@@ -1,0 +1,557 @@
+// DR3-Vision schema
+// First-draft DDL derived from PROJECT-CHARTER.md §6.
+//
+// IMPORTANT semantics encoded here:
+// - Per-site separation: every domain table includes site_id; queries scope by it
+// - Audit log: append-only, indefinite retention (ADR-0007)
+// - Photo storage: file bytes go to R2; Postgres holds metadata only (ADR-0005)
+// - Soft delete: a few tables have deleted_at; the audit_log records who/when
+// - Bonus rules: parameter table, not hardcoded (ADR-0011)
+// - Forward-compat hooks: load_source_type enum supports CIP (V2.2 per ADR-0010)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Sites and configuration
+// ────────────────────────────────────────────────────────────────────────
+
+enum Jurisdiction {
+  oregon
+  california
+}
+
+enum BillingCadence {
+  end_of_month_only       // Oregon
+  mid_month_and_end       // California
+}
+
+model Site {
+  id                              String        @id @default(uuid())
+  code                            String        @unique // 'eugene' | 'woodland'
+  name                            String
+  jurisdiction                    Jurisdiction
+  mrc_program_code                String        // e.g. 'MRC-OR-2025' or 'MRC-CA-2025'
+
+  // Storage limits
+  max_units_indoor                Int?          // CA only
+  max_units_outdoor               Int?          // CA only
+  max_units_total_on_site         Int?          // OR only (off-site prohibited)
+
+  // Operational windows
+  customer_service_open           String        // '08:00' | '08:30'
+  customer_service_close          String        // '16:00' | '16:30'
+
+  // Contract specifics
+  recycling_rate_target_pct       Decimal       @db.Decimal(5, 2) // 75.00 | 70.00
+  records_retention_years         Int           // 4 | 5
+  inbound_processing_deadline_days Int          // 45 | 60
+  mymrc_inbound_submission_business_days Int    // 3 (both)
+  mymrc_processed_submission_business_days Int  // 1 (both)
+  dock_sla_minutes                Int           // 60 (both)
+  reconciliation_target_pct       Decimal       @db.Decimal(5, 2) // 97.00
+
+  billing_cadence                 BillingCadence
+  cip_enabled                     Boolean       @default(false)  // CA Woodland only
+
+  created_at                      DateTime      @default(now())
+  updated_at                      DateTime      @updatedAt
+
+  users                           User[]
+  inbound_loads                   InboundLoad[]
+  expected_loads                  ExpectedLoad[]
+  sources                         Source[]
+  site_holidays                   SiteHoliday[]
+  inventory_snapshots             SiteInventorySnapshot[]
+  billing_rates                   SiteBillingRate[]
+  bonus_rules                     ProcessorBonusRule[]
+  processing_sessions             ProcessingSession[]
+
+  @@map("sites")
+}
+
+model SiteHoliday {
+  id          String   @id @default(uuid())
+  site_id     String
+  site        Site     @relation(fields: [site_id], references: [id])
+  holiday_date DateTime @db.Date
+  name        String   // 'New Year's Day', 'Memorial Day', etc.
+
+  @@unique([site_id, holiday_date])
+  @@map("site_holidays")
+}
+
+model SiteBillingRate {
+  id            String   @id @default(uuid())
+  site_id       String
+  site          Site     @relation(fields: [site_id], references: [id])
+  per_unit_rate_usd Decimal @db.Decimal(10, 4)
+  effective_date DateTime @db.Date
+  end_date      DateTime? @db.Date
+  notes         String?
+
+  @@index([site_id, effective_date])
+  @@map("site_billing_rates")
+}
+
+model SiteInventorySnapshot {
+  id              String   @id @default(uuid())
+  site_id         String
+  site            Site     @relation(fields: [site_id], references: [id])
+  snapshot_at     DateTime @default(now())
+  units_indoor    Int?     // CA only
+  units_outdoor   Int?     // CA only
+  units_total     Int?     // OR only
+  units_in_processing Int  @default(0)
+
+  @@index([site_id, snapshot_at])
+  @@map("site_inventory_snapshots")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Users and auth
+// ────────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  operator
+  manager
+  admin
+}
+
+enum UserLocale {
+  en
+  es
+  ur
+}
+
+model User {
+  id                    String     @id @default(uuid())
+  email                 String?    @unique // null for operator-only accounts
+  name                  String
+  role                  UserRole
+  locale                UserLocale @default(en)
+
+  // Browser auth (manager/admin)
+  password_hash         String?    // Argon2id; null for operator-only
+
+  // PIN auth (operator)
+  pin_hash              String?    // Argon2id; per ADR-0004, NOT indexed
+  pin_failed_attempts   Int        @default(0)
+  pin_locked_until      DateTime?
+
+  // Roles and assignment
+  primary_site_id       String?
+  primary_site          Site?      @relation(fields: [primary_site_id], references: [id])
+
+  // Processor-specific (V2.1)
+  processor_role        String?    // 'Lead', 'Processor', 'Machine Operator', 'Stryo', 'Floater' (Eugene); null for Woodland
+
+  is_active             Boolean    @default(true)
+  last_login_at         DateTime?
+  created_at            DateTime   @default(now())
+  updated_at            DateTime   @updatedAt
+  deleted_at            DateTime?
+
+  // Relations
+  loads_assigned        InboundLoad[] @relation("LoadAssignedOperator")
+  loads_submitted       InboundLoad[] @relation("LoadSubmittedBy")
+  processing_sessions_processor ProcessingSession[] @relation("SessionProcessor")
+  processing_sessions_lead     ProcessingSession[] @relation("SessionLead")
+  processing_sessions_authorized ProcessingSession[] @relation("SessionAuthorizedBy")
+  audit_entries         AuditLog[]
+
+  @@map("users")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Sources (where mattresses come from)
+// ────────────────────────────────────────────────────────────────────────
+
+model Source {
+  id            String   @id @default(uuid())
+  site_id       String
+  site          Site     @relation(fields: [site_id], references: [id])
+  name          String   // verbatim from MyMRC for reconciliation match
+  street        String?
+  city          String?
+  state         String?
+  zip           String?
+  is_active     Boolean  @default(true)
+  notes         String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  inbound_loads InboundLoad[]
+  expected_loads ExpectedLoad[]
+
+  @@unique([site_id, name])
+  @@index([site_id, is_active])
+  @@map("sources")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Transporters (carriers)
+// ────────────────────────────────────────────────────────────────────────
+
+model Transporter {
+  id            String   @id @default(uuid())
+  name          String   @unique // verbatim from MyMRC
+  is_internal   Boolean  @default(false) // SVdP/DR3-owned hauling
+  is_active     Boolean  @default(true)
+  notes         String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  inbound_loads InboundLoad[]
+  expected_loads ExpectedLoad[]
+
+  @@map("transporters")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Expected loads (scheduled hauls scraped from MyMRC)
+// ────────────────────────────────────────────────────────────────────────
+
+model ExpectedLoad {
+  id                       String       @id @default(uuid())
+  site_id                  String
+  site                     Site         @relation(fields: [site_id], references: [id])
+  external_mymrc_haul_id   String       @unique
+  expected_arrival_at      DateTime
+  source_id                String?
+  source                   Source?      @relation(fields: [source_id], references: [id])
+  source_name_at_sync      String       // raw name from MyMRC; in case match fails
+  transporter_id           String?
+  transporter              Transporter? @relation(fields: [transporter_id], references: [id])
+  transporter_name_at_sync String?
+  expected_unit_count      Int?
+  bol_number               String?
+  scheduled_at_mymrc       DateTime?
+  last_synced_at           DateTime     @default(now())
+  cancelled_at             DateTime?    // set when haul disappears from MyMRC
+
+  inbound_load             InboundLoad?
+
+  @@index([site_id, expected_arrival_at])
+  @@index([cancelled_at])
+  @@map("expected_loads")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Inbound loads (the dock workflow record)
+// ────────────────────────────────────────────────────────────────────────
+
+enum LoadSourceType {
+  b2b_haul         // standard transporter delivery (MVP)
+  cip_consumer     // consumer drop-off (V2.2 per ADR-0010)
+}
+
+enum LoadStatus {
+  expected           // pre-arrival
+  arrived            // truck on dock, BOL captured
+  weight_captured    // optional weight ticket logged
+  unload_started     // door-open photo, timer running
+  in_progress        // counting stacks
+  finished           // timer stopped, ready to submit
+  submitted          // operator pressed submit
+  rejected           // terminal: rejected at dock
+  submitted_to_mymrc // entered into MyMRC (V2.1)
+  processed          // line crew finished deconstruction (V2.1)
+}
+
+enum CountMode {
+  ledger
+  multiplier
+  total
+}
+
+enum RejectionCategory {
+  contamination
+  damaged
+  wet
+  bedbugs
+  short
+  mislabeled
+  other
+}
+
+enum ConcernCategory {
+  damaged
+  wet
+  bedbugs
+  contamination
+  short
+  mislabeled
+  other
+}
+
+model InboundLoad {
+  id                            String         @id @default(uuid())
+  site_id                       String
+  site                          Site           @relation(fields: [site_id], references: [id])
+  expected_load_id              String?        @unique
+  expected_load                 ExpectedLoad?  @relation(fields: [expected_load_id], references: [id])
+
+  load_source_type              LoadSourceType @default(b2b_haul)
+  bol_number                    String?
+  source_id                     String?
+  source                        Source?        @relation(fields: [source_id], references: [id])
+  transporter_id                String?
+  transporter                   Transporter?   @relation(fields: [transporter_id], references: [id])
+
+  // Operator
+  assigned_operator_id          String?
+  assigned_operator             User?          @relation("LoadAssignedOperator", fields: [assigned_operator_id], references: [id])
+  assigned_at                   DateTime?
+
+  submitted_by_id               String?
+  submitted_by                  User?          @relation("LoadSubmittedBy", fields: [submitted_by_id], references: [id])
+
+  // Workflow timestamps
+  status                        LoadStatus     @default(expected)
+  dock_appointment_at           DateTime?
+  arrived_at                    DateTime?
+  weight_captured_at            DateTime?
+  unload_started_at             DateTime?      // when door-open photo submitted; timer reference
+  unload_finished_at            DateTime?
+  submitted_at                  DateTime?
+  time_to_unload_start_seconds  Int?           // arrived_at → unload_started_at
+  unload_duration_seconds       Int?           // unload_started_at → unload_finished_at
+
+  // Counts
+  total_units                   Int?
+  count_mode                    CountMode?
+
+  // Weight (US trucking standard, integer pounds)
+  weight_lbs                    Int?           // 1..100,000 valid range
+
+  // Rejection
+  rejection_category            RejectionCategory?
+  rejection_note                String?
+
+  // Integration
+  external_mymrc_haul_id        String?        @unique
+  external_mymrc_materials_id   String?
+  mymrc_submission_deadline     DateTime?      // arrived_at + 3 business days
+
+  created_at                    DateTime       @default(now())
+  updated_at                    DateTime       @updatedAt
+
+  load_stacks                   LoadStack[]
+  load_photos                   LoadPhoto[]
+  load_concerns                 LoadConcern[]
+
+  @@index([site_id, status])
+  @@index([site_id, arrived_at])
+  @@index([assigned_operator_id, status])
+  @@map("inbound_loads")
+}
+
+model LoadStack {
+  id              String      @id @default(uuid())
+  load_id         String
+  load            InboundLoad @relation(fields: [load_id], references: [id], onDelete: Cascade)
+  stack_index     Int         // 1, 2, 3, ...
+  unit_count      Int
+  count_mode      CountMode   // duplicate of parent's mode for debugging
+  created_at      DateTime    @default(now())
+
+  @@unique([load_id, stack_index])
+  @@map("load_stacks")
+}
+
+enum PhotoKind {
+  bol
+  weight_ticket
+  door_open
+  concern
+  rejection
+}
+
+model LoadPhoto {
+  id                       String      @id @default(uuid())
+  load_id                  String
+  load                     InboundLoad @relation(fields: [load_id], references: [id], onDelete: Cascade)
+  kind                     PhotoKind
+  storage_key              String      // R2 object key for raw photo
+  annotation_storage_key   String?     // R2 object key for annotated overlay
+  width                    Int?
+  height                   Int?
+  byte_size                Int?
+  captured_at              DateTime
+  uploaded_at              DateTime    @default(now())
+  purged_at                DateTime?   // set when retention purge removes the R2 object
+
+  @@index([load_id, kind])
+  @@map("load_photos")
+}
+
+model LoadConcern {
+  id              String          @id @default(uuid())
+  load_id         String
+  load            InboundLoad     @relation(fields: [load_id], references: [id], onDelete: Cascade)
+  category        ConcernCategory
+  note            String?
+  note_locale     UserLocale?
+  voice_note_storage_key String?
+  raised_by_user_id String?
+  created_at      DateTime        @default(now())
+
+  @@index([load_id])
+  @@map("load_concerns")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Processing (V2.1 — schema present, UI deferred per ADR-0011)
+// ────────────────────────────────────────────────────────────────────────
+
+enum Shift {
+  morning
+  afternoon
+  evening
+}
+
+model ProcessingSession {
+  id                      String   @id @default(uuid())
+  site_id                 String
+  site                    Site     @relation(fields: [site_id], references: [id])
+  processor_user_id       String
+  processor               User     @relation("SessionProcessor", fields: [processor_user_id], references: [id])
+  session_date            DateTime @db.Date
+  shift                   Shift
+  line_no                 Int?
+  lead_user_id            String?
+  lead                    User?    @relation("SessionLead", fields: [lead_user_id], references: [id])
+  authorized_by_user_id   String?
+  authorized_by           User?    @relation("SessionAuthorizedBy", fields: [authorized_by_user_id], references: [id])
+  units_handled           Int      @default(0)
+  units_processed         Int      @default(0)
+  units_saved             Int      @default(0)
+  units_leftover          Int      @default(0)
+  notes                   String?
+  submitted_to_mymrc_at   DateTime?
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  @@index([site_id, session_date])
+  @@map("processing_sessions")
+}
+
+model ProcessorBonusRule {
+  id              String   @id @default(uuid())
+  site_id         String
+  site            Site     @relation(fields: [site_id], references: [id])
+  threshold_low   Int      // e.g., 50
+  rate_low        Decimal  @db.Decimal(10, 4) // OR: 1.0000, CA: 0.5000
+  threshold_high  Int      // OR: 100, CA: 75
+  rate_high       Decimal  @db.Decimal(10, 4) // 0.2500 both
+  effective_date  DateTime @db.Date
+  end_date        DateTime? @db.Date
+  notes           String?
+
+  @@index([site_id, effective_date])
+  @@map("processor_bonus_rules")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MyMRC reconciliation
+// ────────────────────────────────────────────────────────────────────────
+
+enum ReconciliationStatus {
+  unmatched_in_dr3
+  unmatched_in_mymrc
+  count_mismatch
+  weight_mismatch
+  resolved
+}
+
+model MymrcReconciliation {
+  id              String   @id @default(uuid())
+  site_id         String
+  period_start    DateTime @db.Date
+  period_end      DateTime @db.Date
+  uploaded_by_id  String?
+  uploaded_at     DateTime @default(now())
+  total_rows      Int
+  matched_count   Int
+  unmatched_count Int
+  resolved_count  Int      @default(0)
+
+  items MymrcReconciliationItem[]
+
+  @@index([site_id, period_start])
+  @@map("mymrc_reconciliations")
+}
+
+model MymrcReconciliationItem {
+  id                  String                @id @default(uuid())
+  reconciliation_id   String
+  reconciliation      MymrcReconciliation   @relation(fields: [reconciliation_id], references: [id], onDelete: Cascade)
+  external_haul_id    String
+  external_delivery_date DateTime?           @db.Date
+  external_unit_count Int?
+  external_weight_lbs Int?
+  matched_load_id     String?
+  status              ReconciliationStatus
+  resolution_notes    String?
+  resolved_at         DateTime?
+  resolved_by_id      String?
+
+  @@index([external_haul_id])
+  @@map("mymrc_reconciliation_items")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Audit log (append-only, indefinite retention per ADR-0007)
+// ────────────────────────────────────────────────────────────────────────
+
+enum AuditAction {
+  insert
+  update
+  delete
+  soft_delete
+  restore
+}
+
+model AuditLog {
+  id              String      @id @default(uuid())
+  actor_user_id   String?
+  actor           User?       @relation(fields: [actor_user_id], references: [id])
+  actor_label     String?     // e.g. 'system:mymrc-scrape', 'system:r2-purge'
+  action          AuditAction
+  table_name      String
+  row_id          String
+  before          Json?       // null for inserts
+  after           Json?       // null for deletes
+  ip              String?
+  user_agent      String?
+  created_at      DateTime    @default(now())
+
+  @@index([table_name, row_id])
+  @@index([actor_user_id, created_at])
+  @@index([action, created_at])
+  @@map("audit_log")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Form templates (V2.2+ extensibility hook; not used in MVP)
+// ────────────────────────────────────────────────────────────────────────
+
+model FormTemplate {
+  id              String   @id @default(uuid())
+  site_id         String?
+  code            String   @unique
+  name            String
+  schema_json     Json     // form schema
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@map("form_templates")
+}
