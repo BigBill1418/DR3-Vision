@@ -1,0 +1,31 @@
+# Architecture Decision Records (ADRs)
+
+This directory contains short, dated, immutable records of the technical and architectural decisions made on DR3-Vision. Read every ADR before writing code; they encode constraints that are not always obvious from the codebase.
+
+## Index
+
+| # | Title | Status |
+|---|---|---|
+| 0001 | Tech stack | Accepted |
+| 0002 | Fleet host | Accepted |
+| 0003 | Domain & routing | Accepted |
+| 0004 | PIN authentication | Accepted |
+| 0005 | Photo storage & retention | Accepted |
+| 0006 | Offline queue strategy | Accepted |
+| 0007 | Audit log design & retention | Accepted |
+| 0008 | Brand theme | Accepted |
+| 0009 | MyMRC integration via Playwright | Accepted (with deferred reconsideration on API access) |
+| 0010 | CIP data handling | Deferred (V2.2 scope) |
+| 0011 | Processor Form / deconstruction-line workflow | Accepted (V2.1 scope) |
+| 0012 | Sprint-1 clarifications and supplements | Accepted |
+
+## How to write a new ADR
+
+1. Number it sequentially (`0012-...`), dated (`2026-MM-DD`), short title.
+2. Use the template:
+    - **Context** — what's the situation
+    - **Decision** — what we chose
+    - **Alternatives considered** — what we rejected and why
+    - **Consequences** — what this commits us to
+3. Once accepted, ADRs are immutable. To overturn one, write a new ADR that supersedes it.
+4. Cross-reference the charter section that prompted the decision.
