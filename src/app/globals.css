@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * shadcn/ui CSS variables. Mapped to the DR3 brand palette per ADR-0008.
+ * Components added in later tickets read these tokens; do not introduce
+ * arbitrary hex values here or in component CSS.
+ */
+@layer base {
+  :root {
+    --background: 176 100% 16%; /* dr3-green-deep #00524C */
+    --foreground: 64 100% 92%; /* dr3-cream  #FCFFD7 */
+
+    --card: 176 100% 16%;
+    --card-foreground: 64 100% 92%;
+
+    --popover: 0 0% 10%;
+    --popover-foreground: 64 100% 92%;
+
+    --primary: 161 38% 49%; /* dr3-green   #49AD8E */
+    --primary-foreground: 0 0% 10%;
+
+    --secondary: 65 99% 78%; /* dr3-chartreuse #EFFE8B */
+    --secondary-foreground: 0 0% 10%;
+
+    --muted: 178 84% 22%;
+    --muted-foreground: 64 100% 92%;
+
+    --accent: 65 99% 78%;
+    --accent-foreground: 0 0% 10%;
+
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 64 100% 92%;
+
+    --border: 178 60% 30%;
+    --input: 178 60% 30%;
+    --ring: 161 38% 49%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

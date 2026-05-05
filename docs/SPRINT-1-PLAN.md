@@ -6,7 +6,8 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 ## Foundation (must finish before anything else)
 
-### [ ] T-001: Repo scaffold
+### [x] T-001: Repo scaffold
+
 - Next.js 15 App Router, TypeScript strict mode, Tailwind, shadcn/ui initialized
 - ESLint configured: warnings are errors (`--max-warnings 0`)
 - Prettier configured with `printWidth: 100`
@@ -16,6 +17,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 **Acceptance:** `npm run dev` serves a brand-correct placeholder. `npm run lint` and `npm run build` both green.
 
 ### [ ] T-002: Prisma schema, first migration, seed loader
+
 - Translate `prisma/schema.prisma` into a working migration
 - Write the seed loader that reads the CSVs in `prisma/seed/*` and idempotently inserts/updates
 - Document the seed precedence (sites → users → site_holidays → processor_bonus_rules → sources → transporters)
@@ -23,6 +25,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 **Acceptance:** `docker compose up -d postgres && npx prisma migrate dev --name init && npx prisma db seed` reaches a clean state with all expected row counts (see `HANDOFF.md` Step 3).
 
 ### [ ] T-003: Auth.js v5 — manager/admin email-password flow
+
 - Email + password login at `/login`
 - Session cookies: `Secure`, `HttpOnly`, `SameSite=Lax`, 12-hour idle, 30-day absolute
 - Argon2id password hashing
@@ -33,6 +36,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 **Acceptance:** Bill (admin) can log in and access both sites. Rick (manager, Eugene) can log in and access Eugene only. Attempts to access Woodland from Rick's session return 403.
 
 ### [ ] T-004: PIN flow for operator iPad
+
 - `/operator` route lands on a name-picker (lists active operators at the site, ordered by last-seen-recent)
 - Tapping a name reveals the 4-digit numeric keypad
 - PIN validates server-side (Argon2id), with rate limit: 5 failures in 60 seconds → 15-minute auto-unlock lockout
@@ -45,6 +49,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 ## Core operator path (the dock workflow)
 
 ### [ ] T-005: Expected-loads queue
+
 - Operator lands on the queue post-login: list of pre-scheduled inbound loads for their site, sorted by expected arrival time
 - Each row: source, expected time, transporter, BOL number
 - Pull-to-refresh, auto-refresh every 60 seconds
@@ -53,19 +58,22 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 **Acceptance:** Seeded test loads appear correctly. Empty state renders cleanly. Pull-to-refresh works on iPad Safari.
 
 ### [ ] T-006: Load workflow — BOL → weight → door-open → stack → finish/reject
+
 Implement the seven-stage flow from charter §4 in order:
+
 1. Forced BOL photo (timer does not start)
 2. Optional weight ticket — two equal-weight buttons (Add / None), if added: photo + integer-pounds numeric pad (1–100,000 valid range)
 3. Forced door-open photo — **timer starts on submission of this photo**
 4. Decision branch: Begin unload / Reject load
-5a. Unload: stack counter UI with three modes (ledger, multiplier, total) — see charter §4.3
-5b. Reject: category dropdown + multi-photo + note + submit
-6. Finish (timer stops) → optional concern capture (multi-photo, in-app annotation, voice-to-text note in operator's locale)
-7. Submit (auto-logout)
+   5a. Unload: stack counter UI with three modes (ledger, multiplier, total) — see charter §4.3
+   5b. Reject: category dropdown + multi-photo + note + submit
+5. Finish (timer stops) → optional concern capture (multi-photo, in-app annotation, voice-to-text note in operator's locale)
+6. Submit (auto-logout)
 
 **Acceptance:** Full happy-path completes end-to-end. Forced photos cannot be skipped. Rejection persists with status terminal. Submit creates correct row in `inbound_loads` and rows in `load_stacks`, `load_photos`, `load_concerns`.
 
 ### [ ] T-007: Photo capture, annotation, R2 upload
+
 - Native iPad Camera invocation via `<input type="file" capture="environment" accept="image/*">`
 - In-browser annotation tool (circle, arrow, freehand, text overlay)
 - Both raw and annotated versions uploaded to R2 with signed URLs
@@ -75,6 +83,7 @@ Implement the seven-stage flow from charter §4 in order:
 **Acceptance:** Photos persist. Annotation overlay survives reload. R2 URLs return 200 when accessed with a fresh signed URL.
 
 ### [ ] T-008: i18n — English, Spanish, Urdu
+
 - All operator-facing copy localized
 - Locale picker on the login screen, persisted per-user
 - Urdu flips RTL globally for that user
@@ -84,6 +93,7 @@ Implement the seven-stage flow from charter §4 in order:
 **Acceptance:** Switch locale → all visible strings change correctly. Urdu renders RTL. Spanish and English render LTR. No untranslated strings in any operator-facing screen.
 
 ### [ ] T-009: Offline queue (IndexedDB + Workbox Background Sync)
+
 - All operator submissions queue locally on network failure
 - Service Worker registered with explicit cache versioning
 - Photos stored as Blobs in IndexedDB until upload completes
@@ -95,6 +105,7 @@ Implement the seven-stage flow from charter §4 in order:
 ## Manager portal
 
 ### [ ] T-010: Live dock view
+
 - Per-site real-time view of currently-active operator sessions
 - 5-second polling
 - Each tile: operator name, load BOL, source, current stage, elapsed time
@@ -103,6 +114,7 @@ Implement the seven-stage flow from charter §4 in order:
 **Acceptance:** Two operators on simultaneous loads at Woodland appear as two tiles. Times tick forward in real-time. Tile transitions through stages (BOL → weight → door → stack → finish).
 
 ### [ ] T-011: Load list with filters
+
 - Per-site list view of today's, this-week's, this-month's, custom-range loads
 - Status filter (in-progress, submitted, rejected, submitted-to-mymrc, processed)
 - Source filter
@@ -114,7 +126,9 @@ Implement the seven-stage flow from charter §4 in order:
 **Acceptance:** Filters compose correctly. Pagination handles 1000+ loads without UI lag.
 
 ### [ ] T-012: Compliance dashboard
+
 The seven contract-tracked metrics from `docs/COMPLIANCE.md`:
+
 1. MyMRC submission timeliness (3 business days, ≥95%)
 2. Processed-units submission (1 business day, ≥95%)
 3. Dock-appointment SLA (60 minutes, ≥90%)
@@ -128,6 +142,7 @@ Color-coded tiles (green/yellow/red), with click-through to the underlying data.
 **Acceptance:** Each tile renders correctly with seeded data. Threshold colors transition correctly. Click-through filters the load list to the relevant subset.
 
 ### [ ] T-013: MRC Monthly Invoice export + SVdP Internal CSV export
+
 - `MRC Monthly Invoice (Article 10.4)` export: CSV matching MyMRC reconciliation format
 - `Transportation Invoice` export: CSV per CA contract
 - `Oregon Collection Site Count Invoice` export: CSV per OR contract (V2.2 — placeholder route only)
@@ -139,6 +154,7 @@ All exports are per-site by default. Cross-site export requires `admin` role and
 **Acceptance:** Test month's data exports correctly. Reconciliation CSV matches MyMRC's expected schema (see `docs/MYMRC-INTEGRATION.md`).
 
 ### [ ] T-014: Audit log viewer
+
 - For any record (load, user, source, transporter, etc.), `admin` role can view the full audit trail
 - Append-only display: actor, action, timestamp, before/after JSON
 - Filterable by actor, table, date range
@@ -149,7 +165,9 @@ All exports are per-site by default. Cross-site export requires `admin` role and
 ## MyMRC integration
 
 ### [ ] T-015: Playwright MyMRC schedule scrape (read-only, hourly)
+
 See `docs/MYMRC-INTEGRATION.md` for full runbook.
+
 - Two separate Playwright contexts (one per site, separate credentials in env)
 - Hourly cron pulls next 7 days of scheduled hauls per site
 - Upserts into `expected_loads` table
@@ -158,6 +176,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 **Acceptance:** Scheduled hauls appear in the operator's expected-loads queue within 1 hour of being scheduled in MyMRC. Stale entries (haul cancelled in MyMRC) are removed.
 
 ### [ ] T-016: CSV reconciliation upload (manual, monthly)
+
 - Manager-portal page: upload a monthly MyMRC CSV
 - Match each haul row against DR3-Vision loads by (haul_id, date, source)
 - Display discrepancies: missing in DR3-Vision, missing in MyMRC, count mismatch, weight mismatch beyond tolerance
@@ -169,6 +188,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 ## Operations & deployment
 
 ### [ ] T-017: Docker + fleet integration
+
 - Dockerfile builds a production image (multi-stage, ~300MB target)
 - docker-compose.yml supports local dev (app + Postgres + minio for R2 emulation)
 - Joins SVDP-Guardian, SVDP-Intranet, SVDP-Site networks per FLEET-PRIMER conventions
@@ -178,6 +198,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 **Acceptance:** `docker compose build && docker compose up` runs the full stack locally. Production deploy via swarmpilot_deployer is documented in `docs/FLEET-DEPLOYMENT.md`.
 
 ### [ ] T-018: Observability
+
 - GlitchTip integration (errors)
 - Loki integration (logs)
 - Tempo integration (traces)
@@ -186,6 +207,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 **Acceptance:** Forced error in dev shows up in GlitchTip within 30 seconds. Grafana dashboard renders with at least 5 minutes of seeded traffic data.
 
 ### [ ] T-019: Initial production deploy to dr3-vision.svdp.us
+
 - Cloudflare DNS + Tunnel configured
 - TLS via CF
 - HSTS, CSP, X-Frame-Options, X-Content-Type-Options headers
@@ -197,6 +219,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 ## Sprint-1-complete acceptance
 
 When all 19 tickets are `[x]`:
+
 - Schedule a 30-minute walkthrough with Bill, Rick, Janette, Morena, Kelsey
 - Demo: full operator happy-path end-to-end at one site, then the same at the second site
 - Demo: manager dashboard, compliance tiles, exports, audit log

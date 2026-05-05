@@ -1,37 +1,16 @@
 /** @type {import('next').NextConfig} */
-const withPWA = require('next-pwa')({
-  dest: 'public',
-  register: true,
-  skipWaiting: true,
-  disable: process.env.NODE_ENV === 'development',
-  runtimeCaching: [
-    {
-      urlPattern: /^https:\/\/.*\.r2\.cloudflarestorage\.com\/.*/i,
-      handler: 'CacheFirst',
-      options: {
-        cacheName: 'r2-photos',
-        expiration: {
-          maxEntries: 200,
-          maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days
-        },
-      },
-    },
-    {
-      urlPattern: /\/api\/(loads|sources|transporters|users)\b/,
-      handler: 'NetworkFirst',
-      options: {
-        cacheName: 'api-cache',
-        networkTimeoutSeconds: 5,
-        expiration: {
-          maxEntries: 100,
-          maxAgeSeconds: 5 * 60, // 5 minutes
-        },
-      },
-    },
-  ],
-});
-
+//
+// PWA wrap intentionally omitted in T-001. Per ADR-0012 §4 the project moves
+// from `next-pwa` (EOL, no Next.js 15 App Router support) to `@serwist/next`.
+// The Service Worker source, runtime caching rules, and `withSerwist(...)`
+// wrap land in T-009 (offline queue). For reference, the legacy runtime
+// caching shape was:
+//   - https://*.r2.cloudflarestorage.com  →  CacheFirst, 200 entries, 7d
+//   - /api/(loads|sources|transporters|users)  →  NetworkFirst, 5s timeout, 5m
+// Re-encode these as Serwist `RuntimeCaching` entries when wiring the SW.
+//
 const nextConfig = {
+  output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
   images: {
@@ -81,4 +60,4 @@ const nextConfig = {
   },
 };
 
-module.exports = withPWA(nextConfig);
+module.exports = nextConfig;
