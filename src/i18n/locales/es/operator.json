@@ -176,22 +176,12 @@
   "auth_login": {
     "heading": "Iniciar sesión",
     "language_label": "Idioma",
-    "email_label": "Correo electrónico",
-    "email_placeholder": "tu@svdp.us",
-    "password_label": "Contraseña",
-    "error_invalid": "Correo o contraseña inválidos.",
-    "signing_in": "Iniciando sesión…",
-    "submit": "Iniciar sesión",
-    "forgot": "¿Olvidaste tu contraseña?"
-  },
-  "auth_forgot": {
-    "lead": "Ingresa el correo de tu cuenta y te enviaremos un enlace para restablecer.",
-    "email_label": "Correo electrónico",
-    "email_placeholder": "tu@svdp.us",
-    "sending": "Enviando…",
-    "submit": "Enviar enlace",
-    "back_to_signin": "Volver al inicio de sesión",
-    "submitted": "Si existe una cuenta para {{email}}, el enlace está en camino. El enlace expira en 15 minutos."
+    "sign_in_with_microsoft": "Iniciar sesión con Microsoft",
+    "redirecting": "Redirigiendo a Microsoft…",
+    "sso_only_hint": "Solo encargados y administradores. Los operadores inician sesión en el iPad.",
+    "error_access_denied": "Tu cuenta de Microsoft no está autorizada para DR3-Vision. Pide a un administrador que te agregue.",
+    "error_not_configured": "El inicio de sesión con Microsoft aún no está configurado. Pide a un administrador que termine la configuración.",
+    "error_generic": "No se pudo completar el inicio de sesión. Intenta de nuevo."
   },
   "relative_time": {
     "just_now": "ahora mismo",

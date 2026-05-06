@@ -169,22 +169,12 @@
   "auth_login": {
     "heading": "Sign in",
     "language_label": "Language",
-    "email_label": "Email",
-    "email_placeholder": "you@svdp.us",
-    "password_label": "Password",
-    "error_invalid": "Invalid email or password.",
-    "signing_in": "Signing in…",
-    "submit": "Sign in",
-    "forgot": "Forgot your password?"
-  },
-  "auth_forgot": {
-    "lead": "Enter your account email and we'll send a reset link.",
-    "email_label": "Email",
-    "email_placeholder": "you@svdp.us",
-    "sending": "Sending…",
-    "submit": "Send reset link",
-    "back_to_signin": "Back to sign in",
-    "submitted": "If an account exists for {{email}}, a reset link is on its way. The link expires in 15 minutes."
+    "sign_in_with_microsoft": "Sign in with Microsoft",
+    "redirecting": "Redirecting to Microsoft…",
+    "sso_only_hint": "Managers and admins only. Operators sign in on the iPad.",
+    "error_access_denied": "Your Microsoft account isn't authorized for DR3-Vision. Ask an admin to add you.",
+    "error_not_configured": "Microsoft sign-in isn't configured yet. Ask an admin to finish the setup.",
+    "error_generic": "Sign-in didn't complete. Try again."
   },
   "relative_time": {
     "just_now": "just now",

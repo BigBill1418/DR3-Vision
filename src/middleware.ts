@@ -10,8 +10,6 @@ import { authConfig } from '@/lib/auth.config';
 const PUBLIC_PATHS = new Set<string>([
   '/',
   '/login',
-  '/forgot-password',
-  '/reset-password',
   '/healthz',
 ]);
 

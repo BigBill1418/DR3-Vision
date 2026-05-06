@@ -5,6 +5,71 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — ADR-0016: Microsoft Entra ID SSO for managers + admins
+
+Closes the post-Sprint-1 directive "entra only - sso only for admins
+and managers." Operators are unaffected — PIN auth on the iPad stays.
+
+#### Added
+
+- `src/lib/auth.config.ts` — declares the `MicrosoftEntraID` OIDC
+  provider, edge-safe (no Prisma). Auto-reads
+  `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER`.
+- `src/lib/auth.ts` — `evaluateEntraSignIn()` gate (exported for
+  unit testing) and a `signIn` callback that:
+  - allows the operator PIN flow unconditionally (already gated by
+    its own `authorize` callback);
+  - on Entra sign-in, looks up the user by lowercased email, denies
+    unknown / inactive / soft-deleted / non-manager-or-admin
+    accounts, mirrors the locale cookie, and updates `last_login_at`.
+- `src/lib/__tests__/auth.signin-gate.test.ts` — 7 unit tests
+  covering: allow manager, allow admin, deny operator, deny inactive,
+  deny soft-deleted, deny unknown email, deny pin-only (no email)
+  account.
+- `src/i18n/locales/{en,es,ur}/operator.json` — new `auth_login`
+  keys: `sign_in_with_microsoft`, `redirecting`, `sso_only_hint`,
+  `error_access_denied`, `error_not_configured`, `error_generic`.
+- `docs/adr/0016-entra-id-sso-managers-admins.md` — full ADR.
+- `docs/operator/entra-id-setup.md` — Bill-side runbook for
+  registering the Azure App, minting a secret, and rolling values
+  onto CHAD-HQ.
+- `.env.example` — new `AUTH_MICROSOFT_ENTRA_ID_*` block with the
+  redirect-URI hint and runbook pointer.
+
+#### Changed
+
+- `src/app/login/login-form.tsx` — single "Sign in with Microsoft"
+  CTA. Surfaces `error=AccessDenied` (gate-denied) and
+  `error=Configuration` (env vars unset) as localized messages.
+  Locale picker preserved. Per CLAUDE.md hard rule #10 the form
+  uses `onClick`, not `<form>`.
+- `src/middleware.ts` — `PUBLIC_PATHS` no longer lists
+  `/forgot-password` or `/reset-password`.
+
+#### Removed
+
+- `src/app/forgot-password/` (page + form)
+- `src/app/reset-password/` (page + form)
+- `src/app/api/auth/forgot-password/route.ts`
+- `src/app/api/auth/reset-password/route.ts`
+- `src/lib/password-reset-token.ts` (HMAC-signed reset token util,
+  unused after removing the reset endpoints)
+- `src/lib/email.ts` (Resend stub, unused after removing the reset
+  endpoints — PIN flow doesn't email)
+- `RESEND_API_KEY` / `EMAIL_FROM` env vars from `.env.example`
+- The email + password Credentials provider in `auth.ts`
+- `auth_forgot.*` and the email/password keys (`email_label`,
+  `email_placeholder`, `password_label`, `error_invalid`,
+  `signing_in`, `submit`, `forgot`) under `auth_login.*` in all
+  three locale dictionaries.
+
+#### Vestigial — to be cleaned up in Sprint-2
+
+- `users.password_hash` column. No code path reads or writes it
+  after this change. A dedicated Sprint-2 migration will drop it.
+  Left in place this sprint to keep the ADR-0016 PR free of
+  irreversible schema work and rollback-able by `git revert` alone.
+
 ### 2026-05-06 — Wave C: T-008 i18n (English / Spanish / Urdu)
 
 Closes the last open Sprint-1 ticket. CLAUDE.md hard rule #4 — all

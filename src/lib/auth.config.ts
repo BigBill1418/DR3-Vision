@@ -1,14 +1,31 @@
 import type { NextAuthConfig } from 'next-auth';
+import MicrosoftEntraID from 'next-auth/providers/microsoft-entra-id';
 
 // Edge-runtime-safe base config. The middleware imports this rather
 // than the full `auth.ts` because `auth.ts` brings in the Prisma
 // client (via the Credentials authorize callback), which does NOT
 // run in the edge runtime.
 //
-// The Credentials provider itself is added in `auth.ts`, where it can
-// reach Prisma. The `jwt` and `session` callbacks here are pure
-// transforms over the token + session — no DB reads — so they're
-// edge-safe and shared with the full Node config.
+// Provider strategy (ADR-0016):
+//   - Microsoft Entra ID is the ONLY OAuth provider for managers and
+//     admins. Declared here because OIDC providers don't touch the DB
+//     during the edge-runtime middleware pass — they're constructed
+//     from env vars and validated in the OAuth callback (Node runtime).
+//   - The operator PIN provider is a Credentials provider that reads
+//     Prisma, so it stays in `auth.ts`.
+//   - Email + password is REMOVED. There is no fallback path.
+//
+// The `signIn` gate that decides whether an Entra-authenticated user
+// is allowed in (must be a manager/admin with an active row) lives in
+// `auth.ts` — it does Prisma reads, so it can't be edge-resident.
+//
+// Per Auth.js v5 convention, the provider auto-reads
+// `AUTH_MICROSOFT_ENTRA_ID_ID` / `_SECRET` / `_ISSUER` from env. We
+// pass empty-string fallbacks so the provider can be constructed in
+// environments where the secrets aren't yet populated (e.g. CI before
+// the operator runbook in `docs/operator/entra-id-setup.md` has been
+// run). In that state the OAuth round-trip will fail at the IdP step
+// rather than at module-load time.
 
 // Per-role idle timeouts. Managers/admins follow the SPRINT-1-PLAN
 // T-003 contract (12h idle / 30d absolute). Operators on shared
@@ -26,7 +43,13 @@ export const authConfig = {
   session: { strategy: 'jwt', maxAge: ABSOLUTE_TIMEOUT_S },
   trustHost: true,
   pages: { signIn: '/login' },
-  providers: [],
+  providers: [
+    MicrosoftEntraID({
+      clientId: process.env['AUTH_MICROSOFT_ENTRA_ID_ID'] ?? '',
+      clientSecret: process.env['AUTH_MICROSOFT_ENTRA_ID_SECRET'] ?? '',
+      issuer: process.env['AUTH_MICROSOFT_ENTRA_ID_ISSUER'] ?? '',
+    }),
+  ],
   callbacks: {
     async jwt({ token, user }) {
       const nowS = Math.floor(Date.now() / 1000);

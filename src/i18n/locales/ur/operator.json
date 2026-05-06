@@ -176,22 +176,12 @@
   "auth_login": {
     "heading": "سائن اِن کریں",
     "language_label": "زبان",
-    "email_label": "ای میل",
-    "email_placeholder": "you@svdp.us",
-    "password_label": "پاس ورڈ",
-    "error_invalid": "غلط ای میل یا پاس ورڈ۔",
-    "signing_in": "سائن اِن ہو رہا ہے…",
-    "submit": "سائن اِن کریں",
-    "forgot": "پاس ورڈ بھول گئے؟"
-  },
-  "auth_forgot": {
-    "lead": "اپنی اکاؤنٹ کی ای میل درج کریں اور ہم آپ کو ری سیٹ لنک بھیجیں گے۔",
-    "email_label": "ای میل",
-    "email_placeholder": "you@svdp.us",
-    "sending": "بھیجا جا رہا ہے…",
-    "submit": "ری سیٹ لنک بھیجیں",
-    "back_to_signin": "سائن اِن پر واپس جائیں",
-    "submitted": "اگر {{email}} کے لیے کوئی اکاؤنٹ موجود ہے تو ری سیٹ لنک راستے میں ہے۔ لنک 15 منٹ میں ختم ہو جائے گا۔"
+    "sign_in_with_microsoft": "Microsoft سے سائن اِن کریں",
+    "redirecting": "Microsoft پر بھیجا جا رہا ہے…",
+    "sso_only_hint": "صرف مینیجرز اور ایڈمنز۔ آپریٹر iPad پر سائن اِن کرتے ہیں۔",
+    "error_access_denied": "آپ کا Microsoft اکاؤنٹ DR3-Vision کے لیے مجاز نہیں۔ ایڈمن سے کہیں کہ آپ کو شامل کرے۔",
+    "error_not_configured": "Microsoft سائن اِن ابھی ترتیب نہیں دیا گیا۔ ایڈمن سے سیٹ اَپ مکمل کرنے کے لیے کہیں۔",
+    "error_generic": "سائن اِن مکمل نہ ہو سکا۔ دوبارہ کوشش کریں۔"
   },
   "relative_time": {
     "just_now": "ابھی ابھی",
