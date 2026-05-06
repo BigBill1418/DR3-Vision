@@ -1,0 +1,21 @@
+-- Sprint-2 cleanup: drop the vestigial `users.password_hash` column.
+--
+-- Per ADR-0016 (2026-05-06), Microsoft Entra ID SSO is the only sign-in
+-- path for managers and admins; operators continue to use the PIN flow
+-- (ADR-0004). The Credentials provider that read `password_hash` was
+-- removed in the ADR-0016 PR, leaving the column unused. This migration
+-- drops the column.
+--
+-- Production rows currently carry the literal sentinel string
+-- `pending_first_password_reset` (the seed placeholder) — none of those
+-- values were ever a valid Argon2id hash. The drop is non-destructive in
+-- terms of identity material; no real password hash is being lost.
+--
+-- Idempotent re-run: Prisma tracks applied migrations in the
+-- `_prisma_migrations` table by directory name. On any subsequent
+-- `prisma migrate deploy`, this entry is detected as already applied and
+-- the SQL is not re-executed. The `IF EXISTS` guard below makes the SQL
+-- itself safe to re-run by hand if an operator ever needs to.
+
+-- AlterTable
+ALTER TABLE "users" DROP COLUMN IF EXISTS "password_hash";

@@ -1,6 +1,6 @@
-email,name,role,locale,primary_site_code,processor_role,password_hash,is_active,notes
-operations@svdp.us,Bill Barnard,admin,en,,,pending_first_password_reset,false,Director of Operations SVdP. Seed-inactive; activate via password reset on first login.
-kelsey.ruhland@svdp.us,Kelsey Ruhland,admin,en,,,pending_first_password_reset,false,DR3 Data & Compliance lead. Seed-inactive; activate via password reset.
-morena.gomez@svdp.us,Morena Gomez,manager,en,,,pending_first_password_reset,false,DR3 Operations Manager (both sites). Email is placeholder pending Bill confirmation.
-rick.albritton@svdp.us,Rick Albritton,manager,en,eugene,,pending_first_password_reset,false,Eugene site manager. Email is placeholder pending Bill confirmation.
-janette.thomas@svdp.us,Janette Thomas,manager,en,woodland,,pending_first_password_reset,false,Woodland site manager. Email is placeholder pending Bill confirmation.
+email,name,role,locale,primary_site_code,processor_role,is_active,notes
+operations@svdp.us,Bill Barnard,admin,en,,,false,Director of Operations SVdP. Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.
+kelsey.ruhland@svdp.us,Kelsey Ruhland,admin,en,,,false,DR3 Data & Compliance lead. Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.
+morena.gomez@svdp.us,Morena Gomez,manager,en,,,false,DR3 Operations Manager (both sites). Email is placeholder pending Bill confirmation.
+rick.albritton@svdp.us,Rick Albritton,manager,en,eugene,,false,Eugene site manager. Email is placeholder pending Bill confirmation.
+janette.thomas@svdp.us,Janette Thomas,manager,en,woodland,,false,Woodland site manager. Email is placeholder pending Bill confirmation.

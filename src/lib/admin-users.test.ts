@@ -19,7 +19,6 @@ describe('scrubUserForAudit', () => {
     processor_role: null,
     is_active: true,
     pin_hash: '$argon2id$v=19$m=19456,t=2,p=1$abc$xyz',
-    password_hash: null,
     deleted_at: null,
   };
 
@@ -29,40 +28,14 @@ describe('scrubUserForAudit', () => {
     expect(JSON.stringify(out).includes('argon2id')).toBe(false);
   });
 
-  it('removes password_hash from the output', () => {
-    const out = scrubUserForAudit({
-      ...baseUser,
-      password_hash: '$argon2id$v=19$m=19456,t=2,p=1$abc$secret',
-    });
-    expect('password_hash' in out).toBe(false);
-    expect(JSON.stringify(out).includes('secret')).toBe(false);
-  });
-
   it('records pin_set=true when a pin hash exists', () => {
     const out = scrubUserForAudit(baseUser);
     expect(out.pin_set).toBe(true);
-    expect(out.password_set).toBe(false);
   });
 
   it('records pin_set=false when no pin hash', () => {
     const out = scrubUserForAudit({ ...baseUser, pin_hash: null });
     expect(out.pin_set).toBe(false);
-  });
-
-  it('treats the seed sentinel as password_set=false', () => {
-    const out = scrubUserForAudit({
-      ...baseUser,
-      password_hash: 'pending_first_password_reset',
-    });
-    expect(out.password_set).toBe(false);
-  });
-
-  it('treats a real argon2id password hash as password_set=true', () => {
-    const out = scrubUserForAudit({
-      ...baseUser,
-      password_hash: '$argon2id$v=19$m=19456,t=2,p=1$abc$xyz',
-    });
-    expect(out.password_set).toBe(true);
   });
 
   it('preserves non-secret fields verbatim', () => {
@@ -77,7 +50,7 @@ describe('scrubUserForAudit', () => {
 });
 
 describe('serializeForAudit', () => {
-  it('emits no pin_hash / password_hash keys in the JSON', () => {
+  it('emits no pin_hash key in the JSON', () => {
     const scrubbed = scrubUserForAudit({
       id: 'u',
       email: null,
@@ -88,12 +61,10 @@ describe('serializeForAudit', () => {
       processor_role: null,
       is_active: true,
       pin_hash: 'should-not-appear',
-      password_hash: 'should-not-appear',
       deleted_at: null,
     });
     const json = JSON.stringify(serializeForAudit(scrubbed));
     expect(json).not.toContain('pin_hash');
-    expect(json).not.toContain('password_hash');
     expect(json).not.toContain('should-not-appear');
   });
 
@@ -104,17 +75,19 @@ describe('serializeForAudit', () => {
       id: 'u',
       pin_hash: '$argon2id$xxx',
       pin_set: true,
-      password_set: false,
     } as unknown as ReturnType<typeof scrubUserForAudit>;
     expect(() => serializeForAudit(tainted)).toThrow(/pin_hash/);
   });
 
   it('refuses to serialize an object that still has password_hash', () => {
+    // `password_hash` was dropped in the Sprint-2 cleanup migration,
+    // but the runtime guard stays in place: if a future refactor
+    // re-introduces a password-shaped column, the probe must catch
+    // it before the hash reaches the append-only audit log.
     const tainted = {
       id: 'u',
       password_hash: '$argon2id$xxx',
       pin_set: false,
-      password_set: true,
     } as unknown as ReturnType<typeof scrubUserForAudit>;
     expect(() => serializeForAudit(tainted)).toThrow(/password_hash/);
   });

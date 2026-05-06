@@ -20,8 +20,8 @@ import { LOCALE_COOKIE, isLocale } from '@/i18n/config';
 //      reads Prisma in `verifyPin`, so it's Node-only.
 //
 // Email + password authentication has been removed (ADR-0016). The
-// `password_hash` column on `users` is now vestigial; queued for
-// removal in a Sprint-2 cleanup migration.
+// `password_hash` column on `users` was dropped in the Sprint-2
+// cleanup migration `20260506215753_drop_user_password_hash`.
 //
 // If the Entra env vars are unset at deploy time, the Entra provider
 // is still mounted but every OAuth round-trip fails at the IdP step.

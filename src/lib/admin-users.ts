@@ -8,15 +8,22 @@
 //     transaction so an audit row can never be lost on partial
 //     failure (CLAUDE.md hard rule #6 — append-only retention is
 //     useless if the row never lands)
-//   - never returns `pin_hash` or `password_hash` to callers
-//   - scrubs `pin_hash` and `password_hash` from audit `before` /
-//     `after` snapshots — the audit table records *that* the secret
-//     changed, never what it was.
+//   - never returns `pin_hash` to callers
+//   - scrubs `pin_hash` from audit `before` / `after` snapshots —
+//     the audit table records *that* the secret changed, never what
+//     it was.
 //
 // PIN hashing flows through `setPin()` in `pin-service.ts` so we
 // reuse the existing Argon2id config + uniqueness-within-site
 // loop-verify (ADR-0012 §3). This module never calls `argon2.hash()`
 // directly for PINs.
+//
+// `password_hash` was dropped in the Sprint-2 cleanup migration
+// `20260506215753_drop_user_password_hash` (per ADR-0016 — Entra SSO
+// is the only manager/admin sign-in path). The scrubber + serializer
+// retain a defensive `password_hash` guard so any future refactor
+// that re-introduces a password-shaped column trips the runtime
+// probe before a hash can leak into the append-only audit log.
 
 import { Prisma, type AuditAction, type User, type UserRole } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
@@ -28,13 +35,8 @@ import { PROCESSOR_ROLES, type ProcessorRole } from '@/app/admin/constants';
 // code should import from `@/app/admin/constants` directly.
 export { PROCESSOR_ROLES, type ProcessorRole };
 
-// Sentinel matches `auth.ts`. Manager/admin accounts created via
-// the admin panel start with this hash; the user activates the
-// account on first SSO sign-in (Wave A) or first password-reset.
-const SEED_PLACEHOLDER_HASH = 'pending_first_password_reset';
-
-// Public DTOs. NEVER expose pin_hash / password_hash; use this shape
-// in every API response + every server-component prop.
+// Public DTOs. NEVER expose pin_hash; use this shape in every API
+// response + every server-component prop.
 export interface AdminUserDto {
   id: string;
   email: string | null;
@@ -62,7 +64,6 @@ type AuditableUser = Pick<
   | 'processor_role'
   | 'is_active'
   | 'pin_hash'
-  | 'password_hash'
   | 'deleted_at'
 >;
 
@@ -76,23 +77,25 @@ interface ActorContext {
 // PII scrubber
 // ────────────────────────────────────────────────────────────────────
 
-type ScrubbedUser = Omit<AuditableUser, 'pin_hash' | 'password_hash'> & {
+type ScrubbedUser = Omit<AuditableUser, 'pin_hash'> & {
   pin_set: boolean;
-  password_set: boolean;
 };
 
 /**
- * Strip `pin_hash` and `password_hash` from a User-shaped object,
- * replacing each with a boolean "is set" marker. Used for audit
- * `before`/`after` snapshots; never reverses (we never rehydrate
- * audit rows back into User objects).
+ * Strip `pin_hash` from a User-shaped object, replacing it with a
+ * boolean "is set" marker. Used for audit `before`/`after` snapshots;
+ * never reverses (we never rehydrate audit rows back into User
+ * objects).
+ *
+ * `password_hash` was dropped in Sprint-2; if a future refactor
+ * re-introduces it the runtime probe in `serializeForAudit()` will
+ * throw before the value can land in the append-only audit log.
  */
 export function scrubUserForAudit(u: AuditableUser): ScrubbedUser {
-  const { pin_hash, password_hash, ...rest } = u;
+  const { pin_hash, ...rest } = u;
   return {
     ...rest,
     pin_set: pin_hash != null,
-    password_set: password_hash != null && password_hash !== SEED_PLACEHOLDER_HASH,
   };
 }
 
@@ -212,14 +215,13 @@ export async function createUser(
   // same site. We can't do this inside the create transaction
   // because setPin() does it post-create; but we need the user row
   // to exist before setPin can write the hash. Strategy: create with
-  // password_hash=sentinel and pin_hash=null in a transaction with
-  // the audit row, then call setPin() outside the txn. If setPin
-  // fails (collision), roll back via soft-delete + audit. This is
-  // safe — the user does not appear active until the PIN write
-  // succeeds, because we leave is_active=false until then.
-
-  const passwordHash =
-    input.role === 'manager' || input.role === 'admin' ? SEED_PLACEHOLDER_HASH : null;
+  // pin_hash=null in a transaction with the audit row, then call
+  // setPin() outside the txn. If setPin fails (collision), roll back
+  // via soft-delete + audit. This is safe — the user does not appear
+  // active until the PIN write succeeds, because we leave
+  // is_active=false until then. Manager/admin rows are created
+  // active; sign-in is gated by Entra SSO + the `evaluateEntraSignIn`
+  // role/active/deleted_at checks (ADR-0016).
 
   const created = await prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
@@ -229,7 +231,6 @@ export async function createUser(
         email,
         primary_site_id: input.primary_site_id,
         processor_role: input.processor_role,
-        password_hash: passwordHash,
         // Operators flip to active after the PIN write; SSO users
         // are active immediately so they can sign in.
         is_active: input.role !== 'operator',
@@ -364,17 +365,6 @@ export async function updateUser(
     data.primary_site = { connect: { id: input.primary_site_id } };
   }
   if (input.processor_role !== undefined) data.processor_role = input.processor_role;
-
-  // If a manager/admin gets created without an email yet (legacy
-  // bootstrap) and the admin sets one for the first time, also seed
-  // the password sentinel so they can run forgot-password.
-  if (
-    (nextRole === 'manager' || nextRole === 'admin') &&
-    !existing.password_hash &&
-    nextEmail
-  ) {
-    data.password_hash = SEED_PLACEHOLDER_HASH;
-  }
 
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
@@ -541,8 +531,11 @@ export async function getUser(id: string): Promise<AdminUserDto | null> {
 // type, but `JSON.parse(JSON.stringify(...))` ISO-stringifies them,
 // matching the `audit.ts` behavior.
 function serializeForAudit(v: ScrubbedUser): Prisma.InputJsonValue {
-  // Defensive: confirm at runtime that nobody dropped pin_hash /
-  // password_hash back in via a future refactor. The cost is one
+  // Defensive: confirm at runtime that nobody dropped pin_hash back
+  // in via a future refactor. We also reject `password_hash` even
+  // though the column was dropped in Sprint-2 — if a future change
+  // re-introduces a password-shaped column, this probe ensures the
+  // hash never reaches the append-only audit log. The cost is one
   // shallow has-property check.
   const probe = v as Record<string, unknown>;
   if ('pin_hash' in probe || 'password_hash' in probe) {
@@ -552,4 +545,4 @@ function serializeForAudit(v: ScrubbedUser): Prisma.InputJsonValue {
 }
 
 // Re-export helpers tests need to drive without spinning up a DB.
-export const __testing = { serializeForAudit, SEED_PLACEHOLDER_HASH };
+export const __testing = { serializeForAudit };

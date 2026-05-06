@@ -137,8 +137,9 @@ model User {
   role   UserRole
   locale UserLocale @default(en)
 
-  // Browser auth (manager/admin)
-  password_hash String? // Argon2id; null for operator-only
+  // Browser auth (manager/admin) — Microsoft Entra ID SSO only per
+  // ADR-0016. The legacy `password_hash` column was dropped in
+  // Sprint-2 cleanup migration `20260506215753_drop_user_password_hash`.
 
   // PIN auth (operator)
   pin_hash             String? // Argon2id; per ADR-0004, NOT indexed

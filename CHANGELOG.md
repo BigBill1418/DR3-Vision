@@ -24,6 +24,86 @@ the rest of the fleet already speaks this contract. Tests added at
 `src/app/healthz/route.test.ts` cover both branches plus a direct
 regex assertion against the deployer's exact pattern.
 
+### 2026-05-06 — Sprint-2 cleanup: drop User.password_hash
+
+ADR-0016 made Microsoft Entra ID SSO the only sign-in path for managers
+and admins; operators continue to use PIN auth (ADR-0004). The
+`User.password_hash` column was left in the schema as vestigial. This
+cleanup drops it.
+
+#### Migration
+
+- NEW: `prisma/migrations/20260506215753_drop_user_password_hash/migration.sql`
+  — `ALTER TABLE "users" DROP COLUMN IF EXISTS "password_hash"`. Test
+  applied forward against a Postgres 16 instance with a populated row
+  (the production-style `pending_first_password_reset` placeholder), then
+  re-applied to confirm Prisma's `_prisma_migrations` ledger marks it
+  applied and skips the SQL on subsequent `migrate deploy`. The
+  `IF EXISTS` guard makes the SQL itself idempotent if an operator ever
+  runs it by hand. Production rows currently carry the seed sentinel
+  string — no real Argon2id hash is being lost.
+
+#### Schema
+
+- `prisma/schema.prisma` — removed the `password_hash` field from the
+  `User` model. Comment now points at the cleanup migration + ADR-0016
+  for the why.
+
+#### Code
+
+- `src/lib/admin-users.ts` — removed the `SEED_PLACEHOLDER_HASH`
+  constant, dropped `password_hash` from the `AuditableUser`
+  `Pick<>`, removed the `password_set` field from `ScrubbedUser`,
+  deleted the create-time `passwordHash` calculation + the update-time
+  `password_hash` backfill block. The defensive `password_hash` check
+  in `serializeForAudit()` stays — it is now a forward-defense: if a
+  future refactor re-introduces a password-shaped column, the runtime
+  probe trips before the value reaches the append-only audit log
+  (CLAUDE.md hard rule #6).
+- `src/lib/admin-users.test.ts` — dropped the four scrubber tests that
+  exercised `password_hash` shapes; left the negative `serializeForAudit`
+  guard test that asserts the runtime probe still rejects a tainted
+  object carrying a `password_hash` key.
+- `src/app/api/admin/users/users.test.ts` — removed `password_hash` from
+  the in-memory `MockUser` interface, the `insertUser()` helper, the
+  `prisma.user.create` mock, and the `prisma.user.update` mutable-field
+  list. The `expect(json).not.toContain('password_hash')` PII assertions
+  in the `create operator` + `reset PIN` cases are retained as
+  forward-defenses against type drift.
+- `src/lib/auth.ts` — comment block updated; the "vestigial; queued for
+  removal" note replaced by a pointer to the cleanup migration.
+- `prisma/seed.mjs` — removed the `password_hash: blankToNull(r.password_hash)`
+  field from `seedUsers()`'s `data` object.
+- `prisma/seed/users.csv` — dropped the `password_hash` column entirely;
+  notes updated to describe the Entra SSO + `/admin/users` activation
+  flow instead of password-reset bootstrapping.
+- `prisma/seed/README.md` — `users.csv` section + integrity-reminder
+  bullet updated to reflect ADR-0016 reality (Entra SSO + admin-panel
+  activation; no password to seed).
+
+#### Removed
+
+- `scripts/set-password.mjs` — the bootstrap CLI that hashed a
+  password into `users.password_hash`. Dead code post-ADR-0016 and
+  doubly so post-Sprint-2 (the column it wrote to is gone). Removed
+  in this PR rather than left as a runtime trap.
+
+#### Charter
+
+- `PROJECT-CHARTER.md` §6 schema sketch — `password_hash` line
+  replaced with a comment pointing at ADR-0016 + the Sprint-2 cleanup.
+
+#### Production rollout
+
+The migrate container runs `prisma migrate deploy` on every deploy.
+On the next CHAD-HQ deploy this migration applies, the column is
+dropped, and the cluster runs without it. Rollback story: `git revert`
+of this PR reintroduces the column at the schema level via a follow-up
+migration (Prisma will detect the divergence and prompt for a new
+forward migration); rolling back the database column itself requires a
+manual `ALTER TABLE "users" ADD COLUMN "password_hash" TEXT` if needed
+— but since no row carries a real hash, "rollback" is academic.
+
 ### 2026-05-06 — Entra SSO production cutover + runbook fixes
 
 Live SSO ship for `bill.barnard@svdp.us` (admin) on

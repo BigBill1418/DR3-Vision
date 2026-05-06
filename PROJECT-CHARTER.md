@@ -436,7 +436,9 @@ docks                                    -- V2.1, future
 
 users
   id, email (nullable for operator-only accounts), name,
-  password_hash (nullable; managers/admins only),
+  -- Manager/admin sign-in is Microsoft Entra ID SSO only per ADR-0016;
+  -- no password column. The Sprint-2 cleanup migration dropped the
+  -- vestigial `password_hash` field. Operators sign in with PIN.
   pin_hash (Argon2id; required for all roles that use the iPad),
   role enum(operator|manager|admin),
   locale enum(en|es|ur) default en,        -- per-user language preference; UI + voice-to-text
