@@ -5,6 +5,25 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Healthz body alignment for deploy-gate
+
+`/healthz` now emits `"status":"ok"` (200) on healthy and
+`"status":"degraded"` (503) on db-probe failure, alongside the existing
+`ok / version / uptime_s / db_ok` fields. The swarmpilot deployer
+(`noc-master/api/services/deployer-worker.js`,
+`DEFAULT_HEALTH_MATCH = "status"\s*:\s*"(ok|healthy)"`) is the body-match
+gate shared by 18 fleet repos; without a `status` field the gate ran
+to its 15-min deadline on every deploy. Live observation: commit
+`9a166b7` sat at attempt 90+ with `last_reason: "body did not contain
+status:ok|healthy"` despite the container being live and serving
+`db_ok:true`. Failure-mode is preserved — `"status":"degraded"`
+intentionally does NOT match the regex, so a degraded service
+correctly fails the gate and triggers rollback. Fixed app-side rather
+than deployer-side because the deployer regex is shared infrastructure;
+the rest of the fleet already speaks this contract. Tests added at
+`src/app/healthz/route.test.ts` cover both branches plus a direct
+regex assertion against the deployer's exact pattern.
+
 ### 2026-05-06 — Entra SSO production cutover + runbook fixes
 
 Live SSO ship for `bill.barnard@svdp.us` (admin) on
