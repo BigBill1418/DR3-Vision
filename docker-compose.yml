@@ -82,9 +82,14 @@ services:
     restart: 'no'
     # Explicit path avoids the `.bin/prisma` symlink-flattening trap
     # documented in the Dockerfile runner stage.
-    command: ['node', 'node_modules/prisma/build/index.js', 'migrate', 'deploy']
+    command: ['node', 'scripts/migrate-with-ntfy.mjs']
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
+      # System-level ntfy alerts (ADR-0036) — same fail-soft contract as
+      # the app service. The migrate wrapper publishes one event per
+      # newly-applied migration to `dr3-vision-system`.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,6 +114,12 @@ services:
       # photo flow falls back to the placeholder `pending-r2-…` keys
       # so the workflow keeps working before R2 creds land.
       - path: /home/bbarnard065/.dr3-vision-secrets/r2.env
+        required: false
+      # System-level ntfy alerts (ADR-0036 + ADR-0037). Optional so the
+      # app boots fail-soft when the secret hasn't been dropped yet —
+      # `src/lib/ntfy.ts` treats a missing `NTFY_PUBLISHER_TOKEN` as a
+      # successful no-op. Operator runbook: docs/operator/ntfy-setup.md.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
         required: false
     environment:
       NODE_ENV: production
