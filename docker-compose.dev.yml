@@ -1,0 +1,78 @@
+# DR3-Vision local development docker-compose.
+#
+# In production this file is replaced by the fleet's swarmpilot_deployer
+# manifests; see `docs/FLEET-DEPLOYMENT.md`.
+#
+# For local development:
+#   docker compose up -d postgres minio
+#   npm install
+#   npx prisma migrate dev
+#   npx prisma db seed
+#   npm run dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dr3-vision-postgres
+    environment:
+      POSTGRES_USER: dr3
+      POSTGRES_PASSWORD: dr3_dev_password
+      POSTGRES_DB: dr3_vision
+    ports:
+      - '5432:5432'
+    volumes:
+      - dr3-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dr3 -d dr3_vision']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    # Local S3-compatible R2 emulator for development.
+    # In production, the application uses Cloudflare R2 directly; minio is dev-only.
+    image: minio/minio:latest
+    container_name: dr3-vision-minio
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'  # S3 API
+      - '9001:9001'  # Web console
+    volumes:
+      - dr3-minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    # Optional: uncomment to run the app in Docker locally instead of `npm run dev`.
+    # Useful for testing the production Dockerfile end-to-end.
+    profiles: ['containerized']
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dr3-vision-app
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://dr3:dr3_dev_password@postgres:5432/dr3_vision?schema=public
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev-secret-not-for-production-use-32-bytes-minimum
+      R2_ENDPOINT: http://minio:9000
+      R2_BUCKET: dr3-vision-photos
+      R2_ACCESS_KEY_ID: minioadmin
+      R2_SECRET_ACCESS_KEY: minioadmin
+      R2_PUBLIC_BASE_URL: http://localhost:9000/dr3-vision-photos
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+volumes:
+  dr3-postgres-data:
+  dr3-minio-data:

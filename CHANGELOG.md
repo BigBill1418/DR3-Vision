@@ -5,6 +5,38 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Canonical logo + compose restructure (incident recovery)
+
+Two things in one ship because they couldn't safely be split.
+
+**Canonical logo wired in.** Bill provided the canonical DR3-Vision
+logo (`public/brand/dr3-vision-logo.jpg`, 1168×784) — eye-as-"o"
+treatment in cyan on a dark space backdrop. Closes ADR-0012 §5 and
+HANDOFF open decision #1. The placeholder page now shows the logo
+image as the hero with "— coming soon" beneath, on a black background
+that matches the logo's backdrop. Background change is scoped to the
+placeholder route only; layout-level body bg stays on `--dr3-green-deep`
+per ADR-0008. The earlier inline-SVG eyeball + text wordmark are
+removed. Footer caption under the SVdP seal swapped to a `svdp.us`
+hyperlink at Bill's request.
+
+**Compose restructure.** Production compose moved from
+`deploy/docker-compose.yml` to root `docker-compose.yml`; the previous
+root dev compose moved to `docker-compose.dev.yml`. Driver was a deploy
+incident: the noc swarmpilot deployer's remote-deploy code path
+(compose stacks on non-HQ hosts) does NOT honor the `compose_file:`
+config knob — only the local-deploy path does. So when the deployer
+ran `docker compose up -d` on CHAD-HQ after the prior push it hit the
+DEV compose at root, started the dev MinIO container, and tore down
+`dr3-vision-cloudflared` as an "orphan" — knocking the tunnel down and
+returning HTTP 530. Recovery: manual `docker compose down --remove-orphans`
+
+- rebuild + up against the prod compose. Permanent fix: this
+  restructure, plus updated comments at the top of `docker-compose.yml`
+  explaining why it MUST be the production file. README.md and HANDOFF.md
+  updated to invoke the dev compose explicitly with `-f docker-compose.dev.yml`.
+  ADR-0013 §1 already records the structural choice.
+
 ### 2026-05-06 — T-001 follow-up: deployable to CHAD-HQ
 
 Lands the production deploy surface for the T-001 placeholder.

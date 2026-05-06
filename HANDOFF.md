@@ -19,7 +19,8 @@ dr3-vision/
 ├── next.config.js                     # PWA config included
 ├── tailwind.config.ts                 # DR3 brand tokens
 ├── Dockerfile                         # Fleet-aware
-├── docker-compose.yml                 # Local dev + Postgres
+├── docker-compose.yml                 # Production stack (CHAD-HQ): app + cloudflared
+├── docker-compose.dev.yml             # Local dev: postgres + minio + optional containerized app
 │
 ├── docs/
 │   ├── SPRINT-1-PLAN.md               # Tickets to execute
@@ -93,12 +94,13 @@ If any are wrong, stop and write a `docs/QUESTIONS.md` entry. Do not silently ch
 
 ```bash
 npm install
-docker compose up -d postgres
+docker compose -f docker-compose.dev.yml up -d postgres
 npx prisma migrate dev --name init
 npx prisma db seed
 ```
 
 Expected outcome: a Postgres instance running on `localhost:5432` with all tables created and seed data loaded. `npx prisma studio` should show:
+
 - 2 rows in `sites` (eugene, woodland)
 - 6 rows in `site_holidays` × 2 sites = 12 rows
 - 2 rows in `processor_bonus_rules` (one per site)
@@ -121,6 +123,7 @@ Open `docs/SPRINT-1-PLAN.md`. Tickets are ordered by dependency. Take the first 
 ## Definition of "Sprint 1 complete"
 
 Sprint 1 is done when an operator with a 4-digit PIN can:
+
 1. Log into the iPad PWA at `http://localhost:3000` (or `dr3-vision.svdp.us` once deployed)
 2. See the expected-loads queue for their site
 3. Tap a load, capture a BOL photo, optionally capture a weight ticket
@@ -131,6 +134,7 @@ Sprint 1 is done when an operator with a 4-digit PIN can:
 8. Submit, with all data persisted to Postgres and photos pushed to R2
 
 A manager can:
+
 1. Log into the browser portal with email + password
 2. See the live dock view (5-second polling) with the active operator session highlighted
 3. See today's load list, with status, operator, and counts
@@ -156,6 +160,7 @@ The compliance dashboard surfaces the seven metrics from `docs/COMPLIANCE.md`. n
 ## Definition of done for the handoff itself
 
 This handoff package is "done" when:
+
 - A new Claude Code session opens the repo, reads `CLAUDE.md`, follows the bootstrap sequence above, and reaches Step 4 (working dev server with brand palette) within one hour of session start.
 - That same session can pick up the first ticket from `docs/SPRINT-1-PLAN.md` and begin work without asking Bill for clarification.
 

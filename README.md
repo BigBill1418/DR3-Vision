@@ -46,7 +46,7 @@ Requirements: Node 20.x or 22.x, Docker 24+, npm 10+.
 
 ```bash
 npm install
-docker compose up -d postgres
+docker compose -f docker-compose.dev.yml up -d postgres
 npx prisma migrate dev --name init
 npx prisma db seed
 npm run dev

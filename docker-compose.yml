@@ -1,78 +1,106 @@
-# DR3-Vision local development docker-compose.
+# =============================================================================
+# DR3-Vision — production stack (CHAD-HQ, 10.99.0.2)
+# =============================================================================
+# Architecture (T-001 placeholder):
+#   cloudflared (edge TLS, dr3-vision tunnel 3999bb3b-…)
+#       ↓ HTTP/1.1 over compose bridge
+#   app  (Next.js 15 standalone, listens on :3000 inside the network)
 #
-# In production this file is replaced by the fleet's swarmpilot_deployer
-# manifests; see `docs/FLEET-DEPLOYMENT.md`.
+# T-002+ adds postgres (managed via Prisma); T-007 adds object-storage wiring
+# to Cloudflare R2. None of those land in this file until their tickets ship.
 #
-# For local development:
-#   docker compose up -d postgres minio
-#   npm install
-#   npx prisma migrate dev
-#   npx prisma db seed
-#   npm run dev
+# The NOC swarmpilot_deployer on HSH-HQ polls this repo every 5s. On new
+# main commits it SSHes to CHAD-HQ, pulls, runs `docker compose up -d`
+# from the repo root — that's THIS file. The local-dev compose lives at
+# `docker-compose.dev.yml` (postgres + minio + optional containerized
+# app) and is invoked explicitly with `-f` per `HANDOFF.md` Step 3.
+#
+# WHY THIS IS THE ROOT-LEVEL FILE: the deployer's remote-deploy code
+# path (compose stacks on non-HQ hosts) does NOT honor the
+# `compose_file:` config knob — only the local-deploy path does. So
+# the deployer always invokes the default `docker-compose.yml` on
+# CHAD-HQ. If the dev compose were at root, every deploy would tear
+# down cloudflared as an "orphan" and break the tunnel (this exact
+# regression happened 2026-05-06; recovery + restructure shipped in
+# the same commit). ADR-0013 §1 documents the structural choice.
+#
+# Per ADR-0008 (svdp-intranet), cloudflared lives INSIDE this compose
+# with its own per-service tunnel (not on host-systemd), to keep the
+# ingress graph isolated and make rollback atomic with the app rollback.
+#
+# Tunnel + token live in ~/.dr3-vision-secrets/tunnel.env on CHAD-HQ
+# (mode 600, NOT in the repo). The deployer sources it via env_file.
+# To rotate: re-mint via CF API + replace TUNNEL_TOKEN.
+# =============================================================================
+name: dr3-vision
+
+x-barnardhq-labels: &barnardhq-labels
+  com.barnardhq.project: 'dr3-vision'
+  com.barnardhq.env: 'prod'
+  com.barnardhq.tenant: 'svdp'
+  com.barnardhq.stack: 'dr3-vision'
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '50m'
+    max-file: '5'
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: dr3-vision-postgres
-    environment:
-      POSTGRES_USER: dr3
-      POSTGRES_PASSWORD: dr3_dev_password
-      POSTGRES_DB: dr3_vision
-    ports:
-      - '5432:5432'
-    volumes:
-      - dr3-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U dr3 -d dr3_vision']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  minio:
-    # Local S3-compatible R2 emulator for development.
-    # In production, the application uses Cloudflare R2 directly; minio is dev-only.
-    image: minio/minio:latest
-    container_name: dr3-vision-minio
-    command: server /data --console-address ':9001'
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - '9000:9000'  # S3 API
-      - '9001:9001'  # Web console
-    volumes:
-      - dr3-minio-data:/data
-    healthcheck:
-      test: ['CMD', 'mc', 'ready', 'local']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   app:
-    # Optional: uncomment to run the app in Docker locally instead of `npm run dev`.
-    # Useful for testing the production Dockerfile end-to-end.
-    profiles: ['containerized']
     build:
       context: .
       dockerfile: Dockerfile
+    image: dr3-vision-app:local
     container_name: dr3-vision-app
-    ports:
-      - '3000:3000'
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://dr3:dr3_dev_password@postgres:5432/dr3_vision?schema=public
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: dev-secret-not-for-production-use-32-bytes-minimum
-      R2_ENDPOINT: http://minio:9000
-      R2_BUCKET: dr3-vision-photos
-      R2_ACCESS_KEY_ID: minioadmin
-      R2_SECRET_ACCESS_KEY: minioadmin
-      R2_PUBLIC_BASE_URL: http://localhost:9000/dr3-vision-photos
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+      # T-001 ships without a database; downstream tickets add real env vars
+      # via .env on CHAD-HQ (NEXTAUTH_SECRET, DATABASE_URL, R2_*, MYMRC_*).
+      # Prisma client is generated at build with a placeholder URL — see
+      # Dockerfile. Runtime placeholder URL keeps the client importable
+      # from anywhere in the codebase even though no query runs in T-001.
+      DATABASE_URL: 'postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder?schema=public'
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'app'
+    logging: *logging
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
-volumes:
-  dr3-postgres-data:
-  dr3-minio-data:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.3.0
+    container_name: dr3-vision-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/tunnel.env
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'cloudflared'
+    logging: *logging
+
+networks:
+  dr3net:
+    name: dr3-vision_dr3net
+    driver: bridge
