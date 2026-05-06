@@ -36,6 +36,13 @@ COPY . .
 # resolves at build time. Runtime gets the real URL from the orchestrator.
 RUN DATABASE_URL='postgresql://build:build@127.0.0.1:5432/build?schema=public' npx prisma generate
 RUN npm run build
+# Compile the standalone MyMRC scrape worker (TS → CJS) for the cron
+# container. The Next.js standalone bundle does NOT include arbitrary
+# `src/lib/` modules — only what Next's tracer reaches from app routes.
+# The scrape worker is invoked from `scripts/mymrc-cron.mjs` (outside
+# Next), so it gets its own emit step into `dist/mymrc/` and is COPY'd
+# into the runner. See `tsconfig.mymrc.json` for the compile scope.
+RUN npx tsc --project tsconfig.mymrc.json
 
 # ─── Stage 3: runner (production) ────────────────────────────────────────
 FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS runner
@@ -80,15 +87,25 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/papaparse ./node_mod
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@aws-sdk ./node_modules/@aws-sdk
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@smithy ./node_modules/@smithy
 # scripts/ — operational wrappers invoked by the migrate init container
-# (e.g. scripts/migrate-with-ntfy.mjs). The Next.js standalone bundle
-# does not include scripts/ since no server code imports it; copy it
-# explicitly so init-container commands like
+# (e.g. scripts/migrate-with-ntfy.mjs) and the mymrc-scrape cron container
+# (`scripts/mymrc-cron.mjs` + `scripts/mymrc-scrape.mjs`). The Next.js
+# standalone bundle does not include scripts/ since no server code
+# imports it; copy it explicitly so init-container commands like
 # `node scripts/migrate-with-ntfy.mjs` resolve at runtime. Skipping
 # this copy is what broke the 2026-05-06 deploy of PR #3 — the
 # wrapper hit MODULE_NOT_FOUND, the migrate container exited 1, and
 # the app's depends_on chain blocked the site from starting until
 # the compose command was hand-reverted on CHAD-HQ.
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+# dist/mymrc — pre-compiled CJS output of `src/lib/mymrc/*.ts`, consumed
+# by the `mymrc-scrape` cron container. The Next.js standalone bundle
+# does not include this tree (no app route imports it), so we copy it
+# explicitly. Ship `playwright` + its browser binaries with the runner
+# image (the base image `mcr.microsoft.com/playwright:v1.48.0-jammy`
+# already provides the browsers; the npm package itself is added below).
+COPY --from=builder --chown=nextjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/playwright ./node_modules/playwright
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/playwright-core ./node_modules/playwright-core
 
 USER nextjs
 
