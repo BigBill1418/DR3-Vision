@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@/i18n/provider';
 
 // Wraps the queue list with two refresh paths:
 //   1. Auto-refresh every 60s — meets SPRINT-1-PLAN T-005 cadence
@@ -24,6 +25,7 @@ type Props = {
 
 export function QueueClient({ children }: Props) {
   const router = useRouter();
+  const t = useT();
   const [refreshing, setRefreshing] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const startYRef = useRef<number | null>(null);
@@ -94,10 +96,10 @@ export function QueueClient({ children }: Props) {
         >
           <span className="rounded-full bg-dr3-green px-3 py-1 text-xs font-semibold text-dr3-ink shadow">
             {refreshing
-              ? 'Refreshing…'
+              ? t('queue.refreshing')
               : pullDistance >= PULL_THRESHOLD_PX
-                ? 'Release to refresh'
-                : 'Pull down'}
+                ? t('queue.release_to_refresh')
+                : t('queue.pull_down')}
           </span>
         </div>
       )}

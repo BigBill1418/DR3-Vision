@@ -2,6 +2,7 @@
 
 import type { CountMode } from '@prisma/client';
 import { useEffect, useState, useTransition } from 'react';
+import { useT } from '@/i18n/provider';
 import { addStackAction, finishUnloadAction } from '../../actions';
 
 // Stage 5a — stack counter UI per charter §4.3. Three modes:
@@ -22,6 +23,7 @@ type Props = {
 };
 
 export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks }: Props) {
+  const t = useT();
   const [stacks, setStacks] = useState<Stack[]>(existingStacks);
   const [mode, setMode] = useState<CountMode | null>(existingStacks[0]?.count_mode ?? null);
   const [isPending, startTransition] = useTransition();
@@ -47,7 +49,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
           },
         ]);
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Save failed');
+        setError(e instanceof Error ? e.message : t('stage_stacks.save_failed'));
       }
     });
   };
@@ -59,7 +61,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
       try {
         await finishUnloadAction(siteCode, loadId, mode);
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Finish failed');
+        setError(e instanceof Error ? e.message : t('stage_stacks.finish_failed'));
       }
     });
   };
@@ -68,8 +70,8 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
     return (
       <section className="flex flex-col gap-6">
         <header>
-          <h2 className="text-2xl font-bold">5. Count the units</h2>
-          <p className="text-sm text-dr3-cream/70">Choose how you want to count this load.</p>
+          <h2 className="text-2xl font-bold">{t('stage_stacks.heading_pick_mode')}</h2>
+          <p className="text-sm text-dr3-cream/70">{t('stage_stacks.subheading_pick_mode')}</p>
         </header>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(['ledger', 'multiplier', 'total'] as CountMode[]).map((m) => (
@@ -77,9 +79,9 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
               key={m}
               type="button"
               onClick={() => setMode(m)}
-              className="rounded-lg bg-dr3-green-dark/50 px-6 py-6 text-lg font-semibold capitalize text-dr3-cream transition-colors hover:bg-dr3-green-dark/80"
+              className="rounded-lg bg-dr3-green-dark/50 px-6 py-6 text-lg font-semibold text-dr3-cream transition-colors hover:bg-dr3-green-dark/80"
             >
-              {m === 'ledger' ? 'Tally (+1)' : m === 'multiplier' ? 'Stacks × N' : 'Total only'}
+              {t(`stage_stacks.mode_${m}`)}
             </button>
           ))}
         </div>
@@ -92,9 +94,11 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
     <section className="flex flex-col gap-6">
       <header className="flex items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold">5. Counting · {modeLabel(mode)}</h2>
+          <h2 className="text-2xl font-bold">
+            {t('stage_stacks.heading_counting', { mode: t(`stage_stacks.mode_label_${mode}`) })}
+          </h2>
           <p className="text-sm text-dr3-cream/70">
-            {stacks.length} stacks · {total} units total
+            {t('stage_stacks.stacks_units_summary', { stacks: stacks.length, units: total })}
           </p>
         </div>
         <button
@@ -102,7 +106,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
           onClick={() => setMode(null)}
           className="text-xs text-dr3-cream/60 underline-offset-2 hover:underline"
         >
-          Change mode
+          {t('stage_stacks.change_mode')}
         </button>
       </header>
 
@@ -114,8 +118,8 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
         <ul className="flex flex-col gap-1 text-sm text-dr3-cream/80">
           {stacks.map((s) => (
             <li key={s.id} className="flex justify-between">
-              <span>Stack #{s.stack_index}</span>
-              <span className="tabular-nums">{s.unit_count} units</span>
+              <span>{t('stage_stacks.stack_index', { n: s.stack_index })}</span>
+              <span className="tabular-nums">{t('stage_stacks.stack_units', { n: s.unit_count })}</span>
             </li>
           ))}
         </ul>
@@ -129,7 +133,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
         onClick={finish}
         className="rounded-lg bg-dr3-chartreuse px-6 py-4 text-lg font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {isPending ? 'Finishing…' : 'Finish unload →'}
+        {isPending ? t('stage_stacks.finishing') : t('stage_stacks.finish')}
       </button>
 
       <Timer unloadStartedAt={unloadStartedAt} />
@@ -137,11 +141,8 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   );
 }
 
-function modeLabel(m: CountMode): string {
-  return m === 'ledger' ? 'Tally' : m === 'multiplier' ? 'Stacks × N' : 'Total';
-}
-
 function LedgerControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabled: boolean }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -149,7 +150,7 @@ function LedgerControls({ onAdd, disabled }: { onAdd: (n: number) => void; disab
       onClick={() => onAdd(1)}
       className="rounded-lg bg-dr3-green px-6 py-12 text-3xl font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark disabled:cursor-not-allowed disabled:opacity-40"
     >
-      + 1 mattress
+      {t('stage_stacks.ledger_add_one')}
     </button>
   );
 }
@@ -161,20 +162,21 @@ function MultiplierControls({
   onAdd: (n: number) => void;
   disabled: boolean;
 }) {
+  const t = useT();
   const [units, setUnits] = useState('');
   const n = Number.parseInt(units, 10);
   const valid = Number.isInteger(n) && n >= 1;
   return (
     <div className="flex flex-col gap-3">
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
-        Mattresses in this stack
+        {t('stage_stacks.multiplier_label')}
         <input
           type="number"
           inputMode="numeric"
           min={1}
           value={units}
           onChange={(e) => setUnits(e.target.value.replace(/\D/g, ''))}
-          placeholder="e.g. 12"
+          placeholder={t('stage_stacks.multiplier_placeholder')}
           className="rounded-md border border-dr3-cream/30 bg-dr3-green-deep px-3 py-3 text-2xl tabular-nums text-dr3-cream focus:border-dr3-green focus:outline-none"
         />
       </label>
@@ -187,27 +189,28 @@ function MultiplierControls({
         }}
         className="rounded-lg bg-dr3-green px-6 py-6 text-xl font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Add stack
+        {t('stage_stacks.multiplier_add')}
       </button>
     </div>
   );
 }
 
 function TotalControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabled: boolean }) {
+  const t = useT();
   const [units, setUnits] = useState('');
   const n = Number.parseInt(units, 10);
   const valid = Number.isInteger(n) && n >= 1;
   return (
     <div className="flex flex-col gap-3">
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
-        Total mattresses on this load
+        {t('stage_stacks.total_label')}
         <input
           type="number"
           inputMode="numeric"
           min={1}
           value={units}
           onChange={(e) => setUnits(e.target.value.replace(/\D/g, ''))}
-          placeholder="e.g. 240"
+          placeholder={t('stage_stacks.total_placeholder')}
           className="rounded-md border border-dr3-cream/30 bg-dr3-green-deep px-3 py-3 text-2xl tabular-nums text-dr3-cream focus:border-dr3-green focus:outline-none"
         />
       </label>
@@ -220,13 +223,14 @@ function TotalControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabl
         }}
         className="rounded-lg bg-dr3-green px-6 py-6 text-xl font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Set total
+        {t('stage_stacks.total_set')}
       </button>
     </div>
   );
 }
 
 function Timer({ unloadStartedAt }: { unloadStartedAt: string | null }) {
+  const t = useT();
   const [elapsedS, setElapsedS] = useState(() => {
     if (!unloadStartedAt) return 0;
     return Math.max(0, Math.floor((Date.now() - new Date(unloadStartedAt).getTime()) / 1000));
@@ -245,8 +249,8 @@ function Timer({ unloadStartedAt }: { unloadStartedAt: string | null }) {
   const s = elapsedS % 60;
   return (
     <p className="rounded-md bg-dr3-green-dark/50 px-3 py-2 text-center text-sm text-dr3-cream/80">
-      Timer ·{' '}
-      <span className="font-mono tabular-nums text-dr3-cream">
+      {t('stage_stacks.timer_label')}{' '}
+      <span className="font-mono tabular-nums text-dr3-cream" dir="ltr">
         {m}:{String(s).padStart(2, '0')}
       </span>
     </p>

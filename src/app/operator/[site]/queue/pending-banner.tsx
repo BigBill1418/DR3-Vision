@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { pendingCount, replayAll } from '@/lib/offline-queue';
+import { useI18n } from '@/i18n/provider';
 
 // T-009 — surface pending offline-queue items on next login. Per
 // SPRINT-1-PLAN: "Replay on connectivity recovery; surface unresolved
@@ -13,6 +14,7 @@ import { pendingCount, replayAll } from '@/lib/offline-queue';
 // without needing to tap.
 
 export function PendingBanner() {
+  const { t, tPlural } = useI18n();
   const [count, setCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -63,10 +65,10 @@ export function PendingBanner() {
       type="button"
       onClick={onTap}
       disabled={busy}
-      className="w-full rounded-lg bg-dr3-chartreuse/20 px-4 py-3 text-left text-sm font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30 disabled:opacity-60"
+      className="w-full rounded-lg bg-dr3-chartreuse/20 px-4 py-3 text-start text-sm font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30 disabled:opacity-60"
     >
-      ⏳ {count} item{count === 1 ? '' : 's'} pending upload from a previous shift —{' '}
-      {busy ? 'syncing now…' : 'tap to replay'}
+      ⏳ {tPlural('pending_banner.items_pending', count, { count })} —{' '}
+      {busy ? t('pending_banner.syncing_now') : t('pending_banner.tap_to_replay')}
     </button>
   );
 }

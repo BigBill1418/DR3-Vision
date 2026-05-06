@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import Image from 'next/image';
 import Link from 'next/link';
+import { getLocale } from '@/i18n/get-locale';
+import { getDictionary, translate } from '@/i18n/dictionary';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,6 +12,9 @@ export const dynamic = 'force-dynamic';
 // developer or manager can reach either flow.
 
 export default async function OperatorRootPage() {
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = (k: string) => translate(dict, k);
   const sites = await prisma.site.findMany({
     select: { code: true, name: true },
     orderBy: { name: 'asc' },
@@ -25,7 +30,7 @@ export default async function OperatorRootPage() {
           priority
           className="h-auto w-full"
         />
-        <h1 className="text-2xl font-semibold">Choose your site</h1>
+        <h1 className="text-2xl font-semibold">{t('site_picker.heading')}</h1>
         <ul className="flex w-full flex-col gap-3">
           {sites.map((s) => (
             <li key={s.code}>

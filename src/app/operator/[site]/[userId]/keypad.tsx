@@ -3,11 +3,17 @@
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@/i18n/provider';
 
 // Touch-first numeric keypad. Per CLAUDE.md hard rule #10 there is no
 // <form> — the Submit fires implicitly on the 4th digit, and the
 // outer button-grid uses onClick handlers throughout. Auto-submit
 // keeps gloved-hand interaction at the minimum number of taps.
+//
+// The keypad grid is forced `dir="ltr"` so that even under the
+// page-level `<html dir="rtl">` (Urdu), the digit order stays
+// 1-2-3 / 4-5-6 / 7-8-9. Numerals are universally LTR; flipping them
+// would surprise the operator without benefit.
 
 const PIN_LEN = 4;
 
@@ -15,6 +21,7 @@ type Props = { userId: string; siteCode: string };
 
 export function Keypad({ userId, siteCode }: Props) {
   const router = useRouter();
+  const t = useT();
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +50,7 @@ export function Keypad({ userId, siteCode }: Props) {
     })
       .then((res) => {
         if (res?.error) {
-          setError('PIN incorrect or account locked. Try again.');
+          setError(t('keypad.error_incorrect'));
           setPin('');
           setBusy(false);
           submittedRef.current = false;
@@ -53,16 +60,16 @@ export function Keypad({ userId, siteCode }: Props) {
         router.refresh();
       })
       .catch(() => {
-        setError('Sign-in failed. Try again.');
+        setError(t('keypad.error_failed'));
         setPin('');
         setBusy(false);
         submittedRef.current = false;
       });
-  }, [pin, userId, siteCode, router]);
+  }, [pin, userId, siteCode, router, t]);
 
   return (
-    <div className="flex w-full flex-col items-center gap-6">
-      <div className="flex gap-3" aria-label="PIN progress">
+    <div className="flex w-full flex-col items-center gap-6" dir="ltr">
+      <div className="flex gap-3" aria-label={t('keypad.pin_progress_label')}>
         {Array.from({ length: PIN_LEN }).map((_, i) => (
           <span
             key={i}

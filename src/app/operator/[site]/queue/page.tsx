@@ -2,6 +2,8 @@ import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { formatDate, formatTime, formatRelative } from '@/lib/format';
+import { getLocale } from '@/i18n/get-locale';
+import { getDictionary, translate } from '@/i18n/dictionary';
 import { PendingBanner } from './pending-banner';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
@@ -39,6 +41,10 @@ export default async function OperatorQueuePage({ params }: Props) {
   });
   if (!site) notFound();
   if (session.user.primary_site_id !== site.id) redirect('/operator');
+
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -81,9 +87,9 @@ export default async function OperatorQueuePage({ params }: Props) {
       <div className="mx-auto flex max-w-2xl flex-col gap-6">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Today&apos;s queue</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{t('queue.heading')}</h1>
             <p className="text-sm text-dr3-cream/70">
-              {site.name} · Signed in as <span className="font-semibold">{session.user.name}</span>
+              {t('queue.site_caption', { site: site.name, name: session.user.name })}
             </p>
           </div>
           <SignOutButton siteCode={site.code} />
@@ -93,11 +99,11 @@ export default async function OperatorQueuePage({ params }: Props) {
           <PendingBanner />
           {loads.length === 0 ? (
             <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
-              <p className="text-lg font-medium">No loads expected today</p>
+              <p className="text-lg font-medium">{t('queue.empty_heading')}</p>
               <p className="mt-2 text-sm text-dr3-cream/70">
                 {lastSyncAt
-                  ? `Last sync ${formatRelative(lastSyncAt, now)}`
-                  : 'No MyMRC sync has run yet.'}
+                  ? t('queue.last_sync', { when: formatRelative(lastSyncAt, now, locale) })
+                  : t('queue.no_sync_yet')}
               </p>
             </div>
           ) : (
@@ -105,7 +111,7 @@ export default async function OperatorQueuePage({ params }: Props) {
               {loads.map((l) => {
                 const sourceName = l.source?.name ?? l.source_name_at_sync;
                 const transporterName =
-                  l.transporter?.name ?? l.transporter_name_at_sync ?? 'Unknown carrier';
+                  l.transporter?.name ?? l.transporter_name_at_sync ?? t('queue.unknown_carrier');
                 const arrival = l.expected_arrival_at;
                 const isToday = arrival.toDateString() === now.toDateString();
                 return (
@@ -113,21 +119,25 @@ export default async function OperatorQueuePage({ params }: Props) {
                     <QueueRow siteCode={site.code} expectedLoadId={l.id}>
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-xl font-semibold tabular-nums">
-                          {formatTime(arrival)}
+                          {formatTime(arrival, locale)}
                         </span>
                         {!isToday && (
-                          <span className="text-sm text-dr3-cream/70">{formatDate(arrival)}</span>
+                          <span className="text-sm text-dr3-cream/70">
+                            {formatDate(arrival, locale)}
+                          </span>
                         )}
                       </div>
                       <p className="mt-2 text-base font-medium">{sourceName}</p>
                       <p className="text-sm text-dr3-cream/70">{transporterName}</p>
                       <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
-                        BOL{' '}
+                        {t('queue.bol_label')}{' '}
                         <span className="font-mono normal-case text-dr3-cream">
-                          {l.bol_number ?? '—'}
+                          {l.bol_number ?? t('queue.bol_dash')}
                         </span>
                         {l.expected_unit_count != null && (
-                          <span className="ml-3">~{l.expected_unit_count} units</span>
+                          <span className="ms-3">
+                            {t('queue.approx_units', { count: l.expected_unit_count })}
+                          </span>
                         )}
                       </p>
                     </QueueRow>

@@ -4,6 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useState } from 'react';
+import { useT } from '@/i18n/provider';
 
 // Per CLAUDE.md hard rule #10 the form uses onClick handlers, not a
 // native <form>. Submit fires from the button; Enter-key still works
@@ -11,6 +12,7 @@ import { useState } from 'react';
 export function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
+  const t = useT();
   const next = search.get('next') ?? '/dashboard';
 
   const [email, setEmail] = useState('');
@@ -28,7 +30,7 @@ export function LoginForm() {
       redirect: false,
     });
     if (res?.error) {
-      setError('Invalid email or password.');
+      setError(t('auth_login.error_invalid'));
       setBusy(false);
       return;
     }
@@ -46,7 +48,7 @@ export function LoginForm() {
   return (
     <div className="flex w-full flex-col gap-4 text-left">
       <label className="flex flex-col gap-1 text-sm font-medium text-white/80">
-        Email
+        {t('auth_login.email_label')}
         <input
           type="email"
           autoComplete="email"
@@ -54,11 +56,11 @@ export function LoginForm() {
           onChange={(e) => setEmail(e.target.value)}
           onKeyDown={onEnter}
           className="rounded-md border border-white/20 bg-white/5 px-3 py-2 text-base text-white placeholder:text-white/40 focus:border-dr3-green focus:outline-none focus:ring-1 focus:ring-dr3-green"
-          placeholder="you@svdp.us"
+          placeholder={t('auth_login.email_placeholder')}
         />
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium text-white/80">
-        Password
+        {t('auth_login.password_label')}
         <input
           type="password"
           autoComplete="current-password"
@@ -79,13 +81,13 @@ export function LoginForm() {
         disabled={busy || email === '' || password === ''}
         className="mt-2 rounded-md bg-dr3-green px-4 py-2 text-base font-semibold text-dr3-ink transition-colors hover:bg-dr3-green-dark disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {busy ? 'Signing in…' : 'Sign in'}
+        {busy ? t('auth_login.signing_in') : t('auth_login.submit')}
       </button>
       <Link
         href="/forgot-password"
         className="text-center text-sm text-white/60 underline-offset-4 hover:text-white hover:underline"
       >
-        Forgot your password?
+        {t('auth_login.forgot')}
       </Link>
     </div>
   );

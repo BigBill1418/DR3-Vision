@@ -3,6 +3,7 @@
 import type { CountMode, LoadStatus } from '@prisma/client';
 import { useEffect, useState } from 'react';
 import { pendingCount, replayAll } from '@/lib/offline-queue';
+import { useI18n } from '@/i18n/provider';
 import { StageBol } from './stage-bol';
 import { StageWeight } from './stage-weight';
 import { StageDoor } from './stage-door';
@@ -32,6 +33,7 @@ type Props = {
 };
 
 export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
+  const { t, tPlural } = useI18n();
   // `weightDecided` only lives during the `arrived` phase; once the
   // server status moves on, this ref is moot.
   const [weightSkipped, setWeightSkipped] = useState(false);
@@ -84,17 +86,20 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     void replayAll().then(() => pendingCount().then(setPending));
   };
 
-  const pill = pending > 0 ? <PendingPill count={pending} onTap={onPillTap} /> : null;
+  const pill =
+    pending > 0 ? <PendingPill count={pending} onTap={onPillTap} label={tPlural('pending_pill.label', pending, { count: pending })} /> : null;
 
   if (load.status === 'submitted' || load.status === 'rejected') {
     // Defensive — submit/reject server actions sign the operator
     // out and redirect, so reaching here is rare. Render a soft
     // message rather than nothing.
+    const statusLabel =
+      load.status === 'submitted' ? t('workflow.status_submitted') : t('workflow.status_rejected');
     return (
       <>
         {pill}
         <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
-          Load {load.status}. Returning to the name picker…
+          {t('workflow.load_done_returning', { status: statusLabel })}
         </p>
       </>
     );
@@ -193,19 +198,19 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   return (
     <>
       {pill}
-      <p>Unhandled status: {load.status}</p>
+      <p>{t('workflow.unhandled_status', { status: load.status })}</p>
     </>
   );
 }
 
-function PendingPill({ count, onTap }: { count: number; onTap: () => void }) {
+function PendingPill({ onTap, label }: { count: number; onTap: () => void; label: string }) {
   return (
     <button
       type="button"
       onClick={onTap}
-      className="mb-3 w-full rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-left text-xs font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
+      className="mb-3 w-full rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-start text-xs font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
     >
-      ⏳ {count} pending upload{count === 1 ? '' : 's'} — tap to retry now
+      ⏳ {label}
     </button>
   );
 }

@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
+import { dirFor } from '@/i18n/config';
+import { getLocale } from '@/i18n/get-locale';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -33,9 +35,16 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// Per CLAUDE.md hard rule #4 the shell ships English / Spanish / Urdu
+// (RTL) on day 1. The `dir` attribute on <html> drives Tailwind's
+// logical-property utilities (ms-/me-/ps-/pe-/text-start/text-end)
+// across the whole tree — including the manager portal, which is
+// out-of-scope for T-008's string translation but still benefits from
+// the global RTL flip the moment its strings are localized.
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await getLocale();
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang={locale} dir={dirFor(locale)} className={inter.variable}>
       <body className="min-h-screen bg-dr3-green-deep font-sans text-dr3-cream antialiased">
         {children}
       </body>

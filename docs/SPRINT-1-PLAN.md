@@ -82,7 +82,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 **Acceptance:** Photos persist. Annotation overlay survives reload. R2 URLs return 200 when accessed with a fresh signed URL.
 
-### [ ] T-008: i18n — English, Spanish, Urdu
+### [x] T-008: i18n — English, Spanish, Urdu
 
 - All operator-facing copy localized
 - Locale picker on the login screen, persisted per-user

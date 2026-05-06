@@ -3,6 +3,7 @@
 import type { PhotoKind } from '@prisma/client';
 import { useRef, useState } from 'react';
 import { enqueueUpload, isOfflineError, type UploadKind } from '@/lib/offline-queue';
+import { useT, useLocale } from '@/i18n/provider';
 
 // Touch-first camera input + R2 upload (T-007), now with offline-queue
 // fallback (T-009 / ADR-0006). Sequence:
@@ -33,20 +34,29 @@ import { enqueueUpload, isOfflineError, type UploadKind } from '@/lib/offline-qu
 //   #9  IndexedDB only — no localStorage / sessionStorage
 //   #10 onClick handlers, no native <form>
 
+// `labelKey` is the suffix portion of `photo.label_<labelKey>` in the
+// operator dictionary. This lets the parent stage stay locale-blind —
+// it picks the right translation by giving us the canonical kind name.
+type LabelKey = 'bol' | 'weight_ticket' | 'door_open' | 'rejection' | 'concern';
+
 type Props = {
   loadId: string;
   kind: PhotoKind;
-  label: string;
+  labelKey: LabelKey;
   onCaptured: (file: File) => void;
 };
 
 type Status = 'idle' | 'uploading' | 'done' | 'queued' | 'error';
 
-export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
+export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
+  const t = useT();
+  const locale = useLocale();
   const ref = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const label = t(`photo.label_${labelKey}`);
 
   const queueAndAdvance = async (
     file: File,
@@ -156,15 +166,15 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
   };
 
   const buttonText = (() => {
-    if (status === 'uploading') return `Uploading ${label}…`;
-    if (status === 'done') return `✓ ${label} captured`;
-    if (status === 'queued') return `✓ ${label} queued (offline)`;
-    if (status === 'error') return `Retry ${label}`;
-    return `📸 ${label}`;
+    if (status === 'uploading') return t('photo.uploading', { label });
+    if (status === 'done') return t('photo.captured', { label });
+    if (status === 'queued') return t('photo.queued', { label });
+    if (status === 'error') return t('photo.retry', { label });
+    return t('photo.default', { label });
   })();
 
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-3" lang={locale}>
       <input
         ref={ref}
         type="file"
@@ -189,9 +199,7 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
       </button>
       {name && status !== 'error' && <p className="text-xs text-dr3-cream/60">{name}</p>}
       {status === 'queued' && (
-        <p className="text-xs text-dr3-chartreuse/80">
-          Saved on iPad — will upload when online
-        </p>
+        <p className="text-xs text-dr3-chartreuse/80">{t('photo.queued_caption')}</p>
       )}
       {error && <p className="text-sm text-red-300">{error}</p>}
     </div>

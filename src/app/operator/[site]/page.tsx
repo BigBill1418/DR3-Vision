@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { prisma } from '@/lib/prisma';
+import { getLocale } from '@/i18n/get-locale';
+import { getDictionary, translate } from '@/i18n/dictionary';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +21,10 @@ export default async function OperatorSitePage({ params }: Props) {
     select: { id: true, code: true, name: true },
   });
   if (!site) notFound();
+
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
   const operators = await prisma.user.findMany({
     where: {
@@ -51,12 +57,10 @@ export default async function OperatorSitePage({ params }: Props) {
           </span>
         </header>
 
-        <h1 className="text-2xl font-semibold">Tap your name to sign in</h1>
+        <h1 className="text-2xl font-semibold">{t('name_picker.heading')}</h1>
 
         {operators.length === 0 ? (
-          <p className="text-white/70">
-            No active operators are assigned to {site.name}. Ask a manager to add you in the portal.
-          </p>
+          <p className="text-white/70">{t('name_picker.no_operators', { site: site.name })}</p>
         ) : (
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {operators.map((op) => (

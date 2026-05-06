@@ -1,6 +1,8 @@
 import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
+import { getLocale } from '@/i18n/get-locale';
+import { getDictionary, translate } from '@/i18n/dictionary';
 import { LoadWorkflow } from './load-workflow';
 
 // Workflow shell. The whole 7-stage flow lives in the
@@ -52,14 +54,20 @@ export default async function LoadPage({ params }: Props) {
     redirect(`/operator/${siteCode}/queue`);
   }
 
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = (k: string) => translate(dict, k);
+
   return (
     <main className="min-h-screen bg-dr3-green-deep px-6 py-6 text-dr3-cream">
       <div className="mx-auto max-w-2xl">
         <header className="mb-4">
-          <h1 className="text-xl font-semibold">{load.source?.name ?? 'Unknown source'}</h1>
+          <h1 className="text-xl font-semibold">
+            {load.source?.name ?? t('load_header.unknown_source')}
+          </h1>
           <p className="text-sm text-dr3-cream/70">
-            {load.transporter?.name ?? 'Unknown carrier'} · BOL{' '}
-            <span className="font-mono">{load.bol_number ?? '—'}</span>
+            {load.transporter?.name ?? t('load_header.unknown_carrier')} · {t('load_header.bol_label')}{' '}
+            <span className="font-mono">{load.bol_number ?? t('load_header.bol_dash')}</span>
           </p>
         </header>
         <LoadWorkflow

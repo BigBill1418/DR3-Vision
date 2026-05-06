@@ -1,0 +1,197 @@
+{
+  "site_picker": {
+    "heading": "Choose your site"
+  },
+  "name_picker": {
+    "heading": "Tap your name to sign in",
+    "no_operators": "No active operators are assigned to {{site}}. Ask a manager to add you in the portal."
+  },
+  "keypad": {
+    "prompt": "Enter your 4-digit PIN",
+    "switch_user": "Not you? Switch user",
+    "error_incorrect": "PIN incorrect or account locked. Try again.",
+    "error_failed": "Sign-in failed. Try again.",
+    "pin_progress_label": "PIN progress"
+  },
+  "queue": {
+    "heading": "Today's queue",
+    "signed_in_as": "Signed in as {{name}}",
+    "site_caption": "{{site}} · Signed in as {{name}}",
+    "switch_user": "Switch user",
+    "empty_heading": "No loads expected today",
+    "last_sync": "Last sync {{when}}",
+    "no_sync_yet": "No MyMRC sync has run yet.",
+    "unknown_carrier": "Unknown carrier",
+    "bol_label": "BOL",
+    "bol_dash": "—",
+    "approx_units": "~{{count}} units",
+    "refreshing": "Refreshing…",
+    "release_to_refresh": "Release to refresh",
+    "pull_down": "Pull down"
+  },
+  "pending_banner": {
+    "items_pending_one": "{{count}} item pending upload from a previous shift",
+    "items_pending_other": "{{count}} items pending upload from a previous shift",
+    "syncing_now": "syncing now…",
+    "tap_to_replay": "tap to replay"
+  },
+  "pending_pill": {
+    "label_one": "{{count}} pending upload — tap to retry now",
+    "label_other": "{{count}} pending uploads — tap to retry now"
+  },
+  "load_header": {
+    "unknown_source": "Unknown source",
+    "unknown_carrier": "Unknown carrier",
+    "bol_label": "BOL",
+    "bol_dash": "—"
+  },
+  "workflow": {
+    "load_done_returning": "Load {{status}}. Returning to the name picker…",
+    "unhandled_status": "Unhandled status: {{status}}",
+    "status_submitted": "submitted",
+    "status_rejected": "rejected"
+  },
+  "stage_bol": {
+    "heading": "1. Bill of Lading",
+    "subheading": "Photo the BOL before the truck opens.",
+    "capture": "Capture BOL",
+    "saving": "Saving…",
+    "continue": "Continue →"
+  },
+  "stage_weight": {
+    "heading": "2. Weight ticket",
+    "subheading_choose": "Optional. Add the weight ticket if the carrier provided one.",
+    "subheading_add": "Photo the ticket and enter the weight in pounds (1–100,000).",
+    "add_weight": "Add weight",
+    "none": "None",
+    "capture_ticket": "Capture weight ticket",
+    "weight_label": "Weight (lbs)",
+    "weight_placeholder": "e.g. 8500",
+    "saving": "Saving…",
+    "continue": "Continue →",
+    "save_failed": "Save failed"
+  },
+  "stage_door": {
+    "heading": "3. Door open",
+    "subheading": "Photo the open trailer. Your unload timer starts now.",
+    "capture": "Capture door-open",
+    "starting_timer": "Starting timer…",
+    "start_unload": "Start unload →"
+  },
+  "stage_decision": {
+    "heading": "4. Inspect the load",
+    "subheading": "If the load is acceptable, begin unloading. Otherwise reject it.",
+    "begin_unload": "Begin unload",
+    "reject_load": "Reject load"
+  },
+  "stage_stacks": {
+    "heading_pick_mode": "5. Count the units",
+    "subheading_pick_mode": "Choose how you want to count this load.",
+    "heading_counting": "5. Counting · {{mode}}",
+    "stacks_units_summary": "{{stacks}} stacks · {{units}} units total",
+    "change_mode": "Change mode",
+    "mode_ledger": "Tally (+1)",
+    "mode_multiplier": "Stacks × N",
+    "mode_total": "Total only",
+    "mode_label_ledger": "Tally",
+    "mode_label_multiplier": "Stacks × N",
+    "mode_label_total": "Total",
+    "ledger_add_one": "+ 1 mattress",
+    "multiplier_label": "Mattresses in this stack",
+    "multiplier_placeholder": "e.g. 12",
+    "multiplier_add": "Add stack",
+    "total_label": "Total mattresses on this load",
+    "total_placeholder": "e.g. 240",
+    "total_set": "Set total",
+    "stack_index": "Stack #{{n}}",
+    "stack_units": "{{n}} units",
+    "save_failed": "Save failed",
+    "finish_failed": "Finish failed",
+    "finishing": "Finishing…",
+    "finish": "Finish unload →",
+    "timer_label": "Timer ·"
+  },
+  "stage_reject": {
+    "heading": "5. Reject load",
+    "back": "← Back",
+    "reason_label": "Reason",
+    "reason_select": "— Select —",
+    "category_contamination": "Contamination",
+    "category_damaged": "Damaged",
+    "category_wet": "Wet",
+    "category_bedbugs": "Bedbugs",
+    "category_short": "Short count",
+    "category_mislabeled": "Mislabeled",
+    "category_other": "Other",
+    "capture_evidence": "Capture rejection evidence",
+    "note_label": "Note (optional)",
+    "note_placeholder": "Anything else worth recording. Voice-to-text is OK.",
+    "rejecting": "Rejecting…",
+    "submit": "Reject load",
+    "reject_failed": "Reject failed"
+  },
+  "stage_finish": {
+    "heading": "6. Finish",
+    "operator_units_caption": "{{name}} · {{units}} units counted",
+    "add_concern": "Add a concern (optional)",
+    "concern_type_label": "Concern type",
+    "concern_type_select": "— Select —",
+    "concern_category_damaged": "Damaged units",
+    "concern_category_wet": "Wet",
+    "concern_category_bedbugs": "Bedbugs",
+    "concern_category_contamination": "Contamination",
+    "concern_category_short": "Short count vs BOL",
+    "concern_category_mislabeled": "Mislabeled",
+    "concern_category_other": "Other",
+    "note_label": "Note",
+    "note_placeholder": "Voice-to-text is OK.",
+    "cancel": "Cancel",
+    "save_concern": "Save concern",
+    "concern_recorded": "✓ Concern recorded.",
+    "save_failed": "Save failed",
+    "submit_failed": "Submit failed",
+    "submitting": "Submitting…",
+    "submit": "Submit load (sign out)"
+  },
+  "photo": {
+    "uploading": "Uploading {{label}}…",
+    "captured": "✓ {{label}} captured",
+    "queued": "✓ {{label}} queued (offline)",
+    "retry": "Retry {{label}}",
+    "default": "📸 {{label}}",
+    "queued_caption": "Saved on iPad — will upload when online",
+    "label_bol": "BOL",
+    "label_weight_ticket": "weight ticket",
+    "label_door_open": "door-open",
+    "label_rejection": "rejection evidence",
+    "label_concern": "concern photo"
+  },
+  "auth_login": {
+    "heading": "Sign in",
+    "language_label": "Language",
+    "email_label": "Email",
+    "email_placeholder": "you@svdp.us",
+    "password_label": "Password",
+    "error_invalid": "Invalid email or password.",
+    "signing_in": "Signing in…",
+    "submit": "Sign in",
+    "forgot": "Forgot your password?"
+  },
+  "auth_forgot": {
+    "lead": "Enter your account email and we'll send a reset link.",
+    "email_label": "Email",
+    "email_placeholder": "you@svdp.us",
+    "sending": "Sending…",
+    "submit": "Send reset link",
+    "back_to_signin": "Back to sign in",
+    "submitted": "If an account exists for {{email}}, a reset link is on its way. The link expires in 15 minutes."
+  },
+  "relative_time": {
+    "just_now": "just now",
+    "sec_ago": "{{n}} sec ago",
+    "min_ago": "{{n}} min ago",
+    "hr_ago": "{{n}} hr ago",
+    "day_ago_one": "{{n}} day ago",
+    "day_ago_other": "{{n}} days ago"
+  }
+}

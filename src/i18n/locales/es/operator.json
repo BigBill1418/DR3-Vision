@@ -1,0 +1,204 @@
+{
+  "_meta": {
+    "_comment_1": "Spanish (Mexican) — auto-translated, pending native review by SVdP staff.",
+    "_comment_2": "Mattress-recycling vocabulary uses Woodland operator usage:",
+    "_comment_3": "  source = origen, BOL = BOL (term técnico, not translated),",
+    "_comment_4": "  unload = descargar, reject = rechazar, stack = pila, mattress = colchón.",
+    "_comment_5": "Operator = operador (mixed-gender default; occupational term per RAE)."
+  },
+  "site_picker": {
+    "heading": "Elige tu sitio"
+  },
+  "name_picker": {
+    "heading": "Toca tu nombre para iniciar sesión",
+    "no_operators": "No hay operadores activos asignados a {{site}}. Pide a un encargado que te agregue desde el portal."
+  },
+  "keypad": {
+    "prompt": "Ingresa tu PIN de 4 dígitos",
+    "switch_user": "¿No eres tú? Cambiar usuario",
+    "error_incorrect": "PIN incorrecto o cuenta bloqueada. Intenta de nuevo.",
+    "error_failed": "No se pudo iniciar sesión. Intenta de nuevo.",
+    "pin_progress_label": "Progreso del PIN"
+  },
+  "queue": {
+    "heading": "Cola de hoy",
+    "signed_in_as": "Sesión iniciada como {{name}}",
+    "site_caption": "{{site}} · Sesión iniciada como {{name}}",
+    "switch_user": "Cambiar usuario",
+    "empty_heading": "No se esperan cargas hoy",
+    "last_sync": "Última sincronización {{when}}",
+    "no_sync_yet": "Aún no se ha ejecutado ninguna sincronización con MyMRC.",
+    "unknown_carrier": "Transportista desconocido",
+    "bol_label": "BOL",
+    "bol_dash": "—",
+    "approx_units": "~{{count}} unidades",
+    "refreshing": "Actualizando…",
+    "release_to_refresh": "Suelta para actualizar",
+    "pull_down": "Desliza hacia abajo"
+  },
+  "pending_banner": {
+    "items_pending_one": "{{count}} elemento pendiente de subir desde un turno anterior",
+    "items_pending_other": "{{count}} elementos pendientes de subir desde un turno anterior",
+    "syncing_now": "sincronizando ahora…",
+    "tap_to_replay": "toca para reintentar"
+  },
+  "pending_pill": {
+    "label_one": "{{count}} subida pendiente — toca para reintentar",
+    "label_other": "{{count}} subidas pendientes — toca para reintentar"
+  },
+  "load_header": {
+    "unknown_source": "Origen desconocido",
+    "unknown_carrier": "Transportista desconocido",
+    "bol_label": "BOL",
+    "bol_dash": "—"
+  },
+  "workflow": {
+    "load_done_returning": "Carga {{status}}. Volviendo al selector de nombre…",
+    "unhandled_status": "Estado no manejado: {{status}}",
+    "status_submitted": "enviada",
+    "status_rejected": "rechazada"
+  },
+  "stage_bol": {
+    "heading": "1. Bill of Lading (BOL)",
+    "subheading": "Toma una foto del BOL antes de abrir el camión.",
+    "capture": "Capturar BOL",
+    "saving": "Guardando…",
+    "continue": "Continuar →"
+  },
+  "stage_weight": {
+    "heading": "2. Boleta de peso",
+    "subheading_choose": "Opcional. Agrega la boleta de peso si el transportista la entregó.",
+    "subheading_add": "Toma una foto de la boleta e ingresa el peso en libras (1–100,000).",
+    "add_weight": "Agregar peso",
+    "none": "Ninguna",
+    "capture_ticket": "Capturar boleta de peso",
+    "weight_label": "Peso (lbs)",
+    "weight_placeholder": "ej. 8500",
+    "saving": "Guardando…",
+    "continue": "Continuar →",
+    "save_failed": "Error al guardar"
+  },
+  "stage_door": {
+    "heading": "3. Puerta abierta",
+    "subheading": "Toma una foto del remolque abierto. Tu temporizador de descarga inicia ahora.",
+    "capture": "Capturar puerta abierta",
+    "starting_timer": "Iniciando temporizador…",
+    "start_unload": "Iniciar descarga →"
+  },
+  "stage_decision": {
+    "heading": "4. Inspecciona la carga",
+    "subheading": "Si la carga es aceptable, comienza a descargar. De lo contrario, recházala.",
+    "begin_unload": "Comenzar descarga",
+    "reject_load": "Rechazar carga"
+  },
+  "stage_stacks": {
+    "heading_pick_mode": "5. Cuenta las unidades",
+    "subheading_pick_mode": "Elige cómo quieres contar esta carga.",
+    "heading_counting": "5. Contando · {{mode}}",
+    "stacks_units_summary": "{{stacks}} pilas · {{units}} unidades en total",
+    "change_mode": "Cambiar modo",
+    "mode_ledger": "Marca uno por uno (+1)",
+    "mode_multiplier": "Pilas × N",
+    "mode_total": "Solo total",
+    "mode_label_ledger": "Uno por uno",
+    "mode_label_multiplier": "Pilas × N",
+    "mode_label_total": "Total",
+    "ledger_add_one": "+ 1 colchón",
+    "multiplier_label": "Colchones en esta pila",
+    "multiplier_placeholder": "ej. 12",
+    "multiplier_add": "Agregar pila",
+    "total_label": "Total de colchones en esta carga",
+    "total_placeholder": "ej. 240",
+    "total_set": "Establecer total",
+    "stack_index": "Pila #{{n}}",
+    "stack_units": "{{n}} unidades",
+    "save_failed": "Error al guardar",
+    "finish_failed": "Error al finalizar",
+    "finishing": "Finalizando…",
+    "finish": "Finalizar descarga →",
+    "timer_label": "Temporizador ·"
+  },
+  "stage_reject": {
+    "heading": "5. Rechazar carga",
+    "back": "← Atrás",
+    "reason_label": "Motivo",
+    "reason_select": "— Seleccionar —",
+    "category_contamination": "Contaminación",
+    "category_damaged": "Dañado",
+    "category_wet": "Mojado",
+    "category_bedbugs": "Chinches",
+    "category_short": "Conteo incompleto",
+    "category_mislabeled": "Etiquetado incorrecto",
+    "category_other": "Otro",
+    "capture_evidence": "Capturar evidencia del rechazo",
+    "note_label": "Nota (opcional)",
+    "note_placeholder": "Cualquier otra cosa que valga la pena registrar. El dictado por voz funciona.",
+    "rejecting": "Rechazando…",
+    "submit": "Rechazar carga",
+    "reject_failed": "Error al rechazar"
+  },
+  "stage_finish": {
+    "heading": "6. Finalizar",
+    "operator_units_caption": "{{name}} · {{units}} unidades contadas",
+    "add_concern": "Agregar una observación (opcional)",
+    "concern_type_label": "Tipo de observación",
+    "concern_type_select": "— Seleccionar —",
+    "concern_category_damaged": "Unidades dañadas",
+    "concern_category_wet": "Mojado",
+    "concern_category_bedbugs": "Chinches",
+    "concern_category_contamination": "Contaminación",
+    "concern_category_short": "Conteo menor al BOL",
+    "concern_category_mislabeled": "Etiquetado incorrecto",
+    "concern_category_other": "Otro",
+    "note_label": "Nota",
+    "note_placeholder": "El dictado por voz funciona.",
+    "cancel": "Cancelar",
+    "save_concern": "Guardar observación",
+    "concern_recorded": "✓ Observación registrada.",
+    "save_failed": "Error al guardar",
+    "submit_failed": "Error al enviar",
+    "submitting": "Enviando…",
+    "submit": "Enviar carga (cerrar sesión)"
+  },
+  "photo": {
+    "uploading": "Subiendo {{label}}…",
+    "captured": "✓ {{label}} capturado",
+    "queued": "✓ {{label}} en cola (sin conexión)",
+    "retry": "Reintentar {{label}}",
+    "default": "📸 {{label}}",
+    "queued_caption": "Guardado en el iPad — se subirá cuando haya conexión",
+    "label_bol": "BOL",
+    "label_weight_ticket": "boleta de peso",
+    "label_door_open": "puerta abierta",
+    "label_rejection": "evidencia de rechazo",
+    "label_concern": "foto de observación"
+  },
+  "auth_login": {
+    "heading": "Iniciar sesión",
+    "language_label": "Idioma",
+    "email_label": "Correo electrónico",
+    "email_placeholder": "tu@svdp.us",
+    "password_label": "Contraseña",
+    "error_invalid": "Correo o contraseña inválidos.",
+    "signing_in": "Iniciando sesión…",
+    "submit": "Iniciar sesión",
+    "forgot": "¿Olvidaste tu contraseña?"
+  },
+  "auth_forgot": {
+    "lead": "Ingresa el correo de tu cuenta y te enviaremos un enlace para restablecer.",
+    "email_label": "Correo electrónico",
+    "email_placeholder": "tu@svdp.us",
+    "sending": "Enviando…",
+    "submit": "Enviar enlace",
+    "back_to_signin": "Volver al inicio de sesión",
+    "submitted": "Si existe una cuenta para {{email}}, el enlace está en camino. El enlace expira en 15 minutos."
+  },
+  "relative_time": {
+    "just_now": "ahora mismo",
+    "sec_ago": "hace {{n}} s",
+    "min_ago": "hace {{n}} min",
+    "hr_ago": "hace {{n}} h",
+    "day_ago_one": "hace {{n}} día",
+    "day_ago_other": "hace {{n}} días"
+  }
+}

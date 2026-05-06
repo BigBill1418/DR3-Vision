@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useT } from '@/i18n/provider';
 import { doorOpenCapturedAction } from '../../actions';
 import { PhotoInput } from './photo-input';
 
@@ -10,21 +11,20 @@ import { PhotoInput } from './photo-input';
 // `time_to_unload_start_seconds` (silent SLA metric).
 
 export function StageDoor({ siteCode, loadId }: { siteCode: string; loadId: string }) {
+  const t = useT();
   const [hasFile, setHasFile] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   return (
     <section className="flex flex-col gap-6">
       <header>
-        <h2 className="text-2xl font-bold">3. Door open</h2>
-        <p className="text-sm text-dr3-cream/70">
-          Photo the open trailer. Your unload timer starts now.
-        </p>
+        <h2 className="text-2xl font-bold">{t('stage_door.heading')}</h2>
+        <p className="text-sm text-dr3-cream/70">{t('stage_door.subheading')}</p>
       </header>
       <PhotoInput
         loadId={loadId}
         kind="door_open"
-        label="Capture door-open"
+        labelKey="door_open"
         onCaptured={() => setHasFile(true)}
       />
       <button
@@ -37,7 +37,7 @@ export function StageDoor({ siteCode, loadId }: { siteCode: string; loadId: stri
         }
         className="rounded-lg bg-dr3-chartreuse px-6 py-4 text-lg font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {isPending ? 'Starting timer…' : 'Start unload →'}
+        {isPending ? t('stage_door.starting_timer') : t('stage_door.start_unload')}
       </button>
     </section>
   );

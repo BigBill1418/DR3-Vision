@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { prisma } from '@/lib/prisma';
+import { getLocale } from '@/i18n/get-locale';
+import { getDictionary, translate } from '@/i18n/dictionary';
 import { Keypad } from './keypad';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +42,10 @@ export default async function OperatorPinPage({ params }: Props) {
     notFound();
   }
 
+  const locale = await getLocale();
+  const dict = getDictionary(locale);
+  const t = (k: string) => translate(dict, k);
+
   return (
     <main className="min-h-screen bg-black px-6 py-10 text-white">
       <div className="mx-auto flex max-w-md flex-col items-center gap-8">
@@ -58,7 +64,7 @@ export default async function OperatorPinPage({ params }: Props) {
         </header>
 
         <h1 className="text-2xl font-semibold">{operator.name}</h1>
-        <p className="text-sm text-white/70">Enter your 4-digit PIN</p>
+        <p className="text-sm text-white/70">{t('keypad.prompt')}</p>
 
         <Keypad userId={operator.id} siteCode={site.code} />
 
@@ -66,7 +72,7 @@ export default async function OperatorPinPage({ params }: Props) {
           href={`/operator/${site.code}`}
           className="text-sm text-white/60 underline-offset-4 hover:text-white hover:underline"
         >
-          Not you? Switch user
+          {t('keypad.switch_user')}
         </Link>
       </div>
     </main>

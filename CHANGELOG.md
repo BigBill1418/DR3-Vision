@@ -5,6 +5,149 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Wave C: T-008 i18n (English / Spanish / Urdu)
+
+Closes the last open Sprint-1 ticket. CLAUDE.md hard rule #4 — all
+user-facing copy supports English, Spanish, and Urdu (RTL) on day 1
+— is now satisfied for every operator surface.
+
+#### T-008 — i18n architecture
+
+- `src/i18n/config.ts` — locale registry (`en`/`es`/`ur` mirroring the
+  prisma `UserLocale` enum), `dr3_locale` cookie name, RTL detector,
+  picker labels written in their target language.
+- `src/i18n/dictionary.ts` — synchronous JSON imports of the three
+  locale files. Mustache `{{var}}` interpolation,
+  `_one`/`_other` plural variant chooser, dot-path resolver. The
+  English JSON is the canonical type; Spanish/Urdu inherit it via a
+  TS cast that fails the typecheck on key drift.
+- `src/i18n/get-locale.ts` — server-side resolver. Precedence: `?lang=`
+  > `dr3_locale` cookie > `users.locale` from session > `en` default.
+- `src/i18n/provider.tsx` — `<I18nProvider>` + `useT()` /
+  `useTPlural()` / `useLocale()` / `useI18n()` hooks. Dictionary
+  travels through the RSC payload, no client fetch, no flash of
+  untranslated content.
+- `src/i18n/actions.ts` — `setLocaleAction()` server action used by
+  the locale picker. Writes the cookie + (when a session exists)
+  the user's `users.locale` row.
+- `src/i18n/locales/{en,es,ur}/operator.json` — single namespace
+  `operator` with ~120 keys covering every visible string in the
+  operator surface. English is the source. Spanish (Mexican) and
+  Urdu (Nastaʿlīq script) are auto-translated and flagged for
+  native review by SVdP staff in the file headers.
+- `src/lib/format.ts` — `formatTime` / `formatDate` / `formatRelative`
+  now accept an optional `locale` arg (default `en`). Maps:
+  `en→en-US`, `es→es-MX`, `ur→ur-PK`. `Intl.DateTimeFormat` instances
+  cached per-locale. `formatRelative` returns translated strings
+  (`relative_time.*` keys).
+
+#### Surfaces translated
+
+- `src/app/operator/layout.tsx` (NEW) — wires the I18nProvider for
+  the entire `/operator` route group.
+- `src/app/operator/page.tsx`, `src/app/operator/[site]/page.tsx`,
+  `src/app/operator/[site]/[userId]/page.tsx` — server-component
+  headers / pickers translated.
+- `src/app/operator/[site]/[userId]/keypad.tsx` — error messages,
+  PIN-progress aria-label, switch-user link translated. Keypad grid
+  forced `dir="ltr"` so digits stay 1-2-3 / 4-5-6 / 7-8-9 even under
+  Urdu RTL.
+- `src/app/operator/[site]/queue/page.tsx` — heading, signed-in-as
+  caption, empty state, last-sync caption, BOL labels, approx-units
+  count.
+- `src/app/operator/[site]/queue/queue-client.tsx` — pull-to-refresh
+  pill messages.
+- `src/app/operator/[site]/queue/pending-banner.tsx` — pending count
+  + sync-now / tap-to-replay (with plural variants).
+- `src/app/operator/[site]/queue/sign-out-button.tsx` — switch-user
+  label.
+- `src/app/operator/[site]/load/[id]/page.tsx` — load detail header.
+- `src/app/operator/[site]/load/[id]/load-workflow.tsx` — workflow
+  status messages, pending-pill plural label.
+- All seven stage components (`stage-bol`, `stage-weight`,
+  `stage-door`, `stage-decision`, `stage-stacks`, `stage-reject`,
+  `stage-finish`) — every visible string + select option +
+  placeholder + error message translated.
+- `src/app/operator/[site]/load/[id]/photo-input.tsx` — accepts a
+  `labelKey` prop instead of a hard-coded `label`; looks up
+  `photo.label_<labelKey>` and interpolates into the four button
+  states (uploading / captured / queued / retry). Filename caption
+  + queued caption also translated.
+
+#### RTL handling
+
+- `src/app/layout.tsx` — `<html lang>` + `<html dir>` set from the
+  resolved locale via `dirFor()`. Tailwind's logical-property
+  utilities (`ms-`/`me-`/`ps-`/`pe-`/`text-start`/`text-end`) flip
+  layout automatically. Two operator-surface directional classes
+  (`text-left` → `text-start`, `ml-3` → `ms-3`) converted in the
+  queue + pending-banner.
+- The PIN keypad, the unload timer's `mm:ss`, and the photo-input's
+  filename caption are forced `dir="ltr"` regardless of page
+  locale — numerals are universally LTR.
+- `lang={locale}` set on the two textareas (`stage-finish`,
+  `stage-reject`) so iPadOS dictation picks the right input
+  language model. T-008 acceptance: "voice-to-text uses native
+  iPadOS dictation; correctness is iPadOS's job, not ours."
+
+#### Login locale picker
+
+- `src/app/login/layout.tsx` (NEW) — provider wiring for `/login`.
+- `src/app/login/locale-picker.tsx` (NEW) — three-button picker
+  (English / Español / اردو) above the email input. Tapping fires
+  `setLocaleAction()` and `router.refresh()`; the page re-renders
+  in the new language without losing focus on the form.
+- `src/app/login/page.tsx`, `src/app/login/login-form.tsx` —
+  picker integrated; form copy + error message translated.
+
+#### Auth — cookie → users.locale mirror
+
+- `src/lib/auth.ts` — both Credentials providers (email-password +
+  PIN) call `mirrorLocaleCookie(userId)` after a successful
+  `authorize`. If the `dr3_locale` cookie is set and differs from
+  the user's stored locale, write it through. Failures are
+  swallowed — locale persistence is UX, not a security gate.
+
+#### Out of scope (flagged follow-ups)
+
+- **Manager portal i18n** (`src/app/dashboard/**`). Per the T-008
+  charter call-out, only operator surfaces ship this sprint. The
+  infrastructure is in place; a future ticket adds
+  `src/app/dashboard/layout.tsx` + a `manager.json` namespace and
+  threads the locale through the existing dashboard pages.
+- **Forgot-password / reset-password copy translation.** Manager-
+  adjacent surfaces; the locale picker on `/login` is enough for
+  T-008's "locale picker on the login screen, persisted per-user"
+  acceptance line. Translation can be added in the same follow-up
+  ticket.
+- **Server-side `<title>` metadata translation.** Comes from
+  `metadata` exports; needs the i18n layer reachable from the
+  metadata function. Deferred to the same follow-up.
+- **Spanish + Urdu native review.** Both files carry top-level
+  `_meta._comment_*` flags noting they're auto-translated. Bill /
+  SVdP staff review before launch.
+
+#### Architecture choice
+
+ADR-0015 records why we ship a homegrown sync-import layer instead
+of pulling `i18next` + `next-i18n-router` into the runtime. tl;dr:
+the operator surface is small (~120 keys, ~3 KB gz / locale), the
+App Router prefers synchronous server-side lookups, and
+`next-i18n-router`'s `[locale]` segment would force a 30+ file URL
+contract change for no measurable win.
+
+`i18next` and friends remain in `package.json` from T-001; they are
+unused at runtime (tree-shaken to zero) and stay available if a
+future ticket needs CLDR plurals or ICU MessageFormat.
+
+#### Verification
+
+- `npm run lint` — clean (warnings are errors in this project).
+- `npm run typecheck` — clean.
+- `npm run build` — clean. Operator-page sizes:
+  `/operator/[site]/load/[id]` 4.98 kB → 4.98 kB (no client growth;
+  dictionary travels through RSC payload, not the client bundle).
+
 ### 2026-05-06 — Wave B: T-009 offline queue + T-012 compliance dashboard
 
 Two parallel agents shipped the offline-resilience layer for the

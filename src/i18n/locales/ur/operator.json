@@ -1,0 +1,204 @@
+{
+  "_meta": {
+    "_comment_1": "Urdu — auto-translated, pending native review.",
+    "_comment_2": "Written in Nastaʿlīq Urdu script (NOT romanized) so the RTL renderer flips correctly.",
+    "_comment_3": "Mattress = گدّا, stack = چٹاؤ/ڈھیر, unload = خالی کرنا, reject = مسترد کرنا.",
+    "_comment_4": "BOL kept as English literal (technical term carriers use); numerals are Western Arabic (0-9) per Pakistan business convention.",
+    "_comment_5": "Operator term = آپریٹر (loanword, common in industrial Pakistani Urdu)."
+  },
+  "site_picker": {
+    "heading": "اپنی سائٹ منتخب کریں"
+  },
+  "name_picker": {
+    "heading": "سائن ان کرنے کے لیے اپنا نام چھوئیں",
+    "no_operators": "{{site}} پر کوئی فعال آپریٹر تفویض نہیں ہے۔ پورٹل میں شامل ہونے کے لیے مینیجر سے کہیں۔"
+  },
+  "keypad": {
+    "prompt": "اپنا 4 ہندسوں کا PIN درج کریں",
+    "switch_user": "آپ نہیں؟ صارف تبدیل کریں",
+    "error_incorrect": "PIN غلط ہے یا اکاؤنٹ بند ہے۔ دوبارہ کوشش کریں۔",
+    "error_failed": "سائن اِن ناکام۔ دوبارہ کوشش کریں۔",
+    "pin_progress_label": "PIN کی پیش رفت"
+  },
+  "queue": {
+    "heading": "آج کی قطار",
+    "signed_in_as": "{{name}} کے بطور سائن اِن",
+    "site_caption": "{{site}} · {{name}} کے بطور سائن اِن",
+    "switch_user": "صارف تبدیل کریں",
+    "empty_heading": "آج کوئی لوڈ متوقع نہیں",
+    "last_sync": "آخری مطابقت {{when}}",
+    "no_sync_yet": "MyMRC کے ساتھ ابھی تک کوئی مطابقت نہیں چلی۔",
+    "unknown_carrier": "نامعلوم کیریئر",
+    "bol_label": "BOL",
+    "bol_dash": "—",
+    "approx_units": "~{{count}} یونٹس",
+    "refreshing": "تازہ ہو رہا ہے…",
+    "release_to_refresh": "تازہ کرنے کے لیے چھوڑیں",
+    "pull_down": "نیچے کھینچیں"
+  },
+  "pending_banner": {
+    "items_pending_one": "پچھلی شفٹ سے {{count}} آئٹم اپ لوڈ کے لیے زیرِ التوا",
+    "items_pending_other": "پچھلی شفٹ سے {{count}} آئٹمز اپ لوڈ کے لیے زیرِ التوا",
+    "syncing_now": "ابھی مطابقت ہو رہی ہے…",
+    "tap_to_replay": "دوبارہ کوشش کے لیے چھوئیں"
+  },
+  "pending_pill": {
+    "label_one": "{{count}} زیرِ التوا اپ لوڈ — دوبارہ کوشش کے لیے چھوئیں",
+    "label_other": "{{count}} زیرِ التوا اپ لوڈز — دوبارہ کوشش کے لیے چھوئیں"
+  },
+  "load_header": {
+    "unknown_source": "نامعلوم ذریعہ",
+    "unknown_carrier": "نامعلوم کیریئر",
+    "bol_label": "BOL",
+    "bol_dash": "—"
+  },
+  "workflow": {
+    "load_done_returning": "لوڈ {{status}}۔ نام منتخب کرنے والی اسکرین پر واپس جا رہا ہے…",
+    "unhandled_status": "غیر متوقع حالت: {{status}}",
+    "status_submitted": "جمع شدہ",
+    "status_rejected": "مسترد"
+  },
+  "stage_bol": {
+    "heading": "1۔ بل آف لیڈنگ (BOL)",
+    "subheading": "ٹرک کھولنے سے پہلے BOL کی تصویر لیں۔",
+    "capture": "BOL کیپچر کریں",
+    "saving": "محفوظ ہو رہا ہے…",
+    "continue": "جاری رکھیں →"
+  },
+  "stage_weight": {
+    "heading": "2۔ وزن کی پرچی",
+    "subheading_choose": "اختیاری۔ اگر کیریئر نے وزن کی پرچی دی ہے تو شامل کریں۔",
+    "subheading_add": "پرچی کی تصویر لیں اور پاؤنڈ میں وزن درج کریں (1–100,000)۔",
+    "add_weight": "وزن شامل کریں",
+    "none": "کچھ نہیں",
+    "capture_ticket": "وزن کی پرچی کیپچر کریں",
+    "weight_label": "وزن (lbs)",
+    "weight_placeholder": "مثلاً 8500",
+    "saving": "محفوظ ہو رہا ہے…",
+    "continue": "جاری رکھیں →",
+    "save_failed": "محفوظ کرنے میں ناکامی"
+  },
+  "stage_door": {
+    "heading": "3۔ دروازہ کھلا",
+    "subheading": "کھلے ٹریلر کی تصویر لیں۔ آپ کا اَن لوڈ ٹائمر ابھی شروع ہو گا۔",
+    "capture": "دروازہ کھلا کیپچر کریں",
+    "starting_timer": "ٹائمر شروع ہو رہا ہے…",
+    "start_unload": "اَن لوڈ شروع کریں →"
+  },
+  "stage_decision": {
+    "heading": "4۔ لوڈ کا معائنہ کریں",
+    "subheading": "اگر لوڈ قابلِ قبول ہے تو اَن لوڈ شروع کریں۔ بصورتِ دیگر مسترد کر دیں۔",
+    "begin_unload": "اَن لوڈ شروع کریں",
+    "reject_load": "لوڈ مسترد کریں"
+  },
+  "stage_stacks": {
+    "heading_pick_mode": "5۔ یونٹس گنیں",
+    "subheading_pick_mode": "اس لوڈ کو گننے کا طریقہ منتخب کریں۔",
+    "heading_counting": "5۔ گنتی · {{mode}}",
+    "stacks_units_summary": "{{stacks}} ڈھیر · کُل {{units}} یونٹس",
+    "change_mode": "موڈ تبدیل کریں",
+    "mode_ledger": "ایک ایک کر کے (+1)",
+    "mode_multiplier": "ڈھیر × N",
+    "mode_total": "صرف کُل تعداد",
+    "mode_label_ledger": "ایک ایک",
+    "mode_label_multiplier": "ڈھیر × N",
+    "mode_label_total": "کُل",
+    "ledger_add_one": "+ 1 گدّا",
+    "multiplier_label": "اس ڈھیر میں گدّے",
+    "multiplier_placeholder": "مثلاً 12",
+    "multiplier_add": "ڈھیر شامل کریں",
+    "total_label": "اس لوڈ پر کُل گدّے",
+    "total_placeholder": "مثلاً 240",
+    "total_set": "کُل سیٹ کریں",
+    "stack_index": "ڈھیر #{{n}}",
+    "stack_units": "{{n}} یونٹس",
+    "save_failed": "محفوظ کرنے میں ناکامی",
+    "finish_failed": "ختم کرنے میں ناکامی",
+    "finishing": "ختم ہو رہا ہے…",
+    "finish": "اَن لوڈ ختم کریں →",
+    "timer_label": "ٹائمر ·"
+  },
+  "stage_reject": {
+    "heading": "5۔ لوڈ مسترد کریں",
+    "back": "← واپس",
+    "reason_label": "وجہ",
+    "reason_select": "— منتخب کریں —",
+    "category_contamination": "آلودگی",
+    "category_damaged": "خراب",
+    "category_wet": "گیلا",
+    "category_bedbugs": "کھٹمل",
+    "category_short": "کم گنتی",
+    "category_mislabeled": "غلط لیبل",
+    "category_other": "دیگر",
+    "capture_evidence": "ردّی کا ثبوت کیپچر کریں",
+    "note_label": "نوٹ (اختیاری)",
+    "note_placeholder": "ریکارڈ کرنے کے قابل کوئی اور بات۔ آواز سے ٹیکسٹ ٹھیک ہے۔",
+    "rejecting": "مسترد ہو رہا ہے…",
+    "submit": "لوڈ مسترد کریں",
+    "reject_failed": "مسترد کرنے میں ناکامی"
+  },
+  "stage_finish": {
+    "heading": "6۔ ختم کریں",
+    "operator_units_caption": "{{name}} · {{units}} یونٹس گنے گئے",
+    "add_concern": "ایک اعتراض شامل کریں (اختیاری)",
+    "concern_type_label": "اعتراض کی قسم",
+    "concern_type_select": "— منتخب کریں —",
+    "concern_category_damaged": "خراب یونٹس",
+    "concern_category_wet": "گیلا",
+    "concern_category_bedbugs": "کھٹمل",
+    "concern_category_contamination": "آلودگی",
+    "concern_category_short": "BOL کے مقابلے میں کم گنتی",
+    "concern_category_mislabeled": "غلط لیبل",
+    "concern_category_other": "دیگر",
+    "note_label": "نوٹ",
+    "note_placeholder": "آواز سے ٹیکسٹ ٹھیک ہے۔",
+    "cancel": "منسوخ کریں",
+    "save_concern": "اعتراض محفوظ کریں",
+    "concern_recorded": "✓ اعتراض ریکارڈ ہو گیا۔",
+    "save_failed": "محفوظ کرنے میں ناکامی",
+    "submit_failed": "جمع کرانے میں ناکامی",
+    "submitting": "جمع ہو رہا ہے…",
+    "submit": "لوڈ جمع کریں (سائن آؤٹ)"
+  },
+  "photo": {
+    "uploading": "{{label}} اپ لوڈ ہو رہا ہے…",
+    "captured": "✓ {{label}} لیا گیا",
+    "queued": "✓ {{label}} قطار میں (آف لائن)",
+    "retry": "{{label}} دوبارہ کوشش کریں",
+    "default": "📸 {{label}}",
+    "queued_caption": "iPad پر محفوظ — آن لائن ہونے پر اپ لوڈ ہو گا",
+    "label_bol": "BOL",
+    "label_weight_ticket": "وزن کی پرچی",
+    "label_door_open": "دروازہ کھلا",
+    "label_rejection": "ردّی کا ثبوت",
+    "label_concern": "اعتراض کی تصویر"
+  },
+  "auth_login": {
+    "heading": "سائن اِن کریں",
+    "language_label": "زبان",
+    "email_label": "ای میل",
+    "email_placeholder": "you@svdp.us",
+    "password_label": "پاس ورڈ",
+    "error_invalid": "غلط ای میل یا پاس ورڈ۔",
+    "signing_in": "سائن اِن ہو رہا ہے…",
+    "submit": "سائن اِن کریں",
+    "forgot": "پاس ورڈ بھول گئے؟"
+  },
+  "auth_forgot": {
+    "lead": "اپنی اکاؤنٹ کی ای میل درج کریں اور ہم آپ کو ری سیٹ لنک بھیجیں گے۔",
+    "email_label": "ای میل",
+    "email_placeholder": "you@svdp.us",
+    "sending": "بھیجا جا رہا ہے…",
+    "submit": "ری سیٹ لنک بھیجیں",
+    "back_to_signin": "سائن اِن پر واپس جائیں",
+    "submitted": "اگر {{email}} کے لیے کوئی اکاؤنٹ موجود ہے تو ری سیٹ لنک راستے میں ہے۔ لنک 15 منٹ میں ختم ہو جائے گا۔"
+  },
+  "relative_time": {
+    "just_now": "ابھی ابھی",
+    "sec_ago": "{{n}} سیکنڈ پہلے",
+    "min_ago": "{{n}} منٹ پہلے",
+    "hr_ago": "{{n}} گھنٹے پہلے",
+    "day_ago_one": "{{n}} دن پہلے",
+    "day_ago_other": "{{n}} دن پہلے"
+  }
+}
