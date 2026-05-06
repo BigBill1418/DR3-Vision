@@ -55,12 +55,19 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-# Prisma CLI + engines for the migration init container (`prisma migrate
-# deploy` in `docker-compose.yml::services.migrate`). The Next.js
+# Prisma CLI + engines for the migration init container. The Next.js
 # standalone bundle does not include these packages by itself.
+# NOTE: do NOT copy `node_modules/.bin/prisma` separately — that
+# entry is a symlink to ../prisma/build/index.js, and Docker's COPY
+# resolves the symlink target into a regular file at the destination.
+# When the resulting flat file runs, its `__dirname`-relative
+# `prisma_schema_build_bg.wasm` lookup resolves into `.bin/` instead
+# of `prisma/build/` and 404s. The migrate compose service
+# invokes the binary via its explicit module path
+# (`node node_modules/prisma/build/index.js`) which sidesteps the
+# whole .bin/ resolution chain.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
 USER nextjs
 

@@ -80,7 +80,9 @@ services:
     image: dr3-vision-app:local
     container_name: dr3-vision-migrate
     restart: 'no'
-    command: ['npx', 'prisma', 'migrate', 'deploy']
+    # Explicit path avoids the `.bin/prisma` symlink-flattening trap
+    # documented in the Dockerfile runner stage.
+    command: ['node', 'node_modules/prisma/build/index.js', 'migrate', 'deploy']
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
     depends_on:
