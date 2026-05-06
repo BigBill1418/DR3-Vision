@@ -5,6 +5,118 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Wave B: T-009 offline queue + T-012 compliance dashboard
+
+Two parallel agents shipped the offline-resilience layer for the
+operator iPad and the manager-side compliance dashboard.
+
+#### T-009 — Offline queue + Service Worker (Serwist)
+
+- `src/app/sw.ts` — Serwist Service Worker, `cacheId: 'dr3-v1'`,
+  skipWaiting + clientsClaim. Custom runtime caching layered before
+  `defaultCache`: R2 photos `CacheFirst` 200/7d, operator data
+  `NetworkFirst` 5s timeout / 5min. `BackgroundSyncPlugin` queues
+  for `/api/photos/upload-url`, `/api/photos/confirm`, R2 PUT, and
+  Next.js server actions (matched by the `Next-Action` header for
+  App Router). 24h SW retention.
+- `next.config.js` — re-added the `withSerwist` wrap that T-001
+  intentionally deferred. `swSrc: src/app/sw.ts`, `swDest:
+  public/sw.js`, dev-disabled. Adds `Cache-Control: max-age=0,
+  must-revalidate` + `Service-Worker-Allowed: /` headers for `/sw.js`.
+- `public/manifest.json` — PWA manifest (name DR3-Vision, start_url
+  `/operator`, display standalone, theme_color `#00524C`, icons
+  pointing at the canonical logo per ADR-0014).
+- `src/app/layout.tsx` — added `manifest`, `appleWebApp`, and `icons`
+  to Next metadata.
+- `src/lib/offline-queue.ts` — IndexedDB queue via `idb`. Two stores
+  (`pending_uploads` keyed by ULID with `by-queued-at` + `by-load`
+  indexes; `pending_actions` for queued server-action calls). CRUD
+  helpers + `replayAll()` with capped exponential backoff
+  (`min(2 ** attempts, 60)` seconds), in-flight dedupe, and
+  conflict-flag preservation. `isOfflineError()` distinguishes
+  network failure from hard 4xx.
+- `src/app/operator/[site]/load/[id]/photo-input.tsx` — preserves the
+  T-007 happy path verbatim. Each fetch (mint / R2 PUT / confirm)
+  wraps in try/catch; `isOfflineError` → enqueue + still fire
+  `onCaptured` with status `queued`. Top-of-file comment documents
+  the server-side `LoadPhoto`-row gap until replay completes.
+- `src/app/operator/[site]/load/[id]/load-workflow.tsx` — registers
+  mount sweep + `online` event listener + 30s `replayAll` tick + 5s
+  `pendingCount` poll. `<PendingPill>` floats above each stage when
+  the count is > 0; tap fires immediate replay.
+- `src/app/operator/[site]/queue/page.tsx` — `<PendingBanner />`
+  inserted at the top of `<QueueClient>`; surfaces "N items pending
+  upload from a previous shift — tap to replay".
+- `src/types/serwist.d.ts` — single ambient declaration for
+  `ServiceWorkerGlobalScope.__SW_MANIFEST` (build-time precache
+  injection).
+- `.gitignore` — `/public/sw.js*` + `/public/swe-worker-*.js*` build
+  artifacts.
+
+**Conflict resolution per ADR-0006:** network errors / 5xx → retried
+with backoff; hard 4xx (load reassigned, session revoked, etc.) →
+row stays in IndexedDB with `last_error` prefixed `conflict:`.
+Subsequent replay passes SKIP conflict-flagged rows so they don't
+auto-resolve under the operator. The pill keeps the count visible so
+the operator knows something is stuck and can ask a manager. The
+manager-portal "Discard" button + per-iPad queue-depth metric are a
+T-010 follow-up.
+
+**Sharp edges noted by the agent:** iPad Safari does NOT implement
+the Background Sync API (iPadOS 17 as of writing) — the SW-side
+`BackgroundSyncPlugin` queues are a no-op there. The application
+queue at `src/lib/offline-queue.ts` is the primary path on iPad and
+the SW queues are belt-and-braces. Critical for ADR-0006's "Replay
+on connectivity recovery" acceptance — the application queue
+(`online` event + 30s tick + page-mount sweep) is what actually
+delivers it on iPad.
+
+**Dockerfile** — no changes needed. `COPY --from=builder /app/public
+./public` already picks up the new `manifest.json` + the
+build-emitted `public/sw.js` + `public/swe-worker-*.js`.
+
+#### T-012 — Compliance dashboard
+
+- `src/lib/compliance.ts` — pure aggregation per metric. Each
+  function takes `(siteId, periodStart, periodEnd)` and returns
+  `{ value, threshold, bucket, rowCount, clickThroughHref }`.
+  Per-site thresholds threaded via `MetricInput` — never hardcoded.
+  `addBusinessDays(date, n, holidays)` helper pulls the site's
+  `site_holidays` rows and skips weekends + holidays. UTC-keyed,
+  DST-safe.
+- `src/app/dashboard/[site]/compliance/page.tsx` — `force-dynamic`,
+  auth via `checkManagerForSite` from the canonical `auth-helpers`,
+  honors `?range`, `?from`, `?to` per T-011's URL contract,
+  `Promise.all`'d 7-tile grid.
+- `src/app/dashboard/[site]/compliance/metric-tile.tsx` — single
+  tile, whole-card Next `<Link>`. Color bands: green
+  `bg-dr3-green/20`, yellow `bg-orange-400/30`, red `bg-red-500/30`,
+  pending `bg-dr3-cream/10`.
+- `src/app/dashboard/[site]/compliance/period-picker.tsx` — segmented
+  range buttons + custom-range date inputs, mirrors T-011's
+  `loads-filters.tsx` shape.
+
+**Per-metric formula + source:**
+
+| # | Metric | Source | Status |
+|---|---|---|---|
+| 1 | MyMRC submission timeliness | `inbound_loads.mymrc_submission_deadline` vs `updated_at` of the status flip | Live |
+| 2 | Processed-units submission | `processing_sessions` | Pending V2.1 (no writes yet) |
+| 3 | Dock SLA | `inbound_loads.time_to_unload_start_seconds` vs `site.dock_sla_minutes` | Live |
+| 4 | Recycling rate | needs recycled-weight column | Pending V2.1 |
+| 5 | Reconciliation rate | `mymrc_reconciliations` aggregate | Live |
+| 6 | Storage inventory vs site limit | `inbound_loads` on-site units vs `site.max_units_*` (live computed since `site_inventory_snapshots` writer not yet shipped) | Live |
+| 7 | Records retention | `MIN(arrived_at)` vs `site.records_retention_years` | Live |
+
+**Click-through deep-links:** every tile anchors to
+`/dashboard/[site]/loads?range=...&status=...` adopting T-011's URL
+vocabulary verbatim, so the "tap a tile → see the rows behind it"
+acceptance criterion drops in cleanly.
+
+**Verified post-integration:** `npm run lint` + `npm run typecheck` +
+`npm run build` all green. `/dashboard/[site]/compliance` emits as
+`ƒ` (982 B, 106 kB FLJS).
+
 ### 2026-05-06 — Wave A: T-010 dock view + T-011 load list + T-013 exports
 
 Three Sprint-1 tickets shipped in parallel via worktree-isolated agents,

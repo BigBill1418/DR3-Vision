@@ -92,7 +92,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 **Acceptance:** Switch locale → all visible strings change correctly. Urdu renders RTL. Spanish and English render LTR. No untranslated strings in any operator-facing screen.
 
-### [ ] T-009: Offline queue (IndexedDB + Workbox Background Sync)
+### [x] T-009: Offline queue (IndexedDB + Workbox Background Sync)
 
 - All operator submissions queue locally on network failure
 - Service Worker registered with explicit cache versioning
@@ -125,7 +125,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 **Acceptance:** Filters compose correctly. Pagination handles 1000+ loads without UI lag.
 
-### [ ] T-012: Compliance dashboard
+### [x] T-012: Compliance dashboard
 
 The seven contract-tracked metrics from `docs/COMPLIANCE.md`:
 

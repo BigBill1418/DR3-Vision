@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { formatDate, formatTime, formatRelative } from '@/lib/format';
+import { PendingBanner } from './pending-banner';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
 import { SignOutButton } from './sign-out-button';
@@ -89,6 +90,7 @@ export default async function OperatorQueuePage({ params }: Props) {
         </header>
 
         <QueueClient lastSyncAt={lastSyncAt?.toISOString() ?? null}>
+          <PendingBanner />
           {loads.length === 0 ? (
             <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
               <p className="text-lg font-medium">No loads expected today</p>

@@ -13,6 +13,16 @@ export const metadata: Metadata = {
   description: 'Mattress recycling load tracking for SVdP / DR3 facilities.',
   applicationName: 'DR3-Vision',
   robots: { index: false, follow: false },
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    title: 'DR3-Vision',
+    statusBarStyle: 'black-translucent',
+  },
+  icons: {
+    icon: '/brand/dr3-vision-logo.jpg',
+    apple: '/brand/dr3-vision-logo.jpg',
+  },
 };
 
 export const viewport: Viewport = {

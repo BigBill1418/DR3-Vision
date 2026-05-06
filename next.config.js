@@ -1,14 +1,19 @@
 /** @type {import('next').NextConfig} */
 //
-// PWA wrap intentionally omitted in T-001. Per ADR-0012 §4 the project moves
-// from `next-pwa` (EOL, no Next.js 15 App Router support) to `@serwist/next`.
-// The Service Worker source, runtime caching rules, and `withSerwist(...)`
-// wrap land in T-009 (offline queue). For reference, the legacy runtime
-// caching shape was:
-//   - https://*.r2.cloudflarestorage.com  →  CacheFirst, 200 entries, 7d
-//   - /api/(loads|sources|transporters|users)  →  NetworkFirst, 5s timeout, 5m
-// Re-encode these as Serwist `RuntimeCaching` entries when wiring the SW.
+// Service Worker is wired via `@serwist/next`. SW source lives at
+// `src/app/sw.ts` (per ADR-0006 + ADR-0012 §4 — Serwist replaces the
+// EOL `next-pwa`). Disabled in dev because injectManifest churn
+// + HMR is noisy and the offline path is e2e-tested in production
+// builds only.
 //
+const withSerwist = require('@serwist/next').default({
+  swSrc: 'src/app/sw.ts',
+  swDest: 'public/sw.js',
+  cacheOnNavigation: true,
+  reloadOnOnline: true,
+  disable: process.env.NODE_ENV === 'development',
+});
+
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
@@ -51,6 +56,16 @@ const nextConfig = {
           },
         ],
       },
+      {
+        // SW must NOT be cached at the edge — bumped versions need to
+        // reach the iPad on next page load. Per Serwist + Workbox
+        // convention.
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+          { key: 'Service-Worker-Allowed', value: '/' },
+        ],
+      },
     ];
   },
   experimental: {
@@ -60,4 +75,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = withSerwist(nextConfig);

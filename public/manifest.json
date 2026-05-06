@@ -1,0 +1,25 @@
+{
+  "name": "DR3-Vision",
+  "short_name": "DR3",
+  "description": "Mattress recycling load tracking for SVdP / DR3 facilities.",
+  "start_url": "/operator",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#00524C",
+  "icons": [
+    {
+      "src": "/brand/dr3-vision-logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/dr3-vision-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

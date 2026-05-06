@@ -1,7 +1,8 @@
 'use client';
 
 import type { CountMode, LoadStatus } from '@prisma/client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { pendingCount, replayAll } from '@/lib/offline-queue';
 import { StageBol } from './stage-bol';
 import { StageWeight } from './stage-weight';
 import { StageDoor } from './stage-door';
@@ -36,14 +37,66 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   const [weightSkipped, setWeightSkipped] = useState(false);
   const [showReject, setShowReject] = useState(false);
 
+  // T-009 — offline-queue replay tick. Three triggers:
+  //   1. Mount — sweep anything queued from a prior session.
+  //   2. `online` event — Safari fires this when wifi/cell reconnects.
+  //   3. 30s interval while the workflow page is mounted — covers the
+  //      case where the iPad reports "online" but the app server is
+  //      briefly unreachable.
+  // The pill below taps `replayAll()` directly for an operator-driven
+  // retry. `replayAll()` itself dedupes concurrent invocations.
+  const [pending, setPending] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const n = await pendingCount();
+        if (!cancelled) setPending(n);
+      } catch {
+        // SSR / IndexedDB unavailable — non-fatal, the queue is a
+        // progressive-enhancement layer.
+      }
+    };
+    const sweep = async () => {
+      try {
+        await replayAll();
+      } catch {
+        // Swallow — failed rows are persisted with last_error and
+        // surfaced on the next refresh.
+      } finally {
+        await refresh();
+      }
+    };
+    void sweep();
+    const onOnline = () => void sweep();
+    window.addEventListener('online', onOnline);
+    const tick = window.setInterval(() => void sweep(), 30_000);
+    const refreshTick = window.setInterval(() => void refresh(), 5_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', onOnline);
+      window.clearInterval(tick);
+      window.clearInterval(refreshTick);
+    };
+  }, []);
+
+  const onPillTap = () => {
+    void replayAll().then(() => pendingCount().then(setPending));
+  };
+
+  const pill = pending > 0 ? <PendingPill count={pending} onTap={onPillTap} /> : null;
+
   if (load.status === 'submitted' || load.status === 'rejected') {
     // Defensive — submit/reject server actions sign the operator
     // out and redirect, so reaching here is rare. Render a soft
     // message rather than nothing.
     return (
-      <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
-        Load {load.status}. Returning to the name picker…
-      </p>
+      <>
+        {pill}
+        <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
+          Load {load.status}. Returning to the name picker…
+        </p>
+      </>
     );
   }
 
@@ -58,57 +111,103 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     // For minimum-tap UX we just chain BOL → weight in a single
     // visual flow with internal client state.
     return (
-      <FromBol
-        siteCode={siteCode}
-        load={load}
-        onBolDone={() => setWeightSkipped(false)}
-        onWeightSkipped={() => setWeightSkipped(true)}
-      />
+      <>
+        {pill}
+        <FromBol
+          siteCode={siteCode}
+          load={load}
+          onBolDone={() => setWeightSkipped(false)}
+          onWeightSkipped={() => setWeightSkipped(true)}
+        />
+      </>
     );
   }
 
   if (load.status === 'arrived' && weightSkipped) {
-    return <StageDoor siteCode={siteCode} loadId={load.id} />;
+    return (
+      <>
+        {pill}
+        <StageDoor siteCode={siteCode} loadId={load.id} />
+      </>
+    );
   }
 
   if (load.status === 'weight_captured') {
-    return <StageDoor siteCode={siteCode} loadId={load.id} />;
+    return (
+      <>
+        {pill}
+        <StageDoor siteCode={siteCode} loadId={load.id} />
+      </>
+    );
   }
 
   if (load.status === 'unload_started') {
     if (showReject) {
       return (
-        <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
+        <>
+          {pill}
+          <StageReject
+            siteCode={siteCode}
+            loadId={load.id}
+            onCancel={() => setShowReject(false)}
+          />
+        </>
       );
     }
     return (
-      <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
+      <>
+        {pill}
+        <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
+      </>
     );
   }
 
   if (load.status === 'in_progress') {
     return (
-      <StageStacks
-        siteCode={siteCode}
-        loadId={load.id}
-        unloadStartedAt={load.unload_started_at}
-        existingStacks={load.stacks}
-      />
+      <>
+        {pill}
+        <StageStacks
+          siteCode={siteCode}
+          loadId={load.id}
+          unloadStartedAt={load.unload_started_at}
+          existingStacks={load.stacks}
+        />
+      </>
     );
   }
 
   if (load.status === 'finished') {
     return (
-      <StageFinish
-        siteCode={siteCode}
-        loadId={load.id}
-        operatorName={operatorName}
-        totalUnits={load.total_units}
-      />
+      <>
+        {pill}
+        <StageFinish
+          siteCode={siteCode}
+          loadId={load.id}
+          operatorName={operatorName}
+          totalUnits={load.total_units}
+        />
+      </>
     );
   }
 
-  return <p>Unhandled status: {load.status}</p>;
+  return (
+    <>
+      {pill}
+      <p>Unhandled status: {load.status}</p>
+    </>
+  );
+}
+
+function PendingPill({ count, onTap }: { count: number; onTap: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      className="mb-3 w-full rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-left text-xs font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
+    >
+      ⏳ {count} pending upload{count === 1 ? '' : 's'} — tap to retry now
+    </button>
+  );
 }
 
 function FromBol({

@@ -2,8 +2,10 @@
 
 import type { PhotoKind } from '@prisma/client';
 import { useRef, useState } from 'react';
+import { enqueueUpload, isOfflineError, type UploadKind } from '@/lib/offline-queue';
 
-// Touch-first camera input + R2 upload (T-007). Sequence:
+// Touch-first camera input + R2 upload (T-007), now with offline-queue
+// fallback (T-009 / ADR-0006). Sequence:
 //   1. operator taps the button → file picker / rear camera
 //   2. POST /api/photos/upload-url for a presigned URL + storage_key
 //   3. PUT the file bytes directly to R2 (or skip if R2 not yet
@@ -12,8 +14,23 @@ import { useRef, useState } from 'react';
 //   4. POST /api/photos/confirm to write the LoadPhoto row
 //   5. fire `onCaptured(file)` so the parent stage enables Continue
 //
+// On network failure at ANY of steps 2/3/4 we enqueue the file blob in
+// IndexedDB (per CLAUDE.md hard rule #9 — no localStorage) and STILL
+// fire `onCaptured` so the operator's workflow advances. The
+// `LoadPhoto` row is missing on the server until `replayAll()` runs to
+// completion; the manager-portal load detail surfaces this as a
+// pending-r2 photo until then. Acceptable per ADR-0006: "Photos are
+// uploaded when the queue replays; the user's submission is 'complete'
+// from their perspective even before the photo finishes uploading."
+//
+// Hard 4xx (auth expired, load reassigned, etc.) is NOT a network
+// failure — those errors keep the operator on the current stage with
+// the error message visible, because the queue cannot resolve them.
+//
 // CLAUDE.md hard rules respected:
-//   #7  photos go to R2, never local disk or DB
+//   #7  photos go to R2, never local disk or DB (queue is transient,
+//       blob is removed on successful R2 PUT during replay)
+//   #9  IndexedDB only — no localStorage / sessionStorage
 //   #10 onClick handlers, no native <form>
 
 type Props = {
@@ -23,7 +40,7 @@ type Props = {
   onCaptured: (file: File) => void;
 };
 
-type Status = 'idle' | 'uploading' | 'done' | 'error';
+type Status = 'idle' | 'uploading' | 'done' | 'queued' | 'error';
 
 export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
   const ref = useRef<HTMLInputElement | null>(null);
@@ -31,10 +48,32 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
   const [name, setName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const queueAndAdvance = async (
+    file: File,
+    storage_key: string | null,
+    upload_url: string | null,
+  ) => {
+    await enqueueUpload({
+      load_id: loadId,
+      kind: kind as UploadKind,
+      blob: file,
+      content_type: file.type || 'application/octet-stream',
+      storage_key,
+      upload_url,
+    });
+    setStatus('queued');
+    onCaptured(file);
+  };
+
   const handleFile = async (file: File) => {
     setStatus('uploading');
     setError(null);
     setName(file.name);
+
+    let storage_key: string | null = null;
+    let upload_url: string | null = null;
+
+    // Step 2: mint presigned URL.
     try {
       const mintRes = await fetch('/api/photos/upload-url', {
         method: 'POST',
@@ -46,20 +85,44 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
         }),
       });
       if (!mintRes.ok) throw new Error(`mint failed (${mintRes.status})`);
-      const { storage_key, upload_url } = (await mintRes.json()) as {
+      const minted = (await mintRes.json()) as {
         storage_key: string;
         upload_url: string | null;
       };
+      storage_key = minted.storage_key;
+      upload_url = minted.upload_url;
+    } catch (e) {
+      if (isOfflineError(e)) {
+        await queueAndAdvance(file, null, null);
+        return;
+      }
+      setStatus('error');
+      setError(e instanceof Error ? e.message : 'upload failed');
+      return;
+    }
 
-      if (upload_url) {
+    // Step 3: PUT to R2.
+    if (upload_url) {
+      try {
         const putRes = await fetch(upload_url, {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file,
         });
         if (!putRes.ok) throw new Error(`R2 PUT failed (${putRes.status})`);
+      } catch (e) {
+        if (isOfflineError(e)) {
+          await queueAndAdvance(file, storage_key, upload_url);
+          return;
+        }
+        setStatus('error');
+        setError(e instanceof Error ? e.message : 'upload failed');
+        return;
       }
+    }
 
+    // Step 4: confirm — write the LoadPhoto row.
+    try {
       const confirmRes = await fetch('/api/photos/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71,18 +134,31 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
         }),
       });
       if (!confirmRes.ok) throw new Error(`confirm failed (${confirmRes.status})`);
-
-      setStatus('done');
-      onCaptured(file);
     } catch (e) {
+      if (isOfflineError(e)) {
+        // R2 PUT already succeeded — queue only the confirm step.
+        // We re-use enqueueUpload with the existing storage_key; on
+        // replay the queue notices the URL is stale and re-mints, but
+        // the bytes have to be re-PUT to the new key. That's a minor
+        // bandwidth waste, accepted because partial-progress tracking
+        // would balloon the queue schema for a vanishingly rare case
+        // (network drops between R2 PUT response and Next.js confirm).
+        await queueAndAdvance(file, null, null);
+        return;
+      }
       setStatus('error');
       setError(e instanceof Error ? e.message : 'upload failed');
+      return;
     }
+
+    setStatus('done');
+    onCaptured(file);
   };
 
   const buttonText = (() => {
     if (status === 'uploading') return `Uploading ${label}…`;
     if (status === 'done') return `✓ ${label} captured`;
+    if (status === 'queued') return `✓ ${label} queued (offline)`;
     if (status === 'error') return `Retry ${label}`;
     return `📸 ${label}`;
   })();
@@ -112,6 +188,11 @@ export function PhotoInput({ loadId, kind, label, onCaptured }: Props) {
         {buttonText}
       </button>
       {name && status !== 'error' && <p className="text-xs text-dr3-cream/60">{name}</p>}
+      {status === 'queued' && (
+        <p className="text-xs text-dr3-chartreuse/80">
+          Saved on iPad — will upload when online
+        </p>
+      )}
       {error && <p className="text-sm text-red-300">{error}</p>}
     </div>
   );
