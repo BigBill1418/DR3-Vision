@@ -16,7 +16,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 **Acceptance:** `npm run dev` serves a brand-correct placeholder. `npm run lint` and `npm run build` both green.
 
-### [ ] T-002: Prisma schema, first migration, seed loader
+### [x] T-002: Prisma schema, first migration, seed loader
 
 - Translate `prisma/schema.prisma` into a working migration
 - Write the seed loader that reads the CSVs in `prisma/seed/*` and idempotently inserts/updates

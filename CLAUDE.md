@@ -24,10 +24,12 @@ You are working on **DR3-Vision**, a 100% browser-based PWA that replaces paper-
 8. **PINs are 4 digits, hashed with Argon2id, never logged.** The `pin_hash` column is not indexed. PIN lookup is by `user_id` from a name-picker UI, then PIN comparison — never a `WHERE pin_hash = ?` query (that would enable PIN enumeration).
 9. **No browser storage APIs in the PWA shell other than IndexedDB and the Service Worker cache.** No `localStorage`, no `sessionStorage`. The offline queue is the only persistence path on the iPad.
 10. **Forms in React must use `onClick` handlers, not HTML `<form>` elements.** This is a fleet-wide convention.
+11. **The canonical DR3-Vision brand mark is `public/brand/dr3-vision-logo.jpg`** (per ADR-0014). Use it on every surface that shows a brand mark — placeholder, login (T-003), splash, app-shell brand strip, marketing, PDF headers. Auth surfaces (placeholder + `/login`) use a black background to match the mark's space backdrop; operator + manager working surfaces stay on `--dr3-green-deep` per ADR-0008. The cyan accent in the logo is asset-internal and does not become a `tailwind.config.ts` token.
 
 ## What "done" looks like
 
 A feature is done when:
+
 - The acceptance criteria in `docs/SPRINT-1-PLAN.md` for that ticket are met.
 - Tests pass: `npm test` and `npx playwright test` both green.
 - TypeScript compiles with zero errors and zero warnings.

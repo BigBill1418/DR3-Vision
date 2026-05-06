@@ -1,17 +1,18 @@
 import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
 
 // Healthcheck endpoint hit by:
 //   - Dockerfile HEALTHCHECK
 //   - swarmpilot_deployer post-deploy smoke test
-//   - Cloudflare Healthcheck (configured in CF dashboard)
+//   - Cloudflare Healthcheck (`dr3-vision-public` per cf-healthchecks.yml)
 //   - Manual probes (`curl https://dr3-vision.svdp.us/healthz`)
 //
-// T-001 ships the simplest possible green response. As subsystems come
-// online (T-002 Postgres, T-007 R2), each ticket adds its own reachability
-// probe to this handler and the response shape grows toward the contract
-// in docs/FLEET-DEPLOYMENT.md §"Healthcheck":
-//   200 { ok: true,  version, uptime_s, db_ok, r2_ok }
-//   503 { ok: false, version, ...subsystem flags }
+// Per ADR-0013 §4 the response shape grows with subsystems:
+//   T-001  → { ok, version, uptime_s }
+//   T-002  → adds db_ok (this file)
+//   T-007  → adds r2_ok
+// 200 if every probed subsystem is healthy; 503 if any is down. The
+// deployer's smoke test gates rollback on this distinction.
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,13 +20,25 @@ export const runtime = 'nodejs';
 const BOOT_TS = Date.now();
 const VERSION = process.env['npm_package_version'] ?? '0.1.0';
 
+async function probeDb(): Promise<boolean> {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET() {
+  const db_ok = await probeDb();
+  const ok = db_ok;
   return NextResponse.json(
     {
-      ok: true,
+      ok,
       version: VERSION,
       uptime_s: Math.round((Date.now() - BOOT_TS) / 1000),
+      db_ok,
     },
-    { status: 200 },
+    { status: ok ? 200 : 503 },
   );
 }

@@ -47,6 +47,52 @@ x-logging: &logging
     max-file: '5'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dr3-vision-postgres
+    restart: unless-stopped
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/db.env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'postgres'
+    logging: *logging
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dr3 -d dr3_vision']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  migrate:
+    # One-shot init container. Runs `prisma migrate deploy` against the
+    # production DB on every compose-up; idempotent (no-op if no pending
+    # migrations). The app waits for this to complete successfully before
+    # starting, so a failed migration aborts the deploy at the
+    # depends_on gate rather than letting the app come up with a stale
+    # schema. Per HANDOFF.md "Production seeding": seed CSVs run only
+    # for the first deploy, and via a separate manual `npx prisma db
+    # seed` invocation — NOT in this init container.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-migrate
+    restart: 'no'
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/db.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'migrate'
+    logging: *logging
+
   app:
     build:
       context: .
@@ -54,16 +100,19 @@ services:
     image: dr3-vision-app:local
     container_name: dr3-vision-app
     restart: unless-stopped
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/db.env
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
       PORT: '3000'
-      # T-001 ships without a database; downstream tickets add real env vars
-      # via .env on CHAD-HQ (NEXTAUTH_SECRET, DATABASE_URL, R2_*, MYMRC_*).
-      # Prisma client is generated at build with a placeholder URL — see
-      # Dockerfile. Runtime placeholder URL keeps the client importable
-      # from anywhere in the codebase even though no query runs in T-001.
-      DATABASE_URL: 'postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder?schema=public'
+      # DATABASE_URL is supplied via env_file (db.env). Other downstream
+      # env (NEXTAUTH_SECRET, R2_*, MYMRC_*) lands in T-003 / T-007.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - dr3net
     labels:
@@ -104,3 +153,7 @@ networks:
   dr3net:
     name: dr3-vision_dr3net
     driver: bridge
+
+volumes:
+  postgres-data:
+    name: dr3-vision_postgres-data

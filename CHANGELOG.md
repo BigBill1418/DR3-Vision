@@ -5,6 +5,94 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-002: Prisma init migration + seed loader + production Postgres
+
+Sprint-1 ticket T-002 (`docs/SPRINT-1-PLAN.md`). Closes the database
+foundation that T-003+ tickets depend on.
+
+**Schema:**
+
+- Added `verified` to `LoadStatus` enum between `submitted` and
+  `submitted_to_mymrc` per ADR-0012 §2 (manager-verified gate before
+  MyMRC submission). All other enum positions preserved so existing
+  test fixtures keep their ordinal mappings.
+- `prisma format` reflowed the schema's column alignment but no
+  semantic changes.
+
+**Migration:**
+
+- First migration generated as `prisma/migrations/20260506014249_init/`.
+  Created against a temp Postgres 16 container; 30 tables / 13 enums
+  / all indexes + FKs from the draft DDL land on a fresh DB.
+- Production runs `prisma migrate deploy` via a one-shot `migrate`
+  init container in `docker-compose.yml` (idempotent; depends on
+  `postgres: service_healthy`; the app's `depends_on` blocks on
+  `migrate: service_completed_successfully` so a failed migration
+  aborts the deploy at the gate rather than booting the app against
+  a stale schema).
+
+**Seed loader (`prisma/seed.ts`):**
+
+- Reads the six CSVs in `prisma/seed/` (Papa Parse) and idempotently
+  upserts in dependency order: sites → transporters → users →
+  site_holidays → processor_bonus_rules → sources.
+- Match keys per `prisma/seed/README.md`: `code` (sites), `name`
+  (transporters), `email` (users), `(site_id, holiday_date)`
+  (holidays), `(site_id, effective_date)` (bonus rules — emulated
+  via findFirst since no composite-unique declared on the schema),
+  `(site_id, name)` (sources).
+- Verification: at end of seed, asserts row counts against the
+  contract in `prisma/seed/README.md` (sites=2, users=5,
+  site_holidays=24, processor_bonus_rules=2, sources=111,
+  transporters=11). Mismatches throw and abort.
+- Fixed `processor_bonus_rules.csv` — `notes` column contained
+  unquoted commas (`MAX(units - 50, 0)`), Papa Parse rejected as
+  field-count mismatch; quoted both rows.
+- `package.json` gets `"prisma": { "seed": "tsx prisma/seed.ts" }`
+  so `npx prisma db seed` works from any directory.
+
+**Production Postgres:**
+
+- New `postgres` service in `docker-compose.yml` (postgres:16-alpine,
+  named volume `dr3-vision_postgres-data`). Credentials in
+  `~/.dr3-vision-secrets/db.env` (mode 600) on HSH-HQ + CHAD-HQ;
+  randomly generated 40-char alphanumeric password, never committed.
+- App's `DATABASE_URL` switched from build-time placeholder to a
+  real connection string (sourced via `env_file` from db.env).
+- Dockerfile runner stage now copies `node_modules/prisma`,
+  `node_modules/@prisma`, and `node_modules/.bin/prisma` from the
+  builder so the `migrate` init container can run
+  `npx prisma migrate deploy`.
+
+**Healthz contract:**
+
+- `/healthz` adds `db_ok` (boolean) per ADR-0013 §4. Probes the DB
+  with `SELECT 1` via Prisma; returns 503 if it fails.
+- New `src/lib/prisma.ts` singleton — survives Next.js HMR in dev,
+  shares a connection pool in prod.
+
+**Verified locally:** spun up a temp Postgres 16 container on port
+5435, ran `prisma migrate dev --name init` + `npm run db:seed` twice
+(idempotency check) — both runs report exact target row counts.
+
+**Operator follow-up (not in T-002):** initial production seed must
+run by hand once the migrate container shows green. SSH to CHAD-HQ
+and run `docker compose run --rm migrate npx prisma db seed` (or
+similar one-shot using the same image). HANDOFF.md "Production
+seeding" section is the canonical reference.
+
+### 2026-05-06 — ADR-0014: Canonical brand mark + dark-mode auth lock
+
+`public/brand/dr3-vision-logo.jpg` is the canonical DR3-Vision mark,
+used wherever a brand mark appears. Auth surfaces (placeholder
+
+- `/login`, T-003) use `bg-black` to match the mark's space backdrop;
+  operator + manager working surfaces stay on `--dr3-green-deep` per
+  ADR-0008. Cyan accent in the logo is asset-internal and does NOT
+  become a tailwind token. Closes ADR-0012 §5 + HANDOFF open decision
+  #1. CLAUDE.md hard-rules section gets a new rule #11 enshrining the
+  brand-mark + auth-bg lock.
+
 ### 2026-05-06 — Canonical logo + compose restructure (incident recovery)
 
 Two things in one ship because they couldn't safely be split.
