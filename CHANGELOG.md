@@ -5,7 +5,9 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-05-06 — T-003: Auth.js v5 email-password login + role gating + reset flow
+### 2026-05-06 — Sprint-1 completion: Auth, deployment fixes, brand lock
+
+**T-003: Auth.js v5 email-password login + role gating + reset flow**
 
 Sprint-1 ticket T-003. Closes the auth foundation T-005+ portal tickets need.
 
@@ -98,7 +100,7 @@ admin password (no working credentials exist in the seeded DB by
 design — every seeded user has the `pending_first_password_reset`
 sentinel hash).
 
-### 2026-05-06 — T-002: Prisma init migration + seed loader + production Postgres
+**T-002: Prisma init migration + seed loader + production Postgres**
 
 Sprint-1 ticket T-002 (`docs/SPRINT-1-PLAN.md`). Closes the database
 foundation that T-003+ tickets depend on.
@@ -124,7 +126,7 @@ foundation that T-003+ tickets depend on.
   aborts the deploy at the gate rather than booting the app against
   a stale schema).
 
-**Seed loader (`prisma/seed.ts`):**
+**Seed loader (`prisma/seed.mjs`):**
 
 - Reads the six CSVs in `prisma/seed/` (Papa Parse) and idempotently
   upserts in dependency order: sites → transporters → users →
@@ -141,8 +143,10 @@ foundation that T-003+ tickets depend on.
 - Fixed `processor_bonus_rules.csv` — `notes` column contained
   unquoted commas (`MAX(units - 50, 0)`), Papa Parse rejected as
   field-count mismatch; quoted both rows.
-- `package.json` gets `"prisma": { "seed": "tsx prisma/seed.ts" }`
-  so `npx prisma db seed` works from any directory.
+- `package.json` gets `"prisma": { "seed": "node prisma/seed.mjs" }`
+  so `npx prisma db seed` works from any directory without runtime
+  deps. Converted from `seed.ts` → `seed.mjs` to drop the tsx dev-only
+  dependency from production images.
 
 **Production Postgres:**
 
@@ -154,8 +158,10 @@ foundation that T-003+ tickets depend on.
   real connection string (sourced via `env_file` from db.env).
 - Dockerfile runner stage now copies `node_modules/prisma`,
   `node_modules/@prisma`, and `node_modules/.bin/prisma` from the
-  builder so the `migrate` init container can run
-  `npx prisma migrate deploy`.
+  builder, plus `node_modules/papaparse` (needed by seed.mjs) so the
+  `migrate` init container can run `npx prisma migrate deploy`.
+- Prisma invoked via explicit module path in Dockerfile to avoid
+  symlink COPY issues that broke WASM resolution at runtime.
 
 **Healthz contract:**
 
@@ -170,55 +176,55 @@ foundation that T-003+ tickets depend on.
 
 **Operator follow-up (not in T-002):** initial production seed must
 run by hand once the migrate container shows green. SSH to CHAD-HQ
-and run `docker compose run --rm migrate npx prisma db seed` (or
+and run `docker compose run --rm migrate node prisma/seed.mjs` (or
 similar one-shot using the same image). HANDOFF.md "Production
 seeding" section is the canonical reference.
 
-### 2026-05-06 — ADR-0014: Canonical brand mark + dark-mode auth lock
+**ADR-0014: Canonical brand mark + dark-mode auth lock**
 
 `public/brand/dr3-vision-logo.jpg` is the canonical DR3-Vision mark,
 used wherever a brand mark appears. Auth surfaces (placeholder
+`/login`, T-003) use `bg-black` to match the mark's space backdrop;
+operator + manager working surfaces stay on `--dr3-green-deep` per
+ADR-0008. Cyan accent in the logo is asset-internal and does NOT
+become a tailwind token. Closes ADR-0012 §5 + HANDOFF open decision
+#1. CLAUDE.md hard-rules section gets a new rule #11 enshrining the
+brand-mark + auth-bg lock.
 
-- `/login`, T-003) use `bg-black` to match the mark's space backdrop;
-  operator + manager working surfaces stay on `--dr3-green-deep` per
-  ADR-0008. Cyan accent in the logo is asset-internal and does NOT
-  become a tailwind token. Closes ADR-0012 §5 + HANDOFF open decision
-  #1. CLAUDE.md hard-rules section gets a new rule #11 enshrining the
-  brand-mark + auth-bg lock.
+**Compose restructure** (incident recovery):
 
-### 2026-05-06 — Canonical logo + compose restructure (incident recovery)
-
-Two things in one ship because they couldn't safely be split.
-
-**Canonical logo wired in.** Bill provided the canonical DR3-Vision
-logo (`public/brand/dr3-vision-logo.jpg`, 1168×784) — eye-as-"o"
-treatment in cyan on a dark space backdrop. Closes ADR-0012 §5 and
-HANDOFF open decision #1. The placeholder page now shows the logo
-image as the hero with "— coming soon" beneath, on a black background
-that matches the logo's backdrop. Background change is scoped to the
-placeholder route only; layout-level body bg stays on `--dr3-green-deep`
-per ADR-0008. The earlier inline-SVG eyeball + text wordmark are
-removed. Footer caption under the SVdP seal swapped to a `svdp.us`
-hyperlink at Bill's request.
-
-**Compose restructure.** Production compose moved from
-`deploy/docker-compose.yml` to root `docker-compose.yml`; the previous
-root dev compose moved to `docker-compose.dev.yml`. Driver was a deploy
-incident: the noc swarmpilot deployer's remote-deploy code path
-(compose stacks on non-HQ hosts) does NOT honor the `compose_file:`
-config knob — only the local-deploy path does. So when the deployer
-ran `docker compose up -d` on CHAD-HQ after the prior push it hit the
-DEV compose at root, started the dev MinIO container, and tore down
+Production compose moved from `deploy/docker-compose.yml` to root
+`docker-compose.yml`; the previous root dev compose moved to
+`docker-compose.dev.yml`. Driver was a deploy incident: the noc
+swarmpilot deployer's remote-deploy code path (compose stacks on
+non-HQ hosts) does NOT honor the `compose_file:` config knob — only
+the local-deploy path does. So when the deployer ran
+`docker compose up -d` on CHAD-HQ after the prior push it hit the DEV
+compose at root, started the dev MinIO container, and tore down
 `dr3-vision-cloudflared` as an "orphan" — knocking the tunnel down and
 returning HTTP 530. Recovery: manual `docker compose down --remove-orphans`
 
-- rebuild + up against the prod compose. Permanent fix: this
-  restructure, plus updated comments at the top of `docker-compose.yml`
-  explaining why it MUST be the production file. README.md and HANDOFF.md
-  updated to invoke the dev compose explicitly with `-f docker-compose.dev.yml`.
+- rebuild + up against the prod compose. Permanent fix: this restructure,
+  plus updated comments at the top of `docker-compose.yml` explaining why
+  it MUST be the production file. README.md and HANDOFF.md updated to
+  invoke the dev compose explicitly with `-f docker-compose.dev.yml`.
   ADR-0013 §1 already records the structural choice.
 
-### 2026-05-06 — T-001 follow-up: deployable to CHAD-HQ
+**Canonical logo wired in:**
+
+Bill provided the canonical DR3-Vision logo
+(`public/brand/dr3-vision-logo.jpg`, 1168×784) — eye-as-"o" treatment
+in cyan on a dark space backdrop. The placeholder page now shows the
+logo image as the hero with "— coming soon" beneath, on a black
+background that matches the logo's backdrop. Background change is
+scoped to the placeholder route only; layout-level body bg stays on
+`--dr3-green-deep` per ADR-0008. The earlier inline-SVG eyeball + text
+wordmark are removed. Footer caption under the SVdP seal swapped to a
+`svdp.us` hyperlink at Bill's request. Also added the SVdP seal as a
+small footer credit (72×72 PNG, rendered via next/image with priority
+for LCP).
+
+**T-001 follow-up: deployable to CHAD-HQ**
 
 Lands the production deploy surface for the T-001 placeholder.
 
@@ -228,15 +234,12 @@ Lands the production deploy surface for the T-001 placeholder.
   per-tunnel CF Healthcheck. The response shape grows toward the
   contract in `docs/FLEET-DEPLOYMENT.md` §"Healthcheck" as T-002 / T-007
   bring DB + R2 online.
-- New `deploy/docker-compose.yml` — production stack: `app` (Next.js
-  standalone) + `cloudflared` sidecar bound to the dedicated
-  `dr3-vision` tunnel (UUID `3999bb3b-7f86-4896-8f8c-77ef27f8f2cf`).
-  Per ADR-0008 (svdp-intranet), each service gets its own tunnel and
-  the cloudflared sidecar lives inside the compose so rollback is
-  atomic with the app rollback. Compose is invoked with
-  `--project-directory ..` so the build context resolves to the repo
-  root. Cloudflared image pinned to `2026.3.0` (fleet standard from
-  the eyeson-managed pin).
+- Production stack: `app` (Next.js standalone) + `cloudflared` sidecar
+  bound to the dedicated `dr3-vision` tunnel
+  (UUID `3999bb3b-7f86-4896-8f8c-77ef27f8f2cf`). Per ADR-0008
+  (svdp-intranet), each service gets its own tunnel and the cloudflared
+  sidecar lives inside the compose so rollback is atomic with the app
+  rollback. Cloudflared image pinned to `2026.3.0` (fleet standard).
 - Dockerfile: provide a syntactically valid placeholder `DATABASE_URL`
   for `npx prisma generate` at build time. The client-generation step
   only parses the schema; runtime gets the real URL from the
