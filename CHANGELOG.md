@@ -5,6 +5,71 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-006: Seven-stage load workflow
+
+Sprint-1 ticket T-006 — the meatiest ticket on the board. Operator
+walks an inbound load through BOL → weight → door-open (timer) →
+decision (unload | reject) → counting (3 modes) → finish + concern →
+submit (auto-logout). Photo bytes still go nowhere — T-007 wires R2;
+for T-006 each captured photo writes a `load_photos` row with a
+placeholder `storage_key` and the UI gates "Continue" until a file is
+in client state.
+
+**Data layer** (`src/lib/load-service.ts`):
+
+- State-machine transitions guarded server-side via an `ALLOWED_PRIOR`
+  map, so a hand-crafted POST cannot skip a stage. UI enforces order;
+  service rejects illegal moves.
+- Per ADR-0012 §1 `unload_started_at` is stamped by the door-open
+  capture (not BOL); `time_to_unload_start_seconds` is captured
+  silently for the Article 11.3 SLA dashboard; `unload_duration_seconds`
+  is the visible operator timer.
+- `startInboundLoad` is idempotent — taps from the queue twice
+  return the same in-flight `InboundLoad`.
+- `submitLoad` + `rejectLoad` both stamp `submitted_at` +
+  `submitted_by_id`; rejection writes `rejection_category` +
+  `rejection_note` + a `rejection` photo row.
+- Audit rows on every state transition + on initial create.
+
+**Server actions** (`src/app/operator/[site]/actions.ts`):
+
+- One thin wrapper per service call. Each re-derives operator + site
+  from the active session — no client-trusted IDs. Submit + reject
+  end with `signOut({ redirect: false })` then redirect back to the
+  name picker (ADR-0004 auto-logout on submission).
+
+**Workflow shell + stages**
+(`src/app/operator/[site]/load/[id]/`):
+
+- `page.tsx` — server component, hydrates load + dispatches.
+- `load-workflow.tsx` — client dispatcher; visible stage is a
+  function of `load.status` plus a tiny client flag for the
+  weight-decision sub-stage (Add vs None both leave the load on
+  `arrived` so the server status can't disambiguate).
+- `stage-bol.tsx`, `stage-weight.tsx`, `stage-door.tsx`,
+  `stage-decision.tsx`, `stage-stacks.tsx`, `stage-reject.tsx`,
+  `stage-finish.tsx` — one stage each. All onClick handlers (no
+  `<form>` per CLAUDE.md hard rule #10).
+- `photo-input.tsx` — touch-first camera invocation
+  (`<input type="file" capture="environment" accept="image/*">`).
+  File is held in client state; T-007 swaps in the actual upload.
+- Stage 5a (counting) implements all three modes per charter §4.3:
+  - **ledger** — single big "+1" button
+  - **multiplier** — "Mattresses in this stack" → "Add stack"
+  - **total** — "Total mattresses on this load"
+    Visible timer ticks since `unload_started_at` in the bottom bar.
+
+**Queue tap-to-start** (`src/app/operator/[site]/queue/queue-row.tsx`):
+
+- Each queue row is a `<button>` (no `<form>`) that calls
+  `startLoadAction(siteCode, expectedId)`. The action creates the
+  `InboundLoad` and redirects to `/operator/[site]/load/[id]`.
+
+**Verified:** lint + typecheck + build green; new route
+`/operator/[site]/load/[id]` emits at 4.43 kB ƒ. End-to-end
+(queue → BOL → weight skip → door-open → unload → 1+ stacks →
+finish → submit) verified after deploy + walk-through.
+
 ### 2026-05-06 — T-005: Expected-loads queue (operator surface)
 
 Sprint-1 ticket T-005. Replaces the post-PIN placeholder with the real

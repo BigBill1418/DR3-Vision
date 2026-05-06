@@ -3,6 +3,7 @@ import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { formatDate, formatTime, formatRelative } from '@/lib/format';
 import { QueueClient } from './queue-client';
+import { QueueRow } from './queue-row';
 import { SignOutButton } from './sign-out-button';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -106,29 +107,28 @@ export default async function OperatorQueuePage({ params }: Props) {
                 const arrival = l.expected_arrival_at;
                 const isToday = arrival.toDateString() === now.toDateString();
                 return (
-                  <li
-                    key={l.id}
-                    className="rounded-lg bg-dr3-green-dark/40 p-4 transition-colors hover:bg-dr3-green-dark/70"
-                  >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-xl font-semibold tabular-nums">
-                        {formatTime(arrival)}
-                      </span>
-                      {!isToday && (
-                        <span className="text-sm text-dr3-cream/70">{formatDate(arrival)}</span>
-                      )}
-                    </div>
-                    <p className="mt-2 text-base font-medium">{sourceName}</p>
-                    <p className="text-sm text-dr3-cream/70">{transporterName}</p>
-                    <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
-                      BOL{' '}
-                      <span className="font-mono normal-case text-dr3-cream">
-                        {l.bol_number ?? '—'}
-                      </span>
-                      {l.expected_unit_count != null && (
-                        <span className="ml-3">~{l.expected_unit_count} units</span>
-                      )}
-                    </p>
+                  <li key={l.id}>
+                    <QueueRow siteCode={site.code} expectedLoadId={l.id}>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-xl font-semibold tabular-nums">
+                          {formatTime(arrival)}
+                        </span>
+                        {!isToday && (
+                          <span className="text-sm text-dr3-cream/70">{formatDate(arrival)}</span>
+                        )}
+                      </div>
+                      <p className="mt-2 text-base font-medium">{sourceName}</p>
+                      <p className="text-sm text-dr3-cream/70">{transporterName}</p>
+                      <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
+                        BOL{' '}
+                        <span className="font-mono normal-case text-dr3-cream">
+                          {l.bol_number ?? '—'}
+                        </span>
+                        {l.expected_unit_count != null && (
+                          <span className="ml-3">~{l.expected_unit_count} units</span>
+                        )}
+                      </p>
+                    </QueueRow>
                   </li>
                 );
               })}

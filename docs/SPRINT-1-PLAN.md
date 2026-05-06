@@ -57,7 +57,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 **Acceptance:** Seeded test loads appear correctly. Empty state renders cleanly. Pull-to-refresh works on iPad Safari.
 
-### [ ] T-006: Load workflow — BOL → weight → door-open → stack → finish/reject
+### [x] T-006: Load workflow — BOL → weight → door-open → stack → finish/reject
 
 Implement the seven-stage flow from charter §4 in order:
 
