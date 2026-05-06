@@ -68,6 +68,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modul
 # whole .bin/ resolution chain.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
+# papaparse is used by `prisma/seed.mjs`. The Next.js standalone bundle
+# omits it because no server code imports it; add it explicitly so the
+# `migrate` init container can run `node prisma/seed.mjs`.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/papaparse ./node_modules/papaparse
 
 USER nextjs
 
