@@ -42,5 +42,11 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // Skip middleware on Next static chunks, the favicon, the PWA
+  // manifest, the Service Worker bundle (Serwist), and any in-band
+  // sw-* worker chunks. These need to be served as public assets
+  // for the PWA install + offline behavior to work.
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|manifest\\.json|sw\\.js|swe-worker-).*)',
+  ],
 };
