@@ -5,6 +5,35 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-001 follow-up: deployable to CHAD-HQ
+
+Lands the production deploy surface for the T-001 placeholder.
+
+- New `/healthz` route at `src/app/healthz/route.ts`. Returns
+  `{ ok, version, uptime_s }` with HTTP 200. Hit by the Dockerfile
+  HEALTHCHECK, the swarmpilot post-deploy smoke probe, and the
+  per-tunnel CF Healthcheck. The response shape grows toward the
+  contract in `docs/FLEET-DEPLOYMENT.md` §"Healthcheck" as T-002 / T-007
+  bring DB + R2 online.
+- New `deploy/docker-compose.yml` — production stack: `app` (Next.js
+  standalone) + `cloudflared` sidecar bound to the dedicated
+  `dr3-vision` tunnel (UUID `3999bb3b-7f86-4896-8f8c-77ef27f8f2cf`).
+  Per ADR-0008 (svdp-intranet), each service gets its own tunnel and
+  the cloudflared sidecar lives inside the compose so rollback is
+  atomic with the app rollback. Compose is invoked with
+  `--project-directory ..` so the build context resolves to the repo
+  root. Cloudflared image pinned to `2026.3.0` (fleet standard from
+  the eyeson-managed pin).
+- Dockerfile: provide a syntactically valid placeholder `DATABASE_URL`
+  for `npx prisma generate` at build time. The client-generation step
+  only parses the schema; runtime gets the real URL from the
+  orchestrator. This unblocks builds before the T-002 migration lands.
+- Tunnel created via CF API; ID + token persisted at
+  `~/.dr3-vision-secrets/tunnel.env` on HSH-HQ (mode 600) and
+  replicated to CHAD-HQ at the same path before first compose-up.
+- DNS: `dr3-vision.svdp.us` CNAME → `<tunnel>.cfargotunnel.com`,
+  proxied (record id `61c5ca00fabbd7a759a1af3fe3211327`).
+
 ### 2026-05-05 — T-001: Repo scaffold
 
 Sprint-1 ticket T-001 (`docs/SPRINT-1-PLAN.md`).

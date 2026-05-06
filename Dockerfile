@@ -31,7 +31,10 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 COPY . .
-RUN npx prisma generate
+# Prisma client generation only parses the schema; it never opens a connection.
+# Provide a syntactically valid placeholder DATABASE_URL so `env("DATABASE_URL")`
+# resolves at build time. Runtime gets the real URL from the orchestrator.
+RUN DATABASE_URL='postgresql://build:build@127.0.0.1:5432/build?schema=public' npx prisma generate
 RUN npm run build
 
 # ─── Stage 3: runner (production) ────────────────────────────────────────
