@@ -1,0 +1,77 @@
+import { notFound } from 'next/navigation';
+import Link from 'next/link';
+import Image from 'next/image';
+import { prisma } from '@/lib/prisma';
+
+export const dynamic = 'force-dynamic';
+
+// Operator name picker. Per ADR-0004 the first step of the iPad sign-in:
+// list active operators at the device's site, tap the name, then enter
+// the PIN on the next screen. Ordered last-seen-recent first so the
+// previous-shift operator hits the top.
+
+type Props = { params: Promise<{ site: string }> };
+
+export default async function OperatorSitePage({ params }: Props) {
+  const { site: siteCode } = await params;
+  const site = await prisma.site.findUnique({
+    where: { code: siteCode },
+    select: { id: true, code: true, name: true },
+  });
+  if (!site) notFound();
+
+  const operators = await prisma.user.findMany({
+    where: {
+      role: 'operator',
+      is_active: true,
+      primary_site_id: site.id,
+    },
+    select: {
+      id: true,
+      name: true,
+      last_login_at: true,
+    },
+    orderBy: [{ last_login_at: { sort: 'desc', nulls: 'last' } }, { name: 'asc' }],
+  });
+
+  return (
+    <main className="min-h-screen bg-black px-6 py-10 text-white">
+      <div className="mx-auto flex max-w-2xl flex-col gap-8">
+        <header className="flex items-center justify-between gap-4">
+          <Image
+            src="/brand/dr3-vision-logo.jpg"
+            alt="DR3-Vision"
+            width={1168}
+            height={784}
+            priority
+            className="h-16 w-auto"
+          />
+          <span className="rounded-md bg-white/10 px-3 py-1 text-sm font-medium uppercase tracking-wide text-white/80">
+            {site.name}
+          </span>
+        </header>
+
+        <h1 className="text-2xl font-semibold">Tap your name to sign in</h1>
+
+        {operators.length === 0 ? (
+          <p className="text-white/70">
+            No active operators are assigned to {site.name}. Ask a manager to add you in the portal.
+          </p>
+        ) : (
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {operators.map((op) => (
+              <li key={op.id}>
+                <Link
+                  href={`/operator/${site.code}/${op.id}`}
+                  className="block rounded-lg bg-white/5 px-4 py-6 text-center text-lg font-semibold text-white transition-colors hover:bg-white/10"
+                >
+                  {op.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </main>
+  );
+}

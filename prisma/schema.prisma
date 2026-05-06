@@ -141,9 +141,10 @@ model User {
   password_hash String? // Argon2id; null for operator-only
 
   // PIN auth (operator)
-  pin_hash            String? // Argon2id; per ADR-0004, NOT indexed
-  pin_failed_attempts Int       @default(0)
-  pin_locked_until    DateTime?
+  pin_hash             String? // Argon2id; per ADR-0004, NOT indexed
+  pin_failed_attempts  Int       @default(0)
+  pin_first_failed_at  DateTime? // start of the current 60s rate-limit window (ADR-0004)
+  pin_locked_until     DateTime?
 
   // Roles and assignment
   primary_site_id String?

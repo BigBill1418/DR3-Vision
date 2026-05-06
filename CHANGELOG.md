@@ -5,6 +5,87 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-004: Operator iPad PIN flow
+
+Sprint-1 ticket T-004. Brings up the operator-side auth path that
+T-005+ workflow tickets ride on.
+
+**Schema:**
+
+- New `users.pin_first_failed_at DateTime?` column for the ADR-0004
+  sliding-window rate limit ("5 failed attempts in 60 seconds → 15-min
+  lockout"). Migration `20260506045516_pin_rate_limit_window`.
+
+**PIN service** (`src/lib/pin-service.ts`):
+
+- `verifyPin(userId, pin)` — Argon2id verify + sliding-window rate
+  limit + lockout. Lookup is by `user_id` only (PIN-enumeration
+  hardening; `pin_hash` stays un-indexed per CLAUDE.md hard rule #8).
+  Successful verify resets the failure counter and stamps
+  `last_login_at`. Lockout sets `pin_locked_until` to `now + 15min`.
+- `setPin({ targetUserId, pin, actorUserId })` — runs the
+  loop-verify uniqueness check across all active operators at the
+  target's site (ADR-0012 §3 — ~30 verifies × ~80ms ≈ 2.5s
+  acceptable for admin-side; rejects on collision). On success writes
+  the new hash, clears all rate-limit state, and writes an audit row
+  via the shared helper. The PIN itself is never stored or logged —
+  only `pin_hash: '<argon2id>'` lands in audit.
+
+**PIN policy** (`src/lib/pin-validator.ts`):
+
+- 4 numeric digits, no all-same (0000 / 1111), no sequential (1234 /
+  4321 / 0123), no repeated-pair (1212 / 3434). Per ADR-0004 §Policy.
+
+**Audit helper** (`src/lib/audit.ts`):
+
+- `writeAudit({...})` — append-only insert into `audit_log`. Wraps
+  Prisma's NULL/undefined Json semantics so callers don't have to
+  remember `Prisma.JsonNull`.
+
+**Auth wiring:**
+
+- New `pin` Credentials provider in `src/lib/auth.ts` alongside the
+  existing email-password `credentials` provider. `signIn('pin', {
+user_id, pin })` from the keypad client component.
+- `src/lib/auth.config.ts` — per-role idle timeout: operators get
+  5 min (ADR-0004 auto-logout), managers/admins keep the 12h from
+  T-003. Both roles share the 30d absolute cap.
+
+**Operator surfaces** (per ADR-0014 dark + canonical-logo treatment;
+per CLAUDE.md hard-rule #10 keypad uses `onClick` handlers, no
+`<form>`):
+
+- `/operator` — site picker (only used when the iPad isn't
+  pre-pinned to a site; T-005+ adds the per-device site cookie).
+- `/operator/[site]` — name picker. Lists active operators at that
+  site, sorted last-seen-recent first (`last_login_at` DESC NULLS
+  LAST), then by name.
+- `/operator/[site]/[userId]` — keypad page. Touch-first numeric
+  pad, 4-dot progress indicator, backspace, auto-submit on the 4th
+  digit (no separate submit; gloved-hand minimum-tap UX).
+- `/operator/[site]/queue` — placeholder post-PIN landing. Real
+  expected-loads UI lands in T-005. Carries the "Switch user"
+  sign-out control.
+
+**Middleware** — `/operator` and `/operator/*` are pre-auth surfaces;
+the queue route does its own server-side `auth()` check + role +
+site-scope enforcement.
+
+**Bootstrap CLI** (`scripts/set-operator-pin.mjs`):
+
+- `node scripts/set-operator-pin.mjs <site-code> <operator-name> <pin>`
+- Find-or-create the operator at the given site, run the loop-verify
+  uniqueness check, hash with Argon2id, write the audit row. Used
+  to seat the T-004 acceptance test operator + as the manager-side
+  fallback until the manager-portal PIN-reset surface ships (T-010+).
+
+**Verified:** lint + typecheck + build green; all operator routes
+emit as ƒ (dynamic) since each one queries Prisma. End-to-end
+acceptance — "Test operator with PIN 4738 can log in, perform a
+no-op session, logout. Lockout triggers correctly. Reset flow
+audit-logged" — verified after the deploy + bootstrap of the test
+operator.
+
 ### 2026-05-06 — Sprint-1 completion: Auth, deployment fixes, brand lock
 
 **T-003: Auth.js v5 email-password login + role gating + reset flow**

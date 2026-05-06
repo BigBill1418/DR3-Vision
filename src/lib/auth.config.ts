@@ -10,8 +10,17 @@ import type { NextAuthConfig } from 'next-auth';
 // transforms over the token + session — no DB reads — so they're
 // edge-safe and shared with the full Node config.
 
-const IDLE_TIMEOUT_S = 12 * 60 * 60; //  12h
+// Per-role idle timeouts. Managers/admins follow the SPRINT-1-PLAN
+// T-003 contract (12h idle / 30d absolute). Operators on shared
+// forklift iPads run a much tighter loop per ADR-0004 — 5 min idle —
+// to limit who can hijack the iPad if the operator walks away.
+const IDLE_TIMEOUT_MANAGER_S = 12 * 60 * 60; //  12h
+const IDLE_TIMEOUT_OPERATOR_S = 5 * 60; //  5min
 const ABSOLUTE_TIMEOUT_S = 30 * 24 * 60 * 60; //  30d
+
+function idleTimeoutFor(role: string | undefined): number {
+  return role === 'operator' ? IDLE_TIMEOUT_OPERATOR_S : IDLE_TIMEOUT_MANAGER_S;
+}
 
 export const authConfig = {
   session: { strategy: 'jwt', maxAge: ABSOLUTE_TIMEOUT_S },
@@ -30,7 +39,8 @@ export const authConfig = {
         token.last_seen_at = nowS;
         return token;
       }
-      if (token.last_seen_at && nowS - token.last_seen_at > IDLE_TIMEOUT_S) {
+      const idleS = idleTimeoutFor(token.role);
+      if (token.last_seen_at && nowS - token.last_seen_at > idleS) {
         return {} as typeof token;
       }
       token.last_seen_at = nowS;

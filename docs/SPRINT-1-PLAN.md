@@ -35,7 +35,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 **Acceptance:** Bill (admin) can log in and access both sites. Rick (manager, Eugene) can log in and access Eugene only. Attempts to access Woodland from Rick's session return 403.
 
-### [ ] T-004: PIN flow for operator iPad
+### [x] T-004: PIN flow for operator iPad
 
 - `/operator` route lands on a name-picker (lists active operators at the site, ordered by last-seen-recent)
 - Tapping a name reveals the 4-digit numeric keypad

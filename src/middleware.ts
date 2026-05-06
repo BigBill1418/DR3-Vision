@@ -20,6 +20,11 @@ function isPublic(pathname: string): boolean {
   if (pathname.startsWith('/api/auth/')) return true;
   if (pathname.startsWith('/_next/')) return true;
   if (pathname.startsWith('/brand/')) return true;
+  // Operator name-picker + PIN-entry are pre-auth surfaces. The
+  // /queue subroute does its own server-side session check (and is
+  // gated to role=operator there), so middleware doesn't need to.
+  if (pathname === '/operator') return true;
+  if (pathname.startsWith('/operator/')) return true;
   return false;
 }
 
