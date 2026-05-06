@@ -5,6 +5,79 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-014: admin audit log viewer (/admin/audit)
+
+Closes SPRINT-1-PLAN T-014. Ships an admin-only `/admin/audit` viewer
+that lets Bill (and any future admin) trace who did what to which
+row. Append-only per CLAUDE.md hard rule #6 + ADR-0007 — no edit /
+delete UI exists, the GET-only API route asserts no other HTTP
+verbs are exported, and the data layer never calls
+`prisma.auditLog.update` or `delete`. Full design in
+`docs/adr/0018-audit-log-viewer.md`.
+
+#### Added
+
+- `src/app/admin/audit/page.tsx` — server-rendered viewer mirrors
+  the gate / layout conventions of `/admin/users` (page-layer
+  `checkAdmin()`, in-page 403 surface, redirect on 401).
+- `src/app/admin/audit/AuditFilters.tsx` — `'use client'` filter
+  bar. Apply / Reset are `<button onClick>` per CLAUDE.md hard rule
+  #10 — no `<form>`. Filters: actor (manager/admin dropdown), table
+  (linkable + observed dropdown), date-from / date-to (HTML date
+  inputs), action multi-select chips. URL is the persistent state.
+- `src/app/admin/audit/AuditList.tsx` — row list with per-row
+  collapsible diff (`useState<Set<id>>` toggle).
+- `src/app/admin/audit/AuditDiff.tsx` + `diff-util.ts` — in-house
+  3-column key/before/after grid with added/removed/changed/
+  unchanged colorization. Inline values <60 chars; pretty-printed
+  `<pre>` otherwise. Zero external diff deps (no `react-json-view`).
+- `src/app/admin/audit/AuditPagination.tsx` — prev/next buttons
+  (URLs precomputed server-side so the client component stays thin).
+- `src/app/admin/audit/load/[id]/page.tsx` — resolver that looks up
+  a load's site and redirects to `/dashboard/[site]/load/[id]`. The
+  audit log is site-agnostic; this resolver bridges the gap without
+  hard-coding the lookup at every link site. Hard-deleted rows
+  bounce back to the audit list rather than 404.
+- `src/lib/admin-audit.ts` — data layer. `listAuditEntries(opts)`
+  with Prisma `findMany` + `count`, plus a single bulk-IN query per
+  linkable table to resolve "does this row still exist?". Linkable
+  tables: `users`, `inbound_loads` (the only `table_name` values
+  `writeAudit()` currently emits across the codebase). Adding a
+  target is one constant + one branch.
+- `src/lib/admin-audit-url.ts` — pure parser / builder / ISO-date
+  bounds / default-range helpers. Safe for client + server. Default
+  date range when neither bound supplied: last 7 days (UTC).
+  Defaults are NOT injected into the URL — the server applies them
+  silently and the filter UI shows them as the active draft.
+- `src/app/api/admin/audit/route.ts` — GET-only JSON endpoint.
+  Admin-gated. Returns `{ rows, total, page, per_page, total_pages }`
+  for the client and the future CSV-export use case.
+- `docs/adr/0018-audit-log-viewer.md` — design + alternatives +
+  consequences.
+- "Audit log" nav link in the user-list page header.
+- 53 new tests:
+  - `src/lib/admin-audit-url.test.ts` (18) — parser, builder,
+    round-trip, ISO-date bounds, default range.
+  - `src/app/admin/audit/audit-diff.test.ts` (13) — diff classifier
+    + `deepEqual` (insert / delete / change / nested / arrays).
+  - `src/app/api/admin/audit/audit.test.ts` (22) — role gate,
+    list shape, ordering, row-existence resolver, filter
+    composition, pagination, append-only contract assertion
+    (POST/PATCH/PUT/DELETE not exported).
+
+  Total fleet test count: 51 -> 104.
+
+#### Changed
+
+- `src/app/admin/messages.ts` gains an `audit:` block with all
+  user-visible strings. No literals leak into the audit components.
+  Per ADR-0015 + ADR-0017, the admin surface stays English-only
+  for v1; strings stay concentrated here for the eventual mechanical
+  i18n pass.
+- `src/app/admin/users/page.tsx` — small "Audit log" link added in
+  the header (`data-testid="admin-audit-link"`). Existing add-user
+  CTA layout preserved.
+
 ### 2026-05-06 — Hotfix: COPY scripts/ in runner stage of Dockerfile
 
 PR #3 (`feat(ntfy): wire system-level event publishing`) switched the

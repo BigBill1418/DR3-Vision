@@ -153,7 +153,7 @@ All exports are per-site by default. Cross-site export requires `admin` role and
 
 **Acceptance:** Test month's data exports correctly. Reconciliation CSV matches MyMRC's expected schema (see `docs/MYMRC-INTEGRATION.md`).
 
-### [ ] T-014: Audit log viewer
+### [x] T-014: Audit log viewer
 
 - For any record (load, user, source, transporter, etc.), `admin` role can view the full audit trail
 - Append-only display: actor, action, timestamp, before/after JSON

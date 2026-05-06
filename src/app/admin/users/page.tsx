@@ -71,13 +71,22 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
               <h1 className="text-3xl font-bold tracking-tight">{M.pageTitle}</h1>
               <p className="text-sm text-dr3-cream/70">{M.pageSubtitle}</p>
             </div>
-            <Link
-              href="/admin/users/new"
-              className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90"
-              data-testid="admin-add-user"
-            >
-              + {M.list.addUser}
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/admin/audit"
+                className="inline-flex items-center gap-2 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+                data-testid="admin-audit-link"
+              >
+                {M.audit.navLink}
+              </Link>
+              <Link
+                href="/admin/users/new"
+                className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90"
+                data-testid="admin-add-user"
+              >
+                + {M.list.addUser}
+              </Link>
+            </div>
           </div>
         </header>
 
