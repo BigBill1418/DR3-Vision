@@ -104,7 +104,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 ## Manager portal
 
-### [ ] T-010: Live dock view
+### [x] T-010: Live dock view
 
 - Per-site real-time view of currently-active operator sessions
 - 5-second polling
@@ -113,7 +113,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 **Acceptance:** Two operators on simultaneous loads at Woodland appear as two tiles. Times tick forward in real-time. Tile transitions through stages (BOL → weight → door → stack → finish).
 
-### [ ] T-011: Load list with filters
+### [x] T-011: Load list with filters
 
 - Per-site list view of today's, this-week's, this-month's, custom-range loads
 - Status filter (in-progress, submitted, rejected, submitted-to-mymrc, processed)
@@ -141,7 +141,7 @@ Color-coded tiles (green/yellow/red), with click-through to the underlying data.
 
 **Acceptance:** Each tile renders correctly with seeded data. Threshold colors transition correctly. Click-through filters the load list to the relevant subset.
 
-### [ ] T-013: MRC Monthly Invoice export + SVdP Internal CSV export
+### [x] T-013: MRC Monthly Invoice export + SVdP Internal CSV export
 
 - `MRC Monthly Invoice (Article 10.4)` export: CSV matching MyMRC reconciliation format
 - `Transportation Invoice` export: CSV per CA contract

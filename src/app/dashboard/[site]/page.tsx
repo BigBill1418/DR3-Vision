@@ -2,14 +2,36 @@ import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
+import { DockPoller } from './dock-poller';
+import { DockTile } from './dock-tile';
 
-// Per-site dashboard placeholder. T-005+ replaces this with the live
-// dock view, load list, and compliance dashboard. For T-003 it
-// enforces the SPRINT-1-PLAN T-003 acceptance criterion: a manager
-// scoped to one site gets a 403 on any other site, and an admin can
-// reach both.
+// Per-site live dock view per SPRINT-1-PLAN T-010. Replaces the T-003
+// access-control placeholder with the real manager surface: tiles for
+// every currently-active operator session at the site, refreshing
+// every 5 seconds via `DockPoller`. Tap a tile → load detail.
+//
+// Per-site separation per CLAUDE.md hard rule #2: every Prisma read
+// scopes by `site_id`. The 403 page below is preserved verbatim from
+// the placeholder so off-site managers see the same gate.
+//
+// Manager surfaces stay on the green palette per ADR-0014 (auth
+// surfaces black; working surfaces green).
+
+export const dynamic = 'force-dynamic';
 
 type Props = { params: Promise<{ site: string }> };
+
+// Operator-active states only — the dock view is "who is on the dock
+// right now". Once a load is `submitted` the operator is done; once
+// it's `verified` / `submitted_to_mymrc` / `processed` it's a manager-
+// portal record, not a dock event. T-011's load list covers the rest.
+const OPERATOR_ACTIVE_STATUSES = [
+  'arrived',
+  'weight_captured',
+  'unload_started',
+  'in_progress',
+  'finished',
+] as const;
 
 export default async function SiteDashboardPage({ params }: Props) {
   const { site: siteCode } = await params;
@@ -41,9 +63,27 @@ export default async function SiteDashboardPage({ params }: Props) {
     );
   }
 
+  // Operator-active loads at this site, oldest-arrival first so the
+  // tile order matches the order the operators got on the dock.
+  const loads = await prisma.inboundLoad.findMany({
+    where: {
+      site_id: site.id,
+      status: { in: [...OPERATOR_ACTIVE_STATUSES] },
+    },
+    select: {
+      id: true,
+      bol_number: true,
+      status: true,
+      arrived_at: true,
+      assigned_operator: { select: { name: true } },
+      source: { select: { name: true } },
+    },
+    orderBy: { arrived_at: 'asc' },
+  });
+
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
-      <div className="mx-auto flex max-w-3xl flex-col gap-6">
+    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <Link
           href="/dashboard"
           className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
@@ -52,18 +92,40 @@ export default async function SiteDashboardPage({ params }: Props) {
         </Link>
         <header>
           <h1 className="text-3xl font-bold tracking-tight">{site.name}</h1>
-          <p className="text-sm capitalize text-dr3-cream/70">{site.jurisdiction}</p>
+          <p className="text-sm capitalize text-dr3-cream/70">
+            {site.jurisdiction} · Live dock view
+          </p>
         </header>
-        <p className="text-dr3-cream/80">
-          Operator queue, dock view, and compliance dashboard ship in T-005+. This is the T-003
-          access-control checkpoint.
-        </p>
+
+        <DockPoller>
+          {loads.length === 0 ? (
+            <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
+              <p className="text-lg font-medium">No active loads on the dock</p>
+              <p className="mt-2 text-sm text-dr3-cream/70">
+                Tiles appear here as operators start loads.
+              </p>
+            </div>
+          ) : (
+            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {loads.map((l) => (
+                <li key={l.id}>
+                  <DockTile
+                    siteCode={site.code}
+                    load={{
+                      id: l.id,
+                      bol_number: l.bol_number,
+                      status: l.status,
+                      arrived_at: l.arrived_at,
+                      operatorName: l.assigned_operator?.name ?? 'Unassigned',
+                      sourceName: l.source?.name ?? 'Unknown source',
+                    }}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </DockPoller>
       </div>
     </main>
   );
-}
-
-export async function generateStaticParams() {
-  // Per-site routes are server-rendered (auth-gated); no static gen.
-  return [];
 }

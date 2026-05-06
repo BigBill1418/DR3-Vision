@@ -5,6 +5,115 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Wave A: T-010 dock view + T-011 load list + T-013 exports
+
+Three Sprint-1 tickets shipped in parallel via worktree-isolated agents,
+integrated into one push because they share `CHANGELOG` + `SPRINT-1-PLAN`
+edits and a new shared auth helper. Each agent's report carried forward
+known follow-ups (auth-helper re-pointing, status-label dedup, click-through
+URL contract); those are tracked at the bottom of this entry.
+
+#### T-010 — Live dock view
+
+- `src/app/dashboard/[site]/page.tsx` — replaces the T-003 placeholder
+  with the real per-site dock view. Server component queries `inbound_loads`
+  filtered to operator-active states (`arrived` / `weight_captured` /
+  `unload_started` / `in_progress` / `finished`), ordered by
+  `arrived_at ASC`, with operator + source joined. 403 page preserved
+  verbatim for off-site managers; `force-dynamic`; the placeholder's
+  `generateStaticParams() => []` removed (was forcing the route into
+  the SSG bucket — incompatible with polling + per-request session check).
+- `dock-poller.tsx` — 5s `router.refresh()` interval with
+  paused-while-in-flight guard and a small `Live · 5s` / `Live · refreshing…`
+  pill (mirrors `queue-client.tsx` minus pull-to-refresh).
+- `dock-tile.tsx` — server-rendered tile (Next `<Link>` to the detail
+  page); operator name + source + BOL + status badge + live elapsed.
+  Exports `stageLabel(LoadStatus)` re-used by the detail page; covers
+  every enum value so TS catches a missing case if `LoadStatus` grows.
+- `elapsed-time.tsx` — 1s tick rendering `mm:ss` (or `h:mm:ss` past 1h)
+  in `font-mono tabular-nums`.
+- `dashboard/[site]/load/[id]/page.tsx` (new) — read-only manager
+  load detail: header + status + photos (storage_key listed; pending-r2
+  flagged; presigned-GET preview is a follow-up) + stacks + concerns +
+  last-10 audit rows. Same site-scope + 403 gate.
+
+#### T-011 — Load list with filters
+
+- `src/app/dashboard/[site]/loads/page.tsx` — server component, URL-driven
+  filters → site-scoped Prisma `where`; rows + count in parallel; lookup
+  dropdowns in parallel; `force-dynamic`. Default status filter is the
+  manager-relevant post-operator subset (`submitted`, `verified`,
+  `rejected`, `submitted_to_mymrc`, `processed`); the operator-active
+  states are the dock view's territory.
+- `loads-filters.tsx` — segmented range buttons (today / week / month /
+  custom), custom-range date inputs, status toggle chips, three lookup
+  `<select>`s (source / operator / transporter). Every change `router.push`es
+  the URL with `page` reset to 1. Per CLAUDE.md hard-rule #10 buttons +
+  selects + inputs, no `<form>`.
+- `loads-poller.tsx` — 30s `router.refresh()` with an `aria-live`
+  indicator dot.
+- `load-row.tsx` — single row anchored to `/dashboard/[site]/load/[id]`
+  (T-010 owns the destination); columns + colored status badge.
+- `pagination.tsx` — Prev / "Page N of M" / Next as `<button>`s
+  pushing the `page` param.
+- The existing `@@index([site_id, status])` + `@@index([site_id, arrived_at])`
+  on `inbound_loads` back the filter shape directly; pagination on 1000+
+  loads handled server-side with `take` / `skip`.
+
+#### T-013 — MRC + SVdP CSV exports
+
+- `src/lib/exports.ts` (new) — RFC 4180 CSV emit, UTC half-open
+  `monthRange`, MyMRC-verbatim column lists for the MRC export,
+  MRC + 4 DR3-side provenance columns for the SVdP internal export.
+  Five open questions (Q1–Q5) about column-shape decisions documented
+  in the file header — for Bill to confirm or override before V2.1.
+- `src/lib/auth-helpers.ts` (new, **canonical**) — `requireManagerForSite`
+  (throws `Response`) + `checkManagerForSite` (returns tagged result).
+  T-010 + T-011 page-level auth re-implements the same shape inline;
+  re-pointing both to this helper is a small follow-up.
+- `src/app/api/exports/mrc/route.ts` + `svdp/route.ts` — GET handlers
+  with `?site=...&month=YYYY-MM`, `text/csv` + `attachment` content
+  disposition, `Cache-Control: private, no-store`. Filters loads by
+  `INVOICE_STATUSES` (the four billing-ready states) + `arrived_at`
+  in the period.
+- `src/app/dashboard/exports/page.tsx` + `ExportsClient.tsx` — manager
+  picker UI; site dropdown (admin sees all, manager sees primary),
+  `<input type="month">`, two anchor downloads with `href` driven by
+  client state. Per CLAUDE.md hard-rule #10 no `<form>`.
+- Column choice rationale: MyMRC verbatim names per ADR-0012 §7
+  ("MyMRC field-name shape"), not snake_case — Glenn DePrater reshape
+  is Sprint-2+.
+
+#### Cross-cutting follow-ups (carried from agent reports)
+
+- **Auth-helper re-point** — T-010's `dashboard/[site]/page.tsx` and
+  T-011's `dashboard/[site]/loads/page.tsx` re-implement the
+  manager-for-site check inline; convert both to `requireManagerForSite`
+  / `checkManagerForSite` from `src/lib/auth-helpers.ts` in a small
+  follow-up after T-012 also lands its dashboard page using the helper.
+- **Status-label dedup** — `STATUS_LABELS` / badge classes appear in
+  T-010's `dock-tile.tsx` AND T-011's `loads-filters.tsx` /
+  `load-row.tsx`. Hoist to `src/lib/load-status.ts`
+  (`displayLabel(LoadStatus)` + `badgeClass(LoadStatus)`) so T-008 has
+  exactly one i18n hook to translate.
+- **Click-through URL contract** — T-012 compliance dashboard tiles
+  deep-link into `/dashboard/[site]/loads?...`; the URL vocabulary
+  (`range=today|week|month|custom`, `from`/`to`, `status=`) is
+  established by T-011 and the T-012 agent should adopt it verbatim.
+- **`site_inventory_snapshots` writer** — T-012 metric #6 (storage
+  inventory vs site limit) needs a snapshot writer. None exists yet
+  (write-on-load-finish or cron). Brief T-012 agent on this.
+- **`system_state.last_mymrc_scrape_at`** — T-012 metric #1 (MyMRC
+  submission timeliness) wants a real scrape timestamp; current
+  approximation is `max(expected_loads.last_synced_at)` per the T-005
+  queue page. Same approximation works for T-012 until T-013 (or a
+  later ticket) writes a system_state row.
+
+**Verified post-integration:** lint + typecheck + build green; new
+routes `/dashboard/[site]/loads`, `/dashboard/[site]/load/[id]`,
+`/dashboard/exports`, `/api/exports/mrc`, `/api/exports/svdp` emit
+as `ƒ` (dynamic).
+
 ### 2026-05-06 — T-007: Photo capture + Cloudflare R2 upload
 
 Sprint-1 ticket T-007. Replaces the T-006 placeholder `storage_key`s
