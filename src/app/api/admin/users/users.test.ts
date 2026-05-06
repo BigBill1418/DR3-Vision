@@ -33,7 +33,6 @@ interface MockUser {
   primary_site_id: string | null;
   primary_site?: { code: string } | null;
   processor_role: string | null;
-  password_hash: string | null;
   pin_hash: string | null;
   pin_failed_attempts: number;
   pin_first_failed_at: Date | null;
@@ -101,7 +100,6 @@ function insertUser(p: Partial<MockUser> & { id: string; name: string; role: Moc
     locale: p.locale ?? 'en',
     primary_site_id: p.primary_site_id ?? null,
     processor_role: p.processor_role ?? null,
-    password_hash: p.password_hash ?? null,
     pin_hash: p.pin_hash ?? null,
     pin_failed_attempts: 0,
     pin_first_failed_at: null,
@@ -185,7 +183,6 @@ vi.mock('@/lib/prisma', () => {
         email: data.email ?? null,
         primary_site_id: data.primary_site_id ?? null,
         processor_role: data.processor_role ?? null,
-        password_hash: data.password_hash ?? null,
         pin_hash: data.pin_hash ?? null,
         is_active: data.is_active ?? true,
       });
@@ -202,7 +199,6 @@ vi.mock('@/lib/prisma', () => {
           'role',
           'processor_role',
           'pin_hash',
-          'password_hash',
           'is_active',
           'deleted_at',
           'last_login_at',

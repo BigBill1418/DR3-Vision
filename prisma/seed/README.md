@@ -35,11 +35,11 @@ Empty cells (`,,`) are intentional — Eugene has no indoor/outdoor split, Woodl
 
 The five named portal accounts that exist day 1: Bill Barnard (admin), Kelsey Ruhland (admin), Morena Gomez (manager, both sites), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland).
 
-**All seeded with `is_active=false` and the literal string `pending_first_password_reset` as the password hash.** This is not a valid Argon2id hash, so login fails until Bill resets each user's password via the user-management UI (per `docs/FLEET-DEPLOYMENT.md`, first-deploy checklist).
+**All seeded with `is_active=false`.** Per ADR-0016, manager + admin sign-in is Microsoft Entra ID SSO only — there is no password to seed and no per-user reset flow. An admin activates each row via the `/admin/users` Settings panel (ADR-0017) once the seeded user has been added to the `DR3-Vision Admins` Entra security group; the user can then sign in via "Sign in with Microsoft" on `/login`.
 
 Three of the five emails are placeholders pending Bill's confirmation (Morena, Rick, Janette — see open decision #7 in the charter). The seed loader should preserve any manual email update made post-seed.
 
-Operator accounts (forklift drivers) are **not** in the seed file. They are created through the user-management UI by Rick and Janette as they hire/onboard staff. PIN auth (ADR-0004) flows separately from this seed.
+Operator accounts (forklift drivers) are **not** in the seed file. They are created through the `/admin/users` panel by an admin as Rick and Janette hire/onboard staff. PIN auth (ADR-0004) flows separately from this seed.
 
 ### `site_holidays.csv` — 24 rows (12 per site, 2026 + 2027)
 
@@ -127,4 +127,4 @@ When a processor bonus rule changes, append a new row to `processor_bonus_rules.
 - **Site `code` values** are stable identifiers (`eugene`, `woodland`) — never change them; many things FK to them
 - **Address fields** are nice-to-have for printing and routing, not required. The MyMRC reconciliation match keys off `name` + date + count.
 - **Eugene placeholder rows** have `haul_count_2023_2026 = 0` and empty `last_delivery_date` — easy to filter from real-data analytics until backfilled.
-- **User `password_hash = 'pending_first_password_reset'`** is intentionally invalid. Production deploy must reset every user's password before they receive deploy announcement.
+- **Seeded user rows ship with `is_active = false`.** Production deploy must add each user to the `DR3-Vision Admins` Entra security group AND flip `is_active` true via the `/admin/users` Settings panel (ADR-0017) before they can sign in.

@@ -130,7 +130,6 @@ async function seedUsers(siteIds) {
       locale: r.locale || 'en',
       primary_site_id,
       processor_role: blankToNull(r.processor_role),
-      password_hash: blankToNull(r.password_hash),
       is_active: bool(r.is_active),
     };
     await prisma.user.upsert({
