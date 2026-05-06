@@ -24,7 +24,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 **Acceptance:** `docker compose up -d postgres && npx prisma migrate dev --name init && npx prisma db seed` reaches a clean state with all expected row counts (see `HANDOFF.md` Step 3).
 
-### [ ] T-003: Auth.js v5 — manager/admin email-password flow
+### [x] T-003: Auth.js v5 — manager/admin email-password flow
 
 - Email + password login at `/login`
 - Session cookies: `Secure`, `HttpOnly`, `SameSite=Lax`, 12-hour idle, 30-day absolute

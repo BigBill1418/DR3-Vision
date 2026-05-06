@@ -104,6 +104,7 @@ services:
     restart: unless-stopped
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
+      - /home/bbarnard065/.dr3-vision-secrets/auth.env
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0

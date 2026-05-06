@@ -5,6 +5,99 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-003: Auth.js v5 email-password login + role gating + reset flow
+
+Sprint-1 ticket T-003. Closes the auth foundation T-005+ portal tickets need.
+
+**Auth core:**
+
+- `src/lib/auth.ts` — Auth.js v5 (next-auth@5.0.0-beta.22) full Node
+  config with a Credentials provider that authenticates against
+  `users.password_hash` via Argon2id (`src/lib/argon.ts`). Rejects the
+  seed sentinel `pending_first_password_reset` so unfinished accounts
+  can't sign in. JWT session, 30-day absolute max + 12-hour idle
+  enforced in the `jwt` callback by tracking `last_seen_at`.
+- `src/lib/auth.config.ts` — edge-safe base config (no providers, no
+  Prisma) shared by middleware. Splitting the config keeps Prisma out
+  of the edge runtime.
+- `src/middleware.ts` — auth-gates everything except `/`, `/login`,
+  `/forgot-password`, `/reset-password`, `/healthz`, `/api/auth/*`,
+  static assets. Anonymous → 302 to `/login` with a `?next=` param
+  preserving the requested path.
+- `src/types/next-auth.d.ts` — module augmentation for `User`,
+  `Session`, `JWT` to carry `role` + `primary_site_id`.
+
+**Login + reset surfaces** (per ADR-0014: dark bg + canonical logo on
+auth routes; per CLAUDE.md hard-rule #10: `onClick` handlers, no
+`<form>` element):
+
+- `/login` — email + password, `signIn('credentials')`,
+  redirect to `?next=` or `/dashboard`. Suspense boundary wraps the
+  client form because of `useSearchParams()`.
+- `/forgot-password` — POSTs to `/api/auth/forgot-password`. Always
+  returns the same UI confirmation regardless of whether the email is
+  in the system, so the form can't be used as an account-existence
+  oracle.
+- `/reset-password?token=...` — accepts the HMAC-signed token, sets
+  the new password (≥ 12 chars), marks the user `is_active=true`.
+
+**Stateless reset tokens** (`src/lib/password-reset-token.ts`):
+
+- HMAC-SHA-256 over `${user_id}.${expires_at_unix}.${nonce}` using
+  `NEXTAUTH_SECRET` as the key. 15-minute TTL. Rotating
+  `NEXTAUTH_SECRET` invalidates outstanding reset links along with
+  all sessions — same blast radius, intentional.
+- `timingSafeEqual` on the signature compare. No DB row needed —
+  trade-off documented inline.
+
+**Email** (`src/lib/email.ts`):
+
+- Direct fetch to Resend's REST API (no SDK package). If
+  `RESEND_API_KEY` is unset the sender logs to stdout and resolves —
+  keeps the bootstrap path usable before the API key is provisioned
+  (operator drops it into `~/.dr3-vision-secrets/auth.env` later).
+
+**Acceptance harness** (T-003 line says manager must be 403'd from
+the wrong site):
+
+- `/dashboard` lists sites visible to the signed-in user (admin
+  sees both; manager sees only their `primary_site_id`).
+- `/dashboard/[site]` enforces site scoping at the route handler;
+  returns a 403 page with a link back to `/dashboard` when a manager
+  hits a site that isn't theirs.
+- T-005+ replaces these placeholders with the real operator queue +
+  manager dock view; the gating moves into shared helpers.
+
+**Bootstrap CLI** (`scripts/set-password.mjs`):
+
+- One-shot tool to seat a manager/admin password without going
+  through the email-reset flow. Reads new password from a TTY prompt
+  (no echo), writes the Argon2id hash, marks the account
+  `is_active=true`. Used post-deploy to bring up Bill's account so
+  the email-reset flow can be tested for the rest of the team once
+  Resend is wired.
+- Usage:
+  `docker compose run --rm migrate node scripts/set-password.mjs operations@svdp.us`
+
+**Secrets** — new `~/.dr3-vision-secrets/auth.env` (mode 600) on
+HSH-HQ + CHAD-HQ:
+
+- `NEXTAUTH_SECRET` — base64-encoded 32-byte random; signs JWTs and
+  password-reset tokens.
+- `NEXTAUTH_URL=https://dr3-vision.svdp.us`
+- `RESEND_API_KEY` — empty until operator provisions; sender
+  stub-logs.
+- `EMAIL_FROM=no-reply@dr3-vision.svdp.us`
+
+App service in `docker-compose.yml` now sources both `db.env` and
+`auth.env`.
+
+**Verified:** lint + typecheck + build green. End-to-end against
+production deferred until operator runs the bootstrap CLI to set the
+admin password (no working credentials exist in the seeded DB by
+design — every seeded user has the `pending_first_password_reset`
+sentinel hash).
+
 ### 2026-05-06 — T-002: Prisma init migration + seed loader + production Postgres
 
 Sprint-1 ticket T-002 (`docs/SPRINT-1-PLAN.md`). Closes the database
