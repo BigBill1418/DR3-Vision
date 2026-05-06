@@ -1,0 +1,230 @@
+// ADR-0017 — admin Settings panel: list page.
+//
+// Server component. Re-checks the admin gate (the middleware-level
+// auth covers the redirect, but page handlers MUST never trust that
+// alone — CLAUDE.md hard rule #6 plus the SPRINT-1 T-013 pattern).
+// URL-driven filters (?site=&role=&status=) so refresh-keeps-state.
+
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { prisma } from '@/lib/prisma';
+import { checkAdmin } from '@/lib/auth-helpers';
+import { listUsers, type AdminUserDto } from '@/lib/admin-users';
+import { adminMessages as M } from '@/app/admin/messages';
+import { UserListClient } from './UserListClient';
+
+export const dynamic = 'force-dynamic';
+
+type SearchParams = Promise<{
+  site?: string;
+  role?: string;
+  status?: string;
+}>;
+
+const ROLES = ['operator', 'manager', 'admin'] as const;
+const STATUSES = ['active', 'inactive', 'all'] as const;
+type RoleFilter = (typeof ROLES)[number];
+type StatusFilter = (typeof STATUSES)[number];
+
+function parseRole(v: string | undefined): RoleFilter | undefined {
+  return v && (ROLES as readonly string[]).includes(v) ? (v as RoleFilter) : undefined;
+}
+function parseStatus(v: string | undefined): StatusFilter {
+  return v && (STATUSES as readonly string[]).includes(v) ? (v as StatusFilter) : 'active';
+}
+
+export default async function AdminUsersPage({ searchParams }: { searchParams: SearchParams }) {
+  const gate = await checkAdmin();
+  if (!gate.ok) {
+    if (gate.status === 401) redirect('/login?next=/admin/users');
+    return <ForbiddenPage />;
+  }
+
+  const sp = await searchParams;
+  const sites = await prisma.site.findMany({
+    select: { id: true, code: true, name: true },
+    orderBy: { name: 'asc' },
+  });
+  const siteByCode = new Map(sites.map((s) => [s.code, s]));
+  const siteFilter = sp.site ? siteByCode.get(sp.site) : undefined;
+  const roleFilter = parseRole(sp.role);
+  const statusFilter = parseStatus(sp.status);
+
+  const users = await listUsers({
+    siteId: siteFilter?.id,
+    role: roleFilter,
+    status: statusFilter,
+  });
+
+  return (
+    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+      <div className="mx-auto flex max-w-6xl flex-col gap-8">
+        <header className="flex flex-col gap-1">
+          <Link
+            href="/dashboard"
+            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          >
+            ← {M.backToDashboard}
+          </Link>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">{M.pageTitle}</h1>
+              <p className="text-sm text-dr3-cream/70">{M.pageSubtitle}</p>
+            </div>
+            <Link
+              href="/admin/users/new"
+              className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90"
+              data-testid="admin-add-user"
+            >
+              + {M.list.addUser}
+            </Link>
+          </div>
+        </header>
+
+        <Filters
+          sites={sites}
+          siteCode={siteFilter?.code}
+          role={roleFilter}
+          status={statusFilter}
+        />
+
+        <UserListClient users={users} />
+      </div>
+    </main>
+  );
+}
+
+interface FiltersProps {
+  sites: { id: string; code: string; name: string }[];
+  siteCode: string | undefined;
+  role: RoleFilter | undefined;
+  status: StatusFilter;
+}
+
+function Filters({ sites, siteCode, role, status }: FiltersProps) {
+  // Filter form is server-side: each select is a plain anchor list.
+  // No `<form>` (CLAUDE.md hard rule #10) and no client JS for state
+  // persistence — the URL IS the state.
+  return (
+    <section className="grid gap-4 sm:grid-cols-3">
+      <FilterGroup label={M.list.filterSite}>
+        <FilterLink href={buildHref({ site: undefined, role, status })} active={!siteCode}>
+          {M.list.filterAllSites}
+        </FilterLink>
+        {sites.map((s) => (
+          <FilterLink
+            key={s.code}
+            href={buildHref({ site: s.code, role, status })}
+            active={siteCode === s.code}
+          >
+            {s.name}
+          </FilterLink>
+        ))}
+      </FilterGroup>
+      <FilterGroup label={M.list.filterRole}>
+        <FilterLink
+          href={buildHref({ site: siteCode, role: undefined, status })}
+          active={!role}
+        >
+          {M.list.filterAllRoles}
+        </FilterLink>
+        {ROLES.map((r) => (
+          <FilterLink
+            key={r}
+            href={buildHref({ site: siteCode, role: r, status })}
+            active={role === r}
+          >
+            {capitalize(r)}
+          </FilterLink>
+        ))}
+      </FilterGroup>
+      <FilterGroup label={M.list.filterStatus}>
+        <FilterLink
+          href={buildHref({ site: siteCode, role, status: 'active' })}
+          active={status === 'active'}
+        >
+          {M.list.filterStatusActive}
+        </FilterLink>
+        <FilterLink
+          href={buildHref({ site: siteCode, role, status: 'inactive' })}
+          active={status === 'inactive'}
+        >
+          {M.list.filterStatusInactive}
+        </FilterLink>
+        <FilterLink
+          href={buildHref({ site: siteCode, role, status: 'all' })}
+          active={status === 'all'}
+        >
+          {M.list.filterStatusAll}
+        </FilterLink>
+      </FilterGroup>
+    </section>
+  );
+}
+
+function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
+        {label}
+      </span>
+      <div className="flex flex-wrap gap-2">{children}</div>
+    </div>
+  );
+}
+
+function FilterLink({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  const cls = active
+    ? 'bg-dr3-chartreuse text-dr3-ink'
+    : 'bg-dr3-green-dark/40 text-dr3-cream hover:bg-dr3-green-dark/60';
+  return (
+    <Link
+      href={href}
+      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${cls}`}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function buildHref(params: {
+  site: string | undefined;
+  role: RoleFilter | undefined;
+  status: StatusFilter;
+}): string {
+  const sp = new URLSearchParams();
+  if (params.site) sp.set('site', params.site);
+  if (params.role) sp.set('role', params.role);
+  if (params.status !== 'active') sp.set('status', params.status);
+  const qs = sp.toString();
+  return qs ? `/admin/users?${qs}` : '/admin/users';
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ForbiddenPage() {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+      <h1 className="text-2xl font-semibold">{M.forbiddenHeading}</h1>
+      <p className="mt-2 text-dr3-cream/70">{M.forbiddenBody}</p>
+      <Link
+        href="/dashboard"
+        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+      >
+        {M.backToDashboard}
+      </Link>
+    </main>
+  );
+}
+
+export type { AdminUserDto };

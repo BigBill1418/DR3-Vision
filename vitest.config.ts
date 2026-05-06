@@ -1,17 +1,17 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-// Minimal vitest config. Wires the `@/*` path alias from
-// `tsconfig.json` so unit tests can import application modules the
-// same way the runtime does. Default `node` environment is fine for
-// the current test surface (no React component tests yet — those will
-// flip to `jsdom` per file via `// @vitest-environment jsdom`).
+// Minimal Vitest config. Wires the `@/*` path alias from `tsconfig.json`
+// so unit tests can import application modules the same way the
+// runtime does. Default `node` environment — DOM tests can opt in via
+// the `// @vitest-environment jsdom` pragma.
 
 export default defineConfig({
   test: {
     environment: 'node',
     globals: false,
-    include: ['src/**/__tests__/**/*.test.ts', 'src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/__tests__/**/*.test.ts'],
+    exclude: ['node_modules', '.next', 'legacy'],
   },
   resolve: {
     alias: {

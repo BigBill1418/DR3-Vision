@@ -70,6 +70,97 @@ and managers." Operators are unaffected — PIN auth on the iPad stays.
   Left in place this sprint to keep the ADR-0016 PR free of
   irreversible schema work and rollback-able by `git revert` alone.
 
+### 2026-05-06 — Post-Sprint-1: Admin Settings panel (`/admin/users`) — ADR-0017
+
+First in-portal user-management surface. Replaces the bootstrap-CSV
+seed for ongoing day-to-day adds, edits, deactivations, and
+operator PIN resets. Bill's product call: "we will seed operator
+accounts from within the settings panel in the portal — same place
+I will add / seed other manager email accounts. entra only — sso
+only for admins and managers."
+
+#### Surface
+
+- `/admin` → redirects to `/admin/users`.
+- `/admin/users` — list with URL-driven filters
+  (`?site=&role=&status=`). Sort by name. Default hides inactive.
+- `/admin/users/new` — create form. Operator gets PIN + confirm-PIN
+  fields; manager/admin get an email field (no password). Eugene
+  operators get the `processor_role` dropdown.
+- `/admin/users/[id]` — edit form, "Reset PIN" modal (operators
+  only), Deactivate / Reactivate buttons. Self-deactivate refused.
+- "Admin" link in the dashboard header, visible only when
+  `session.user.role === 'admin'`.
+
+#### API
+
+- `POST /api/admin/users` — create.
+- `GET /api/admin/users` — list (JSON).
+- `PATCH /api/admin/users/[id]` — discriminated union by `action`:
+  `update | reset_pin | deactivate | reactivate`.
+- `DELETE /api/admin/users/[id]` — alias for `{action:'deactivate'}`.
+- All endpoints gated to `role='admin'`. Manager + operator both
+  return 403; anonymous returns 401. The middleware-level redirect
+  is NOT trusted by the API.
+
+#### Data + audit
+
+- `src/lib/admin-users.ts` — server-only CRUD module. Every
+  mutation is a `prisma.$transaction` paired with an `AuditLog`
+  insert. Operator creation reuses `setPin()` from
+  `src/lib/pin-service.ts`, preserving the per-site uniqueness
+  loop-verify (ADR-0012 §3) and the "PIN hash never indexed" rule
+  (CLAUDE.md hard rule #8).
+- `scrubUserForAudit()` strips `pin_hash` and `password_hash` from
+  every audit `before` / `after` snapshot, replacing them with
+  `pin_set` / `password_set` boolean markers. A defensive runtime
+  probe in `serializeForAudit()` throws if either secret-hash key
+  ever sneaks back in — append-only audit rows mean a leaked hash
+  would persist forever (CLAUDE.md hard rule #6).
+- The `AuditAction` enum is unchanged. PIN resets share the
+  `update` action; the `before`/`after` JSON differentiates.
+
+#### Files
+
+- NEW: `src/lib/admin-users.ts`
+- NEW: `src/app/admin/{page,messages,constants}.ts(x)`
+- NEW: `src/app/admin/users/{page,UserListClient}.tsx`
+- NEW: `src/app/admin/users/new/{page,UserCreateForm}.tsx`
+- NEW: `src/app/admin/users/[id]/{page,UserEditForm}.tsx`
+- NEW: `src/app/api/admin/users/route.ts`
+- NEW: `src/app/api/admin/users/[id]/route.ts`
+- NEW: `vitest.config.ts`
+- NEW: `src/lib/admin-users.test.ts`
+- NEW: `src/app/api/admin/users/users.test.ts`
+- NEW: `docs/adr/0017-admin-settings-panel.md`
+- MOD: `src/lib/auth-helpers.ts` — adds `requireAdmin()` +
+  `checkAdmin()` mirroring the existing manager-site helpers.
+- MOD: `src/app/dashboard/page.tsx` — Admin link visible only to
+  admins.
+- MOD: `docs/adr/README.md` — index entry for ADR-0017.
+
+#### Verification
+
+- `npx tsc --noEmit` clean
+- `npx next lint --max-warnings 0` clean
+- `npx vitest run` — 29/29 pass (10 PII-scrubber unit + 19 API
+  integration with mocked Prisma + auth, real Argon2id hashing
+  for the operator PIN-collision path).
+- `npm run build` — admin routes compile, no client bundle drags
+  in argon2 native binding (constants extracted).
+
+#### Out of scope (deferred)
+
+- Force-logout / session invalidation. Deactivation is the v1
+  mechanism.
+- Password reset email magic links — Resend not provisioned
+  (Sprint-1 residual #2).
+- Bulk import via UI — bootstrap CSV remains the canonical bulk
+  path.
+- Translating `/admin` strings — admin surface stays English-only
+  for v1; literals concentrated in `src/app/admin/messages.ts` so a
+  Sprint-2 pass is a single mechanical conversion.
+
 ### 2026-05-06 — Wave C: T-008 i18n (English / Spanish / Urdu)
 
 Closes the last open Sprint-1 ticket. CLAUDE.md hard rule #4 — all
