@@ -24,12 +24,25 @@ export default async function DashboardPage() {
   return (
     <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
-        <header className="flex flex-col gap-1">
-          <h1 className="text-3xl font-bold tracking-tight">DR3-Vision</h1>
-          <p className="text-sm text-dr3-cream/70">
-            Signed in as <span className="font-semibold">{session.user.name}</span> ·{' '}
-            <span className="capitalize">{session.user.role}</span>
-          </p>
+        <header className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">DR3-Vision</h1>
+              <p className="text-sm text-dr3-cream/70">
+                Signed in as <span className="font-semibold">{session.user.name}</span> ·{' '}
+                <span className="capitalize">{session.user.role}</span>
+              </p>
+            </div>
+            {session.user.role === 'admin' ? (
+              <Link
+                href="/admin/users"
+                className="inline-flex items-center gap-2 rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-sm font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+                data-testid="dashboard-admin-link"
+              >
+                Admin
+              </Link>
+            ) : null}
+          </div>
         </header>
 
         <section className="flex flex-col gap-3">

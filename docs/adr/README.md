@@ -21,6 +21,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0013 | Production deploy pattern | Accepted |
 | 0014 | Canonical brand mark + dark-mode auth surfaces | Accepted |
 | 0015 | i18n architecture — server dictionaries + client React Context | Accepted |
+| 0017 | Admin Settings panel for user seeding & management | Accepted |
 
 ## How to write a new ADR
 

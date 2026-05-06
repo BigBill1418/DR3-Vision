@@ -91,3 +91,56 @@ export async function checkManagerForSite(siteCode: string): Promise<ManagerSite
     throw e;
   }
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Admin-only guard
+//
+// `/admin/*` (settings panel for user seeding) is gated to role=admin.
+// Manager + operator both 403. Mirrors `requireManagerForSite` shape:
+// throws Response on deny, returns the caller identity on allow.
+// ────────────────────────────────────────────────────────────────────
+
+export interface AdminContext {
+  userId: string;
+  email: string | null;
+  name: string;
+}
+
+/**
+ * Guard for /api/admin/* + /admin/* server pages.
+ *
+ * Throws a `Response` on failure so route handlers can `return` it
+ * directly:
+ *  - no session            -> 401
+ *  - non-admin role        -> 403
+ */
+export async function requireAdmin(): Promise<AdminContext> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Response('unauthenticated', { status: 401 });
+  }
+  if (session.user.role !== 'admin') {
+    throw new Response('forbidden', { status: 403 });
+  }
+  return {
+    userId: session.user.id,
+    email: session.user.email ?? null,
+    name: session.user.name ?? '',
+  };
+}
+
+/** Page-friendly variant: discriminated result, no throw. */
+export type AdminResult = { ok: true; ctx: AdminContext } | { ok: false; status: 401 | 403 };
+
+export async function checkAdmin(): Promise<AdminResult> {
+  try {
+    const ctx = await requireAdmin();
+    return { ok: true, ctx };
+  } catch (e) {
+    if (e instanceof Response) {
+      const s = e.status;
+      if (s === 401 || s === 403) return { ok: false, status: s };
+    }
+    throw e;
+  }
+}
