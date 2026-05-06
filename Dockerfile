@@ -72,6 +72,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modul
 # omits it because no server code imports it; add it explicitly so the
 # `migrate` init container can run `node prisma/seed.mjs`.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/papaparse ./node_modules/papaparse
+# AWS SDK v3 — used by `src/lib/r2.ts` for the operator photo flow
+# (presigned-URL minting). The Next.js standalone bundle does pick
+# these up because server code imports them, but the route runs in
+# the Node runtime and benefits from having the full package
+# directories available for any optional sub-imports.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@aws-sdk ./node_modules/@aws-sdk
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@smithy ./node_modules/@smithy
 
 USER nextjs
 

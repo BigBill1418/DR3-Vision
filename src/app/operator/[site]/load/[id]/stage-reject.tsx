@@ -73,7 +73,12 @@ export function StageReject({
           ))}
         </select>
       </label>
-      <PhotoInput label="Capture rejection evidence" onCaptured={() => setHasPhoto(true)} />
+      <PhotoInput
+        loadId={loadId}
+        kind="rejection"
+        label="Capture rejection evidence"
+        onCaptured={() => setHasPhoto(true)}
+      />
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
         Note (optional)
         <textarea

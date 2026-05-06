@@ -72,7 +72,7 @@ Implement the seven-stage flow from charter §4 in order:
 
 **Acceptance:** Full happy-path completes end-to-end. Forced photos cannot be skipped. Rejection persists with status terminal. Submit creates correct row in `inbound_loads` and rows in `load_stacks`, `load_photos`, `load_concerns`.
 
-### [ ] T-007: Photo capture, annotation, R2 upload
+### [x] T-007: Photo capture, annotation, R2 upload
 
 - Native iPad Camera invocation via `<input type="file" capture="environment" accept="image/*">`
 - In-browser annotation tool (circle, arrow, freehand, text overlay)

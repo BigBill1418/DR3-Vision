@@ -26,7 +26,12 @@ export function StageBol({
         <h2 className="text-2xl font-bold">1. Bill of Lading</h2>
         <p className="text-sm text-dr3-cream/70">Photo the BOL before the truck opens.</p>
       </header>
-      <PhotoInput label="Capture BOL" onCaptured={() => setHasFile(true)} />
+      <PhotoInput
+        loadId={loadId}
+        kind="bol"
+        label="Capture BOL"
+        onCaptured={() => setHasFile(true)}
+      />
       <button
         type="button"
         disabled={!hasFile || isPending}

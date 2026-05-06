@@ -105,6 +105,11 @@ services:
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
       - /home/bbarnard065/.dr3-vision-secrets/auth.env
+      # T-007 R2 photo upload. File is optional — when absent, the
+      # photo flow falls back to the placeholder `pending-r2-…` keys
+      # so the workflow keeps working before R2 creds land.
+      - path: /home/bbarnard065/.dr3-vision-secrets/r2.env
+        required: false
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0

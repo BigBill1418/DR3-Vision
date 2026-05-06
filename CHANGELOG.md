@@ -5,6 +5,86 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-007: Photo capture + Cloudflare R2 upload
+
+Sprint-1 ticket T-007. Replaces the T-006 placeholder `storage_key`s
+with real R2 uploads via presigned URLs.
+
+**Flow:**
+
+1. Operator taps the camera button → file picker / iPad rear camera
+2. Client POSTs `/api/photos/upload-url` → server mints a 10-minute
+   presigned R2 PUT URL + `storage_key` (`loads/<id>/<kind>/<uuid>.<ext>`)
+3. Client PUTs the file bytes directly to R2 — server never proxies
+   the bytes (CLAUDE.md hard rule #7)
+4. Client POSTs `/api/photos/confirm` → server inserts the `LoadPhoto`
+   row with the real `storage_key` + byte size
+5. `onCaptured` fires → parent stage's "Continue" button enables
+
+**R2 client** (`src/lib/r2.ts`): wraps `@aws-sdk/client-s3` +
+`@aws-sdk/s3-request-presigner` for the Cloudflare R2 endpoint
+(`https://<account>.r2.cloudflarestorage.com`, region `auto`,
+force-path-style). Cached client; 10-min URL TTL; safe extension
+mapping for jpeg/png/webp/heic/heif → `bin` fallback.
+
+**Fallback when R2 not yet provisioned:** if the four R2 env vars
+are unset, `mintUploadUrl` returns `{ storage_key:
+'pending-r2-<kind>-<uuid>.<ext>', upload_url: null }`. The client
+detects `null` and skips the PUT but still calls `/api/photos/confirm`
+so the workflow row count stays correct (matches the T-006 placeholder
+semantics). This keeps the operator flow unblocked during the
+operator-residual window before R2 creds land.
+
+**Auth guard** (`src/lib/load-photo-guard.ts`):
+`requireOperatorOwnsLoad(loadId)` — session role must be operator,
+load must be assigned to that operator, operator's `primary_site_id`
+must equal the load's `site_id`. Throws a `Response` for the route
+handlers to return directly. Used by both `/api/photos/upload-url`
+and `/api/photos/confirm`.
+
+**Service-layer cleanup:** the four operator-stage server actions
+(`recordBolCapture`, `recordWeightCapture`, `recordDoorOpenCapture`,
+`rejectLoad`) no longer call `attachPhoto` themselves — that would
+double-insert now that the client writes the row pre-action.
+`attachPhoto` is left exported as a server-side helper for future
+batch / backfill paths.
+
+**Compose + Dockerfile:**
+
+- `docker-compose.yml` app service gets an optional `r2.env` env_file
+  (Compose v2 `path` + `required: false`); falls back gracefully if
+  the file doesn't exist yet.
+- Runner stage adds `node_modules/@aws-sdk` + `node_modules/@smithy`
+  COPY lines so the AWS SDK's optional sub-imports are present at
+  runtime (the Next.js standalone bundle covers the main paths but
+  optional client transports trip the same trap as papaparse did in
+  T-002).
+
+**Annotation tool** (in-browser circle/arrow/freehand/text overlay
+per SPRINT-1-PLAN T-007 line) is intentionally deferred. The schema
+already carries `LoadPhoto.annotation_storage_key` ready for the
+two-blob upload pattern; the UI canvas + the annotation-confirm
+endpoint ship in a follow-up. Flagged in CHANGELOG but not blocking
+Sprint-1 completion (operator can still describe issues via the
+finish-stage concern note).
+
+**Operator residual:**
+`~/.dr3-vision-secrets/r2.env` (mode 600 on HSH-HQ + CHAD-HQ) needs:
+
+```
+R2_ACCOUNT_ID=<cloudflare account id>
+R2_ACCESS_KEY_ID=<r2 access key id>
+R2_SECRET_ACCESS_KEY=<r2 secret access key>
+R2_BUCKET=dr3-vision-photos
+R2_PUBLIC_BASE_URL=https://photos.dr3-vision.svdp.us
+```
+
+R2 bucket + public custom domain provisioning is operator
+click-through (the on-file CF API tokens lack R2 admin scopes).
+
+**Verified:** lint + typecheck + build green; new routes
+`/api/photos/upload-url` + `/api/photos/confirm` emit as ƒ.
+
 ### 2026-05-06 — T-006: Seven-stage load workflow
 
 Sprint-1 ticket T-006 — the meatiest ticket on the board. Operator

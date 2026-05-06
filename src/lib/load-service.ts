@@ -147,7 +147,14 @@ async function transition(args: {
   });
 }
 
-async function attachPhoto(loadId: string, kind: PhotoKind): Promise<void> {
+// Per T-007 the client uploads the photo to R2 (or hits the
+// placeholder fallback) and writes the `LoadPhoto` row via
+// `/api/photos/confirm` BEFORE invoking the stage server action.
+// `attachPhoto` is exported so any future non-photo-input caller
+// (e.g. server-side imports, batch backfill scripts) can still record
+// a placeholder row, but the operator-workflow stage actions no
+// longer call it — that would double-insert.
+export async function attachPhoto(loadId: string, kind: PhotoKind): Promise<void> {
   await prisma.loadPhoto.create({
     data: {
       load_id: loadId,
@@ -163,10 +170,9 @@ export async function recordBolCapture(args: {
   operatorUserId: string;
   siteId: string;
 }): Promise<void> {
-  // BOL is captured during the `arrived` stage; the row is already
-  // there from `startInboundLoad`. Only side effect is the photo row.
+  // The BOL photo row was written by the client via /api/photos/confirm
+  // before this action fired. No server-side photo write here.
   await assertOwn(args);
-  await attachPhoto(args.loadId, 'bol');
 }
 
 export async function recordWeightSkip(args: {
@@ -195,7 +201,7 @@ export async function recordWeightCapture(args: {
     to: 'weight_captured',
     data: { weight_lbs: args.weightLbs, weight_captured_at: new Date() },
   });
-  await attachPhoto(args.loadId, 'weight_ticket');
+  // weight_ticket photo row already written by the client.
 }
 
 export async function recordDoorOpenCapture(args: {
@@ -215,7 +221,7 @@ export async function recordDoorOpenCapture(args: {
       time_to_unload_start_seconds: timeToUnloadStart,
     },
   });
-  await attachPhoto(args.loadId, 'door_open');
+  // door_open photo row already written by the client.
 }
 
 export async function beginUnload(args: {
@@ -325,5 +331,5 @@ export async function rejectLoad(args: {
       submitted_by: { connect: { id: args.operatorUserId } },
     },
   });
-  await attachPhoto(args.loadId, 'rejection');
+  // rejection photo row already written by the client.
 }

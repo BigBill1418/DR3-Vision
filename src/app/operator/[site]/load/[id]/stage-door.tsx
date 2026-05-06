@@ -21,7 +21,12 @@ export function StageDoor({ siteCode, loadId }: { siteCode: string; loadId: stri
           Photo the open trailer. Your unload timer starts now.
         </p>
       </header>
-      <PhotoInput label="Capture door-open" onCaptured={() => setHasFile(true)} />
+      <PhotoInput
+        loadId={loadId}
+        kind="door_open"
+        label="Capture door-open"
+        onCaptured={() => setHasFile(true)}
+      />
       <button
         type="button"
         disabled={!hasFile || isPending}

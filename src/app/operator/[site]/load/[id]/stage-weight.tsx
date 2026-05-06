@@ -69,7 +69,12 @@ export function StageWeight({
           Photo the ticket and enter the weight in pounds (1–100,000).
         </p>
       </header>
-      <PhotoInput label="Capture weight ticket" onCaptured={() => setHasPhoto(true)} />
+      <PhotoInput
+        loadId={loadId}
+        kind="weight_ticket"
+        label="Capture weight ticket"
+        onCaptured={() => setHasPhoto(true)}
+      />
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
         Weight (lbs)
         <input
