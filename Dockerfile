@@ -79,6 +79,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/papaparse ./node_mod
 # directories available for any optional sub-imports.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@aws-sdk ./node_modules/@aws-sdk
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@smithy ./node_modules/@smithy
+# scripts/ — operational wrappers invoked by the migrate init container
+# (e.g. scripts/migrate-with-ntfy.mjs). The Next.js standalone bundle
+# does not include scripts/ since no server code imports it; copy it
+# explicitly so init-container commands like
+# `node scripts/migrate-with-ntfy.mjs` resolve at runtime. Skipping
+# this copy is what broke the 2026-05-06 deploy of PR #3 — the
+# wrapper hit MODULE_NOT_FOUND, the migrate container exited 1, and
+# the app's depends_on chain blocked the site from starting until
+# the compose command was hand-reverted on CHAD-HQ.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 
 USER nextjs
 
