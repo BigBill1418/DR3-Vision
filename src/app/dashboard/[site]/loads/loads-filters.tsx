@@ -3,39 +3,27 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useTransition } from 'react';
 import type { LoadStatus } from '@prisma/client';
+import { useI18n } from '@/i18n/provider';
+import { loadStatusLabel } from '@/lib/loads/labels';
 
 // Filter bar for the load list. Per CLAUDE.md hard rule #10 every
 // control is a button / select / input — never a <form>. Each change
 // pushes the URL via router.push, so filter state lives in the URL
 // (shareable, bookmarkable, back-button friendly) and the server
 // component re-runs with the new params.
+//
+// Status labels are rendered through the shared `loadStatusLabel`
+// helper in `@/lib/loads/labels` — same map that backs the row badge
+// and the dock tile, so the three surfaces stay aligned.
 
-const RANGE_LABELS: Record<string, string> = {
-  today: 'Today',
-  week: 'This week',
-  month: 'This month',
-  custom: 'Custom',
-};
-
-const STATUS_LABELS: Record<LoadStatus, string> = {
-  expected: 'Expected',
-  arrived: 'Arrived',
-  weight_captured: 'Weight captured',
-  unload_started: 'Unloading',
-  in_progress: 'In progress',
-  finished: 'Finished',
-  submitted: 'Submitted',
-  verified: 'Verified',
-  rejected: 'Rejected',
-  submitted_to_mymrc: 'Sent to MyMRC',
-  processed: 'Processed',
-};
+const RANGE_KEYS = ['today', 'week', 'month', 'custom'] as const;
+type RangeKey = (typeof RANGE_KEYS)[number];
 
 export type LoadsFilterOption = { id: string; label: string };
 
 type Props = {
   siteCode: string;
-  range: 'today' | 'week' | 'month' | 'custom';
+  range: RangeKey;
   from: string;
   to: string;
   statuses: LoadStatus[];
@@ -65,6 +53,14 @@ export function LoadsFilters({
   const pathname = usePathname();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const { t, dict } = useI18n();
+
+  const rangeLabels: Record<RangeKey, string> = {
+    today: t('loads.range_today'),
+    week: t('loads.range_week'),
+    month: t('loads.range_month'),
+    custom: t('loads.range_custom'),
+  };
 
   const updateParams = (mutate: (p: URLSearchParams) => void) => {
     const next = new URLSearchParams(params.toString());
@@ -141,9 +137,11 @@ export function LoadsFilters({
     >
       {/* Range — segmented buttons */}
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">Date range</span>
+        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+          {t('loads.filter_label_date_range')}
+        </span>
         <div className="flex flex-wrap gap-2">
-          {Object.entries(RANGE_LABELS).map(([value, label]) => (
+          {RANGE_KEYS.map((value) => (
             <button
               key={value}
               type="button"
@@ -156,14 +154,14 @@ export function LoadsFilters({
                   : 'rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:opacity-60'
               }
             >
-              {label}
+              {rangeLabels[value]}
             </button>
           ))}
         </div>
         {range === 'custom' && (
           <div className="mt-2 flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
-              From
+              {t('loads.range_from')}
               <input
                 type="date"
                 value={from}
@@ -173,7 +171,7 @@ export function LoadsFilters({
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
-              To
+              {t('loads.range_to')}
               <input
                 type="date"
                 value={to}
@@ -188,7 +186,9 @@ export function LoadsFilters({
 
       {/* Status — toggle chips */}
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">Status</span>
+        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+          {t('loads.filter_label_status')}
+        </span>
         <div className="flex flex-wrap gap-2">
           {allStatuses.map((s) => {
             const active = statuses.includes(s);
@@ -205,7 +205,7 @@ export function LoadsFilters({
                     : 'rounded-full bg-dr3-green-dark/60 px-3 py-1 text-xs font-medium text-dr3-cream/80 hover:bg-dr3-green-dark/80 disabled:opacity-60'
                 }
               >
-                {STATUS_LABELS[s]}
+                {loadStatusLabel(s, dict)}
               </button>
             );
           })}
@@ -215,24 +215,27 @@ export function LoadsFilters({
       {/* Lookup dropdowns */}
       <div className="grid gap-3 sm:grid-cols-3">
         <FilterSelect
-          label="Source"
+          label={t('loads.filter_label_source')}
           value={sourceId ?? ''}
           options={sourceOptions}
           disabled={isPending}
+          allLabel={t('loads.filter_all_option', { label: t('loads.filter_label_source') })}
           onChange={(v) => setLookup('source_id', v)}
         />
         <FilterSelect
-          label="Operator"
+          label={t('loads.filter_label_operator')}
           value={operatorId ?? ''}
           options={operatorOptions}
           disabled={isPending}
+          allLabel={t('loads.filter_all_option', { label: t('loads.filter_label_operator') })}
           onChange={(v) => setLookup('operator_id', v)}
         />
         <FilterSelect
-          label="Transporter"
+          label={t('loads.filter_label_transporter')}
           value={transporterId ?? ''}
           options={transporterOptions}
           disabled={isPending}
+          allLabel={t('loads.filter_all_option', { label: t('loads.filter_label_transporter') })}
           onChange={(v) => setLookup('transporter_id', v)}
         />
       </div>
@@ -245,12 +248,14 @@ function FilterSelect({
   value,
   options,
   disabled,
+  allLabel,
   onChange,
 }: {
   label: string;
   value: string;
   options: LoadsFilterOption[];
   disabled: boolean;
+  allLabel: string;
   onChange: (v: string) => void;
 }) {
   return (
@@ -262,7 +267,7 @@ function FilterSelect({
         onChange={(e) => onChange(e.target.value)}
         className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
       >
-        <option value="">All {label.toLowerCase()}s</option>
+        <option value="">{allLabel}</option>
         {options.map((o) => (
           <option key={o.id} value={o.id}>
             {o.label}

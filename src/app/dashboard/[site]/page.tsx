@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { DockPoller } from './dock-poller';
 import { DockTile } from './dock-tile';
+import { getLocale } from '@/i18n/get-locale';
+import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
 // Per-site live dock view per SPRINT-1-PLAN T-010. Replaces the T-003
 // access-control placeholder with the real manager surface: tiles for
@@ -38,6 +40,10 @@ export default async function SiteDashboardPage({ params }: Props) {
   const session = await auth();
   if (!session?.user) redirect('/login');
 
+  const locale = await getLocale();
+  const dict = getManagerDictionary(locale);
+  const t = (key: string, vars?: Record<string, string | number>) => translate(dict, key, vars);
+
   const site = await prisma.site.findUnique({
     where: { code: siteCode },
     select: { id: true, code: true, name: true, jurisdiction: true },
@@ -51,13 +57,15 @@ export default async function SiteDashboardPage({ params }: Props) {
     // sees a 403, not a redirect or a misleading 404.
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
-        <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
-        <p className="mt-2 text-dr3-cream/70">You don&apos;t have access to {site.name}.</p>
+        <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
+        <p className="mt-2 text-dr3-cream/70">
+          {t('dashboard.forbidden_body', { name: site.name })}
+        </p>
         <Link
           href="/dashboard"
           className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
         >
-          Back to your sites
+          {t('dashboard.back_to_sites')}
         </Link>
       </main>
     );
@@ -88,21 +96,37 @@ export default async function SiteDashboardPage({ params }: Props) {
           href="/dashboard"
           className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
         >
-          ← All sites
+          {t('dashboard.back_to_sites')}
         </Link>
-        <header>
-          <h1 className="text-3xl font-bold tracking-tight">{site.name}</h1>
-          <p className="text-sm capitalize text-dr3-cream/70">
-            {site.jurisdiction} · Live dock view
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">{site.name}</h1>
+            <p className="text-sm capitalize text-dr3-cream/70">
+              {t('site_dashboard.subtitle', { jurisdiction: site.jurisdiction })}
+            </p>
+          </div>
+          <nav className="flex flex-wrap gap-2 text-sm">
+            <Link
+              href={`/dashboard/${site.code}/loads`}
+              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+            >
+              {t('loads.heading')}
+            </Link>
+            <Link
+              href={`/dashboard/${site.code}/compliance`}
+              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+            >
+              {t('compliance.heading')}
+            </Link>
+          </nav>
         </header>
 
         <DockPoller>
           {loads.length === 0 ? (
             <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
-              <p className="text-lg font-medium">No active loads on the dock</p>
+              <p className="text-lg font-medium">{t('site_dashboard.no_active_loads_heading')}</p>
               <p className="mt-2 text-sm text-dr3-cream/70">
-                Tiles appear here as operators start loads.
+                {t('site_dashboard.no_active_loads_body')}
               </p>
             </div>
           ) : (
@@ -116,8 +140,8 @@ export default async function SiteDashboardPage({ params }: Props) {
                       bol_number: l.bol_number,
                       status: l.status,
                       arrived_at: l.arrived_at,
-                      operatorName: l.assigned_operator?.name ?? 'Unassigned',
-                      sourceName: l.source?.name ?? 'Unknown source',
+                      operatorName: l.assigned_operator?.name ?? t('site_dashboard.tile_unassigned'),
+                      sourceName: l.source?.name ?? t('site_dashboard.tile_unknown_source'),
                     }}
                   />
                 </li>

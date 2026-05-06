@@ -24,10 +24,14 @@ import type { Locale } from './config';
 import enOperator from './locales/en/operator.json';
 import esOperator from './locales/es/operator.json';
 import urOperator from './locales/ur/operator.json';
+import enManager from './locales/en/manager.json';
+import esManager from './locales/es/manager.json';
+import urManager from './locales/ur/manager.json';
 
 // The English JSON is the canonical shape. Spanish + Urdu inherit the
 // same keys; if any drift, the typecheck fails at compile time.
 export type Dictionary = typeof enOperator;
+export type ManagerDictionary = typeof enManager;
 
 const DICTIONARIES: Record<Locale, Dictionary> = {
   en: enOperator,
@@ -35,8 +39,22 @@ const DICTIONARIES: Record<Locale, Dictionary> = {
   ur: urOperator as Dictionary,
 };
 
+const MANAGER_DICTIONARIES: Record<Locale, ManagerDictionary> = {
+  en: enManager,
+  es: esManager as ManagerDictionary,
+  ur: urManager as ManagerDictionary,
+};
+
 export function getDictionary(locale: Locale): Dictionary {
   return DICTIONARIES[locale];
+}
+
+// Manager-portal dictionary. Lives in its own namespace so the dashboard
+// surface can iterate without churning the iPad strings (and the
+// reverse). Kept synchronously imported so server components stay
+// `await`-free at the entry point.
+export function getManagerDictionary(locale: Locale): ManagerDictionary {
+  return MANAGER_DICTIONARIES[locale];
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -46,7 +64,10 @@ export function getDictionary(locale: Locale): Dictionary {
 // Dot-path resolution. A miss returns the key itself (visible in dev,
 // preferable to throwing in prod where a missing translation should
 // degrade rather than crash the page).
-function resolvePath(dict: Dictionary, key: string): string {
+//
+// `dict` widened to `unknown` since the same machinery serves both
+// the operator + manager namespaces (different shapes, same algorithm).
+function resolvePath(dict: unknown, key: string): string {
   const parts = key.split('.');
   let cur: unknown = dict;
   for (const p of parts) {
@@ -78,7 +99,7 @@ export function interpolate(template: string, vars?: TranslateVars): string {
 // surface; richer CLDR rules (Polish/Russian few/many) would warrant
 // pulling i18next back in.
 export function translatePlural(
-  dict: Dictionary,
+  dict: Dictionary | ManagerDictionary,
   baseKey: string,
   count: number,
   vars?: TranslateVars,
@@ -92,6 +113,10 @@ export function translatePlural(
   return interpolate(base, merged);
 }
 
-export function translate(dict: Dictionary, key: string, vars?: TranslateVars): string {
+export function translate(
+  dict: Dictionary | ManagerDictionary,
+  key: string,
+  vars?: TranslateVars,
+): string {
   return interpolate(resolvePath(dict, key), vars);
 }

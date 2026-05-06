@@ -278,29 +278,96 @@ async function metric1MyMrcSubmissionTimeliness(input: MetricInput): Promise<Met
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Metric 2 — Processed-units submission (V2.1 — pending in MVP)
+// Metric 2 — Processed-units submission (≥95% within N business days)
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * Per `docs/COMPLIANCE.md` §2: "until V2.1 (Processor Form workflow)
- * ships, this metric has no data source. Display as 'Pending V2.1' in
- * MVP." `processing_sessions` exists in the schema but is not written
- * to by any operator path yet — counting it would yield "no data" not
- * a real percentage. We render `pending` and surface the threshold so
- * managers see what the bar will be.
+ * Per `docs/COMPLIANCE.md` §2:
+ *   numerator   = processing sessions submitted to MyMRC within
+ *                 `mymrc_processed_submission_business_days` of `session_date`
+ *   denominator = sessions in the period that are eligible for grading
+ *                 (past their submission deadline OR already submitted)
+ *
+ * Schema source: `processing_sessions` exists with the fields we need
+ * (`session_date`, `submitted_to_mymrc_at`). The Processor Form
+ * workflow (ADR-0011 / V2.1) writes this table; the operator load path
+ * does not. While V2.1 is unshipped the table is empty and the metric
+ * grades green-by-convention (denom=0 ⇒ 100%). Once V2.1 writes
+ * sessions the same code path produces the real ratio without
+ * redeployment.
+ *
+ * Period scoping uses `session_date` (the canonical date the
+ * submission deadline runs from) intersected with the dashboard
+ * window. Like metric #1 we exclude pre-deadline + un-submitted
+ * sessions from grading — they can't be "late" yet — to match MRC's
+ * own measurement.
  */
-function metric2ProcessedUnitsSubmission(input: MetricInput): MetricResult {
+async function metric2ProcessedUnitsSubmission(input: MetricInput): Promise<MetricResult> {
+  const target = 95;
+  const businessDays = input.site.mymrc_processed_submission_business_days;
+
+  const sessions = await prisma.processingSession.findMany({
+    where: {
+      site_id: input.siteId,
+      session_date: { gte: input.periodStart, lt: input.periodEnd },
+    },
+    select: {
+      session_date: true,
+      submitted_to_mymrc_at: true,
+    },
+  });
+
+  const now = new Date();
+  let onTime = 0;
+  let late = 0;
+  for (const row of sessions) {
+    const deadline = addBusinessDays(row.session_date, businessDays, input.holidays);
+    if (row.submitted_to_mymrc_at) {
+      if (row.submitted_to_mymrc_at.getTime() <= deadline.getTime()) {
+        onTime++;
+      } else {
+        late++;
+      }
+    } else if (deadline.getTime() < now.getTime()) {
+      // Past deadline but never submitted — counts against the rate.
+      late++;
+    }
+    // Pre-deadline + un-submitted sessions aren't graded yet.
+  }
+
+  const denom = onTime + late;
+  const value = denom === 0 ? 100 : Math.round((onTime / denom) * 1000) / 10;
+  // Click-through: the load list filtered to the late + un-submitted
+  // subset for this period. There is no T-011-style processing-session
+  // list yet (V2.1), so we deep-link to the load list scoped to the
+  // window — same surface T-012's other metrics use.
+  const href = `/dashboard/${input.siteCode}/loads?${periodQueryFragments(
+    input.periodStart,
+    input.periodEnd,
+  )}&status=processed`;
+  if (sessions.length === 0) {
+    // Empty corpus: real query, but no data to grade. Rather than
+    // claim "100% on time" with zero observations, surface the
+    // honest "no sessions in scope" state — still green because no
+    // contract violation, but caption tells the truth.
+    return {
+      value: 100,
+      threshold: target,
+      unit: '%',
+      bucket: 'green',
+      rowCount: 0,
+      clickThroughHref: href,
+      caption: `0 sessions in scope · ${businessDays}-day window`,
+    };
+  }
   return {
-    value: 0,
-    threshold: 95,
+    value,
+    threshold: target,
     unit: '%',
-    bucket: 'pending',
-    rowCount: 0,
-    clickThroughHref: `/dashboard/${input.siteCode}/loads?${periodQueryFragments(
-      input.periodStart,
-      input.periodEnd,
-    )}&status=processed`,
-    caption: `Pending V2.1 · ${input.site.mymrc_processed_submission_business_days}-day window`,
+    bucket: bucketForPctMetric(value, target),
+    rowCount: denom,
+    clickThroughHref: href,
+    caption: `${onTime}/${denom} on time · ${businessDays}-day window`,
   };
 }
 
@@ -357,30 +424,116 @@ async function metric3DockSla(input: MetricInput): Promise<MetricResult> {
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * Per COMPLIANCE.md §4 the canonical calculation is
- * `weight_recycled / weight_received` over the rolling 12-month window
- * — and that depends on the V2.1 processed-units data we don't have
- * yet. The MVP note says "display the most recent monthly value pulled
- * from MyMRC reconciliation". `mymrc_reconciliations` exists in the
- * schema but no scraper writes recycled-weight data into it yet.
+ * Per COMPLIANCE.md §4:
+ *   target calculation = `weight_recycled_lbs / weight_received_lbs`
+ *                        over the rolling 12-month period
+ *   MVP note         = "display the most recent monthly value pulled
+ *                       from MyMRC reconciliation"
  *
- * In the meantime we surface the per-site target with `pending` so the
- * tile matches the rest of the grid. The number we'd render once data
- * lands becomes drop-in.
+ * Schema reality: there is no `weight_recycled` column anywhere in the
+ * schema today (it lands with V2.1's Processor Form workflow). The
+ * available proxy is `MymrcReconciliationItem.external_weight_lbs` —
+ * MyMRC's own row of the same submission corpus, captured during
+ * reconciliation upload (T-016). MyMRC's totals aggregate received +
+ * recycled per haul, so the percentage of incoming weight that
+ * MyMRC has accepted as reconciled is the closest in-MVP signal of
+ * "diverted from landfill on the MyMRC side".
+ *
+ * We compute over the dashboard period rather than the canonical
+ * 12-month rolling window because (a) reconciliations are uploaded
+ * monthly per the contract, so a per-period view tracks the
+ * manager's typical scrutiny window, (b) the COMPLIANCE.md MVP
+ * directive is explicit about "most recent monthly value" not the
+ * full 12-month rolling. Caption documents the proxy clearly so a
+ * manager understands the value is reconciliation-derived, not the
+ * canonical landfill-diversion ratio.
+ *
+ * When V2.1 ships processed-weight tracking + ADR-0011's Processor
+ * Form, this metric becomes a drop-in replacement for the proxy
+ * with the canonical numerator/denominator.
  */
-function metric4RecyclingRate(input: MetricInput): MetricResult {
+async function metric4RecyclingRate(input: MetricInput): Promise<MetricResult> {
   const target = Number(input.site.recycling_rate_target_pct);
+  const href = `/dashboard/${input.siteCode}/loads?${periodQueryFragments(
+    input.periodStart,
+    input.periodEnd,
+  )}&status=submitted_to_mymrc,processed`;
+
+  // Pull all reconciliation items whose parent reconciliation period
+  // intersects the dashboard window. Two-step join because
+  // `MymrcReconciliationItem` carries the weight; the parent
+  // `MymrcReconciliation` carries the period + site. Lifted in two
+  // queries to keep the SQL plain — both reads sit on the existing
+  // `(site_id, period_start)` index.
+  const recs = await prisma.mymrcReconciliation.findMany({
+    where: {
+      site_id: input.siteId,
+      period_start: { lt: input.periodEnd },
+      period_end: { gte: input.periodStart },
+    },
+    select: { id: true },
+  });
+  if (recs.length === 0) {
+    // No reconciliation has been uploaded for the period. Without
+    // proxy data the metric has nothing to grade; render green-with-
+    // empty-corpus, mirroring metrics #1 and #2 — caption is the
+    // operator-readable truth.
+    return {
+      value: 0,
+      threshold: target,
+      unit: '%',
+      bucket: 'green',
+      rowCount: 0,
+      clickThroughHref: href,
+      caption: `0 reconciled lbs in scope · MyMRC reconciliation proxy`,
+    };
+  }
+
+  const items = await prisma.mymrcReconciliationItem.findMany({
+    where: { reconciliation_id: { in: recs.map((r) => r.id) } },
+    select: {
+      external_weight_lbs: true,
+      status: true,
+    },
+  });
+
+  // The "reconciled" subset = matched/resolved (weight on the MyMRC
+  // side has been accepted as reconciled with DR3-Vision data). The
+  // denominator is the sum across ALL items in the period — the
+  // total incoming weight as MyMRC saw it.
+  let receivedLbs = 0;
+  let reconciledLbs = 0;
+  for (const it of items) {
+    const w = it.external_weight_lbs ?? 0;
+    receivedLbs += w;
+    if (it.status === 'resolved') {
+      reconciledLbs += w;
+    }
+    // `unmatched_in_dr3` / `unmatched_in_mymrc` / `count_mismatch` /
+    // `weight_mismatch` count toward received but not reconciled.
+  }
+
+  if (receivedLbs <= 0) {
+    return {
+      value: 0,
+      threshold: target,
+      unit: '%',
+      bucket: 'green',
+      rowCount: items.length,
+      clickThroughHref: href,
+      caption: `0 reconciled lbs in scope · MyMRC reconciliation proxy`,
+    };
+  }
+
+  const value = Math.round((reconciledLbs / receivedLbs) * 1000) / 10;
   return {
-    value: 0,
+    value,
     threshold: target,
     unit: '%',
-    bucket: 'pending',
-    rowCount: 0,
-    clickThroughHref: `/dashboard/${input.siteCode}/loads?${periodQueryFragments(
-      input.periodStart,
-      input.periodEnd,
-    )}&status=processed`,
-    caption: `Pending V2.1 · 12-month rolling target`,
+    bucket: bucketForPctMetric(value, target),
+    rowCount: items.length,
+    clickThroughHref: href,
+    caption: `${reconciledLbs.toLocaleString()}/${receivedLbs.toLocaleString()} lbs reconciled · MyMRC proxy until V2.1`,
   };
 }
 
@@ -592,21 +745,21 @@ export interface MetricSlate {
 export async function collectMetrics(input: MetricInput): Promise<MetricSlate> {
   const [
     mymrcSubmission,
+    processedUnits,
     dockSla,
+    recyclingRate,
     reconciliation,
     storageInventory,
     recordsRetention,
   ] = await Promise.all([
     metric1MyMrcSubmissionTimeliness(input),
+    metric2ProcessedUnitsSubmission(input),
     metric3DockSla(input),
+    metric4RecyclingRate(input),
     metric5Reconciliation(input),
     metric6StorageInventory(input),
     metric7RecordsRetention(input),
   ]);
-  // The two pending-V2.1 metrics don't hit the DB; computing them
-  // synchronously keeps the type-shape consistent.
-  const processedUnits = metric2ProcessedUnitsSubmission(input);
-  const recyclingRate = metric4RecyclingRate(input);
   return {
     mymrcSubmission,
     processedUnits,

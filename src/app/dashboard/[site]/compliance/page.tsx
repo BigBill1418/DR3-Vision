@@ -5,6 +5,8 @@ import { checkManagerForSite } from '@/lib/auth-helpers';
 import { collectMetrics } from '@/lib/compliance';
 import { MetricTile } from './metric-tile';
 import { PeriodPicker } from './period-picker';
+import { getLocale } from '@/i18n/get-locale';
+import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
 // SPRINT-1-PLAN T-012 — per-site Compliance dashboard.
 //
@@ -150,6 +152,10 @@ export default async function CompliancePage({ params, searchParams }: Props) {
   const { site: siteCode } = await params;
   const sp = await searchParams;
 
+  const locale = await getLocale();
+  const dict = getManagerDictionary(locale);
+  const t = (key: string, vars?: Record<string, string | number>) => translate(dict, key, vars);
+
   // Auth + site lookup via the shared helper (per the cross-cutting
   // follow-up; T-010 + T-011 still inline their copy).
   const auth = await checkManagerForSite(siteCode);
@@ -157,7 +163,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
     if (auth.status === 401) redirect('/login');
     if (auth.status === 404) notFound();
     // 403 — render an in-page surface matching T-010 / T-011's gate.
-    return <ForbiddenSurface siteCode={siteCode} />;
+    return <ForbiddenSurface siteCode={siteCode} t={t} />;
   }
   const ctx = auth.ctx;
 
@@ -214,12 +220,16 @@ export default async function CompliancePage({ params, searchParams }: Props) {
           href={`/dashboard/${site.code}`}
           className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
         >
-          ← {site.name}
+          {t('dashboard.back_to_site', { name: site.name })}
         </Link>
         <header className="flex flex-col gap-1">
-          <h1 className="text-3xl font-bold tracking-tight">Compliance</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{t('compliance.heading')}</h1>
           <p className="text-sm capitalize text-dr3-cream/70">
-            {site.name} · {site.jurisdiction} · {periodLabel(range, window)}
+            {t('compliance.subtitle', {
+              name: site.name,
+              jurisdiction: site.jurisdiction,
+              period: periodLabel(range, window),
+            })}
           </p>
         </header>
 
@@ -229,17 +239,14 @@ export default async function CompliancePage({ params, searchParams }: Props) {
           to={customTo ? toDateInput(customTo) : ''}
         />
 
-        <p className="text-xs text-dr3-cream/60">
-          In-app signals only. Push notifications go to Bill for system events; everything on this
-          page is dashboard-only.
-        </p>
+        <p className="text-xs text-dr3-cream/60">{t('compliance.in_app_only_note')}</p>
 
         <section
-          aria-label="Compliance metrics"
+          aria-label={t('compliance.metrics_aria')}
           className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
         >
           <MetricTile
-            title="MyMRC submission timeliness"
+            title={t('compliance.tile_mymrc_submission')}
             value={slate.mymrcSubmission.value}
             threshold={slate.mymrcSubmission.threshold}
             unit={slate.mymrcSubmission.unit}
@@ -249,7 +256,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.mymrcSubmission.caption}
           />
           <MetricTile
-            title="Processed-units submission"
+            title={t('compliance.tile_processed_units')}
             value={slate.processedUnits.value}
             threshold={slate.processedUnits.threshold}
             unit={slate.processedUnits.unit}
@@ -259,7 +266,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.processedUnits.caption}
           />
           <MetricTile
-            title="Dock-appointment SLA"
+            title={t('compliance.tile_dock_sla')}
             value={slate.dockSla.value}
             threshold={slate.dockSla.threshold}
             unit={slate.dockSla.unit}
@@ -269,7 +276,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.dockSla.caption}
           />
           <MetricTile
-            title="Recycling rate"
+            title={t('compliance.tile_recycling_rate')}
             value={slate.recyclingRate.value}
             threshold={slate.recyclingRate.threshold}
             unit={slate.recyclingRate.unit}
@@ -279,7 +286,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.recyclingRate.caption}
           />
           <MetricTile
-            title="In/out reconciliation"
+            title={t('compliance.tile_reconciliation')}
             value={slate.reconciliation.value}
             threshold={slate.reconciliation.threshold}
             unit={slate.reconciliation.unit}
@@ -289,7 +296,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.reconciliation.caption}
           />
           <MetricTile
-            title="Storage inventory"
+            title={t('compliance.tile_storage_inventory')}
             value={slate.storageInventory.value}
             threshold={slate.storageInventory.threshold}
             unit={slate.storageInventory.unit}
@@ -299,7 +306,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
             caption={slate.storageInventory.caption}
           />
           <MetricTile
-            title="Records retention"
+            title={t('compliance.tile_records_retention')}
             value={slate.recordsRetention.value}
             threshold={slate.recordsRetention.threshold}
             unit={slate.recordsRetention.unit}
@@ -314,16 +321,22 @@ export default async function CompliancePage({ params, searchParams }: Props) {
   );
 }
 
-function ForbiddenSurface({ siteCode }: { siteCode: string }) {
+function ForbiddenSurface({
+  siteCode,
+  t,
+}: {
+  siteCode: string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
-      <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
-      <p className="mt-2 text-dr3-cream/70">You don&apos;t have access to {siteCode}.</p>
+      <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
+      <p className="mt-2 text-dr3-cream/70">{t('dashboard.forbidden_body', { name: siteCode })}</p>
       <Link
         href="/dashboard"
         className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
       >
-        Back to your sites
+        {t('dashboard.back_to_sites')}
       </Link>
     </main>
   );

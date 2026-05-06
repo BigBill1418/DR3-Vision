@@ -1,5 +1,8 @@
+'use client';
+
 import Link from 'next/link';
 import type { ComplianceBucket } from '@/lib/compliance';
+import { useT } from '@/i18n/provider';
 
 // SPRINT-1-PLAN T-012 — single tile in the compliance grid.
 //
@@ -33,13 +36,6 @@ const BUCKET_DOT: Record<ComplianceBucket, string> = {
   pending: 'bg-dr3-cream/40',
 };
 
-const BUCKET_LABEL: Record<ComplianceBucket, string> = {
-  green: 'On target',
-  yellow: 'Approaching threshold',
-  red: 'Below threshold',
-  pending: 'Pending data source',
-};
-
 type Props = {
   title: string;
   value: number;
@@ -61,13 +57,34 @@ export function MetricTile({
   clickThroughHref,
   caption,
 }: Props) {
+  const t = useT();
   const valueDisplay = bucket === 'pending' ? '—' : formatValue(value, unit);
-  const thresholdDisplay = formatThreshold(threshold, unit);
+  const thresholdDisplay = formatThreshold(threshold, unit, t);
+
+  const bucketLabels: Record<ComplianceBucket, string> = {
+    green: t('compliance_tile.bucket_green'),
+    yellow: t('compliance_tile.bucket_yellow'),
+    red: t('compliance_tile.bucket_red'),
+    pending: t('compliance_tile.bucket_pending'),
+  };
+
+  const scopeText =
+    bucket === 'pending'
+      ? t('compliance_tile.scope_pending')
+      : t('compliance_tile.scope_count', {
+          count: rowCount.toLocaleString(),
+          unit:
+            unit === 'units'
+              ? t('compliance_tile.unit_units')
+              : rowCount === 1
+                ? t('compliance_tile.unit_load_one')
+                : t('compliance_tile.unit_load_other'),
+        });
 
   return (
     <Link
       href={clickThroughHref}
-      aria-label={`${title}: ${valueDisplay}, threshold ${thresholdDisplay}, ${BUCKET_LABEL[bucket]}`}
+      aria-label={`${title}: ${valueDisplay}, ${t('compliance_tile.target_label')} ${thresholdDisplay}, ${bucketLabels[bucket]}`}
       className={`group flex h-full flex-col gap-3 rounded-lg p-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-dr3-chartreuse ${BUCKET_BG[bucket]}`}
     >
       <header className="flex items-start justify-between gap-2">
@@ -90,16 +107,12 @@ export function MetricTile({
       </p>
 
       <p className="text-xs text-dr3-cream/70">
-        Target {thresholdDisplay}
+        {t('compliance_tile.target_label')} {thresholdDisplay}
       </p>
 
       {caption && <p className="text-xs leading-snug text-dr3-cream/60">{caption}</p>}
 
-      <p className="mt-auto text-[11px] uppercase tracking-wide text-dr3-cream/50">
-        {bucket === 'pending'
-          ? 'No data — see caption'
-          : `${rowCount.toLocaleString()} ${unit === 'units' ? 'units' : 'load' + (rowCount === 1 ? '' : 's')} in scope · view →`}
-      </p>
+      <p className="mt-auto text-[11px] uppercase tracking-wide text-dr3-cream/50">{scopeText}</p>
     </Link>
   );
 }
@@ -111,9 +124,14 @@ function formatValue(value: number, unit: '%' | 'units' | 'yrs' | ''): string {
   return value.toString();
 }
 
-function formatThreshold(threshold: number, unit: '%' | 'units' | 'yrs' | ''): string {
-  if (unit === 'units') return `≤ ${threshold.toLocaleString()} units`;
-  if (unit === 'yrs') return `${threshold} yr window`;
-  if (unit === '%') return `≥ ${threshold}%`;
+function formatThreshold(
+  threshold: number,
+  unit: '%' | 'units' | 'yrs' | '',
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (unit === 'units')
+    return t('compliance_tile.threshold_units', { value: threshold.toLocaleString() });
+  if (unit === 'yrs') return t('compliance_tile.threshold_yrs', { value: threshold });
+  if (unit === '%') return t('compliance_tile.threshold_pct', { value: threshold });
   return threshold.toString();
 }

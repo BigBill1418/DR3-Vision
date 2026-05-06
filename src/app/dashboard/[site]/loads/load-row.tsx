@@ -1,26 +1,20 @@
+'use client';
+
 import Link from 'next/link';
 import { LoadStatus } from '@prisma/client';
 import { formatDate, formatTime } from '@/lib/format';
+import { useI18n } from '@/i18n/provider';
+import { loadStatusLabel } from '@/lib/loads/labels';
 
 // Single row in the load list. Renders as an <li> wrapping a <Link>
 // to the per-load detail page (T-010 owns the detail route at
 // /dashboard/[site]/load/[id]). Per CLAUDE.md hard rule #10 navigation
 // uses <Link> + onClick rather than a form submission, which Next's
 // Link delivers natively.
-
-const STATUS_DISPLAY: Record<LoadStatus, string> = {
-  expected: 'Expected',
-  arrived: 'Arrived',
-  weight_captured: 'Weight captured',
-  unload_started: 'Unloading',
-  in_progress: 'In progress',
-  finished: 'Finished',
-  submitted: 'Submitted',
-  verified: 'Verified',
-  rejected: 'Rejected',
-  submitted_to_mymrc: 'Sent to MyMRC',
-  processed: 'Processed',
-};
+//
+// Status pill text is the shared `loadStatusLabel` from
+// `@/lib/loads/labels` — same map as the filter chips and (with stage
+// variants) the dock tile.
 
 // Color buckets per the T-011 brief:
 //   green  — completed (processed)
@@ -55,6 +49,7 @@ type Props = {
 };
 
 export function LoadRow({ siteCode, load }: Props) {
+  const { t, dict } = useI18n();
   const arrival = load.arrived_at;
   const arrivalLabel = arrival ? `${formatDate(arrival)} · ${formatTime(arrival)}` : '—';
 
@@ -71,7 +66,9 @@ export function LoadRow({ siteCode, load }: Props) {
           {load.source_name ?? '—'}
         </span>
         <span className="col-span-6 truncate text-sm text-dr3-cream/80 sm:col-span-2">
-          {load.operator_name ?? <span className="text-dr3-cream/50">unassigned</span>}
+          {load.operator_name ?? (
+            <span className="text-dr3-cream/50">{t('loads.row_unassigned')}</span>
+          )}
         </span>
         <span className="col-span-6 truncate text-sm text-dr3-cream/80 sm:col-span-2">
           {load.transporter_name ?? '—'}
@@ -86,7 +83,7 @@ export function LoadRow({ siteCode, load }: Props) {
           <span
             className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${statusBadgeClass(load.status)}`}
           >
-            {STATUS_DISPLAY[load.status]}
+            {loadStatusLabel(load.status, dict)}
           </span>
         </span>
       </Link>

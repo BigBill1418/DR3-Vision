@@ -7,6 +7,8 @@ import { LoadsFilters, type LoadsFilterOption } from './loads-filters';
 import { LoadsPoller } from './loads-poller';
 import { LoadRow } from './load-row';
 import { Pagination } from './pagination';
+import { getLocale } from '@/i18n/get-locale';
+import { getManagerDictionary, translate, translatePlural } from '@/i18n/dictionary';
 
 // SPRINT-1-PLAN T-011 — per-site load list with filters.
 //
@@ -167,18 +169,24 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   });
   if (!site) notFound();
 
+  const locale = await getLocale();
+  const dict = getManagerDictionary(locale);
+  const t = (key: string, vars?: Record<string, string | number>) => translate(dict, key, vars);
+
   const isAdmin = role === 'admin';
   const isAssigned = session.user.primary_site_id === site.id;
   if (!isAdmin && !isAssigned) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
-        <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
-        <p className="mt-2 text-dr3-cream/70">You don&apos;t have access to {site.name}.</p>
+        <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
+        <p className="mt-2 text-dr3-cream/70">
+          {t('dashboard.forbidden_body', { name: site.name })}
+        </p>
         <Link
           href="/dashboard"
           className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
         >
-          Back to your sites
+          {t('dashboard.back_to_sites')}
         </Link>
       </main>
     );
@@ -275,11 +283,11 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   const sourceOptions: LoadsFilterOption[] = sources.map((s) => ({ id: s.id, label: s.name }));
   const operatorOptions: LoadsFilterOption[] = operators.map((o) => ({
     id: o.id,
-    label: o.is_active ? o.name : `${o.name} (inactive)`,
+    label: o.is_active ? o.name : `${o.name} ${t('loads.filter_inactive_suffix')}`,
   }));
-  const transporterOptions: LoadsFilterOption[] = transporters.map((t) => ({
-    id: t.id,
-    label: t.name,
+  const transporterOptions: LoadsFilterOption[] = transporters.map((tr) => ({
+    id: tr.id,
+    label: tr.name,
   }));
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -292,12 +300,12 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
           href={`/dashboard/${site.code}`}
           className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
         >
-          ← {site.name}
+          {t('dashboard.back_to_site', { name: site.name })}
         </Link>
         <header className="flex flex-col gap-1">
-          <h1 className="text-3xl font-bold tracking-tight">Loads</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{t('loads.heading')}</h1>
           <p className="text-sm capitalize text-dr3-cream/70">
-            {site.name} · {site.jurisdiction}
+            {t('loads.subtitle', { name: site.name, jurisdiction: site.jurisdiction })}
           </p>
         </header>
 
@@ -321,15 +329,17 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
         <section className="flex flex-col gap-2">
           <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
             {total === 0
-              ? 'No loads match these filters.'
-              : `${total.toLocaleString()} load${total === 1 ? '' : 's'} · page ${safePage} of ${totalPages}`}
+              ? t('loads.summary_none')
+              : translatePlural(dict, 'loads.summary_count', total, {
+                  count: total.toLocaleString(),
+                  page: safePage,
+                  total: totalPages,
+                })}
           </p>
           {rows.length === 0 ? (
             <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
-              <p className="text-base font-medium">Nothing to show on this page.</p>
-              <p className="mt-2 text-sm text-dr3-cream/70">
-                Adjust the date range, status, or other filters above.
-              </p>
+              <p className="text-base font-medium">{t('loads.empty_page_heading')}</p>
+              <p className="mt-2 text-sm text-dr3-cream/70">{t('loads.empty_page_body')}</p>
             </div>
           ) : (
             <ul className="flex flex-col divide-y divide-dr3-green-dark/40 overflow-hidden rounded-lg bg-dr3-green-dark/30">
