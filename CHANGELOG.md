@@ -104,6 +104,65 @@ forward migration); rolling back the database column itself requires a
 manual `ALTER TABLE "users" ADD COLUMN "password_hash" TEXT` if needed
 — but since no row carries a real hash, "rollback" is academic.
 
+### 2026-05-06 — DR3-Vision ntfy wiring (system-level events only)
+
+Closes the Sprint-1 residual where DR3-Vision was scaffolded for ntfy but
+never finished wiring. Substrate (server, token, ACL, registry) was healthy
+end-of-day 2026-05-06; the app side simply didn't publish anything. This
+change adds the publisher helper, three system-level call sites, the
+operator runbook for the token + env_file drop, and the unit tests.
+
+Per CLAUDE.md hard rule #5 + docs/COMPLIANCE.md the publishes are limited
+to **system-level events**: container start, migration applied, unhandled
+error. Operational events (rejections, long unloads, SLA breaches, PIN
+lockouts) stay on the in-app dashboard and are explicitly NOT wired.
+
+#### Added
+
+- `src/lib/ntfy.ts` — `publishNtfy()` helper implementing the ADR-0036
+  contract (X-Title, Authorization: Bearer, Click, Priority, Tags) and
+  the ADR-0037 cooldown enforcement (per-fingerprint, default 5 min,
+  caller-overridable). Publisher-side fallback to `ntfy.sh` with
+  `[FALLBACK]` prefix on primary failure, using the obscured topics
+  registered in `~/noc-master/data/ntfy-fallback-topics.yml`. Three
+  convenience wrappers — `publishContainerStart`,
+  `publishMigrationApplied`, `publishUnhandledError`.
+- `src/instrumentation.ts` — Next.js instrumentation hook that fires the
+  boot publish (30-min cooldown so a crashloop doesn't spam) and wires
+  `process.on('uncaughtException')` + `unhandledRejection` to publish
+  with a 30-min per-fingerprint cooldown.
+- `scripts/migrate-with-ntfy.mjs` — wraps `prisma migrate deploy` and
+  publishes one event per newly-applied migration (snapshot before,
+  snapshot after, diff). Replaces the bare invocation in `docker-compose.yml`'s
+  `migrate` service.
+- `docs/operator/ntfy-setup.md` — Bill-side runbook: token lookup on
+  HSH-HQ, env_file drop on CHAD-HQ (mode 600), `force-recreate` (NOT
+  `restart`, same lesson as the Entra setup), verification, rotation,
+  troubleshooting.
+- `src/lib/ntfy.test.ts` — 14 unit tests covering token-less no-op,
+  successful primary publish + headers, fallback path with prefix +
+  Authorization stripping, fingerprint cooldown suppression, expiry,
+  and the three convenience wrappers.
+
+#### Changed
+
+- `.env.example` — `NTFY_BASE_URL` corrected from `https://ntfy.svdp.us`
+  (wrong host, never existed) to canonical `https://ntfy.barnardhq.com`.
+  Variables renamed to match the helper: `NTFY_TOPIC_SYSTEM`,
+  `NTFY_TOPIC_CONTAINER`, `NTFY_PUBLISHER_TOKEN`. Comment block points at
+  the operator runbook for the production token.
+- `docker-compose.yml` — `app` and `migrate` services pick up an
+  optional `~/.dr3-vision-secrets/ntfy.env` env_file (`required: false`
+  so the app boots without ntfy if the operator hasn't dropped it yet).
+  `migrate` service `command` switched from bare `prisma migrate deploy`
+  to the new wrapper script.
+
+#### Operator residual
+
+Bill needs to drop `~/.dr3-vision-secrets/ntfy.env` on CHAD-HQ and recreate
+the app container. Full instructions in `docs/operator/ntfy-setup.md`.
+Until that lands the publisher path is a successful no-op; nothing breaks.
+
 ### 2026-05-06 — Entra SSO production cutover + runbook fixes
 
 Live SSO ship for `bill.barnard@svdp.us` (admin) on
