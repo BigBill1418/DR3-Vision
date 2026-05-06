@@ -10,14 +10,18 @@ import { useT } from '@/i18n/provider';
 // native <form>; there's no other interactive element on the page
 // besides the locale picker (a separate client component).
 //
-// `error=AccessDenied` is what NextAuth sets in the URL when the
-// `signIn` callback returned false — we surface a non-revealing
-// "you don't have access" message rather than blaming the IdP.
+// Error param mapping (Auth.js v5 sets `?error=<code>` when redirecting
+// here from a failed callback — see `pages.error` in auth.config.ts):
 //
-// `error=Configuration` is set when the Entra env vars are missing
-// or invalid — we surface a distinct "SSO is not configured yet"
-// hint so an operator can ask Bill to finish the runbook in
-// `docs/operator/entra-id-setup.md`.
+//   AccessDenied      signIn callback returned false (unauthorized email,
+//                     inactive row, wrong role) → "you don't have access".
+//   Configuration     Entra env vars missing/invalid → "SSO not
+//                     configured yet" so an operator can finish the
+//                     runbook in docs/operator/entra-id-setup.md.
+//   Callback          OAuth callback failed AFTER a successful round
+//                     trip — almost always a back-button replay through
+//                     a consumed PKCE verifier → "Session expired".
+//   anything else     generic "sign-in didn't complete" hint.
 
 export function LoginForm() {
   const search = useSearchParams();
@@ -37,14 +41,19 @@ export function LoginForm() {
     setBusy(false);
   };
 
-  const errorMessage =
-    errorParam === 'AccessDenied'
-      ? t('auth_login.error_access_denied')
-      : errorParam === 'Configuration'
-        ? t('auth_login.error_not_configured')
-        : errorParam
-          ? t('auth_login.error_generic')
-          : null;
+  const errorMessage = (() => {
+    if (!errorParam) return null;
+    switch (errorParam) {
+      case 'AccessDenied':
+        return t('auth_login.error_access_denied');
+      case 'Configuration':
+        return t('auth_login.error_not_configured');
+      case 'Callback':
+        return t('auth_login.error_session_expired');
+      default:
+        return t('auth_login.error_generic');
+    }
+  })();
 
   return (
     <div className="flex w-full flex-col gap-4 text-left">

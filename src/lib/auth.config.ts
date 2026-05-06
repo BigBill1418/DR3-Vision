@@ -42,7 +42,12 @@ function idleTimeoutFor(role: string | undefined): number {
 export const authConfig = {
   session: { strategy: 'jwt', maxAge: ABSOLUTE_TIMEOUT_S },
   trustHost: true,
-  pages: { signIn: '/login' },
+  // Route every Auth.js error back to /login?error=<code> so the styled
+  // login surface handles the message instead of the bare-bones built-in
+  // /api/auth/error page. Most user-facing path: a stale OAuth callback
+  // (back-button after a successful sign-in) becomes a clean "Session
+  // expired" hint instead of a "Server error / configuration problem".
+  pages: { signIn: '/login', error: '/login' },
   providers: [
     MicrosoftEntraID({
       clientId: process.env['AUTH_MICROSOFT_ENTRA_ID_ID'] ?? '',

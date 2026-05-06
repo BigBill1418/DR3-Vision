@@ -5,6 +5,60 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Entra SSO production cutover + runbook fixes
+
+Live SSO ship for `bill.barnard@svdp.us` (admin) on
+<https://dr3-vision.svdp.us>. Azure tenant single-tenant app
+registration, `DR3-Vision Admins` security group as the assignment-required
+gate, env_file values dropped on CHAD-HQ + container recreated. First
+admin DB row seeded directly via SQL (chicken-and-egg: `/admin/users`
+panel can't help bootstrap when nobody has logged in yet).
+
+#### Fixed in `docs/operator/entra-id-setup.md`
+
+- **Issuer trailing slash.** Runbook prescribed
+  `https://login.microsoftonline.com/<tenant-id>/v2.0/`; Microsoft's
+  OIDC discovery returns the issuer without a trailing slash. Auth.js
+  refused with `"response" body "issuer" does not match
+  "expectedIssuer"` and rendered a generic "Server error" page. Stripped
+  the slash, added a callout in §2 + a troubleshooting note in §6.
+- **Container restart vs. recreate.** Step 5 said `docker compose
+  restart`. That stops/starts the existing container, which keeps the
+  pre-existing (empty) env baked in from create time — new env_file
+  values never load. Switched to `up -d --force-recreate --no-deps app`
+  with the explanation. Step 7 (rotation) updated to match.
+- **§4 — Group policy made non-optional.** Was "Optional: restrict
+  access at the tenant." Now it's the canonical gate: every SSO user
+  must be in the `DR3-Vision Admins` Entra security group AND have an
+  active DB row. Onboarding rule documented (add to group → activate /
+  create DB row). Group is intentionally shared across both roles; app
+  signIn callback decides admin vs. manager from the DB `role` column.
+- **`sudo -u dr3-vision`** removed from the §5 SSH steps. The actual
+  CHAD-HQ secrets dir is owned by `bbarnard065`, not a service account.
+
+#### Custom error routing (replaces Auth.js bare error page)
+
+The default `/api/auth/error` page rendered a generic "Server error /
+There is a problem with the server configuration. Check the server logs
+for more information." for every failure class — including the harmless
+back-button-through-callback case where the PKCE verifier cookie has
+already been consumed. Routed it back to the styled `/login` surface
+instead so users get a clear, role-appropriate hint.
+
+##### Changed
+
+- `src/lib/auth.config.ts` — added `pages.error: '/login'` so Auth.js
+  redirects every callback failure to `/login?error=<code>` instead of
+  its own generic page.
+- `src/app/login/login-form.tsx` — rewrote the error-param mapping as a
+  switch and added a `Callback` case mapped to a new
+  `auth_login.error_session_expired` string. Doc comment now lists every
+  Auth.js error code we handle and what each one means.
+- `src/i18n/locales/{en,es,ur}/operator.json` — new
+  `auth_login.error_session_expired` translation in all three locales.
+  ES + UR translations queued for native-speaker review (see Sprint-1
+  residual list).
+
 ### 2026-05-06 — Post-Sprint-1: ADR-0016 Entra SSO + ADR-0017 Admin Settings
 
 #### ADR-0016: Microsoft Entra ID SSO for managers + admins

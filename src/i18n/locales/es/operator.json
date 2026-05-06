@@ -181,6 +181,7 @@
     "sso_only_hint": "Solo encargados y administradores. Los operadores inician sesión en el iPad.",
     "error_access_denied": "Tu cuenta de Microsoft no está autorizada para DR3-Vision. Pide a un administrador que te agregue.",
     "error_not_configured": "El inicio de sesión con Microsoft aún no está configurado. Pide a un administrador que termine la configuración.",
+    "error_session_expired": "Tu sesión de inicio expiró. Inicia sesión de nuevo para continuar.",
     "error_generic": "No se pudo completar el inicio de sesión. Intenta de nuevo."
   },
   "relative_time": {
