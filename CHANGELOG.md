@@ -5,6 +5,54 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — T-005: Expected-loads queue (operator surface)
+
+Sprint-1 ticket T-005. Replaces the post-PIN placeholder with the real
+queue the operator works against during a shift.
+
+**Surface** (`src/app/operator/[site]/queue/page.tsx`):
+
+- Server component reads `expected_loads` for the operator's site,
+  filtered to non-cancelled rows arriving today or later, ordered by
+  `expected_arrival_at ASC`.
+- Each row: arrival time (large, tabular-numerals — easy to read on a
+  forklift mount under glare), source name (resolved through the
+  `Source` FK with the raw `source_name_at_sync` as fallback for
+  pre-reconcile rows), transporter name (same fallback pattern), BOL
+  number, optional `~N units`.
+- Empty state: "No loads expected today" + last-sync caption derived
+  from `max(expected_loads.last_synced_at)` for the site. T-013 ships
+  the actual MyMRC scrape; until then `last_synced_at` is whatever
+  the test seeder wrote.
+- Per ADR-0014 this is the first OPERATOR working surface — green
+  palette (`bg-dr3-green-deep` / `text-dr3-cream`), not the auth-screen
+  black. The pre-PIN routes (name picker, keypad) keep the dark +
+  canonical-logo treatment per the ADR; the queue is where the work
+  begins.
+
+**Refresh paths** (`queue-client.tsx`):
+
+- **Auto-refresh every 60 s** — `router.refresh()` re-runs the server
+  component without a hard navigation. Tick is paused while a refresh
+  is already in flight to avoid stacking.
+- **Pull-to-refresh** — touch handler engages from `scrollY === 0`,
+  threshold 80 px, with linear-then-resistant pull math so the
+  indicator doesn't fly off-screen on overshoot. A pill at the top of
+  the list shows "Pull down" → "Release to refresh" → "Refreshing…"
+  state. Handles iPad Safari standalone-PWA mode where the
+  browser-native pull-to-refresh isn't installed.
+
+**Format helpers** (`src/lib/format.ts`):
+
+- `formatTime`, `formatDate`, `formatRelative`. Locale defaults to
+  `en-US`; T-008 wires the user's stored locale in once Spanish + Urdu
+  ship.
+
+**Acceptance:** `npm run lint`, `npm run typecheck`, `npm run build`
+all green; `/operator/[site]/queue` emits as ƒ (dynamic, 1.03 kB).
+End-to-end against production verified after deploy + a small batch
+of test `ExpectedLoad` rows seeded for Woodland.
+
 ### 2026-05-06 — T-004: Operator iPad PIN flow
 
 Sprint-1 ticket T-004. Brings up the operator-side auth path that

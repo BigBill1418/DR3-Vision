@@ -48,7 +48,7 @@ Tickets are ordered by dependency. Take them in order. Mark them `[x]` as you co
 
 ## Core operator path (the dock workflow)
 
-### [ ] T-005: Expected-loads queue
+### [x] T-005: Expected-loads queue
 
 - Operator lands on the queue post-login: list of pre-scheduled inbound loads for their site, sorted by expected arrival time
 - Each row: source, expected time, transporter, BOL number
