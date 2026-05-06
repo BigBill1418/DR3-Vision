@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-06 — Hotfix: COPY scripts/ in runner stage of Dockerfile
+
+PR #3 (`feat(ntfy): wire system-level event publishing`) switched the
+`migrate` service `command` in `docker-compose.yml` from the bare
+`prisma migrate deploy` to a wrapper at `scripts/migrate-with-ntfy.mjs`.
+The wrapper exists in the repo, but the Dockerfile runner stage only
+copied `.next/standalone`, `.next/static`, `public/`, `prisma/`, and
+select `node_modules/` subtrees from the builder. `scripts/` was never
+copied. On deploy of `12afd6e` to CHAD-HQ (2026-05-06 22:29 UTC) the
+migrate container hit `MODULE_NOT_FOUND` and exited 1; `dr3-vision-app`
+sat in `Created` state because `depends_on.migrate.condition:
+service_completed_successfully` never resolved; site was DOWN. Manual
+recovery: hand-revert the compose `command` line on CHAD-HQ to the bare
+`prisma migrate deploy`, remove the failed migrate container, recreate
+the stack. The hand-edit will be overwritten by the next deployer pull
+— this hotfix restores `scripts/` to the runtime image so the upstream
+compose command resolves.
+
+#### Fixed
+
+- `Dockerfile` runner stage — added
+  `COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts`
+  alongside the existing per-package `node_modules/` copies. Comment
+  block explains the standalone-bundle gotcha and references this
+  incident.
+
+#### Lesson
+
+This is the second instance of the Next.js standalone-bundle gotcha
+(first was `papaparse` for `prisma/seed.mjs`). When code paths run
+**outside** the Next.js server runtime — init containers, cron
+wrappers, maintenance scripts — they need an explicit `COPY` from the
+builder stage. Anything new dropped into `scripts/` follows the same
+rule.
+
 ### 2026-05-06 — Healthz body alignment for deploy-gate
 
 `/healthz` now emits `"status":"ok"` (200) on healthy and
