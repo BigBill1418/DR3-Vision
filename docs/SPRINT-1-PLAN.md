@@ -187,7 +187,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 
 ## Operations & deployment
 
-### [ ] T-017: Docker + fleet integration
+### [x] T-017: Docker + fleet integration
 
 - Dockerfile builds a production image (multi-stage, ~300MB target)
 - docker-compose.yml supports local dev (app + Postgres + minio for R2 emulation)
@@ -206,7 +206,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 
 **Acceptance:** Forced error in dev shows up in GlitchTip within 30 seconds. Grafana dashboard renders with at least 5 minutes of seeded traffic data.
 
-### [ ] T-019: Initial production deploy to dr3-vision.svdp.us
+### [x] T-019: Initial production deploy to dr3-vision.svdp.us
 
 - Cloudflare DNS + Tunnel configured
 - TLS via CF
@@ -238,4 +238,8 @@ If all five demos pass without interruption, Sprint 1 is shipped.
 - "Next up" cast view for warehouse TV
 - Outbound load tracking — V2.2
 - CIP data capture — V2.2
+- **Bulk data upload** (operator requirement, captured 2026-05-07). Current import paths cover seed-time CSV (sites/users/holidays/sources/transporters), per-row admin adds via `/admin/users`, operator iPad capture, and the MyMRC hourly scrape + monthly CSV reconciliation. None of these cover one-shot bulk imports — historical inbound-load backfills, bulk source onboarding after a contract change, V1-PHP migration. Specific axis to scope with Bill before designing (likely historical-loads first). New ADR slot expected since the schema implications (audit log entries for historical data, photo placeholders for missing assets, status enum mapping) are non-obvious.
+- T-018 observability (the only Sprint-1 ticket not shipped) — GlitchTip + Loki + Tempo + Grafana dashboards for request rate / error rate / MyMRC scrape success / R2 upload success / offline-queue depth. Out of scope until Phase-2 themes are picked.
+- Photo annotation canvas re-tackle (descoped from PR #7; offline-queue payload schema needs a backwards-compatible migration to carry annotated PNG alongside raw, deserves its own ticket + ADR).
+- ES + UR native-speaker translation review across operator and manager namespaces (auto-translated strings shipped, tagged for review in `_meta` blocks of locale JSON).
 - Sacramento site provisioning (when consolidation completes)

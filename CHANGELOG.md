@@ -5,6 +5,38 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-05-07 — Sprint-1 substantial-complete checkpoint + V2.1 backlog refresh
+
+Doc-only update at the end of the Phase-2 dispatch session. Eight PRs
+landed today (#1 healthz, #2 password_hash drop, #3 ntfy wiring, #4
+Dockerfile scripts/ hotfix, #5 audit viewer, #6 MyMRC scrape, #7
+Sprint-1 carryovers, #8 reconciliation upload). All on `main` at
+`e7f16c1`; deployer in flight to roll the cumulative state out.
+
+Sprint-1 status: T-001 through T-017 + T-019 ticked (T-018
+observability is the lone outstanding Sprint-1 ticket — promoted to
+the V2.1 backlog with explicit "out of scope until Phase-2 themes are
+picked" framing). T-016 acceptance ("Upload Woodland's last monthly
+CSV → 95%+ rows reconcile cleanly") is a live-data verification owed
+once Bill has a real CSV in hand.
+
+V2.1 backlog refresh:
+- **Bulk data upload** added per Bill's 2026-05-07 ask. Current paths
+  (seed CSV, `/admin/users`, operator capture, MyMRC scrape, monthly
+  reconciliation) do NOT cover historical-load backfills or bulk
+  source onboarding. Scope axis to be picked with Bill before
+  designing.
+- Photo annotation canvas re-tackle (descoped from PR #7, blocked on
+  offline-queue payload schema migration).
+- ES + UR native-speaker translation review across both i18n
+  namespaces.
+
+README "Status" section updated from "Pre-Sprint 1" to the substantial-
+complete framing with current production URL + the two outstanding
+operator residuals (MyMRC creds drop + live reconciliation test).
+README "Stack" auth line corrected from "email/password for portal" to
+the post-ADR-0016 Microsoft Entra ID SSO reality.
+
 ### 2026-05-06 — T-014: admin audit log viewer (/admin/audit)
 
 Closes SPRINT-1-PLAN T-014. Ships an admin-only `/admin/audit` viewer

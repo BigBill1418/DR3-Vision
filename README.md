@@ -25,7 +25,7 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 
 - **Next.js 15** (App Router) + TypeScript + Tailwind + shadcn/ui
 - **Postgres 16** + Prisma
-- **Auth.js v5** (PIN flow on iPad, email/password for portal)
+- **Auth.js v5** (PIN flow on iPad, Microsoft Entra ID SSO for managers/admins per ADR-0016)
 - **next-pwa** + IndexedDB + Workbox Background Sync (offline-tolerant)
 - **Cloudflare R2** (photo storage)
 - **Playwright** (MyMRC integration)
@@ -34,7 +34,14 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 
 ## Status
 
-**Pre-Sprint 1.** This repo contains the project charter, architecture decisions, integration documentation, schema draft, and seed data. No application code has been written yet.
+**Sprint 1 substantially complete (2026-05-07).** Production app live at <https://dr3-vision.svdp.us>:
+
+- T-001 through T-016 shipped (foundation, operator iPad workflow, manager portal, compliance dashboard, exports, audit log viewer, MyMRC scrape, reconciliation upload).
+- Post-Sprint-1: Microsoft Entra ID SSO (ADR-0016), `/admin/users` panel (ADR-0017), `/admin/audit` viewer (ADR-0018).
+- Open: T-018 observability (GlitchTip + Loki + Tempo + Grafana) is the only Sprint-1 ticket not yet built.
+- Pending operator action: drop `~/.dr3-vision-secrets/mymrc.env` on CHAD-HQ to flip the hourly MyMRC scrape on (per `docs/operator/mymrc-setup.md`); upload a real monthly MyMRC CSV through `/dashboard/<site>/reconciliation` to validate the 95% clean-match acceptance.
+
+See `CHANGELOG.md` for the full ship log; see `docs/SPRINT-1-PLAN.md` for ticket-by-ticket state.
 
 **For developers:** read [`CLAUDE.md`](./CLAUDE.md) and [`HANDOFF.md`](./HANDOFF.md) to begin.
 
