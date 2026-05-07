@@ -466,12 +466,33 @@ model ProcessorBonusRule {
 // MyMRC reconciliation
 // ────────────────────────────────────────────────────────────────────────
 
+// Sprint-1 T-016 — categorize each CSV row against DR3-Vision loads.
+// `unmatched_in_dr3` / `unmatched_in_mymrc` retained for back-compat
+// with the compliance-tile read; the parser writes the new
+// `match_clean` / `count_mismatch` / `weight_mismatch` /
+// `missing_in_dr3` / `missing_in_mymrc` shapes.
 enum ReconciliationStatus {
-  unmatched_in_dr3
-  unmatched_in_mymrc
+  match_clean
   count_mismatch
   weight_mismatch
+  missing_in_dr3
+  missing_in_mymrc
+  // Legacy aliases — kept for the v0.1 compliance read; the T-016
+  // engine never writes these, but dropping them would break the
+  // existing migration's enum values.
+  unmatched_in_dr3
+  unmatched_in_mymrc
   resolved
+}
+
+// Sprint-1 T-016 — operator's resolution decision for a discrepancy
+// row. `unresolved` is the default at upload time; the manager
+// chooses one of the three explicit actions.
+enum ReconciliationResolution {
+  unresolved
+  dr3_correct
+  mymrc_correct
+  flag_followup
 }
 
 model MymrcReconciliation {
@@ -481,31 +502,71 @@ model MymrcReconciliation {
   period_end      DateTime @db.Date
   uploaded_by_id  String?
   uploaded_at     DateTime @default(now())
-  total_rows      Int
+
+  // Idempotency: same file (sha256) + same site -> reuse the upload
+  // session instead of creating duplicate items. The unique
+  // constraint enforces this at the DB layer; the upload route
+  // detects the collision and returns the existing session.
+  filename       String
+  content_sha256 String
+
+  // Tolerance threshold the engine applied when categorizing this
+  // file. Persisted so a later threshold change does not retroactively
+  // reclassify historical items.
+  weight_tolerance_pct Decimal @db.Decimal(5, 2)
+
+  total_rows Int
+  // Legacy roll-ups (kept so the compliance tile keeps reading the
+  // same fields). Engine sets `matched_count = match_clean_count` and
+  // `unmatched_count = total_rows - matched_count`.
   matched_count   Int
   unmatched_count Int
-  resolved_count  Int      @default(0)
+  resolved_count  Int @default(0)
+
+  // T-016 by-category counts. Snapshot at upload; do not recompute on
+  // resolution-write (resolution is a separate audit-tracked decision,
+  // not a re-categorization).
+  match_clean_count      Int @default(0)
+  weight_mismatch_count  Int @default(0)
+  count_mismatch_count   Int @default(0)
+  missing_in_dr3_count   Int @default(0)
+  missing_in_mymrc_count Int @default(0)
 
   items MymrcReconciliationItem[]
 
+  @@unique([site_id, content_sha256])
   @@index([site_id, period_start])
   @@map("mymrc_reconciliations")
 }
 
 model MymrcReconciliationItem {
-  id                     String               @id @default(uuid())
+  id                     String              @id @default(uuid())
   reconciliation_id      String
-  reconciliation         MymrcReconciliation  @relation(fields: [reconciliation_id], references: [id], onDelete: Cascade)
+  reconciliation         MymrcReconciliation @relation(fields: [reconciliation_id], references: [id], onDelete: Cascade)
   external_haul_id       String
-  external_delivery_date DateTime?            @db.Date
+  external_delivery_date DateTime?           @db.Date
+  external_source_name   String? // raw "Collection Site" from CSV
   external_unit_count    Int?
   external_weight_lbs    Int?
-  matched_load_id        String?
-  status                 ReconciliationStatus
-  resolution_notes       String?
-  resolved_at            DateTime?
-  resolved_by_id         String?
 
+  // DR3-side snapshot at upload time, captured for the table view +
+  // resolution UI so the manager sees both sides without a second
+  // join. Null for `missing_in_dr3` rows.
+  matched_load_id String?
+  dr3_unit_count  Int?
+  dr3_weight_lbs  Int?
+
+  status ReconciliationStatus
+
+  // Resolution decision. `unresolved` until the manager picks one of
+  // {dr3_correct, mymrc_correct, flag_followup}. Audit-logged on every
+  // change.
+  resolution       ReconciliationResolution @default(unresolved)
+  resolution_notes String?
+  resolved_at      DateTime?
+  resolved_by_id   String?
+
+  @@index([reconciliation_id, status])
   @@index([external_haul_id])
   @@map("mymrc_reconciliation_items")
 }
