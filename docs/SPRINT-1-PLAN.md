@@ -164,7 +164,7 @@ All exports are per-site by default. Cross-site export requires `admin` role and
 
 ## MyMRC integration
 
-### [ ] T-015: Playwright MyMRC schedule scrape (read-only, hourly)
+### [x] T-015: Playwright MyMRC schedule scrape (read-only, hourly)
 
 See `docs/MYMRC-INTEGRATION.md` for full runbook.
 

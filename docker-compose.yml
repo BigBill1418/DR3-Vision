@@ -151,6 +151,54 @@ services:
       start_period: 30s
       retries: 3
 
+  mymrc-scrape:
+    # Hourly cron host for the MyMRC scheduled-hauls scrape (T-015 /
+    # ADR-0009). Long-running Node process that re-spawns
+    # `scripts/mymrc-scrape.mjs` once on boot and once at the top of
+    # every UTC hour. Per-run lifecycle: launch chromium, scrape both
+    # sites sequentially with separate Playwright contexts, upsert
+    # `expected_loads`, exit. Failures fire `dr3-vision-system` ntfy
+    # with a 30-min cooldown per site.
+    #
+    # Fail-soft: when MYMRC_*_USERNAME / MYMRC_*_PASSWORD are unset,
+    # the worker logs "creds not configured, skipping" and exits 0
+    # without ntfy publish — that's an operator state, not a system
+    # error. Drop credentials per `docs/operator/mymrc-setup.md` and
+    # the next hourly tick begins populating the queue.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-mymrc-scrape
+    restart: unless-stopped
+    command: ['node', 'scripts/mymrc-cron.mjs']
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/db.env
+      # MyMRC credentials — optional file. When absent, worker no-ops
+      # per-tick and never alerts. See docs/operator/mymrc-setup.md.
+      - path: /home/bbarnard065/.dr3-vision-secrets/mymrc.env
+        required: false
+      # Re-uses the same ntfy publisher token as the app + migrate
+      # services; same fail-soft contract.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
+        required: false
+    environment:
+      NODE_ENV: production
+      MYMRC_HEADLESS: 'true'
+      # Persist Playwright auth state across container restarts so we
+      # don't re-login every hour. Mounted volume below.
+      MYMRC_AUTH_STATE_DIR: /var/lib/dr3-vision/mymrc-auth
+    volumes:
+      - mymrc-auth-state:/var/lib/dr3-vision/mymrc-auth
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'mymrc-scrape'
+    logging: *logging
+
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     container_name: dr3-vision-cloudflared
@@ -176,3 +224,5 @@ networks:
 volumes:
   postgres-data:
     name: dr3-vision_postgres-data
+  mymrc-auth-state:
+    name: dr3-vision_mymrc-auth-state

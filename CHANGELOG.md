@@ -258,6 +258,130 @@ working — the T-016 engine never writes them. New
 `ReconciliationResolution` enum: `unresolved` (default at upload) /
 `dr3_correct` / `mymrc_correct` / `flag_followup`.
 
+### 2026-05-06 — T-015: MyMRC hourly schedule scrape (data ingestion)
+
+Closes T-015 in `docs/SPRINT-1-PLAN.md`. Implements the MVP read-path
+of the MyMRC integration per ADR-0009: a long-running cron host
+container drives one boot scrape + one scrape at the top of every UTC
+hour, with two separate Playwright contexts (one per site, separate
+credentials) pulling the next 7 days of scheduled hauls and idempotently
+upserting them into `expected_loads`. Stale rows in the same window
+are flagged `cancelled_at = now` (NOT deleted — preserves audit trail).
+Failures publish to `dr3-vision-system` ntfy with a per-site fingerprint
++ 30-min cooldown. No per-haul alerts (CLAUDE.md hard rule #5 +
+ADR-0037 — system-level only).
+
+#### Added
+
+- `src/lib/mymrc/types.ts` — shared types (`SiteCode`, `SiteCredentials`,
+  `ScrapedHaul`, `ScrapeResult`, `SiteScrapeOutcome`).
+- `src/lib/mymrc/selectors.ts` — Playwright selectors with a dated
+  `SELECTOR_VERSION` constant. Per ADR-0009, the most fragile file in
+  the codebase — when MRC redesigns the portal, this is the first thing
+  that breaks.
+- `src/lib/mymrc/parser.ts` — pure HTML → `ScrapedHaul[]` transformation.
+  Header-driven column lookup tolerates ordering + label drift.
+  Strict date validation (Feb 30 rejected, not silently rolled into
+  March), comma-stripped numeric parsing, HTML entity decoding,
+  graceful drop of rows missing required fields.
+- `src/lib/mymrc/credentials.ts` — env-driven per-site credential
+  reader. Accepts both site-name form (`MYMRC_EUGENE_*` /
+  `MYMRC_WOODLAND_*`) and the legacy jurisdiction form (`MYMRC_OR_*`
+  / `MYMRC_CA_*`) from `docs/MYMRC-INTEGRATION.md`. Site-name wins on
+  conflict; partial pairs treated as unconfigured.
+- `src/lib/mymrc/scrape.ts` — Playwright orchestration. Per ADR-0009
+  uses an isolated `BrowserContext` per site with persisted storage
+  state (`~/.dr3-vision/mymrc-{site}/auth.json`); detects login
+  redirect and re-authenticates on demand. Throws on failure so the
+  cron wrapper can publish to ntfy.
+- `src/lib/mymrc/upsert.ts` — idempotent upsert into `expected_loads`
+  matched by `external_mymrc_haul_id` (globally unique per ADR-0009).
+  Pre-resolves source / transporter FKs in two queries (no N+1).
+  Tracks unmatched-source / unmatched-transporter counts in the summary
+  so the operator runbook can surface seed gaps. Stale-haul cleanup
+  scoped to the same 7-day window the scrape covers; cancellation sets
+  `cancelled_at = now` and writes a `soft_delete` audit row. Inline
+  audit writer takes the caller's `PrismaClient` (the cron worker
+  uses its own client, separate from the in-app singleton).
+- `src/lib/mymrc/index.ts` — barrel export so consumers can pull from
+  `@/lib/mymrc`.
+- `src/lib/mymrc/parser.test.ts` (14 tests), `credentials.test.ts`
+  (11 tests), `upsert.test.ts` (8 tests) — 33 tests in total covering
+  the parser fixtures, the no-credentials fail-soft contract, and the
+  upsert paths (insert / no-change / material-update / re-cancel /
+  unmatched-FK / stale-cancel) against a mocked Prisma client. All
+  fixtures are inline; tests never touch the live MyMRC portal per the
+  runbook prohibition.
+- `scripts/mymrc-scrape.mjs` — one-shot scrape wrapper (boot + manual
+  invocation). Handles the per-site loop, ntfy publish on failure with
+  fingerprint `mymrc-scrape-fail:<site>`, exit-code policy
+  (0 = at-least-one-site-OK or all-no-creds; 1 = all-configured-sites-failed
+  to avoid restart-policy thrashing).
+- `scripts/mymrc-cron.mjs` — long-running cron host. Re-spawns
+  `mymrc-scrape.mjs` once on boot (after a 5s settle) and once at the
+  top of every UTC hour. Anchored to the wall clock (not interval-based)
+  so two scrapes can never collide. Graceful shutdown on
+  SIGTERM/SIGINT with a 30s grace window for an in-flight scrape.
+- `tsconfig.mymrc.json` — minimal tsc project that compiles JUST
+  `src/lib/mymrc/*.ts` to CommonJS at `dist/mymrc/`. The Next.js
+  standalone bundle does not include arbitrary `src/lib/` modules
+  (only what Next's tracer reaches from app routes); the cron
+  container needs the compiled output to import via `createRequire`.
+- `docs/operator/mymrc-setup.md` — Bill-side runbook: credential drop
+  on CHAD-HQ (mode 600), `up -d --force-recreate` (NOT `restart` —
+  same lesson as the Entra and ntfy setups), verification, rotation
+  (with auth-state wipe), troubleshooting (selector breakage, CAPTCHA,
+  account lockout, OOM).
+
+#### Changed
+
+- `Dockerfile` builder stage — adds
+  `RUN npx tsc --project tsconfig.mymrc.json` after `npm run build`
+  so `dist/mymrc/` lands in the builder for the runner copy.
+- `Dockerfile` runner stage — copies `/app/dist`, `node_modules/playwright`,
+  and `node_modules/playwright-core` from the builder so the cron
+  container can `require('./dist/mymrc')` and `import { chromium }
+  from 'playwright'` at runtime. Browser binaries already present
+  via the `mcr.microsoft.com/playwright:v1.48.0-jammy` base image.
+  Scripts/ COPY comment block updated to mention the new wrappers.
+- `docker-compose.yml` — new `mymrc-scrape` service (`image:
+  dr3-vision-app:local`, `command: ['node', 'scripts/mymrc-cron.mjs']`,
+  `restart: unless-stopped`). Depends on postgres-healthy +
+  migrate-completed-successfully. Optional env_files for
+  `mymrc.env` (credentials) and `ntfy.env` (alert publisher) so the
+  service boots fail-soft without either. New
+  `mymrc-auth-state` named volume mounted at
+  `/var/lib/dr3-vision/mymrc-auth` so Playwright storage state
+  survives container restarts.
+- `package.json` — new scripts `build:mymrc` (compiles the cron
+  worker) and `mymrc:scrape` (one-shot local invocation).
+- `.env.example` — `MYMRC_*` block expanded with the site-name form
+  as the documented preferred shape, the jurisdiction-form aliases
+  commented out, and the `MYMRC_HEADLESS` flag exposed.
+- `.gitignore` — adds `/dist` (regenerated by `npm run build:mymrc`,
+  shipped into the runtime image at build time).
+- `docs/SPRINT-1-PLAN.md` — T-015 ticked.
+
+#### Operator residual
+
+Bill needs to drop `~/.dr3-vision-secrets/mymrc.env` on CHAD-HQ with
+both site credential pairs and recreate the cron container. Full
+instructions in `docs/operator/mymrc-setup.md`. Until that lands the
+worker logs `creds not configured, skipping` per tick and exits 0
+(no ntfy alert — that's an operator state, not a system error). Once
+credentials are in place, the next hourly tick begins populating
+`expected_loads`.
+
+#### Out of scope (deliberate)
+
+- Source-name backfill UI when the `unmatchedSources=N` counter is
+  non-zero. The seed CSV path remains the canonical add-source surface
+  until the V2.1 admin Sources page lands. The summary counter is
+  surfaced in the cron logs so operators can see the gap.
+- The MyMRC write-path (V2.1 backlog per ADR-0009).
+- Selector versioning header in `docs/MYMRC-INTEGRATION.md` (queued
+  for Sprint 2 once a redesign actually happens).
+
 ### 2026-05-06 — Hotfix: COPY scripts/ in runner stage of Dockerfile
 
 PR #3 (`feat(ntfy): wire system-level event publishing`) switched the
