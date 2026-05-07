@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useTransition } from 'react';
+import { useT } from '@/i18n/provider';
 
 // SPRINT-1-PLAN T-012 — segmented period picker for the compliance grid.
 //
@@ -15,14 +16,9 @@ import { useTransition } from 'react';
 // `today`) — compliance metrics are inherently period-aggregations and
 // most thresholds are stated per-month / per-rolling-window.
 
-const RANGE_LABELS: Record<string, string> = {
-  today: 'Today',
-  week: 'This week',
-  month: 'This month',
-  custom: 'Custom',
-};
+const RANGE_KEYS = ['today', 'week', 'month', 'custom'] as const;
 
-type Range = 'today' | 'week' | 'month' | 'custom';
+type Range = (typeof RANGE_KEYS)[number];
 
 type Props = {
   range: Range;
@@ -35,6 +31,14 @@ export function PeriodPicker({ range, from, to }: Props) {
   const pathname = usePathname();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const t = useT();
+
+  const rangeLabels: Record<Range, string> = {
+    today: t('compliance.period_label_today'),
+    week: t('compliance.period_label_week'),
+    month: t('loads.range_month'),
+    custom: t('loads.range_custom'),
+  };
 
   const update = (mutate: (p: URLSearchParams) => void) => {
     const next = new URLSearchParams(params.toString());
@@ -74,9 +78,11 @@ export function PeriodPicker({ range, from, to }: Props) {
       aria-busy={isPending}
     >
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">Period</span>
+        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+          {t('loads.filter_label_date_range')}
+        </span>
         <div className="flex flex-wrap gap-2">
-          {Object.entries(RANGE_LABELS).map(([value, label]) => (
+          {RANGE_KEYS.map((value) => (
             <button
               key={value}
               type="button"
@@ -89,7 +95,7 @@ export function PeriodPicker({ range, from, to }: Props) {
                   : 'rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:opacity-60'
               }
             >
-              {label}
+              {rangeLabels[value]}
             </button>
           ))}
         </div>
@@ -97,7 +103,7 @@ export function PeriodPicker({ range, from, to }: Props) {
       {range === 'custom' && (
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
-            From
+            {t('compliance.period_label_from')}
             <input
               type="date"
               value={from}
@@ -107,7 +113,7 @@ export function PeriodPicker({ range, from, to }: Props) {
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
-            To
+            {t('compliance.period_label_to')}
             <input
               type="date"
               value={to}

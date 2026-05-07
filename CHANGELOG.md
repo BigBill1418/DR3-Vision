@@ -78,6 +78,144 @@ verbs are exported, and the data layer never calls
   the header (`data-testid="admin-audit-link"`). Existing add-user
   CTA layout preserved.
 
+### 2026-05-06 — Sprint-1 carryover polish (compliance #2+#4, STATUS_LABELS, photo annotation, manager i18n)
+
+Bundled cluster of post-Sprint-1 carryover items. Item 3 (photo
+annotation canvas) is descoped to a follow-up PR — see "Descoped"
+section below for rationale.
+
+#### Compliance metrics #2 + #4 — wired off `pending`
+
+Both metrics previously rendered as `pending` placeholders. They now
+compute against live tables with the same `green/yellow/red`
+threshold pattern the other five metrics use:
+
+- **#2 Processed-units submission (≥95% in 1 business day)** — reads
+  `processing_sessions` for the dashboard period. Numerator =
+  sessions whose `submitted_to_mymrc_at` lands within
+  `mymrc_processed_submission_business_days` of `session_date`. The
+  table is empty until V2.1's Processor Form workflow ships, so the
+  metric grades green-with-empty-corpus today; once V2.1 starts
+  writing sessions the grade becomes real with no code change.
+- **#4 Recycling rate (CA ≥75%, OR ≥70%)** — reads
+  `mymrc_reconciliation_items.external_weight_lbs` joined to the
+  parent reconciliation's period window. Surfaces
+  `resolved_weight / total_weight` as the MVP proxy for "weight
+  diverted from landfill", per `docs/COMPLIANCE.md` §4 MVP note
+  ("display the most recent monthly value pulled from MyMRC
+  reconciliation"). Caption documents the proxy explicitly so a
+  manager understands the value is reconciliation-derived, not the
+  canonical landfill-diversion ratio. Becomes a drop-in for the
+  canonical numerator/denominator once V2.1's Processor Form
+  workflow ships processed-weight tracking.
+
+Both metrics keep their click-through deep-links — same
+`?range=custom&from=…&to=…` URL vocabulary as the rest of the
+dashboard so a manager bouncing between compliance and the load
+list keeps a consistent window.
+
+New tests at `src/lib/compliance.test.ts` cover both metrics:
+empty-corpus → green, threshold-boundary → green, within-5pp →
+yellow, below-threshold-5pp → red, period scoping, click-through
+href, and per-site target honoring (CA 75% vs OR 70%).
+12 new tests, all green.
+
+#### STATUS_LABELS hoisted to a single source
+
+Three files inlined parallel `Record<LoadStatus, string>` maps —
+`STATUS_LABELS` in `loads-filters.tsx`, `STATUS_DISPLAY` in
+`load-row.tsx`, `STAGE_LABELS` in `dock-tile.tsx`. They had drifted
+out of sync (the dock variant uses workflow stage names like "Door
+open" / "Counting" while the filter + row variants use record-state
+names like "Unloading" / "In progress"). Hoisted to:
+
+- **NEW: `src/lib/loads/labels.ts`** — `loadStatusLabel(status, dict)`
+  + `loadStageLabel(status, dict)` + `ALL_LOAD_STATUSES` constant. Both
+  helpers translate through the manager dictionary, so labels are
+  EN/ES/UR localized at the call site (CLAUDE.md hard rule #4).
+- **`loads-filters.tsx` / `load-row.tsx` / `dock-tile.tsx`** — now
+  consume the shared helper. All three are `'use client'` and reach
+  for `useI18n()` for the dictionary.
+- **NEW: `src/app/dashboard/[site]/load/[id]/stage-label-server.ts`**
+  — server-side helper used by the load-detail page so the page can
+  resolve the stage label without crossing the client/server boundary.
+
+`rg "STATUS_LABELS|STATUS_DISPLAY|STAGE_LABELS" src/` now matches
+this changelog entry and one comment in `labels.ts` only — no
+duplicate maps remain.
+
+#### Manager portal i18n — EN/ES/UR live across the dashboard
+
+Per CLAUDE.md hard rule #4 every user-facing surface must support
+EN/ES/UR on day 1. The operator surface shipped with T-008; the
+manager portal was carryover. This change closes that gap for every
+page under `/dashboard/**` (the `/admin` surface is explicitly out of
+scope per ADR-0017 — admin-only, English-only for v1).
+
+- **NEW: `src/i18n/locales/{en,es,ur}/manager.json`** — separate
+  namespace from `operator.json` so the dashboard surface can iterate
+  without churning the iPad strings (and vice-versa).
+- **`src/i18n/dictionary.ts`** — adds `getManagerDictionary(locale)`
+  alongside the existing `getDictionary()`. The same `translate()`
+  helper serves both shapes; `resolvePath()` widened to `unknown`
+  since the algorithm is purely structural.
+- **`src/i18n/provider.tsx`** — `I18nProvider` now accepts
+  `Dictionary | ManagerDictionary` so the same client component
+  serves both route groups. The discriminator is the route group
+  (operator/manager) at the layout level, not the type.
+- **NEW: `src/app/dashboard/layout.tsx`** — mounts I18nProvider with
+  the manager dictionary for every page under `/dashboard/**`.
+- **`src/app/dashboard/page.tsx` / `[site]/page.tsx` / loads /
+  compliance** — every English literal threaded through `t(...)`. The
+  metric-tile is now `'use client'` and reads its bucket labels +
+  threshold formatters from the dictionary.
+
+Spanish + Urdu strings are auto-translated (Mexican Spanish, Nastaʿlīq
+Urdu) and queued for native-speaker review via the same SVdP staff
+channel as the operator-namespace translations. The `_meta` block in
+each JSON file documents the dialect + vocabulary choices and flags
+the pending-review status.
+
+#### Descoped — Photo annotation canvas (T-007 enhancement)
+
+Item 3 from the task brief. Descoped from this PR for the following
+reasons:
+
+1. The acceptance contract is large: in-browser canvas with four
+   tools (circle, arrow, freehand, text), separate R2 upload for the
+   annotated version, `annotation_storage_key` persistence, re-edit
+   from the saved annotation on reload, mobile-first 44px touch
+   targets, and integration with the existing offline queue (which
+   today carries one blob per photo, not two).
+2. The offline-queue payload schema (`src/lib/offline-queue.ts`) would
+   need a backwards-compatible migration to carry the annotated PNG
+   alongside the raw photo so they replay together — that's a
+   schema-touching change deserving its own ticket and ADR.
+3. Bundling it into this polish PR would push the diff past the
+   review threshold for the other three items and risk regressions in
+   the photo-capture path that the operator-iPad flow depends on.
+
+Unblocking notes for the follow-up PR:
+
+- Schema is already in place: `LoadPhoto.annotation_storage_key`
+  (nullable) lives at `prisma/schema.prisma:386`, written nowhere.
+- Photo-flow entry point is `src/app/operator/[site]/load/[id]/
+  photo-input.tsx` — current contract is capture → R2 PUT → confirm.
+  Annotation slots in between R2 PUT (raw) and confirm; the `confirm`
+  endpoint at `src/app/api/photos/confirm/route.ts` already accepts
+  the LoadPhoto row write — extend it (or add a sibling `/annotate`
+  route) with an `annotation_storage_key` field.
+- Tests pattern lives at `src/app/healthz/route.test.ts` and
+  `src/app/api/admin/users/users.test.ts` — vitest with
+  `vi.mock('@/lib/prisma', …)`. Recommend pure HTML5 `<canvas>` over
+  `react-konva` to keep the dep surface narrow (~0 KB vs +25 KB gz).
+
+#### Verification
+
+- `npm test` → 6 files / 63 tests pass (was 5/51; +12 new compliance tests).
+- `npx tsc --noEmit` → 0 errors.
+- `npx next lint --max-warnings 0` → 0 warnings.
+
 ### 2026-05-06 — Hotfix: COPY scripts/ in runner stage of Dockerfile
 
 PR #3 (`feat(ntfy): wire system-level event publishing`) switched the

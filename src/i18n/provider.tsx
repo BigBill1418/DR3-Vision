@@ -8,19 +8,27 @@
 // The dictionary is small (~3 KB / locale gz) and inlined into the
 // RSC payload — no streaming behavior, no flash of untranslated
 // content.
+//
+// Two namespaces share this provider: operator (iPad, mounted under
+// the operator route group) and manager (dashboard, mounted under the
+// dashboard route group). The dict shape is unioned so consumer hook
+// call sites stay identical regardless of which surface they render in.
 
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { Locale } from './config';
 import {
   type Dictionary,
+  type ManagerDictionary,
   type TranslateVars,
   translate,
   translatePlural,
 } from './dictionary';
 
+type AnyDictionary = Dictionary | ManagerDictionary;
+
 interface I18nContextValue {
   locale: Locale;
-  dict: Dictionary;
+  dict: AnyDictionary;
   t: (key: string, vars?: TranslateVars) => string;
   tPlural: (baseKey: string, count: number, vars?: TranslateVars) => string;
 }
@@ -33,7 +41,7 @@ export function I18nProvider({
   children,
 }: {
   locale: Locale;
-  dict: Dictionary;
+  dict: AnyDictionary;
   children: React.ReactNode;
 }) {
   const t = useCallback(

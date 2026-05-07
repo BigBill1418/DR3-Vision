@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { formatDate, formatTime } from '@/lib/format';
 import { ElapsedTime } from '../../elapsed-time';
-import { stageLabel } from '../../dock-tile';
+import { stageLabelForCurrentLocale } from './stage-label-server';
 
 // Manager view of a single inbound load per SPRINT-1-PLAN T-010
 // ("Tap a tile → load detail page with all photos, stack counts,
@@ -134,6 +134,7 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
   // active loads still tick; submitted/finished loads show the
   // captured duration.
   const isActive = load.submitted_at == null && load.unload_finished_at == null;
+  const stageLabelText = await stageLabelForCurrentLocale(load.status);
 
   return (
     <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
@@ -162,7 +163,7 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-sm uppercase tracking-wide text-dr3-cream/60">Status</span>
             <span className="rounded-full bg-dr3-green/30 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide">
-              {stageLabel(load.status)}
+              {stageLabelText}
             </span>
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">

@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useTransition } from 'react';
+import { useT } from '@/i18n/provider';
 
 // Prev / N of M / Next anchored to the URL `page` param. Per
 // CLAUDE.md hard rule #10 these are buttons with onClick that
@@ -18,6 +19,7 @@ export function Pagination({ page, totalPages }: Props) {
   const pathname = usePathname();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const t = useT();
 
   const goTo = (next: number) => {
     if (next < 1 || next > totalPages || next === page) return;
@@ -38,7 +40,7 @@ export function Pagination({ page, totalPages }: Props) {
 
   return (
     <nav
-      aria-label="Pagination"
+      aria-label={t('loads.pagination_of', { page, total: totalPages })}
       className="flex items-center justify-between gap-4 rounded-lg bg-dr3-green-dark/30 px-4 py-3"
     >
       <button
@@ -47,11 +49,10 @@ export function Pagination({ page, totalPages }: Props) {
         disabled={prevDisabled}
         className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        ← Prev
+        {t('loads.pagination_prev')}
       </button>
       <span className="text-sm text-dr3-cream/80">
-        Page <span className="font-semibold tabular-nums">{page}</span> of{' '}
-        <span className="font-semibold tabular-nums">{totalPages}</span>
+        {t('loads.pagination_of', { page, total: totalPages })}
       </span>
       <button
         type="button"
@@ -59,7 +60,7 @@ export function Pagination({ page, totalPages }: Props) {
         disabled={nextDisabled}
         className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Next →
+        {t('loads.pagination_next')}
       </button>
     </nav>
   );
