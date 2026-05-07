@@ -118,6 +118,13 @@ export default async function SiteDashboardPage({ params }: Props) {
             >
               {t('compliance.heading')}
             </Link>
+            <Link
+              href={`/dashboard/${site.code}/reconciliation`}
+              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+              data-testid="dashboard-reconciliation-link"
+            >
+              Reconciliation
+            </Link>
           </nav>
         </header>
 

@@ -216,6 +216,48 @@ Unblocking notes for the follow-up PR:
 - `npx tsc --noEmit` → 0 errors.
 - `npx next lint --max-warnings 0` → 0 warnings.
 
+### 2026-05-06 — T-016: CSV reconciliation upload (manager portal)
+
+Sprint-1 ticket T-016. Manager-portal page at
+`/dashboard/{site}/reconciliation` that ingests the monthly MyMRC CSV,
+matches every haul against DR3-Vision's `inbound_loads` by
+`external_mymrc_haul_id`, and surfaces five categorized buckets:
+`match_clean`, `weight_mismatch` (default ±2% tolerance, configurable
+per upload), `count_mismatch`, `missing_in_dr3`, `missing_in_mymrc`.
+
+Per-row resolution actions (`DR3-Vision is correct` / `MyMRC is
+correct` / `Flag for follow-up`) write a `mymrc_reconciliation_items`
+update + an audit_log entry in one Prisma transaction
+(CLAUDE.md hard rule #6 — append-only audit). CLAUDE.md hard rule #2
+(Eugene/Woodland strictly separated): manager scoped to one site
+cannot reach the other's data; admin sees both. CLAUDE.md hard rule
+#10 (no `<form>`): all submissions are `onClick` + `fetch`.
+
+Idempotency: `(site_id, content_sha256)` unique index — re-uploading
+the same byte-identical file returns the existing session ID with
+`created: false`, never produces duplicate items or audit rows.
+Upload metadata persisted: `filename`, `content_sha256`,
+`weight_tolerance_pct`, by-category counts.
+
+#### Added
+
+- `prisma/migrations/20260506232606_t016_reconciliation_upload_metadata/migration.sql` — extends `mymrc_reconciliations` with upload metadata + by-category counts; extends `mymrc_reconciliation_items` with DR3-side snapshot + `resolution` enum; adds the idempotency unique index.
+- `src/lib/reconciliation.ts` — pure parser + categorizer + persistence helpers + cross-site-safe resolution writer.
+- `src/app/api/reconciliation/[site]/upload/route.ts` — multipart upload endpoint, `requireManagerForSite` gate, 25 MiB ceiling, configurable tolerance, dedupe via SHA-256.
+- `src/app/api/reconciliation/[site]/items/[itemId]/resolve/route.ts` — per-item resolution writer, double-checked cross-site rejection.
+- `src/app/dashboard/[site]/reconciliation/page.tsx` + `UploadClient.tsx` + `[id]/page.tsx` + `[id]/ReconciliationTable.tsx` — manager-portal landing, upload widget, per-session table grouped by category with sortable headers + per-row resolution buttons.
+- `src/lib/reconciliation.test.ts` (28 tests) + `src/app/api/reconciliation/[site]/routes.test.ts` (10 tests) — parser, categorizer, persistence idempotency, cross-site rejection, audit-row write contract.
+- Nav link from `/dashboard/{site}` → reconciliation.
+
+#### Schema notes
+
+`ReconciliationStatus` enum gains `match_clean`, `missing_in_dr3`,
+`missing_in_mymrc`. The legacy `unmatched_in_dr3` / `unmatched_in_mymrc`
+/ `resolved` values are retained so the v0.1 compliance read keeps
+working — the T-016 engine never writes them. New
+`ReconciliationResolution` enum: `unresolved` (default at upload) /
+`dr3_correct` / `mymrc_correct` / `flag_followup`.
+
 ### 2026-05-06 — Hotfix: COPY scripts/ in runner stage of Dockerfile
 
 PR #3 (`feat(ntfy): wire system-level event publishing`) switched the

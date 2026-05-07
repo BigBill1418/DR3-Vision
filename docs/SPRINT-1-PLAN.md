@@ -175,7 +175,7 @@ See `docs/MYMRC-INTEGRATION.md` for full runbook.
 
 **Acceptance:** Scheduled hauls appear in the operator's expected-loads queue within 1 hour of being scheduled in MyMRC. Stale entries (haul cancelled in MyMRC) are removed.
 
-### [ ] T-016: CSV reconciliation upload (manual, monthly)
+### [x] T-016: CSV reconciliation upload (manual, monthly)
 
 - Manager-portal page: upload a monthly MyMRC CSV
 - Match each haul row against DR3-Vision loads by (haul_id, date, source)
