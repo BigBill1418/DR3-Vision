@@ -20,8 +20,11 @@ when *proxied*; DNS-only it returns a non-routable synthetic address
 (observed: ULA `fd10:aec2:5dae::`, no public A) and the edge has no route
 for the SNI → 403. Verified via Cloudflare audit log: the flip happened
 **2026-05-19T18:05:07Z** inside a **batch DNS edit in the shared `svdp.us`
-zone by `james.goss@svdp.us`** (Cloudflare dashboard, IP 216.115.11.18) —
-unrelated, accidental collateral. Not an intentional takedown.
+zone by `james.goss@svdp.us`** (Cloudflare dashboard, IP 216.115.11.18).
+DR3-Vision appears to be collateral of a bulk edit rather than a targeted
+takedown, but the actor was a **since-terminated SVdP employee whose access had
+not been revoked** — see the access-incident note in the follow-up below and
+`noc-master/docs/security/2026-06-03-svdp-cloudflare-access-incident.md`.
 
 **Fix.** `PATCH` the record back to `proxied:true` via the BarnardHQ
 zone-scoped CF DNS token. Public edge confirmed `HTTP 200` + `<title>DR3-Vision</title>`
