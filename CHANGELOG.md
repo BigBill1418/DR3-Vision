@@ -27,20 +27,24 @@ unrelated, accidental collateral. Not an intentional takedown.
 zone-scoped CF DNS token. Public edge confirmed `HTTP 200` + `<title>DR3-Vision</title>`
 from both anycast IPs (104.21.12.136 / 172.67.152.137) immediately after.
 
-**Follow-up — change-alerting DEPLOYED (2026-06-03).** The `svdp.us` zone is
-**shared**: SVdP staff (`james.goss@svdp.us`) have dashboard DNS access and can
-re-break the BarnardHQ tunnel records on any bulk edit. The dr3-vision tunnel
-CNAME being proxied is load-bearing and silent when wrong, so a drift guard now
-watches it: `ops-monitors/dr3-vision-dns-guard.sh` on HSH-HQ (5-min cron)
-compares the live Cloudflare API state of all `dr3-vision*` records to a
-known-good baseline (proxied flag, content, type, adds/deletes) plus a
-`1.1.1.1` anycast corroboration probe, and pages **ntfy `dr3-vision-dns`**
-— `urgent` if the tunnel CNAME is unproxied/unresolvable (site-down), `high`
-for other drift, 6 h cooldown, recovery note on return to baseline. Optional
-`AUTO_HEAL=1` re-proxies automatically. The stale `dr3-vision-publisher` ntfy
-token (invalid post-migration) was re-minted in the same pass. Remaining
-hardening option (not done): split BarnardHQ app hostnames out of SVdP's
-editable zone surface. No app code change — DNS/control-plane + monitoring only.
+**Follow-up — change-alerting DEPLOYED (2026-06-03).** DR3-Vision is an SVdP
+app on SVdP's own domain (`svdp.us`, hosted in BarnardHQ's Cloudflare account);
+the `svdp.us` zone is co-administered, and the 2026-05-19 break was an honest
+accident — a tunnel CNAME grey-clouded during a legitimate batch DNS edit by
+SVdP's own IT (`james.goss@svdp.us`), not a trust/boundary issue. A
+`*.cfargotunnel.com` CNAME silently stops routing when unproxied, so the failure
+is easy to make and invisible until someone notices the site is down. A drift
+guard now catches it regardless of who/why: `ops-monitors/dr3-vision-dns-guard.sh`
+on HSH-HQ (5-min cron) compares the live Cloudflare API state of all
+`dr3-vision*` records to a known-good baseline (proxied flag, content, type,
+adds/deletes) plus a `1.1.1.1` anycast corroboration probe, and pages **ntfy
+`dr3-vision-dns`** — `urgent` if the tunnel CNAME is unproxied/unresolvable
+(site-down), `high` for other drift, 6 h cooldown, recovery note on return to
+baseline. Optional `AUTO_HEAL=1` re-proxies automatically. The stale
+`dr3-vision-publisher` ntfy token (invalid post-migration) was re-minted in the
+same pass. Best non-automated prevention: a heads-up to SVdP IT that the
+`*.svdp.us` tunnel CNAMEs must stay proxied (orange cloud). No app code change —
+DNS/control-plane + monitoring only.
 
 ### 2026-05-07 — Sprint-1 substantial-complete checkpoint + V2.1 backlog refresh
 
