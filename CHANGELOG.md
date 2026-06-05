@@ -5,6 +5,37 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-05 — Sprint 2 Wave A: foundation (T-100–T-103)
+
+Foundation wave for the Bonus Management System, Vision Dashboard, and full
+fleet observability (ADRs 0019–0022). Built on branch `sprint-2`.
+
+- **T-100 — Bonus schema.** New `bonus_employees`, `bonus_daily_entries`,
+  `bonus_months` tables + `BonusMonthState` enum (migration
+  `20260605222816_bonus_tables`). Site-scoped so Eugene is a future drop-in.
+  Relation lines added to `Site` and `User`. DMMF shape test in
+  `src/lib/__tests__/bonus-schema.test.ts`.
+- **T-101 — Formula off-by-one correction.** Woodland `threshold_high` 75 → **74**
+  (ADR-0019 §1). Corrected in the seed CSV (quoting preserved — the handoff's
+  unquoted copy would have broken papaparse) and via a defensive, idempotent data
+  migration `20260605222900_correct_woodland_bonus_threshold`. New shared
+  cents-based calculator `src/lib/bonus/calculator.ts` (the single source of bonus
+  math for UI, PDF, and exports per hard rule #3) with the full ADR-0019 §1
+  walk-through covered. ADR-0011 marked superseded.
+- **T-102 — OpenTelemetry → Tempo.** `NodeSDK` wired into `instrumentation.ts`,
+  gated on `TEMPO_ENDPOINT` (fail-open), `ParentBased(TraceIdRatioBased)` head
+  sampler (100% dev / `OTEL_TRACE_SAMPLE_RATE` prod). OTel's Node-only/gRPC tree
+  externalized via a webpack matcher so it never reaches the edge/client bundles.
+  Residual: always-keep-error-spans is collector-side tail sampling, not wired here.
+- **T-103 — GlitchTip (Sentry SDK).** `@sentry/nextjs` against a GlitchTip DSN;
+  server/edge/client config files + `global-error.tsx`; `beforeSend` scrubs
+  authorization/cookie/IP and drops PIN-tagged events; `skipOpenTelemetrySetup` so
+  Sentry's embedded OTel doesn't fight our NodeSDK; source-map upload gated on
+  `GLITCHTIP_AUTH_TOKEN`. Fail-open without a DSN.
+
+Verification: `tsc --noEmit` clean, `next build` compiles (exit 0), `npm test`
+**207 passed** (187 baseline + 20 new), `next lint` clean.
+
 ### 2026-06-03 — INCIDENT: public site down ~15 days (DNS proxy flipped off) — RESOLVED
 
 `https://dr3-vision.svdp.us` was unreachable to the public (connection

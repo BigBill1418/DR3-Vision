@@ -3,6 +3,13 @@
 **Date:** 2026-05-04
 **Status:** Accepted (V2.1 scope)
 
+> **Bonus formula superseded by [ADR-0019](0019-bonus-management-system.md) §1
+> (2026-06-05).** The Woodland daily-bonus formula described below used a high
+> threshold of 75, which underpaid processors by ~$0.25/day on high-throughput
+> days. ADR-0019 §1 corrects the high threshold to **74** and moves bonus
+> tracking into the Bonus Management System (Sprint 2). The historical decision
+> text below is preserved for context; the corrected formula is authoritative.
+
 ## Context
 
 After mattresses arrive at the dock and are recorded as inbound loads, they enter the deconstruction line, where processors hand-disassemble them into recoverable components: steel springs, foam, cotton, wood. This downstream workflow is currently captured on a daily paper Processor Form per processor per shift.

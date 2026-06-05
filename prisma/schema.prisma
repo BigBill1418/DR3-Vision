@@ -73,6 +73,10 @@ model Site {
   bonus_rules         ProcessorBonusRule[]
   processing_sessions ProcessingSession[]
 
+  // Bonus Management System (ADR-0019)
+  bonus_employees     BonusEmployee[]
+  bonus_months        BonusMonth[]
+
   @@map("sites")
 }
 
@@ -167,6 +171,13 @@ model User {
   processing_sessions_lead       ProcessingSession[] @relation("SessionLead")
   processing_sessions_authorized ProcessingSession[] @relation("SessionAuthorizedBy")
   audit_entries                  AuditLog[]
+
+  // Bonus Management System (ADR-0019)
+  bonus_employee_link            BonusEmployee[]   @relation("BonusEmployeeUser")
+  bonus_entries_authored         BonusDailyEntry[] @relation("BonusEntryAuthor")
+  bonus_months_signed_as_janette BonusMonth[]      @relation("BonusJanetteSigner")
+  bonus_months_signed_as_morena  BonusMonth[]      @relation("BonusMorenaSigner")
+  bonus_months_amended           BonusMonth[]      @relation("BonusAmender")
 
   @@map("users")
 }
@@ -618,4 +629,127 @@ model FormTemplate {
   updated_at  DateTime @updatedAt
 
   @@map("form_templates")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Bonus Management System (ADR-0019) — Woodland processor daily bonus.
+// Site-scoped so Eugene can be enabled in V2.1+ with no migration.
+// ────────────────────────────────────────────────────────────────────────
+
+enum BonusMonthState {
+  draft // current month, daily entries being added
+  pending_signatures // month ended, awaiting first signature
+  partially_signed // one signature in, awaiting second
+  signed // both signatures captured, PDF generated
+  paid // PDF sent to payroll@svdp.us via M365 Graph
+  amended // post-signature edit (Bill-only override)
+}
+
+model BonusEmployee {
+  id      String @id @default(uuid())
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  // Display name — see ADR-0019 §9b for retroactive display behavior
+  full_name      String
+  previous_names Json? // [{ name: "...", changed_at: "..." }, ...]
+
+  is_active Boolean @default(true)
+
+  // Optional link to a system user — most processors are NOT system users
+  user_id String?
+  user    User?   @relation("BonusEmployeeUser", fields: [user_id], references: [id])
+
+  notes      String?
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime? // soft delete; rehire reactivates per ADR-0019 §9a
+
+  daily_entries BonusDailyEntry[]
+
+  @@index([site_id, is_active])
+  @@map("bonus_employees")
+}
+
+model BonusDailyEntry {
+  id                String        @id @default(uuid())
+  bonus_employee_id String
+  bonus_employee    BonusEmployee @relation(fields: [bonus_employee_id], references: [id])
+  bonus_month_id    String
+  bonus_month       BonusMonth    @relation(fields: [bonus_month_id], references: [id])
+
+  entry_date     DateTime @db.Date
+  mattress_count Int // 0..999 valid, soft-warn above 200
+  note           String? // optional HR annotation, does NOT affect math
+
+  // Who actually keyed this entry — could be Janette, Morena, or Bill per ADR-0019 §4
+  entered_by_user_id String
+  entered_by         User     @relation("BonusEntryAuthor", fields: [entered_by_user_id], references: [id])
+  entered_at         DateTime @default(now())
+
+  @@unique([bonus_employee_id, entry_date])
+  @@index([bonus_month_id])
+  @@index([entry_date])
+  @@map("bonus_daily_entries")
+}
+
+model BonusMonth {
+  id      String @id @default(uuid())
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  month_start DateTime        @db.Date // first day of the month
+  month_end   DateTime        @db.Date // last day of the month
+  state       BonusMonthState @default(draft)
+
+  // ─── Janette's signature (facility manager attestation) ────────────
+  janette_signed_by_user_id String?
+  janette_signed_by         User?     @relation("BonusJanetteSigner", fields: [janette_signed_by_user_id], references: [id])
+  janette_signed_at         DateTime?
+  janette_signed_ip         String?
+  janette_signed_user_agent String?
+  // Set when Bill or Morena signed in her place per ADR-0019 §5
+  janette_override_actor_id String?
+  janette_override_reason   String?
+
+  // ─── Morena's signature (operations manager attestation) ───────────
+  morena_signed_by_user_id String?
+  morena_signed_by         User?     @relation("BonusMorenaSigner", fields: [morena_signed_by_user_id], references: [id])
+  morena_signed_at         DateTime?
+  morena_signed_ip         String?
+  morena_signed_user_agent String?
+  // Set when Bill signed in her place per ADR-0019 §5 (only Bill can override Morena)
+  morena_override_actor_id String?
+  morena_override_reason   String?
+
+  // ─── PDF artifact ──────────────────────────────────────────────────
+  pdf_storage_key  String? // R2 key
+  pdf_generated_at DateTime?
+
+  // ─── Payroll delivery (M365 Graph mail-send per ADR-0021) ──────────
+  payroll_sent_at     DateTime?
+  payroll_message_id  String? // Graph request ID for audit correlation
+  payroll_retry_count Int       @default(0)
+
+  // ─── Amendment tracking per ADR-0019 §6 ────────────────────────────
+  // If this month was created by amending an earlier month, points to it
+  amended_from_month_id String?     @unique
+  amended_from          BonusMonth? @relation("BonusAmendment", fields: [amended_from_month_id], references: [id])
+  amended_into          BonusMonth? @relation("BonusAmendment")
+  amendment_reason      String?
+  amended_by_user_id    String?
+  amended_by            User?       @relation("BonusAmender", fields: [amended_by_user_id], references: [id])
+  amended_at            DateTime?
+
+  // Computed at sign time, locked thereafter (re-computed only on amendment)
+  total_payout_cents Int?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  daily_entries BonusDailyEntry[]
+
+  @@unique([site_id, month_start])
+  @@index([site_id, state])
+  @@map("bonus_months")
 }

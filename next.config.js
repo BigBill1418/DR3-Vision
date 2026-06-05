@@ -18,6 +18,38 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
+  // pino (ADR-0022 §3) ships a worker-thread transport that must not be bundled.
+  serverExternalPackages: ['pino', 'pino-pretty'],
+  // OpenTelemetry NodeSDK (ADR-0022 §1) is Node-only and pulls a large native/gRPC
+  // dependency tree (@grpc/grpc-js → zlib, exporter-prometheus → http, dozens of
+  // instrumentation-* → os/net) that webpack cannot bundle. `serverExternalPackages`
+  // does not reliably cover the `instrumentation.ts` compilation, so we externalize
+  // the whole tree via a webpack externals matcher on the server build. We lazy-
+  // import these inside the nodejs runtime guard, so they never reach edge/client
+  // bundles; standalone output traces them into the runtime image.
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      const externalize = ({ request }, callback) => {
+        if (
+          request &&
+          (/^@opentelemetry\//.test(request) ||
+            /^@grpc\//.test(request) ||
+            request === 'require-in-the-middle' ||
+            request === 'import-in-the-middle')
+        ) {
+          return callback(null, 'commonjs ' + request);
+        }
+        return callback();
+      };
+      const existing = config.externals;
+      config.externals = Array.isArray(existing)
+        ? [...existing, externalize]
+        : existing
+          ? [existing, externalize]
+          : [externalize];
+    }
+    return config;
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '*.r2.cloudflarestorage.com' },
@@ -75,4 +107,30 @@ const nextConfig = {
   },
 };
 
-module.exports = withSerwist(nextConfig);
+// Sentry/GlitchTip (ADR-0022 §2). The bundler plugin injects the release and
+// (when GLITCHTIP_AUTH_TOKEN is set) uploads source maps so GlitchTip stack
+// traces are readable. Without the token, source-map upload is skipped silently —
+// the build still succeeds. The SDK itself no-ops at runtime without a DSN.
+const { withSentryConfig } = require('@sentry/nextjs');
+
+const hasSentryAuth = Boolean(process.env.GLITCHTIP_AUTH_TOKEN);
+
+module.exports = withSentryConfig(withSerwist(nextConfig), {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.GLITCHTIP_AUTH_TOKEN,
+  // GlitchTip ingest host for source-map upload (Sentry CLI). Unused when
+  // source-map upload is disabled.
+  sentryUrl: process.env.GLITCHTIP_URL || 'https://glitchtip.barnardhq.com',
+  silent: true,
+  telemetry: false,
+  sourcemaps: { disable: !hasSentryAuth },
+  widenClientFileUpload: false,
+  webpack: {
+    // Strip Sentry debug logging from the bundle (replaces deprecated disableLogger).
+    treeshake: { removeDebugLogging: true },
+    // We register Sentry manually in instrumentation.ts; don't let the plugin
+    // auto-inject a second server instrumentation path.
+    autoInstrumentServerFunctions: false,
+  },
+});

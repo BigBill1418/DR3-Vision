@@ -1,45 +1,55 @@
-// Next.js instrumentation hook (Node runtime only).
+// Next.js instrumentation hook (ADR-0036/0037 ntfy + ADR-0022 observability).
 //
-// Two side-effects on first server boot:
-//   1. Publish `[DR3-Vision] Container started` to `dr3-vision-container`
-//      (ADR-0036 + ADR-0037, 30-min cooldown so a crashloop doesn't
-//      spam Bill's phone).
-//   2. Wire `process.on('uncaughtException')` and `unhandledRejection`
-//      to publish `[DR3-Vision] Unhandled error: <summary>` with a
-//      30-min per-fingerprint cooldown.
+// Side-effects on first server boot, in order:
+//   1. (Node) GlitchTip/Sentry server-runtime init — error reporting (ADR-0022 §2).
+//   2. (Node) OpenTelemetry NodeSDK — traces to Tempo (ADR-0022 §1), gated on
+//      TEMPO_ENDPOINT so it no-ops cleanly in dev / when unset (fail-open).
+//   3. (Node) Publish `[DR3-Vision] Container started` to `dr3-vision-container`
+//      (30-min cooldown so a crashloop doesn't spam Bill's phone).
+//   4. (Node) Wire `uncaughtException` / `unhandledRejection` → ntfy publish with a
+//      30-min per-fingerprint cooldown. (GlitchTip captures these too; the two
+//      gate independently per ADR-0022 §2.)
+//   5. (Edge) GlitchTip/Sentry edge-runtime init.
 //
-// The hook is invoked once per Node.js process — Next.js standalone
-// boot, dev server, and Vitest workers all hit this. We guard against
-// running in the edge runtime (where `process` doesn't have signal
-// hooks) and against the dev-mode HMR re-instantiation that would
-// otherwise stack handlers.
+// The hook is invoked once per Node.js process. We guard the edge runtime (no
+// signal hooks there) and dev-mode HMR re-instantiation (which would stack
+// handlers).
 //
-// Per CLAUDE.md hard rule #5 + docs/COMPLIANCE.md, these are the only
-// two system-level publish paths the app emits. Operational alerts
-// (rejections, long unloads, SLA breaches, PIN lockouts) stay on the
-// in-app dashboard and never page.
+// All observability is FAIL-OPEN (SPRINT-2-HANDOFF hard rule #6): no TEMPO_ENDPOINT
+// → no traces; no GLITCHTIP_DSN → no error reporting; no NTFY token → no pages.
+// The app starts and serves regardless.
 
 export async function register(): Promise<void> {
-  if (process.env['NEXT_RUNTIME'] !== 'nodejs') {
-    // Edge runtime — middleware bundle, etc. ntfy publish needs Node
-    // crypto + native fetch with AbortController; skip cleanly.
+  const runtime = process.env['NEXT_RUNTIME'];
+
+  if (runtime === 'edge') {
+    // Edge bundle (middleware). ntfy + OTel NodeSDK need Node APIs; only the
+    // Sentry edge init is safe here.
+    await import('../sentry.edge.config');
     return;
   }
 
-  // Lazy import so the helper only loads on the Node side.
+  if (runtime !== 'nodejs') return;
+
+  // ─── GlitchTip/Sentry (errors) ─────────────────────────────────────────
+  await import('../sentry.server.config');
+
+  // ─── OpenTelemetry (traces → Tempo) ────────────────────────────────────
+  await initOpenTelemetry();
+
+  // ─── ntfy boot publish + uncaught handlers (existing behavior) ──────────
   const { publishContainerStart, publishUnhandledError } = await import('@/lib/ntfy');
 
-  // Boot publish — fire-and-forget. The promise resolves when ntfy
-  // returns or the cooldown short-circuits; we don't await it because
-  // the request handler should not block on a network call to a
-  // separate host during cold-start.
+  // Boot publish — fire-and-forget; cold-start request handling must not block
+  // on a network call to a separate host.
   const version = process.env['npm_package_version'] ?? '0.1.0';
-  const commitSha = process.env['DR3_GIT_COMMIT_SHA'] ?? process.env['VERCEL_GIT_COMMIT_SHA'];
+  const commitSha =
+    process.env['GIT_SHA'] ??
+    process.env['DR3_GIT_COMMIT_SHA'] ??
+    process.env['VERCEL_GIT_COMMIT_SHA'];
   void publishContainerStart({ version, commitSha });
 
-  // Idempotency guard — Next.js dev mode re-runs `register` per HMR
-  // event. Without this guard we'd accumulate handlers and double-page
-  // every uncaught error.
+  // Idempotency guard — Next.js dev mode re-runs `register` per HMR event.
   const g = globalThis as unknown as { __dr3VisionNtfyHandlersWired?: boolean };
   if (g.__dr3VisionNtfyHandlersWired) return;
   g.__dr3VisionNtfyHandlersWired = true;
@@ -50,4 +60,78 @@ export async function register(): Promise<void> {
   process.on('unhandledRejection', (reason) => {
     void publishUnhandledError({ err: reason, context: 'unhandledRejection' });
   });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Next.js server-error hook → GlitchTip. Next 15 calls this for errors thrown in
+// nested React Server Components, route handlers, and server actions that the
+// default boundary wouldn't otherwise report to the SDK.
+// ───────────────────────────────────────────────────────────────────────────
+export async function onRequestError(
+  ...args: Parameters<NonNullable<typeof import('@sentry/nextjs').captureRequestError>>
+): Promise<void> {
+  if (!process.env['GLITCHTIP_DSN']) return;
+  const Sentry = await import('@sentry/nextjs');
+  Sentry.captureRequestError(...args);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// OpenTelemetry NodeSDK init. Idempotent within a process; fail-open on missing
+// TEMPO_ENDPOINT. Sampling: 100% in dev, OTEL_TRACE_SAMPLE_RATE (default 1%) in
+// production via a ParentBased(TraceIdRatioBased) head sampler.
+//
+// NOTE (honest residual): ADR-0022 §1 also wants "100% error spans". Always
+// retaining error spans is a TAIL-sampling concern (the error isn't known at span
+// start), handled at the OTel Collector — not expressible in a head sampler. This
+// implements the ratio head sampler; collector-side tail sampling for errors is a
+// fleet-collector follow-up, not wired here.
+// ───────────────────────────────────────────────────────────────────────────
+async function initOpenTelemetry(): Promise<void> {
+  const endpoint = process.env['TEMPO_ENDPOINT'];
+  if (!endpoint) {
+    console.log('[observability] TEMPO_ENDPOINT not set, tracing disabled');
+    return;
+  }
+
+  const g = globalThis as unknown as { __dr3VisionOtelStarted?: boolean };
+  if (g.__dr3VisionOtelStarted) return;
+  g.__dr3VisionOtelStarted = true;
+
+  const { NodeSDK } = await import('@opentelemetry/sdk-node');
+  const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http');
+  const { getNodeAutoInstrumentations } = await import(
+    '@opentelemetry/auto-instrumentations-node'
+  );
+  const { resourceFromAttributes } = await import('@opentelemetry/resources');
+  const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = await import(
+    '@opentelemetry/semantic-conventions'
+  );
+  const { ParentBasedSampler, TraceIdRatioBasedSampler } = await import(
+    '@opentelemetry/sdk-trace-node'
+  );
+
+  const sampleRate =
+    process.env['NODE_ENV'] === 'production'
+      ? Number(process.env['OTEL_TRACE_SAMPLE_RATE'] ?? '0.01')
+      : 1;
+
+  const sdk = new NodeSDK({
+    resource: resourceFromAttributes({
+      [ATTR_SERVICE_NAME]: 'dr3-vision',
+      [ATTR_SERVICE_VERSION]: process.env['GIT_SHA'] ?? 'dev',
+      'deployment.environment.name': process.env['NODE_ENV'] ?? 'development',
+    }),
+    traceExporter: new OTLPTraceExporter({ url: endpoint }),
+    sampler: new ParentBasedSampler({
+      root: new TraceIdRatioBasedSampler(Number.isFinite(sampleRate) ? sampleRate : 0.01),
+    }),
+    instrumentations: [
+      getNodeAutoInstrumentations({
+        '@opentelemetry/instrumentation-fs': { enabled: false }, // too noisy
+        '@opentelemetry/instrumentation-dns': { enabled: false }, // too noisy
+      }),
+    ],
+  });
+
+  sdk.start();
 }
