@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-05 — Sprint 2 Wave B: bonus core + dashboard + observability (T-104–T-109)
+
+Built via parallel multi-agent dispatch (6 agents, disjoint file ownership);
+orchestrator owned the shared `middleware.ts` seam and integration verification.
+
+- **T-104 — Bonus employees CRUD** (`/bonus/employees`). Data layer + API +
+  server page, Woodland-scoped, every mutation audited in-transaction. Rehire
+  (§9a) returns a `rehire_candidate` signal (HTTP 409) so the UI prompts
+  reactivate; rename (§9b) appends to `previous_names`. Rick → 403. 28 tests.
+- **T-105 — Daily entry grid** (`/bonus`). Live per-row + total bonus from the
+  shared calculator (rule pulled from `processor_bonus_rules`, never hardcoded);
+  upsert keyed on (employee, date); writes blocked (409) once the month leaves
+  `draft`; Janette/Morena/Bill can each key. 19 tests.
+- **T-106 — Monthly state machine.** `ALLOWED_TRANSITIONS` (7 legal edges),
+  `transitionMonth` (the only mutation path, audited in the same transaction),
+  `getOrCreateDraftMonth`, `closeMonthsDueForSignature` (for the Wave C cron),
+  `assertEntriesEditable`. 34 tests.
+- **T-107 — Vision Dashboard** (`/`). Role-aware tile launcher replacing the
+  "coming soon" splash; `canSeeTile` matrix mirrors the bonus access rule;
+  inaccessible tiles omitted (not greyed); featured Bonus tile with NEW pill.
+  Self-gates + edge-gated (see middleware). 11 tests. **Visual verification
+  (Playwright multi-viewport on a live URL) still pending — not yet marked done.**
+- **T-108 — pino structured logger** (`src/lib/observability/logger.ts`) with
+  redaction; `newRequestId`/`childLogger`. Middleware now mints/forwards an
+  `x-request-id`. 6 tests.
+- **T-109 — Prometheus `/metrics`** (Node runtime), internal-only (404 on any
+  request carrying `cf-connecting-ip`); full registry + `recordHttpRequest`
+  helper. Made `/metrics` middleware-public so internal scrapes aren't redirected
+  to /login (its own cf-connecting-ip check is the real gate). 5 tests.
+
+Orchestrator integration: wired the 3 middleware concerns (auth-gate `/`,
+request-id, `/metrics` allowance), fixed a `BonusMonthDb` test-fake type the
+agents' scoped vitest runs missed. Wave-B foundation also added the shared
+`requireBonusAccess` gate (8 tests).
+
+Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **318 passed**,
+`next lint` clean.
+
 ### 2026-06-05 — Sprint 2 Wave A: foundation (T-100–T-103)
 
 Foundation wave for the Bonus Management System, Vision Dashboard, and full
@@ -47,7 +85,7 @@ and the tunnel (`3999bb3b-…`) stayed connected to Cloudflare `sjc01`.
 **Root cause (DNS, not service).** The `dr3-vision.svdp.us` **CNAME →
 `3999bb3b-….cfargotunnel.com`** had its **Cloudflare proxy turned OFF**
 (orange→grey / `proxied:false`). A `cfargotunnel.com` CNAME only routes
-when *proxied*; DNS-only it returns a non-routable synthetic address
+when _proxied_; DNS-only it returns a non-routable synthetic address
 (observed: ULA `fd10:aec2:5dae::`, no public A) and the edge has no route
 for the SNI → 403. Verified via Cloudflare audit log: the flip happened
 **2026-05-19T18:05:07Z** inside a **batch DNS edit in the shared `svdp.us`
@@ -100,6 +138,7 @@ CSV → 95%+ rows reconcile cleanly") is a live-data verification owed
 once Bill has a real CSV in hand.
 
 V2.1 backlog refresh:
+
 - **Bulk data upload** added per Bill's 2026-05-07 ask. Current paths
   (seed CSV, `/admin/users`, operator capture, MyMRC scrape, monthly
   reconciliation) do NOT cover historical-load backfills or bulk
@@ -170,7 +209,7 @@ verbs are exported, and the data layer never calls
   - `src/lib/admin-audit-url.test.ts` (18) — parser, builder,
     round-trip, ISO-date bounds, default range.
   - `src/app/admin/audit/audit-diff.test.ts` (13) — diff classifier
-    + `deepEqual` (insert / delete / change / nested / arrays).
+    - `deepEqual` (insert / delete / change / nested / arrays).
   - `src/app/api/admin/audit/audit.test.ts` (22) — role gate,
     list shape, ordering, row-existence resolver, filter
     composition, pagination, append-only contract assertion
@@ -241,9 +280,9 @@ open" / "Counting" while the filter + row variants use record-state
 names like "Unloading" / "In progress"). Hoisted to:
 
 - **NEW: `src/lib/loads/labels.ts`** — `loadStatusLabel(status, dict)`
-  + `loadStageLabel(status, dict)` + `ALL_LOAD_STATUSES` constant. Both
-  helpers translate through the manager dictionary, so labels are
-  EN/ES/UR localized at the call site (CLAUDE.md hard rule #4).
+  - `loadStageLabel(status, dict)` + `ALL_LOAD_STATUSES` constant. Both
+    helpers translate through the manager dictionary, so labels are
+    EN/ES/UR localized at the call site (CLAUDE.md hard rule #4).
 - **`loads-filters.tsx` / `load-row.tsx` / `dock-tile.tsx`** — now
   consume the shared helper. All three are `'use client'` and reach
   for `useI18n()` for the dictionary.
@@ -311,7 +350,7 @@ Unblocking notes for the follow-up PR:
 - Schema is already in place: `LoadPhoto.annotation_storage_key`
   (nullable) lives at `prisma/schema.prisma:386`, written nowhere.
 - Photo-flow entry point is `src/app/operator/[site]/load/[id]/
-  photo-input.tsx` — current contract is capture → R2 PUT → confirm.
+photo-input.tsx` — current contract is capture → R2 PUT → confirm.
   Annotation slots in between R2 PUT (raw) and confirm; the `confirm`
   endpoint at `src/app/api/photos/confirm/route.ts` already accepts
   the LoadPhoto row write — extend it (or add a sibling `/annotate`
@@ -379,8 +418,9 @@ credentials) pulling the next 7 days of scheduled hauls and idempotently
 upserting them into `expected_loads`. Stale rows in the same window
 are flagged `cancelled_at = now` (NOT deleted — preserves audit trail).
 Failures publish to `dr3-vision-system` ntfy with a per-site fingerprint
-+ 30-min cooldown. No per-haul alerts (CLAUDE.md hard rule #5 +
-ADR-0037 — system-level only).
+
+- 30-min cooldown. No per-haul alerts (CLAUDE.md hard rule #5 +
+  ADR-0037 — system-level only).
 
 #### Added
 
@@ -452,11 +492,11 @@ ADR-0037 — system-level only).
 - `Dockerfile` runner stage — copies `/app/dist`, `node_modules/playwright`,
   and `node_modules/playwright-core` from the builder so the cron
   container can `require('./dist/mymrc')` and `import { chromium }
-  from 'playwright'` at runtime. Browser binaries already present
+from 'playwright'` at runtime. Browser binaries already present
   via the `mcr.microsoft.com/playwright:v1.48.0-jammy` base image.
   Scripts/ COPY comment block updated to mention the new wrappers.
 - `docker-compose.yml` — new `mymrc-scrape` service (`image:
-  dr3-vision-app:local`, `command: ['node', 'scripts/mymrc-cron.mjs']`,
+dr3-vision-app:local`, `command: ['node', 'scripts/mymrc-cron.mjs']`,
   `restart: unless-stopped`). Depends on postgres-healthy +
   migrate-completed-successfully. Optional env_files for
   `mymrc.env` (credentials) and `ntfy.env` (alert publisher) so the
@@ -701,10 +741,10 @@ panel can't help bootstrap when nobody has logged in yet).
   `https://login.microsoftonline.com/<tenant-id>/v2.0/`; Microsoft's
   OIDC discovery returns the issuer without a trailing slash. Auth.js
   refused with `"response" body "issuer" does not match
-  "expectedIssuer"` and rendered a generic "Server error" page. Stripped
+"expectedIssuer"` and rendered a generic "Server error" page. Stripped
   the slash, added a callout in §2 + a troubleshooting note in §6.
 - **Container restart vs. recreate.** Step 5 said `docker compose
-  restart`. That stops/starts the existing container, which keeps the
+restart`. That stops/starts the existing container, which keeps the
   pre-existing (empty) env baked in from create time — new env_file
   values never load. Switched to `up -d --force-recreate --no-deps app`
   with the explanation. Step 7 (rotation) updated to match.

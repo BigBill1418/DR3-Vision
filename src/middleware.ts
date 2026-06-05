@@ -7,11 +7,12 @@ import { authConfig } from '@/lib/auth.config';
 // `auth.ts`, which would pull Prisma into the edge bundle and fail
 // the middleware build.
 
-const PUBLIC_PATHS = new Set<string>([
-  '/',
-  '/login',
-  '/healthz',
-]);
+// NOTE: '/' is NOT public — the root route is the authenticated Vision Dashboard
+// (ADR-0020, T-107). page.tsx self-gates too, so this is defense-in-depth.
+// '/metrics' IS public at the middleware layer so Prometheus can scrape it; the
+// route handler itself is the real gate (404 on any request carrying a
+// cf-connecting-ip header, i.e. anything via the public Cloudflare tunnel — T-109).
+const PUBLIC_PATHS = new Set<string>(['/login', '/healthz', '/metrics']);
 
 function isPublic(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
@@ -30,13 +31,28 @@ const { auth } = NextAuth(authConfig);
 
 export default auth((req) => {
   const path = req.nextUrl.pathname;
-  if (isPublic(path)) return NextResponse.next();
+
+  // Request-id correlation (ADR-0022 §3, T-108). Mint an edge-safe id (or honor
+  // an inbound one from an upstream proxy/trace) and forward it to downstream
+  // Node handlers (which build a child logger from it) AND echo it on the
+  // response. crypto.randomUUID() is available globally on the edge runtime.
+  const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
+  const forwardHeaders = new Headers(req.headers);
+  forwardHeaders.set('x-request-id', requestId);
+  const withId = (res: NextResponse): NextResponse => {
+    res.headers.set('x-request-id', requestId);
+    return res;
+  };
+
+  if (isPublic(path)) {
+    return withId(NextResponse.next({ request: { headers: forwardHeaders } }));
+  }
   if (!req.auth) {
     const loginUrl = new URL('/login', req.url);
     loginUrl.searchParams.set('next', path);
-    return NextResponse.redirect(loginUrl);
+    return withId(NextResponse.redirect(loginUrl));
   }
-  return NextResponse.next();
+  return withId(NextResponse.next({ request: { headers: forwardHeaders } }));
 });
 
 export const config = {
@@ -44,7 +60,5 @@ export const config = {
   // manifest, the Service Worker bundle (Serwist), and any in-band
   // sw-* worker chunks. These need to be served as public assets
   // for the PWA install + offline behavior to work.
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|manifest\\.json|sw\\.js|swe-worker-).*)',
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|manifest\\.json|sw\\.js|swe-worker-).*)'],
 };
