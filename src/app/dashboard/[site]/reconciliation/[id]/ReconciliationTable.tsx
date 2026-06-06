@@ -102,7 +102,7 @@ export function ReconciliationTable({ siteCode, items }: Props) {
         return <CategoryGroup key={key} statusKey={key} rows={rows} siteCode={siteCode} />;
       })}
       {items.length === 0 ? (
-        <p className="rounded-md bg-dr3-green-dark/30 px-4 py-3 text-sm text-dr3-cream/70">
+        <p className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3 text-sm text-dr3-mist-dim">
           No items in this session.
         </p>
       ) : null}
@@ -133,12 +133,12 @@ function CategoryGroup({
       else if (sortKey === 'units')
         cmp = numberCmp(
           a.external_unit_count ?? a.dr3_unit_count,
-          b.external_unit_count ?? b.dr3_unit_count
+          b.external_unit_count ?? b.dr3_unit_count,
         );
       else if (sortKey === 'weight')
         cmp = numberCmp(
           a.external_weight_lbs ?? a.dr3_weight_lbs,
-          b.external_weight_lbs ?? b.dr3_weight_lbs
+          b.external_weight_lbs ?? b.dr3_weight_lbs,
         );
       return asc ? cmp : -cmp;
     });
@@ -161,13 +161,13 @@ function CategoryGroup({
       <header className="flex items-baseline justify-between">
         <h3 className="text-lg font-semibold">
           {STATUS_LABEL[statusKey]}{' '}
-          <span className="text-sm font-normal text-dr3-cream/70">({rows.length})</span>
+          <span className="text-sm font-normal text-dr3-mist-dim">({rows.length})</span>
         </h3>
       </header>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wide text-dr3-cream/70">
+            <tr className="text-left text-xs uppercase tracking-wide text-dr3-mist-dim">
               <SortHeader
                 label="Haul ID"
                 active={sortKey === 'haul'}
@@ -223,7 +223,7 @@ function SortHeader({
       <button
         type="button"
         onClick={onClick}
-        className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-dr3-cream/70 hover:text-dr3-cream"
+        className="inline-flex items-center gap-1 text-xs uppercase tracking-wide text-dr3-mist-dim hover:text-dr3-cyan"
       >
         {label}
         {active ? <span aria-hidden>{asc ? '▲' : '▼'}</span> : null}
@@ -246,7 +246,7 @@ function ItemRow({ row, siteCode }: { row: SerializableItem; siteCode: string })
   const [showNotes, setShowNotes] = useState(false);
   const [notes, setNotes] = useState<string>(row.resolution_notes ?? '');
   const [localResolution, setLocalResolution] = useState<ResolutionKey>(
-    (row.resolution as ResolutionKey) ?? 'unresolved'
+    (row.resolution as ResolutionKey) ?? 'unresolved',
   );
 
   const submitResolution = async (choice: Exclude<ResolutionKey, 'unresolved'>) => {
@@ -274,7 +274,10 @@ function ItemRow({ row, siteCode }: { row: SerializableItem; siteCode: string })
 
   return (
     <>
-      <tr className="border-t border-dr3-cream/10" data-testid={`reconciliation-row-${row.id}`}>
+      <tr
+        className="border-t border-dr3-steel-light/20"
+        data-testid={`reconciliation-row-${row.id}`}
+      >
         <td className="px-2 py-2 font-mono text-xs">{row.external_haul_id}</td>
         <td className="px-2 py-2">{row.external_delivery_date ?? '—'}</td>
         <td className="px-2 py-2">{row.external_source_name ?? '—'}</td>
@@ -310,13 +313,13 @@ function ItemRow({ row, siteCode }: { row: SerializableItem; siteCode: string })
             <button
               type="button"
               onClick={() => setShowNotes((v) => !v)}
-              className="text-[10px] text-dr3-cream/60 underline-offset-4 hover:text-dr3-cream hover:underline"
+              className="text-[10px] text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             >
               notes
             </button>
           </div>
           {localResolution !== 'unresolved' ? (
-            <p className="mt-1 text-[10px] text-dr3-cream/60">
+            <p className="mt-1 text-[10px] text-dr3-mist-dim">
               {RESOLUTION_LABEL[localResolution]}
             </p>
           ) : null}
@@ -330,7 +333,7 @@ function ItemRow({ row, siteCode }: { row: SerializableItem; siteCode: string })
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional notes (saved with the next resolution click)"
               rows={2}
-              className="w-full rounded-md bg-dr3-green-dark/30 px-2 py-1 text-xs text-dr3-cream"
+              className="w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-xs text-dr3-mist"
               data-testid={`resolve-notes-${row.id}`}
             />
           </td>
@@ -368,8 +371,8 @@ function ResolveButton({
       data-testid={testId}
       className={`rounded-md px-2 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
         active
-          ? 'bg-dr3-chartreuse text-dr3-ink'
-          : 'bg-dr3-green-dark/50 text-dr3-cream hover:bg-dr3-green-dark/70'
+          ? 'bg-dr3-cyan text-dr3-space'
+          : 'bg-dr3-steel/40 text-dr3-mist hover:bg-dr3-steel/60'
       }`}
     >
       {label}

@@ -29,12 +29,12 @@ export function LoadsPoller() {
   }, [router, refreshing]);
 
   return (
-    <div className="flex items-center gap-2 text-xs text-dr3-cream/60" aria-live="polite">
+    <div className="flex items-center gap-2 text-xs text-dr3-mist-dim" aria-live="polite">
       <span
         className={
           refreshing
-            ? 'inline-block h-2 w-2 animate-pulse rounded-full bg-dr3-chartreuse'
-            : 'inline-block h-2 w-2 rounded-full bg-dr3-green'
+            ? 'inline-block h-2 w-2 animate-pulse rounded-full bg-dr3-cyan-bright'
+            : 'inline-block h-2 w-2 rounded-full bg-dr3-cyan'
         }
         aria-hidden="true"
       />

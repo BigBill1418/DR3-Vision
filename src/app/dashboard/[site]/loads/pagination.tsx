@@ -41,24 +41,24 @@ export function Pagination({ page, totalPages }: Props) {
   return (
     <nav
       aria-label={t('loads.pagination_of', { page, total: totalPages })}
-      className="flex items-center justify-between gap-4 rounded-lg bg-dr3-green-dark/30 px-4 py-3"
+      className="flex items-center justify-between gap-4 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3"
     >
       <button
         type="button"
         onClick={() => goTo(page - 1)}
         disabled={prevDisabled}
-        className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-md bg-dr3-steel/40 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:bg-dr3-steel/60 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {t('loads.pagination_prev')}
       </button>
-      <span className="text-sm text-dr3-cream/80">
+      <span className="text-sm text-dr3-mist-dim">
         {t('loads.pagination_of', { page, total: totalPages })}
       </span>
       <button
         type="button"
         onClick={() => goTo(page + 1)}
         disabled={nextDisabled}
-        className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-md bg-dr3-steel/40 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:bg-dr3-steel/60 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {t('loads.pagination_next')}
       </button>

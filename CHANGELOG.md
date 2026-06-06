@@ -5,6 +5,36 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Manager DASHBOARD sub-pages re-themed to the logo-keyed DARK identity
+
+Converted every manager-portal surface under `src/app/dashboard/**` from the
+legacy light green/cream palette to the DR3-Vision logo-keyed dark-space/cyan
+theme (the same tokens the themed home tiles use: `dr3-space`, `dr3-space-2`,
+`dr3-cyan`, `dr3-mist`, `dr3-steel-light`, etc., already in `tailwind.config.ts`).
+
+- **Pages re-skinned (20 files):** the site picker (`dashboard/page.tsx`), the
+  per-site dock view, load list + load detail, compliance grid + tiles +
+  period picker, reconciliation landing + per-session table, the exports surface
+  (`ExportsClient`, `BonusReports`), and the dock/loads pollers.
+- **Surfaces:** page base `bg-dr3-space`; cards/filters/tables raised to
+  `bg-dr3-space-2` with `border border-dr3-steel-light/25`; body text
+  `text-dr3-mist`, secondary `text-dr3-mist-dim`.
+- **CTAs/active controls:** chartreuse/green → `bg-dr3-cyan text-dr3-space`
+  (hover `bg-dr3-cyan-bright`); focus rings → `ring-dr3-cyan`. Dark text only
+  ever sits on a bright cyan/emerald/amber fill — no dark-on-dark.
+- **Status semantics preserved (not flattened to cyan):** compliance metric
+  buckets and the load-row / reconciliation status badges keep ok/warn/bad as
+  emerald/amber/rose, re-tuned for legibility on the dark field; the in-flight
+  "Live" pills use cyan. Reconciliation category washes (emerald/amber/rose
+  700/900) and the upload error/resume alert washes (red/amber-900) are
+  unchanged — they already read on dark.
+- **Tables/lists:** zebra/dividers → `divide-dr3-steel-light/20`, headers
+  `text-dr3-mist-dim` w/ cyan hover; native `<select>` option list keeps
+  `text-dr3-ink` (renders on the OS-default light popup, not a dark surface).
+- Scope strictly `dashboard/**`; `operator/**`, `page.tsx`, and `_components/**`
+  untouched. Verified: `npm run lint` clean, `tsc --noEmit` clean, dashboard
+  vitest 4/4 green.
+
 ### 2026-06-06 — Payroll PDF re-themed RED/BLACK + co-branded with the official SVdP logo
 
 Re-styled the monthly processor-bonus report (the signed payroll PDF) for print.

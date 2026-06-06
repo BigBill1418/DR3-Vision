@@ -51,18 +51,18 @@ export default async function ReconciliationLandingPage({ params }: Props) {
   });
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-5xl flex-col gap-8">
         <Link
           href={`/dashboard/${siteCode}`}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           data-testid="reconciliation-back-link"
         >
           ← {gate.ctx.siteName} dock
         </Link>
         <header className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">MyMRC reconciliation</h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             {gate.ctx.siteName} — upload the monthly MyMRC CSV to reconcile against DR3-Vision
             loads.
           </p>
@@ -73,7 +73,7 @@ export default async function ReconciliationLandingPage({ params }: Props) {
         <section className="flex flex-col gap-3" data-testid="reconciliation-history">
           <h2 className="text-xl font-semibold">Prior uploads</h2>
           {sessions.length === 0 ? (
-            <p className="rounded-md bg-dr3-green-dark/30 px-4 py-3 text-sm text-dr3-cream/70">
+            <p className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3 text-sm text-dr3-mist-dim">
               No uploads yet for {gate.ctx.siteName}. Upload the first monthly MyMRC CSV above.
             </p>
           ) : (
@@ -82,30 +82,28 @@ export default async function ReconciliationLandingPage({ params }: Props) {
                 <li key={s.id}>
                   <Link
                     href={`/dashboard/${siteCode}/reconciliation/${s.id}`}
-                    className="block rounded-md bg-dr3-green-dark/40 px-4 py-3 transition-colors hover:bg-dr3-green-dark/70"
+                    className="block rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3 transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
                     data-testid={`reconciliation-session-${s.id}`}
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <code className="break-all text-sm font-medium text-dr3-cream">
+                      <code className="break-all text-sm font-medium text-dr3-mist">
                         {s.filename}
                       </code>
-                      <span className="text-xs text-dr3-cream/70">
+                      <span className="text-xs text-dr3-mist-dim">
                         {new Date(s.uploaded_at).toISOString().slice(0, 10)} ·{' '}
                         {fmtDate(s.period_start)}–{fmtDate(s.period_end)}
                       </span>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-dr3-cream/80">
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-dr3-mist-dim">
                       <span>{s.total_rows} rows</span>
                       <span className="text-emerald-300">{s.match_clean_count} clean</span>
                       <span className="text-amber-300">{s.weight_mismatch_count} weight</span>
                       <span className="text-amber-300">{s.count_mismatch_count} count</span>
-                      <span className="text-rose-300">
-                        {s.missing_in_dr3_count} missing-in-dr3
-                      </span>
+                      <span className="text-rose-300">{s.missing_in_dr3_count} missing-in-dr3</span>
                       <span className="text-rose-300">
                         {s.missing_in_mymrc_count} missing-in-mymrc
                       </span>
-                      <span className="text-dr3-cream/60">{s.resolved_count} resolved</span>
+                      <span className="text-dr3-mist-dim">{s.resolved_count} resolved</span>
                     </div>
                   </Link>
                 </li>
@@ -120,14 +118,14 @@ export default async function ReconciliationLandingPage({ params }: Props) {
 
 function ForbiddenSurface({ siteCode }: { siteCode: string }) {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
-      <p className="mt-2 text-dr3-cream/70">
+      <p className="mt-2 text-dr3-mist-dim">
         You don&apos;t have access to reconcile {siteCode} data.
       </p>
       <Link
         href="/dashboard"
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
       >
         Back to your sites
       </Link>

@@ -132,12 +132,12 @@ export function LoadsFilters({
 
   return (
     <div
-      className="flex flex-col gap-4 rounded-lg bg-dr3-green-dark/30 p-4"
+      className="flex flex-col gap-4 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4"
       aria-busy={isPending}
     >
       {/* Range — segmented buttons */}
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+        <span className="text-xs uppercase tracking-wide text-dr3-mist-dim">
           {t('loads.filter_label_date_range')}
         </span>
         <div className="flex flex-wrap gap-2">
@@ -150,8 +150,8 @@ export function LoadsFilters({
               aria-pressed={range === value}
               className={
                 range === value
-                  ? 'rounded-md bg-dr3-green px-3 py-1.5 text-sm font-semibold text-dr3-ink disabled:opacity-60'
-                  : 'rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:opacity-60'
+                  ? 'rounded-md bg-dr3-cyan px-3 py-1.5 text-sm font-semibold text-dr3-space disabled:opacity-60'
+                  : 'rounded-md bg-dr3-steel/40 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:bg-dr3-steel/60 disabled:opacity-60'
               }
             >
               {rangeLabels[value]}
@@ -160,24 +160,24 @@ export function LoadsFilters({
         </div>
         {range === 'custom' && (
           <div className="mt-2 flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
+            <label className="flex flex-col gap-1 text-xs text-dr3-mist-dim">
               {t('loads.range_from')}
               <input
                 type="date"
                 value={from}
                 disabled={isPending}
                 onChange={(e) => setCustomBound('from', e.target.value)}
-                className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-sm text-dr3-cream"
+                className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-sm text-dr3-mist"
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
+            <label className="flex flex-col gap-1 text-xs text-dr3-mist-dim">
               {t('loads.range_to')}
               <input
                 type="date"
                 value={to}
                 disabled={isPending}
                 onChange={(e) => setCustomBound('to', e.target.value)}
-                className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-sm text-dr3-cream"
+                className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-sm text-dr3-mist"
               />
             </label>
           </div>
@@ -186,7 +186,7 @@ export function LoadsFilters({
 
       {/* Status — toggle chips */}
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+        <span className="text-xs uppercase tracking-wide text-dr3-mist-dim">
           {t('loads.filter_label_status')}
         </span>
         <div className="flex flex-wrap gap-2">
@@ -201,8 +201,8 @@ export function LoadsFilters({
                 aria-pressed={active}
                 className={
                   active
-                    ? 'rounded-full bg-dr3-chartreuse px-3 py-1 text-xs font-semibold text-dr3-ink disabled:opacity-60'
-                    : 'rounded-full bg-dr3-green-dark/60 px-3 py-1 text-xs font-medium text-dr3-cream/80 hover:bg-dr3-green-dark/80 disabled:opacity-60'
+                    ? 'rounded-full bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space disabled:opacity-60'
+                    : 'rounded-full bg-dr3-steel/40 px-3 py-1 text-xs font-medium text-dr3-mist-dim hover:bg-dr3-steel/60 disabled:opacity-60'
                 }
               >
                 {loadStatusLabel(s, dict)}
@@ -260,12 +260,12 @@ function FilterSelect({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs uppercase tracking-wide text-dr3-cream/60">{label}</span>
+      <span className="text-xs uppercase tracking-wide text-dr3-mist-dim">{label}</span>
       <select
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
+        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-2 text-sm text-dr3-mist disabled:opacity-60"
       >
         <option value="">{allLabel}</option>
         {options.map((o) => (

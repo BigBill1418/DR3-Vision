@@ -57,12 +57,12 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
   const isAssigned = session.user.primary_site_id === site.id;
   if (!isAdmin && !isAssigned) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
-        <p className="mt-2 text-dr3-cream/70">You don&apos;t have access to {site.name}.</p>
+        <p className="mt-2 text-dr3-mist-dim">You don&apos;t have access to {site.name}.</p>
         <Link
           href="/dashboard"
-          className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           Back to your sites
         </Link>
@@ -137,11 +137,11 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
   const stageLabelText = await stageLabelForCurrentLocale(load.status);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-3xl flex-col gap-6">
         <Link
           href={`/dashboard/${site.code}`}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           ← {site.name} dock
         </Link>
@@ -150,30 +150,29 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
           <h1 className="text-2xl font-semibold">
             BOL <span className="font-mono">{load.bol_number ?? '—'}</span>
           </h1>
-          <p className="text-sm text-dr3-cream/80">
-            {load.source?.name ?? 'Unknown source'} ·{' '}
-            {load.transporter?.name ?? 'Unknown carrier'}
+          <p className="text-sm text-dr3-mist-dim">
+            {load.source?.name ?? 'Unknown source'} · {load.transporter?.name ?? 'Unknown carrier'}
           </p>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             Operator: {load.assigned_operator?.name ?? 'Unassigned'}
           </p>
         </header>
 
-        <section className="flex flex-col gap-2 rounded-lg bg-dr3-green-dark/40 p-4">
+        <section className="flex flex-col gap-2 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4">
           <div className="flex items-baseline justify-between gap-3">
-            <span className="text-sm uppercase tracking-wide text-dr3-cream/60">Status</span>
-            <span className="rounded-full bg-dr3-green/30 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide">
+            <span className="text-sm uppercase tracking-wide text-dr3-mist-dim">Status</span>
+            <span className="rounded-full bg-dr3-cyan/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-dr3-cyan ring-1 ring-dr3-cyan/30">
               {stageLabelText}
             </span>
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-            <dt className="text-dr3-cream/60">Arrived</dt>
+            <dt className="text-dr3-mist-dim">Arrived</dt>
             <dd className="text-right">
               {load.arrived_at
                 ? `${formatDate(load.arrived_at)} ${formatTime(load.arrived_at)}`
                 : '—'}
             </dd>
-            <dt className="text-dr3-cream/60">{isActive ? 'Elapsed' : 'Unload duration'}</dt>
+            <dt className="text-dr3-mist-dim">{isActive ? 'Elapsed' : 'Unload duration'}</dt>
             <dd className="text-right">
               {isActive && load.arrived_at ? (
                 <ElapsedTime since={load.arrived_at.toISOString()} />
@@ -187,28 +186,28 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
             </dd>
             {load.weight_lbs != null && (
               <>
-                <dt className="text-dr3-cream/60">Weight</dt>
+                <dt className="text-dr3-mist-dim">Weight</dt>
                 <dd className="text-right tabular-nums">{load.weight_lbs.toLocaleString()} lbs</dd>
               </>
             )}
             {load.total_units != null && (
               <>
-                <dt className="text-dr3-cream/60">Total units</dt>
+                <dt className="text-dr3-mist-dim">Total units</dt>
                 <dd className="text-right tabular-nums">
                   {load.total_units}
                   {load.count_mode != null && (
-                    <span className="ml-2 text-xs text-dr3-cream/60">({load.count_mode})</span>
+                    <span className="ml-2 text-xs text-dr3-mist-dim">({load.count_mode})</span>
                   )}
                 </dd>
               </>
             )}
             {load.rejection_category != null && (
               <>
-                <dt className="text-dr3-cream/60">Rejection</dt>
+                <dt className="text-dr3-mist-dim">Rejection</dt>
                 <dd className="text-right">{load.rejection_category}</dd>
                 {load.rejection_note && (
                   <>
-                    <dt className="text-dr3-cream/60">Note</dt>
+                    <dt className="text-dr3-mist-dim">Note</dt>
                     <dd className="col-span-1 text-right">{load.rejection_note}</dd>
                   </>
                 )}
@@ -219,20 +218,20 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
 
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">
-            Photos <span className="text-sm text-dr3-cream/60">({load.load_photos.length})</span>
+            Photos <span className="text-sm text-dr3-mist-dim">({load.load_photos.length})</span>
           </h2>
           {load.load_photos.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">No photos captured yet.</p>
+            <p className="text-sm text-dr3-mist-dim">No photos captured yet.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {load.load_photos.map((p) => (
                 <li
                   key={p.id}
-                  className="flex items-baseline justify-between gap-3 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm"
+                  className="flex items-baseline justify-between gap-3 rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-sm"
                 >
                   <span className="font-medium capitalize">{p.kind.replace('_', ' ')}</span>
                   <span
-                    className="ml-3 max-w-[60%] truncate text-right font-mono text-xs text-dr3-cream/70"
+                    className="ml-3 max-w-[60%] truncate text-right font-mono text-xs text-dr3-mist-dim"
                     title={p.storage_key}
                   >
                     {photoCaption(p.storage_key)}
@@ -245,21 +244,21 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
 
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">
-            Stacks <span className="text-sm text-dr3-cream/60">({load.load_stacks.length})</span>
+            Stacks <span className="text-sm text-dr3-mist-dim">({load.load_stacks.length})</span>
           </h2>
           {load.load_stacks.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">No stacks counted yet.</p>
+            <p className="text-sm text-dr3-mist-dim">No stacks counted yet.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {load.load_stacks.map((s) => (
                 <li
                   key={s.id}
-                  className="flex items-baseline justify-between rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm"
+                  className="flex items-baseline justify-between rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-sm"
                 >
                   <span>Stack {s.stack_index}</span>
                   <span className="tabular-nums">
                     {s.unit_count} units{' '}
-                    <span className="text-xs text-dr3-cream/60">({s.count_mode})</span>
+                    <span className="text-xs text-dr3-mist-dim">({s.count_mode})</span>
                   </span>
                 </li>
               ))}
@@ -270,24 +269,24 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">
             Concerns{' '}
-            <span className="text-sm text-dr3-cream/60">({load.load_concerns.length})</span>
+            <span className="text-sm text-dr3-mist-dim">({load.load_concerns.length})</span>
           </h2>
           {load.load_concerns.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">No concerns raised.</p>
+            <p className="text-sm text-dr3-mist-dim">No concerns raised.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {load.load_concerns.map((c) => (
                 <li
                   key={c.id}
-                  className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm"
+                  className="rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-sm"
                 >
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="font-medium capitalize">{c.category}</span>
-                    <span className="text-xs text-dr3-cream/60">
+                    <span className="text-xs text-dr3-mist-dim">
                       raised by {c.raised_by_user_id ?? 'unknown'}
                     </span>
                   </div>
-                  {c.note && <p className="mt-1 text-dr3-cream/80">{c.note}</p>}
+                  {c.note && <p className="mt-1 text-dr3-mist-dim">{c.note}</p>}
                 </li>
               ))}
             </ul>
@@ -296,10 +295,10 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
 
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">
-            Audit <span className="text-sm text-dr3-cream/60">(last {audit.length})</span>
+            Audit <span className="text-sm text-dr3-mist-dim">(last {audit.length})</span>
           </h2>
           {audit.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">No audit entries.</p>
+            <p className="text-sm text-dr3-mist-dim">No audit entries.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {audit.map((a) => {
@@ -311,21 +310,21 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
                 return (
                   <li
                     key={a.id}
-                    className="flex items-baseline justify-between gap-3 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-xs"
+                    className="flex items-baseline justify-between gap-3 rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-xs"
                   >
                     <span>
-                      <span className="font-mono text-dr3-cream/70">{a.action}</span>{' '}
-                      <span className="text-dr3-cream/80">{actor}</span>
+                      <span className="font-mono text-dr3-mist-dim">{a.action}</span>{' '}
+                      <span className="text-dr3-mist-dim">{actor}</span>
                       {fromStatus && toStatus && (
-                        <span className="ml-2 text-dr3-cream/70">
+                        <span className="ml-2 text-dr3-mist-dim">
                           {fromStatus} → {toStatus}
                         </span>
                       )}
                       {!fromStatus && toStatus && (
-                        <span className="ml-2 text-dr3-cream/70">{toStatus}</span>
+                        <span className="ml-2 text-dr3-mist-dim">{toStatus}</span>
                       )}
                     </span>
-                    <span className="font-mono text-dr3-cream/60">
+                    <span className="font-mono text-dr3-mist-dim">
                       {formatTime(a.created_at)} · {formatDate(a.created_at)}
                     </span>
                   </li>

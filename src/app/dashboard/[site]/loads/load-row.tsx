@@ -16,22 +16,24 @@ import { loadStatusLabel } from '@/lib/loads/labels';
 // `@/lib/loads/labels` — same map as the filter chips and (with stage
 // variants) the dock tile.
 
-// Color buckets per the T-011 brief:
-//   green  — completed (processed)
-//   orange — verified (manager-gate clear, awaiting MyMRC)
-//   red    — rejected
-//   neutral— everything else (submitted, in-flight)
+// Color buckets per the T-011 brief, on the dark Vision theme the status
+// badges stay as semantic status hues (filled, dark text) so they read at
+// a glance against the steel chrome:
+//   emerald — completed (processed)
+//   amber   — verified (manager-gate clear, awaiting MyMRC)
+//   rose    — rejected
+//   neutral — everything else (submitted, in-flight)
 function statusBadgeClass(status: LoadStatus): string {
   if (status === LoadStatus.processed) {
-    return 'bg-dr3-green text-dr3-ink';
+    return 'bg-emerald-400 text-dr3-space';
   }
   if (status === LoadStatus.verified) {
-    return 'bg-orange-400 text-dr3-ink';
+    return 'bg-amber-400 text-dr3-space';
   }
   if (status === LoadStatus.rejected) {
-    return 'bg-red-500 text-white';
+    return 'bg-rose-500 text-white';
   }
-  return 'bg-dr3-cream/20 text-dr3-cream';
+  return 'bg-dr3-steel/60 text-dr3-mist';
 }
 
 type Props = {
@@ -57,26 +59,26 @@ export function LoadRow({ siteCode, load }: Props) {
     <li>
       <Link
         href={`/dashboard/${siteCode}/load/${load.id}`}
-        className="grid grid-cols-12 gap-3 px-4 py-3 transition-colors hover:bg-dr3-green-dark/60 focus:bg-dr3-green-dark/60 focus:outline-none"
+        className="grid grid-cols-12 gap-3 px-4 py-3 transition-colors hover:bg-dr3-steel/40 focus:bg-dr3-steel/40 focus:outline-none"
       >
-        <span className="col-span-12 text-sm font-medium tabular-nums text-dr3-cream sm:col-span-3">
+        <span className="col-span-12 text-sm font-medium tabular-nums text-dr3-mist sm:col-span-3">
           {arrivalLabel}
         </span>
-        <span className="col-span-6 truncate text-sm text-dr3-cream/90 sm:col-span-2">
+        <span className="col-span-6 truncate text-sm text-dr3-mist sm:col-span-2">
           {load.source_name ?? '—'}
         </span>
-        <span className="col-span-6 truncate text-sm text-dr3-cream/80 sm:col-span-2">
+        <span className="col-span-6 truncate text-sm text-dr3-mist-dim sm:col-span-2">
           {load.operator_name ?? (
-            <span className="text-dr3-cream/50">{t('loads.row_unassigned')}</span>
+            <span className="text-dr3-mist-dim/70">{t('loads.row_unassigned')}</span>
           )}
         </span>
-        <span className="col-span-6 truncate text-sm text-dr3-cream/80 sm:col-span-2">
+        <span className="col-span-6 truncate text-sm text-dr3-mist-dim sm:col-span-2">
           {load.transporter_name ?? '—'}
         </span>
-        <span className="col-span-3 truncate font-mono text-xs text-dr3-cream/80 sm:col-span-1">
+        <span className="col-span-3 truncate font-mono text-xs text-dr3-mist-dim sm:col-span-1">
           {load.bol_number ?? '—'}
         </span>
-        <span className="col-span-2 text-right text-sm tabular-nums text-dr3-cream sm:col-span-1">
+        <span className="col-span-2 text-right text-sm tabular-nums text-dr3-mist sm:col-span-1">
           {load.total_units ?? '—'}
         </span>
         <span className="col-span-12 sm:col-span-1">

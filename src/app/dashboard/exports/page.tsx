@@ -57,10 +57,10 @@ export default async function ExportsPage() {
   // render a friendly "ask an admin" instead of an empty picker.
   if (visibleSites.length === 0) {
     return (
-      <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+      <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
         <div className="mx-auto flex max-w-3xl flex-col gap-6">
           <PageHeader name={session.user.name ?? 'Manager'} role={session.user.role} />
-          <p className="rounded-md bg-dr3-green-dark/40 px-4 py-3 text-dr3-cream/80">
+          <p className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3 text-dr3-mist-dim">
             No sites are currently assigned to your account. Ask an admin to set your primary site
             before generating exports.
           </p>
@@ -72,7 +72,7 @@ export default async function ExportsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
         <PageHeader name={session.user.name ?? 'Manager'} role={session.user.role} />
         <ExportsClient sites={visibleSites} />
@@ -87,7 +87,7 @@ function PageHeader({ name, role }: { name: string; role: string }) {
   return (
     <header className="flex flex-col gap-1">
       <h1 className="text-3xl font-bold tracking-tight">Monthly exports</h1>
-      <p className="text-sm text-dr3-cream/70">
+      <p className="text-sm text-dr3-mist-dim">
         Signed in as <span className="font-semibold">{name}</span>{' '}
         <span className="capitalize">({role})</span>
       </p>
@@ -99,7 +99,7 @@ function BackLink() {
   return (
     <Link
       href={HOME_ROUTE}
-      className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+      className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
     >
       Back to dashboard
     </Link>

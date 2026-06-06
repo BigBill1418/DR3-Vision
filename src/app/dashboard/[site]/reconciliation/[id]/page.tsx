@@ -28,11 +28,11 @@ export default async function ReconciliationSessionPage({ params }: Props) {
     }
     if (gate.status === 404) notFound();
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>
         <Link
           href="/dashboard"
-          className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           Back to your sites
         </Link>
@@ -102,11 +102,11 @@ export default async function ReconciliationSessionPage({ params }: Props) {
   }));
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <Link
           href={`/dashboard/${siteCode}/reconciliation`}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           data-testid="reconciliation-session-back"
         >
           ← All uploads
@@ -114,13 +114,13 @@ export default async function ReconciliationSessionPage({ params }: Props) {
 
         <header className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">{session.filename}</h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             {gate.ctx.siteName} — uploaded{' '}
             {new Date(session.uploaded_at).toISOString().slice(0, 16).replace('T', ' ')} UTC ·
             period {fmtDate(session.period_start)} → {fmtDate(session.period_end)} · tolerance ±
             {session.weight_tolerance_pct.toString()}%
           </p>
-          <code className="break-all text-[10px] text-dr3-cream/50" title="content sha256">
+          <code className="break-all text-[10px] text-dr3-mist-dim/70" title="content sha256">
             sha256:{session.content_sha256}
           </code>
         </header>
@@ -185,12 +185,12 @@ function Tile({
         ? 'text-amber-300'
         : tone === 'bad'
           ? 'text-rose-300'
-          : 'text-dr3-cream';
+          : 'text-dr3-mist';
   return (
-    <div className="flex flex-col gap-0.5 rounded-md bg-dr3-green-dark/40 px-3 py-2">
-      <span className="text-[11px] uppercase tracking-wide text-dr3-cream/70">{label}</span>
+    <div className="flex flex-col gap-0.5 rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2">
+      <span className="text-[11px] uppercase tracking-wide text-dr3-mist-dim">{label}</span>
       <span className={`text-2xl font-semibold ${toneClass}`}>{value}</span>
-      {sub ? <span className="text-[10px] text-dr3-cream/60">{sub}</span> : null}
+      {sub ? <span className="text-[10px] text-dr3-mist-dim">{sub}</span> : null}
     </div>
   );
 }

@@ -214,17 +214,17 @@ export default async function CompliancePage({ params, searchParams }: Props) {
   });
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <Link
           href={`/dashboard/${site.code}`}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           {t('dashboard.back_to_site', { name: site.name })}
         </Link>
         <header className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">{t('compliance.heading')}</h1>
-          <p className="text-sm capitalize text-dr3-cream/70">
+          <p className="text-sm capitalize text-dr3-mist-dim">
             {t('compliance.subtitle', {
               name: site.name,
               jurisdiction: site.jurisdiction,
@@ -239,7 +239,7 @@ export default async function CompliancePage({ params, searchParams }: Props) {
           to={customTo ? toDateInput(customTo) : ''}
         />
 
-        <p className="text-xs text-dr3-cream/60">{t('compliance.in_app_only_note')}</p>
+        <p className="text-xs text-dr3-mist-dim">{t('compliance.in_app_only_note')}</p>
 
         <section
           aria-label={t('compliance.metrics_aria')}
@@ -329,12 +329,12 @@ function ForbiddenSurface({
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
-      <p className="mt-2 text-dr3-cream/70">{t('dashboard.forbidden_body', { name: siteCode })}</p>
+      <p className="mt-2 text-dr3-mist-dim">{t('dashboard.forbidden_body', { name: siteCode })}</p>
       <Link
         href="/dashboard"
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
       >
         {t('dashboard.back_to_sites')}
       </Link>
