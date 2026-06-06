@@ -41,9 +41,11 @@ const activeKeys = (s: Session) =>
     .map((t) => t.key);
 
 describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
-  it('Bill (admin) sees Bonus + Exports + Admin active (ops/compliance/recon paused)', () => {
+  it('Bill (admin) sees Bonus + Exports + Admin + Observability active (ops/compliance/recon paused)', () => {
     const bill = makeSession('admin', EUGENE); // admin primary site is irrelevant
-    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin']);
+    // Observability lit up 2026-06-06 (admin-only); it lives in the COMING_SOON
+    // array so it trails the ACTIVE_TILES actives in registry order.
+    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'observability']);
   });
 
   it('Janette (Woodland manager) sees Bonus + Exports active, no Admin', () => {
@@ -87,8 +89,9 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'processor-workflow',
       'cip-capture',
       'mrc-api',
-      'observability',
     ]);
+    // 'observability' is no longer here — lit up 2026-06-06 (active, admin-only),
+    // so Rick (manager) doesn't see it at all.
   });
 
   it('the three paused tiles carry status coming-soon (2026-06-06 flip)', () => {

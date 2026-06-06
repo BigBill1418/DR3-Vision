@@ -167,9 +167,14 @@ const COMING_SOON_TILES: readonly DashboardTile[] = [
     label: 'Observability',
     description: 'System health, ingest status, and operational metrics.',
     icon: 'Activity',
-    route: '#',
-    status: 'coming-soon',
-    scope: 'manager+',
+    // Lit up 2026-06-06: the observability backend is fully wired (T-123) —
+    // Prometheus scrape, OTel traces → Tempo, errors → GlitchTip, Grafana
+    // dashboard. Grafana isn't publicly exposed, so the tile opens the fleet
+    // status surface for DR3 (reachable, CF-Access-gated). Admin-only; external
+    // route → opens in a new tab (see VisionTile).
+    route: 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision',
+    status: 'active',
+    scope: 'admin-only',
   },
 ];
 
