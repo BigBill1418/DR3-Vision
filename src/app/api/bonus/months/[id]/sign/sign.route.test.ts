@@ -234,11 +234,17 @@ describe('POST /api/bonus/months/[id]/sign — role gate', () => {
     expect(res.status).toBe(403);
   });
 
-  it('403 for Eugene manager (Rick)', async () => {
+  it('403 for Rick (Eugene mgr) requesting Woodland — site isolation', async () => {
+    // ADR-0019.2: Rick has Eugene bonus access but not Woodland; requesting the
+    // Woodland scope is denied at the gate (before any signature is recorded).
     const { POST } = await import('./route');
     seedMonth();
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
-    const res = await POST(makeReq(), { params });
+    const req = new Request('http://x/api/bonus/months/m1/sign?site=woodland', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1', 'user-agent': 'Vitest/1.0' },
+    });
+    const res = await POST(req, { params });
     expect(res.status).toBe(403);
   });
 });

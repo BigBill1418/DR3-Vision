@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { createEmployee, listEmployees, type ListEmployeesFilters } from '@/lib/bonus/employees';
 
 export const runtime = 'nodejs';
@@ -40,7 +40,7 @@ function actorFrom(req: Request, userId: string) {
 export async function POST(req: Request) {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

@@ -12,14 +12,14 @@
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { annualTotals, type AnnualEmployeeRow } from '@/lib/bonus/aggregates';
 import { formatCents } from '@/lib/bonus/calculator';
 import { appCurrentYear } from '@/lib/time';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Promise<{ year?: string }>;
+type SearchParams = Promise<{ year?: string; site?: string }>;
 
 /** Parse ?year= to a sane 4-digit year; default to the current Pacific year. */
 function parseYear(raw: string | undefined): number {
@@ -31,13 +31,13 @@ function parseYear(raw: string | undefined): number {
 }
 
 export default async function BonusAnnualPage({ searchParams }: { searchParams: SearchParams }) {
-  const gate = await checkBonusAccess();
+  const sp = await searchParams;
+  const gate = await tryBonusAccess(parseSiteCode(sp.site));
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus/annual');
     return <ForbiddenPage />;
   }
 
-  const sp = await searchParams;
   const year = parseYear(sp.year);
   const rows = await annualTotals(gate.ctx.siteId, year);
 
@@ -187,7 +187,7 @@ function ForbiddenPage() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">Access denied</h1>
       <p className="mt-2 text-dr3-mist-dim">
-        Bonus management is limited to Woodland managers and administrators.
+        Bonus management is limited to site managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}

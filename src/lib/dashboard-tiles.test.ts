@@ -10,13 +10,15 @@
 //   Bill   (admin)              → Bonus + Exports + Admin
 //   Janette(Woodland manager)   → Bonus + Exports (no Admin)
 //   Morena (both-sites manager) → same as Janette (primary_site_id = null)
-//   Rick   (Eugene manager)     → Exports only (NO Bonus, no Admin)
+//   Rick   (Eugene manager)     → Bonus + Exports (ADR-0019.2 §1; NO Admin)
+//
+// As of ADR-0019.2 (Eugene enablement, hard rule 6) the bonus tile matrix
+// expanded: EVERY manager now passes the bonus gate (Woodland, Eugene, and
+// California-ops null all reach at least one bonus site). The `woodlandSiteId`
+// arg is retained for back-compat but no longer load-bearing for the bonus tile.
 //
 // The paused tiles are still *visible* to every manager/admin, just in the
 // coming-soon group (asserted below).
-//
-// The bonus rule keys off Woodland's site id, so every call threads it in,
-// matching how the page resolves it from Prisma.
 
 import { describe, it, expect } from 'vitest';
 import type { Session } from 'next-auth';
@@ -61,10 +63,12 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     expect(canSeeTile(morena, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
 
-  it('Rick (Eugene manager) sees Exports active only — NO Bonus, no Admin', () => {
+  it('Rick (Eugene manager) now sees Bonus + Exports — ADR-0019.2 §1, NO Admin', () => {
+    // The bonus tile matrix expanded (hard rule 6): Rick (Eugene) passes the
+    // bonus gate. He still has no Admin & Audit (admin-only).
     const rick = makeSession('manager', EUGENE);
-    expect(activeKeys(rick)).toEqual(['exports']);
-    expect(canSeeTile(rick, tileByKey('bonus'), WOODLAND)).toBe(false);
+    expect(activeKeys(rick)).toEqual(['bonus', 'exports']);
+    expect(canSeeTile(rick, tileByKey('bonus'), WOODLAND)).toBe(true);
     expect(canSeeTile(rick, tileByKey('admin'), WOODLAND)).toBe(false);
   });
 
@@ -105,13 +109,14 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     expect(featured.map((t) => t.key)).toEqual(['bonus']);
   });
 
-  it('without a resolved Woodland id, a Woodland-bound manager loses bonus (fail-closed)', () => {
-    const janette = makeSession('manager', WOODLAND);
-    // null woodlandSiteId: primary_site_id 'site-woodland' !== null and !== null
-    expect(canSeeTile(janette, tileByKey('bonus'))).toBe(false);
-    // but a both-sites manager (null) still passes regardless of resolution
-    const morena = makeSession('manager', null);
-    expect(canSeeTile(morena, tileByKey('bonus'))).toBe(true);
+  it('bonus tile no longer depends on the resolved Woodland id (ADR-0019.2)', () => {
+    // The matrix expanded: every manager sees bonus regardless of the
+    // (now-unused) woodlandSiteId arg — Woodland, Eugene, and California-ops null.
+    expect(canSeeTile(makeSession('manager', WOODLAND), tileByKey('bonus'))).toBe(true);
+    expect(canSeeTile(makeSession('manager', EUGENE), tileByKey('bonus'))).toBe(true);
+    expect(canSeeTile(makeSession('manager', null), tileByKey('bonus'))).toBe(true);
+    // operators still never see it.
+    expect(canSeeTile(makeSession('operator', WOODLAND), tileByKey('bonus'))).toBe(false);
   });
 });
 

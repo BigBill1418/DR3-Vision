@@ -14,7 +14,7 @@
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { notFound, redirect } from 'next/navigation';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
@@ -102,10 +102,13 @@ interface EmployeeTotal {
 
 export default async function BonusMonthDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ site?: string }>;
 }) {
-  const gate = await checkBonusAccess();
+  const sp = await searchParams;
+  const gate = await tryBonusAccess(parseSiteCode(sp.site));
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus');
     return <ForbiddenPage />;

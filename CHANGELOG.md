@@ -5,40 +5,46 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-06 — Sprint 2 addendum Wave B: bonus PDF site-name + bi-weekly period naming + override attestation (T-209)
+### 2026-06-06 — Sprint 2 addendum Wave B: Eugene-aware access gate + Vision tile/site-picker (T-207, T-210)
 
-Re-titled the bonus PDF for the bi-weekly cadence (ADR-0019.1 §1) and made the
-signature attestation language adapt to how each slot was filled (ADR-0019.1 §4 /
-ADR-0019.2). Kept the existing red/black SVdP + DR3-Vision co-branded styling
-untouched — this is a content change, not a restyle. `tsc --noEmit`, `next lint
---max-warnings 0`, and the bonus `vitest` suite (238 tests, +6 new pdf-data
-specs) all clean; Woodland + Eugene Period 13 PDFs rendered and verified by eye.
+Made the bonus surface multi-site (Woodland + Eugene) per ADR-0019.2 §1/§6.
+`tsc --noEmit`, `next lint --max-warnings 0`, and the full `vitest` suite
+(598 tests) all clean.
 
-- **Title block.** Replaced the monthly "DR3 Woodland — Monthly Processor Bonus
-  Report / May 2026" header with the bi-weekly form
-  `DR3 [site] Bonus Report — Period N: <Mon D> – <Mon D>, <year>` plus a
-  `Pay date: <Mon D>, <year>` sub-line. Site-name driven (works for Woodland and
-  Eugene with no hardcoding). New pure `formatPeriodTitle()` in `pdf-data.ts`;
-  `bareSiteName()` strips the seeded "DR3 " prefix from `sites.name` so the
-  template's own "DR3 " prefix isn't doubled. Boundaries are `@db.Date` columns,
-  formatted in UTC per the `@/lib/time` storage invariant.
-- **Source-adaptive attestation.** New pure `buildAttestation()` branches on slot
-  source: primary-signed → standard attestation; manual override
-  (`*_override_actor_id` set, `*_auto_override_at` null) → "Signed by <actor>,
-  Administrator, on behalf of <natural signer>, <slot role>. Reason: <reason>";
-  auto override (`*_auto_override_at` not null) → same lead line + "System-applied
-  admin override per ADR-0019.1 escalation policy. <natural signer> did not sign
-  by 08:30 AM PT on <Tue date>." The natural signer per site is resolved from
-  `getSignatureChain()` (read-only) — facility/ops signer UUIDs → display names —
-  never hardcoded.
-- **Page wiring** (`src/app/internal/bonus-pdf/[month-id]/page.tsx`, URL segment
-  unchanged per ADR-0019.1 §7). Fetches the new `period_*` / `*_auto_override_at`
-  columns, resolves override-actor + auto-override-actor + natural-signer names in
-  one `user.findMany`, and renders the two attestation lines (the secondary
-  override sentence in red so payroll sees a non-primary signature at a glance).
-- **Reference sample.** Regenerated and committed
-  `public/brand/dr3-bonus-report-sample-eugene-period-13.pdf` (facility auto-
-  override + ops manual override) for ongoing visual reference.
+- **`src/lib/bonus/access.ts` reshaped (T-207).** New
+  `checkBonusAccess(session, requestedSite?): Promise<{allowed, sites}>` is the
+  single source of truth for the ADR-0019.2 §1 matrix: admin → both sites;
+  Woodland manager (Janette) → woodland; Eugene manager (Rick) → eugene;
+  California-ops manager (Morena, `primary_site_id=null`) → woodland only (no
+  Eugene); operator → denied. A `requestedSite` narrows the list and flips
+  `allowed:false` when out of reach. The manager's `primary_site_id` (a uuid) is
+  mapped to a site code via a single Prisma lookup — no hardcoded `'woodland'`
+  site logic. `requireBonusAccess(requestedSite?)` is now site-aware: it resolves
+  the EFFECTIVE site (explicit `?site=` → picked-site cookie → first allowed
+  site), loads that site row, and returns a `BonusContext` carrying `siteCode`,
+  `siteName`, and `allowedSites`. The old page-friendly `{ok,ctx}` variant was
+  renamed `tryBonusAccess`. New helpers: `parseSiteCode`, `siteFromRequest`.
+- **All bonus routes thread `?site=`.** Every `/api/bonus/**` route (and the
+  `/bonus/months/[id]/pdf` route) passes `siteFromRequest(req)` into
+  `requireBonusAccess`, so an admin's chosen site scopes the query and managers
+  stay confined to their own site. Cross-site month access by id 404s.
+- **Vision Dashboard bonus tile expanded (T-210).** `canSeeTile('bonus', …)` now
+  returns true for every manager (Woodland, Eugene, California-ops) — only the
+  matrix expands, the tile shape is unchanged (addendum hard rule 6). The
+  `woodlandSiteId` arg is retained but no longer load-bearing.
+- **Admin site picker + switch (T-210).** `/bonus` now server-detects multi-site
+  access: single-site users scope straight to their site; admins with no pick yet
+  get a themed site picker ("Choose a site: Woodland | Eugene"). The choice
+  persists in a `dr3_bonus_site` cookie (server actions in
+  `src/app/bonus/site-actions.ts`); the new `/bonus` layout shows a
+  "Site: <name> | switch" banner on every bonus route for multi-site admins.
+  New UI (`SitePicker`, `SiteSwitchBanner`, `layout.tsx`) matches the dark
+  dr3-space/cyan theme.
+- **Tests.** Rewrote `access.test.ts` for the new shape (full matrix +
+  requestedSite narrowing + effective-site resolution + deny paths). Updated the
+  bonus route tests and `dashboard-tiles.test.ts` to the expanded matrix (Rick
+  now reaches Eugene; "Rick → 403" became "Rick requesting Woodland → 403 /
+  Rick on Eugene → allowed").
 
 ### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 

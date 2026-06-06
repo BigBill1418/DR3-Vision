@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import {
   upsertDailyEntries,
   NoOpenPayPeriodError,
@@ -55,7 +55,7 @@ function parseEntryDate(iso: string | undefined): Date {
 export async function POST(req: Request) {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

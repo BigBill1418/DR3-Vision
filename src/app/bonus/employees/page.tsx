@@ -9,13 +9,13 @@
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { listEmployees, type EmployeeStatusFilter, type EmployeeSort } from '@/lib/bonus/employees';
 import { EmployeeManager, type EmployeeRow } from './EmployeeManager';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Promise<{ status?: string; sort?: string }>;
+type SearchParams = Promise<{ status?: string; sort?: string; site?: string }>;
 
 const STATUSES = ['active', 'inactive', 'all'] as const;
 const SORTS = ['name', 'status'] as const;
@@ -28,13 +28,13 @@ function parseSort(v: string | undefined): EmployeeSort {
 }
 
 export default async function BonusEmployeesPage({ searchParams }: { searchParams: SearchParams }) {
-  const gate = await checkBonusAccess();
+  const sp = await searchParams;
+  const gate = await tryBonusAccess(parseSiteCode(sp.site));
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus/employees');
     return <ForbiddenPage />;
   }
 
-  const sp = await searchParams;
   const status = parseStatus(sp.status);
   const sort = parseSort(sp.sort);
 
@@ -59,8 +59,8 @@ export default async function BonusEmployeesPage({ searchParams }: { searchParam
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Bonus Employees</h1>
           <p className="text-sm text-dr3-mist-dim">
-            Woodland processor roster ({gate.ctx.siteName}). Add, rename, and (de)activate the
-            employees whose daily mattress counts drive the monthly bonus.
+            {gate.ctx.siteName} processor roster. Add, rename, and (de)activate the employees whose
+            daily mattress counts drive the bonus.
           </p>
         </header>
 
@@ -142,7 +142,7 @@ function ForbiddenPage() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">Access denied</h1>
       <p className="mt-2 text-dr3-mist-dim">
-        Bonus management is limited to Woodland managers and administrators.
+        Bonus management is limited to site managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}

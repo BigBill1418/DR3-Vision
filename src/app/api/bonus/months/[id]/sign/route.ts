@@ -19,7 +19,7 @@
 // signature transaction, via the data layer).
 
 import { NextResponse } from 'next/server';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { recordSignature, recordStateGauge } from '@/lib/bonus/signatures';
 import { triggerPayrollDelivery } from '@/lib/bonus/payroll-delivery';
@@ -46,7 +46,7 @@ export async function POST(
 ): Promise<Response> {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

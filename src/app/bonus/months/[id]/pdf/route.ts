@@ -10,7 +10,7 @@
 // month must belong to the caller's Woodland site and must have a generated PDF.
 
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 
 export const runtime = 'nodejs';
@@ -32,12 +32,12 @@ function r2Client(): S3Client {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

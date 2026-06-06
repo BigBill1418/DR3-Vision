@@ -14,7 +14,7 @@
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { formatCents } from '@/lib/bonus/calculator';
 import {
   listBonusPayPeriods,
@@ -64,15 +64,15 @@ function signatureLabel(row: MonthListRow): string {
 export default async function BonusMonthsListPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>;
+  searchParams: Promise<{ filter?: string; site?: string }>;
 }) {
-  const gate = await checkBonusAccess();
+  const sp = await searchParams;
+  const gate = await tryBonusAccess(parseSiteCode(sp.site));
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus/months');
     return <ForbiddenPage />;
   }
 
-  const sp = await searchParams;
   const filter = parsePayPeriodFilter(sp.filter);
   const rows = await listBonusPayPeriods(gate.ctx.siteId, filter);
 
@@ -180,7 +180,7 @@ function ForbiddenPage() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-bold">Access restricted</h1>
       <p className="mt-2 max-w-md text-sm text-dr3-mist-dim">
-        Bonus management is limited to Woodland managers and administrators.
+        Bonus management is limited to site managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
