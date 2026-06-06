@@ -13,6 +13,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { generateBonusPdf } from '@/lib/bonus/pdf';
+import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { sendPayrollPdf } from '@/lib/m365-mail';
 import { log, newRequestId } from '@/lib/observability/logger';
 
@@ -27,13 +28,24 @@ export function triggerPayrollDelivery(monthId: string): void {
     try {
       await generateBonusPdf(monthId);
     } catch (err) {
-      log.error({ requestId, monthId, err }, '[payroll-delivery] PDF generation failed; skipping mail');
+      log.error(
+        { requestId, monthId, err },
+        '[payroll-delivery] PDF generation failed; skipping mail',
+      );
       return;
     }
     try {
       const month = await prisma.bonusPayPeriod.findUnique({
         where: { id: monthId },
-        select: { pdf_storage_key: true, period_start: true, amended_from_period_id: true },
+        select: {
+          pdf_storage_key: true,
+          period_start: true,
+          amended_from_period_id: true,
+          // Site-aware subject/body (Eugene must read "Eugene", not "Woodland").
+          // `sites.name` is seeded with the "DR3 " prefix; bareSiteName strips it
+          // so the copy reads the bare site name, matching the T-209 PDF title.
+          site: { select: { name: true } },
+        },
       });
       if (!month?.pdf_storage_key) {
         log.error(
@@ -48,7 +60,10 @@ export function triggerPayrollDelivery(monthId: string): void {
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
       const bucket = process.env['R2_BUCKET'];
       if (!accountId || !accessKeyId || !secretAccessKey || !bucket) {
-        log.warn({ requestId, monthId }, '[payroll-delivery] R2 not configured; cannot attach pdf for mail');
+        log.warn(
+          { requestId, monthId },
+          '[payroll-delivery] R2 not configured; cannot attach pdf for mail',
+        );
         return;
       }
       const r2 = new S3Client({
@@ -57,18 +72,21 @@ export function triggerPayrollDelivery(monthId: string): void {
         credentials: { accessKeyId, secretAccessKey },
         forcePathStyle: true,
       });
-      const obj = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: month.pdf_storage_key }));
+      const obj = await r2.send(
+        new GetObjectCommand({ Bucket: bucket, Key: month.pdf_storage_key }),
+      );
       const pdfBuffer = Buffer.from(await obj.Body!.transformToByteArray());
       const ym = `${month.period_start.getUTCFullYear()}-${String(
         month.period_start.getUTCMonth() + 1,
       ).padStart(2, '0')}`;
+      const site = bareSiteName(month.site.name);
       const isAmendment = month.amended_from_period_id !== null;
       await sendPayrollPdf({
         monthId,
         pdfBuffer,
         filename: `bonus-${ym}.pdf`,
-        subject: `${isAmendment ? '[AMENDED] ' : ''}Woodland processor bonus — ${ym}`,
-        htmlBody: `<p>The signed Woodland processor bonus report for ${ym} is attached.</p>`,
+        subject: `${isAmendment ? '[AMENDED] ' : ''}${site} processor bonus — ${ym}`,
+        htmlBody: `<p>The signed ${site} processor bonus report for ${ym} is attached.</p>`,
         isAmendment,
       });
     } catch (err) {

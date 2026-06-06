@@ -32,6 +32,7 @@ vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 import { notifyPendingSigner, resolveSlotSigner } from './signature-notifications';
 
 const WOODLAND = 'site-woodland';
+const EUGENE = 'site-eugene';
 
 interface FakeMonth {
   id: string;
@@ -40,6 +41,7 @@ interface FakeMonth {
   state: string;
   facility_signed_by_user_id: string | null;
   ops_signed_by_user_id: string | null;
+  site: { name: string };
 }
 
 function fakeDb(opts: {
@@ -74,6 +76,7 @@ const month = (over: Partial<FakeMonth> = {}): FakeMonth => ({
   state: 'pending_signatures',
   facility_signed_by_user_id: null,
   ops_signed_by_user_id: null,
+  site: { name: 'DR3 Woodland' },
   ...over,
 });
 
@@ -138,6 +141,43 @@ describe('notifyPendingSigner — who gets prompted', () => {
     const r = await notifyPendingSigner('m1', db as never);
     expect(r.slot).toBe('facility');
     expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({ to: JANETTE.email });
+  });
+});
+
+describe('notifyPendingSigner — site-aware email copy', () => {
+  it('Woodland period → email body says "DR3 Woodland", not Eugene', async () => {
+    const { db } = fakeDb({ month: month(), janette: JANETTE, morena: MORENA });
+    await notifyPendingSigner('m1', db as never);
+    const body = (sendSystemEmail.mock.calls[0]![0] as { htmlBody: string }).htmlBody;
+    expect(body).toContain('DR3 Woodland processor bonus report');
+    expect(body).not.toContain('Eugene');
+  });
+
+  it('Eugene period → email body says "DR3 Eugene", not Woodland (no hardcoding)', async () => {
+    const { db } = fakeDb({
+      month: month({ site_id: EUGENE, site: { name: 'DR3 Eugene' } }),
+      // facility slot for Eugene resolves by primary_site_id === EUGENE
+      janette: null,
+      morena: null,
+    });
+    // Override the user resolver via a fresh db that matches the Eugene site id.
+    const eugeneDb = {
+      bonusPayPeriod: {
+        findUnique: async () => month({ site_id: EUGENE, site: { name: 'DR3 Eugene' } }),
+      },
+      user: {
+        findFirst: async ({ where }: { where: Record<string, unknown> }) =>
+          where['primary_site_id'] === EUGENE
+            ? { id: 'u-rick', name: 'Rick Allen', email: 'rick.allen@svdp.us' }
+            : null,
+      },
+    };
+    const r = await notifyPendingSigner('m1', eugeneDb as never);
+    expect(r).toEqual({ notified: true, slot: 'facility' });
+    const body = (sendSystemEmail.mock.calls[0]![0] as { htmlBody: string }).htmlBody;
+    expect(body).toContain('DR3 Eugene processor bonus report');
+    expect(body).not.toContain('Woodland');
+    void db; // fakeDb call above documents the Eugene fixture shape
   });
 });
 

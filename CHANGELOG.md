@@ -5,6 +5,43 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum: site-aware bonus emails + Wave C e2e tests (T-211, T-212, T-213)
+
+Made the payroll + signature-request emails site-aware (so Eugene is no longer
+mislabeled "Woodland") and added the Wave C end-to-end cycle tests. `tsc
+--noEmit`, `next lint --max-warnings 0`, and the full `vitest` suite (645 tests)
+all clean.
+
+- **Site-aware email copy.** `src/lib/bonus/payroll-delivery.ts` and
+  `src/lib/bonus/signature-notifications.ts` no longer hardcode "Woodland". Both
+  now resolve the display name from the pay period's `site.name` (joined in the
+  Prisma `select`) and strip the seeded "DR3 " prefix via
+  `bareSiteName` from `@/lib/bonus/pdf-data` — the same helper T-209's PDF title
+  uses. Woodland copy is byte-for-byte unchanged ("DR3 Woodland processor bonus
+  …" / "Woodland processor bonus — `<ym>`"); Eugene now reads "Eugene". Tests
+  extended so a Eugene period produces Eugene-labeled email and Woodland stays
+  Woodland.
+- **Wave C e2e tests** in `src/lib/bonus/__tests__/bonus-cycle-e2e.test.ts` (8
+  tests). T-211 drives the real Woodland Period 12 close → pending_signatures
+  (+ signature-request email) → Janette → partially_signed → Morena → signed
+  (total locked from entries via the rule) → PDF + payroll mail, asserting every
+  state transition + audit row and that the test payroll recipient got the PDF;
+  Period 13 stays draft. T-212 repeats for Eugene (Rick + Kelsey) and asserts
+  site isolation (no Woodland audit/state contamination; cross-site forged id
+  404s). T-213 drives the escalation cron: t1 default + t2 urgent ntfy, then t3
+  auto-signs both slots as the chain auto-override actor (Bill) with
+  `*_auto_override_at` + the ADR-0019.1 attestation language and the
+  `system:bonus-escalation` audit actor, firing the PDF/mail side-effects.
+- **GAP surfaced (NOT papered over):** no production code drives the
+  `signed -> paid` transition. `sendPayrollPdf` deliberately leaves the period
+  `signed` and writes `payroll_sent_at`; nothing calls
+  `transitionMonth(..., to: 'paid')`. So T-211 step 5 ("M365 send success →
+  state `paid`") is unimplemented — the cycle ends in `signed`. The e2e asserts
+  the actual end state and documents the gap. Knock-on: the t4 09:00 PT
+  escalation keys off `state != 'paid'`, so a successfully-delivered period would
+  still trip a FALSE "payroll deadline MISSED" alert. Needs a follow-up that
+  advances `signed -> paid` on confirmed M365 delivery.
+
 ### 2026-06-06 — Sprint 2 addendum Wave B: Eugene-aware access gate + Vision tile/site-picker (T-207, T-210)
 
 Made the bonus surface multi-site (Woodland + Eugene) per ADR-0019.2 §1/§6.

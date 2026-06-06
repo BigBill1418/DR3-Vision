@@ -23,6 +23,7 @@
 import { prisma } from '@/lib/prisma';
 import { sendSystemEmail } from '@/lib/m365-mail';
 import { writeAudit } from '@/lib/audit';
+import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { log } from '@/lib/observability/logger';
 import type { SignatureSlot } from './signatures';
 
@@ -57,6 +58,8 @@ export interface SignatureMonthRow {
   state: string;
   facility_signed_by_user_id: string | null;
   ops_signed_by_user_id: string | null;
+  /** Site relation — drives the site-aware email copy (Woodland vs Eugene). */
+  site: { name: string };
 }
 
 export interface NotifyResult {
@@ -97,10 +100,15 @@ function monthLabel(monthStart: Date): string {
 function buildEmail(slot: SignatureSlot, month: SignatureMonthRow) {
   const label = monthLabel(month.period_start);
   const url = `${APP_BASE_URL}/bonus/months/${month.id}`;
+  // Site-aware copy: derive the display name from the period's site so Eugene
+  // reads "Eugene" and Woodland stays "Woodland". `sites.name` carries the
+  // seeded "DR3 " prefix; bareSiteName strips it, then the "DR3 " below restores
+  // the same wording Woodland had ("DR3 Woodland …"), matching the T-209 PDF.
+  const site = bareSiteName(month.site.name);
   const lead =
     slot === 'facility'
-      ? `The ${label} DR3 Woodland processor bonus report is ready for your signature.`
-      : `The ${label} DR3 Woodland processor bonus report has its first signature; your signature is now needed to finalize it.`;
+      ? `The ${label} DR3 ${site} processor bonus report is ready for your signature.`
+      : `The ${label} DR3 ${site} processor bonus report has its first signature; your signature is now needed to finalize it.`;
   return {
     subject: `[DR3 Bonus] Signature needed — ${label}`,
     htmlBody:
@@ -129,6 +137,7 @@ export async function notifyPendingSigner(
       state: true,
       facility_signed_by_user_id: true,
       ops_signed_by_user_id: true,
+      site: { select: { name: true } },
     },
   });
   if (!month) return { notified: false, reason: 'month_not_found' };
