@@ -356,13 +356,13 @@ describe('assertEntriesEditable', () => {
     expect(() => assertEntriesEditable({ id: 'x', state: 'draft' })).not.toThrow();
   });
 
-  const locked: BonusMonthState[] = [
-    'pending_signatures',
-    'partially_signed',
-    'signed',
-    'paid',
-    'amended',
-  ];
+  // ADR-0019 §6 / T-116: an unlocked (amended) month is editable again so Bill
+  // can correct the daily counts before re-collecting signatures.
+  it('passes for an amended month', () => {
+    expect(() => assertEntriesEditable({ id: 'x', state: 'amended' })).not.toThrow();
+  });
+
+  const locked: BonusMonthState[] = ['pending_signatures', 'partially_signed', 'signed', 'paid'];
   it.each(locked)('throws EntriesLockedError for state %s', (state) => {
     let err: unknown;
     try {

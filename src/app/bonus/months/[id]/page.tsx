@@ -19,6 +19,8 @@ import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
 import { naturalSlotFor } from '@/lib/bonus/signatures';
 import { SignaturePanel, type SignerSlot } from './SignaturePanel';
+import { AmendmentPanel, type AmendDayOption, type AmendEmployeeRow } from './AmendmentPanel';
+import { ReadOnlyGrid, type ReadOnlyGridDay, type ReadOnlyGridRow } from './ReadOnlyGrid';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +50,49 @@ function signedAtLabel(d: Date): string {
   }).format(d);
 }
 
+/** UTC YYYY-MM-DD for a @db.Date day. */
+function isoDay(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Every calendar day in [month_start, month_end] as compact grid columns. */
+function gridDays(start: Date, end: Date): ReadOnlyGridDay[] {
+  const out: ReadOnlyGridDay[] = [];
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+  const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  const last = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  while (cur.getTime() <= last) {
+    out.push({ iso: isoDay(cur), label: fmt.format(cur) });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
+/** Every calendar day in [month_start, month_end], as picker options. */
+function monthDays(start: Date, end: Date): AmendDayOption[] {
+  const out: AmendDayOption[] = [];
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+  const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  const last = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  while (cur.getTime() <= last) {
+    out.push({ iso: isoDay(cur), label: fmt.format(cur) });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
 interface EmployeeTotal {
   name: string;
   totalMattresses: number;
@@ -72,7 +117,9 @@ export default async function BonusMonthDetailPage({
     include: {
       janette_signed_by: { select: { name: true } },
       morena_signed_by: { select: { name: true } },
-      daily_entries: { select: { bonus_employee_id: true, mattress_count: true } },
+      daily_entries: {
+        select: { bonus_employee_id: true, mattress_count: true, entry_date: true, note: true },
+      },
     },
   });
   if (!month) notFound();
@@ -108,6 +155,76 @@ export default async function BonusMonthDetailPage({
     primarySiteId: ctx.primarySiteId,
     siteId: ctx.siteId,
   });
+
+  // ── Amendment (ADR-0019 §6, admin-only) ───────────────────────────
+  // Unlock is offered on signed/paid; the editable grid + re-submit on amended.
+  // Janette/Morena/Rick never see any of this (gated on ctx.isAdmin).
+  const showUnlock = ctx.isAdmin && (month.state === 'signed' || month.state === 'paid');
+  const showAmendEditor = ctx.isAdmin && month.state === 'amended';
+
+  let amendDays: AmendDayOption[] = [];
+  let amendEmployees: AmendEmployeeRow[] = [];
+  let amendEntriesByDay: Record<string, { mattress_count: number; note: string | null }> = {};
+  if (showAmendEditor) {
+    const active = await prisma.bonusEmployee.findMany({
+      where: { site_id: ctx.siteId, is_active: true },
+      orderBy: { full_name: 'asc' },
+      select: { id: true, full_name: true },
+    });
+    amendDays = monthDays(month.month_start, month.month_end);
+    amendEntriesByDay = Object.fromEntries(
+      month.daily_entries.map((e) => [
+        `${isoDay(e.entry_date)}|${e.bonus_employee_id}`,
+        { mattress_count: e.mattress_count, note: e.note ?? null },
+      ]),
+    );
+    const firstIso = amendDays[0]?.iso ?? '';
+    amendEmployees = active.map((emp) => {
+      const keyed = amendEntriesByDay[`${firstIso}|${emp.id}`];
+      return {
+        bonus_employee_id: emp.id,
+        full_name: emp.full_name,
+        mattress_count: keyed ? keyed.mattress_count : null,
+        note: keyed?.note ?? null,
+      };
+    });
+  }
+
+  // ── Read-only daily grid (ADR-0019 §8, T-117) ─────────────────────
+  // A locked day-by-day view for terminal months so a manager browsing history
+  // sees exactly what was keyed. Shown for signed/paid always; for amended only
+  // when the (admin-only) amend editor is NOT rendered, so the two never stack
+  // on the same page (per ticket: gate read-only to non-amended terminal states
+  // once T-116 added editing).
+  const isTerminalState =
+    month.state === 'signed' || month.state === 'paid' || month.state === 'amended';
+  const showReadOnlyGrid = isTerminalState && !showAmendEditor;
+
+  let readOnlyDays: ReadOnlyGridDay[] = [];
+  let readOnlyRows: ReadOnlyGridRow[] = [];
+  let readOnlyGrandCents = 0;
+  if (showReadOnlyGrid) {
+    readOnlyDays = gridDays(month.month_start, month.month_end);
+    const grid = new Map<string, ReadOnlyGridRow>();
+    for (const e of month.daily_entries) {
+      const id = e.bonus_employee_id;
+      const acc =
+        grid.get(id) ??
+        ({
+          bonusEmployeeId: id,
+          name: nameById.get(id) ?? id,
+          countsByDay: {},
+          totalMattresses: 0,
+          totalBonusCents: 0,
+        } satisfies ReadOnlyGridRow);
+      acc.countsByDay[isoDay(e.entry_date)] = e.mattress_count;
+      acc.totalMattresses += e.mattress_count;
+      acc.totalBonusCents += calculateDailyBonusCents(e.mattress_count, rule);
+      grid.set(id, acc);
+    }
+    readOnlyRows = [...grid.values()].sort((a, b) => a.name.localeCompare(b.name));
+    readOnlyGrandCents = readOnlyRows.reduce((s, r) => s + r.totalBonusCents, 0);
+  }
 
   return (
     <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
@@ -195,6 +312,43 @@ export default async function BonusMonthDetailPage({
             </div>
           )}
         </section>
+
+        {/* Read-only daily grid (ADR-0019 §8) — past terminal months */}
+        {showReadOnlyGrid && (
+          <section className="rounded-lg bg-dr3-green-dark/40 p-5" data-testid="readonly-section">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">Daily counts</h2>
+              {month.pdf_storage_key && (
+                <a
+                  href={`/bonus/months/${month.id}/pdf`}
+                  className="rounded-md bg-dr3-chartreuse px-3 py-1.5 text-sm font-semibold text-dr3-ink"
+                >
+                  Download PDF
+                </a>
+              )}
+            </div>
+            <ReadOnlyGrid
+              days={readOnlyDays}
+              rows={readOnlyRows}
+              grandTotalCents={readOnlyGrandCents}
+            />
+          </section>
+        )}
+
+        {/* Amendment (ADR-0019 §6) — admin-only */}
+        {(showUnlock || showAmendEditor) && (
+          <section className="rounded-lg bg-dr3-green-dark/40 p-5" data-testid="amendment-section">
+            <h2 className="mb-4 text-lg font-semibold">Amendment</h2>
+            <AmendmentPanel
+              monthId={month.id}
+              state={month.state as 'signed' | 'paid' | 'amended'}
+              rule={rule}
+              days={amendDays}
+              employees={amendEmployees}
+              entriesByDay={amendEntriesByDay}
+            />
+          </section>
+        )}
       </div>
     </main>
   );

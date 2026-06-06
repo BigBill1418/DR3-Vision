@@ -295,7 +295,7 @@ partially_signed`).
 - Mail unconfigured → signing still works, prompt is skipped + logged (fail-open).
 - Every send writes an audit row with `actor_label = 'system:signature-request'`.
 
-### [ ] T-116: Amendment workflow (admin-only)
+### [x] T-116: Amendment workflow (admin-only)
 
 Bill-only "Unlock month" action on `/bonus/months/[id]` for `signed` and `paid` months. Confirmation modal requires a reason (free-text, required). On unlock:
 
@@ -315,7 +315,7 @@ Per ADR-0019 §6, the next PDF is marked "AMENDED" and includes a supersedes-pri
 - A subsequent re-sign and PDF carries the "AMENDED" marker
 - The original signed PDF in R2 is preserved (not overwritten — new R2 key for the amended version)
 
-### [ ] T-117: Historical browsing
+### [x] T-117: Historical browsing
 
 Past-month read-only views at `/bonus/months/[id]` for any `signed`, `paid`, or `amended` month. Daily grid is locked (read-only), signatures + PDF download visible, audit log slice for the month accessible.
 
@@ -328,7 +328,7 @@ Past-month read-only views at `/bonus/months/[id]` for any `signed`, `paid`, or 
 - Amended months are clearly badged "AMENDED" with link to prior version
 - All visibility is site-scoped — Rick gets 403 on Woodland months
 
-### [ ] T-118: Per-employee + annual aggregate views
+### [x] T-118: Per-employee + annual aggregate views
 
 `/bonus/employee/[id]` shows one employee's cross-month history: monthly totals, year-to-date, last 12 months chart. Drill-down to monthly daily grid (read-only).
 

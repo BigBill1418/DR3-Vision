@@ -110,12 +110,15 @@ export class TransitionError extends Error {
   }
 }
 
-/** Raised when a daily-entry mutation is attempted on a non-draft month. */
+/** States in which daily mattress-count entries may be added/edited. */
+export const EDITABLE_STATES: readonly BonusMonthState[] = ['draft', 'amended'];
+
+/** Raised when a daily-entry mutation is attempted on a non-editable month. */
 export class EntriesLockedError extends Error {
   readonly status = 409 as const;
   readonly state: BonusMonthState;
   constructor(state: BonusMonthState) {
-    super(`bonus month is ${state}; daily entries are only editable while draft`);
+    super(`bonus month is ${state}; daily entries are only editable while draft or amended`);
     this.name = 'EntriesLockedError';
     this.state = state;
   }
@@ -292,13 +295,14 @@ export async function closeMonthsDueForSignature(
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Throw {@link EntriesLockedError} (409) unless the month is in `draft`. Daily
- * mattress-count entries may only be added/edited while the month is open;
- * once it moves to `pending_signatures` the totals are frozen pending signature.
- * Callers (T-105 and the daily-entry API) call this before any write.
+ * Throw {@link EntriesLockedError} (409) unless the month is editable. Daily
+ * mattress-count entries may only be added/edited while the month is open
+ * (`draft`) or has been unlocked for correction (`amended`, ADR-0019 §6); once
+ * it moves to `pending_signatures` the totals are frozen pending signature.
+ * Callers (T-105 daily-entry API, T-116 amendment edit) call this before any write.
  */
 export function assertEntriesEditable(month: { id: string; state: BonusMonthState }): void {
-  if (month.state !== 'draft') {
+  if (!EDITABLE_STATES.includes(month.state)) {
     throw new EntriesLockedError(month.state);
   }
 }

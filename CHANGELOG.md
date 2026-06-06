@@ -5,6 +5,96 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 Wave D verification (orchestrator)
+
+T-116 + T-118 built in parallel, then T-117. No middleware changes needed.
+Integrated + verified: `tsc --noEmit` clean, `next build` exit 0, `npm test`
+**470 passed**, `next lint` clean. Visual pass (Playwright, reviewed by eye): the
+month-list, per-employee history (with "previously known as" badge), annual
+aggregate (totals tie out — $1,861.50 across 3 processors), and the admin
+month-detail (monthly totals + signatures + read-only daily grid + "Unlock month
+for amendment" panel, admin-only) all render correctly and on-brand.
+
+### 2026-06-06 — Sprint 2 T-118: per-employee + annual aggregates (ADR-0019 §8)
+
+- **Data layer** (`src/lib/bonus/aggregates.ts`, new): `employeeHistory` (per-month
+  totals newest-first, current-year YTD, last-12-months series), `annualTotals`
+  (per-employee YTD for a year), `csvForAnnual` (papaparse). All math via the shared
+  `@/lib/bonus/calculator` using each month's effective rule (hard rule #3); every
+  query Woodland-scoped (hard rule #2). Shows the current name with a "previously
+  known as" badge from `previous_names` (ADR-0019 §9b).
+- **Per-employee page** (`/bonus/employee/[id]`): YTD cards, a no-chart-lib
+  last-12-months bar list, monthly-totals table drilling into each month.
+- **Annual page** (`/bonus/annual`): year selector, per-processor YTD table, CSV
+  export (`GET /api/bonus/annual/export`, attachment). All gated (Rick/operators
+  403). 17 tests.
+
+### 2026-06-06 — Sprint 2 T-117: historical month browsing (ADR-0019 §8)
+
+Read-only browsing of past Woodland bonus months. Janette can open last month's
+signed report, see the daily grid locked (no inputs), and download the PDF; Rick
+(Eugene) gets 403 via `checkBonusAccess` like every other bonus surface.
+
+- **Data layer** (`src/lib/bonus/month-list.ts`, new): `listBonusMonths(siteId,
+filter, now?)` — site-scoped (hard rule #2), newest-first, with `current` /
+  `year` / `all` filters (`monthWindow`/`parseMonthFilter` helpers). Per-month
+  payout prefers the locked `total_payout_cents`; for unlocked months it computes
+  from keyed entries through the shared `@/lib/bonus/calculator` with each month's
+  effective rule (hard rule #3 — never hardcoded, never diverges from PDF/CSV). A
+  pre-rule/empty month resolves to $0 instead of throwing so browsing never 500s.
+  Derives signature status (none/partial/complete) and amendment linkage
+  (`isAmendment` + `amendedFromMonthId`). Strictly read-only — no mutations, no
+  audit writes. 19 tests (`month-list.test.ts`, DB mocked).
+- **List page** (`src/app/bonus/months/page.tsx`, new): gated server component.
+  Server-side filter tabs (no client JS), state badges (draft → amended), AMENDED
+  chip + "View prior version" link when `amended_from_month_id` is set, payout per
+  row, every row links to `/bonus/months/[id]`.
+- **Read-only daily grid** (`src/app/bonus/months/[id]/ReadOnlyGrid.tsx`, new):
+  presentational, locked day-by-day per-processor counts + month totals, money via
+  the shared calculator. Surfaced ADDITIVELY on the detail page for terminal
+  months (`signed`/`paid` always; `amended` only when the T-116 admin amend editor
+  is NOT shown, so the two never stack), with a "Download PDF" button reusing the
+  T-112 `GET /bonus/months/[id]/pdf` route when a PDF exists. All existing
+  detail-page behavior preserved.
+
+### 2026-06-06 — Sprint 2 T-116: amendment workflow (admin-only, ADR-0019 §6)
+
+Corrections to a `signed`/`paid` month require an admin-only amendment (Bill /
+Kelsey). Janette, Morena, and Rick never see or reach the unlock/amend actions.
+
+- **State machine** (`src/lib/bonus/state-machine.ts`): `assertEntriesEditable`
+  now permits `draft` **and** `amended` (new exported `EDITABLE_STATES`), so daily
+  counts are editable again once a month is unlocked. Minimal extension + test.
+- **Amendment data layer** (`src/lib/bonus/amendment.ts`):
+  - `unlockMonthForAmendment` — `signed|paid → amended` via `transitionMonth` (run
+    inline inside one tx via a `txForTransition` pass-through, mirroring
+    `signatures.ts`). In the SAME tx it clears **both** signature column sets,
+    sets `amended_by_user_id` / `amended_at` / `amendment_reason`, and
+    self-references `amended_from_month_id = monthId` so the PDF AMENDED marker
+    lights. `payroll_sent_at` is preserved (the "supersedes" date). One audit row
+    captures the FULL prior signed state (both signatures) as `before`. Reason is
+    required.
+  - `resubmitAmendedMonth` — `amended → pending_signatures` via the state machine.
+  - `upsertAmendedMonthEntries` — month-scoped daily upsert (keyed on a specific
+    `monthId`, not "the current month" like T-105's `/api/bonus/entries`), audited.
+  - 13 tests.
+- **Routes** (admin-only; managers → 403):
+  - `POST /api/bonus/months/[id]/amend` — unlock (reason required).
+  - `POST /api/bonus/months/[id]/resubmit` — re-submit + re-prompt next signer
+    (`notifyPendingSigner`, off the request path, fail-open).
+  - `POST /api/bonus/months/[id]/entries` — month-scoped corrected-count upsert.
+  - 19 route tests.
+- **UI**: `src/app/bonus/months/[id]/AmendmentPanel.tsx` (new client) — unlock
+  confirm modal (free-text reason required) on `signed`/`paid`; an editable
+  month-scoped daily grid (per-day picker) + "Re-submit for signatures" on
+  `amended`. `page.tsx` renders the panel only for admins.
+- **AMENDED PDF**: the next generated PDF carries the AMENDED marker +
+  supersedes-prior-version line (driven by `amended_from_month_id !== null`).
+  `generateBonusPdf` writes a fresh R2 key each call, so the original signed PDF
+  is preserved automatically.
+
+Full T-116 suite: 66 tests green. Project `tsc --noEmit` clean.
+
 ### 2026-06-06 — Sprint 2 T-125: signature-request emails + month-close cron + PDF verify
 
 New requirement (Bill): actively prompt signers by email when their input is
