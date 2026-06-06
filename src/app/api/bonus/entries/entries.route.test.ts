@@ -218,6 +218,21 @@ function makeReq(body: unknown): Request {
 
 const TODAY_ISO = '2026-06-05';
 
+// Pin the clock so the route's appToday() (America/Los_Angeles) deterministically
+// equals TODAY_ISO no matter when the suite runs. 2026-06-05T18:00:00Z = 11:00 AM
+// PDT on 2026-06-05. Without this, route.ts's admin/back-date gate compares the
+// posted TODAY_ISO against the REAL Pacific day and rejects it (403) once the wall
+// clock rolls past 2026-06-05 — the time-bomb that turned these tests red on 6/6.
+// The admin-back-dating describe re-pins to its own boundary instant (same Pacific
+// day), so this outer hook is harmless there.
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-06-05T18:00:00Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 // ── Role gate ───────────────────────────────────────────────────
 
 describe('POST /api/bonus/entries — role gate', () => {
