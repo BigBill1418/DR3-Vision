@@ -97,17 +97,26 @@ async function initOpenTelemetry(): Promise<void> {
   if (g.__dr3VisionOtelStarted) return;
   g.__dr3VisionOtelStarted = true;
 
-  const { NodeSDK } = await import('@opentelemetry/sdk-node');
-  const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http');
-  const { getNodeAutoInstrumentations } = await import(
-    '@opentelemetry/auto-instrumentations-node'
+  // `webpackIgnore: true` — keep webpack from bundling the OTel tree on EITHER
+  // server runtime. On nodejs these resolve from node_modules at runtime (the
+  // only place this code runs); on edge the whole function is unreachable
+  // (guarded above) so the imports never execute. This avoids both the node-build
+  // gRPC/native bundling failures and the edge "Native module not found" error.
+  const { NodeSDK } = await import(/* webpackIgnore: true */ '@opentelemetry/sdk-node');
+  const { OTLPTraceExporter } = await import(
+    /* webpackIgnore: true */ '@opentelemetry/exporter-trace-otlp-http'
   );
-  const { resourceFromAttributes } = await import('@opentelemetry/resources');
+  const { getNodeAutoInstrumentations } = await import(
+    /* webpackIgnore: true */ '@opentelemetry/auto-instrumentations-node'
+  );
+  const { resourceFromAttributes } = await import(
+    /* webpackIgnore: true */ '@opentelemetry/resources'
+  );
   const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = await import(
-    '@opentelemetry/semantic-conventions'
+    /* webpackIgnore: true */ '@opentelemetry/semantic-conventions'
   );
   const { ParentBasedSampler, TraceIdRatioBasedSampler } = await import(
-    '@opentelemetry/sdk-trace-node'
+    /* webpackIgnore: true */ '@opentelemetry/sdk-trace-node'
   );
 
   const sampleRate =

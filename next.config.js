@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- this is a CommonJS Next
+   config file; `require()` is the correct (and only) way to load the @serwist/next
+   and @sentry/nextjs config wrappers here. */
 /** @type {import('next').NextConfig} */
 //
 // Service Worker is wired via `@serwist/next`. SW source lives at
@@ -18,38 +21,25 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
-  // pino (ADR-0022 §3) ships a worker-thread transport that must not be bundled.
-  serverExternalPackages: ['pino', 'pino-pretty'],
-  // OpenTelemetry NodeSDK (ADR-0022 §1) is Node-only and pulls a large native/gRPC
-  // dependency tree (@grpc/grpc-js → zlib, exporter-prometheus → http, dozens of
-  // instrumentation-* → os/net) that webpack cannot bundle. `serverExternalPackages`
-  // does not reliably cover the `instrumentation.ts` compilation, so we externalize
-  // the whole tree via a webpack externals matcher on the server build. We lazy-
-  // import these inside the nodejs runtime guard, so they never reach edge/client
-  // bundles; standalone output traces them into the runtime image.
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      const externalize = ({ request }, callback) => {
-        if (
-          request &&
-          (/^@opentelemetry\//.test(request) ||
-            /^@grpc\//.test(request) ||
-            request === 'require-in-the-middle' ||
-            request === 'import-in-the-middle')
-        ) {
-          return callback(null, 'commonjs ' + request);
-        }
-        return callback();
-      };
-      const existing = config.externals;
-      config.externals = Array.isArray(existing)
-        ? [...existing, externalize]
-        : existing
-          ? [existing, externalize]
-          : [externalize];
-    }
-    return config;
-  },
+  // Node-only packages that must NOT be bundled by webpack (pino's worker-thread
+  // transport; the OpenTelemetry NodeSDK tree, which pulls @grpc/grpc-js → native
+  // stream/fs/tls/net). serverExternalPackages externalizes them on the Node
+  // server build AND traces them into the standalone output. It does NOT apply to
+  // the edge runtime — which is correct: the OTel imports in instrumentation.ts
+  // carry a `webpackIgnore: true` magic comment so webpack never tries to bundle
+  // them on edge (they're runtime-guarded to nodejs and never execute on edge),
+  // while the edge Sentry SDK gets to bundle @opentelemetry/api normally (it is
+  // edge-safe — externalizing it there caused "Native module not found").
+  serverExternalPackages: [
+    'pino',
+    'pino-pretty',
+    '@opentelemetry/sdk-node',
+    '@opentelemetry/auto-instrumentations-node',
+    '@opentelemetry/exporter-trace-otlp-http',
+    '@opentelemetry/sdk-trace-node',
+    '@opentelemetry/resources',
+    '@opentelemetry/semantic-conventions',
+  ],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '*.r2.cloudflarestorage.com' },

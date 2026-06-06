@@ -40,8 +40,24 @@ request-id, `/metrics` allowance), fixed a `BonusMonthDb` test-fake type the
 agents' scoped vitest runs missed. Wave-B foundation also added the shared
 `requireBonusAccess` gate (8 tests).
 
-Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **318 passed**,
-`next lint` clean.
+**Runtime fix (caught by running the app, not by the build):** the OpenTelemetry
+NodeSDK tree was being pulled into the _edge_ instrumentation bundle, which 500'd
+every request (`Native module not found: @opentelemetry/api`). Replaced the
+webpack-externals approach with `webpackIgnore: true` on the OTel dynamic imports
+(webpack never bundles them; they resolve from node_modules on nodejs and are
+unreachable on edge) + `serverExternalPackages` for node-side standalone tracing —
+leaving the edge Sentry SDK to bundle `@opentelemetry/api` normally. Verified at
+runtime: `/healthz` 200, `/` 307→/login (edge-gated), zero instrumentation errors.
+
+**T-107 visual verification (passed).** Forged admin + manager sessions and
+captured Playwright multi-viewport screenshots of `/` (reviewed by eye): role
+matrix correct — Bill 6 active tiles, Janette 5 (no Admin), Rick 4 (no Bonus, no
+Admin); brand-correct (deep-green shell, cream tiles, chartreuse featured Bonus +
+NEW pill, DR3 watermark); mobile stacks cleanly. `/bonus` and `/bonus/employees`
+render with correct empty states.
+
+Verification: `tsc --noEmit` clean, `next build` exit 0 (runtime-verified), `npm
+test` **318 passed**, `next lint` clean.
 
 ### 2026-06-05 — Sprint 2 Wave A: foundation (T-100–T-103)
 

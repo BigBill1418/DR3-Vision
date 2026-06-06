@@ -106,7 +106,7 @@ Daily-entry mutations are blocked once state ≠ `draft`. PDF generation is bloc
 - The audit log captures every state transition with actor, before, after
 - Tests in `src/lib/bonus/state-machine.test.ts` cover every valid + invalid transition
 
-### [~] T-107: Vision Dashboard tile landing <!-- code complete + tests/build green; visual verification (Playwright multi-viewport on live URL) PENDING -->
+### [x] T-107: Vision Dashboard tile landing
 
 Implement `/` route as the Vision Dashboard per ADR-0020. Replaces the current `src/app/page.tsx` "coming soon" placeholder.
 
