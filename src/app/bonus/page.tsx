@@ -15,45 +15,51 @@ import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { getDailyGrid } from '@/lib/bonus/daily-entry';
+import {
+  appToday,
+  appTodayISO,
+  dayKeyUTCFromISO,
+  dayISO,
+  pacificMonthLabel,
+  pacificDateLabel,
+} from '@/lib/time';
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
+import { AdminDatePicker } from './AdminDatePicker';
 import { CloseMonthButton } from './CloseMonthButton';
 
 export const dynamic = 'force-dynamic';
 
-/** "September 2026" for the close-month confirmation, in UTC to match @db.Date. */
-function monthLabel(d: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(d);
+type SearchParams = Promise<{ date?: string }>;
+
+/**
+ * Resolve the business day this page edits. Default is Pacific "today". An admin
+ * (Bill) may override it via ?date=YYYY-MM-DD to backfill any prior day; the
+ * picker is admin-only and the write is re-checked server-side in the API. Any
+ * malformed or non-admin override falls back to today.
+ */
+function resolveEntryDate(raw: string | undefined, isAdmin: boolean): Date {
+  if (!isAdmin || !raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return appToday();
+  try {
+    return dayKeyUTCFromISO(raw);
+  } catch {
+    return appToday();
+  }
 }
 
-/** Render a Date's UTC calendar day as YYYY-MM-DD (matches the @db.Date key). */
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Human heading date, en-US, in UTC so it matches the stored calendar day. */
-function headingDate(d: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(d);
-}
-
-export default async function BonusDailyEntryPage() {
+export default async function BonusDailyEntryPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
   const gate = await checkBonusAccess();
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus');
     return <ForbiddenPage />;
   }
 
-  const today = new Date();
-  const grid = await getDailyGrid(gate.ctx.siteId, today);
+  const sp = await searchParams;
+  const entryDate = resolveEntryDate(sp.date, gate.ctx.isAdmin);
+  const grid = await getDailyGrid(gate.ctx.siteId, entryDate);
 
   const rows: GridRowProps[] = grid.rows.map((r) => ({
     bonus_employee_id: r.bonus_employee_id,
@@ -75,10 +81,13 @@ export default async function BonusDailyEntryPage() {
           <h1 className="text-3xl font-bold tracking-tight">Daily Bonus Entry</h1>
           <p className="text-sm text-dr3-cream/70">
             {gate.ctx.siteName} processor mattress counts for{' '}
-            <span className="font-medium text-dr3-cream">{headingDate(grid.entryDate)}</span>.
+            <span className="font-medium text-dr3-cream">{pacificDateLabel(grid.entryDate)}</span>.
             Counts drive each processor&rsquo;s daily bonus; the note is optional and never affects
             the math.
           </p>
+          {gate.ctx.isAdmin ? (
+            <AdminDatePicker selected={dayISO(grid.entryDate)} today={appTodayISO()} />
+          ) : null}
           <nav className="mt-2 text-sm">
             <Link
               href="/bonus/employees"
@@ -91,7 +100,7 @@ export default async function BonusDailyEntryPage() {
 
         <DailyEntryGrid
           rule={grid.rule}
-          entryDate={isoDay(grid.entryDate)}
+          entryDate={dayISO(grid.entryDate)}
           editable={grid.editable}
           monthState={grid.monthState}
           rows={rows}
@@ -100,10 +109,13 @@ export default async function BonusDailyEntryPage() {
         {grid.monthState === 'draft' && (
           <footer className="flex flex-col items-end gap-2 border-t border-dr3-cream/15 pt-6">
             <p className="text-right text-sm text-dr3-cream/60">
-              Finished entering counts for {monthLabel(grid.entryDate)}? Close the month to lock
-              entries and start the signature workflow.
+              Finished entering counts for {pacificMonthLabel(grid.entryDate)}? Close the month to
+              lock entries and start the signature workflow.
             </p>
-            <CloseMonthButton monthId={grid.monthId} monthLabel={monthLabel(grid.entryDate)} />
+            <CloseMonthButton
+              monthId={grid.monthId}
+              monthLabel={pacificMonthLabel(grid.entryDate)}
+            />
           </footer>
         )}
       </div>

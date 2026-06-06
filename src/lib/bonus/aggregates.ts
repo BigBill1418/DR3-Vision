@@ -22,6 +22,7 @@ import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { appCurrentYear } from '@/lib/time';
 
 export interface PreviousNameEntry {
   name: string;
@@ -222,8 +223,10 @@ export async function employeeHistory(
 
   const displayMonths = allMonthTotals.slice(0, monthsBack);
 
-  // YTD: current UTC calendar year.
-  const thisYear = new Date().getUTCFullYear();
+  // YTD: current Pacific calendar year (not the server's UTC year — they differ
+  // for the first hours of Jan 1 Pacific, which are still Dec 31 in UTC's eyes
+  // inverted; using Pacific keeps YTD aligned with how the facilities count).
+  const thisYear = appCurrentYear();
   const ytd = emptyRollup();
   for (const mt of allMonthTotals) {
     if (mt.monthStart.getUTCFullYear() === thisYear) {

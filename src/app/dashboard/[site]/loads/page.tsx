@@ -10,6 +10,7 @@ import { LoadRow } from './load-row';
 import { Pagination } from './pagination';
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary, translate, translatePlural } from '@/i18n/dictionary';
+import { pacificDayStartInstant, pacificDayStartInstantPlus } from '@/lib/time';
 
 // SPRINT-1-PLAN T-011 — per-site load list with filters.
 //
@@ -108,48 +109,44 @@ function parsePositiveInt(raw: string | undefined, fallback: number, max?: numbe
 
 function parseIsoDate(raw: string | undefined): Date | null {
   if (!raw) return null;
-  // Accept YYYY-MM-DD or full ISO; reject anything else.
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
+  // A custom-range bound is a Pacific calendar day. Resolve it to the UTC
+  // instant of that day's Pacific midnight (DST-correct) so the filter against
+  // the `created_at` instant column means the day the operator intended, not a
+  // UTC-shifted one. Accept YYYY-MM-DD or full ISO; reject anything else.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (!m) return null;
+  // Anchor on NOON UTC of the calendar day: that instant resolves to the same
+  // calendar day in Pacific regardless of DST, so `pacificDayStartInstant` then
+  // snaps to that day's Pacific midnight.
+  const noonUTC = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12));
+  if (Number.isNaN(noonUTC.getTime())) return null;
+  return pacificDayStartInstant(noonUTC);
 }
 
 type DateWindow = { from: Date | null; to: Date | null };
 
+// Day boundaries are PACIFIC, not the server's UTC clock: `created_at` is an
+// instant column, and the facilities (both Pacific) think of "today" as the
+// Pacific calendar day. Each bound is the true UTC instant of a Pacific local
+// midnight (DST-correct, via @/lib/time). Computing this in UTC would slide the
+// window a day for ~7mo/year, mis-bucketing late-evening loads.
 function rangeToWindow(range: Range, customFrom: Date | null, customTo: Date | null): DateWindow {
-  const now = new Date();
   if (range === 'today') {
-    const from = new Date(now);
-    from.setHours(0, 0, 0, 0);
-    const to = new Date(from);
-    to.setDate(to.getDate() + 1);
-    return { from, to };
+    return { from: pacificDayStartInstant(), to: pacificDayStartInstantPlus(1) };
   }
   if (range === 'week') {
     // Last 7 days, including today.
-    const to = new Date(now);
-    to.setHours(0, 0, 0, 0);
-    to.setDate(to.getDate() + 1);
-    const from = new Date(to);
-    from.setDate(from.getDate() - 7);
-    return { from, to };
+    const to = pacificDayStartInstantPlus(1);
+    return { from: pacificDayStartInstantPlus(-7, to), to };
   }
   if (range === 'month') {
-    const to = new Date(now);
-    to.setHours(0, 0, 0, 0);
-    to.setDate(to.getDate() + 1);
-    const from = new Date(to);
-    from.setDate(from.getDate() - 30);
-    return { from, to };
+    const to = pacificDayStartInstantPlus(1);
+    return { from: pacificDayStartInstantPlus(-30, to), to };
   }
-  // custom — respect whichever bounds were given; absent bounds = open-ended on that side.
-  const from = customFrom ? new Date(customFrom) : null;
-  if (from) from.setHours(0, 0, 0, 0);
-  const to = customTo ? new Date(customTo) : null;
-  if (to) {
-    to.setHours(0, 0, 0, 0);
-    to.setDate(to.getDate() + 1); // make `to` exclusive end-of-day
-  }
+  // custom — bounds are already Pacific-midnight instants from parseIsoDate;
+  // absent bounds = open-ended on that side. `to` is made exclusive end-of-day.
+  const from = customFrom ?? null;
+  const to = customTo ? pacificDayStartInstantPlus(1, customTo) : null;
   return { from, to };
 }
 

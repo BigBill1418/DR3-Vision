@@ -10,13 +10,14 @@
 
 import { requireBonusAccess } from '@/lib/bonus/access';
 import { annualTotals, csvForAnnual } from '@/lib/bonus/aggregates';
+import { appCurrentYear } from '@/lib/time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Parse ?year= to a sane 4-digit year; default to the current UTC year. */
+/** Parse ?year= to a sane 4-digit year; default to the current Pacific year. */
 function parseYear(raw: string | null): number {
-  const now = new Date().getUTCFullYear();
+  const now = appCurrentYear();
   if (!raw) return now;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 2000 || n > now + 1) return now;

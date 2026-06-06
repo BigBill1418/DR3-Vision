@@ -5,6 +5,78 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Fix: dates/times are now Pacific (was UTC) + admin-only "enter bonus for any date"
+
+**Symptom (operator, P0):** at ~10:50 PM Pacific on 2026-06-05 the daily bonus
+entry page said it was "loading entries for 6/6/26" — one day ahead. The fleet
+host (CHAD-HQ) runs its system clock in UTC, which is 7h ahead of Pacific in
+summer, so 10:50 PM PDT Jun 5 = 05:50 UTC Jun 6. The app computed the business
+"today" from the UTC components of `new Date()`, landing on Jun 6.
+
+**Both facilities (Woodland CA + Eugene OR) and all users are Pacific**, so the
+app's business day and every user-facing date must be `America/Los_Angeles`,
+never UTC and never the server's local clock.
+
+#### Fix 1 — Pacific business day (P0)
+
+- **New single source of truth: `src/lib/time.ts`.** Pins all calendar math to
+  `America/Los_Angeles` via `Intl.DateTimeFormat` (never the server `TZ`):
+  `appToday()` / `appTodayISO()` (Pacific "today" as a `@db.Date`-shaped UTC-
+  midnight key / ISO string), `pacificDayKeyUTC()`, `dayKeyUTCFromISO()`,
+  `appCurrentMonthStart()`, `appCurrentYear()`, `isPacificWeekend()`,
+  `pacificDayStartInstant()` / `…Plus()` (DST-correct UTC instant of Pacific
+  local midnight, for filtering instant columns), and the display helpers
+  `pacificDateLabel()` / `pacificMonthLabel()` / `dayISO()` (render a stored
+  `@db.Date` in UTC — its UTC parts already ARE the Pacific day) and
+  `formatPacificDateTime()` (render a true instant in Pacific wall clock).
+- **Storage invariant documented:** `@db.Date` columns store a zone-less
+  calendar day that Prisma materializes at UTC midnight; the canonical in-app
+  business day is a `Date` whose UTC Y/M/D are the Pacific Y/M/D. We shift only
+  when _computing_ "today"; we do NOT re-shift already-stored `@db.Date` values
+  on display (that would move them back a day).
+- **`src/lib/bonus/eod-check.ts`** now delegates its Pacific math to `@/lib/time`
+  (was a private duplicate of the same logic).
+- **Converted every "today / this month / this year" computation to Pacific:**
+  - `src/app/bonus/page.tsx` — the daily-entry default day (the exact symptom).
+  - `src/app/api/bonus/entries/route.ts` — omitted `entry_date` default.
+  - `src/app/api/internal/bonus/close-months/route.ts` — month-close cron "now".
+  - `src/lib/bonus/month-list.ts` — `monthWindow` / `listBonusMonths` "current".
+  - `src/lib/bonus/aggregates.ts` — YTD current year.
+  - `src/app/bonus/annual/page.tsx` + `src/app/api/bonus/annual/export/route.ts`
+    — default report year.
+  - `src/app/dashboard/[site]/loads/page.tsx` — the today/week/month/custom load
+    filters now bound on Pacific local-midnight instants (loads `created_at` is
+    an instant column; the window was previously UTC-bucketed).
+- **Left correct-as-is (verified, not changed):** all month/day labels that
+  render a stored `@db.Date` via `timeZone: 'UTC'` (bonus PDF month, month-detail
+  grid days, signature-request email month) — correct under the storage
+  invariant; and signature `signed_at` / `pdf_generated_at` / audit timestamps,
+  which are true instants.
+
+#### Fix 2 — admin-only "enter bonus data for any date"
+
+- **`src/app/bonus/AdminDatePicker.tsx` (new):** a date picker rendered only for
+  admins (Bill). Defaults to Pacific today, max = today, drives `?date=` which the
+  page resolves to the chosen Pacific calendar day. Non-admins see no picker and
+  remain "today only".
+- **Server-side enforcement (client never trusted):**
+  `src/app/api/bonus/entries/route.ts` now rejects (403) any non-admin POST whose
+  `entry_date` is not Pacific today; admins may back-date freely. The selected day
+  drives the same upsert path, recorded against the chosen Pacific calendar day.
+
+#### Tests
+
+- **`src/lib/time.test.ts` (new, 17 tests):** pins the canonical boundary instant
+  `2026-06-06T05:50:00Z` and asserts business-day `2026-06-05` (fails under the
+  old UTC logic, verified); plus PST/PDT, month/year-seam, display-invariant, and
+  DST-correct instant-boundary cases. Clock injected, never the runner's TZ.
+- **`src/app/api/bonus/entries/entries.route.test.ts` (+4 tests):** non-admin
+  back-date → 403 (nothing written); admin back-date persists on the chosen day;
+  non-admin posting today allowed; omitted `entry_date` defaults to the Pacific
+  day (2026-06-05), not the UTC day (2026-06-06).
+
+Full suite: 512 passing (was 491). `tsc --noEmit` clean; `lint` clean.
+
 ### 2026-06-06 — Fix: post-action / post-login redirect lands on site picker instead of dashboard
 
 **Symptom (operator):** after finishing a task ("when I finish something

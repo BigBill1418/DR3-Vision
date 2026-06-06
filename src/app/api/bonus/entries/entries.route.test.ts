@@ -10,7 +10,7 @@
 //   - writes blocked (409) once the month leaves draft (ADR-0019 §7)
 //   - note field does not change the persisted count's math
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 let mockSession: {
   user: {
@@ -326,6 +326,81 @@ describe('POST /api/bonus/entries — month lock', () => {
     );
     expect(res.status).toBe(409);
     expect(entryStore.size).toBe(0);
+  });
+});
+
+// ── Admin-only back-dating + Pacific "today" default (TZ fix, 2026-06-06) ──
+//
+// FIX 2: only an admin may record against a day other than Pacific "today".
+// FIX 1: an omitted entry_date must default to the PACIFIC calendar day of the
+// run instant, never the server's UTC day. We pin the clock to the canonical
+// boundary instant — 10:50 PM PDT on 2026-06-05 == 2026-06-06T05:50:00Z — so a
+// UTC-derived default would (wrongly) be 2026-06-06. The entry-key the data
+// layer writes is asserted to be the 2026-06-05 @db.Date.
+
+describe('POST /api/bonus/entries — admin back-dating + Pacific default', () => {
+  // 10:50 PM PDT Jun 5 == 05:50 UTC Jun 6 (the exact bug Bill hit).
+  const BUG_INSTANT = new Date('2026-06-06T05:50:00Z');
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BUG_INSTANT);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('non-admin manager (Janette) is REJECTED 403 when back-dating', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-01', // not today — manager may not back-date
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 10 }],
+      }),
+    );
+    expect(res.status).toBe(403);
+    // Nothing was written.
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('admin (Bill) MAY back-date and the entry persists', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-01',
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 12 }],
+      }),
+    );
+    expect(res.status).toBe(200);
+    // Persisted against the back-dated calendar day, not today.
+    expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 1))))).toBe(true);
+  });
+
+  it('non-admin posting TODAY (Pacific) is allowed', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-05', // Pacific today at the pinned instant
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 8 }],
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('omitted entry_date defaults to the PACIFIC day (2026-06-05), not the UTC day (2026-06-06)', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({ entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 9 }] }),
+    );
+    expect(res.status).toBe(200);
+    // The write landed on the Pacific calendar day...
+    expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 5))))).toBe(true);
+    // ...and NOT on the UTC day (the old bug).
+    expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 6))))).toBe(false);
   });
 });
 

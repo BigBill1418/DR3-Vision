@@ -15,14 +15,15 @@ import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { annualTotals, type AnnualEmployeeRow } from '@/lib/bonus/aggregates';
 import { formatCents } from '@/lib/bonus/calculator';
+import { appCurrentYear } from '@/lib/time';
 
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Promise<{ year?: string }>;
 
-/** Parse ?year= to a sane 4-digit year; default to the current UTC year. */
+/** Parse ?year= to a sane 4-digit year; default to the current Pacific year. */
 function parseYear(raw: string | undefined): number {
-  const now = new Date().getUTCFullYear();
+  const now = appCurrentYear();
   if (!raw) return now;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 2000 || n > now + 1) return now;
@@ -42,7 +43,7 @@ export default async function BonusAnnualPage({ searchParams }: { searchParams: 
 
   const grandTotalCents = rows.reduce((s, r) => s + r.bonusCents, 0);
   const totalMattresses = rows.reduce((s, r) => s + r.mattresses, 0);
-  const currentYear = new Date().getUTCFullYear();
+  const currentYear = appCurrentYear();
   // Offer the last 5 years plus next year (for an early-January boundary).
   const yearOptions: number[] = [];
   for (let y = currentYear + 1; y >= currentYear - 4; y--) yearOptions.push(y);

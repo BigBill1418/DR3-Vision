@@ -23,6 +23,10 @@
 // day's fingerprint and therefore can never retroactively suppress (un-send)
 // the prior day's alert — the check is strict by construction.
 
+// The Pacific calendar-day math lives in the shared `@/lib/time` source of
+// truth; this module just composes it with the EOD alert decision.
+import { pacificDayISO, pacificDayKeyUTC, isPacificWeekend, pacificDateLabel } from '@/lib/time';
+
 /** Minimal shape the core needs from a `bonus_employees` row. */
 export interface ActiveEmployee {
   id: string;
@@ -72,31 +76,6 @@ export interface EodDecision {
 // a constant so the fingerprint shape stays consistent with the cron.
 const SITE_CODE = 'woodland';
 
-const PACIFIC_TZ = 'America/Los_Angeles';
-
-// en-US formatter for the human label (`Sep 14, 2026`). Constructed once.
-const LABEL_FMT = new Intl.DateTimeFormat('en-US', {
-  timeZone: PACIFIC_TZ,
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-});
-
-// en-CA yields ISO-ordered `YYYY-MM-DD` parts, the cleanest way to read a
-// zoned calendar date out of Intl without manual part-stitching ambiguity.
-const ISO_FMT = new Intl.DateTimeFormat('en-CA', {
-  timeZone: PACIFIC_TZ,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
-// Weekday formatter (`Sat`/`Sun` detection) in the Pacific zone.
-const WEEKDAY_FMT = new Intl.DateTimeFormat('en-US', {
-  timeZone: PACIFIC_TZ,
-  weekday: 'short',
-});
-
 /** ntfy fingerprint for the missing-entries alert on a given Pacific day. */
 export function missingFingerprint(dateIso: string): string {
   return `bonus-entry-missing:${SITE_CODE}:${dateIso}`;
@@ -104,20 +83,21 @@ export function missingFingerprint(dateIso: string): string {
 
 /**
  * Resolve the Pacific calendar-day facts for an instant. Pure: depends only
- * on `now` and the fixed Pacific zone.
+ * on `now` and the fixed Pacific zone (via `@/lib/time`).
  */
 export function pacificDateParts(now: Date): PacificDateParts {
-  const iso = ISO_FMT.format(now); // 'YYYY-MM-DD'
-  const label = LABEL_FMT.format(now); // 'Sep 14, 2026'
-  const weekday = WEEKDAY_FMT.format(now); // 'Mon' .. 'Sun'
-  const isWeekend = weekday === 'Sat' || weekday === 'Sun';
+  const iso = pacificDayISO(now); // 'YYYY-MM-DD'
+  const dayKeyUTC = pacificDayKeyUTC(now); // UTC midnight of the Pacific day
+  // 'Sep 14, 2026' — render the @db.Date-shaped key in UTC (its UTC parts ARE
+  // the Pacific day) to match how the rest of the app labels stored days.
+  const label = pacificDateLabel(dayKeyUTC, 'en', {
+    weekday: undefined,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 
-  // Build the UTC-midnight key from the *Pacific* Y/M/D so it lines up with
-  // the `@db.Date` values the cron compares against.
-  const [y, m, d] = iso.split('-').map((p) => Number.parseInt(p, 10));
-  const dayKeyUTC = new Date(Date.UTC(y as number, (m as number) - 1, d as number));
-
-  return { iso, label, dayKeyUTC, isWeekend };
+  return { iso, label, dayKeyUTC, isWeekend: isPacificWeekend(now) };
 }
 
 /**

@@ -14,14 +14,16 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess } from '@/lib/bonus/access';
 import { upsertDailyEntries, type DailyEntryInput } from '@/lib/bonus/daily-entry';
+import { appToday, appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// `entry_date` is an optional ISO date (YYYY-MM-DD). Omitted = today (server
-// clock). Past days are editable while the month is draft (ADR-0019 §7), so the
-// client may submit a back-dated day; the data layer scopes it to that day's
-// draft month.
+// `entry_date` is an optional ISO date (YYYY-MM-DD). Omitted = Pacific "today"
+// (NEVER the server's UTC clock — see @/lib/time). Back-dating to any other
+// Pacific calendar day is an ADMIN-ONLY action (Bill); a non-admin submitting a
+// non-today date is rejected 403 below. The data layer scopes the chosen day to
+// that day's draft month (ADR-0019 §7).
 const entrySchema = z.object({
   bonus_employee_id: z.string().min(1),
   mattress_count: z.number().int().min(0).max(999),
@@ -39,12 +41,11 @@ const bodySchema = z.object({
   entries: z.array(entrySchema).min(1).max(200),
 });
 
+/** The Pacific calendar day for a client-supplied ISO, or Pacific today if omitted. */
 function parseEntryDate(iso: string | undefined): Date {
-  if (!iso) return new Date();
-  // Build a UTC-midnight date from the calendar day; the data layer normalizes
-  // again, but parsing as UTC here avoids a local-zone shift on the boundary.
-  const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d));
+  if (!iso) return appToday();
+  // Build the canonical UTC-midnight @db.Date key from the calendar day.
+  return dayKeyUTCFromISO(iso);
 }
 
 export async function POST(req: Request) {
@@ -72,6 +73,18 @@ export async function POST(req: Request) {
   }
 
   const date = parseEntryDate(parsed.data.entry_date);
+
+  // Admin-only back-dating (FIX 2): only an admin (Bill) may record against a
+  // day other than Pacific "today". A manager/operator that forges a back-dated
+  // `entry_date` is rejected here — the client is NEVER trusted (hard rule #2).
+  // Comparison is on the canonical UTC-midnight @db.Date key.
+  if (!ctx.isAdmin && date.getTime() !== appToday().getTime()) {
+    return NextResponse.json(
+      { error: `Entries may only be recorded for today (${appTodayISO()}).` },
+      { status: 403 },
+    );
+  }
+
   const inputs: DailyEntryInput[] = parsed.data.entries.map((e) => ({
     bonus_employee_id: e.bonus_employee_id,
     mattress_count: e.mattress_count,

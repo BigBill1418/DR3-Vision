@@ -21,6 +21,7 @@ import { prisma } from '@/lib/prisma';
 import { resolveActiveRule, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
 import type { BonusMonthState } from '@/lib/bonus/state-machine';
+import { appToday } from '@/lib/time';
 
 // ────────────────────────────────────────────────────────────────────
 // Public types
@@ -75,11 +76,13 @@ interface DateWindow {
 }
 
 /**
- * Build the `month_start` range for a filter, anchored on `now` (defaults to the
- * wall clock; injectable for deterministic tests). All bounds are UTC-midnight
- * so they line up with the `@db.Date` column.
+ * Build the `month_start` range for a filter, anchored on `now`. Defaults to the
+ * Pacific business day (`appToday()`, UTC components = Pacific Y/M/D), NOT the
+ * server's UTC clock — otherwise "current month" flips a day early near month
+ * boundaries for ~7mo/year. Injectable for deterministic tests. All bounds are
+ * UTC-midnight so they line up with the `@db.Date` column.
  */
-export function monthWindow(filter: MonthFilter, now: Date = new Date()): DateWindow {
+export function monthWindow(filter: MonthFilter, now: Date = appToday()): DateWindow {
   const y = now.getUTCFullYear();
   const m = now.getUTCMonth();
   if (filter === 'current') {
@@ -159,7 +162,7 @@ async function payoutForMonth(
 export async function listBonusMonths(
   siteId: string,
   filter: MonthFilter,
-  now: Date = new Date(),
+  now: Date = appToday(),
 ): Promise<MonthListRow[]> {
   const win = monthWindow(filter, now);
   const where: { site_id: string; month_start?: { gte?: Date; lt?: Date } } = { site_id: siteId };

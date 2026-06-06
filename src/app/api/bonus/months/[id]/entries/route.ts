@@ -21,6 +21,7 @@ import {
   type AmendmentEntryDb,
   type AmendmentEntryInput,
 } from '@/lib/bonus/amendment';
+import { dayKeyUTCFromISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,10 +40,10 @@ const bodySchema = z.object({
   entries: z.array(entrySchema).min(1).max(200),
 });
 
-function parseEntryDate(iso: string): Date {
-  const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d));
-}
+// A calendar-day string → its canonical @db.Date key (UTC midnight). No instant
+// is involved here (the day is supplied and bounded to the amended month), so
+// there is no UTC-vs-Pacific ambiguity; we reuse the shared helper for one path.
+const parseEntryDate = (iso: string): Date => dayKeyUTCFromISO(iso);
 
 export async function POST(
   req: Request,
