@@ -45,7 +45,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const locale = await getLocale();
   return (
     <html lang={locale} dir={dirFor(locale)} className={inter.variable}>
-      <body className="min-h-screen bg-dr3-green-deep font-sans text-dr3-cream antialiased">
+      <body className="min-h-screen bg-dr3-space font-sans text-dr3-mist antialiased">
         {children}
       </body>
     </html>

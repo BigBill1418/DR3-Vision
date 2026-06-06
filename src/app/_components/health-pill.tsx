@@ -55,17 +55,17 @@ export function HealthPill() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-2 rounded-full bg-dr3-green-dark/60 px-3 py-1 text-xs font-medium text-dr3-cream/80 transition-colors hover:text-dr3-cream"
+        className="inline-flex items-center gap-2 rounded-full border border-dr3-steel-light/25 bg-dr3-space-2/60 px-3 py-1 text-xs font-medium text-dr3-mist-dim transition-colors hover:text-dr3-mist"
       >
         <span className={`h-2 w-2 rounded-full ${DOT[overall]}`} aria-hidden="true" />
         {LABEL[overall]}
-        <span aria-hidden="true" className="text-dr3-cream/50">
+        <span aria-hidden="true" className="text-dr3-mist-dim/70">
           {open ? '▾' : '▸'}
         </span>
       </button>
 
       {open && (
-        <div className="absolute bottom-full left-0 mb-2 w-72 rounded-lg bg-dr3-cream p-3 text-dr3-ink shadow-xl">
+        <div className="absolute bottom-full left-0 mb-2 w-72 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-3 text-dr3-mist shadow-xl">
           {subs ? (
             <ul className="flex flex-col gap-2">
               {subs.map((s) => (
@@ -74,12 +74,12 @@ export function HealthPill() {
                     <span className={`h-2 w-2 rounded-full ${DOT[s.status]}`} aria-hidden="true" />
                     {s.label}
                   </span>
-                  <span className="text-dr3-ink/60">{s.detail}</span>
+                  <span className="text-dr3-mist-dim">{s.detail}</span>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-dr3-ink/60">Checking subsystems…</p>
+            <p className="text-xs text-dr3-mist-dim">Checking subsystems…</p>
           )}
         </div>
       )}

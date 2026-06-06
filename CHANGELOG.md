@@ -5,6 +5,32 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Re-themed auth + shared dashboard chrome to the logo-keyed DARK identity
+
+Continued the rollout of the DR3-Vision dark-space/cyan identity (the tokens in
+`tailwind.config.ts`: `dr3-space`, `dr3-cyan`, `dr3-steel`, `dr3-mist`, …) from
+the already-themed dashboard shell out to the root body, the auth surface, and
+the shared dashboard components. The operator iPad field UI is deliberately left
+on its high-contrast GREEN palette (operators work outdoors).
+
+- **Root `<body>`** (`src/app/layout.tsx`): `bg-dr3-green-deep`→`bg-dr3-space`,
+  `text-dr3-cream`→`text-dr3-mist`.
+- **Operator stays GREEN** (`src/app/operator/layout.tsx`): the pass-through
+  layout now wraps children in an explicit
+  `min-h-screen bg-dr3-green-deep text-dr3-cream` element so the new dark root
+  body never bleeds into the operator subtree. No operator colors converted.
+- **Login** (`src/app/login/page.tsx`, `login-form.tsx`): page base
+  `bg-black`→`bg-dr3-space`; SSO hint `text-white/60`→`text-dr3-mist-dim`. The
+  Microsoft SSO button keeps its brand-mandated white-on-black; the error pill
+  keeps its semantic red.
+- **Dashboard chrome** (`src/app/_components/dashboard-avatar.tsx`,
+  `health-pill.tsx`): avatar initials chip→`bg-dr3-cyan text-dr3-space`, photo
+  ring on `bg-dr3-space-2`; health pill button + popover moved to
+  `bg-dr3-space-2` glass with `border-dr3-steel-light/25`, text to
+  `dr3-mist`/`dr3-mist-dim`. Status-dot hexes preserved.
+- No dark-text-on-dark-bg: the only remaining `text-dr3-space` is on a
+  `bg-dr3-cyan` fill (avatar initials); zero `text-dr3-ink` left.
+
 ### 2026-06-06 — Payroll PDF re-themed RED/BLACK + co-branded with the official SVdP logo
 
 Re-styled the monthly processor-bonus report (the signed payroll PDF) for print.

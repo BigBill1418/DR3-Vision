@@ -46,14 +46,14 @@ export function DashboardAvatar({ name }: { name: string }) {
         alt=""
         width={40}
         height={40}
-        className="h-10 w-10 rounded-full bg-dr3-green object-cover"
+        className="h-10 w-10 rounded-full bg-dr3-space-2 object-cover ring-1 ring-dr3-steel-light/30"
       />
     );
   }
 
   return (
     <span
-      className="flex h-10 w-10 items-center justify-center rounded-full bg-dr3-green text-sm font-bold text-dr3-green-deep"
+      className="flex h-10 w-10 items-center justify-center rounded-full bg-dr3-cyan text-sm font-bold text-dr3-space"
       aria-hidden="true"
     >
       {initials(name)}

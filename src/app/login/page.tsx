@@ -8,7 +8,7 @@ export const metadata = { title: 'Sign in — DR3-Vision' };
 
 export default function LoginPage() {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center bg-black px-6">
+    <main className="relative flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6">
       <div className="flex w-full max-w-md flex-col items-center gap-8">
         <Image
           src="/brand/dr3-vision-logo.jpg"

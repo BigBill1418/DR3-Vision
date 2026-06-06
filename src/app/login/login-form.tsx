@@ -78,7 +78,7 @@ export function LoginForm() {
         <MicrosoftLogo />
         {busy ? t('auth_login.redirecting') : t('auth_login.sign_in_with_microsoft')}
       </button>
-      <p className="text-center text-xs text-white/60">{t('auth_login.sso_only_hint')}</p>
+      <p className="text-center text-xs text-dr3-mist-dim">{t('auth_login.sso_only_hint')}</p>
     </div>
   );
 }
