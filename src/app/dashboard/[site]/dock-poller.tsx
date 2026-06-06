@@ -36,13 +36,10 @@ export function DockPoller({ children }: Props) {
 
   return (
     <div className="relative">
-      <div
-        className="pointer-events-none flex items-center justify-end pb-2"
-        aria-live="polite"
-      >
+      <div className="pointer-events-none flex items-center justify-end pb-2" aria-live="polite">
         <span
           className={
-            'rounded-full bg-dr3-green px-2.5 py-0.5 text-[11px] font-semibold text-dr3-ink shadow transition-opacity ' +
+            'rounded-full bg-dr3-cyan px-2.5 py-0.5 text-[11px] font-semibold text-dr3-space shadow transition-opacity ' +
             (refreshing ? 'opacity-100' : 'opacity-60')
           }
         >

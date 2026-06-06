@@ -39,21 +39,21 @@ export function DockTile({ siteCode, load }: Props) {
   return (
     <Link
       href={`/dashboard/${siteCode}/load/${load.id}`}
-      className="block rounded-lg bg-dr3-green-dark/40 p-4 transition-colors hover:bg-dr3-green-dark/70"
+      className="block rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4 transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
     >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-base font-semibold">{load.operatorName}</span>
-        <span className="rounded-full bg-dr3-green/30 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-dr3-cream">
+        <span className="rounded-full bg-dr3-cyan/15 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-dr3-cyan ring-1 ring-dr3-cyan/30">
           {loadStageLabel(load.status, dict)}
         </span>
       </div>
-      <p className="mt-1 text-sm text-dr3-cream/80">{load.sourceName}</p>
-      <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
+      <p className="mt-1 text-sm text-dr3-mist-dim">{load.sourceName}</p>
+      <p className="mt-2 text-xs uppercase tracking-wide text-dr3-mist-dim">
         {t('site_dashboard.tile_bol_label')}{' '}
-        <span className="font-mono normal-case text-dr3-cream">{load.bol_number ?? '—'}</span>
+        <span className="font-mono normal-case text-dr3-mist">{load.bol_number ?? '—'}</span>
       </p>
       <p className="mt-3 text-sm">
-        <span className="text-dr3-cream/60">{t('site_dashboard.tile_elapsed_label')} </span>
+        <span className="text-dr3-mist-dim">{t('site_dashboard.tile_elapsed_label')} </span>
         {sinceIso ? <ElapsedTime since={sinceIso} /> : <span className="font-mono">—</span>}
       </p>
     </Link>

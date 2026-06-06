@@ -74,11 +74,11 @@ export function PeriodPicker({ range, from, to }: Props) {
 
   return (
     <div
-      className="flex flex-col gap-3 rounded-lg bg-dr3-green-dark/30 p-4"
+      className="flex flex-col gap-3 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4"
       aria-busy={isPending}
     >
       <div className="flex flex-col gap-2">
-        <span className="text-xs uppercase tracking-wide text-dr3-cream/60">
+        <span className="text-xs uppercase tracking-wide text-dr3-mist-dim">
           {t('loads.filter_label_date_range')}
         </span>
         <div className="flex flex-wrap gap-2">
@@ -91,8 +91,8 @@ export function PeriodPicker({ range, from, to }: Props) {
               aria-pressed={range === value}
               className={
                 range === value
-                  ? 'rounded-md bg-dr3-green px-3 py-1.5 text-sm font-semibold text-dr3-ink disabled:opacity-60'
-                  : 'rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:opacity-60'
+                  ? 'rounded-md bg-dr3-cyan px-3 py-1.5 text-sm font-semibold text-dr3-space disabled:opacity-60'
+                  : 'rounded-md bg-dr3-steel/40 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:bg-dr3-steel/60 disabled:opacity-60'
               }
             >
               {rangeLabels[value]}
@@ -102,24 +102,24 @@ export function PeriodPicker({ range, from, to }: Props) {
       </div>
       {range === 'custom' && (
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
+          <label className="flex flex-col gap-1 text-xs text-dr3-mist-dim">
             {t('compliance.period_label_from')}
             <input
               type="date"
               value={from}
               disabled={isPending}
               onChange={(e) => setBound('from', e.target.value)}
-              className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-sm text-dr3-cream"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-sm text-dr3-mist"
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-dr3-cream/70">
+          <label className="flex flex-col gap-1 text-xs text-dr3-mist-dim">
             {t('compliance.period_label_to')}
             <input
               type="date"
               value={to}
               disabled={isPending}
               onChange={(e) => setBound('to', e.target.value)}
-              className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-sm text-dr3-cream"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-sm text-dr3-mist"
             />
           </label>
         </div>

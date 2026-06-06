@@ -16,7 +16,7 @@ export function BonusReports({ year }: { year: number }) {
     <section className="flex flex-col gap-4" data-testid="bonus-reports">
       <header className="flex flex-col gap-1">
         <h2 className="text-xl font-semibold tracking-tight">Bonus reports</h2>
-        <p className="text-sm text-dr3-cream/70">
+        <p className="text-sm text-dr3-mist-dim">
           Woodland processor bonus reporting. Figures match the daily grid and the signed monthly
           PDF.
         </p>
@@ -68,15 +68,15 @@ function ReportCard({ title, helper, href, linkLabel, dataTestId, secondary }: R
   const baseClasses =
     'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors';
   return (
-    <article className="flex flex-col gap-3 rounded-md bg-dr3-green-dark/30 p-4">
+    <article className="flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-4">
       <header className="flex flex-col gap-1">
-        <h3 className="text-lg font-semibold text-dr3-cream">{title}</h3>
-        <p className="text-xs text-dr3-cream/70">{helper}</p>
+        <h3 className="text-lg font-semibold text-dr3-mist">{title}</h3>
+        <p className="text-xs text-dr3-mist-dim">{helper}</p>
       </header>
       <div className="flex flex-wrap items-center gap-3">
         <Link
           href={href}
-          className={`${baseClasses} bg-dr3-chartreuse text-dr3-ink hover:bg-dr3-chartreuse/90`}
+          className={`${baseClasses} bg-dr3-cyan text-dr3-space hover:bg-dr3-cyan-bright`}
           data-testid={dataTestId}
         >
           {linkLabel}
@@ -85,7 +85,7 @@ function ReportCard({ title, helper, href, linkLabel, dataTestId, secondary }: R
           <a
             href={secondary.href}
             download={secondary.download}
-            className={`${baseClasses} border border-dr3-cream/20 text-dr3-cream hover:bg-dr3-green-dark/40`}
+            className={`${baseClasses} border border-dr3-steel-light/40 text-dr3-mist hover:bg-dr3-steel/40`}
             data-testid={secondary.dataTestId}
           >
             {secondary.label}

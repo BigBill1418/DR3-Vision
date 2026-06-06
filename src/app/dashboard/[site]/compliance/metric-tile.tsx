@@ -11,29 +11,32 @@ import { useT } from '@/i18n/provider';
 // surface is the click target — easier to hit on a touchpad and clearer
 // affordance for the manager.
 //
-// Color bands match the T-010 / T-011 convention:
-//   green  → bg-dr3-green/20    (meets threshold; using the brand secondary)
-//   yellow → bg-orange-400/30   (within 5pp; explicit warning hue, not brand)
-//   red    → bg-red-500/30      (below threshold-5pp; explicit alert hue)
-//   pending→ bg-dr3-cream/10    (data source not yet wired; no grading)
+// Color bands carry the grading semantics; on the dark Vision theme the
+// status hues stay deliberately non-brand so green/amber/red read as
+// status, not decoration:
+//   green  → emerald wash        (meets threshold)
+//   yellow → amber wash          (within 5pp; explicit warning hue)
+//   red    → rose wash           (below threshold-5pp; explicit alert hue)
+//   pending→ neutral steel wash  (data source not yet wired; no grading)
 //
-// Per ADR-0014 manager surfaces stay on the green palette; only the
-// alert-state inserts (yellow/red) reach for non-brand hues, intentionally.
+// The "ok" hue is emerald (not brand cyan) so a passing metric reads as a
+// distinct status colour against the cyan chrome, matching the
+// reconciliation tone scale (emerald/amber/rose).
 //
 // Per CLAUDE.md hard rule #10 navigation is a Next <Link>, not a form.
 
 const BUCKET_BG: Record<ComplianceBucket, string> = {
-  green: 'bg-dr3-green/20 hover:bg-dr3-green/30',
-  yellow: 'bg-orange-400/30 hover:bg-orange-400/40',
-  red: 'bg-red-500/30 hover:bg-red-500/40',
-  pending: 'bg-dr3-cream/10 hover:bg-dr3-cream/15',
+  green: 'bg-emerald-500/15 ring-1 ring-emerald-400/30 hover:bg-emerald-500/25',
+  yellow: 'bg-amber-500/15 ring-1 ring-amber-400/30 hover:bg-amber-500/25',
+  red: 'bg-rose-500/15 ring-1 ring-rose-400/30 hover:bg-rose-500/25',
+  pending: 'bg-dr3-space-2 ring-1 ring-dr3-steel-light/25 hover:bg-dr3-steel/40',
 };
 
 const BUCKET_DOT: Record<ComplianceBucket, string> = {
-  green: 'bg-dr3-green',
-  yellow: 'bg-orange-400',
-  red: 'bg-red-500',
-  pending: 'bg-dr3-cream/40',
+  green: 'bg-emerald-400',
+  yellow: 'bg-amber-400',
+  red: 'bg-rose-400',
+  pending: 'bg-dr3-mist-dim/50',
 };
 
 type Props = {
@@ -85,12 +88,10 @@ export function MetricTile({
     <Link
       href={clickThroughHref}
       aria-label={`${title}: ${valueDisplay}, ${t('compliance_tile.target_label')} ${thresholdDisplay}, ${bucketLabels[bucket]}`}
-      className={`group flex h-full flex-col gap-3 rounded-lg p-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-dr3-chartreuse ${BUCKET_BG[bucket]}`}
+      className={`group flex h-full flex-col gap-3 rounded-lg p-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-dr3-cyan ${BUCKET_BG[bucket]}`}
     >
       <header className="flex items-start justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-dr3-cream">
-          {title}
-        </h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-dr3-mist">{title}</h2>
         <span
           className={`mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ${BUCKET_DOT[bucket]}`}
           aria-hidden="true"
@@ -98,21 +99,23 @@ export function MetricTile({
       </header>
 
       <p className="flex items-baseline gap-1">
-        <span className="font-mono text-4xl font-bold tabular-nums text-dr3-cream">
+        <span className="font-mono text-4xl font-bold tabular-nums text-dr3-mist">
           {valueDisplay}
         </span>
         {unit && bucket !== 'pending' && (
-          <span className="text-lg font-medium text-dr3-cream/70">{unit === '%' ? '%' : ''}</span>
+          <span className="text-lg font-medium text-dr3-mist-dim">{unit === '%' ? '%' : ''}</span>
         )}
       </p>
 
-      <p className="text-xs text-dr3-cream/70">
+      <p className="text-xs text-dr3-mist-dim">
         {t('compliance_tile.target_label')} {thresholdDisplay}
       </p>
 
-      {caption && <p className="text-xs leading-snug text-dr3-cream/60">{caption}</p>}
+      {caption && <p className="text-xs leading-snug text-dr3-mist-dim">{caption}</p>}
 
-      <p className="mt-auto text-[11px] uppercase tracking-wide text-dr3-cream/50">{scopeText}</p>
+      <p className="mt-auto text-[11px] uppercase tracking-wide text-dr3-mist-dim/70">
+        {scopeText}
+      </p>
     </Link>
   );
 }

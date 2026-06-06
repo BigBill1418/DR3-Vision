@@ -29,13 +29,13 @@ export default async function DashboardPage() {
       : sites.filter((s) => s.id === session.user.primary_site_id);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
         <header className="flex flex-col gap-2">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">{t('dashboard.header_title')}</h1>
-              <p className="text-sm text-dr3-cream/70">
+              <p className="text-sm text-dr3-mist-dim">
                 {t('dashboard.signed_in_as', {
                   name: session.user.name ?? '',
                   role: session.user.role,
@@ -45,7 +45,7 @@ export default async function DashboardPage() {
             {session.user.role === 'admin' ? (
               <Link
                 href="/admin/users"
-                className="inline-flex items-center gap-2 rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-sm font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+                className="inline-flex items-center gap-2 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-sm font-medium text-dr3-mist transition-colors hover:bg-dr3-steel/40"
                 data-testid="dashboard-admin-link"
               >
                 {t('dashboard.admin_link')}
@@ -57,16 +57,16 @@ export default async function DashboardPage() {
         <section className="flex flex-col gap-3">
           <h2 className="text-xl font-semibold">{t('dashboard.sites_heading')}</h2>
           {visibleSites.length === 0 ? (
-            <p className="text-dr3-cream/70">{t('dashboard.sites_empty')}</p>
+            <p className="text-dr3-mist-dim">{t('dashboard.sites_empty')}</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {visibleSites.map((s) => (
                 <li key={s.id}>
                   <Link
                     href={`/dashboard/${s.code}`}
-                    className="block rounded-md bg-dr3-green-dark/40 px-4 py-3 text-lg font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+                    className="block rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3 text-lg font-medium text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
                   >
-                    {s.name} <span className="text-sm text-dr3-cream/60">({s.code})</span>
+                    {s.name} <span className="text-sm text-dr3-mist-dim">({s.code})</span>
                   </Link>
                 </li>
               ))}

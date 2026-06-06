@@ -46,17 +46,17 @@ export function ExportsClient({ sites }: Props) {
     <section className="flex flex-col gap-6">
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-cream/80">Site</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">Site</span>
           {sites.length === 1 ? (
             <span
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-2 text-dr3-mist"
               data-testid="exports-site-fixed"
             >
               {sites[0]!.name}
             </span>
           ) : (
             <select
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
               value={siteCode}
               onChange={(e) => setSiteCode(e.target.value)}
               data-testid="exports-site-select"
@@ -71,10 +71,10 @@ export function ExportsClient({ sites }: Props) {
         </label>
 
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-cream/80">Month</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">Month</span>
           <input
             type="month"
-            className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+            className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
             value={month}
             onChange={(e) => setMonth(e.target.value)}
             data-testid="exports-month-input"
@@ -86,9 +86,7 @@ export function ExportsClient({ sites }: Props) {
         <DownloadCard
           title="MRC Monthly Invoice (Article 10.4)"
           href={mrcHref}
-          filename={
-            ready ? `dr3-mrc-invoice-${siteCode}-${month}.csv` : 'dr3-mrc-invoice-...csv'
-          }
+          filename={ready ? `dr3-mrc-invoice-${siteCode}-${month}.csv` : 'dr3-mrc-invoice-...csv'}
           helper="One row per submitted, verified, submitted-to-MyMRC, or processed inbound load for the selected site and month. Column shape matches the MyMRC reconciliation CSV."
           dataTestId="download-mrc"
         />
@@ -118,17 +116,17 @@ function DownloadCard({ title, helper, href, filename, dataTestId }: CardProps) 
   const enabled = !!href;
   const baseClasses =
     'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors';
-  const enabledClasses = 'bg-dr3-chartreuse text-dr3-ink hover:bg-dr3-chartreuse/90';
-  const disabledClasses = 'cursor-not-allowed bg-dr3-green-dark/30 text-dr3-cream/50';
+  const enabledClasses = 'bg-dr3-cyan text-dr3-space hover:bg-dr3-cyan-bright';
+  const disabledClasses = 'cursor-not-allowed bg-dr3-space text-dr3-mist-dim/60';
 
   return (
-    <article className="flex flex-col gap-3 rounded-md bg-dr3-green-dark/30 p-4">
+    <article className="flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-4">
       <header className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold text-dr3-cream">{title}</h2>
-        <p className="text-xs text-dr3-cream/70">{helper}</p>
+        <h2 className="text-lg font-semibold text-dr3-mist">{title}</h2>
+        <p className="text-xs text-dr3-mist-dim">{helper}</p>
       </header>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <code className="break-all text-xs text-dr3-cream/60">{filename}</code>
+        <code className="break-all text-xs text-dr3-mist-dim">{filename}</code>
         {enabled ? (
           <a
             href={href}

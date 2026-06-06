@@ -88,12 +88,12 @@ export function UploadClient({ siteCode }: Props) {
 
   return (
     <section
-      className="flex flex-col gap-4 rounded-md bg-dr3-green-dark/30 p-5"
+      className="flex flex-col gap-4 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-5"
       data-testid="reconciliation-upload"
     >
       <header>
-        <h2 className="text-lg font-semibold text-dr3-cream">Upload monthly CSV</h2>
-        <p className="text-xs text-dr3-cream/70">
+        <h2 className="text-lg font-semibold text-dr3-mist">Upload monthly CSV</h2>
+        <p className="text-xs text-dr3-mist-dim">
           Pull the latest monthly export from MyMRC and drop it here. Uploads are deduplicated by
           file content — re-uploading the same file routes you to the existing session.
         </p>
@@ -127,18 +127,18 @@ export function UploadClient({ siteCode }: Props) {
 
       <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-cream/80">CSV file</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">CSV file</span>
           <input
             type="file"
             accept=".csv,text/csv,text/plain"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm text-dr3-cream file:mr-3 file:rounded file:border-0 file:bg-dr3-chartreuse file:px-3 file:py-1 file:text-sm file:font-semibold file:text-dr3-ink"
+            className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist file:mr-3 file:rounded file:border-0 file:bg-dr3-cyan file:px-3 file:py-1 file:text-sm file:font-semibold file:text-dr3-space"
             data-testid="reconciliation-file-input"
           />
         </label>
 
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-cream/80">Weight tolerance (%)</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">Weight tolerance (%)</span>
           <input
             type="number"
             inputMode="decimal"
@@ -147,7 +147,7 @@ export function UploadClient({ siteCode }: Props) {
             step="0.1"
             value={tolerance}
             onChange={(e) => setTolerance(e.target.value)}
-            className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+            className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
             data-testid="reconciliation-tolerance-input"
           />
         </label>
@@ -158,7 +158,7 @@ export function UploadClient({ siteCode }: Props) {
           type="button"
           onClick={handleUpload}
           disabled={pending || !file}
-          className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="reconciliation-upload-submit"
         >
           {pending ? 'Uploading…' : 'Upload and reconcile'}

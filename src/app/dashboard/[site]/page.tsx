@@ -56,14 +56,14 @@ export default async function SiteDashboardPage({ params }: Props) {
     // Per acceptance: a manager scoped to Eugene hitting /dashboard/woodland
     // sees a 403, not a redirect or a misleading 404.
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
-        <p className="mt-2 text-dr3-cream/70">
+        <p className="mt-2 text-dr3-mist-dim">
           {t('dashboard.forbidden_body', { name: site.name })}
         </p>
         <Link
           href="/dashboard"
-          className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           {t('dashboard.back_to_sites')}
         </Link>
@@ -90,37 +90,37 @@ export default async function SiteDashboardPage({ params }: Props) {
   });
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <Link
           href="/dashboard"
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           {t('dashboard.back_to_sites')}
         </Link>
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{site.name}</h1>
-            <p className="text-sm capitalize text-dr3-cream/70">
+            <p className="text-sm capitalize text-dr3-mist-dim">
               {t('site_dashboard.subtitle', { jurisdiction: site.jurisdiction })}
             </p>
           </div>
           <nav className="flex flex-wrap gap-2 text-sm">
             <Link
               href={`/dashboard/${site.code}/loads`}
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
             >
               {t('loads.heading')}
             </Link>
             <Link
               href={`/dashboard/${site.code}/compliance`}
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
             >
               {t('compliance.heading')}
             </Link>
             <Link
               href={`/dashboard/${site.code}/reconciliation`}
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
               data-testid="dashboard-reconciliation-link"
             >
               Reconciliation
@@ -130,9 +130,9 @@ export default async function SiteDashboardPage({ params }: Props) {
 
         <DockPoller>
           {loads.length === 0 ? (
-            <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
+            <div className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-8 text-center">
               <p className="text-lg font-medium">{t('site_dashboard.no_active_loads_heading')}</p>
-              <p className="mt-2 text-sm text-dr3-cream/70">
+              <p className="mt-2 text-sm text-dr3-mist-dim">
                 {t('site_dashboard.no_active_loads_body')}
               </p>
             </div>
@@ -147,7 +147,8 @@ export default async function SiteDashboardPage({ params }: Props) {
                       bol_number: l.bol_number,
                       status: l.status,
                       arrived_at: l.arrived_at,
-                      operatorName: l.assigned_operator?.name ?? t('site_dashboard.tile_unassigned'),
+                      operatorName:
+                        l.assigned_operator?.name ?? t('site_dashboard.tile_unassigned'),
                       sourceName: l.source?.name ?? t('site_dashboard.tile_unknown_source'),
                     }}
                   />

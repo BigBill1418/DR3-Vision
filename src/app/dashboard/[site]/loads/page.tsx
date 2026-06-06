@@ -180,14 +180,14 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   const isAssigned = session.user.primary_site_id === site.id;
   if (!isAdmin && !isAssigned) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>
-        <p className="mt-2 text-dr3-cream/70">
+        <p className="mt-2 text-dr3-mist-dim">
           {t('dashboard.forbidden_body', { name: site.name })}
         </p>
         <Link
           href="/dashboard"
-          className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           {t('dashboard.back_to_sites')}
         </Link>
@@ -297,17 +297,17 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   const safePage = Math.min(page, totalPages);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <Link
           href={`/dashboard/${site.code}`}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
         >
           {t('dashboard.back_to_site', { name: site.name })}
         </Link>
         <header className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">{t('loads.heading')}</h1>
-          <p className="text-sm capitalize text-dr3-cream/70">
+          <p className="text-sm capitalize text-dr3-mist-dim">
             {t('loads.subtitle', { name: site.name, jurisdiction: site.jurisdiction })}
           </p>
         </header>
@@ -330,7 +330,7 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
         <LoadsPoller />
 
         <section className="flex flex-col gap-2">
-          <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
+          <p className="text-xs uppercase tracking-wide text-dr3-mist-dim">
             {total === 0
               ? t('loads.summary_none')
               : translatePlural(dict, 'loads.summary_count', total, {
@@ -340,12 +340,12 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
                 })}
           </p>
           {rows.length === 0 ? (
-            <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
+            <div className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-8 text-center">
               <p className="text-base font-medium">{t('loads.empty_page_heading')}</p>
-              <p className="mt-2 text-sm text-dr3-cream/70">{t('loads.empty_page_body')}</p>
+              <p className="mt-2 text-sm text-dr3-mist-dim">{t('loads.empty_page_body')}</p>
             </div>
           ) : (
-            <ul className="flex flex-col divide-y divide-dr3-green-dark/40 overflow-hidden rounded-lg bg-dr3-green-dark/30">
+            <ul className="flex flex-col divide-y divide-dr3-steel-light/20 overflow-hidden rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2">
               {rows.map((row) => (
                 <LoadRow
                   key={row.id}
