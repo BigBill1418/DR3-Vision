@@ -20,7 +20,14 @@ import { headers } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { formatCents } from '@/lib/bonus/calculator';
-import { assemblePdfRows, type PdfEntry } from '@/lib/bonus/pdf-data';
+import {
+  assemblePdfRows,
+  buildAttestation,
+  formatPeriodTitle,
+  type AttestationSource,
+  type PdfEntry,
+} from '@/lib/bonus/pdf-data';
+import { getSignatureChain } from '@/lib/bonus/signature-chain';
 
 // Red/black payroll palette (ADR-0023). A print/payroll document is deliberately
 // styled in deep SVdP red + black on white — NOT the app's dark-cyan dashboard
@@ -59,14 +66,15 @@ export const dynamic = 'force-dynamic';
 
 interface SignatureBlock {
   label: string;
-  attestation: string;
+  /** Source-adapted attestation lines (T-209): primary / manual / auto override. */
+  attestationLines: string[];
+  attestationSource: AttestationSource;
+  /** Name printed on the signature line (the actual signer or override actor). */
   signedName: string | null;
   signedRole: string;
   signedAt: Date | null;
   signedIp: string | null;
   signedUserAgent: string | null;
-  overrideActorName: string | null;
-  overrideReason: string | null;
 }
 
 function fmtTimestamp(d: Date | null): string {
@@ -135,6 +143,9 @@ export default async function BonusPdfSourcePage({
       state: month.state,
       total_payout_cents: month.total_payout_cents,
       amended_from_period_id: month.amended_from_period_id,
+      period_number: month.period_number,
+      period_year: month.period_year,
+      pay_date: month.pay_date,
     },
     site: { code: month.site.code, name: month.site.name },
     employees,
@@ -142,43 +153,105 @@ export default async function BonusPdfSourcePage({
     rule,
   });
 
-  // Resolve override-actor display names (admin signed in someone's place).
-  const overrideActorIds = [month.facility_override_actor_id, month.ops_override_actor_id].filter(
-    (v): v is string => typeof v === 'string',
-  );
-  const overrideActors = overrideActorIds.length
+  // T-209 title block — site-name driven, bi-weekly period naming (ADR-0019.1 §1).
+  const periodTitle = formatPeriodTitle({
+    siteName: month.site.name,
+    periodNumber: month.period_number,
+    periodYear: month.period_year,
+    periodStart: month.period_start,
+    periodEnd: month.period_end,
+    payDate: month.pay_date,
+  });
+
+  // Resolve the site's natural signers + the auto-override actor from the
+  // signature chain (read-only; the chain is the single source of truth for
+  // "who signs which slot at which site" — addendum hard rule #2). Override
+  // attestation reads "on behalf of <natural signer>" for the slot.
+  const chain = await getSignatureChain(month.site_id);
+
+  // Collect every user UUID we must turn into a display name in one query:
+  // manual override actors, the configured auto-override actor, and the natural
+  // (chain) signers for each slot.
+  const nameLookupIds = [
+    month.facility_override_actor_id,
+    month.ops_override_actor_id,
+    chain.auto_override_actor_user_id,
+    chain.facility_signer_user_id,
+    chain.ops_signer_user_id,
+  ].filter((v): v is string => typeof v === 'string');
+  const lookedUpUsers = nameLookupIds.length
     ? await prisma.user.findMany({
-        where: { id: { in: overrideActorIds } },
+        where: { id: { in: [...new Set(nameLookupIds)] } },
         select: { id: true, name: true },
       })
     : [];
-  const actorName = (id: string | null): string | null =>
-    id ? (overrideActors.find((u) => u.id === id)?.name ?? id) : null;
+  const userName = (id: string | null): string | null =>
+    id ? (lookedUpUsers.find((u) => u.id === id)?.name ?? id) : null;
+
+  const facilityRole = 'Facility Manager';
+  const opsRole = 'Operations Manager';
+
+  const facilityAttest = buildAttestation(
+    {
+      slotRole: facilityRole,
+      primarySignerName: month.facility_signed_by?.name ?? null,
+      overrideActorName: userName(month.facility_override_actor_id),
+      overrideReason: month.facility_override_reason,
+      autoOverrideAt: month.facility_auto_override_at,
+      autoOverrideActorName: userName(chain.auto_override_actor_user_id),
+      naturalSignerName: userName(chain.facility_signer_user_id),
+    },
+    'I attest that the mattress counts and processor bonuses reported above are accurate for the period shown.',
+  );
+
+  const opsAttest = buildAttestation(
+    {
+      slotRole: opsRole,
+      primarySignerName: month.ops_signed_by?.name ?? null,
+      overrideActorName: userName(month.ops_override_actor_id),
+      overrideReason: month.ops_override_reason,
+      autoOverrideAt: month.ops_auto_override_at,
+      autoOverrideActorName: userName(chain.auto_override_actor_user_id),
+      naturalSignerName: userName(chain.ops_signer_user_id),
+    },
+    'I attest that I have reviewed and approve the processor bonuses reported above for payroll.',
+  );
+
+  // Name printed on the signature line: the override actor if overridden,
+  // otherwise the primary signer.
+  const facilitySignedName =
+    facilityAttest.source === 'auto_override'
+      ? userName(chain.auto_override_actor_user_id)
+      : facilityAttest.source === 'manual_override'
+        ? userName(month.facility_override_actor_id)
+        : (month.facility_signed_by?.name ?? null);
+  const opsSignedName =
+    opsAttest.source === 'auto_override'
+      ? userName(chain.auto_override_actor_user_id)
+      : opsAttest.source === 'manual_override'
+        ? userName(month.ops_override_actor_id)
+        : (month.ops_signed_by?.name ?? null);
 
   const signatures: SignatureBlock[] = [
     {
-      label: 'Facility Manager',
-      attestation:
-        'I attest that the mattress counts and processor bonuses reported above are accurate for the month shown.',
-      signedName: month.facility_signed_by?.name ?? null,
-      signedRole: 'Facility Manager (Woodland)',
+      label: facilityRole,
+      attestationLines: facilityAttest.lines,
+      attestationSource: facilityAttest.source,
+      signedName: facilitySignedName,
+      signedRole: facilityRole,
       signedAt: month.facility_signed_at,
       signedIp: month.facility_signed_ip,
       signedUserAgent: month.facility_signed_user_agent,
-      overrideActorName: actorName(month.facility_override_actor_id),
-      overrideReason: month.facility_override_reason,
     },
     {
-      label: 'Operations Manager',
-      attestation:
-        'I attest that I have reviewed and approve the processor bonuses reported above for payroll.',
-      signedName: month.ops_signed_by?.name ?? null,
-      signedRole: 'Operations Manager',
+      label: opsRole,
+      attestationLines: opsAttest.lines,
+      attestationSource: opsAttest.source,
+      signedName: opsSignedName,
+      signedRole: opsRole,
       signedAt: month.ops_signed_at,
       signedIp: month.ops_signed_ip,
       signedUserAgent: month.ops_signed_user_agent,
-      overrideActorName: actorName(month.ops_override_actor_id),
-      overrideReason: month.ops_override_reason,
     },
   ];
 
@@ -204,9 +277,11 @@ export default async function BonusPdfSourcePage({
               <div className="brand-sub">DR3-Vision</div>
             </div>
             <div className="title-block">
-              {/* site.name already includes the "DR3" prefix (e.g. "DR3 Woodland"). */}
-              <h1>{month.site.name} — Monthly Processor Bonus Report</h1>
-              <p className="subtitle">{data.monthLabel}</p>
+              {/* T-209: bi-weekly, site-name-driven title (ADR-0019.1 §1). The
+                  "DR3 " prefix is owned by the title template; formatPeriodTitle
+                  strips the seeded prefix from site.name to avoid doubling it. */}
+              <h1>{periodTitle.title}</h1>
+              <p className="subtitle">{periodTitle.payDateLine}</p>
               {data.isAmended && (
                 <>
                   <p className="amended-marker">AMENDED</p>
@@ -253,7 +328,7 @@ export default async function BonusPdfSourcePage({
             <tfoot>
               <tr>
                 <td className="col-name grand-label" colSpan={3}>
-                  Monthly Grand Total
+                  Period Grand Total
                 </td>
                 <td className="col-num grand-total">{formatCents(data.grandTotalCents)}</td>
               </tr>
@@ -263,7 +338,18 @@ export default async function BonusPdfSourcePage({
           <section className="signatures">
             {signatures.map((s) => (
               <div className="sig-block" key={s.label}>
-                <div className="sig-attest">{s.attestation}</div>
+                <div className="sig-attest">
+                  {s.attestationLines.map((line, i) => (
+                    <p
+                      key={i}
+                      className={
+                        i === 0 ? 'sig-attest-line' : 'sig-attest-line sig-attest-secondary'
+                      }
+                    >
+                      {line}
+                    </p>
+                  ))}
+                </div>
                 <div className="sig-line">
                   <span className="sig-name">{s.signedName ?? '— not signed —'}</span>
                 </div>
@@ -272,12 +358,6 @@ export default async function BonusPdfSourcePage({
                   <div>Signed: {fmtTimestamp(s.signedAt)}</div>
                   <div>IP: {s.signedIp ?? '—'}</div>
                   <div className="sig-ua">UA: {s.signedUserAgent ?? '—'}</div>
-                  {s.overrideActorName && (
-                    <div className="sig-override">
-                      Signed on their behalf by {s.overrideActorName}
-                      {s.overrideReason ? ` — ${s.overrideReason}` : ''}
-                    </div>
-                  )}
                 </div>
               </div>
             ))}
@@ -358,11 +438,14 @@ const PRINT_CSS = `
   .signatures { display: flex; gap: 32px; margin-top: 30px; page-break-inside: avoid; }
   .sig-block { flex: 1; page-break-inside: avoid; }
   .sig-attest { font-size: 11px; color: ${T.ink}; min-height: 30px; }
+  .sig-attest-line { margin: 0 0 4px; font-size: 11px; line-height: 1.4; }
+  /* Override / system-override explanatory sentences read in red so payroll sees
+     immediately that the slot was not primary-signed. */
+  .sig-attest-secondary { color: ${T.red}; font-weight: 600; font-style: italic; }
   .sig-line { border-bottom: 1px solid ${T.black}; margin: 22px 0 6px; padding-bottom: 4px; }
   .sig-name { font-size: 15px; font-weight: 600; color: ${T.black}; }
   .sig-meta { font-size: 10px; color: ${T.meta}; line-height: 1.5; }
   .sig-ua { word-break: break-all; }
-  .sig-override { margin-top: 4px; color: ${T.red}; font-weight: 600; }
   .report-foot {
     display: flex; justify-content: space-between; margin-top: 28px;
     padding-top: 12px; border-top: 1px solid ${T.hairline};

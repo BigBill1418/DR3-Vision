@@ -7,7 +7,14 @@
 // never diverge from the single calculator (CLAUDE.md hard rule #3).
 
 import { describe, it, expect } from 'vitest';
-import { assemblePdfRows, type PdfMonthInput } from './pdf-data';
+import {
+  assemblePdfRows,
+  buildAttestation,
+  formatPeriodTitle,
+  bareSiteName,
+  type AttestationSlotInput,
+  type PdfMonthInput,
+} from './pdf-data';
 import {
   calculateMonthlyBonusCents,
   calculateDailyBonusCents,
@@ -36,6 +43,9 @@ function baseInput(): PdfMonthInput {
       state: 'signed',
       total_payout_cents: null,
       amended_from_period_id: null,
+      period_number: 10,
+      period_year: 2026,
+      pay_date: dayUTC(2026, 4, 5),
     },
     site: { code: 'woodland', name: 'Woodland' },
     employees: [
@@ -117,5 +127,116 @@ describe('assemblePdfRows', () => {
     input.month.total_payout_cents = 4242;
     const out = assemblePdfRows(input);
     expect(out.lockedTotalCents).toBe(4242);
+  });
+});
+
+// T-209 — bi-weekly title + slot-source attestation (ADR-0019.1 §1, §4).
+
+describe('bareSiteName', () => {
+  it('strips the seeded "DR3 " prefix so the title does not double it', () => {
+    expect(bareSiteName('DR3 Woodland')).toBe('Woodland');
+    expect(bareSiteName('DR3 Eugene')).toBe('Eugene');
+  });
+  it('is a no-op for a name without the prefix', () => {
+    expect(bareSiteName('Woodland')).toBe('Woodland');
+  });
+});
+
+describe('formatPeriodTitle', () => {
+  // Period 13 of 2026: Tue Jun 9 → Mon Jun 22, pay date Fri Jun 26.
+  const p13 = {
+    periodNumber: 13,
+    periodYear: 2026,
+    periodStart: dayUTC(2026, 5, 9),
+    periodEnd: dayUTC(2026, 5, 22),
+    payDate: dayUTC(2026, 5, 26),
+  };
+
+  it('renders the Woodland title in the ADR-0019.1 format', () => {
+    const out = formatPeriodTitle({ siteName: 'DR3 Woodland', ...p13 });
+    expect(out.title).toBe('DR3 Woodland Bonus Report — Period 13: Jun 9 – Jun 22, 2026');
+    expect(out.payDateLine).toBe('Pay date: Jun 26, 2026');
+  });
+
+  it('renders the Eugene title from site name with no hardcoding', () => {
+    const out = formatPeriodTitle({ siteName: 'DR3 Eugene', ...p13 });
+    expect(out.title).toBe('DR3 Eugene Bonus Report — Period 13: Jun 9 – Jun 22, 2026');
+  });
+
+  it('does not double the DR3 prefix', () => {
+    const out = formatPeriodTitle({ siteName: 'DR3 Woodland', ...p13 });
+    expect(out.title.startsWith('DR3 DR3')).toBe(false);
+  });
+});
+
+describe('buildAttestation', () => {
+  const STD = 'I attest that the counts are accurate.';
+  const base: AttestationSlotInput = {
+    slotRole: 'Facility Manager',
+    primarySignerName: null,
+    overrideActorName: null,
+    overrideReason: null,
+    autoOverrideAt: null,
+    autoOverrideActorName: null,
+    naturalSignerName: 'Janette Thomas',
+  };
+
+  it('primary-signed renders the standard attestation', () => {
+    const out = buildAttestation({ ...base, primarySignerName: 'Janette Thomas' }, STD);
+    expect(out.source).toBe('primary');
+    expect(out.lines).toEqual([STD]);
+  });
+
+  it('manual override renders human-override language with the reason', () => {
+    const out = buildAttestation(
+      {
+        ...base,
+        overrideActorName: 'Bill Barnard',
+        overrideReason: 'Janette on medical leave',
+      },
+      STD,
+    );
+    expect(out.source).toBe('manual_override');
+    expect(out.lines[0]).toBe(
+      'Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.',
+    );
+    expect(out.lines[1]).toBe('Reason: Janette on medical leave');
+  });
+
+  it('auto override renders the ADR-0019.1 escalation language', () => {
+    // Tue Jun 9 2026 08:30 PT == 15:30 UTC (PDT, UTC-7).
+    const at = new Date('2026-06-09T15:30:00Z');
+    const out = buildAttestation(
+      {
+        ...base,
+        overrideActorName: 'Bill Barnard',
+        autoOverrideAt: at,
+        autoOverrideActorName: 'Bill Barnard',
+      },
+      STD,
+    );
+    expect(out.source).toBe('auto_override');
+    expect(out.lines[0]).toBe(
+      'Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.',
+    );
+    expect(out.lines[1]).toBe(
+      'System-applied admin override per ADR-0019.1 escalation policy. Janette Thomas did not sign by 08:30 AM PT on Tue Jun 9, 2026.',
+    );
+  });
+
+  it('auto override wins over a manual override actor when autoOverrideAt is set', () => {
+    const at = new Date('2026-06-09T15:30:00Z');
+    const out = buildAttestation(
+      { ...base, overrideActorName: 'Someone Else', autoOverrideAt: at, autoOverrideActorName: 'Bill Barnard' },
+      STD,
+    );
+    expect(out.source).toBe('auto_override');
+    expect(out.lines[0]).toContain('Signed by Bill Barnard');
+  });
+
+  it('unsigned slot falls back to the standard attestation', () => {
+    const out = buildAttestation(base, STD);
+    expect(out.source).toBe('unsigned');
+    expect(out.lines).toEqual([STD]);
   });
 });

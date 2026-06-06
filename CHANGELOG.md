@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave B: bonus PDF site-name + bi-weekly period naming + override attestation (T-209)
+
+Re-titled the bonus PDF for the bi-weekly cadence (ADR-0019.1 §1) and made the
+signature attestation language adapt to how each slot was filled (ADR-0019.1 §4 /
+ADR-0019.2). Kept the existing red/black SVdP + DR3-Vision co-branded styling
+untouched — this is a content change, not a restyle. `tsc --noEmit`, `next lint
+--max-warnings 0`, and the bonus `vitest` suite (238 tests, +6 new pdf-data
+specs) all clean; Woodland + Eugene Period 13 PDFs rendered and verified by eye.
+
+- **Title block.** Replaced the monthly "DR3 Woodland — Monthly Processor Bonus
+  Report / May 2026" header with the bi-weekly form
+  `DR3 [site] Bonus Report — Period N: <Mon D> – <Mon D>, <year>` plus a
+  `Pay date: <Mon D>, <year>` sub-line. Site-name driven (works for Woodland and
+  Eugene with no hardcoding). New pure `formatPeriodTitle()` in `pdf-data.ts`;
+  `bareSiteName()` strips the seeded "DR3 " prefix from `sites.name` so the
+  template's own "DR3 " prefix isn't doubled. Boundaries are `@db.Date` columns,
+  formatted in UTC per the `@/lib/time` storage invariant.
+- **Source-adaptive attestation.** New pure `buildAttestation()` branches on slot
+  source: primary-signed → standard attestation; manual override
+  (`*_override_actor_id` set, `*_auto_override_at` null) → "Signed by <actor>,
+  Administrator, on behalf of <natural signer>, <slot role>. Reason: <reason>";
+  auto override (`*_auto_override_at` not null) → same lead line + "System-applied
+  admin override per ADR-0019.1 escalation policy. <natural signer> did not sign
+  by 08:30 AM PT on <Tue date>." The natural signer per site is resolved from
+  `getSignatureChain()` (read-only) — facility/ops signer UUIDs → display names —
+  never hardcoded.
+- **Page wiring** (`src/app/internal/bonus-pdf/[month-id]/page.tsx`, URL segment
+  unchanged per ADR-0019.1 §7). Fetches the new `period_*` / `*_auto_override_at`
+  columns, resolves override-actor + auto-override-actor + natural-signer names in
+  one `user.findMany`, and renders the two attestation lines (the secondary
+  override sentence in red so payroll sees a non-primary signature at a glance).
+- **Reference sample.** Regenerated and committed
+  `public/brand/dr3-bonus-report-sample-eugene-period-13.pdf` (facility auto-
+  override + ops manual override) for ongoing visual reference.
+
 ### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 
 Made the bonus signature service site-aware by sourcing signer/override identity
