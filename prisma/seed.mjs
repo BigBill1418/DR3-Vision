@@ -395,15 +395,21 @@ async function seedBonusPostSeedDdl() {
 }
 
 async function assertCounts() {
-  const expected = {
+  // Seed-controlled tables: exact count is the contract (CSV-driven).
+  const expectedExact = {
     sites: 2,
-    users: 5,
     site_holidays: 24,
     processor_bonus_rules: 2,
-    sources: 111,
-    transporters: 11,
     bonus_pay_periods: 52, // 26 periods × 2 sites (ADR-0019.1 / T-201)
     bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
+  };
+  // Runtime-growable tables: the seed sets a baseline, but the app legitimately
+  // adds rows (users via the admin UI; sources/transporters may be extended).
+  // Assert a FLOOR, not equality — otherwise prod (e.g. 7 users) fails the seed.
+  const expectedMin = {
+    users: 5,
+    sources: 111,
+    transporters: 11,
   };
   const actual = {
     sites: await prisma.site.count(),
@@ -415,10 +421,16 @@ async function assertCounts() {
     bonus_pay_periods: await prisma.bonusPayPeriod.count(),
     bonus_signature_chains: await prisma.bonusSignatureChain.count(),
   };
-  const mismatches = Object.keys(expected).filter((k) => actual[k] !== expected[k]);
+  const mismatches = [
+    ...Object.keys(expectedExact)
+      .filter((k) => actual[k] !== expectedExact[k])
+      .map((k) => `${k}: expected=${expectedExact[k]} actual=${actual[k]}`),
+    ...Object.keys(expectedMin)
+      .filter((k) => actual[k] < expectedMin[k])
+      .map((k) => `${k}: expected>=${expectedMin[k]} actual=${actual[k]}`),
+  ];
   if (mismatches.length > 0) {
-    const detail = mismatches.map((k) => `${k}: expected=${expected[k]} actual=${actual[k]}`).join('; ');
-    throw new Error(`Seed row-count mismatch — ${detail}`);
+    throw new Error(`Seed row-count mismatch — ${mismatches.join('; ')}`);
   }
   return actual;
 }
