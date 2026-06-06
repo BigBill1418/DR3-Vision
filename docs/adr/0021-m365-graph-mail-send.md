@@ -47,6 +47,7 @@ The existing permission is preserved:
 - **`User.Read`** (delegated, from ADR-0016) — used by the SSO flow for users to sign in and read their own profile
 
 No second app registration. Single app, two purposes:
+
 1. SSO for managers/admins (user-delegated, `User.Read`)
 2. System mail-send (app-delegated, `Mail.Send`)
 
@@ -93,25 +94,25 @@ export async function sendPayrollPdf(opts: {
   isAmendment: boolean;
 }): Promise<{ messageId: string }> {
   const fromMailbox = process.env.M365_MAIL_FROM_ADDRESS!; // dr3-vision@svdp.us
-  const toAddress = process.env.M365_PAYROLL_TO_ADDRESS!;  // payroll@svdp.us
+  const toAddress = process.env.M365_PAYROLL_TO_ADDRESS!; // payroll@svdp.us
 
-  const response = await graphClient
-    .api(`/users/${fromMailbox}/sendMail`)
-    .post({
-      message: {
-        subject: opts.subject,
-        body: { contentType: 'HTML', content: opts.htmlBody },
-        toRecipients: [{ emailAddress: { address: toAddress } }],
-        attachments: [{
+  const response = await graphClient.api(`/users/${fromMailbox}/sendMail`).post({
+    message: {
+      subject: opts.subject,
+      body: { contentType: 'HTML', content: opts.htmlBody },
+      toRecipients: [{ emailAddress: { address: toAddress } }],
+      attachments: [
+        {
           '@odata.type': '#microsoft.graph.fileAttachment',
           name: opts.filename,
           contentType: 'application/pdf',
           contentBytes: opts.pdfBuffer.toString('base64'),
-        }],
-        importance: opts.isAmendment ? 'high' : 'normal',
-      },
-      saveToSentItems: true,
-    });
+        },
+      ],
+      importance: opts.isAmendment ? 'high' : 'normal',
+    },
+    saveToSentItems: true,
+  });
 
   // The 202 response from sendMail does not include a messageId; we audit the call ID.
   return { messageId: graphClient._requestContext?.id ?? 'unknown' };
@@ -136,6 +137,7 @@ HTML body is short (the PDF is the canonical document):
 > Please process this report in the next payroll cycle. Questions: contact Bill Barnard (operations@svdp.us).
 >
 > ---
+>
 > This is an automated message from DR3 Vision. Do not reply to this address; it is not monitored continuously.
 
 The PDF attachment is the source of truth. The HTML body is a convenience summary for payroll's inbox.
@@ -190,7 +192,7 @@ Procedure documented in `docs/operator/m365-mail-send-setup.md`.
 
 - A Microsoft service outage on Graph API means PDF delivery queues until recovery. Acceptable — bonus reports are not real-time, monthly cadence has tolerance for hours-long outages. ntfy alerts Bill if delivery fails after retries.
 
-- Future system emails (audit-log notifications, weekly summaries, etc.) ride on the same infrastructure with the same retry/audit/rotation pattern. The `sendPayrollPdf` helper generalizes to `sendSystemEmail`.
+- Future system emails (audit-log notifications, weekly summaries, etc.) ride on the same infrastructure with the same retry/audit/rotation pattern. The `sendPayrollPdf` helper generalizes to `sendSystemEmail`. **The first such consumer is the signature-request emails (ADR-0019 §5a / T-125): when a month reaches `pending_signatures` the facility-manager signer is emailed, and when it reaches `partially_signed` the remaining signer is emailed — both fail-open, both audited as `system:signature-request`.**
 
 - SVdP M365 tenant administrator (likely Bill or a SVdP IT contact) is now a critical operator. Setup is documented in `docs/operator/m365-mail-send-setup.md` step-by-step.
 

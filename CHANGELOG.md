@@ -5,6 +5,39 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 Wave C: signatures, PDF, mail, EOD cron, Grafana (T-110–T-115)
+
+Parallel multi-agent build (PDF / EOD cron / M365 mail / Grafana in parallel) →
+signature capture → override; orchestrator integrated middleware + verification.
+
+- **T-110 — Signature capture.** `/bonus/months/[id]` detail page + dual-signature
+  panel; sign route records signed_by/at/ip/ua, drives state via the state machine
+  (1st → `partially_signed`, 2nd → `signed`), locks `total_payout_cents`, and fires
+  PDF + M365 delivery as non-blocking side-effects on the 2nd signature. 20 tests.
+- **T-111 — Asymmetric override.** Bill overrides either slot; Morena only Janette's;
+  Janette neither — enforced server-side; reason required + audited. 35 tests.
+- **T-112 — PDF generation.** Co-branded server-rendered source at
+  `/internal/bonus-pdf/[id]` (loopback/cf-connecting-ip guarded) → Playwright
+  `page.pdf()` → R2 upload; totals proven == `calculateMonthlyBonusCents`; AMENDED
+  marker; auth-gated download route. 7 tests.
+- **T-113 — EOD ntfy enforcement.** `scripts/bonus-eod-check.mjs` + pure core: 5 PM
+  Pacific, alerts on missing Woodland entries (fingerprinted, fire-once, weekends/
+  holidays skipped, late entry can't un-send). 8 tests.
+- **T-114 — M365 Graph mail.** `sendPayrollPdf` via Graph sendMail, client-credentials
+  token, retry/backoff, fail-open, ntfy on exhaustion, audited + metered. 7 tests.
+- **T-115 — Grafana.** `grafana/dashboards/dr3-vision.json` (uid dr3-vision) +
+  `grafana/alerts/dr3-vision.yaml` matching the metric names in metrics.ts; drift
+  guard test. 7 tests.
+
+Orchestrator: added `/internal/bonus-pdf` to the middleware public-path allowlist
+(route's loopback guard is the real gate); removed unused mock params flagged by
+`--max-warnings 0`. **Build needs `NODE_OPTIONS=--max-old-space-size≈6144`** — the
+default heap OOM-kills the build's type-check phase (flag for the deployer/CI).
+
+Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **382 passed**,
+`next lint` clean. PDF visual verification + the signature→PDF→mail flow are
+verified next alongside T-125.
+
 ### 2026-06-05 — Sprint 2 Wave B: bonus core + dashboard + observability (T-104–T-109)
 
 Built via parallel multi-agent dispatch (6 agents, disjoint file ownership);

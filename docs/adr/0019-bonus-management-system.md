@@ -38,13 +38,13 @@ daily_bonus = MAX(units − 50, 0) × $0.50 + MAX(units − 74, 0) × $0.25
 
 The off-by-one correction is on `threshold_high`: was 75, now **74**. Walk-throughs:
 
-| Units handled | Formula | Total |
-|---|---|---|
-| 50 | (0 × 0.50) + (0 × 0.25) | $0.00 (qualifying day, no bonus) |
-| 51 | (1 × 0.50) + (0 × 0.25) | $0.50 |
-| 74 | (24 × 0.50) + (0 × 0.25) | $12.00 |
-| 75 | (25 × 0.50) + (1 × 0.25) | $12.75 (1 mattress earns $0.75) |
-| 100 | (50 × 0.50) + (26 × 0.25) | $31.50 |
+| Units handled | Formula                   | Total                            |
+| ------------- | ------------------------- | -------------------------------- |
+| 50            | (0 × 0.50) + (0 × 0.25)   | $0.00 (qualifying day, no bonus) |
+| 51            | (1 × 0.50) + (0 × 0.25)   | $0.50                            |
+| 74            | (24 × 0.50) + (0 × 0.25)  | $12.00                           |
+| 75            | (25 × 0.50) + (1 × 0.25)  | $12.75 (1 mattress earns $0.75)  |
+| 100           | (50 × 0.50) + (26 × 0.25) | $31.50                           |
 
 ADR-0011 is updated by reference. The existing `processor_bonus_rules.csv` seed row for Woodland is corrected in-place because no historical bonus rows exist in DR3-Vision yet (the portal isn't built). The 2026 spreadsheet's prior incorrect calculations are not retroactively reconciled — that's last-year payroll and outside DR3-Vision's scope.
 
@@ -89,6 +89,41 @@ The standard signing flow:
 
 Override events are documented on the PDF (attestation block reads "Signed by Bill Barnard, admin, on behalf of Janette Thomas, unavailable"). The original assigned signer's name is preserved in the PDF for clarity.
 
+### 5a. Signature-request emails (addendum 2026-06-06)
+
+Signers must be **actively prompted by email** when their input is required — they
+should not have to remember to check the portal at month-end.
+
+Two prompts, keyed on the state-machine transitions (so overrides and amendment
+re-signs are handled automatically — the prompt follows the _unsigned slot_, not a
+hardcoded person):
+
+1. **Month closes → first signer prompted.** When a month transitions
+   `draft → pending_signatures` (the month-end auto-close, §2 / T-106
+   `closeMonthsDueForSignature`, and the amendment path `amended → pending_signatures`),
+   email the **facility-manager slot's signer** (Janette): "The {Month YYYY} Woodland
+   bonus report is ready for your signature."
+
+2. **First signature lands → second signer prompted.** When a month transitions
+   `pending_signatures → partially_signed`, email the signer of the **still-unsigned
+   slot** (normally Morena, the operations-manager slot; if a slot was filled out of
+   order via override, the prompt targets whichever slot remains): "Janette has signed
+   the {Month YYYY} Woodland bonus report; your signature is needed."
+
+Recipients are **resolved dynamically from the `users` table**, never hardcoded:
+the facility-manager slot → the active `manager` whose `primary_site_id` is Woodland;
+the operations-manager slot → the active `manager` whose `primary_site_id` is null
+(both-sites). Bill (admin) is not auto-prompted but may sign at any time via override.
+
+**Channel:** Microsoft Graph email (ADR-0021), reusing the same `sendSystemEmail`
+helper as the payroll delivery — **not** ntfy (ntfy is Bill's incident channel per
+ADR-0037; routine signer nudges to named staff belong in email). Each email links
+directly to the month page (`/bonus/months/[id]` — a tier-1 click target) and is
+**fail-open** (a mail outage never blocks signing; it logs + audits
+`actor_label = 'system:signature-request'`). Delivery fires once at the moment of
+transition (not on a poll), so no de-dup state is needed; reminder re-sends are out of
+scope for V2. Implemented in T-125.
+
 ### 6. Amendment workflow
 
 Once a month is `signed` and the PDF has been emailed to payroll, the data is locked. Corrections require an **admin-only amendment** (Bill only).
@@ -100,14 +135,14 @@ Amendment workflow:
 3. Edits are made (audit log captures every change)
 4. State returns to `pending_signatures`
 5. Both signatures must be re-collected (Janette + Morena, with overrides allowed as in §5)
-6. New PDF generates, marked "**Amended**" in the title block, with a notice line: "*This document supersedes a prior version emailed to payroll on [date]*"
+6. New PDF generates, marked "**Amended**" in the title block, with a notice line: "_This document supersedes a prior version emailed to payroll on [date]_"
 7. New PDF is auto-sent to payroll@svdp.us
 
 The original signed version is preserved in the audit log and in R2 (the original PDF is never deleted). Payroll's email archive retains the original as well; the amended PDF is the new source of truth from its delivery date forward.
 
 ### 7. Daily entry granularity
 
-One number per active employee per day. Optional freeform note field for HR annotations ("left early — sick", "covered for ___", etc.). Notes do not affect bonus math. Half-days, partial shifts, and hours-worked are out of scope — those belong in the payroll system.
+One number per active employee per day. Optional freeform note field for HR annotations ("left early — sick", "covered for \_\_\_", etc.). Notes do not affect bonus math. Half-days, partial shifts, and hours-worked are out of scope — those belong in the payroll system.
 
 The entry UI is a daily grid: column 1 is employee name (ordered alphabetically by `is_active=true`), column 2 is numeric input (integer, 0–999 valid range, soft-warning above 200), column 3 is the optional note field.
 
@@ -126,18 +161,22 @@ All visibility is **site-scoped**. Rick (Eugene manager) cannot see Woodland's b
 ### 9. Employee identity
 
 #### 9a. Rehires
+
 **Same employee record reactivated.** When a deactivated name is re-added, the UI prompts: "An inactive employee with this name exists (Maria Lopez, deactivated 2026-03-15). Reactivate this record, or create a new one?" — Janette's choice. Default is reactivate. Annual totals roll up continuously across employment gaps.
 
 #### 9b. Name changes
+
 **Retroactive display.** When Janette changes "Maria Lopez" to "Maria Garcia", all in-portal views show "Maria Garcia" everywhere (including past months). The employee detail view shows a "Previously known as: Maria Lopez (changed 2026-08-15)" badge.
 
 The old name is preserved in:
+
 - The audit log (the before/after JSON of the update)
 - A `previous_names` JSONB column on `bonus_employees` (array of `{name, changed_at}`)
 
 PDFs already emailed to payroll are immutable in payroll's archive — we do not reissue past PDFs because a name changed.
 
 #### 9c. Employee ID stability
+
 The `bonus_employees.id` UUID is stable across name changes and rehires. The PDF displays the name as it currently is in the system at sign time. An amended PDF (per §6) reflects the current name as of amendment date.
 
 ### 10. PDF branding
@@ -215,6 +254,7 @@ The existing `processor_bonus_rules` table (from Sprint 1) drives the calculatio
 - `/internal/bonus-pdf/[month-id]` — server-rendered HTML used as PDF source (gated to internal calls only)
 
 All routes gated to:
+
 - `manager` role with `primary_site_code = woodland` (Janette)
 - `manager` role with `primary_site_code = null` (Morena — both sites)
 - `admin` role (Bill, Kelsey)

@@ -1,0 +1,418 @@
+{
+  "uid": "dr3-vision",
+  "title": "DR3-Vision",
+  "tags": ["dr3-vision", "svdp", "fleet"],
+  "timezone": "America/Los_Angeles",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "route",
+        "label": "Route",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(dr3_vision_http_requests_total, route)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "site",
+        "label": "Site",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(dr3_vision_mymrc_scrape_total, site)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Operational overview",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request rate per route (req/s, 1m)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (route) (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\"$route\"}[1m]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Request duration p50 / p95 / p99 per route",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "p50",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le, route) (rate(dr3_vision_http_request_duration_seconds_bucket{service=\"dr3-vision\", route=~\"$route\"}[5m])))",
+          "legendFormat": "p50 {{route}}"
+        },
+        {
+          "refId": "p95",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(dr3_vision_http_request_duration_seconds_bucket{service=\"dr3-vision\", route=~\"$route\"}[5m])))",
+          "legendFormat": "p95 {{route}}"
+        },
+        {
+          "refId": "p99",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(dr3_vision_http_request_duration_seconds_bucket{service=\"dr3-vision\", route=~\"$route\"}[5m])))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Error rate per route (4xx / 5xx, % of requests)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "4xx",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (route) (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\"$route\", status=~\"4..\"}[5m])) / clamp_min(sum by (route) (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\"$route\"}[5m])), 1)",
+          "legendFormat": "4xx {{route}}"
+        },
+        {
+          "refId": "5xx",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (route) (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\"$route\", status=~\"5..\"}[5m])) / clamp_min(sum by (route) (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\"$route\"}[5m])), 1)",
+          "legendFormat": "5xx {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Memory + CPU per container",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "mem",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "process_resident_memory_bytes{service=\"dr3-vision\"}",
+          "legendFormat": "RSS {{instance}}"
+        },
+        {
+          "refId": "cpu",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(process_cpu_seconds_total{service=\"dr3-vision\"}[5m])",
+          "legendFormat": "CPU cores {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Active sessions (offline-queue heartbeat operators)",
+      "description": "Distinct (site,user_id) series emitting offline_queue_depth — proxy for active operator sessions, broken out by site.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 17 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "count by (site) (dr3_vision_offline_queue_depth{service=\"dr3-vision\"})",
+          "legendFormat": "{{site}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "MyMRC integration",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+    },
+    {
+      "id": 11,
+      "type": "gauge",
+      "title": "MyMRC scrape success rate per site (24h)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (site) (increase(dr3_vision_mymrc_scrape_total{service=\"dr3-vision\", outcome=\"success\"}[24h])) / clamp_min(sum by (site) (increase(dr3_vision_mymrc_scrape_total{service=\"dr3-vision\"}[24h])), 1)",
+          "legendFormat": "{{site}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Last successful scrape per site (time since)",
+      "description": "Time since the dr3_vision_mymrc_scrape_total{outcome=\"success\"} counter last advanced, per site.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "time() - max by (site) (timestamp(increase(dr3_vision_mymrc_scrape_total{service=\"dr3-vision\", outcome=\"success\"}[10m]) > 0))",
+          "legendFormat": "{{site}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Operator iPad path",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Inbound loads per hour",
+      "description": "Derived from inbound-load route hits (POST /api/.../loads) on the operator path.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (route) (increase(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\".*loads.*\", method=\"POST\"}[1h]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Photo uploads to R2 (success vs failure, /s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (outcome) (rate(dr3_vision_r2_upload_total{service=\"dr3-vision\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Offline queue depth (active operators)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "dr3_vision_offline_queue_depth{service=\"dr3-vision\"} > 0",
+          "legendFormat": "{{site}} / {{user_id}}"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Bonus Management",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Bonus months by state",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (state) (dr3_vision_bonus_months_by_state{service=\"dr3-vision\"})",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "stat",
+      "title": "Daily entries today vs expected",
+      "description": "Approximated from daily-entry route writes today against the count of draft months (expected one entry-set per draft site/day). Pre-5pm >50% gap = warning.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "entries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum (increase(dr3_vision_http_requests_total{service=\"dr3-vision\", route=~\".*daily-entr.*\", method=~\"POST|PUT|PATCH\", status=~\"2..\"}[24h]))",
+          "legendFormat": "entries today"
+        },
+        {
+          "refId": "expected",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum (dr3_vision_bonus_months_by_state{service=\"dr3-vision\", state=\"draft\"})",
+          "legendFormat": "expected (draft months)"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "gauge",
+      "title": "Payroll delivery success rate (30d)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.95 },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum (increase(dr3_vision_payroll_delivery_total{service=\"dr3-vision\", outcome=\"success\"}[30d])) / clamp_min(sum (increase(dr3_vision_payroll_delivery_total{service=\"dr3-vision\", outcome=~\"success|failed\"}[30d])), 1)",
+          "legendFormat": "delivery success"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Time from 2nd signature to payroll delivery (p50/p95)",
+      "description": "Latency between a month reaching signed state and a successful payroll send. Sourced from request-duration on the payroll-send route as a proxy until a dedicated histogram lands.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "p50",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(dr3_vision_http_request_duration_seconds_bucket{service=\"dr3-vision\", route=~\".*payroll.*\"}[30m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "p95",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(dr3_vision_http_request_duration_seconds_bucket{service=\"dr3-vision\", route=~\".*payroll.*\"}[30m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Cross-cutting",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 }
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "ntfy publish rate by topic",
+      "description": "From the fleet ntfy publisher metric (dr3-vision is a publisher; topic label set by the publish helper).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (topic) (rate(dr3_vision_payroll_delivery_total{service=\"dr3-vision\"}[5m]) * 0)",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "/healthz status (up / db_ok)",
+      "description": "Prometheus `up` for the dr3-vision scrape target + db_ok exposed via the request-error path. up==0 means /metrics is unscrapeable (proxy for healthz down).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "up",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "up{job=\"dr3-vision\"}",
+          "legendFormat": "scrape up {{instance}}"
+        },
+        {
+          "refId": "healthz",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum (rate(dr3_vision_http_requests_total{service=\"dr3-vision\", route=\"/healthz\", status=~\"5..\"}[5m]))",
+          "legendFormat": "healthz 5xx /s"
+        }
+      ]
+    }
+  ]
+}

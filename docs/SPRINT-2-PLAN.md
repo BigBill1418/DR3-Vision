@@ -158,7 +158,7 @@ Wire middleware-level request counters + duration histograms. Wire custom counte
 
 ## Wave C — Signatures + PDF + delivery (parallel after Wave B)
 
-### [ ] T-110: Signature capture flow
+### [x] T-110: Signature capture flow
 
 Implement the signature buttons on `/bonus/months/[id]`. When clicked: confirmation modal with attestation text, server records `*_signed_by_user_id`, `*_signed_at`, `*_signed_ip` (from request), `*_signed_user_agent`.
 
@@ -177,7 +177,7 @@ Janette and Morena each have their own signature button. The UI hides Janette's 
 - A user who already signed cannot re-sign (button is disabled)
 - An unauthorized user (Rick) cannot reach the page (403)
 
-### [ ] T-111: Signature override workflow
+### [x] T-111: Signature override workflow
 
 Per ADR-0019 §5: Bill OR Morena can sign in Janette's stead; Bill ONLY can sign in Morena's stead. Override is always available (no grace period).
 
@@ -191,7 +191,7 @@ UI: alongside each signature button, a small "Sign on behalf of {name}" link app
 - An override records the override actor + reason in the database
 - The PDF (T-112) reflects the override in the attestation block
 
-### [ ] T-112: PDF generation
+### [x] T-112: PDF generation
 
 Generate the bonus PDF via Playwright `page.pdf()` against a server-rendered HTML page at `/internal/bonus-pdf/[month-id]`. The internal route is gated to localhost-only (loopback origin check) so production Playwright can reach it but the public Cloudflare tunnel cannot.
 
@@ -211,7 +211,7 @@ For amendments, the PDF title block displays "**AMENDED**" and includes the supe
 - The PDF stored in R2 is downloadable from `/bonus/months/[id]/pdf` for authorized users
 - An amended PDF carries the "AMENDED" marker and the supersedes line
 
-### [ ] T-113: EOD ntfy enforcement
+### [x] T-113: EOD ntfy enforcement
 
 Cron job runs at 5:00 PM Pacific daily. For each Woodland active day (Mon–Fri excluding `site_holidays`), check if all active employees have `bonus_daily_entries` rows for today. If any are missing, publish to ntfy `dr3-vision-system` with fingerprint `bonus-entry-missing:woodland:<YYYY-MM-DD>`.
 
@@ -225,7 +225,7 @@ Implementation: extend `scripts/mymrc-cron.mjs` to run a 5pm Pacific tick in add
 - Filling in the entries the next morning does NOT retroactively suppress the alert (per ADR-0019 §2)
 - The publish includes a useful body: "Bonus entries missing for Woodland — Sept 14, 2026. Open /bonus to enter."
 
-### [ ] T-114: M365 Graph mail-send integration
+### [x] T-114: M365 Graph mail-send integration
 
 Implement `src/lib/m365-mail.ts` per ADR-0021. Acquire token via `ClientSecretCredential`; call `POST /users/{from-mailbox}/sendMail`. Retry-with-backoff on transient failures (429, 503, 504, network). Publish to ntfy on exhaustive failure.
 
@@ -241,7 +241,7 @@ Operator runbook documents the mailbox creation, app permission consent, and App
 - An exhausted retry chain publishes ntfy and surfaces a manager-visible "retry delivery" button on the month page
 - Without `AUTH_MICROSOFT_ENTRA_ID_*` env vars, the function fails open with a clear error logged
 
-### [ ] T-115: Grafana dashboard + alert rules
+### [x] T-115: Grafana dashboard + alert rules
 
 Commit `grafana/dashboards/dr3-vision.json` with the panel set described in ADR-0022 §5. Commit `grafana/alerts/dr3-vision.yaml` with the alert rules described in §6.
 
@@ -255,6 +255,45 @@ Both files are consumed by the fleet's Grafana provisioning. Reload happens via 
 - Critical alerts route to ntfy `dr3-vision-system`; warnings stay in-portal
 
 ## Wave D — Amendment + history + dashboards (parallel after Wave C)
+
+### [ ] T-125: Signature-request emails (ADR-0019 §5a)
+
+Actively prompt signers by email when their signature is required, so they don't
+have to remember to check the portal. Depends on T-110 (signature transitions),
+T-106 (`closeMonthsDueForSignature`), and T-114 (M365 mail helper). Builds on the
+`sendSystemEmail` generalization of `sendPayrollPdf`.
+
+Implementation:
+
+- New `src/lib/bonus/signature-notifications.ts`:
+  - `resolveSlotSigner(slot)` — facility-manager slot → active `manager` with
+    `primary_site_id` = Woodland; ops-manager slot → active `manager` with
+    `primary_site_id` null. Resolved from the `users` table; no hardcoded addresses.
+  - `notifyPendingSigner(month)` — given a month in `pending_signatures` (none signed
+    → prompt facility manager) or `partially_signed` (prompt the still-unsigned slot's
+    signer), send the signature-request email via M365 and write an `audit_log` row
+    (`actor_label = 'system:signature-request'`). Fail-open; links to
+    `/bonus/months/[id]`.
+- Wire the call at the two transition points:
+  - `scripts/bonus-eod-check.mjs` / the month-close path (after `draft →
+pending_signatures`, including amendment `amended → pending_signatures`).
+  - `src/app/api/bonus/months/[id]/sign/route.ts` (after `pending_signatures →
+partially_signed`).
+- `src/lib/bonus/signature-notifications.test.ts` — recipient resolution per slot;
+  pending_signatures → facility manager; partially_signed → the unsigned slot's
+  signer (incl. the override-out-of-order case); fail-open when mail unconfigured;
+  audit row written. Mail mocked.
+
+**Acceptance:**
+
+- When a month auto-closes to `pending_signatures`, Janette receives a "ready for
+  your signature" email linking to the month page.
+- After Janette signs (`partially_signed`), Morena receives a "your signature is
+  needed" email; after Morena signs, no further prompt (state `signed`).
+- An amendment that returns a month to `pending_signatures` re-prompts Janette.
+- Recipients resolve from the `users` table (a rename/role change is reflected).
+- Mail unconfigured → signing still works, prompt is skipped + logged (fail-open).
+- Every send writes an audit row with `actor_label = 'system:signature-request'`.
 
 ### [ ] T-116: Amendment workflow (admin-only)
 
@@ -407,7 +446,7 @@ For Claude Code orchestration:
 - **Wave A** (4 tickets, fully parallel): T-100, T-101, T-102, T-103
 - **Wave B** (6 tickets, fully parallel after Wave A): T-104, T-105, T-106, T-107, T-108, T-109
 - **Wave C** (6 tickets, fully parallel after Wave B): T-110, T-111, T-112, T-113, T-114, T-115
-- **Wave D** (3 tickets, fully parallel after Wave C): T-116, T-117, T-118
+- **Wave D** (4 tickets, fully parallel after Wave C): T-125, T-116, T-117, T-118 (T-125 depends on T-110/T-114 from Wave C)
 - **Wave E** (6 tickets, mostly parallel; T-122 and T-123 are operator-side and gate the production go-live but not the code merges): T-119, T-120, T-121, T-122, T-123, T-124
 
 Critical path through code work: T-100 → T-106 → T-110 → T-112 → T-114 → T-116. About 6 hops. With parallel agents, end-to-end wall-clock time is dominated by the most complex single ticket in each wave plus dispatch overhead.

@@ -19,6 +19,10 @@ function isPublic(pathname: string): boolean {
   if (pathname.startsWith('/api/auth/')) return true;
   if (pathname.startsWith('/_next/')) return true;
   if (pathname.startsWith('/brand/')) return true;
+  // Internal PDF source (T-112): the session-less Playwright generator must reach
+  // it without an auth redirect. The route's own loopback / cf-connecting-ip 404
+  // guard is the real protection (the public tunnel still gets 404).
+  if (pathname.startsWith('/internal/bonus-pdf/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.

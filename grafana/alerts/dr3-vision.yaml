@@ -1,0 +1,214 @@
+# DR3-Vision Grafana alert provisioning — ADR-0022 §6.
+#
+# Consumed by the fleet's Grafana provisioning (provisioning/alerting/*.yaml).
+# Two severities, two routing destinations:
+#
+#   CRITICAL  -> ntfy topic `dr3-vision-system` (Bill).  Wakes the operator.
+#               * db_ok false for > 2m
+#               * HTTP error rate (5xx) > 5% for > 5m
+#               * /healthz down (scrape `up` == 0) for > 1m
+#
+#   WARNING   -> in-app dashboard signal ONLY, NOT ntfy (matches the routing
+#               matrix in docs/COMPLIANCE.md — operational events stay in-portal).
+#               * MyMRC scrape failed last tick
+#               * R2 upload error rate > 1%
+#               * payroll delivery retried
+#
+# Routing is by the `severity` + `route` labels below; the fleet
+# notification-policy file (grafana provisioning/alerting/policies.yaml) maps
+#   severity=critical -> contact point `ntfy-dr3-vision-system`
+#   route=in-app      -> contact point `in-app` (a no-op/silent receiver; the
+#                        firing alert is visible in Grafana + surfaced in the
+#                        DR3-Vision dashboard, but does not page).
+# See grafana/README.md for how the fleet wires the contact points.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: dr3-vision-critical
+    folder: DR3-Vision
+    interval: 1m
+    rules:
+      - uid: dr3-vision-db-down
+        title: DR3-Vision DB unreachable
+        condition: C
+        for: 2m
+        labels:
+          service: dr3-vision
+          severity: critical
+          route: ntfy
+          ntfy_topic: dr3-vision-system
+        annotations:
+          summary: "[DR3-Vision] Database unreachable (db_ok=false)"
+          description: "healthz db probe has reported db_ok=false / the DB has been unreachable for over 2 minutes. Bonus + operator writes will fail."
+          runbook_url: "https://noc-mastercontrol.barnardhq.com/status/dr3-vision"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              # db_ok is surfaced via the healthz request-error path: a sustained
+              # absence of successful /healthz 2xx (or presence of 5xx) means the
+              # db probe is failing. up==0 for the target is caught by the
+              # dedicated healthz-down rule below.
+              expr: sum(rate(dr3_vision_http_requests_total{service="dr3-vision", route="/healthz", status=~"5.."}[2m]))
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: dr3-vision-error-rate
+        title: DR3-Vision HTTP error rate high
+        condition: C
+        for: 5m
+        labels:
+          service: dr3-vision
+          severity: critical
+          route: ntfy
+          ntfy_topic: dr3-vision-system
+        annotations:
+          summary: "[DR3-Vision] HTTP 5xx error rate above 5%"
+          description: "5xx responses exceeded 5% of total requests for over 5 minutes."
+          runbook_url: "https://noc-mastercontrol.barnardhq.com/status/dr3-vision"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(rate(dr3_vision_http_requests_total{service="dr3-vision", status=~"5.."}[5m])) / clamp_min(sum(rate(dr3_vision_http_requests_total{service="dr3-vision"}[5m])), 1)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+
+      - uid: dr3-vision-healthz-down
+        title: DR3-Vision healthz / metrics target down
+        condition: C
+        for: 1m
+        labels:
+          service: dr3-vision
+          severity: critical
+          route: ntfy
+          ntfy_topic: dr3-vision-system
+        annotations:
+          summary: "[DR3-Vision] Service down (metrics target unscrapeable)"
+          description: "Prometheus cannot scrape the dr3-vision target (up==0) for over 1 minute — the service is likely down or healthz is failing."
+          runbook_url: "https://noc-mastercontrol.barnardhq.com/status/dr3-vision"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: min(up{job="dr3-vision"})
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+  - orgId: 1
+    name: dr3-vision-warning
+    folder: DR3-Vision
+    interval: 1m
+    rules:
+      - uid: dr3-vision-mymrc-scrape-failed
+        title: DR3-Vision MyMRC scrape failed
+        condition: C
+        for: 0m
+        labels:
+          service: dr3-vision
+          severity: warning
+          route: in-app
+        annotations:
+          summary: "[DR3-Vision] MyMRC scrape failed on last tick"
+          description: "At least one MyMRC scrape recorded a non-success outcome in the last interval. In-app signal only — does not page."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(increase(dr3_vision_mymrc_scrape_total{service="dr3-vision", outcome!="success"}[10m]))
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: dr3-vision-r2-upload-errors
+        title: DR3-Vision R2 upload error rate high
+        condition: C
+        for: 5m
+        labels:
+          service: dr3-vision
+          severity: warning
+          route: in-app
+        annotations:
+          summary: "[DR3-Vision] R2 upload error rate above 1%"
+          description: "R2 photo upload failures exceeded 1% of attempts over 5 minutes. In-app signal only — does not page."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(rate(dr3_vision_r2_upload_total{service="dr3-vision", outcome!="success"}[5m])) / clamp_min(sum(rate(dr3_vision_r2_upload_total{service="dr3-vision"}[5m])), 1)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.01] }
+
+      - uid: dr3-vision-payroll-retried
+        title: DR3-Vision payroll delivery retried
+        condition: C
+        for: 0m
+        labels:
+          service: dr3-vision
+          severity: warning
+          route: in-app
+        annotations:
+          summary: "[DR3-Vision] Payroll delivery retried"
+          description: "A payroll delivery attempt entered retry state. In-app signal only — does not page; the dedicated failed-delivery path escalates separately."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(increase(dr3_vision_payroll_delivery_total{service="dr3-vision", outcome="retry"}[10m]))
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
