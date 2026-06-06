@@ -5,6 +5,20 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 production deploy (T-124) + build heap fix
+
+Cut the Sprint 2 production deploy to CHAD-HQ (manual host build; `main` fast-forwarded
+to the sprint-2 tip `eb0b084`). Migrate init container applied the two additive bonus
+migrations (`bonus_tables`, `correct_woodland_bonus_threshold`) against the live DB.
+All M365 mail / SSO secret / observability features remain fail-open (dark) until the
+operator finishes the Entra `Mail.Send` + Application Access Policy + secret steps
+(T-122) and the observability wiring (T-123).
+
+- **Dockerfile** — bake `ENV NODE_OPTIONS=--max-old-space-size=6144` into the builder
+  stage. The Next.js type-check + build OOMs on the default heap at Sprint-2 size;
+  baking it in (vs. passing ad-hoc) fixes both manual host builds and the future fleet
+  auto-deployer. Does not leak to the runner stage.
+
 ### 2026-06-06 — Sprint 2 Wave E: profile photo, health pill, docs (T-119/T-120/T-121)
 
 Final code wave. Only the operator residuals (T-122 M365 mailbox, T-123 observability
