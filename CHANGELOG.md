@@ -5,6 +5,21 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Fix: Playwright base-image/package version mismatch (PDF + MyMRC cron)
+
+Post-deploy triage caught the `mymrc-scrape` cron crash-looping with
+`browserType.launch: Executable doesn't exist`. The npm `playwright` caret
+(`^1.48.0`) had drifted the lockfile to **1.59.1**, but the Dockerfile runner
+base image was still pinned to **v1.48.0-jammy** — so the bundled browsers no
+longer matched, breaking every `browserType.launch`. This hit BOTH the MyMRC
+scrape worker AND the bonus-PDF render (same launch path) — i.e. a core Sprint-2
+feature was broken in the container even though it verified clean in dev (dev
+used matching local browsers).
+
+- **Dockerfile** — runner base `mcr.microsoft.com/playwright:v1.48.0-jammy` →
+  `v1.59.1-jammy` to match the locked package. Added a comment requiring the tag
+  stay in lockstep with the lockfile on every Playwright bump.
+
 ### 2026-06-06 — Fleet observability wire-in: WG metrics port + FLEET-DEPLOYMENT doc reconciliation
 
 Fleet-integration audit follow-up. DR3 already ships `/metrics`, a Grafana

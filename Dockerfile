@@ -50,7 +50,13 @@ RUN npm run build
 RUN npx tsc --project tsconfig.mymrc.json
 
 # ─── Stage 3: runner (production) ────────────────────────────────────────
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS runner
+# Base image version MUST match the resolved `playwright` package version in
+# package-lock.json. The npm caret (^1.48.0) resolved up to 1.59.1; the v1.48.0
+# base ships browsers Playwright 1.59.1 can't find ("Executable doesn't exist"),
+# which crash-loops the mymrc-scrape cron AND breaks the bonus-PDF render (both
+# call browserType.launch). Keep this tag in lockstep with the lockfile on every
+# Playwright bump. (Fixed 2026-06-06.)
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -106,7 +112,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 # by the `mymrc-scrape` cron container. The Next.js standalone bundle
 # does not include this tree (no app route imports it), so we copy it
 # explicitly. Ship `playwright` + its browser binaries with the runner
-# image (the base image `mcr.microsoft.com/playwright:v1.48.0-jammy`
+# image (the base image `mcr.microsoft.com/playwright:v1.59.1-jammy`
 # already provides the browsers; the npm package itself is added below).
 COPY --from=builder --chown=nextjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/playwright ./node_modules/playwright
