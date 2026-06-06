@@ -19,8 +19,31 @@ import {
   type BonusMonthSignatureRow,
   type SignerContext,
 } from './signatures';
+import { clearSignatureChainCache, type SignatureChainDb } from './signature-chain';
 
 const WOODLAND = 'site-woodland';
+
+// Woodland chain double (T-208): facility=Janette, ops=Morena, facility may be
+// overridden by Bill+Morena, ops by Bill only, auto-override actor = Bill.
+// Outcomes match the pre-T-208 role heuristic exactly — identity is now sourced
+// from this row instead of inferred.
+function makeChainDb(): SignatureChainDb {
+  return {
+    bonusSignatureChain: {
+      findUnique: async ({ where }) =>
+        where.site_id === WOODLAND
+          ? {
+              facility_signer_user_id: 'janette',
+              facility_override_actor_ids: 'bill,morena',
+              ops_signer_user_id: 'morena',
+              ops_override_actor_ids: 'bill',
+              auto_override_actor_user_id: 'bill',
+            }
+          : null,
+    },
+  };
+}
+const chainDb = makeChainDb();
 
 interface Row extends BonusMonthSignatureRow {
   facility_signed_ip: string | null;
@@ -111,20 +134,23 @@ beforeEach(() => {
   };
   entries = [];
   audit.length = 0;
+  clearSignatureChainCache(chainDb);
 });
 
-describe('naturalSlotFor', () => {
-  it('Woodland manager → janette', () => {
-    expect(naturalSlotFor(janette)).toBe('facility');
+const p = (s: SignerContext) => ({ id: s.userId, role: s.role });
+
+describe('naturalSlotFor (chain-sourced, T-208)', () => {
+  it('Woodland facility signer (Janette) → facility', async () => {
+    expect(await naturalSlotFor(p(janette), WOODLAND, chainDb)).toBe('facility');
   });
-  it('both-sites manager (primary null) → morena', () => {
-    expect(naturalSlotFor(morena)).toBe('ops');
+  it('Woodland ops signer (Morena) → ops', async () => {
+    expect(await naturalSlotFor(p(morena), WOODLAND, chainDb)).toBe('ops');
   });
-  it('admin → null (no natural slot; override is T-111)', () => {
-    expect(naturalSlotFor(bill)).toBeNull();
+  it('admin not configured as a signer → null (no natural slot; override path)', async () => {
+    expect(await naturalSlotFor(p(bill), WOODLAND, chainDb)).toBeNull();
   });
-  it('Eugene manager → null', () => {
-    expect(naturalSlotFor({ ...janette, primarySiteId: 'site-eugene' })).toBeNull();
+  it('a user who is no slot signer at this site → null', async () => {
+    expect(await naturalSlotFor({ id: 'rick', role: 'manager' }, WOODLAND, chainDb)).toBeNull();
   });
 });
 
@@ -132,6 +158,7 @@ describe('recordSignature', () => {
   it('Janette first → partially_signed, ip/ua/at captured + audit', async () => {
     const res = await recordSignature({
       db: makeDb(),
+      chainDb,
       monthId: 'm1',
       signer: janette,
       ip: '203.0.113.7',
@@ -159,7 +186,7 @@ describe('recordSignature', () => {
     row.facility_signed_by_user_id = 'janette';
     row.facility_signed_at = new Date();
     entries = [{ mattress_count: 75 }, { mattress_count: 60 }]; // 1275 + 500 = 1775
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
     expect(res).toMatchObject({ ok: true, slot: 'ops', state: 'signed', fullySigned: true });
     expect(row.state).toBe('signed');
     expect(row.ops_signed_by_user_id).toBe('morena');
@@ -167,27 +194,27 @@ describe('recordSignature', () => {
   });
 
   it('signatures may land in either order (Morena first, then Janette)', async () => {
-    const r1 = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
+    const r1 = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
     expect(r1).toMatchObject({ ok: true, slot: 'ops', state: 'partially_signed' });
-    const r2 = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
+    const r2 = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: janette });
     expect(r2).toMatchObject({ ok: true, slot: 'facility', state: 'signed', fullySigned: true });
   });
 
   it('re-sign of a filled slot → already_signed', async () => {
     row.state = 'partially_signed';
     row.facility_signed_by_user_id = 'janette';
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: janette });
     expect(res).toEqual({ ok: false, reason: 'already_signed', slot: 'facility' });
   });
 
   it('admin with no override target → no_slot', async () => {
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: bill });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: bill });
     expect(res).toEqual({ ok: false, reason: 'no_slot' });
   });
 
   it('signing a non-signature-state month → wrong_state', async () => {
     row.state = 'signed';
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
     expect(res).toMatchObject({ ok: false, reason: 'wrong_state' });
   });
 
@@ -195,7 +222,7 @@ describe('recordSignature', () => {
   // (it is neither pending_signatures nor partially_signed), and nothing is written.
   it('signing a SKIPPED period → wrong_state (signature workflow blocked)', async () => {
     row.state = 'skipped';
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
     expect(res).toMatchObject({ ok: false, reason: 'wrong_state' });
     expect(row.ops_signed_by_user_id).toBeNull();
     expect(row.state).toBe('skipped');
@@ -205,7 +232,7 @@ describe('recordSignature', () => {
   it('cross-site month id → not_found', async () => {
     // The month belongs to Eugene; Janette (Woodland-scoped) must not reach it.
     row.site_id = 'site-eugene';
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: janette });
     expect(res).toEqual({ ok: false, reason: 'not_found' });
   });
 
@@ -215,6 +242,7 @@ describe('recordSignature', () => {
     // authority + reason/audit coverage lives in signature-override.test.ts.
     const res = await recordSignature({
       db: makeDb(),
+      chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',

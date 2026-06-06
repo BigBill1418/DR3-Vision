@@ -43,6 +43,7 @@ In addition to the original Sprint 2 hard rules in `docs/SPRINT-2-PLAN.md`:
 Apply the migration in `prisma/migrations/20260606_bi_weekly_pay_periods/migration.sql`. Update `prisma/schema.prisma` to match `prisma/schema.prisma.cadence.patch`. Regenerate Prisma client.
 
 **Acceptance:**
+
 - Migration applies cleanly against a Sprint-2-tip baseline DB
 - `prisma generate` produces typed client with `BonusPayPeriod` (not `BonusMonth`), `BonusPayPeriodState` enum, renamed columns
 - All 30+ TypeScript files that reference `bonus_months` / `BonusMonth` / `janette_*` / `morena_*` compile (the refactor is T-202)
@@ -70,6 +71,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS bonus_pay_periods_site_id_period_year_period_n
 These run after data is in place because the columns were created NULL-allowed in the migration.
 
 **Acceptance:**
+
 - Fresh DB after `prisma migrate deploy && prisma db seed` has 52 pay-period rows + 2 signature chain rows
 - Re-running the seed is a no-op (idempotent upserts)
 - Post-seed DDL applies cleanly
@@ -79,37 +81,38 @@ These run after data is in place because the columns were created NULL-allowed i
 
 The largest single ticket in this addendum. Every reference to the old names must update:
 
-| Old | New |
-|---|---|
-| `BonusMonth` type | `BonusPayPeriod` |
-| `BonusMonthState` enum | `BonusPayPeriodState` |
+| Old                                                | New                                                   |
+| -------------------------------------------------- | ----------------------------------------------------- |
+| `BonusMonth` type                                  | `BonusPayPeriod`                                      |
+| `BonusMonthState` enum                             | `BonusPayPeriodState`                                 |
 | `bonus_months` (table reference in Prisma queries) | `bonus_pay_periods` (handled by Prisma client rename) |
-| `bonus_month_id` field | `bonus_pay_period_id` |
-| `month_start` field | `period_start` |
-| `month_end` field | `period_end` |
-| `janette_signed_*` fields | `facility_signed_*` |
-| `morena_signed_*` fields | `ops_signed_*` |
-| `janette_override_*` | `facility_override_*` |
-| `morena_override_*` | `ops_override_*` |
-| `BonusJanetteSigner` relation | `BonusFacilitySigner` |
-| `BonusMorenaSigner` relation | `BonusOpsSigner` |
-| `bonus_months_signed_as_janette` user field | `bonus_pay_periods_signed_as_facility` |
-| `bonus_months_signed_as_morena` user field | `bonus_pay_periods_signed_as_ops` |
-| `bonus_months_amended` user field | `bonus_pay_periods_amended` |
+| `bonus_month_id` field                             | `bonus_pay_period_id`                                 |
+| `month_start` field                                | `period_start`                                        |
+| `month_end` field                                  | `period_end`                                          |
+| `janette_signed_*` fields                          | `facility_signed_*`                                   |
+| `morena_signed_*` fields                           | `ops_signed_*`                                        |
+| `janette_override_*`                               | `facility_override_*`                                 |
+| `morena_override_*`                                | `ops_override_*`                                      |
+| `BonusJanetteSigner` relation                      | `BonusFacilitySigner`                                 |
+| `BonusMorenaSigner` relation                       | `BonusOpsSigner`                                      |
+| `bonus_months_signed_as_janette` user field        | `bonus_pay_periods_signed_as_facility`                |
+| `bonus_months_signed_as_morena` user field         | `bonus_pay_periods_signed_as_ops`                     |
+| `bonus_months_amended` user field                  | `bonus_pay_periods_amended`                           |
 
 Function-level renames (in `src/lib/bonus/`):
 
-| Old function | New function |
-|---|---|
-| `getOrCreateDraftMonth` | `getOrCreateDraftPayPeriod` |
+| Old function                 | New function                     |
+| ---------------------------- | -------------------------------- |
+| `getOrCreateDraftMonth`      | `getOrCreateDraftPayPeriod`      |
 | `closeMonthsDueForSignature` | `closePayPeriodsDueForSignature` |
-| `listBonusMonths` | `listBonusPayPeriods` |
-| `monthWindow` | `payPeriodWindow` |
-| `parseMonthFilter` | `parsePayPeriodFilter` |
+| `listBonusMonths`            | `listBonusPayPeriods`            |
+| `monthWindow`                | `payPeriodWindow`                |
+| `parseMonthFilter`           | `parsePayPeriodFilter`           |
 
 URL paths under `/bonus/months/*` **stay as-is** (preserves bookmarks per ADR-0019.1 §7). Only the internal data layer / types rename.
 
 **Acceptance:**
+
 - `npx tsc --noEmit` clean
 - `npx next lint --max-warnings 0` clean
 - All existing bonus tests pass after rename (some test names will update; their assertions don't change)
@@ -124,6 +127,7 @@ URL paths under `/bonus/months/*` **stay as-is** (preserves bookmarks per ADR-00
 - A new `skipped` terminal state is added to `ALLOWED_TRANSITIONS` with one legal in-edge: `draft → skipped` (admin-only, used for Period 12 bootstrap per ADR-0019.1 "Bootstrapping question").
 
 **Acceptance:**
+
 - All existing state-machine tests pass with renamed fields
 - New tests cover: `draft → skipped` admin-only transition; non-admin → 403; skipped period blocks daily entry mutations; skipped period blocks signature workflow
 
@@ -138,6 +142,7 @@ Replace `scripts/bonus-month-close.mjs` with `scripts/bonus-period-close.mjs`. T
 Update `docker-compose.yml`'s relevant cron service to use the new script name + schedule.
 
 **Acceptance:**
+
 - A test period with `period_end = today (Pacific)` and `state = 'draft'` transitions to `pending_signatures` when the cron fires
 - A test period with `period_end != today` is untouched
 - The signature-request email path fires correctly (audit log records `system:signature-request`)
@@ -154,6 +159,7 @@ New `scripts/bonus-escalation-check.mjs` daemon. On each tick (Pacific-aware), e
 Cron schedule: implementable as three separate cron entries OR one daemon that wakes at the three times. Daemon shape preferred (single process, single restart policy).
 
 **Acceptance:**
+
 - A `pending_signatures` period on a Tuesday morning produces the right ntfy publish at 06:00 and 07:30 (verifiable via mock ntfy publisher)
 - At 08:30, an unsigned slot gets `*_signed_by_user_id = bill`, `*_override_actor_id = bill`, `*_auto_override_at = (tick time)`, `*_override_reason = "ADR-0019.1 escalation policy..."`
 - Audit log records `system:bonus-escalation` actor label
@@ -165,6 +171,7 @@ Cron schedule: implementable as three separate cron entries OR one daemon that w
 Same daemon as T-205. At 09:00 PT, examines all yesterday's-period rows where `state != 'paid'` (PDF didn't ship). Publishes ntfy `bonus-payroll-deadline-missed:<site>:<period-id>` at urgent priority. Bill manually intervenes.
 
 **Acceptance:**
+
 - A period where auto-override fired at 08:30 but mail-send hung past 09:00 produces the deadline-missed ntfy
 - A period that successfully reached `paid` state by 09:00 does NOT produce the ntfy
 - Cooldown prevents repeated fires on the same period
@@ -178,16 +185,21 @@ Same daemon as T-205. At 09:00 PT, examines all yesterday's-period rows where `s
 Extend `src/lib/bonus/access.ts` `checkBonusAccess()` per ADR-0019.2 §1.
 
 **Function shape:**
+
 ```typescript
 type BonusAccess = {
   allowed: boolean;
-  sites: ('woodland' | 'eugene')[];  // empty array if !allowed
+  sites: ('woodland' | 'eugene')[]; // empty array if !allowed
 };
 
-export async function checkBonusAccess(session: Session, requestedSite?: SiteCode): Promise<BonusAccess>;
+export async function checkBonusAccess(
+  session: Session,
+  requestedSite?: SiteCode,
+): Promise<BonusAccess>;
 ```
 
 **Behavior:**
+
 - Admin (Bill, Kelsey) → `{allowed: true, sites: ['woodland', 'eugene']}` regardless of `requestedSite`
 - Manager with `primary_site_code='woodland'` (Janette) → `{allowed: true, sites: ['woodland']}`
 - Manager with `primary_site_code='eugene'` (Rick) → `{allowed: true, sites: ['eugene']}`
@@ -197,6 +209,7 @@ export async function checkBonusAccess(session: Session, requestedSite?: SiteCod
 If `requestedSite` is set, narrow `sites` to just that one (and flip `allowed` to false if the user can't access it).
 
 **Acceptance:**
+
 - Janette `requestedSite='woodland'` → `{allowed: true, sites: ['woodland']}`
 - Janette `requestedSite='eugene'` → `{allowed: false, sites: []}` → page returns 403
 - Rick `requestedSite='eugene'` → `{allowed: true, sites: ['eugene']}`
@@ -204,14 +217,14 @@ If `requestedSite` is set, narrow `sites` to just that one (and flip `allowed` t
 - Bill `requestedSite=undefined` → `{allowed: true, sites: ['woodland', 'eugene']}`
 - All existing bonus-route tests pass with the new access shape
 
-### [ ] T-208: Signature chain lookup + signature service Eugene awareness
+### [x] T-208: Signature chain lookup + signature service Eugene awareness
 
 New `src/lib/bonus/signature-chain.ts`:
 
 ```typescript
 export async function getSignatureChain(siteId: string): Promise<{
   facility_signer_user_id: string;
-  facility_override_actor_user_ids: string[];   // parsed from CSV column
+  facility_override_actor_user_ids: string[]; // parsed from CSV column
   ops_signer_user_id: string;
   ops_override_actor_user_ids: string[];
   auto_override_actor_user_id: string;
@@ -227,6 +240,7 @@ Update `src/lib/bonus/signatures.ts` to use the chain instead of hardcoded "Jane
 - `getAutoOverrideActor(siteId)` — returns `chain.auto_override_actor_user_id`
 
 **Acceptance:**
+
 - Rick can sign facility for Eugene (`canSignSlot(rick, 'facility', eugeneId) === true`)
 - Rick cannot sign facility for Woodland (`canSignSlot(rick, 'facility', woodlandId) === false`)
 - Kelsey can sign ops for Eugene
@@ -242,23 +256,24 @@ Update the bonus PDF render at `src/app/internal/bonus-pdf/[month-id]/page.tsx` 
 Title block:
 
 > **DR3 [site.name] Bonus Report — Period [period_number]: [period_start_label] – [period_end_label], [period_year]**
-> *Pay date: [pay_date_label]*
+> _Pay date: [pay_date_label]_
 
 Where `site.name` comes from `prisma.site.findUnique({where: {id}})` joined to the period. `period_start_label` / `period_end_label` use the Pacific-aware date formatter (e.g. "Jun 9" – "Jun 22"). `period_year` is the `period_year` column.
 
 Signature attestation language adapts to slot-source. For a human override:
 
-> *Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.*
-> *Reason: <facility_override_reason>*
+> _Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager._
+> _Reason: <facility_override_reason>_
 
 For an auto-override (T-205-applied):
 
-> *Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.*
-> *System-applied admin override per ADR-0019.1 escalation policy. Janette Thomas did not sign by 08:30 AM PT on Tue [date].*
+> _Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager._
+> _System-applied admin override per ADR-0019.1 escalation policy. Janette Thomas did not sign by 08:30 AM PT on Tue [date]._
 
 Distinguished by `facility_auto_override_at IS NOT NULL` (system) vs `facility_override_actor_id IS NOT NULL AND facility_auto_override_at IS NULL` (manual override) vs `facility_signed_by_user_id IS NOT NULL AND facility_override_actor_id IS NULL` (primary signed).
 
 **Acceptance:**
+
 - A signed Period 13 for Woodland renders with the new title format and "Woodland" as site name
 - A signed Period 13 for Eugene renders identically but with "Eugene"
 - An auto-override attestation displays the ADR-0019.1 language
@@ -281,6 +296,7 @@ Distinguished by `facility_auto_override_at IS NOT NULL` (system) vs `facility_o
 - Shell header at `/bonus/**` shows "Site: Woodland | switch" for admin sessions
 
 **Acceptance:**
+
 - Rick → tile visible → clicks → lands on `/bonus?site=eugene` → sees Eugene daily entry grid
 - Janette → tile visible → clicks → lands on `/bonus?site=woodland`
 - Morena → tile visible → clicks → lands on `/bonus?site=woodland` (her single accessible site)
@@ -302,6 +318,7 @@ Run a full simulation of the Mon Jun 8 → Tue Jun 9 close-and-sign cycle for Wo
 5. Simulate M365 send success → state `paid`, audit log records the send
 
 **Acceptance:**
+
 - All state transitions audited correctly
 - PDF renders with "Period 12: May 26 – Jun 8, 2026 · Pay date Jun 12" title
 - Test mail recipient receives the PDF (use test recipient, not real payroll)
@@ -332,6 +349,7 @@ Simulate a period where neither slot is manually signed by Tue 08:30 PT. Expect 
 ### [ ] T-214: Operator runbook — bonus cadence + Eugene cutover
 
 Write `docs/operator/bonus-cadence-and-eugene-cutover.md` covering:
+
 - Pre-cutover checklist (Period 12 disposition decision, Eugene roster bootstrap, secret rotation if needed)
 - Deploy steps (force-recreate the app + cron containers)
 - Day-of verification (escalation cron timer set correctly; signature chains seeded; tile visibility per role)
@@ -340,6 +358,7 @@ Write `docs/operator/bonus-cadence-and-eugene-cutover.md` covering:
 ### [ ] T-215: Documentation updates
 
 Update:
+
 - `README.md` — note the bi-weekly cadence + Eugene-now-supported
 - `PROJECT-CHARTER.md` — add §16.1 Sprint 2 addendum summary, reference ADRs 0019.1 + 0019.2
 - `docs/adr/README.md` — index ADRs 0019.1 + 0019.2 under Sprint 2 section
@@ -348,6 +367,7 @@ Update:
 ### [ ] T-216: Production deploy + Monday go-live verification
 
 Sun Jun 7 EOD or earlier:
+
 - Push sprint-2-addendum tip to `main`
 - Manual deploy to CHAD-HQ (until swarmpilot_deployer is back; the original Sprint 2 had to deploy manually too)
 - Verify migration applied (`prisma migrate status`)
@@ -357,10 +377,12 @@ Sun Jun 7 EOD or earlier:
 - Period 12 disposition: execute Bill's decision (skip / backdate / partial)
 
 Mon Jun 8:
+
 - 17:30 PT: confirm close cron fires (ntfy publish to dr3-vision-system "container ready" earlier in the day; cron log shows close attempted)
 - 17:31 PT: confirm signature-request email landed in Janette's inbox (if Period 12 was kept) or no-op (if skipped)
 
 Tue Jun 9:
+
 - 06:00, 07:30 PT: confirm escalation cron fires if Period 12 unsigned (else no-op)
 - 08:30 PT: confirm auto-override path runs cleanly
 - 09:00 PT: confirm deadline-missed ntfy does NOT fire (PDF should be in payroll inbox)
@@ -371,25 +393,25 @@ When all confirmations land, sprint addendum is shipped.
 
 ## Wave dispatch summary for multi-agent
 
-| Wave | Tickets | Parallelism notes |
-|---|---|---|
-| **A** Foundation | T-200, T-201, T-202, T-203, T-204, T-205, T-206 | T-200 and T-201 sequential (T-201 depends on schema). T-202 large refactor, can absorb a full agent. T-203/204/205/206 parallel after T-202 lands. |
-| **B** Eugene awareness | T-207, T-208, T-209, T-210 | Fully parallel after Wave A |
-| **C** Integration tests | T-211, T-212, T-213 | Fully parallel after Wave B |
-| **D** Polish + deploy | T-214, T-215, T-216 | T-214 + T-215 parallel; T-216 is Bill-driven, after T-211–T-213 pass |
+| Wave                    | Tickets                                         | Parallelism notes                                                                                                                                  |
+| ----------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A** Foundation        | T-200, T-201, T-202, T-203, T-204, T-205, T-206 | T-200 and T-201 sequential (T-201 depends on schema). T-202 large refactor, can absorb a full agent. T-203/204/205/206 parallel after T-202 lands. |
+| **B** Eugene awareness  | T-207, T-208, T-209, T-210                      | Fully parallel after Wave A                                                                                                                        |
+| **C** Integration tests | T-211, T-212, T-213                             | Fully parallel after Wave B                                                                                                                        |
+| **D** Polish + deploy   | T-214, T-215, T-216                             | T-214 + T-215 parallel; T-216 is Bill-driven, after T-211–T-213 pass                                                                               |
 
 Critical path is T-200 → T-202 → T-208 → T-211 → T-216. About 5 hops with parallelism.
 
 ## Risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Schema rename breaks an unmigrated test fixture | T-200 acceptance covers `tsc --noEmit`. Any test importing the old name fails the build before deploy. |
+| Risk                                                   | Mitigation                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schema rename breaks an unmigrated test fixture        | T-200 acceptance covers `tsc --noEmit`. Any test importing the old name fails the build before deploy.                                                                                                                                                                          |
 | Bill's account is unreachable when auto-override fires | T-205 includes "auto-override actor available" check in the escalation cron — if the configured actor isn't a valid active user, the cron publishes an urgent ntfy and does NOT proceed with auto-sign (better to miss the deadline with explicit alert than to fail silently). |
-| Eugene chain config wrong on first cycle | T-208 acceptance + T-212 e2e test catch this. Backup: signature chain is a single-row config; admin can fix it via SQL in under a minute. |
-| Period 12 disposition uncertainty | T-214 runbook explicitly lists the three options. Default if Bill doesn't decide: skip. |
-| Cron timing drift across DST | Already handled by ADR-0019.1 — all date math goes through `@/lib/time`, which uses `Intl.DateTimeFormat` for Pacific. DST transition Mar 8 / Nov 1, 2026 verified in T-205 test cases. |
-| Existing bookmarks to `/bonus/months/[id]` break | URL paths preserved per ADR-0019.1 §7 — no bookmark invalidation. |
+| Eugene chain config wrong on first cycle               | T-208 acceptance + T-212 e2e test catch this. Backup: signature chain is a single-row config; admin can fix it via SQL in under a minute.                                                                                                                                       |
+| Period 12 disposition uncertainty                      | T-214 runbook explicitly lists the three options. Default if Bill doesn't decide: skip.                                                                                                                                                                                         |
+| Cron timing drift across DST                           | Already handled by ADR-0019.1 — all date math goes through `@/lib/time`, which uses `Intl.DateTimeFormat` for Pacific. DST transition Mar 8 / Nov 1, 2026 verified in T-205 test cases.                                                                                         |
+| Existing bookmarks to `/bonus/months/[id]` break       | URL paths preserved per ADR-0019.1 §7 — no bookmark invalidation.                                                                                                                                                                                                               |
 
 ## Out of scope (deliberate)
 

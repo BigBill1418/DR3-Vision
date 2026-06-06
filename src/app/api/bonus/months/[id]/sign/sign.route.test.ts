@@ -167,7 +167,33 @@ vi.mock('@/lib/prisma', () => {
   // signature; it resolves the next signer via user.findFirst. Stub it to null so
   // the non-blocking prompt no-ops cleanly (no mail in these tests).
   const user = { findFirst: vi.fn(async () => null) };
-  const client = { bonusPayPeriod, bonusDailyEntry, processorBonusRule, site, auditLog, user };
+  // T-208: the signature service now sources signer/override identity from the
+  // bonus_signature_chains row for the period's site. Woodland chain mirrors the
+  // T-201 seed (facility=Janette, ops=Morena, facility-override [Bill,Morena],
+  // ops-override [Bill], auto=Bill) — outcomes are unchanged from the old role
+  // heuristic; identity is just chain-sourced now.
+  const bonusSignatureChain = {
+    findUnique: vi.fn(async ({ where }: { where: { site_id: string } }) =>
+      where.site_id === WOODLAND
+        ? {
+            facility_signer_user_id: 'janette',
+            facility_override_actor_ids: 'bill,morena',
+            ops_signer_user_id: 'morena',
+            ops_override_actor_ids: 'bill',
+            auto_override_actor_user_id: 'bill',
+          }
+        : null,
+    ),
+  };
+  const client = {
+    bonusPayPeriod,
+    bonusDailyEntry,
+    processorBonusRule,
+    site,
+    auditLog,
+    user,
+    bonusSignatureChain,
+  };
   return {
     prisma: {
       ...client,

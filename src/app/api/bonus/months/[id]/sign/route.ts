@@ -141,6 +141,9 @@ export async function POST(
 
   const result = await recordSignature({
     db: prisma as never,
+    // Chain lookup (T-208) reads the bonus_signature_chains row for the
+    // period's site off the request-scoped Prisma singleton.
+    chainDb: prisma,
     monthId: id,
     signer: {
       userId: ctx.userId,

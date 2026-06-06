@@ -5,44 +5,43 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-06 — Sprint 2 addendum Wave A: period-close cron — Mon 17:30 PT (T-204)
+### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 
-Replaced the monthly close cron with the bi-weekly period-close cron
-(ADR-0019.1 §3/§6). `tsc --noEmit`, `next lint --max-warnings 0`, and the full
-`vitest` suite (548 tests, +5) all clean.
+Made the bonus signature service site-aware by sourcing signer/override identity
+from the `bonus_signature_chains` table (ADR-0019.2 §2) instead of any hardcoded
+"Janette signs facility / Morena signs ops" role heuristic (addendum hard rules
+#2 & #3). Woodland outcomes are unchanged — Janette/Morena are still the Woodland
+signers, just sourced from the chain now. `tsc --noEmit`, `next lint
+--max-warnings 0`, and the full `vitest` suite (571 tests, +28) all clean.
 
-- **`scripts/bonus-period-close.mjs`** replaces the deleted
-  `scripts/bonus-month-close.mjs`. Long-running daemon (same shape as
-  `scripts/mymrc-cron.mjs`): a single process under one `unless-stopped` restart
-  policy that sleeps until the next **17:30 America/Los_Angeles** instant —
-  recomputed each cycle off the Pacific wall clock (Intl, mirroring
-  `src/lib/time.ts`) so it survives the Mar/Nov DST shifts — and on each fire
-  drives the close. Fires **daily** at 17:30 PT (cron can't express "every other
-  Monday" cleanly; the close decision is keyed off the seeded
-  `period_end == appToday()` so non-period-end days are a clean no-op — the
-  ADR-0019.1-preferred daily-tick + Pacific-date-check shape).
-- **Drives the existing internal route**, not a re-implemented state machine in
-  plain JS. The daemon POSTs `/api/internal/bonus/close-months`, which imports
-  the bonus tx layer, calls `closePayPeriodsDueForSignature(prisma, appToday())`
-  (transitions every `draft` period whose `period_end` is Pacific-today to
-  `pending_signatures` via the audited state machine), and fires
-  `notifyPendingSigner` (signature-request email, fail-open) per newly-closed
-  period. Keeps the orchestration behind the tested TS route per ADR-0019.
-- **Idempotent** — the route only matches `state = 'draft'`, so a second
-  same-day fire (or a restart-triggered re-fire) never double-transitions.
-- **`docker-compose.yml`**: new `bonus-period-close` service (image
-  `dr3-vision-app:local`, `command: node scripts/bonus-period-close.mjs`,
-  `restart: unless-stopped`, on `dr3net`, `depends_on: app healthy`,
-  `INTERNAL_BASE_URL=http://app:3000`, optional `auth.env` for a shared
-  `INTERNAL_CRON_TOKEN`). Dockerfile already `COPY`s `scripts/`, so the new
-  script ships with no Dockerfile change.
-- **Route docstring** updated from "monthly, 1st @ 00:05" to "bi-weekly, daily
-  @ 17:30 PT"; URL path preserved per ADR-0019.1 §7.
-- **Tests:** `src/lib/bonus/__tests__/bonus-period-close-cron.test.ts` (+5) —
-  smoke-imports the daemon without starting it and asserts the Pacific-aware
-  "next 17:30 PT" computation across PDT (-7) and PST (-8). Transition + email +
-  idempotency coverage continues to ride on `close-months.route.test.ts` and the
-  T-203 `closePayPeriodsDueForSignature` tests.
+- **New `src/lib/bonus/signature-chain.ts`.** `getSignatureChain(siteId, db?)`
+  reads the single `bonus_signature_chains` row for a site and returns
+  `{facility_signer_user_id, facility_override_actor_user_ids[],
+ops_signer_user_id, ops_override_actor_user_ids[], auto_override_actor_user_id}`.
+  The override-actor columns are stored by the T-201 seed as comma-separated
+  UUID strings; `parseOverrideActorIds()` splits/trims/drops-blanks back to
+  arrays. Cached per-(db,site) for the request lifecycle via a `WeakMap` keyed on
+  the db instance (failed lookups evict so a retry re-reads).
+  `getAutoOverrideActor(siteId)` returns the chain's auto-override actor — never
+  hardcoded as Bill. `SignatureChainNotFoundError` on an unseeded site.
+- **`src/lib/bonus/signatures.ts` now chain-sourced.** `canSignSlot(user, slot,
+siteId)` → `user.id === chain.{slot}_signer_user_id`; `canOverrideSlot(user,
+slot, siteId)` → admin (ADR-0019.2 §3) OR `user.id ∈
+chain.{slot}_override_actor_user_ids`; `naturalSlotFor(user, siteId)` resolves
+  the caller's primary slot from the chain. All async now. `recordSignature`
+  threads `siteId` (from the signer context) + an optional `chainDb` through to
+  these. `getAutoOverrideActor` is re-exported here so the T-205 escalation cron
+  has one import site.
+- **Callers threaded.** Sign route passes `chainDb: prisma`; the month detail
+  page computes `viewerSlot` + `overridableSlots` from the chain (scoped to the
+  period's `site_id`) and now wires `overridableSlots` into `SignaturePanel`.
+- **Tests.** New `signature-chain.test.ts` implements the addendum acceptance
+  matrix across both sites (Rick signs Eugene facility but not Woodland; Kelsey
+  signs Eugene ops, but Woodland ops is an override for her not primary; Bill
+  overrides either slot at either site; Morena overrides Woodland facility but
+  not Eugene ops; etc.) plus parsing/caching/error coverage. Existing
+  `signatures.test.ts` / `signature-override.test.ts` / sign-route test updated
+  to feed a Woodland chain double — assertions/outcomes unchanged.
 
 ### 2026-06-06 — Sprint 2 addendum Wave A: state machine period boundaries + `skipped` transition (T-203)
 

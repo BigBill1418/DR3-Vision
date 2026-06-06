@@ -1,7 +1,10 @@
 // T-110 — Signature capture data layer (ADR-0019 §5).
+// T-208 — Made site-aware: signer/override identity now comes from the
+//         `bonus_signature_chains` row for the period's site, NEVER hardcoded
+//         (addendum hard rules #2 & #3).
 //
-// Records one of the two monthly attestation signatures (Janette / Morena) on a
-// Woodland `bonus_pay_periods` row and advances the lifecycle via the T-106 state
+// Records one of the two attestation signatures (facility / ops) on a
+// `bonus_pay_periods` row and advances the lifecycle via the T-106 state
 // machine — the ONLY path that mutates `bonus_pay_periods.state`. The signature
 // column write, the audit row, and the state transition all land in ONE
 // interactive transaction so a signature can never be captured without its
@@ -16,28 +19,37 @@
 // signer cannot re-sign, and the override path cannot stomp an existing
 // signature.
 //
-// SLOT determination (NON-override case — the override case is T-111's job):
-//   - Janette slot: the Woodland facility manager (manager, primary_site_id =
-//     Woodland site id).
-//   - Morena slot:  the both-sites operations manager (manager,
-//     primary_site_id = null).
-//   - An admin (Bill / Kelsey) signing with NO `onBehalfOf` has no natural
-//     slot and is rejected here with a 422 `no_slot` — admin-as-override is
-//     T-111, which will pass an explicit `onBehalfOf` slot. The `onBehalfOf`
-//     param is the clean seam: it is accepted but NOT yet exposed by the T-110
-//     route/UI, so the override semantics (who-may-override-whom, the
-//     override_actor_id / override_reason columns) remain entirely T-111's to
-//     wire.
+// SLOT determination (NON-override case) — CHAIN-SOURCED (T-208):
+//   - facility slot: the user whose id === chain.facility_signer_user_id for
+//     the period's site (Janette @ Woodland, Rick @ Eugene).
+//   - ops slot:      the user whose id === chain.ops_signer_user_id (Morena @
+//     Woodland, Kelsey @ Eugene).
+//   - A caller who is neither configured signer and supplies NO `onBehalfOf`
+//     has no natural slot and is rejected with `no_slot` — admin-as-override
+//     passes an explicit `onBehalfOf` slot (the override path).
 //
-// Bonus is Woodland-scoped (CLAUDE.md hard rule #2): the month is always
-// re-read scoped to the caller's site id; a forged month id for another site
-// is treated as not-found.
+// OVERRIDE authority — CHAIN-SOURCED (T-208) + admin (ADR-0019.2 §3):
+//   - any admin may override either slot (admins occupy any slot they're
+//     authorized for; Woodland's chain need not list them).
+//   - a non-admin may override a slot iff their id is in that slot's
+//     `*_override_actor_user_ids` list. For Woodland: Morena (ops_signer) is
+//     also in facility_override, so she may override facility but NOT ops; she
+//     signs her OWN ops slot naturally, never via override.
+//
+// Bonus is site-scoped (CLAUDE.md hard rule #2): the month is always re-read
+// scoped to the caller's site id; a forged month id for another site is treated
+// as not-found.
 
 import type { AuditAction } from '@prisma/client';
 import { calculateMonthlyBonusCents } from '@/lib/bonus/calculator';
 import { transitionMonth, type BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { entryDateUTC, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { bonusPayPeriodsByState } from '@/lib/observability/metrics';
+import { getSignatureChain, type SignatureChainDb } from '@/lib/bonus/signature-chain';
+
+// Re-export so the escalation cron (T-205) imports the auto-override actor from
+// one place (and so callers needn't reach into two modules).
+export { getAutoOverrideActor } from '@/lib/bonus/signature-chain';
 
 // ────────────────────────────────────────────────────────────────────
 // Types
@@ -117,6 +129,13 @@ export interface RecordSignatureOpts {
   db: SignatureDb;
   monthId: string;
   signer: SignerContext;
+  /**
+   * Client used to read the `bonus_signature_chains` row (T-208). Defaults to
+   * the global Prisma singleton; the route passes `prisma`, tests pass a chain
+   * double. Kept separate from `db` because `db` is the (possibly transactional)
+   * signature client whose structural type does not include the chain model.
+   */
+  chainDb?: SignatureChainDb;
   ip?: string | null;
   userAgent?: string | null;
   /**
@@ -156,43 +175,76 @@ export type RecordSignatureResult =
     };
 
 // ────────────────────────────────────────────────────────────────────
-// Slot determination
+// Slot determination & authority — CHAIN-SOURCED (T-208)
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * The slot this signer fills in the NON-override case. Returns null for a
- * caller with no natural slot (an admin signing without `onBehalfOf`) — that is
- * the T-111 override path, rejected here.
+ * The minimal principal the chain-sourced checks need: an id and a role. Role
+ * only grants the blanket admin override (ADR-0019.2 §3); WHO signs and WHO may
+ * override a slot otherwise comes entirely from the chain.
  */
-export function naturalSlotFor(signer: SignerContext): SignatureSlot | null {
-  if (signer.role !== 'manager') return null;
-  if (signer.primarySiteId === signer.siteId) return 'facility';
-  if (signer.primarySiteId === null) return 'ops';
-  return null;
+export interface UserPrincipal {
+  id: string;
+  role: 'manager' | 'admin';
 }
 
 /**
- * Asymmetric override authority (ADR-0019 §5), enforced SERVER-SIDE:
- *
- *   - Janette's slot may be overridden by Bill (admin) OR Morena (the both-sites
- *     ops manager — manager with primary_site_id = null).
- *   - Morena's slot may be overridden by Bill (admin) ONLY (the facility manager
- *     does not outrank the ops manager in this attestation chain).
- *   - Janette (Woodland facility manager) has NO override authority.
- *
- * Authority is derived from role + primary_site_id (NOT from a name), so any
- * admin (Bill, Kelsey) gets full authority and the both-sites ops manager gets
- * the Janette-only authority — matching how `requireBonusAccess` identifies these
- * principals. Filling one's OWN natural slot is the natural-signature path, never
- * an override, so it is not granted here.
+ * Whether `user` is the configured PRIMARY signer for `slot` at `siteId`.
+ *   `user.id === chain.{slot}_signer_user_id`
+ * Pure chain lookup — no role logic (an admin who is also the configured signer
+ * is a primary signature, not an override; e.g. Kelsey is Eugene's ops_signer).
  */
-export function canOverrideSlot(signer: SignerContext, slot: SignatureSlot): boolean {
-  if (signer.role === 'admin') return true;
-  // Both-sites ops manager (Morena) may stand in for Janette only.
-  if (signer.role === 'manager' && signer.primarySiteId === null && slot === 'facility') {
-    return true;
-  }
-  return false;
+export async function canSignSlot(
+  user: UserPrincipal,
+  slot: SignatureSlot,
+  siteId: string,
+  db?: SignatureChainDb,
+): Promise<boolean> {
+  const chain = await getSignatureChain(siteId, db);
+  const signerId = slot === 'facility' ? chain.facility_signer_user_id : chain.ops_signer_user_id;
+  return user.id === signerId;
+}
+
+/**
+ * Whether `user` may OVERRIDE (sign on behalf of the configured signer for)
+ * `slot` at `siteId`:
+ *   - any admin → true (ADR-0019.2 §3: admins occupy any slot they're
+ *     authorized for; the per-site override list need not enumerate them);
+ *   - otherwise → `user.id ∈ chain.{slot}_override_actor_user_ids`.
+ *
+ * Woodland outcome (unchanged): Bill/Kelsey (admin) → both slots; Morena (in
+ * facility_override) → facility only; Janette (in neither list) → neither.
+ * Eugene: Bill/Kelsey (admin) → both; Rick (in neither list) → neither.
+ */
+export async function canOverrideSlot(
+  user: UserPrincipal,
+  slot: SignatureSlot,
+  siteId: string,
+  db?: SignatureChainDb,
+): Promise<boolean> {
+  if (user.role === 'admin') return true;
+  const chain = await getSignatureChain(siteId, db);
+  const list =
+    slot === 'facility'
+      ? chain.facility_override_actor_user_ids
+      : chain.ops_override_actor_user_ids;
+  return list.includes(user.id);
+}
+
+/**
+ * The slot this signer fills in the NON-override case, sourced from the chain.
+ * Returns null for a caller who is neither configured signer (an admin or a
+ * non-signer must use the override path with an explicit `onBehalfOf`).
+ */
+export async function naturalSlotFor(
+  signer: UserPrincipal,
+  siteId: string,
+  db?: SignatureChainDb,
+): Promise<SignatureSlot | null> {
+  const chain = await getSignatureChain(siteId, db);
+  if (signer.id === chain.facility_signer_user_id) return 'facility';
+  if (signer.id === chain.ops_signer_user_id) return 'ops';
+  return null;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -207,16 +259,21 @@ export function canOverrideSlot(signer: SignerContext, slot: SignatureSlot): boo
  */
 export async function recordSignature(opts: RecordSignatureOpts): Promise<RecordSignatureResult> {
   const { db, monthId, signer } = opts;
+  const chainDb = opts.chainDb;
+  const principal: UserPrincipal = { id: signer.userId, role: signer.role };
 
   const isOverride = opts.onBehalfOf !== undefined;
-  const slot = opts.onBehalfOf ?? naturalSlotFor(signer);
+  // Slot identity is CHAIN-SOURCED (T-208): on a natural signature it is the
+  // slot whose configured signer is the caller; on an override it is the
+  // explicit target.
+  const slot = opts.onBehalfOf ?? (await naturalSlotFor(principal, signer.siteId, chainDb));
   if (!slot) return { ok: false, reason: 'no_slot' };
 
-  // Override path: enforce the asymmetric authority + a non-blank reason BEFORE
+  // Override path: enforce chain-sourced authority + a non-blank reason BEFORE
   // touching the DB. The natural path skips both (and ignores overrideReason).
   let reason: string | null = null;
   if (isOverride) {
-    if (!canOverrideSlot(signer, slot)) {
+    if (!(await canOverrideSlot(principal, slot, signer.siteId, chainDb))) {
       return { ok: false, reason: 'not_authorized', slot };
     }
     reason = (opts.overrideReason ?? '').trim();
