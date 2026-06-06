@@ -19,6 +19,10 @@ export interface PdfMonthRow {
   state: string;
   total_payout_cents: number | null;
   amended_from_period_id: string | null;
+  // ─── Bi-weekly period identity (ADR-0019.1 §1) ─────────────────────
+  period_number: number;
+  period_year: number;
+  pay_date: Date;
 }
 
 export interface PdfEmployee {
@@ -142,4 +146,170 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
 /** UTC YYYY-MM for a period_start (shared by pdf.ts for the R2 storage key). */
 export function pdfMonthYm(monthStart: Date): string {
   return isoMonth(monthStart);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// T-209 — bi-weekly title + attestation language (ADR-0019.1 §1, §4)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Short month/day label for a @db.Date boundary (e.g. "Jun 9"). @db.Date values
+ * carry their Pacific calendar day in their UTC components, so we format in UTC
+ * — re-shifting through the Pacific zone would move them back a day (see the
+ * storage invariant in `@/lib/time`).
+ */
+function shortMonthDay(d: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(d);
+}
+
+/**
+ * Strip the seeded "DR3 " site-name prefix so the title reads
+ * "DR3 Woodland Bonus Report" (not "DR3 DR3 Woodland ..."). `sites.name` is
+ * seeded as "DR3 Woodland" / "DR3 Eugene"; the title template owns the "DR3 "
+ * prefix per ADR-0019.1.
+ */
+export function bareSiteName(siteName: string): string {
+  return siteName.replace(/^DR3\s+/i, '').trim();
+}
+
+export interface PeriodTitleInput {
+  siteName: string; // raw sites.name (may carry the "DR3 " prefix)
+  periodNumber: number;
+  periodYear: number;
+  periodStart: Date; // @db.Date Tuesday
+  periodEnd: Date; // @db.Date Monday
+  payDate: Date; // @db.Date Friday
+}
+
+export interface PeriodTitle {
+  /** e.g. "DR3 Woodland Bonus Report — Period 13: Jun 9 – Jun 22, 2026" */
+  title: string;
+  /** e.g. "Pay date: Jun 26, 2026" */
+  payDateLine: string;
+}
+
+/**
+ * Build the bonus-PDF title block strings for a bi-weekly period (ADR-0019.1).
+ * Site-name driven (works for Woodland and Eugene with no hardcoding); labels
+ * use UTC-component short month/day for the @db.Date boundaries.
+ */
+export function formatPeriodTitle(input: PeriodTitleInput): PeriodTitle {
+  const site = bareSiteName(input.siteName);
+  const startLabel = shortMonthDay(input.periodStart);
+  const endLabel = shortMonthDay(input.periodEnd);
+  const payLabel = shortMonthDay(input.payDate);
+  return {
+    title: `DR3 ${site} Bonus Report — Period ${input.periodNumber}: ${startLabel} – ${endLabel}, ${input.periodYear}`,
+    payDateLine: `Pay date: ${payLabel}, ${input.periodYear}`,
+  };
+}
+
+/** How a signature slot came to be filled (drives attestation wording). */
+export type AttestationSource = 'unsigned' | 'primary' | 'manual_override' | 'auto_override';
+
+/**
+ * Raw per-slot inputs the attestation builder needs. All names are already
+ * resolved (the caller resolves user UUIDs → display names and the site's
+ * natural signer from the signature chain); this keeps the builder pure.
+ */
+export interface AttestationSlotInput {
+  /** Human role label for this slot, e.g. "Facility Manager". */
+  slotRole: string;
+  /** Name of the person who actually signed primary (slot signer), if any. */
+  primarySignerName: string | null;
+  /** Set when a human override actor filled the slot. */
+  overrideActorName: string | null;
+  /** Free-text manual-override reason. */
+  overrideReason: string | null;
+  /** Set when the system auto-signed the slot (ADR-0019.1 §4). NULL = human. */
+  autoOverrideAt: Date | null;
+  /** Name of who auto-signed (the configured auto-override actor, e.g. Bill). */
+  autoOverrideActorName: string | null;
+  /**
+   * The slot's NATURAL signer — who SHOULD have signed (resolved from the
+   * signature chain). Used in override wording ("on behalf of <natural signer>").
+   */
+  naturalSignerName: string | null;
+}
+
+export interface AttestationResult {
+  source: AttestationSource;
+  /** The one or two attestation lines to print, in order. */
+  lines: string[];
+}
+
+/**
+ * Tuesday-date label for the auto-override deadline message, e.g. "Tue Jun 9,
+ * 2026" — assembled from Pacific-zone parts so the weekday/month/day reflect
+ * Bill's wall clock for this true instant (08:30 AM PT). Built by hand rather
+ * than via a single Intl format string because en-US inserts a comma after the
+ * weekday ("Tue, Jun 9"); the ADR-0019.1 wording has no such comma.
+ */
+function autoOverrideDeadlineLabel(at: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'America/Los_Angeles',
+  }).formatToParts(at);
+  const get = (t: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('weekday')} ${get('month')} ${get('day')}, ${get('year')}`;
+}
+
+/**
+ * Build the attestation lines for one signature slot, branching on slot source
+ * (ADR-0019.1 §4 / T-209):
+ *
+ *  - primary          → the standard attestation passed by the caller.
+ *  - manual_override  → "Signed by <actor>, <role>, on behalf of <natural>, <slot role>. Reason: <reason>"
+ *  - auto_override    → same lead line + the ADR-0019.1 escalation sentence.
+ *
+ * Distinguished by: auto when `autoOverrideAt` set; else manual when
+ * `overrideActorName` set; else primary when a `primarySignerName` is present.
+ */
+export function buildAttestation(
+  slot: AttestationSlotInput,
+  standardAttestation: string,
+  overrideActorRole = 'Administrator',
+): AttestationResult {
+  const natural = slot.naturalSignerName ?? slot.slotRole;
+
+  // Auto override (system-applied) takes precedence — it is a kind of override
+  // and always carries an autoOverrideAt timestamp.
+  if (slot.autoOverrideAt) {
+    const actor = slot.autoOverrideActorName ?? slot.overrideActorName ?? 'an administrator';
+    const deadline = autoOverrideDeadlineLabel(slot.autoOverrideAt);
+    return {
+      source: 'auto_override',
+      lines: [
+        `Signed by ${actor}, ${overrideActorRole}, on behalf of ${natural}, ${slot.slotRole}.`,
+        `System-applied admin override per ADR-0019.1 escalation policy. ${natural} did not sign by 08:30 AM PT on ${deadline}.`,
+      ],
+    };
+  }
+
+  // Manual human override.
+  if (slot.overrideActorName) {
+    const reason = slot.overrideReason?.trim();
+    return {
+      source: 'manual_override',
+      lines: [
+        `Signed by ${slot.overrideActorName}, ${overrideActorRole}, on behalf of ${natural}, ${slot.slotRole}.`,
+        reason ? `Reason: ${reason}` : 'Reason: (not recorded)',
+      ],
+    };
+  }
+
+  // Primary signed.
+  if (slot.primarySignerName) {
+    return { source: 'primary', lines: [standardAttestation] };
+  }
+
+  // Not signed at all.
+  return { source: 'unsigned', lines: [standardAttestation] };
 }

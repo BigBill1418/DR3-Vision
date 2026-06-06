@@ -5,55 +5,40 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-06 — Sprint 2 addendum Wave A: signature-escalation cron + payroll-deadline-missed alert (T-205 + T-206)
+### 2026-06-06 — Sprint 2 addendum Wave B: bonus PDF site-name + bi-weekly period naming + override attestation (T-209)
 
-Added the bi-weekly signature-escalation workflow (ADR-0019.1 §3/§4/§6) that
-drives a `pending_signatures`/`partially_signed` pay period to delivery by the
-hard Tue 09:00 AM PT payroll deadline. A single long-running, Pacific-aware
-daemon (`scripts/bonus-escalation-check.mjs`) wakes at four wall-clock times and
-POSTs the new internal route per tier; the orchestration lives in TypeScript
-behind the state machine. `tsc --noEmit`, `next lint --max-warnings 0`, and the
-full `vitest` suite (603 tests, +27) all clean.
+Re-titled the bonus PDF for the bi-weekly cadence (ADR-0019.1 §1) and made the
+signature attestation language adapt to how each slot was filled (ADR-0019.1 §4 /
+ADR-0019.2). Kept the existing red/black SVdP + DR3-Vision co-branded styling
+untouched — this is a content change, not a restyle. `tsc --noEmit`, `next lint
+--max-warnings 0`, and the bonus `vitest` suite (238 tests, +6 new pdf-data
+specs) all clean; Woodland + Eugene Period 13 PDFs rendered and verified by eye.
 
-- **New `scripts/bonus-escalation-check.mjs`** (+ `.d.mts`). Thin DST-safe
-  scheduler mirroring `bonus-period-close.mjs`: fires 06:00 (t1) / 07:30 (t2) /
-  08:30 (t3) / 09:00 (t4) America/Los_Angeles, POSTing
-  `/api/internal/bonus/escalation-check?tier=<t1..t4>`. Daily fire is a clean
-  no-op when no period matches the yesterday's-close window.
-- **New `src/lib/bonus/escalation.ts`** — `runEscalationTier({db, tier, now})`,
-  the testable orchestration. Examines `bonus_pay_periods` where
-  `period_end == appToday() - 1 day` (Pacific). t1 → low-urgency ntfy
-  (`bonus-escalation-warning:<site>:<id>:t1`, priority default); t2 → urgent
-  ntfy (`...:t2`) whose body lists the chain's override-authorized humans;
-  t3 → AUTO-OVERRIDE each still-unsigned slot via `recordSignature` as the
-  chain's `auto_override_actor_user_id` (admin override path, `*_auto_override_at`
-  stamped, audit `actor_label = system:bonus-escalation`, ADR-0019.1 reason
-  text), then fire PDF + M365 delivery; t4 → urgent
-  `bonus-payroll-deadline-missed:<site>:<id>` for any yesterday's-period not yet
-  `paid`. All ntfy fingerprinted + cooled.
-- **Risk mitigation (addendum):** before t3 auto-signs, the configured
-  auto-override actor must be a valid ACTIVE user; if missing/inactive, an urgent
-  ntfy fires and NO auto-sign happens (miss with an explicit alert rather than
-  fail silently).
-- **Idempotent:** a slot signed manually by 08:25 is rejected by
-  `recordSignature` as `already_signed` and is not re-overridden; a fully-signed
-  period produces no escalation.
-- **New `src/app/api/internal/bonus/escalation-check/route.ts`** — loopback-only
-  (cf-connecting-ip 404), optional `INTERNAL_CRON_TOKEN` bearer, `?tier=`
-  validation; passes `appToday()` so the date math is Pacific.
-- **New `src/lib/bonus/payroll-delivery.ts`** — extracted the post-signature PDF
-  render + R2 fetch + M365 send from the sign route so the manual 2nd-signature
-  path AND the auto-override path fire the identical side-effect chain. Sign
-  route now imports it.
-- **`src/lib/bonus/signatures.ts`** — `recordSignature` gained `autoOverride`
-  (stamps `*_auto_override_at`) and `actorLabel` (audit label) opts; the success
-  result exposes `autoOverride`. Manual override behavior unchanged.
-- **`docker-compose.yml`** — new `bonus-escalation-check` cron service (same
-  image/env/restart/labels/network as `bonus-period-close`).
-- **Tests:** `escalation.test.ts` (14, orchestration + idempotency + risk gate +
-  T-206, clock pinned via `now`, ntfy/chain/signature/delivery mocked),
-  `bonus-escalation-cron.test.ts` (8, the daemon's Pacific tier scheduling across
-  DST), `escalation-check.route.test.ts` (5).
+- **Title block.** Replaced the monthly "DR3 Woodland — Monthly Processor Bonus
+  Report / May 2026" header with the bi-weekly form
+  `DR3 [site] Bonus Report — Period N: <Mon D> – <Mon D>, <year>` plus a
+  `Pay date: <Mon D>, <year>` sub-line. Site-name driven (works for Woodland and
+  Eugene with no hardcoding). New pure `formatPeriodTitle()` in `pdf-data.ts`;
+  `bareSiteName()` strips the seeded "DR3 " prefix from `sites.name` so the
+  template's own "DR3 " prefix isn't doubled. Boundaries are `@db.Date` columns,
+  formatted in UTC per the `@/lib/time` storage invariant.
+- **Source-adaptive attestation.** New pure `buildAttestation()` branches on slot
+  source: primary-signed → standard attestation; manual override
+  (`*_override_actor_id` set, `*_auto_override_at` null) → "Signed by <actor>,
+  Administrator, on behalf of <natural signer>, <slot role>. Reason: <reason>";
+  auto override (`*_auto_override_at` not null) → same lead line + "System-applied
+  admin override per ADR-0019.1 escalation policy. <natural signer> did not sign
+  by 08:30 AM PT on <Tue date>." The natural signer per site is resolved from
+  `getSignatureChain()` (read-only) — facility/ops signer UUIDs → display names —
+  never hardcoded.
+- **Page wiring** (`src/app/internal/bonus-pdf/[month-id]/page.tsx`, URL segment
+  unchanged per ADR-0019.1 §7). Fetches the new `period_*` / `*_auto_override_at`
+  columns, resolves override-actor + auto-override-actor + natural-signer names in
+  one `user.findMany`, and renders the two attestation lines (the secondary
+  override sentence in red so payroll sees a non-primary signature at a glance).
+- **Reference sample.** Regenerated and committed
+  `public/brand/dr3-bonus-report-sample-eugene-period-13.pdf` (facility auto-
+  override + ops manual override) for ongoing visual reference.
 
 ### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 
