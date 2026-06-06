@@ -47,9 +47,9 @@ export async function GET(
 
   // Scope to the caller's Woodland site so a forged id can't read another
   // site's artifact (CLAUDE.md hard rule #2).
-  const month = await prisma.bonusMonth.findFirst({
+  const month = await prisma.bonusPayPeriod.findFirst({
     where: { id, site_id: ctx.siteId },
-    select: { id: true, pdf_storage_key: true, month_start: true },
+    select: { id: true, pdf_storage_key: true, period_start: true },
   });
   if (!month) return new Response('not found', { status: 404 });
   if (!month.pdf_storage_key) return new Response('pdf not generated', { status: 409 });
@@ -64,8 +64,8 @@ export async function GET(
 
   // The SDK Body is a web ReadableStream in the Node 18+ fetch runtime.
   const body = obj.Body.transformToWebStream();
-  const ym = `${month.month_start.getUTCFullYear()}-${String(
-    month.month_start.getUTCMonth() + 1,
+  const ym = `${month.period_start.getUTCFullYear()}-${String(
+    month.period_start.getUTCMonth() + 1,
   ).padStart(2, '0')}`;
 
   return new Response(body, {

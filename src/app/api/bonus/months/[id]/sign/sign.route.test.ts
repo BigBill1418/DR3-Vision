@@ -46,25 +46,25 @@ const EUGENE = 'site-eugene';
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
+  period_start: Date;
+  period_end: Date;
   state: string;
-  janette_signed_by_user_id: string | null;
-  janette_signed_at: Date | null;
-  janette_signed_ip: string | null;
-  janette_signed_user_agent: string | null;
-  morena_signed_by_user_id: string | null;
-  morena_signed_at: Date | null;
-  morena_signed_ip: string | null;
-  morena_signed_user_agent: string | null;
+  facility_signed_by_user_id: string | null;
+  facility_signed_at: Date | null;
+  facility_signed_ip: string | null;
+  facility_signed_user_agent: string | null;
+  ops_signed_by_user_id: string | null;
+  ops_signed_at: Date | null;
+  ops_signed_ip: string | null;
+  ops_signed_user_agent: string | null;
   total_payout_cents: number | null;
   pdf_storage_key: string | null;
-  amended_from_month_id: string | null;
+  amended_from_period_id: string | null;
 }
 
 const sitesStore = new Map<string, { id: string; code: string; name: string }>();
 const monthStore = new Map<string, MockMonth>();
-const entryStore: Array<{ bonus_month_id: string; mattress_count: number }> = [];
+const entryStore: Array<{ bonus_pay_period_id: string; mattress_count: number }> = [];
 const auditRows: Array<{
   action: string;
   table_name: string;
@@ -87,20 +87,20 @@ function seedMonth(over: Partial<MockMonth> = {}): MockMonth {
   const m: MockMonth = {
     id: 'm1',
     site_id: WOODLAND,
-    month_start: new Date(Date.UTC(2026, 5, 1)),
-    month_end: new Date(Date.UTC(2026, 5, 30)),
+    period_start: new Date(Date.UTC(2026, 5, 1)),
+    period_end: new Date(Date.UTC(2026, 5, 30)),
     state: 'pending_signatures',
-    janette_signed_by_user_id: null,
-    janette_signed_at: null,
-    janette_signed_ip: null,
-    janette_signed_user_agent: null,
-    morena_signed_by_user_id: null,
-    morena_signed_at: null,
-    morena_signed_ip: null,
-    morena_signed_user_agent: null,
+    facility_signed_by_user_id: null,
+    facility_signed_at: null,
+    facility_signed_ip: null,
+    facility_signed_user_agent: null,
+    ops_signed_by_user_id: null,
+    ops_signed_at: null,
+    ops_signed_ip: null,
+    ops_signed_user_agent: null,
     total_payout_cents: null,
     pdf_storage_key: null,
-    amended_from_month_id: null,
+    amended_from_period_id: null,
     ...over,
   };
   monthStore.set(m.id, m);
@@ -108,7 +108,7 @@ function seedMonth(over: Partial<MockMonth> = {}): MockMonth {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
       const m = monthStore.get(where.id);
       return m ? { ...m } : null;
@@ -127,8 +127,10 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
   const bonusDailyEntry = {
-    findMany: vi.fn(async ({ where }: { where: { bonus_month_id: string } }) =>
-      entryStore.filter((e) => e.bonus_month_id === where.bonus_month_id).map((e) => ({ ...e })),
+    findMany: vi.fn(async ({ where }: { where: { bonus_pay_period_id: string } }) =>
+      entryStore
+        .filter((e) => e.bonus_pay_period_id === where.bonus_pay_period_id)
+        .map((e) => ({ ...e })),
     ),
   };
   const processorBonusRule = {
@@ -165,7 +167,7 @@ vi.mock('@/lib/prisma', () => {
   // signature; it resolves the next signer via user.findFirst. Stub it to null so
   // the non-blocking prompt no-ops cleanly (no mail in these tests).
   const user = { findFirst: vi.fn(async () => null) };
-  const client = { bonusMonth, bonusDailyEntry, processorBonusRule, site, auditLog, user };
+  const client = { bonusPayPeriod, bonusDailyEntry, processorBonusRule, site, auditLog, user };
   return {
     prisma: {
       ...client,
@@ -225,22 +227,22 @@ describe('POST /api/bonus/months/[id]/sign — signature flow', () => {
     const res = await POST(makeReq(), { params });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { slot: string; state: string; fullySigned: boolean };
-    expect(body.slot).toBe('janette');
+    expect(body.slot).toBe('facility');
     expect(body.state).toBe('partially_signed');
     expect(body.fullySigned).toBe(false);
 
     const m = monthStore.get('m1')!;
     expect(m.state).toBe('partially_signed');
-    expect(m.janette_signed_by_user_id).toBe('janette');
-    expect(m.janette_signed_ip).toBe('203.0.113.7');
-    expect(m.janette_signed_user_agent).toBe('Vitest/1.0');
-    expect(m.janette_signed_at).toBeInstanceOf(Date);
+    expect(m.facility_signed_by_user_id).toBe('janette');
+    expect(m.facility_signed_ip).toBe('203.0.113.7');
+    expect(m.facility_signed_user_agent).toBe('Vitest/1.0');
+    expect(m.facility_signed_at).toBeInstanceOf(Date);
     // No side effects on the first signature.
     expect(generateBonusPdf).not.toHaveBeenCalled();
     expect(sendPayrollPdf).not.toHaveBeenCalled();
     // Audit captured the signer.
     expect(
-      auditRows.some((r) => r.table_name === 'bonus_months' && r.actor_user_id === 'janette'),
+      auditRows.some((r) => r.table_name === 'bonus_pay_periods' && r.actor_user_id === 'janette'),
     ).toBe(true);
   });
 
@@ -249,24 +251,24 @@ describe('POST /api/bonus/months/[id]/sign — signature flow', () => {
     // Pre-seed Janette already signed → partially_signed.
     seedMonth({
       state: 'partially_signed',
-      janette_signed_by_user_id: 'janette',
-      janette_signed_at: new Date(),
+      facility_signed_by_user_id: 'janette',
+      facility_signed_at: new Date(),
     });
     entryStore.push(
-      { bonus_month_id: 'm1', mattress_count: 75 }, // 25*50 + 1*25 = 1275
-      { bonus_month_id: 'm1', mattress_count: 60 }, // 10*50 = 500
+      { bonus_pay_period_id: 'm1', mattress_count: 75 }, // 25*50 + 1*25 = 1275
+      { bonus_pay_period_id: 'm1', mattress_count: 60 }, // 10*50 = 500
     );
     mockSession = { user: { id: 'morena', role: 'manager', primary_site_id: null } };
     const res = await POST(makeReq(), { params });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { slot: string; state: string; fullySigned: boolean };
-    expect(body.slot).toBe('morena');
+    expect(body.slot).toBe('ops');
     expect(body.state).toBe('signed');
     expect(body.fullySigned).toBe(true);
 
     const m = monthStore.get('m1')!;
     expect(m.state).toBe('signed');
-    expect(m.morena_signed_by_user_id).toBe('morena');
+    expect(m.ops_signed_by_user_id).toBe('morena');
     expect(m.total_payout_cents).toBe(1775);
 
     // Side effects fire off the request path; flush microtasks/timers.
@@ -277,8 +279,8 @@ describe('POST /api/bonus/months/[id]/sign — signature flow', () => {
     const { POST } = await import('./route');
     seedMonth({
       state: 'partially_signed',
-      janette_signed_by_user_id: 'janette',
-      janette_signed_at: new Date(),
+      facility_signed_by_user_id: 'janette',
+      facility_signed_at: new Date(),
     });
     // Janette tries again — her slot is filled.
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };

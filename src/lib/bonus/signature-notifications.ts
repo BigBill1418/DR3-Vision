@@ -3,15 +3,15 @@
 // Actively prompt the next signer by email when their signature is required, so
 // they don't have to remember to check the portal:
 //   1. Month closes (draft -> pending_signatures, incl. amendment re-open) -> email
-//      the facility-manager signer (the "janette" slot).
+//      the facility-manager signer (the "facility" slot).
 //   2. First signature lands (pending_signatures -> partially_signed) -> email the
-//      still-unsigned slot's signer (normally the "morena" ops slot; if a slot was
+//      still-unsigned slot's signer (normally the "ops" slot; if a slot was
 //      filled out of order via override, this targets whichever slot remains).
 //
 // Recipients are resolved DYNAMICALLY from the users table (never hardcoded):
-//   - facility-manager slot ("janette") -> active manager whose primary_site_id is
+//   - facility-manager slot ("facility") -> active manager whose primary_site_id is
 //     the bonus site (Woodland)
-//   - operations-manager slot ("morena") -> active manager whose primary_site_id is
+//   - operations-manager slot ("ops") -> active manager whose primary_site_id is
 //     null (the both-sites ops manager)
 //
 // Channel: Microsoft Graph email via sendSystemEmail (ADR-0021) — NOT ntfy (ntfy is
@@ -37,9 +37,9 @@ export interface SlotSigner {
   email: string | null;
 }
 
-/** Minimal `bonusMonth` surface this module needs (Prisma client or a test double). */
+/** Minimal `bonusPayPeriod` surface this module needs (Prisma client or a test double). */
 export interface SignatureNotificationDb {
-  bonusMonth: {
+  bonusPayPeriod: {
     findUnique: (args: {
       where: { id: string };
       select?: unknown;
@@ -53,10 +53,10 @@ export interface SignatureNotificationDb {
 export interface SignatureMonthRow {
   id: string;
   site_id: string;
-  month_start: Date;
+  period_start: Date;
   state: string;
-  janette_signed_by_user_id: string | null;
-  morena_signed_by_user_id: string | null;
+  facility_signed_by_user_id: string | null;
+  ops_signed_by_user_id: string | null;
 }
 
 export interface NotifyResult {
@@ -73,16 +73,16 @@ export async function resolveSlotSigner(
 ): Promise<SlotSigner | null> {
   const base = { role: 'manager', is_active: true, deleted_at: null } as const;
   const where =
-    slot === 'janette'
+    slot === 'facility'
       ? { ...base, primary_site_id: siteId } // facility manager (Woodland)
       : { ...base, primary_site_id: null }; // both-sites operations manager
   return db.user.findFirst({ where, select: { id: true, name: true, email: true } });
 }
 
-/** The first still-unsigned slot, in signing order (janette first). Null if both signed. */
+/** The first still-unsigned slot, in signing order (facility first). Null if both signed. */
 function unsignedSlot(month: SignatureMonthRow): SignatureSlot | null {
-  if (!month.janette_signed_by_user_id) return 'janette';
-  if (!month.morena_signed_by_user_id) return 'morena';
+  if (!month.facility_signed_by_user_id) return 'facility';
+  if (!month.ops_signed_by_user_id) return 'ops';
   return null;
 }
 
@@ -95,10 +95,10 @@ function monthLabel(monthStart: Date): string {
 }
 
 function buildEmail(slot: SignatureSlot, month: SignatureMonthRow) {
-  const label = monthLabel(month.month_start);
+  const label = monthLabel(month.period_start);
   const url = `${APP_BASE_URL}/bonus/months/${month.id}`;
   const lead =
-    slot === 'janette'
+    slot === 'facility'
       ? `The ${label} DR3 Woodland processor bonus report is ready for your signature.`
       : `The ${label} DR3 Woodland processor bonus report has its first signature; your signature is now needed to finalize it.`;
   return {
@@ -120,15 +120,15 @@ export async function notifyPendingSigner(
   monthId: string,
   db: SignatureNotificationDb = prisma as unknown as SignatureNotificationDb,
 ): Promise<NotifyResult> {
-  const month = await db.bonusMonth.findUnique({
+  const month = await db.bonusPayPeriod.findUnique({
     where: { id: monthId },
     select: {
       id: true,
       site_id: true,
-      month_start: true,
+      period_start: true,
       state: true,
-      janette_signed_by_user_id: true,
-      morena_signed_by_user_id: true,
+      facility_signed_by_user_id: true,
+      ops_signed_by_user_id: true,
     },
   });
   if (!month) return { notified: false, reason: 'month_not_found' };
@@ -169,7 +169,7 @@ export async function notifyPendingSigner(
   await writeAudit({
     actor_label: 'system:signature-request',
     action: 'insert',
-    table_name: 'bonus_months',
+    table_name: 'bonus_pay_periods',
     row_id: monthId,
     after: { slot, to: signer.email, message_id: res.messageId, subject },
   });

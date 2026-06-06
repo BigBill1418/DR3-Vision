@@ -20,7 +20,7 @@
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
-import type { BonusMonthState } from '@/lib/bonus/state-machine';
+import type { BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { appToday } from '@/lib/time';
 
 // ────────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ export type MonthFilter = 'current' | 'year' | 'all';
 export const MONTH_FILTERS: readonly MonthFilter[] = ['current', 'year', 'all'];
 
 /** Narrow an arbitrary string (e.g. a search param) to a {@link MonthFilter}. */
-export function parseMonthFilter(value: string | null | undefined): MonthFilter {
+export function parsePayPeriodFilter(value: string | null | undefined): MonthFilter {
   return value === 'year' || value === 'all' ? value : 'current';
 }
 
@@ -51,7 +51,7 @@ export interface MonthListRow {
   monthStart: Date;
   /** "September 2026", en-US, rendered in UTC to match the stored calendar day. */
   label: string;
-  state: BonusMonthState;
+  state: BonusPayPeriodState;
   /** Total payout in integer CENTS (locked total, else computed from entries). */
   totalPayoutCents: number;
   /** Whether `totalPayoutCents` came from the frozen locked column vs. computed. */
@@ -76,13 +76,13 @@ interface DateWindow {
 }
 
 /**
- * Build the `month_start` range for a filter, anchored on `now`. Defaults to the
+ * Build the `period_start` range for a filter, anchored on `now`. Defaults to the
  * Pacific business day (`appToday()`, UTC components = Pacific Y/M/D), NOT the
  * server's UTC clock — otherwise "current month" flips a day early near month
  * boundaries for ~7mo/year. Injectable for deterministic tests. All bounds are
  * UTC-midnight so they line up with the `@db.Date` column.
  */
-export function monthWindow(filter: MonthFilter, now: Date = appToday()): DateWindow {
+export function payPeriodWindow(filter: MonthFilter, now: Date = appToday()): DateWindow {
   const y = now.getUTCFullYear();
   const m = now.getUTCMonth();
   if (filter === 'current') {
@@ -128,19 +128,19 @@ function signatureStatus(janette: boolean, morena: boolean): SignatureStatus {
  */
 async function payoutForMonth(
   siteId: string,
-  month: { id: string; month_start: Date; total_payout_cents: number | null },
+  month: { id: string; period_start: Date; total_payout_cents: number | null },
 ): Promise<{ cents: number; locked: boolean }> {
   if (month.total_payout_cents !== null) {
     return { cents: month.total_payout_cents, locked: true };
   }
   const entries = await prisma.bonusDailyEntry.findMany({
-    where: { bonus_month_id: month.id },
+    where: { bonus_pay_period_id: month.id },
     select: { mattress_count: true },
   });
   if (entries.length === 0) return { cents: 0, locked: false };
   let rule;
   try {
-    rule = await resolveActiveRule(siteId, month.month_start);
+    rule = await resolveActiveRule(siteId, month.period_start);
   } catch (e) {
     if (e instanceof NoActiveRuleError) return { cents: 0, locked: false };
     throw e;
@@ -151,7 +151,7 @@ async function payoutForMonth(
 }
 
 // ────────────────────────────────────────────────────────────────────
-// listBonusMonths — the filtered, site-scoped list
+// listBonusPayPeriods — the filtered, site-scoped list
 // ────────────────────────────────────────────────────────────────────
 
 /**
@@ -159,50 +159,50 @@ async function payoutForMonth(
  * total, signature status, and amendment linkage. Site-scoped (hard rule #2).
  * `now` is injectable for deterministic tests.
  */
-export async function listBonusMonths(
+export async function listBonusPayPeriods(
   siteId: string,
   filter: MonthFilter,
   now: Date = appToday(),
 ): Promise<MonthListRow[]> {
-  const win = monthWindow(filter, now);
-  const where: { site_id: string; month_start?: { gte?: Date; lt?: Date } } = { site_id: siteId };
+  const win = payPeriodWindow(filter, now);
+  const where: { site_id: string; period_start?: { gte?: Date; lt?: Date } } = { site_id: siteId };
   if (win.gte || win.lt) {
-    where.month_start = {};
-    if (win.gte) where.month_start.gte = win.gte;
-    if (win.lt) where.month_start.lt = win.lt;
+    where.period_start = {};
+    if (win.gte) where.period_start.gte = win.gte;
+    if (win.lt) where.period_start.lt = win.lt;
   }
 
-  const months = await prisma.bonusMonth.findMany({
+  const months = await prisma.bonusPayPeriod.findMany({
     where,
-    orderBy: { month_start: 'desc' },
+    orderBy: { period_start: 'desc' },
     select: {
       id: true,
-      month_start: true,
+      period_start: true,
       state: true,
       total_payout_cents: true,
-      janette_signed_by_user_id: true,
-      morena_signed_by_user_id: true,
-      amended_from_month_id: true,
+      facility_signed_by_user_id: true,
+      ops_signed_by_user_id: true,
+      amended_from_period_id: true,
     },
   });
 
   const rows: MonthListRow[] = [];
   for (const m of months) {
-    const janetteSigned = m.janette_signed_by_user_id !== null;
-    const morenaSigned = m.morena_signed_by_user_id !== null;
+    const janetteSigned = m.facility_signed_by_user_id !== null;
+    const morenaSigned = m.ops_signed_by_user_id !== null;
     const payout = await payoutForMonth(siteId, m);
     rows.push({
       id: m.id,
-      monthStart: m.month_start,
-      label: monthLabel(m.month_start),
-      state: m.state as BonusMonthState,
+      monthStart: m.period_start,
+      label: monthLabel(m.period_start),
+      state: m.state as BonusPayPeriodState,
       totalPayoutCents: payout.cents,
       totalIsLocked: payout.locked,
       signatureStatus: signatureStatus(janetteSigned, morenaSigned),
       janetteSigned,
       morenaSigned,
-      isAmendment: m.amended_from_month_id !== null,
-      amendedFromMonthId: m.amended_from_month_id ?? null,
+      isAmendment: m.amended_from_period_id !== null,
+      amendedFromMonthId: m.amended_from_period_id ?? null,
     });
   }
   return rows;

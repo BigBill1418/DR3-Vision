@@ -16,11 +16,19 @@ function fieldNames(name: string): string[] {
 }
 
 describe('Bonus schema — generated Prisma client shape (ADR-0019)', () => {
-  it('BonusMonthState enum has the six lifecycle states', () => {
-    const e = Prisma.dmmf.datamodel.enums.find((x) => x.name === 'BonusMonthState');
+  it('BonusPayPeriodState enum has the seven lifecycle states', () => {
+    const e = Prisma.dmmf.datamodel.enums.find((x) => x.name === 'BonusPayPeriodState');
     expect(e).toBeTruthy();
     expect(e!.values.map((v) => v.name).sort()).toEqual(
-      ['amended', 'draft', 'paid', 'partially_signed', 'pending_signatures', 'signed'].sort(),
+      [
+        'amended',
+        'draft',
+        'paid',
+        'partially_signed',
+        'pending_signatures',
+        'signed',
+        'skipped',
+      ].sort(),
     );
   });
 
@@ -46,7 +54,7 @@ describe('Bonus schema — generated Prisma client shape (ADR-0019)', () => {
     expect(f).toEqual(
       expect.arrayContaining([
         'bonus_employee_id',
-        'bonus_month_id',
+        'bonus_pay_period_id',
         'entry_date',
         'mattress_count',
         'note',
@@ -58,33 +66,33 @@ describe('Bonus schema — generated Prisma client shape (ADR-0019)', () => {
     expect(uniques).toContain('bonus_employee_id,entry_date');
   });
 
-  it('BonusMonth carries dual-signature, override, PDF, payroll, and amendment columns', () => {
-    const f = fieldNames('BonusMonth');
+  it('BonusPayPeriod carries dual-signature, override, PDF, payroll, and amendment columns', () => {
+    const f = fieldNames('BonusPayPeriod');
     expect(f).toEqual(
       expect.arrayContaining([
         'state',
-        'month_start',
-        'month_end',
-        'janette_signed_by_user_id',
-        'janette_signed_ip',
-        'janette_override_actor_id',
-        'janette_override_reason',
-        'morena_signed_by_user_id',
-        'morena_override_actor_id',
+        'period_start',
+        'period_end',
+        'facility_signed_by_user_id',
+        'facility_signed_ip',
+        'facility_override_actor_id',
+        'facility_override_reason',
+        'ops_signed_by_user_id',
+        'ops_override_actor_id',
         'pdf_storage_key',
         'payroll_sent_at',
         'payroll_message_id',
         'payroll_retry_count',
-        'amended_from_month_id',
+        'amended_from_period_id',
         'amendment_reason',
         'total_payout_cents',
       ]),
     );
   });
 
-  it('BonusMonth is unique per (site, month_start)', () => {
-    const m = model('BonusMonth');
+  it('BonusPayPeriod is unique per (site, period_start)', () => {
+    const m = model('BonusPayPeriod');
     const uniques = m.uniqueIndexes.map((u) => u.fields.join(','));
-    expect(uniques).toContain('site_id,month_start');
+    expect(uniques).toContain('site_id,period_start');
   });
 });

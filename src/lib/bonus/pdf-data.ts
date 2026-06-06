@@ -14,11 +14,11 @@ import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calc
 export interface PdfMonthRow {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
+  period_start: Date;
+  period_end: Date;
   state: string;
   total_payout_cents: number | null;
-  amended_from_month_id: string | null;
+  amended_from_period_id: string | null;
 }
 
 export interface PdfEmployee {
@@ -61,7 +61,7 @@ export interface PdfData {
   lockedTotalCents: number | null;
 }
 
-/** UTC YYYY-MM for the document id / key, matching the @db.Date month_start. */
+/** UTC YYYY-MM for the document id / key, matching the @db.Date period_start. */
 function isoMonth(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -126,20 +126,20 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const grandTotalCents = rows.reduce((s, r) => s + r.totalBonusCents, 0);
-  const ym = isoMonth(input.month.month_start);
+  const ym = isoMonth(input.month.period_start);
   const documentId = `bonus-${input.site.code}-${ym}-${randomUUID().slice(0, 8)}`;
 
   return {
     documentId,
-    monthLabel: monthLabel(input.month.month_start),
-    isAmended: input.month.amended_from_month_id !== null,
+    monthLabel: monthLabel(input.month.period_start),
+    isAmended: input.month.amended_from_period_id !== null,
     rows,
     grandTotalCents,
     lockedTotalCents: input.month.total_payout_cents,
   };
 }
 
-/** UTC YYYY-MM for a month_start (shared by pdf.ts for the R2 storage key). */
+/** UTC YYYY-MM for a period_start (shared by pdf.ts for the R2 storage key). */
 export function pdfMonthYm(monthStart: Date): string {
   return isoMonth(monthStart);
 }

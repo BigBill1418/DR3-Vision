@@ -17,7 +17,7 @@ import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
+  period_start: Date;
   state: string;
 }
 interface MockEmployee {
@@ -30,7 +30,7 @@ interface MockEmployee {
 interface MockEntry {
   id: string;
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: number;
 }
@@ -71,7 +71,7 @@ function addMonth(year: number, monthIndex0: number, state = 'paid'): MockMonth 
   const m: MockMonth = {
     id: `month-${++idCounter}`,
     site_id: WOODLAND,
-    month_start: um(year, monthIndex0),
+    period_start: um(year, monthIndex0),
     state,
   };
   monthStore.set(m.id, m);
@@ -96,11 +96,13 @@ function addEmp(
 
 function addEntry(monthId: string, empId: string, day: number, count: number): void {
   const m = monthStore.get(monthId)!;
-  const date = new Date(Date.UTC(m.month_start.getUTCFullYear(), m.month_start.getUTCMonth(), day));
+  const date = new Date(
+    Date.UTC(m.period_start.getUTCFullYear(), m.period_start.getUTCMonth(), day),
+  );
   const e: MockEntry = {
     id: `entry-${++idCounter}`,
     bonus_employee_id: empId,
-    bonus_month_id: monthId,
+    bonus_pay_period_id: monthId,
     entry_date: date,
     mattress_count: count,
   };
@@ -137,26 +139,26 @@ function inList(where: Record<string, unknown>, key: string, value: string): boo
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findMany: vi.fn(
       async ({
         where = {},
         orderBy,
       }: {
         where?: Record<string, unknown>;
-        orderBy?: { month_start?: 'asc' | 'desc' };
+        orderBy?: { period_start?: 'asc' | 'desc' };
       } = {}) => {
         let out = [...monthStore.values()].filter((m) => {
           if ('site_id' in where && m.site_id !== where['site_id']) return false;
-          if ('month_start' in where) {
-            const range = where['month_start'] as { gte?: Date; lt?: Date };
-            if (range.gte && m.month_start.getTime() < range.gte.getTime()) return false;
-            if (range.lt && m.month_start.getTime() >= range.lt.getTime()) return false;
+          if ('period_start' in where) {
+            const range = where['period_start'] as { gte?: Date; lt?: Date };
+            if (range.gte && m.period_start.getTime() < range.gte.getTime()) return false;
+            if (range.lt && m.period_start.getTime() >= range.lt.getTime()) return false;
           }
           return true;
         });
-        if (orderBy?.month_start === 'desc') {
-          out = out.sort((a, b) => b.month_start.getTime() - a.month_start.getTime());
+        if (orderBy?.period_start === 'desc') {
+          out = out.sort((a, b) => b.period_start.getTime() - a.period_start.getTime());
         }
         return out.map((m) => ({ ...m }));
       },
@@ -186,11 +188,11 @@ vi.mock('@/lib/prisma', () => {
         .filter((e) => {
           if ('bonus_employee_id' in where && e.bonus_employee_id !== where['bonus_employee_id'])
             return false;
-          if (!inList(where, 'bonus_month_id', e.bonus_month_id)) return false;
-          // bonus_month: { site_id } relation filter
-          if ('bonus_month' in where) {
-            const rel = where['bonus_month'] as { site_id?: string };
-            const m = monthStore.get(e.bonus_month_id);
+          if (!inList(where, 'bonus_pay_period_id', e.bonus_pay_period_id)) return false;
+          // bonus_pay_period: { site_id } relation filter
+          if ('bonus_pay_period' in where) {
+            const rel = where['bonus_pay_period'] as { site_id?: string };
+            const m = monthStore.get(e.bonus_pay_period_id);
             if (rel.site_id && (!m || m.site_id !== rel.site_id)) return false;
           }
           return true;
@@ -209,7 +211,7 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
 
-  return { prisma: { bonusMonth, bonusEmployee, bonusDailyEntry, processorBonusRule } };
+  return { prisma: { bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
 });
 
 // Import AFTER the mock is registered.
@@ -286,7 +288,7 @@ describe('employeeHistory', () => {
 
     const h = (await employeeHistory(WOODLAND, 'emp-cara'))!;
     expect(h.last12).toHaveLength(12);
-    // ascending by month_start.
+    // ascending by period_start.
     for (let i = 1; i < h.last12.length; i++) {
       expect(h.last12[i]!.monthStart.getTime()).toBeGreaterThan(
         h.last12[i - 1]!.monthStart.getTime(),

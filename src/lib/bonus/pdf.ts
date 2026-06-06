@@ -4,7 +4,7 @@
 // navigates to the INTERNAL co-branded report page
 // (`/internal/bonus-pdf/<monthId>`), prints it to a PDF buffer, uploads the
 // buffer to Cloudflare R2, and persists `pdf_storage_key` + `pdf_generated_at`
-// on the bonus_months row.
+// on the bonus_pay_periods row.
 //
 // CALLED AS A SIDE-EFFECT of the 2nd signature (T-110): it MUST be background-
 // safe — it never throws into the signing request. The caller fires it without
@@ -83,13 +83,13 @@ async function renderPdfBuffer(monthId: string): Promise<Buffer> {
  * the signing path must call this WITHOUT awaiting so it never blocks signing.
  */
 export async function generateBonusPdf(monthId: string): Promise<GenerateBonusPdfResult> {
-  const month = await prisma.bonusMonth.findUnique({
+  const month = await prisma.bonusPayPeriod.findUnique({
     where: { id: monthId },
     include: { site: { select: { code: true } } },
   });
   if (!month) throw new Error(`bonus month ${monthId} not found`);
 
-  const ym = pdfMonthYm(month.month_start);
+  const ym = pdfMonthYm(month.period_start);
   const short = randomUUID().slice(0, 8);
   const storageKey = `pdfs/bonus/${month.site.code}/${ym}/${short}.pdf`;
 
@@ -107,7 +107,7 @@ export async function generateBonusPdf(monthId: string): Promise<GenerateBonusPd
       }),
     );
 
-    await prisma.bonusMonth.update({
+    await prisma.bonusPayPeriod.update({
       where: { id: monthId },
       data: { pdf_storage_key: storageKey, pdf_generated_at: new Date() },
     });

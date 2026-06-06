@@ -13,7 +13,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { closeMonthsDueForSignature } from '@/lib/bonus/state-machine';
+import { closePayPeriodsDueForSignature } from '@/lib/bonus/state-machine';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
 import { log } from '@/lib/observability/logger';
 import { appToday } from '@/lib/time';
@@ -37,7 +37,7 @@ export async function POST(req: Request): Promise<Response> {
   // Pass Pacific "today" (the @db.Date-shaped key) as `now`: the cron fires at
   // 00:05 America/Los_Angeles on the 1st, which is already past UTC midnight, so
   // a raw `new Date()` would resolve to the wrong calendar month for ~7mo/year.
-  const { transitioned } = await closeMonthsDueForSignature(prisma as never, appToday());
+  const { transitioned } = await closePayPeriodsDueForSignature(prisma as never, appToday());
 
   // Email the first signer for each newly-closed month (fail-open; never throws).
   const notified: string[] = [];

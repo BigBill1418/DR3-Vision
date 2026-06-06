@@ -20,40 +20,40 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-export type SignerSlot = 'janette' | 'morena' | null;
+export type SignerSlot = 'facility' | 'ops' | null;
 
 interface Props {
   monthId: string;
   /** Which slot the current viewer fills (null = admin/no natural slot). */
   viewerSlot: SignerSlot;
-  janetteSigned: boolean;
-  morenaSigned: boolean;
+  facilitySigned: boolean;
+  opsSigned: boolean;
   /**
    * Slots the viewer is authorized to OVERRIDE (sign on behalf of), computed
    * server-side via `canOverrideSlot`. Defaults to none. A slot is offered only
    * if it is in this list AND still unsigned AND not the viewer's own natural
    * slot (that is the normal sign button, not an override).
    */
-  overridableSlots?: Array<'janette' | 'morena'>;
+  overridableSlots?: Array<'facility' | 'ops'>;
 }
 
 const ATTESTATION = 'I certify the above bonus calculations are accurate and authorize payment.';
 
-const SLOT_LABEL: Record<'janette' | 'morena', string> = {
-  janette: 'Sign as Facility Manager (Janette)',
-  morena: 'Sign as Operations Manager (Morena)',
+const SLOT_LABEL: Record<'facility' | 'ops', string> = {
+  facility: 'Sign as Facility Manager (Janette)',
+  ops: 'Sign as Operations Manager (Morena)',
 };
 
-const SLOT_ASSIGNEE: Record<'janette' | 'morena', string> = {
-  janette: 'Janette',
-  morena: 'Morena',
+const SLOT_ASSIGNEE: Record<'facility' | 'ops', string> = {
+  facility: 'Janette',
+  ops: 'Morena',
 };
 
 export function SignaturePanel({
   monthId,
   viewerSlot,
-  janetteSigned,
-  morenaSigned,
+  facilitySigned,
+  opsSigned,
   overridableSlots = [],
 }: Props) {
   const router = useRouter();
@@ -62,12 +62,12 @@ export function SignaturePanel({
   const [error, setError] = useState<string | null>(null);
 
   // The slot the active modal is acting on, and whether it is an override.
-  const [activeSlot, setActiveSlot] = useState<'janette' | 'morena' | null>(null);
+  const [activeSlot, setActiveSlot] = useState<'facility' | 'ops' | null>(null);
   const [isOverride, setIsOverride] = useState(false);
   const [reason, setReason] = useState('');
 
-  const slotSigned = (slot: 'janette' | 'morena') =>
-    slot === 'janette' ? janetteSigned : morenaSigned;
+  const slotSigned = (slot: 'facility' | 'ops') =>
+    slot === 'facility' ? facilitySigned : opsSigned;
 
   // Natural sign button: viewer owns an unsigned slot.
   const canSign = viewerSlot !== null && !slotSigned(viewerSlot);
@@ -86,7 +86,7 @@ export function SignaturePanel({
     setOpen(true);
   }
 
-  function openOverride(slot: 'janette' | 'morena') {
+  function openOverride(slot: 'facility' | 'ops') {
     setActiveSlot(slot);
     setIsOverride(true);
     setReason('');

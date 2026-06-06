@@ -34,7 +34,7 @@ export async function POST(
   const { id } = await params;
 
   // Site-scope the month so a manager can never close another site's month by id.
-  const month = await prisma.bonusMonth.findFirst({
+  const month = await prisma.bonusPayPeriod.findFirst({
     where: { id, site_id: ctx.siteId },
     select: { id: true, state: true },
   });

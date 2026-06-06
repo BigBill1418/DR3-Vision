@@ -1,8 +1,8 @@
 // T-110 — Signature capture data layer (ADR-0019 §5).
 //
 // Records one of the two monthly attestation signatures (Janette / Morena) on a
-// Woodland `bonus_months` row and advances the lifecycle via the T-106 state
-// machine — the ONLY path that mutates `bonus_months.state`. The signature
+// Woodland `bonus_pay_periods` row and advances the lifecycle via the T-106 state
+// machine — the ONLY path that mutates `bonus_pay_periods.state`. The signature
 // column write, the audit row, and the state transition all land in ONE
 // interactive transaction so a signature can never be captured without its
 // audit trail or its state move (CLAUDE.md hard rule #6).
@@ -35,20 +35,24 @@
 
 import type { AuditAction } from '@prisma/client';
 import { calculateMonthlyBonusCents } from '@/lib/bonus/calculator';
-import { transitionMonth, type BonusMonthState } from '@/lib/bonus/state-machine';
+import { transitionMonth, type BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { entryDateUTC, NoActiveRuleError } from '@/lib/bonus/daily-entry';
-import { bonusMonthsByState } from '@/lib/observability/metrics';
+import { bonusPayPeriodsByState } from '@/lib/observability/metrics';
 
 // ────────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────────
 
-/** The two attestation slots on a bonus month. */
-export type SignatureSlot = 'janette' | 'morena';
+/**
+ * The two attestation slots on a bonus pay period. Site-neutral per ADR-0019.1
+ * §5 so Eugene's chain (Rick/Kelsey) reuses the same slots; the slot value is
+ * also the renamed column prefix (`facility_signed_*` / `ops_signed_*`).
+ */
+export type SignatureSlot = 'facility' | 'ops';
 
 /** Structural type for the prisma/tx client this layer uses. */
 export interface SignatureDb {
-  bonusMonth: {
+  bonusPayPeriod: {
     findFirst(args: {
       where: { id: string; site_id: string };
     }): Promise<BonusMonthSignatureRow | null>;
@@ -58,7 +62,9 @@ export interface SignatureDb {
     }): Promise<BonusMonthSignatureRow>;
   };
   bonusDailyEntry: {
-    findMany(args: { where: { bonus_month_id: string } }): Promise<{ mattress_count: number }[]>;
+    findMany(args: {
+      where: { bonus_pay_period_id: string };
+    }): Promise<{ mattress_count: number }[]>;
   };
   processorBonusRule: {
     findFirst(args: {
@@ -82,17 +88,17 @@ export interface SignatureDb {
   $transaction<T>(fn: (tx: SignatureDb) => Promise<T>): Promise<T>;
 }
 
-/** The subset of a `bonus_months` row the signature layer reads. */
+/** The subset of a `bonus_pay_periods` row the signature layer reads. */
 export interface BonusMonthSignatureRow {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
-  state: BonusMonthState;
-  janette_signed_by_user_id: string | null;
-  janette_signed_at: Date | null;
-  morena_signed_by_user_id: string | null;
-  morena_signed_at: Date | null;
+  period_start: Date;
+  period_end: Date;
+  state: BonusPayPeriodState;
+  facility_signed_by_user_id: string | null;
+  facility_signed_at: Date | null;
+  ops_signed_by_user_id: string | null;
+  ops_signed_at: Date | null;
   total_payout_cents: number | null;
 }
 
@@ -133,7 +139,7 @@ export type RecordSignatureResult =
   | {
       ok: true;
       slot: SignatureSlot;
-      state: BonusMonthState;
+      state: BonusPayPeriodState;
       fullySigned: boolean;
       override: boolean;
     }
@@ -160,8 +166,8 @@ export type RecordSignatureResult =
  */
 export function naturalSlotFor(signer: SignerContext): SignatureSlot | null {
   if (signer.role !== 'manager') return null;
-  if (signer.primarySiteId === signer.siteId) return 'janette';
-  if (signer.primarySiteId === null) return 'morena';
+  if (signer.primarySiteId === signer.siteId) return 'facility';
+  if (signer.primarySiteId === null) return 'ops';
   return null;
 }
 
@@ -183,7 +189,7 @@ export function naturalSlotFor(signer: SignerContext): SignatureSlot | null {
 export function canOverrideSlot(signer: SignerContext, slot: SignatureSlot): boolean {
   if (signer.role === 'admin') return true;
   // Both-sites ops manager (Morena) may stand in for Janette only.
-  if (signer.role === 'manager' && signer.primarySiteId === null && slot === 'janette') {
+  if (signer.role === 'manager' && signer.primarySiteId === null && slot === 'facility') {
     return true;
   }
   return false;
@@ -220,7 +226,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
   }
 
   return db.$transaction(async (tx) => {
-    const month = await tx.bonusMonth.findFirst({
+    const month = await tx.bonusPayPeriod.findFirst({
       where: { id: monthId, site_id: signer.siteId },
     });
     if (!month) return { ok: false, reason: 'not_found' as const };
@@ -231,18 +237,18 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     }
 
     const alreadySigned =
-      slot === 'janette'
-        ? month.janette_signed_by_user_id !== null
-        : month.morena_signed_by_user_id !== null;
+      slot === 'facility'
+        ? month.facility_signed_by_user_id !== null
+        : month.ops_signed_by_user_id !== null;
     if (alreadySigned) return { ok: false, reason: 'already_signed' as const, slot };
 
     const otherSigned =
-      slot === 'janette'
-        ? month.morena_signed_by_user_id !== null
-        : month.janette_signed_by_user_id !== null;
+      slot === 'facility'
+        ? month.ops_signed_by_user_id !== null
+        : month.facility_signed_by_user_id !== null;
 
     const now = new Date();
-    const prefix = slot; // 'janette' | 'morena'
+    const prefix = slot; // 'facility' | 'ops' — also the renamed column prefix
     // The signed_* columns always record the ACTUAL signer (the caller). On an
     // override we additionally stamp *_override_actor_id / *_override_reason so
     // the PDF can render "Signed by <caller> on behalf of <assignee>".
@@ -255,14 +261,14 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
       [`${prefix}_override_reason`]: isOverride ? reason : null,
     };
 
-    await tx.bonusMonth.update({ where: { id: monthId }, data: sigData });
+    await tx.bonusPayPeriod.update({ where: { id: monthId }, data: sigData });
 
     await tx.auditLog.create({
       data: {
         actor_user_id: signer.userId,
         actor_label: null,
         action: 'update' satisfies AuditAction,
-        table_name: 'bonus_months',
+        table_name: 'bonus_pay_periods',
         row_id: monthId,
         before: { [`${prefix}_signed_by_user_id`]: null, state: month.state },
         after: {
@@ -280,7 +286,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     // First signature → partially_signed; second → signed. transitionMonth
     // validates the edge and writes its own audit row in this same tx.
     const fullySigned = otherSigned;
-    const to: BonusMonthState = fullySigned ? 'signed' : 'partially_signed';
+    const to: BonusPayPeriodState = fullySigned ? 'signed' : 'partially_signed';
     await transitionMonth({
       db: txForTransition(tx),
       monthId,
@@ -293,8 +299,10 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     // On reaching `signed`, lock total_payout_cents from the keyed entries using
     // the active rule (NEVER hardcoded — CLAUDE.md hard rule #3).
     if (fullySigned) {
-      const entries = await tx.bonusDailyEntry.findMany({ where: { bonus_month_id: monthId } });
-      const on = entryDateUTC(month.month_start);
+      const entries = await tx.bonusDailyEntry.findMany({
+        where: { bonus_pay_period_id: monthId },
+      });
+      const on = entryDateUTC(month.period_start);
       const ruleRow = await tx.processorBonusRule.findFirst({
         where: {
           site_id: signer.siteId,
@@ -313,7 +321,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
           rate_high: ruleRow.rate_high.toString(),
         },
       );
-      await tx.bonusMonth.update({
+      await tx.bonusPayPeriod.update({
         where: { id: monthId },
         data: { total_payout_cents: total },
       });
@@ -332,13 +340,15 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
  */
 function txForTransition(tx: SignatureDb): import('@/lib/bonus/state-machine').BonusMonthDb {
   return {
-    bonusMonth: {
+    bonusPayPeriod: {
       // The state machine only reads id/site_id/state and writes state.
       findUnique: (args) =>
-        tx.bonusMonth.findFirst({ where: args.where as { id: string; site_id: string } }) as never,
+        tx.bonusPayPeriod.findFirst({
+          where: args.where as { id: string; site_id: string },
+        }) as never,
       findMany: (() => Promise.resolve([])) as never,
       create: (() => Promise.reject(new Error('not used'))) as never,
-      update: (args) => tx.bonusMonth.update(args) as never,
+      update: (args) => tx.bonusPayPeriod.update(args) as never,
     },
     auditLog: tx.auditLog,
     $transaction: ((fn: (t: unknown) => unknown) => fn(txForTransition(tx))) as never,
@@ -350,13 +360,17 @@ function txForTransition(tx: SignatureDb): import('@/lib/bonus/state-machine').B
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Reflect a single month's state change on the `bonusMonthsByState` gauge. The
+ * Reflect a single pay-period's state change on the `bonusPayPeriodsByState` gauge. The
  * gauge is a point-in-time count per (site,state); the simplest correct update
  * on a single transition is to decrement the old bucket and increment the new.
  * Callers (the sign route) invoke this AFTER a successful signature.
  */
-export function recordStateGauge(siteId: string, from: BonusMonthState, to: BonusMonthState): void {
+export function recordStateGauge(
+  siteId: string,
+  from: BonusPayPeriodState,
+  to: BonusPayPeriodState,
+): void {
   if (from === to) return;
-  bonusMonthsByState.dec({ site: siteId, state: from });
-  bonusMonthsByState.inc({ site: siteId, state: to });
+  bonusPayPeriodsByState.dec({ site: siteId, state: from });
+  bonusPayPeriodsByState.inc({ site: siteId, state: to });
 }

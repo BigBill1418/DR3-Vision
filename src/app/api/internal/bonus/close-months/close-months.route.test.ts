@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const closeMonthsDueForSignature = vi.fn(async () => ({ transitioned: ['m1', 'm2'] }));
+const closePayPeriodsDueForSignature = vi.fn(async () => ({ transitioned: ['m1', 'm2'] }));
 const notifyPendingSigner = vi.fn<(id: string) => Promise<{ notified: boolean; slot: 'janette' }>>(
   async () => ({ notified: true, slot: 'janette' as const }),
 );
 
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/bonus/state-machine', () => ({
-  closeMonthsDueForSignature: (...a: unknown[]) => closeMonthsDueForSignature(...(a as [])),
+  closePayPeriodsDueForSignature: (...a: unknown[]) => closePayPeriodsDueForSignature(...(a as [])),
 }));
 vi.mock('@/lib/bonus/signature-notifications', () => ({
   notifyPendingSigner: (id: string) => notifyPendingSigner(id as never),
@@ -23,7 +23,7 @@ function req(headers: Record<string, string> = {}): Request {
 }
 
 beforeEach(() => {
-  closeMonthsDueForSignature.mockClear();
+  closePayPeriodsDueForSignature.mockClear();
   notifyPendingSigner.mockClear();
   delete process.env['INTERNAL_CRON_TOKEN'];
 });
@@ -32,7 +32,7 @@ describe('POST /api/internal/bonus/close-months', () => {
   it('404s a public-tunnel request (cf-connecting-ip present) without closing anything', async () => {
     const res = await POST(req({ 'cf-connecting-ip': '203.0.113.9' }));
     expect(res.status).toBe(404);
-    expect(closeMonthsDueForSignature).not.toHaveBeenCalled();
+    expect(closePayPeriodsDueForSignature).not.toHaveBeenCalled();
   });
 
   it('closes due months and emails the first signer for each (loopback)', async () => {

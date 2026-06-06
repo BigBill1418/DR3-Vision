@@ -4,7 +4,7 @@
 // 403 → render the forbidden surface in-place (Rick / operators land here). The
 // page never trusts middleware alone (CLAUDE.md hard rule #6).
 //
-// Loads (or creates, via the T-106 `getOrCreateDraftMonth` inside the data
+// Loads (or creates, via the T-106 `getOrCreateDraftPayPeriod` inside the data
 // layer) the current month's draft for Woodland, lists ACTIVE employees
 // alphabetically, and pre-loads today's row. The Woodland processor-bonus rule
 // is resolved server-side and passed to the client grid so live bonus math is

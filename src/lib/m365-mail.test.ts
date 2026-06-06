@@ -3,7 +3,7 @@
 // DB/network are fully mocked. We drive the REAL sendPayrollPdf handler with:
 //   - a fake graph client (via __testing.setClientFactory) whose `.post()`
 //     resolves or throws GraphError-shaped objects ({ statusCode })
-//   - an in-memory prisma double (bonusMonth.update + auditLog.create)
+//   - an in-memory prisma double (bonusPayPeriod.update + auditLog.create)
 //   - a spy on publishNtfy
 //   - a synchronous sleep seam so backoff doesn't actually wait
 //
@@ -46,7 +46,7 @@ const auditRows: AuditRow[] = [];
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
-    bonusMonth: {
+    bonusPayPeriod: {
       update: vi.fn(
         async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
           const row = monthsStore.get(where.id);
@@ -228,7 +228,7 @@ describe('sendPayrollPdf — success', () => {
     expect(auditRows).toHaveLength(1);
     const a = auditRows[0]!;
     expect(a.actor_label).toBe('system:m365-mail-send');
-    expect(a.table_name).toBe('bonus_months');
+    expect(a.table_name).toBe('bonus_pay_periods');
     expect(a.row_id).toBe('bm-1');
     const after = a.after as Record<string, unknown>;
     expect(after['recipient']).toBe('payroll@svdp.us');

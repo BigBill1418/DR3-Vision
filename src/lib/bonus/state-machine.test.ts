@@ -9,24 +9,24 @@ import {
   ALLOWED_TRANSITIONS,
   isTransitionAllowed,
   transitionMonth,
-  getOrCreateDraftMonth,
-  closeMonthsDueForSignature,
+  getOrCreateDraftPayPeriod,
+  closePayPeriodsDueForSignature,
   assertEntriesEditable,
   TransitionError,
   EntriesLockedError,
   type BonusMonthRow,
-  type BonusMonthState,
+  type BonusPayPeriodState,
   type BonusMonthDb,
 } from './state-machine';
 
 // ── In-memory fake prisma/tx ────────────────────────────────────────
 //
 // Implements only the surface the state machine touches:
-//   bonusMonth.findUnique({ where: { site_id_month_start } })
-//   bonusMonth.findFirst({ where })
-//   bonusMonth.findMany({ where })
-//   bonusMonth.create({ data })
-//   bonusMonth.update({ where: { id }, data })
+//   bonusPayPeriod.findUnique({ where: { site_id_period_start } })
+//   bonusPayPeriod.findFirst({ where })
+//   bonusPayPeriod.findMany({ where })
+//   bonusPayPeriod.create({ data })
+//   bonusPayPeriod.update({ where: { id }, data })
 //   auditLog.create({ data })
 //   $transaction(fn)
 
@@ -55,15 +55,15 @@ function resetStores() {
 }
 
 function seedMonth(
-  p: Partial<BonusMonthRow> & { site_id: string; month_start: Date },
+  p: Partial<BonusMonthRow> & { site_id: string; period_start: Date },
 ): BonusMonthRow {
   const id = p.id ?? `bm-${++seq}`;
-  const ms = p.month_start;
+  const ms = p.period_start;
   const row: BonusMonthRow = {
     id,
     site_id: p.site_id,
-    month_start: ms,
-    month_end: p.month_end ?? dayUTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0),
+    period_start: ms,
+    period_end: p.period_end ?? dayUTC(ms.getUTCFullYear(), ms.getUTCMonth() + 1, 0),
     state: p.state ?? 'draft',
   };
   monthsStore.set(id, row);
@@ -75,17 +75,17 @@ function sameDay(a: Date, b: Date): boolean {
 }
 
 const fakePrisma = {
-  bonusMonth: {
+  bonusPayPeriod: {
     findUnique: async ({
       where,
     }: {
-      where: { site_id_month_start?: { site_id: string; month_start: Date }; id?: string };
+      where: { site_id_period_start?: { site_id: string; period_start: Date }; id?: string };
     }) => {
       if (where.id) return monthsStore.get(where.id) ?? null;
-      const key = where.site_id_month_start;
+      const key = where.site_id_period_start;
       if (key) {
         for (const r of monthsStore.values()) {
-          if (r.site_id === key.site_id && sameDay(r.month_start, key.month_start)) return r;
+          if (r.site_id === key.site_id && sameDay(r.period_start, key.period_start)) return r;
         }
       }
       return null;
@@ -93,13 +93,13 @@ const fakePrisma = {
     findMany: async ({
       where,
     }: {
-      where?: { site_id?: string; state?: BonusMonthState; month_end?: { lt?: Date } };
+      where?: { site_id?: string; state?: BonusPayPeriodState; period_end?: { lt?: Date } };
     } = {}) => {
       const out: BonusMonthRow[] = [];
       for (const r of monthsStore.values()) {
         if (where?.site_id && r.site_id !== where.site_id) continue;
         if (where?.state && r.state !== where.state) continue;
-        if (where?.month_end?.lt && !(r.month_end.getTime() < where.month_end.lt.getTime()))
+        if (where?.period_end?.lt && !(r.period_end.getTime() < where.period_end.lt.getTime()))
           continue;
         out.push(r);
       }
@@ -110,8 +110,8 @@ const fakePrisma = {
       const row: BonusMonthRow = {
         id,
         site_id: data.site_id,
-        month_start: data.month_start,
-        month_end: data.month_end,
+        period_start: data.period_start,
+        period_end: data.period_end,
         state: data.state,
       };
       monthsStore.set(id, row);
@@ -147,7 +147,7 @@ beforeEach(resetStores);
 // ── Transition table ────────────────────────────────────────────────
 
 describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
-  const legal: Array<[BonusMonthState, BonusMonthState]> = [
+  const legal: Array<[BonusPayPeriodState, BonusPayPeriodState]> = [
     ['draft', 'pending_signatures'],
     ['pending_signatures', 'partially_signed'],
     ['partially_signed', 'signed'],
@@ -161,7 +161,7 @@ describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
     expect(isTransitionAllowed(from, to)).toBe(true);
   });
 
-  const illegal: Array<[BonusMonthState, BonusMonthState]> = [
+  const illegal: Array<[BonusPayPeriodState, BonusPayPeriodState]> = [
     ['draft', 'signed'],
     ['draft', 'paid'],
     ['draft', 'partially_signed'],
@@ -179,7 +179,7 @@ describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
 
   it('ALLOWED_TRANSITIONS only lists the seven legal edges', () => {
     const edges = Object.entries(ALLOWED_TRANSITIONS).flatMap(([from, tos]) =>
-      (tos as BonusMonthState[]).map((to) => `${from}->${to}`),
+      (tos as BonusPayPeriodState[]).map((to) => `${from}->${to}`),
     );
     expect(edges.sort()).toEqual(
       [
@@ -201,7 +201,7 @@ describe('transitionMonth', () => {
   it('performs a legal transition and writes an audit row in the same flow', async () => {
     const m = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 4, 1),
+      period_start: dayUTC(2026, 4, 1),
       state: 'draft',
     });
 
@@ -215,7 +215,7 @@ describe('transitionMonth', () => {
     expect(updated.state).toBe('pending_signatures');
     expect(monthsStore.get(m.id)!.state).toBe('pending_signatures');
 
-    const row = auditRows.find((r) => r.table_name === 'bonus_months' && r.row_id === m.id);
+    const row = auditRows.find((r) => r.table_name === 'bonus_pay_periods' && r.row_id === m.id);
     expect(row).toBeDefined();
     expect(row!.action).toBe('update');
     expect(row!.actor_user_id).toBe('admin-1');
@@ -226,7 +226,7 @@ describe('transitionMonth', () => {
   it('rejects an illegal transition and does NOT mutate state or write audit', async () => {
     const m = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 4, 1),
+      period_start: dayUTC(2026, 4, 1),
       state: 'draft',
     });
 
@@ -253,7 +253,7 @@ describe('transitionMonth', () => {
   it('supports a system actor via actor.label', async () => {
     const m = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 4, 1),
+      period_start: dayUTC(2026, 4, 1),
       state: 'draft',
     });
     await transitionMonth({
@@ -268,50 +268,54 @@ describe('transitionMonth', () => {
   });
 });
 
-// ── getOrCreateDraftMonth ───────────────────────────────────────────
+// ── getOrCreateDraftPayPeriod ───────────────────────────────────────────
 
-describe('getOrCreateDraftMonth', () => {
+describe('getOrCreateDraftPayPeriod', () => {
   it('creates a draft month covering the given date (correct month boundaries)', async () => {
-    const created = await getOrCreateDraftMonth(fakePrisma, 'site-woodland', dayUTC(2026, 1, 14)); // Feb 14
+    const created = await getOrCreateDraftPayPeriod(
+      fakePrisma,
+      'site-woodland',
+      dayUTC(2026, 1, 14),
+    ); // Feb 14
     expect(created.state).toBe('draft');
-    expect(created.month_start.getTime()).toBe(dayUTC(2026, 1, 1).getTime()); // Feb 1
-    expect(created.month_end.getTime()).toBe(dayUTC(2026, 1, 28).getTime()); // Feb 28 (2026 not leap)
+    expect(created.period_start.getTime()).toBe(dayUTC(2026, 1, 1).getTime()); // Feb 1
+    expect(created.period_end.getTime()).toBe(dayUTC(2026, 1, 28).getTime()); // Feb 28 (2026 not leap)
     expect(monthsStore.size).toBe(1);
   });
 
   it('is idempotent — second call returns the same row, does not create a duplicate', async () => {
-    const a = await getOrCreateDraftMonth(fakePrisma, 'site-woodland', dayUTC(2026, 4, 3));
-    const b = await getOrCreateDraftMonth(fakePrisma, 'site-woodland', dayUTC(2026, 4, 27));
+    const a = await getOrCreateDraftPayPeriod(fakePrisma, 'site-woodland', dayUTC(2026, 4, 3));
+    const b = await getOrCreateDraftPayPeriod(fakePrisma, 'site-woodland', dayUTC(2026, 4, 27));
     expect(b.id).toBe(a.id);
     expect(monthsStore.size).toBe(1);
   });
 
   it('scopes by site — different sites get different rows for the same month', async () => {
-    await getOrCreateDraftMonth(fakePrisma, 'site-woodland', dayUTC(2026, 4, 3));
-    await getOrCreateDraftMonth(fakePrisma, 'site-eugene', dayUTC(2026, 4, 3));
+    await getOrCreateDraftPayPeriod(fakePrisma, 'site-woodland', dayUTC(2026, 4, 3));
+    await getOrCreateDraftPayPeriod(fakePrisma, 'site-eugene', dayUTC(2026, 4, 3));
     expect(monthsStore.size).toBe(2);
   });
 
-  it('computes Dec month_end correctly (year rollover)', async () => {
-    const dec = await getOrCreateDraftMonth(fakePrisma, 'site-woodland', dayUTC(2026, 11, 9)); // Dec 9
-    expect(dec.month_start.getTime()).toBe(dayUTC(2026, 11, 1).getTime());
-    expect(dec.month_end.getTime()).toBe(dayUTC(2026, 11, 31).getTime());
+  it('computes Dec period_end correctly (year rollover)', async () => {
+    const dec = await getOrCreateDraftPayPeriod(fakePrisma, 'site-woodland', dayUTC(2026, 11, 9)); // Dec 9
+    expect(dec.period_start.getTime()).toBe(dayUTC(2026, 11, 1).getTime());
+    expect(dec.period_end.getTime()).toBe(dayUTC(2026, 11, 31).getTime());
   });
 });
 
-// ── closeMonthsDueForSignature ──────────────────────────────────────
+// ── closePayPeriodsDueForSignature ──────────────────────────────────────
 
-describe('closeMonthsDueForSignature', () => {
+describe('closePayPeriodsDueForSignature', () => {
   it('transitions ended draft months to pending_signatures', async () => {
     const ended = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 3, 1), // April
-      month_end: dayUTC(2026, 3, 30),
+      period_start: dayUTC(2026, 3, 1), // April
+      period_end: dayUTC(2026, 3, 30),
       state: 'draft',
     });
     const now = dayUTC(2026, 4, 2); // May 2 — April has ended
 
-    const result = await closeMonthsDueForSignature(fakePrisma, now);
+    const result = await closePayPeriodsDueForSignature(fakePrisma, now);
 
     expect(result.transitioned).toContain(ended.id);
     expect(monthsStore.get(ended.id)!.state).toBe('pending_signatures');
@@ -321,13 +325,13 @@ describe('closeMonthsDueForSignature', () => {
   it('leaves the current (not-yet-ended) draft month alone', async () => {
     const current = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 4, 1), // May
-      month_end: dayUTC(2026, 4, 31),
+      period_start: dayUTC(2026, 4, 1), // May
+      period_end: dayUTC(2026, 4, 31),
       state: 'draft',
     });
     const now = dayUTC(2026, 4, 15); // mid-May
 
-    const result = await closeMonthsDueForSignature(fakePrisma, now);
+    const result = await closePayPeriodsDueForSignature(fakePrisma, now);
 
     expect(result.transitioned).not.toContain(current.id);
     expect(monthsStore.get(current.id)!.state).toBe('draft');
@@ -336,13 +340,13 @@ describe('closeMonthsDueForSignature', () => {
   it('ignores non-draft months even if ended', async () => {
     const signed = seedMonth({
       site_id: 'site-woodland',
-      month_start: dayUTC(2026, 2, 1),
-      month_end: dayUTC(2026, 2, 31),
+      period_start: dayUTC(2026, 2, 1),
+      period_end: dayUTC(2026, 2, 31),
       state: 'signed',
     });
     const now = dayUTC(2026, 4, 1);
 
-    const result = await closeMonthsDueForSignature(fakePrisma, now);
+    const result = await closePayPeriodsDueForSignature(fakePrisma, now);
 
     expect(result.transitioned).not.toContain(signed.id);
     expect(monthsStore.get(signed.id)!.state).toBe('signed');
@@ -362,7 +366,12 @@ describe('assertEntriesEditable', () => {
     expect(() => assertEntriesEditable({ id: 'x', state: 'amended' })).not.toThrow();
   });
 
-  const locked: BonusMonthState[] = ['pending_signatures', 'partially_signed', 'signed', 'paid'];
+  const locked: BonusPayPeriodState[] = [
+    'pending_signatures',
+    'partially_signed',
+    'signed',
+    'paid',
+  ];
   it.each(locked)('throws EntriesLockedError for state %s', (state) => {
     let err: unknown;
     try {

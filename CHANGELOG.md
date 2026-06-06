@@ -54,6 +54,43 @@ pay_date=2026-06-26`, signature chains resolve to the correct people
   resolver throws loudly if any referenced email is unresolvable, matching the
   runbook's "deploy will fail if a referenced user can't be found" contract.
 
+### 2026-06-06 — Sprint 2 addendum Wave A: TypeScript-wide rename refactor (T-202)
+
+Refactored the entire bonus TypeScript surface to the renamed schema from
+T-200 (ADR-0019.1 §5). Rename + minimal-to-compile only — no behavior change;
+the `skipped` state machine, period-boundary close, and crons are T-203/T-204+.
+40 files changed; `tsc --noEmit`, `next lint --max-warnings 0`, and the full
+`vitest` suite (517 tests) all clean.
+
+- **Types / fields / Prisma access.** `BonusMonthState`→`BonusPayPeriodState`
+  (plus the new `skipped` enum value mirrored from the schema and a `skipped: []`
+  terminal entry in `ALLOWED_TRANSITIONS` — no new in-edge; that is T-203),
+  `prisma.bonusMonth`→`prisma.bonusPayPeriod`, `bonus_month_id`→
+  `bonus_pay_period_id`, `month_start`/`month_end`→`period_start`/`period_end`,
+  `janette_*`→`facility_*`, `morena_*`→`ops_*`, `amended_from_month_id`→
+  `amended_from_period_id`, composite key `site_id_month_start`→
+  `site_id_period_start`. Audit `table_name` literals now read
+  `'bonus_pay_periods'`.
+- **Functions** (`src/lib/bonus/`): `getOrCreateDraftMonth`→
+  `getOrCreateDraftPayPeriod`, `closeMonthsDueForSignature`→
+  `closePayPeriodsDueForSignature`, `listBonusMonths`→`listBonusPayPeriods`,
+  `monthWindow`→`payPeriodWindow`, `parseMonthFilter`→`parsePayPeriodFilter`.
+- **Signature slot identifiers** `'janette'|'morena'`→`'facility'|'ops'`
+  (`SignatureSlot`, `naturalSlotFor`, `canOverrideSlot`, the sign route's
+  `onBehalfOf`, and `SignaturePanel`'s `facilitySigned`/`opsSigned` props). The
+  old slot value was the dynamic column prefix; after the column rename it had to
+  follow or the signed\_\* columns silently wrote dead keys (caught by the route
+  tests). Human-name UI labels and user-id values are unchanged.
+- **URL paths preserved.** `/bonus/months/*` routes and the
+  `/internal/bonus-pdf/[month-id]` segment keep their names (ADR-0019.1 §7);
+  only the internal data layer renamed.
+- **Observability series name kept stable (flagged).** The JS symbol
+  `bonusMonthsByState`→`bonusPayPeriodsByState`, but the Prometheus series
+  `dr3_vision_bonus_months_by_state` is intentionally NOT renamed — it is the
+  live contract referenced by `grafana/dashboards/dr3-vision.json`,
+  `grafana-config.test.ts`, and ADR-0022. Renaming the series is a behavior
+  change (breaks existing Grafana panels), out of scope for a rename refactor.
+
 ### 2026-06-06 — Bonus management surface re-themed to the dark-space/cyan identity
 
 Converted the entire Bonus management surface (`src/app/bonus/**`, 13 files) from

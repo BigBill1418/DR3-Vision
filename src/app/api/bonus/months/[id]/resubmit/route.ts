@@ -6,7 +6,7 @@
 // amended -> pending_signatures via the data layer / state machine, then
 // re-prompts the next signer (Janette) off the request path (ADR-0019 §5a).
 // The normal dual-signature flow (T-110) runs again; a subsequent re-sign
-// produces an AMENDED PDF (the month now self-references amended_from_month_id).
+// produces an AMENDED PDF (the month now self-references amended_from_period_id).
 
 import { NextResponse } from 'next/server';
 import { requireBonusAccess } from '@/lib/bonus/access';

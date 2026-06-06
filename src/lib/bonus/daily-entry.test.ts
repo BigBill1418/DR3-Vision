@@ -16,8 +16,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
+  period_start: Date;
+  period_end: Date;
   state: 'draft' | 'pending_signatures' | 'partially_signed' | 'signed' | 'paid' | 'amended';
 }
 interface MockEmployee {
@@ -29,7 +29,7 @@ interface MockEmployee {
 interface MockEntry {
   id: string;
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: number;
   note: string | null;
@@ -129,13 +129,13 @@ function matchesEmp(e: MockEmployee, where: Record<string, unknown>): boolean {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       if ('id' in where) return monthStore.get(where['id'] as string) ?? null;
-      if ('site_id_month_start' in where) {
-        const k = where['site_id_month_start'] as { site_id: string; month_start: Date };
+      if ('site_id_period_start' in where) {
+        const k = where['site_id_period_start'] as { site_id: string; period_start: Date };
         for (const m of monthStore.values()) {
-          if (m.site_id === k.site_id && m.month_start.getTime() === k.month_start.getTime())
+          if (m.site_id === k.site_id && m.period_start.getTime() === k.period_start.getTime())
             return { ...m };
         }
         return null;
@@ -177,7 +177,11 @@ vi.mock('@/lib/prisma', () => {
     findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       const out: MockEntry[] = [];
       for (const e of entryStore.values()) {
-        if ('bonus_month_id' in where && e.bonus_month_id !== where['bonus_month_id']) continue;
+        if (
+          'bonus_pay_period_id' in where &&
+          e.bonus_pay_period_id !== where['bonus_pay_period_id']
+        )
+          continue;
         if (
           'entry_date' in where &&
           e.entry_date.getTime() !== (where['entry_date'] as Date).getTime()
@@ -256,7 +260,7 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const client = {
-    bonusMonth,
+    bonusPayPeriod,
     bonusEmployee,
     bonusDailyEntry,
     processorBonusRule,

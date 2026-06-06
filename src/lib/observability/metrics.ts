@@ -20,7 +20,7 @@ interface MetricsBundle {
   mymrcScrapeSuccess: Counter<'site' | 'outcome'>;
   r2UploadSuccess: Counter<'kind' | 'outcome'>;
   offlineQueueDepth: Gauge<'site' | 'user_id'>;
-  bonusMonthsByState: Gauge<'site' | 'state'>;
+  bonusPayPeriodsByState: Gauge<'site' | 'state'>;
   payrollDeliverySuccess: Counter<'outcome'>;
 }
 
@@ -72,9 +72,9 @@ function buildBundle(): MetricsBundle {
     registers: [registry],
   });
 
-  const bonusMonthsByState = new Gauge({
+  const bonusPayPeriodsByState = new Gauge({
     name: 'dr3_vision_bonus_months_by_state',
-    help: 'Bonus month counts by state',
+    help: 'Bonus pay-period counts by state',
     labelNames: ['site', 'state'],
     registers: [registry],
   });
@@ -93,7 +93,7 @@ function buildBundle(): MetricsBundle {
     mymrcScrapeSuccess,
     r2UploadSuccess,
     offlineQueueDepth,
-    bonusMonthsByState,
+    bonusPayPeriodsByState,
     payrollDeliverySuccess,
   };
 }
@@ -107,7 +107,7 @@ export const httpRequestDuration = bundle.httpRequestDuration;
 export const mymrcScrapeSuccess = bundle.mymrcScrapeSuccess;
 export const r2UploadSuccess = bundle.r2UploadSuccess;
 export const offlineQueueDepth = bundle.offlineQueueDepth;
-export const bonusMonthsByState = bundle.bonusMonthsByState;
+export const bonusPayPeriodsByState = bundle.bonusPayPeriodsByState;
 export const payrollDeliverySuccess = bundle.payrollDeliverySuccess;
 
 /**

@@ -31,11 +31,11 @@ function baseInput(): PdfMonthInput {
     month: {
       id: 'bm-1',
       site_id: 'site-wood',
-      month_start: dayUTC(2026, 4, 1), // 2026-05-01
-      month_end: dayUTC(2026, 4, 31),
+      period_start: dayUTC(2026, 4, 1), // 2026-05-01
+      period_end: dayUTC(2026, 4, 31),
       state: 'signed',
       total_payout_cents: null,
-      amended_from_month_id: null,
+      amended_from_period_id: null,
     },
     site: { code: 'woodland', name: 'Woodland' },
     employees: [
@@ -105,7 +105,7 @@ describe('assemblePdfRows', () => {
 
   it('flags amended months', () => {
     const input = baseInput();
-    input.month.amended_from_month_id = 'bm-prior';
+    input.month.amended_from_period_id = 'bm-prior';
     const out = assemblePdfRows(input);
     expect(out.isAmended).toBe(true);
   });

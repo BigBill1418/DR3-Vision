@@ -1,20 +1,20 @@
-// T-106 — Monthly state machine: the lifecycle authority for `bonus_months`
+// T-106 — Monthly state machine: the lifecycle authority for `bonus_pay_periods`
 // (ADR-0019 §5/§6, SPRINT-2 plan T-106).
 //
-// This module is the ONLY place that mutates `bonus_months.state`. Every other
+// This module is the ONLY place that mutates `bonus_pay_periods.state`. Every other
 // bonus ticket (signature capture, payroll send, amendment, the month-close
 // cron, daily-entry mutations) routes its state changes through `transitionMonth`
 // so the legal-transition table and the append-only audit trail are enforced in
 // one spot.
 //
 // Design notes:
-//   - `transitionMonth` / `getOrCreateDraftMonth` / `closeMonthsDueForSignature`
+//   - `transitionMonth` / `getOrCreateDraftPayPeriod` / `closePayPeriodsDueForSignature`
 //     accept an injected prisma-or-tx client (`BonusMonthDb`) so callers can
 //     compose them inside a larger interactive transaction (e.g. T-105 wires a
 //     daily-entry write + draft-month upsert in one tx). The default callers can
 //     pass the singleton `prisma` from '@/lib/prisma'.
 //   - State transitions write an audit row with `action: 'update'` and
-//     `table_name: 'bonus_months'` (the AuditAction enum has no dedicated
+//     `table_name: 'bonus_pay_periods'` (the AuditAction enum has no dedicated
 //     "transition" verb; a state change is an update). The audit write happens in
 //     the SAME transaction as the state update so a transition can never land
 //     without its audit row (CLAUDE.md hard rule #6).
@@ -31,22 +31,23 @@ import type { AuditAction } from '@prisma/client';
 // Types
 // ────────────────────────────────────────────────────────────────────
 
-/** Mirrors the Prisma `BonusMonthState` enum (prisma/schema.prisma). */
-export type BonusMonthState =
+/** Mirrors the Prisma `BonusPayPeriodState` enum (prisma/schema.prisma). */
+export type BonusPayPeriodState =
   | 'draft'
   | 'pending_signatures'
   | 'partially_signed'
   | 'signed'
   | 'paid'
-  | 'amended';
+  | 'amended'
+  | 'skipped';
 
-/** The subset of a `bonus_months` row this module reads/writes. */
+/** The subset of a `bonus_pay_periods` row this module reads/writes. */
 export interface BonusMonthRow {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
-  state: BonusMonthState;
+  period_start: Date;
+  period_end: Date;
+  state: BonusPayPeriodState;
 }
 
 /**
@@ -56,28 +57,28 @@ export interface BonusMonthRow {
  * DB-free.
  */
 export interface BonusMonthDb {
-  bonusMonth: {
+  bonusPayPeriod: {
     findUnique(args: {
-      where: { id: string } | { site_id_month_start: { site_id: string; month_start: Date } };
+      where: { id: string } | { site_id_period_start: { site_id: string; period_start: Date } };
     }): Promise<BonusMonthRow | null>;
     findMany(args?: {
       where?: {
         site_id?: string;
-        state?: BonusMonthState;
-        month_end?: { lt?: Date };
+        state?: BonusPayPeriodState;
+        period_end?: { lt?: Date };
       };
     }): Promise<BonusMonthRow[]>;
     create(args: {
       data: {
         site_id: string;
-        month_start: Date;
-        month_end: Date;
-        state: BonusMonthState;
+        period_start: Date;
+        period_end: Date;
+        state: BonusPayPeriodState;
       };
     }): Promise<BonusMonthRow>;
     update(args: {
       where: { id: string };
-      data: { state: BonusMonthState };
+      data: { state: BonusPayPeriodState };
     }): Promise<BonusMonthRow>;
   };
   auditLog: {
@@ -100,9 +101,9 @@ export interface TransitionActor {
 /** Raised when a transition is illegal or the target month is missing. */
 export class TransitionError extends Error {
   readonly status = 409 as const;
-  readonly from: BonusMonthState | null;
-  readonly to: BonusMonthState;
-  constructor(message: string, to: BonusMonthState, from: BonusMonthState | null) {
+  readonly from: BonusPayPeriodState | null;
+  readonly to: BonusPayPeriodState;
+  constructor(message: string, to: BonusPayPeriodState, from: BonusPayPeriodState | null) {
     super(message);
     this.name = 'TransitionError';
     this.from = from;
@@ -111,13 +112,13 @@ export class TransitionError extends Error {
 }
 
 /** States in which daily mattress-count entries may be added/edited. */
-export const EDITABLE_STATES: readonly BonusMonthState[] = ['draft', 'amended'];
+export const EDITABLE_STATES: readonly BonusPayPeriodState[] = ['draft', 'amended'];
 
 /** Raised when a daily-entry mutation is attempted on a non-editable month. */
 export class EntriesLockedError extends Error {
   readonly status = 409 as const;
-  readonly state: BonusMonthState;
-  constructor(state: BonusMonthState) {
+  readonly state: BonusPayPeriodState;
+  constructor(state: BonusPayPeriodState) {
     super(`bonus month is ${state}; daily entries are only editable while draft or amended`);
     this.name = 'EntriesLockedError';
     this.state = state;
@@ -129,21 +130,27 @@ export class EntriesLockedError extends Error {
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Legal `bonus_months.state` transitions (ADR-0019 §5/§6). Any edge not listed
+ * Legal `bonus_pay_periods.state` transitions (ADR-0019 §5/§6). Any edge not listed
  * here is rejected by {@link transitionMonth}. The `amended -> pending_signatures`
  * edge is what restarts the signature flow after a Bill-only amendment.
  */
-export const ALLOWED_TRANSITIONS: Readonly<Record<BonusMonthState, readonly BonusMonthState[]>> = {
+export const ALLOWED_TRANSITIONS: Readonly<
+  Record<BonusPayPeriodState, readonly BonusPayPeriodState[]>
+> = {
   draft: ['pending_signatures'],
   pending_signatures: ['partially_signed'],
   partially_signed: ['signed'],
   signed: ['paid', 'amended'],
   paid: ['amended'],
   amended: ['pending_signatures'],
+  // `skipped` is a terminal state mirrored from the Prisma enum (ADR-0019.1).
+  // The `draft -> skipped` in-edge and admin-only guard are owned by T-203;
+  // T-202 only adds the type/key so the transition table stays exhaustive.
+  skipped: [],
 };
 
 /** True iff `from -> to` is a legal transition. Self-edges are never legal. */
-export function isTransitionAllowed(from: BonusMonthState, to: BonusMonthState): boolean {
+export function isTransitionAllowed(from: BonusPayPeriodState, to: BonusPayPeriodState): boolean {
   return ALLOWED_TRANSITIONS[from].includes(to);
 }
 
@@ -154,7 +161,7 @@ export function isTransitionAllowed(from: BonusMonthState, to: BonusMonthState):
 export interface TransitionMonthOpts {
   db: BonusMonthDb;
   monthId: string;
-  to: BonusMonthState;
+  to: BonusPayPeriodState;
   actor: TransitionActor;
   /** Optional audit context. */
   ip?: string | null;
@@ -170,7 +177,7 @@ export async function transitionMonth(opts: TransitionMonthOpts): Promise<BonusM
   const { db, monthId, to, actor } = opts;
 
   return db.$transaction(async (tx) => {
-    const month = await tx.bonusMonth.findUnique({ where: { id: monthId } });
+    const month = await tx.bonusPayPeriod.findUnique({ where: { id: monthId } });
     if (!month) {
       throw new TransitionError(`bonus month ${monthId} not found`, to, null);
     }
@@ -179,7 +186,7 @@ export async function transitionMonth(opts: TransitionMonthOpts): Promise<BonusM
       throw new TransitionError(`illegal transition ${from} -> ${to}`, to, from);
     }
 
-    const updated = await tx.bonusMonth.update({
+    const updated = await tx.bonusPayPeriod.update({
       where: { id: monthId },
       data: { state: to },
     });
@@ -189,7 +196,7 @@ export async function transitionMonth(opts: TransitionMonthOpts): Promise<BonusM
         actor_user_id: actor.userId ?? null,
         actor_label: actor.label ?? null,
         action: 'update' satisfies AuditAction,
-        table_name: 'bonus_months',
+        table_name: 'bonus_pay_periods',
         row_id: monthId,
         before: { state: from },
         after: { state: to },
@@ -218,13 +225,13 @@ export function monthEndUTC(date: Date): Date {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// getOrCreateDraftMonth — consumed by T-105
+// getOrCreateDraftPayPeriod — consumed by T-105
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Return the `bonus_months` row covering the month of `date` for `siteId`,
+ * Return the `bonus_pay_periods` row covering the month of `date` for `siteId`,
  * creating it in `draft` state if absent. Idempotent and safe under the
- * `UNIQUE(site_id, month_start)` constraint: it looks up by the composite key
+ * `UNIQUE(site_id, period_start)` constraint: it looks up by the composite key
  * first and only creates on a miss.
  *
  * NOTE: a true concurrency-safe upsert would catch the unique-violation and
@@ -232,29 +239,29 @@ export function monthEndUTC(date: Date): Date {
  * own tx and rely on the DB constraint as the backstop. For the single-operator
  * Woodland workflow the find-then-create path is sufficient.
  */
-export async function getOrCreateDraftMonth(
+export async function getOrCreateDraftPayPeriod(
   db: BonusMonthDb,
   siteId: string,
   date: Date,
 ): Promise<BonusMonthRow> {
-  const month_start = monthStartUTC(date);
-  const existing = await db.bonusMonth.findUnique({
-    where: { site_id_month_start: { site_id: siteId, month_start } },
+  const period_start = monthStartUTC(date);
+  const existing = await db.bonusPayPeriod.findUnique({
+    where: { site_id_period_start: { site_id: siteId, period_start } },
   });
   if (existing) return existing;
 
-  return db.bonusMonth.create({
+  return db.bonusPayPeriod.create({
     data: {
       site_id: siteId,
-      month_start,
-      month_end: monthEndUTC(date),
+      period_start,
+      period_end: monthEndUTC(date),
       state: 'draft',
     },
   });
 }
 
 // ────────────────────────────────────────────────────────────────────
-// closeMonthsDueForSignature — month-end auto-transition (Wave C cron)
+// closePayPeriodsDueForSignature — month-end auto-transition (Wave C cron)
 // ────────────────────────────────────────────────────────────────────
 
 export interface CloseMonthsResult {
@@ -264,17 +271,17 @@ export interface CloseMonthsResult {
 
 /**
  * Find every `draft` month whose calendar month has fully ended as of `now`
- * (i.e. `month_end` falls before the first day of `now`'s month) and transition
+ * (i.e. `period_end` falls before the first day of `now`'s month) and transition
  * it `draft -> pending_signatures`. Used by the Wave C month-close cron; the cron
  * supplies `now` so the function stays deterministic and testable.
  */
-export async function closeMonthsDueForSignature(
+export async function closePayPeriodsDueForSignature(
   db: BonusMonthDb,
   now: Date,
 ): Promise<CloseMonthsResult> {
   const currentMonthStart = monthStartUTC(now);
-  const due = await db.bonusMonth.findMany({
-    where: { state: 'draft', month_end: { lt: currentMonthStart } },
+  const due = await db.bonusPayPeriod.findMany({
+    where: { state: 'draft', period_end: { lt: currentMonthStart } },
   });
 
   const transitioned: string[] = [];
@@ -301,7 +308,7 @@ export async function closeMonthsDueForSignature(
  * it moves to `pending_signatures` the totals are frozen pending signature.
  * Callers (T-105 daily-entry API, T-116 amendment edit) call this before any write.
  */
-export function assertEntriesEditable(month: { id: string; state: BonusMonthState }): void {
+export function assertEntriesEditable(month: { id: string; state: BonusPayPeriodState }): void {
   if (!EDITABLE_STATES.includes(month.state)) {
     throw new EntriesLockedError(month.state);
   }

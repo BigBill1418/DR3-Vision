@@ -8,7 +8,7 @@
 //     EVERY query is scoped by it (CLAUDE.md hard rule #2 — bonus is
 //     Woodland-only in V2).
 //   - routes the draft-month lookup through the T-106 state machine
-//     (`getOrCreateDraftMonth`) so the month lifecycle stays owned by one
+//     (`getOrCreateDraftPayPeriod`) so the month lifecycle stays owned by one
 //     module, and gates writes through `assertEntriesEditable` so a count can
 //     never be added once the month leaves `draft` (ADR-0019 §7 — totals freeze
 //     at signature time).
@@ -26,9 +26,9 @@ import { Prisma, type AuditAction } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
   assertEntriesEditable,
-  getOrCreateDraftMonth,
+  getOrCreateDraftPayPeriod,
   type BonusMonthDb,
-  type BonusMonthState,
+  type BonusPayPeriodState,
 } from '@/lib/bonus/state-machine';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
 
@@ -38,7 +38,7 @@ import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calc
 
 /**
  * Normalize a Date to UTC midnight of its calendar day, matching how the
- * `@db.Date` columns store `entry_date` / `month_start`. Building the key in UTC
+ * `@db.Date` columns store `entry_date` / `period_start`. Building the key in UTC
  * avoids the local-timezone off-by-one that bites date comparisons in non-UTC
  * envs (same rationale as the state machine's month-boundary helpers).
  */
@@ -104,7 +104,7 @@ export interface DailyGridEntryRow {
 
 export interface DailyGridData {
   monthId: string;
-  monthState: BonusMonthState;
+  monthState: BonusPayPeriodState;
   /** Whether daily entries can be written (true iff the month is `draft`). */
   editable: boolean;
   /** UTC-midnight calendar day this grid represents. */
@@ -125,7 +125,7 @@ export interface DailyGridData {
  */
 export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGridData> {
   const entryDate = entryDateUTC(date);
-  const month = await getOrCreateDraftMonth(monthDb(), siteId, entryDate);
+  const month = await getOrCreateDraftPayPeriod(monthDb(), siteId, entryDate);
   const rule = await resolveActiveRule(siteId, entryDate);
 
   const employees = await prisma.bonusEmployee.findMany({
@@ -134,7 +134,7 @@ export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGri
   });
 
   const existing = await prisma.bonusDailyEntry.findMany({
-    where: { bonus_month_id: month.id, entry_date: entryDate },
+    where: { bonus_pay_period_id: month.id, entry_date: entryDate },
   });
   const byEmployee = new Map(existing.map((e) => [e.bonus_employee_id, e]));
 
@@ -198,7 +198,7 @@ export interface UpsertedEntry {
 
 export type UpsertDailyEntriesResult =
   | { ok: true; monthId: string; entries: UpsertedEntry[] }
-  | { ok: false; reason: 'month_locked'; state: BonusMonthState }
+  | { ok: false; reason: 'month_locked'; state: BonusPayPeriodState }
   | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' | 'unknown_employee' };
 
 const MAX_MATTRESS_COUNT = 999;
@@ -212,10 +212,10 @@ function serializeForAudit(v: unknown): Prisma.InputJsonValue {
 /**
  * The state machine declares `BonusMonthDb` as a narrow structural client so it
  * can compose with both the singleton and an interactive `tx`. The real
- * `PrismaClient` satisfies every method `getOrCreateDraftMonth` actually calls
- * (`bonusMonth.findUnique` / `.create`), but its `$transaction` has a wider
+ * `PrismaClient` satisfies every method `getOrCreateDraftPayPeriod` actually calls
+ * (`bonusPayPeriod.findUnique` / `.create`), but its `$transaction` has a wider
  * overload set than the structural type, so a direct pass trips variance. We
- * only ever hand the singleton to `getOrCreateDraftMonth` (which never calls
+ * only ever hand the singleton to `getOrCreateDraftPayPeriod` (which never calls
  * `$transaction`), so this narrowing is sound. Documented cast, not a silent one.
  */
 function monthDb(): BonusMonthDb {
@@ -258,7 +258,7 @@ export async function upsertDailyEntries(
 
   // Resolve the draft month (creating it on first key of the month) and confirm
   // it is still editable BEFORE opening the write transaction.
-  const month = await getOrCreateDraftMonth(monthDb(), siteId, entryDate);
+  const month = await getOrCreateDraftPayPeriod(monthDb(), siteId, entryDate);
   if (month.state !== 'draft') {
     return { ok: false, reason: 'month_locked', state: month.state };
   }
@@ -281,7 +281,7 @@ export async function upsertDailyEntries(
   const entries = await prisma.$transaction(async (tx) => {
     // Re-assert editability inside the tx as a backstop against a concurrent
     // transition between the pre-check and the write (ADR-0019 §7).
-    const fresh = await tx.bonusMonth.findUnique({ where: { id: month.id } });
+    const fresh = await tx.bonusPayPeriod.findUnique({ where: { id: month.id } });
     if (fresh) assertEntriesEditable({ id: fresh.id, state: fresh.state });
 
     const out: UpsertedEntry[] = [];
@@ -306,7 +306,7 @@ export async function upsertDailyEntries(
         },
         create: {
           bonus_employee_id: input.bonus_employee_id,
-          bonus_month_id: month.id,
+          bonus_pay_period_id: month.id,
           entry_date: entryDate,
           mattress_count: input.mattress_count,
           note,

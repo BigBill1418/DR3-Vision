@@ -59,7 +59,7 @@ function isoDay(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Every calendar day in [month_start, month_end] as compact grid columns. */
+/** Every calendar day in [period_start, period_end] as compact grid columns. */
 function gridDays(start: Date, end: Date): ReadOnlyGridDay[] {
   const out: ReadOnlyGridDay[] = [];
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -76,7 +76,7 @@ function gridDays(start: Date, end: Date): ReadOnlyGridDay[] {
   return out;
 }
 
-/** Every calendar day in [month_start, month_end], as picker options. */
+/** Every calendar day in [period_start, period_end], as picker options. */
 function monthDays(start: Date, end: Date): AmendDayOption[] {
   const out: AmendDayOption[] = [];
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -113,11 +113,11 @@ export default async function BonusMonthDetailPage({
   const ctx = gate.ctx;
   const { id } = await params;
 
-  const month = await prisma.bonusMonth.findFirst({
+  const month = await prisma.bonusPayPeriod.findFirst({
     where: { id, site_id: ctx.siteId },
     include: {
-      janette_signed_by: { select: { name: true } },
-      morena_signed_by: { select: { name: true } },
+      facility_signed_by: { select: { name: true } },
+      ops_signed_by: { select: { name: true } },
       daily_entries: {
         select: { bonus_employee_id: true, mattress_count: true, entry_date: true, note: true },
       },
@@ -125,7 +125,7 @@ export default async function BonusMonthDetailPage({
   });
   if (!month) notFound();
 
-  const rule = await resolveActiveRule(ctx.siteId, month.month_start);
+  const rule = await resolveActiveRule(ctx.siteId, month.period_start);
 
   const employeeIds = [...new Set(month.daily_entries.map((e) => e.bonus_employee_id))];
   const employees = await prisma.bonusEmployee.findMany({
@@ -172,7 +172,7 @@ export default async function BonusMonthDetailPage({
       orderBy: { full_name: 'asc' },
       select: { id: true, full_name: true },
     });
-    amendDays = monthDays(month.month_start, month.month_end);
+    amendDays = monthDays(month.period_start, month.period_end);
     amendEntriesByDay = Object.fromEntries(
       month.daily_entries.map((e) => [
         `${isoDay(e.entry_date)}|${e.bonus_employee_id}`,
@@ -205,7 +205,7 @@ export default async function BonusMonthDetailPage({
   let readOnlyRows: ReadOnlyGridRow[] = [];
   let readOnlyGrandCents = 0;
   if (showReadOnlyGrid) {
-    readOnlyDays = gridDays(month.month_start, month.month_end);
+    readOnlyDays = gridDays(month.period_start, month.period_end);
     const grid = new Map<string, ReadOnlyGridRow>();
     for (const e of month.daily_entries) {
       const id = e.bonus_employee_id;
@@ -238,7 +238,7 @@ export default async function BonusMonthDetailPage({
             ← Back to bonus entry
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">
-            {monthLabel(month.month_start)} bonus
+            {monthLabel(month.period_start)} bonus
           </h1>
           <p className="text-sm text-dr3-mist-dim">
             {ctx.siteName} ·{' '}
@@ -294,14 +294,14 @@ export default async function BonusMonthDetailPage({
             <SignatureSlotCard
               role="Facility Manager"
               assigned="Janette Thomas"
-              signerName={month.janette_signed_by?.name ?? null}
-              signedAt={month.janette_signed_at}
+              signerName={month.facility_signed_by?.name ?? null}
+              signedAt={month.facility_signed_at}
             />
             <SignatureSlotCard
               role="Operations Manager"
               assigned="Morena Gomez"
-              signerName={month.morena_signed_by?.name ?? null}
-              signedAt={month.morena_signed_at}
+              signerName={month.ops_signed_by?.name ?? null}
+              signedAt={month.ops_signed_at}
             />
           </div>
 
@@ -310,8 +310,8 @@ export default async function BonusMonthDetailPage({
               <SignaturePanel
                 monthId={month.id}
                 viewerSlot={viewerSlot}
-                janetteSigned={month.janette_signed_by_user_id !== null}
-                morenaSigned={month.morena_signed_by_user_id !== null}
+                facilitySigned={month.facility_signed_by_user_id !== null}
+                opsSigned={month.ops_signed_by_user_id !== null}
               />
             </div>
           )}

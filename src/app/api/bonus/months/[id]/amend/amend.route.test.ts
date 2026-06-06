@@ -34,19 +34,19 @@ interface MockMonth {
   id: string;
   site_id: string;
   state: string;
-  janette_signed_by_user_id: string | null;
-  janette_signed_at: Date | null;
-  janette_signed_ip: string | null;
-  janette_signed_user_agent: string | null;
-  janette_override_actor_id: string | null;
-  janette_override_reason: string | null;
-  morena_signed_by_user_id: string | null;
-  morena_signed_at: Date | null;
-  morena_signed_ip: string | null;
-  morena_signed_user_agent: string | null;
-  morena_override_actor_id: string | null;
-  morena_override_reason: string | null;
-  amended_from_month_id: string | null;
+  facility_signed_by_user_id: string | null;
+  facility_signed_at: Date | null;
+  facility_signed_ip: string | null;
+  facility_signed_user_agent: string | null;
+  facility_override_actor_id: string | null;
+  facility_override_reason: string | null;
+  ops_signed_by_user_id: string | null;
+  ops_signed_at: Date | null;
+  ops_signed_ip: string | null;
+  ops_signed_user_agent: string | null;
+  ops_override_actor_id: string | null;
+  ops_override_reason: string | null;
+  amended_from_period_id: string | null;
   amendment_reason: string | null;
   amended_by_user_id: string | null;
   amended_at: Date | null;
@@ -71,19 +71,19 @@ function seedMonth(over: Partial<MockMonth> = {}): MockMonth {
     id: 'm1',
     site_id: WOODLAND,
     state: 'signed',
-    janette_signed_by_user_id: 'janette',
-    janette_signed_at: new Date(),
-    janette_signed_ip: '203.0.113.7',
-    janette_signed_user_agent: 'JB/1.0',
-    janette_override_actor_id: null,
-    janette_override_reason: null,
-    morena_signed_by_user_id: 'morena',
-    morena_signed_at: new Date(),
-    morena_signed_ip: '203.0.113.8',
-    morena_signed_user_agent: 'MB/1.0',
-    morena_override_actor_id: null,
-    morena_override_reason: null,
-    amended_from_month_id: null,
+    facility_signed_by_user_id: 'janette',
+    facility_signed_at: new Date(),
+    facility_signed_ip: '203.0.113.7',
+    facility_signed_user_agent: 'JB/1.0',
+    facility_override_actor_id: null,
+    facility_override_reason: null,
+    ops_signed_by_user_id: 'morena',
+    ops_signed_at: new Date(),
+    ops_signed_ip: '203.0.113.8',
+    ops_signed_user_agent: 'MB/1.0',
+    ops_override_actor_id: null,
+    ops_override_reason: null,
+    amended_from_period_id: null,
     amendment_reason: null,
     amended_by_user_id: null,
     amended_at: null,
@@ -95,7 +95,7 @@ function seedMonth(over: Partial<MockMonth> = {}): MockMonth {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
       const m = monthStore.get(where.id);
       return m ? { ...m } : null;
@@ -132,7 +132,7 @@ vi.mock('@/lib/prisma', () => {
       return { id: `audit-${auditRows.length}` };
     }),
   };
-  const client = { bonusMonth, site, auditLog };
+  const client = { bonusPayPeriod, site, auditLog };
   return {
     prisma: {
       ...client,
@@ -211,16 +211,16 @@ describe('POST /api/bonus/months/[id]/amend — admin unlock', () => {
 
     const m = monthStore.get('m1')!;
     expect(m.state).toBe('amended');
-    expect(m.janette_signed_by_user_id).toBeNull();
-    expect(m.morena_signed_by_user_id).toBeNull();
+    expect(m.facility_signed_by_user_id).toBeNull();
+    expect(m.ops_signed_by_user_id).toBeNull();
     expect(m.amended_by_user_id).toBe('bill');
-    expect(m.amended_from_month_id).toBe('m1'); // PDF marker
+    expect(m.amended_from_period_id).toBe('m1'); // PDF marker
     expect(m.payroll_sent_at).toBeInstanceOf(Date); // supersedes date preserved
     // Prior signed state preserved in an audit row.
     expect(
       auditRows.some(
         (r) =>
-          r.table_name === 'bonus_months' &&
+          r.table_name === 'bonus_pay_periods' &&
           JSON.stringify(r.before).includes('janette') &&
           JSON.stringify(r.before).includes('morena'),
       ),

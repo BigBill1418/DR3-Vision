@@ -3,7 +3,7 @@
 // DB-free: an in-memory fake prisma/tx satisfies the structural client types.
 // Verifies the unlock / re-submit / month-scoped-edit contract:
 //   - unlock signed -> amended: clears BOTH signatures, sets amended_*,
-//     self-references amended_from_month_id (PDF marker), preserves payroll_sent_at,
+//     self-references amended_from_period_id (PDF marker), preserves payroll_sent_at,
 //     and PRESERVES the full prior signed state in an audit row.
 //   - unlock paid -> amended likewise.
 //   - unlock requires a non-empty reason (422 missing_reason).
@@ -37,8 +37,8 @@ interface AuditRow {
 }
 
 interface FullMonth extends AmendmentMonthRow {
-  month_start: Date;
-  month_end: Date;
+  period_start: Date;
+  period_end: Date;
   payroll_sent_at: Date | null;
   pdf_storage_key: string | null;
 }
@@ -46,7 +46,7 @@ interface FullMonth extends AmendmentMonthRow {
 interface DailyEntry {
   id: string;
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: number;
   note: string | null;
@@ -71,22 +71,22 @@ function seedSignedMonth(over: Partial<FullMonth> = {}): FullMonth {
   const m: FullMonth = {
     id: 'm1',
     site_id: WOODLAND,
-    month_start: new Date(Date.UTC(2026, 4, 1)),
-    month_end: new Date(Date.UTC(2026, 4, 31)),
+    period_start: new Date(Date.UTC(2026, 4, 1)),
+    period_end: new Date(Date.UTC(2026, 4, 31)),
     state: 'signed',
-    janette_signed_by_user_id: 'janette',
-    janette_signed_at: new Date(Date.UTC(2026, 5, 1, 10)),
-    janette_signed_ip: '203.0.113.7',
-    janette_signed_user_agent: 'JanetteBrowser/1.0',
-    janette_override_actor_id: null,
-    janette_override_reason: null,
-    morena_signed_by_user_id: 'morena',
-    morena_signed_at: new Date(Date.UTC(2026, 5, 1, 11)),
-    morena_signed_ip: '203.0.113.8',
-    morena_signed_user_agent: 'MorenaBrowser/1.0',
-    morena_override_actor_id: null,
-    morena_override_reason: null,
-    amended_from_month_id: null,
+    facility_signed_by_user_id: 'janette',
+    facility_signed_at: new Date(Date.UTC(2026, 5, 1, 10)),
+    facility_signed_ip: '203.0.113.7',
+    facility_signed_user_agent: 'JanetteBrowser/1.0',
+    facility_override_actor_id: null,
+    facility_override_reason: null,
+    ops_signed_by_user_id: 'morena',
+    ops_signed_at: new Date(Date.UTC(2026, 5, 1, 11)),
+    ops_signed_ip: '203.0.113.8',
+    ops_signed_user_agent: 'MorenaBrowser/1.0',
+    ops_override_actor_id: null,
+    ops_override_reason: null,
+    amended_from_period_id: null,
     amendment_reason: null,
     amended_by_user_id: null,
     amended_at: null,
@@ -100,7 +100,7 @@ function seedSignedMonth(over: Partial<FullMonth> = {}): FullMonth {
 
 // ── Fake prisma satisfying both AmendmentDb and AmendmentEntryDb ────────
 const fakeDb = {
-  bonusMonth: {
+  bonusPayPeriod: {
     findUnique: async ({ where }: { where: { id: string } }) => {
       const m = monthStore.get(where.id);
       return m ? { ...m } : null;
@@ -159,7 +159,7 @@ const fakeDb = {
       const row: DailyEntry = {
         id: `de-${++seq}`,
         bonus_employee_id: create['bonus_employee_id'] as string,
-        bonus_month_id: create['bonus_month_id'] as string,
+        bonus_pay_period_id: create['bonus_pay_period_id'] as string,
         entry_date: create['entry_date'] as Date,
         mattress_count: create['mattress_count'] as number,
         note: (create['note'] as string | null) ?? null,
@@ -208,20 +208,20 @@ describe('unlockMonthForAmendment', () => {
     const m = monthStore.get('m1')!;
     expect(m.state).toBe('amended');
     // Both signature column sets cleared.
-    expect(m.janette_signed_by_user_id).toBeNull();
-    expect(m.janette_signed_at).toBeNull();
-    expect(m.janette_signed_ip).toBeNull();
-    expect(m.janette_signed_user_agent).toBeNull();
-    expect(m.morena_signed_by_user_id).toBeNull();
-    expect(m.morena_signed_at).toBeNull();
-    expect(m.morena_signed_ip).toBeNull();
-    expect(m.morena_signed_user_agent).toBeNull();
+    expect(m.facility_signed_by_user_id).toBeNull();
+    expect(m.facility_signed_at).toBeNull();
+    expect(m.facility_signed_ip).toBeNull();
+    expect(m.facility_signed_user_agent).toBeNull();
+    expect(m.ops_signed_by_user_id).toBeNull();
+    expect(m.ops_signed_at).toBeNull();
+    expect(m.ops_signed_ip).toBeNull();
+    expect(m.ops_signed_user_agent).toBeNull();
     // Amendment tracking set.
     expect(m.amended_by_user_id).toBe('bill');
     expect(m.amendment_reason).toContain('should be 80');
     expect(m.amended_at).toBeInstanceOf(Date);
-    // PDF marker: amended_from_month_id self-reference lights the AMENDED marker.
-    expect(m.amended_from_month_id).toBe('m1');
+    // PDF marker: amended_from_period_id self-reference lights the AMENDED marker.
+    expect(m.amended_from_period_id).toBe('m1');
     // Supersedes date preserved.
     expect(m.payroll_sent_at).toBeInstanceOf(Date);
   });
@@ -238,7 +238,7 @@ describe('unlockMonthForAmendment', () => {
     // The unlock audit row whose before carries both signers.
     const preserved = auditRows.find(
       (r) =>
-        r.table_name === 'bonus_months' &&
+        r.table_name === 'bonus_pay_periods' &&
         r.row_id === 'm1' &&
         JSON.stringify(r.before).includes('janette') &&
         JSON.stringify(r.before).includes('morena'),
@@ -246,8 +246,8 @@ describe('unlockMonthForAmendment', () => {
     expect(preserved).toBeDefined();
     expect(preserved!.actor_user_id).toBe('bill');
     const before = preserved!.before as Record<string, unknown>;
-    expect(before['janette_signed_by_user_id']).toBe('janette');
-    expect(before['morena_signed_by_user_id']).toBe('morena');
+    expect(before['facility_signed_by_user_id']).toBe('janette');
+    expect(before['ops_signed_by_user_id']).toBe('morena');
     expect(before['state']).toBe('signed');
   });
 
@@ -321,7 +321,9 @@ describe('resubmitAmendedMonth', () => {
     });
     expect(res.ok).toBe(true);
     expect(monthStore.get('m1')!.state).toBe('pending_signatures');
-    expect(auditRows.some((r) => r.table_name === 'bonus_months' && r.row_id === 'm1')).toBe(true);
+    expect(auditRows.some((r) => r.table_name === 'bonus_pay_periods' && r.row_id === 'm1')).toBe(
+      true,
+    );
   });
 
   it('rejects re-submitting a non-amended month', async () => {

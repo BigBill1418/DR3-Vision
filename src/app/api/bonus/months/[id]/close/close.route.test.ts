@@ -30,7 +30,7 @@ vi.mock('@/lib/prisma', () => ({
         where.code === 'woodland' ? { id: WOODLAND, code: 'woodland', name: 'DR3 Woodland' } : null,
       ),
     },
-    bonusMonth: {
+    bonusPayPeriod: {
       findFirst: vi.fn(async ({ where }: { where: { id: string; site_id: string } }) =>
         monthRow && monthRow.id === where.id && monthRow.site_id === where.site_id
           ? { id: monthRow.id, state: monthRow.state }

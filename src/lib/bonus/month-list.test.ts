@@ -9,7 +9,7 @@
 //   - amendment linkage (isAmendment + amendedFromMonthId)
 //   - site scoping (hard rule #2): a non-Woodland month is never returned
 //   - resilience: a pre-rule/empty month resolves to $0 rather than throwing
-//   - pure helpers: parseMonthFilter, monthWindow
+//   - pure helpers: parsePayPeriodFilter, payPeriodWindow
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
@@ -18,16 +18,16 @@ import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
+  period_start: Date;
   state: string;
   total_payout_cents: number | null;
-  janette_signed_by_user_id: string | null;
-  morena_signed_by_user_id: string | null;
-  amended_from_month_id: string | null;
+  facility_signed_by_user_id: string | null;
+  ops_signed_by_user_id: string | null;
+  amended_from_period_id: string | null;
 }
 interface MockEntry {
   id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   mattress_count: number;
 }
 interface MockRule {
@@ -74,12 +74,12 @@ function addMonth(opts: {
   const m: MockMonth = {
     id: `month-${++idCounter}`,
     site_id: opts.site_id ?? WOODLAND,
-    month_start: um(opts.year, opts.month0),
+    period_start: um(opts.year, opts.month0),
     state: opts.state ?? 'paid',
     total_payout_cents: opts.total_payout_cents ?? null,
-    janette_signed_by_user_id: opts.janette ?? null,
-    morena_signed_by_user_id: opts.morena ?? null,
-    amended_from_month_id: opts.amended_from ?? null,
+    facility_signed_by_user_id: opts.janette ?? null,
+    ops_signed_by_user_id: opts.morena ?? null,
+    amended_from_period_id: opts.amended_from ?? null,
   };
   monthStore.set(m.id, m);
   return m;
@@ -88,7 +88,7 @@ function addMonth(opts: {
 function addEntry(monthId: string, count: number): void {
   const e: MockEntry = {
     id: `entry-${++idCounter}`,
-    bonus_month_id: monthId,
+    bonus_pay_period_id: monthId,
     mattress_count: count,
   };
   entryStore.set(e.id, e);
@@ -112,28 +112,28 @@ function reset(): void {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findMany: vi.fn(
       async ({
         where = {},
         orderBy,
       }: {
         where?: Record<string, unknown>;
-        orderBy?: { month_start?: 'asc' | 'desc' };
+        orderBy?: { period_start?: 'asc' | 'desc' };
       } = {}) => {
         let out = [...monthStore.values()].filter((m) => {
           if ('site_id' in where && m.site_id !== where['site_id']) return false;
-          if ('month_start' in where) {
-            const range = where['month_start'] as { gte?: Date; lt?: Date };
-            if (range.gte && m.month_start.getTime() < range.gte.getTime()) return false;
-            if (range.lt && m.month_start.getTime() >= range.lt.getTime()) return false;
+          if ('period_start' in where) {
+            const range = where['period_start'] as { gte?: Date; lt?: Date };
+            if (range.gte && m.period_start.getTime() < range.gte.getTime()) return false;
+            if (range.lt && m.period_start.getTime() >= range.lt.getTime()) return false;
           }
           return true;
         });
-        if (orderBy?.month_start === 'desc') {
-          out = out.sort((a, b) => b.month_start.getTime() - a.month_start.getTime());
-        } else if (orderBy?.month_start === 'asc') {
-          out = out.sort((a, b) => a.month_start.getTime() - b.month_start.getTime());
+        if (orderBy?.period_start === 'desc') {
+          out = out.sort((a, b) => b.period_start.getTime() - a.period_start.getTime());
+        } else if (orderBy?.period_start === 'asc') {
+          out = out.sort((a, b) => a.period_start.getTime() - b.period_start.getTime());
         }
         return out.map((m) => ({ ...m }));
       },
@@ -143,7 +143,11 @@ vi.mock('@/lib/prisma', () => {
   const bonusDailyEntry = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
       return [...entryStore.values()]
-        .filter((e) => !('bonus_month_id' in where) || e.bonus_month_id === where['bonus_month_id'])
+        .filter(
+          (e) =>
+            !('bonus_pay_period_id' in where) ||
+            e.bonus_pay_period_id === where['bonus_pay_period_id'],
+        )
         .map((e) => ({ ...e }));
     }),
   };
@@ -158,14 +162,14 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
 
-  return { prisma: { bonusMonth, bonusDailyEntry, processorBonusRule } };
+  return { prisma: { bonusPayPeriod, bonusDailyEntry, processorBonusRule } };
 });
 
 // Import AFTER the mock is registered.
 import {
-  listBonusMonths,
-  parseMonthFilter,
-  monthWindow,
+  listBonusPayPeriods,
+  parsePayPeriodFilter,
+  payPeriodWindow,
   MONTH_FILTERS,
   type MonthFilter,
 } from '@/lib/bonus/month-list';
@@ -181,45 +185,45 @@ function dayBonus(count: number): number {
 // A fixed "now" so window math is deterministic regardless of when tests run.
 const NOW = new Date(Date.UTC(2026, 5, 15)); // 2026-06-15
 
-describe('parseMonthFilter', () => {
+describe('parsePayPeriodFilter', () => {
   it('narrows known values and defaults unknowns to current', () => {
-    expect(parseMonthFilter('current')).toBe('current');
-    expect(parseMonthFilter('year')).toBe('year');
-    expect(parseMonthFilter('all')).toBe('all');
-    expect(parseMonthFilter('bogus')).toBe('current');
-    expect(parseMonthFilter(null)).toBe('current');
-    expect(parseMonthFilter(undefined)).toBe('current');
+    expect(parsePayPeriodFilter('current')).toBe('current');
+    expect(parsePayPeriodFilter('year')).toBe('year');
+    expect(parsePayPeriodFilter('all')).toBe('all');
+    expect(parsePayPeriodFilter('bogus')).toBe('current');
+    expect(parsePayPeriodFilter(null)).toBe('current');
+    expect(parsePayPeriodFilter(undefined)).toBe('current');
   });
 
   it('every MONTH_FILTERS value round-trips', () => {
-    for (const f of MONTH_FILTERS) expect(parseMonthFilter(f)).toBe(f);
+    for (const f of MONTH_FILTERS) expect(parsePayPeriodFilter(f)).toBe(f);
   });
 });
 
-describe('monthWindow', () => {
+describe('payPeriodWindow', () => {
   it('current = the anchor UTC month', () => {
-    const w = monthWindow('current', NOW);
+    const w = payPeriodWindow('current', NOW);
     expect(w.gte).toEqual(new Date(Date.UTC(2026, 5, 1)));
     expect(w.lt).toEqual(new Date(Date.UTC(2026, 6, 1)));
   });
   it('year = the anchor UTC calendar year', () => {
-    const w = monthWindow('year', NOW);
+    const w = payPeriodWindow('year', NOW);
     expect(w.gte).toEqual(new Date(Date.UTC(2026, 0, 1)));
     expect(w.lt).toEqual(new Date(Date.UTC(2027, 0, 1)));
   });
   it('all = unbounded', () => {
-    const w = monthWindow('all', NOW);
+    const w = payPeriodWindow('all', NOW);
     expect(w.gte).toBeUndefined();
     expect(w.lt).toBeUndefined();
   });
 });
 
-describe('listBonusMonths — filters', () => {
+describe('listBonusPayPeriods — filters', () => {
   it('current returns only the anchor month', async () => {
     addMonth({ year: 2026, month0: 5 }); // June (current)
     addMonth({ year: 2026, month0: 4 }); // May
     addMonth({ year: 2025, month0: 11 }); // last Dec
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.monthStart).toEqual(um(2026, 5));
   });
@@ -229,7 +233,7 @@ describe('listBonusMonths — filters', () => {
     addMonth({ year: 2026, month0: 0 }); // Jan
     addMonth({ year: 2026, month0: 2 }); // Mar
     addMonth({ year: 2025, month0: 11 }); // excluded (prior year)
-    const rows = await listBonusMonths(WOODLAND, 'year', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'year', NOW);
     expect(rows.map((r) => r.monthStart)).toEqual([um(2026, 5), um(2026, 2), um(2026, 0)]);
   });
 
@@ -237,26 +241,26 @@ describe('listBonusMonths — filters', () => {
     addMonth({ year: 2026, month0: 5 });
     addMonth({ year: 2024, month0: 1 });
     addMonth({ year: 2025, month0: 8 });
-    const rows = await listBonusMonths(WOODLAND, 'all', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'all', NOW);
     expect(rows.map((r) => r.monthStart)).toEqual([um(2026, 5), um(2025, 8), um(2024, 1)]);
   });
 });
 
-describe('listBonusMonths — site scoping (hard rule #2)', () => {
+describe('listBonusPayPeriods — site scoping (hard rule #2)', () => {
   it('never returns a non-Woodland month', async () => {
     addMonth({ year: 2026, month0: 5, site_id: WOODLAND });
     addMonth({ year: 2026, month0: 5, site_id: EUGENE });
-    const rows = await listBonusMonths(WOODLAND, 'all', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'all', NOW);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.id).toBeDefined();
   });
 });
 
-describe('listBonusMonths — payout', () => {
+describe('listBonusPayPeriods — payout', () => {
   it('prefers the locked total_payout_cents when present', async () => {
     const m = addMonth({ year: 2026, month0: 5, state: 'signed', total_payout_cents: 12345 });
     addEntry(m.id, 80); // would compute to a different number, must be ignored
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.totalPayoutCents).toBe(12345);
     expect(rows[0]!.totalIsLocked).toBe(true);
   });
@@ -265,7 +269,7 @@ describe('listBonusMonths — payout', () => {
     const m = addMonth({ year: 2026, month0: 5, state: 'draft', total_payout_cents: null });
     addEntry(m.id, 60); // 10 * 50c = 500
     addEntry(m.id, 80); // (30*50)+(6*25) = 1650
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.totalPayoutCents).toBe(dayBonus(60) + dayBonus(80));
     expect(rows[0]!.totalIsLocked).toBe(false);
   });
@@ -274,22 +278,22 @@ describe('listBonusMonths — payout', () => {
     ruleStore.clear(); // no rule covers anything
     const m = addMonth({ year: 2026, month0: 5, state: 'draft', total_payout_cents: null });
     addEntry(m.id, 80);
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.totalPayoutCents).toBe(0);
     expect(rows[0]!.totalIsLocked).toBe(false);
   });
 
   it('resolves to $0 for an empty month', async () => {
     addMonth({ year: 2026, month0: 5, state: 'draft', total_payout_cents: null });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.totalPayoutCents).toBe(0);
   });
 });
 
-describe('listBonusMonths — signature status', () => {
+describe('listBonusPayPeriods — signature status', () => {
   it('none when neither signer set', async () => {
     addMonth({ year: 2026, month0: 5, state: 'pending_signatures' });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('none');
     expect(rows[0]!.janetteSigned).toBe(false);
     expect(rows[0]!.morenaSigned).toBe(false);
@@ -297,7 +301,7 @@ describe('listBonusMonths — signature status', () => {
 
   it('partial when exactly one signer set', async () => {
     addMonth({ year: 2026, month0: 5, state: 'partially_signed', janette: 'user-jan' });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('partial');
     expect(rows[0]!.janetteSigned).toBe(true);
     expect(rows[0]!.morenaSigned).toBe(false);
@@ -311,12 +315,12 @@ describe('listBonusMonths — signature status', () => {
       janette: 'user-jan',
       morena: 'user-mor',
     });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('complete');
   });
 });
 
-describe('listBonusMonths — amendment linkage (§6)', () => {
+describe('listBonusPayPeriods — amendment linkage (§6)', () => {
   it('flags an amendment and exposes the prior month id', async () => {
     const prior = addMonth({ year: 2026, month0: 4, state: 'amended' });
     addMonth({
@@ -327,7 +331,7 @@ describe('listBonusMonths — amendment linkage (§6)', () => {
       janette: 'j',
       morena: 'm',
     });
-    const rows = await listBonusMonths(WOODLAND, 'year', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'year', NOW);
     const amendment = rows.find((r) => r.isAmendment);
     expect(amendment).toBeDefined();
     expect(amendment!.amendedFromMonthId).toBe(prior.id);
@@ -335,16 +339,16 @@ describe('listBonusMonths — amendment linkage (§6)', () => {
 
   it('non-amended months report isAmendment=false and null prior id', async () => {
     addMonth({ year: 2026, month0: 5, state: 'paid', janette: 'j', morena: 'm' });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.isAmendment).toBe(false);
     expect(rows[0]!.amendedFromMonthId).toBeNull();
   });
 });
 
-describe('listBonusMonths — row shape', () => {
+describe('listBonusPayPeriods — row shape', () => {
   it('carries label + state through', async () => {
     addMonth({ year: 2026, month0: 5, state: 'paid' });
-    const rows = await listBonusMonths(WOODLAND, 'current', NOW);
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.label).toBe('June 2026');
     expect(rows[0]!.state).toBe('paid');
   });

@@ -32,8 +32,8 @@ interface MockSite {
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
-  month_end: Date;
+  period_start: Date;
+  period_end: Date;
   state: string;
 }
 interface MockEmployee {
@@ -45,7 +45,7 @@ interface MockEmployee {
 interface MockEntry {
   id: string;
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: number;
   note: string | null;
@@ -84,13 +84,13 @@ function reset() {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       if ('id' in where) return monthStore.get(where['id'] as string) ?? null;
-      if ('site_id_month_start' in where) {
-        const k = where['site_id_month_start'] as { site_id: string; month_start: Date };
+      if ('site_id_period_start' in where) {
+        const k = where['site_id_period_start'] as { site_id: string; period_start: Date };
         for (const m of monthStore.values()) {
-          if (m.site_id === k.site_id && m.month_start.getTime() === k.month_start.getTime())
+          if (m.site_id === k.site_id && m.period_start.getTime() === k.period_start.getTime())
             return { ...m };
         }
         return null;
@@ -194,7 +194,14 @@ vi.mock('@/lib/prisma', () => {
       return { id: `audit-${auditRows.length}` };
     }),
   };
-  const client = { bonusMonth, bonusEmployee, bonusDailyEntry, processorBonusRule, site, auditLog };
+  const client = {
+    bonusPayPeriod,
+    bonusEmployee,
+    bonusDailyEntry,
+    processorBonusRule,
+    site,
+    auditLog,
+  };
   return {
     prisma: {
       ...client,
@@ -329,8 +336,8 @@ describe('POST /api/bonus/entries — month lock', () => {
     monthStore.set('m1', {
       id: 'm1',
       site_id: WOODLAND,
-      month_start: new Date(Date.UTC(2026, 5, 1)),
-      month_end: new Date(Date.UTC(2026, 5, 30)),
+      period_start: new Date(Date.UTC(2026, 5, 1)),
+      period_end: new Date(Date.UTC(2026, 5, 30)),
       state: 'pending_signatures',
     });
     const res = await POST(

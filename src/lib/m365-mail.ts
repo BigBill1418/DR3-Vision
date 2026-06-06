@@ -330,7 +330,7 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
   if (result.delivered) {
     // Persist delivery metadata. State is intentionally NOT advanced to
     // `paid` — that transition is owned by the caller/operator flow.
-    await prisma.bonusMonth.update({
+    await prisma.bonusPayPeriod.update({
       where: { id: args.monthId },
       data: {
         payroll_sent_at: new Date(),
@@ -341,7 +341,7 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
     await writeAudit({
       actor_label: 'system:m365-mail-send',
       action: 'update',
-      table_name: 'bonus_months',
+      table_name: 'bonus_pay_periods',
       row_id: args.monthId,
       after: auditAfter,
     });
@@ -353,7 +353,7 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
   // Exhausted / non-retryable failure. Record retry attempts (if any),
   // alert the operator, and leave the month state as-is (still `signed`).
   if (result.retries > 0) {
-    await prisma.bonusMonth.update({
+    await prisma.bonusPayPeriod.update({
       where: { id: args.monthId },
       data: { payroll_retry_count: { increment: result.retries } },
     });
@@ -363,7 +363,7 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
   await writeAudit({
     actor_label: 'system:m365-mail-send',
     action: 'update',
-    table_name: 'bonus_months',
+    table_name: 'bonus_pay_periods',
     row_id: args.monthId,
     after: auditAfter,
   });

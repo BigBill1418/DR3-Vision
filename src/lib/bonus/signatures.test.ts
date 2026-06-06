@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/observability/metrics', () => ({
-  bonusMonthsByState: { inc: vi.fn(), dec: vi.fn() },
+  bonusPayPeriodsByState: { inc: vi.fn(), dec: vi.fn() },
 }));
 
 import {
@@ -23,10 +23,10 @@ import {
 const WOODLAND = 'site-woodland';
 
 interface Row extends BonusMonthSignatureRow {
-  janette_signed_ip: string | null;
-  janette_signed_user_agent: string | null;
-  morena_signed_ip: string | null;
-  morena_signed_user_agent: string | null;
+  facility_signed_ip: string | null;
+  facility_signed_user_agent: string | null;
+  ops_signed_ip: string | null;
+  ops_signed_user_agent: string | null;
 }
 
 let row: Row;
@@ -35,7 +35,7 @@ const audit: Array<{ action: string; table_name: string; actor_user_id: string |
 
 function makeDb(): SignatureDb {
   const db: SignatureDb = {
-    bonusMonth: {
+    bonusPayPeriod: {
       findFirst: async ({ where }) => {
         if (row.id !== where.id) return null;
         if (where.site_id !== undefined && row.site_id !== where.site_id) return null;
@@ -96,17 +96,17 @@ beforeEach(() => {
   row = {
     id: 'm1',
     site_id: WOODLAND,
-    month_start: new Date(Date.UTC(2026, 5, 1)),
-    month_end: new Date(Date.UTC(2026, 5, 30)),
+    period_start: new Date(Date.UTC(2026, 5, 1)),
+    period_end: new Date(Date.UTC(2026, 5, 30)),
     state: 'pending_signatures',
-    janette_signed_by_user_id: null,
-    janette_signed_at: null,
-    janette_signed_ip: null,
-    janette_signed_user_agent: null,
-    morena_signed_by_user_id: null,
-    morena_signed_at: null,
-    morena_signed_ip: null,
-    morena_signed_user_agent: null,
+    facility_signed_by_user_id: null,
+    facility_signed_at: null,
+    facility_signed_ip: null,
+    facility_signed_user_agent: null,
+    ops_signed_by_user_id: null,
+    ops_signed_at: null,
+    ops_signed_ip: null,
+    ops_signed_user_agent: null,
     total_payout_cents: null,
   };
   entries = [];
@@ -115,10 +115,10 @@ beforeEach(() => {
 
 describe('naturalSlotFor', () => {
   it('Woodland manager → janette', () => {
-    expect(naturalSlotFor(janette)).toBe('janette');
+    expect(naturalSlotFor(janette)).toBe('facility');
   });
   it('both-sites manager (primary null) → morena', () => {
-    expect(naturalSlotFor(morena)).toBe('morena');
+    expect(naturalSlotFor(morena)).toBe('ops');
   });
   it('admin → null (no natural slot; override is T-111)', () => {
     expect(naturalSlotFor(bill)).toBeNull();
@@ -139,45 +139,45 @@ describe('recordSignature', () => {
     });
     expect(res).toMatchObject({
       ok: true,
-      slot: 'janette',
+      slot: 'facility',
       state: 'partially_signed',
       fullySigned: false,
     });
     expect(row.state).toBe('partially_signed');
-    expect(row.janette_signed_by_user_id).toBe('janette');
-    expect(row.janette_signed_ip).toBe('203.0.113.7');
-    expect(row.janette_signed_user_agent).toBe('UA/1');
-    expect(row.janette_signed_at).toBeInstanceOf(Date);
+    expect(row.facility_signed_by_user_id).toBe('janette');
+    expect(row.facility_signed_ip).toBe('203.0.113.7');
+    expect(row.facility_signed_user_agent).toBe('UA/1');
+    expect(row.facility_signed_at).toBeInstanceOf(Date);
     expect(row.total_payout_cents).toBeNull(); // not locked until second signature
     expect(
-      audit.some((a) => a.actor_user_id === 'janette' && a.table_name === 'bonus_months'),
+      audit.some((a) => a.actor_user_id === 'janette' && a.table_name === 'bonus_pay_periods'),
     ).toBe(true);
   });
 
   it('Morena second → signed, total_payout_cents locked from entries', async () => {
     row.state = 'partially_signed';
-    row.janette_signed_by_user_id = 'janette';
-    row.janette_signed_at = new Date();
+    row.facility_signed_by_user_id = 'janette';
+    row.facility_signed_at = new Date();
     entries = [{ mattress_count: 75 }, { mattress_count: 60 }]; // 1275 + 500 = 1775
     const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
-    expect(res).toMatchObject({ ok: true, slot: 'morena', state: 'signed', fullySigned: true });
+    expect(res).toMatchObject({ ok: true, slot: 'ops', state: 'signed', fullySigned: true });
     expect(row.state).toBe('signed');
-    expect(row.morena_signed_by_user_id).toBe('morena');
+    expect(row.ops_signed_by_user_id).toBe('morena');
     expect(row.total_payout_cents).toBe(1775);
   });
 
   it('signatures may land in either order (Morena first, then Janette)', async () => {
     const r1 = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
-    expect(r1).toMatchObject({ ok: true, slot: 'morena', state: 'partially_signed' });
+    expect(r1).toMatchObject({ ok: true, slot: 'ops', state: 'partially_signed' });
     const r2 = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
-    expect(r2).toMatchObject({ ok: true, slot: 'janette', state: 'signed', fullySigned: true });
+    expect(r2).toMatchObject({ ok: true, slot: 'facility', state: 'signed', fullySigned: true });
   });
 
   it('re-sign of a filled slot → already_signed', async () => {
     row.state = 'partially_signed';
-    row.janette_signed_by_user_id = 'janette';
+    row.facility_signed_by_user_id = 'janette';
     const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
-    expect(res).toEqual({ ok: false, reason: 'already_signed', slot: 'janette' });
+    expect(res).toEqual({ ok: false, reason: 'already_signed', slot: 'facility' });
   });
 
   it('admin with no override target → no_slot', async () => {
@@ -206,10 +206,10 @@ describe('recordSignature', () => {
       db: makeDb(),
       monthId: 'm1',
       signer: bill,
-      onBehalfOf: 'janette',
+      onBehalfOf: 'facility',
       overrideReason: 'Janette unavailable',
     });
-    expect(res).toMatchObject({ ok: true, slot: 'janette', state: 'partially_signed' });
-    expect(row.janette_signed_by_user_id).toBe('bill');
+    expect(res).toMatchObject({ ok: true, slot: 'facility', state: 'partially_signed' });
+    expect(row.facility_signed_by_user_id).toBe('bill');
   });
 });

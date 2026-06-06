@@ -103,19 +103,19 @@ export default async function BonusPdfSourcePage({
 
   const { 'month-id': monthId } = await params;
 
-  const month = await prisma.bonusMonth.findUnique({
+  const month = await prisma.bonusPayPeriod.findUnique({
     where: { id: monthId },
     include: {
       site: { select: { code: true, name: true } },
-      janette_signed_by: { select: { name: true } },
-      morena_signed_by: { select: { name: true } },
+      facility_signed_by: { select: { name: true } },
+      ops_signed_by: { select: { name: true } },
     },
   });
   if (!month) notFound();
 
   // Employees + entries for this month.
   const entries = await prisma.bonusDailyEntry.findMany({
-    where: { bonus_month_id: month.id },
+    where: { bonus_pay_period_id: month.id },
     select: { bonus_employee_id: true, entry_date: true, mattress_count: true },
   });
   const employees = await prisma.bonusEmployee.findMany({
@@ -124,17 +124,17 @@ export default async function BonusPdfSourcePage({
   });
 
   // Rule effective at the month's start drives the math (CLAUDE.md hard rule #3).
-  const rule = await resolveActiveRule(month.site_id, month.month_start);
+  const rule = await resolveActiveRule(month.site_id, month.period_start);
 
   const data = assemblePdfRows({
     month: {
       id: month.id,
       site_id: month.site_id,
-      month_start: month.month_start,
-      month_end: month.month_end,
+      period_start: month.period_start,
+      period_end: month.period_end,
       state: month.state,
       total_payout_cents: month.total_payout_cents,
-      amended_from_month_id: month.amended_from_month_id,
+      amended_from_period_id: month.amended_from_period_id,
     },
     site: { code: month.site.code, name: month.site.name },
     employees,
@@ -143,7 +143,7 @@ export default async function BonusPdfSourcePage({
   });
 
   // Resolve override-actor display names (admin signed in someone's place).
-  const overrideActorIds = [month.janette_override_actor_id, month.morena_override_actor_id].filter(
+  const overrideActorIds = [month.facility_override_actor_id, month.ops_override_actor_id].filter(
     (v): v is string => typeof v === 'string',
   );
   const overrideActors = overrideActorIds.length
@@ -160,25 +160,25 @@ export default async function BonusPdfSourcePage({
       label: 'Facility Manager',
       attestation:
         'I attest that the mattress counts and processor bonuses reported above are accurate for the month shown.',
-      signedName: month.janette_signed_by?.name ?? null,
+      signedName: month.facility_signed_by?.name ?? null,
       signedRole: 'Facility Manager (Woodland)',
-      signedAt: month.janette_signed_at,
-      signedIp: month.janette_signed_ip,
-      signedUserAgent: month.janette_signed_user_agent,
-      overrideActorName: actorName(month.janette_override_actor_id),
-      overrideReason: month.janette_override_reason,
+      signedAt: month.facility_signed_at,
+      signedIp: month.facility_signed_ip,
+      signedUserAgent: month.facility_signed_user_agent,
+      overrideActorName: actorName(month.facility_override_actor_id),
+      overrideReason: month.facility_override_reason,
     },
     {
       label: 'Operations Manager',
       attestation:
         'I attest that I have reviewed and approve the processor bonuses reported above for payroll.',
-      signedName: month.morena_signed_by?.name ?? null,
+      signedName: month.ops_signed_by?.name ?? null,
       signedRole: 'Operations Manager',
-      signedAt: month.morena_signed_at,
-      signedIp: month.morena_signed_ip,
-      signedUserAgent: month.morena_signed_user_agent,
-      overrideActorName: actorName(month.morena_override_actor_id),
-      overrideReason: month.morena_override_reason,
+      signedAt: month.ops_signed_at,
+      signedIp: month.ops_signed_ip,
+      signedUserAgent: month.ops_signed_user_agent,
+      overrideActorName: actorName(month.ops_override_actor_id),
+      overrideReason: month.ops_override_reason,
     },
   ];
 

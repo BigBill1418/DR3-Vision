@@ -15,7 +15,7 @@
 // is the only place that knows the zone; everything else calls these helpers.
 //
 // ── @db.Date representation invariant (READ THIS) ────────────────────
-// The bonus date columns (`bonus_daily_entries.entry_date`, `bonus_months.*`,
+// The bonus date columns (`bonus_daily_entries.entry_date`, `bonus_pay_periods.*`,
 // `site_holidays.holiday_date`, `processor_bonus_rules.*`) are Postgres
 // `@db.Date` — a zone-less calendar day. Prisma materializes such a value as
 // a JS `Date` at UTC midnight of that calendar day. So the canonical in-app

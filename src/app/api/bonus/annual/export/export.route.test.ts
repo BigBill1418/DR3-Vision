@@ -28,7 +28,7 @@ const THIS_YEAR = new Date().getUTCFullYear();
 interface MockMonth {
   id: string;
   site_id: string;
-  month_start: Date;
+  period_start: Date;
 }
 interface MockEmployee {
   id: string;
@@ -39,7 +39,7 @@ interface MockEmployee {
 }
 interface MockEntry {
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   mattress_count: number;
 }
 
@@ -61,15 +61,15 @@ vi.mock('@/lib/prisma', () => {
   const site = {
     findUnique: vi.fn(async () => ({ id: WOODLAND, code: 'woodland', name: 'Woodland' })),
   };
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
       return [...monthStore.values()]
         .filter((m) => !('site_id' in where) || m.site_id === where['site_id'])
         .filter((m) => {
-          if (!('month_start' in where)) return true;
-          const range = where['month_start'] as { gte?: Date; lt?: Date };
-          if (range.gte && m.month_start.getTime() < range.gte.getTime()) return false;
-          if (range.lt && m.month_start.getTime() >= range.lt.getTime()) return false;
+          if (!('period_start' in where)) return true;
+          const range = where['period_start'] as { gte?: Date; lt?: Date };
+          if (range.gte && m.period_start.getTime() < range.gte.getTime()) return false;
+          if (range.lt && m.period_start.getTime() >= range.lt.getTime()) return false;
           return true;
         })
         .map((m) => ({ ...m }));
@@ -86,7 +86,7 @@ vi.mock('@/lib/prisma', () => {
   const bonusDailyEntry = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
       return entries
-        .filter((e) => inList(where, 'bonus_month_id', e.bonus_month_id))
+        .filter((e) => inList(where, 'bonus_pay_period_id', e.bonus_pay_period_id))
         .map((e) => ({ ...e }));
     }),
   };
@@ -102,7 +102,7 @@ vi.mock('@/lib/prisma', () => {
       end_date: null,
     })),
   };
-  return { prisma: { site, bonusMonth, bonusEmployee, bonusDailyEntry, processorBonusRule } };
+  return { prisma: { site, bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
 });
 
 import { GET } from '@/app/api/bonus/annual/export/route';
@@ -122,7 +122,7 @@ function seed(): void {
   const may: MockMonth = {
     id: 'm-may',
     site_id: WOODLAND,
-    month_start: new Date(Date.UTC(THIS_YEAR, 4, 1)),
+    period_start: new Date(Date.UTC(THIS_YEAR, 4, 1)),
   };
   monthStore.set(may.id, may);
   empStore.set('emp-amy', {
@@ -132,7 +132,7 @@ function seed(): void {
     previous_names: null,
     is_active: true,
   });
-  entries.push({ bonus_employee_id: 'emp-amy', bonus_month_id: 'm-may', mattress_count: 60 });
+  entries.push({ bonus_employee_id: 'emp-amy', bonus_pay_period_id: 'm-may', mattress_count: 60 });
 }
 
 describe('GET /api/bonus/annual/export', () => {

@@ -36,10 +36,10 @@ const WOODLAND = 'site-woodland';
 interface FakeMonth {
   id: string;
   site_id: string;
-  month_start: Date;
+  period_start: Date;
   state: string;
-  janette_signed_by_user_id: string | null;
-  morena_signed_by_user_id: string | null;
+  facility_signed_by_user_id: string | null;
+  ops_signed_by_user_id: string | null;
 }
 
 function fakeDb(opts: {
@@ -50,7 +50,7 @@ function fakeDb(opts: {
   const userWhereSeen: unknown[] = [];
   return {
     db: {
-      bonusMonth: {
+      bonusPayPeriod: {
         findUnique: async () => opts.month ?? null,
       },
       user: {
@@ -70,10 +70,10 @@ function fakeDb(opts: {
 const month = (over: Partial<FakeMonth> = {}): FakeMonth => ({
   id: 'm1',
   site_id: WOODLAND,
-  month_start: new Date(Date.UTC(2026, 8, 1)), // September 2026
+  period_start: new Date(Date.UTC(2026, 8, 1)), // September 2026
   state: 'pending_signatures',
-  janette_signed_by_user_id: null,
-  morena_signed_by_user_id: null,
+  facility_signed_by_user_id: null,
+  ops_signed_by_user_id: null,
   ...over,
 });
 
@@ -88,14 +88,14 @@ beforeEach(() => {
 describe('resolveSlotSigner', () => {
   it('janette slot → manager scoped to the Woodland site', async () => {
     const { db, userWhereSeen } = fakeDb({ janette: JANETTE });
-    const s = await resolveSlotSigner('janette', WOODLAND, db as never);
+    const s = await resolveSlotSigner('facility', WOODLAND, db as never);
     expect(s).toEqual(JANETTE);
     expect(userWhereSeen[0]).toMatchObject({ role: 'manager', primary_site_id: WOODLAND });
   });
 
   it('morena slot → manager with null primary_site_id (both-sites ops)', async () => {
     const { db, userWhereSeen } = fakeDb({ morena: MORENA });
-    const s = await resolveSlotSigner('morena', WOODLAND, db as never);
+    const s = await resolveSlotSigner('ops', WOODLAND, db as never);
     expect(s).toEqual(MORENA);
     expect(userWhereSeen[0]).toMatchObject({ role: 'manager', primary_site_id: null });
   });
@@ -105,7 +105,7 @@ describe('notifyPendingSigner — who gets prompted', () => {
   it('pending_signatures (none signed) → emails the facility manager (Janette)', async () => {
     const { db } = fakeDb({ month: month(), janette: JANETTE, morena: MORENA });
     const r = await notifyPendingSigner('m1', db as never);
-    expect(r).toEqual({ notified: true, slot: 'janette' });
+    expect(r).toEqual({ notified: true, slot: 'facility' });
     expect(sendSystemEmail).toHaveBeenCalledTimes(1);
     expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({
       to: JANETTE.email,
@@ -113,30 +113,30 @@ describe('notifyPendingSigner — who gets prompted', () => {
     });
     expect(auditRows[0]).toMatchObject({
       actor_label: 'system:signature-request',
-      table_name: 'bonus_months',
+      table_name: 'bonus_pay_periods',
       row_id: 'm1',
     });
   });
 
   it('partially_signed (Janette signed) → emails the ops manager (Morena)', async () => {
     const { db } = fakeDb({
-      month: month({ state: 'partially_signed', janette_signed_by_user_id: 'u-jan' }),
+      month: month({ state: 'partially_signed', facility_signed_by_user_id: 'u-jan' }),
       janette: JANETTE,
       morena: MORENA,
     });
     const r = await notifyPendingSigner('m1', db as never);
-    expect(r).toEqual({ notified: true, slot: 'morena' });
+    expect(r).toEqual({ notified: true, slot: 'ops' });
     expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({ to: MORENA.email });
   });
 
   it('out-of-order override (Morena signed first) → prompts the remaining Janette slot', async () => {
     const { db } = fakeDb({
-      month: month({ state: 'partially_signed', morena_signed_by_user_id: 'u-bill' }),
+      month: month({ state: 'partially_signed', ops_signed_by_user_id: 'u-bill' }),
       janette: JANETTE,
       morena: MORENA,
     });
     const r = await notifyPendingSigner('m1', db as never);
-    expect(r.slot).toBe('janette');
+    expect(r.slot).toBe('facility');
     expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({ to: JANETTE.email });
   });
 });
@@ -146,8 +146,8 @@ describe('notifyPendingSigner — no-op cases', () => {
     const { db } = fakeDb({
       month: month({
         state: 'signed',
-        janette_signed_by_user_id: 'a',
-        morena_signed_by_user_id: 'b',
+        facility_signed_by_user_id: 'a',
+        ops_signed_by_user_id: 'b',
       }),
     });
     const r = await notifyPendingSigner('m1', db as never);
@@ -173,14 +173,14 @@ describe('notifyPendingSigner — no-op cases', () => {
     });
     const { db } = fakeDb({ month: month(), janette: JANETTE });
     const r = await notifyPendingSigner('m1', db as never);
-    expect(r).toEqual({ notified: false, slot: 'janette', reason: 'mail_disabled' });
+    expect(r).toEqual({ notified: false, slot: 'facility', reason: 'mail_disabled' });
     expect(auditRows).toHaveLength(0);
   });
 
   it('skips (no throw) when the responsible signer has no email', async () => {
     const { db } = fakeDb({ month: month(), janette: { id: 'x', name: 'No Email', email: null } });
     const r = await notifyPendingSigner('m1', db as never);
-    expect(r).toMatchObject({ notified: false, slot: 'janette', reason: 'no_signer_email' });
+    expect(r).toMatchObject({ notified: false, slot: 'facility', reason: 'no_signer_email' });
     expect(sendSystemEmail).not.toHaveBeenCalled();
   });
 

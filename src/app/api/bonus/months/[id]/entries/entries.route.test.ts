@@ -25,7 +25,7 @@ interface MockMonth {
 interface MockEntry {
   id: string;
   bonus_employee_id: string;
-  bonus_month_id: string;
+  bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: number;
   note: string | null;
@@ -50,7 +50,7 @@ function reset() {
 }
 
 vi.mock('@/lib/prisma', () => {
-  const bonusMonth = {
+  const bonusPayPeriod = {
     findFirst: vi.fn(async ({ where }: { where: { id: string; site_id?: string } }) => {
       const m = monthStore.get(where.id);
       if (!m) return null;
@@ -104,7 +104,7 @@ vi.mock('@/lib/prisma', () => {
         const row: MockEntry = {
           id: `de-${++seq}`,
           bonus_employee_id: create['bonus_employee_id'] as string,
-          bonus_month_id: create['bonus_month_id'] as string,
+          bonus_pay_period_id: create['bonus_pay_period_id'] as string,
           entry_date: create['entry_date'] as Date,
           mattress_count: create['mattress_count'] as number,
           note: (create['note'] as string | null) ?? null,
@@ -123,7 +123,7 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
   const auditLog = { create: vi.fn(async () => ({ id: 'a1' })) };
-  const client = { bonusMonth, bonusEmployee, bonusDailyEntry, site, auditLog };
+  const client = { bonusPayPeriod, bonusEmployee, bonusDailyEntry, site, auditLog };
   return {
     prisma: {
       ...client,
@@ -181,7 +181,7 @@ describe('POST /api/bonus/months/[id]/entries — month-scoped edit', () => {
     const res = await POST(makeReq(goodBody), { params });
     expect(res.status).toBe(200);
     expect(entryStore[0]!.mattress_count).toBe(80);
-    expect(entryStore[0]!.bonus_month_id).toBe('m1');
+    expect(entryStore[0]!.bonus_pay_period_id).toBe('m1');
     expect(entryStore[0]!.entered_by_user_id).toBe('bill');
   });
 

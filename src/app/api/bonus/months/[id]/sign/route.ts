@@ -51,9 +51,9 @@ function triggerPayrollDelivery(monthId: string): void {
       return;
     }
     try {
-      const month = await prisma.bonusMonth.findUnique({
+      const month = await prisma.bonusPayPeriod.findUnique({
         where: { id: monthId },
-        select: { pdf_storage_key: true, month_start: true, amended_from_month_id: true },
+        select: { pdf_storage_key: true, period_start: true, amended_from_period_id: true },
       });
       if (!month?.pdf_storage_key) {
         log.error(
@@ -81,10 +81,10 @@ function triggerPayrollDelivery(monthId: string): void {
         new GetObjectCommand({ Bucket: bucket, Key: month.pdf_storage_key }),
       );
       const pdfBuffer = Buffer.from(await obj.Body!.transformToByteArray());
-      const ym = `${month.month_start.getUTCFullYear()}-${String(
-        month.month_start.getUTCMonth() + 1,
+      const ym = `${month.period_start.getUTCFullYear()}-${String(
+        month.period_start.getUTCMonth() + 1,
       ).padStart(2, '0')}`;
-      const isAmendment = month.amended_from_month_id !== null;
+      const isAmendment = month.amended_from_period_id !== null;
       await sendPayrollPdf({
         monthId,
         pdfBuffer,
@@ -124,14 +124,14 @@ export async function POST(
   // empty body; an override posts { onBehalfOf, reason }. The server re-derives
   // and re-enforces the asymmetric authority in the data layer — the client is
   // NEVER trusted for who-may-override-whom.
-  let onBehalfOf: 'janette' | 'morena' | undefined;
+  let onBehalfOf: 'facility' | 'ops' | undefined;
   let overrideReason: string | undefined;
   try {
     const body = (await req.json().catch(() => null)) as {
       onBehalfOf?: unknown;
       reason?: unknown;
     } | null;
-    if (body && (body.onBehalfOf === 'janette' || body.onBehalfOf === 'morena')) {
+    if (body && (body.onBehalfOf === 'facility' || body.onBehalfOf === 'ops')) {
       onBehalfOf = body.onBehalfOf;
       overrideReason = typeof body.reason === 'string' ? body.reason : undefined;
     }

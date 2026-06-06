@@ -77,7 +77,7 @@ export interface AnnualEmployeeRow {
 // Helpers
 // ────────────────────────────────────────────────────────────────────
 
-/** UTC YYYY-MM for a month_start, matching the @db.Date column. */
+/** UTC YYYY-MM for a period_start, matching the @db.Date column. */
 function ym(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -182,22 +182,22 @@ export async function employeeHistory(
   // Pull this employee's months (those with at least one of their entries) plus
   // their entries, scoped to the site via the month relation. We fetch all the
   // employee's months, then trim to the requested window after sorting.
-  const months = await prisma.bonusMonth.findMany({
+  const months = await prisma.bonusPayPeriod.findMany({
     where: { site_id: siteId },
-    orderBy: { month_start: 'desc' },
-    select: { id: true, month_start: true, state: true },
+    orderBy: { period_start: 'desc' },
+    select: { id: true, period_start: true, state: true },
   });
 
   const entries = await prisma.bonusDailyEntry.findMany({
-    where: { bonus_employee_id: employeeId, bonus_month: { site_id: siteId } },
-    select: { bonus_month_id: true, entry_date: true, mattress_count: true },
+    where: { bonus_employee_id: employeeId, bonus_pay_period: { site_id: siteId } },
+    select: { bonus_pay_period_id: true, entry_date: true, mattress_count: true },
   });
 
   const entriesByMonth = new Map<string, { entry_date: Date; mattress_count: number }[]>();
   for (const e of entries) {
-    const list = entriesByMonth.get(e.bonus_month_id) ?? [];
+    const list = entriesByMonth.get(e.bonus_pay_period_id) ?? [];
     list.push({ entry_date: e.entry_date, mattress_count: e.mattress_count });
-    entriesByMonth.set(e.bonus_month_id, list);
+    entriesByMonth.set(e.bonus_pay_period_id, list);
   }
 
   const resolveRule = ruleResolver(siteId);
@@ -205,14 +205,14 @@ export async function employeeHistory(
   for (const m of months) {
     const monthEntries = entriesByMonth.get(m.id) ?? [];
     if (monthEntries.length === 0) continue; // month with no entries for this employee
-    const rule = await resolveRule(m.month_start);
+    const rule = await resolveRule(m.period_start);
     const acc = emptyRollup();
     for (const e of monthEntries) accumulate(acc, e.mattress_count, rule);
     allMonthTotals.push({
       monthId: m.id,
-      ym: ym(m.month_start),
-      label: monthLabel(m.month_start),
-      monthStart: m.month_start,
+      ym: ym(m.period_start),
+      label: monthLabel(m.period_start),
+      monthStart: m.period_start,
       state: m.state,
       mattresses: acc.mattresses,
       daysQualified: acc.daysQualified,
@@ -266,22 +266,22 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
   const yearStart = new Date(Date.UTC(year, 0, 1));
   const yearEnd = new Date(Date.UTC(year + 1, 0, 1)); // exclusive
 
-  const months = await prisma.bonusMonth.findMany({
-    where: { site_id: siteId, month_start: { gte: yearStart, lt: yearEnd } },
-    select: { id: true, month_start: true },
+  const months = await prisma.bonusPayPeriod.findMany({
+    where: { site_id: siteId, period_start: { gte: yearStart, lt: yearEnd } },
+    select: { id: true, period_start: true },
   });
-  const monthStartById = new Map(months.map((m) => [m.id, m.month_start]));
+  const monthStartById = new Map(months.map((m) => [m.id, m.period_start]));
   if (months.length === 0) return [];
 
   const entries = await prisma.bonusDailyEntry.findMany({
-    where: { bonus_month_id: { in: [...monthStartById.keys()] } },
-    select: { bonus_employee_id: true, bonus_month_id: true, mattress_count: true },
+    where: { bonus_pay_period_id: { in: [...monthStartById.keys()] } },
+    select: { bonus_employee_id: true, bonus_pay_period_id: true, mattress_count: true },
   });
 
   const resolveRule = ruleResolver(siteId);
   const byEmployee = new Map<string, Rollup>();
   for (const e of entries) {
-    const monthStart = monthStartById.get(e.bonus_month_id);
+    const monthStart = monthStartById.get(e.bonus_pay_period_id);
     if (!monthStart) continue;
     const rule = await resolveRule(monthStart);
     const acc = byEmployee.get(e.bonus_employee_id) ?? emptyRollup();

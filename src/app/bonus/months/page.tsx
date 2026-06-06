@@ -17,8 +17,8 @@ import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { formatCents } from '@/lib/bonus/calculator';
 import {
-  listBonusMonths,
-  parseMonthFilter,
+  listBonusPayPeriods,
+  parsePayPeriodFilter,
   type MonthFilter,
   type MonthListRow,
 } from '@/lib/bonus/month-list';
@@ -38,6 +38,7 @@ const STATE_LABEL: Record<MonthListRow['state'], string> = {
   signed: 'Signed',
   paid: 'Paid',
   amended: 'Amended',
+  skipped: 'Skipped',
 };
 
 // Badge palette — steel chips on the deep-space page; emerald for the "done"
@@ -49,6 +50,7 @@ const STATE_BADGE: Record<MonthListRow['state'], string> = {
   signed: 'bg-emerald-500/20 text-emerald-200',
   paid: 'bg-emerald-500/20 text-emerald-200',
   amended: 'bg-dr3-cyan/20 text-dr3-cyan',
+  skipped: 'bg-dr3-steel-light/10 text-dr3-mist/60',
 };
 
 function signatureLabel(row: MonthListRow): string {
@@ -71,8 +73,8 @@ export default async function BonusMonthsListPage({
   }
 
   const sp = await searchParams;
-  const filter = parseMonthFilter(sp.filter);
-  const rows = await listBonusMonths(gate.ctx.siteId, filter);
+  const filter = parsePayPeriodFilter(sp.filter);
+  const rows = await listBonusPayPeriods(gate.ctx.siteId, filter);
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
