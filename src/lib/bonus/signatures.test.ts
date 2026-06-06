@@ -191,6 +191,17 @@ describe('recordSignature', () => {
     expect(res).toMatchObject({ ok: false, reason: 'wrong_state' });
   });
 
+  // T-203: a `skipped` period is inert — the signature workflow refuses it
+  // (it is neither pending_signatures nor partially_signed), and nothing is written.
+  it('signing a SKIPPED period → wrong_state (signature workflow blocked)', async () => {
+    row.state = 'skipped';
+    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: morena });
+    expect(res).toMatchObject({ ok: false, reason: 'wrong_state' });
+    expect(row.ops_signed_by_user_id).toBeNull();
+    expect(row.state).toBe('skipped');
+    expect(audit.length).toBe(0);
+  });
+
   it('cross-site month id → not_found', async () => {
     // The month belongs to Eugene; Janette (Woodland-scoped) must not reach it.
     row.site_id = 'site-eugene';

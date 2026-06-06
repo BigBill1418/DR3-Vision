@@ -4,17 +4,19 @@
 // 403 → render the forbidden surface in-place (Rick / operators land here). The
 // page never trusts middleware alone (CLAUDE.md hard rule #6).
 //
-// Loads (or creates, via the T-106 `getOrCreateDraftPayPeriod` inside the data
-// layer) the current month's draft for Woodland, lists ACTIVE employees
-// alphabetically, and pre-loads today's row. The Woodland processor-bonus rule
-// is resolved server-side and passed to the client grid so live bonus math is
-// rule-driven, never hardcoded (CLAUDE.md hard rule #3).
+// Resolves the SEEDED pay period covering the chosen day (via `resolveOpenPayPeriod`
+// inside the data layer — T-203 / ADR-0019.1; periods are pre-seeded, never
+// fabricated), lists ACTIVE employees alphabetically, and pre-loads today's row.
+// The Woodland processor-bonus rule is resolved server-side and passed to the
+// client grid so live bonus math is rule-driven, never hardcoded (CLAUDE.md hard
+// rule #3). A day outside every seeded period renders a clean "no open period"
+// surface rather than crashing.
 
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
-import { getDailyGrid } from '@/lib/bonus/daily-entry';
+import { getDailyGrid, NoOpenPayPeriodError } from '@/lib/bonus/daily-entry';
 import {
   appToday,
   appTodayISO,
@@ -59,7 +61,17 @@ export default async function BonusDailyEntryPage({
 
   const sp = await searchParams;
   const entryDate = resolveEntryDate(sp.date, gate.ctx.isAdmin);
-  const grid = await getDailyGrid(gate.ctx.siteId, entryDate);
+  let grid;
+  try {
+    grid = await getDailyGrid(gate.ctx.siteId, entryDate);
+  } catch (e) {
+    // No seeded pay period covers the chosen day (ADR-0019.1). Render a clean
+    // surface instead of a 500 — this is an out-of-range calendar day.
+    if (e instanceof NoOpenPayPeriodError) {
+      return <NoOpenPeriodPage date={dayISO(entryDate)} isAdmin={gate.ctx.isAdmin} />;
+    }
+    throw e;
+  }
 
   const rows: GridRowProps[] = grid.rows.map((r) => ({
     bonus_employee_id: r.bonus_employee_id,
@@ -119,6 +131,25 @@ export default async function BonusDailyEntryPage({
           </footer>
         )}
       </div>
+    </main>
+  );
+}
+
+function NoOpenPeriodPage({ date, isAdmin }: { date: string; isAdmin: boolean }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
+      <h1 className="text-2xl font-semibold">No open pay period</h1>
+      <p className="mt-2 max-w-md text-dr3-mist-dim">
+        There is no bonus pay period that covers {date}. Pay periods are pre-scheduled; pick a date
+        inside a scheduled period.
+        {isAdmin ? ' Use the date picker on a covered day to backfill entries.' : ''}
+      </p>
+      <Link
+        href={HOME_ROUTE}
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
+      >
+        Back to dashboard
+      </Link>
     </main>
   );
 }

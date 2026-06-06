@@ -112,6 +112,17 @@ function reset() {
     full_name: 'Eve',
     is_active: true,
   });
+
+  // T-203: periods are PRE-SEEDED (no auto-create). Seed Period 12 of 2026 for
+  // Woodland (Tue May 26 → Mon Jun 8), the window covering TODAY (2026-06-05).
+  // The daily-entry layer resolves THIS row by date-range.
+  monthStore.set('p12-wo', {
+    id: 'p12-wo',
+    site_id: WOODLAND,
+    period_start: new Date(Date.UTC(2026, 4, 26)),
+    period_end: new Date(Date.UTC(2026, 5, 8)),
+    state: 'draft',
+  });
 }
 
 function matchesEmp(e: MockEmployee, where: Record<string, unknown>): boolean {
@@ -142,6 +153,31 @@ vi.mock('@/lib/prisma', () => {
       }
       return null;
     }),
+    // T-203: daily-entry resolves the SEEDED period by date-range (no create).
+    findFirst: vi.fn(
+      async ({
+        where,
+      }: {
+        where: {
+          site_id: string;
+          period_start?: { lte: Date };
+          period_end?: { gte?: Date; equals?: Date };
+        };
+      }) => {
+        for (const m of monthStore.values()) {
+          if (m.site_id !== where.site_id) continue;
+          if (
+            where.period_start?.lte &&
+            !(m.period_start.getTime() <= where.period_start.lte.getTime())
+          )
+            continue;
+          if (where.period_end?.gte && !(m.period_end.getTime() >= where.period_end.gte.getTime()))
+            continue;
+          return { ...m };
+        }
+        return null;
+      },
+    ),
     create: vi.fn(async ({ data }: { data: Omit<MockMonth, 'id'> }) => {
       const m: MockMonth = { id: `month-${++idCounter}`, ...data };
       monthStore.set(m.id, m);
@@ -303,7 +339,7 @@ describe('resolveActiveRule', () => {
 });
 
 describe('getDailyGrid', () => {
-  it('creates the draft month and lists ACTIVE employees alphabetically', async () => {
+  it('resolves the seeded draft period and lists ACTIVE employees alphabetically', async () => {
     const { getDailyGrid } = await import('./daily-entry');
     const grid = await getDailyGrid(WOODLAND, TODAY);
 

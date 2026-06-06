@@ -162,6 +162,9 @@ function txForTransition(tx: AmendmentDb): BonusMonthDb {
   return {
     bonusPayPeriod: {
       findUnique: (args) => tx.bonusPayPeriod.findUnique(args) as never,
+      // transitionMonth never calls findFirst (period resolution happens before
+      // the transition); a stub keeps the structural BonusMonthDb shape satisfied.
+      findFirst: (() => Promise.resolve(null)) as never,
       findMany: (() => Promise.resolve([])) as never,
       create: (() => Promise.reject(new Error('not used'))) as never,
       update: (args) => tx.bonusPayPeriod.update(args) as never,

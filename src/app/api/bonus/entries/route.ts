@@ -13,7 +13,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess } from '@/lib/bonus/access';
-import { upsertDailyEntries, type DailyEntryInput } from '@/lib/bonus/daily-entry';
+import {
+  upsertDailyEntries,
+  NoOpenPayPeriodError,
+  type DailyEntryInput,
+} from '@/lib/bonus/daily-entry';
 import { appToday, appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
@@ -91,11 +95,25 @@ export async function POST(req: Request) {
     note: e.note,
   }));
 
-  const result = await upsertDailyEntries(ctx.siteId, date, inputs, {
-    actorUserId: ctx.userId,
-    ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
-    userAgent: req.headers.get('user-agent') ?? null,
-  });
+  let result;
+  try {
+    result = await upsertDailyEntries(ctx.siteId, date, inputs, {
+      actorUserId: ctx.userId,
+      ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+      userAgent: req.headers.get('user-agent') ?? null,
+    });
+  } catch (e) {
+    // No seeded pay period covers the chosen day (ADR-0019.1). Surface a clean
+    // 409 rather than a 500 — periods are pre-seeded, so this is an out-of-range
+    // calendar day, not a server fault.
+    if (e instanceof NoOpenPayPeriodError) {
+      return NextResponse.json(
+        { error: 'There is no open bonus pay period for that date.' },
+        { status: 409 },
+      );
+    }
+    throw e;
+  }
 
   if (result.ok) {
     return NextResponse.json({ monthId: result.monthId, entries: result.entries }, { status: 200 });

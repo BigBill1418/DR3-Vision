@@ -81,6 +81,16 @@ function reset() {
   sitesStore.set(WOODLAND, { id: WOODLAND, code: 'woodland', name: 'Woodland' });
   sitesStore.set(EUGENE, { id: EUGENE, code: 'eugene', name: 'Eugene' });
   empStore.set('emp-amy', { id: 'emp-amy', site_id: WOODLAND, full_name: 'Amy', is_active: true });
+  // T-203: periods are PRE-SEEDED (no auto-create). Seed Period 12 of 2026 for
+  // Woodland (Tue May 26 → Mon Jun 8), the window covering every date these tests
+  // exercise (Jun 1 / Jun 5). The daily-entry layer resolves THIS row by range.
+  monthStore.set('p12', {
+    id: 'p12',
+    site_id: WOODLAND,
+    period_start: new Date(Date.UTC(2026, 4, 26)),
+    period_end: new Date(Date.UTC(2026, 5, 8)),
+    state: 'draft',
+  });
 }
 
 vi.mock('@/lib/prisma', () => {
@@ -97,6 +107,31 @@ vi.mock('@/lib/prisma', () => {
       }
       return null;
     }),
+    // T-203: daily-entry now resolves the SEEDED period by date-range (no create).
+    findFirst: vi.fn(
+      async ({
+        where,
+      }: {
+        where: {
+          site_id: string;
+          period_start?: { lte: Date };
+          period_end?: { gte?: Date; equals?: Date };
+        };
+      }) => {
+        for (const m of monthStore.values()) {
+          if (m.site_id !== where.site_id) continue;
+          if (
+            where.period_start?.lte &&
+            !(m.period_start.getTime() <= where.period_start.lte.getTime())
+          )
+            continue;
+          if (where.period_end?.gte && !(m.period_end.getTime() >= where.period_end.gte.getTime()))
+            continue;
+          return { ...m };
+        }
+        return null;
+      },
+    ),
     create: vi.fn(async ({ data }: { data: Omit<MockMonth, 'id'> }) => {
       const m: MockMonth = { id: `month-${++idCounter}`, ...data };
       monthStore.set(m.id, m);
@@ -328,21 +363,58 @@ describe('POST /api/bonus/entries — write path', () => {
 
 // ── Month lock (ADR-0019 §7) ────────────────────────────────────
 
-describe('POST /api/bonus/entries — month lock', () => {
-  it('returns 409 once the month is not draft', async () => {
+describe('POST /api/bonus/entries — period lock', () => {
+  it('returns 409 once the covering period is not draft', async () => {
     const { POST } = await import('./route');
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
-    // Seed a non-draft month for 2026-06.
-    monthStore.set('m1', {
-      id: 'm1',
+    // Make the SEEDED period covering TODAY_ISO non-draft (a `skipped` period
+    // would lock entries the same way — both are outside EDITABLE_STATES).
+    monthStore.set('p12', {
+      id: 'p12',
       site_id: WOODLAND,
-      period_start: new Date(Date.UTC(2026, 5, 1)),
-      period_end: new Date(Date.UTC(2026, 5, 30)),
+      period_start: new Date(Date.UTC(2026, 4, 26)),
+      period_end: new Date(Date.UTC(2026, 5, 8)),
       state: 'pending_signatures',
     });
     const res = await POST(
       makeReq({
         entry_date: TODAY_ISO,
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 5 }],
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('returns 409 (skipped period) — a skipped period blocks daily-entry writes', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    monthStore.set('p12', {
+      id: 'p12',
+      site_id: WOODLAND,
+      period_start: new Date(Date.UTC(2026, 4, 26)),
+      period_end: new Date(Date.UTC(2026, 5, 8)),
+      state: 'skipped',
+    });
+    const res = await POST(
+      makeReq({
+        entry_date: TODAY_ISO,
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 5 }],
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { state?: string };
+    expect(body.state).toBe('skipped');
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('returns 409 when no seeded period covers the date', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    monthStore.clear(); // no period covers any date
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-05',
         entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 5 }],
       }),
     );

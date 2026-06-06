@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave A: state machine period boundaries + `skipped` transition (T-203)
+
+Converted the bonus state machine from calendar-month boundaries to the
+pre-seeded bi-weekly pay-period boundaries (ADR-0019.1 §3/§6) and added the
+`draft → skipped` admin-only transition (ADR-0019.1 "Bootstrapping question").
+No crons here (T-204/205/206) and no Eugene access (Wave B). `tsc --noEmit`,
+`next lint --max-warnings 0`, and the full `vitest` suite (543 tests, +26)
+all clean.
+
+- **Period resolution, not month math (`src/lib/bonus/state-machine.ts`).** New
+  `resolveOpenPayPeriod(db, siteId, day)` returns the SEEDED period whose
+  `[period_start, period_end]` window contains `day` (`period_start <= day AND
+period_end >= day`), scoped by site — a pure lookup that NEVER fabricates a
+  calendar-month row. `getOrCreateDraftPayPeriod` is retained as a back-compat
+  alias (T-202 name freeze) and now resolves, returning `null` on a true miss.
+  The month-boundary helpers (`monthStartUTC`/`monthEndUTC`) are removed.
+- **`closePayPeriodsDueForSignature(db, now)`** now selects
+  `WHERE period_end = appToday() AND state = 'draft'` (Pacific-aware via
+  `@/lib/time`, supplied as `now` for determinism) and transitions matches to
+  `pending_signatures` with actor label `system:period-close-cron`. Idempotent:
+  a second same-day fire no longer matches `state = 'draft'`. This is what the
+  T-204 close cron will call.
+- **`draft → skipped` transition.** Single legal in-edge to the terminal
+  `skipped` state added to `ALLOWED_TRANSITIONS`; `ADMIN_ONLY_TRANSITIONS` +
+  `isAdminOnlyTransition()` mark it admin-only, enforced inside `transitionMonth`
+  (new `TransitionForbiddenError`, 403) as a server-side backstop. A `skipped`
+  period blocks daily-entry mutations (not in `EDITABLE_STATES`) and the
+  signature workflow (`recordSignature` returns `wrong_state`).
+- **New route** `POST /api/bonus/months/[id]/skip` — admin-only (managers 403),
+  site-scoped, transitions a `draft` period to `skipped`.
+- **Daily-entry layer** (`src/lib/bonus/daily-entry.ts`) now resolves the seeded
+  period by range and raises `NoOpenPayPeriodError` (409) when no seeded period
+  covers the day, surfaced cleanly by the entries route and the `/bonus` page
+  (instead of fabricating a row or 500ing).
+
 ### 2026-06-06 — Sprint 2 addendum Wave A foundation: bi-weekly cadence schema + seed (T-200, T-201)
 
 Foundation for the monthly→bi-weekly bonus cadence (ADR-0019.1) and Eugene

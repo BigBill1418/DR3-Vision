@@ -346,6 +346,9 @@ function txForTransition(tx: SignatureDb): import('@/lib/bonus/state-machine').B
         tx.bonusPayPeriod.findFirst({
           where: args.where as { id: string; site_id: string },
         }) as never,
+      // transitionMonth never calls findFirst on its db; a stub keeps the
+      // structural BonusMonthDb shape satisfied.
+      findFirst: (() => Promise.resolve(null)) as never,
       findMany: (() => Promise.resolve([])) as never,
       create: (() => Promise.reject(new Error('not used'))) as never,
       update: (args) => tx.bonusPayPeriod.update(args) as never,

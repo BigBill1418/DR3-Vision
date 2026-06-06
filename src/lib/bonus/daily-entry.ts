@@ -26,8 +26,9 @@ import { Prisma, type AuditAction } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
   assertEntriesEditable,
-  getOrCreateDraftPayPeriod,
+  resolveOpenPayPeriod,
   type BonusMonthDb,
+  type BonusMonthRow,
   type BonusPayPeriodState,
 } from '@/lib/bonus/state-machine';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
@@ -55,6 +56,21 @@ export class NoActiveRuleError extends Error {
   constructor(siteId: string) {
     super(`no active processor_bonus_rules row for site ${siteId}`);
     this.name = 'NoActiveRuleError';
+  }
+}
+
+/**
+ * Raised when no SEEDED `bonus_pay_periods` row covers `day` for the site
+ * (T-203 / ADR-0019.1). Periods are pre-seeded with explicit Tue→Mon boundaries;
+ * a day outside every seeded window (before Period 1 / after the last seeded
+ * period of the year) has no open period to write into. The daily-entry layer
+ * surfaces this instead of fabricating a calendar-month row.
+ */
+export class NoOpenPayPeriodError extends Error {
+  readonly status = 409 as const;
+  constructor(siteId: string, day: Date) {
+    super(`no seeded bonus pay period covers ${day.toISOString().slice(0, 10)} for site ${siteId}`);
+    this.name = 'NoOpenPayPeriodError';
   }
 }
 
@@ -125,7 +141,7 @@ export interface DailyGridData {
  */
 export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGridData> {
   const entryDate = entryDateUTC(date);
-  const month = await getOrCreateDraftPayPeriod(monthDb(), siteId, entryDate);
+  const month = await resolvePeriodOrThrow(siteId, entryDate);
   const rule = await resolveActiveRule(siteId, entryDate);
 
   const employees = await prisma.bonusEmployee.findMany({
@@ -212,14 +228,26 @@ function serializeForAudit(v: unknown): Prisma.InputJsonValue {
 /**
  * The state machine declares `BonusMonthDb` as a narrow structural client so it
  * can compose with both the singleton and an interactive `tx`. The real
- * `PrismaClient` satisfies every method `getOrCreateDraftPayPeriod` actually calls
- * (`bonusPayPeriod.findUnique` / `.create`), but its `$transaction` has a wider
- * overload set than the structural type, so a direct pass trips variance. We
- * only ever hand the singleton to `getOrCreateDraftPayPeriod` (which never calls
- * `$transaction`), so this narrowing is sound. Documented cast, not a silent one.
+ * `PrismaClient` satisfies every method `resolveOpenPayPeriod` actually calls
+ * (`bonusPayPeriod.findFirst`), but its `$transaction` has a wider overload set
+ * than the structural type, so a direct pass trips variance. We only ever hand the
+ * singleton to `resolveOpenPayPeriod` (which never calls `$transaction`), so this
+ * narrowing is sound. Documented cast, not a silent one.
  */
 function monthDb(): BonusMonthDb {
   return prisma as unknown as BonusMonthDb;
+}
+
+/**
+ * Resolve the seeded pay period covering `day` for `siteId`, or throw
+ * {@link NoOpenPayPeriodError} (409) when none does. Used by both the read
+ * (`getDailyGrid`) and write (`upsertDailyEntries`) paths so neither fabricates a
+ * period row (T-203 / ADR-0019.1).
+ */
+async function resolvePeriodOrThrow(siteId: string, day: Date): Promise<BonusMonthRow> {
+  const period = await resolveOpenPayPeriod(monthDb(), siteId, day);
+  if (!period) throw new NoOpenPayPeriodError(siteId, day);
+  return period;
 }
 
 /**
@@ -256,9 +284,11 @@ export async function upsertDailyEntries(
     }
   }
 
-  // Resolve the draft month (creating it on first key of the month) and confirm
-  // it is still editable BEFORE opening the write transaction.
-  const month = await getOrCreateDraftPayPeriod(monthDb(), siteId, entryDate);
+  // Resolve the seeded pay period covering this day (NEVER fabricated — T-203 /
+  // ADR-0019.1) and confirm it is still editable BEFORE opening the write
+  // transaction. A `skipped` (or any non-draft) period is locked here; an
+  // uncovered day throws NoOpenPayPeriodError up to the route.
+  const month = await resolvePeriodOrThrow(siteId, entryDate);
   if (month.state !== 'draft') {
     return { ok: false, reason: 'month_locked', state: month.state };
   }
