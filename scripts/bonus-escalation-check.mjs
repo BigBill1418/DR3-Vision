@@ -147,7 +147,7 @@ function scheduleNext() {
         logTs(`tier ${next.tier} run failed (non-fatal, retry next tick): ${err?.message ?? err}`),
       )
       .finally(scheduleNext);
-  }, next.delay).unref();
+  }, next.delay); // NOT .unref() — this timer must keep the daemon alive
 }
 
 function setupShutdown() {

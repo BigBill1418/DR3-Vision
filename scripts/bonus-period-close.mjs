@@ -141,7 +141,7 @@ function scheduleNext() {
       .then((text) => logTs(`close run complete: ${text}`))
       .catch((err) => logTs(`close run failed (non-fatal, retry next tick): ${err?.message ?? err}`))
       .finally(scheduleNext);
-  }, delay).unref();
+  }, delay); // NOT .unref() — this timer must keep the daemon alive
 }
 
 function setupShutdown() {
