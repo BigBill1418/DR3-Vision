@@ -5,6 +5,45 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum (consolidated): bi-weekly bonus cadence + Eugene site enablement
+
+Umbrella summary of the Sprint-2 addendum (T-201 … T-215). The per-wave entries
+below carry the implementation detail; this entry is the single reconciled
+overview of what the addendum delivers, for readers who don't want to reassemble
+it from the wave entries.
+
+**What it is.** Two corrections to the Bonus Management System (ADR-0019),
+shipping together on the Mon Jun 8, 2026 cutover:
+
+- **Bi-weekly cadence (ADR-0019.1, `docs/adr/0019.1-bonus-cadence-bi-weekly.md`).**
+  Bonus reporting moves from monthly to **bi-weekly** — 26 periods/year, 14 days
+  fixed, Tue→Mon, Friday pay date — matching the SVdP 2026 Payroll Calendar.
+  Schema renamed `bonus_months → bonus_pay_periods` with site-neutral
+  `facility_*` / `ops_*` signature columns, new `period_number` / `period_year` /
+  `pay_date` / `*_auto_override_at` columns, and a terminal `skipped` state. The
+  monthly `bonus-month-close` cron is gone; a daily Pacific-aware **17:30 PT**
+  close (`bonus-period-close`) replaces it. A hard **Tue 09:00 AM PT** payroll
+  deadline is enforced by the `bonus-escalation-check` cron: 06:00 warn → 07:30
+  urgent → 08:30 **auto-override as Bill** → 09:00 deadline-miss check. Period 12
+  of 2026 is **skipped** at cutover (admin-only `POST /api/bonus/months/[id]/skip`);
+  Period 13 is the first canonical bi-weekly PDF.
+- **Eugene enablement (ADR-0019.2, `docs/adr/0019.2-bonus-eugene-site-enablement.md`).**
+  Eugene goes live as a second bonus site with no schema migration (already
+  site-scoped). Delivered: the access matrix (Rick → Eugene only, Morena →
+  Woodland only, admins → both with a site picker), a per-site
+  `bonus_signature_chains` table (Eugene = Rick facility / Kelsey ops / Bill
+  auto-override), PDF site-name substitution, and Vision Dashboard tile routing
+  (Rick now sees the bonus tile). Both sites share the pay-period calendar and the
+  `payroll@svdp.us` destination.
+
+**Docs (T-214 / T-215).** Operator cutover runbook at
+`docs/operator/bonus-cadence-and-eugene-cutover.md`; both ADRs copied into the
+canonical `docs/adr/` and indexed in `docs/adr/README.md`; `README.md` and
+`PROJECT-CHARTER.md` updated.
+
+**Gates:** `tsc --noEmit` clean, `next lint --max-warnings 0` clean, full
+`vitest` suite green (648 tests).
+
 ### 2026-06-06 — Sprint 2 addendum: wire `signed -> paid` on confirmed payroll delivery (T-211 step 5; closes the t4 false-alert)
 
 Fixed the gap surfaced by the Wave C e2e tests: nothing advanced a pay period
