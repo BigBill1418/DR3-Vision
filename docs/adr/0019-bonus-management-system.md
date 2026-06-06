@@ -124,6 +124,11 @@ directly to the month page (`/bonus/months/[id]` — a tier-1 click target) and 
 transition (not on a poll), so no de-dup state is needed; reminder re-sends are out of
 scope for V2. Implemented in T-125.
 
+A manual **"Month complete — ready to sign"** button on `/bonus` (shown only while
+the month is `draft`) lets an operator close the current month on demand rather
+than waiting for the month-end auto-close cron. It drives the same
+`draft → pending_signatures` transition and the same signature-request prompt.
+
 ### 6. Amendment workflow
 
 Once a month is `signed` and the PDF has been emailed to payroll, the data is locked. Corrections require an **admin-only amendment** (Bill only).

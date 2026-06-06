@@ -15,8 +15,18 @@ import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { getDailyGrid } from '@/lib/bonus/daily-entry';
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
+import { CloseMonthButton } from './CloseMonthButton';
 
 export const dynamic = 'force-dynamic';
+
+/** "September 2026" for the close-month confirmation, in UTC to match @db.Date. */
+function monthLabel(d: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(d);
+}
 
 /** Render a Date's UTC calendar day as YYYY-MM-DD (matches the @db.Date key). */
 function isoDay(d: Date): string {
@@ -85,6 +95,16 @@ export default async function BonusDailyEntryPage() {
           monthState={grid.monthState}
           rows={rows}
         />
+
+        {grid.monthState === 'draft' && (
+          <footer className="flex flex-col items-end gap-2 border-t border-dr3-cream/15 pt-6">
+            <p className="text-right text-sm text-dr3-cream/60">
+              Finished entering counts for {monthLabel(grid.entryDate)}? Close the month to lock
+              entries and start the signature workflow.
+            </p>
+            <CloseMonthButton monthId={grid.monthId} monthLabel={monthLabel(grid.entryDate)} />
+          </footer>
+        )}
       </div>
     </main>
   );

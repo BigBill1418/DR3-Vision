@@ -22,6 +22,12 @@ required — Janette when the month closes, Morena once Janette signs.
   caller): internal loopback-guarded `POST /api/internal/bonus/close-months` runs
   the close then fires trigger #1 (email Janette) for each newly-closed month;
   `scripts/bonus-month-close.mjs` drives it at 00:05 Pacific on the 1st. 4 tests.
+- **"Month complete — ready to sign" button** (operator-initiated close, Bill's
+  request): a chartreuse button on `/bonus` (draft only) closes the current month
+  on demand (draft → pending_signatures) with a confirm modal, locking entries and
+  firing the same signature-request email, then routes to the signing page. New
+  `CloseMonthButton.tsx` + `POST /api/bonus/months/[id]/close` (gated, site-scoped,
+  409 if already closed). 6 tests; button render verified by eye.
 - **PDF visual verification (T-112, by eye):** seeded a signed month (3 processors,
   30 entries) and rendered the report — co-branded header, per-employee table,
   dual signature blocks (name/role/Pacific timestamp/IP/UA), doc-id + footer all
@@ -29,7 +35,7 @@ required — Janette when the month closes, Morena once Janette signs.
   the title double-prefixed the site ("DR3 DR3 Woodland") — now "DR3 Woodland".
   Loopback guard verified (200 local, 404 with `cf-connecting-ip`).
 
-Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **396 passed**,
+Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **402 passed**,
 `next lint` clean.
 
 ### 2026-06-06 — Sprint 2 Wave C: signatures, PDF, mail, EOD cron, Grafana (T-110–T-115)
