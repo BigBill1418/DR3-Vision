@@ -5,6 +5,45 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave A: period-close cron — Mon 17:30 PT (T-204)
+
+Replaced the monthly close cron with the bi-weekly period-close cron
+(ADR-0019.1 §3/§6). `tsc --noEmit`, `next lint --max-warnings 0`, and the full
+`vitest` suite (548 tests, +5) all clean.
+
+- **`scripts/bonus-period-close.mjs`** replaces the deleted
+  `scripts/bonus-month-close.mjs`. Long-running daemon (same shape as
+  `scripts/mymrc-cron.mjs`): a single process under one `unless-stopped` restart
+  policy that sleeps until the next **17:30 America/Los_Angeles** instant —
+  recomputed each cycle off the Pacific wall clock (Intl, mirroring
+  `src/lib/time.ts`) so it survives the Mar/Nov DST shifts — and on each fire
+  drives the close. Fires **daily** at 17:30 PT (cron can't express "every other
+  Monday" cleanly; the close decision is keyed off the seeded
+  `period_end == appToday()` so non-period-end days are a clean no-op — the
+  ADR-0019.1-preferred daily-tick + Pacific-date-check shape).
+- **Drives the existing internal route**, not a re-implemented state machine in
+  plain JS. The daemon POSTs `/api/internal/bonus/close-months`, which imports
+  the bonus tx layer, calls `closePayPeriodsDueForSignature(prisma, appToday())`
+  (transitions every `draft` period whose `period_end` is Pacific-today to
+  `pending_signatures` via the audited state machine), and fires
+  `notifyPendingSigner` (signature-request email, fail-open) per newly-closed
+  period. Keeps the orchestration behind the tested TS route per ADR-0019.
+- **Idempotent** — the route only matches `state = 'draft'`, so a second
+  same-day fire (or a restart-triggered re-fire) never double-transitions.
+- **`docker-compose.yml`**: new `bonus-period-close` service (image
+  `dr3-vision-app:local`, `command: node scripts/bonus-period-close.mjs`,
+  `restart: unless-stopped`, on `dr3net`, `depends_on: app healthy`,
+  `INTERNAL_BASE_URL=http://app:3000`, optional `auth.env` for a shared
+  `INTERNAL_CRON_TOKEN`). Dockerfile already `COPY`s `scripts/`, so the new
+  script ships with no Dockerfile change.
+- **Route docstring** updated from "monthly, 1st @ 00:05" to "bi-weekly, daily
+  @ 17:30 PT"; URL path preserved per ADR-0019.1 §7.
+- **Tests:** `src/lib/bonus/__tests__/bonus-period-close-cron.test.ts` (+5) —
+  smoke-imports the daemon without starting it and asserts the Pacific-aware
+  "next 17:30 PT" computation across PDT (-7) and PST (-8). Transition + email +
+  idempotency coverage continues to ride on `close-months.route.test.ts` and the
+  T-203 `closePayPeriodsDueForSignature` tests.
+
 ### 2026-06-06 — Sprint 2 addendum Wave A: state machine period boundaries + `skipped` transition (T-203)
 
 Converted the bonus state machine from calendar-month boundaries to the

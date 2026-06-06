@@ -1,10 +1,13 @@
-// Internal month-close cron endpoint (ADR-0019 §2 + §5a, T-125 / fills the T-106
-// auto-close gap).
+// Internal period-close cron endpoint (ADR-0019.1 §3/§6, T-204; supersedes the
+// monthly T-125 close — URL path preserved per ADR-0019.1 §7 so bookmarks /
+// existing callers don't break).
 //
-// On the 1st of each month (00:05 America/Los_Angeles), the fleet cron POSTs here.
-// We transition every draft month whose month has ended to `pending_signatures`
-// (via the state machine, audited), then email the facility-manager signer for each
-// newly-closed month (signature-request, fail-open).
+// Daily at 17:30 America/Los_Angeles, the fleet cron (`scripts/bonus-period-close.mjs`)
+// POSTs here. We transition every draft pay-period whose `period_end` is the
+// Pacific calendar today to `pending_signatures` (via the state machine,
+// audited), then email the facility-manager signer for each newly-closed period
+// (signature-request, fail-open). On a non-period-end day no period matches, so
+// the run is a clean no-op.
 //
 // INTERNAL-ONLY: like /metrics and /internal/bonus-pdf, any request carrying a
 // `cf-connecting-ip` header (i.e. anything arriving via the public Cloudflare
@@ -35,8 +38,9 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // Pass Pacific "today" (the @db.Date-shaped key) as `now`: the cron fires at
-  // 00:05 America/Los_Angeles on the 1st, which is already past UTC midnight, so
-  // a raw `new Date()` would resolve to the wrong calendar month for ~7mo/year.
+  // 17:30 America/Los_Angeles, which is already past UTC midnight, so a raw
+  // `new Date()` would resolve to the wrong calendar day (hence wrong period_end
+  // match) for the whole evening. `appToday()` keys off the Pacific zone.
   const { transitioned } = await closePayPeriodsDueForSignature(prisma as never, appToday());
 
   // Email the first signer for each newly-closed month (fail-open; never throws).

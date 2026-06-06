@@ -127,7 +127,7 @@ URL paths under `/bonus/months/*` **stay as-is** (preserves bookmarks per ADR-00
 - All existing state-machine tests pass with renamed fields
 - New tests cover: `draft → skipped` admin-only transition; non-admin → 403; skipped period blocks daily entry mutations; skipped period blocks signature workflow
 
-### [ ] T-204: Period close cron — Mon 17:30 PT
+### [x] T-204: Period close cron — Mon 17:30 PT
 
 Replace `scripts/bonus-month-close.mjs` with `scripts/bonus-period-close.mjs`. The new script:
 
