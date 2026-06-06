@@ -110,7 +110,7 @@ export function UserCreateForm({ sites }: Props) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
           data-testid="admin-create-name"
         />
       </Field>
@@ -119,16 +119,16 @@ export function UserCreateForm({ sites }: Props) {
         <select
           value={role}
           onChange={(e) => setRole(e.target.value as Role)}
-          className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
           data-testid="admin-create-role"
         >
-          <option value="operator" className="text-dr3-ink">
+          <option value="operator" className="text-dr3-space">
             {M.form.roleOperator}
           </option>
-          <option value="manager" className="text-dr3-ink">
+          <option value="manager" className="text-dr3-space">
             {M.form.roleManager}
           </option>
-          <option value="admin" className="text-dr3-ink">
+          <option value="admin" className="text-dr3-space">
             {M.form.roleAdmin}
           </option>
         </select>
@@ -142,7 +142,7 @@ export function UserCreateForm({ sites }: Props) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
           data-testid="admin-create-email"
         />
       </Field>
@@ -154,11 +154,11 @@ export function UserCreateForm({ sites }: Props) {
         <select
           value={siteId}
           onChange={(e) => setSiteId(e.target.value)}
-          className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
           data-testid="admin-create-site"
         >
           {sites.map((s) => (
-            <option key={s.id} value={s.id} className="text-dr3-ink">
+            <option key={s.id} value={s.id} className="text-dr3-space">
               {s.name}
             </option>
           ))}
@@ -170,14 +170,14 @@ export function UserCreateForm({ sites }: Props) {
           <select
             value={processorRole}
             onChange={(e) => setProcessorRole(e.target.value)}
-            className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
             data-testid="admin-create-processor-role"
           >
-            <option value="" className="text-dr3-ink">
+            <option value="" className="text-dr3-space">
               {M.form.processorRoleNone}
             </option>
             {PROCESSOR_ROLES.map((p) => (
-              <option key={p} value={p} className="text-dr3-ink">
+              <option key={p} value={p} className="text-dr3-space">
                 {p}
               </option>
             ))}
@@ -195,7 +195,7 @@ export function UserCreateForm({ sites }: Props) {
               maxLength={4}
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+              className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
               data-testid="admin-create-pin"
             />
           </Field>
@@ -207,7 +207,7 @@ export function UserCreateForm({ sites }: Props) {
               maxLength={4}
               value={pinConfirm}
               onChange={(e) => setPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+              className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
               data-testid="admin-create-pin-confirm"
             />
           </Field>
@@ -219,7 +219,7 @@ export function UserCreateForm({ sites }: Props) {
           type="button"
           onClick={handleSubmit}
           disabled={pending}
-          className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="admin-create-submit"
         >
           {M.form.submitCreate}
@@ -227,7 +227,7 @@ export function UserCreateForm({ sites }: Props) {
         <button
           type="button"
           onClick={() => router.push('/admin/users')}
-          className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           data-testid="admin-create-cancel"
         >
           {M.form.cancel}
@@ -248,9 +248,9 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-2">
-      <span className="text-sm font-medium text-dr3-cream/80">{label}</span>
+      <span className="text-sm font-medium text-dr3-mist">{label}</span>
       {children}
-      {helper ? <span className="text-xs text-dr3-cream/60">{helper}</span> : null}
+      {helper ? <span className="text-xs text-dr3-mist-dim">{helper}</span> : null}
     </label>
   );
 }

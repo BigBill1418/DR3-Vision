@@ -88,11 +88,11 @@ export function AuditFilters({ initial, actors, tables }: Props) {
 
   return (
     <section
-      className="flex flex-col gap-4 rounded-lg bg-dr3-green-dark/30 p-4"
+      className="flex flex-col gap-4 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4"
       aria-busy={isPending}
       data-testid="admin-audit-filters"
     >
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
+      <h2 className="text-xs font-semibold uppercase tracking-wider text-dr3-cyan">
         {M.audit.filtersHeading}
       </h2>
 
@@ -102,7 +102,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
             value={draft.actor ?? ''}
             disabled={isPending}
             onChange={(e) => setDraft((d) => ({ ...d, actor: e.target.value || null }))}
-            className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
+            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
             data-testid="admin-audit-filter-actor"
           >
             <option value="">{M.audit.filterAllActors}</option>
@@ -119,7 +119,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
             value={draft.table ?? ''}
             disabled={isPending}
             onChange={(e) => setDraft((d) => ({ ...d, table: e.target.value || null }))}
-            className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
+            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
             data-testid="admin-audit-filter-table"
           >
             <option value="">{M.audit.filterAllTables}</option>
@@ -137,7 +137,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
             value={draft.from ?? ''}
             disabled={isPending}
             onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value || null }))}
-            className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
+            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
             data-testid="admin-audit-filter-from"
           />
         </FieldLabel>
@@ -148,14 +148,14 @@ export function AuditFilters({ initial, actors, tables }: Props) {
             value={draft.to ?? ''}
             disabled={isPending}
             onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value || null }))}
-            className="rounded-md bg-dr3-green-dark/60 px-2 py-2 text-sm text-dr3-cream disabled:opacity-60"
+            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
             data-testid="admin-audit-filter-to"
           />
         </FieldLabel>
       </div>
 
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
+        <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cyan">
           {M.audit.filterActions}
         </span>
         <div className="flex flex-wrap gap-2">
@@ -171,8 +171,8 @@ export function AuditFilters({ initial, actors, tables }: Props) {
                 data-testid={`admin-audit-filter-action-${a}`}
                 className={
                   active
-                    ? 'rounded-full bg-dr3-chartreuse px-3 py-1 text-xs font-semibold text-dr3-ink disabled:opacity-60'
-                    : 'rounded-full bg-dr3-green-dark/60 px-3 py-1 text-xs font-medium text-dr3-cream/80 hover:bg-dr3-green-dark/80 disabled:opacity-60'
+                    ? 'rounded-full bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space disabled:opacity-60'
+                    : 'rounded-full border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-mist disabled:opacity-60'
                 }
               >
                 {ACTION_LABELS[a]}
@@ -187,7 +187,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
           type="button"
           onClick={apply}
           disabled={isPending}
-          className="rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="admin-audit-apply"
         >
           {M.audit.filterApply}
@@ -196,7 +196,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
           type="button"
           onClick={reset}
           disabled={isPending}
-          className="rounded-md bg-dr3-green-dark/60 px-4 py-2 text-sm font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-4 py-2 text-sm font-medium text-dr3-mist transition-colors hover:border-dr3-cyan/40 disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="admin-audit-reset"
         >
           {M.audit.filterReset}
@@ -209,9 +209,7 @@ export function AuditFilters({ initial, actors, tables }: Props) {
 function FieldLabel({ text, children }: { text: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
-        {text}
-      </span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cyan">{text}</span>
       {children}
     </label>
   );

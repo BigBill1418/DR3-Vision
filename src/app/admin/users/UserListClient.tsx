@@ -43,7 +43,7 @@ export function UserListClient({ users }: Props) {
         setPendingId(null);
       }
     },
-    [router]
+    [router],
   );
 
   const handleReactivate = useCallback(
@@ -66,13 +66,13 @@ export function UserListClient({ users }: Props) {
         setPendingId(null);
       }
     },
-    [router]
+    [router],
   );
 
   if (users.length === 0) {
     return (
       <p
-        className="rounded-md bg-dr3-green-dark/30 p-6 text-center text-dr3-cream/80"
+        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-center text-dr3-mist-dim"
         data-testid="admin-users-empty"
       >
         {M.list.empty}
@@ -91,10 +91,10 @@ export function UserListClient({ users }: Props) {
           {error}
         </p>
       ) : null}
-      <div className="overflow-x-auto rounded-md bg-dr3-green-dark/30">
+      <div className="overflow-x-auto rounded-md border border-dr3-steel-light/25 bg-dr3-space-2">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-dr3-cream/10 text-left text-xs uppercase tracking-wider text-dr3-cream/70">
+            <tr className="border-b border-dr3-steel-light/25 text-left text-xs uppercase tracking-wider text-dr3-cyan">
               <th className="px-4 py-3">{M.list.columnName}</th>
               <th className="px-4 py-3">{M.list.columnEmail}</th>
               <th className="px-4 py-3">{M.list.columnRole}</th>
@@ -108,11 +108,11 @@ export function UserListClient({ users }: Props) {
             {users.map((u) => (
               <tr
                 key={u.id}
-                className="border-b border-dr3-cream/5 last:border-b-0"
+                className="border-b border-dr3-steel-light/15 text-dr3-mist last:border-b-0 odd:bg-dr3-space-2/40"
                 data-testid={`admin-user-row-${u.id}`}
               >
                 <td className="px-4 py-3 font-medium">{u.name}</td>
-                <td className="px-4 py-3 text-dr3-cream/80">{u.email ?? '—'}</td>
+                <td className="px-4 py-3 text-dr3-mist-dim">{u.email ?? '—'}</td>
                 <td className="px-4 py-3 capitalize">{u.role}</td>
                 <td className="px-4 py-3">{u.primary_site_code ?? '—'}</td>
                 <td className="px-4 py-3">
@@ -126,14 +126,14 @@ export function UserListClient({ users }: Props) {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-dr3-cream/70">
+                <td className="px-4 py-3 text-dr3-mist-dim">
                   {u.last_login_at ? formatDate(u.last_login_at) : M.list.neverSignedIn}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     <Link
                       href={`/admin/users/${u.id}`}
-                      className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-xs hover:bg-dr3-green-dark/80"
+                      className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-1 text-xs text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan"
                       data-testid={`admin-user-edit-${u.id}`}
                     >
                       {M.list.edit}

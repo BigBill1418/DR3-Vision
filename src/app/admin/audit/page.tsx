@@ -129,26 +129,26 @@ export default async function AdminAuditPage({ searchParams }: PageProps) {
   }));
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <header className="flex flex-col gap-1">
           <Link
             href="/admin/users"
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
             ← {M.pageTitle}
           </Link>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">{M.audit.pageTitle}</h1>
-              <p className="text-sm text-dr3-cream/70">{M.audit.pageSubtitle}</p>
+              <p className="text-sm text-dr3-mist-dim">{M.audit.pageSubtitle}</p>
             </div>
           </div>
         </header>
 
         <AuditFilters initial={filterDraft} actors={actors} tables={tableOptions} />
 
-        <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
+        <p className="text-xs uppercase tracking-wide text-dr3-mist-dim">
           {page.total === 0
             ? M.audit.empty
             : `${M.audit.summary(page.total)} · ${M.audit.pageOf(page.page, page.total_pages)}`}
@@ -171,12 +171,12 @@ export default async function AdminAuditPage({ searchParams }: PageProps) {
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">{M.forbiddenHeading}</h1>
-      <p className="mt-2 text-dr3-cream/70">{M.forbiddenBody}</p>
+      <p className="mt-2 text-dr3-mist-dim">{M.forbiddenBody}</p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
       >
         {M.backToDashboard}
       </Link>
