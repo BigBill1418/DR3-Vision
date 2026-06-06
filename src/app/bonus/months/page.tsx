@@ -40,15 +40,15 @@ const STATE_LABEL: Record<MonthListRow['state'], string> = {
   amended: 'Amended',
 };
 
-// Badge palette — dark chips on the deep-green page, chartreuse accent for the
-// "done" states (signed/paid) and amended.
+// Badge palette — steel chips on the deep-space page; emerald for the "done"
+// states (signed/paid) and a cyan accent for amended.
 const STATE_BADGE: Record<MonthListRow['state'], string> = {
-  draft: 'bg-dr3-cream/15 text-dr3-cream',
-  pending_signatures: 'bg-dr3-cream/15 text-dr3-cream',
-  partially_signed: 'bg-dr3-cream/20 text-dr3-cream',
-  signed: 'bg-dr3-chartreuse text-dr3-ink',
-  paid: 'bg-dr3-chartreuse text-dr3-ink',
-  amended: 'bg-dr3-chartreuse/80 text-dr3-ink',
+  draft: 'bg-dr3-steel-light/20 text-dr3-mist',
+  pending_signatures: 'bg-dr3-steel-light/20 text-dr3-mist',
+  partially_signed: 'bg-dr3-steel-light/30 text-dr3-mist',
+  signed: 'bg-emerald-500/20 text-emerald-200',
+  paid: 'bg-emerald-500/20 text-emerald-200',
+  amended: 'bg-dr3-cyan/20 text-dr3-cyan',
 };
 
 function signatureLabel(row: MonthListRow): string {
@@ -75,17 +75,17 @@ export default async function BonusMonthsListPage({
   const rows = await listBonusMonths(gate.ctx.siteId, filter);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
             href="/bonus"
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           >
             ← Back to bonus entry
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Bonus months</h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             {gate.ctx.siteName} bonus history. Open any month to view its report and download the
             signed PDF.
           </p>
@@ -102,8 +102,8 @@ export default async function BonusMonthsListPage({
                 aria-current={active ? 'page' : undefined}
                 className={
                   active
-                    ? 'rounded-md bg-dr3-chartreuse px-3 py-1.5 text-sm font-semibold text-dr3-ink'
-                    : 'rounded-md bg-dr3-green-dark/40 px-3 py-1.5 text-sm text-dr3-cream/80 hover:bg-dr3-green-dark/60 hover:text-dr3-cream'
+                    ? 'rounded-md bg-dr3-cyan px-3 py-1.5 text-sm font-semibold text-dr3-space'
+                    : 'rounded-md border border-dr3-steel-light/25 bg-dr3-space-2/60 px-3 py-1.5 text-sm text-dr3-mist-dim hover:bg-dr3-space-2 hover:text-dr3-mist'
                 }
               >
                 {tab.label}
@@ -112,13 +112,13 @@ export default async function BonusMonthsListPage({
           })}
         </nav>
 
-        <section className="rounded-lg bg-dr3-green-dark/40 p-5">
+        <section className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5">
           {rows.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">
+            <p className="text-sm text-dr3-mist-dim">
               No bonus months {filter === 'all' ? 'yet' : 'in this period'}.
             </p>
           ) : (
-            <ul className="flex flex-col divide-y divide-dr3-cream/10">
+            <ul className="flex flex-col divide-y divide-dr3-steel-light/20">
               {rows.map((row) => (
                 <li key={row.id} className="py-3 first:pt-0 last:pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -136,15 +136,15 @@ export default async function BonusMonthsListPage({
                           {STATE_LABEL[row.state]}
                         </span>
                         {row.isAmendment && (
-                          <span className="rounded-full bg-dr3-chartreuse/80 px-2 py-0.5 font-semibold text-dr3-ink">
+                          <span className="rounded-full bg-dr3-cyan/20 px-2 py-0.5 font-semibold text-dr3-cyan">
                             AMENDED
                           </span>
                         )}
-                        <span className="text-dr3-cream/60">{signatureLabel(row)}</span>
+                        <span className="text-dr3-mist-dim">{signatureLabel(row)}</span>
                         {row.isAmendment && row.amendedFromMonthId && (
                           <Link
                             href={`/bonus/months/${row.amendedFromMonthId}`}
-                            className="text-dr3-cream/70 underline underline-offset-4 hover:text-dr3-cream"
+                            className="text-dr3-mist-dim underline underline-offset-4 hover:text-dr3-mist"
                           >
                             View prior version
                           </Link>
@@ -157,7 +157,7 @@ export default async function BonusMonthsListPage({
                       </span>
                       <Link
                         href={`/bonus/months/${row.id}`}
-                        className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+                        className="text-sm text-dr3-cyan underline-offset-4 hover:text-dr3-cyan-bright hover:underline"
                       >
                         Open →
                       </Link>
@@ -175,14 +175,14 @@ export default async function BonusMonthsListPage({
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-bold">Access restricted</h1>
-      <p className="mt-2 max-w-md text-sm text-dr3-cream/70">
+      <p className="mt-2 max-w-md text-sm text-dr3-mist-dim">
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink"
+        className="mt-6 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright"
       >
         Back to dashboard
       </Link>

@@ -34,10 +34,10 @@ export function AdminDatePicker({ selected, today }: Props) {
 
   return (
     <div
-      className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-dr3-chartreuse/30 bg-dr3-green-dark/30 px-4 py-3"
+      className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-dr3-cyan/30 bg-dr3-space-2/60 px-4 py-3"
       data-testid="admin-date-picker"
     >
-      <span className="text-xs font-semibold uppercase tracking-wide text-dr3-chartreuse">
+      <span className="text-xs font-semibold uppercase tracking-wide text-dr3-cyan">
         Admin: enter for date
       </span>
       <input
@@ -47,7 +47,7 @@ export function AdminDatePicker({ selected, today }: Props) {
         onChange={(e) => {
           if (e.target.value) go(e.target.value);
         }}
-        className="rounded-md border border-dr3-cream/20 bg-dr3-green-dark/60 px-3 py-1.5 text-sm text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-1.5 text-sm text-dr3-mist [color-scheme:dark] focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
         aria-label="Business day to enter bonus data for"
         data-testid="admin-date-input"
       />
@@ -55,7 +55,7 @@ export function AdminDatePicker({ selected, today }: Props) {
         <button
           type="button"
           onClick={() => go(today)}
-          className="text-xs text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+          className="text-xs text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           data-testid="admin-date-reset"
         >
           Back to today

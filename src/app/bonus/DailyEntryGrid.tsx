@@ -136,7 +136,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     <section className="flex flex-col gap-4" data-testid="daily-entry-grid">
       {!editable ? (
         <p
-          className="rounded-md bg-dr3-green-dark/50 px-4 py-3 text-sm text-dr3-cream"
+          className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2/60 px-4 py-3 text-sm text-dr3-mist"
           role="status"
           data-testid="grid-locked-banner"
         >
@@ -157,7 +157,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
 
       {saved ? (
         <p
-          className="rounded-md bg-dr3-green/30 px-4 py-2 text-sm text-dr3-cream"
+          className="rounded-md border border-emerald-400/30 bg-emerald-500/15 px-4 py-2 text-sm text-emerald-200"
           role="status"
           data-testid="grid-saved"
         >
@@ -165,10 +165,10 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
         </p>
       ) : null}
 
-      <div className="overflow-x-auto rounded-lg border border-dr3-green-dark/50">
+      <div className="overflow-x-auto rounded-lg border border-dr3-steel-light/25">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="bg-dr3-green-dark/40 text-xs uppercase tracking-wider text-dr3-cream/70">
+            <tr className="bg-dr3-space-2/80 text-xs uppercase tracking-wider text-dr3-cyan">
               <th className="px-4 py-3 font-semibold">Processor</th>
               <th className="px-4 py-3 font-semibold">Mattresses</th>
               <th className="px-4 py-3 font-semibold">Note (optional)</th>
@@ -178,7 +178,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-dr3-cream/60">
+                <td colSpan={4} className="px-4 py-6 text-center text-dr3-mist-dim">
                   No active processors. Add employees on the Bonus Employees page first.
                 </td>
               </tr>
@@ -191,10 +191,10 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                 return (
                   <tr
                     key={r.bonus_employee_id}
-                    className="border-t border-dr3-green-dark/30"
+                    className="border-t border-dr3-steel-light/20 odd:bg-dr3-space-2/40"
                     data-testid={`grid-row-${r.bonus_employee_id}`}
                   >
-                    <td className="px-4 py-3 font-medium text-dr3-cream">{r.full_name}</td>
+                    <td className="px-4 py-3 font-medium text-dr3-mist">{r.full_name}</td>
                     <td className="px-4 py-3">
                       <input
                         type="number"
@@ -204,13 +204,13 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                         value={rs.count}
                         disabled={!editable}
                         onChange={(e) => setRow(r.bonus_employee_id, { count: e.target.value })}
-                        className="w-24 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse disabled:opacity-60"
+                        className="w-24 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
                         aria-label={`Mattress count for ${r.full_name}`}
                         data-testid={`grid-count-${r.bonus_employee_id}`}
                       />
                       {overWarn ? (
                         <span
-                          className="ml-2 text-xs text-dr3-chartreuse"
+                          className="ml-2 text-xs text-amber-300"
                           data-testid={`grid-warn-${r.bonus_employee_id}`}
                         >
                           Over {SOFT_WARN_THRESHOLD} — please confirm
@@ -224,13 +224,13 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                         disabled={!editable}
                         maxLength={2000}
                         onChange={(e) => setRow(r.bonus_employee_id, { note: e.target.value })}
-                        className="w-full rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse disabled:opacity-60"
+                        className="w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
                         aria-label={`Note for ${r.full_name}`}
                         data-testid={`grid-note-${r.bonus_employee_id}`}
                       />
                     </td>
                     <td
-                      className="px-4 py-3 text-right font-mono text-dr3-cream"
+                      className="px-4 py-3 text-right font-mono text-dr3-mist"
                       data-testid={`grid-bonus-${r.bonus_employee_id}`}
                     >
                       {formatCents(bonus)}
@@ -241,12 +241,12 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-dr3-green-dark/60 bg-dr3-green-dark/30">
-              <td className="px-4 py-3 font-semibold text-dr3-cream" colSpan={3}>
+            <tr className="border-t-2 border-dr3-steel-light/30 bg-dr3-space-2/70">
+              <td className="px-4 py-3 font-semibold text-dr3-mist" colSpan={3}>
                 Day total
               </td>
               <td
-                className="px-4 py-3 text-right font-mono text-base font-bold text-dr3-chartreuse"
+                className="px-4 py-3 text-right font-mono text-base font-bold text-dr3-cyan-bright"
                 data-testid="grid-total"
               >
                 {formatCents(totalCents)}
@@ -262,7 +262,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="rounded-md bg-dr3-chartreuse px-5 py-2 text-sm font-semibold text-dr3-ink transition-opacity hover:opacity-90 disabled:opacity-60"
+            className="rounded-md bg-dr3-cyan px-5 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:opacity-60"
             data-testid="grid-save"
           >
             {saving ? 'Saving…' : 'Save entries'}

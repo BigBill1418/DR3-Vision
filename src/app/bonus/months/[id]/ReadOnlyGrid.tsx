@@ -39,19 +39,17 @@ export interface ReadOnlyGridProps {
  */
 export function ReadOnlyGrid({ days, rows, grandTotalCents }: ReadOnlyGridProps) {
   if (rows.length === 0) {
-    return <p className="text-sm text-dr3-cream/70">No mattress counts were keyed this month.</p>;
+    return <p className="text-sm text-dr3-mist-dim">No mattress counts were keyed this month.</p>;
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs uppercase tracking-wide text-dr3-cream/60">Locked · read-only</p>
+      <p className="text-xs uppercase tracking-wide text-dr3-cyan">Locked · read-only</p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[40rem] text-sm" data-testid="readonly-daily-grid">
           <thead>
-            <tr className="border-b border-dr3-cream/20 text-left text-dr3-cream/70">
-              <th className="sticky left-0 bg-dr3-green-dark/40 pb-2 pr-3 font-medium">
-                Processor
-              </th>
+            <tr className="border-b border-dr3-steel-light/20 text-left text-dr3-cyan">
+              <th className="sticky left-0 bg-dr3-space-2 pb-2 pr-3 font-medium">Processor</th>
               {days.map((d) => (
                 <th key={d.iso} className="px-2 pb-2 text-right font-medium tabular-nums">
                   {d.label}
@@ -63,15 +61,18 @@ export function ReadOnlyGrid({ days, rows, grandTotalCents }: ReadOnlyGridProps)
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.bonusEmployeeId} className="border-b border-dr3-cream/10">
-                <td className="sticky left-0 bg-dr3-green-dark/40 py-2 pr-3 font-medium">
+              <tr
+                key={r.bonusEmployeeId}
+                className="border-b border-dr3-steel-light/20 odd:bg-dr3-space-2/40"
+              >
+                <td className="sticky left-0 bg-dr3-space-2 py-2 pr-3 font-medium text-dr3-mist">
                   {r.name}
                 </td>
                 {days.map((d) => {
                   const c = r.countsByDay[d.iso];
                   return (
                     <td key={d.iso} className="px-2 py-2 text-right tabular-nums">
-                      {c === undefined ? <span className="text-dr3-cream/30">·</span> : c}
+                      {c === undefined ? <span className="text-dr3-mist-dim/50">·</span> : c}
                     </td>
                   );
                 })}
@@ -83,8 +84,8 @@ export function ReadOnlyGrid({ days, rows, grandTotalCents }: ReadOnlyGridProps)
             ))}
           </tbody>
           <tfoot>
-            <tr className="font-semibold">
-              <td className="sticky left-0 bg-dr3-green-dark/40 pr-3 pt-3">Total payout</td>
+            <tr className="font-semibold text-dr3-mist">
+              <td className="sticky left-0 bg-dr3-space-2 pr-3 pt-3">Total payout</td>
               {days.map((d) => (
                 <td key={d.iso} className="pt-3" />
               ))}

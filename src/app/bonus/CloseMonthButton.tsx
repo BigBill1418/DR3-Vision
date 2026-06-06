@@ -40,7 +40,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse focus:ring-offset-2 focus:ring-offset-dr3-green-deep"
+        className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright focus:outline-none focus:ring-2 focus:ring-dr3-cyan focus:ring-offset-2 focus:ring-offset-dr3-space"
       >
         Month complete — ready to sign
       </button>
@@ -52,14 +52,16 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
           aria-label="Close month for signatures"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6"
         >
-          <div className="w-full max-w-md rounded-lg bg-dr3-cream p-6 text-dr3-ink shadow-xl">
+          <div className="w-full max-w-md rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl">
             <h2 className="text-lg font-bold">Close {monthLabel} for signatures?</h2>
-            <p className="mt-2 text-sm text-dr3-ink/80">
+            <p className="mt-2 text-sm text-dr3-mist-dim">
               This locks the daily entries for {monthLabel} and notifies the facility manager to
               sign. Reopening a closed month requires an administrator amendment.
             </p>
             {error && (
-              <p className="mt-3 rounded bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>
+              <p className="mt-3 rounded border border-red-500/30 bg-red-900/40 px-3 py-2 text-sm text-red-100">
+                {error}
+              </p>
             )}
             <div className="mt-5 flex justify-end gap-3">
               <button
@@ -69,7 +71,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
                   setOpen(false);
                   setError(null);
                 }}
-                className="rounded-md px-4 py-2 text-sm font-medium text-dr3-ink/70 hover:text-dr3-ink disabled:opacity-50"
+                className="rounded-md px-4 py-2 text-sm font-medium text-dr3-mist-dim hover:text-dr3-mist disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -77,7 +79,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
                 type="button"
                 disabled={busy}
                 onClick={confirmClose}
-                className="rounded-md bg-dr3-green-deep px-4 py-2 text-sm font-semibold text-dr3-cream hover:bg-dr3-green-dark disabled:opacity-50"
+                className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
               >
                 {busy ? 'Closing…' : 'Close month'}
               </button>

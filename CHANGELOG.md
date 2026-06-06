@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Bonus management surface re-themed to the dark-space/cyan identity
+
+Converted the entire Bonus management surface (`src/app/bonus/**`, 13 files) from
+the legacy light green/cream palette to the logo-keyed dark-space/cyan identity,
+matching the already-themed Vision Dashboard (`vision-shell.tsx` / `vision-tile.tsx`).
+
+- **Token migration** (per the shared mapping): `dr3-green-deep`→`dr3-space`,
+  `dr3-cream` surfaces→`dr3-space-2` (with `border-dr3-steel-light/25` where the
+  card lacked a border), `dr3-cream` text→`dr3-mist` / muted→`dr3-mist-dim`,
+  `dr3-chartreuse` CTAs→`dr3-cyan` (dark `text-dr3-space` label, `hover:bg-dr3-cyan-bright`),
+  `dr3-ink` body→`dr3-mist`, borders/rings→`dr3-steel-light`/`dr3-cyan`.
+- **Data tables** (DailyEntryGrid, AmendmentPanel editor, ReadOnlyGrid, the
+  monthly-totals / annual / employee-history tables): cyan headers, zebra
+  `odd:bg-dr3-space-2/40` rows, `dr3-steel-light/20` borders, dark `dr3-space`
+  inputs with cyan focus rings, `dr3-cyan-bright` grand totals. Sticky first
+  columns in ReadOnlyGrid use an opaque `bg-dr3-space-2` so scrolled cells hide.
+- **Modals** (SignaturePanel, AmendmentPanel unlock, CloseMonthButton) flipped
+  from bright cream/ink cards to dark-glass `bg-dr3-space-2` panels with cyan
+  primary actions.
+- **Semantic colors:** success states (saved banners, signed signatures, active
+  employee, signed/paid month badges) use `emerald`; warnings (over-threshold
+  count) use `amber-300`; errors keep red (lightened to `red-100` on dark);
+  amendment/informational accents use `dr3-cyan`.
+- Verified: `next lint` clean, `tsc --noEmit` clean, 181 bonus unit/data tests +
+  66 bonus API route tests green. No dark-text-on-dark (every `text-dr3-space` is
+  on a `bg-dr3-cyan` fill).
+
 ### 2026-06-06 — Payroll PDF re-themed RED/BLACK + co-branded with the official SVdP logo
 
 Re-styled the monthly processor-bonus report (the signed payroll PDF) for print.

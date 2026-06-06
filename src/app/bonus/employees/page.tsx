@@ -48,17 +48,17 @@ export default async function BonusEmployeesPage({ searchParams }: { searchParam
   }));
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
             href={HOME_ROUTE}
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           >
             ← Back to dashboard
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Bonus Employees</h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             Woodland processor roster ({gate.ctx.siteName}). Add, rename, and (de)activate the
             employees whose daily mattress counts drive the monthly bonus.
           </p>
@@ -97,9 +97,7 @@ function Filters({ status, sort }: { status: EmployeeStatusFilter; sort: Employe
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
-        {label}
-      </span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cyan">{label}</span>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
@@ -115,8 +113,8 @@ function FilterLink({
   children: React.ReactNode;
 }) {
   const cls = active
-    ? 'bg-dr3-chartreuse text-dr3-ink'
-    : 'bg-dr3-green-dark/40 text-dr3-cream hover:bg-dr3-green-dark/60';
+    ? 'bg-dr3-cyan text-dr3-space'
+    : 'border border-dr3-steel-light/25 bg-dr3-space-2/60 text-dr3-mist-dim hover:bg-dr3-space-2 hover:text-dr3-mist';
   return (
     <Link
       href={href}
@@ -141,14 +139,14 @@ function capitalize(s: string): string {
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">Access denied</h1>
-      <p className="mt-2 text-dr3-cream/70">
+      <p className="mt-2 text-dr3-mist-dim">
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
       >
         Back to dashboard
       </Link>
