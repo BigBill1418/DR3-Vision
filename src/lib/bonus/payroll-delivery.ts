@@ -10,11 +10,22 @@
 // fail-safe: generateBonusPdf rethrows on failure (swallowed + logged here so a
 // PDF/mail failure never crashes the process), and sendPayrollPdf is fail-open.
 // Mail only runs if the PDF succeeded — there is nothing to attach otherwise.
+//
+// signed -> paid (T-211 step 5): on a CONFIRMED Graph delivery (sendPayrollPdf
+// returns `delivered: true` — a real 202 with a message id), this advances the
+// period `signed -> paid` through the state-machine (audited). The transition
+// fires ONLY after the mail actually succeeds and ONLY when the period is still
+// `signed` — never on a fail-open no-op (`disabled: true`, M365/R2 unconfigured)
+// and never on an exhausted/failed send. Leaving a genuinely-undelivered period
+// `signed` is load-bearing: it lets the T-206 t4 09:00 PT deadline-miss check
+// (which keys off `state != 'paid'`) alert on a REAL miss while staying silent
+// for a period that did deliver.
 
 import { prisma } from '@/lib/prisma';
 import { generateBonusPdf } from '@/lib/bonus/pdf';
 import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { sendPayrollPdf } from '@/lib/m365-mail';
+import { transitionMonth, TransitionError } from '@/lib/bonus/state-machine';
 import { log, newRequestId } from '@/lib/observability/logger';
 
 /**
@@ -81,7 +92,7 @@ export function triggerPayrollDelivery(monthId: string): void {
       ).padStart(2, '0')}`;
       const site = bareSiteName(month.site.name);
       const isAmendment = month.amended_from_period_id !== null;
-      await sendPayrollPdf({
+      const sendResult = await sendPayrollPdf({
         monthId,
         pdfBuffer,
         filename: `bonus-${ym}.pdf`,
@@ -89,8 +100,51 @@ export function triggerPayrollDelivery(monthId: string): void {
         htmlBody: `<p>The signed ${site} processor bonus report for ${ym} is attached.</p>`,
         isAmendment,
       });
+
+      // Confirmed Graph delivery (202 + message id) is the ONLY trigger for
+      // signed -> paid. A fail-open no-op (disabled: M365/R2 unconfigured) or an
+      // exhausted/failed send leaves the period `signed` so the t4 09:00 PT
+      // deadline-miss check alerts on a real miss. sendPayrollPdf already
+      // persisted payroll_sent_at + payroll_message_id on success.
+      if (sendResult.delivered) {
+        await markPaid(monthId, requestId);
+      }
     } catch (err) {
       log.error({ requestId, monthId, err }, '[payroll-delivery] payroll mail-send failed');
     }
   })();
+}
+
+/**
+ * Advance the period `signed -> paid` through the audited state machine after a
+ * confirmed payroll delivery. Idempotent against re-fires: if the period is
+ * already `paid` (a prior delivery, or a retry), the illegal-transition guard
+ * rejects `paid -> paid` and we swallow it as a no-op. Any other transition
+ * failure is logged but never rethrown — the mail already shipped; failing to
+ * flip the state must not crash the background task (it degrades to a t4 alert,
+ * which is the safe direction).
+ */
+async function markPaid(monthId: string, requestId: string): Promise<void> {
+  try {
+    await transitionMonth({
+      db: prisma as never,
+      monthId,
+      to: 'paid',
+      actor: { label: 'system:payroll-delivered' },
+    });
+  } catch (err) {
+    if (err instanceof TransitionError) {
+      // Period was not `signed` (e.g. already `paid` from a prior delivery, or
+      // it was amended out from under us). Not an error — the delivery stands.
+      log.info(
+        { requestId, monthId, from: err.from },
+        '[payroll-delivery] skipped signed -> paid (period not in signed state)',
+      );
+      return;
+    }
+    log.error(
+      { requestId, monthId, err },
+      '[payroll-delivery] mail delivered but signed -> paid transition failed',
+    );
+  }
 }

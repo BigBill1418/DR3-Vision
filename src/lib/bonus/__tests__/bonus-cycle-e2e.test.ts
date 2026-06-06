@@ -23,17 +23,17 @@
 // 22) is the next draft. T-213 exercises the Tue 08:30 PT auto-override path.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// KNOWN GAP surfaced by these tests (do NOT paper over): NO production code path
-// drives the `signed -> paid` transition. `sendPayrollPdf` deliberately leaves
-// the period `signed` and writes payroll_sent_at ("State is intentionally NOT
-// advanced to `paid` — that transition is owned by the caller/operator flow"),
-// and nothing else calls transitionMonth(..., to: 'paid'). So T-211 step 5
-// ("M365 send success → state `paid`") cannot be satisfied by current code: the
-// period ends the cycle in `signed`. These tests assert the ACTUAL end state
-// (`signed` + payroll_sent_at + send audit) and flag the missing `paid` step.
-// Knock-on: the t4 09:00 PT escalation fires a FALSE "payroll deadline MISSED"
-// for a period that DID deliver, because it keys off `state != 'paid'`. See the
-// report accompanying this branch.
+// signed -> paid (T-211 step 5, now WIRED): `triggerPayrollDelivery` advances the
+// period `signed -> paid` through the audited state machine on a CONFIRMED Graph
+// delivery (sendPayrollPdf → delivered: true). `sendPayrollPdf` itself still only
+// persists payroll_sent_at / payroll_message_id; the transition lives in the
+// shared delivery trigger so BOTH the manual 2nd-signature path and the t3
+// auto-override path reach `paid`. A fail-open no-op (M365/R2 unconfigured) or an
+// exhausted/failed send leaves the period `signed` — which is exactly what the
+// T-206 t4 09:00 PT deadline-miss check (keyed on `state != 'paid'`) needs to
+// alert on a REAL miss while staying silent for a period that did deliver. These
+// tests drive the REAL chain in-process (R2 + Graph mocked at the boundary) and
+// assert the period ends `paid` on success and stays `signed` on failure.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -91,6 +91,24 @@ vi.mock('@/lib/m365-mail', () => ({
 // payroll-delivery side-effect proceeds to the mail leg.
 const generateBonusPdf = vi.fn<(monthId: string) => Promise<{ storageKey: string }>>();
 vi.mock('@/lib/bonus/pdf', () => ({ generateBonusPdf: (id: string) => generateBonusPdf(id) }));
+
+// @aws-sdk/client-s3: stub the R2 fetch so the REAL triggerPayrollDelivery runs
+// end-to-end (PDF → R2 GetObject → sendPayrollPdf → signed -> paid) in-process.
+// The R2 fetch is the one external leg we cannot run live; returning a tiny
+// buffer lets the rest of the real chain — including the signed -> paid
+// transition under test — execute against the in-memory store. R2 env is set in
+// beforeEach so payroll-delivery does NOT take its "R2 not configured" fail-open
+// branch (which would skip the mail leg and therefore the paid transition).
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    send = async () => ({
+      Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
+    });
+  },
+  GetObjectCommand: class {
+    constructor(public input: unknown) {}
+  },
+}));
 
 // In-memory prisma store. The mock factory is hoisted and runs once at import
 // time, but `store` is re-created per test (beforeEach) — so we hand the mock a
@@ -554,15 +572,19 @@ function wirePayrollSend(): void {
   });
 }
 
-/** Flush the fire-and-forget triggerPayrollDelivery() promise chain. */
-async function flushPayrollDelivery(): Promise<void> {
-  // payroll-delivery awaits generateBonusPdf → findUnique → R2 → sendPayrollPdf.
-  // With R2 unconfigured it would bail BEFORE sendPayrollPdf, so we drive the
-  // delivery by invoking the wired stubs directly here (the real R2 fetch is the
-  // one piece we cannot run in-process). This mirrors the real ordering:
-  // PDF first, then mail. The route/escalation already proved triggerPayrollDelivery
-  // fires (asserted separately via the spy).
-  await vi.waitFor(() => expect(generateBonusPdf).toHaveBeenCalled());
+/**
+ * Flush the fire-and-forget triggerPayrollDelivery() promise chain and wait for
+ * it to settle. The REAL chain runs in-process now (generateBonusPdf →
+ * findUnique → R2 GetObject [mocked] → sendPayrollPdf [mocked] → signed -> paid),
+ * so we wait until sendPayrollPdf has been invoked AND the period has left the
+ * `signed` state — i.e. the transition under test has actually fired.
+ */
+async function flushPayrollDelivery(monthId: string): Promise<void> {
+  await vi.waitFor(() => {
+    expect(generateBonusPdf).toHaveBeenCalled();
+    expect(sendPayrollPdf).toHaveBeenCalled();
+    expect(periodById(monthId).state).not.toBe('signed');
+  });
 }
 
 beforeEach(() => {
@@ -574,6 +596,14 @@ beforeEach(() => {
   sendPayrollPdf.mockReset();
   generateBonusPdf.mockReset();
   wirePayrollSend();
+  // R2 must look configured so the REAL triggerPayrollDelivery proceeds to the
+  // mail leg (and thence signed -> paid) instead of taking the fail-open "R2 not
+  // configured" branch. The S3 client itself is mocked above; these only gate the
+  // env check in payroll-delivery.
+  process.env['R2_ACCOUNT_ID'] = 'test-account';
+  process.env['R2_ACCESS_KEY_ID'] = 'test-key';
+  process.env['R2_SECRET_ACCESS_KEY'] = 'test-secret';
+  process.env['R2_BUCKET'] = 'test-bucket';
   // Pin the clock to Tue Jun 9 2026 07:05 PT (=14:05 UTC PDT) for signed_at /
   // audit determinism. Individual tests override per step where needed.
   vi.useFakeTimers();
@@ -582,6 +612,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  delete process.env['R2_ACCOUNT_ID'];
+  delete process.env['R2_ACCESS_KEY_ID'];
+  delete process.env['R2_SECRET_ACCESS_KEY'];
+  delete process.env['R2_BUCKET'];
   // Clean up fixtures (addendum: "all test artifacts cleaned up post-test").
   store.periods = [];
   store.entries = [];
@@ -683,17 +717,19 @@ describe('T-211 — Woodland Period 12 → 13 close-and-sign cycle', () => {
     expect(periodById('wl-p12').total_payout_cents).toBe(2150);
 
     // 5. Fire the post-signature side-effects (PDF then mail to test payroll).
+    //    The REAL triggerPayrollDelivery runs the full chain in-process and, on
+    //    confirmed delivery, advances signed -> paid (T-211 step 5, now wired).
     triggerPayrollDelivery('wl-p12');
-    await flushPayrollDelivery();
-    await sendPayrollPdf({
-      monthId: 'wl-p12',
-      pdfBuffer: Buffer.from('pdf'),
-      filename: 'bonus-2026-06.pdf',
-      subject: 'Woodland processor bonus — 2026-06',
-      htmlBody: '<p>The signed Woodland processor bonus report for 2026-06 is attached.</p>',
-      isAmendment: false,
-    });
+    await flushPayrollDelivery('wl-p12');
     expect(generateBonusPdf).toHaveBeenCalledWith('wl-p12');
+    // filename / subject ym derive from period_start (Tue May 26) → 2026-05.
+    expect(sendPayrollPdf).toHaveBeenCalledWith(
+      expect.objectContaining({
+        monthId: 'wl-p12',
+        filename: 'bonus-2026-05.pdf',
+        subject: 'Woodland processor bonus — 2026-05',
+      }),
+    );
     // Test payroll recipient received the PDF (mocked), and the send is audited.
     const sendAudit = store.audit.find(
       (a) => a.actor_label === 'system:m365-mail-send' && a.row_id === 'wl-p12',
@@ -701,18 +737,28 @@ describe('T-211 — Woodland Period 12 → 13 close-and-sign cycle', () => {
     expect(sendAudit).toBeTruthy();
     expect((sendAudit!.after as { recipient: string }).recipient).toBe(TEST_PAYROLL_TO);
     expect(periodById('wl-p12').payroll_sent_at).not.toBeNull();
+    expect(periodById('wl-p12').payroll_message_id).toBe('req-payroll');
 
-    // State transitions audited in order: pending_signatures → partially_signed → signed.
+    // T-211 step 5 (now implemented): confirmed M365 delivery drives signed ->
+    // paid through the audited state machine, actor system:payroll-delivered.
+    expect(periodById('wl-p12').state).toBe('paid');
+    const paidAudit = store.audit.find(
+      (a) =>
+        a.row_id === 'wl-p12' &&
+        a.actor_label === 'system:payroll-delivered' &&
+        (a.after as { state?: string }).state === 'paid',
+    );
+    expect(paidAudit).toBeTruthy();
+    expect((paidAudit!.before as { state: string }).state).toBe('signed');
+
+    // State transitions audited in order: pending_signatures → partially_signed
+    // → signed → paid.
     expect(stateTransitions('wl-p12')).toEqual([
       'pending_signatures',
       'partially_signed',
       'signed',
+      'paid',
     ]);
-
-    // GAP: no code drives signed → paid; the period ends `signed`, NOT `paid`.
-    // T-211 step 5 ("M365 send success → state paid") is unimplemented. This
-    // assertion documents the gap so a future `paid` step turns it red.
-    expect(periodById('wl-p12').state).toBe('signed');
 
     // Period 13 (Tue Jun 9 → Mon Jun 22) is still draft and would accept entries.
     expect(periodById('wl-p13').state).toBe('draft');
@@ -794,22 +840,17 @@ describe('T-212 — Eugene parallel cycle with site isolation', () => {
     expect(periodById('eu-p12').state).toBe('signed');
     expect(periodById('eu-p12').total_payout_cents).toBe(1000);
 
-    // Payroll PDF subject/body resolve "Eugene" (site-aware): exercise the leg.
+    // Payroll PDF subject/body resolve "Eugene" (site-aware): the REAL delivery
+    // chain builds the subject from the period's site name (bareSiteName).
     triggerPayrollDelivery('eu-p12');
-    await flushPayrollDelivery();
-    await sendPayrollPdf({
-      monthId: 'eu-p12',
-      pdfBuffer: Buffer.from('pdf'),
-      filename: 'bonus-2026-06.pdf',
-      subject: 'Eugene processor bonus — 2026-06',
-      htmlBody: '<p>The signed Eugene processor bonus report for 2026-06 is attached.</p>',
-      isAmendment: false,
-    });
+    await flushPayrollDelivery('eu-p12');
     const sendAudit = store.audit.find(
       (a) => a.actor_label === 'system:m365-mail-send' && a.row_id === 'eu-p12',
     );
     expect((sendAudit!.after as { subject: string }).subject).toContain('Eugene');
     expect((sendAudit!.after as { subject: string }).subject).not.toContain('Woodland');
+    // Confirmed delivery → signed -> paid, with the Eugene period isolated.
+    expect(periodById('eu-p12').state).toBe('paid');
   });
 
   it('site isolation — Eugene cycle never touches the Woodland period or its audit', async () => {
@@ -960,5 +1001,79 @@ describe('T-213 — auto-override escalation path', () => {
     // Sanity: the chain the escalation reads names Bill as the auto-override actor.
     const chain = await getSignatureChain(WOODLAND, db());
     expect(chain.auto_override_actor_user_id).toBe('bill');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-211 step 5 + T-206 t4 — delivery → paid closes the t4 false-alert window
+// ─────────────────────────────────────────────────────────────────────────────
+describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)', () => {
+  const SITE = { code: 'woodland', name: 'DR3 Woodland' };
+  // Period 12 closed Mon Jun 8; the t4 09:00 PT fire runs on Tue Jun 9, where
+  // yesterdayKey(Jun 9) == period_end (Jun 8) — so the period is in t4 scope.
+  const T4_TODAY = dayUTC(2026, 5, 9);
+
+  beforeEach(() => {
+    // A fully-signed Period 12 awaiting payroll delivery.
+    const period = p12(WOODLAND, SITE, 'wl-p12');
+    period.state = 'signed';
+    period.total_payout_cents = 500;
+    period.facility_signed_by_user_id = 'janette';
+    period.ops_signed_by_user_id = 'morena';
+    store.periods = [period];
+    store.entries = [{ bonus_pay_period_id: 'wl-p12', mattress_count: 60 }];
+  });
+
+  it('(a) confirmed delivery → paid, and t4 at 09:00 PT fires NO false deadline-miss', async () => {
+    // Real delivery chain runs to a confirmed send → signed -> paid.
+    triggerPayrollDelivery('wl-p12');
+    await flushPayrollDelivery('wl-p12');
+    expect(periodById('wl-p12').state).toBe('paid');
+    expect(periodById('wl-p12').payroll_sent_at).not.toBeNull();
+
+    publishNtfy.mockClear();
+    // t4 09:00 PT — a paid period is OUT of the `state != 'paid'` scope, so no
+    // deadline-miss alert fires (the false-positive this fix closes).
+    const t4 = await runEscalationTier({ db: db(), tier: 't4', now: T4_TODAY });
+    expect(t4.periodsExamined).toBe(0);
+    expect(t4.deadlineMissed).toBe(0);
+    const missAlert = publishNtfy.mock.calls
+      .map((c) => c[0])
+      .find((a) => String(a.title).includes('payroll deadline MISSED'));
+    expect(missAlert).toBeUndefined();
+  });
+
+  it('(b) delivery FAILURE → stays signed, and t4 at 09:00 PT DOES fire the real deadline-miss', async () => {
+    // Mail-send fails (exhausted/non-retryable): sendPayrollPdf returns
+    // delivered:false. The period must NOT advance to paid — leaving it `signed`
+    // so the real miss is alerted.
+    sendPayrollPdf.mockResolvedValueOnce({ delivered: false, disabled: false });
+
+    triggerPayrollDelivery('wl-p12');
+    // sendPayrollPdf is reached, but the period stays `signed` (no paid flip).
+    await vi.waitFor(() => expect(sendPayrollPdf).toHaveBeenCalled());
+    expect(periodById('wl-p12').state).toBe('signed');
+
+    publishNtfy.mockClear();
+    // t4 09:00 PT — a still-`signed` period IS in scope → real deadline-miss.
+    const t4 = await runEscalationTier({ db: db(), tier: 't4', now: T4_TODAY });
+    expect(t4.deadlineMissed).toBe(1);
+    const missAlert = publishNtfy.mock.calls
+      .map((c) => c[0])
+      .find((a) => String(a.title).includes('payroll deadline MISSED'));
+    expect(missAlert).toBeTruthy();
+    expect(missAlert!.priority).toBe('urgent');
+    expect(missAlert!.fingerprint).toBe('bonus-payroll-deadline-missed:woodland:wl-p12');
+  });
+
+  it('(c) fail-open (M365/R2 not configured) → NOT paid; the delivery never happened', async () => {
+    // Tear down the R2 env so payroll-delivery takes its fail-open branch and
+    // never reaches the mail/paid leg.
+    delete process.env['R2_ACCOUNT_ID'];
+    triggerPayrollDelivery('wl-p12');
+    await vi.waitFor(() => expect(generateBonusPdf).toHaveBeenCalled());
+    // The mail leg was skipped (R2 unconfigured) → no delivery → still signed.
+    expect(sendPayrollPdf).not.toHaveBeenCalled();
+    expect(periodById('wl-p12').state).toBe('signed');
   });
 });

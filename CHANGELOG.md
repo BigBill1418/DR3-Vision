@@ -5,6 +5,37 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum: wire `signed -> paid` on confirmed payroll delivery (T-211 step 5; closes the t4 false-alert)
+
+Fixed the gap surfaced by the Wave C e2e tests: nothing advanced a pay period
+from `signed` to `paid`, so the T-206 t4 09:00 PT deadline-miss check (keyed on
+`state != 'paid'`) fired a FALSE "payroll deadline MISSED" URGENT ntfy every pay
+cycle for periods that had actually delivered. `tsc --noEmit`, `next lint
+--max-warnings 0`, and the full `vitest` suite (648 tests) all clean.
+
+- **`src/lib/bonus/payroll-delivery.ts`** now advances `signed -> paid` through
+  the audited state machine (`transitionMonth`, actor `system:payroll-delivered`)
+  AFTER `sendPayrollPdf` returns a confirmed delivery (`delivered: true` — a real
+  202 + message id). The transition fires only on real delivery: a fail-open
+  no-op (`disabled: true`, M365/R2 unconfigured) or an exhausted/failed send
+  leaves the period `signed`, so the t4 check still alerts on a REAL miss.
+  Because both the manual 2nd-signature path and the t3 auto-override path call
+  the shared `triggerPayrollDelivery`, both now reach `paid`. The new `markPaid`
+  helper swallows the `paid -> paid` illegal-transition (idempotent re-fires /
+  retries) and never rethrows — the mail already shipped, so a transition failure
+  degrades to a t4 alert rather than crashing the background task. `paid` was
+  already a valid `signed -> paid` edge in `ALLOWED_TRANSITIONS` (no schema/table
+  change needed).
+- **`src/lib/bonus/escalation.ts` t4** already keyed off `state != 'paid'`; with
+  the transition wired it is now correct automatically — verified, no change.
+- **`src/lib/bonus/__tests__/bonus-cycle-e2e.test.ts`** flips the T-211/T-212
+  end-state assertions from `signed` to `paid` (T-211 step 5 implemented), drives
+  the REAL delivery chain in-process (R2 + Graph mocked at the boundary), and
+  adds a dedicated block proving: (a) confirmed delivery → `paid` + NO t4 false
+  alert; (b) delivery failure → stays `signed` → t4 DOES fire the real
+  deadline-miss; (c) fail-open (R2 unconfigured) → not `paid` (no delivery
+  happened). 648 tests total (was 645).
+
 ### 2026-06-06 — Sprint 2 addendum: site-aware bonus emails + Wave C e2e tests (T-211, T-212, T-213)
 
 Made the payroll + signature-request emails site-aware (so Eugene is no longer
