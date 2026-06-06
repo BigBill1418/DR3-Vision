@@ -46,7 +46,12 @@ export interface DashboardTile {
   featured?: boolean;
 }
 
-// ── Active tiles (ADR-0020) ───────────────────────────────────────────
+// ── Registry, grouped by ADR-0020 origin ──────────────────────────────
+// NOTE: the launcher at `/` sorts tiles by `status`, not by which array they
+// live in. As of 2026-06-06 three tiles here carry `status: 'coming-soon'`
+// (operations, compliance, reconciliation) — paused at operator request while
+// the underlying surfaces are reworked. Their routes are preserved so a future
+// re-enable is a one-field flip back to 'active'.
 const ACTIVE_TILES: readonly DashboardTile[] = [
   {
     key: 'bonus',
@@ -63,8 +68,11 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     label: 'Operations Dashboard',
     description: 'Live load activity, photos, and processing throughput by site.',
     icon: 'LayoutDashboard',
+    // Route preserved (the /dashboard site picker still exists and is reachable
+    // from sub-pages); only the launcher entry point is paused — flip back to
+    // 'active' to restore the tile.
     route: '/dashboard',
-    status: 'active',
+    status: 'coming-soon',
     scope: 'manager+',
   },
   {
@@ -72,8 +80,9 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     label: 'Compliance',
     description: 'Contract-tracked metrics and the seven-tile compliance slate.',
     icon: 'ShieldCheck',
+    // Route preserved; flip back to 'active' to restore the tile.
     route: '/dashboard/[site]/compliance',
-    status: 'active',
+    status: 'coming-soon',
     scope: 'manager+',
   },
   {
@@ -81,8 +90,9 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     label: 'Reconciliation',
     description: 'Reconcile recorded loads against MyMRC settlement records.',
     icon: 'Scale',
+    // Route preserved; flip back to 'active' to restore the tile.
     route: '/dashboard/[site]/reconciliation',
-    status: 'active',
+    status: 'coming-soon',
     scope: 'manager+',
   },
   {

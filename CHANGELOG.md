@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Reports area: bonus report entry points + pause three dashboard tiles
+
+**Task 1 — surface bonus reporting in the Reports/Exports area.** The Exports &
+Reports surface (`/dashboard/exports`) now links out to the existing bonus
+reporting pages so an admin or Woodland/both-sites manager can reach them from
+one place. No bonus reporting is re-implemented — these are entry points only.
+
+- New `src/app/dashboard/exports/BonusReports.tsx` (pure presentation server
+  component) renders a "Bonus reports" section with three cards:
+  - Monthly bonus reports → `/bonus/months`
+  - Annual bonus aggregate → `/bonus/annual`, plus a direct "Export CSV" link to
+    the existing `/api/bonus/annual/export?year=<current Pacific year>` route.
+  - Per-employee history → `/bonus/employees`
+- `src/app/dashboard/exports/page.tsx` resolves `checkBonusAccess()` and renders
+  the section only when the caller may access bonus (admin OR Woodland/both-sites
+  manager; Eugene/Rick and operators never see it). Shown in both the normal and
+  the "no sites assigned" branches so a both-sites manager isn't excluded.
+- Brand/voice match the existing export download cards (chartreuse primary
+  action, `dr3-green-dark` card surface, cream copy).
+- Tests: `BonusReports.test.tsx` asserts the link/route contract and the
+  year-threaded CSV href.
+
+**Task 2 — three dashboard tiles set to "coming soon".** In the ADR-0020 tile
+matrix (`src/lib/dashboard-tiles.ts`) the following flip from `active` to
+`coming-soon`, moving them into the launcher's "coming soon" group where they
+render muted and non-clickable (no `href` emitted — `VisionTile` already drops
+the link for coming-soon tiles):
+
+- `reconciliation` (Reconciliation / MyMRC reconcile)
+- `operations` (Operations Dashboard → the `/dashboard` site picker)
+- `compliance` (Compliance)
+
+Routes are preserved in the registry (a one-field flip restores each tile). The
+underlying routes (`/dashboard`, `/dashboard/[site]/compliance`,
+`/dashboard/[site]/reconciliation`) are untouched and still reachable directly
+and via existing back-links — only the launcher entry points are paused. Tile
+matrix tests updated for the new active/coming-soon sets.
+
 ### 2026-06-06 — Fix: dates/times are now Pacific (was UTC) + admin-only "enter bonus for any date"
 
 **Symptom (operator, P0):** at ~10:50 PM Pacific on 2026-06-05 the daily bonus

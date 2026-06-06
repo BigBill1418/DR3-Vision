@@ -1,0 +1,97 @@
+// Bonus reporting entry points for the Reports/Exports area (T-013 follow-up,
+// 2026-06-06).
+//
+// PRESENTATION ONLY — pure server component, no auth/prisma. The Exports page
+// resolves `checkBonusAccess()` and renders this *only* when the caller may
+// reach bonus reporting (admin OR Woodland/both-sites manager). It links out to
+// the existing /bonus surfaces and the existing annual CSV export route; it does
+// NOT re-implement any bonus reporting. Voice + brand match the Exports download
+// cards on the same page.
+
+import * as React from 'react';
+import Link from 'next/link';
+
+export function BonusReports({ year }: { year: number }) {
+  return (
+    <section className="flex flex-col gap-4" data-testid="bonus-reports">
+      <header className="flex flex-col gap-1">
+        <h2 className="text-xl font-semibold tracking-tight">Bonus reports</h2>
+        <p className="text-sm text-dr3-cream/70">
+          Woodland processor bonus reporting. Figures match the daily grid and the signed monthly
+          PDF.
+        </p>
+      </header>
+
+      <div className="flex flex-col gap-4">
+        <ReportCard
+          title="Monthly bonus reports"
+          helper="Browse every bonus month — open a month for the read-only grid, signature panel, and the signed payroll PDF export."
+          href="/bonus/months"
+          linkLabel="Open monthly reports"
+          dataTestId="bonus-report-months"
+        />
+        <ReportCard
+          title="Annual bonus aggregate"
+          helper={`Per-processor year-to-date totals for ${year}. Pick a year on the page; export the displayed year as CSV.`}
+          href="/bonus/annual"
+          linkLabel="Open annual summary"
+          dataTestId="bonus-report-annual"
+          secondary={{
+            href: `/api/bonus/annual/export?year=${year}`,
+            label: `Export ${year} CSV`,
+            download: `bonus-annual-${year}.csv`,
+            dataTestId: 'bonus-report-annual-csv',
+          }}
+        />
+        <ReportCard
+          title="Per-employee history"
+          helper="Processor roster with cross-month bonus history. Open an employee for their full per-month detail."
+          href="/bonus/employees"
+          linkLabel="Open employee history"
+          dataTestId="bonus-report-employees"
+        />
+      </div>
+    </section>
+  );
+}
+
+interface ReportCardProps {
+  title: string;
+  helper: string;
+  href: string;
+  linkLabel: string;
+  dataTestId: string;
+  secondary?: { href: string; label: string; download: string; dataTestId: string };
+}
+
+function ReportCard({ title, helper, href, linkLabel, dataTestId, secondary }: ReportCardProps) {
+  const baseClasses =
+    'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors';
+  return (
+    <article className="flex flex-col gap-3 rounded-md bg-dr3-green-dark/30 p-4">
+      <header className="flex flex-col gap-1">
+        <h3 className="text-lg font-semibold text-dr3-cream">{title}</h3>
+        <p className="text-xs text-dr3-cream/70">{helper}</p>
+      </header>
+      <div className="flex flex-wrap items-center gap-3">
+        <Link
+          href={href}
+          className={`${baseClasses} bg-dr3-chartreuse text-dr3-ink hover:bg-dr3-chartreuse/90`}
+          data-testid={dataTestId}
+        >
+          {linkLabel}
+        </Link>
+        {secondary ? (
+          <a
+            href={secondary.href}
+            download={secondary.download}
+            className={`${baseClasses} border border-dr3-cream/20 text-dr3-cream hover:bg-dr3-green-dark/40`}
+            data-testid={secondary.dataTestId}
+          >
+            {secondary.label}
+          </a>
+        ) : null}
+      </div>
+    </article>
+  );
+}

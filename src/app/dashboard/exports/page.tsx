@@ -15,7 +15,10 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { ExportsClient, type SiteOption } from './ExportsClient';
+import { BonusReports } from './BonusReports';
 import { HOME_ROUTE } from '@/lib/routes';
+import { checkBonusAccess } from '@/lib/bonus/access';
+import { appCurrentYear } from '@/lib/time';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +30,14 @@ export default async function ExportsPage() {
   // role-aware home (which routes them onward to /operator) rather than
   // render a 403 - the surface shouldn't even exist in their UX.
   if (session.user.role === 'operator') redirect(HOME_ROUTE);
+
+  // Bonus reporting access is a distinct authorization (Woodland-scoped) from
+  // the per-site export gate above: admins and Woodland/both-sites managers may
+  // reach the bonus reports, Eugene (Rick) and operators may not. We surface the
+  // bonus report entry points here only when this gate passes, mirroring every
+  // /bonus page and /api/bonus route (single source: requireBonusAccess).
+  const bonusGate = await checkBonusAccess();
+  const showBonus = bonusGate.ok;
 
   const allSites = await prisma.site.findMany({
     select: { id: true, code: true, name: true },
@@ -53,6 +64,7 @@ export default async function ExportsPage() {
             No sites are currently assigned to your account. Ask an admin to set your primary site
             before generating exports.
           </p>
+          {showBonus ? <BonusReports year={appCurrentYear()} /> : null}
           <BackLink />
         </div>
       </main>
@@ -64,6 +76,7 @@ export default async function ExportsPage() {
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
         <PageHeader name={session.user.name ?? 'Manager'} role={session.user.role} />
         <ExportsClient sites={visibleSites} />
+        {showBonus ? <BonusReports year={appCurrentYear()} /> : null}
         <BackLink />
       </div>
     </main>
