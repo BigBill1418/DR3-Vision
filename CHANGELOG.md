@@ -5,6 +5,35 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Fleet observability wire-in: WG metrics port + FLEET-DEPLOYMENT doc reconciliation
+
+Fleet-integration audit follow-up. DR3 already ships `/metrics`, a Grafana
+dashboard, and alert rules; this closes the wiring on the fleet side and fixes
+doc drift.
+
+- **docker-compose.yml** — bind the `app` container's `:3000` to `10.99.0.2:9469`
+  (CHAD WireGuard IP only, **never `0.0.0.0`**) so the fleet Prometheus can scrape
+  `/metrics`. Required because `src/app/metrics/route.ts` 404s any request with a
+  `cf-connecting-ip` header — the public tunnel can never reach `/metrics`, so the
+  scrape must be a direct WG hit. Public ingress remains exclusively via the
+  cloudflared sidecar. The matching Prometheus job + `/healthz` wall tile +
+  dashboard provisioning live in InfraWatch (ADR-0016).
+  > Deploy note: the scrape target is `up == 0` until this compose change lands on
+  > CHAD (`docker compose up -d`); sequence the DR3 deploy before/with the
+  > InfraWatch rebuild.
+- **docs/FLEET-DEPLOYMENT.md** — reconcile with reality:
+  - Deployment/build pipeline: the doc described an aspirational GHCR
+    build→push→pull pipeline that was never wired. Reality: the swarmpilot_deployer
+    `git pull`s on CHAD and runs `docker compose up -d`, building the **local**
+    image `dr3-vision-app:local` (no registry image, no pull). Rollback is
+    source-level (reset + rebuild), not image-tag-level. Updated build pipeline,
+    rollback, and first-deploy checklist sections accordingly.
+  - ntfy: corrected `NTFY_BASE_URL` from `ntfy.svdp.us` to the fleet standard
+    `https://ntfy.barnardhq.com` (ADR-0036; matches `src/lib/ntfy.ts` default and
+    the live `~/.dr3-vision-secrets/ntfy.env`), and the token env var from
+    `NTFY_BEARER_TOKEN` to the actual `NTFY_PUBLISHER_TOKEN`.
+  - Logs/traces section: document the WG `/metrics` scrape path + the dashboard uid.
+
 ### 2026-06-06 — Sprint 2 production deploy (T-124) + build heap fix
 
 Cut the Sprint 2 production deploy to CHAD-HQ (manual host build; `main` fast-forwarded

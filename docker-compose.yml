@@ -127,6 +127,17 @@ services:
       PORT: '3000'
       # DATABASE_URL is supplied via env_file (db.env). Other downstream
       # env (NEXTAUTH_SECRET, R2_*, MYMRC_*) lands in T-003 / T-007.
+    ports:
+      # WireGuard-only host bind for the fleet Prometheus /metrics scrape
+      # (ADR-0022 §4 / fleet observability wire-in 2026-06-06). The public
+      # tunnel path is NOT a viable scrape route: `src/app/metrics/route.ts`
+      # 404s any request carrying a `cf-connecting-ip` header, so /metrics is
+      # reachable ONLY off-tunnel. InfraWatch's Prometheus (on BOS-HQ) reaches
+      # this WG IP directly. Bound to 10.99.0.2 (CHAD WG) — NEVER 0.0.0.0 — so
+      # the app's full surface is not published to the public host interface;
+      # the public ingress stays exclusively through the cloudflared sidecar.
+      # The /metrics IP-header guard is the auth boundary (no bearer token).
+      - '10.99.0.2:9469:3000'
     depends_on:
       postgres:
         condition: service_healthy
