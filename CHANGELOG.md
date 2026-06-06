@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Payroll PDF re-themed RED/BLACK + co-branded with the official SVdP logo
+
+Re-styled the monthly processor-bonus report (the signed payroll PDF) for print.
+This is a deliberate departure from the dashboard's dark-cyan identity: a payroll
+document must be crisp, legible, and conservative.
+
+- **Red/black/white print palette** defined once as `PAYROLL_THEME` in
+  `src/app/internal/bonus-pdf/[month-id]/page.tsx` (no scattered hexes). Deep
+  SVdP-style crimson `#B91C2C` for headers/accents/grand total, black header
+  divider with a red accent rule, pale-red zebra rows, black signature lines.
+  No cyan anywhere in the document chrome.
+- **Co-branded header with two logos:** the official St. Vincent de Paul seal
+  sourced from svdp.us (`SVdP-favico.png`, 512×512 RGBA red/black/white on
+  transparent) saved as `public/brand/svdp-logo-official.png`, plus the
+  DR3-Vision brand logo seated on a black chip (its art is dark/cyan-accented, so
+  it sits on black to read crisply on white without recoloring it). Both logos
+  are inlined as base64 data URIs so the headless render is self-contained.
+- All report content/structure preserved (employee table, per-employee bonus,
+  grand total, signature blocks + attestation, doc-id/generated-at footer).
+- Print-correct: Letter, `printBackground`, `print-color-adjust: exact`,
+  page-break-safe signatures; the full Woodland June-2026 sample (13 employees +
+  signatures + footer) fits on one page.
+- Fresh sample regenerated and committed at
+  `public/brand/dr3-bonus-report-sample.pdf` (published at
+  `https://dr3-vision.svdp.us/brand/dr3-bonus-report-sample.pdf`). Verified by
+  eye (rasterized) and emailed to bill@svdp.us + bill@barnardhq.com.
+
 ### 2026-06-06 — Vision Dashboard re-themed to the DR3-Vision logo identity
 
 Keyed the portal's front door to the brand logo (the cyber "eye" in deep space):

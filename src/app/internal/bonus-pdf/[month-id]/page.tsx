@@ -13,12 +13,46 @@
 // middleware public-paths allowlist so the auth middleware does not bounce the
 // session-less generator to /login (see middlewareIntegration in the handoff).
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { formatCents } from '@/lib/bonus/calculator';
 import { assemblePdfRows, type PdfEntry } from '@/lib/bonus/pdf-data';
+
+// Red/black payroll palette (ADR-0023). A print/payroll document is deliberately
+// styled in deep SVdP red + black on white — NOT the app's dark-cyan dashboard
+// theme. All colors live here so no arbitrary hexes are scattered through the CSS.
+const PAYROLL_THEME = {
+  red: '#B91C2C', // deep SVdP-style crimson — headers, accents, grand total
+  redDark: '#8A1420', // darker red for the table-header band gradient + rules
+  redTint: '#FBEAEC', // pale red wash — table zebra + tint surfaces
+  ink: '#1A1A1A', // near-black body text
+  black: '#000000', // pure black for the primary header rule
+  white: '#FFFFFF',
+  paper: '#FFFFFF',
+  meta: '#6B7280', // muted gray for signature/footer meta
+  hairline: '#E2D6D8', // soft red-gray hairline for table rows / footer
+} as const;
+
+/**
+ * Read a brand asset off disk and return it as a base64 data URI. Inlining keeps
+ * the printable page fully self-contained so the headless render never races a
+ * /public fetch during `networkidle` and the PDF carries the logos as bytes.
+ */
+function brandDataUri(file: string, mime: string): string {
+  const bytes = readFileSync(join(process.cwd(), 'public', 'brand', file));
+  return `data:${mime};base64,${bytes.toString('base64')}`;
+}
+
+// Official St. Vincent de Paul seal sourced from svdp.us
+// (https://www.svdp.us/wp-content/uploads/2021/09/SVdP-favico.png) — red/black/white
+// on transparent, reads crisply on a white payroll document. The DR3-Vision brand
+// logo is dark-background/cyan-accented, so it sits on a small black chip in-header.
+const SVDP_LOGO = brandDataUri('svdp-logo-official.png', 'image/png');
+const DR3_LOGO = brandDataUri('dr3-vision-logo.jpg', 'image/jpeg');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -161,8 +195,13 @@ export default async function BonusPdfSourcePage({
         <div className="page">
           <header className="report-head">
             <div className="brand brand-left">
-              <div className="brand-mark">DR3</div>
-              <div className="brand-sub">Vision</div>
+              <div className="brand-chip">
+                {/* next/image is unavailable in this standalone <html> print doc
+                    rendered by Playwright; the logo is an inlined data URI. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="dr3-logo" src={DR3_LOGO} alt="DR3-Vision" />
+              </div>
+              <div className="brand-sub">DR3-Vision</div>
             </div>
             <div className="title-block">
               {/* site.name already includes the "DR3" prefix (e.g. "DR3 Woodland"). */}
@@ -179,7 +218,8 @@ export default async function BonusPdfSourcePage({
               )}
             </div>
             <div className="brand brand-right">
-              <div className="seal">SVdP</div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img className="svdp-logo" src={SVDP_LOGO} alt="St. Vincent de Paul" />
               <div className="brand-sub">St. Vincent de Paul</div>
             </div>
           </header>
@@ -253,67 +293,80 @@ export default async function BonusPdfSourcePage({
   );
 }
 
-// Inline, print-friendly CSS using the DR3 brand palette. Self-contained so the
-// headless render needs no external stylesheet (Tailwind isn't reliably present
-// for a route that renders a full <html> document outside the app shell).
+// Inline, print-friendly CSS in the RED/BLACK payroll palette (ADR-0023).
+// Self-contained so the headless render needs no external stylesheet (Tailwind
+// isn't reliably present for a route that renders a full <html> document outside
+// the app shell). Every color comes from PAYROLL_THEME — no scattered hexes.
+const T = PAYROLL_THEME;
 const PRINT_CSS = `
   * { box-sizing: border-box; }
   body {
     margin: 0;
     font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    color: #1A1A1A;
-    background: #fff;
+    color: ${T.ink};
+    background: ${T.paper};
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .page { padding: 32px 40px; max-width: 800px; margin: 0 auto; }
+  /* Black header divider with a thin red accent rule layered directly beneath it
+     (box-shadow keeps the red flush under the black border, never floating across
+     the wrapped title). */
   .report-head {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; border-bottom: 3px solid #00524C; padding-bottom: 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding-bottom: 16px;
+    border-bottom: 3px solid ${T.black};
+    box-shadow: 0 3px 0 0 ${T.red};
   }
-  .brand { text-align: center; min-width: 96px; }
-  .brand-mark {
-    font-size: 28px; font-weight: 800; color: #00524C; letter-spacing: 1px;
-    background: #EFFE8B; border-radius: 8px; padding: 8px 10px; display: inline-block;
+  .brand { text-align: center; min-width: 132px; }
+  /* DR3-Vision brand logo is dark/cyan-accented art — seat it on a black chip so
+     it reads crisply against the white payroll page without recoloring it. */
+  .brand-chip {
+    background: ${T.black}; border-radius: 10px; padding: 9px 12px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid ${T.black};
   }
-  .seal {
-    font-size: 22px; font-weight: 800; color: #fff; background: #0B6662;
-    border-radius: 50%; width: 56px; height: 56px; line-height: 56px;
-    display: inline-block; text-align: center;
-  }
-  .brand-sub { font-size: 11px; color: #0B6662; margin-top: 4px; }
+  .dr3-logo { height: 46px; width: auto; display: block; }
+  .svdp-logo { height: 66px; width: auto; display: block; margin: 0 auto; }
+  .brand-sub { font-size: 11px; color: ${T.red}; font-weight: 700; margin-top: 6px;
+    letter-spacing: 0.3px; }
   .title-block { flex: 1; text-align: center; }
-  .title-block h1 { font-size: 20px; margin: 0 0 4px; color: #00524C; }
-  .subtitle { font-size: 14px; margin: 0; color: #1A1A1A; }
+  .title-block h1 { font-size: 20px; margin: 0 0 4px; color: ${T.black}; }
+  .subtitle { font-size: 14px; margin: 0; color: ${T.red}; font-weight: 600; }
   .amended-marker {
     margin: 8px 0 2px; font-size: 16px; font-weight: 800; letter-spacing: 2px;
-    color: #b91c1c;
+    color: ${T.red};
   }
-  .amended-note { margin: 0; font-size: 11px; color: #444; font-style: italic; }
-  .bonus-table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+  .amended-note { margin: 0; font-size: 11px; color: ${T.meta}; font-style: italic; }
+  .bonus-table { width: 100%; border-collapse: collapse; margin-top: 22px; }
   .bonus-table th, .bonus-table td {
-    border-bottom: 1px solid #d8e0dc; padding: 8px 10px; font-size: 13px;
+    border-bottom: 1px solid ${T.hairline}; padding: 7px 12px; font-size: 13px;
   }
   .bonus-table thead th {
-    background: #00524C; color: #FCFFD7; text-align: left; border-bottom: none;
+    background: ${T.red}; color: ${T.white}; text-align: left; border-bottom: none;
+    font-weight: 700; letter-spacing: 0.2px;
   }
+  .bonus-table tbody tr:nth-child(even) { background: ${T.redTint}; }
   .col-num { text-align: right; }
   th.col-num { text-align: right; }
   .bonus-table tfoot td {
-    border-top: 2px solid #00524C; border-bottom: none; font-weight: 700;
-    padding-top: 10px;
+    border-top: 2px solid ${T.black}; border-bottom: none; font-weight: 800;
+    padding-top: 11px; font-size: 14px;
   }
-  .grand-label { text-align: right; }
-  .grand-total { color: #00524C; }
-  .signatures { display: flex; gap: 32px; margin-top: 40px; }
-  .sig-block { flex: 1; }
-  .sig-attest { font-size: 11px; color: #333; min-height: 32px; }
-  .sig-line { border-bottom: 1px solid #1A1A1A; margin: 28px 0 6px; padding-bottom: 4px; }
-  .sig-name { font-size: 15px; font-weight: 600; }
-  .sig-meta { font-size: 10px; color: #555; line-height: 1.5; }
+  .grand-label { text-align: right; color: ${T.black}; }
+  .grand-total { color: ${T.red}; }
+  .signatures { display: flex; gap: 32px; margin-top: 30px; page-break-inside: avoid; }
+  .sig-block { flex: 1; page-break-inside: avoid; }
+  .sig-attest { font-size: 11px; color: ${T.ink}; min-height: 30px; }
+  .sig-line { border-bottom: 1px solid ${T.black}; margin: 22px 0 6px; padding-bottom: 4px; }
+  .sig-name { font-size: 15px; font-weight: 600; color: ${T.black}; }
+  .sig-meta { font-size: 10px; color: ${T.meta}; line-height: 1.5; }
   .sig-ua { word-break: break-all; }
-  .sig-override { margin-top: 4px; color: #00524C; font-weight: 600; }
+  .sig-override { margin-top: 4px; color: ${T.red}; font-weight: 600; }
   .report-foot {
-    display: flex; justify-content: space-between; margin-top: 48px;
-    padding-top: 12px; border-top: 1px solid #d8e0dc; font-size: 10px; color: #777;
+    display: flex; justify-content: space-between; margin-top: 28px;
+    padding-top: 12px; border-top: 1px solid ${T.hairline};
+    font-size: 10px; color: ${T.meta};
   }
   .doc-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   @media print { .page { padding: 0; } }
