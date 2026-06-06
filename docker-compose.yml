@@ -121,6 +121,12 @@ services:
       # successful no-op. Operator runbook: docs/operator/ntfy-setup.md.
       - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
         required: false
+      # T-122 M365 Graph mail-send (ADR-0021). Holds M365_MAIL_FROM_ADDRESS +
+      # M365_PAYROLL_TO_ADDRESS; the Entra creds it pairs with live in auth.env
+      # above. Optional so the app stays fail-open (mail-send disabled) until the
+      # mailbox + permission are provisioned. Verified working 2026-06-06.
+      - path: /home/bbarnard065/.dr3-vision-secrets/m365.env
+        required: false
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
