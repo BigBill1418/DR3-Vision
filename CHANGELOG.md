@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 T-125: signature-request emails + month-close cron + PDF verify
+
+New requirement (Bill): actively prompt signers by email when their input is
+required — Janette when the month closes, Morena once Janette signs.
+
+- **Signature-request emails** (`src/lib/bonus/signature-notifications.ts`):
+  `notifyPendingSigner` emails the next required signer, keyed on the state
+  transition so it follows the unsigned slot (handles overrides + amendment
+  re-opens). Recipients resolved dynamically from the `users` table (facility slot
+  = Woodland manager; ops slot = both-sites manager). Via Microsoft Graph
+  (`sendSystemEmail`, now exported), **not** ntfy. Fail-open, audited
+  `system:signature-request`, links to the month page. Trigger #2 wired into the
+  sign route (after `partially_signed`). 10 tests.
+- **Month-close cron** (filled the T-106 gap — `closeMonthsDueForSignature` had no
+  caller): internal loopback-guarded `POST /api/internal/bonus/close-months` runs
+  the close then fires trigger #1 (email Janette) for each newly-closed month;
+  `scripts/bonus-month-close.mjs` drives it at 00:05 Pacific on the 1st. 4 tests.
+- **PDF visual verification (T-112, by eye):** seeded a signed month (3 processors,
+  30 entries) and rendered the report — co-branded header, per-employee table,
+  dual signature blocks (name/role/Pacific timestamp/IP/UA), doc-id + footer all
+  correct; **math spot-checked correct** (grand total $620.50). **Fixed a bug**:
+  the title double-prefixed the site ("DR3 DR3 Woodland") — now "DR3 Woodland".
+  Loopback guard verified (200 local, 404 with `cf-connecting-ip`).
+
+Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **396 passed**,
+`next lint` clean.
+
 ### 2026-06-06 — Sprint 2 Wave C: signatures, PDF, mail, EOD cron, Grafana (T-110–T-115)
 
 Parallel multi-agent build (PDF / EOD cron / M365 mail / Grafana in parallel) →

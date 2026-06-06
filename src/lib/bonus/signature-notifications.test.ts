@@ -1,0 +1,192 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ── mail double ──────────────────────────────────────────────────
+const sendSystemEmail = vi.fn<
+  (args: unknown) => Promise<{
+    delivered: boolean;
+    disabled: boolean;
+    messageId: string;
+    retries: number;
+    lastStatus: number | undefined;
+  }>
+>(async () => ({
+  delivered: true,
+  disabled: false,
+  messageId: 'req-1',
+  retries: 0,
+  lastStatus: undefined as number | undefined,
+}));
+vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: (a: unknown) => sendSystemEmail(a) }));
+
+// ── audit double ─────────────────────────────────────────────────
+const auditRows: Array<Record<string, unknown>> = [];
+vi.mock('@/lib/audit', () => ({
+  writeAudit: vi.fn(async (a: Record<string, unknown>) => {
+    auditRows.push(a);
+  }),
+}));
+
+// ── prisma default (unused — we inject a fake db) ────────────────
+vi.mock('@/lib/prisma', () => ({ prisma: {} }));
+
+import { notifyPendingSigner, resolveSlotSigner } from './signature-notifications';
+
+const WOODLAND = 'site-woodland';
+
+interface FakeMonth {
+  id: string;
+  site_id: string;
+  month_start: Date;
+  state: string;
+  janette_signed_by_user_id: string | null;
+  morena_signed_by_user_id: string | null;
+}
+
+function fakeDb(opts: {
+  month?: FakeMonth | null;
+  janette?: { id: string; name: string; email: string | null } | null;
+  morena?: { id: string; name: string; email: string | null } | null;
+}) {
+  const userWhereSeen: unknown[] = [];
+  return {
+    db: {
+      bonusMonth: {
+        findUnique: async () => opts.month ?? null,
+      },
+      user: {
+        findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+          userWhereSeen.push(where);
+          // janette slot resolves by primary_site_id === site; morena slot by null
+          if (where['primary_site_id'] === WOODLAND) return opts.janette ?? null;
+          if (where['primary_site_id'] === null) return opts.morena ?? null;
+          return null;
+        },
+      },
+    },
+    userWhereSeen,
+  };
+}
+
+const month = (over: Partial<FakeMonth> = {}): FakeMonth => ({
+  id: 'm1',
+  site_id: WOODLAND,
+  month_start: new Date(Date.UTC(2026, 8, 1)), // September 2026
+  state: 'pending_signatures',
+  janette_signed_by_user_id: null,
+  morena_signed_by_user_id: null,
+  ...over,
+});
+
+const JANETTE = { id: 'u-jan', name: 'Janette Thomas', email: 'janette.thomas@svdp.us' };
+const MORENA = { id: 'u-mor', name: 'Morena Gomez', email: 'morena.gomez@svdp.us' };
+
+beforeEach(() => {
+  auditRows.length = 0;
+  sendSystemEmail.mockClear();
+});
+
+describe('resolveSlotSigner', () => {
+  it('janette slot → manager scoped to the Woodland site', async () => {
+    const { db, userWhereSeen } = fakeDb({ janette: JANETTE });
+    const s = await resolveSlotSigner('janette', WOODLAND, db as never);
+    expect(s).toEqual(JANETTE);
+    expect(userWhereSeen[0]).toMatchObject({ role: 'manager', primary_site_id: WOODLAND });
+  });
+
+  it('morena slot → manager with null primary_site_id (both-sites ops)', async () => {
+    const { db, userWhereSeen } = fakeDb({ morena: MORENA });
+    const s = await resolveSlotSigner('morena', WOODLAND, db as never);
+    expect(s).toEqual(MORENA);
+    expect(userWhereSeen[0]).toMatchObject({ role: 'manager', primary_site_id: null });
+  });
+});
+
+describe('notifyPendingSigner — who gets prompted', () => {
+  it('pending_signatures (none signed) → emails the facility manager (Janette)', async () => {
+    const { db } = fakeDb({ month: month(), janette: JANETTE, morena: MORENA });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toEqual({ notified: true, slot: 'janette' });
+    expect(sendSystemEmail).toHaveBeenCalledTimes(1);
+    expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({
+      to: JANETTE.email,
+      importance: 'high',
+    });
+    expect(auditRows[0]).toMatchObject({
+      actor_label: 'system:signature-request',
+      table_name: 'bonus_months',
+      row_id: 'm1',
+    });
+  });
+
+  it('partially_signed (Janette signed) → emails the ops manager (Morena)', async () => {
+    const { db } = fakeDb({
+      month: month({ state: 'partially_signed', janette_signed_by_user_id: 'u-jan' }),
+      janette: JANETTE,
+      morena: MORENA,
+    });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toEqual({ notified: true, slot: 'morena' });
+    expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({ to: MORENA.email });
+  });
+
+  it('out-of-order override (Morena signed first) → prompts the remaining Janette slot', async () => {
+    const { db } = fakeDb({
+      month: month({ state: 'partially_signed', morena_signed_by_user_id: 'u-bill' }),
+      janette: JANETTE,
+      morena: MORENA,
+    });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r.slot).toBe('janette');
+    expect(sendSystemEmail.mock.calls[0]![0]).toMatchObject({ to: JANETTE.email });
+  });
+});
+
+describe('notifyPendingSigner — no-op cases', () => {
+  it('does nothing for a fully signed month', async () => {
+    const { db } = fakeDb({
+      month: month({
+        state: 'signed',
+        janette_signed_by_user_id: 'a',
+        morena_signed_by_user_id: 'b',
+      }),
+    });
+    const r = await notifyPendingSigner('m1', db as never);
+    // A `signed` month is caught by the state guard before the slot check.
+    expect(r).toEqual({ notified: false, reason: 'not_awaiting_signatures' });
+    expect(sendSystemEmail).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a draft month', async () => {
+    const { db } = fakeDb({ month: month({ state: 'draft' }) });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r.reason).toBe('not_awaiting_signatures');
+    expect(sendSystemEmail).not.toHaveBeenCalled();
+  });
+
+  it('fail-open when mail is disabled (M365 unconfigured): no audit, no throw', async () => {
+    sendSystemEmail.mockResolvedValueOnce({
+      delivered: false,
+      disabled: true,
+      messageId: '',
+      retries: 0,
+      lastStatus: undefined,
+    });
+    const { db } = fakeDb({ month: month(), janette: JANETTE });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toEqual({ notified: false, slot: 'janette', reason: 'mail_disabled' });
+    expect(auditRows).toHaveLength(0);
+  });
+
+  it('skips (no throw) when the responsible signer has no email', async () => {
+    const { db } = fakeDb({ month: month(), janette: { id: 'x', name: 'No Email', email: null } });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toMatchObject({ notified: false, slot: 'janette', reason: 'no_signer_email' });
+    expect(sendSystemEmail).not.toHaveBeenCalled();
+  });
+
+  it('returns month_not_found when the month is missing', async () => {
+    const { db } = fakeDb({ month: null });
+    const r = await notifyPendingSigner('nope', db as never);
+    expect(r.reason).toBe('month_not_found');
+  });
+});

@@ -16,7 +16,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── ntfy double ─────────────────────────────────────────────────
-const publishNtfyMock = vi.fn(async () => ({
+const publishNtfyMock = vi.fn<
+  (args: Record<string, unknown>) => Promise<{ ok: boolean; outcome: 'sent' }>
+>(async () => ({
   ok: true,
   outcome: 'sent' as const,
 }));

@@ -80,7 +80,7 @@ export interface SystemEmailArgs {
   importance?: 'low' | 'normal' | 'high';
 }
 
-interface SystemEmailResult {
+export interface SystemEmailResult {
   delivered: boolean;
   disabled: boolean;
   messageId: string;
@@ -209,7 +209,7 @@ async function postOnce(
  * structured result; NEVER throws (fail-open / fail-soft at the boundary).
  * Callers own audit + ntfy + persistence semantics.
  */
-async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmailResult> {
+export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmailResult> {
   const config = readConfig();
   const requestId = newRequestId();
 

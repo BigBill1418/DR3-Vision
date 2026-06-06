@@ -25,10 +25,12 @@ let mockSession: {
 vi.mock('@/lib/auth', () => ({ auth: vi.fn(async () => mockSession) }));
 
 // Side-effect modules — never launch a browser or hit Graph in tests.
-const generateBonusPdf = vi.fn(async () => ({
+const generateBonusPdf = vi.fn<(id: string) => Promise<{ storageKey: string }>>(async () => ({
   storageKey: 'pdfs/bonus/woodland/2026-06/x.pdf',
 }));
-const sendPayrollPdf = vi.fn(async () => ({
+const sendPayrollPdf = vi.fn<
+  (args: unknown) => Promise<{ delivered: boolean; disabled: boolean; messageId: string }>
+>(async () => ({
   delivered: true,
   disabled: false,
   messageId: 'm1',
@@ -159,7 +161,11 @@ vi.mock('@/lib/prisma', () => {
       return { id: `audit-${auditRows.length}` };
     }),
   };
-  const client = { bonusMonth, bonusDailyEntry, processorBonusRule, site, auditLog };
+  // T-125 fires a fire-and-forget signature-request email after the first
+  // signature; it resolves the next signer via user.findFirst. Stub it to null so
+  // the non-blocking prompt no-ops cleanly (no mail in these tests).
+  const user = { findFirst: vi.fn(async () => null) };
+  const client = { bonusMonth, bonusDailyEntry, processorBonusRule, site, auditLog, user };
   return {
     prisma: {
       ...client,

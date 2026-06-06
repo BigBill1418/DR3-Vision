@@ -24,6 +24,7 @@ import { prisma } from '@/lib/prisma';
 import { recordSignature, recordStateGauge } from '@/lib/bonus/signatures';
 import { generateBonusPdf } from '@/lib/bonus/pdf';
 import { sendPayrollPdf } from '@/lib/m365-mail';
+import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
 import { log, newRequestId } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -96,6 +97,13 @@ function triggerPayrollDelivery(monthId: string): void {
       log.error({ requestId, monthId, err }, '[sign] payroll mail-send failed');
     }
   })();
+}
+
+/** Email the remaining signer after the FIRST signature, off the request path. */
+function triggerSignaturePrompt(monthId: string): void {
+  void notifyPendingSigner(monthId).catch((err) => {
+    log.error({ monthId, err }, '[sign] signature-request email failed (non-fatal)');
+  });
 }
 
 export async function POST(
@@ -186,7 +194,9 @@ export async function POST(
   recordStateGauge(ctx.siteId, from, result.state);
 
   // Second signature → fire PDF + payroll delivery off the request path.
+  // First signature → email the remaining signer (ADR-0019 §5a, T-125).
   if (result.fullySigned) triggerPayrollDelivery(id);
+  else triggerSignaturePrompt(id);
 
   return NextResponse.json(
     { ok: true, slot: result.slot, state: result.state, fullySigned: result.fullySigned },

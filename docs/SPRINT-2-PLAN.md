@@ -256,7 +256,7 @@ Both files are consumed by the fleet's Grafana provisioning. Reload happens via 
 
 ## Wave D — Amendment + history + dashboards (parallel after Wave C)
 
-### [ ] T-125: Signature-request emails (ADR-0019 §5a)
+### [x] T-125: Signature-request emails (ADR-0019 §5a)
 
 Actively prompt signers by email when their signature is required, so they don't
 have to remember to check the portal. Depends on T-110 (signature transitions),

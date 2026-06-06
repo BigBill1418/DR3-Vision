@@ -165,7 +165,8 @@ export default async function BonusPdfSourcePage({
               <div className="brand-sub">Vision</div>
             </div>
             <div className="title-block">
-              <h1>DR3 {month.site.name} — Monthly Processor Bonus Report</h1>
+              {/* site.name already includes the "DR3" prefix (e.g. "DR3 Woodland"). */}
+              <h1>{month.site.name} — Monthly Processor Bonus Report</h1>
               <p className="subtitle">{data.monthLabel}</p>
               {data.isAmended && (
                 <>
