@@ -58,31 +58,31 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
   });
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
             href={HOME_ROUTE}
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
             ← {M.backToDashboard}
           </Link>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">{M.pageTitle}</h1>
-              <p className="text-sm text-dr3-cream/70">{M.pageSubtitle}</p>
+              <p className="text-sm text-dr3-mist-dim">{M.pageSubtitle}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 href="/admin/audit"
-                className="inline-flex items-center gap-2 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm font-medium text-dr3-cream transition-colors hover:bg-dr3-green-dark/70"
+                className="inline-flex items-center gap-2 rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-sm font-medium text-dr3-mist transition-colors hover:border-dr3-cyan/40 hover:text-dr3-cyan"
                 data-testid="admin-audit-link"
               >
                 {M.audit.navLink}
               </Link>
               <Link
                 href="/admin/users/new"
-                className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90"
+                className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright"
                 data-testid="admin-add-user"
               >
                 + {M.list.addUser}
@@ -172,9 +172,7 @@ function Filters({ sites, siteCode, role, status }: FiltersProps) {
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cream/60">
-        {label}
-      </span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-dr3-cyan">{label}</span>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
@@ -190,8 +188,8 @@ function FilterLink({
   children: React.ReactNode;
 }) {
   const cls = active
-    ? 'bg-dr3-chartreuse text-dr3-ink'
-    : 'bg-dr3-green-dark/40 text-dr3-cream hover:bg-dr3-green-dark/60';
+    ? 'bg-dr3-cyan text-dr3-space'
+    : 'border border-dr3-steel-light/30 bg-dr3-space-2 text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan';
   return (
     <Link
       href={href}
@@ -221,12 +219,12 @@ function capitalize(s: string): string {
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">{M.forbiddenHeading}</h1>
-      <p className="mt-2 text-dr3-cream/70">{M.forbiddenBody}</p>
+      <p className="mt-2 text-dr3-mist-dim">{M.forbiddenBody}</p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
       >
         {M.backToDashboard}
       </Link>

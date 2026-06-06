@@ -39,10 +39,10 @@ export function AuditDiff({ before, after }: Props) {
   }
 
   return (
-    <div className="overflow-hidden rounded-md bg-dr3-ink/40 text-xs">
+    <div className="overflow-hidden rounded-md border border-dr3-steel-light/25 bg-dr3-space text-xs">
       <table className="w-full border-collapse">
         <thead>
-          <tr className="border-b border-dr3-cream/10 text-left uppercase tracking-wider text-dr3-cream/60">
+          <tr className="border-b border-dr3-steel-light/20 text-left uppercase tracking-wider text-dr3-cyan">
             <th className="px-3 py-2 text-[10px] font-semibold">Field</th>
             <th className="px-3 py-2 text-[10px] font-semibold">{M.audit.beforeLabel}</th>
             <th className="px-3 py-2 text-[10px] font-semibold">{M.audit.afterLabel}</th>
@@ -52,20 +52,20 @@ export function AuditDiff({ before, after }: Props) {
           {rows.map((r) => (
             <tr
               key={r.key}
-              className={`border-b border-dr3-cream/5 last:border-b-0 ${rowClass(r.kind)}`}
+              className={`border-b border-dr3-steel-light/15 last:border-b-0 ${rowClass(r.kind)}`}
               data-diff-kind={r.kind}
             >
-              <td className="px-3 py-2 align-top font-mono text-dr3-cream">{r.key}</td>
+              <td className="px-3 py-2 align-top font-mono text-dr3-mist">{r.key}</td>
               <td className="px-3 py-2 align-top font-mono">
                 {r.kind === 'added' ? (
-                  <span className="text-dr3-cream/40">—</span>
+                  <span className="text-dr3-mist-dim">—</span>
                 ) : (
                   <ValueCell value={r.before} />
                 )}
               </td>
               <td className="px-3 py-2 align-top font-mono">
                 {r.kind === 'removed' ? (
-                  <span className="text-dr3-cream/40">—</span>
+                  <span className="text-dr3-mist-dim">—</span>
                 ) : (
                   <ValueCell value={r.after} />
                 )}
@@ -85,21 +85,21 @@ export function AuditDiff({ before, after }: Props) {
 const INLINE_BUDGET = 60;
 
 function ValueCell({ value }: { value: Json }) {
-  if (value === undefined) return <span className="text-dr3-cream/40">—</span>;
-  if (value === null) return <span className="text-dr3-cream/60">null</span>;
+  if (value === undefined) return <span className="text-dr3-mist-dim">—</span>;
+  if (value === null) return <span className="text-dr3-mist-dim">null</span>;
   if (typeof value === 'string') {
-    return <span className="text-dr3-cream/90">&quot;{value}&quot;</span>;
+    return <span className="text-dr3-mist">&quot;{value}&quot;</span>;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
-    return <span className="text-dr3-cream/90">{String(value)}</span>;
+    return <span className="text-dr3-mist">{String(value)}</span>;
   }
   // Object / array — try inline, else pretty.
   const inline = compactJson(value);
   if (inline.length <= INLINE_BUDGET) {
-    return <span className="text-dr3-cream/90">{inline}</span>;
+    return <span className="text-dr3-mist">{inline}</span>;
   }
   return (
-    <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-dr3-cream/90">
+    <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-dr3-mist">
       {prettyJson(value)}
     </pre>
   );
@@ -107,12 +107,12 @@ function ValueCell({ value }: { value: Json }) {
 
 function SnapshotPanel({ label, value }: { label: string; value: Json }) {
   return (
-    <div className="rounded-md bg-dr3-ink/40 p-3">
-      <div className="mb-1 text-[10px] uppercase tracking-wider text-dr3-cream/60">{label}</div>
+    <div className="rounded-md border border-dr3-steel-light/25 bg-dr3-space p-3">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-dr3-cyan">{label}</div>
       {value === null || value === undefined ? (
-        <span className="text-dr3-cream/40">—</span>
+        <span className="text-dr3-mist-dim">—</span>
       ) : (
-        <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-dr3-cream/90">
+        <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-dr3-mist">
           {prettyJson(value)}
         </pre>
       )}

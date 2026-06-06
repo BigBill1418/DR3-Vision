@@ -154,13 +154,13 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
             className={inputCls}
             data-testid="admin-edit-role"
           >
-            <option value="operator" className="text-dr3-ink">
+            <option value="operator" className="text-dr3-space">
               {M.form.roleOperator}
             </option>
-            <option value="manager" className="text-dr3-ink">
+            <option value="manager" className="text-dr3-space">
               {M.form.roleManager}
             </option>
-            <option value="admin" className="text-dr3-ink">
+            <option value="admin" className="text-dr3-space">
               {M.form.roleAdmin}
             </option>
           </select>
@@ -185,7 +185,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
             data-testid="admin-edit-site"
           >
             {sites.map((s) => (
-              <option key={s.id} value={s.id} className="text-dr3-ink">
+              <option key={s.id} value={s.id} className="text-dr3-space">
                 {s.name}
               </option>
             ))}
@@ -199,11 +199,11 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
               className={inputCls}
               data-testid="admin-edit-processor-role"
             >
-              <option value="" className="text-dr3-ink">
+              <option value="" className="text-dr3-space">
                 {M.form.processorRoleNone}
               </option>
               {PROCESSOR_ROLES.map((p) => (
-                <option key={p} value={p} className="text-dr3-ink">
+                <option key={p} value={p} className="text-dr3-space">
                   {p}
                 </option>
               ))}
@@ -215,7 +215,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
             type="button"
             onClick={handleSave}
             disabled={pending}
-            className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="admin-edit-submit"
           >
             {M.form.submitUpdate}
@@ -223,7 +223,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           <button
             type="button"
             onClick={() => router.push('/admin/users')}
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             data-testid="admin-edit-cancel"
           >
             {M.form.cancel}
@@ -234,11 +234,11 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
       {/* ── Reset PIN (operators only) ── */}
       {role === 'operator' ? (
         <section
-          className="flex flex-col gap-3 rounded-md bg-dr3-green-dark/30 p-4"
+          className="flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-4"
           data-testid="admin-edit-pin-section"
         >
           <h2 className="text-lg font-semibold">{M.edit.resetPinHeading}</h2>
-          <p className="text-xs text-dr3-cream/70">{M.edit.resetPinHelper}</p>
+          <p className="text-xs text-dr3-mist-dim">{M.edit.resetPinHelper}</p>
           {pinSuccess ? (
             <p className="text-sm text-emerald-200" data-testid="admin-edit-pin-success">
               {pinSuccess}
@@ -250,7 +250,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
               setPinSuccess(null);
               setShowPinModal(true);
             }}
-            className="self-start rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm hover:bg-dr3-green-dark/80"
+            className="self-start rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-1.5 text-sm text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan"
             data-testid="admin-edit-pin-open"
           >
             {M.edit.resetPinButton}
@@ -259,14 +259,11 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
       ) : null}
 
       {/* ── Deactivate / reactivate ── */}
-      <section className="flex flex-col gap-3 rounded-md bg-dr3-green-dark/30 p-4">
+      <section className="flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-4">
         <h2 className="text-lg font-semibold">{M.edit.deactivateHeading}</h2>
-        <p className="text-xs text-dr3-cream/70">{M.edit.deactivateHelper}</p>
+        <p className="text-xs text-dr3-mist-dim">{M.edit.deactivateHelper}</p>
         {isSelf ? (
-          <p
-            className="text-sm text-dr3-cream/60"
-            data-testid="admin-edit-self-deactivate-notice"
-          >
+          <p className="text-sm text-dr3-mist-dim" data-testid="admin-edit-self-deactivate-notice">
             {M.edit.cannotSelfDeactivate}
           </p>
         ) : user.is_active ? (
@@ -352,7 +349,7 @@ function ResetPinModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
       <div
-        className="flex w-full max-w-md flex-col gap-4 rounded-md bg-dr3-green-deep p-6 text-dr3-cream shadow-xl"
+        className="flex w-full max-w-md flex-col gap-4 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl"
         role="dialog"
         aria-modal="true"
         data-testid="admin-edit-pin-modal"
@@ -395,7 +392,7 @@ function ResetPinModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             data-testid="admin-edit-pin-cancel"
           >
             {M.form.cancel}
@@ -404,7 +401,7 @@ function ResetPinModal({
             type="button"
             onClick={handleSubmit}
             disabled={pending}
-            className="inline-flex items-center gap-2 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition-colors hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="admin-edit-pin-submit"
           >
             {M.edit.resetPinSubmit}
@@ -416,7 +413,7 @@ function ResetPinModal({
 }
 
 const inputCls =
-  'rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse';
+  'rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan';
 
 function Field({
   label,
@@ -429,9 +426,9 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-2">
-      <span className="text-sm font-medium text-dr3-cream/80">{label}</span>
+      <span className="text-sm font-medium text-dr3-mist">{label}</span>
       {children}
-      {helper ? <span className="text-xs text-dr3-cream/60">{helper}</span> : null}
+      {helper ? <span className="text-xs text-dr3-mist-dim">{helper}</span> : null}
     </label>
   );
 }

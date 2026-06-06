@@ -36,19 +36,19 @@ export function AuditPagination({ page, totalPages, prevHref, nextHref }: Props)
   return (
     <nav
       aria-label="Audit pagination"
-      className="flex items-center justify-between gap-4 rounded-lg bg-dr3-green-dark/30 px-4 py-3"
+      className="flex items-center justify-between gap-4 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 px-4 py-3"
       data-testid="admin-audit-pagination"
     >
       <button
         type="button"
         onClick={() => goTo(prevHref)}
         disabled={prevDisabled}
-        className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan disabled:cursor-not-allowed disabled:opacity-50"
         data-testid="admin-audit-page-prev"
       >
         ← Prev
       </button>
-      <span className="text-sm text-dr3-cream/80">
+      <span className="text-sm text-dr3-mist-dim">
         Page <span className="font-semibold tabular-nums">{page}</span> of{' '}
         <span className="font-semibold tabular-nums">{totalPages}</span>
       </span>
@@ -56,7 +56,7 @@ export function AuditPagination({ page, totalPages, prevHref, nextHref }: Props)
         type="button"
         onClick={() => goTo(nextHref)}
         disabled={nextDisabled}
-        className="rounded-md bg-dr3-green-dark/60 px-3 py-1.5 text-sm font-medium text-dr3-cream hover:bg-dr3-green-dark/80 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-1.5 text-sm font-medium text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan disabled:cursor-not-allowed disabled:opacity-50"
         data-testid="admin-audit-page-next"
       >
         Next →

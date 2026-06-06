@@ -53,7 +53,7 @@ export function AuditList({ rows }: Props) {
   if (rows.length === 0) {
     return (
       <p
-        className="rounded-md bg-dr3-green-dark/30 p-6 text-center text-dr3-cream/80"
+        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-center text-dr3-mist-dim"
         data-testid="admin-audit-empty"
       >
         {M.audit.empty}
@@ -71,20 +71,17 @@ export function AuditList({ rows }: Props) {
   };
 
   return (
-    <ul className="flex flex-col divide-y divide-dr3-green-dark/40 overflow-hidden rounded-lg bg-dr3-green-dark/30">
+    <ul className="flex flex-col divide-y divide-dr3-steel-light/20 overflow-hidden rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2">
       {rows.map((r) => {
         const isOpen = expanded.has(r.id);
         return (
           <li key={r.id} data-testid={`admin-audit-row-${r.id}`} className="px-4 py-3">
             <div className="grid grid-cols-12 items-center gap-3">
-              <span className="col-span-12 text-xs font-medium tabular-nums text-dr3-cream sm:col-span-3">
+              <span className="col-span-12 text-xs font-medium tabular-nums text-dr3-mist sm:col-span-3">
                 {formatTimestamp(r.created_at)}
               </span>
               <span className="col-span-6 truncate text-sm sm:col-span-3">
-                <ActorCell
-                  actor_user={r.actor_user}
-                  actor_label={r.actor_label}
-                />
+                <ActorCell actor_user={r.actor_user} actor_label={r.actor_label} />
               </span>
               <span className="col-span-3 sm:col-span-2">
                 <span
@@ -93,18 +90,14 @@ export function AuditList({ rows }: Props) {
                   {ACTION_LABEL[r.action]}
                 </span>
               </span>
-              <span className="col-span-9 truncate text-xs text-dr3-cream/80 sm:col-span-3">
-                <TargetCell
-                  table_name={r.table_name}
-                  row_id={r.row_id}
-                  row_exists={r.row_exists}
-                />
+              <span className="col-span-9 truncate text-xs text-dr3-mist-dim sm:col-span-3">
+                <TargetCell table_name={r.table_name} row_id={r.row_id} row_exists={r.row_exists} />
               </span>
               <span className="col-span-3 text-right sm:col-span-1">
                 <button
                   type="button"
                   onClick={() => toggle(r.id)}
-                  className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-xs text-dr3-cream hover:bg-dr3-green-dark/80"
+                  className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-1 text-xs text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan"
                   aria-expanded={isOpen}
                   aria-controls={`audit-diff-${r.id}`}
                   data-testid={`admin-audit-toggle-${r.id}`}
@@ -121,7 +114,7 @@ export function AuditList({ rows }: Props) {
               >
                 <AuditDiff before={r.before} after={r.after} />
                 {r.ip || r.user_agent ? (
-                  <div className="mt-2 grid gap-1 text-[11px] text-dr3-cream/60 sm:grid-cols-2">
+                  <div className="mt-2 grid gap-1 text-[11px] text-dr3-mist-dim sm:grid-cols-2">
                     {r.ip ? (
                       <span>
                         IP: <span className="font-mono">{r.ip}</span>
@@ -157,25 +150,25 @@ function ActorCell({
   if (actor_user) {
     return (
       <span>
-        <span className="font-medium text-dr3-cream">{actor_user.name}</span>
+        <span className="font-medium text-dr3-mist">{actor_user.name}</span>
         <RoleBadge role={actor_user.role} />
         {actor_user.email ? (
-          <span className="ml-2 text-dr3-cream/50">{actor_user.email}</span>
+          <span className="ml-2 text-dr3-mist-dim">{actor_user.email}</span>
         ) : null}
       </span>
     );
   }
   if (actor_label) {
     return (
-      <span className="font-mono text-dr3-cream/80">
-        <span className="mr-1 rounded bg-dr3-ink/50 px-1.5 py-0.5 text-[10px] uppercase text-dr3-cream/70">
+      <span className="font-mono text-dr3-mist-dim">
+        <span className="mr-1 rounded bg-dr3-space px-1.5 py-0.5 text-[10px] uppercase text-dr3-mist-dim">
           {M.audit.systemActor}
         </span>
         {actor_label}
       </span>
     );
   }
-  return <span className="text-dr3-cream/40">—</span>;
+  return <span className="text-dr3-mist-dim">—</span>;
 }
 
 function RoleBadge({ role }: { role: string }) {
@@ -186,7 +179,7 @@ function RoleBadge({ role }: { role: string }) {
   else if (lower === 'operator') label = M.audit.actorRoleOperator;
   else label = role;
   return (
-    <span className="ml-2 rounded-full bg-dr3-ink/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-dr3-cream/70">
+    <span className="ml-2 rounded-full bg-dr3-space px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-dr3-mist-dim">
       {label}
     </span>
   );
@@ -208,10 +201,10 @@ function TargetCell({
     return (
       <Link
         href={href}
-        className="font-mono text-dr3-cream/90 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="font-mono text-dr3-mist underline-offset-4 hover:text-dr3-cyan hover:underline"
         data-testid="admin-audit-target-link"
       >
-        <span className="text-dr3-cream/60">{table_name}/</span>
+        <span className="text-dr3-mist-dim">{table_name}/</span>
         {shortId(row_id)}
       </Link>
     );
@@ -221,10 +214,10 @@ function TargetCell({
   // soft-delete).
   if (href && row_exists === false) {
     return (
-      <span className="font-mono text-dr3-cream/60" data-testid="admin-audit-target-deleted">
-        <span className="text-dr3-cream/40">{table_name}/</span>
+      <span className="font-mono text-dr3-mist-dim" data-testid="admin-audit-target-deleted">
+        <span className="text-dr3-mist-dim/70">{table_name}/</span>
         {shortId(row_id)}
-        <span className="ml-2 text-[10px] uppercase tracking-wider text-dr3-cream/50">
+        <span className="ml-2 text-[10px] uppercase tracking-wider text-dr3-mist-dim/80">
           {M.audit.rowDeleted}
         </span>
       </span>
@@ -233,8 +226,8 @@ function TargetCell({
 
   // Unlinkable table — render plain text.
   return (
-    <span className="font-mono text-dr3-cream/60" data-testid="admin-audit-target-plain">
-      <span className="text-dr3-cream/40">{table_name}/</span>
+    <span className="font-mono text-dr3-mist-dim" data-testid="admin-audit-target-plain">
+      <span className="text-dr3-mist-dim/70">{table_name}/</span>
       {shortId(row_id)}
     </span>
   );
