@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import tailwindcssAnimate from 'tailwindcss-animate';
 
 /**
  * Tailwind config locked to the DR3 brand palette.
@@ -32,12 +33,23 @@ const config: Config = {
       colors: {
         // ─── DR3 brand palette (ADR-0008) ─────────────────────────────────
         dr3: {
-          'green-deep': '#00524C',  // primary; deep teal/forest
-          'green': '#49AD8E',       // most-used secondary accent
-          'green-dark': '#0B6662',  // pressed / active states
-          chartreuse: '#EFFE8B',    // CTA highlight
-          cream: '#FCFFD7',         // subtle card background
-          ink: '#1A1A1A',           // body text and "R3" wordmark
+          'green-deep': '#00524C', // primary; deep teal/forest
+          green: '#49AD8E', // most-used secondary accent
+          'green-dark': '#0B6662', // pressed / active states
+          chartreuse: '#EFFE8B', // CTA highlight
+          cream: '#FCFFD7', // subtle card background
+          ink: '#1A1A1A', // body text and "R3" wordmark
+          // ─── Vision logo-keyed dark theme (Vision Dashboard portal) ─────
+          // Sampled from public/brand/dr3-vision-logo.jpg: a cyber "eye" in
+          // deep space — cyan iris/wordmark, steel-blue "DR3", near-black field.
+          space: '#070C12', // deep-space page base (matches logo field)
+          'space-2': '#0E1923', // raised glass-panel base
+          cyan: '#50F0E0', // primary glow — the eye / "Vision"
+          'cyan-bright': '#8FFBEF', // hover / focus highlight
+          steel: '#263B4B', // steel-blue — the "DR3" wordmark tone
+          'steel-light': '#3E5B6E', // borders / dividers
+          mist: '#DCEFEC', // cool off-white body text
+          'mist-dim': '#8BA7AE', // muted secondary text
         },
         // ─── shadcn/ui tokens (mapped to DR3 brand) ──────────────────────
         background: 'hsl(var(--background))',
@@ -98,7 +110,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [tailwindcssAnimate],
 };
 
 export default config;

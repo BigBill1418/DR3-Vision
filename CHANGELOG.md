@@ -5,6 +5,22 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Vision Dashboard re-themed to the DR3-Vision logo identity
+
+Keyed the portal's front door to the brand logo (the cyber "eye" in deep space):
+
+- New logo-keyed dark palette in `tailwind.config.ts` (`dr3-space`, `dr3-cyan`,
+  `dr3-steel`, `dr3-mist`, …) sampled from `public/brand/dr3-vision-logo.jpg`.
+- `VisionShell`: deep-space field with a cyan nebula glow + starfield; the real
+  Vision **logo top-left** in the header (replaces the text wordmark); cyan
+  section labels + footer.
+- `VisionTile`: deep-space **glass panels** with the logo's eye as a
+  semi-transparent watermark on the right, cyan icon glow, and a cyan halo +
+  lift on hover. Featured (Bonus) tile = brighter cyan ring/glow + NEW pill;
+  coming-soon = dimmed glass. Verified by eye across phone/desktop/wide.
+- Scoped to the dashboard; operator/login/bonus pages keep the existing brand
+  tokens (additive — no `:root`/shadcn changes).
+
 ### 2026-06-06 — Reports area: bonus report entry points + pause three dashboard tiles
 
 **Task 1 — surface bonus reporting in the Reports/Exports area.** The Exports &

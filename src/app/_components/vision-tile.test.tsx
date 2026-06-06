@@ -43,7 +43,9 @@ describe('VisionTile', () => {
     expect(html).toContain('href="/bonus"');
     expect(html).toContain('data-featured="true"');
     expect(html).toMatch(/>New</);
-    expect(html).toContain('bg-dr3-chartreuse');
+    // Featured surface is the logo-keyed cyan treatment (ADR-0008 dark theme):
+    // a cyan ring + glow, not the legacy chartreuse fill.
+    expect(html).toContain('border-dr3-cyan/45');
   });
 
   it('coming-soon tile is non-interactive and exposes no href', () => {
