@@ -22,81 +22,15 @@ import { NextResponse } from 'next/server';
 import { requireBonusAccess } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { recordSignature, recordStateGauge } from '@/lib/bonus/signatures';
-import { generateBonusPdf } from '@/lib/bonus/pdf';
-import { sendPayrollPdf } from '@/lib/m365-mail';
+import { triggerPayrollDelivery } from '@/lib/bonus/payroll-delivery';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
-import { log, newRequestId } from '@/lib/observability/logger';
+import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function clientIp(req: Request): string | null {
   return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
-}
-
-/**
- * Fire the 2nd-signature side effects WITHOUT blocking the signing response.
- * Both steps are individually fail-safe: generateBonusPdf rethrows on failure
- * (we swallow + log here so a PDF/mail failure never surfaces to the signer or
- * crashes the process), and sendPayrollPdf is fail-open. Mail only runs if the
- * PDF succeeded — there is nothing to attach otherwise.
- */
-function triggerPayrollDelivery(monthId: string): void {
-  const requestId = newRequestId();
-  void (async () => {
-    try {
-      await generateBonusPdf(monthId);
-    } catch (err) {
-      log.error({ requestId, monthId, err }, '[sign] bonus PDF generation failed; skipping mail');
-      return;
-    }
-    try {
-      const month = await prisma.bonusPayPeriod.findUnique({
-        where: { id: monthId },
-        select: { pdf_storage_key: true, period_start: true, amended_from_period_id: true },
-      });
-      if (!month?.pdf_storage_key) {
-        log.error(
-          { requestId, monthId },
-          '[sign] no pdf_storage_key after generation; skipping mail',
-        );
-        return;
-      }
-      const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
-      const accountId = process.env['R2_ACCOUNT_ID'];
-      const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
-      const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
-      const bucket = process.env['R2_BUCKET'];
-      if (!accountId || !accessKeyId || !secretAccessKey || !bucket) {
-        log.warn({ requestId, monthId }, '[sign] R2 not configured; cannot attach pdf for mail');
-        return;
-      }
-      const r2 = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: { accessKeyId, secretAccessKey },
-        forcePathStyle: true,
-      });
-      const obj = await r2.send(
-        new GetObjectCommand({ Bucket: bucket, Key: month.pdf_storage_key }),
-      );
-      const pdfBuffer = Buffer.from(await obj.Body!.transformToByteArray());
-      const ym = `${month.period_start.getUTCFullYear()}-${String(
-        month.period_start.getUTCMonth() + 1,
-      ).padStart(2, '0')}`;
-      const isAmendment = month.amended_from_period_id !== null;
-      await sendPayrollPdf({
-        monthId,
-        pdfBuffer,
-        filename: `bonus-${ym}.pdf`,
-        subject: `${isAmendment ? '[AMENDED] ' : ''}Woodland processor bonus — ${ym}`,
-        htmlBody: `<p>The signed Woodland processor bonus report for ${ym} is attached.</p>`,
-        isAmendment,
-      });
-    } catch (err) {
-      log.error({ requestId, monthId, err }, '[sign] payroll mail-send failed');
-    }
-  })();
 }
 
 /** Email the remaining signer after the FIRST signature, off the request path. */

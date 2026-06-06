@@ -5,6 +5,56 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave A: signature-escalation cron + payroll-deadline-missed alert (T-205 + T-206)
+
+Added the bi-weekly signature-escalation workflow (ADR-0019.1 §3/§4/§6) that
+drives a `pending_signatures`/`partially_signed` pay period to delivery by the
+hard Tue 09:00 AM PT payroll deadline. A single long-running, Pacific-aware
+daemon (`scripts/bonus-escalation-check.mjs`) wakes at four wall-clock times and
+POSTs the new internal route per tier; the orchestration lives in TypeScript
+behind the state machine. `tsc --noEmit`, `next lint --max-warnings 0`, and the
+full `vitest` suite (603 tests, +27) all clean.
+
+- **New `scripts/bonus-escalation-check.mjs`** (+ `.d.mts`). Thin DST-safe
+  scheduler mirroring `bonus-period-close.mjs`: fires 06:00 (t1) / 07:30 (t2) /
+  08:30 (t3) / 09:00 (t4) America/Los_Angeles, POSTing
+  `/api/internal/bonus/escalation-check?tier=<t1..t4>`. Daily fire is a clean
+  no-op when no period matches the yesterday's-close window.
+- **New `src/lib/bonus/escalation.ts`** — `runEscalationTier({db, tier, now})`,
+  the testable orchestration. Examines `bonus_pay_periods` where
+  `period_end == appToday() - 1 day` (Pacific). t1 → low-urgency ntfy
+  (`bonus-escalation-warning:<site>:<id>:t1`, priority default); t2 → urgent
+  ntfy (`...:t2`) whose body lists the chain's override-authorized humans;
+  t3 → AUTO-OVERRIDE each still-unsigned slot via `recordSignature` as the
+  chain's `auto_override_actor_user_id` (admin override path, `*_auto_override_at`
+  stamped, audit `actor_label = system:bonus-escalation`, ADR-0019.1 reason
+  text), then fire PDF + M365 delivery; t4 → urgent
+  `bonus-payroll-deadline-missed:<site>:<id>` for any yesterday's-period not yet
+  `paid`. All ntfy fingerprinted + cooled.
+- **Risk mitigation (addendum):** before t3 auto-signs, the configured
+  auto-override actor must be a valid ACTIVE user; if missing/inactive, an urgent
+  ntfy fires and NO auto-sign happens (miss with an explicit alert rather than
+  fail silently).
+- **Idempotent:** a slot signed manually by 08:25 is rejected by
+  `recordSignature` as `already_signed` and is not re-overridden; a fully-signed
+  period produces no escalation.
+- **New `src/app/api/internal/bonus/escalation-check/route.ts`** — loopback-only
+  (cf-connecting-ip 404), optional `INTERNAL_CRON_TOKEN` bearer, `?tier=`
+  validation; passes `appToday()` so the date math is Pacific.
+- **New `src/lib/bonus/payroll-delivery.ts`** — extracted the post-signature PDF
+  render + R2 fetch + M365 send from the sign route so the manual 2nd-signature
+  path AND the auto-override path fire the identical side-effect chain. Sign
+  route now imports it.
+- **`src/lib/bonus/signatures.ts`** — `recordSignature` gained `autoOverride`
+  (stamps `*_auto_override_at`) and `actorLabel` (audit label) opts; the success
+  result exposes `autoOverride`. Manual override behavior unchanged.
+- **`docker-compose.yml`** — new `bonus-escalation-check` cron service (same
+  image/env/restart/labels/network as `bonus-period-close`).
+- **Tests:** `escalation.test.ts` (14, orchestration + idempotency + risk gate +
+  T-206, clock pinned via `now`, ntfy/chain/signature/delivery mocked),
+  `bonus-escalation-cron.test.ts` (8, the daemon's Pacific tier scheduling across
+  DST), `escalation-check.route.test.ts` (5).
+
 ### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 
 Made the bonus signature service site-aware by sourcing signer/override identity

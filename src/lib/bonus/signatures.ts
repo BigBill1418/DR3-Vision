@@ -152,6 +152,23 @@ export interface RecordSignatureOpts {
    * `onBehalfOf` is set; ignored on the natural-signature path.
    */
   overrideReason?: string;
+  /**
+   * AUTO-OVERRIDE (T-205, ADR-0019.1 §4): when true, this is a system-applied
+   * admin override fired by the Tue 08:30 PT escalation cron. It is structurally
+   * the SAME path as a manual override (requires `onBehalfOf` + a non-blank
+   * `overrideReason`, enforces the same chain-sourced authority on the actor),
+   * but additionally stamps `*_auto_override_at` so the PDF (T-209) can render
+   * the ADR-0019.1 escalation attestation instead of the manual-override
+   * language, and labels the audit row {@link actorLabel}.
+   */
+  autoOverride?: boolean;
+  /**
+   * Audit `actor_label` for this signature. The natural/manual paths leave it
+   * null (the actor_user_id carries identity); the escalation cron passes
+   * `'system:bonus-escalation'` (ADR-0019.1 §4) so the audit trail flags the
+   * automated origin.
+   */
+  actorLabel?: string;
 }
 
 export type RecordSignatureResult =
@@ -161,6 +178,7 @@ export type RecordSignatureResult =
       state: BonusPayPeriodState;
       fullySigned: boolean;
       override: boolean;
+      autoOverride: boolean;
     }
   | {
       ok: false;
@@ -263,6 +281,11 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
   const principal: UserPrincipal = { id: signer.userId, role: signer.role };
 
   const isOverride = opts.onBehalfOf !== undefined;
+  // Auto-override (T-205) is a system-fired override: it travels the SAME
+  // override path (authority + reason enforced below), only adding the
+  // `*_auto_override_at` stamp and the audit actor_label. It is meaningless
+  // without `onBehalfOf` (there is no "natural auto-signature").
+  const isAutoOverride = opts.autoOverride === true && isOverride;
   // Slot identity is CHAIN-SOURCED (T-208): on a natural signature it is the
   // slot whose configured signer is the caller; on an override it is the
   // explicit target.
@@ -316,6 +339,9 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
       [`${prefix}_signed_user_agent`]: opts.userAgent ?? null,
       [`${prefix}_override_actor_id`]: isOverride ? signer.userId : null,
       [`${prefix}_override_reason`]: isOverride ? reason : null,
+      // Only the system auto-override stamps this; a manual override leaves it
+      // null so the PDF (T-209) distinguishes the two by `*_auto_override_at`.
+      [`${prefix}_auto_override_at`]: isAutoOverride ? now : null,
     };
 
     await tx.bonusPayPeriod.update({ where: { id: monthId }, data: sigData });
@@ -323,7 +349,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     await tx.auditLog.create({
       data: {
         actor_user_id: signer.userId,
-        actor_label: null,
+        actor_label: opts.actorLabel ?? null,
         action: 'update' satisfies AuditAction,
         table_name: 'bonus_pay_periods',
         row_id: monthId,
@@ -334,6 +360,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
           signed_at: now.toISOString(),
           override: isOverride,
           ...(isOverride ? { override_actor_id: signer.userId, override_reason: reason } : {}),
+          ...(isAutoOverride ? { auto_override_at: now.toISOString() } : {}),
         },
         ip: opts.ip ?? null,
         user_agent: opts.userAgent ?? null,
@@ -384,7 +411,14 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
       });
     }
 
-    return { ok: true as const, slot, state: to, fullySigned, override: isOverride };
+    return {
+      ok: true as const,
+      slot,
+      state: to,
+      fullySigned,
+      override: isOverride,
+      autoOverride: isAutoOverride,
+    };
   });
 }
 

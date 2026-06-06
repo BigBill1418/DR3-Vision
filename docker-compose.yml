@@ -282,6 +282,63 @@ services:
       com.barnardhq.service: 'bonus-period-close'
     logging: *logging
 
+  bonus-escalation-check:
+    # Bonus signature-escalation cron host (ADR-0019.1 §3/§4/§6, T-205 + T-206).
+    #
+    # Long-running Node daemon (same shape as `bonus-period-close`): a single
+    # process under a single `unless-stopped` restart policy that sleeps until the
+    # next of four Pacific wall-clock fire times — 06:00 (t1), 07:30 (t2), 08:30
+    # (t3), 09:00 (t4) America/Los_Angeles, recomputed each cycle so it survives
+    # the Mar/Nov DST shifts — and on each fire POSTs the app's internal,
+    # loopback-guarded escalation route
+    # (`/api/internal/bonus/escalation-check?tier=<t1|t2|t3|t4>`). That route
+    # examines yesterday's-close periods (`period_end == appToday() - 1 day`,
+    # Pacific) and per still-unsigned slot:
+    #   t1 → low-urgency "still unsigned" ntfy
+    #   t2 → urgent ntfy listing the override-authorized humans
+    #   t3 → AUTO-OVERRIDE: system-sign each unsigned slot as the chain's
+    #        configured auto-override actor via the audited state machine, then
+    #        fire the PDF + M365 payroll delivery (the actor must be ACTIVE first,
+    #        else urgent ntfy + NO auto-sign — risk mitigation)
+    #   t4 → (T-206) urgent payroll-deadline-missed ntfy for any period not yet
+    #        `paid` at 09:00 PT
+    #
+    # Schedule note: the daemon fires DAILY at each time. ADR-0019.1's escalation
+    # is "every other Tuesday", but the route keys off the seeded `period_end`
+    # matching yesterday, so on a non-period morning no period matches and the
+    # fire is a clean no-op (daily-tick + Pacific date check, DST-robust — same
+    # rationale as the period-close daemon).
+    #
+    # Idempotent: t1/t2/t4 are fingerprinted+cooled in the ntfy helper; t3's
+    # auto-override is rejected by `recordSignature` for an already-signed slot,
+    # so a manual sign before 08:30 (or a restart-triggered re-POST) is never
+    # double-overridden.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-bonus-escalation-check
+    restart: unless-stopped
+    command: ['node', 'scripts/bonus-escalation-check.mjs']
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
+      # internal escalation route). Optional: when absent both sides skip the
+      # bearer check and the loopback/cf-connecting-ip guard remains the boundary.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback —
+      # this is a separate container). The route's cf-connecting-ip guard still
+      # rejects any public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'bonus-escalation-check'
+    logging: *logging
+
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     container_name: dr3-vision-cloudflared
