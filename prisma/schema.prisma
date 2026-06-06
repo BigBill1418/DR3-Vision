@@ -73,9 +73,10 @@ model Site {
   bonus_rules         ProcessorBonusRule[]
   processing_sessions ProcessingSession[]
 
-  // Bonus Management System (ADR-0019)
-  bonus_employees     BonusEmployee[]
-  bonus_months        BonusMonth[]
+  // Bonus Management System (ADR-0019; bi-weekly cadence per ADR-0019.1)
+  bonus_employees       BonusEmployee[]
+  bonus_pay_periods     BonusPayPeriod[]
+  bonus_signature_chain BonusSignatureChain?
 
   @@map("sites")
 }
@@ -172,12 +173,15 @@ model User {
   processing_sessions_authorized ProcessingSession[] @relation("SessionAuthorizedBy")
   audit_entries                  AuditLog[]
 
-  // Bonus Management System (ADR-0019)
-  bonus_employee_link            BonusEmployee[]   @relation("BonusEmployeeUser")
-  bonus_entries_authored         BonusDailyEntry[] @relation("BonusEntryAuthor")
-  bonus_months_signed_as_janette BonusMonth[]      @relation("BonusJanetteSigner")
-  bonus_months_signed_as_morena  BonusMonth[]      @relation("BonusMorenaSigner")
-  bonus_months_amended           BonusMonth[]      @relation("BonusAmender")
+  // Bonus Management System (ADR-0019; bi-weekly cadence + Eugene per ADR-0019.1 / ADR-0019.2)
+  bonus_employee_link                     BonusEmployee[]       @relation("BonusEmployeeUser")
+  bonus_entries_authored                  BonusDailyEntry[]     @relation("BonusEntryAuthor")
+  bonus_pay_periods_signed_as_facility    BonusPayPeriod[]      @relation("BonusFacilitySigner")
+  bonus_pay_periods_signed_as_ops         BonusPayPeriod[]      @relation("BonusOpsSigner")
+  bonus_pay_periods_amended               BonusPayPeriod[]      @relation("BonusAmender")
+  bonus_signature_chains_as_facility      BonusSignatureChain[] @relation("BonusFacilitySignerConfig")
+  bonus_signature_chains_as_ops           BonusSignatureChain[] @relation("BonusOpsSignerConfig")
+  bonus_signature_chains_as_auto_override BonusSignatureChain[] @relation("BonusAutoOverrideActor")
 
   @@map("users")
 }
@@ -636,13 +640,14 @@ model FormTemplate {
 // Site-scoped so Eugene can be enabled in V2.1+ with no migration.
 // ────────────────────────────────────────────────────────────────────────
 
-enum BonusMonthState {
-  draft // current month, daily entries being added
-  pending_signatures // month ended, awaiting first signature
+enum BonusPayPeriodState {
+  draft // current period, daily entries being added
+  pending_signatures // period closed, awaiting first signature
   partially_signed // one signature in, awaiting second
   signed // both signatures captured, PDF generated
   paid // PDF sent to payroll@svdp.us via M365 Graph
   amended // post-signature edit (Bill-only override)
+  skipped // NEW (ADR-0019.1): pre-cutover periods with no data; terminal, no PDF
 }
 
 model BonusEmployee {
@@ -675,8 +680,8 @@ model BonusDailyEntry {
   id                String        @id @default(uuid())
   bonus_employee_id String
   bonus_employee    BonusEmployee @relation(fields: [bonus_employee_id], references: [id])
-  bonus_month_id    String
-  bonus_month       BonusMonth    @relation(fields: [bonus_month_id], references: [id])
+  bonus_pay_period_id String         // was bonus_month_id
+  bonus_pay_period    BonusPayPeriod @relation(fields: [bonus_pay_period_id], references: [id])
 
   entry_date     DateTime @db.Date
   mattress_count Int // 0..999 valid, soft-warn above 200
@@ -688,39 +693,49 @@ model BonusDailyEntry {
   entered_at         DateTime @default(now())
 
   @@unique([bonus_employee_id, entry_date])
-  @@index([bonus_month_id])
+  @@index([bonus_pay_period_id])
   @@index([entry_date])
   @@map("bonus_daily_entries")
 }
 
-model BonusMonth {
+model BonusPayPeriod {
   id      String @id @default(uuid())
   site_id String
   site    Site   @relation(fields: [site_id], references: [id])
 
-  month_start DateTime        @db.Date // first day of the month
-  month_end   DateTime        @db.Date // last day of the month
-  state       BonusMonthState @default(draft)
+  // ─── Period identity (NEW columns per ADR-0019.1) ──────────────────
+  period_number Int      // 1..26
+  period_year   Int      // e.g. 2026
+  pay_date      DateTime @db.Date // Fri, ~4 days after period_end
 
-  // ─── Janette's signature (facility manager attestation) ────────────
-  janette_signed_by_user_id String?
-  janette_signed_by         User?     @relation("BonusJanetteSigner", fields: [janette_signed_by_user_id], references: [id])
-  janette_signed_at         DateTime?
-  janette_signed_ip         String?
-  janette_signed_user_agent String?
-  // Set when Bill or Morena signed in her place per ADR-0019 §5
-  janette_override_actor_id String?
-  janette_override_reason   String?
+  // ─── Boundaries (was month_start / month_end) ──────────────────────
+  period_start DateTime            @db.Date // Tue
+  period_end   DateTime            @db.Date // Mon (14 days after period_start, inclusive boundary)
+  state        BonusPayPeriodState @default(draft)
 
-  // ─── Morena's signature (operations manager attestation) ───────────
-  morena_signed_by_user_id String?
-  morena_signed_by         User?     @relation("BonusMorenaSigner", fields: [morena_signed_by_user_id], references: [id])
-  morena_signed_at         DateTime?
-  morena_signed_ip         String?
-  morena_signed_user_agent String?
-  // Set when Bill signed in her place per ADR-0019 §5 (only Bill can override Morena)
-  morena_override_actor_id String?
-  morena_override_reason   String?
+  // ─── Facility signature (was janette_*; facility manager attestation) ──
+  facility_signed_by_user_id String?
+  facility_signed_by         User?     @relation("BonusFacilitySigner", fields: [facility_signed_by_user_id], references: [id])
+  facility_signed_at         DateTime?
+  facility_signed_ip         String?
+  facility_signed_user_agent String?
+  // Set when an override actor signed in the facility signer's place per ADR-0019 §5
+  facility_override_actor_id String?
+  facility_override_reason   String?
+  // NEW (ADR-0019.1 §4): when the system auto-signed this slot. NULL = human signed.
+  facility_auto_override_at  DateTime?
+
+  // ─── Ops signature (was morena_*; operations manager attestation) ──
+  ops_signed_by_user_id String?
+  ops_signed_by         User?     @relation("BonusOpsSigner", fields: [ops_signed_by_user_id], references: [id])
+  ops_signed_at         DateTime?
+  ops_signed_ip         String?
+  ops_signed_user_agent String?
+  // Set when an override actor (Bill) signed in the ops signer's place per ADR-0019 §5
+  ops_override_actor_id String?
+  ops_override_reason   String?
+  // NEW (ADR-0019.1 §4): when the system auto-signed this slot. NULL = human signed.
+  ops_auto_override_at  DateTime?
 
   // ─── PDF artifact ──────────────────────────────────────────────────
   pdf_storage_key  String? // R2 key
@@ -732,14 +747,14 @@ model BonusMonth {
   payroll_retry_count Int       @default(0)
 
   // ─── Amendment tracking per ADR-0019 §6 ────────────────────────────
-  // If this month was created by amending an earlier month, points to it
-  amended_from_month_id String?     @unique
-  amended_from          BonusMonth? @relation("BonusAmendment", fields: [amended_from_month_id], references: [id])
-  amended_into          BonusMonth? @relation("BonusAmendment")
-  amendment_reason      String?
-  amended_by_user_id    String?
-  amended_by            User?       @relation("BonusAmender", fields: [amended_by_user_id], references: [id])
-  amended_at            DateTime?
+  // If this period was created by amending an earlier period, points to it
+  amended_from_period_id String?         @unique
+  amended_from           BonusPayPeriod? @relation("BonusAmendment", fields: [amended_from_period_id], references: [id])
+  amended_into           BonusPayPeriod? @relation("BonusAmendment")
+  amendment_reason       String?
+  amended_by_user_id     String?
+  amended_by             User?           @relation("BonusAmender", fields: [amended_by_user_id], references: [id])
+  amended_at             DateTime?
 
   // Computed at sign time, locked thereafter (re-computed only on amendment)
   total_payout_cents Int?
@@ -749,7 +764,43 @@ model BonusMonth {
 
   daily_entries BonusDailyEntry[]
 
-  @@unique([site_id, month_start])
+  @@unique([site_id, period_start])               // semantically same as old (site_id, month_start)
+  @@unique([site_id, period_year, period_number]) // NEW — fast canonical period lookup
   @@index([site_id, state])
-  @@map("bonus_months")
+  @@index([pay_date])                             // NEW — upcoming-deadline queries
+  @@map("bonus_pay_periods")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// NEW table: bonus_signature_chains (per ADR-0019.2 §2)
+// Per-site configuration of who signs which slot and who can override.
+// Seeded for both sites at deploy time (T-201).
+// ────────────────────────────────────────────────────────────────────────
+
+model BonusSignatureChain {
+  id      String @id @default(uuid())
+  site_id String @unique
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  // Facility slot
+  facility_signer_user_id     String
+  facility_signer             User   @relation("BonusFacilitySignerConfig", fields: [facility_signer_user_id], references: [id])
+  // Comma-separated list of user UUIDs that may override the facility slot.
+  // Stored as a string for portability; parsed at use site (cardinality <= 3).
+  facility_override_actor_ids String // e.g. "uuid-bill,uuid-morena" for Woodland
+
+  // Ops slot
+  ops_signer_user_id     String
+  ops_signer             User   @relation("BonusOpsSignerConfig", fields: [ops_signer_user_id], references: [id])
+  ops_override_actor_ids String // e.g. "uuid-bill" for Woodland (Bill-only override)
+
+  // The user who fires the auto-override at Tue 08:30 PT per ADR-0019.1 §4.
+  // Same across all sites today (Bill); future-flexible.
+  auto_override_actor_user_id String
+  auto_override_actor         User   @relation("BonusAutoOverrideActor", fields: [auto_override_actor_user_id], references: [id])
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("bonus_signature_chains")
 }

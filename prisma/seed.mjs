@@ -14,13 +14,21 @@
 //   4. site_holidays          -- depends on sites
 //   5. processor_bonus_rules  -- depends on sites
 //   6. sources                -- depends on sites
+//   7. bonus_pay_periods      -- depends on sites (ADR-0019.1 / T-201)
+//   8. bonus_signature_chains -- depends on sites + users (resolves signer
+//                                emails to user ids; ADR-0019.2 / T-201)
+//   9. bonus post-seed DDL    -- NOT NULL + canonical unique index, applied
+//                                after the 52 rows are in place (T-201)
 //
 // Re-runs are safe: existing rows update, new rows insert, never duplicate.
+// The post-seed DDL is idempotent (SET NOT NULL re-issue is a no-op;
+// CREATE UNIQUE INDEX IF NOT EXISTS).
 //
 // Verification: at the end the script asserts the row counts documented
 // in `prisma/seed/README.md` (sites=2, users=5, site_holidays=24,
-// processor_bonus_rules=2, sources=111, transporters=11). Mismatches
-// throw and abort the seed — investigate the CSV before proceeding.
+// processor_bonus_rules=2, sources=111, transporters=11,
+// bonus_pay_periods=52, bonus_signature_chains=2). Mismatches throw and
+// abort the seed — investigate the CSV before proceeding.
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import Papa from 'papaparse';
@@ -54,6 +62,51 @@ function intOrNull(v) {
 
 function bool(v) {
   return String(v).toLowerCase() === 'true';
+}
+
+// Parse a YYYY-MM-DD CSV cell as a date-only value at UTC midnight, matching
+// the @db.Date columns (Postgres DATE has no time/zone). Same convention as
+// seedSiteHolidays / seedProcessorBonusRules above.
+function dateOnly(v) {
+  const s = blankToNull(v);
+  if (s == null) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw new Error(`Expected YYYY-MM-DD date, got '${v}'`);
+  }
+  return new Date(`${s}T00:00:00Z`);
+}
+
+// ─── Signature-chain email reconciliation ────────────────────────────────
+// `bonus_signature_chains.csv` identifies signers/override-actors by EMAIL,
+// but those emails do not all match the canonical addresses seeded by
+// `users.csv`. Two documented discrepancies (flagged in the T-200/T-201
+// report, NOT silently absorbed):
+//
+//   1. Short-form addresses in the chain CSV (janette@ / morena@ / rick@)
+//      are abbreviations of the canonical `.full@svdp.us` form used in
+//      users.csv AND in the cutover runbook's Entra-account list
+//      (docs/v3 add/bonus-cadence-and-eugene-cutover.md). The chain CSV
+//      itself was corrected to the canonical form when copied into
+//      prisma/seed/; this map is defense-in-depth in case a future CSV
+//      regresses to the short form.
+//   2. Bill is seeded in users.csv as `operations@svdp.us`, but the chain
+//      CSV + runbook refer to him as `bill.barnard@svdp.us`. Until users.csv
+//      adopts bill.barnard@ (out of scope for T-201 — it would change an
+//      existing seeded identity), we resolve bill.barnard@ → operations@.
+//
+// If a referenced email cannot be resolved to a seeded user, the seed throws
+// loudly (matching the runbook's "deploy will fail if a referenced user can't
+// be found" contract) rather than silently dropping a signer.
+const SIGNATURE_CHAIN_EMAIL_ALIASES = {
+  'bill.barnard@svdp.us': 'operations@svdp.us',
+  'janette@svdp.us': 'janette.thomas@svdp.us',
+  'morena@svdp.us': 'morena.gomez@svdp.us',
+  'rick@svdp.us': 'rick.albritton@svdp.us',
+};
+
+function resolveSignerEmail(email) {
+  const e = email.trim().toLowerCase();
+  return SIGNATURE_CHAIN_EMAIL_ALIASES[e] ?? e;
 }
 
 async function seedSites() {
@@ -213,6 +266,134 @@ async function seedSources(siteIds) {
   }
 }
 
+// ─── Bonus bi-weekly pay periods (ADR-0019.1 / T-201) ────────────────────
+// 26 periods × 2 sites = 52 rows. Idempotent upsert keyed on the canonical
+// (site_id, period_year, period_number). The unique index backing that key is
+// created post-seed (see seedBonusPostSeedDdl) because period_number /
+// period_year were added NULL-allowed by the migration; we use findFirst +
+// create/update here so the seed is safe both before and after that index
+// exists.
+async function seedBonusPayPeriods(siteIds) {
+  const rows = parseCsv('bonus_pay_periods_2026.csv');
+  for (const r of rows) {
+    const site_id = siteIds.get(r.site_code);
+    if (!site_id) {
+      throw new Error(`bonus_pay_periods_2026.csv: unknown site_code='${r.site_code}'`);
+    }
+    const period_number = Number.parseInt(r.period_number, 10);
+    const period_year = Number.parseInt(r.period_year, 10);
+    if (!Number.isInteger(period_number) || !Number.isInteger(period_year)) {
+      throw new Error(
+        `bonus_pay_periods_2026.csv: bad period_number/period_year for ${r.site_code} (${r.period_number}/${r.period_year})`,
+      );
+    }
+    const data = {
+      site_id,
+      period_number,
+      period_year,
+      period_start: dateOnly(r.period_start),
+      period_end: dateOnly(r.period_end),
+      pay_date: dateOnly(r.pay_date),
+    };
+    const existing = await prisma.bonusPayPeriod.findFirst({
+      where: { site_id, period_year, period_number },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.bonusPayPeriod.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.bonusPayPeriod.create({ data });
+    }
+  }
+}
+
+// ─── Bonus signature chains (ADR-0019.2 §2 / T-201) ──────────────────────
+// 2 rows (Woodland + Eugene). The CSV identifies signers/override-actors by
+// EMAIL; we resolve to user UUIDs at seed time (see resolveSignerEmail and the
+// SIGNATURE_CHAIN_EMAIL_ALIASES note). Override-actor email lists are
+// comma-separated; we resolve each and store back as a comma-separated list of
+// UUIDs in the *_override_actor_ids string columns. Idempotent upsert keyed on
+// site_id (one chain per site).
+async function seedBonusSignatureChains(siteIds) {
+  const users = await prisma.user.findMany({ select: { id: true, email: true } });
+  const userIdByEmail = new Map(
+    users.filter((u) => u.email).map((u) => [u.email.toLowerCase(), u.id]),
+  );
+
+  const resolve = (rawEmail, ctx) => {
+    const canonical = resolveSignerEmail(rawEmail);
+    const id = userIdByEmail.get(canonical);
+    if (!id) {
+      throw new Error(
+        `bonus_signature_chains.csv: cannot resolve ${ctx} email '${rawEmail}' ` +
+          `(canonical '${canonical}') to a seeded user. Seed users first, or fix the email.`,
+      );
+    }
+    return id;
+  };
+
+  const resolveList = (rawList, ctx) =>
+    String(rawList)
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean)
+      .map((e) => resolve(e, ctx))
+      .join(',');
+
+  const rows = parseCsv('bonus_signature_chains.csv');
+  for (const r of rows) {
+    const site_id = siteIds.get(r.site_code);
+    if (!site_id) {
+      throw new Error(`bonus_signature_chains.csv: unknown site_code='${r.site_code}'`);
+    }
+    const data = {
+      site_id,
+      facility_signer_user_id: resolve(r.facility_signer_email, `${r.site_code} facility_signer`),
+      facility_override_actor_ids: resolveList(
+        r.facility_override_actor_emails,
+        `${r.site_code} facility_override`,
+      ),
+      ops_signer_user_id: resolve(r.ops_signer_email, `${r.site_code} ops_signer`),
+      ops_override_actor_ids: resolveList(
+        r.ops_override_actor_emails,
+        `${r.site_code} ops_override`,
+      ),
+      auto_override_actor_user_id: resolve(
+        r.auto_override_actor_email,
+        `${r.site_code} auto_override_actor`,
+      ),
+    };
+    await prisma.bonusSignatureChain.upsert({
+      where: { site_id },
+      create: data,
+      update: data,
+    });
+  }
+}
+
+// ─── Post-seed DDL (T-201) ───────────────────────────────────────────────
+// The migration added period_number / period_year / pay_date as NULL-allowed
+// so the in-place table rename could land before data existed. Now that the
+// 52 rows are seeded, tighten the constraints and add the canonical unique
+// index. All statements are idempotent (IF NOT EXISTS / re-issuing SET NOT
+// NULL on an already-NOT-NULL column is a no-op), so re-running the seed is
+// safe.
+async function seedBonusPostSeedDdl() {
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE bonus_pay_periods ALTER COLUMN period_number SET NOT NULL',
+  );
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE bonus_pay_periods ALTER COLUMN period_year SET NOT NULL',
+  );
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE bonus_pay_periods ALTER COLUMN pay_date SET NOT NULL',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS bonus_pay_periods_site_id_period_year_period_number_key ' +
+      'ON bonus_pay_periods(site_id, period_year, period_number)',
+  );
+}
+
 async function assertCounts() {
   const expected = {
     sites: 2,
@@ -221,6 +402,8 @@ async function assertCounts() {
     processor_bonus_rules: 2,
     sources: 111,
     transporters: 11,
+    bonus_pay_periods: 52, // 26 periods × 2 sites (ADR-0019.1 / T-201)
+    bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
   };
   const actual = {
     sites: await prisma.site.count(),
@@ -229,6 +412,8 @@ async function assertCounts() {
     processor_bonus_rules: await prisma.processorBonusRule.count(),
     sources: await prisma.source.count(),
     transporters: await prisma.transporter.count(),
+    bonus_pay_periods: await prisma.bonusPayPeriod.count(),
+    bonus_signature_chains: await prisma.bonusSignatureChain.count(),
   };
   const mismatches = Object.keys(expected).filter((k) => actual[k] !== expected[k]);
   if (mismatches.length > 0) {
@@ -252,6 +437,12 @@ async function main() {
   await seedProcessorBonusRules(siteIds);
   console.log('▶ seeding sources');
   await seedSources(siteIds);
+  console.log('▶ seeding bonus pay periods');
+  await seedBonusPayPeriods(siteIds);
+  console.log('▶ seeding bonus signature chains');
+  await seedBonusSignatureChains(siteIds);
+  console.log('▶ applying bonus post-seed DDL');
+  await seedBonusPostSeedDdl();
   const counts = await assertCounts();
   console.log('✔ seed complete:', counts);
 }

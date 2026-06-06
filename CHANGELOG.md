@@ -5,6 +5,55 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave A foundation: bi-weekly cadence schema + seed (T-200, T-201)
+
+Foundation for the monthly→bi-weekly bonus cadence (ADR-0019.1) and Eugene
+site enablement (ADR-0019.2). Schema + seed only; the TypeScript-wide rename
+refactor is T-202 (still pending — `tsc --noEmit` reports 30 expected
+old-name errors confined to the 10 bonus/m365 files T-202 will update).
+
+- **T-200 — schema migration.** New migration
+  `prisma/migrations/20260606_bi_weekly_pay_periods/` renames `bonus_months`→
+  `bonus_pay_periods` in place (preserving OIDs/FKs), renames the boundary
+  columns (`month_start`→`period_start`, `month_end`→`period_end`), the
+  signature columns (`janette_*`→`facility_*`, `morena_*`→`ops_*`), the enum
+  (`BonusMonthState`→`BonusPayPeriodState`, plus a new terminal `skipped`
+  value for the Period 12 bootstrap), and the `bonus_daily_entries` FK
+  (`bonus_month_id`→`bonus_pay_period_id`). Adds `period_number` /
+  `period_year` / `pay_date` (NULL-allowed; tightened post-seed), the
+  `*_auto_override_at` timestamps, a `pay_date` index, and the new
+  `bonus_signature_chains` table (per-site signer/override config). A
+  hand-applied `down.sql` reverses the renames for emergency rollback (not run
+  by Prisma migrate). `prisma/schema.prisma` updated to match; client
+  regenerated with `BonusPayPeriod`, `BonusPayPeriodState`,
+  `BonusSignatureChain`. Verified end-to-end against a throwaway Postgres 16
+  (all 7 migrations apply cleanly via `prisma migrate deploy`).
+- **T-201 — pay-period + signature-chain seed.** Two new CSVs in
+  `prisma/seed/` (`bonus_pay_periods_2026.csv` = 26 periods × 2 sites = 52
+  rows; `bonus_signature_chains.csv` = Woodland + Eugene). `prisma/seed.mjs`
+  gains `seedBonusPayPeriods()` (idempotent on `site_id`+`period_year`+
+  `period_number`), `seedBonusSignatureChains()` (idempotent on `site_id`,
+  resolves signer/override EMAILS to user ids at seed time), and a post-seed
+  DDL step (NOT NULL on the period-identity columns + the canonical unique
+  index). `assertCounts()` now also asserts `bonus_pay_periods=52` and
+  `bonus_signature_chains=2`. Verified on the scratch DB: 52 + 2 rows, Eugene
+  Period 13 reads `period_start=2026-06-09 / period_end=2026-06-22 /
+pay_date=2026-06-26`, signature chains resolve to the correct people
+  (Woodland: Janette/Morena, overrides Bill+Morena / Bill; Eugene: Rick/Kelsey,
+  overrides Bill+Kelsey / Bill; auto-override Bill at both), and re-running the
+  seed is a no-op.
+- **Signer-email reconciliation (flagged, not silently absorbed).** The
+  provided `bonus_signature_chains.csv` identified signers by emails that did
+  not all match the seeded `users.csv`. The three short-form addresses
+  (`janette@`/`morena@`/`rick@`) were normalized to the canonical
+  `.full@svdp.us` form used by `users.csv` and the cutover runbook's Entra
+  list. Bill's case is a genuine identity gap — the chain CSV + runbook call
+  him `bill.barnard@svdp.us` but `users.csv` seeds him as
+  `operations@svdp.us`; the seed resolves `bill.barnard@`→`operations@` via a
+  documented alias map (changing `users.csv` is out of scope for T-201). The
+  resolver throws loudly if any referenced email is unresolvable, matching the
+  runbook's "deploy will fail if a referenced user can't be found" contract.
+
 ### 2026-06-06 — Bonus management surface re-themed to the dark-space/cyan identity
 
 Converted the entire Bonus management surface (`src/app/bonus/**`, 13 files) from
