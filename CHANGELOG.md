@@ -5,6 +5,48 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Fix: post-action / post-login redirect lands on site picker instead of dashboard
+
+**Symptom (operator):** after finishing a task ("when I finish something
+somewhere") the user was dropped on the `/dashboard` site picker — the
+Sprint-1 page listing the two MyMRC facilities (Woodland / Eugene) — rather
+than the role-aware Vision Dashboard at `/` (ADR-0020, T-107).
+
+**Root cause:** two related funnels still pointed at the legacy site picker:
+
+1. **Post-login default.** `src/app/login/login-form.tsx` defaulted the
+   `redirectTo` to `'/dashboard'` when no deep-link `?next=` was present. So
+   any re-auth / "go home" with no stashed target landed on the picker.
+2. **"Back to dashboard" breadcrumbs + wrong-role guards.** Every Bonus,
+   Admin, and Exports page's "Back to dashboard" `<Link>` (labelled
+   _dashboard_) and four wrong-role `redirect('/dashboard')` guards
+   (loads, exports, operator load + queue) also targeted the picker.
+
+The completion flows themselves were already correct (sign / amend /
+resubmit / override / daily-entry use `router.refresh()`; CSV upload advances
+to the new reconciliation detail; month-close advances to the month detail) —
+none of those were changed.
+
+**Fix:**
+
+- New dependency-free `src/lib/routes.ts`: `HOME_ROUTE = '/'` (the Vision
+  Dashboard), `SITE_PICKER_ROUTE = '/dashboard'`, and
+  `resolvePostLoginTarget(next)` — honors a safe internal deep-link, falls
+  back to `HOME_ROUTE` otherwise, and rejects external / protocol-relative
+  `next` values (open-redirect guard) and `/login` loops.
+- `login-form.tsx` now uses `resolvePostLoginTarget(search.get('next'))`.
+- All "Back to dashboard" links (Bonus, Admin, Exports) → `HOME_ROUTE`.
+- The four wrong-role `redirect('/dashboard')` guards → `redirect(HOME_ROUTE)`
+  (which then routes operators onward to `/operator`).
+- **Left intentionally:** the seven "Back to your sites" / `back_to_sites`
+  links under `/dashboard/[site]/*` (the site detail subtree is reached via
+  the picker, so its back-link belongs there), and the "Operations Dashboard"
+  tile whose route is the picker.
+
+Tests: `src/lib/routes.test.ts` (13 cases) covers the default-to-home
+behavior, deep-link passthrough, the open-redirect guard, and the login-loop
+guard. Full suite 491 passing; `tsc --noEmit` clean; lint clean.
+
 ### 2026-06-06 — Fix: Playwright base-image/package version mismatch (PDF + MyMRC cron)
 
 Post-deploy triage caught the `mymrc-scrape` cron crash-looping with

@@ -1,6 +1,7 @@
 import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
+import { HOME_ROUTE } from '@/lib/routes';
 import { LoadStatus, type Prisma } from '@prisma/client';
 import Link from 'next/link';
 import { LoadsFilters, type LoadsFilterOption } from './loads-filters';
@@ -88,7 +89,10 @@ function parseRange(raw: string | undefined): Range {
 
 function parseStatuses(raw: string | undefined): LoadStatus[] {
   if (raw === undefined) return DEFAULT_STATUSES;
-  const tokens = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const tokens = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (tokens.length === 0) return [];
   const valid = new Set<string>(ALL_STATUSES);
   const filtered = tokens.filter((t): t is LoadStatus => valid.has(t));
@@ -160,7 +164,9 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   // their own auth flow.
   const role = session.user.role;
   if (role !== 'manager' && role !== 'admin') {
-    redirect('/dashboard');
+    // Wrong-role bounce → role-aware home (routes operators to /operator),
+    // not the site picker. See src/lib/routes.ts.
+    redirect(HOME_ROUTE);
   }
 
   const site = await prisma.site.findUnique({
@@ -378,4 +384,3 @@ function toDateInputValue(d: Date): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
-

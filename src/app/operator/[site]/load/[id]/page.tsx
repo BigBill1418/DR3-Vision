@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { LoadWorkflow } from './load-workflow';
+import { HOME_ROUTE } from '@/lib/routes';
 
 // Workflow shell. The whole 7-stage flow lives in the
 // `LoadWorkflow` client component and dispatches by `load.status`.
@@ -18,7 +19,7 @@ export default async function LoadPage({ params }: Props) {
   const { site: siteCode, id: loadId } = await params;
   const session = await auth();
   if (!session?.user) redirect(`/operator/${siteCode}`);
-  if (session.user.role !== 'operator') redirect('/dashboard');
+  if (session.user.role !== 'operator') redirect(HOME_ROUTE);
 
   const site = await prisma.site.findUnique({
     where: { code: siteCode },
@@ -66,7 +67,8 @@ export default async function LoadPage({ params }: Props) {
             {load.source?.name ?? t('load_header.unknown_source')}
           </h1>
           <p className="text-sm text-dr3-cream/70">
-            {load.transporter?.name ?? t('load_header.unknown_carrier')} · {t('load_header.bol_label')}{' '}
+            {load.transporter?.name ?? t('load_header.unknown_carrier')} ·{' '}
+            {t('load_header.bol_label')}{' '}
             <span className="font-mono">{load.bol_number ?? t('load_header.bol_dash')}</span>
           </p>
         </header>

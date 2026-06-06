@@ -15,6 +15,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { ExportsClient, type SiteOption } from './ExportsClient';
+import { HOME_ROUTE } from '@/lib/routes';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,10 +23,10 @@ export default async function ExportsPage() {
   const session = await auth();
   if (!session?.user) redirect('/login');
 
-  // Operators have no business on the exports page; redirect them
-  // back to the dashboard rather than render a 403 - the surface
-  // shouldn't even exist in their UX.
-  if (session.user.role === 'operator') redirect('/dashboard');
+  // Operators have no business on the exports page; redirect them to the
+  // role-aware home (which routes them onward to /operator) rather than
+  // render a 403 - the surface shouldn't even exist in their UX.
+  if (session.user.role === 'operator') redirect(HOME_ROUTE);
 
   const allSites = await prisma.site.findMany({
     select: { id: true, code: true, name: true },
@@ -84,7 +85,7 @@ function PageHeader({ name, role }: { name: string; role: string }) {
 function BackLink() {
   return (
     <Link
-      href="/dashboard"
+      href={HOME_ROUTE}
       className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
     >
       Back to dashboard

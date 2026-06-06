@@ -8,6 +8,7 @@ import { PendingBanner } from './pending-banner';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
 import { SignOutButton } from './sign-out-button';
+import { HOME_ROUTE } from '@/lib/routes';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
 // list of in-window inbound hauls for the operator's site, ordered
@@ -33,7 +34,7 @@ export default async function OperatorQueuePage({ params }: Props) {
   const { site: siteCode } = await params;
   const session = await auth();
   if (!session?.user) redirect(`/operator/${siteCode}`);
-  if (session.user.role !== 'operator') redirect('/dashboard');
+  if (session.user.role !== 'operator') redirect(HOME_ROUTE);
 
   const site = await prisma.site.findUnique({
     where: { code: siteCode },

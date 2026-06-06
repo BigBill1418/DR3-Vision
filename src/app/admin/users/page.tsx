@@ -6,6 +6,7 @@
 // URL-driven filters (?site=&role=&status=) so refresh-keeps-state.
 
 import Link from 'next/link';
+import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { checkAdmin } from '@/lib/auth-helpers';
@@ -61,7 +62,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
       <div className="mx-auto flex max-w-6xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
-            href="/dashboard"
+            href={HOME_ROUTE}
             className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
           >
             ← {M.backToDashboard}
@@ -131,10 +132,7 @@ function Filters({ sites, siteCode, role, status }: FiltersProps) {
         ))}
       </FilterGroup>
       <FilterGroup label={M.list.filterRole}>
-        <FilterLink
-          href={buildHref({ site: siteCode, role: undefined, status })}
-          active={!role}
-        >
+        <FilterLink href={buildHref({ site: siteCode, role: undefined, status })} active={!role}>
           {M.list.filterAllRoles}
         </FilterLink>
         {ROLES.map((r) => (
@@ -227,7 +225,7 @@ function ForbiddenPage() {
       <h1 className="text-2xl font-semibold">{M.forbiddenHeading}</h1>
       <p className="mt-2 text-dr3-cream/70">{M.forbiddenBody}</p>
       <Link
-        href="/dashboard"
+        href={HOME_ROUTE}
         className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
       >
         {M.backToDashboard}

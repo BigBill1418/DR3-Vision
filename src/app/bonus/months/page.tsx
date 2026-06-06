@@ -12,6 +12,7 @@
 // calculator so the figure can never diverge from the PDF/CSV.
 
 import Link from 'next/link';
+import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { formatCents } from '@/lib/bonus/calculator';
@@ -180,7 +181,7 @@ function ForbiddenPage() {
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
-        href="/dashboard"
+        href={HOME_ROUTE}
         className="mt-6 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink"
       >
         Back to dashboard

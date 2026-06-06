@@ -10,6 +10,7 @@
 // employee has prior names. Each month row links to that month's detail page.
 
 import Link from 'next/link';
+import { HOME_ROUTE } from '@/lib/routes';
 import { notFound, redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { employeeHistory, type EmployeeMonthTotal } from '@/lib/bonus/aggregates';
@@ -167,7 +168,7 @@ function ForbiddenPage() {
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
-        href="/dashboard"
+        href={HOME_ROUTE}
         className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
       >
         Back to dashboard

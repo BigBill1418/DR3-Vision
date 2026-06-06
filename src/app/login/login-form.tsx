@@ -4,6 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { useT } from '@/i18n/provider';
+import { resolvePostLoginTarget } from '@/lib/routes';
 
 // Single SSO button — Microsoft Entra ID (ADR-0016). Per CLAUDE.md
 // hard rule #10 the surface uses an onClick handler instead of a
@@ -26,7 +27,10 @@ import { useT } from '@/i18n/provider';
 export function LoginForm() {
   const search = useSearchParams();
   const t = useT();
-  const next = search.get('next') ?? '/dashboard';
+  // Default landing is the role-aware Vision Dashboard at `/` (HOME_ROUTE),
+  // NOT the `/dashboard` site picker. A safe deep-link in `?next=` is honored;
+  // external/unsafe values fall back to home. See src/lib/routes.ts.
+  const next = resolvePostLoginTarget(search.get('next'));
   const errorParam = search.get('error');
 
   const [busy, setBusy] = useState(false);

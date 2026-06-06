@@ -12,6 +12,7 @@
 // the signer name/role/timestamp is shown and the button is hidden.
 
 import Link from 'next/link';
+import { HOME_ROUTE } from '@/lib/routes';
 import { notFound, redirect } from 'next/navigation';
 import { checkBonusAccess } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
@@ -389,7 +390,7 @@ function ForbiddenPage() {
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
-        href="/dashboard"
+        href={HOME_ROUTE}
         className="mt-6 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink"
       >
         Back to dashboard
