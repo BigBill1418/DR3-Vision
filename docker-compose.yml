@@ -163,6 +163,17 @@ services:
       retries: 3
 
   mymrc-scrape:
+    # DISABLED 2026-06-06 (operator request) — the MyMRC scrape is OFF until the
+    # MyMRC service-account credentials are provisioned. The `mymrc` Compose
+    # profile keeps this config intact but excludes the service from the default
+    # `docker compose up -d` (and the swarmpilot deployer's up -d), so the
+    # container is never created/started. To RE-ENABLE: (1) drop MYMRC_* creds
+    # per docs/operator/mymrc-setup.md, (2) ensure the mymrc-auth volume is owned
+    # by uid 1001 (the runner runs as `nextjs`; bring back the Dockerfile chown
+    # or run `docker run --rm -v dr3-vision_mymrc-auth-state:/v alpine chown -R
+    # 1001:1001 /v`), (3) start with `docker compose --profile mymrc up -d`, and
+    # (4) re-add `mymrc-scrape` to the noc-master service-registry containers[].
+    profiles: ['mymrc']
     # Hourly cron host for the MyMRC scheduled-hauls scrape (T-015 /
     # ADR-0009). Long-running Node process that re-spawns
     # `scripts/mymrc-scrape.mjs` once on boot and once at the top of
