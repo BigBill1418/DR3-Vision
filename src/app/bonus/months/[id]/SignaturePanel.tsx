@@ -134,7 +134,7 @@ export function SignaturePanel({
 
   if (!canSign && overrideTargets.length === 0) {
     return (
-      <p className="text-sm text-dr3-cream/70">
+      <p className="text-sm text-dr3-mist-dim">
         {viewerSlot && slotSigned(viewerSlot)
           ? 'You have signed this month.'
           : 'You are not an assigned signer for this month.'}
@@ -148,7 +148,7 @@ export function SignaturePanel({
         <button
           type="button"
           onClick={openNatural}
-          className="self-start rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse/70"
+          className="self-start rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition hover:bg-dr3-cyan-bright focus:outline-none focus:ring-2 focus:ring-dr3-cyan/70"
         >
           {SLOT_LABEL[viewerSlot!]}
         </button>
@@ -159,7 +159,7 @@ export function SignaturePanel({
           key={slot}
           type="button"
           onClick={() => openOverride(slot)}
-          className="self-start text-sm text-dr3-cream/80 underline underline-offset-4 transition hover:text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse/70"
+          className="self-start text-sm text-dr3-mist-dim underline underline-offset-4 transition hover:text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan/70"
         >
           Sign on behalf of {SLOT_ASSIGNEE[slot]}
         </button>
@@ -172,19 +172,19 @@ export function SignaturePanel({
           aria-label={isOverride ? 'Sign on behalf of another signer' : 'Confirm signature'}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
         >
-          <div className="w-full max-w-md rounded-lg bg-dr3-cream p-6 text-dr3-ink shadow-xl">
+          <div className="w-full max-w-md rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl">
             <h2 className="text-lg font-bold">
               {isOverride
                 ? `Sign on behalf of ${SLOT_ASSIGNEE[activeSlot]}`
                 : 'Confirm your signature'}
             </h2>
-            <p className="mt-3 text-sm leading-relaxed">{ATTESTATION}</p>
+            <p className="mt-3 text-sm leading-relaxed text-dr3-mist-dim">{ATTESTATION}</p>
 
             {isOverride && (
               <div className="mt-4">
                 <label htmlFor="override-reason" className="block text-sm font-medium">
                   Reason for signing on behalf of {SLOT_ASSIGNEE[activeSlot]}
-                  <span className="text-red-700"> *</span>
+                  <span className="text-red-400"> *</span>
                 </label>
                 <textarea
                   id="override-reason"
@@ -193,13 +193,16 @@ export function SignaturePanel({
                   onChange={(e) => setReason(e.target.value)}
                   rows={3}
                   placeholder="e.g. Janette is on leave this week"
-                  className="mt-1 w-full rounded-md border border-dr3-ink/20 bg-white px-3 py-2 text-sm focus:border-dr3-green-dark focus:outline-none focus:ring-1 focus:ring-dr3-green-dark"
+                  className="mt-1 w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:border-dr3-cyan focus:outline-none focus:ring-1 focus:ring-dr3-cyan"
                 />
               </div>
             )}
 
             {error && (
-              <p role="alert" className="mt-3 rounded bg-red-100 px-3 py-2 text-sm text-red-800">
+              <p
+                role="alert"
+                className="mt-3 rounded border border-red-500/30 bg-red-900/40 px-3 py-2 text-sm text-red-100"
+              >
                 {error}
               </p>
             )}
@@ -209,7 +212,7 @@ export function SignaturePanel({
                 type="button"
                 onClick={close}
                 disabled={submitting}
-                className="rounded-md px-4 py-2 text-sm font-medium text-dr3-ink/70 hover:text-dr3-ink disabled:opacity-50"
+                className="rounded-md px-4 py-2 text-sm font-medium text-dr3-mist-dim hover:text-dr3-mist disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -217,7 +220,7 @@ export function SignaturePanel({
                 type="button"
                 onClick={submit}
                 disabled={submitting || (isOverride && reason.trim().length === 0)}
-                className="rounded-md bg-dr3-green-deep px-4 py-2 text-sm font-semibold text-dr3-cream transition hover:bg-dr3-green-dark disabled:opacity-50"
+                className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition hover:bg-dr3-cyan-bright disabled:opacity-50"
               >
                 {submitting ? 'Signing…' : 'I certify & sign'}
               </button>

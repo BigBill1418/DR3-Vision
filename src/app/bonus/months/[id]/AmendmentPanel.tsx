@@ -94,7 +94,7 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
   if (state === 'signed' || state === 'paid') {
     return (
       <div className="flex flex-col gap-3" data-testid="amendment-unlock">
-        <p className="text-sm text-dr3-cream/70">
+        <p className="text-sm text-dr3-mist-dim">
           This month is locked. Unlocking it for amendment clears both signatures and re-opens the
           daily counts for correction. Both signatures must be re-collected afterward.
         </p>
@@ -105,7 +105,7 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
             setUnlockError(null);
             setUnlockOpen(true);
           }}
-          className="self-start rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink transition hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse/70"
+          className="self-start rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition hover:bg-dr3-cyan-bright focus:outline-none focus:ring-2 focus:ring-dr3-cyan/70"
           data-testid="amendment-unlock-btn"
         >
           Unlock month for amendment
@@ -118,15 +118,15 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
             aria-label="Unlock month for amendment"
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
           >
-            <div className="w-full max-w-md rounded-lg bg-dr3-cream p-6 text-dr3-ink shadow-xl">
+            <div className="w-full max-w-md rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl">
               <h2 className="text-lg font-bold">Unlock this month?</h2>
-              <p className="mt-3 text-sm leading-relaxed">
+              <p className="mt-3 text-sm leading-relaxed text-dr3-mist-dim">
                 Both signatures will be cleared and the month re-opened for correction. The original
                 signed PDF is preserved; a new AMENDED PDF is generated after re-signing.
               </p>
               <div className="mt-4">
                 <label htmlFor="amend-reason" className="block text-sm font-medium">
-                  Reason for amendment<span className="text-red-700"> *</span>
+                  Reason for amendment<span className="text-red-400"> *</span>
                 </label>
                 <textarea
                   id="amend-reason"
@@ -135,12 +135,15 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
                   onChange={(e) => setReason(e.target.value)}
                   rows={3}
                   placeholder="e.g. Maria's 5/12 count was keyed as 60, should be 80"
-                  className="mt-1 w-full rounded-md border border-dr3-ink/20 bg-white px-3 py-2 text-sm focus:border-dr3-green-dark focus:outline-none focus:ring-1 focus:ring-dr3-green-dark"
+                  className="mt-1 w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:border-dr3-cyan focus:outline-none focus:ring-1 focus:ring-dr3-cyan"
                   data-testid="amendment-reason"
                 />
               </div>
               {unlockError && (
-                <p role="alert" className="mt-3 rounded bg-red-100 px-3 py-2 text-sm text-red-800">
+                <p
+                  role="alert"
+                  className="mt-3 rounded border border-red-500/30 bg-red-900/40 px-3 py-2 text-sm text-red-100"
+                >
                   {unlockError}
                 </p>
               )}
@@ -149,7 +152,7 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
                   type="button"
                   onClick={() => !unlocking && setUnlockOpen(false)}
                   disabled={unlocking}
-                  className="rounded-md px-4 py-2 text-sm font-medium text-dr3-ink/70 hover:text-dr3-ink disabled:opacity-50"
+                  className="rounded-md px-4 py-2 text-sm font-medium text-dr3-mist-dim hover:text-dr3-mist disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -157,7 +160,7 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
                   type="button"
                   onClick={submitUnlock}
                   disabled={unlocking || reason.trim().length === 0}
-                  className="rounded-md bg-dr3-green-deep px-4 py-2 text-sm font-semibold text-dr3-cream transition hover:bg-dr3-green-dark disabled:opacity-50"
+                  className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition hover:bg-dr3-cyan-bright disabled:opacity-50"
                   data-testid="amendment-confirm-unlock"
                 >
                   {unlocking ? 'Unlocking…' : 'Unlock for amendment'}
@@ -306,20 +309,20 @@ function AmendedEditor({
 
   return (
     <div className="flex flex-col gap-4" data-testid="amendment-editor">
-      <p className="text-sm text-dr3-cream/70">
+      <p className="text-sm text-dr3-mist-dim">
         This month is unlocked for amendment. Correct the daily counts below, then re-submit for
         signatures. A new AMENDED PDF is generated once both signatures are re-collected.
       </p>
 
       <div className="flex items-center gap-3">
-        <label htmlFor="amend-day" className="text-sm font-medium text-dr3-cream">
+        <label htmlFor="amend-day" className="text-sm font-medium text-dr3-mist">
           Edit day
         </label>
         <select
           id="amend-day"
           value={day}
           onChange={(e) => onDayChange(e.target.value)}
-          className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-sm text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+          className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
           data-testid="amendment-day-select"
         >
           {days.map((d) => (
@@ -338,16 +341,16 @@ function AmendedEditor({
       {saved && (
         <p
           role="status"
-          className="rounded-md bg-dr3-green-dark/40 px-4 py-2 text-sm text-dr3-cream"
+          className="rounded-md border border-emerald-400/30 bg-emerald-500/15 px-4 py-2 text-sm text-emerald-200"
         >
           Corrected counts saved.
         </p>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-dr3-green-dark/50">
+      <div className="overflow-x-auto rounded-lg border border-dr3-steel-light/25">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="bg-dr3-green-dark/40 text-xs uppercase tracking-wider text-dr3-cream/70">
+            <tr className="bg-dr3-space-2/80 text-xs uppercase tracking-wider text-dr3-cyan">
               <th className="px-4 py-3 font-semibold">Processor</th>
               <th className="px-4 py-3 font-semibold">Mattresses</th>
               <th className="px-4 py-3 font-semibold">Note (optional)</th>
@@ -363,10 +366,10 @@ function AmendedEditor({
               return (
                 <tr
                   key={e.bonus_employee_id}
-                  className="border-t border-dr3-green-dark/30"
+                  className="border-t border-dr3-steel-light/20 odd:bg-dr3-space-2/40"
                   data-testid={`amend-row-${e.bonus_employee_id}`}
                 >
-                  <td className="px-4 py-3 font-medium text-dr3-cream">{e.full_name}</td>
+                  <td className="px-4 py-3 font-medium text-dr3-mist">{e.full_name}</td>
                   <td className="px-4 py-3">
                     <input
                       type="number"
@@ -375,12 +378,12 @@ function AmendedEditor({
                       max={999}
                       value={rs.count}
                       onChange={(ev) => setRow(e.bonus_employee_id, { count: ev.target.value })}
-                      className="w-24 rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+                      className="w-24 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
                       aria-label={`Mattress count for ${e.full_name}`}
                       data-testid={`amend-count-${e.bonus_employee_id}`}
                     />
                     {overWarn && (
-                      <span className="ml-2 text-xs text-dr3-chartreuse">
+                      <span className="ml-2 text-xs text-amber-300">
                         Over {SOFT_WARN} — please confirm
                       </span>
                     )}
@@ -391,11 +394,11 @@ function AmendedEditor({
                       value={rs.note}
                       maxLength={2000}
                       onChange={(ev) => setRow(e.bonus_employee_id, { note: ev.target.value })}
-                      className="w-full rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+                      className="w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
                       aria-label={`Note for ${e.full_name}`}
                     />
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-dr3-cream">
+                  <td className="px-4 py-3 text-right font-mono text-dr3-mist">
                     {formatCents(bonus)}
                   </td>
                 </tr>
@@ -403,12 +406,12 @@ function AmendedEditor({
             })}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-dr3-green-dark/60 bg-dr3-green-dark/30">
-              <td className="px-4 py-3 font-semibold text-dr3-cream" colSpan={3}>
+            <tr className="border-t-2 border-dr3-steel-light/30 bg-dr3-space-2/70">
+              <td className="px-4 py-3 font-semibold text-dr3-mist" colSpan={3}>
                 Day total
               </td>
               <td
-                className="px-4 py-3 text-right font-mono text-base font-bold text-dr3-chartreuse"
+                className="px-4 py-3 text-right font-mono text-base font-bold text-dr3-cyan-bright"
                 data-testid="amend-total"
               >
                 {formatCents(totalCents)}
@@ -423,7 +426,7 @@ function AmendedEditor({
           type="button"
           onClick={save}
           disabled={saving}
-          className="rounded-md bg-dr3-chartreuse px-5 py-2 text-sm font-semibold text-dr3-ink transition-opacity hover:opacity-90 disabled:opacity-60"
+          className="rounded-md bg-dr3-cyan px-5 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:opacity-60"
           data-testid="amend-save"
         >
           {saving ? 'Saving…' : 'Save corrected counts'}
@@ -432,7 +435,7 @@ function AmendedEditor({
           type="button"
           onClick={resubmit}
           disabled={resubmitting}
-          className="rounded-md bg-dr3-green-deep px-5 py-2 text-sm font-semibold text-dr3-cream transition hover:bg-dr3-green-dark disabled:opacity-60"
+          className="rounded-md border border-dr3-cyan/40 bg-dr3-space-2 px-5 py-2 text-sm font-semibold text-dr3-cyan transition hover:bg-dr3-space-2/70 hover:text-dr3-cyan-bright disabled:opacity-60"
           data-testid="amend-resubmit"
         >
           {resubmitting ? 'Re-submitting…' : 'Re-submit for signatures'}

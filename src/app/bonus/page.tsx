@@ -69,19 +69,19 @@ export default async function BonusDailyEntryPage({
   }));
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
             href={HOME_ROUTE}
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           >
             ← Back to dashboard
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Daily Bonus Entry</h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             {gate.ctx.siteName} processor mattress counts for{' '}
-            <span className="font-medium text-dr3-cream">{pacificDateLabel(grid.entryDate)}</span>.
+            <span className="font-medium text-dr3-mist">{pacificDateLabel(grid.entryDate)}</span>.
             Counts drive each processor&rsquo;s daily bonus; the note is optional and never affects
             the math.
           </p>
@@ -91,7 +91,7 @@ export default async function BonusDailyEntryPage({
           <nav className="mt-2 text-sm">
             <Link
               href="/bonus/employees"
-              className="text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+              className="text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
             >
               Manage employees →
             </Link>
@@ -107,8 +107,8 @@ export default async function BonusDailyEntryPage({
         />
 
         {grid.monthState === 'draft' && (
-          <footer className="flex flex-col items-end gap-2 border-t border-dr3-cream/15 pt-6">
-            <p className="text-right text-sm text-dr3-cream/60">
+          <footer className="flex flex-col items-end gap-2 border-t border-dr3-steel-light/25 pt-6">
+            <p className="text-right text-sm text-dr3-mist-dim">
               Finished entering counts for {pacificMonthLabel(grid.entryDate)}? Close the month to
               lock entries and start the signature workflow.
             </p>
@@ -125,14 +125,14 @@ export default async function BonusDailyEntryPage({
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">Access denied</h1>
-      <p className="mt-2 text-dr3-cream/70">
+      <p className="mt-2 text-dr3-mist-dim">
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 text-sm text-dr3-cream/80 underline-offset-4 hover:text-dr3-cream hover:underline"
+        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
       >
         Back to dashboard
       </Link>

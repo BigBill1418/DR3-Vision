@@ -228,35 +228,35 @@ export default async function BonusMonthDetailPage({
   }
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-12 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
             href="/bonus"
-            className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           >
             ← Back to bonus entry
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">
             {monthLabel(month.month_start)} bonus
           </h1>
-          <p className="text-sm text-dr3-cream/70">
+          <p className="text-sm text-dr3-mist-dim">
             {ctx.siteName} ·{' '}
-            <span className="font-medium text-dr3-cream">
+            <span className="font-medium text-dr3-mist">
               {STATE_LABEL[month.state] ?? month.state}
             </span>
           </p>
         </header>
 
         {/* Per-employee totals */}
-        <section className="rounded-lg bg-dr3-green-dark/40 p-5">
+        <section className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5">
           <h2 className="mb-3 text-lg font-semibold">Monthly totals</h2>
           {rows.length === 0 ? (
-            <p className="text-sm text-dr3-cream/70">No mattress counts were keyed this month.</p>
+            <p className="text-sm text-dr3-mist-dim">No mattress counts were keyed this month.</p>
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-dr3-cream/20 text-left text-dr3-cream/70">
+                <tr className="border-b border-dr3-steel-light/20 text-left text-dr3-cyan">
                   <th className="pb-2 font-medium">Processor</th>
                   <th className="pb-2 text-right font-medium">Mattresses</th>
                   <th className="pb-2 text-right font-medium">Bonus</th>
@@ -264,7 +264,10 @@ export default async function BonusMonthDetailPage({
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.name} className="border-b border-dr3-cream/10">
+                  <tr
+                    key={r.name}
+                    className="border-b border-dr3-steel-light/20 odd:bg-dr3-space-2/40"
+                  >
                     <td className="py-2">{r.name}</td>
                     <td className="py-2 text-right tabular-nums">{r.totalMattresses}</td>
                     <td className="py-2 text-right tabular-nums">
@@ -285,7 +288,7 @@ export default async function BonusMonthDetailPage({
         </section>
 
         {/* Signatures */}
-        <section className="rounded-lg bg-dr3-green-dark/40 p-5">
+        <section className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5">
           <h2 className="mb-4 text-lg font-semibold">Signatures</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <SignatureSlotCard
@@ -303,7 +306,7 @@ export default async function BonusMonthDetailPage({
           </div>
 
           {inSignatureState && (
-            <div className="mt-5 border-t border-dr3-cream/15 pt-5">
+            <div className="mt-5 border-t border-dr3-steel-light/20 pt-5">
               <SignaturePanel
                 monthId={month.id}
                 viewerSlot={viewerSlot}
@@ -316,13 +319,16 @@ export default async function BonusMonthDetailPage({
 
         {/* Read-only daily grid (ADR-0019 §8) — past terminal months */}
         {showReadOnlyGrid && (
-          <section className="rounded-lg bg-dr3-green-dark/40 p-5" data-testid="readonly-section">
+          <section
+            className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5"
+            data-testid="readonly-section"
+          >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold">Daily counts</h2>
               {month.pdf_storage_key && (
                 <a
                   href={`/bonus/months/${month.id}/pdf`}
-                  className="rounded-md bg-dr3-chartreuse px-3 py-1.5 text-sm font-semibold text-dr3-ink"
+                  className="rounded-md bg-dr3-cyan px-3 py-1.5 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright"
                 >
                   Download PDF
                 </a>
@@ -338,7 +344,10 @@ export default async function BonusMonthDetailPage({
 
         {/* Amendment (ADR-0019 §6) — admin-only */}
         {(showUnlock || showAmendEditor) && (
-          <section className="rounded-lg bg-dr3-green-dark/40 p-5" data-testid="amendment-section">
+          <section
+            className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5"
+            data-testid="amendment-section"
+          >
             <h2 className="mb-4 text-lg font-semibold">Amendment</h2>
             <AmendmentPanel
               monthId={month.id}
@@ -368,15 +377,15 @@ function SignatureSlotCard({
 }) {
   const signed = signerName !== null && signedAt !== null;
   return (
-    <div className="rounded-md border border-dr3-cream/15 p-4">
-      <p className="text-xs uppercase tracking-wide text-dr3-cream/60">{role}</p>
-      <p className="mt-1 font-medium">{assigned}</p>
+    <div className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2/40 p-4">
+      <p className="text-xs uppercase tracking-wide text-dr3-mist-dim">{role}</p>
+      <p className="mt-1 font-medium text-dr3-mist">{assigned}</p>
       {signed ? (
-        <p className="mt-2 text-sm text-dr3-chartreuse">
+        <p className="mt-2 text-sm text-emerald-300">
           Signed by {signerName} · {signedAtLabel(signedAt!)}
         </p>
       ) : (
-        <p className="mt-2 text-sm text-dr3-cream/60">Awaiting signature</p>
+        <p className="mt-2 text-sm text-dr3-mist-dim">Awaiting signature</p>
       )}
     </div>
   );
@@ -384,14 +393,14 @@ function SignatureSlotCard({
 
 function ForbiddenPage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-dr3-cream">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-bold">Access restricted</h1>
-      <p className="mt-2 max-w-md text-sm text-dr3-cream/70">
+      <p className="mt-2 max-w-md text-sm text-dr3-mist-dim">
         Bonus management is limited to Woodland managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
-        className="mt-6 rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink"
+        className="mt-6 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright"
       >
         Back to dashboard
       </Link>

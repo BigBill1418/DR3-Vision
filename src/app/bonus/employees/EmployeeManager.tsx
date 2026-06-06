@@ -144,11 +144,11 @@ export function EmployeeManager({ employees }: Props) {
 
       {rehire ? (
         <div
-          className="flex flex-col gap-3 rounded-md border border-dr3-chartreuse/50 bg-dr3-green-dark/40 px-4 py-3"
+          className="flex flex-col gap-3 rounded-md border border-dr3-cyan/40 bg-dr3-space-2/70 px-4 py-3"
           role="alertdialog"
           data-testid="bonus-rehire-prompt"
         >
-          <p className="text-sm text-dr3-cream">
+          <p className="text-sm text-dr3-mist">
             <strong>{rehire.name}</strong> was deactivated on {formatDate(rehire.deactivatedAt)}.
             Reactivate this employee instead of creating a duplicate?
           </p>
@@ -158,7 +158,7 @@ export function EmployeeManager({ employees }: Props) {
               onClick={confirmRehire}
               disabled={pending}
               autoFocus
-              className="inline-flex items-center rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink hover:bg-dr3-chartreuse/90 disabled:opacity-50"
+              className="inline-flex items-center rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
               data-testid="bonus-rehire-confirm"
             >
               Reactivate {rehire.name}
@@ -166,7 +166,7 @@ export function EmployeeManager({ employees }: Props) {
             <button
               type="button"
               onClick={() => setRehire(null)}
-              className="text-sm text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+              className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
               data-testid="bonus-rehire-cancel"
             >
               Cancel
@@ -177,13 +177,13 @@ export function EmployeeManager({ employees }: Props) {
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-1 flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-cream/80">Add employee</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">Add employee</span>
           <input
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Full name"
-            className="rounded-md bg-dr3-green-dark/40 px-3 py-2 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+            className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
             data-testid="bonus-employee-new-name"
           />
         </label>
@@ -191,16 +191,16 @@ export function EmployeeManager({ employees }: Props) {
           type="button"
           onClick={handleAdd}
           disabled={pending}
-          className="inline-flex items-center rounded-md bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-dr3-ink hover:bg-dr3-chartreuse/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="bonus-employee-add"
         >
           + Add
         </button>
       </div>
 
-      <ul className="flex flex-col divide-y divide-dr3-green-dark/40 rounded-md bg-dr3-green-dark/20">
+      <ul className="flex flex-col divide-y divide-dr3-steel-light/20 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2/50">
         {employees.length === 0 ? (
-          <li className="px-4 py-6 text-sm text-dr3-cream/60" data-testid="bonus-employee-empty">
+          <li className="px-4 py-6 text-sm text-dr3-mist-dim" data-testid="bonus-employee-empty">
             No employees match this filter.
           </li>
         ) : (
@@ -217,14 +217,14 @@ export function EmployeeManager({ employees }: Props) {
                       type="text"
                       value={editName}
                       onChange={(ev) => setEditName(ev.target.value)}
-                      className="rounded-md bg-dr3-green-dark/60 px-2 py-1 text-dr3-cream focus:outline-none focus:ring-2 focus:ring-dr3-chartreuse"
+                      className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
                       data-testid="bonus-employee-edit-name"
                     />
                     <button
                       type="button"
                       onClick={() => saveRename(e.id)}
                       disabled={pending}
-                      className="rounded-md bg-dr3-chartreuse px-3 py-1 text-xs font-semibold text-dr3-ink hover:bg-dr3-chartreuse/90 disabled:opacity-50"
+                      className="rounded-md bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
                       data-testid="bonus-employee-edit-save"
                     >
                       Save
@@ -232,17 +232,17 @@ export function EmployeeManager({ employees }: Props) {
                     <button
                       type="button"
                       onClick={() => setEditingId(null)}
-                      className="text-xs text-dr3-cream/70 underline-offset-4 hover:text-dr3-cream hover:underline"
+                      className="text-xs text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
                       data-testid="bonus-employee-edit-cancel"
                     >
                       Cancel
                     </button>
                   </div>
                 ) : (
-                  <span className="text-sm font-medium text-dr3-cream">{e.full_name}</span>
+                  <span className="text-sm font-medium text-dr3-mist">{e.full_name}</span>
                 )}
                 {e.previous_names.length > 0 ? (
-                  <span className="text-xs text-dr3-cream/50">
+                  <span className="text-xs text-dr3-mist-dim">
                     Formerly: {e.previous_names.map((p) => p.name).join(', ')}
                   </span>
                 ) : null}
@@ -252,8 +252,8 @@ export function EmployeeManager({ employees }: Props) {
                 <span
                   className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                     e.is_active
-                      ? 'bg-dr3-green/30 text-dr3-cream'
-                      : 'bg-dr3-green-dark/60 text-dr3-cream/60'
+                      ? 'bg-emerald-500/20 text-emerald-200'
+                      : 'bg-dr3-steel-light/25 text-dr3-mist-dim'
                   }`}
                   data-testid="bonus-employee-status"
                 >
@@ -268,7 +268,7 @@ export function EmployeeManager({ employees }: Props) {
                         setEditName(e.full_name);
                         setError(null);
                       }}
-                      className="rounded-md bg-dr3-green-dark/40 px-3 py-1 text-xs font-medium text-dr3-cream hover:bg-dr3-green-dark/70"
+                      className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:bg-dr3-space-2/70 hover:text-dr3-cyan"
                       data-testid="bonus-employee-rename"
                     >
                       Rename
@@ -278,7 +278,7 @@ export function EmployeeManager({ employees }: Props) {
                         type="button"
                         onClick={() => patch(e.id, { action: 'deactivate' })}
                         disabled={pending}
-                        className="rounded-md bg-dr3-green-dark/40 px-3 py-1 text-xs font-medium text-dr3-cream hover:bg-red-900/50 disabled:opacity-50"
+                        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:border-red-500/40 hover:bg-red-900/40 hover:text-red-100 disabled:opacity-50"
                         data-testid="bonus-employee-deactivate"
                       >
                         Deactivate
@@ -288,7 +288,7 @@ export function EmployeeManager({ employees }: Props) {
                         type="button"
                         onClick={() => patch(e.id, { action: 'reactivate' })}
                         disabled={pending}
-                        className="rounded-md bg-dr3-green-dark/40 px-3 py-1 text-xs font-medium text-dr3-cream hover:bg-dr3-green/40 disabled:opacity-50"
+                        className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:border-emerald-400/40 hover:bg-emerald-500/15 hover:text-emerald-200 disabled:opacity-50"
                         data-testid="bonus-employee-reactivate"
                       >
                         Reactivate
