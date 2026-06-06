@@ -26,8 +26,30 @@ import {
   type BonusMonthSignatureRow,
   type SignerContext,
 } from './signatures';
+import { clearSignatureChainCache, type SignatureChainDb } from './signature-chain';
 
 const WOODLAND = 'site-woodland';
+
+// Woodland chain double (T-208): identity is sourced from this row, not inferred
+// from role/primary_site. Outcomes match the pre-T-208 asymmetric authority.
+function makeChainDb(): SignatureChainDb {
+  return {
+    bonusSignatureChain: {
+      findUnique: async ({ where }) =>
+        where.site_id === WOODLAND
+          ? {
+              facility_signer_user_id: 'janette',
+              facility_override_actor_ids: 'bill,morena',
+              ops_signer_user_id: 'morena',
+              ops_override_actor_ids: 'bill',
+              auto_override_actor_user_id: 'bill',
+            }
+          : null,
+    },
+  };
+}
+const chainDb = makeChainDb();
+const prin = (s: SignerContext) => ({ id: s.userId, role: s.role });
 
 interface Row extends BonusMonthSignatureRow {
   facility_signed_ip: string | null;
@@ -132,29 +154,30 @@ beforeEach(() => {
   };
   entries = [];
   audit.length = 0;
+  clearSignatureChainCache(chainDb);
 });
 
-describe('canOverrideSlot — asymmetric authority (ADR-0019 §5)', () => {
-  it('admin (Bill) may override BOTH slots', () => {
-    expect(canOverrideSlot(bill, 'facility')).toBe(true);
-    expect(canOverrideSlot(bill, 'ops')).toBe(true);
+describe('canOverrideSlot — chain-sourced authority (ADR-0019 §5 / T-208)', () => {
+  it('admin (Bill) may override BOTH slots', async () => {
+    expect(await canOverrideSlot(prin(bill), 'facility', WOODLAND, chainDb)).toBe(true);
+    expect(await canOverrideSlot(prin(bill), 'ops', WOODLAND, chainDb)).toBe(true);
   });
 
-  it('both-sites ops manager (Morena) may override Janette slot ONLY', () => {
-    expect(canOverrideSlot(morena, 'facility')).toBe(true);
-    expect(canOverrideSlot(morena, 'ops')).toBe(false);
+  it('Woodland ops signer (Morena) — in facility_override list — may override facility ONLY', async () => {
+    expect(await canOverrideSlot(prin(morena), 'facility', WOODLAND, chainDb)).toBe(true);
+    expect(await canOverrideSlot(prin(morena), 'ops', WOODLAND, chainDb)).toBe(false);
   });
 
-  it('Woodland facility manager (Janette) may override NEITHER slot', () => {
-    expect(canOverrideSlot(janette, 'facility')).toBe(false);
-    expect(canOverrideSlot(janette, 'ops')).toBe(false);
+  it('Woodland facility signer (Janette) — in neither override list — may override NEITHER slot', async () => {
+    expect(await canOverrideSlot(prin(janette), 'facility', WOODLAND, chainDb)).toBe(false);
+    expect(await canOverrideSlot(prin(janette), 'ops', WOODLAND, chainDb)).toBe(false);
   });
 });
 
 describe('recordSignature — override path', () => {
   it('Bill overrides Janette slot: records signed_* as Bill + override actor/reason + audit', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -183,7 +206,7 @@ describe('recordSignature — override path', () => {
 
   it('Bill overrides Morena slot (admin-only) succeeds', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'ops',
@@ -197,7 +220,7 @@ describe('recordSignature — override path', () => {
 
   it('Morena overrides Janette slot succeeds + records override actor/reason', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: morena,
       onBehalfOf: 'facility',
@@ -211,7 +234,7 @@ describe('recordSignature — override path', () => {
 
   it('Morena CANNOT override Morena slot → not_authorized', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: morena,
       onBehalfOf: 'ops',
@@ -223,7 +246,7 @@ describe('recordSignature — override path', () => {
 
   it('Janette CANNOT override Janette slot via override path → not_authorized', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: janette,
       onBehalfOf: 'facility',
@@ -234,7 +257,7 @@ describe('recordSignature — override path', () => {
 
   it('Janette CANNOT override Morena slot → not_authorized', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: janette,
       onBehalfOf: 'ops',
@@ -245,7 +268,7 @@ describe('recordSignature — override path', () => {
 
   it('override with missing reason → missing_reason (no DB write)', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -256,7 +279,7 @@ describe('recordSignature — override path', () => {
 
   it('override with blank/whitespace reason → missing_reason', async () => {
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -267,7 +290,7 @@ describe('recordSignature — override path', () => {
 
   it('override reason is trimmed before persisting', async () => {
     await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -280,7 +303,7 @@ describe('recordSignature — override path', () => {
     row.state = 'partially_signed';
     row.facility_signed_by_user_id = 'janette';
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -295,7 +318,7 @@ describe('recordSignature — override path', () => {
     row.ops_signed_at = new Date();
     entries = [{ mattress_count: 75 }, { mattress_count: 60 }]; // 1275 + 500 = 1775
     const res = await recordSignature({
-      db: makeDb(),
+      db: makeDb(), chainDb,
       monthId: 'm1',
       signer: bill,
       onBehalfOf: 'facility',
@@ -313,7 +336,7 @@ describe('recordSignature — override path', () => {
   });
 
   it('non-override (natural) signature still works and is NOT marked override', async () => {
-    const res = await recordSignature({ db: makeDb(), monthId: 'm1', signer: janette });
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: janette });
     expect(res).toMatchObject({ ok: true, slot: 'facility', override: false });
     expect(row.facility_override_actor_id).toBeNull();
     expect(row.facility_override_reason).toBeNull();

@@ -204,7 +204,7 @@ If `requestedSite` is set, narrow `sites` to just that one (and flip `allowed` t
 - Bill `requestedSite=undefined` → `{allowed: true, sites: ['woodland', 'eugene']}`
 - All existing bonus-route tests pass with the new access shape
 
-### [ ] T-208: Signature chain lookup + signature service Eugene awareness
+### [x] T-208: Signature chain lookup + signature service Eugene awareness
 
 New `src/lib/bonus/signature-chain.ts`:
 

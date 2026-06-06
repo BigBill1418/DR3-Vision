@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
+
+Made the bonus signature service site-aware by sourcing signer/override identity
+from the `bonus_signature_chains` table (ADR-0019.2 §2) instead of any hardcoded
+"Janette signs facility / Morena signs ops" role heuristic (addendum hard rules
+#2 & #3). Woodland outcomes are unchanged — Janette/Morena are still the Woodland
+signers, just sourced from the chain now. `tsc --noEmit`, `next lint
+--max-warnings 0`, and the full `vitest` suite (571 tests, +28) all clean.
+
+- **New `src/lib/bonus/signature-chain.ts`.** `getSignatureChain(siteId, db?)`
+  reads the single `bonus_signature_chains` row for a site and returns
+  `{facility_signer_user_id, facility_override_actor_user_ids[],
+  ops_signer_user_id, ops_override_actor_user_ids[], auto_override_actor_user_id}`.
+  The override-actor columns are stored by the T-201 seed as comma-separated
+  UUID strings; `parseOverrideActorIds()` splits/trims/drops-blanks back to
+  arrays. Cached per-(db,site) for the request lifecycle via a `WeakMap` keyed on
+  the db instance (failed lookups evict so a retry re-reads).
+  `getAutoOverrideActor(siteId)` returns the chain's auto-override actor — never
+  hardcoded as Bill. `SignatureChainNotFoundError` on an unseeded site.
+- **`src/lib/bonus/signatures.ts` now chain-sourced.** `canSignSlot(user, slot,
+  siteId)` → `user.id === chain.{slot}_signer_user_id`; `canOverrideSlot(user,
+  slot, siteId)` → admin (ADR-0019.2 §3) OR `user.id ∈
+  chain.{slot}_override_actor_user_ids`; `naturalSlotFor(user, siteId)` resolves
+  the caller's primary slot from the chain. All async now. `recordSignature`
+  threads `siteId` (from the signer context) + an optional `chainDb` through to
+  these. `getAutoOverrideActor` is re-exported here so the T-205 escalation cron
+  has one import site.
+- **Callers threaded.** Sign route passes `chainDb: prisma`; the month detail
+  page computes `viewerSlot` + `overridableSlots` from the chain (scoped to the
+  period's `site_id`) and now wires `overridableSlots` into `SignaturePanel`.
+- **Tests.** New `signature-chain.test.ts` implements the addendum acceptance
+  matrix across both sites (Rick signs Eugene facility but not Woodland; Kelsey
+  signs Eugene ops, but Woodland ops is an override for her not primary; Bill
+  overrides either slot at either site; Morena overrides Woodland facility but
+  not Eugene ops; etc.) plus parsing/caching/error coverage. Existing
+  `signatures.test.ts` / `signature-override.test.ts` / sign-route test updated
+  to feed a Woodland chain double — assertions/outcomes unchanged.
+
 ### 2026-06-06 — Sprint 2 addendum Wave A: state machine period boundaries + `skipped` transition (T-203)
 
 Converted the bonus state machine from calendar-month boundaries to the

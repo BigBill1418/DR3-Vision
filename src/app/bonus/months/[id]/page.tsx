@@ -18,7 +18,7 @@ import { checkBonusAccess } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
-import { naturalSlotFor } from '@/lib/bonus/signatures';
+import { naturalSlotFor, canOverrideSlot } from '@/lib/bonus/signatures';
 import { SignaturePanel, type SignerSlot } from './SignaturePanel';
 import { AmendmentPanel, type AmendDayOption, type AmendEmployeeRow } from './AmendmentPanel';
 import { ReadOnlyGrid, type ReadOnlyGridDay, type ReadOnlyGridRow } from './ReadOnlyGrid';
@@ -150,12 +150,20 @@ export default async function BonusMonthDetailPage({
 
   const inSignatureState =
     month.state === 'pending_signatures' || month.state === 'partially_signed';
-  const viewerSlot: SignerSlot = naturalSlotFor({
-    userId: ctx.userId,
-    role: ctx.role,
-    primarySiteId: ctx.primarySiteId,
-    siteId: ctx.siteId,
-  });
+  // Slot identity + override authority are CHAIN-SOURCED (T-208) — scoped to the
+  // period's site, never inferred from a name or hardcoded.
+  const principal = { id: ctx.userId, role: ctx.role };
+  const viewerSlot: SignerSlot = inSignatureState
+    ? await naturalSlotFor(principal, month.site_id, prisma)
+    : null;
+  const overridableSlots: Array<'facility' | 'ops'> = [];
+  if (inSignatureState) {
+    for (const slot of ['facility', 'ops'] as const) {
+      if (await canOverrideSlot(principal, slot, month.site_id, prisma)) {
+        overridableSlots.push(slot);
+      }
+    }
+  }
 
   // ── Amendment (ADR-0019 §6, admin-only) ───────────────────────────
   // Unlock is offered on signed/paid; the editable grid + re-submit on amended.
@@ -312,6 +320,7 @@ export default async function BonusMonthDetailPage({
                 viewerSlot={viewerSlot}
                 facilitySigned={month.facility_signed_by_user_id !== null}
                 opsSigned={month.ops_signed_by_user_id !== null}
+                overridableSlots={overridableSlots}
               />
             </div>
           )}
