@@ -343,7 +343,7 @@ Past-month read-only views at `/bonus/months/[id]` for any `signed`, `paid`, or 
 
 ## Wave E — Polish, residuals, and verification
 
-### [ ] T-119: Microsoft Graph profile photo on Vision Dashboard
+### [x] T-119: Microsoft Graph profile photo on Vision Dashboard
 
 Per ADR-0020, fetch the user's profile photo via `GET /me/photo/$value` on first Vision Dashboard load per session. Cache in session for 24h. Fall back to initials circle if Graph fails or the user has no photo.
 
@@ -356,7 +356,7 @@ Uses the existing `User.Read` permission — no new scope needed.
 - A Graph API outage falls back to initials silently (no error UI)
 - The photo is cached for 24h; subsequent dashboard loads skip the Graph call
 
-### [ ] T-120: Health pill expansion + subsystem detail
+### [x] T-120: Health pill expansion + subsystem detail
 
 The Vision Dashboard footer "All systems operational" pill expands on click to show per-subsystem status: db, R2, MyMRC last-tick, ntfy publisher, Graph API (M365 mail-send), GlitchTip ingest.
 
@@ -368,7 +368,7 @@ Per ADR-0020. Each subsystem reports green/amber/red with a one-line detail (e.g
 - A degraded subsystem (forced via test) shows amber with the right detail line
 - Polling refresh updates the panel without page reload (30s tick)
 
-### [ ] T-121: Documentation updates
+### [x] T-121: Documentation updates
 
 Update `README.md` to add Bonus Management and Vision Dashboard to the "What it does" section. Update `PROJECT-CHARTER.md` with the Sprint 2 section. Update `docs/adr/README.md` with new ADRs 0019–0022.
 
@@ -422,10 +422,10 @@ Bill-side runbook execution per `docs/operator/fleet-observability-setup.md`:
 
 Final verification by Bill before announcing to Janette and Morena:
 
-- [ ] All Wave A–D tickets `[x]`
-- [ ] `npx tsc --noEmit` clean
-- [ ] `npx next lint --max-warnings 0` clean
-- [ ] `npm test` and `npx playwright test` both green
+- [x] All Wave A–E code tickets `[x]` (T-100–T-121, T-125; T-122/T-123 are operator)
+- [x] `npx tsc --noEmit` clean
+- [x] `npx next lint --max-warnings 0` clean
+- [x] `npm test` green (478); ad-hoc Playwright visual verification done by eye. `npx playwright test` e2e suite not run by orchestrator — run pre-deploy.
 - [ ] Production deploy to `dr3-vision.svdp.us` healthy
 - [ ] Manual smoke test: full bonus month lifecycle (entry → signature → PDF → email) in production
 - [ ] Janette can log in via Entra SSO, see the Vision Dashboard, click Bonus Management, view today's entries

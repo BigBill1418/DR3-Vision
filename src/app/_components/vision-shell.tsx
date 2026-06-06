@@ -12,6 +12,8 @@
 
 import * as React from 'react';
 import type { ReactNode } from 'react';
+import { DashboardAvatar } from './dashboard-avatar';
+import { HealthPill } from './health-pill';
 
 interface VisionShellProps {
   userName: string;
@@ -58,12 +60,7 @@ export function VisionShell({
                 {userEmail ?? '—'} · {role}
               </span>
             </div>
-            <span
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-dr3-green text-sm font-bold text-dr3-green-deep"
-              aria-hidden="true"
-            >
-              {initials(userName)}
-            </span>
+            <DashboardAvatar name={userName} />
           </div>
         </header>
 
@@ -89,21 +86,10 @@ export function VisionShell({
 
         {/* ── Footer ────────────────────────────────────────────── */}
         <footer className="mt-auto flex flex-col gap-3 border-t border-dr3-cream/10 pt-8 sm:flex-row sm:items-center sm:justify-between">
-          <span className="inline-flex items-center gap-2 rounded-full bg-dr3-green-dark/60 px-3 py-1 text-xs font-medium text-dr3-cream/80">
-            <span className="h-2 w-2 rounded-full bg-dr3-chartreuse" aria-hidden="true" />
-            All systems operational
-          </span>
+          <HealthPill />
           <span className="text-xs text-dr3-cream/40">DR3-Vision · build {version}</span>
         </footer>
       </div>
     </main>
   );
-}
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  const first = parts[0]?.[0] ?? '';
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
-  return (first + last).toUpperCase();
 }

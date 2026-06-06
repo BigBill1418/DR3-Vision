@@ -11,6 +11,8 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 - Forklift-mounted iPads at the dock capture every load: BOL photo, weight ticket, door-open photo, stack counts, concerns, rejections — all timestamped, all signed, all persisted offline-tolerant.
 - A browser portal lets facility managers monitor live dock activity, manage exceptions, run compliance dashboards against MRC contract requirements, and generate billing-ready exports.
 - An hourly Playwright job pulls scheduled hauls from MyMRC, MRC's vendor portal, and reconciles completed loads back against MyMRC haul records.
+- The **Bonus Management System** runs the Woodland processor bonus end to end — daily per-employee entry, code-enforced monthly state machine, dual sign-off (facility + operations manager) with an asymmetric override path, auto-generated co-branded PDF, direct delivery to SVdP payroll via Microsoft Graph, plus amendment, full history, and per-employee/annual aggregates with CSV export.
+- A role-aware **Vision Dashboard** is the authenticated landing page — a branded tile launcher that surfaces each user's available capabilities and the V2.1+ roadmap as Coming Soon tiles.
 - All data feeds the MRC Monthly Invoice (~$7M annual revenue), the Compliance dashboard (recycling rate, processing deadlines, dock SLAs), and the audit trail required by both Oregon DEQ and California CalRecycle.
 
 ## Who it's for

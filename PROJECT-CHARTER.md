@@ -12,6 +12,7 @@
 **Build target:** Claude Code (this charter is the briefing doc; implementation happens in a Claude Code session against `BigBill1418/DR3-Vision`)
 
 ### Changelog
+
 - **v0.30 (2026-05-04)** — Three secondary build questions resolved. **Q22 (weight ticket precision):** integer pounds, US trucking standard, validated > 0 and ≤ 100,000 (DOT max gross is 80,000; values outside surface a soft warning requiring manager confirmation). `weight_lbs` typed as `INTEGER`. **Q23 (audit log retention):** retained indefinitely, no pruning. Independent of contract retention rules (CA 4yr / OR 5yr apply to load records and photos only). **Q24 (deployment rollout):** both sites simultaneous on day 1, no staggered launch — affirms the v0.2 decision. With these answered, all 21 primary build questions plus 3 secondary questions are banked. Charter is ready as briefing doc for Claude Code; pivoting to deliverables.
 - **v0.29 (2026-05-04)** — Q21 resolved: **4-digit PIN** (not 6), 5 attempts → 15-min auto-unlock lockout, disallow obvious patterns (sequential, all-same, repeated-pair), unique within site / reusable across sites, manager-resettable, admin-resettable, audit-logged. Repeat-lockout indicator on Compliance dashboard for training-signal detection. **WiFi confirmed good at both Eugene and Woodland docks; iPads also have built-in cellular service** as automatic two-path fallback — open decision #3 closed. Q20's no-paper-fallback decision is significantly de-risked: the iPad has two independent network paths, so realistic offline windows are short. §5.8 updated. Open decisions section renumbered.
 - **v0.28 (2026-05-04)** — Q20 resolved: **offline queue only, no paper fallback**. Pattern C (IndexedDB + Workbox Background Sync) is the sole outage strategy. No printed paper-form binders, no paper-recovery flow in the manager portal, no `recovery_source=paper` audit field. Trade-off: simpler operations and no paper-data-sync risk, but higher dependence on cache durability and offline-queue robustness — these become MVP-day-1 quality gates rather than nice-to-haves. New §5.8 documents the strategy. New risk row added: PWA cache unrecoverable.
@@ -69,6 +70,7 @@ DR3-Vision operates under **two completely separate state mattress stewardship p
 ### California program (Woodland)
 
 MRC California Recycling Services Agreement, signed 2024, term 2025-01-01 through 2027-12-31, auto-renewing. Reviewed in detail and integrated into this charter (clauses below).
+
 - **Per-unit processing fee:** $16.00 (2025), $16.50 (2026), $17.00 (2027), CPI-indexed thereafter.
 - **Billing cadence:** mid-month + end-of-month processing invoices, plus separate transportation/fuel/container invoice ("End of Month Trans Invoice").
 - **MyMRC platform section:** California-specific. Separate URL path and/or tenant filter from the Oregon section.
@@ -85,28 +87,28 @@ MRC Oregon Recycling Services Agreement (markup dated 2024-12-02). Stewardship o
 
 **Material clauses (Oregon-specific — DO NOT apply California values):**
 
-| Constraint | Oregon value |
-|---|---|
-| Recycling Percentage minimum | **70%** (CA is 75%) |
-| Recycling Percentage formula | (recycled + reused + renovated) ÷ (recycled + reused + renovated + disposed) × 100 — broader than CA, includes renovation |
-| Processing deadline | **60 days** from receipt to fully deconstruct (CA is 45) |
-| On-site storage limit | **6,000 unprocessed units total** (single combined limit — CA splits 3,500 inside + 5,000 outside) |
-| Off-site storage | **Prohibited without prior written MRC notice** — off-site accumulation is grounds for immediate termination |
-| Records retention | **5 years** after final payment (CA is 4) |
-| Customer service hours | **8:00am–4:00pm Pacific** Monday–Friday excluding federal holidays (CA is 8:30am–4:30pm) |
-| Holidays observed (Eugene closed) | New Year's, Memorial, Independence, Thanksgiving, Labor, Christmas (per Exhibit G) |
-| 60-minute dock-appointment SLA | Same as CA — applies in Oregon |
-| 97% inbound/outbound weight reconciliation | Same as CA — applies in Oregon |
-| 3-business-day inbound MyMRC entry deadline | Same as CA — applies in Oregon (Exhibit H) |
-| 1-business-day processed-units deadline | Same as CA — applies in Oregon (Exhibit H) |
-| 3-business-day outbound weight + final disposition entry | Same as CA — applies in Oregon (Exhibit H) |
-| 5-business-day outbound BOL upload | Same as CA — applies in Oregon (Exhibit H) |
-| Service Level Adjustment penalty | Same as CA — 10% withhold for missed deadlines or sub-97% reconciliation |
-| Consumer Incentive Program | **NOT in Oregon contract** — no CIP at Eugene. CIP is California-only. |
-| Invoicing discrepancy floor | **<$5,000 → MRC pays in full**; correction issued on next invoice (Oregon-only protection) |
-| Standard payment terms | Net 30 from receipt of invoice + supporting documentation |
-| Bankruptcy notification | 2 business days |
-| Regulatory orders/fines notice to MRC | 2 business days |
+| Constraint                                               | Oregon value                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Recycling Percentage minimum                             | **70%** (CA is 75%)                                                                                                       |
+| Recycling Percentage formula                             | (recycled + reused + renovated) ÷ (recycled + reused + renovated + disposed) × 100 — broader than CA, includes renovation |
+| Processing deadline                                      | **60 days** from receipt to fully deconstruct (CA is 45)                                                                  |
+| On-site storage limit                                    | **6,000 unprocessed units total** (single combined limit — CA splits 3,500 inside + 5,000 outside)                        |
+| Off-site storage                                         | **Prohibited without prior written MRC notice** — off-site accumulation is grounds for immediate termination              |
+| Records retention                                        | **5 years** after final payment (CA is 4)                                                                                 |
+| Customer service hours                                   | **8:00am–4:00pm Pacific** Monday–Friday excluding federal holidays (CA is 8:30am–4:30pm)                                  |
+| Holidays observed (Eugene closed)                        | New Year's, Memorial, Independence, Thanksgiving, Labor, Christmas (per Exhibit G)                                        |
+| 60-minute dock-appointment SLA                           | Same as CA — applies in Oregon                                                                                            |
+| 97% inbound/outbound weight reconciliation               | Same as CA — applies in Oregon                                                                                            |
+| 3-business-day inbound MyMRC entry deadline              | Same as CA — applies in Oregon (Exhibit H)                                                                                |
+| 1-business-day processed-units deadline                  | Same as CA — applies in Oregon (Exhibit H)                                                                                |
+| 3-business-day outbound weight + final disposition entry | Same as CA — applies in Oregon (Exhibit H)                                                                                |
+| 5-business-day outbound BOL upload                       | Same as CA — applies in Oregon (Exhibit H)                                                                                |
+| Service Level Adjustment penalty                         | Same as CA — 10% withhold for missed deadlines or sub-97% reconciliation                                                  |
+| Consumer Incentive Program                               | **NOT in Oregon contract** — no CIP at Eugene. CIP is California-only.                                                    |
+| Invoicing discrepancy floor                              | **<$5,000 → MRC pays in full**; correction issued on next invoice (Oregon-only protection)                                |
+| Standard payment terms                                   | Net 30 from receipt of invoice + supporting documentation                                                                 |
+| Bankruptcy notification                                  | 2 business days                                                                                                           |
+| Regulatory orders/fines notice to MRC                    | 2 business days                                                                                                           |
 
 **Implication:** Eugene's Compliance dashboard runs on Oregon-specific values. Woodland's runs on California-specific values. They are not interchangeable.
 
@@ -153,7 +155,7 @@ V2 adds two things V1 did not: **forced photo capture** at defined moments (BOL 
 
 ## 3. Users
 
-- **Operators** — warehouse staff at each site. iPad mounted on the forklift (or a stationary kiosk for non-forklift workflows like baling, future). Gloves on, dust, glare, intermittent WiFi, possibly limited English literacy. Needs the screen to be a tool, not an obstacle. Note: "operator" refers to DR3 *warehouse staff who operate the equipment and run the forms*. The truck driver who delivers the load is a separate person and is not a system user.
+- **Operators** — warehouse staff at each site. iPad mounted on the forklift (or a stationary kiosk for non-forklift workflows like baling, future). Gloves on, dust, glare, intermittent WiFi, possibly limited English literacy. Needs the screen to be a tool, not an obstacle. Note: "operator" refers to DR3 _warehouse staff who operate the equipment and run the forms_. The truck driver who delivers the load is a separate person and is not a system user.
 - **Facility manager — Eugene:** **Rick Albritton**. Per-site manager for Eugene operations.
 - **Facility manager — Woodland:** **Janette Thomas**. Per-site manager for Woodland operations.
 - **DR3 Operations Manager** — **Morena Gomez**. Oversees DR3 across all active sites (currently Eugene + Woodland). Primary day-to-day operations stakeholder for DR3-Vision. Sees per-site dashboards and can switch between sites; data is never co-mingled in a single view (per §1.5 separation principle). Owns the Compliance dashboard from the operations side. Modeled as `manager` role with `user_sites` assignments to all DR3 sites.
@@ -596,6 +598,7 @@ When a manager marks a load `verified` in DR3-Vision, the system creates the cor
 - Manual fallback workflow: if the robot is in cooldown after a failure, manager dashboard surfaces the load with a "Submit manually" button that opens the prefilled MyMRC URL in a new tab
 
 **Selector resilience patterns** (mitigates the MyMRC-UI-changes risk for both directions):
+
 - Prefer ARIA labels and data attributes over XPath
 - Centralize all selectors in a single `mymrc-selectors.ts` module so a UI redesign is a one-file fix
 - Snapshot the page HTML on every successful run; diff on failure to detect what changed
@@ -605,22 +608,22 @@ When a manager marks a load `verified` in DR3-Vision, the system creates the cor
 
 ### Field mapping (DR3-Vision → MyMRC)
 
-| MyMRC field | DR3-Vision source |
-|---|---|
-| Recycler | `sites.name` |
-| Recycler Reported Delivery Date | `inbound_loads.unload_ended_at` (date portion, site timezone) |
-| Collection Site | `sources.name` (when `kind=collection_site`) |
-| Other Collection Site | free-text fallback when source not in controlled list |
-| Pickup Address | `pickup_street_line1` + `pickup_city`, `pickup_state` `pickup_zip` |
-| Transporter | `sources.name` (when `kind=transporter`) |
-| Reference Number | `reference_number` |
-| Unit Count at Unload | `total_units` |
-| Recycler Program Unit Count | `program_unit_count` |
-| Recycler Non-Program Unit Count | `non_program_unit_count` |
-| Recycler Weight | `weight_lbs` |
-| Status | `status` enum mapped to MyMRC vocabulary |
-| Commodity | hardcoded `"Whole Mattresses and Foundations"` (only commodity DR3 handles) |
-| Attachments | `load_photos` of kinds `bol`, `door_open`, `concern`, `weight_ticket` |
+| MyMRC field                     | DR3-Vision source                                                           |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| Recycler                        | `sites.name`                                                                |
+| Recycler Reported Delivery Date | `inbound_loads.unload_ended_at` (date portion, site timezone)               |
+| Collection Site                 | `sources.name` (when `kind=collection_site`)                                |
+| Other Collection Site           | free-text fallback when source not in controlled list                       |
+| Pickup Address                  | `pickup_street_line1` + `pickup_city`, `pickup_state` `pickup_zip`          |
+| Transporter                     | `sources.name` (when `kind=transporter`)                                    |
+| Reference Number                | `reference_number`                                                          |
+| Unit Count at Unload            | `total_units`                                                               |
+| Recycler Program Unit Count     | `program_unit_count`                                                        |
+| Recycler Non-Program Unit Count | `non_program_unit_count`                                                    |
+| Recycler Weight                 | `weight_lbs`                                                                |
+| Status                          | `status` enum mapped to MyMRC vocabulary                                    |
+| Commodity                       | hardcoded `"Whole Mattresses and Foundations"` (only commodity DR3 handles) |
+| Attachments                     | `load_photos` of kinds `bol`, `door_open`, `concern`, `weight_ticket`       |
 
 ### Sources seed data
 
@@ -632,24 +635,24 @@ The `sources` table is seeded on day 1 from the real MyMRC haul export Bill prov
 
 ## 7. Architecture & technology
 
-| Layer | Choice | Rationale |
-|---|---|---|
-| Framework | **Next.js 15 (App Router) + TypeScript** | Single codebase for operator PWA + manager portal. Existing fleet precedent (Guardian). Strong PWA story. |
-| ORM | **Prisma** | Eliminates SQL injection class-of-bug at the language level. Excellent migration tooling. |
-| Database | **Postgres 16** | Replaces MySQL/MariaDB. Better constraints, JSON support, partitioning when needed. Single instance on CHAD-HQ initially; replication later if needed. |
-| Auth | **Auth.js v5 (manager/admin) + custom PIN flow (operator)** | PIN-only on iPad with Argon2id hashing. Auth.js handles session cookies for both roles. |
-| Photo storage | **Cloudflare R2** | Already in fleet. Signed URLs. Out of web root. Cheap. |
-| UI | **Tailwind + shadcn/ui** | Themeable to DR3 brand. Accessible by default. Production component primitives. |
-| Validation | **Zod** | Runtime-validate every input on both client and server. |
-| Offline | **next-pwa** + **idb** + **Workbox Background Sync** | Service worker + IndexedDB queue. |
-| Container | **Dockerfile + docker-compose.yml** | Standard fleet pattern. Deployed by `swarmpilot_deployer`. |
-| Notifications | **ntfy** (`dr3-*` topics) | Per fleet ADR-0036 / 0037. |
-| Errors | **GlitchTip** | Per fleet observability stack. |
-| Logs | **Loki via Alloy** | Per fleet observability stack. |
-| Traces | **Tempo via OTLP** | Per fleet observability stack. |
-| Metrics | **Prometheus → Grafana** | Per fleet observability stack. |
-| CI | **Self-hosted runner** `[self-hosted, linux, x64, chad]` | Per fleet §8. Build + lint + test + (deploy via marker push). |
-| Deploy | **swarmpilot_deployer** auto-deploy from `main` | Per fleet §7. `[skip-deploy]` for doc-only commits. |
+| Layer         | Choice                                                      | Rationale                                                                                                                                              |
+| ------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Framework     | **Next.js 15 (App Router) + TypeScript**                    | Single codebase for operator PWA + manager portal. Existing fleet precedent (Guardian). Strong PWA story.                                              |
+| ORM           | **Prisma**                                                  | Eliminates SQL injection class-of-bug at the language level. Excellent migration tooling.                                                              |
+| Database      | **Postgres 16**                                             | Replaces MySQL/MariaDB. Better constraints, JSON support, partitioning when needed. Single instance on CHAD-HQ initially; replication later if needed. |
+| Auth          | **Auth.js v5 (manager/admin) + custom PIN flow (operator)** | PIN-only on iPad with Argon2id hashing. Auth.js handles session cookies for both roles.                                                                |
+| Photo storage | **Cloudflare R2**                                           | Already in fleet. Signed URLs. Out of web root. Cheap.                                                                                                 |
+| UI            | **Tailwind + shadcn/ui**                                    | Themeable to DR3 brand. Accessible by default. Production component primitives.                                                                        |
+| Validation    | **Zod**                                                     | Runtime-validate every input on both client and server.                                                                                                |
+| Offline       | **next-pwa** + **idb** + **Workbox Background Sync**        | Service worker + IndexedDB queue.                                                                                                                      |
+| Container     | **Dockerfile + docker-compose.yml**                         | Standard fleet pattern. Deployed by `swarmpilot_deployer`.                                                                                             |
+| Notifications | **ntfy** (`dr3-*` topics)                                   | Per fleet ADR-0036 / 0037.                                                                                                                             |
+| Errors        | **GlitchTip**                                               | Per fleet observability stack.                                                                                                                         |
+| Logs          | **Loki via Alloy**                                          | Per fleet observability stack.                                                                                                                         |
+| Traces        | **Tempo via OTLP**                                          | Per fleet observability stack.                                                                                                                         |
+| Metrics       | **Prometheus → Grafana**                                    | Per fleet observability stack.                                                                                                                         |
+| CI            | **Self-hosted runner** `[self-hosted, linux, x64, chad]`    | Per fleet §8. Build + lint + test + (deploy via marker push).                                                                                          |
+| Deploy        | **swarmpilot_deployer** auto-deploy from `main`             | Per fleet §7. `[skip-deploy]` for doc-only commits.                                                                                                    |
 
 ### 7.1 Fleet integration checklist (pre-launch — per FLEET-PRIMER §12)
 
@@ -675,16 +678,16 @@ The `sources` table is seeded on day 1 from the real MyMRC haul export Bill prov
 
 Palette extracted from `mattressrecycling.us` 2026-05-04:
 
-| Token | Hex | Notes |
-|---|---|---|
-| `--dr3-green-deep` | `#00524C` | Primary. Headers, primary buttons. |
-| `--dr3-green` | `#49AD8E` | Secondary. Active state, success affordances. |
-| `--dr3-green-dark` | `#0B6662` | Hover/pressed. |
-| `--dr3-chartreuse` | `#EFFE8B` | Highlight. Sparingly — call-to-action only. |
-| `--dr3-cream` | `#FCFFD7` | Soft surfaces. |
-| `--dr3-ink` | `#1A1A1A` | Body text. |
-| `--dr3-white` | `#FFFFFF` | Default surface. |
-| `--dr3-danger` | `#DF080F` | Destructive only. |
+| Token              | Hex       | Notes                                         |
+| ------------------ | --------- | --------------------------------------------- |
+| `--dr3-green-deep` | `#00524C` | Primary. Headers, primary buttons.            |
+| `--dr3-green`      | `#49AD8E` | Secondary. Active state, success affordances. |
+| `--dr3-green-dark` | `#0B6662` | Hover/pressed.                                |
+| `--dr3-chartreuse` | `#EFFE8B` | Highlight. Sparingly — call-to-action only.   |
+| `--dr3-cream`      | `#FCFFD7` | Soft surfaces.                                |
+| `--dr3-ink`        | `#1A1A1A` | Body text.                                    |
+| `--dr3-white`      | `#FFFFFF` | Default surface.                              |
+| `--dr3-danger`     | `#DF080F` | Destructive only.                             |
 
 Logo: clean SVG of the DR3 mark (green "D", black "R3", recycling arrow under the "3"). Source asset to be checked into the repo at `public/brand/dr3-logo.svg` — Bill to provide canonical SVG (don't ship the Wix-CDN PNG).
 
@@ -768,7 +771,7 @@ Theming approach: Tailwind config exposes the palette as utility classes (`bg-dr
 - **ADR-0011 — Processor Form / deconstruction-line workflow (V2.1)** — paper-replacement for the daily Processor Form at each site; per-processor-per-day session model; stack-ledger plus per-unit material tally; lead verification; bonus-calculation feed; schema reconciliation between inbound `total_units` and downstream `processed + saved + leftover`. **Bonus formulas (per current 2026 spreadsheet):**
   - **Eugene (Oregon):** daily bonus = `MAX(units − 50, 0) × $1.00 + MAX(units − 100, 0) × $0.25` — additive two-tier
   - **Woodland (California):** daily bonus = `MAX(units − 50, 0) × $0.50 + MAX(units − 75, 0) × $0.25` — additive two-tier, lower rates and tighter high-volume threshold
-  - Both jurisdictions share the same formula *shape* (two-threshold, two-rate) but with different parameters. Modeled as a per-site `processor_bonus_rules` table: `(site_id, threshold_low, rate_low, threshold_high, rate_high, effective_date, end_date)`. Historical rates retained for back-calculation.
+  - Both jurisdictions share the same formula _shape_ (two-threshold, two-rate) but with different parameters. Modeled as a per-site `processor_bonus_rules` table: `(site_id, threshold_low, rate_low, threshold_high, rate_high, effective_date, end_date)`. Historical rates retained for back-calculation.
   - Eugene tracks roles per processor (Lead, Processor, Machine Operator, Stryo, Floater); California tracks bare names. Schema includes optional `processor_role` field.
   - Eugene reports monthly **bonus dollars** only; California also reports **monthly processed total** (units). Both should be exposed in V2.1 reports.
 
@@ -783,9 +786,11 @@ Theming approach: Tailwind config exposes the palette as utility classes (`bg-dr
 7. **Site manager contact info.** Names captured: **Rick Albritton (Eugene)**, **Janette Thomas (Woodland)**. Email + cell needed at deployment for portal account setup; not blocking the build. Neither receives ntfy (Bill-only per ntfy policy).
 
 ### Deferred (pending external response)
+
 - **MyMRC API access.** Email sent to MRC contact 2026-05-04 requesting "API Enabled" on operator profile or Connected App setup. Holding on V2.1 write-path implementation pending response. If granted: switch from Playwright to Salesforce REST API. If denied or no response within 30 days: proceed with Playwright per ADR-0009. CSV reconciliation in MVP is not blocked by this and ships as planned.
 
 ### Resolved
+
 - **(2026-05-04)** ~~MyMRC API access available?~~ **No (current state).** Tested via `mrc-us.my.site.com/services/data/v66.0/sobjects/`; both cookie auth and bearer-from-cookie returned 401. Operator user lacks "API Enabled". V2.1 write path = Playwright browser automation unless MRC reverses on parallel email request.
 - **(2026-05-04)** ~~Oregon MRC contract review?~~ Oregon contract received (markup dated 2024-12-02) and integrated into §1.5 charter section. Eugene runs on Oregon-specific values (70% recycling rate, 6,000 unit storage limit total on-site, 5-year retention, $17 flat through 2027, etc.) — California values do NOT apply.
 - **(2026-05-04)** ~~PIN length and policy?~~ **4-digit PIN, 5 attempts → 15-min auto-unlock, disallow obvious patterns (sequential, all-same, repeated-pair), unique within site / reusable across sites, manager-resettable, admin-resettable, audit-logged** per Q21.
@@ -818,26 +823,26 @@ Theming approach: Tailwind config exposes the palette as utility classes (`bg-dr
 
 ## 14. Risks
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| iPad WiFi worse than expected at dock | Medium | High | Aggressive offline queue from MVP day 1 |
-| Operators resist new tool | Medium | High | On-site iteration during the first 30 days; weekly UX feedback loop |
-| MRC reporting requirements shift mid-build | Low | Medium | Schema designed to extend; ADR-0007 captures change process; MRC has 60-day notice obligation under contract |
-| Sacramento consolidation timeline shifts the multi-site rollout | High | Low | Site model is data-driven; new site = new row, not new code |
-| V1 PHP app accidentally referenced as "the system" by anyone external | Medium | Low | Archive V1 to `legacy/` in the same repo once V2 is in production |
-| Operators misuse "Total mode" to skip stack-by-stack tracking | Medium | Medium | Manager dashboard flags total-mode loads for spot-check |
-| Shared-iPad PIN sharing between operators | Medium | Medium | Short idle timeout; auto-logout after each load submission; manager education on audit-trail integrity |
-| MyMRC UI redesign breaks Playwright automation | Medium | Medium | Selector resilience patterns; weekly snapshot diff; ntfy alert on failure; manual fallback workflow with prefilled URL in manager dashboard |
-| MyMRC and DR3-Vision unit counts diverge (data integrity risk) | Medium | High | Daily reconciliation dashboard; conflict-resolution UX; audit log preserves both versions |
-| MyMRC credentials in `.env` get committed | Low | High | gitleaks pre-commit + CI; secrets in `~/.dr3-vision-secrets/` per fleet §11; mode 600 |
-| **Missed 3-day MyMRC submission deadline → 10% payment withhold** (Contract Exhibit H) | Medium | **High** | Submission deadline timestamp on every load; Compliance dashboard tracks % on-time; in-app warning at 24h before deadline; daily email digest to Morena summarizing at-risk loads; Playwright automation reduces manual effort |
-| **Failed 75% recycling rate by weight → potential termination** (Contract Article 6.4) | Low | **Critical** | Material breakdown tracking from V2.1; rolling rate calculation on Compliance dashboard; alert if approaching threshold |
-| **Failed 97% inbound/outbound weight reconciliation → 10% payment withhold per pp below** | Medium | **High** | Weight tracked at every step; reconciliation dashboard; nine-month rolling calculation with predictive alert |
-| **60-min dock SLA breach → demurrage chargeback** (Contract Article 11.3) | Medium | Medium | dock_appointment_at vs unload_started_at timing; in-app warning badge at 90 min, critical at 110 min on live dock view |
-| **Storage limit breach** (CA: 3,500 inside / 5,000 outside; OR: 6,000 total on-site) **→ termination grounds** (Contract: CA Article 6.5–6.6, OR Article 3.5) | Low | **Critical** | Daily inventory snapshots; live counter on manager dashboard; **ntfy alert via `dr3-vision-container` topic to Bill at 90% capacity** (storage is one of the two ntfy-eligible event types per Q16); immediate notification automation to MRC on hard breach; in-app banner to Morena/Kelsey on dashboard |
-| **PWA cache unrecoverable + offline queue lost** (no paper fallback per Q20) | Low | **High** | Cache durability engineering: Service Worker versioning, IndexedDB encryption-at-rest, queue replay on every PWA load, queue-health indicator on operator screen, monthly cache-recovery drills documented in deployment runbook |
-| **Records-retention failure** → audit findings (Contract Article 8.6) | Low | High | 4-year retention default for photos/audit/postgres backups; lifecycle policy on R2; documented in ADR-0005 + ADR-0007 |
-| **Consumer Incentive Program PII breach** (Contract Exhibit I — Personal Data) | Low | **Critical** | V2.2 separate ADR-0010; encryption; access controls; breach notification process; 10-business-day deletion-on-termination automation |
+| Risk                                                                                                                                                          | Likelihood | Impact       | Mitigation                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iPad WiFi worse than expected at dock                                                                                                                         | Medium     | High         | Aggressive offline queue from MVP day 1                                                                                                                                                                                                                                                                   |
+| Operators resist new tool                                                                                                                                     | Medium     | High         | On-site iteration during the first 30 days; weekly UX feedback loop                                                                                                                                                                                                                                       |
+| MRC reporting requirements shift mid-build                                                                                                                    | Low        | Medium       | Schema designed to extend; ADR-0007 captures change process; MRC has 60-day notice obligation under contract                                                                                                                                                                                              |
+| Sacramento consolidation timeline shifts the multi-site rollout                                                                                               | High       | Low          | Site model is data-driven; new site = new row, not new code                                                                                                                                                                                                                                               |
+| V1 PHP app accidentally referenced as "the system" by anyone external                                                                                         | Medium     | Low          | Archive V1 to `legacy/` in the same repo once V2 is in production                                                                                                                                                                                                                                         |
+| Operators misuse "Total mode" to skip stack-by-stack tracking                                                                                                 | Medium     | Medium       | Manager dashboard flags total-mode loads for spot-check                                                                                                                                                                                                                                                   |
+| Shared-iPad PIN sharing between operators                                                                                                                     | Medium     | Medium       | Short idle timeout; auto-logout after each load submission; manager education on audit-trail integrity                                                                                                                                                                                                    |
+| MyMRC UI redesign breaks Playwright automation                                                                                                                | Medium     | Medium       | Selector resilience patterns; weekly snapshot diff; ntfy alert on failure; manual fallback workflow with prefilled URL in manager dashboard                                                                                                                                                               |
+| MyMRC and DR3-Vision unit counts diverge (data integrity risk)                                                                                                | Medium     | High         | Daily reconciliation dashboard; conflict-resolution UX; audit log preserves both versions                                                                                                                                                                                                                 |
+| MyMRC credentials in `.env` get committed                                                                                                                     | Low        | High         | gitleaks pre-commit + CI; secrets in `~/.dr3-vision-secrets/` per fleet §11; mode 600                                                                                                                                                                                                                     |
+| **Missed 3-day MyMRC submission deadline → 10% payment withhold** (Contract Exhibit H)                                                                        | Medium     | **High**     | Submission deadline timestamp on every load; Compliance dashboard tracks % on-time; in-app warning at 24h before deadline; daily email digest to Morena summarizing at-risk loads; Playwright automation reduces manual effort                                                                            |
+| **Failed 75% recycling rate by weight → potential termination** (Contract Article 6.4)                                                                        | Low        | **Critical** | Material breakdown tracking from V2.1; rolling rate calculation on Compliance dashboard; alert if approaching threshold                                                                                                                                                                                   |
+| **Failed 97% inbound/outbound weight reconciliation → 10% payment withhold per pp below**                                                                     | Medium     | **High**     | Weight tracked at every step; reconciliation dashboard; nine-month rolling calculation with predictive alert                                                                                                                                                                                              |
+| **60-min dock SLA breach → demurrage chargeback** (Contract Article 11.3)                                                                                     | Medium     | Medium       | dock_appointment_at vs unload_started_at timing; in-app warning badge at 90 min, critical at 110 min on live dock view                                                                                                                                                                                    |
+| **Storage limit breach** (CA: 3,500 inside / 5,000 outside; OR: 6,000 total on-site) **→ termination grounds** (Contract: CA Article 6.5–6.6, OR Article 3.5) | Low        | **Critical** | Daily inventory snapshots; live counter on manager dashboard; **ntfy alert via `dr3-vision-container` topic to Bill at 90% capacity** (storage is one of the two ntfy-eligible event types per Q16); immediate notification automation to MRC on hard breach; in-app banner to Morena/Kelsey on dashboard |
+| **PWA cache unrecoverable + offline queue lost** (no paper fallback per Q20)                                                                                  | Low        | **High**     | Cache durability engineering: Service Worker versioning, IndexedDB encryption-at-rest, queue replay on every PWA load, queue-health indicator on operator screen, monthly cache-recovery drills documented in deployment runbook                                                                          |
+| **Records-retention failure** → audit findings (Contract Article 8.6)                                                                                         | Low        | High         | 4-year retention default for photos/audit/postgres backups; lifecycle policy on R2; documented in ADR-0005 + ADR-0007                                                                                                                                                                                     |
+| **Consumer Incentive Program PII breach** (Contract Exhibit I — Personal Data)                                                                                | Low        | **Critical** | V2.2 separate ADR-0010; encryption; access controls; breach notification process; 10-business-day deletion-on-termination automation                                                                                                                                                                      |
 
 ## 15. Where to read more (cross-references)
 
@@ -849,6 +854,44 @@ Theming approach: Tailwind config exposes the palette as utility classes (`bg-dr
 - `~/noc-master/docs/spec/fleet-integration.md` — fleet integration checklist (canonical)
 - `~/noc-master/data/service-registry.json` — canonical service entry for `dr3-vision`
 - `FLEET-PRIMER.md` — fleet conventions briefing
+
+## 16. Sprint 2 (Bonus Management, Vision Dashboard, observability)
+
+Sprint 2 ships ahead of the V2.1 backlog. It moves the Woodland processor bonus inside DR3-Vision, gives the product a real landing page, and completes the fleet observability wire-in deferred from Sprint 1. Tickets T-100 through T-125 (see `docs/SPRINT-2-PLAN.md`). The section numbering below is intentional: §12 above remains the original "Success criteria" section; this Sprint 2 section is appended as §16 rather than renumbering the charter.
+
+**Bonus Management System (ADR-0019).** The Woodland daily mattress-handling bonus — previously tracked on paper and an Excel sheet with a wrong high-throughput formula — is replaced by a code-enforced workflow. Daily per-employee entry pulls rates from `processor_bonus_rules` (the off-by-one high threshold corrected from 75 to 74, per ADR-0019 §1, superseding ADR-0011's formula). A monthly state machine (`draft` → `pending_signatures` → `partially_signed` → `signed` → `paid`, with admin `amended`) is server-enforced; daily-entry mutations lock once a month leaves `draft`. Dual sign-off (facility manager + operations manager) carries an asymmetric override — Bill or Morena can sign for Janette; only Bill can sign for Morena — and every signature records actor, timestamp, IP, and user-agent. A co-branded PDF auto-generates on the second signature, uploads to R2, and is delivered to payroll. Amendment (admin-only unlock, "AMENDED" PDF marker, supersedes line), historical browsing, and per-employee plus annual aggregate views with CSV export complete the lifecycle. Woodland-only in V2; the schema is site-scoped so Eugene drops in later. A 5:00 PM Pacific EOD cron publishes to ntfy `dr3-vision-system` when active-employee entries are missing for a Woodland working day.
+
+**Vision Dashboard (ADR-0020).** The root route `/` becomes a branded, role-aware tile launcher replacing the "coming soon" placeholder, surfacing each user's available capabilities and showing V2.1+ work as deactivated Coming Soon tiles. Bill (admin) sees all tiles; Janette and Rick see only their site-scoped, role-appropriate set; the operator PIN flow at `/operator` is unaffected. The tile registry is a single TypeScript array so adding a tile is one entry.
+
+**M365 Graph mail-send (ADR-0021).** Payroll PDF delivery goes through Microsoft Graph (`POST /users/{mailbox}/sendMail`) rather than external SMTP, so intra-tenant `dr3-vision@svdp.us → payroll@svdp.us` mail is recognized by Exchange Online as same-organization and bypasses the same-domain spoofing filters that quarantine third-party-origin SMTP. Token acquisition uses `ClientSecretCredential` against the existing Entra tenant (extends ADR-0016); sends retry with backoff on transient failures, fail open without the Entra env vars, and publish to ntfy on exhaustive failure. Every send is audited.
+
+**Fleet observability wire-in (ADR-0022).** The Sprint-1 deferral (T-018) is closed: OpenTelemetry traces to Tempo, `@sentry/nextjs` errors to GlitchTip (sensitive headers/cookies/PIN scrubbed, fail-open without a DSN), `pino` structured JSON logs to Loki with request-id correlation and field redaction, and an internal-only Prometheus `/metrics` endpoint (404 through the public Cloudflare tunnel). A committed Grafana dashboard and alert-rule set complete the stack; critical alerts route to ntfy, warnings stay in-portal.
+
+**Signature-request emails (ADR-0019 §5a).** Signers are actively prompted by email when their signature is required rather than relying on them to check the portal. On `draft → pending_signatures` (and on amendment re-open) the facility-manager signer is emailed; after the first signature the still-unsigned slot's signer is emailed; recipients resolve from the `users` table (no hardcoded addresses) and every prompt is audited. Fails open — signing still works if mail is unconfigured.
+
+**Shipped tickets (T-100–T-125):**
+
+- **T-100** — Bonus schema migration (`bonus_employees`, `bonus_daily_entries`, `bonus_months`)
+- **T-101** — Processor bonus formula off-by-one correction (Woodland high threshold 75 → 74)
+- **T-102** — OpenTelemetry SDK + auto-instrumentation → Tempo
+- **T-103** — GlitchTip (Sentry SDK) integration
+- **T-104** — Bonus employees CRUD (`/bonus/employees`)
+- **T-105** — Bonus daily entry grid (`/bonus`)
+- **T-106** — Monthly state machine
+- **T-107** — Vision Dashboard tile landing (`/`)
+- **T-108** — Loki structured logging (pino)
+- **T-109** — Prometheus `/metrics` endpoint (internal-only)
+- **T-110** — Signature capture flow
+- **T-111** — Signature override workflow (asymmetric)
+- **T-112** — PDF generation (Playwright, co-branded)
+- **T-113** — EOD ntfy enforcement
+- **T-114** — M365 Graph mail-send integration
+- **T-115** — Grafana dashboard + alert rules
+- **T-116** — Amendment workflow (admin-only)
+- **T-117** — Historical browsing
+- **T-118** — Per-employee + annual aggregate views + CSV
+- **T-125** — Signature-request emails
+- **T-119–T-124** — Polish, operator residuals (M365 mailbox + observability env vars), and go-live verification
 
 ---
 

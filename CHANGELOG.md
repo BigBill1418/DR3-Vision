@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 Wave E: profile photo, health pill, docs (T-119/T-120/T-121)
+
+Final code wave. Only the operator residuals (T-122 M365 mailbox, T-123 observability
+infra) + production deploy + the go-live smoke tests (T-124) remain for Sprint 2.
+
+- **T-119 — Graph profile photo** on the dashboard avatar. The Entra sign-in now
+  persists the Graph access token in the (encrypted, server-only) session JWT
+  (`User.Read` scope added); `GET /api/me/photo` proxies `/me/photo/$value` with a
+  24h private cache — no photo bytes in the cookie, no server storage. The avatar
+  preloads the photo client-side and renders **initials by default**, swapping in the
+  photo only on a successful load (avoids the broken-image glyph + the pre-hydration
+  onError race). Fail-open: no token / no photo / Graph down → initials. 5 tests +
+  verified by eye (initials fallback).
+- **T-120 — Health-pill detail.** Footer pill expands to per-subsystem status (db
+  live + R2 / MyMRC / ntfy / Graph / GlitchTip config presence), 30s poll, ADR-0020
+  colors. New `GET /api/health/subsystems`. 3 tests + verified by eye (db green, rest
+  amber in a bare env → "Some systems degraded").
+- **T-121 — Docs.** README (Bonus Management + Vision Dashboard), PROJECT-CHARTER
+  §16 Sprint 2, ADR index updated for 0019–0022 (+ an ADR-0018 index gap-fill).
+
+Verification: `tsc --noEmit` clean, `next build` exit 0, `npm test` **478 passed**,
+`next lint` clean. Build needs `NODE_OPTIONS=--max-old-space-size≈6144` (type-check
+phase OOMs on the default heap) — flag for the deployer/CI.
+
 ### 2026-06-06 — Sprint 2 Wave D verification (orchestrator)
 
 T-116 + T-118 built in parallel, then T-117. No middleware changes needed.

@@ -53,10 +53,13 @@ export const authConfig = {
       clientId: process.env['AUTH_MICROSOFT_ENTRA_ID_ID'] ?? '',
       clientSecret: process.env['AUTH_MICROSOFT_ENTRA_ID_SECRET'] ?? '',
       issuer: process.env['AUTH_MICROSOFT_ENTRA_ID_ISSUER'] ?? '',
+      // User.Read so the resulting access token can fetch /me/photo (ADR-0020 /
+      // T-119). These are standard pre-consented delegated scopes; SSO is unchanged.
+      authorization: { params: { scope: 'openid profile email User.Read' } },
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
       const nowS = Math.floor(Date.now() / 1000);
       if (user) {
         if (user.id) token.sub = user.id;
@@ -64,6 +67,13 @@ export const authConfig = {
         if (user.name != null) token.name = user.name;
         token.role = user.role;
         token.primary_site_id = user.primary_site_id;
+        // Persist the Graph access token from the Entra sign-in (T-119). Server-only
+        // (the session callback never copies it out); used by /api/me/photo.
+        if (account?.provider === 'microsoft-entra-id' && account.access_token) {
+          token.ms_access_token = account.access_token;
+          token.ms_access_token_exp =
+            typeof account.expires_at === 'number' ? account.expires_at : nowS + 3000;
+        }
         token.last_seen_at = nowS;
         return token;
       }
