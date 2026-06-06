@@ -59,7 +59,15 @@ function inList(where: Record<string, unknown>, key: string, value: string): boo
 
 vi.mock('@/lib/prisma', () => {
   const site = {
-    findUnique: vi.fn(async () => ({ id: WOODLAND, code: 'woodland', name: 'Woodland' })),
+    // ADR-0019.2: answer both the id→code (manager primary-site mapping) and
+    // code→row (effective-site resolution) lookups, for both sites.
+    findUnique: vi.fn(async ({ where }: { where: { id?: string; code?: string } }) => {
+      if (where.id === WOODLAND) return { code: 'woodland' };
+      if (where.id === EUGENE) return { code: 'eugene' };
+      if (where.code === 'woodland') return { id: WOODLAND, code: 'woodland', name: 'Woodland' };
+      if (where.code === 'eugene') return { id: EUGENE, code: 'eugene', name: 'Eugene' };
+      return null;
+    }),
   };
   const bonusPayPeriod = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
@@ -147,10 +155,26 @@ describe('GET /api/bonus/annual/export', () => {
     expect(res.status).toBe(403);
   });
 
-  it('403 for the Eugene manager (Rick)', async () => {
+  it('403 for Rick (Eugene mgr) requesting Woodland — site isolation', async () => {
+    // ADR-0019.2: Rick has Eugene bonus access but not Woodland; ?site=woodland
+    // is denied at the gate.
     mockSession = { user: { id: 'u-rick', role: 'manager', primary_site_id: EUGENE } };
-    const res = await GET(req());
+    const res = await GET(
+      new Request(`https://x/api/bonus/annual/export?year=${THIS_YEAR}&site=woodland`),
+    );
     expect(res.status).toBe(403);
+  });
+
+  it('200 CSV for Rick on his own Eugene site (?site=eugene)', async () => {
+    seed();
+    mockSession = { user: { id: 'u-rick', role: 'manager', primary_site_id: EUGENE } };
+    const res = await GET(
+      new Request(`https://x/api/bonus/annual/export?year=${THIS_YEAR}&site=eugene`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toBe(
+      `attachment; filename="bonus-eugene-annual-${THIS_YEAR}.csv"`,
+    );
   });
 
   it('200 CSV attachment for the Woodland manager', async () => {

@@ -8,7 +8,7 @@
 // `@/lib/bonus/calculator` via `annualTotals`, so the CSV can never diverge from
 // the on-screen totals or the signed PDF (CLAUDE.md hard rule #3).
 
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { annualTotals, csvForAnnual } from '@/lib/bonus/aggregates';
 import { appCurrentYear } from '@/lib/time';
 
@@ -27,7 +27,7 @@ function parseYear(raw: string | null): number {
 export async function GET(req: Request) {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

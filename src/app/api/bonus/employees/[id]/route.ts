@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { deactivateEmployee, reactivateEmployee, renameEmployee } from '@/lib/bonus/employees';
 
 export const runtime = 'nodejs';
@@ -37,7 +37,7 @@ interface Params {
 export async function PATCH(req: Request, { params }: Params) {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

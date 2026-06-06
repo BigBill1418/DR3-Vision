@@ -165,11 +165,18 @@ describe('POST /api/bonus/months/[id]/entries — gate', () => {
     expect((await POST(makeReq(goodBody), { params })).status).toBe(403);
   });
 
-  it('403 Eugene manager (Rick)', async () => {
+  it('403 Rick (Eugene mgr) requesting Woodland — site isolation', async () => {
+    // ADR-0019.2: Rick has Eugene bonus access but not Woodland; ?site=woodland
+    // is denied at the gate (and this route is admin-only besides).
     const { POST } = await import('./route');
     monthStore.set('m1', { id: 'm1', site_id: WOODLAND, state: 'amended' });
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
-    expect((await POST(makeReq(goodBody), { params })).status).toBe(403);
+    const req = new Request('http://x/api/bonus/months/m1/entries?site=woodland', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'Vitest/1.0' },
+      body: JSON.stringify(goodBody),
+    });
+    expect((await POST(req, { params })).status).toBe(403);
   });
 });
 

@@ -9,7 +9,7 @@
 // produces an AMENDED PDF (the month now self-references amended_from_period_id).
 
 import { NextResponse } from 'next/server';
-import { requireBonusAccess } from '@/lib/bonus/access';
+import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { resubmitAmendedMonth, type AmendmentDb } from '@/lib/bonus/amendment';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
@@ -35,7 +35,7 @@ export async function POST(
 ): Promise<Response> {
   let ctx;
   try {
-    ctx = await requireBonusAccess();
+    ctx = await requireBonusAccess(siteFromRequest(req));
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

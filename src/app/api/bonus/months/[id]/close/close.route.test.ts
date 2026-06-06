@@ -26,9 +26,17 @@ let monthRow: { id: string; site_id: string; state: string } | null = null;
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     site: {
-      findUnique: vi.fn(async ({ where }: { where: { code: string } }) =>
-        where.code === 'woodland' ? { id: WOODLAND, code: 'woodland', name: 'DR3 Woodland' } : null,
-      ),
+      // ADR-0019.2: the access matrix maps a manager's primary_site_id (uuid) →
+      // code, and resolves the effective site by code, so answer both shapes for
+      // both sites.
+      findUnique: vi.fn(async ({ where }: { where: { id?: string; code?: string } }) => {
+        if (where.id === WOODLAND) return { code: 'woodland' };
+        if (where.id === EUGENE) return { code: 'eugene' };
+        if (where.code === 'woodland')
+          return { id: WOODLAND, code: 'woodland', name: 'DR3 Woodland' };
+        if (where.code === 'eugene') return { id: EUGENE, code: 'eugene', name: 'DR3 Eugene' };
+        return null;
+      }),
     },
     bonusPayPeriod: {
       findFirst: vi.fn(async ({ where }: { where: { id: string; site_id: string } }) =>
@@ -61,9 +69,18 @@ describe('POST /api/bonus/months/[id]/close — role gate', () => {
     mockSession = { user: { id: 'op', role: 'operator' } };
     expect((await POST(req(), { params })).status).toBe(403);
   });
-  it('403 for the Eugene manager (Rick)', async () => {
+  it('404 for the Eugene manager (Rick) on a Woodland month — site isolation', async () => {
+    // ADR-0019.2: Rick now HAS bonus access (Eugene). His effective site is
+    // Eugene, so a Woodland month is invisible to him → 404 (cross-site), not a
+    // blanket 403. He cannot reach Woodland data.
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
-    expect((await POST(req(), { params })).status).toBe(403);
+    expect((await POST(req(), { params })).status).toBe(404);
+  });
+
+  it('200 for Rick closing his own Eugene month', async () => {
+    monthRow = { id: 'm1', site_id: EUGENE, state: 'draft' };
+    mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
+    expect((await POST(req(), { params })).status).toBe(200);
   });
 });
 

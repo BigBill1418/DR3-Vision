@@ -5,6 +5,47 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum Wave B: Eugene-aware access gate + Vision tile/site-picker (T-207, T-210)
+
+Made the bonus surface multi-site (Woodland + Eugene) per ADR-0019.2 §1/§6.
+`tsc --noEmit`, `next lint --max-warnings 0`, and the full `vitest` suite
+(598 tests) all clean.
+
+- **`src/lib/bonus/access.ts` reshaped (T-207).** New
+  `checkBonusAccess(session, requestedSite?): Promise<{allowed, sites}>` is the
+  single source of truth for the ADR-0019.2 §1 matrix: admin → both sites;
+  Woodland manager (Janette) → woodland; Eugene manager (Rick) → eugene;
+  California-ops manager (Morena, `primary_site_id=null`) → woodland only (no
+  Eugene); operator → denied. A `requestedSite` narrows the list and flips
+  `allowed:false` when out of reach. The manager's `primary_site_id` (a uuid) is
+  mapped to a site code via a single Prisma lookup — no hardcoded `'woodland'`
+  site logic. `requireBonusAccess(requestedSite?)` is now site-aware: it resolves
+  the EFFECTIVE site (explicit `?site=` → picked-site cookie → first allowed
+  site), loads that site row, and returns a `BonusContext` carrying `siteCode`,
+  `siteName`, and `allowedSites`. The old page-friendly `{ok,ctx}` variant was
+  renamed `tryBonusAccess`. New helpers: `parseSiteCode`, `siteFromRequest`.
+- **All bonus routes thread `?site=`.** Every `/api/bonus/**` route (and the
+  `/bonus/months/[id]/pdf` route) passes `siteFromRequest(req)` into
+  `requireBonusAccess`, so an admin's chosen site scopes the query and managers
+  stay confined to their own site. Cross-site month access by id 404s.
+- **Vision Dashboard bonus tile expanded (T-210).** `canSeeTile('bonus', …)` now
+  returns true for every manager (Woodland, Eugene, California-ops) — only the
+  matrix expands, the tile shape is unchanged (addendum hard rule 6). The
+  `woodlandSiteId` arg is retained but no longer load-bearing.
+- **Admin site picker + switch (T-210).** `/bonus` now server-detects multi-site
+  access: single-site users scope straight to their site; admins with no pick yet
+  get a themed site picker ("Choose a site: Woodland | Eugene"). The choice
+  persists in a `dr3_bonus_site` cookie (server actions in
+  `src/app/bonus/site-actions.ts`); the new `/bonus` layout shows a
+  "Site: <name> | switch" banner on every bonus route for multi-site admins.
+  New UI (`SitePicker`, `SiteSwitchBanner`, `layout.tsx`) matches the dark
+  dr3-space/cyan theme.
+- **Tests.** Rewrote `access.test.ts` for the new shape (full matrix +
+  requestedSite narrowing + effective-site resolution + deny paths). Updated the
+  bonus route tests and `dashboard-tiles.test.ts` to the expanded matrix (Rick
+  now reaches Eugene; "Rick → 403" became "Rick requesting Woodland → 403 /
+  Rick on Eugene → allowed").
+
 ### 2026-06-06 — Sprint 2 addendum Wave B: signature-chain lookup + site-aware signature service (T-208)
 
 Made the bonus signature service site-aware by sourcing signer/override identity

@@ -17,7 +17,7 @@ import Link from 'next/link';
 import { ExportsClient, type SiteOption } from './ExportsClient';
 import { BonusReports } from './BonusReports';
 import { HOME_ROUTE } from '@/lib/routes';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { tryBonusAccess } from '@/lib/bonus/access';
 import { appCurrentYear } from '@/lib/time';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +36,7 @@ export default async function ExportsPage() {
   // reach the bonus reports, Eugene (Rick) and operators may not. We surface the
   // bonus report entry points here only when this gate passes, mirroring every
   // /bonus page and /api/bonus route (single source: requireBonusAccess).
-  const bonusGate = await checkBonusAccess();
+  const bonusGate = await tryBonusAccess();
   const showBonus = bonusGate.ok;
 
   const allSites = await prisma.site.findMany({

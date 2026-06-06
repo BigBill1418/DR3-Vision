@@ -296,11 +296,17 @@ describe('POST /api/bonus/entries — role gate', () => {
     expect(res.status).toBe(403);
   });
 
-  it('403 for Eugene manager (Rick)', async () => {
+  it('403 for Rick (Eugene mgr) requesting Woodland — site isolation', async () => {
+    // ADR-0019.2: Rick has bonus access (Eugene) but not Woodland; ?site=woodland
+    // is denied at the gate.
     const { POST } = await import('./route');
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
     const res = await POST(
-      makeReq({ entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 1 }] }),
+      new Request('http://x/api/bonus/entries?site=woodland', {
+        method: 'POST',
+        body: JSON.stringify({ entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 1 }] }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
     expect(res.status).toBe(403);
   });

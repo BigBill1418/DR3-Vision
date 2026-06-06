@@ -193,11 +193,24 @@ describe('POST /api/bonus/employees — role gate', () => {
     expect(res.status).toBe(403);
   });
 
-  it('403 for Rick — the Eugene manager (acceptance)', async () => {
+  it('403 for Rick (Eugene mgr) requesting Woodland — site isolation (acceptance)', async () => {
+    // ADR-0019.2: Rick has bonus access (Eugene) but NOT Woodland. Requesting
+    // ?site=woodland is denied; his own Eugene site is allowed (next test).
     const { POST } = await import('./route');
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
-    const res = await POST(makeReq('http://x/api/bonus/employees', jsonBody({ full_name: 'A' })));
+    const res = await POST(
+      makeReq('http://x/api/bonus/employees?site=woodland', jsonBody({ full_name: 'A' })),
+    );
     expect(res.status).toBe(403);
+  });
+
+  it('allows Rick on his own Eugene site (?site=eugene) → 201', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
+    const res = await POST(
+      makeReq('http://x/api/bonus/employees?site=eugene', jsonBody({ full_name: 'Eugene Hire' })),
+    );
+    expect(res.status).toBe(201);
   });
 
   it('allows Janette — the Woodland manager', async () => {
@@ -264,12 +277,12 @@ describe('PATCH /api/bonus/employees/[id]', () => {
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
   });
 
-  it('403 for Rick on a rename', async () => {
+  it('403 for Rick renaming a Woodland employee (?site=woodland) — site isolation', async () => {
     insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'X', is_active: true });
     const { PATCH } = await import('./[id]/route');
     mockSession = { user: { id: 'rick', role: 'manager', primary_site_id: EUGENE } };
     const res = await PATCH(
-      makeReq('http://x/api/bonus/employees/e1', {
+      makeReq('http://x/api/bonus/employees/e1?site=woodland', {
         method: 'PATCH',
         body: JSON.stringify({ action: 'rename', full_name: 'Y' }),
         headers: { 'Content-Type': 'application/json' },

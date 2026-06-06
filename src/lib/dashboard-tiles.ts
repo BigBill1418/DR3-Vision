@@ -6,13 +6,13 @@
 // session.
 //
 // Bonus visibility intentionally mirrors `src/lib/bonus/access.ts` to the
-// letter: admin OR a manager whose `primary_site_id` is Woodland (Janette) or
-// `null` (both-sites operations manager, Morena). A manager bound to Eugene
-// (Rick) does NOT see the Bonus tile. Because the bonus rule keys off the
-// Woodland *site id* (not a code), and the session only carries
-// `primary_site_id`, callers must resolve Woodland's id once (server-side) and
-// pass it in — exactly as `requireBonusAccess` looks it up from Prisma. This
-// keeps the matrix a pure function and avoids a DB read per tile.
+// letter (ADR-0019.2 §1, Eugene enablement): admin OR ANY manager sees the
+// Bonus tile — Woodland (Janette), Eugene (Rick), and California-ops (Morena,
+// primary_site_id=null) all reach at least one bonus site, so all three see the
+// tile. Only operators (who never reach `/`) are excluded. The tile is a pure
+// gate; per-site scoping happens inside `/bonus` via `checkBonusAccess`. The
+// `woodlandSiteId` arg is retained for signature/back-compat callers but is no
+// longer load-bearing for tile visibility (every manager passes).
 //
 // Tiles the caller may NOT access are OMITTED from the launcher entirely (not
 // greyed) — ADR-0020. Coming-soon tiles are visible to everyone who passes the
@@ -210,9 +210,12 @@ export function canSeeTile(
     case 'admin-only':
       return role === 'admin';
     case 'bonus':
-      if (role === 'admin') return true;
-      // manager: Woodland-bound or both-sites (null) only — mirrors access.ts.
-      return user.primary_site_id === woodlandSiteId || user.primary_site_id === null;
+      // ADR-0019.2 §1: admin and EVERY manager reach at least one bonus site
+      // (Woodland, Eugene, or California-ops null → Woodland). Per-site scoping
+      // happens at `/bonus`; the tile only gates the manager+ audience. The
+      // `woodlandSiteId` arg is intentionally unused now (matrix expanded).
+      void woodlandSiteId;
+      return true;
     default:
       return false;
   }

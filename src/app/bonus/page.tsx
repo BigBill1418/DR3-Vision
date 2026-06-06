@@ -1,21 +1,37 @@
-// ADR-0019 §4/§7 — Bonus daily-entry page (T-105, server component).
+// ADR-0019 §4/§7 + ADR-0019.2 §1/§6 — Bonus daily-entry page (T-105 / T-210,
+// server component).
 //
-// Gated via `checkBonusAccess()` (Woodland-scoped): 401 → redirect to /login,
-// 403 → render the forbidden surface in-place (Rick / operators land here). The
-// page never trusts middleware alone (CLAUDE.md hard rule #6).
+// MULTI-SITE entry point. Access is the ADR-0019.2 matrix via
+// `checkBonusAccess(session, ?site)`:
+//   - no session                         → redirect to /login
+//   - operator / no bonus access         → in-place forbidden surface
+//   - single-site caller (Janette, Rick, Morena) → scope to their one site
+//   - multi-site caller (Bill, Kelsey) with NO site picked yet → render the
+//     site picker; once picked (?site= or the dr3_bonus_site cookie) → scope to it
+//
+// The page never trusts middleware alone (CLAUDE.md hard rule #6); every gate is
+// re-checked server-side. Site flows through `?site=` (and the picked-site
+// cookie) into `requireBonusAccess`, which resolves the effective site id.
 //
 // Resolves the SEEDED pay period covering the chosen day (via `resolveOpenPayPeriod`
 // inside the data layer — T-203 / ADR-0019.1; periods are pre-seeded, never
 // fabricated), lists ACTIVE employees alphabetically, and pre-loads today's row.
-// The Woodland processor-bonus rule is resolved server-side and passed to the
+// The site's processor-bonus rule is resolved server-side and passed to the
 // client grid so live bonus math is rule-driven, never hardcoded (CLAUDE.md hard
 // rule #3). A day outside every seeded period renders a clean "no open period"
 // surface rather than crashing.
 
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
-import { checkBonusAccess } from '@/lib/bonus/access';
+import { auth } from '@/lib/auth';
+import {
+  checkBonusAccess,
+  tryBonusAccess,
+  parseSiteCode,
+  BONUS_SITE_COOKIE,
+} from '@/lib/bonus/access';
 import { getDailyGrid, NoOpenPayPeriodError } from '@/lib/bonus/daily-entry';
 import {
   appToday,
@@ -28,10 +44,11 @@ import {
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
 import { AdminDatePicker } from './AdminDatePicker';
 import { CloseMonthButton } from './CloseMonthButton';
+import { SitePicker } from './SitePicker';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Promise<{ date?: string }>;
+type SearchParams = Promise<{ date?: string; site?: string }>;
 
 /**
  * Resolve the business day this page edits. Default is Pacific "today". An admin
@@ -53,13 +70,37 @@ export default async function BonusDailyEntryPage({
 }: {
   searchParams: SearchParams;
 }) {
-  const gate = await checkBonusAccess();
+  const sp = await searchParams;
+  const requestedSite = parseSiteCode(sp.site);
+
+  // Resolve the caller's full site set first (ADR-0019.2 §1). This drives the
+  // single-vs-multi-site branch below.
+  const session = await auth();
+  const access = await checkBonusAccess(session);
+  if (!access.allowed) {
+    if (!session?.user?.id) redirect('/login?next=/bonus');
+    return <ForbiddenPage />;
+  }
+
+  // Multi-site caller (admin) who hasn't pinned a site yet → render the picker.
+  // "Pinned" = an explicit ?site= OR the persisted dr3_bonus_site cookie.
+  if (access.sites.length > 1 && !requestedSite) {
+    const store = await cookies();
+    const picked = parseSiteCode(store.get(BONUS_SITE_COOKIE)?.value);
+    if (!picked) {
+      return <SitePicker sites={access.sites} />;
+    }
+  }
+
+  // Scope to the effective site (the requested one, else the picked cookie, else
+  // the caller's single site). 403 if the caller can't reach the requested site
+  // (e.g. Janette asking for ?site=eugene).
+  const gate = await tryBonusAccess(requestedSite);
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus');
     return <ForbiddenPage />;
   }
 
-  const sp = await searchParams;
   const entryDate = resolveEntryDate(sp.date, gate.ctx.isAdmin);
   let grid;
   try {
@@ -159,7 +200,7 @@ function ForbiddenPage() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
       <h1 className="text-2xl font-semibold">Access denied</h1>
       <p className="mt-2 text-dr3-mist-dim">
-        Bonus management is limited to Woodland managers and administrators.
+        Bonus management is limited to site managers and administrators.
       </p>
       <Link
         href={HOME_ROUTE}
