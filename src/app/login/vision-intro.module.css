@@ -1,0 +1,213 @@
+/*
+ * Vision Dashboard intro — a <3s cinematic reveal of the DR3-Vision eye logo
+ * that plays once per browser session on the login surface, then resolves into
+ * the login. Deep-space ignition: starfield + cyan nebula bloom → the eye +
+ * wordmark glow in (mix-blend: screen drops the logo's black field so only the
+ * cyan/steel art floats) → a scan-line sweeps the eye → a flash bloom → the
+ * overlay fades, handing off to the login (whose logo is also screen-blended,
+ * so the glowing eye stays continuous). CSS-only; GPU-friendly (opacity /
+ * transform / filter). Honor prefers-reduced-motion: the component never mounts
+ * this for reduced-motion users.
+ */
+
+/* Hide the login content under the intro until just before the reveal, so a
+ * first-visit user never sees the login flash before the intro covers it. The
+ * pre-paint inline script in page.tsx adds html.dr3-intro-playing. */
+:global(html.dr3-intro-playing) .shell {
+  opacity: 0;
+}
+.shell {
+  transition: opacity 0.55s ease;
+}
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  overflow: hidden;
+  background: #000;
+  animation: introOut 0.62s cubic-bezier(0.7, 0, 0.25, 1) 2.02s forwards;
+}
+@keyframes introOut {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.06);
+    visibility: hidden;
+  }
+}
+
+.stars {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background-image:
+    radial-gradient(1.2px 1.2px at 18% 28%, #ffffffcc, transparent 60%),
+    radial-gradient(1px 1px at 72% 60%, #9ff3eaaa, transparent 60%),
+    radial-gradient(1px 1px at 45% 82%, #ffffff88, transparent 60%),
+    radial-gradient(1.4px 1.4px at 86% 22%, #ffffffaa, transparent 60%),
+    radial-gradient(1px 1px at 32% 64%, #7fe8de99, transparent 60%),
+    radial-gradient(1px 1px at 60% 38%, #ffffff77, transparent 60%);
+  background-size:
+    340px 340px,
+    280px 280px,
+    220px 220px,
+    190px 190px,
+    150px 150px,
+    260px 260px;
+  animation: starsIn 1.3s ease-out 0.15s forwards;
+}
+@keyframes starsIn {
+  0% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
+.nebula {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 140vmax;
+  height: 140vmax;
+  transform: translate(-50%, -50%) scale(0.15);
+  background: radial-gradient(
+    circle,
+    rgba(80, 240, 224, 0.26),
+    rgba(80, 240, 224, 0.07) 28%,
+    transparent 58%
+  );
+  opacity: 0;
+  animation: nebula 2.3s cubic-bezier(0.2, 0.6, 0.2, 1) 0.05s forwards;
+}
+@keyframes nebula {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.15);
+  }
+  28% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.45;
+    transform: translate(-50%, -50%) scale(1.15);
+  }
+}
+
+.logo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(48rem, 88vw);
+  height: auto;
+  transform: translate(-50%, -50%) scale(1.14);
+  mix-blend-mode: screen;
+  opacity: 0;
+  animation:
+    logoIn 1.15s cubic-bezier(0.16, 1, 0.3, 1) 0.42s forwards,
+    logoGlow 1.7s ease-in-out 0.85s 1;
+}
+@keyframes logoIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.14);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes logoGlow {
+  0% {
+    filter: drop-shadow(0 0 4px rgba(80, 240, 224, 0));
+  }
+  50% {
+    filter: drop-shadow(0 0 30px rgba(80, 240, 224, 0.6));
+  }
+  100% {
+    filter: drop-shadow(0 0 16px rgba(80, 240, 224, 0.32));
+  }
+}
+
+.scanwrap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(48rem, 88vw);
+  aspect-ratio: 1168 / 784;
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+.scan {
+  position: absolute;
+  left: -5%;
+  right: -5%;
+  height: 11%;
+  top: -15%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(140, 255, 246, 0),
+    rgba(150, 255, 247, 0.9),
+    rgba(140, 255, 246, 0)
+  );
+  filter: blur(2px);
+  opacity: 0;
+  animation: scan 1.05s cubic-bezier(0.45, 0, 0.55, 1) 0.82s 1;
+}
+@keyframes scan {
+  0% {
+    top: -15%;
+    opacity: 0;
+  }
+  14% {
+    opacity: 0.95;
+  }
+  86% {
+    opacity: 0.95;
+  }
+  100% {
+    top: 108%;
+    opacity: 0;
+  }
+}
+
+.flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12vmax;
+  height: 12vmax;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.2);
+  background: radial-gradient(
+    circle,
+    rgba(210, 255, 251, 0.95),
+    rgba(80, 240, 224, 0.5) 32%,
+    transparent 66%
+  );
+  opacity: 0;
+  mix-blend-mode: screen;
+  animation: flash 0.72s cubic-bezier(0.2, 0.7, 0.3, 1) 1.5s forwards;
+}
+@keyframes flash {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.2);
+  }
+  22% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(4.2);
+  }
+}
