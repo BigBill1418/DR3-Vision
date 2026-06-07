@@ -5,6 +5,45 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-06 — Sprint 2 addendum: production cutover executed + post-cutover fixes (T-216)
+
+The bi-weekly + Eugene addendum was deployed to production CHAD-HQ and the
+cutover state established. This is the execution log (the runbook is the
+procedure; this records what actually happened).
+
+**Cutover (live on `dr3_vision`):** pre-migration `pg_dump` backup taken
+(`~/dr3-backups/dr3_pre-biweekly_*.dump` on CHAD); `prisma migrate deploy` applied
+`20260606_bi_weekly_pay_periods` (renames + `bonus_signature_chains` + the
+`skipped` state); seed loaded **52 pay-periods + 2 signature chains** (Woodland
+Janette/Morena, Eugene Rick/Kelsey, Bill auto-override). The pre-existing monthly
+June row + its 50 daily entries were **deleted** (operator decision — pre-cutover,
+unsigned, unpaid, Period-12-era data; recoverable from the backup) because its
+Jun 1–30 range overlapped the seeded bi-weekly periods and blocked the
+post-seed `NOT NULL` DDL. **Period 12 skipped** on both sites; **Period 13
+(Jun 9–22, pay Jun 26)** is the first canonical bi-weekly payroll period.
+Consequence: no bonus daily entry is possible Jun 6–8 (those dates resolve to the
+skipped Period 12); entry resumes Jun 9.
+
+**Three bugs caught at cutover and fixed (not surfaced by tests/build):**
+
+- **`fix(bonus-cron)` — daemons crash-looped.** `bonus-period-close` and
+  `bonus-escalation-check` used `setTimeout(...).unref()`; with only that timer
+  pending, Node's event loop had nothing keeping it alive, so each daemon exited
+  `0` right after scheduling → container restart loop, never firing. Removed
+  `.unref()` so the sleep timer keeps the process alive.
+- **`fix(seed)` — assertCounts too strict for prod.** The seed asserted exact row
+  counts including `users: 5`, but prod has 7 (added via the admin UI), so the
+  seed aborted at validation. Seed-controlled tables keep exact counts;
+  runtime-growable tables (`users` / `sources` / `transporters`) now assert a floor.
+- **`chore(compose)` — false "unhealthy" on the cron containers.** Both cron
+  daemons inherited the app image's HTTP `/healthz` HEALTHCHECK, which can never
+  pass for a non-web process. Added `healthcheck: disable` to both cron services;
+  liveness is the running process + `restart: unless-stopped`.
+
+**Remaining operator steps:** bootstrap the Eugene processor roster via the UI
+(`/bonus` → Eugene → Employees; empty by design); authed visual check (Rick sees
+Bonus → Eugene; admins get the site picker).
+
 ### 2026-06-06 — Sprint 2 addendum (consolidated): bi-weekly bonus cadence + Eugene site enablement
 
 Umbrella summary of the Sprint-2 addendum (T-201 … T-215). The per-wave entries
