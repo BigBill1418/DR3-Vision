@@ -260,6 +260,11 @@ services:
     container_name: dr3-vision-bonus-period-close
     restart: unless-stopped
     command: ['node', 'scripts/bonus-period-close.mjs']
+    # This is a cron daemon, not the web app — disable the image's inherited
+    # HTTP /healthz HEALTHCHECK (it would always fail here and show a false
+    # "unhealthy"). Liveness is "the process is up"; restart:unless-stopped covers it.
+    healthcheck:
+      disable: true
     env_file:
       # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
       # internal close route). Optional: when absent both sides skip the bearer
@@ -317,6 +322,10 @@ services:
     container_name: dr3-vision-bonus-escalation-check
     restart: unless-stopped
     command: ['node', 'scripts/bonus-escalation-check.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here → false "unhealthy"). See bonus-period-close.
+    healthcheck:
+      disable: true
     env_file:
       # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
       # internal escalation route). Optional: when absent both sides skip the
