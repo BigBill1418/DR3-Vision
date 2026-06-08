@@ -52,6 +52,15 @@ export async function POST(
     return new NextResponse('Not Found', { status: 404 });
   }
 
+  // T-321 is scoped to historical periods only: never stamp a PDF on a live
+  // draft / pending_signatures period, even over loopback.
+  if (period.state !== 'historical_imported') {
+    return NextResponse.json(
+      { id, error: 'generate-pdf is restricted to historical_imported periods' },
+      { status: 409 },
+    );
+  }
+
   // Idempotency: already has a PDF — no-op.
   if (period.pdf_storage_key) {
     return NextResponse.json({ id, skipped: true, storageKey: period.pdf_storage_key });
