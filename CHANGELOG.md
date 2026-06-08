@@ -5,6 +5,32 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-08 — Eager historical-period PDF generation (T-321, ADR-0023)
+
+Sprint 3 historical import: every `historical_imported` pay period now gets a
+PDF generated and uploaded to R2 at seed/deploy time (ADR-0023 Q13).
+
+- **`scripts/generate-historical-pdfs.mjs` (feat).** Enumerates every
+  `historical_imported` period with a NULL `pdf_storage_key` and drives PDF
+  generation via the loopback-guarded internal route (fleet `.mjs`→internal-route
+  convention, mirroring `scripts/bonus-period-close.mjs`). Idempotent (skips
+  periods that already have a key); logs a generated/skipped/failed summary.
+  Runnable standalone (`npm run db:seed:pdfs`) per the operator runbook.
+- **`POST /api/internal/bonus/generate-pdf/[id]` (feat).** Internal,
+  loopback-guarded endpoint that calls the existing `generateBonusPdf` path;
+  no-ops on an already-set `pdf_storage_key`.
+- **Historical-aware PDF render (feat).** The internal bonus-PDF page now prints
+  the **as-paid legacy total** (`legacy_total_payout_cents` when
+  `imported_with_legacy_formula`, per ADR-0023 Q1) and an import-specific
+  attestation ("Imported from <file> SHA-256 …, not signed by facility or ops")
+  for `historical_imported` periods. The live signed-period path is unchanged.
+- **Seed wiring.** `prisma/seed.mjs` runs PDF generation as its final step;
+  best-effort so a bare `prisma db seed` without the running app / R2 logs a
+  warning and continues rather than failing the data seed.
+
+`tsc --noEmit` introduces zero new errors; ESLint clean on all touched files;
+`pdf-data` + sign-route suites green (25 tests).
+
 ### 2026-06-07 — Login cinematic intro + post-cutover theme refresh
 
 Added a cinematic Vision logo intro on first session load and completed the

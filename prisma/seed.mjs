@@ -779,6 +779,36 @@ async function main() {
   await seedHistoricalImport(siteIds);
   const counts = await assertCounts();
   console.log('✔ seed complete:', counts);
+
+  // ── Eager historical-period PDF generation (ADR-0023 Q13 / T-321) ──
+  // FINAL seed step. Renders + uploads a PDF (as-paid legacy total + import
+  // attestation) for every historical_imported period lacking a pdf_storage_key.
+  // Best-effort: this needs the running Next app (the internal render route) +
+  // R2 creds, which may be absent during a bare `prisma db seed`. A failure here
+  // must NOT fail the data seed — the operator runbook re-runs it standalone
+  // (`node scripts/generate-historical-pdfs.mjs`) once the app + R2 are up.
+  // Idempotent, so the standalone re-run only fills the gaps.
+  console.log('▶ generating historical-period PDFs (ADR-0023 / T-321)');
+  try {
+    const { generateHistoricalPdfs } = await import('../scripts/generate-historical-pdfs.mjs');
+    const pdfSummary = await generateHistoricalPdfs(prisma);
+    if (pdfSummary.failed > 0) {
+      console.warn(
+        `  ⚠ ${pdfSummary.failed} historical PDF(s) failed to generate ` +
+          `(generated ${pdfSummary.generated}, skipped ${pdfSummary.skipped}). ` +
+          'Re-run `node scripts/generate-historical-pdfs.mjs` once the app + R2 are up.',
+      );
+    } else {
+      console.log(
+        `  ✔ historical PDFs: generated ${pdfSummary.generated}, skipped ${pdfSummary.skipped}`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      '  ⚠ historical PDF generation skipped (app/R2 unavailable): ' +
+        `${err?.message ?? err}. Re-run \`node scripts/generate-historical-pdfs.mjs\` later.`,
+    );
+  }
 }
 
 main()
