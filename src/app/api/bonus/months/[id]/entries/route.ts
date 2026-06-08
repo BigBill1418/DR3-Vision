@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
+import { isValidMattressCount } from '@/lib/bonus/daily-entry';
 import {
   upsertAmendedMonthEntries,
   type AmendmentEntryDb,
@@ -28,7 +29,13 @@ export const dynamic = 'force-dynamic';
 
 const entrySchema = z.object({
   bonus_employee_id: z.string().min(1),
-  mattress_count: z.number().int().min(0).max(999),
+  // T-330 follow-up: 0..999 with at most one decimal place (Decimal(5,1)); negatives
+  // and >1 decimal place rejected. Single source of truth = isValidMattressCount,
+  // mirroring the primary /api/bonus/entries daily-entry path. Historical Eugene
+  // half-shift values (23.5/30.5) are corrected through this amendment path.
+  mattress_count: z
+    .number()
+    .refine(isValidMattressCount, 'Count must be 0–999 with at most one decimal place.'),
   note: z
     .union([z.string().max(2000), z.literal(''), z.null()])
     .optional()
@@ -106,7 +113,7 @@ export async function POST(
       );
     case 'count_out_of_range':
       return NextResponse.json(
-        { error: 'Mattress counts must be whole numbers from 0 to 999.' },
+        { error: 'Mattress counts must be from 0 to 999, with at most one decimal place.' },
         { status: 422 },
       );
     case 'employee_not_in_site':
