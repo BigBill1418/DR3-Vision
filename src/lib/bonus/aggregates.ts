@@ -196,7 +196,7 @@ export async function employeeHistory(
   const entriesByMonth = new Map<string, { entry_date: Date; mattress_count: number }[]>();
   for (const e of entries) {
     const list = entriesByMonth.get(e.bonus_pay_period_id) ?? [];
-    list.push({ entry_date: e.entry_date, mattress_count: e.mattress_count });
+    list.push({ entry_date: e.entry_date, mattress_count: e.mattress_count.toNumber() });
     entriesByMonth.set(e.bonus_pay_period_id, list);
   }
 
@@ -285,7 +285,7 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
     if (!monthStart) continue;
     const rule = await resolveRule(monthStart);
     const acc = byEmployee.get(e.bonus_employee_id) ?? emptyRollup();
-    accumulate(acc, e.mattress_count, rule);
+    accumulate(acc, e.mattress_count.toNumber(), rule);
     byEmployee.set(e.bonus_employee_id, acc);
   }
   if (byEmployee.size === 0) return [];

@@ -12,7 +12,13 @@
 //   - pure helpers: parsePayPeriodFilter, payPeriodWindow
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
+
+// T-330: mattress_count is Decimal(5,1) — Prisma returns a Decimal on read, so
+// the mock store holds Decimals and payoutForMonth's `.toNumber()` works.
+type Dec = Prisma.Decimal;
+const toDec = (n: number): Dec => new Prisma.Decimal(n);
 
 // ── In-memory stores ────────────────────────────────────────────
 interface MockMonth {
@@ -28,7 +34,7 @@ interface MockMonth {
 interface MockEntry {
   id: string;
   bonus_pay_period_id: string;
-  mattress_count: number;
+  mattress_count: Dec;
 }
 interface MockRule {
   id: string;
@@ -89,7 +95,7 @@ function addEntry(monthId: string, count: number): void {
   const e: MockEntry = {
     id: `entry-${++idCounter}`,
     bonus_pay_period_id: monthId,
-    mattress_count: count,
+    mattress_count: toDec(count),
   };
   entryStore.set(e.id, e);
 }

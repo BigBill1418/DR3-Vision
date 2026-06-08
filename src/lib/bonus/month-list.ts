@@ -146,7 +146,7 @@ async function payoutForMonth(
     throw e;
   }
   let cents = 0;
-  for (const e of entries) cents += calculateDailyBonusCents(e.mattress_count, rule);
+  for (const e of entries) cents += calculateDailyBonusCents(e.mattress_count.toNumber(), rule);
   return { cents, locked: false };
 }
 

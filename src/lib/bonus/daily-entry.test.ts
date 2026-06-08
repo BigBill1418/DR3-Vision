@@ -11,6 +11,13 @@
 //   - active rule is resolved from processor_bonus_rules (never hardcoded)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
+
+// T-330: mattress_count is a Decimal(5,1) column — the real Prisma client coerces
+// the written number to a Decimal and returns a Decimal on read. The mock store
+// mirrors that so `.toNumber()` at the read boundary behaves as in production.
+type Dec = Prisma.Decimal;
+const toDec = (n: number): Dec => new Prisma.Decimal(n);
 
 // ── In-memory stores ────────────────────────────────────────────
 interface MockMonth {
@@ -31,7 +38,7 @@ interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
   entry_date: Date;
-  mattress_count: number;
+  mattress_count: Dec;
   note: string | null;
   entered_by_user_id: string;
   entered_at: Date;
@@ -250,15 +257,20 @@ vi.mock('@/lib/prisma', () => {
           entry_date: Date;
         };
         const key = entryKey(k.bonus_employee_id, k.entry_date);
+        // The Decimal(5,1) column coerces a written number to a Decimal (T-330).
+        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> =>
+          'mattress_count' in d && typeof d.mattress_count === 'number'
+            ? { ...d, mattress_count: toDec(d.mattress_count as unknown as number) }
+            : d;
         const existing = entryStore.get(key);
         if (existing) {
-          Object.assign(existing, update);
+          Object.assign(existing, coerce(update));
           return { ...existing };
         }
         const row: MockEntry = {
           id: `entry-${++idCounter}`,
           entered_at: new Date(),
-          ...create,
+          ...(coerce(create as Partial<MockEntry>) as Omit<MockEntry, 'id' | 'entered_at'>),
         };
         entryStore.set(key, row);
         return { ...row };
@@ -483,5 +495,85 @@ describe('upsertDailyEntries — validation + site scope', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toBe('employee_not_in_site');
+  });
+});
+
+// ── T-330: one-decimal-place daily-entry contract ───────────────────
+// mattress_count is Decimal(5,1). The data layer accepts 0..999 with at most
+// one decimal place, rejects negatives and >1 decimal place, and the calculator
+// FLOORS the value — so a fractional entry's bonus equals its integer floor.
+describe('upsertDailyEntries — T-330 decimal contract', () => {
+  it('accepts a one-decimal count and persists it verbatim (23.5)', async () => {
+    const { upsertDailyEntries, getDailyGrid } = await import('./daily-entry');
+    const res = await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 23.5 }],
+      actor('user-janette'),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Persisted as the exact decimal, not floored/rounded at the write boundary.
+    expect(res.entries[0]!.mattress_count).toBe(23.5);
+
+    const grid = await getDailyGrid(WOODLAND, TODAY);
+    const amy = grid.rows.find((r) => r.full_name === 'Amy')!;
+    expect(amy.mattress_count).toBe(23.5);
+  });
+
+  it('rejects a two-decimal-place count (23.55)', async () => {
+    const { upsertDailyEntries } = await import('./daily-entry');
+    const res = await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 23.55 }],
+      actor('user-janette'),
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('count_out_of_range');
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('rejects a negative count (-3)', async () => {
+    const { upsertDailyEntries } = await import('./daily-entry');
+    const res = await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: -3 }],
+      actor('user-janette'),
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('count_out_of_range');
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('the calculator floors a fractional count: bonus(23.5) === bonus(23)', async () => {
+    const { upsertDailyEntries, getDailyGrid } = await import('./daily-entry');
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 23.5 }],
+      actor('user-janette'),
+    );
+    const grid = await getDailyGrid(WOODLAND, TODAY);
+    const amy = grid.rows.find((r) => r.full_name === 'Amy')!;
+    // 23 < threshold_low (50) ⇒ floor(23.5)=23 yields 0 cents, same as 23.
+    expect(amy.bonus_cents).toBe(0);
+  });
+
+  it('isValidMattressCount enforces the one-decimal-place rule', async () => {
+    const { isValidMattressCount } = await import('./daily-entry');
+    expect(isValidMattressCount(23.5)).toBe(true);
+    expect(isValidMattressCount(200.5)).toBe(true);
+    expect(isValidMattressCount(0)).toBe(true);
+    expect(isValidMattressCount(999)).toBe(true);
+    expect(isValidMattressCount(23.55)).toBe(false);
+    expect(isValidMattressCount(-3)).toBe(false);
+    expect(isValidMattressCount(-0.1)).toBe(false);
+    expect(isValidMattressCount(1000)).toBe(false);
+    expect(isValidMattressCount(NaN)).toBe(false);
+    expect(isValidMattressCount(Infinity)).toBe(false);
   });
 });

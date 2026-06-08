@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-08 — Decimal daily-entry input + Decimal migration type debt (T-330, ADR-0023)
+
+Sprint 3: the daily mattress-count entry now accepts one decimal place, and the
+`mattress_count` `Int → Decimal(5,1)` migration (Unit 1) is fully reconciled so
+`tsc --noEmit` is clean branch-wide.
+
+- **Decimal daily-entry input (feat).** `DailyEntryGrid` accepts `\d{1,4}(\.\d)?`
+  — 0–999 with an optional single decimal place; `23.5` persists verbatim,
+  `23.55` and negatives are rejected. A persistent "Up to one decimal place" hint
+  sits under each input (wired via `aria-describedby`). The >200 soft-warn now
+  fires on the **integer floor** (`200.5` → no warn; `230.5` → warn), matching the
+  calculator, which floors — so a fractional entry's live bonus preview equals its
+  integer-floor result.
+- **Validation contract (feat).** New exported `isValidMattressCount()` in
+  `daily-entry.ts` is the single source of truth (finite, 0–999, ≤1 decimal). The
+  data-layer pre-check and the `POST /api/bonus/entries` zod schema both use it;
+  the API rejects two-decimal / negative counts with 422.
+- **Decimal → number read boundaries (fix).** `mattress_count` is converted via
+  `.toNumber()` at every point where Prisma data feeds `number`-typed calculator
+  inputs / view models (`bonus/months/[id]` page, `aggregates.ts`,
+  `daily-entry.ts`, `month-list.ts`, and the bonus-PDF page — which replaces an
+  unsafe `as PdfEntry[]` cast with a proper map). `mattress_count` stays `Decimal`
+  only at the Prisma edge; downstream interfaces remain `number`.
+- **Enum label maps (fix).** `historical_imported` added to both the status-label
+  and badge-style maps on the bonus-months list page (muted style, matching
+  `skipped`).
+- **Tests.** DB-free Prisma mocks now model `mattress_count` as `Prisma.Decimal`
+  (matching production reads); added decimal-contract cases at the data layer and
+  the API (`23.5` accepted, `23.55`/`-3` rejected, floor equivalence). The schema
+  test's state-enum assertion was intentionally updated from seven → eight states
+  (`historical_imported`).
+
+`tsc --noEmit` exits 0 (headline gate for the branch); full vitest suite green
+(686 tests); ESLint clean on all touched files.
+
 ### 2026-06-08 — Eager historical-period PDF generation (T-321, ADR-0023)
 
 Sprint 3 historical import: every `historical_imported` pay period now gets a

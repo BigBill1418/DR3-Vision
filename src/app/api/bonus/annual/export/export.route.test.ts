@@ -8,6 +8,12 @@
 //                                              columns + Content-Disposition
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
+
+// T-330: mattress_count is Decimal(5,1) — Prisma returns a Decimal on read, so
+// the mock store holds Decimals and the aggregates layer's `.toNumber()` works.
+type Dec = Prisma.Decimal;
+const toDec = (n: number): Dec => new Prisma.Decimal(n);
 
 let mockSession: {
   user: {
@@ -40,7 +46,7 @@ interface MockEmployee {
 interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
-  mattress_count: number;
+  mattress_count: Dec;
 }
 
 const monthStore = new Map<string, MockMonth>();
@@ -140,7 +146,11 @@ function seed(): void {
     previous_names: null,
     is_active: true,
   });
-  entries.push({ bonus_employee_id: 'emp-amy', bonus_pay_period_id: 'm-may', mattress_count: 60 });
+  entries.push({
+    bonus_employee_id: 'emp-amy',
+    bonus_pay_period_id: 'm-may',
+    mattress_count: toDec(60),
+  });
 }
 
 describe('GET /api/bonus/annual/export', () => {

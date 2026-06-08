@@ -25,7 +25,6 @@ import {
   buildAttestation,
   formatPeriodTitle,
   type AttestationSource,
-  type PdfEntry,
 } from '@/lib/bonus/pdf-data';
 import { getSignatureChain } from '@/lib/bonus/signature-chain';
 
@@ -164,7 +163,15 @@ export default async function BonusPdfSourcePage({
     },
     site: { code: month.site.code, name: month.site.name },
     employees,
-    entries: entries as PdfEntry[],
+    // mattress_count is Decimal(5,1) at the Prisma edge; convert to number for
+    // the PdfEntry[] view model so grid rows render (Unit 8 / T-330). This only
+    // types the per-entry count — the displayed grand total is driven by
+    // displayTotalCents below (Unit 7), which is untouched.
+    entries: entries.map((e) => ({
+      bonus_employee_id: e.bonus_employee_id,
+      entry_date: e.entry_date,
+      mattress_count: e.mattress_count.toNumber(),
+    })),
     rule,
   });
 

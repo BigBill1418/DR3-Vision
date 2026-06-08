@@ -164,7 +164,7 @@ export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGri
   let totalCents = 0;
   const rows: DailyGridEntryRow[] = employees.map((emp) => {
     const entry = byEmployee.get(emp.id);
-    const count = entry ? entry.mattress_count : null;
+    const count = entry ? entry.mattress_count.toNumber() : null;
     const bonus_cents = count != null ? calculateDailyBonusCents(count, ruleParams) : 0;
     totalCents += bonus_cents;
     return {
@@ -219,6 +219,20 @@ export type UpsertDailyEntriesResult =
 
 const MAX_MATTRESS_COUNT = 999;
 
+/**
+ * A keyed mattress count is valid iff it is finite, in 0..999, and has at most
+ * one decimal place (the Decimal(5,1) column resolution — T-330). Negatives and
+ * two-or-more-decimal values (e.g. 23.55) are rejected. The integer-floor of the
+ * value drives the bonus math; the fractional tenth is stored verbatim.
+ */
+export function isValidMattressCount(n: number): boolean {
+  if (!Number.isFinite(n) || n < 0 || n > MAX_MATTRESS_COUNT) return false;
+  // One decimal place: scaling by 10 must yield a whole number. Round first to
+  // absorb binary-float noise (23.5 * 10 === 235 exactly, but guard regardless).
+  const scaled = n * 10;
+  return Math.abs(scaled - Math.round(scaled)) < 1e-9;
+}
+
 // Audit serializer. Mirrors `writeAudit()` / `employees.ts`: Date instances
 // ISO-stringify via the JSON round-trip, matching the audit-table behavior.
 function serializeForAudit(v: unknown): Prisma.InputJsonValue {
@@ -261,9 +275,10 @@ async function resolvePeriodOrThrow(siteId: string, day: Date): Promise<BonusMon
  * (ADR-0019 §7), via the T-106 `assertEntriesEditable` guard. The `note` field
  * is free text and never affects bonus math.
  *
- * Validation: counts must be integers in 0..999 (the schema's documented range;
+ * Validation: counts are in 0..999 with at most ONE decimal place (T-330 —
+ * `mattress_count` is Decimal(5,1)). Negatives and >1 decimal place are rejected;
  * >200 is a soft UI warning, NOT a hard reject — the operator can confirm a
- * legitimately high day). Each employee must be an ACTIVE Woodland row.
+ * legitimately high day. Each employee must be an ACTIVE Woodland row.
  */
 export async function upsertDailyEntries(
   siteId: string,
@@ -274,12 +289,10 @@ export async function upsertDailyEntries(
   const entryDate = entryDateUTC(date);
 
   // Validate counts up front (cheap, no DB) so a bad batch never opens a tx.
+  // T-330: at most one decimal place, 0..999, no negatives. The Decimal(5,1)
+  // column stores the fractional value verbatim; the calculator floors it.
   for (const i of inputs) {
-    if (
-      !Number.isInteger(i.mattress_count) ||
-      i.mattress_count < 0 ||
-      i.mattress_count > MAX_MATTRESS_COUNT
-    ) {
+    if (!isValidMattressCount(i.mattress_count)) {
       return { ok: false, reason: 'count_out_of_range' };
     }
   }
@@ -378,7 +391,7 @@ export async function upsertDailyEntries(
       out.push({
         id: row.id,
         bonus_employee_id: row.bonus_employee_id,
-        mattress_count: row.mattress_count,
+        mattress_count: row.mattress_count.toNumber(),
         note: row.note,
         entered_by_user_id: row.entered_by_user_id,
       });
