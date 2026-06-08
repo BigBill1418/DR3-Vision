@@ -45,6 +45,30 @@ function makeChainDb(): SignatureChainDb {
 }
 const chainDb = makeChainDb();
 
+const EUGENE = 'site-eugene';
+
+// T-312 (ADR-0023): Eugene chain double mirroring the T-201 seed —
+// facility=Rick, ops=Kelsey, facility-override=[bill,kelsey], ops-override=[bill],
+// auto=Bill. Patrick is in NONE of these slots, so the signature guard must
+// reject any Patrick-as-signer attempt at Eugene.
+function makeEugeneChainDb(): SignatureChainDb {
+  return {
+    bonusSignatureChain: {
+      findUnique: async ({ where }) =>
+        where.site_id === EUGENE
+          ? {
+              facility_signer_user_id: 'rick',
+              facility_override_actor_ids: 'bill,kelsey',
+              ops_signer_user_id: 'kelsey',
+              ops_override_actor_ids: 'bill',
+              auto_override_actor_user_id: 'bill',
+            }
+          : null,
+    },
+  };
+}
+const eugeneChainDb = makeEugeneChainDb();
+
 interface Row extends BonusMonthSignatureRow {
   facility_signed_ip: string | null;
   facility_signed_user_agent: string | null;
@@ -114,6 +138,13 @@ const bill: SignerContext = {
   primarySiteId: null,
   siteId: WOODLAND,
 };
+// T-312 (ADR-0023): Patrick Dills — Eugene manager, in NO Eugene chain slot.
+const patrick: SignerContext = {
+  userId: 'patrick',
+  role: 'manager',
+  primarySiteId: EUGENE,
+  siteId: EUGENE,
+};
 
 beforeEach(() => {
   row = {
@@ -135,6 +166,7 @@ beforeEach(() => {
   entries = [];
   audit.length = 0;
   clearSignatureChainCache(chainDb);
+  clearSignatureChainCache(eugeneChainDb);
 });
 
 const p = (s: SignerContext) => ({ id: s.userId, role: s.role });
@@ -250,5 +282,114 @@ describe('recordSignature', () => {
     });
     expect(res).toMatchObject({ ok: true, slot: 'facility', state: 'partially_signed' });
     expect(row.facility_signed_by_user_id).toBe('bill');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// T-312 (ADR-0023) — Patrick Dills rejected when he attempts to sign Eugene
+// ────────────────────────────────────────────────────────────────────
+//
+// Patrick has Eugene bonus VIEW access (access.test.ts) but is in NO Eugene
+// signature-chain slot (signature-chain.test.ts). The SAME recordSignature guard
+// that gates every other signer must reject any Patrick-as-signer attempt:
+//   - a natural attempt (no onBehalfOf) has no slot      → no_slot
+//   - an explicit override attempt at the facility slot  → not_authorized
+// The Eugene month exists and is in a signable state, so the rejection is the
+// AUTHORIZATION guard firing, not the cross-site not-found path.
+describe('Patrick Dills (T-312) — rejected by the signature guard at Eugene', () => {
+  function makeEugeneDb(): SignatureDb {
+    const erow: Row = {
+      id: 'me1',
+      site_id: EUGENE,
+      period_start: new Date(Date.UTC(2026, 5, 1)),
+      period_end: new Date(Date.UTC(2026, 5, 30)),
+      state: 'pending_signatures',
+      facility_signed_by_user_id: null,
+      facility_signed_at: null,
+      facility_signed_ip: null,
+      facility_signed_user_agent: null,
+      ops_signed_by_user_id: null,
+      ops_signed_at: null,
+      ops_signed_ip: null,
+      ops_signed_user_agent: null,
+      total_payout_cents: null,
+    };
+    const db: SignatureDb = {
+      bonusPayPeriod: {
+        findFirst: async ({ where }) => {
+          if (erow.id !== where.id) return null;
+          if (where.site_id !== undefined && erow.site_id !== where.site_id) return null;
+          return { ...erow };
+        },
+        update: async ({ data }) => {
+          Object.assign(erow, data);
+          return { ...erow };
+        },
+      },
+      bonusDailyEntry: { findMany: async () => [] },
+      processorBonusRule: {
+        findFirst: async () => ({
+          id: 'rule-eu',
+          threshold_low: 50,
+          rate_low: { toString: () => '0.5000' },
+          threshold_high: 74,
+          rate_high: { toString: () => '0.2500' },
+        }),
+      },
+      auditLog: {
+        create: async ({ data }) => {
+          audit.push({
+            action: data['action'] as string,
+            table_name: data['table_name'] as string,
+            actor_user_id: (data['actor_user_id'] as string | null) ?? null,
+          });
+          return {};
+        },
+      },
+      $transaction: async (fn) => fn(db),
+    };
+    return db;
+  }
+
+  it('Patrick is not the configured facility signer at Eugene', async () => {
+    expect(await naturalSlotFor(p(patrick), EUGENE, eugeneChainDb)).toBeNull();
+  });
+
+  it('natural attempt → no_slot (Patrick signs no Eugene slot)', async () => {
+    const res = await recordSignature({
+      db: makeEugeneDb(),
+      chainDb: eugeneChainDb,
+      monthId: 'me1',
+      signer: patrick,
+    });
+    expect(res).toEqual({ ok: false, reason: 'no_slot' });
+  });
+
+  it('explicit facility-override attempt → not_authorized (in no override list)', async () => {
+    const res = await recordSignature({
+      db: makeEugeneDb(),
+      chainDb: eugeneChainDb,
+      monthId: 'me1',
+      signer: patrick,
+      onBehalfOf: 'facility',
+      overrideReason: 'attempting to self-sign',
+    });
+    expect(res).toEqual({ ok: false, reason: 'not_authorized', slot: 'facility' });
+  });
+
+  it('no signature or audit row is written on rejection', async () => {
+    audit.length = 0;
+    const db = makeEugeneDb();
+    await recordSignature({
+      db,
+      chainDb: eugeneChainDb,
+      monthId: 'me1',
+      signer: patrick,
+      onBehalfOf: 'facility',
+      overrideReason: 'attempting to self-sign',
+    });
+    const after = await db.bonusPayPeriod.findFirst({ where: { id: 'me1', site_id: EUGENE } });
+    expect(after?.facility_signed_by_user_id).toBeNull();
+    expect(audit.length).toBe(0);
   });
 });

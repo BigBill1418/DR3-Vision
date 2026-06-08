@@ -36,6 +36,9 @@ const kelsey: UserPrincipal = { id: 'kelsey', role: 'admin' };
 const janette: UserPrincipal = { id: 'janette', role: 'manager' };
 const morena: UserPrincipal = { id: 'morena', role: 'manager' };
 const rick: UserPrincipal = { id: 'rick', role: 'manager' };
+// T-312 (ADR-0023): Patrick Dills — Eugene manager who is ALSO a BonusEmployee at
+// Eugene. Separation of duties: he must occupy NO Eugene signature-chain slot.
+const patrick: UserPrincipal = { id: 'patrick', role: 'manager' };
 
 // ── Chain rows mirroring the T-201 seed (emails resolved → uuids, lists
 //    re-joined with commas, exactly as the seed stores them) ──────────
@@ -243,5 +246,35 @@ describe('canOverrideSlot — override authority per site (chain-sourced + admin
   it('Rick has no override authority at Eugene (he signs, he does not override)', async () => {
     expect(await canOverrideSlot(rick, 'facility', EUGENE, chainDb)).toBe(false);
     expect(await canOverrideSlot(rick, 'ops', EUGENE, chainDb)).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// T-312 (ADR-0023) — Patrick Dills: separation of duties at Eugene
+// ────────────────────────────────────────────────────────────────────
+//
+// Patrick is a NEW Eugene manager who is also a BonusEmployee at Eugene, so he
+// must occupy NO Eugene signature-chain slot (facility signer, ops signer, or
+// either override-actor list — including the auto-override actor). He gets bonus
+// VIEW access (asserted in access.test.ts) but never SIGNING authority.
+
+describe('Patrick Dills (T-312) — absent from every Eugene signature-chain slot', () => {
+  it('is not a member of any slot or override list on the resolved Eugene chain', async () => {
+    const c = await getSignatureChain(EUGENE, chainDb);
+    expect(c.facility_signer_user_id).not.toBe('patrick');
+    expect(c.ops_signer_user_id).not.toBe('patrick');
+    expect(c.auto_override_actor_user_id).not.toBe('patrick');
+    expect(c.facility_override_actor_user_ids).not.toContain('patrick');
+    expect(c.ops_override_actor_user_ids).not.toContain('patrick');
+  });
+
+  it('cannot sign either slot at Eugene (not the configured primary signer)', async () => {
+    expect(await canSignSlot(patrick, 'facility', EUGENE, chainDb)).toBe(false);
+    expect(await canSignSlot(patrick, 'ops', EUGENE, chainDb)).toBe(false);
+  });
+
+  it('cannot override either slot at Eugene (manager, in no override list)', async () => {
+    expect(await canOverrideSlot(patrick, 'facility', EUGENE, chainDb)).toBe(false);
+    expect(await canOverrideSlot(patrick, 'ops', EUGENE, chainDb)).toBe(false);
   });
 });
