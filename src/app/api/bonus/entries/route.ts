@@ -135,7 +135,7 @@ export async function POST(req: Request) {
       );
     case 'count_out_of_range':
       return NextResponse.json(
-        { error: 'Mattress counts must be whole numbers from 0 to 999.' },
+        { error: 'Mattress counts must be from 0 to 999, with at most one decimal place.' },
         { status: 422 },
       );
     case 'employee_not_in_site':
