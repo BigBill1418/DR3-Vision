@@ -5,7 +5,54 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-08 — GlitchTip error-capture production readiness (T-123, ADR-0022)
+### 2026-06-08 — Sprint 3: historical bonus data import + Mail.Send + GlitchTip (ADR-0023)
+
+**Headline.** 17 months of historical bonus data (Jan 2025 → Jun 2026) land in
+Vision ahead of the Tue 2026-06-09 Period-13 production go-live: **5,158 daily
+entries, 94 unique processors, $113,776.00 reconciled to the cent**. Delivered as
+a one-shot, SHA-256-idempotent seed (no bulk-upload UI — design pivot per Q19/Q20).
+Verified end-to-end against a throwaway Postgres 16: full migration chain +
+`seedHistoricalImport` produce exactly 104 pay periods / 76 `historical_imported` /
+94 employees / 128 aliases / 1 import / 5,158 entries / 5,234 audit rows, and
+`SUM(legacy_total_cents) = 11,377,600¢ = $113,776.00` exactly; a re-run is a no-op.
+
+- **Schema + migration (T-300).** `20260608_historical_data_import`: enum value
+  `historical_imported`; dual-total (`legacy_total_payout_cents`,
+  `imported_with_legacy_formula`) + `import_session_id` on `bonus_pay_periods`;
+  `mattress_count` `Int → Decimal(5,1)`; provenance (`legacy_total_cents`,
+  `import_session_id`, `import_provenance` JSONB) on `bonus_daily_entries`; new
+  `bonus_imports` (SHA-256 idempotency key) and `bonus_employee_aliases` tables.
+- **State machine (T-310).** Admin-only `draft → historical_imported` and
+  `skipped → historical_imported`; amendable out-edge `historical_imported →
+  amended`. `historical_imported` is intentionally **not** in `EDITABLE_STATES`
+  (correct via the existing admin amendment workflow only).
+- **Seed runtime (T-320).** `seedHistoricalImport()` in `prisma/seed.mjs`
+  (idempotent by `source_sha256`); 7 historical CSVs + the archived source
+  workbook under `prisma/seed/historical/`; `assertCounts()` expanded.
+- **Governance + access (T-301/T-302/T-312).** ADR-0023 shipped; Patrick Dills
+  seeded (manager @ Eugene, seed-inactive, **not** a Eugene signature-chain
+  member — separation of duties; he is also a `BonusEmployee` there). Tests
+  assert his Eugene-scoped read access and that a sign attempt is rejected.
+- **Dashboard (T-311).** Bulk-upload tile removed (Q20 — import is one-shot).
+- **Decimal entry (T-330).** Daily-entry input + **both** write paths
+  (`/api/bonus/entries` and the amendment route `…/months/[id]/entries`) accept
+  one decimal place via the shared `isValidMattressCount` contract; the >200
+  soft-warn applies on the integer floor; `mattress_count` Decimal→number
+  reconciled at all read boundaries so `tsc --noEmit` is clean branch-wide.
+- **Observability + payroll (T-123 / T-122).** Both are **operator env config**,
+  not code flips: GlitchTip already captures 100% of errors when `GLITCHTIP_DSN`
+  is set (error `sampleRate` was never 0), and M365 Mail.Send is fully env-driven
+  with no sandbox lock. `.env.example` updated; an admin-gated
+  `/api/admin/_test-error` route added for ingest verification.
+
+**Tests:** full `vitest` suite green (**695**); `tsc --noEmit` exits 0; ESLint
+clean. **Operator action required on CHAD-HQ** (env vars only — see the M365 and
+observability operator docs): `AUTH_MICROSOFT_ENTRA_ID_*` + `M365_MAIL_FROM_ADDRESS`
+/ `M365_PAYROLL_TO_ADDRESS`, and `GLITCHTIP_DSN` / `NEXT_PUBLIC_GLITCHTIP_DSN`.
+
+Detail for the larger sub-areas follows:
+
+#### 2026-06-08 — GlitchTip error-capture production readiness (T-123, ADR-0022)
 
 Sprint 3: production wiring for GlitchTip error reporting. No sample-rate code
 change was warranted — the error sample rate was **never pinned to 0**.
@@ -32,7 +79,7 @@ change.
 deploy is required for capture to begin. Vars are already documented in
 `.env.example`.
 
-### 2026-06-08 — Decimal daily-entry input + Decimal migration type debt (T-330, ADR-0023)
+#### 2026-06-08 — Decimal daily-entry input + Decimal migration type debt (T-330, ADR-0023)
 
 Sprint 3: the daily mattress-count entry now accepts one decimal place, and the
 `mattress_count` `Int → Decimal(5,1)` migration (Unit 1) is fully reconciled so
@@ -67,7 +114,7 @@ Sprint 3: the daily mattress-count entry now accepts one decimal place, and the
 `tsc --noEmit` exits 0 (headline gate for the branch); full vitest suite green
 (686 tests); ESLint clean on all touched files.
 
-### 2026-06-08 — Eager historical-period PDF generation (T-321, ADR-0023)
+#### 2026-06-08 — Eager historical-period PDF generation (T-321, ADR-0023)
 
 Sprint 3 historical import: every `historical_imported` pay period now gets a
 PDF generated and uploaded to R2 at seed/deploy time (ADR-0023 Q13).
