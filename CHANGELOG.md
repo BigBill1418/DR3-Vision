@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-08 — GlitchTip error-capture production readiness (T-123, ADR-0022)
+
+Sprint 3: production wiring for GlitchTip error reporting. No sample-rate code
+change was warranted — the error sample rate was **never pinned to 0**.
+`glitchTipInitOptions()` (`src/lib/observability/sentry.ts`) sets only
+`tracesSampleRate: 0` (Tempo owns traces, ADR-0022 §1) and omits the error
+`sampleRate`, which the Sentry SDK defaults to `1.0`. So when `GLITCHTIP_DSN`
+is set, 100% of errors are already captured; when it is unset, init no-ops
+(fail-open). Production wiring is therefore **operator env config**, not a code
+change.
+
+- **GlitchTip ingest verification endpoint (feat).** New admin-gated
+  `GET /api/admin/_test-error` deliberately throws so an operator can confirm
+  end-to-end ingest after setting `GLITCHTIP_DSN` on CHAD-HQ. Gated to
+  `role=admin` (an open error-trigger is an abuse/DoS vector): anonymous → 401,
+  non-admin → 403, admin → deliberate 500 captured by GlitchTip. Closes the
+  long-standing gap where `docs/operator/fleet-observability-setup.md` step 7a
+  referenced an `/api/_test-error` route that was never shipped.
+- **Operator runbook (docs).** Step 7a now points at the real admin-gated path
+  and documents the admin-session-cookie requirement.
+
+**Operator action (CHAD-HQ):** add `GLITCHTIP_DSN` (and the browser-side
+`NEXT_PUBLIC_GLITCHTIP_DSN`, plus `GLITCHTIP_AUTH_TOKEN` for source maps) to
+`~/.dr3-vision-secrets/observability.env` and recreate the container. No code
+deploy is required for capture to begin. Vars are already documented in
+`.env.example`.
+
 ### 2026-06-08 — Decimal daily-entry input + Decimal migration type debt (T-330, ADR-0023)
 
 Sprint 3: the daily mattress-count entry now accepts one decimal place, and the
