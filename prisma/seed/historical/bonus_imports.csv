@@ -1,0 +1,2 @@
+id,source_filename,source_sha256,imported_by_email,imported_at,total_entries,total_mattress_count,total_legacy_dollars,stockton_origin_entries,stockton_origin_dollars,anomaly_count,auto_sum_count,notes
+import_2026_06_08_historical,Bonus_Spread_Sheet_2026__1_.xlsx,e172dd106d04e2244bb7b55c00be6fcf17caebada1daea0de915c6489d86805f,operations@svdp.us,2026-06-08T16:30:00-07:00,5158,416911.0,113776.0,1869,41399.5,74,4,Historical data import per ADR-0023; v3 parser (dynamic layout + additive formulas)

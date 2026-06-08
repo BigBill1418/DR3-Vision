@@ -1,0 +1,1046 @@
+{
+  "import_session_id": "import_2026_06_08_historical",
+  "source_filename": "Bonus_Spread_Sheet_2026__1_.xlsx",
+  "source_sha256": "e172dd106d04e2244bb7b55c00be6fcf17caebada1daea0de915c6489d86805f",
+  "imported_at": "2026-06-08T16:30:00-07:00",
+  "totals": {
+    "daily_entries": 5158,
+    "mattress_count": 416911.0,
+    "legacy_dollars": 113776.0,
+    "unique_employees": 94,
+    "alias_mappings": 128,
+    "auto_sum_events": 4,
+    "anomalies_logged": 74
+  },
+  "by_site_year": {
+    "eugene_2025": {
+      "entries": 645,
+      "dollars": 15851.0
+    },
+    "eugene_2026": {
+      "entries": 282,
+      "dollars": 12159.75
+    },
+    "woodland_2025": {
+      "entries": 3035,
+      "dollars": 65834.75
+    },
+    "woodland_2026": {
+      "entries": 1196,
+      "dollars": 19930.5
+    }
+  },
+  "stockton_fold": {
+    "entries_folded_to_woodland": 1869,
+    "dollars_folded_to_woodland": 41399.5
+  },
+  "sheets_processed": [
+    {
+      "name": "Woodland Jan 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Oregon Jan 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        9,
+        95
+      ]
+    },
+    {
+      "name": "Stockton jan 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        130
+      ]
+    },
+    {
+      "name": " Oregon February 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        9,
+        95
+      ]
+    },
+    {
+      "name": "Woodland Feb 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton Feb 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": " Eugene March 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        9,
+        95
+      ]
+    },
+    {
+      "name": "Woodland March 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockotn March 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Eugene April 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        11,
+        95
+      ]
+    },
+    {
+      "name": "Woodland April 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton April 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Eugene May 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        21,
+        95
+      ]
+    },
+    {
+      "name": "Woodland May 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockotn May 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Eugene June 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        13,
+        95
+      ]
+    },
+    {
+      "name": "Woodland June 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        127
+      ]
+    },
+    {
+      "name": "Stockton June 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Eugene July 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        14,
+        96
+      ]
+    },
+    {
+      "name": "Woodland July 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton July 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland August 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 17,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton August 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Eugene August 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        12,
+        95
+      ]
+    },
+    {
+      "name": "EUgene September 2025 ",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        12,
+        109
+      ]
+    },
+    {
+      "name": "Woodland September 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        130
+      ]
+    },
+    {
+      "name": "Stockton September 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        130
+      ]
+    },
+    {
+      "name": "Eugene October 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        12,
+        126
+      ]
+    },
+    {
+      "name": "Woodland October 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton October 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "November 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        12,
+        126
+      ]
+    },
+    {
+      "name": "Stockton November 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland November 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland December 2025",
+      "sheet_site": "woodland",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton December 2025",
+      "sheet_site": "stockton",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "December 2025",
+      "sheet_site": "eugene",
+      "year": 2025,
+      "days_detected": 31,
+      "shape": [
+        12,
+        126
+      ]
+    },
+    {
+      "name": "Jan 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        127
+      ]
+    },
+    {
+      "name": "Woodland January 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton January 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Feb 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        127
+      ]
+    },
+    {
+      "name": "Woodland Feb 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton Feb 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "March 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        126
+      ]
+    },
+    {
+      "name": "Woodland March 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        127
+      ]
+    },
+    {
+      "name": "Stockton March 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland April 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton April 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "April 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        126
+      ]
+    },
+    {
+      "name": "May 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        126
+      ]
+    },
+    {
+      "name": "June 2026",
+      "sheet_site": "eugene",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        9,
+        126
+      ]
+    },
+    {
+      "name": "Stockton May 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland May 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Stockton June 2026",
+      "sheet_site": "stockton",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    },
+    {
+      "name": "Woodland June 2026",
+      "sheet_site": "woodland",
+      "year": 2026,
+      "days_detected": 31,
+      "shape": [
+        40,
+        128
+      ]
+    }
+  ],
+  "sheets_skipped": [
+    {
+      "name": "Eugene template",
+      "reason": "template"
+    },
+    {
+      "name": "California Template",
+      "reason": "template"
+    }
+  ],
+  "anomalies_sample": [
+    {
+      "type": "missing_total_recomputed",
+      "sheet": "Woodland Jan 2025",
+      "row": 24,
+      "date": "2025-01-09",
+      "raw_name": "Eric Polk",
+      "count": 53.0,
+      "recomputed_total": 1.5
+    },
+    {
+      "type": "missing_total_recomputed",
+      "sheet": "Woodland Jan 2025",
+      "row": 24,
+      "date": "2025-01-10",
+      "raw_name": "Eric Polk",
+      "count": 68.0,
+      "recomputed_total": 9.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton Feb 2025",
+      "row": 8,
+      "date": "2025-02-28",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Woodland March 2025",
+      "row": 16,
+      "date": "2025-03-03",
+      "raw_name": "Oamr Diaz Vera",
+      "count": 156.0,
+      "total": 73.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Woodland March 2025",
+      "row": 16,
+      "date": "2025-03-25",
+      "raw_name": "Oamr Diaz Vera",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn March 2025",
+      "row": 8,
+      "date": "2025-03-20",
+      "raw_name": "Nelson Diaz",
+      "count": 170.0,
+      "total": 83.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn March 2025",
+      "row": 8,
+      "date": "2025-03-21",
+      "raw_name": "Nelson Diaz",
+      "count": 152.0,
+      "total": 70.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn March 2025",
+      "row": 8,
+      "date": "2025-03-28",
+      "raw_name": "Nelson Diaz",
+      "count": 155.0,
+      "total": 72.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn March 2025",
+      "row": 8,
+      "date": "2025-03-31",
+      "raw_name": "Nelson Diaz",
+      "count": 155.0,
+      "total": 72.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton April 2025",
+      "row": 8,
+      "date": "2025-04-01",
+      "raw_name": "Nelson Diaz",
+      "count": 153.0,
+      "total": 71.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton April 2025",
+      "row": 8,
+      "date": "2025-04-07",
+      "raw_name": "Nelson Diaz",
+      "count": 153.0,
+      "total": 71.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton April 2025",
+      "row": 8,
+      "date": "2025-04-08",
+      "raw_name": "Nelson Diaz",
+      "count": 152.0,
+      "total": 70.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton April 2025",
+      "row": 8,
+      "date": "2025-04-10",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-01",
+      "raw_name": "Nelson Diaz",
+      "count": 165.0,
+      "total": 80.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-06",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-07",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-08",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-09",
+      "raw_name": "Nelson Diaz",
+      "count": 170.0,
+      "total": 83.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-12",
+      "raw_name": "Nelson Diaz",
+      "count": 165.0,
+      "total": 80.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-21",
+      "raw_name": "Nelson Diaz",
+      "count": 190.0,
+      "total": 98.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-23",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-28",
+      "raw_name": "Nelson Diaz",
+      "count": 165.0,
+      "total": 80.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockotn May 2025",
+      "row": 8,
+      "date": "2025-05-29",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Woodland June 2025",
+      "row": 3,
+      "date": "2025-06-20",
+      "raw_name": "Wilmar Monsalve",
+      "count": 153.0,
+      "total": 71.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-06",
+      "raw_name": "Nelson Diaz",
+      "count": 165.0,
+      "total": 80.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-10",
+      "raw_name": "Nelson Diaz",
+      "count": 170.0,
+      "total": 83.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-13",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-16",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-17",
+      "raw_name": "Nelson Diaz",
+      "count": 151.0,
+      "total": 69.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-18",
+      "raw_name": "Nelson Diaz",
+      "count": 168.0,
+      "total": 82.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-23",
+      "raw_name": "Nelson Diaz",
+      "count": 162.0,
+      "total": 77.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-24",
+      "raw_name": "Nelson Diaz",
+      "count": 170.0,
+      "total": 83.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-25",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-27",
+      "raw_name": "Nelson Diaz",
+      "count": 240.0,
+      "total": 136.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton June 2025",
+      "row": 8,
+      "date": "2025-06-30",
+      "raw_name": "Nelson Diaz",
+      "count": 171.0,
+      "total": 84.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Woodland July 2025",
+      "row": 4,
+      "date": "2025-07-22",
+      "raw_name": "Luis Velasquez",
+      "count": 180.0,
+      "total": 91.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Woodland July 2025",
+      "row": 4,
+      "date": "2025-07-23",
+      "raw_name": "Luis Velasquez",
+      "count": 177.0,
+      "total": 95.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-03",
+      "raw_name": "Nelson Diaz",
+      "count": 167.0,
+      "total": 81.5
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 2,
+      "date": "2025-07-03",
+      "raw_name": "Yeimar Sarmiento",
+      "count": 153.0,
+      "total": 71.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-14",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-15",
+      "raw_name": "Nelson Diaz",
+      "count": 164.0,
+      "total": 79.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-16",
+      "raw_name": "Nelson Diaz",
+      "count": 185.0,
+      "total": 95.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-17",
+      "raw_name": "Nelson Diaz",
+      "count": 201.0,
+      "total": 107.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-18",
+      "raw_name": "Nelson Diaz",
+      "count": 160.0,
+      "total": 76.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-21",
+      "raw_name": "Nelson Diaz",
+      "count": 200.0,
+      "total": 106.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-22",
+      "raw_name": "Nelson Diaz",
+      "count": 158.0,
+      "total": 74.75
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-23",
+      "raw_name": "Nelson Diaz",
+      "count": 172.0,
+      "total": 85.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton July 2025",
+      "row": 1,
+      "date": "2025-07-28",
+      "raw_name": "Nelson Diaz",
+      "count": 156.0,
+      "total": 73.25
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton August 2025",
+      "row": 1,
+      "date": "2025-08-14",
+      "raw_name": "Nelson Diaz",
+      "count": 165.0,
+      "total": 80.0
+    },
+    {
+      "type": "high_count",
+      "sheet": "Stockton August 2025",
+      "row": 1,
+      "date": "2025-08-15",
+      "raw_name": "Nelson Diaz",
+      "count": 201.0,
+      "total": 107.0
+    }
+  ],
+  "anomaly_summary": {
+    "high_count": 68,
+    "missing_total_recomputed": 2,
+    "auto_sum_duplicate": 4
+  }
+}
