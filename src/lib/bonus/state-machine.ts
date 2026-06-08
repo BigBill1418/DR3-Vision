@@ -46,7 +46,8 @@ export type BonusPayPeriodState =
   | 'signed'
   | 'paid'
   | 'amended'
-  | 'skipped';
+  | 'skipped'
+  | 'historical_imported'; // ADR-0023 — periods loaded from the historical spreadsheet
 
 /** The subset of a `bonus_pay_periods` row this module reads/writes. */
 export interface BonusMonthRow {
@@ -189,21 +190,33 @@ export const ALLOWED_TRANSITIONS: Readonly<
   // for a period with no real data (e.g. Period 12 of 2026). Admin-only — enforced
   // SERVER-SIDE by {@link assertAdminOnlyTransition} + the route guard; this table
   // only declares legality, not authorization.
-  draft: ['pending_signatures', 'skipped'],
+  // `draft -> skipped` (T-203 / ADR-0019.1) and `draft -> historical_imported`
+  // (ADR-0023) are both admin-only edges into terminal-ish states. The
+  // historical_imported state is amendable: a period imported from the
+  // spreadsheet can be unlocked for correction via the existing amendment
+  // workflow, restarting the signature flow at pending_signatures.
+  draft: ['pending_signatures', 'skipped', 'historical_imported'],
   pending_signatures: ['partially_signed'],
   partially_signed: ['signed'],
   signed: ['paid', 'amended'],
   paid: ['amended'],
   amended: ['pending_signatures'],
-  // `skipped` is terminal: no out-edges. A skipped period is permanently inert —
+  // `skipped` is terminal EXCEPT for the ADR-0023 recovery edge: a
+  // pre-cutover-skipped period that turns out to have historical data may be
+  // moved into historical_imported. Otherwise it stays permanently inert —
   // daily-entry mutations and the signature workflow both refuse to touch it
   // (it is not in EDITABLE_STATES, and it is not pending/partially-signed).
-  skipped: [],
+  skipped: ['historical_imported'], // ADR-0023 — a pre-cutover-skipped period that turns out to have historical data
+  historical_imported: ['amended'], // ADR-0023 — amendable via existing admin workflow (Q4)
 };
 
 /** Transitions that may only be performed by an admin actor (ADR-0019.1). */
 export const ADMIN_ONLY_TRANSITIONS: ReadonlySet<`${BonusPayPeriodState}->${BonusPayPeriodState}`> =
-  new Set(['draft->skipped']);
+  new Set([
+    'draft->skipped',
+    'draft->historical_imported', // ADR-0023 Q8 — bulk import is admin-only
+    'skipped->historical_imported', // ADR-0023 Q8 — same
+  ]);
 
 /** True iff `from -> to` is a legal transition. Self-edges are never legal. */
 export function isTransitionAllowed(from: BonusPayPeriodState, to: BonusPayPeriodState): boolean {

@@ -215,7 +215,8 @@ describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
     ['pending_signatures', 'signed'],
     ['amended', 'draft'],
     ['draft', 'draft'],
-    // `skipped` is terminal — no out-edges, and no other state may reach it.
+    // `skipped` has only the ADR-0023 recovery out-edge (-> historical_imported);
+    // no other state may reach it, and no other out-edge is legal from it.
     ['skipped', 'draft'],
     ['skipped', 'pending_signatures'],
     ['pending_signatures', 'skipped'],
@@ -227,7 +228,7 @@ describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
     expect(isTransitionAllowed(from, to)).toBe(false);
   });
 
-  it('ALLOWED_TRANSITIONS lists exactly the eight legal edges', () => {
+  it('ALLOWED_TRANSITIONS lists exactly the legal edges (incl. ADR-0023 historical_imported)', () => {
     const edges = Object.entries(ALLOWED_TRANSITIONS).flatMap(([from, tos]) =>
       (tos as BonusPayPeriodState[]).map((to) => `${from}->${to}`),
     );
@@ -235,20 +236,26 @@ describe('ALLOWED_TRANSITIONS / isTransitionAllowed', () => {
       [
         'draft->pending_signatures',
         'draft->skipped',
+        'draft->historical_imported',
         'pending_signatures->partially_signed',
         'partially_signed->signed',
         'signed->paid',
         'signed->amended',
         'paid->amended',
         'amended->pending_signatures',
+        'skipped->historical_imported',
+        'historical_imported->amended',
       ].sort(),
     );
   });
 
-  it('only draft->skipped is admin-only', () => {
+  it('draft->skipped and the ADR-0023 import edges are admin-only', () => {
     expect(isAdminOnlyTransition('draft', 'skipped')).toBe(true);
+    expect(isAdminOnlyTransition('draft', 'historical_imported')).toBe(true);
+    expect(isAdminOnlyTransition('skipped', 'historical_imported')).toBe(true);
     expect(isAdminOnlyTransition('draft', 'pending_signatures')).toBe(false);
     expect(isAdminOnlyTransition('signed', 'amended')).toBe(false);
+    expect(isAdminOnlyTransition('historical_imported', 'amended')).toBe(false);
   });
 });
 
