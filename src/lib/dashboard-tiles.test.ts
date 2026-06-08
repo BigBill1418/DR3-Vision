@@ -88,7 +88,6 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'operations',
       'compliance',
       'reconciliation',
-      'bulk-upload',
       'photo-annotation',
       'processor-workflow',
       'cip-capture',
@@ -117,6 +116,13 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     expect(canSeeTile(makeSession('manager', null), tileByKey('bonus'))).toBe(true);
     // operators still never see it.
     expect(canSeeTile(makeSession('operator', WOODLAND), tileByKey('bonus'))).toBe(false);
+  });
+});
+
+describe('bulk-upload tile removal (ADR-0023)', () => {
+  it('does NOT register a bulk-upload tile', () => {
+    const keys = DASHBOARD_TILES.map((t) => t.key);
+    expect(keys).not.toContain('bulk-upload');
   });
 });
 
