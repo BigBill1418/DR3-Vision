@@ -147,10 +147,10 @@ model User {
   // Sprint-2 cleanup migration `20260506215753_drop_user_password_hash`.
 
   // PIN auth (operator)
-  pin_hash             String? // Argon2id; per ADR-0004, NOT indexed
-  pin_failed_attempts  Int       @default(0)
-  pin_first_failed_at  DateTime? // start of the current 60s rate-limit window (ADR-0004)
-  pin_locked_until     DateTime?
+  pin_hash            String? // Argon2id; per ADR-0004, NOT indexed
+  pin_failed_attempts Int       @default(0)
+  pin_first_failed_at DateTime? // start of the current 60s rate-limit window (ADR-0004)
+  pin_locked_until    DateTime?
 
   // Roles and assignment
   primary_site_id String?
@@ -182,6 +182,7 @@ model User {
   bonus_signature_chains_as_facility      BonusSignatureChain[] @relation("BonusFacilitySignerConfig")
   bonus_signature_chains_as_ops           BonusSignatureChain[] @relation("BonusOpsSignerConfig")
   bonus_signature_chains_as_auto_override BonusSignatureChain[] @relation("BonusAutoOverrideActor")
+  bonus_imports_authored                  BonusImport[]
 
   @@map("users")
 }
@@ -511,12 +512,12 @@ enum ReconciliationResolution {
 }
 
 model MymrcReconciliation {
-  id              String   @id @default(uuid())
-  site_id         String
-  period_start    DateTime @db.Date
-  period_end      DateTime @db.Date
-  uploaded_by_id  String?
-  uploaded_at     DateTime @default(now())
+  id             String   @id @default(uuid())
+  site_id        String
+  period_start   DateTime @db.Date
+  period_end     DateTime @db.Date
+  uploaded_by_id String?
+  uploaded_at    DateTime @default(now())
 
   // Idempotency: same file (sha256) + same site -> reuse the upload
   // session instead of creating duplicate items. The unique
@@ -530,7 +531,7 @@ model MymrcReconciliation {
   // reclassify historical items.
   weight_tolerance_pct Decimal @db.Decimal(5, 2)
 
-  total_rows Int
+  total_rows      Int
   // Legacy roll-ups (kept so the compliance tile keeps reading the
   // same fields). Engine sets `matched_count = match_clean_count` and
   // `unmatched_count = total_rows - matched_count`.
@@ -648,6 +649,7 @@ enum BonusPayPeriodState {
   paid // PDF sent to payroll@svdp.us via M365 Graph
   amended // post-signature edit (Bill-only override)
   skipped // NEW (ADR-0019.1): pre-cutover periods with no data; terminal, no PDF
+  historical_imported // ADR-0023 — periods loaded from the historical spreadsheet
 }
 
 model BonusEmployee {
@@ -671,21 +673,31 @@ model BonusEmployee {
   deleted_at DateTime? // soft delete; rehire reactivates per ADR-0019 §9a
 
   daily_entries BonusDailyEntry[]
+  aliases       BonusEmployeeAlias[]
 
   @@index([site_id, is_active])
   @@map("bonus_employees")
 }
 
 model BonusDailyEntry {
-  id                String        @id @default(uuid())
-  bonus_employee_id String
-  bonus_employee    BonusEmployee @relation(fields: [bonus_employee_id], references: [id])
-  bonus_pay_period_id String         // was bonus_month_id
+  id                  String         @id @default(uuid())
+  bonus_employee_id   String
+  bonus_employee      BonusEmployee  @relation(fields: [bonus_employee_id], references: [id])
+  bonus_pay_period_id String // was bonus_month_id
   bonus_pay_period    BonusPayPeriod @relation(fields: [bonus_pay_period_id], references: [id])
 
   entry_date     DateTime @db.Date
-  mattress_count Int // 0..999 valid, soft-warn above 200
+  mattress_count Decimal  @db.Decimal(5, 1) // 0..999 valid, soft-warn above 200; Decimal(5,1) per ADR-0023 (historical half-shift values + decimal UI going forward)
   note           String? // optional HR annotation, does NOT affect math
+
+  // Sprint 3 / ADR-0023: provenance for historical imports. NULL for
+  // production entries; populated for every row loaded via the historical
+  // spreadsheet import. See bonus_imports for the session this row belongs
+  // to; import_provenance is the raw forensic payload.
+  legacy_total_cents Int?
+  import_session_id  String?
+  import_provenance  Json?
+  bonus_import       BonusImport? @relation(fields: [import_session_id], references: [id])
 
   // Who actually keyed this entry — could be Janette, Morena, or Bill per ADR-0019 §4
   entered_by_user_id String
@@ -695,6 +707,7 @@ model BonusDailyEntry {
   @@unique([bonus_employee_id, entry_date])
   @@index([bonus_pay_period_id])
   @@index([entry_date])
+  @@index([import_session_id])
   @@map("bonus_daily_entries")
 }
 
@@ -704,8 +717,8 @@ model BonusPayPeriod {
   site    Site   @relation(fields: [site_id], references: [id])
 
   // ─── Period identity (NEW columns per ADR-0019.1) ──────────────────
-  period_number Int      // 1..26
-  period_year   Int      // e.g. 2026
+  period_number Int // 1..26
+  period_year   Int // e.g. 2026
   pay_date      DateTime @db.Date // Fri, ~4 days after period_end
 
   // ─── Boundaries (was month_start / month_end) ──────────────────────
@@ -756,18 +769,29 @@ model BonusPayPeriod {
   amended_by             User?           @relation("BonusAmender", fields: [amended_by_user_id], references: [id])
   amended_at             DateTime?
 
-  // Computed at sign time, locked thereafter (re-computed only on amendment)
+  // Computed at sign time, locked thereafter (re-computed only on amendment).
+  // For historical_imported periods, this stores the corrected-formula
+  // calculator output (threshold_high=74 for Woodland).
   total_payout_cents Int?
+
+  // Sprint 3 / ADR-0023: dual-total storage for historical_imported periods.
+  // legacy_total_payout_cents is the sum of as-paid spreadsheet Total cells.
+  // When imported_with_legacy_formula = true, PDF and payroll-export read from
+  // legacy_total_payout_cents; the corrected total is informational only.
+  legacy_total_payout_cents    Int?
+  imported_with_legacy_formula Boolean      @default(false)
+  import_session_id            String?
+  bonus_import                 BonusImport? @relation(fields: [import_session_id], references: [id])
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   daily_entries BonusDailyEntry[]
 
-  @@unique([site_id, period_start])               // semantically same as old (site_id, month_start)
+  @@unique([site_id, period_start]) // semantically same as old (site_id, month_start)
   @@unique([site_id, period_year, period_number]) // NEW — fast canonical period lookup
   @@index([site_id, state])
-  @@index([pay_date])                             // NEW — upcoming-deadline queries
+  @@index([pay_date]) // NEW — upcoming-deadline queries
   @@map("bonus_pay_periods")
 }
 
@@ -803,4 +827,47 @@ model BonusSignatureChain {
   updated_at DateTime @updatedAt
 
   @@map("bonus_signature_chains")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// NEW tables: historical import session tracking + name aliases (ADR-0023).
+// ────────────────────────────────────────────────────────────────────────
+
+model BonusImport {
+  id                      String   @id
+  source_filename         String
+  source_sha256           String   @unique
+  source_archive_path     String? // repo-relative path; promoted to R2 key in follow-up ticket
+  imported_by_user_id     String
+  imported_by             User     @relation(fields: [imported_by_user_id], references: [id])
+  imported_at             DateTime @default(now())
+  total_entries           Int
+  total_mattress_count    Decimal  @db.Decimal(10, 1)
+  total_legacy_dollars    Decimal  @db.Decimal(12, 2)
+  stockton_origin_entries Int      @default(0)
+  stockton_origin_dollars Decimal  @default(0) @db.Decimal(12, 2)
+  anomaly_count           Int      @default(0)
+  auto_sum_count          Int      @default(0)
+  reconciliation_json     Json?
+  notes                   String?
+
+  pay_periods   BonusPayPeriod[]
+  daily_entries BonusDailyEntry[]
+
+  @@index([imported_at])
+  @@map("bonus_imports")
+}
+
+model BonusEmployeeAlias {
+  id                    String        @id @default(uuid())
+  variant_name          String
+  canonical_employee_id String
+  canonical_employee    BonusEmployee @relation(fields: [canonical_employee_id], references: [id])
+  import_session_id     String?
+  created_at            DateTime      @default(now())
+
+  @@unique([variant_name, canonical_employee_id])
+  @@index([canonical_employee_id])
+  @@index([variant_name])
+  @@map("bonus_employee_aliases")
 }
