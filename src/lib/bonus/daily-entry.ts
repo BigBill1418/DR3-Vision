@@ -104,6 +104,45 @@ export async function resolveActiveRule(
   };
 }
 
+/**
+ * Resolve a rule for a HISTORICAL period that may predate the earliest
+ * `processor_bonus_rules` row. Returns the rule active on `onDate` when one
+ * exists; otherwise falls back to the SITE'S EARLIEST rule (oldest
+ * `effective_date`). Throws {@link NoActiveRuleError} only when the site has no
+ * rule at all.
+ *
+ * ADR-0023: historical_imported periods (Jan 2025 →) can start before the
+ * earliest seeded rule. Their displayed grand total is the stored AS-PAID legacy
+ * total (Q1), and the per-employee rows are informational — so a missing
+ * date-scoped rule must not hard-fail the read-only render (the PDF page +
+ * archive). This mirrors `monthListPayout`'s graceful `NoActiveRuleError`
+ * handling. NEVER call this for live/editable periods — those must use the
+ * strict {@link resolveActiveRule} so a genuinely missing rule surfaces.
+ */
+export async function resolveRuleForHistorical(
+  siteId: string,
+  onDate: Date,
+): Promise<BonusRuleParams & { id: string; effective_date: Date }> {
+  try {
+    return await resolveActiveRule(siteId, onDate);
+  } catch (e) {
+    if (!(e instanceof NoActiveRuleError)) throw e;
+    const earliest = await prisma.processorBonusRule.findFirst({
+      where: { site_id: siteId },
+      orderBy: { effective_date: 'asc' },
+    });
+    if (!earliest) throw new NoActiveRuleError(siteId);
+    return {
+      id: earliest.id,
+      effective_date: earliest.effective_date,
+      threshold_low: earliest.threshold_low,
+      rate_low: earliest.rate_low.toString(),
+      threshold_high: earliest.threshold_high,
+      rate_high: earliest.rate_high.toString(),
+    };
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Today's grid (read side)
 // ────────────────────────────────────────────────────────────────────

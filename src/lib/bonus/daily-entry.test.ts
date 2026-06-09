@@ -279,18 +279,32 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const processorBonusRule = {
-    findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
-      const siteId = where['site_id'];
-      const eff = (where['effective_date'] as { lte: Date }).lte;
-      const candidates = [...ruleStore.values()].filter((r) => {
-        if (r.site_id !== siteId) return false;
-        if (r.effective_date.getTime() > eff.getTime()) return false;
-        if (r.end_date && r.end_date.getTime() < eff.getTime()) return false;
-        return true;
-      });
-      candidates.sort((a, b) => b.effective_date.getTime() - a.effective_date.getTime());
-      return candidates[0] ? { ...candidates[0] } : null;
-    }),
+    findFirst: vi.fn(
+      async ({
+        where,
+        orderBy,
+      }: {
+        where: Record<string, unknown>;
+        orderBy?: { effective_date?: 'asc' | 'desc' };
+      }) => {
+        const siteId = where['site_id'];
+        const effFilter = where['effective_date'] as { lte: Date } | undefined;
+        const candidates = [...ruleStore.values()].filter((r) => {
+          if (r.site_id !== siteId) return false;
+          if (effFilter) {
+            const eff = effFilter.lte;
+            if (r.effective_date.getTime() > eff.getTime()) return false;
+            if (r.end_date && r.end_date.getTime() < eff.getTime()) return false;
+          }
+          return true;
+        });
+        // Default (resolveActiveRule): latest effective_date wins. The historical
+        // fallback passes orderBy effective_date asc to get the earliest rule.
+        const dir = orderBy?.effective_date === 'asc' ? 1 : -1;
+        candidates.sort((a, b) => dir * (a.effective_date.getTime() - b.effective_date.getTime()));
+        return candidates[0] ? { ...candidates[0] } : null;
+      },
+    ),
   };
 
   const auditLog = {
@@ -347,6 +361,39 @@ describe('resolveActiveRule', () => {
   it('throws NoActiveRuleError when no rule covers the date', async () => {
     const { resolveActiveRule, NoActiveRuleError } = await import('./daily-entry');
     await expect(resolveActiveRule('site-nope', TODAY)).rejects.toBeInstanceOf(NoActiveRuleError);
+  });
+});
+
+describe('resolveRuleForHistorical (ADR-0023 — historical periods predating rules)', () => {
+  // A 2025 historical date predates the seeded rules (effective 2026); the strict
+  // resolver throws, the historical resolver falls back to the site's earliest rule.
+  const HISTORICAL_2025 = new Date(Date.UTC(2025, 3, 29)); // 2025-04-29
+
+  it('returns the active rule when one covers the date', async () => {
+    const { resolveRuleForHistorical, resolveActiveRule } = await import('./daily-entry');
+    const active = await resolveActiveRule(WOODLAND, TODAY);
+    const hist = await resolveRuleForHistorical(WOODLAND, TODAY);
+    expect(hist.id).toBe(active.id);
+  });
+
+  it('falls back to the site earliest rule when the date predates all rules', async () => {
+    const { resolveRuleForHistorical, resolveActiveRule } = await import('./daily-entry');
+    // strict throws for the 2025 date...
+    const { NoActiveRuleError } = await import('./daily-entry');
+    await expect(resolveActiveRule(WOODLAND, HISTORICAL_2025)).rejects.toBeInstanceOf(
+      NoActiveRuleError,
+    );
+    // ...the historical resolver returns the earliest rule instead of throwing.
+    const hist = await resolveRuleForHistorical(WOODLAND, HISTORICAL_2025);
+    expect(hist.id).toBeTruthy();
+    expect(hist.threshold_high).toBeGreaterThan(0);
+  });
+
+  it('still throws NoActiveRuleError when the site has no rule at all', async () => {
+    const { resolveRuleForHistorical, NoActiveRuleError } = await import('./daily-entry');
+    await expect(resolveRuleForHistorical('site-nope', HISTORICAL_2025)).rejects.toBeInstanceOf(
+      NoActiveRuleError,
+    );
   });
 });
 
