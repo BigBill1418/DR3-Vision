@@ -1,7 +1,7 @@
 email,name,role,locale,primary_site_code,processor_role,is_active,notes
-operations@svdp.us,Bill Barnard,admin,en,,,false,Director of Operations SVdP. Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.
-kelsey.ruhland@svdp.us,Kelsey Ruhland,admin,en,,,false,DR3 Data & Compliance lead. Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.
-morena.gomez@svdp.us,Morena Gomez,manager,en,,,false,DR3 Operations Manager (both sites). Email is placeholder pending Bill confirmation.
-rick.albritton@svdp.us,Rick Albritton,manager,en,eugene,,false,Eugene site manager. Email is placeholder pending Bill confirmation.
-janette.thomas@svdp.us,Janette Thomas,manager,en,woodland,,false,Woodland site manager. Email is placeholder pending Bill confirmation.
-patrick.dills@svdp.us,Patrick Dills,manager,en,eugene,Lead,false,Eugene lead processor. Per ADR-0023: read access to Eugene site data; intentionally NOT a member of the Eugene bonus signature chain (separation of duties — Patrick is also a BonusEmployee at Eugene). Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.
+operations@svdp.us,Bill Barnard,admin,en,,,false,Director of Operations SVdP — import/automation alias (the historical-import actor). NOT a login identity; Bill signs in as bill.barnard@svdp.us. Kept seed-inactive on purpose.
+kelsey.ruhland@svdp.us,Kelsey Ruhland,admin,en,,,true,DR3 Data & Compliance lead. Admin — all-site access. Email + access confirmed by Bill 2026-06-09; seeded active so M365 sign-in works straight through.
+morena.gomez@svdp.us,Morena Gomez,manager,en,woodland,,true,DR3 Operations Manager — Woodland ONLY (California ops; confirmed by Bill 2026-06-09). Seeded active for straight-through M365 sign-in.
+rick.albritton@svdp.us,Rick Albritton,manager,en,eugene,,true,Eugene site manager (also the Eugene facility signer). Email confirmed by Bill 2026-06-09; seeded active for straight-through M365 sign-in.
+janette.thomas@svdp.us,Janette Thomas,manager,en,woodland,,true,Woodland site manager (also the Woodland facility signer). Email confirmed by Bill 2026-06-09; seeded active for straight-through M365 sign-in.
+patrick.dills@svdp.us,Patrick Dills,manager,en,eugene,Lead,true,Eugene lead processor. Per ADR-0023: read access to Eugene site data; intentionally NOT a member of the Eugene bonus signature chain (separation of duties — Patrick is also a BonusEmployee at Eugene). Email confirmed by Bill 2026-06-09; seeded active for straight-through M365 sign-in.
