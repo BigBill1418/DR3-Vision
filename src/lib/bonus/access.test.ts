@@ -54,6 +54,13 @@ const RICK = session({ role: 'manager', primary_site_id: EUGENE_ID });
 const MORENA = session({ role: 'manager', primary_site_id: null });
 const OPERATOR = session({ role: 'operator', primary_site_id: WOODLAND_ID });
 
+// T-312 (ADR-0023): Patrick Dills — a NEW Eugene manager. Same access shape as
+// Rick (manager primary_site_id = eugene) → Eugene-scoped bonus access under the
+// EXISTING manager+ rule, no production change. (His non-membership in any Eugene
+// signature-chain slot — separation of duties, he is also a BonusEmployee at
+// Eugene — is asserted in signature-chain.test.ts / signatures.test.ts.)
+const PATRICK = session({ id: 'patrick', role: 'manager', primary_site_id: EUGENE_ID });
+
 beforeEach(() => {
   mockSession = null;
   mockCookie = undefined;
@@ -73,6 +80,12 @@ describe('checkBonusAccess — ADR-0019.2 §1 matrix (no requestedSite)', () => 
 
   it('Eugene manager (Rick) → eugene only', async () => {
     expect(await checkBonusAccess(RICK)).toEqual({ allowed: true, sites: ['eugene'] });
+  });
+
+  // T-312 (ADR-0023): Patrick Dills qualifies for Eugene bonus access under the
+  // SAME manager+ rule as Rick — no production code change to access.ts.
+  it('Eugene manager (Patrick Dills, T-312) → eugene only', async () => {
+    expect(await checkBonusAccess(PATRICK)).toEqual({ allowed: true, sites: ['eugene'] });
   });
 
   it('California-ops manager (Morena, primary_site_id null) → woodland only, NO eugene', async () => {
@@ -106,6 +119,15 @@ describe('checkBonusAccess — requestedSite narrowing', () => {
 
   it('Rick requesting woodland → denied', async () => {
     expect(await checkBonusAccess(RICK, 'woodland')).toEqual({ allowed: false, sites: [] });
+  });
+
+  // T-312 (ADR-0023): Patrick is Eugene-scoped — granted eugene, denied woodland.
+  it('Patrick (T-312) requesting eugene → allowed', async () => {
+    expect(await checkBonusAccess(PATRICK, 'eugene')).toEqual({ allowed: true, sites: ['eugene'] });
+  });
+
+  it('Patrick (T-312) requesting woodland → denied (Eugene-scoped)', async () => {
+    expect(await checkBonusAccess(PATRICK, 'woodland')).toEqual({ allowed: false, sites: [] });
   });
 
   it('Morena requesting eugene → denied (California-ops, no Oregon)', async () => {

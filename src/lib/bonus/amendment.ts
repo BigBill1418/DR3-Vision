@@ -38,6 +38,7 @@ import {
   type BonusMonthDb,
   type BonusPayPeriodState,
 } from '@/lib/bonus/state-machine';
+import { isValidMattressCount } from '@/lib/bonus/daily-entry';
 
 // ────────────────────────────────────────────────────────────────────
 // Structural DB types (DB-free testable; satisfied by PrismaClient/tx)
@@ -352,8 +353,6 @@ export type AmendmentEntriesResult =
   | { ok: false; reason: 'month_locked'; state: BonusPayPeriodState }
   | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' };
 
-const MAX_MATTRESS_COUNT = 999;
-
 /**
  * Upsert daily mattress-count entries for a SPECIFIC month (keyed by monthId,
  * re-scoped to siteId) for a single calendar day. Unlike the T-105
@@ -375,12 +374,13 @@ export async function upsertAmendedMonthEntries(
 ): Promise<AmendmentEntriesResult> {
   const entryDate = entryDateUTC(date);
 
+  // T-330 follow-up: counts are 0..999 with at most ONE decimal place
+  // (Decimal(5,1)); negatives and >1 decimal place are rejected. Reuse the
+  // canonical isValidMattressCount predicate so this amendment write path honors
+  // the SAME contract as the primary /api/bonus/entries daily-entry path —
+  // historical Eugene half-shift corrections (23.5/30.5) must pass here.
   for (const i of inputs) {
-    if (
-      !Number.isInteger(i.mattress_count) ||
-      i.mattress_count < 0 ||
-      i.mattress_count > MAX_MATTRESS_COUNT
-    ) {
+    if (!isValidMattressCount(i.mattress_count)) {
       return { ok: false, reason: 'count_out_of_range' };
     }
   }

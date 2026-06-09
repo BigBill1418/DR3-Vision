@@ -23,9 +23,11 @@ function isPublic(pathname: string): boolean {
   // it without an auth redirect. The route's own loopback / cf-connecting-ip 404
   // guard is the real protection (the public tunnel still gets 404).
   if (pathname.startsWith('/internal/bonus-pdf/')) return true;
-  // Internal month-close cron (T-125): same loopback-guarded pattern; the route
-  // 404s any public-tunnel request and optionally checks a bearer token.
-  if (pathname === '/api/internal/bonus/close-months') return true;
+  // Internal bonus cron / seed endpoints (close-months T-125, escalation-check,
+  // generate-pdf T-321): same loopback-guarded pattern — each route 404s any
+  // public-tunnel request and optionally checks a bearer token, so the auth
+  // middleware just needs to let the session-less in-fleet caller through.
+  if (pathname.startsWith('/api/internal/bonus/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.

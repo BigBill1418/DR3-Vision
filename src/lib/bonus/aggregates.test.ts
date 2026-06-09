@@ -11,7 +11,13 @@
 //   - csvForAnnual has the right columns + previously-known-as + dollar string
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
+
+// T-330: mattress_count is Decimal(5,1) — Prisma returns a Decimal on read, so
+// the mock store holds Decimals and the aggregates layer's `.toNumber()` works.
+type Dec = Prisma.Decimal;
+const toDec = (n: number): Dec => new Prisma.Decimal(n);
 
 // ── In-memory stores ────────────────────────────────────────────
 interface MockMonth {
@@ -32,7 +38,7 @@ interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
   entry_date: Date;
-  mattress_count: number;
+  mattress_count: Dec;
 }
 interface MockRule {
   id: string;
@@ -104,7 +110,7 @@ function addEntry(monthId: string, empId: string, day: number, count: number): v
     bonus_employee_id: empId,
     bonus_pay_period_id: monthId,
     entry_date: date,
-    mattress_count: count,
+    mattress_count: toDec(count),
   };
   entryStore.set(e.id, e);
 }

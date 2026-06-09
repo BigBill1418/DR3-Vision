@@ -11,6 +11,12 @@
 //   - note field does not change the persisted count's math
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Prisma } from '@prisma/client';
+
+// T-330: mattress_count is Decimal(5,1) — Prisma returns a Decimal on read. The
+// mock store mirrors that so the data layer's `.toNumber()` boundary works.
+type Dec = Prisma.Decimal;
+const toDec = (n: number): Dec => new Prisma.Decimal(n);
 
 let mockSession: {
   user: {
@@ -47,7 +53,7 @@ interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
   entry_date: Date;
-  mattress_count: number;
+  mattress_count: Dec;
   note: string | null;
   entered_by_user_id: string;
 }
@@ -186,12 +192,20 @@ vi.mock('@/lib/prisma', () => {
           entry_date: Date;
         };
         const key = entryKey(k.bonus_employee_id, k.entry_date);
+        // The Decimal(5,1) column coerces a written number to a Decimal (T-330).
+        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> =>
+          'mattress_count' in d && typeof d.mattress_count === 'number'
+            ? { ...d, mattress_count: toDec(d.mattress_count as unknown as number) }
+            : d;
         const existing = entryStore.get(key);
         if (existing) {
-          Object.assign(existing, update);
+          Object.assign(existing, coerce(update));
           return { ...existing };
         }
-        const row: MockEntry = { id: `entry-${++idCounter}`, ...create };
+        const row: MockEntry = {
+          id: `entry-${++idCounter}`,
+          ...(coerce(create as Partial<MockEntry>) as Omit<MockEntry, 'id'>),
+        };
         entryStore.set(key, row);
         return { ...row };
       },
@@ -523,6 +537,45 @@ describe('POST /api/bonus/entries — validation', () => {
     const { POST } = await import('./route');
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
     const res = await POST(makeReq({ entry_date: TODAY_ISO, entries: [] }));
+    expect(res.status).toBe(422);
+  });
+
+  // T-330 — one-decimal-place contract at the API boundary.
+  it('200 on a one-decimal count (23.5) — persisted verbatim', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: TODAY_ISO,
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 23.5 }],
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: Array<{ mattress_count: number }> };
+    expect(body.entries[0]!.mattress_count).toBe(23.5);
+  });
+
+  it('422 on a two-decimal-place count (23.55)', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: TODAY_ISO,
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 23.55 }],
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('422 on a negative count (-3)', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: TODAY_ISO,
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: -3 }],
+      }),
+    );
     expect(res.status).toBe(422);
   });
 });

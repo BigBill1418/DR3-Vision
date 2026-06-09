@@ -39,6 +39,7 @@ const STATE_LABEL: Record<MonthListRow['state'], string> = {
   paid: 'Paid',
   amended: 'Amended',
   skipped: 'Skipped',
+  historical_imported: 'Historical',
 };
 
 // Badge palette — steel chips on the deep-space page; emerald for the "done"
@@ -51,6 +52,7 @@ const STATE_BADGE: Record<MonthListRow['state'], string> = {
   paid: 'bg-emerald-500/20 text-emerald-200',
   amended: 'bg-dr3-cyan/20 text-dr3-cyan',
   skipped: 'bg-dr3-steel-light/10 text-dr3-mist/60',
+  historical_imported: 'bg-dr3-steel-light/10 text-dr3-mist/60',
 };
 
 function signatureLabel(row: MonthListRow): string {

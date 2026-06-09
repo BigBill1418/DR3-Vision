@@ -165,14 +165,23 @@ docker compose exec app env | grep -E '(GLITCHTIP|TEMPO|LOG_LEVEL)'
 
 ### 7a. GlitchTip — errors
 
-Force an error from a known test endpoint (if you've shipped one) or temporarily:
+Hit the admin-gated test-error endpoint (T-123). It deliberately throws,
+which GlitchTip captures when `GLITCHTIP_DSN` is configured. It is gated to
+`role=admin` (an open error-trigger would be an abuse/DoS vector), so you
+must send a valid admin session cookie:
 
 ```bash
-# Trigger from outside via a deliberately-broken request, or use the test endpoint
-curl https://dr3-vision.svdp.us/api/_test-error  # if T-103 added this
+# -b "<cookie>" carries an admin session; the route returns 500 on the
+# deliberate throw, and the error lands in GlitchTip within ~30s.
+curl -b "authjs.session-token=<admin-session-cookie>" \
+  https://dr3-vision.svdp.us/api/admin/_test-error
 ```
 
-Within 30 seconds, the error should appear in GlitchTip → Issues. The stack trace should be readable (source maps uploaded if `GLITCHTIP_AUTH_TOKEN` was set during build).
+Without a valid admin cookie the route returns 401/403 and nothing is
+reported — that gate is intentional. Within 30 seconds of an authenticated
+admin hit, the error should appear in GlitchTip → Issues. The stack trace
+should be readable (source maps uploaded if `GLITCHTIP_AUTH_TOKEN` was set
+during build).
 
 ### 7b. Tempo — traces
 

@@ -144,8 +144,9 @@ export default async function BonusMonthDetailPage({
       totalMattresses: 0,
       totalBonusCents: 0,
     };
-    acc.totalMattresses += e.mattress_count;
-    acc.totalBonusCents += calculateDailyBonusCents(e.mattress_count, rule);
+    const count = e.mattress_count.toNumber();
+    acc.totalMattresses += count;
+    acc.totalBonusCents += calculateDailyBonusCents(count, rule);
     byEmployee.set(e.bonus_employee_id, acc);
   }
   const rows = [...byEmployee.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -187,7 +188,7 @@ export default async function BonusMonthDetailPage({
     amendEntriesByDay = Object.fromEntries(
       month.daily_entries.map((e) => [
         `${isoDay(e.entry_date)}|${e.bonus_employee_id}`,
-        { mattress_count: e.mattress_count, note: e.note ?? null },
+        { mattress_count: e.mattress_count.toNumber(), note: e.note ?? null },
       ]),
     );
     const firstIso = amendDays[0]?.iso ?? '';
@@ -229,9 +230,10 @@ export default async function BonusMonthDetailPage({
           totalMattresses: 0,
           totalBonusCents: 0,
         } satisfies ReadOnlyGridRow);
-      acc.countsByDay[isoDay(e.entry_date)] = e.mattress_count;
-      acc.totalMattresses += e.mattress_count;
-      acc.totalBonusCents += calculateDailyBonusCents(e.mattress_count, rule);
+      const count = e.mattress_count.toNumber();
+      acc.countsByDay[isoDay(e.entry_date)] = count;
+      acc.totalMattresses += count;
+      acc.totalBonusCents += calculateDailyBonusCents(count, rule);
       grid.set(id, acc);
     }
     readOnlyRows = [...grid.values()].sort((a, b) => a.name.localeCompare(b.name));

@@ -31,9 +31,11 @@ Per-site differences locked in here:
 
 Empty cells (`,,`) are intentional — Eugene has no indoor/outdoor split, Woodland has no total cap.
 
-### `users.csv` — 5 rows
+### `users.csv` — 6 rows
 
-The five named portal accounts that exist day 1: Bill Barnard (admin), Kelsey Ruhland (admin), Morena Gomez (manager, both sites), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland).
+The six named portal accounts that exist day 1: Bill Barnard (admin), Kelsey Ruhland (admin), Morena Gomez (manager, both sites), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland), Patrick Dills (manager, Eugene).
+
+Patrick Dills is the Eugene lead processor, added per ADR-0023. He gets read access to Eugene site data but is **intentionally not a member of the Eugene bonus signature chain** (separation of duties — Patrick is himself a BonusEmployee at Eugene). Like the other rows he ships `is_active=false` and is activated via the `/admin/users` panel after his first Entra SSO sign-in.
 
 **All seeded with `is_active=false`.** Per ADR-0016, manager + admin sign-in is Microsoft Entra ID SSO only — there is no password to seed and no per-user reset flow. An admin activates each row via the `/admin/users` Settings panel (ADR-0017) once the seeded user has been added to the `DR3-Vision Admins` Entra security group; the user can then sign in via "Sign in with Microsoft" on `/login`.
 
@@ -103,7 +105,7 @@ After a fresh seed, `npx prisma studio` should show:
 | Table | Row count |
 |---|---|
 | `sites` | 2 |
-| `users` | 5 |
+| `users` | 6 |
 | `site_holidays` | 24 |
 | `processor_bonus_rules` | 2 |
 | `sources` | 111 |

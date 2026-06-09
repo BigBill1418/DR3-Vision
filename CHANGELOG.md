@@ -5,6 +5,141 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-08 — Sprint 3: historical bonus data import + Mail.Send + GlitchTip (ADR-0023)
+
+**Headline.** 17 months of historical bonus data (Jan 2025 → Jun 2026) land in
+Vision ahead of the Tue 2026-06-09 Period-13 production go-live: **5,158 daily
+entries, 94 unique processors, $113,776.00 reconciled to the cent**. Delivered as
+a one-shot, SHA-256-idempotent seed (no bulk-upload UI — design pivot per Q19/Q20).
+Verified end-to-end against a throwaway Postgres 16: full migration chain +
+`seedHistoricalImport` produce exactly 104 pay periods / 76 `historical_imported` /
+94 employees / 128 aliases / 1 import / 5,158 entries / 5,234 audit rows, and
+`SUM(legacy_total_cents) = 11,377,600¢ = $113,776.00` exactly; a re-run is a no-op.
+
+- **Schema + migration (T-300).** `20260608_historical_data_import`: enum value
+  `historical_imported`; dual-total (`legacy_total_payout_cents`,
+  `imported_with_legacy_formula`) + `import_session_id` on `bonus_pay_periods`;
+  `mattress_count` `Int → Decimal(5,1)`; provenance (`legacy_total_cents`,
+  `import_session_id`, `import_provenance` JSONB) on `bonus_daily_entries`; new
+  `bonus_imports` (SHA-256 idempotency key) and `bonus_employee_aliases` tables.
+- **State machine (T-310).** Admin-only `draft → historical_imported` and
+  `skipped → historical_imported`; amendable out-edge `historical_imported →
+  amended`. `historical_imported` is intentionally **not** in `EDITABLE_STATES`
+  (correct via the existing admin amendment workflow only).
+- **Seed runtime (T-320).** `seedHistoricalImport()` in `prisma/seed.mjs`
+  (idempotent by `source_sha256`); 7 historical CSVs + the archived source
+  workbook under `prisma/seed/historical/`; `assertCounts()` expanded.
+- **Governance + access (T-301/T-302/T-312).** ADR-0023 shipped; Patrick Dills
+  seeded (manager @ Eugene, seed-inactive, **not** a Eugene signature-chain
+  member — separation of duties; he is also a `BonusEmployee` there). Tests
+  assert his Eugene-scoped read access and that a sign attempt is rejected.
+- **Dashboard (T-311).** Bulk-upload tile removed (Q20 — import is one-shot).
+- **Decimal entry (T-330).** Daily-entry input + **both** write paths
+  (`/api/bonus/entries` and the amendment route `…/months/[id]/entries`) accept
+  one decimal place via the shared `isValidMattressCount` contract; the >200
+  soft-warn applies on the integer floor; `mattress_count` Decimal→number
+  reconciled at all read boundaries so `tsc --noEmit` is clean branch-wide.
+- **Observability + payroll (T-123 / T-122).** Both are **operator env config**,
+  not code flips: GlitchTip already captures 100% of errors when `GLITCHTIP_DSN`
+  is set (error `sampleRate` was never 0), and M365 Mail.Send is fully env-driven
+  with no sandbox lock. `.env.example` updated; an admin-gated
+  `/api/admin/_test-error` route added for ingest verification.
+
+**Tests:** full `vitest` suite green (**695**); `tsc --noEmit` exits 0; ESLint
+clean. **Operator action required on CHAD-HQ** (env vars only — see the M365 and
+observability operator docs): `AUTH_MICROSOFT_ENTRA_ID_*` + `M365_MAIL_FROM_ADDRESS`
+/ `M365_PAYROLL_TO_ADDRESS`, and `GLITCHTIP_DSN` / `NEXT_PUBLIC_GLITCHTIP_DSN`.
+
+Detail for the larger sub-areas follows:
+
+#### 2026-06-08 — GlitchTip error-capture production readiness (T-123, ADR-0022)
+
+Sprint 3: production wiring for GlitchTip error reporting. No sample-rate code
+change was warranted — the error sample rate was **never pinned to 0**.
+`glitchTipInitOptions()` (`src/lib/observability/sentry.ts`) sets only
+`tracesSampleRate: 0` (Tempo owns traces, ADR-0022 §1) and omits the error
+`sampleRate`, which the Sentry SDK defaults to `1.0`. So when `GLITCHTIP_DSN`
+is set, 100% of errors are already captured; when it is unset, init no-ops
+(fail-open). Production wiring is therefore **operator env config**, not a code
+change.
+
+- **GlitchTip ingest verification endpoint (feat).** New admin-gated
+  `GET /api/admin/_test-error` deliberately throws so an operator can confirm
+  end-to-end ingest after setting `GLITCHTIP_DSN` on CHAD-HQ. Gated to
+  `role=admin` (an open error-trigger is an abuse/DoS vector): anonymous → 401,
+  non-admin → 403, admin → deliberate 500 captured by GlitchTip. Closes the
+  long-standing gap where `docs/operator/fleet-observability-setup.md` step 7a
+  referenced an `/api/_test-error` route that was never shipped.
+- **Operator runbook (docs).** Step 7a now points at the real admin-gated path
+  and documents the admin-session-cookie requirement.
+
+**Operator action (CHAD-HQ):** add `GLITCHTIP_DSN` (and the browser-side
+`NEXT_PUBLIC_GLITCHTIP_DSN`, plus `GLITCHTIP_AUTH_TOKEN` for source maps) to
+`~/.dr3-vision-secrets/observability.env` and recreate the container. No code
+deploy is required for capture to begin. Vars are already documented in
+`.env.example`.
+
+#### 2026-06-08 — Decimal daily-entry input + Decimal migration type debt (T-330, ADR-0023)
+
+Sprint 3: the daily mattress-count entry now accepts one decimal place, and the
+`mattress_count` `Int → Decimal(5,1)` migration (Unit 1) is fully reconciled so
+`tsc --noEmit` is clean branch-wide.
+
+- **Decimal daily-entry input (feat).** `DailyEntryGrid` accepts `\d{1,4}(\.\d)?`
+  — 0–999 with an optional single decimal place; `23.5` persists verbatim,
+  `23.55` and negatives are rejected. A persistent "Up to one decimal place" hint
+  sits under each input (wired via `aria-describedby`). The >200 soft-warn now
+  fires on the **integer floor** (`200.5` → no warn; `230.5` → warn), matching the
+  calculator, which floors — so a fractional entry's live bonus preview equals its
+  integer-floor result.
+- **Validation contract (feat).** New exported `isValidMattressCount()` in
+  `daily-entry.ts` is the single source of truth (finite, 0–999, ≤1 decimal). The
+  data-layer pre-check and the `POST /api/bonus/entries` zod schema both use it;
+  the API rejects two-decimal / negative counts with 422.
+- **Decimal → number read boundaries (fix).** `mattress_count` is converted via
+  `.toNumber()` at every point where Prisma data feeds `number`-typed calculator
+  inputs / view models (`bonus/months/[id]` page, `aggregates.ts`,
+  `daily-entry.ts`, `month-list.ts`, and the bonus-PDF page — which replaces an
+  unsafe `as PdfEntry[]` cast with a proper map). `mattress_count` stays `Decimal`
+  only at the Prisma edge; downstream interfaces remain `number`.
+- **Enum label maps (fix).** `historical_imported` added to both the status-label
+  and badge-style maps on the bonus-months list page (muted style, matching
+  `skipped`).
+- **Tests.** DB-free Prisma mocks now model `mattress_count` as `Prisma.Decimal`
+  (matching production reads); added decimal-contract cases at the data layer and
+  the API (`23.5` accepted, `23.55`/`-3` rejected, floor equivalence). The schema
+  test's state-enum assertion was intentionally updated from seven → eight states
+  (`historical_imported`).
+
+`tsc --noEmit` exits 0 (headline gate for the branch); full vitest suite green
+(686 tests); ESLint clean on all touched files.
+
+#### 2026-06-08 — Eager historical-period PDF generation (T-321, ADR-0023)
+
+Sprint 3 historical import: every `historical_imported` pay period now gets a
+PDF generated and uploaded to R2 at seed/deploy time (ADR-0023 Q13).
+
+- **`scripts/generate-historical-pdfs.mjs` (feat).** Enumerates every
+  `historical_imported` period with a NULL `pdf_storage_key` and drives PDF
+  generation via the loopback-guarded internal route (fleet `.mjs`→internal-route
+  convention, mirroring `scripts/bonus-period-close.mjs`). Idempotent (skips
+  periods that already have a key); logs a generated/skipped/failed summary.
+  Runnable standalone (`npm run db:seed:pdfs`) per the operator runbook.
+- **`POST /api/internal/bonus/generate-pdf/[id]` (feat).** Internal,
+  loopback-guarded endpoint that calls the existing `generateBonusPdf` path;
+  no-ops on an already-set `pdf_storage_key`.
+- **Historical-aware PDF render (feat).** The internal bonus-PDF page now prints
+  the **as-paid legacy total** (`legacy_total_payout_cents` when
+  `imported_with_legacy_formula`, per ADR-0023 Q1) and an import-specific
+  attestation ("Imported from <file> SHA-256 …, not signed by facility or ops")
+  for `historical_imported` periods. The live signed-period path is unchanged.
+- **Seed wiring.** `prisma/seed.mjs` runs PDF generation as its final step;
+  best-effort so a bare `prisma db seed` without the running app / R2 logs a
+  warning and continues rather than failing the data seed.
+
+`tsc --noEmit` introduces zero new errors; ESLint clean on all touched files;
+`pdf-data` + sign-route suites green (25 tests).
+
 ### 2026-06-07 — Login cinematic intro + post-cutover theme refresh
 
 Added a cinematic Vision logo intro on first session load and completed the

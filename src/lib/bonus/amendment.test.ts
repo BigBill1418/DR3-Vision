@@ -419,4 +419,53 @@ describe('upsertAmendedMonthEntries', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe('count_out_of_range');
   });
+
+  // T-330 follow-up: this layer now uses the canonical isValidMattressCount
+  // contract (0..999, <=1 decimal place), matching the primary daily-entry path,
+  // so historical Eugene half-shift corrections (23.5) persist verbatim as the
+  // Decimal(5,1) value while two-decimal / negative counts are rejected.
+  it('accepts a one-decimal count (23.5) and persists it', async () => {
+    seedSignedMonth({ state: 'amended' });
+    const res = await upsertAmendedMonthEntries(
+      entryDb,
+      'm1',
+      WOODLAND,
+      new Date(Date.UTC(2026, 4, 12)),
+      [{ bonus_employee_id: 'e1', mattress_count: 23.5 }],
+      { userId: 'bill' },
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.entries[0]!.mattress_count).toBe(23.5);
+    expect(entryStore[0]!.mattress_count).toBe(23.5);
+  });
+
+  it('rejects a two-decimal count (23.55) as count_out_of_range', async () => {
+    seedSignedMonth({ state: 'amended' });
+    const res = await upsertAmendedMonthEntries(
+      entryDb,
+      'm1',
+      WOODLAND,
+      new Date(Date.UTC(2026, 4, 12)),
+      [{ bonus_employee_id: 'e1', mattress_count: 23.55 }],
+      { userId: 'bill' },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('count_out_of_range');
+    expect(entryStore.length).toBe(0);
+  });
+
+  it('rejects a negative count (-3) as count_out_of_range', async () => {
+    seedSignedMonth({ state: 'amended' });
+    const res = await upsertAmendedMonthEntries(
+      entryDb,
+      'm1',
+      WOODLAND,
+      new Date(Date.UTC(2026, 4, 12)),
+      [{ bonus_employee_id: 'e1', mattress_count: -3 }],
+      { userId: 'bill' },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('count_out_of_range');
+    expect(entryStore.length).toBe(0);
+  });
 });

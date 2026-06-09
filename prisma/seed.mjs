@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const SEED_DIR = join(__dirname, 'seed');
+const HISTORICAL_SEED_DIR = join(SEED_DIR, 'historical');
 
 const prisma = new PrismaClient();
 
@@ -47,6 +48,15 @@ function parseCsv(filename) {
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   if (parsed.errors.length > 0) {
     throw new Error(`CSV parse errors in ${filename}: ${JSON.stringify(parsed.errors)}`);
+  }
+  return parsed.data;
+}
+
+function parseHistoricalCsv(filename) {
+  const text = readFileSync(join(HISTORICAL_SEED_DIR, filename), 'utf-8');
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  if (parsed.errors.length > 0) {
+    throw new Error(`Historical CSV parse errors in ${filename}: ${JSON.stringify(parsed.errors)}`);
   }
   return parsed.data;
 }
@@ -394,22 +404,328 @@ async function seedBonusPostSeedDdl() {
   );
 }
 
+// ─── Historical bonus data import (ADR-0023 / T-320) ─────────────────────
+// Imports the one historical spreadsheet bundle in prisma/seed/historical/.
+// IDEMPOTENT via bonus_imports.source_sha256 — a re-run that finds the same
+// SHA already imported is a no-op. createMany(skipDuplicates) + upserts make
+// the row-level inserts re-run-safe too. See ADR-0023.
+async function seedHistoricalImport(siteIds) {
+  // Read the bonus_imports row first — it carries SHA, totals, the import
+  // session id, and the timestamp. One row.
+  const importRow = parseHistoricalCsv('bonus_imports.csv')[0];
+  if (!importRow) {
+    console.log('  (no historical import to seed — bonus_imports.csv is empty)');
+    return;
+  }
+  const importSessionId = importRow.id;
+  const sourceSha = importRow.source_sha256;
+
+  // Idempotency: if this exact import already landed, no-op.
+  const existing = await prisma.bonusImport.findUnique({
+    where: { source_sha256: sourceSha },
+    select: { id: true },
+  });
+  if (existing) {
+    console.log(`  ▼ historical import already loaded (sha ${sourceSha.slice(0, 12)}…); skipping`);
+    return;
+  }
+
+  // ── Resolve the importing user (Bill via operations@svdp.us alias) ──
+  const importer = await prisma.user.findUnique({
+    where: { email: 'operations@svdp.us' },
+    select: { id: true },
+  });
+  if (!importer) {
+    throw new Error(
+      'seedHistoricalImport: cannot resolve operations@svdp.us — users must be seeded first.',
+    );
+  }
+
+  // ── 1. Create the BonusImport row ──
+  console.log('  ▶ creating bonus_import session');
+  await prisma.bonusImport.create({
+    data: {
+      id: importSessionId,
+      source_filename: importRow.source_filename,
+      source_sha256: sourceSha,
+      source_archive_path: `prisma/seed/historical/source-archive/${importRow.source_filename}`,
+      imported_by_user_id: importer.id,
+      imported_at: new Date(importRow.imported_at),
+      total_entries: Number.parseInt(importRow.total_entries, 10),
+      total_mattress_count: new Prisma.Decimal(importRow.total_mattress_count),
+      total_legacy_dollars: new Prisma.Decimal(importRow.total_legacy_dollars),
+      stockton_origin_entries: Number.parseInt(importRow.stockton_origin_entries, 10),
+      stockton_origin_dollars: new Prisma.Decimal(importRow.stockton_origin_dollars),
+      anomaly_count: Number.parseInt(importRow.anomaly_count, 10),
+      auto_sum_count: Number.parseInt(importRow.auto_sum_count, 10),
+      notes: importRow.notes ?? null,
+    },
+  });
+
+  // ── 2. Seed 2025 pay periods (52 rows) ──
+  console.log('  ▶ seeding 2025 pay periods (52 rows)');
+  const pp2025 = parseHistoricalCsv('bonus_pay_periods_2025.csv');
+  for (const r of pp2025) {
+    const site_id = siteIds.get(r.site_code);
+    if (!site_id) {
+      throw new Error(`bonus_pay_periods_2025.csv: unknown site_code='${r.site_code}'`);
+    }
+    const period_number = Number.parseInt(r.period_number, 10);
+    const period_year = Number.parseInt(r.period_year, 10);
+    const data = {
+      site_id,
+      period_number,
+      period_year,
+      period_start: dateOnly(r.period_start),
+      period_end: dateOnly(r.period_end),
+      pay_date: dateOnly(r.pay_date),
+      state: 'draft', // initial state; transitions to historical_imported below
+    };
+    const existing = await prisma.bonusPayPeriod.findFirst({
+      where: { site_id, period_year, period_number },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.bonusPayPeriod.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.bonusPayPeriod.create({ data });
+    }
+  }
+
+  // Build period-id lookup: (site_code, year, period_number) → period.id
+  const periodIdByKey = new Map();
+  const allPeriods = await prisma.bonusPayPeriod.findMany({
+    select: { id: true, site_id: true, period_year: true, period_number: true },
+  });
+  const siteCodeById = new Map(Array.from(siteIds.entries()).map(([code, id]) => [id, code]));
+  for (const p of allPeriods) {
+    const code = siteCodeById.get(p.site_id);
+    periodIdByKey.set(`${code}|${p.period_year}|${p.period_number}`, p.id);
+  }
+
+  // ── 3. Seed bonus_employees (94 rows; idempotent by deterministic UUID) ──
+  console.log('  ▶ seeding bonus_employees from historical CSV');
+  const empRows = parseHistoricalCsv('bonus_employees_historical.csv');
+  // Resolve Patrick Dills' user_id once (he is the sole BonusEmployee linked
+  // to a User account in the historical import, per ADR-0023).
+  const patrick = await prisma.user.findUnique({
+    where: { email: 'patrick.dills@svdp.us' },
+    select: { id: true },
+  });
+  const patrickUserId = patrick?.id ?? null;
+
+  for (const r of empRows) {
+    const site_id = siteIds.get(r.site_code);
+    if (!site_id) {
+      throw new Error(`bonus_employees_historical.csv: unknown site_code='${r.site_code}'`);
+    }
+    const data = {
+      id: r.id,
+      site_id,
+      full_name: r.full_name,
+      is_active: bool(r.is_active),
+      notes: blankToNull(r.notes),
+      user_id: r.full_name === 'Patrick Dills' ? patrickUserId : null,
+    };
+    await prisma.bonusEmployee.upsert({
+      where: { id: r.id },
+      create: data,
+      update: data,
+    });
+  }
+
+  // ── 4. Seed bonus_employee_aliases (128 rows) ──
+  console.log('  ▶ seeding bonus_employee_aliases');
+  const aliasRows = parseHistoricalCsv('bonus_employee_aliases_historical.csv');
+  // Build canonical_name → bonus_employee_id lookup (scoped by site)
+  const empIdByCanonical = new Map();
+  for (const r of empRows) {
+    empIdByCanonical.set(`${r.full_name}|${r.site_code}`, r.id);
+  }
+  for (const a of aliasRows) {
+    const canonical_employee_id = empIdByCanonical.get(`${a.canonical_name}|${a.target_site_code}`);
+    if (!canonical_employee_id) {
+      throw new Error(
+        `bonus_employee_aliases_historical.csv: cannot resolve canonical='${a.canonical_name}' site='${a.target_site_code}'`,
+      );
+    }
+    await prisma.bonusEmployeeAlias.upsert({
+      where: {
+        variant_name_canonical_employee_id: {
+          variant_name: a.variant_name,
+          canonical_employee_id,
+        },
+      },
+      create: {
+        variant_name: a.variant_name,
+        canonical_employee_id,
+        import_session_id: a.import_session_id,
+      },
+      update: {
+        import_session_id: a.import_session_id,
+      },
+    });
+  }
+
+  // ── 5. Update pay-period state + dual totals from historical state CSV ──
+  console.log('  ▶ updating pay-period totals + transitioning to historical_imported');
+  const stateRows = parseHistoricalCsv('bonus_pay_periods_historical_state.csv');
+  let periodsTransitioned = 0;
+  for (const r of stateRows) {
+    const key = `${r.site_code}|${r.period_year}|${r.period_number}`;
+    const periodId = periodIdByKey.get(key);
+    if (!periodId) {
+      throw new Error(`bonus_pay_periods_historical_state.csv: unknown period ${key}`);
+    }
+    const legacyCents = Number.parseInt(r.legacy_total_payout_cents, 10);
+    const totalCents = Number.parseInt(r.total_payout_cents, 10);
+    const importedWithLegacy = bool(r.imported_with_legacy_formula);
+
+    // Read current state so we capture before-state correctly for audit
+    const before = await prisma.bonusPayPeriod.findUnique({
+      where: { id: periodId },
+      select: { state: true },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.bonusPayPeriod.update({
+        where: { id: periodId },
+        data: {
+          state: 'historical_imported',
+          legacy_total_payout_cents: legacyCents,
+          total_payout_cents: totalCents,
+          imported_with_legacy_formula: importedWithLegacy,
+          import_session_id: importSessionId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: importer.id,
+          actor_label: 'system:historical-import',
+          action: 'update',
+          table_name: 'bonus_pay_periods',
+          row_id: periodId,
+          before: { state: before?.state ?? 'unknown' },
+          after: {
+            state: 'historical_imported',
+            legacy_total_payout_cents: legacyCents,
+            total_payout_cents: totalCents,
+            imported_with_legacy_formula: importedWithLegacy,
+            import_session_id: importSessionId,
+          },
+        },
+      });
+    });
+    periodsTransitioned++;
+  }
+  console.log(`    transitioned ${periodsTransitioned} periods to historical_imported`);
+
+  // ── 6. Bulk insert daily entries (with provenance JSONB + audit rows) ──
+  console.log('  ▶ inserting historical daily entries (~5,158 rows)');
+  const entryRows = parseHistoricalCsv('bonus_daily_entries_historical.csv');
+
+  // Build the dataset for createMany in batches of 500 (memory + query size).
+  const BATCH = 500;
+  let insertedEntries = 0;
+  let insertedAuditRows = 0;
+  for (let i = 0; i < entryRows.length; i += BATCH) {
+    const chunk = entryRows.slice(i, i + BATCH);
+    const periodKey = (r) => `${r.site_code}|${r.period_year}|${r.period_number}`;
+    const entryData = chunk
+      .map((r) => {
+        const periodId = periodIdByKey.get(periodKey(r));
+        if (!periodId) {
+          throw new Error(
+            `bonus_daily_entries_historical.csv: unknown period ${periodKey(r)} for entry ${r.id}`,
+          );
+        }
+        return {
+          id: r.id,
+          bonus_employee_id: r.bonus_employee_id,
+          bonus_pay_period_id: periodId,
+          entry_date: dateOnly(r.entry_date),
+          mattress_count: new Prisma.Decimal(r.mattress_count),
+          legacy_total_cents: Math.round(Number.parseFloat(r.legacy_total_dollars) * 100),
+          import_session_id: importSessionId,
+          import_provenance: {
+            source_sheet_name: r.source_sheet_name,
+            source_row_index: r.source_row_index,
+            source_count_col: Number.parseInt(r.source_count_col, 10),
+            source_total_col: Number.parseInt(r.source_total_col, 10),
+            original_site_code: r.original_site_code,
+            total_source: r.total_source,
+            raw_count: Number.parseFloat(r.raw_count),
+            raw_total: Number.parseFloat(r.raw_total),
+            formula_version: r.formula_version,
+            merge_strategy: r.merge_strategy || null,
+            merge_source_count: r.merge_source_count
+              ? Number.parseInt(r.merge_source_count, 10)
+              : 1,
+          },
+          entered_by_user_id: importer.id,
+          entered_at: new Date(importRow.imported_at),
+          note: null,
+        };
+      });
+    // createMany with skipDuplicates for re-run safety on the unique
+    // (bonus_employee_id, entry_date) index.
+    const result = await prisma.bonusDailyEntry.createMany({
+      data: entryData,
+      skipDuplicates: true,
+    });
+    insertedEntries += result.count;
+
+    // Audit log: one row per daily entry created (Q17 max forensic granularity).
+    // Build audit rows mirroring the entry data; provenance JSONB is the `after`.
+    const auditData = entryData.map((e) => ({
+      actor_user_id: importer.id,
+      actor_label: 'system:historical-import',
+      action: 'insert',
+      table_name: 'bonus_daily_entries',
+      row_id: e.id,
+      before: null,
+      after: {
+        bonus_employee_id: e.bonus_employee_id,
+        bonus_pay_period_id: e.bonus_pay_period_id,
+        entry_date: e.entry_date,
+        mattress_count: e.mattress_count.toString(),
+        legacy_total_cents: e.legacy_total_cents,
+        import_session_id: e.import_session_id,
+        import_provenance: e.import_provenance,
+      },
+    }));
+    const auditResult = await prisma.auditLog.createMany({ data: auditData });
+    insertedAuditRows += auditResult.count;
+
+    if ((i / BATCH) % 5 === 0) {
+      console.log(`    ${insertedEntries}/${entryRows.length} entries + ${insertedAuditRows} audit rows`);
+    }
+  }
+  console.log(`    ✔ ${insertedEntries} daily entries inserted; ${insertedAuditRows} audit rows`);
+
+  console.log('  ✔ historical import complete');
+}
+
 async function assertCounts() {
   // Seed-controlled tables: exact count is the contract (CSV-driven).
   const expectedExact = {
     sites: 2,
     site_holidays: 24,
     processor_bonus_rules: 2,
-    bonus_pay_periods: 52, // 26 periods × 2 sites (ADR-0019.1 / T-201)
+    bonus_pay_periods: 104, // 52 (2026) + 52 (2025) = 104 (ADR-0023 §Q3)
     bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
   };
   // Runtime-growable tables: the seed sets a baseline, but the app legitimately
   // adds rows (users via the admin UI; sources/transporters may be extended).
   // Assert a FLOOR, not equality — otherwise prod (e.g. 7 users) fails the seed.
   const expectedMin = {
-    users: 5,
+    users: 6, // Bill, Kelsey, Morena, Rick, Janette, Patrick (ADR-0023)
     sources: 111,
     transporters: 11,
+    bonus_employees: 94, // historical import (ADR-0023)
+    bonus_employee_aliases: 128,
+    bonus_imports: 1,
+    bonus_daily_entries: 5000, // floor — exact is 5,158 but allow for future entries
   };
   const actual = {
     sites: await prisma.site.count(),
@@ -420,6 +736,10 @@ async function assertCounts() {
     transporters: await prisma.transporter.count(),
     bonus_pay_periods: await prisma.bonusPayPeriod.count(),
     bonus_signature_chains: await prisma.bonusSignatureChain.count(),
+    bonus_employees: await prisma.bonusEmployee.count(),
+    bonus_employee_aliases: await prisma.bonusEmployeeAlias.count(),
+    bonus_imports: await prisma.bonusImport.count(),
+    bonus_daily_entries: await prisma.bonusDailyEntry.count(),
   };
   const mismatches = [
     ...Object.keys(expectedExact)
@@ -455,8 +775,40 @@ async function main() {
   await seedBonusSignatureChains(siteIds);
   console.log('▶ applying bonus post-seed DDL');
   await seedBonusPostSeedDdl();
+  console.log('▶ seeding historical bonus data (ADR-0023)');
+  await seedHistoricalImport(siteIds);
   const counts = await assertCounts();
   console.log('✔ seed complete:', counts);
+
+  // ── Eager historical-period PDF generation (ADR-0023 Q13 / T-321) ──
+  // FINAL seed step. Renders + uploads a PDF (as-paid legacy total + import
+  // attestation) for every historical_imported period lacking a pdf_storage_key.
+  // Best-effort: this needs the running Next app (the internal render route) +
+  // R2 creds, which may be absent during a bare `prisma db seed`. A failure here
+  // must NOT fail the data seed — the operator runbook re-runs it standalone
+  // (`node scripts/generate-historical-pdfs.mjs`) once the app + R2 are up.
+  // Idempotent, so the standalone re-run only fills the gaps.
+  console.log('▶ generating historical-period PDFs (ADR-0023 / T-321)');
+  try {
+    const { generateHistoricalPdfs } = await import('../scripts/generate-historical-pdfs.mjs');
+    const pdfSummary = await generateHistoricalPdfs(prisma);
+    if (pdfSummary.failed > 0) {
+      console.warn(
+        `  ⚠ ${pdfSummary.failed} historical PDF(s) failed to generate ` +
+          `(generated ${pdfSummary.generated}, skipped ${pdfSummary.skipped}). ` +
+          'Re-run `node scripts/generate-historical-pdfs.mjs` once the app + R2 are up.',
+      );
+    } else {
+      console.log(
+        `  ✔ historical PDFs: generated ${pdfSummary.generated}, skipped ${pdfSummary.skipped}`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      '  ⚠ historical PDF generation skipped (app/R2 unavailable): ' +
+        `${err?.message ?? err}. Re-run \`node scripts/generate-historical-pdfs.mjs\` later.`,
+    );
+  }
 }
 
 main()

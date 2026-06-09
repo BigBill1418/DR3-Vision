@@ -215,4 +215,54 @@ describe('POST /api/bonus/months/[id]/entries — month-scoped edit', () => {
     const res = await POST(makeReq(goodBody), { params });
     expect(res.status).toBe(404);
   });
+
+  // T-330 follow-up: the amendment write path honors the same decimal contract as
+  // the primary /api/bonus/entries path. Historical Eugene half-shift corrections
+  // (e.g. 23.5) flow through this amendment workflow, so one decimal place must be
+  // accepted and persisted as the Decimal(5,1) value; two decimals / negatives are
+  // rejected at the zod boundary (422).
+  it('accepts a one-decimal count (23.5) and persists it', async () => {
+    const { POST } = await import('./route');
+    monthStore.set('m1', { id: 'm1', site_id: WOODLAND, state: 'amended' });
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-05-12',
+        entries: [{ bonus_employee_id: 'e1', mattress_count: 23.5 }],
+      }),
+      { params },
+    );
+    expect(res.status).toBe(200);
+    expect(entryStore[0]!.mattress_count).toBe(23.5);
+  });
+
+  it('rejects a two-decimal count (23.55) at the zod boundary -> 422', async () => {
+    const { POST } = await import('./route');
+    monthStore.set('m1', { id: 'm1', site_id: WOODLAND, state: 'amended' });
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-05-12',
+        entries: [{ bonus_employee_id: 'e1', mattress_count: 23.55 }],
+      }),
+      { params },
+    );
+    expect(res.status).toBe(422);
+    expect(entryStore.length).toBe(0);
+  });
+
+  it('rejects a negative count (-3) at the zod boundary -> 422', async () => {
+    const { POST } = await import('./route');
+    monthStore.set('m1', { id: 'm1', site_id: WOODLAND, state: 'amended' });
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-05-12',
+        entries: [{ bonus_employee_id: 'e1', mattress_count: -3 }],
+      }),
+      { params },
+    );
+    expect(res.status).toBe(422);
+    expect(entryStore.length).toBe(0);
+  });
 });

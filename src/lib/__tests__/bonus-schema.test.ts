@@ -16,13 +16,16 @@ function fieldNames(name: string): string[] {
 }
 
 describe('Bonus schema — generated Prisma client shape (ADR-0019)', () => {
-  it('BonusPayPeriodState enum has the seven lifecycle states', () => {
+  it('BonusPayPeriodState enum has the eight lifecycle states', () => {
     const e = Prisma.dmmf.datamodel.enums.find((x) => x.name === 'BonusPayPeriodState');
     expect(e).toBeTruthy();
+    // T-310 (ADR-0023) added `historical_imported` for back-imported spreadsheet
+    // periods — the eighth state alongside the original seven.
     expect(e!.values.map((v) => v.name).sort()).toEqual(
       [
         'amended',
         'draft',
+        'historical_imported',
         'paid',
         'partially_signed',
         'pending_signatures',

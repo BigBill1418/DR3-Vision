@@ -25,7 +25,6 @@ import {
   buildAttestation,
   formatPeriodTitle,
   type AttestationSource,
-  type PdfEntry,
 } from '@/lib/bonus/pdf-data';
 import { getSignatureChain } from '@/lib/bonus/signature-chain';
 
@@ -117,9 +116,24 @@ export default async function BonusPdfSourcePage({
       site: { select: { code: true, name: true } },
       facility_signed_by: { select: { name: true } },
       ops_signed_by: { select: { name: true } },
+      // ADR-0023 Q13 / T-321: for historical_imported periods we print the
+      // as-paid legacy total + an import-specific attestation; both need the
+      // source filename + SHA-256 from the import session.
+      bonus_import: {
+        select: { source_filename: true, source_sha256: true, imported_at: true },
+      },
     },
   });
   if (!month) notFound();
+
+  // ADR-0023 Q1/Q4/Q13 (T-321): historical_imported periods are loaded from the
+  // legacy spreadsheet — they were never live-signed. They print:
+  //   (a) the AS-PAID legacy total when imported_with_legacy_formula is set
+  //       (legacy_total_payout_cents), NOT the recomputed/corrected total; and
+  //   (b) an import-specific attestation naming the source workbook + SHA-256,
+  //       explicitly stating the report is NOT facility/ops-signed.
+  // Live signed periods (every other state) keep the unchanged signed flow below.
+  const isHistorical = month.state === 'historical_imported';
 
   // Employees + entries for this month.
   const entries = await prisma.bonusDailyEntry.findMany({
@@ -149,9 +163,29 @@ export default async function BonusPdfSourcePage({
     },
     site: { code: month.site.code, name: month.site.name },
     employees,
-    entries: entries as PdfEntry[],
+    // mattress_count is Decimal(5,1) at the Prisma edge; convert to number for
+    // the PdfEntry[] view model so grid rows render (Unit 8 / T-330). This only
+    // types the per-entry count — the displayed grand total is driven by
+    // displayTotalCents below (Unit 7), which is untouched.
+    entries: entries.map((e) => ({
+      bonus_employee_id: e.bonus_employee_id,
+      entry_date: e.entry_date,
+      mattress_count: e.mattress_count.toNumber(),
+    })),
     rule,
   });
+
+  // Grand total printed in the table footer. For a historical_imported period the
+  // ADR-0023 Q1 rule applies: print the AS-PAID legacy total (the spreadsheet's
+  // threshold_high=75 figure stored at import) when imported_with_legacy_formula
+  // is set, falling back to the stored corrected total; never the recomputed
+  // (corrected-formula) figure from assemblePdfRows. Live periods keep the
+  // calculator-derived grand total so screen / PDF / CSV can never diverge.
+  const displayTotalCents = isHistorical
+    ? month.imported_with_legacy_formula
+      ? (month.legacy_total_payout_cents ?? month.total_payout_cents ?? data.grandTotalCents)
+      : (month.total_payout_cents ?? data.grandTotalCents)
+    : data.grandTotalCents;
 
   // T-209 title block — site-name driven, bi-weekly period naming (ADR-0019.1 §1).
   const periodTitle = formatPeriodTitle({
@@ -232,28 +266,55 @@ export default async function BonusPdfSourcePage({
         ? userName(month.ops_override_actor_id)
         : (month.ops_signed_by?.name ?? null);
 
-  const signatures: SignatureBlock[] = [
-    {
-      label: facilityRole,
-      attestationLines: facilityAttest.lines,
-      attestationSource: facilityAttest.source,
-      signedName: facilitySignedName,
-      signedRole: facilityRole,
-      signedAt: month.facility_signed_at,
-      signedIp: month.facility_signed_ip,
-      signedUserAgent: month.facility_signed_user_agent,
-    },
-    {
-      label: opsRole,
-      attestationLines: opsAttest.lines,
-      attestationSource: opsAttest.source,
-      signedName: opsSignedName,
-      signedRole: opsRole,
-      signedAt: month.ops_signed_at,
-      signedIp: month.ops_signed_ip,
-      signedUserAgent: month.ops_signed_user_agent,
-    },
+  // ADR-0023 Q4/Q13 (T-321): a historical_imported period was loaded from the
+  // legacy workbook and was NEVER live-signed — printing the facility/ops
+  // signature slots (all empty, "not signed") would misrepresent it as an
+  // unsigned-but-expected report. Replace the two signer blocks with one
+  // import-provenance attestation that names the source file + SHA-256 and
+  // states plainly that it is not facility/ops-signed.
+  const importSourceFile = month.bonus_import?.source_filename ?? 'the historical workbook';
+  const importSha = month.bonus_import?.source_sha256 ?? null;
+  const importShaLabel = importSha ? `SHA-256 ${importSha.slice(0, 12)}…` : 'SHA-256 unavailable';
+  const importAttestationLines = [
+    `Imported from ${importSourceFile} ${importShaLabel}, not signed by facility or ops.`,
+    `Historical record — as-paid totals from the legacy spreadsheet (ADR-0023). No live attestation exists for this period.`,
   ];
+
+  const signatures: SignatureBlock[] = isHistorical
+    ? [
+        {
+          label: 'Historical Import',
+          attestationLines: importAttestationLines,
+          attestationSource: 'unsigned',
+          signedName: null,
+          signedRole: 'Historical Import (not signed)',
+          signedAt: month.bonus_import?.imported_at ?? null,
+          signedIp: null,
+          signedUserAgent: null,
+        },
+      ]
+    : [
+        {
+          label: facilityRole,
+          attestationLines: facilityAttest.lines,
+          attestationSource: facilityAttest.source,
+          signedName: facilitySignedName,
+          signedRole: facilityRole,
+          signedAt: month.facility_signed_at,
+          signedIp: month.facility_signed_ip,
+          signedUserAgent: month.facility_signed_user_agent,
+        },
+        {
+          label: opsRole,
+          attestationLines: opsAttest.lines,
+          attestationSource: opsAttest.source,
+          signedName: opsSignedName,
+          signedRole: opsRole,
+          signedAt: month.ops_signed_at,
+          signedIp: month.ops_signed_ip,
+          signedUserAgent: month.ops_signed_user_agent,
+        },
+      ];
 
   const generatedAt = new Date();
 
@@ -330,7 +391,7 @@ export default async function BonusPdfSourcePage({
                 <td className="col-name grand-label" colSpan={3}>
                   Period Grand Total
                 </td>
-                <td className="col-num grand-total">{formatCents(data.grandTotalCents)}</td>
+                <td className="col-num grand-total">{formatCents(displayTotalCents)}</td>
               </tr>
             </tfoot>
           </table>

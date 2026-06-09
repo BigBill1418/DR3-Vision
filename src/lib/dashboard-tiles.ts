@@ -117,15 +117,7 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───
 const COMING_SOON_TILES: readonly DashboardTile[] = [
-  {
-    key: 'bulk-upload',
-    label: 'Bulk Data Upload',
-    description: 'Import historical loads and processor records from spreadsheets.',
-    icon: 'Upload',
-    route: '#',
-    status: 'coming-soon',
-    scope: 'manager+',
-  },
+  // bulk-upload tile removed per ADR-0023 Q20 — historical data import is a one-shot seed delivery, not a runtime feature.
   {
     key: 'photo-annotation',
     label: 'Photo Annotation Canvas',

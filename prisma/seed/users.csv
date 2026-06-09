@@ -4,3 +4,4 @@ kelsey.ruhland@svdp.us,Kelsey Ruhland,admin,en,,,false,DR3 Data & Compliance lea
 morena.gomez@svdp.us,Morena Gomez,manager,en,,,false,DR3 Operations Manager (both sites). Email is placeholder pending Bill confirmation.
 rick.albritton@svdp.us,Rick Albritton,manager,en,eugene,,false,Eugene site manager. Email is placeholder pending Bill confirmation.
 janette.thomas@svdp.us,Janette Thomas,manager,en,woodland,,false,Woodland site manager. Email is placeholder pending Bill confirmation.
+patrick.dills@svdp.us,Patrick Dills,manager,en,eugene,Lead,false,Eugene lead processor. Per ADR-0023: read access to Eugene site data; intentionally NOT a member of the Eugene bonus signature chain (separation of duties — Patrick is also a BonusEmployee at Eugene). Seed-inactive; admin activates account via /admin/users panel after first Entra SSO sign-in.

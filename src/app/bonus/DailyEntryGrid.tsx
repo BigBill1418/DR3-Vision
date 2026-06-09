@@ -6,11 +6,13 @@
 // button posts via `onClick`. No component library (hard rule #7) — plain HTML +
 // Tailwind brand tokens.
 //
-// Each row = employee name, an integer count input (0..999, soft-warn above
-// 200), and an optional note. The per-row bonus and the page grand total tick
-// live as the operator types, computed through `@/lib/bonus/calculator` with the
-// Woodland rule passed down from the server (NEVER hardcoded — hard rule #3).
-// The note field never feeds the math.
+// Each row = employee name, a count input (0..999 with at most ONE decimal
+// place — T-330; soft-warn when the INTEGER FLOOR exceeds 200), and an optional
+// note. The per-row bonus and the page grand total tick live as the operator
+// types, computed through `@/lib/bonus/calculator` with the Woodland rule passed
+// down from the server (NEVER hardcoded — hard rule #3). The calculator floors,
+// so a fractional entry's preview equals its integer-floor result. The note
+// field never feeds the math.
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -41,6 +43,12 @@ interface Props {
 
 const SOFT_WARN_THRESHOLD = 200;
 
+// T-330: accept 0–9999 with an optional single decimal place. The numeric range
+// (0..999) and one-decimal rule are re-enforced by parsedCount and, server-side,
+// by isValidMattressCount — this pattern is the input-shape gate only. Negatives
+// have no `-`, so they are excluded by construction.
+const COUNT_PATTERN = /^\d{1,4}(\.\d)?$/;
+
 interface RowState {
   count: string; // raw input string ('' = not entered)
   note: string;
@@ -63,9 +71,13 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
   const [saved, setSaved] = useState(false);
 
   const parsedCount = (raw: string): number | null => {
-    if (raw.trim() === '') return null;
-    const n = Number(raw);
-    if (!Number.isInteger(n) || n < 0 || n > 999) return null;
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    // Shape gate: digits with an optional single decimal place; no sign, so
+    // negatives are rejected here. Then enforce the 0..999 numeric range.
+    if (!COUNT_PATTERN.test(trimmed)) return null;
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0 || n > 999) return null;
     return n;
   };
 
@@ -98,7 +110,9 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
       // Only submit rows that actually have a count; a blank input is "not keyed".
       if (rs.count.trim() === '') continue;
       if (n == null) {
-        setError(`"${r.full_name}" has an invalid count — enter a whole number from 0 to 999.`);
+        setError(
+          `"${r.full_name}" has an invalid count — enter 0 to 999 with at most one decimal place.`,
+        );
         return;
       }
       entries.push({
@@ -186,7 +200,10 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
               rows.map((r) => {
                 const rs = state[r.bonus_employee_id]!;
                 const n = parsedCount(rs.count);
-                const overWarn = n != null && n > SOFT_WARN_THRESHOLD;
+                // Soft-warn on the integer FLOOR (T-330): 200.5 floors to 200
+                // (no warn); 201 / 230.5 warn. The calculator floors too, so the
+                // warn tracks the value that actually drives the bonus.
+                const overWarn = n != null && Math.floor(n) > SOFT_WARN_THRESHOLD;
                 const bonus = n != null ? calculateDailyBonusCents(n, rule) : 0;
                 return (
                   <tr
@@ -198,14 +215,16 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                     <td className="px-4 py-3">
                       <input
                         type="number"
-                        inputMode="numeric"
+                        inputMode="decimal"
                         min={0}
                         max={999}
+                        step={0.1}
                         value={rs.count}
                         disabled={!editable}
                         onChange={(e) => setRow(r.bonus_employee_id, { count: e.target.value })}
                         className="w-24 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
                         aria-label={`Mattress count for ${r.full_name}`}
+                        aria-describedby={`grid-hint-${r.bonus_employee_id}`}
                         data-testid={`grid-count-${r.bonus_employee_id}`}
                       />
                       {overWarn ? (
@@ -216,6 +235,13 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                           Over {SOFT_WARN_THRESHOLD} — please confirm
                         </span>
                       ) : null}
+                      <span
+                        id={`grid-hint-${r.bonus_employee_id}`}
+                        className="mt-1 block text-xs text-dr3-mist-dim"
+                        data-testid={`grid-hint-${r.bonus_employee_id}`}
+                      >
+                        Up to one decimal place
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <input
