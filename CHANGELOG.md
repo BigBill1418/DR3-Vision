@@ -5,6 +5,26 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — Fix: Janette's surname is Tomas, not Thomas (sign-in blocker)
+
+Janette Tomas (Woodland facility manager) could not sign in: her DR3 user row and
+the seed data had her surname misspelled **Thomas**, so the email/UPN Microsoft
+presents (`janette.tomas@svdp.us`) didn't match the seeded `janette.thomas@svdp.us`
+— the Entra sign-in gate looked her up, found nobody, and returned `AccessDenied`.
+
+- **Live prod fixed first** (direct DB update): her `users` row is now
+  `janette.tomas@svdp.us` / `Janette Tomas`. Her Woodland facility-signer slot
+  followed automatically (the signature chain references her by user-id, not email).
+- **Source fixed** so a future re-seed can't reintroduce the typo (which, because
+  the seed upserts by email, would have created a *duplicate* wrong-Janette):
+  `prisma/seed/users.csv`, `prisma/seed/bonus_signature_chains.csv` (Woodland
+  facility signer), and the historical-import alias map in `prisma/seed.mjs`.
+- **Name corrected** in the bonus month-detail signature card (`/bonus/months/[id]`),
+  the README / charter / seed README, the operator cutover runbook, and the bonus
+  test fixtures. (Immutable ADRs + superseded draft docs left as historical record.)
+
+`tsc --noEmit` exits 0; the touched bonus suites stay green.
+
 ### 2026-06-09 — All-sites manager: `/admin/users` toggle (ADR-0024 follow-up)
 
 Granting/revoking `all_sites` no longer requires a seed change or raw SQL — it is

@@ -306,7 +306,7 @@ export default async function BonusMonthDetailPage({
           <div className="grid gap-4 sm:grid-cols-2">
             <SignatureSlotCard
               role="Facility Manager"
-              assigned="Janette Thomas"
+              assigned="Janette Tomas"
               signerName={month.facility_signed_by?.name ?? null}
               signedAt={month.facility_signed_at}
             />

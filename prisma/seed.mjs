@@ -109,7 +109,7 @@ function dateOnly(v) {
 // be found" contract) rather than silently dropping a signer.
 const SIGNATURE_CHAIN_EMAIL_ALIASES = {
   'bill.barnard@svdp.us': 'operations@svdp.us',
-  'janette@svdp.us': 'janette.thomas@svdp.us',
+  'janette@svdp.us': 'janette.tomas@svdp.us',
   'morena@svdp.us': 'morena.gomez@svdp.us',
   'rick@svdp.us': 'rick.albritton@svdp.us',
 };

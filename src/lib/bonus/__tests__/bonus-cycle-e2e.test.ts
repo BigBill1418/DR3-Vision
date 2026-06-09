@@ -427,8 +427,8 @@ function seedUsers(): UserRow[] {
     // Woodland signers
     {
       id: 'janette',
-      name: 'Janette Thomas',
-      email: 'janette.thomas@svdp.us',
+      name: 'Janette Tomas',
+      email: 'janette.tomas@svdp.us',
       role: 'manager',
       primary_site_id: WOODLAND,
       is_active: true,
@@ -681,7 +681,7 @@ describe('T-211 — Woodland Period 12 → 13 close-and-sign cycle', () => {
     // Signature-request email to the facility manager (Janette), site-aware copy.
     const notified = await notifyPendingSigner('wl-p12', db() as never);
     expect(notified).toEqual({ notified: true, slot: 'facility' });
-    expect(sendSystemEmail.mock.calls[0]![0].to).toBe('janette.thomas@svdp.us');
+    expect(sendSystemEmail.mock.calls[0]![0].to).toBe('janette.tomas@svdp.us');
     expect(sendSystemEmail.mock.calls[0]![0].htmlBody).toContain('DR3 Woodland processor bonus');
 
     // 3. Janette signs Mon evening → partially_signed.
@@ -972,7 +972,7 @@ describe('T-213 — auto-override escalation path', () => {
         overrideReason: p.facility_override_reason,
         autoOverrideAt: p.facility_auto_override_at,
         autoOverrideActorName: 'Bill Barnard',
-        naturalSignerName: 'Janette Thomas',
+        naturalSignerName: 'Janette Tomas',
       },
       'I attest that the counts are accurate.',
     );

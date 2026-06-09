@@ -80,7 +80,7 @@ const month = (over: Partial<FakeMonth> = {}): FakeMonth => ({
   ...over,
 });
 
-const JANETTE = { id: 'u-jan', name: 'Janette Thomas', email: 'janette.thomas@svdp.us' };
+const JANETTE = { id: 'u-jan', name: 'Janette Tomas', email: 'janette.tomas@svdp.us' };
 const MORENA = { id: 'u-mor', name: 'Morena Gomez', email: 'morena.gomez@svdp.us' };
 
 beforeEach(() => {

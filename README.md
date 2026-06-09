@@ -18,7 +18,7 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 ## Who it's for
 
 - **Forklift operators and warehouse staff** — primary users, English/Spanish/Urdu speakers, gloves on, clipboards out
-- **Site managers** — Rick Albritton (Eugene), Janette Thomas (Woodland)
+- **Site managers** — Rick Albritton (Eugene), Janette Tomas (Woodland)
 - **DR3 Operations Manager** — Morena Gomez, both sites
 - **DR3 Data & Compliance lead** — Kelsey Ruhland, MRC contract SME
 - **Director of Operations, SVdP** — Bill Barnard, project sponsor
