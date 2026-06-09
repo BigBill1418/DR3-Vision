@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import { prisma } from '@/lib/prisma';
-import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { resolveActiveRule, resolveRuleForHistorical } from '@/lib/bonus/daily-entry';
 import { formatCents } from '@/lib/bonus/calculator';
 import {
   assemblePdfRows,
@@ -146,7 +146,13 @@ export default async function BonusPdfSourcePage({
   });
 
   // Rule effective at the month's start drives the math (CLAUDE.md hard rule #3).
-  const rule = await resolveActiveRule(month.site_id, month.period_start);
+  // Historical_imported periods (ADR-0023) can predate the earliest seeded rule;
+  // their displayed total is the stored AS-PAID legacy total (Q1) and the rows
+  // are informational, so fall back to the site's earliest rule rather than
+  // hard-failing the read-only render. Live periods stay strict.
+  const rule = isHistorical
+    ? await resolveRuleForHistorical(month.site_id, month.period_start)
+    : await resolveActiveRule(month.site_id, month.period_start);
 
   const data = assemblePdfRows({
     month: {
