@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma';
 import { verifyPin } from '@/lib/pin-service';
 import { authConfig } from '@/lib/auth.config';
 import { LOCALE_COOKIE, isLocale } from '@/i18n/config';
+import { log } from '@/lib/observability/logger';
 
 // Full Node-runtime auth config. Two providers ride on this file:
 //
@@ -101,7 +102,19 @@ export type EntraGateResult =
 export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<EntraGateResult> {
   const raw = profile.email ?? profile.preferred_username ?? '';
   const email = raw.trim().toLowerCase();
-  if (!email) return { ok: false, reason: 'no_email' };
+
+  // Log every denial with the attempted email + reason. Without this, a
+  // rejected sign-in is an opaque `AccessDenied` with no way to tell whether
+  // the email is misspelled, inactive, etc. (cost us hours when
+  // janette.tomas@ couldn't sign in — her row had the surname misspelled).
+  // The email is an identifier, not a secret (unlike pin_hash); it is safe and
+  // necessary to log for support.
+  const deny = (reason: Extract<EntraGateResult, { ok: false }>['reason']): EntraGateResult => {
+    log.warn({ event: 'entra_signin_denied', email: email || null, reason }, 'Entra sign-in denied');
+    return { ok: false, reason };
+  };
+
+  if (!email) return deny('no_email');
 
   const user = await prisma.user.findUnique({
     where: { email },
@@ -116,11 +129,11 @@ export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<En
       deleted_at: true,
     },
   });
-  if (!user) return { ok: false, reason: 'unknown' };
-  if (user.deleted_at) return { ok: false, reason: 'deleted' };
-  if (!user.is_active) return { ok: false, reason: 'inactive' };
+  if (!user) return deny('unknown');
+  if (user.deleted_at) return deny('deleted');
+  if (!user.is_active) return deny('inactive');
   if (user.role !== 'manager' && user.role !== 'admin') {
-    return { ok: false, reason: 'wrong_role' };
+    return deny('wrong_role');
   }
   return { ok: true, user };
 }
