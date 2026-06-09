@@ -59,8 +59,16 @@ vi.mock('next-auth/providers/microsoft-entra-id', () => ({
   default: (config: unknown) => config,
 }));
 
+// Spy on the observability logger so we can assert denied sign-ins are logged
+// with the attempted email + reason (the diagnostic that was missing when
+// janette.tomas@ couldn't sign in — 2026-06-09).
+vi.mock('@/lib/observability/logger', () => ({
+  log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 // Now safe to import the SUT.
 import { evaluateEntraSignIn } from '@/lib/auth';
+import { log } from '@/lib/observability/logger';
 
 interface UserRow {
   id: string;
@@ -184,5 +192,51 @@ describe('evaluateEntraSignIn — Entra sign-in authorization gate', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('unknown');
+  });
+});
+
+describe('evaluateEntraSignIn — denial logging (observability)', () => {
+  it('logs a structured warning with the attempted (lowercased) email + reason on an unknown denial', async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+
+    await evaluateEntraSignIn({ email: 'Janette.Tomas@SVdP.us' });
+
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'entra_signin_denied',
+        email: 'janette.tomas@svdp.us',
+        reason: 'unknown',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('logs the reason for a wrong_role denial', async () => {
+    findUniqueMock.mockResolvedValueOnce({ ...baseUser, role: 'operator' });
+
+    await evaluateEntraSignIn({ email: 'op@svdp.us' });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'entra_signin_denied', reason: 'wrong_role' }),
+      expect.any(String),
+    );
+  });
+
+  it('logs no_email denials with a null email (nothing was presented)', async () => {
+    await evaluateEntraSignIn({});
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'entra_signin_denied', email: null, reason: 'no_email' }),
+      expect.any(String),
+    );
+  });
+
+  it('does NOT log a denial warning on a successful sign-in', async () => {
+    findUniqueMock.mockResolvedValueOnce({ ...baseUser });
+
+    await evaluateEntraSignIn({ email: 'manager@svdp.us' });
+
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

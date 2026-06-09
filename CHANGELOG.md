@@ -5,7 +5,20 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-09 — Fix: Janette's surname is Tomas, not Thomas (sign-in blocker)
+### 2026-06-09 — Observability: log denied Entra sign-ins (email + reason)
+
+`evaluateEntraSignIn` now emits a structured `log.warn` on every denial —
+`{ event: 'entra_signin_denied', email, reason }` — where `reason` is one of
+`no_email | unknown | inactive | deleted | wrong_role` and `email` is the
+attempted (lowercased) address (or `null` when none was presented). Previously a
+rejected sign-in surfaced only as an opaque Auth.js `AccessDenied` with no record
+of who was denied or why, which is exactly what made the `janette.tomas@` typo
+(her row said `janette.thomas@`) so slow to diagnose. The email is an identifier,
+not a secret (unlike `pin_hash`), so it is safe and necessary to log for support.
+The logs ship to Loki via the existing pino → Alloy pipeline. TDD: 4 new cases in
+`auth.signin-gate.test.ts` (logs each denial reason with the attempted email;
+silent on success).
+
 
 Janette Tomas (Woodland facility manager) could not sign in: her DR3 user row and
 the seed data had her surname misspelled **Thomas**, so the email/UPN Microsoft
