@@ -25,6 +25,8 @@ interface MockMonth {
   site_id: string;
   period_start: Date;
   period_end: Date;
+  period_number: number;
+  period_year: number;
   state: 'draft' | 'pending_signatures' | 'partially_signed' | 'signed' | 'paid' | 'amended';
 }
 interface MockEmployee {
@@ -128,6 +130,8 @@ function reset() {
     site_id: WOODLAND,
     period_start: new Date(Date.UTC(2026, 4, 26)),
     period_end: new Date(Date.UTC(2026, 5, 8)),
+    period_number: 12,
+    period_year: 2026,
     state: 'draft',
   });
 }
@@ -148,6 +152,11 @@ function matchesEmp(e: MockEmployee, where: Record<string, unknown>): boolean {
 
 vi.mock('@/lib/prisma', () => {
   const bonusPayPeriod = {
+    findUniqueOrThrow: vi.fn(async ({ where }: { where: { id: string } }) => {
+      const m = monthStore.get(where.id);
+      if (!m) throw new Error(`mock: no bonus_pay_period ${where.id}`);
+      return { ...m };
+    }),
     findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       if ('id' in where) return monthStore.get(where['id'] as string) ?? null;
       if ('site_id_period_start' in where) {

@@ -88,10 +88,10 @@ export default async function BonusMonthsListPage({
           >
             ← Back to bonus entry
           </Link>
-          <h1 className="text-3xl font-bold tracking-tight">Bonus months</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Pay Period History</h1>
           <p className="text-sm text-dr3-mist-dim">
-            {gate.ctx.siteName} bonus history. Open any month to view its report and download the
-            signed PDF.
+            {gate.ctx.siteName} bonus history — every pay period, including imported history. Open
+            any pay period to view its report and download the signed PDF.
           </p>
         </header>
 
@@ -119,7 +119,7 @@ export default async function BonusMonthsListPage({
         <section className="rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2/70 p-5">
           {rows.length === 0 ? (
             <p className="text-sm text-dr3-mist-dim">
-              No bonus months {filter === 'all' ? 'yet' : 'in this period'}.
+              No pay periods {filter === 'all' ? 'yet' : 'in this range'}.
             </p>
           ) : (
             <ul className="flex flex-col divide-y divide-dr3-steel-light/20">

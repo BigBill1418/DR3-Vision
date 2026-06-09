@@ -1,18 +1,19 @@
 'use client';
 
-// "Month complete — ready to sign" (ADR-0019 §5a). Closes the current draft month
-// on demand (draft -> pending_signatures), locking daily entries and emailing the
-// facility-manager signer. Shown only while the month is in `draft`.
+// "Pay period complete — ready to sign" (ADR-0019 §5a). Closes the current draft
+// pay period on demand (draft -> pending_signatures), locking daily entries and
+// emailing the facility-manager signer. Shown only while the period is `draft`.
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 interface Props {
   monthId: string;
-  monthLabel: string;
+  /** Human pay-period label, e.g. "Pay Period 13 · Jun 9–22, 2026". */
+  periodLabel: string;
 }
 
-export function CloseMonthButton({ monthId, monthLabel }: Props) {
+export function CloseMonthButton({ monthId, periodLabel }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -28,7 +29,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
         return;
       }
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(body.error ?? 'Could not close the month. Please try again.');
+      setError(body.error ?? 'Could not close the pay period. Please try again.');
     } catch {
       setError('Could not reach the server. Please try again.');
     }
@@ -42,7 +43,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
         onClick={() => setOpen(true)}
         className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright focus:outline-none focus:ring-2 focus:ring-dr3-cyan focus:ring-offset-2 focus:ring-offset-dr3-space"
       >
-        Month complete — ready to sign
+        Pay period complete — ready to sign
       </button>
 
       {open && (
@@ -53,10 +54,10 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6"
         >
           <div className="w-full max-w-md rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl">
-            <h2 className="text-lg font-bold">Close {monthLabel} for signatures?</h2>
+            <h2 className="text-lg font-bold">Close {periodLabel} for signatures?</h2>
             <p className="mt-2 text-sm text-dr3-mist-dim">
-              This locks the daily entries for {monthLabel} and notifies the facility manager to
-              sign. Reopening a closed month requires an administrator amendment.
+              This locks the daily entries for {periodLabel} and notifies the facility manager to
+              sign. Reopening a closed pay period requires an administrator amendment.
             </p>
             {error && (
               <p className="mt-3 rounded border border-red-500/30 bg-red-900/40 px-3 py-2 text-sm text-red-100">
@@ -81,7 +82,7 @@ export function CloseMonthButton({ monthId, monthLabel }: Props) {
                 onClick={confirmClose}
                 className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
               >
-                {busy ? 'Closing…' : 'Close month'}
+                {busy ? 'Closing…' : 'Close pay period'}
               </button>
             </div>
           </div>

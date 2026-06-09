@@ -38,9 +38,23 @@ import {
   appTodayISO,
   dayKeyUTCFromISO,
   dayISO,
-  pacificMonthLabel,
   pacificDateLabel,
 } from '@/lib/time';
+
+/**
+ * Compact pay-period date range for the @db.Date window keys (UTC-midnight), e.g.
+ * "Jun 9–22, 2026" (same month) or "Dec 30, 2025 – Jan 12, 2026" (spanning). The
+ * keys are calendar-day anchors, so they're formatted in UTC to avoid a TZ shift.
+ */
+function payPeriodRange(start: Date, end: Date): string {
+  const md = (d: Date) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(d);
+  const year = end.getUTCFullYear();
+  if (start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth()) {
+    return `${md(start)}–${end.getUTCDate()}, ${year}`;
+  }
+  return `${md(start)}, ${start.getUTCFullYear()} – ${md(end)}, ${year}`;
+}
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
 import { AdminDatePicker } from './AdminDatePicker';
 import { CloseMonthButton } from './CloseMonthButton';
@@ -121,6 +135,11 @@ export default async function BonusDailyEntryPage({
     note: r.note,
   }));
 
+  // Human label for the bi-weekly pay period (e.g. "Pay Period 13 · Jun 9–22,
+  // 2026"). The period is NOT a calendar month — the system migrated to a
+  // bi-weekly cadence (ADR-0019.1), so the UI names it as a pay period.
+  const periodLabel = `Pay Period ${grid.periodNumber} · ${payPeriodRange(grid.periodStart, grid.periodEnd)}`;
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
@@ -141,12 +160,21 @@ export default async function BonusDailyEntryPage({
           {gate.ctx.isAdmin ? (
             <AdminDatePicker selected={dayISO(grid.entryDate)} today={appTodayISO()} />
           ) : null}
-          <nav className="mt-2 text-sm">
+          {/* Primary navigation for the bonus area — surfaced as buttons so the
+              employee roster and the pay-period history are easy to find from the
+              daily-entry screen (operator feedback, 2026-06-09). */}
+          <nav className="mt-3 flex flex-wrap gap-3" aria-label="Bonus navigation">
             <Link
               href="/bonus/employees"
-              className="text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
+              className="inline-flex items-center gap-2 rounded-md border border-dr3-cyan/40 bg-dr3-space-2/60 px-4 py-2 text-sm font-semibold text-dr3-mist transition-colors hover:border-dr3-cyan hover:bg-dr3-space-2"
             >
-              Manage employees →
+              <span aria-hidden="true">👥</span> Manage Employees
+            </Link>
+            <Link
+              href="/bonus/months"
+              className="inline-flex items-center gap-2 rounded-md border border-dr3-cyan/40 bg-dr3-space-2/60 px-4 py-2 text-sm font-semibold text-dr3-mist transition-colors hover:border-dr3-cyan hover:bg-dr3-space-2"
+            >
+              <span aria-hidden="true">🗓️</span> Pay Period History
             </Link>
           </nav>
         </header>
@@ -162,13 +190,10 @@ export default async function BonusDailyEntryPage({
         {grid.monthState === 'draft' && (
           <footer className="flex flex-col items-end gap-2 border-t border-dr3-steel-light/25 pt-6">
             <p className="text-right text-sm text-dr3-mist-dim">
-              Finished entering counts for {pacificMonthLabel(grid.entryDate)}? Close the month to
-              lock entries and start the signature workflow.
+              Finished entering counts for {periodLabel}? Close the pay period to lock entries and
+              start the signature workflow.
             </p>
-            <CloseMonthButton
-              monthId={grid.monthId}
-              monthLabel={pacificMonthLabel(grid.entryDate)}
-            />
+            <CloseMonthButton monthId={grid.monthId} periodLabel={periodLabel} />
           </footer>
         )}
       </div>

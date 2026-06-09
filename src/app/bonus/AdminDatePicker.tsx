@@ -40,6 +40,7 @@ export function AdminDatePicker({ selected, today }: Props) {
       <span className="text-xs font-semibold uppercase tracking-wide text-dr3-cyan">
         Admin: enter for date
       </span>
+      <span className="text-xs text-dr3-mist-dim">(today or earlier — counts can&rsquo;t be entered for a future day)</span>
       <input
         type="date"
         value={selected}

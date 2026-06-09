@@ -106,6 +106,10 @@ services:
       dockerfile: Dockerfile
     image: dr3-vision-app:local
     container_name: dr3-vision-app
+    # tini as PID 1 reaps exited Playwright/chromium children. Without it, node
+    # (PID 1) never reaps them and every bonus-PDF render leaks a defunct chrome
+    # process — a 76-PDF backfill left 150 zombies (2026-06-09). (init nit)
+    init: true
     restart: unless-stopped
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
@@ -201,6 +205,8 @@ services:
     # the next hourly tick begins populating the queue.
     image: dr3-vision-app:local
     container_name: dr3-vision-mymrc-scrape
+    # Reap exited Playwright/chromium children (MyMRC scrape launches a browser).
+    init: true
     restart: unless-stopped
     command: ['node', 'scripts/mymrc-cron.mjs']
     env_file:
@@ -258,6 +264,8 @@ services:
     # the same day (or a restart-triggered re-fire) never double-transitions.
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-period-close
+    # Reap exited Playwright/chromium children (period close renders the PDF).
+    init: true
     restart: unless-stopped
     command: ['node', 'scripts/bonus-period-close.mjs']
     # This is a cron daemon, not the web app — disable the image's inherited
@@ -320,6 +328,8 @@ services:
     # double-overridden.
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-escalation-check
+    # Consistent with the other app-image services — reap any child subprocess.
+    init: true
     restart: unless-stopped
     command: ['node', 'scripts/bonus-escalation-check.mjs']
     # Cron daemon, not the web app — disable the inherited HTTP /healthz
