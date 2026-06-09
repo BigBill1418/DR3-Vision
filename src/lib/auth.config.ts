@@ -67,6 +67,7 @@ export const authConfig = {
         if (user.name != null) token.name = user.name;
         token.role = user.role;
         token.primary_site_id = user.primary_site_id;
+        token.all_sites = user.all_sites; // ADR-0024 all-sites manager
         // Persist the Graph access token from the Entra sign-in (T-119). Server-only
         // (the session callback never copies it out); used by /api/me/photo.
         if (account?.provider === 'microsoft-entra-id' && account.access_token) {
@@ -90,6 +91,7 @@ export const authConfig = {
       if (token.primary_site_id !== undefined) {
         session.user.primary_site_id = token.primary_site_id;
       }
+      session.user.all_sites = token.all_sites === true; // ADR-0024 (default false)
       return session;
     },
   },

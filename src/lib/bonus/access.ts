@@ -95,9 +95,10 @@ export async function checkBonusAccess(
   const role = user.role;
   if (role !== 'manager' && role !== 'admin') return { allowed: false, sites: [] };
 
-  // Admins (Bill, Kelsey) see both sites unconditionally.
+  // Admins see both sites unconditionally; so does an all-sites manager
+  // (ADR-0024 — `all_sites` grants every site without the admin role).
   let sites: SiteCode[];
-  if (role === 'admin') {
+  if (role === 'admin' || user.all_sites === true) {
     sites = ['woodland', 'eugene'];
   } else {
     sites = await managerSitesFor(user.primary_site_id ?? null);

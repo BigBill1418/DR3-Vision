@@ -156,6 +156,12 @@ model User {
   primary_site_id String?
   primary_site    Site?   @relation(fields: [primary_site_id], references: [id])
 
+  // ADR-0024 — all-sites manager. When true, a `manager` reaches every site
+  // (like an admin) WITHOUT the admin role, so it confers no admin-only powers
+  // (user management, bonus amendment/override, /admin). Always false for
+  // operators and irrelevant for admins (who already see all sites).
+  all_sites Boolean @default(false)
+
   // Processor-specific (V2.1)
   processor_role String? // 'Lead', 'Processor', 'Machine Operator', 'Stryo', 'Floater' (Eugene); null for Woodland
 

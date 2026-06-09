@@ -89,6 +89,7 @@ export interface EntraGateUser {
   name: string;
   role: 'operator' | 'manager' | 'admin';
   primary_site_id: string | null;
+  all_sites: boolean;
   is_active: boolean;
   deleted_at: Date | null;
 }
@@ -110,6 +111,7 @@ export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<En
       name: true,
       role: true,
       primary_site_id: true,
+      all_sites: true,
       is_active: true,
       deleted_at: true,
     },
@@ -157,6 +159,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           name: user.name,
           role: user.role,
           primary_site_id: user.primary_site_id,
+          all_sites: false, // operators are single-site (PIN flow); never all-sites
         };
       },
     }),
@@ -181,6 +184,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         user.name = result.user.name;
         user.role = result.user.role;
         user.primary_site_id = result.user.primary_site_id;
+        user.all_sites = result.user.all_sites; // ADR-0024 all-sites manager
 
         await prisma.user.update({
           where: { id: result.user.id },

@@ -177,7 +177,8 @@ export default async function LoadsListPage({ params, searchParams }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => translate(dict, key, vars);
 
   const isAdmin = role === 'admin';
-  const isAssigned = session.user.primary_site_id === site.id;
+  // ADR-0024: an all-sites manager reaches every site.
+  const isAssigned = session.user.primary_site_id === site.id || session.user.all_sites === true;
   if (!isAdmin && !isAssigned) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">

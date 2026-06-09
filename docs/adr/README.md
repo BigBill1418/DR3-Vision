@@ -30,7 +30,8 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0020   | Vision Dashboard tile landing (features Bonus Management per ADR-0019)                                      | Accepted                                                        |
 | 0021   | M365 Graph mail-send for payroll PDF delivery (extends ADR-0016; delivers ADR-0019 PDFs)                    | Accepted                                                        |
 | 0022   | Fleet observability wire-in — GlitchTip, Loki, Tempo, Grafana, Prometheus, ntfy (supersedes T-018 deferral) | Accepted                                                        |
-| 0023   | Historical Bonus Data Import                                                                                 | Accepted                                                        |
+| 0023   | Historical Bonus Data Import                                                                                | Accepted                                                        |
+| 0024   | All-sites manager (`all_sites` flag) — amends hard-rule #2 + ADR-0019.2 §1                                  | Accepted                                                        |
 
 ## How to write a new ADR
 

@@ -26,6 +26,7 @@ npx prisma db seed
 The two operating sites: Eugene (Oregon) and Woodland (California). Each row encodes the per-site contract parameters from `docs/MRC-CONTRACTS.md`: storage limits, recycling rate target, retention years, processing deadline, and billing cadence.
 
 Per-site differences locked in here:
+
 - Eugene: 6,000 unit total cap, no in/outdoor split, 70% recycling target, 5-year retention, 60-day processing window, end-of-month billing only, no CIP
 - Woodland: 3,500 indoor + 5,000 outdoor caps, 75% recycling target, 4-year retention, 45-day processing window, mid+end-of-month billing, CIP enabled
 
@@ -33,7 +34,9 @@ Empty cells (`,,`) are intentional — Eugene has no indoor/outdoor split, Woodl
 
 ### `users.csv` — 6 rows
 
-The six named portal accounts that exist day 1: Bill Barnard (admin), Kelsey Ruhland (admin), Morena Gomez (manager, both sites), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland), Patrick Dills (manager, Eugene).
+The six named portal accounts that exist day 1: Bill Barnard (`operations@` import alias, inactive — Bill signs in as `bill.barnard@svdp.us`), Kelsey Ruhland (manager, **all-sites** per ADR-0024), Morena Gomez (manager, Woodland), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland), Patrick Dills (manager, Eugene).
+
+The `all_sites` column (ADR-0024): `true` makes a `manager` reach every site like an admin would, but WITHOUT the admin role — so no user management, bonus amendment, or override. Only Kelsey ships `all_sites=true` (Data & Compliance lead / MRC SME who needs both-site visibility). Granting/revoking it today is seed- or SQL-managed; an `/admin/users` toggle is a planned fast-follow.
 
 Patrick Dills is the Eugene lead processor, added per ADR-0023. He gets read access to Eugene site data but is **intentionally not a member of the Eugene bonus signature chain** (separation of duties — Patrick is himself a BonusEmployee at Eugene). Like the other rows he ships `is_active=false` and is activated via the `/admin/users` panel after his first Entra SSO sign-in.
 
@@ -65,12 +68,14 @@ ADR-0011 covers why this is parameterized rather than hardcoded.
 Mattress collection sites that deliver to DR3 facilities. Drives the **Source** dropdown on the inbound-load form.
 
 **Provenance:**
+
 - 105 rows: real Woodland sources extracted from the MyMRC haul-level export (`report1777920718332.xls`), covering 4,906 hauls dated 2023-09-20 through 2026-05-04. Address fields parsed from the most-recent haul to that source.
 - 6 rows: Eugene placeholder stubs for Oregon Collection Site Count locations (Salem, Albany, Cottage Grove, Florence per MRC OR contract Exhibit) and known Lane County waste facilities. **Addresses TBD** — backfill from the Oregon MyMRC export when available.
 
 Source `name` values **must match MyMRC verbatim** — including punctuation and capitalization — for the reconciliation match to work. Don't "clean up" names in the seed file.
 
 Top 5 Woodland sources by historical volume:
+
 1. North Area Recovery Station (NARS) — 343 hauls
 2. Neal Road Recycling and Waste Facility — 343 hauls
 3. Western Placer Waste Management Authority — 311 hauls
@@ -89,33 +94,34 @@ Trucking companies that deliver mattresses to DR3. Drives the **Transporter** dr
 
 The seed loader (T-002 in Sprint 1) must be **idempotent**: re-running `npx prisma db seed` should update existing rows where the data has changed and insert new rows, but never create duplicates. Match keys:
 
-| Table | Match key |
-|---|---|
-| `sites` | `code` |
-| `users` | `email` |
-| `site_holidays` | `(site_id, holiday_date)` |
+| Table                   | Match key                   |
+| ----------------------- | --------------------------- |
+| `sites`                 | `code`                      |
+| `users`                 | `email`                     |
+| `site_holidays`         | `(site_id, holiday_date)`   |
 | `processor_bonus_rules` | `(site_id, effective_date)` |
-| `sources` | `(site_id, name)` |
-| `transporters` | `name` |
+| `sources`               | `(site_id, name)`           |
+| `transporters`          | `name`                      |
 
 ## Expected row counts after seed
 
 After a fresh seed, `npx prisma studio` should show:
 
-| Table | Row count |
-|---|---|
-| `sites` | 2 |
-| `users` | 6 |
-| `site_holidays` | 24 |
-| `processor_bonus_rules` | 2 |
-| `sources` | 111 |
-| `transporters` | 11 |
+| Table                   | Row count |
+| ----------------------- | --------- |
+| `sites`                 | 2         |
+| `users`                 | 6         |
+| `site_holidays`         | 24        |
+| `processor_bonus_rules` | 2         |
+| `sources`               | 111       |
+| `transporters`          | 11        |
 
 If any of these is off, the seed loader has a bug — investigate before proceeding.
 
 ## Updating
 
 When the Oregon MyMRC export becomes available:
+
 1. Drop the OR `report*.xls` file in `/scratch/`
 2. Run `scripts/regenerate-seed-from-mymrc.py` (TODO build in Sprint 2 — preserves any manual edits)
 3. Commit the updated CSVs
