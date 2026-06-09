@@ -38,6 +38,7 @@ interface MockUser {
   pin_first_failed_at: Date | null;
   pin_locked_until: Date | null;
   is_active: boolean;
+  all_sites: boolean;
   last_login_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -105,6 +106,7 @@ function insertUser(p: Partial<MockUser> & { id: string; name: string; role: Moc
     pin_first_failed_at: null,
     pin_locked_until: null,
     is_active: p.is_active ?? true,
+    all_sites: p.all_sites ?? false,
     last_login_at: null,
     created_at: now,
     updated_at: now,
@@ -185,6 +187,7 @@ vi.mock('@/lib/prisma', () => {
         processor_role: data.processor_role ?? null,
         pin_hash: data.pin_hash ?? null,
         is_active: data.is_active ?? true,
+        all_sites: data.all_sites ?? false,
       });
       return withSite(u);
     }),
@@ -200,6 +203,7 @@ vi.mock('@/lib/prisma', () => {
           'processor_role',
           'pin_hash',
           'is_active',
+          'all_sites',
           'deleted_at',
           'last_login_at',
           'pin_failed_attempts',
@@ -217,7 +221,7 @@ vi.mock('@/lib/prisma', () => {
         }
         u.updated_at = new Date();
         return withSite(u);
-      }
+      },
     ),
   };
 
@@ -292,6 +296,7 @@ interface UserResponseShape {
   primary_site_id: string | null;
   primary_site_code: string | null;
   is_active: boolean;
+  all_sites: boolean;
   has_pin: boolean;
   deleted_at: string | null;
 }
@@ -307,7 +312,7 @@ describe('POST /api/admin/users — role gate', () => {
         method: 'POST',
         body: JSON.stringify({}),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(401);
   });
@@ -325,7 +330,7 @@ describe('POST /api/admin/users — role gate', () => {
           primary_site_id: 'site-eugene',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(403);
   });
@@ -338,7 +343,7 @@ describe('POST /api/admin/users — role gate', () => {
         method: 'POST',
         body: JSON.stringify({}),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(403);
   });
@@ -362,7 +367,7 @@ describe('POST /api/admin/users — create operator', () => {
           pin: '8429',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { user: UserResponseShape };
@@ -402,7 +407,7 @@ describe('POST /api/admin/users — create operator', () => {
           primary_site_id: 'site-eugene',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(422);
   });
@@ -419,7 +424,7 @@ describe('POST /api/admin/users — create operator', () => {
           pin: '5683', // matches op-existing
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(409);
   });
@@ -436,7 +441,7 @@ describe('POST /api/admin/users — create operator', () => {
           pin: '1234',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(422);
   });
@@ -459,7 +464,7 @@ describe('POST /api/admin/users — create manager', () => {
           primary_site_id: 'site-woodland',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as { user: UserResponseShape };
@@ -479,7 +484,7 @@ describe('POST /api/admin/users — create manager', () => {
           primary_site_id: 'site-woodland',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(res.status).toBe(422);
   });
@@ -497,7 +502,7 @@ describe('POST /api/admin/users — create manager', () => {
           primary_site_id: 'site-woodland',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(ok.status).toBe(201);
     // duplicate email
@@ -511,9 +516,101 @@ describe('POST /api/admin/users — create manager', () => {
           primary_site_id: 'site-eugene',
         }),
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
     expect(dup.status).toBe(409);
+  });
+});
+
+describe('all_sites flag (ADR-0024) — create + update', () => {
+  beforeEach(() => {
+    mockSession = { user: { id: 'admin-1', role: 'admin' } };
+  });
+
+  it('creates a manager with all_sites=true', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Kelsey',
+          role: 'manager',
+          email: 'kelsey@example.com',
+          primary_site_id: 'site-eugene',
+          all_sites: true,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.all_sites).toBe(true);
+  });
+
+  it('coerces all_sites to false when creating an operator (operators are single-site)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Op Two',
+          role: 'operator',
+          primary_site_id: 'site-eugene',
+          pin: '8261',
+          all_sites: true,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.all_sites).toBe(false);
+  });
+
+  it('toggles all_sites on an existing manager via update', async () => {
+    insertUser({
+      id: 'mgr-all',
+      name: 'Mgr All',
+      email: 'mgrall@example.com',
+      role: 'manager',
+      primary_site_id: 'site-eugene',
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/admin/users/mgr-all', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'update', all_sites: true }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'mgr-all' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.all_sites).toBe(true);
+  });
+
+  it('clears all_sites when an all-sites manager is changed to admin', async () => {
+    insertUser({
+      id: 'mgr-promote',
+      name: 'Mgr Promote',
+      email: 'promote@example.com',
+      role: 'manager',
+      primary_site_id: 'site-eugene',
+      all_sites: true,
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/admin/users/mgr-promote', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'update', role: 'admin' }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'mgr-promote' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.role).toBe('admin');
+    expect(body.user.all_sites).toBe(false);
   });
 });
 
@@ -531,7 +628,7 @@ describe('PATCH /api/admin/users/[id] — reset PIN + deactivate + reactivate', 
         body: JSON.stringify({ action: 'reset_pin', pin: '8429' }),
         headers: { 'Content-Type': 'application/json' },
       }),
-      { params: Promise.resolve({ id: 'op-existing' }) }
+      { params: Promise.resolve({ id: 'op-existing' }) },
     );
     expect(res.status).toBe(200);
 
@@ -566,7 +663,7 @@ describe('PATCH /api/admin/users/[id] — reset PIN + deactivate + reactivate', 
         body: JSON.stringify({ action: 'reset_pin', pin: '8429' }),
         headers: { 'Content-Type': 'application/json' },
       }),
-      { params: Promise.resolve({ id: 'mgr-1' }) }
+      { params: Promise.resolve({ id: 'mgr-1' }) },
     );
     expect(res.status).toBe(422);
   });
@@ -579,7 +676,7 @@ describe('PATCH /api/admin/users/[id] — reset PIN + deactivate + reactivate', 
         body: JSON.stringify({ action: 'deactivate' }),
         headers: { 'Content-Type': 'application/json' },
       }),
-      { params: Promise.resolve({ id: 'op-existing' }) }
+      { params: Promise.resolve({ id: 'op-existing' }) },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { user: UserResponseShape };
@@ -598,7 +695,7 @@ describe('PATCH /api/admin/users/[id] — reset PIN + deactivate + reactivate', 
         body: JSON.stringify({ action: 'deactivate' }),
         headers: { 'Content-Type': 'application/json' },
       }),
-      { params: Promise.resolve({ id: 'admin-1' }) }
+      { params: Promise.resolve({ id: 'admin-1' }) },
     );
     expect(res.status).toBe(422);
   });
@@ -615,7 +712,7 @@ describe('PATCH /api/admin/users/[id] — reset PIN + deactivate + reactivate', 
         body: JSON.stringify({ action: 'reactivate' }),
         headers: { 'Content-Type': 'application/json' },
       }),
-      { params: Promise.resolve({ id: 'op-existing' }) }
+      { params: Promise.resolve({ id: 'op-existing' }) },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { user: UserResponseShape };

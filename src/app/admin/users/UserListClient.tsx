@@ -114,7 +114,18 @@ export function UserListClient({ users }: Props) {
                 <td className="px-4 py-3 font-medium">{u.name}</td>
                 <td className="px-4 py-3 text-dr3-mist-dim">{u.email ?? '—'}</td>
                 <td className="px-4 py-3 capitalize">{u.role}</td>
-                <td className="px-4 py-3">{u.primary_site_code ?? '—'}</td>
+                <td className="px-4 py-3">
+                  {u.all_sites ? (
+                    <span
+                      className="rounded-full bg-dr3-cyan/15 px-2 py-0.5 text-xs text-dr3-cyan"
+                      data-testid={`admin-user-all-sites-${u.id}`}
+                    >
+                      {M.list.allSitesBadge}
+                    </span>
+                  ) : (
+                    (u.primary_site_code ?? '—')
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   {u.is_active ? (
                     <span className="rounded-full bg-emerald-900/40 px-2 py-0.5 text-xs text-emerald-200">

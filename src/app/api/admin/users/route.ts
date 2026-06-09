@@ -49,6 +49,7 @@ const createSchema = z.object({
   primary_site_id: z.string().min(1),
   processor_role: optionalProcessorRole,
   pin: optionalPin,
+  all_sites: z.boolean().optional(), // ADR-0024 (manager-only; coerced in the model)
 });
 
 const listQuerySchema = z.object({
@@ -76,7 +77,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json(
       { error: M.errors.invalidPayload, details: parsed.error.flatten() },
-      { status: 422 }
+      { status: 422 },
     );
   }
 
@@ -91,6 +92,7 @@ export async function POST(req: Request) {
     primary_site_id: parsed.data.primary_site_id,
     processor_role: parsed.data.processor_role,
     pin: parsed.data.pin,
+    all_sites: parsed.data.all_sites ?? false,
   };
 
   const result = await createUser(input, {
