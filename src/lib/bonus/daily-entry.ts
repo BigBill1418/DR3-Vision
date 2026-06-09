@@ -160,10 +160,17 @@ export interface DailyGridEntryRow {
 export interface DailyGridData {
   monthId: string;
   monthState: BonusPayPeriodState;
-  /** Whether daily entries can be written (true iff the month is `draft`). */
+  /** Whether daily entries can be written (true iff the period is `draft`). */
   editable: boolean;
   /** UTC-midnight calendar day this grid represents. */
   entryDate: Date;
+  /** Bi-weekly pay-period number (1..26) within {@link periodYear}. */
+  periodNumber: number;
+  /** Calendar year the pay period belongs to. */
+  periodYear: number;
+  /** Pay-period window (UTC-midnight @db.Date keys), for the period label. */
+  periodStart: Date;
+  periodEnd: Date;
   /** Rule params for client-side live calculation (NEVER hardcoded). */
   rule: BonusRuleParams;
   /** Active employees, alphabetical, with today's entry pre-loaded. */
@@ -181,6 +188,12 @@ export interface DailyGridData {
 export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGridData> {
   const entryDate = entryDateUTC(date);
   const month = await resolvePeriodOrThrow(siteId, entryDate);
+  // BonusMonthRow (the lifecycle abstraction) carries id/site/window/state but not
+  // the period number/year; read them by PK for the human pay-period label.
+  const meta = await prisma.bonusPayPeriod.findUniqueOrThrow({
+    where: { id: month.id },
+    select: { period_number: true, period_year: true },
+  });
   const rule = await resolveActiveRule(siteId, entryDate);
 
   const employees = await prisma.bonusEmployee.findMany({
@@ -220,6 +233,10 @@ export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGri
     monthState: month.state,
     editable: month.state === 'draft',
     entryDate,
+    periodNumber: meta.period_number,
+    periodYear: meta.period_year,
+    periodStart: month.period_start,
+    periodEnd: month.period_end,
     rule: ruleParams,
     rows,
     totalCents,
