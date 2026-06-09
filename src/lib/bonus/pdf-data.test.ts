@@ -178,11 +178,11 @@ describe('buildAttestation', () => {
     overrideReason: null,
     autoOverrideAt: null,
     autoOverrideActorName: null,
-    naturalSignerName: 'Janette Thomas',
+    naturalSignerName: 'Janette Tomas',
   };
 
   it('primary-signed renders the standard attestation', () => {
-    const out = buildAttestation({ ...base, primarySignerName: 'Janette Thomas' }, STD);
+    const out = buildAttestation({ ...base, primarySignerName: 'Janette Tomas' }, STD);
     expect(out.source).toBe('primary');
     expect(out.lines).toEqual([STD]);
   });
@@ -198,7 +198,7 @@ describe('buildAttestation', () => {
     );
     expect(out.source).toBe('manual_override');
     expect(out.lines[0]).toBe(
-      'Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.',
+      'Signed by Bill Barnard, Administrator, on behalf of Janette Tomas, Facility Manager.',
     );
     expect(out.lines[1]).toBe('Reason: Janette on medical leave');
   });
@@ -217,10 +217,10 @@ describe('buildAttestation', () => {
     );
     expect(out.source).toBe('auto_override');
     expect(out.lines[0]).toBe(
-      'Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility Manager.',
+      'Signed by Bill Barnard, Administrator, on behalf of Janette Tomas, Facility Manager.',
     );
     expect(out.lines[1]).toBe(
-      'System-applied admin override per ADR-0019.1 escalation policy. Janette Thomas did not sign by 08:30 AM PT on Tue Jun 9, 2026.',
+      'System-applied admin override per ADR-0019.1 escalation policy. Janette Tomas did not sign by 08:30 AM PT on Tue Jun 9, 2026.',
     );
   });
 

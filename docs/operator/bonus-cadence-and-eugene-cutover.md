@@ -106,7 +106,7 @@ a referenced user can't be resolved. Confirm in Entra these accounts are
   override backup)
 - `morena.gomez@svdp.us` (Morena — manager; Woodland ops signer; Woodland
   facility override backup)
-- `janette.thomas@svdp.us` (Janette — manager; Woodland facility signer)
+- `janette.tomas@svdp.us` (Janette — manager; Woodland facility signer)
 - `rick.albritton@svdp.us` (Rick — manager; Eugene facility signer)
 
 > Seed accounts are seeded **inactive**; an admin activates each account via the
@@ -333,9 +333,9 @@ signer is absent. As built:
   `actor_user_id = Bill`, full before/after JSON) and fires a `dr3-vision-system`
   ntfy confirming the slot(s) overridden.
 - The PDF signature block flags the automated origin explicitly, e.g.:
-  _"Signed by Bill Barnard, Administrator, on behalf of Janette Thomas, Facility
+  _"Signed by Bill Barnard, Administrator, on behalf of Janette Tomas, Facility
   Manager. System-applied admin override per ADR-0019.1 escalation policy.
-  Janette Thomas did not sign by 08:30 AM PT."_
+  Janette Tomas did not sign by 08:30 AM PT."_
 - **Then it advances `signed → paid`** once M365 confirms delivery
   (`delivered:true`). This is the T-211 step-5 fix (commit `d5b18a9`): a fail-open
   no-op or a failed send leaves the period `signed`, so the t4 check fires on a

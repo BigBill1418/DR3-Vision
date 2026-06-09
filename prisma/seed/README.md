@@ -34,7 +34,7 @@ Empty cells (`,,`) are intentional — Eugene has no indoor/outdoor split, Woodl
 
 ### `users.csv` — 6 rows
 
-The six named portal accounts that exist day 1: Bill Barnard (`operations@` import alias, inactive — Bill signs in as `bill.barnard@svdp.us`), Kelsey Ruhland (manager, **all-sites** per ADR-0024), Morena Gomez (manager, Woodland), Rick Albritton (manager, Eugene), Janette Thomas (manager, Woodland), Patrick Dills (manager, Eugene).
+The six named portal accounts that exist day 1: Bill Barnard (`operations@` import alias, inactive — Bill signs in as `bill.barnard@svdp.us`), Kelsey Ruhland (manager, **all-sites** per ADR-0024), Morena Gomez (manager, Woodland), Rick Albritton (manager, Eugene), Janette Tomas (manager, Woodland), Patrick Dills (manager, Eugene).
 
 The `all_sites` column (ADR-0024): `true` makes a `manager` reach every site like an admin would, but WITHOUT the admin role — so no user management, bonus amendment, or override. Only Kelsey ships `all_sites=true` (Data & Compliance lead / MRC SME who needs both-site visibility). Granting/revoking it today is seed- or SQL-managed; an `/admin/users` toggle is a planned fast-follow.
 

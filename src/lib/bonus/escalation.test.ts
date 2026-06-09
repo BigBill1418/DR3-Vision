@@ -139,7 +139,7 @@ beforeEach(() => {
   users = [
     { id: 'bill', name: 'Bill Barnard', is_active: true },
     { id: 'morena', name: 'Morena Ruiz', is_active: true },
-    { id: 'janette', name: 'Janette Thomas', is_active: true },
+    { id: 'janette', name: 'Janette Tomas', is_active: true },
   ];
 });
 
