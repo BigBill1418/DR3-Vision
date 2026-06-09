@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — All-sites manager (ADR-0024)
+
+New `all_sites` flag on `users`: when set on a **manager**, they reach **every
+site** like an admin would, but the role stays `manager` so they get **none** of
+the admin powers (user management, bonus amendment/override, `/admin/*`). This
+splits "view all sites" from "administer the system," which the app previously
+conflated into the `admin` role. Provisioned for **Kelsey Ruhland** (Data &
+Compliance lead / MRC SME) so she sees both Eugene + Woodland without being an
+admin.
+
+- **Schema + migration.** `20260609_all_sites_manager`: `users.all_sites
+BOOLEAN NOT NULL DEFAULT false`. Pure DDL; every existing row unchanged.
+- **Session threading.** `all_sites` flows DB → Entra sign-in gate
+  (`evaluateEntraSignIn`) → JWT → session (`src/lib/auth.ts`,
+  `auth.config.ts`, `next-auth.d.ts`). Operators are hard-coded `all_sites:
+false`.
+- **Site-reach gates (the only places it is consulted).** `checkBonusAccess`
+  (admin OR `all_sites` → both sites), `requireManagerForSite` (manager passes
+  if `primary_site_id === site` **or** `all_sites`), the three
+  `/dashboard/[site]/**` page guards, and the `/dashboard` + `/dashboard/exports`
+  site pickers.
+- **Admin boundary untouched.** `requireAdmin` (`/admin/*`, user management,
+  audit admin) and the admin-only bonus state transitions (amendment, override)
+  still gate on `role === 'admin'` — `all_sites` is never consulted there.
+- **Seed.** `users.csv` gains an `all_sites` column; Kelsey is now
+  `role=manager, all_sites=true` (was `admin`). CLAUDE.md hard-rule #2 + the ADR
+  index updated.
+- **Tests.** TDD: 8 new cases across `bonus/access.test.ts` (all-sites manager →
+  both sites; narrows to either) and the new `auth-helpers.test.ts` (off-primary
+  site allowed with the flag; plain manager still 403; operator still 403).
+
+**Tests:** full `vitest` suite green (**706**); `tsc --noEmit` exits 0; ESLint
+clean. **Follow-up:** an `/admin/users` toggle for `all_sites` (granting is
+seed/SQL-managed until then). See ADR-0024.
+
 ### 2026-06-09 — Period-13 production go-live: bonus UX, init reaper, historical-PDF hotfix, staff activation
 
 **Headline.** DR3-Vision's Bonus Management System went **live in production on

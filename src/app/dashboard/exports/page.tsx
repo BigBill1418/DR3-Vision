@@ -44,10 +44,10 @@ export default async function ExportsPage() {
     orderBy: { name: 'asc' },
   });
 
-  // CLAUDE.md hard-rule #2: managers see their primary site only;
-  // admins see every site.
+  // CLAUDE.md hard-rule #2 (as amended by ADR-0024): a plain manager sees their
+  // primary site only; admins AND all-sites managers see every site.
   const visibleSites: SiteOption[] =
-    session.user.role === 'admin'
+    session.user.role === 'admin' || session.user.all_sites === true
       ? allSites.map((s) => ({ code: s.code, name: s.name }))
       : allSites
           .filter((s) => s.id === session.user.primary_site_id)

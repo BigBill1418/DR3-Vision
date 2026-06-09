@@ -194,6 +194,7 @@ async function seedUsers(siteIds) {
       primary_site_id,
       processor_role: blankToNull(r.processor_role),
       is_active: bool(r.is_active),
+      all_sites: bool(r.all_sites), // ADR-0024 all-sites manager (blank → false)
     };
     await prisma.user.upsert({
       where: { email: data.email },

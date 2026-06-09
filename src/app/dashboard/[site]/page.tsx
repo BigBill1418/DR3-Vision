@@ -51,10 +51,11 @@ export default async function SiteDashboardPage({ params }: Props) {
   if (!site) notFound();
 
   const isAdmin = session.user.role === 'admin';
-  const isAssigned = session.user.primary_site_id === site.id;
+  const isAssigned = session.user.primary_site_id === site.id || session.user.all_sites === true;
   if (!isAdmin && !isAssigned) {
     // Per acceptance: a manager scoped to Eugene hitting /dashboard/woodland
-    // sees a 403, not a redirect or a misleading 404.
+    // sees a 403, not a redirect or a misleading 404. (An all-sites manager —
+    // ADR-0024 — reaches every site, so `isAssigned` is true for them.)
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">{t('dashboard.forbidden_heading')}</h1>

@@ -58,7 +58,13 @@ export async function requireManagerForSite(siteCode: string): Promise<ManagerSi
   if (!site) {
     throw new Response('site not found', { status: 404 });
   }
-  if (role === 'manager' && session.user.primary_site_id !== site.id) {
+  // A plain manager is hard-scoped to their primary site; an all-sites manager
+  // (ADR-0024) reaches any site, like an admin, but without the admin role.
+  if (
+    role === 'manager' &&
+    session.user.primary_site_id !== site.id &&
+    session.user.all_sites !== true
+  ) {
     throw new Response('forbidden', { status: 403 });
   }
   return {

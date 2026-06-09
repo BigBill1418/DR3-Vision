@@ -6,6 +6,8 @@ declare module 'next-auth' {
   interface User extends DefaultUser {
     role: UserRole;
     primary_site_id: string | null;
+    /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
+    all_sites: boolean;
   }
 
   interface Session extends DefaultSession {
@@ -15,6 +17,8 @@ declare module 'next-auth' {
       name: string;
       role: UserRole;
       primary_site_id: string | null;
+      /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
+      all_sites: boolean;
     } & DefaultSession['user'];
   }
 }
@@ -23,6 +27,8 @@ declare module 'next-auth/jwt' {
   interface JWT extends DefaultJWT {
     role?: UserRole;
     primary_site_id?: string | null;
+    /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
+    all_sites?: boolean;
     last_seen_at?: number;
     // Microsoft Graph delegated access token (User.Read), persisted from the Entra
     // sign-in so the server-only /api/me/photo route can fetch the profile photo

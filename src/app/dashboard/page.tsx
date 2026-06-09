@@ -23,8 +23,10 @@ export default async function DashboardPage() {
     orderBy: { name: 'asc' },
   });
 
+  // Admins and all-sites managers (ADR-0024) see every site; a plain manager
+  // sees only their primary site.
   const visibleSites =
-    session.user.role === 'admin'
+    session.user.role === 'admin' || session.user.all_sites === true
       ? sites
       : sites.filter((s) => s.id === session.user.primary_site_id);
 

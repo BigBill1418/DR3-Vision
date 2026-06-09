@@ -61,6 +61,17 @@ const OPERATOR = session({ role: 'operator', primary_site_id: WOODLAND_ID });
 // Eugene — is asserted in signature-chain.test.ts / signatures.test.ts.)
 const PATRICK = session({ id: 'patrick', role: 'manager', primary_site_id: EUGENE_ID });
 
+// ADR-0024: Kelsey Ruhland — an all-sites MANAGER (not admin). `all_sites=true`
+// grants every site like an admin, but she keeps role=manager so she gets NONE
+// of the admin-only powers (user mgmt, amendment, override). Her primary_site_id
+// is incidental once all_sites is set.
+const KELSEY = session({
+  id: 'kelsey',
+  role: 'manager',
+  primary_site_id: EUGENE_ID,
+  all_sites: true,
+});
+
 beforeEach(() => {
   mockSession = null;
   mockCookie = undefined;
@@ -90,6 +101,15 @@ describe('checkBonusAccess — ADR-0019.2 §1 matrix (no requestedSite)', () => 
 
   it('California-ops manager (Morena, primary_site_id null) → woodland only, NO eugene', async () => {
     expect(await checkBonusAccess(MORENA)).toEqual({ allowed: true, sites: ['woodland'] });
+  });
+
+  // ADR-0024: all-sites manager (Kelsey) reaches both sites like an admin would,
+  // but via the all_sites flag rather than the admin role.
+  it('all-sites manager (Kelsey, all_sites=true) → both sites', async () => {
+    expect(await checkBonusAccess(KELSEY)).toEqual({
+      allowed: true,
+      sites: ['woodland', 'eugene'],
+    });
   });
 
   it('operator → denied, empty sites', async () => {
@@ -140,6 +160,18 @@ describe('checkBonusAccess — requestedSite narrowing', () => {
 
   it('Bill requesting woodland → narrowed to woodland', async () => {
     expect(await checkBonusAccess(BILL, 'woodland')).toEqual({
+      allowed: true,
+      sites: ['woodland'],
+    });
+  });
+
+  // ADR-0024: an all-sites manager narrows to either requested site, like an admin.
+  it('Kelsey (all-sites manager) requesting eugene → allowed', async () => {
+    expect(await checkBonusAccess(KELSEY, 'eugene')).toEqual({ allowed: true, sites: ['eugene'] });
+  });
+
+  it('Kelsey (all-sites manager) requesting woodland → allowed', async () => {
+    expect(await checkBonusAccess(KELSEY, 'woodland')).toEqual({
       allowed: true,
       sites: ['woodland'],
     });
