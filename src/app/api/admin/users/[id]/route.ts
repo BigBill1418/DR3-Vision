@@ -52,6 +52,7 @@ const updateAction = z.object({
   email: optionalEmail,
   primary_site_id: z.string().min(1).optional(),
   processor_role: optionalProcessorRole,
+  all_sites: z.boolean().optional(), // ADR-0024 (manager-only; coerced in the model)
 });
 
 const resetPinAction = z.object({
@@ -93,7 +94,7 @@ export async function PATCH(req: Request, { params }: Params) {
   if (!parsed.success) {
     return NextResponse.json(
       { error: M.errors.invalidPayload, details: parsed.error.flatten() },
-      { status: 422 }
+      { status: 422 },
     );
   }
 
@@ -112,6 +113,7 @@ export async function PATCH(req: Request, { params }: Params) {
         input.primary_site_id = parsed.data.primary_site_id;
       if (parsed.data.processor_role !== undefined)
         input.processor_role = parsed.data.processor_role;
+      if (parsed.data.all_sites !== undefined) input.all_sites = parsed.data.all_sites;
 
       const r = await updateUser(id, input, actor);
       if (!r.ok) return reasonToResponse(r.reason);

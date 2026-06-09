@@ -46,6 +46,7 @@ export interface AdminUserDto {
   primary_site_code: string | null;
   processor_role: string | null;
   is_active: boolean;
+  all_sites: boolean;
   has_pin: boolean;
   last_login_at: Date | null;
   created_at: Date;
@@ -63,6 +64,7 @@ type AuditableUser = Pick<
   | 'primary_site_id'
   | 'processor_role'
   | 'is_active'
+  | 'all_sites'
   | 'pin_hash'
   | 'deleted_at'
 >;
@@ -115,6 +117,7 @@ function toDto(u: UserWithSite): AdminUserDto {
     primary_site_code: u.primary_site?.code ?? null,
     processor_role: u.processor_role,
     is_active: u.is_active,
+    all_sites: u.all_sites,
     has_pin: u.pin_hash != null,
     last_login_at: u.last_login_at,
     created_at: u.created_at,
@@ -164,6 +167,9 @@ export interface CreateUserInput {
   primary_site_id: string;
   processor_role: ProcessorRole | null;
   pin: string | null;
+  /** ADR-0024 — all-sites manager. Only meaningful for `manager`; coerced to
+   * false for any other role (admins already see all sites; operators never). */
+  all_sites?: boolean;
 }
 
 export type CreateUserResult =
@@ -181,7 +187,7 @@ export type CreateUserResult =
 
 export async function createUser(
   input: CreateUserInput,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<CreateUserResult> {
   // Email is required for manager + admin; optional for operator.
   if ((input.role === 'manager' || input.role === 'admin') && !input.email) {
@@ -231,6 +237,8 @@ export async function createUser(
         email,
         primary_site_id: input.primary_site_id,
         processor_role: input.processor_role,
+        // ADR-0024: all_sites only applies to managers; force false otherwise.
+        all_sites: input.role === 'manager' ? (input.all_sites ?? false) : false,
         // Operators flip to active after the PIN write; SSO users
         // are active immediately so they can sign in.
         is_active: input.role !== 'operator',
@@ -314,6 +322,10 @@ export interface UpdateUserInput {
   email?: string | null;
   primary_site_id?: string;
   processor_role?: ProcessorRole | null;
+  /** ADR-0024 — all-sites manager. Coerced to false whenever the effective
+   * role is not `manager` (so promoting an all-sites manager to admin, or
+   * demoting to operator, clears the flag). */
+  all_sites?: boolean;
 }
 
 export type UpdateUserResult =
@@ -323,7 +335,7 @@ export type UpdateUserResult =
 export async function updateUser(
   id: string,
   input: UpdateUserInput,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<UpdateUserResult> {
   const existing = await prisma.user.findUnique({
     where: { id },
@@ -336,11 +348,7 @@ export async function updateUser(
   // managers can clear it explicitly via input.processor_role=null.
   const nextRole = input.role ?? existing.role;
   const nextEmail =
-    input.email === undefined
-      ? existing.email
-      : input.email
-        ? input.email.toLowerCase()
-        : null;
+    input.email === undefined ? existing.email : input.email ? input.email.toLowerCase() : null;
   if ((nextRole === 'manager' || nextRole === 'admin') && !nextEmail) {
     return { ok: false, reason: 'email_required' };
   }
@@ -365,6 +373,14 @@ export async function updateUser(
     data.primary_site = { connect: { id: input.primary_site_id } };
   }
   if (input.processor_role !== undefined) data.processor_role = input.processor_role;
+
+  // ADR-0024: all_sites is meaningful only for managers. Recompute it whenever
+  // the flag OR the role is part of this update, so a role change away from
+  // `manager` clears it and a flag toggle on a manager persists it.
+  if (input.all_sites !== undefined || input.role !== undefined) {
+    const nextAllSites = nextRole === 'manager' ? (input.all_sites ?? existing.all_sites) : false;
+    if (nextAllSites !== existing.all_sites) data.all_sites = nextAllSites;
+  }
 
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
@@ -398,17 +414,13 @@ export type ResetPinResult =
   | { ok: true }
   | {
       ok: false;
-      reason:
-        | 'not_found'
-        | 'not_operator'
-        | 'pin_invalid_pattern'
-        | 'pin_collision_within_site';
+      reason: 'not_found' | 'not_operator' | 'pin_invalid_pattern' | 'pin_collision_within_site';
     };
 
 export async function resetUserPin(
   id: string,
   newPin: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<ResetPinResult> {
   const target = await prisma.user.findUnique({
     where: { id },
@@ -473,10 +485,7 @@ export type ReactivateResult =
   | { ok: true; user: AdminUserDto }
   | { ok: false; reason: 'not_found' };
 
-export async function reactivateUser(
-  id: string,
-  actor: ActorContext
-): Promise<ReactivateResult> {
+export async function reactivateUser(id: string, actor: ActorContext): Promise<ReactivateResult> {
   const existing = await prisma.user.findUnique({
     where: { id },
     include: { primary_site: { select: { code: true } } },

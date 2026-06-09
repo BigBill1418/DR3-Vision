@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — All-sites manager: `/admin/users` toggle (ADR-0024 follow-up)
+
+Granting/revoking `all_sites` no longer requires a seed change or raw SQL — it is
+now a checkbox in the admin user panel, closing the follow-up noted when the flag
+shipped earlier today.
+
+- **UI.** A manager-only **"Access to all sites"** checkbox on both the create
+  (`/admin/users/new`) and edit (`/admin/users/[id]`) forms. It renders only when
+  role is `manager` (meaningless for admins, who already see all sites, and for
+  operators, who are single-site). The users list shows an **"All sites"** badge
+  in the site column for flagged managers.
+- **API + model.** `all_sites` accepted on `POST /api/admin/users` and the
+  `update` action of `PATCH /api/admin/users/[id]`. `createUser` / `updateUser`
+  **coerce it to false whenever the effective role is not `manager`** — so
+  promoting an all-sites manager to admin, or demoting to operator, clears the
+  flag automatically. The flag is part of the append-only audit before/after
+  snapshot (`AuditableUser`).
+- **Tests.** TDD: 4 new route cases (create manager with the flag; create
+  operator coerces it false; toggle on an existing manager; promote-to-admin
+  clears it).
+
+**Tests:** full `vitest` suite green (**710**); `tsc --noEmit` exits 0; ESLint
+clean.
+
 ### 2026-06-09 — All-sites manager (ADR-0024)
 
 New `all_sites` flag on `users`: when set on a **manager**, they reach **every

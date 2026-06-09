@@ -32,6 +32,7 @@ export const adminMessages = {
     reactivate: 'Reactivate',
     statusActive: 'Active',
     statusInactive: 'Inactive',
+    allSitesBadge: 'All sites',
     filterSite: 'Site',
     filterRole: 'Role',
     filterStatus: 'Status',
@@ -66,9 +67,13 @@ export const adminMessages = {
     processorRoleLabel: 'Processor role (Eugene only)',
     processorRoleHelp: 'Optional. Only meaningful at the Eugene site.',
     processorRoleNone: '—',
+    allSitesLabel: 'Access to all sites',
+    allSitesHelp:
+      'Lets this manager see both Eugene and Woodland — not just their primary site. Grants no admin powers (no user management, bonus amendment, or override). For managers only.',
     pinLabel: 'PIN (4 digits)',
     pinConfirmLabel: 'Confirm PIN',
-    pinHelp: 'Set a 4-digit PIN for the operator. Cannot be all-same, sequential, or repeated-pair.',
+    pinHelp:
+      'Set a 4-digit PIN for the operator. Cannot be all-same, sequential, or repeated-pair.',
     pinRequired: 'PIN is required for operators.',
     pinPattern: 'PIN must be exactly 4 digits.',
     pinMismatch: 'PIN entries do not match.',

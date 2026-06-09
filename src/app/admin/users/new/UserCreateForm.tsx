@@ -29,6 +29,7 @@ export function UserCreateForm({ sites }: Props) {
   const [email, setEmail] = useState('');
   const [siteId, setSiteId] = useState<string>(sites[0]?.id ?? '');
   const [processorRole, setProcessorRole] = useState<string>('');
+  const [allSites, setAllSites] = useState(false);
   const [pin, setPin] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +79,7 @@ export function UserCreateForm({ sites }: Props) {
           email: email.trim() || null,
           primary_site_id: siteId,
           processor_role: showProcessorRole ? processorRole || null : null,
+          all_sites: role === 'manager' ? allSites : false,
           pin: role === 'operator' ? pin : null,
         }),
       });
@@ -183,6 +185,22 @@ export function UserCreateForm({ sites }: Props) {
             ))}
           </select>
         </Field>
+      ) : null}
+
+      {role === 'manager' ? (
+        <label className="flex items-start gap-3" data-testid="admin-create-all-sites-field">
+          <input
+            type="checkbox"
+            checked={allSites}
+            onChange={(e) => setAllSites(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-dr3-steel-light/40 bg-dr3-space-2 text-dr3-cyan focus:ring-2 focus:ring-dr3-cyan"
+            data-testid="admin-create-all-sites"
+          />
+          <span className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-dr3-mist">{M.form.allSitesLabel}</span>
+            <span className="text-xs text-dr3-mist-dim">{M.form.allSitesHelp}</span>
+          </span>
+        </label>
       ) : null}
 
       {role === 'operator' ? (

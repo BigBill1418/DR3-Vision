@@ -35,6 +35,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
   const [email, setEmail] = useState(user.email ?? '');
   const [siteId, setSiteId] = useState<string>(user.primary_site_id ?? sites[0]?.id ?? '');
   const [processorRole, setProcessorRole] = useState<string>(user.processor_role ?? '');
+  const [allSites, setAllSites] = useState<boolean>(user.all_sites);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -69,6 +70,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           email: email.trim() || null,
           primary_site_id: siteId,
           processor_role: showProcessorRole ? processorRole || null : null,
+          all_sites: role === 'manager' ? allSites : false,
         }),
       });
       if (!res.ok) {
@@ -209,6 +211,21 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
               ))}
             </select>
           </Field>
+        ) : null}
+        {role === 'manager' ? (
+          <label className="flex items-start gap-3" data-testid="admin-edit-all-sites-field">
+            <input
+              type="checkbox"
+              checked={allSites}
+              onChange={(e) => setAllSites(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-dr3-steel-light/40 bg-dr3-space-2 text-dr3-cyan focus:ring-2 focus:ring-dr3-cyan"
+              data-testid="admin-edit-all-sites"
+            />
+            <span className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-dr3-mist">{M.form.allSitesLabel}</span>
+              <span className="text-xs text-dr3-mist-dim">{M.form.allSitesHelp}</span>
+            </span>
+          </label>
         ) : null}
         <div className="flex flex-wrap items-center gap-3">
           <button

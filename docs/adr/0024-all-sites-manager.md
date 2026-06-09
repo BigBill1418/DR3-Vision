@@ -48,7 +48,7 @@ Operators are never all-sites (the PIN flow hard-codes `all_sites: false`); for 
 ### Negative
 
 - CLAUDE.md hard-rule #2 ("cross-site rollups require admin role") is now **amended**: cross-site reach is granted to admins **and** explicitly-flagged all-sites managers. Future code must check `role === 'admin' || all_sites` for _site reach_, but keep `role === 'admin'` for _admin powers_. The two must not be reconflated.
-- Granting/revoking `all_sites` is currently **seed- or SQL-managed** — there is no `/admin/users` UI toggle yet (planned fast-follow). Until then, a new all-sites manager requires a seed change or a one-line `UPDATE`.
+- Granting/revoking `all_sites` was initially **seed- or SQL-managed**. **Update 2026-06-09:** the `/admin/users` toggle shipped — a manager-only "Access to all sites" checkbox on the create + edit forms, with the model coercing the flag to false whenever the role is not `manager`. Admins now grant/revoke it in the UI; no SQL needed.
 
 ### Neutral
 
