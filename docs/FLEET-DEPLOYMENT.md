@@ -185,6 +185,27 @@ For routine deploys, swarmpilot_deployer handles everything. Manual intervention
 - Secret rotations
 - Feature flags toggles
 
+## Operational notes (production)
+
+- **Container init / zombie reaping (added Sprint 3, 2026-06-09).** The `app` and
+  `cron` services run with `init: true` in `docker-compose.yml`. PDF generation
+  spawns headless chromium via Playwright; without a real PID-1 the Node process
+  does not reap the chromium children and they accumulate as zombies (the 76-PDF
+  historical backfill leaked ~150). `init: true` installs Tini as PID-1 to reap
+  them. **Do not remove it** — see ADR-0023 "Fix 2". If you ever see a growing
+  zombie count, the prior stop-gap was an app restart; the durable fix is this
+  flag.
+- **CHAD-HQ deployer build is transiently flaky.** A single auto-deploy build of
+  `dr3-vision-app:local` can fail for environmental reasons (deployer build
+  context), then succeed on retry. The reliable manual fallback on CHAD-HQ is
+  `docker compose --env-file .env build app` followed by `docker compose up -d`.
+  This is not a DR3-Vision defect.
+- **Historical-PDF backfill.** `npm run db:seed:pdfs` (or the seed's final step)
+  regenerates any `historical_imported` period with a NULL `pdf_storage_key`. It
+  is idempotent and requires the app + R2 reachable. Historical periods that
+  predate the earliest `processor_bonus_rules` rule render via
+  `resolveRuleForHistorical` (ADR-0023 "Fix 1") — they do not error.
+
 ## References
 
 - ADR-0001 (tech stack)

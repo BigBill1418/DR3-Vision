@@ -21,18 +21,23 @@ The historical spreadsheet is parsed in design conversation (no upload UI), prod
 The design dialogue locked 22 decisions. The mooted items (Q5, Q7, Q9, Q12) follow from the Q19 pivot to in-conversation processing.
 
 ### Q1 — Formula reconciliation: dual-total storage
+
 Both `total_payout_cents` (corrected formula, threshold_high=74 Woodland) and `legacy_total_payout_cents` (as-paid spreadsheet, threshold_high=75 Woodland) are stored on every `historical_imported` period. The `imported_with_legacy_formula` boolean signals which total drives PDF and payroll display. Default for historical periods: legacy.
 
 ### Q2 — Identity resolution: pre-confirmed clusters
+
 Twelve canonical employees with pre-confirmed aliases land at seed time (`bonus_employee_aliases_historical.csv`, 128 rows total). The remaining ~80 employees use deterministic name normalization (role-suffix strip, quoted-nickname strip, whitespace collapse). All Stockton-origin employees fold to Woodland canonical site (see Q11).
 
 ### Q3 — Pay periods 2025: bi-weekly extended back
+
 The 2025 bi-weekly cadence is anchored at Period 1 of 2025 = Tue Dec 24, 2024 → Mon Jan 6, 2025, pay Fri Jan 10, 2025. 26 periods × 2 sites = 52 new pay-period rows. Total `bonus_pay_periods` count after seed: 104.
 
 ### Q4 — State machine: new terminal-ish state `historical_imported`
+
 Periods loaded from the spreadsheet land in `historical_imported`. Amendable via existing admin workflow (`historical_imported → amended → pending_signatures → …`). PDFs generate for historical periods with import-specific attestation language.
 
 ### Q6 — Anomaly bundle
+
 - `mattress_count` schema changes `Int → Decimal(5,1)` to preserve Eugene's historical half-shift values (23.5, 30.5).
 - Empty/orphan rows skip silently.
 - `-TERM` suffix strips + sets `is_active=false`.
@@ -40,48 +45,62 @@ Periods loaded from the spreadsheet land in `historical_imported`. Amendable via
 - Outliers (>150 mattresses/day) log to anomaly report but import.
 
 ### Q8 — Two new state transitions
+
 - `draft → historical_imported` (admin-only): 2025 periods are seeded as `draft`, then bulk-transitioned.
 - `skipped → historical_imported` (admin-only): for a pre-cutover-skipped period that turns out to have historical data.
 
 Both added to `ADMIN_ONLY_TRANSITIONS`. Single out-edge from `historical_imported` is `amended` (admin amendment workflow).
 
 ### Q10 — Eugene roster auto-creation
+
 Importer auto-creates `BonusEmployee` rows for processors found in the spreadsheet. Patrick Dills, Stanley Crux, Mike Fetter, Orrin Fitzgerald, etc. land as Eugene `BonusEmployee` rows at seed time. Patrick Dills is also linked to his `User` row (the only employee↔user link the import creates).
 
 ### Q11 — No Stockton site row; provenance preserves origin
+
 Stockton remains absent from `sites` table. `original_site_code='stockton'` is preserved in `import_provenance` JSONB on every Stockton-origin daily entry (1,869 entries / $41,399.50). All Stockton employees fold to Woodland canonical (Stockton/Woodland share the California MRC contract; staff travel between sites).
 
 ### Q13 — Eager PDF generation
+
 All ~104 historical-period PDFs render and upload to R2 at seed/deploy time. The PDF defaults to as-paid (legacy) totals per Q1.
 
 ### Q14 — Sprint 3 scope bundle
+
 Sprint 3 = historical import + T-122 (M365 Mail.Send setup) + T-123 (GlitchTip DSN). One addendum, one deploy.
 
 ### Q15 — Build today (Mon Jun 8)
+
 Sprint 3 ships before Tue Jun 9 morning so Janette and Rick see full history on day one of production entry.
 
 ### Q16 — Auto-sum duplicate (employee, date) pairs
+
 After Stockton-fold and identity merge, duplicate `(employee, date)` rows auto-sum with both source rows preserved in audit. `merge_strategy='auto_sum'` flag. Four such events in the v3 parse.
 
 ### Q17 — Audit log retention: max forensic granularity
+
 Every imported daily entry generates an audit row with the full provenance JSON (`source_sheet_name`, `source_row_index`, `source_count_col`, `source_total_col`, `raw_count`, `raw_total`, `total_source`, `formula_version`, `original_site_code`, `merge_strategy`, `merge_source_count`). ~5,158 audit rows from this import. Estimated 75–100 MB audit-log growth.
 
 ### Q18 — UI accepts decimals going forward
+
 Production daily-entry UI accepts up to one decimal place at both sites. Validation: `\d{1,4}(\.\d)?`. Schema change supports this (`Decimal(5,1)`).
 
 ### Q19 — Source `.xlsx` archived
+
 The source spreadsheet is archived at `prisma/seed/historical/source-archive/Bonus_Spread_Sheet_2026.xlsx` and tracked in `bonus_imports.source_archive_path`. R2 promotion is a follow-up ticket (out of scope for Sprint 3).
 
 ### Q20 — Bulk Upload tile removed
+
 The `bulk-upload` tile is removed from `DASHBOARD_TILES` entirely. Historical import is a one-shot operation, not a feature.
 
 ### Q21 — Hybrid delivery: schema migration + seed CSVs
+
 Schema changes (new enum value, new transitions, decimal column, provenance fields, new tables) ship as `prisma/migrations/20260608_historical_data_import/migration.sql`. Data (~5,158 daily entries, 94 employees, 128 aliases, 76 pay-period state rows, 1 import-session row) ships as CSVs in `prisma/seed/historical/`. Re-deploy is a no-op (SHA-256 idempotency check).
 
 ### Q22 — No pre-flight reconciliation report
+
 Locked decisions Q1–Q21 suffice. Reconciliation report ships as a `reconciliation.json` artifact alongside the CSVs for forensic reference but is not a deploy gate.
 
 ### Mooted by Q19 pivot
+
 - ~~Q5~~ permanent admin feature: no UI built
 - ~~Q7~~ Bill-only scope: no tile
 - ~~Q9~~ `'super-admin'` TileScope: no tile
@@ -90,6 +109,7 @@ Locked decisions Q1–Q21 suffice. Reconciliation report ships as a `reconciliat
 ## Critical findings during implementation
 
 ### Production calculator formula is correct (no fix needed)
+
 Initial analysis suggested a possible bug in `src/lib/bonus/calculator.ts` (tiered-substitution vs additive). Reading the source confirmed the calculator uses additive semantics correctly:
 
 ```typescript
@@ -99,6 +119,7 @@ return lowTier + highTier;
 ```
 
 This matches the spreadsheet's implicit formula. Worked examples:
+
 - Woodland count=77, threshold_high=75: `(27 × $0.50) + (2 × $0.25) = $14.00` ✓
 - Eugene count=102, threshold_high=100: `(52 × $1.00) + (2 × $0.25) = $52.50` ✓
 - Eugene count=120, threshold_high=100: `(70 × $1.00) + (20 × $0.25) = $75.00` ✓
@@ -106,14 +127,17 @@ This matches the spreadsheet's implicit formula. Worked examples:
 A previous historical doc walkthrough wrote `(50 × 1.00) + (20 × 0.25) = $75` for count=120 — the parenthesized arithmetic was off (gives $55, not $75), but the result was correct. The calculator code is the source of truth.
 
 ### Parser robustness: dynamic layout was load-bearing
+
 A v1 fixed-stride parser silently dropped ~17% of Eugene entries because the spreadsheet's Eugene sheets switch between 3-col-per-day and 4-col-per-day patterns mid-sheet. The v3 parser uses dynamic date-column detection (`map_day_columns()` in `parse-historical-v3.py`): scan row 0 for date headers, infer the per-day total column as the last "Total" header before the next date anchor. Result: 5,158 entries / $113,776.00, vs v1's 4,883 / $96,511.25.
 
 ### Eugene 2026 sheets use Format A (4-col with "High Yield Bonus")
+
 The bare-month-name Eugene 2026 sheets (`Jan 2026`, `Feb 2026`, etc., 126–127 cols each) use the Woodland-style 4-col-per-day format with a column labeled "High Yield Bonus" (semantically equivalent to Woodland's "High Volume Bonus"). The dynamic detector handles this transparently — site classification still produces `eugene` (no "woodland" or "stockton" in the sheet name), and the additive formula applies correctly because `processor_bonus_rules` for Eugene already has `threshold_high=100, rate_high=$0.25`.
 
 ## Consequences
 
 ### Positive
+
 - 17 months of historical bonus visible in Vision from Day 1.
 - Single source of truth: no parallel spreadsheet ongoing.
 - Forensic provenance for every imported row (audit + JSONB).
@@ -121,15 +145,66 @@ The bare-month-name Eugene 2026 sheets (`Jan 2026`, `Feb 2026`, etc., 126–127 
 - Patrick Dills enters Vision as both `User` and `BonusEmployee` correctly.
 
 ### Negative
+
 - ~75–100 MB audit-log growth from this single import.
 - Re-deploy idempotency relies on `bonus_imports.source_sha256` — if the spreadsheet is updated and re-loaded, it gets a new import session ID (intentional, not a regression).
 - The historical Woodland totals use the legacy threshold_high=75 formula; reports comparing 2025 to 2026 must account for the threshold change.
 
 ### Neutral
+
 - The `bulk-upload` tile slot is freed; a future bulk-data-recovery feature would need its own ADR if one is ever needed.
 - The state machine gains one new state (`historical_imported`) and two new transitions; the EDITABLE_STATES set is unchanged (historical_imported is locked, requires amendment first).
 
+## Post-acceptance — production go-live (2026-06-09) + operational fixes
+
+The ADR body above is the accepted decision and is immutable. This section records
+what actually happened on the live deploy and the two fixes the deploy surfaced —
+discovered only by running the import end-to-end against the production database.
+
+### Go-live outcome (verified on live `dr3_vision`, CHAD-HQ)
+
+The import reconciled on the production database exactly as on the throwaway-Postgres
+dry run: **104 pay periods (76 `historical_imported`), 5,158 daily entries, 94
+processors, 1 import session, and `SUM(legacy_total_cents) = 11,377,600¢ =
+$113,776.00` to the cent**, with all **76/76 historical PDFs** generated into R2.
+Period 13 (Jun 9–22, 2026) is the first live draft. Re-running the seed is a no-op
+(`bonus_imports.source_sha256` idempotency held).
+
+### Fix 1 — historical periods can predate the earliest rule (`resolveRuleForHistorical`)
+
+`historical_imported` periods (Jan 2025+) can start **before** the earliest
+`processor_bonus_rules.effective_date`, so `resolveActiveRule` threw
+`NoActiveRuleError`. That bubbled up through the internal bonus-PDF page, the
+Playwright `page.goto` timed out, and the eager-PDF backfill produced **0/76**
+PDFs. User-facing month-list views were already graceful (they catch the error),
+which is why the gap only showed in the headless render path.
+
+Fix: a new `resolveRuleForHistorical` (`src/lib/bonus/daily-entry.ts`) falls back
+to the site's **earliest** rule for `historical_imported` periods only. This is
+safe because, per **Q1**, a historical period's displayed total is the stored
+as-paid `legacy_total_payout_cents`, not a recomputed figure — the rule only drives
+the informational per-row breakdown, never a payout. **Live periods stay strict**
+(`resolveActiveRule` is unchanged) so a genuinely mis-configured live site still
+fails loudly. (Shipped as the T-321 hotfix, PR #10 `85b2904`.)
+
+### Fix 2 — PDF backfill leaked zombie chromium (`init: true`)
+
+The 76-PDF backfill spawns headless chromium via Playwright. The Node process ran
+as **PID 1** in the container with no init, so it never reaped the chromium
+children — the backfill left ~150 zombie processes. Fix: `init: true` on the `app`
+and `cron` services in `docker-compose.yml` installs a real PID-1 (Tini) that
+reaps them. The previous workaround (restart the app to clear zombies) is retired.
+(Shipped in PR #11 `5ba1ed8`.)
+
+### Operational note — CHAD-HQ deployer build flake
+
+The CHAD-HQ swarmpilot_deployer build of `dr3-vision-app:local` is **transiently
+flaky** and can fail a single auto-deploy run; a manual
+`docker compose --env-file .env build app` on CHAD is the reliable fallback. This
+is environmental (the deployer build context), not a DR3-Vision defect.
+
 ## Related ADRs
+
 - ADR-0007 — Audit log: append-only retention
 - ADR-0019 / ADR-0019.1 / ADR-0019.2 — Bonus management system (cadence, signature chains)
 - ADR-0020 — Vision Dashboard tile registry

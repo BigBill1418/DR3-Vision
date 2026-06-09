@@ -9,7 +9,7 @@ You are working on **DR3-Vision**, a 100% browser-based PWA that replaces paper-
 1. **`PROJECT-CHARTER.md`** — the master spec, ~850 lines. Authoritative for every product question. When you're unsure what to build, the charter has the answer.
 2. **`HANDOFF.md`** — the bootstrapping runbook for Sprint 1.
 3. **`docs/SPRINT-1-PLAN.md`** — the actual task list with acceptance criteria.
-4. **`docs/adr/`** — read all ADRs (currently 12). They are short. They lock in technical decisions you should not re-litigate. ADR-0012 in particular bundles seven Sprint-1 clarifications that supplement ADRs 0001/0004/0008/0009.
+4. **`docs/adr/`** — read all ADRs (currently 25 files, 0001–0023 plus 0019.1/0019.2; see `docs/adr/README.md` for the index). They are short. They lock in technical decisions you should not re-litigate. ADR-0012 in particular bundles seven Sprint-1 clarifications that supplement ADRs 0001/0004/0008/0009; the bonus system spans ADR-0019/0019.1/0019.2/0020/0021/0022/0023.
 5. **`prisma/schema.prisma`** — the data model, draft form. Iterate on it during Sprint 1 but preserve the field semantics and table relationships.
 
 ## Hard rules — do not violate

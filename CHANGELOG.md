@@ -5,6 +5,66 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — Period-13 production go-live: bonus UX, init reaper, historical-PDF hotfix, staff activation
+
+**Headline.** DR3-Vision's Bonus Management System went **live in production on
+CHAD-HQ for the Tuesday 2026-06-09 Period-13 go-live**. The 17-month historical
+import (ADR-0023) is reconciled on the live `dr3_vision` database — **$113,776.00
+to the cent, 104 pay periods (76 `historical_imported`, Period 13 the first live
+draft), 5,158 daily entries, 94 processors, 76/76 historical PDFs in R2** — and
+the five confirmed M365 staff (Kelsey, Morena, Rick, Janette, Patrick) sign
+straight in through the Entra gate. Shipped as
+PR #10 (`85b2904`, historical-PDF hotfix), PR #11 (`5ba1ed8`, bonus UX + init
+reaper), and a `[skip-deploy]` seed commit (`beb2ca9`, staff activation). Full
+`vitest` suite green (**698**); `tsc --noEmit` exits 0; ESLint clean; `next build`
+OK.
+
+#### 2026-06-09 — Confirmed-staff activation (seed `users.csv`, `beb2ca9` `[skip-deploy]`)
+
+Bill confirmed the production roster + emails on 2026-06-09 and that anyone in the
+M365 group should sign straight in. `prisma/seed/users.csv` now seeds
+**kelsey** (admin), **rick** (Eugene), **janette** (Woodland),
+**morena** (Woodland, pinned explicitly rather than relying on the
+`null → woodland` special case), and **patrick** (Eugene) as `is_active=true`, so
+the Entra SSO gate admits them without per-person manual activation.
+`operations@` stays inactive (it is an import alias, not a login). Already applied
+to the live prod DB.
+
+#### 2026-06-09 — Bonus UX: findable history, Manage Employees, Pay-Period nomenclature, date-picker hint (PR #11)
+
+- **Findability (fix).** `/bonus` now surfaces prominent **"Manage Employees"**
+  and **"Pay Period History"** buttons. History was previously unreachable from
+  the entry screen — the operator could not find it.
+- **Nomenclature (fix).** "month" → **"Pay Period"** across the close button,
+  footer, and history page. The period label is now derived from the period
+  number + window (e.g. **"Pay Period 13 · Jun 9–22, 2026"**) instead of the
+  misleading calendar-month name the bi-weekly schema inherited.
+- **Date-picker hint (fix).** `AdminDatePicker` now states the `max=today` rule
+  explicitly (no future-day entry).
+
+#### 2026-06-09 — init reaper: zombie chromium/Playwright reaping (PR #11)
+
+`docker-compose.yml` sets **`init: true`** on the `app` and `cron` services so a
+real PID-1 reaps Playwright/chromium child processes. The Node process had been
+running as PID 1 with no init, so chromium children orphaned on exit — the 76-PDF
+historical backfill leaked ~150 zombie processes. The Tini init shim now reaps
+them; the prior workaround (app restart to clear zombies) is retired.
+
+#### 2026-06-08 — Historical-period PDF render hotfix: `resolveRuleForHistorical` (T-321 hotfix, PR #10)
+
+`historical_imported` periods (Jan 2025+) can start **before** the earliest
+`processor_bonus_rules.effective_date`, so `resolveActiveRule` threw
+`NoActiveRuleError` → the internal bonus-PDF page errored → the Playwright
+`page.goto` timed out → **0/76 historical PDFs generated**. New
+`resolveRuleForHistorical` (`src/lib/bonus/daily-entry.ts`) falls back to the
+site's **earliest** rule for `historical_imported` periods only; the displayed
+total is the stored as-paid legacy total (ADR-0023 Q1) and the rows are
+informational, so the fallback rule never affects a payout figure. **Live periods
+stay strict** (`resolveActiveRule` unchanged). User-facing month-list views were
+already graceful (they catch `NoActiveRuleError`). After the fix, all 76/76
+historical PDFs regenerated into R2. `daily-entry.test.ts` covers the fallback +
+the live-strict path.
+
 ### 2026-06-08 — Sprint 3: historical bonus data import + Mail.Send + GlitchTip (ADR-0023)
 
 **Headline.** 17 months of historical bonus data (Jan 2025 → Jun 2026) land in
@@ -24,7 +84,7 @@ Verified end-to-end against a throwaway Postgres 16: full migration chain +
   `bonus_imports` (SHA-256 idempotency key) and `bonus_employee_aliases` tables.
 - **State machine (T-310).** Admin-only `draft → historical_imported` and
   `skipped → historical_imported`; amendable out-edge `historical_imported →
-  amended`. `historical_imported` is intentionally **not** in `EDITABLE_STATES`
+amended`. `historical_imported` is intentionally **not** in `EDITABLE_STATES`
   (correct via the existing admin amendment workflow only).
 - **Seed runtime (T-320).** `seedHistoricalImport()` in `prisma/seed.mjs`
   (idempotent by `source_sha256`); 7 historical CSVs + the archived source

@@ -36,14 +36,15 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 
 ## Status
 
-**Sprint 1 substantially complete (2026-05-07).** Production app live at <https://dr3-vision.svdp.us>:
+**Live in production at <https://dr3-vision.svdp.us> (CHAD-HQ). Bonus Management System went live for the Period-13 go-live on 2026-06-09.** Sprints 1, 2, and 3 are all shipped.
 
-- T-001 through T-016 shipped (foundation, operator iPad workflow, manager portal, compliance dashboard, exports, audit log viewer, MyMRC scrape, reconciliation upload).
-- Post-Sprint-1: Microsoft Entra ID SSO (ADR-0016), `/admin/users` panel (ADR-0017), `/admin/audit` viewer (ADR-0018).
-- Open: T-018 observability (GlitchTip + Loki + Tempo + Grafana) is the only Sprint-1 ticket not yet built.
+- **Sprint 1 (2026-05-07).** T-001 through T-016 — foundation, operator iPad workflow, manager portal, compliance dashboard, exports, audit log viewer, MyMRC scrape, reconciliation upload. Post-Sprint-1: Microsoft Entra ID SSO (ADR-0016), `/admin/users` panel (ADR-0017), `/admin/audit` viewer (ADR-0018).
+- **Sprint 2 + addendum (2026-06-06).** Bonus Management System (ADR-0019): daily per-employee entry, bi-weekly pay-period state machine (ADR-0019.1 — 26 periods/year, Tue→Mon, Friday pay date, Tuesday 08:30 PT auto-override), dual sign-off, co-branded PDF, payroll delivery via M365 Graph (ADR-0021), Vision Dashboard tile landing (ADR-0020). Eugene enabled as a second bonus site (ADR-0019.2). Production cutover executed 2026-06-06; Period 12 skipped, Period 13 is the first canonical bi-weekly PDF.
+- **Sprint 3 (2026-06-08 → 2026-06-09).** Historical bonus data import (ADR-0023) — 17 months (Jan 2025 → Jun 2026) reconciled on the live database to **$113,776.00 to the cent**: 104 pay periods (76 `historical_imported`), 5,158 daily entries, 94 processors, 76/76 historical PDFs in R2. Fleet observability wired in (ADR-0022 — GlitchTip, Loki, Tempo, Grafana, Prometheus, ntfy), closing the T-018 deferral. M365 Mail.Send production-ready. Bonus UX pass (findable Pay Period History + Manage Employees, Pay-Period nomenclature, date-picker hint) and the `init: true` container fix that reaps Playwright/chromium zombies. Five confirmed M365 staff (Kelsey, Morena, Rick, Janette, Patrick) activated to sign straight in through the Entra gate.
+- **Tests:** full `vitest` suite green (698); `tsc --noEmit` exits 0; ESLint clean.
 - Pending operator action: drop `~/.dr3-vision-secrets/mymrc.env` on CHAD-HQ to flip the hourly MyMRC scrape on (per `docs/operator/mymrc-setup.md`); upload a real monthly MyMRC CSV through `/dashboard/<site>/reconciliation` to validate the 95% clean-match acceptance.
 
-See `CHANGELOG.md` for the full ship log; see `docs/SPRINT-1-PLAN.md` for ticket-by-ticket state.
+See `CHANGELOG.md` for the full ship log; see `docs/SPRINT-1-PLAN.md` / `docs/SPRINT-2-PLAN.md` for ticket-by-ticket state and the ADRs (`docs/adr/`, through 0023) for locked decisions.
 
 **For developers:** read [`CLAUDE.md`](./CLAUDE.md) and [`HANDOFF.md`](./HANDOFF.md) to begin.
 
