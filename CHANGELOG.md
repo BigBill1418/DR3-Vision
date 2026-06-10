@@ -5,6 +5,26 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — Ops: DR3 deploy build timeout raised + first escalation-run verification scheduled
+
+Two operational follow-ups to the go-live-day escalation fixes (ADR-0025):
+
+- **Deployer build timeout 600 s → 900 s for DR3-Vision.** The fleet
+  auto-deployer (`swarmpilot_deployer`) capped remote builds at 600 s; CHAD-HQ's
+  cold Next.js build for `dr3-vision-app` (multi-stage + Playwright/chromium) runs
+  right at/over 10 min, so a cold deploy SIGKILL-aborted and only a warm-cache
+  build squeaked under. Fixed in **noc-master ADR-0105** (per-repo
+  `compose_build_timeout: 900` for DR3 only; all other repos unchanged). Cold DR3
+  deploys now have headroom; the manual-build workaround should no longer be needed.
+- **First production escalation-run verification scheduled.** A one-shot
+  host monitor on CHAD-HQ (`~/dr3-escalation-monitor.sh`, systemd `--user` timer,
+  fires 2026-06-10 16:10 UTC / 09:10 PT — after the 09:00 PT t4 tier) checks the
+  first real scheduled run of the ADR-0025-hardened escalation: all four tiers
+  executed, **no** ntfy publish `dropped` (PR #17 retry), and **no** t4 false-fire
+  (PR #18 — and the DB confirms 0 periods end "yesterday" Jun 9, so a correct run
+  examines nothing). It ntfys Bill a PASS/WARN/FAIL verdict and writes
+  `~/dr3-escalation-monitor-20260610.md`.
+
 ### 2026-06-09 — Fix: t4 payroll-deadline escalation no longer false-fires on archival periods
 
 The 09:00 AM PT `t4` "payroll deadline missed" escalation queried
