@@ -336,4 +336,34 @@ describe('t4 — 09:00 PT payroll-deadline-missed', () => {
     const res = await runEscalationTier({ db: makeDb(), tier: 't4', now: TODAY });
     expect(res.deadlineMissed).toBe(1);
   });
+
+  it('does NOT fire for a historical_imported period (ADR-0023 archival, not a live deadline)', async () => {
+    // Regression: the 2026-06-09 go-live false-positive. Period 12
+    // (historical_imported, period_end == yesterday) was wrongly flagged as a
+    // missed payroll deadline because the old query was `state != 'paid'`.
+    periods = [pendingPeriod({ state: 'historical_imported' })];
+    const res = await runEscalationTier({ db: makeDb(), tier: 't4', now: TODAY });
+    expect(res.deadlineMissed).toBe(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire for a skipped period (pre-cutover, terminal, no PDF)', async () => {
+    periods = [pendingPeriod({ state: 'skipped' })];
+    const res = await runEscalationTier({ db: makeDb(), tier: 't4', now: TODAY });
+    expect(res.deadlineMissed).toBe(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire for an amended period (admin correction, paged out-of-band)', async () => {
+    periods = [pendingPeriod({ state: 'amended' })];
+    const res = await runEscalationTier({ db: makeDb(), tier: 't4', now: TODAY });
+    expect(res.deadlineMissed).toBe(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('still fires for a draft period that never closed (period-close cron failed)', async () => {
+    periods = [pendingPeriod({ state: 'draft' })];
+    const res = await runEscalationTier({ db: makeDb(), tier: 't4', now: TODAY });
+    expect(res.deadlineMissed).toBe(1);
+  });
 });
