@@ -355,16 +355,35 @@ function signedSlotsLabel(slots: readonly SignatureSlot[]): string {
 // t4 — payroll-deadline-missed (T-206)
 // ────────────────────────────────────────────────────────────────────
 
+// t4 fires only for periods in the LIVE payroll lifecycle that should have
+// reached `paid` by the 09:00 PT deadline but didn't. Terminal / archival
+// states are NOT live deadlines and must never page:
+//   - `paid`                — success.
+//   - `skipped`             — pre-cutover empties (ADR-0019.1); terminal, no PDF.
+//   - `historical_imported` — spreadsheet loads (ADR-0023); already paid in V1.
+//   - `amended`             — admin corrections, handled out-of-band.
+// An allowlist (not the old `state != 'paid'`) is what stops the 2026-06-09
+// go-live false-positive: Period 12 (historical_imported, period_end ==
+// yesterday) was wrongly flagged as a missed payroll deadline. `draft` stays in
+// the list so a period that never closed (period-close cron failed) still pages.
+const T4_LIVE_DEADLINE_STATES = [
+  'draft',
+  'pending_signatures',
+  'partially_signed',
+  'signed',
+] as const;
+
 async function runDeadlineMissed(
   db: EscalationDb,
   periodEnd: Date,
   result: RunEscalationResult,
 ): Promise<void> {
-  // Any yesterday's-period that has not reached `paid` by 09:00 PT — the PDF did
-  // not ship (M365/R2 outage after auto-override, or never signed). Bill
-  // manually intervenes.
+  // A yesterday's-period still in the live lifecycle (not yet `paid`) at 09:00 PT
+  // — the PDF did not ship (M365/R2 outage after auto-override, or never signed).
+  // Bill manually intervenes. Archival/terminal states are excluded (see
+  // T4_LIVE_DEADLINE_STATES) so historical imports never false-page.
   const stuck = await db.bonusPayPeriod.findMany({
-    where: { period_end: periodEnd, state: { not: 'paid' } },
+    where: { period_end: periodEnd, state: { in: [...T4_LIVE_DEADLINE_STATES] } },
     select: PERIOD_SELECT,
   });
   result.periodsExamined = stuck.length;

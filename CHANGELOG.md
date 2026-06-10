@@ -5,6 +5,29 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — Fix: t4 payroll-deadline escalation no longer false-fires on archival periods
+
+The 09:00 AM PT `t4` "payroll deadline missed" escalation queried
+`bonus_pay_periods` with `state != 'paid'`, so any **non-paid** period whose
+`period_end` was yesterday matched — including terminal/archival periods that are
+not live deadlines. On the **2026-06-09 go-live** this flagged **Period 12
+(eugene + woodland)**, both `historical_imported` (ADR-0023 spreadsheet loads,
+already paid in V1) and ending Mon Jun 8, as two missed payroll deadlines.
+
+**Fix:** `runDeadlineMissed` now uses an allowlist of the *live* pre-`paid`
+lifecycle states — `draft`, `pending_signatures`, `partially_signed`, `signed`
+(`T4_LIVE_DEADLINE_STATES` in `src/lib/bonus/escalation.ts`). The archival/terminal
+states — `paid` (success), `skipped` (pre-cutover empties), `historical_imported`
+(ADR-0023), and `amended` (admin corrections) — are excluded. `draft` stays in
+the list so a period that never closed (period-close cron failed) still pages.
+t1–t3 were already allowlisted (`pending_signatures`/`partially_signed`), so only
+t4 carried the leak.
+
+TDD: 4 new cases in `escalation.test.ts` (no fire on `historical_imported` /
+`skipped` / `amended`; still fires on `draft`). Existing t4 cases (`signed`,
+`paid`, `pending_signatures`) unchanged. Full suite 720 green; `tsc --noEmit` 0;
+eslint 0.
+
 ### 2026-06-09 — Resilience: retry ntfy publishes so a transient blip can't drop an alert
 
 `publishNtfy` (`src/lib/ntfy.ts`) now retries each delivery path with short
