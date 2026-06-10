@@ -75,6 +75,12 @@ Reserved for system-level events that require Bill's immediate attention.
 
 These are the **only** two ntfy topics the application emits. Period.
 
+**Delivery resilience (ADR-0025, 2026-06-09):** `publishNtfy` retries each path with
+backoff (primary up to 3 attempts, fallback up to 2) under a 12 s total budget, so a
+momentary network blip can't silently drop a payroll-deadline or system page. This
+changes only *delivery reliability* — the routing matrix above (what fires, to whom)
+is unchanged.
+
 ### In-app dashboard signals (no push)
 
 All operational events. These appear on the manager portal and Compliance dashboard but never trigger phone notifications.

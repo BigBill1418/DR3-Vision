@@ -32,6 +32,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0022   | Fleet observability wire-in — GlitchTip, Loki, Tempo, Grafana, Prometheus, ntfy (supersedes T-018 deferral) | Accepted                                                        |
 | 0023   | Historical Bonus Data Import                                                                                | Accepted                                                        |
 | 0024   | All-sites manager (`all_sites` flag) — amends hard-rule #2 + ADR-0019.2 §1                                  | Accepted                                                        |
+| 0025   | Escalation & notification delivery hardening (ntfy retry + t4 archival-state exclusion; extends 0019.1, 0023) | Accepted                                                        |
 
 ## How to write a new ADR
 
