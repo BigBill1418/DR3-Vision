@@ -5,6 +5,40 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-09 — Resilience: retry ntfy publishes so a transient blip can't drop an alert
+
+`publishNtfy` (`src/lib/ntfy.ts`) now retries each delivery path with short
+backoff instead of taking a single shot at the primary and a single shot at the
+fallback. Previously one momentary network hiccup on CHAD-HQ would lose the
+alert entirely.
+
+**Why:** on the 2026-06-09 Period-13 go-live, the 09:00 AM PT (`t4`) bonus
+escalation correctly detected two periods and tried to page, but the publish was
+logged `dropped (primary+fallback failed)` — both the primary
+(`ntfy.barnardhq.com`) attempt and the immediately-following `ntfy.sh` fallback
+attempt failed within ~16 ms of each other (an instant connection error, not a
+5 s timeout — i.e. a transient egress blip). The helper had no retry, so for a
+`t4` deadline-missed alert — which has no later tick that day — the page was
+simply lost. (No impact on go-live day: the period had just *opened*, so there
+was no real deadline to miss. This hardens the path for real future deadlines.)
+
+**What changed:**
+- New `postWithRetry` wrapper. Primary does up to **3 attempts** (backoff
+  250 ms / 750 ms); fallback does up to **2 attempts** (backoff 500 ms). A
+  transient failure returns instantly, so a retry costs ≈ the backoff, not a
+  full timeout.
+- A shared **`PUBLISH_TOTAL_BUDGET_MS` (12 s)** wall-clock budget across all
+  attempts so a genuinely hung server can never block a caller far past it — the
+  pathological all-timeout case stays bounded.
+- Cooldown is still recorded on a retry-recovered success, so recovery can't
+  double-page. No change to *what* is published or to ADR-0036/0037 semantics
+  (topics, headers, cooldowns, the obscured fallback topic) — delivery
+  resilience only.
+- TDD: 3 new cases in `ntfy.test.ts` (transient-blip recovers as `sent` without
+  touching the fallback; `dropped` only after all 5 attempts fail; cooldown
+  recorded after a retried success). Existing fallback/no-fallback cases updated
+  for the new attempt counts. Suite 716 green; `tsc --noEmit` 0; eslint 0.
+
 ### 2026-06-09 — Observability: log denied Entra sign-ins (email + reason)
 
 `evaluateEntraSignIn` now emits a structured `log.warn` on every denial —

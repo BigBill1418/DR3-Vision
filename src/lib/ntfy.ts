@@ -67,6 +67,27 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const PRIMARY_TIMEOUT_MS = 5_000;
 const FALLBACK_TIMEOUT_MS = 5_000;
 
+// Retry backoff schedules (ADR-0037 resilience addendum, 2026-06-09).
+// A transient egress blip on CHAD-HQ takes out a single primary attempt
+// AND the fallback attempt fired milliseconds later — observed when the
+// t4 payroll-deadline-missed escalation dropped (both paths failed ~16ms
+// apart, far too fast to be 5s timeouts, i.e. instant connection errors).
+// A couple of fast retries with short backoff turn that miss into a
+// `sent`/`fallback-sent`. Because a transient failure returns instantly,
+// a retry costs roughly the backoff, not a full timeout.
+//
+// Array length = number of retries → PRIMARY does up to 3 attempts,
+// FALLBACK up to 2. Each value is the pause BEFORE the next attempt.
+const PRIMARY_RETRY_BACKOFF_MS: readonly number[] = [250, 750];
+const FALLBACK_RETRY_BACKOFF_MS: readonly number[] = [500];
+
+// Overall wall-clock budget across ALL attempts (primary + fallback).
+// Bounds the worst case when the server is genuinely hung (every attempt
+// times out) so a publish never blocks a caller far beyond this. A
+// fast-failing transient never approaches it; this only caps the
+// pathological all-timeout case.
+const PUBLISH_TOTAL_BUDGET_MS = 12_000;
+
 // ntfy body cap — server accepts more, but a runaway error message
 // shouldn't push a 1MB blob through the helper.
 const BODY_MAX_BYTES = 1024;
@@ -254,6 +275,42 @@ async function postWithTimeout(
   }
 }
 
+// Injectable sleep — production waits real time between retries; tests
+// swap in a no-op via `__testing.setSleep` so the retry paths run
+// instantly (no fake-timer plumbing needed for the backoff waits).
+let sleep: (ms: number) => Promise<void> = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * POST with bounded retries + backoff, stopping early if the overall
+ * publish budget (`deadline`, an absolute ms timestamp) would be
+ * exceeded by the next backoff wait. Returns true on the first success;
+ * false once the retry schedule or the time budget runs out.
+ *
+ * Failures from `postWithTimeout` are indistinguishable (non-2xx, thrown,
+ * or aborted all collapse to `false`), so we retry uniformly — a
+ * transient connection error fails fast and is cheap to retry; a genuine
+ * outage exhausts the schedule and the budget caps total latency.
+ */
+async function postWithRetry(
+  url: string,
+  body: string,
+  headers: Record<string, string>,
+  perAttemptTimeoutMs: number,
+  backoffMs: readonly number[],
+  deadline: number,
+): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    if (await postWithTimeout(url, body, headers, perAttemptTimeoutMs)) {
+      return true;
+    }
+    const backoff = backoffMs[attempt];
+    if (backoff === undefined) return false; // retry schedule exhausted
+    if (Date.now() + backoff >= deadline) return false; // budget exhausted
+    await sleep(backoff);
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Env reads — late-binding so test harnesses can stub `process.env`
 // ────────────────────────────────────────────────────────────────────────
@@ -319,11 +376,17 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     isFallback: false,
   });
 
-  const primaryOk = await postWithTimeout(
+  // Overall budget shared across every primary + fallback attempt so a
+  // hung server can't make this block far past PUBLISH_TOTAL_BUDGET_MS.
+  const deadline = now + PUBLISH_TOTAL_BUDGET_MS;
+
+  const primaryOk = await postWithRetry(
     `${baseUrl}/${args.topic}`,
     truncated,
     primaryHeaders,
     PRIMARY_TIMEOUT_MS,
+    PRIMARY_RETRY_BACKOFF_MS,
+    deadline,
   );
   if (primaryOk) {
     recordCooldown(fp, now, cooldownMs);
@@ -346,11 +409,13 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     publisherToken: undefined,
     isFallback: true,
   });
-  const fallbackOk = await postWithTimeout(
+  const fallbackOk = await postWithRetry(
     `${FALLBACK_BASE}/${fbTopic}`,
     truncated,
     fallbackHeaders,
     FALLBACK_TIMEOUT_MS,
+    FALLBACK_RETRY_BACKOFF_MS,
+    deadline,
   );
   if (fallbackOk) {
     recordCooldown(fp, now, cooldownMs);
@@ -443,4 +508,12 @@ export const __testing = {
   clearCooldownLedger,
   cooldownActive: (key: string) => cooldownActive(key, Date.now()),
   cooldownLedgerSize: () => cooldownLedger.size,
+  /** Swap the retry-backoff sleep for a no-op (or a spy) in tests. */
+  setSleep: (fn: (ms: number) => Promise<void>) => {
+    sleep = fn;
+  },
+  /** Restore the real setTimeout-based sleep. */
+  resetSleep: () => {
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  },
 };
