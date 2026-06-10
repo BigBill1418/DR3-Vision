@@ -45,6 +45,9 @@ function restoreEnv() {
 
 beforeEach(() => {
   __testing.clearCooldownLedger();
+  // Retry backoff sleeps run instantly in tests — we assert retry
+  // COUNTS and outcomes, not wall-clock timing.
+  __testing.setSleep(() => Promise.resolve());
   fetchCalls = [];
   fetchImpls = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(((url: string, init: RequestInit = {}) => {
@@ -58,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  __testing.resetSleep();
   restoreEnv();
 });
 
@@ -119,11 +123,13 @@ describe('publishNtfy — fallback on primary failure', () => {
     process.env['NTFY_PUBLISHER_TOKEN'] = 'tk_test_token_value';
   });
 
-  it('falls back to the obscured ntfy.sh topic with [FALLBACK] prefix and no Authorization', async () => {
+  it('falls back to the obscured ntfy.sh topic only after the primary retries are exhausted', async () => {
     fetchImpls = [
-      // Primary returns 502.
+      // Primary fails on all three attempts (1 initial + 2 retries).
       () => Promise.resolve(new Response('bad gateway', { status: 502 })),
-      // Fallback succeeds.
+      () => Promise.resolve(new Response('bad gateway', { status: 502 })),
+      () => Promise.resolve(new Response('bad gateway', { status: 502 })),
+      // Fallback succeeds on its first attempt.
       () => Promise.resolve(new Response(null, { status: 200 })),
     ];
     const result = await publishNtfy({
@@ -132,17 +138,46 @@ describe('publishNtfy — fallback on primary failure', () => {
       body: 'applied',
     });
     expect(result.outcome).toBe('fallback-sent');
-    expect(fetchCalls).toHaveLength(2);
-    expect(fetchCalls[0]!.url).toBe('https://ntfy.barnardhq.com/dr3-vision-system');
-    expect(fetchCalls[1]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
-    const fbHeaders = fetchCalls[1]!.init.headers as Record<string, string>;
+    expect(fetchCalls).toHaveLength(4);
+    // First three calls are the primary (with retries); fourth is the fallback.
+    expect(fetchCalls.slice(0, 3).map((c) => c.url)).toEqual([
+      'https://ntfy.barnardhq.com/dr3-vision-system',
+      'https://ntfy.barnardhq.com/dr3-vision-system',
+      'https://ntfy.barnardhq.com/dr3-vision-system',
+    ]);
+    expect(fetchCalls[3]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
+    const fbHeaders = fetchCalls[3]!.init.headers as Record<string, string>;
     expect(fbHeaders['X-Title']).toBe('[FALLBACK] [DR3-Vision] Migration applied 0001_init');
     expect(fbHeaders['Authorization']).toBeUndefined();
   });
 
-  it('returns dropped when both primary and fallback fail', async () => {
+  it('recovers a transient primary blip on retry without ever touching the fallback', async () => {
+    // The 2026-06-09 t4-escalation drop: the first attempt fails instantly
+    // (connection error), the retry succeeds. The alert must land as `sent`,
+    // not `dropped`, and the obscured fallback topic must never be hit.
+    fetchImpls = [
+      () => Promise.reject(new TypeError('fetch failed')),
+      () => Promise.resolve(new Response(null, { status: 200 })),
+    ];
+    const result = await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'URGENT: payroll deadline MISSED — Woodland Period 13',
+      body: 'intervene',
+    });
+    expect(result).toEqual({ ok: true, outcome: 'sent' });
+    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls.every((c) => c.url === 'https://ntfy.barnardhq.com/dr3-vision-system')).toBe(
+      true,
+    );
+  });
+
+  it('returns dropped only after every primary AND fallback attempt fails', async () => {
+    // 3 primary attempts + 2 fallback attempts = 5 failed fetches.
     fetchImpls = [
       () => Promise.reject(new TypeError('network')),
+      () => Promise.reject(new TypeError('network')),
+      () => Promise.reject(new TypeError('network')),
+      () => Promise.resolve(new Response(null, { status: 503 })),
       () => Promise.resolve(new Response(null, { status: 503 })),
     ];
     const result = await publishNtfy({
@@ -151,18 +186,47 @@ describe('publishNtfy — fallback on primary failure', () => {
       body: 'both down',
     });
     expect(result).toEqual({ ok: false, outcome: 'dropped' });
-    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls).toHaveLength(5);
+    expect(fetchCalls.slice(0, 3).every((c) => c.url.startsWith('https://ntfy.barnardhq.com'))).toBe(
+      true,
+    );
+    expect(fetchCalls.slice(3).every((c) => c.url.startsWith('https://ntfy.sh'))).toBe(true);
+  });
+
+  it('records a cooldown after a retry-recovered success so it does not double-page', async () => {
+    fetchImpls = [
+      () => Promise.reject(new TypeError('blip')),
+      () => Promise.resolve(new Response(null, { status: 200 })),
+    ];
+    const args = {
+      topic: 'dr3-vision-system',
+      title: 'Same',
+      body: 'a',
+      fingerprint: 'fp-retry',
+      cooldownMs: 60_000,
+    };
+    const first = await publishNtfy(args);
+    expect(first.outcome).toBe('sent');
+    const second = await publishNtfy({ ...args, body: 'b' });
+    expect(second.outcome).toBe('cooldown-suppressed');
   });
 
   it('returns dropped (no fallback attempted) when topic has no fallback registered', async () => {
-    fetchImpls = [() => Promise.resolve(new Response(null, { status: 502 }))];
+    // Primary exhausts its 3 attempts; topic isn't in the fallback map, so
+    // no ntfy.sh call is made.
+    fetchImpls = [
+      () => Promise.resolve(new Response(null, { status: 502 })),
+      () => Promise.resolve(new Response(null, { status: 502 })),
+      () => Promise.resolve(new Response(null, { status: 502 })),
+    ];
     const result = await publishNtfy({
       topic: 'unregistered-topic-name',
       title: 'X',
       body: 'y',
     });
     expect(result).toEqual({ ok: false, outcome: 'dropped' });
-    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls).toHaveLength(3);
+    expect(fetchCalls.every((c) => c.url.startsWith('https://ntfy.barnardhq.com'))).toBe(true);
   });
 });
 
