@@ -54,6 +54,14 @@ copy via static markup); extended `month-list.test.ts` (`facilitySigned` /
 pins the React 18 automatic JSX runtime so client components render to markup in
 tests (tsconfig `jsx: preserve` otherwise leaves no runtime).
 
+**Deploy verified live (2026-06-11 ~8:30 PM PDT / 03:30 UTC):** PR #21 merge
+`1edacc8` auto-deployed by swarmpilot_deployer to CHAD-HQ — clean warm-cache
+build (~9.5 min, under the 900s `compose_build_timeout` from noc-master
+ADR-0105), container recreated healthy, no manual rebuild needed. In-bundle
+verification: the new slot-neutral "Facility signed" label is present in the
+running `.next` output and the old `"Sign as Facility Manager (Janette)"`
+literal is absent.
+
 ### 2026-06-09 — Ops: DR3 deploy build timeout raised + first escalation-run verification scheduled
 
 Two operational follow-ups to the go-live-day escalation fixes (ADR-0025):
