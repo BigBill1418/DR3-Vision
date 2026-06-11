@@ -5,6 +5,55 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-11 — Fix: manager bonus UI shows the SITE's signers (no hardcoded Woodland names)
+
+The manager-facing bonus UI hardcoded the WOODLAND signature-chain names, so a
+**Eugene** pay period rendered **Janette Tomas / Morena Gomez** (the Woodland
+facility/ops signers) instead of Eugene's **Rick Albritton / Kelsey Ruhland**.
+Kelsey — reaching Eugene via the ADR-0024 `all_sites` flag — opened a Eugene
+report and saw the wrong signers. Ground truth (who signs which slot at which
+site) lives in the `bonus_signature_chains` data; the data layer was already
+site-scoped everywhere, and the **bonus-pdf page already resolved names from the
+chain correctly** — only these three presentation surfaces lagged. This violated
+CLAUDE.md **hard rule #2** (Eugene and Woodland are strictly separated; no
+per-site signer identity is baked into presentation). The hardcoded literals
+predate ADR-0024 — `all_sites` simply gave Kelsey the cross-site reach that
+exposed the latent defect.
+
+**Root cause:** three presentation surfaces carried `"Janette Tomas"` /
+`"Morena Gomez"` (and `Janette`/`Morena` short forms) as literals rather than
+resolving the period's signature chain.
+
+**Fix (presentation only — no data-layer or authority change):**
+
+- **`src/app/bonus/months/[id]/page.tsx`** — resolves the period's signers from
+  the chain via a new shared helper and passes the names to both signature cards
+  and the signature panel. "Awaiting signature" logic untouched.
+- **New `src/lib/bonus/signer-names.ts`** (`resolveSlotSignerNames`) — lifts the
+  exact chain-resolve-then-`user.findMany` pattern the bonus-pdf page already
+  uses into one unit-testable helper, so the page and panel share one
+  implementation. Falls back to the user UUID if a name is unresolved (same as
+  the PDF page).
+- **`src/app/bonus/months/[id]/SignaturePanel.tsx`** — module-level
+  `SLOT_LABEL` / `SLOT_ASSIGNEE` constants replaced with `facilityAssignee` /
+  `opsAssignee` props (chain-resolved by the page); labels, the "Sign on behalf
+  of …" link, and the override-reason placeholder now build from props.
+  Server-side signature authority (already chain-sourced) is untouched.
+- **`src/lib/bonus/month-list.ts` + `src/app/bonus/months/page.tsx`** — the list
+  view's `janetteSigned` / `morenaSigned` fields renamed to slot-neutral
+  `facilitySigned` / `opsSigned`, and the partial-signature label is now
+  slot-generic ("Facility signed" / "Ops signed") rather than a (wrong-for-
+  Eugene) signer name. The list intentionally does **not** resolve per-row chain
+  names (would N+1 the query); the detail page resolves identity.
+
+**Tests (+14, suite 720 → 734 green):** new `signer-names.test.ts` (Eugene →
+Rick/Kelsey, Woodland → Janette/Morena, no-leak, UUID fallback, single
+`user.findMany`); new `SignaturePanel.test.tsx` (site-aware labels + override
+copy via static markup); extended `month-list.test.ts` (`facilitySigned` /
+`opsSigned`, slot-neutral `signatureLabel`). `tsc` 0, ESLint 0. Vitest config
+pins the React 18 automatic JSX runtime so client components render to markup in
+tests (tsconfig `jsx: preserve` otherwise leaves no runtime).
+
 ### 2026-06-09 — Ops: DR3 deploy build timeout raised + first escalation-run verification scheduled
 
 Two operational follow-ups to the go-live-day escalation fixes (ADR-0025):
@@ -34,7 +83,7 @@ not live deadlines. On the **2026-06-09 go-live** this flagged **Period 12
 (eugene + woodland)**, both `historical_imported` (ADR-0023 spreadsheet loads,
 already paid in V1) and ending Mon Jun 8, as two missed payroll deadlines.
 
-**Fix:** `runDeadlineMissed` now uses an allowlist of the *live* pre-`paid`
+**Fix:** `runDeadlineMissed` now uses an allowlist of the _live_ pre-`paid`
 lifecycle states — `draft`, `pending_signatures`, `partially_signed`, `signed`
 (`T4_LIVE_DEADLINE_STATES` in `src/lib/bonus/escalation.ts`). The archival/terminal
 states — `paid` (success), `skipped` (pre-cutover empties), `historical_imported`
@@ -62,10 +111,11 @@ logged `dropped (primary+fallback failed)` — both the primary
 attempt failed within ~16 ms of each other (an instant connection error, not a
 5 s timeout — i.e. a transient egress blip). The helper had no retry, so for a
 `t4` deadline-missed alert — which has no later tick that day — the page was
-simply lost. (No impact on go-live day: the period had just *opened*, so there
+simply lost. (No impact on go-live day: the period had just _opened_, so there
 was no real deadline to miss. This hardens the path for real future deadlines.)
 
 **What changed:**
+
 - New `postWithRetry` wrapper. Primary does up to **3 attempts** (backoff
   250 ms / 750 ms); fallback does up to **2 attempts** (backoff 500 ms). A
   transient failure returns instantly, so a retry costs ≈ the backoff, not a
@@ -74,7 +124,7 @@ was no real deadline to miss. This hardens the path for real future deadlines.)
   attempts so a genuinely hung server can never block a caller far past it — the
   pathological all-timeout case stays bounded.
 - Cooldown is still recorded on a retry-recovered success, so recovery can't
-  double-page. No change to *what* is published or to ADR-0036/0037 semantics
+  double-page. No change to _what_ is published or to ADR-0036/0037 semantics
   (topics, headers, cooldowns, the obscured fallback topic) — delivery
   resilience only.
 - TDD: 3 new cases in `ntfy.test.ts` (transient-blip recovers as `sent` without
@@ -96,7 +146,6 @@ The logs ship to Loki via the existing pino → Alloy pipeline. TDD: 4 new cases
 `auth.signin-gate.test.ts` (logs each denial reason with the attempted email;
 silent on success).
 
-
 Janette Tomas (Woodland facility manager) could not sign in: her DR3 user row and
 the seed data had her surname misspelled **Thomas**, so the email/UPN Microsoft
 presents (`janette.tomas@svdp.us`) didn't match the seeded `janette.thomas@svdp.us`
@@ -106,7 +155,7 @@ presents (`janette.tomas@svdp.us`) didn't match the seeded `janette.thomas@svdp.
   `janette.tomas@svdp.us` / `Janette Tomas`. Her Woodland facility-signer slot
   followed automatically (the signature chain references her by user-id, not email).
 - **Source fixed** so a future re-seed can't reintroduce the typo (which, because
-  the seed upserts by email, would have created a *duplicate* wrong-Janette):
+  the seed upserts by email, would have created a _duplicate_ wrong-Janette):
   `prisma/seed/users.csv`, `prisma/seed/bonus_signature_chains.csv` (Woodland
   facility signer), and the historical-import alias map in `prisma/seed.mjs`.
 - **Name corrected** in the bonus month-detail signature card (`/bonus/months/[id]`),

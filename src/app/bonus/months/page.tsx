@@ -19,6 +19,7 @@ import { formatCents } from '@/lib/bonus/calculator';
 import {
   listBonusPayPeriods,
   parsePayPeriodFilter,
+  signatureLabel,
   type MonthFilter,
   type MonthListRow,
 } from '@/lib/bonus/month-list';
@@ -54,14 +55,6 @@ const STATE_BADGE: Record<MonthListRow['state'], string> = {
   skipped: 'bg-dr3-steel-light/10 text-dr3-mist/60',
   historical_imported: 'bg-dr3-steel-light/10 text-dr3-mist/60',
 };
-
-function signatureLabel(row: MonthListRow): string {
-  if (row.signatureStatus === 'complete') return 'Both signed';
-  if (row.signatureStatus === 'partial') {
-    return row.janetteSigned ? 'Janette signed' : 'Morena signed';
-  }
-  return 'Unsigned';
-}
 
 export default async function BonusMonthsListPage({
   searchParams,

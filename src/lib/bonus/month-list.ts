@@ -58,8 +58,16 @@ export interface MonthListRow {
   totalIsLocked: boolean;
   /** Signature progress (independent of the lifecycle state). */
   signatureStatus: SignatureStatus;
-  janetteSigned: boolean;
-  morenaSigned: boolean;
+  /**
+   * Whether the FACILITY slot is signed (from `facility_signed_by_user_id`).
+   * Slot-neutral by design — the natural signer's NAME is site-specific (chain-
+   * sourced) and is NOT resolved here; the list renders a slot-generic label
+   * ("Facility signed") to avoid baking a per-site identity into the list view
+   * (CLAUDE.md hard rule #2). Per-row chain lookups would N+1 the list.
+   */
+  facilitySigned: boolean;
+  /** Whether the OPS slot is signed (from `ops_signed_by_user_id`). */
+  opsSigned: boolean;
   /** True iff this month was produced by amending an earlier month (§6). */
   isAmendment: boolean;
   /** The prior month this one amends, if any — for the "view prior version" link. */
@@ -108,10 +116,28 @@ function monthLabel(d: Date): string {
   }).format(d);
 }
 
-function signatureStatus(janette: boolean, morena: boolean): SignatureStatus {
-  if (janette && morena) return 'complete';
-  if (janette || morena) return 'partial';
+function signatureStatus(facilitySigned: boolean, opsSigned: boolean): SignatureStatus {
+  if (facilitySigned && opsSigned) return 'complete';
+  if (facilitySigned || opsSigned) return 'partial';
   return 'none';
+}
+
+/**
+ * Slot-GENERIC signature label for the list view. Reports WHICH SLOT is signed,
+ * never WHO — the natural signer's name is site-specific (Janette/Morena at
+ * Woodland, Rick/Kelsey at Eugene) and lives in the signature chain. The list
+ * deliberately does not resolve per-row chain names (that would N+1 the query)
+ * and never hardcodes a per-site identity (CLAUDE.md hard rule #2). The detail
+ * page resolves the names.
+ */
+export function signatureLabel(
+  row: Pick<MonthListRow, 'signatureStatus' | 'facilitySigned'>,
+): string {
+  if (row.signatureStatus === 'complete') return 'Both signed';
+  if (row.signatureStatus === 'partial') {
+    return row.facilitySigned ? 'Facility signed' : 'Ops signed';
+  }
+  return 'Unsigned';
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -188,8 +214,8 @@ export async function listBonusPayPeriods(
 
   const rows: MonthListRow[] = [];
   for (const m of months) {
-    const janetteSigned = m.facility_signed_by_user_id !== null;
-    const morenaSigned = m.ops_signed_by_user_id !== null;
+    const facilitySigned = m.facility_signed_by_user_id !== null;
+    const opsSigned = m.ops_signed_by_user_id !== null;
     const payout = await payoutForMonth(siteId, m);
     rows.push({
       id: m.id,
@@ -198,9 +224,9 @@ export async function listBonusPayPeriods(
       state: m.state as BonusPayPeriodState,
       totalPayoutCents: payout.cents,
       totalIsLocked: payout.locked,
-      signatureStatus: signatureStatus(janetteSigned, morenaSigned),
-      janetteSigned,
-      morenaSigned,
+      signatureStatus: signatureStatus(facilitySigned, opsSigned),
+      facilitySigned,
+      opsSigned,
       isAmendment: m.amended_from_period_id !== null,
       amendedFromMonthId: m.amended_from_period_id ?? null,
     });
