@@ -7,6 +7,14 @@ import { defineConfig } from 'vitest/config';
 // the `// @vitest-environment jsdom` pragma.
 
 export default defineConfig({
+  // tsconfig sets `jsx: preserve` (Next compiles JSX itself); under Vitest's
+  // esbuild transform that leaves component .tsx files with no JSX runtime, so
+  // a client component using hooks throws "React is not defined" when rendered
+  // to markup in a test. Pin the React 18 automatic runtime for the test build
+  // — no `import React` needed at any call site, server or client component.
+  esbuild: {
+    jsx: 'automatic',
+  },
   test: {
     environment: 'node',
     globals: false,

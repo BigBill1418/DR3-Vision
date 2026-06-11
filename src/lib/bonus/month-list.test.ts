@@ -73,8 +73,8 @@ function addMonth(opts: {
   state?: string;
   site_id?: string;
   total_payout_cents?: number | null;
-  janette?: string | null;
-  morena?: string | null;
+  facility?: string | null;
+  ops?: string | null;
   amended_from?: string | null;
 }): MockMonth {
   const m: MockMonth = {
@@ -83,8 +83,8 @@ function addMonth(opts: {
     period_start: um(opts.year, opts.month0),
     state: opts.state ?? 'paid',
     total_payout_cents: opts.total_payout_cents ?? null,
-    facility_signed_by_user_id: opts.janette ?? null,
-    ops_signed_by_user_id: opts.morena ?? null,
+    facility_signed_by_user_id: opts.facility ?? null,
+    ops_signed_by_user_id: opts.ops ?? null,
     amended_from_period_id: opts.amended_from ?? null,
   };
   monthStore.set(m.id, m);
@@ -176,6 +176,7 @@ import {
   listBonusPayPeriods,
   parsePayPeriodFilter,
   payPeriodWindow,
+  signatureLabel,
   MONTH_FILTERS,
   type MonthFilter,
 } from '@/lib/bonus/month-list';
@@ -301,16 +302,24 @@ describe('listBonusPayPeriods — signature status', () => {
     addMonth({ year: 2026, month0: 5, state: 'pending_signatures' });
     const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('none');
-    expect(rows[0]!.janetteSigned).toBe(false);
-    expect(rows[0]!.morenaSigned).toBe(false);
+    expect(rows[0]!.facilitySigned).toBe(false);
+    expect(rows[0]!.opsSigned).toBe(false);
   });
 
-  it('partial when exactly one signer set', async () => {
-    addMonth({ year: 2026, month0: 5, state: 'partially_signed', janette: 'user-jan' });
+  it('partial (facility only) when the facility slot is signed', async () => {
+    addMonth({ year: 2026, month0: 5, state: 'partially_signed', facility: 'user-fac' });
     const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('partial');
-    expect(rows[0]!.janetteSigned).toBe(true);
-    expect(rows[0]!.morenaSigned).toBe(false);
+    expect(rows[0]!.facilitySigned).toBe(true);
+    expect(rows[0]!.opsSigned).toBe(false);
+  });
+
+  it('partial (ops only) when the ops slot is signed', async () => {
+    addMonth({ year: 2026, month0: 5, state: 'partially_signed', ops: 'user-ops' });
+    const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
+    expect(rows[0]!.signatureStatus).toBe('partial');
+    expect(rows[0]!.facilitySigned).toBe(false);
+    expect(rows[0]!.opsSigned).toBe(true);
   });
 
   it('complete when both signers set', async () => {
@@ -318,11 +327,36 @@ describe('listBonusPayPeriods — signature status', () => {
       year: 2026,
       month0: 5,
       state: 'signed',
-      janette: 'user-jan',
-      morena: 'user-mor',
+      facility: 'user-fac',
+      ops: 'user-ops',
     });
     const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.signatureStatus).toBe('complete');
+  });
+});
+
+describe('signatureLabel — slot-neutral, site-agnostic (hard rule #2)', () => {
+  it('reports "Both signed" when complete', () => {
+    expect(signatureLabel({ signatureStatus: 'complete', facilitySigned: true })).toBe(
+      'Both signed',
+    );
+  });
+
+  it('reports "Facility signed" (not a signer name) for a facility-only partial', () => {
+    const label = signatureLabel({ signatureStatus: 'partial', facilitySigned: true });
+    expect(label).toBe('Facility signed');
+    // The list never names the site-specific signer (Janette/Morena/Rick/Kelsey).
+    expect(label).not.toMatch(/Janette|Morena|Rick|Kelsey/);
+  });
+
+  it('reports "Ops signed" (not a signer name) for an ops-only partial', () => {
+    const label = signatureLabel({ signatureStatus: 'partial', facilitySigned: false });
+    expect(label).toBe('Ops signed');
+    expect(label).not.toMatch(/Janette|Morena|Rick|Kelsey/);
+  });
+
+  it('reports "Unsigned" when none', () => {
+    expect(signatureLabel({ signatureStatus: 'none', facilitySigned: false })).toBe('Unsigned');
   });
 });
 
@@ -334,8 +368,8 @@ describe('listBonusPayPeriods — amendment linkage (§6)', () => {
       month0: 4,
       state: 'signed',
       amended_from: prior.id,
-      janette: 'j',
-      morena: 'm',
+      facility: 'j',
+      ops: 'm',
     });
     const rows = await listBonusPayPeriods(WOODLAND, 'year', NOW);
     const amendment = rows.find((r) => r.isAmendment);
@@ -344,7 +378,7 @@ describe('listBonusPayPeriods — amendment linkage (§6)', () => {
   });
 
   it('non-amended months report isAmendment=false and null prior id', async () => {
-    addMonth({ year: 2026, month0: 5, state: 'paid', janette: 'j', morena: 'm' });
+    addMonth({ year: 2026, month0: 5, state: 'paid', facility: 'j', ops: 'm' });
     const rows = await listBonusPayPeriods(WOODLAND, 'current', NOW);
     expect(rows[0]!.isAmendment).toBe(false);
     expect(rows[0]!.amendedFromMonthId).toBeNull();

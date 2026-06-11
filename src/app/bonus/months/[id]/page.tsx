@@ -19,6 +19,7 @@ import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
 import { naturalSlotFor, canOverrideSlot } from '@/lib/bonus/signatures';
+import { resolveSlotSignerNames } from '@/lib/bonus/signer-names';
 import { SignaturePanel, type SignerSlot } from './SignaturePanel';
 import { AmendmentPanel, type AmendDayOption, type AmendEmployeeRow } from './AmendmentPanel';
 import { ReadOnlyGrid, type ReadOnlyGridDay, type ReadOnlyGridRow } from './ReadOnlyGrid';
@@ -151,6 +152,12 @@ export default async function BonusMonthDetailPage({
   }
   const rows = [...byEmployee.values()].sort((a, b) => a.name.localeCompare(b.name));
   const grandTotalCents = rows.reduce((s, r) => s + r.totalBonusCents, 0);
+
+  // Natural-signer display names are CHAIN-SOURCED for the period's SITE
+  // (CLAUDE.md hard rule #2) — Janette/Morena at Woodland, Rick/Kelsey at
+  // Eugene. Never hardcoded per site in presentation. Same resolution the
+  // bonus-pdf page performs.
+  const slotSigners = await resolveSlotSignerNames(month.site_id, prisma);
 
   const inSignatureState =
     month.state === 'pending_signatures' || month.state === 'partially_signed';
@@ -306,13 +313,13 @@ export default async function BonusMonthDetailPage({
           <div className="grid gap-4 sm:grid-cols-2">
             <SignatureSlotCard
               role="Facility Manager"
-              assigned="Janette Tomas"
+              assigned={slotSigners.facility}
               signerName={month.facility_signed_by?.name ?? null}
               signedAt={month.facility_signed_at}
             />
             <SignatureSlotCard
               role="Operations Manager"
-              assigned="Morena Gomez"
+              assigned={slotSigners.ops}
               signerName={month.ops_signed_by?.name ?? null}
               signedAt={month.ops_signed_at}
             />
@@ -323,6 +330,8 @@ export default async function BonusMonthDetailPage({
               <SignaturePanel
                 monthId={month.id}
                 viewerSlot={viewerSlot}
+                facilityAssignee={slotSigners.facility}
+                opsAssignee={slotSigners.ops}
                 facilitySigned={month.facility_signed_by_user_id !== null}
                 opsSigned={month.ops_signed_by_user_id !== null}
                 overridableSlots={overridableSlots}

@@ -26,6 +26,14 @@ interface Props {
   monthId: string;
   /** Which slot the current viewer fills (null = admin/no natural slot). */
   viewerSlot: SignerSlot;
+  /**
+   * Natural-signer display names for the period's SITE, resolved from the
+   * signature chain by the server (CLAUDE.md hard rule #2 — Janette/Morena at
+   * Woodland, Rick/Kelsey at Eugene). Drives slot labels + the "on behalf of"
+   * copy. Never hardcoded per site.
+   */
+  facilityAssignee: string;
+  opsAssignee: string;
   facilitySigned: boolean;
   opsSigned: boolean;
   /**
@@ -39,23 +47,25 @@ interface Props {
 
 const ATTESTATION = 'I certify the above bonus calculations are accurate and authorize payment.';
 
-const SLOT_LABEL: Record<'facility' | 'ops', string> = {
-  facility: 'Sign as Facility Manager (Janette)',
-  ops: 'Sign as Operations Manager (Morena)',
-};
-
-const SLOT_ASSIGNEE: Record<'facility' | 'ops', string> = {
-  facility: 'Janette',
-  ops: 'Morena',
-};
-
 export function SignaturePanel({
   monthId,
   viewerSlot,
+  facilityAssignee,
+  opsAssignee,
   facilitySigned,
   opsSigned,
   overridableSlots = [],
 }: Props) {
+  // Slot labels + "on behalf of" copy are built from the SITE's chain-resolved
+  // signer names (props), never hardcoded per site (CLAUDE.md hard rule #2).
+  const slotAssignee: Record<'facility' | 'ops', string> = {
+    facility: facilityAssignee,
+    ops: opsAssignee,
+  };
+  const slotLabel: Record<'facility' | 'ops', string> = {
+    facility: `Sign as Facility Manager (${facilityAssignee})`,
+    ops: `Sign as Operations Manager (${opsAssignee})`,
+  };
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -150,7 +160,7 @@ export function SignaturePanel({
           onClick={openNatural}
           className="self-start rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition hover:bg-dr3-cyan-bright focus:outline-none focus:ring-2 focus:ring-dr3-cyan/70"
         >
-          {SLOT_LABEL[viewerSlot!]}
+          {slotLabel[viewerSlot!]}
         </button>
       )}
 
@@ -161,7 +171,7 @@ export function SignaturePanel({
           onClick={() => openOverride(slot)}
           className="self-start text-sm text-dr3-mist-dim underline underline-offset-4 transition hover:text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan/70"
         >
-          Sign on behalf of {SLOT_ASSIGNEE[slot]}
+          Sign on behalf of {slotAssignee[slot]}
         </button>
       ))}
 
@@ -175,7 +185,7 @@ export function SignaturePanel({
           <div className="w-full max-w-md rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-6 text-dr3-mist shadow-xl">
             <h2 className="text-lg font-bold">
               {isOverride
-                ? `Sign on behalf of ${SLOT_ASSIGNEE[activeSlot]}`
+                ? `Sign on behalf of ${slotAssignee[activeSlot]}`
                 : 'Confirm your signature'}
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-dr3-mist-dim">{ATTESTATION}</p>
@@ -183,7 +193,7 @@ export function SignaturePanel({
             {isOverride && (
               <div className="mt-4">
                 <label htmlFor="override-reason" className="block text-sm font-medium">
-                  Reason for signing on behalf of {SLOT_ASSIGNEE[activeSlot]}
+                  Reason for signing on behalf of {slotAssignee[activeSlot]}
                   <span className="text-red-400"> *</span>
                 </label>
                 <textarea
@@ -192,7 +202,7 @@ export function SignaturePanel({
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   rows={3}
-                  placeholder="e.g. Janette is on leave this week"
+                  placeholder={`e.g. ${slotAssignee[activeSlot]} is on leave this week`}
                   className="mt-1 w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:border-dr3-cyan focus:outline-none focus:ring-1 focus:ring-dr3-cyan"
                 />
               </div>
