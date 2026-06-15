@@ -5,6 +5,17 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-15 — Added: `employee_number` on bonus processors (ADR-0026)
+
+New nullable `bonus_employees.employee_number` column + `(site_id,
+employee_number)` index. Migration `20260615_bonus_employee_number` backfills the
+21 legacy DR3 Woodland rows whose display name carried a trailing 4-digit employee
+number, strips the number out of `full_name`, and records the original name in
+`previous_names` (`reason: employee_number_extracted`). Idempotent;
+behavior-neutral (no UI consumes the column yet). Per-site uniqueness enforced at
+the app layer, not the DB. Verified against production 2026-06-15 (21/107 rows;
+one soft-deleted row included).
+
 ### 2026-06-11 — Fix: manager bonus UI shows the SITE's signers (no hardcoded Woodland names)
 
 The manager-facing bonus UI hardcoded the WOODLAND signature-chain names, so a
