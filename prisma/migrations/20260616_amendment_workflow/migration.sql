@@ -14,24 +14,27 @@ CREATE TYPE "BonusAmendmentChangeType" AS ENUM (
 );
 
 CREATE TABLE "bonus_amendment_requests" (
-  "id"                          UUID NOT NULL DEFAULT gen_random_uuid(),
-  "bonus_pay_period_id"         UUID NOT NULL,
-  "site_id"                     UUID NOT NULL,
+  -- NOTE: id/FK columns are TEXT, not UUID. This database stores all primary
+  -- keys as TEXT (Prisma `String @default(uuid())` → text), so UUID-typed FK
+  -- columns are incompatible with the referenced TEXT ids (fixed 2026-06-16).
+  "id"                          TEXT NOT NULL,
+  "bonus_pay_period_id"         TEXT NOT NULL,
+  "site_id"                     TEXT NOT NULL,
   "target_entry_date"           DATE NOT NULL,
-  "bonus_employee_id"           UUID NOT NULL,
+  "bonus_employee_id"           TEXT NOT NULL,
   "change_type"                 "BonusAmendmentChangeType" NOT NULL,
   "old_value"                   JSONB,
   "new_value"                   JSONB NOT NULL,
   "justification"               TEXT NOT NULL,
-  "requested_by_user_id"        UUID NOT NULL,
+  "requested_by_user_id"        TEXT NOT NULL,
   "requested_at"                TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "state"                       "BonusAmendmentRequestState" NOT NULL DEFAULT 'pending',
-  "expected_approver_user_id"   UUID NOT NULL,
+  "expected_approver_user_id"   TEXT NOT NULL,
   "bill_pinged_at"              TIMESTAMP(3),
-  "reviewed_by_user_id"         UUID,
+  "reviewed_by_user_id"         TEXT,
   "reviewed_at"                 TIMESTAMP(3),
   "decision_notes"              TEXT,
-  "applied_audit_id"            UUID,
+  "applied_audit_id"            TEXT,
   "created_at"                  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at"                  TIMESTAMP(3) NOT NULL,
 

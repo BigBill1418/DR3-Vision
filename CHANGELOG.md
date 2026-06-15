@@ -5,6 +5,23 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-16 — Fix: amendment-workflow migration used UUID columns against a TEXT-id schema
+
+The Sprint 4 migration `20260616_amendment_workflow` (ADR-0028) declared every
+id/FK column as `UUID`, but this database stores all primary keys as `TEXT`
+(Prisma `String @default(uuid())` → `text`). On deploy the migration failed at
+`bonus_amendment_requests_period_fk` (Postgres 42804: "Key columns
+bonus_pay_period_id and id are of incompatible types: uuid and text"), which
+(a) blocked the deploy's `migrate deploy` step and (b) left the app container
+unable to start. The CI gate (tsc/eslint/vitest/`next build`) never executes the
+migration against a real Postgres, so it passed while the migration was broken.
+Fix: all id/FK columns in `migration.sql` are now `TEXT` (and the
+`gen_random_uuid()` default removed — ids are generated client-side by Prisma,
+matching every other table). Recovered on prod by cleaning the partial state +
+re-running the corrected migration; the table, both enums, and all existing data
+verified intact. The Prisma schema (`String`) was already correct; only the raw
+`migration.sql` was wrong.
+
 ### 2026-06-16 — Added: prior-day bonus amendment workflow + manager date picker + bi-site EOD check (ADR-0028)
 
 Morena Gomez asked (2026-06-15) what the correct process is to fix a prior day's
