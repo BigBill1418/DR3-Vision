@@ -5,6 +5,19 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-15 — Fix: bonus daily-entry grid now repopulates when the admin changes the date
+
+Picking a different business day in the admin date picker left the grid showing
+the **previous** day's counts (or blanks) until a manual page reload. Root cause:
+`DailyEntryGrid` seeds its input state from `rows` in the `useState` initializer,
+which runs once per mount; client-side date navigation (`router.push`) passes new
+`rows` but React reuses the same instance, so the seed never re-ran. Fix: a
+`key={entryDate}` on the grid in `src/app/bonus/page.tsx` forces a remount on date
+change, re-seeding from the new day's rows. Save/`router.refresh()` is unaffected
+(same date → same key → no remount, in-progress edits preserved). New
+`DailyEntryGrid.test.tsx` (+3) pins the seed-on-mount contract and documents why
+the key is required. Suite 762 → 765 green.
+
 ### 2026-06-15 — Added: PWA "update available — tap to reload" prompt (ADR-0027)
 
 An installed, always-open PWA never reloads on its own, so after a deploy it
