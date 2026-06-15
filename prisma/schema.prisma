@@ -667,6 +667,12 @@ model BonusEmployee {
   full_name      String
   previous_names Json? // [{ name: "...", changed_at: "..." }, ...]
 
+  // Legacy roster employee number extracted from full_name (ADR-0026).
+  // Nullable: only the 21 imported DR3 Woodland legacy rows carry one;
+  // production-created processors have none. Uniqueness is enforced
+  // per-site at the application layer, NOT in the DB — see ADR-0026.
+  employee_number String?
+
   is_active Boolean @default(true)
 
   // Optional link to a system user — most processors are NOT system users
@@ -682,6 +688,7 @@ model BonusEmployee {
   aliases       BonusEmployeeAlias[]
 
   @@index([site_id, is_active])
+  @@index([site_id, employee_number])
   @@map("bonus_employees")
 }
 
