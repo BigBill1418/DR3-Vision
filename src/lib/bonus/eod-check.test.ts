@@ -57,6 +57,7 @@ describe('evaluateEod', () => {
   it('does not alert when every active employee has an entry today', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
+      siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B, EMP_C],
       enteredEmployeeIds: new Set(['emp-a', 'emp-b', 'emp-c']),
       holidayIsoDates: new Set(),
@@ -69,6 +70,7 @@ describe('evaluateEod', () => {
   it('alerts on a workday when some employees are missing entries', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
+      siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B, EMP_C],
       enteredEmployeeIds: new Set(['emp-a']),
       holidayIsoDates: new Set(),
@@ -82,6 +84,7 @@ describe('evaluateEod', () => {
   it('does not alert on a weekend even when entries are missing', () => {
     const res = evaluateEod({
       now: SAT_5PM_PT,
+      siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B],
       enteredEmployeeIds: new Set(),
       holidayIsoDates: new Set(),
@@ -93,6 +96,7 @@ describe('evaluateEod', () => {
   it('does not alert on a site holiday even when entries are missing', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
+      siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B],
       enteredEmployeeIds: new Set(),
       holidayIsoDates: new Set(['2026-09-14']),
@@ -104,6 +108,7 @@ describe('evaluateEod', () => {
   it('does not alert when there are no active employees (nothing to miss)', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
+      siteCode: 'woodland',
       activeEmployees: [],
       enteredEmployeeIds: new Set(),
       holidayIsoDates: new Set(),
@@ -112,13 +117,65 @@ describe('evaluateEod', () => {
     expect(res.missingCount).toBe(0);
     expect(res.skipReason).toBe('no_active_employees');
   });
+
+  // ADR-0028: the check is bi-site. An Eugene-context dataset alerts with an
+  // Eugene-scoped fingerprint, never colliding with the Woodland day.
+  it('alerts for an Eugene-context dataset with an Eugene-scoped fingerprint', () => {
+    const res = evaluateEod({
+      now: MON_5PM_PT,
+      siteCode: 'eugene',
+      activeEmployees: [EMP_A, EMP_B],
+      enteredEmployeeIds: new Set(['emp-a']),
+      holidayIsoDates: new Set(),
+    });
+    expect(res.shouldAlert).toBe(true);
+    expect(res.missingCount).toBe(1);
+    expect(res.fingerprint).toBe('bonus-entry-missing:eugene:2026-09-14');
+  });
+
+  // ADR-0028: two simultaneous sites yield independent decisions — one can alert
+  // while the other is clean, each with its own site-scoped fingerprint.
+  it('yields independent decisions for two sites on the same Pacific day', () => {
+    const woodland = evaluateEod({
+      now: MON_5PM_PT,
+      siteCode: 'woodland',
+      activeEmployees: [EMP_A, EMP_B],
+      enteredEmployeeIds: new Set(['emp-a', 'emp-b']), // all entered
+      holidayIsoDates: new Set(),
+    });
+    const eugene = evaluateEod({
+      now: MON_5PM_PT,
+      siteCode: 'eugene',
+      activeEmployees: [EMP_A, EMP_B, EMP_C],
+      enteredEmployeeIds: new Set(['emp-a']), // two missing
+      holidayIsoDates: new Set(),
+    });
+    expect(woodland.shouldAlert).toBe(false);
+    expect(woodland.skipReason).toBe('all_entered');
+    expect(eugene.shouldAlert).toBe(true);
+    expect(eugene.missingCount).toBe(2);
+    expect(woodland.fingerprint).not.toBe(eugene.fingerprint);
+    expect(eugene.fingerprint).toBe('bonus-entry-missing:eugene:2026-09-14');
+  });
 });
 
 describe('missingFingerprint', () => {
   it('is stable, site-scoped, and date-scoped', () => {
-    expect(missingFingerprint('2026-09-14')).toBe('bonus-entry-missing:woodland:2026-09-14');
+    expect(missingFingerprint('woodland', '2026-06-16')).toBe(
+      'bonus-entry-missing:woodland:2026-06-16',
+    );
+    expect(missingFingerprint('eugene', '2026-06-16')).toBe(
+      'bonus-entry-missing:eugene:2026-06-16',
+    );
     // A different day yields a different fingerprint — so a late entry the
     // next morning never collides with (and thus never un-sends) today's.
-    expect(missingFingerprint('2026-09-15')).not.toBe(missingFingerprint('2026-09-14'));
+    expect(missingFingerprint('woodland', '2026-09-15')).not.toBe(
+      missingFingerprint('woodland', '2026-09-14'),
+    );
+    // A different SITE yields a different fingerprint on the same day — Woodland
+    // and Eugene alerts are independent (bi-site, ADR-0028).
+    expect(missingFingerprint('woodland', '2026-06-16')).not.toBe(
+      missingFingerprint('eugene', '2026-06-16'),
+    );
   });
 });

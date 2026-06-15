@@ -35,6 +35,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0025   | Escalation & notification delivery hardening (ntfy retry + t4 archival-state exclusion; extends 0019.1, 0023) | Accepted                                                        |
 | 0026   | Extract legacy employee numbers from `bonus_employees.full_name` (extends 0019, 0023)                         | Accepted                                                        |
 | 0027   | PWA user-prompted update (waiting-SW + tap-to-reload; supersedes the deferred-prompt note in 0006)            | Accepted                                                        |
+| 0028   | Bonus daily-entry prior-day amendment workflow (four-eyes, soft-control; extends 0019/0019.1/0019.2/0024)     | Accepted                                                        |
 
 ## How to write a new ADR
 

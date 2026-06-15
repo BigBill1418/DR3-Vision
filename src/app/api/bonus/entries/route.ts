@@ -104,6 +104,7 @@ export async function POST(req: Request) {
   try {
     result = await upsertDailyEntries(ctx.siteId, date, inputs, {
       actorUserId: ctx.userId,
+      isAdmin: ctx.isAdmin,
       ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
       userAgent: req.headers.get('user-agent') ?? null,
     });
@@ -120,8 +121,18 @@ export async function POST(req: Request) {
     throw e;
   }
 
-  if (result.ok) {
+  if (result.ok === true) {
     return NextResponse.json({ monthId: result.monthId, entries: result.entries }, { status: 200 });
+  }
+
+  // ADR-0028: a prior-day count change by a non-admin manager routes through the
+  // four-eyes amendment workflow instead of writing directly. Surface a 409 with
+  // the pending payload so the client can pivot to the Request Edit modal.
+  if (result.ok === 'requires_amendment') {
+    return NextResponse.json(
+      { error: 'requires_amendment', monthId: result.monthId, pending: result.pending },
+      { status: 409 },
+    );
   }
 
   switch (result.reason) {

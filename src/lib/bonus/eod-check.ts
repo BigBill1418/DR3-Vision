@@ -48,11 +48,17 @@ export interface PacificDateParts {
 export interface EvaluateEodArgs {
   /** The run instant (e.g. `new Date()` in the cron). */
   now: Date;
-  /** Active (`is_active = true`, not soft-deleted) Woodland employees. */
+  /**
+   * Site code the decision covers (`woodland` | `eugene`). Threaded through so
+   * the alert fingerprint is site-scoped (ADR-0028 bi-site EOD check) — the
+   * check is no longer Woodland-only.
+   */
+  siteCode: string;
+  /** Active (`is_active = true`, not soft-deleted) employees at the site. */
   activeEmployees: readonly ActiveEmployee[];
   /** Employee ids that already have a daily entry for the Pacific day. */
   enteredEmployeeIds: ReadonlySet<string>;
-  /** `YYYY-MM-DD` strings of Woodland site holidays. */
+  /** `YYYY-MM-DD` strings of the site's holidays. */
   holidayIsoDates: ReadonlySet<string>;
 }
 
@@ -72,13 +78,13 @@ export interface EodDecision {
   skipReason?: EodSkipReason;
 }
 
-// The only site this check covers (ADR-0019 §2 is Woodland-scoped). Kept as
-// a constant so the fingerprint shape stays consistent with the cron.
-const SITE_CODE = 'woodland';
-
-/** ntfy fingerprint for the missing-entries alert on a given Pacific day. */
-export function missingFingerprint(dateIso: string): string {
-  return `bonus-entry-missing:${SITE_CODE}:${dateIso}`;
+/**
+ * ntfy fingerprint for the missing-entries alert on a given Pacific day, scoped
+ * to the site (ADR-0028 — the check is bi-site; the cron passes the site code
+ * per-iteration so Woodland and Eugene alerts never collide).
+ */
+export function missingFingerprint(siteCode: string, dateIso: string): string {
+  return `bonus-entry-missing:${siteCode}:${dateIso}`;
 }
 
 /**
@@ -111,7 +117,7 @@ export function evaluateEod(args: EvaluateEodArgs): EodDecision {
   const base = {
     dateIso: parts.iso,
     dateLabel: parts.label,
-    fingerprint: missingFingerprint(parts.iso),
+    fingerprint: missingFingerprint(args.siteCode, parts.iso),
   };
 
   if (parts.isWeekend) {

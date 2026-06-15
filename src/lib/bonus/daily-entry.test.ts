@@ -10,7 +10,7 @@
 //   - note field never changes bonus math
 //   - active rule is resolved from processor_bonus_rules (never hardcoded)
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Prisma } from '@prisma/client';
 
 // T-330: mattress_count is a Decimal(5,1) column — the real Prisma client coerces
@@ -348,6 +348,18 @@ vi.mock('@/lib/prisma', () => {
 
 beforeEach(() => {
   reset();
+  // Pin the clock so the Pacific calendar "today" IS the test's TODAY key
+  // (2026-06-05). ADR-0028's amendment router (`shouldRequireAmendment`) keys a
+  // direct-vs-amendment decision off `appToday()` vs the entry date; these
+  // data-layer tests exercise SAME-DAY writes, so "today" must equal TODAY or
+  // they would (correctly) route to the amendment workflow. 12:00Z = 05:00 PDT,
+  // unambiguously the 2026-06-05 Pacific day.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-06-05T12:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function actor(id: string) {
@@ -449,7 +461,7 @@ describe('upsertDailyEntries — persistence + actor stamping', () => {
       actor('user-morena'),
     );
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (res.ok !== true) return;
     expect(res.entries[0]!.entered_by_user_id).toBe('user-morena');
     expect(res.entries[0]!.mattress_count).toBe(60);
 
@@ -474,7 +486,7 @@ describe('upsertDailyEntries — persistence + actor stamping', () => {
       actor('user-bill'),
     );
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (res.ok !== true) return;
     expect(res.entries[0]!.entered_by_user_id).toBe('user-bill');
     expect(res.entries[0]!.mattress_count).toBe(80);
 
@@ -568,7 +580,7 @@ describe('upsertDailyEntries — T-330 decimal contract', () => {
       actor('user-janette'),
     );
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (res.ok !== true) return;
     // Persisted as the exact decimal, not floored/rounded at the write boundary.
     expect(res.entries[0]!.mattress_count).toBe(23.5);
 
