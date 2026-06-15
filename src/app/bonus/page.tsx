@@ -53,7 +53,7 @@ function payPeriodRange(start: Date, end: Date): string {
   return `${md(start)}, ${start.getUTCFullYear()} – ${md(end)}, ${year}`;
 }
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
-import { AdminDatePicker } from './AdminDatePicker';
+import { BonusDatePicker } from './BonusDatePicker';
 import { CloseMonthButton } from './CloseMonthButton';
 import { SitePicker } from './SitePicker';
 
@@ -62,18 +62,30 @@ export const dynamic = 'force-dynamic';
 type SearchParams = Promise<{ date?: string; site?: string }>;
 
 /**
- * Resolve the business day this page edits. Default is Pacific "today". An admin
- * (Bill) may override it via ?date=YYYY-MM-DD to backfill any prior day; the
- * picker is admin-only and the write is re-checked server-side in the API. Any
- * malformed or non-admin override falls back to today.
+ * Resolve the business day this page edits. Default is Pacific "today".
+ *
+ * ADR-0028: the date picker is now visible to all managers, not just admins.
+ * A manager may navigate to any prior day WITHIN the current draft period
+ * (`>= periodStart`, `<= today`); an admin (Bill) is unconstrained and may pick
+ * any prior day (including days in closed periods, for the admin escape valve).
+ * A future day, a malformed string, or a manager going before the period start
+ * all fall back to today. The write side is re-checked server-side either way
+ * (the amendment workflow gates a manager's prior-day count change; the entries
+ * API re-checks admin for any non-today direct write) — this is defense in depth.
  */
-function resolveEntryDate(raw: string | undefined, isAdmin: boolean): Date {
-  if (!isAdmin || !raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return appToday();
+function resolveEntryDate(raw: string | undefined, isAdmin: boolean, periodStart: Date): Date {
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return appToday();
+  let parsed: Date;
   try {
-    return dayKeyUTCFromISO(raw);
+    parsed = dayKeyUTCFromISO(raw);
   } catch {
     return appToday();
   }
+  const today = appToday();
+  if (parsed.getTime() > today.getTime()) return appToday();
+  if (isAdmin) return parsed;
+  if (parsed.getTime() < periodStart.getTime()) return appToday();
+  return parsed;
 }
 
 export default async function BonusDailyEntryPage({
@@ -112,17 +124,32 @@ export default async function BonusDailyEntryPage({
     return <ForbiddenPage />;
   }
 
-  const entryDate = resolveEntryDate(sp.date, gate.ctx.isAdmin);
+  // ADR-0028: resolve the CURRENT period first (today's grid) so we know the
+  // period_start bound, then resolve the requested entry date with that bound
+  // (managers are constrained to the current draft window; admins are not), and
+  // only re-fetch the grid if the resolved day differs from today.
   let grid;
   try {
-    grid = await getDailyGrid(gate.ctx.siteId, entryDate);
+    grid = await getDailyGrid(gate.ctx.siteId, appToday());
   } catch (e) {
-    // No seeded pay period covers the chosen day (ADR-0019.1). Render a clean
-    // surface instead of a 500 — this is an out-of-range calendar day.
     if (e instanceof NoOpenPayPeriodError) {
-      return <NoOpenPeriodPage date={dayISO(entryDate)} isAdmin={gate.ctx.isAdmin} />;
+      return <NoOpenPeriodPage date={dayISO(appToday())} isAdmin={gate.ctx.isAdmin} />;
     }
     throw e;
+  }
+
+  const entryDate = resolveEntryDate(sp.date, gate.ctx.isAdmin, grid.periodStart);
+  if (entryDate.getTime() !== grid.entryDate.getTime()) {
+    try {
+      grid = await getDailyGrid(gate.ctx.siteId, entryDate);
+    } catch (e) {
+      // No seeded pay period covers the chosen day (ADR-0019.1) — only reachable
+      // for an admin, who alone can resolve outside the current period window.
+      if (e instanceof NoOpenPayPeriodError) {
+        return <NoOpenPeriodPage date={dayISO(entryDate)} isAdmin={gate.ctx.isAdmin} />;
+      }
+      throw e;
+    }
   }
 
   const rows: GridRowProps[] = grid.rows.map((r) => ({
@@ -154,9 +181,12 @@ export default async function BonusDailyEntryPage({
             Counts drive each processor&rsquo;s daily bonus; the note is optional and never affects
             the math.
           </p>
-          {gate.ctx.isAdmin ? (
-            <AdminDatePicker selected={dayISO(grid.entryDate)} today={appTodayISO()} />
-          ) : null}
+          <BonusDatePicker
+            selected={dayISO(grid.entryDate)}
+            today={appTodayISO()}
+            constrained={!gate.ctx.isAdmin}
+            periodStart={dayISO(grid.periodStart)}
+          />
           {/* Primary navigation for the bonus area — surfaced as buttons so the
               employee roster and the pay-period history are easy to find from the
               daily-entry screen (operator feedback, 2026-06-09). */}

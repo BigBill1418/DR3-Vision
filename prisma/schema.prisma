@@ -78,6 +78,9 @@ model Site {
   bonus_pay_periods     BonusPayPeriod[]
   bonus_signature_chain BonusSignatureChain?
 
+  // Bonus amendment workflow (ADR-0028)
+  bonus_amendment_requests BonusAmendmentRequest[]
+
   @@map("sites")
 }
 
@@ -189,6 +192,11 @@ model User {
   bonus_signature_chains_as_ops           BonusSignatureChain[] @relation("BonusOpsSignerConfig")
   bonus_signature_chains_as_auto_override BonusSignatureChain[] @relation("BonusAutoOverrideActor")
   bonus_imports_authored                  BonusImport[]
+
+  // Bonus amendment workflow (ADR-0028)
+  bonus_amendments_requested  BonusAmendmentRequest[] @relation("BonusAmendmentRequester")
+  bonus_amendments_to_approve BonusAmendmentRequest[] @relation("BonusAmendmentExpectedApprover")
+  bonus_amendments_reviewed   BonusAmendmentRequest[] @relation("BonusAmendmentReviewer")
 
   @@map("users")
 }
@@ -619,6 +627,9 @@ model AuditLog {
   user_agent    String?
   created_at    DateTime    @default(now())
 
+  // Bonus amendment workflow (ADR-0028)
+  bonus_amendments_applied BonusAmendmentRequest[] @relation("BonusAmendmentAppliedAudit")
+
   @@index([table_name, row_id])
   @@index([actor_user_id, created_at])
   @@index([action, created_at])
@@ -686,6 +697,9 @@ model BonusEmployee {
 
   daily_entries BonusDailyEntry[]
   aliases       BonusEmployeeAlias[]
+
+  // Bonus amendment workflow (ADR-0028)
+  amendment_requests BonusAmendmentRequest[]
 
   @@index([site_id, is_active])
   @@index([site_id, employee_number])
@@ -801,6 +815,9 @@ model BonusPayPeriod {
 
   daily_entries BonusDailyEntry[]
 
+  // Bonus amendment workflow (ADR-0028)
+  amendment_requests BonusAmendmentRequest[]
+
   @@unique([site_id, period_start]) // semantically same as old (site_id, month_start)
   @@unique([site_id, period_year, period_number]) // NEW — fast canonical period lookup
   @@index([site_id, state])
@@ -883,4 +900,69 @@ model BonusEmployeeAlias {
   @@index([canonical_employee_id])
   @@index([variant_name])
   @@map("bonus_employee_aliases")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Bonus daily-entry amendment workflow (ADR-0028).
+// Four-eyes approval gate for prior-day edits within the current draft period.
+// ────────────────────────────────────────────────────────────────────────
+
+enum BonusAmendmentRequestState {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum BonusAmendmentChangeType {
+  update
+  insert
+}
+
+model BonusAmendmentRequest {
+  id String @id @default(uuid())
+
+  bonus_pay_period_id String
+  bonus_pay_period    BonusPayPeriod @relation(fields: [bonus_pay_period_id], references: [id])
+
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  target_entry_date DateTime @db.Date
+  bonus_employee_id String
+  bonus_employee    BonusEmployee @relation(fields: [bonus_employee_id], references: [id])
+
+  change_type   BonusAmendmentChangeType
+  old_value     Json?
+  new_value     Json
+  justification String
+
+  requested_by_user_id String
+  requested_by         User     @relation("BonusAmendmentRequester", fields: [requested_by_user_id], references: [id])
+  requested_at         DateTime @default(now())
+
+  state BonusAmendmentRequestState @default(pending)
+
+  expected_approver_user_id String
+  expected_approver         User   @relation("BonusAmendmentExpectedApprover", fields: [expected_approver_user_id], references: [id])
+
+  bill_pinged_at DateTime?
+
+  reviewed_by_user_id String?
+  reviewed_by         User?     @relation("BonusAmendmentReviewer", fields: [reviewed_by_user_id], references: [id])
+  reviewed_at         DateTime?
+  decision_notes      String?
+
+  applied_audit_id String?
+  applied_audit    AuditLog? @relation("BonusAmendmentAppliedAudit", fields: [applied_audit_id], references: [id])
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([bonus_pay_period_id])
+  @@index([site_id, state])
+  @@index([expected_approver_user_id, state])
+  @@index([requested_by_user_id])
+  @@index([bonus_employee_id, target_entry_date])
+  @@map("bonus_amendment_requests")
 }

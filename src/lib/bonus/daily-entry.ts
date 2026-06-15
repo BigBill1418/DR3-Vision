@@ -32,6 +32,7 @@ import {
   type BonusPayPeriodState,
 } from '@/lib/bonus/state-machine';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import { shouldRequireAmendment } from '@/lib/bonus/amendment-requests';
 
 // ────────────────────────────────────────────────────────────────────
 // Date helper (UTC, zone-safe for @db.Date)
@@ -258,6 +259,7 @@ interface ActorContext {
   actorLabel?: string | null;
   ip: string | null;
   userAgent: string | null;
+  isAdmin?: boolean;
 }
 
 export interface UpsertedEntry {
@@ -271,7 +273,17 @@ export interface UpsertedEntry {
 export type UpsertDailyEntriesResult =
   | { ok: true; monthId: string; entries: UpsertedEntry[] }
   | { ok: false; reason: 'month_locked'; state: BonusPayPeriodState }
-  | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' | 'unknown_employee' };
+  | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' | 'unknown_employee' }
+  | {
+      ok: 'requires_amendment';
+      monthId: string;
+      pending: Array<{
+        bonus_employee_id: string;
+        change_type: 'update' | 'insert';
+        existing: { mattress_count: number; note: string | null } | null;
+        proposed: { mattress_count: number; note: string | null };
+      }>;
+    };
 
 const MAX_MATTRESS_COUNT = 999;
 
@@ -375,6 +387,53 @@ export async function upsertDailyEntries(
     if (!validIds.has(i.bonus_employee_id)) {
       return { ok: false, reason: 'employee_not_in_site' };
     }
+  }
+
+  // ADR-0028: route prior-day count changes through the amendment workflow.
+  // We load existing entries for the day, run shouldRequireAmendment per input,
+  // and if ANY input requires the workflow, surface the requires_amendment
+  // shape so the route layer can pivot to the modal flow. The direct path
+  // remains for same-day edits, note-only edits, inserts on today, and admin.
+  const existingRows = await prisma.bonusDailyEntry.findMany({
+    where: { bonus_employee_id: { in: ids }, entry_date: entryDate },
+    select: { bonus_employee_id: true, mattress_count: true, note: true },
+  });
+  const existingByEmployee = new Map(
+    existingRows.map((r) => [
+      r.bonus_employee_id,
+      { mattress_count: r.mattress_count.toNumber(), note: r.note },
+    ]),
+  );
+
+  const routingDecisions = inputs.map((input) => {
+    const existing = existingByEmployee.get(input.bonus_employee_id) ?? null;
+    const decision = shouldRequireAmendment(
+      {
+        periodState: month.state,
+        entryDate,
+        newCount: input.mattress_count,
+        existingCount: existing?.mattress_count ?? null,
+        actorIsAdmin: actor.isAdmin === true,
+      },
+      existing?.note ?? null,
+    );
+    return { input, existing, decision };
+  });
+
+  const anyAmendment = routingDecisions.some((r) => r.decision.route === 'amendment');
+  if (anyAmendment) {
+    return {
+      ok: 'requires_amendment',
+      monthId: month.id,
+      pending: routingDecisions
+        .filter((r) => r.decision.route === 'amendment')
+        .map((r) => ({
+          bonus_employee_id: r.input.bonus_employee_id,
+          change_type: (r.decision as { changeType: 'update' | 'insert' }).changeType,
+          existing: r.existing,
+          proposed: { mattress_count: r.input.mattress_count, note: r.input.note ?? null },
+        })),
+    };
   }
 
   const entries = await prisma.$transaction(async (tx) => {

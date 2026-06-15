@@ -5,6 +5,54 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-16 — Added: prior-day bonus amendment workflow + manager date picker + bi-site EOD check (ADR-0028)
+
+Morena Gomez asked (2026-06-15) what the correct process is to fix a prior day's
+bonus entry. There wasn't one. Within a `draft` pay period, a manager could
+silently rewrite any prior day; closed periods had no manager path at all. This
+sprint defines the answer: a **four-eyes prior-day amendment workflow**.
+
+- **Workflow (Sprint 4):** within the current `draft` period, a non-admin
+  manager's change to a prior day's `mattress_count` (an `update`, or an
+  `insert` of a missed day) no longer writes directly — it opens a Request Edit
+  modal requiring a ≥20-char justification and routes to the signature-chain
+  counterpart for approval. Approval applies the entry change, writes the
+  entry-audit row (`actor_label='system:amendment-approved'`), marks the request
+  `approved`, and links the applied audit id back into the request — all in one
+  Prisma transaction. Rejection requires a reason. Bill is notified (ntfy +
+  email) on **every** approval and rejection. A requester whose approver is
+  unavailable can "Ping Bill" to add the Director as a second eligible approver
+  (soft control; the audit log records ping timing for abuse detection).
+- **Carve-outs:** same-day corrections, note-only prior-day edits, and admin
+  writes stay direct. Patrick Dills (Eugene Lead processor) is excluded from the
+  workflow by separation of duties — his prior-day grid is read-only. Closed
+  periods stay immutable for managers; Bill keeps the existing audit-labeled
+  admin escape valve in `src/lib/bonus/amendment.ts` (unchanged).
+- **Concurrency:** a new request from the same requester for the same
+  `(target_entry_date, bonus_employee_id)` auto-cancels their prior pending
+  request (audit-tracked, `superseded_by_new_request`).
+- **Date picker:** the admin-only `AdminDatePicker` is replaced by
+  `BonusDatePicker`, visible to all managers and constrained to the current
+  draft window (`min=period_start`, `max=today` Pacific); admins remain
+  unconstrained. Both the client `min/max` and the server-side `resolveEntryDate`
+  enforce the bound. The PR #25 grid date-key remount fix is preserved.
+- **Bi-site EOD check:** the 5 PM Pacific missing-entries notification, formerly
+  Woodland-only and not wired into the production stack, is now bi-site (iterates
+  every site with an active signature chain) and runs as a long-running
+  `bonus-eod-check` docker-compose daemon alongside `bonus-period-close` and
+  `bonus-escalation-check`. `missingFingerprint(siteCode, dateIso)` and
+  `evaluateEod` are now site-scoped so Woodland and Eugene alerts never collide.
+- **Migration `20260616_amendment_workflow`** (pure additive): one new table
+  (`bonus_amendment_requests`), two enums, five DB-level CHECK constraints
+  (requester ≠ approver, justification ≥20, decided rows have a reviewer,
+  rejected rows have notes), five indexes.
+- New service modules (`amendment-approvers`, `amendment-requests`,
+  `amendment-notifications`), five routes
+  (`GET/POST /api/bonus/amendments`, `POST .../[id]/(approve|reject|cancel|ping-bill)`),
+  three UI components (`BonusDatePicker`, `RequestEditModal`, `AmendmentQueue`)
+  and the `/bonus/amendments` queue page. ADR-0028 + operator runbook
+  `docs/operator/bonus-amendment-workflow.md` document the design and deploy/verify/rollback.
+
 ### 2026-06-15 — Fix: bonus daily-entry grid now repopulates when the admin changes the date
 
 Picking a different business day in the admin date picker left the grid showing

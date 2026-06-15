@@ -1,57 +1,30 @@
 #!/usr/bin/env node
-// T-113 — EOD bonus-entry enforcement (ADR-0019 §2).
+// ADR-0019 §2 + ADR-0028 — Bi-site EOD bonus-entry enforcement (daemon).
 //
-// Cron registration (deployer cron, NOT a system crontab):
-//   Schedule: 0 17 * * *  in TZ=America/Los_Angeles  (5:00 PM Pacific,
-//   daily). The fleet runs one-shot scripts like this via the deployer's
-//   cron surface — this file is the executable; wiring the schedule is an
-//   operator/deployer config step (mirrors how `mymrc-cron.mjs` is hosted,
-//   except this one is a single-shot run, not a long-lived loop).
-//
-//   The 5 PM Pacific anchor is deliberate: the box clock is UTC (7–8h
-//   ahead of Bill), so "today" must be resolved in America/Los_Angeles or
-//   the alert date is off by one. See `src/lib/bonus/eod-check.ts` for the
-//   tested date math this script mirrors.
-//
-// Behaviour:
-//   1. Resolve TODAY as the Pacific calendar day of the run instant.
-//   2. Skip silently on weekends and on Woodland `site_holidays`.
-//   3. Load active Woodland `bonus_employees` and the set of employee ids
-//      that already have a `bonus_daily_entries` row for today.
-//   4. If ANY active employee is missing an entry, publish ONE ntfy alert
-//      to `dr3-vision-system` with fingerprint
-//      `bonus-entry-missing:woodland:<YYYY-MM-DD>`.
-//
-// Fire-once / no-un-send: the fingerprint is keyed on the Pacific day and
-// the cron runs once/day, so the alert fires at most once. A late entry the
-// next morning lands under a different day's fingerprint and can never
-// suppress (un-send) the prior day's alert. This is strict by design.
-//
-// Fail-soft on ntfy: when `NTFY_PUBLISHER_TOKEN` is unset the publish step
-// is a no-op (the script still exits 0). On primary failure it retries once
-// on the public ntfy.sh fallback topic with `[FALLBACK]` prefixed and the
-// Authorization header stripped (ADR-0036 / ADR-0037), mirroring
-// `migrate-with-ntfy.mjs` and `src/lib/ntfy.ts`.
+// Long-running daemon, same shape as bonus-period-close + bonus-escalation-check:
+// sleeps until the next 17:00 Pacific instant, fires, repeats. Per-site
+// iteration covers Woodland + Eugene (any site with an active bonus signature
+// chain). One ntfy per site with missing entries, fingerprinted per (site, date).
 
 import { PrismaClient } from '@prisma/client';
 
-const SITE_CODE = 'woodland';
 const PACIFIC_TZ = 'America/Los_Angeles';
+const FIRE_HOUR_PT = 17;
+const FIRE_MINUTE_PT = 0;
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
 const FALLBACK_BASE = 'https://ntfy.sh';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
-// Pinned obscured fallback topic for `dr3-vision-system` — matches
-// `src/lib/ntfy.ts#FALLBACK_TOPIC_BY_PRIMARY` and ntfy-fallback-topics.yml.
 const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+
 const TIMEOUT_MS = 5_000;
 
 function logTs(message) {
   console.log(`[bonus-eod-check ${new Date().toISOString()}] ${message}`);
 }
 
-// ── Pacific-day resolution (mirrors src/lib/bonus/eod-check.ts) ───────
+// ── Pacific date helpers ────────────────────────────────────────────
 
 const ISO_FMT = new Intl.DateTimeFormat('en-CA', {
   timeZone: PACIFIC_TZ,
@@ -71,32 +44,54 @@ const WEEKDAY_FMT = new Intl.DateTimeFormat('en-US', {
 });
 
 function pacificDateParts(now) {
-  const iso = ISO_FMT.format(now); // 'YYYY-MM-DD'
-  const label = LABEL_FMT.format(now); // 'Sep 14, 2026'
-  const weekday = WEEKDAY_FMT.format(now); // 'Mon'..'Sun'
+  const iso = ISO_FMT.format(now);
+  const label = LABEL_FMT.format(now);
+  const weekday = WEEKDAY_FMT.format(now);
   const isWeekend = weekday === 'Sat' || weekday === 'Sun';
-  // UTC-midnight key from the Pacific Y/M/D — matches @db.Date storage.
   const [y, m, d] = iso.split('-').map((p) => Number.parseInt(p, 10));
   const dayKeyUTC = new Date(Date.UTC(y, m - 1, d));
   return { iso, label, dayKeyUTC, isWeekend };
 }
 
-function missingFingerprint(dateIso) {
-  return `bonus-entry-missing:${SITE_CODE}:${dateIso}`;
+// Next 17:00 PT instant after `from`. Safe across DST shifts: we project `from`
+// into Pacific wall-clock parts, compute the seconds-of-day delta to 17:00 PT,
+// and add the delta in UTC. The Intl formatter does all the DST math for us.
+function nextFireInstant(from) {
+  const FMT = new Intl.DateTimeFormat('en-CA', {
+    timeZone: PACIFIC_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = Object.fromEntries(FMT.formatToParts(from).map((p) => [p.type, p.value]));
+  const ptNow = {
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+  const currentSecondsOfDay = ptNow.hour * 3600 + ptNow.minute * 60 + ptNow.second;
+  const fireSecondsOfDay = FIRE_HOUR_PT * 3600 + FIRE_MINUTE_PT * 60;
+  let deltaSec;
+  if (currentSecondsOfDay < fireSecondsOfDay) {
+    deltaSec = fireSecondsOfDay - currentSecondsOfDay;
+  } else {
+    deltaSec = 86400 - currentSecondsOfDay + fireSecondsOfDay;
+  }
+  return new Date(from.getTime() + deltaSec * 1000);
 }
 
-// ── ntfy publish (fail-soft, primary→fallback) ───────────────────────
+// ── ntfy publish (fail-soft, primary→fallback) ──────────────────────
 
 async function postWithTimeout(url, body, headers, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const resp = await fetch(url, { method: 'POST', body, headers, signal: controller.signal });
-    if (!resp.ok) {
-      await resp.text().catch(() => '');
-      return false;
-    }
-    return true;
+    return resp.ok;
   } catch {
     return false;
   } finally {
@@ -104,16 +99,20 @@ async function postWithTimeout(url, body, headers, timeoutMs) {
   }
 }
 
-async function publishMissing({ dateLabel, missingCount, fingerprint }) {
+async function publishMissing({ siteCode, siteName, dateLabel, missingCount, fingerprint }) {
   const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
-  const title = `[DR3-Vision] Bonus entries missing for Woodland`.slice(0, 250);
+  // Title MUST NOT be prefixed with [DR3-Vision] — publishNtfy auto-prefixes
+  // in TS-land; in the .mjs daemon we set the full title once because we're
+  // calling ntfy HTTP directly. Keep "[DR3-Vision]" here so the user-visible
+  // title matches the rest of the fleet.
+  const title = `[DR3-Vision] Bonus entries missing for ${siteName}`.slice(0, 250);
   const body =
-    `Bonus entries missing for Woodland — ${dateLabel}. ` +
+    `Bonus entries missing for ${siteName} — ${dateLabel}. ` +
     `${missingCount} processor${missingCount === 1 ? '' : 's'} without an entry. ` +
     `Open /bonus to enter.`;
 
   if (!token) {
-    logTs('NTFY_PUBLISHER_TOKEN unset — skipping publish (no-op, exit 0)');
+    logTs(`NTFY_PUBLISHER_TOKEN unset — skipping publish for ${siteCode} (no-op)`);
     return;
   }
 
@@ -122,18 +121,14 @@ async function publishMissing({ dateLabel, missingCount, fingerprint }) {
     Priority: 'high',
     Click: CLICK_URL,
     Tags: 'warning,bonus,dr3-vision',
-    // ntfy server-side dedup hint; the day-scoped fingerprint also makes
-    // re-runs idempotent within the cooldown window.
     'X-Dedup-Id': fingerprint,
     Authorization: `Bearer ${token}`,
   };
   const ok = await postWithTimeout(`${PRIMARY_BASE}/${TOPIC}`, body, headers, TIMEOUT_MS);
   if (ok) {
-    logTs(`published to ${TOPIC} (${fingerprint})`);
+    logTs(`published to ${TOPIC} for ${siteCode} (${fingerprint})`);
     return;
   }
-  // Fallback — strip Authorization, prefix [FALLBACK]. No cooldown on the
-  // fallback path (ADR-0037 §3 carve-out).
   const fbHeaders = {
     'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
     Priority: 'high',
@@ -147,10 +142,90 @@ async function publishMissing({ dateLabel, missingCount, fingerprint }) {
     fbHeaders,
     TIMEOUT_MS,
   );
-  logTs(fbOk ? `published to FALLBACK topic (${fingerprint})` : `publish FAILED (${fingerprint})`);
+  logTs(
+    fbOk
+      ? `published to FALLBACK topic for ${siteCode} (${fingerprint})`
+      : `publish FAILED for ${siteCode} (${fingerprint})`,
+  );
 }
 
-// ── Main ─────────────────────────────────────────────────────────────
+// ── Per-site check ──────────────────────────────────────────────────
+
+async function checkSite(prisma, site, dateParts) {
+  const holiday = await prisma.siteHoliday.findUnique({
+    where: {
+      site_id_holiday_date: { site_id: site.id, holiday_date: dateParts.dayKeyUTC },
+    },
+    select: { id: true },
+  });
+  if (holiday) {
+    logTs(`${site.code}: site holiday on ${dateParts.iso} — skipping`);
+    return;
+  }
+
+  const activeEmployees = await prisma.bonusEmployee.findMany({
+    where: { site_id: site.id, is_active: true, deleted_at: null },
+    select: { id: true },
+  });
+  if (activeEmployees.length === 0) {
+    logTs(`${site.code}: no active employees — skipping`);
+    return;
+  }
+
+  const entries = await prisma.bonusDailyEntry.findMany({
+    where: {
+      entry_date: dateParts.dayKeyUTC,
+      bonus_employee: { site_id: site.id },
+    },
+    select: { bonus_employee_id: true },
+  });
+  const entered = new Set(entries.map((e) => e.bonus_employee_id));
+  const missing = activeEmployees.filter((e) => !entered.has(e.id));
+
+  if (missing.length === 0) {
+    logTs(`${site.code}: all ${activeEmployees.length} active employees have entries — no alert`);
+    return;
+  }
+
+  logTs(`${site.code}: ${missing.length}/${activeEmployees.length} missing — alerting`);
+  await publishMissing({
+    siteCode: site.code,
+    siteName: site.name,
+    dateLabel: dateParts.label,
+    missingCount: missing.length,
+    fingerprint: `bonus-entry-missing:${site.code}:${dateParts.iso}`,
+  });
+}
+
+// ── Fire ─────────────────────────────────────────────────────────────
+
+async function runOnce(prisma) {
+  const now = new Date();
+  const dateParts = pacificDateParts(now);
+  logTs(`evaluating bi-site EOD for Pacific day ${dateParts.iso} (${dateParts.label})`);
+
+  if (dateParts.isWeekend) {
+    logTs('weekend — skipping all sites');
+    return;
+  }
+
+  // Iterate every site that has an active bonus signature chain (a bonus-enabled site).
+  const sites = await prisma.site.findMany({
+    where: { bonus_signature_chain: { isNot: null } },
+    select: { id: true, code: true, name: true },
+    orderBy: { code: 'asc' },
+  });
+
+  for (const site of sites) {
+    try {
+      await checkSite(prisma, site, dateParts);
+    } catch (err) {
+      logTs(`${site.code}: check FAILED — ${err?.message ?? err}`);
+    }
+  }
+}
+
+// ── Main loop ────────────────────────────────────────────────────────
 
 async function main() {
   if (!process.env['DATABASE_URL']) {
@@ -158,67 +233,22 @@ async function main() {
     process.exit(2);
   }
 
-  const now = new Date();
-  const parts = pacificDateParts(now);
-  logTs(`evaluating Woodland for Pacific day ${parts.iso} (${parts.label})`);
-
-  if (parts.isWeekend) {
-    logTs('weekend — skipping');
-    return;
-  }
-
   const prisma = new PrismaClient();
-  try {
-    const site = await prisma.site.findUnique({
-      where: { code: SITE_CODE },
-      select: { id: true },
-    });
-    if (!site) {
-      console.error(`bonus-eod-check: no site with code ${SITE_CODE}`);
-      process.exit(1);
+  logTs('daemon starting');
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const now = new Date();
+    const fire = nextFireInstant(now);
+    const sleepMs = fire.getTime() - now.getTime();
+    logTs(`sleeping until ${fire.toISOString()} (~${Math.round(sleepMs / 1000)}s)`);
+    await new Promise((res) => setTimeout(res, sleepMs));
+
+    try {
+      await runOnce(prisma);
+    } catch (err) {
+      logTs(`runOnce FAILED — ${err?.message ?? err}`);
     }
-
-    const holiday = await prisma.siteHoliday.findUnique({
-      where: { site_id_holiday_date: { site_id: site.id, holiday_date: parts.dayKeyUTC } },
-      select: { id: true },
-    });
-    if (holiday) {
-      logTs(`site holiday on ${parts.iso} — skipping`);
-      return;
-    }
-
-    const activeEmployees = await prisma.bonusEmployee.findMany({
-      where: { site_id: site.id, is_active: true, deleted_at: null },
-      select: { id: true },
-    });
-    if (activeEmployees.length === 0) {
-      logTs('no active employees — nothing to miss, skipping');
-      return;
-    }
-
-    const entries = await prisma.bonusDailyEntry.findMany({
-      where: {
-        entry_date: parts.dayKeyUTC,
-        bonus_employee: { site_id: site.id },
-      },
-      select: { bonus_employee_id: true },
-    });
-    const entered = new Set(entries.map((e) => e.bonus_employee_id));
-
-    const missing = activeEmployees.filter((e) => !entered.has(e.id));
-    if (missing.length === 0) {
-      logTs(`all ${activeEmployees.length} active employees have entries — no alert`);
-      return;
-    }
-
-    logTs(`${missing.length}/${activeEmployees.length} active employees missing entries — alerting`);
-    await publishMissing({
-      dateLabel: parts.label,
-      missingCount: missing.length,
-      fingerprint: missingFingerprint(parts.iso),
-    });
-  } finally {
-    await prisma.$disconnect();
   }
 }
 

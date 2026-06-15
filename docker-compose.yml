@@ -358,6 +358,55 @@ services:
       com.barnardhq.service: 'bonus-escalation-check'
     logging: *logging
 
+  bonus-eod-check:
+    # Bi-site EOD bonus-entry enforcement daemon (ADR-0019 §2 + ADR-0028, T-113).
+    #
+    # Long-running Node daemon (same shape as bonus-period-close +
+    # bonus-escalation-check): a single process under a single `unless-stopped`
+    # restart policy that sleeps until the next 17:00 America/Los_Angeles instant
+    # (recomputed each cycle off the Pacific wall clock so it survives the Mar/Nov
+    # DST shifts) and on each fire iterates every bonus-enabled site (any site
+    # with an active signature chain — today Woodland + Eugene). Per site it
+    # compares active processors against today's `bonus_daily_entries`, skips
+    # weekends + site holidays, and publishes one `dr3-vision-system` ntfy per
+    # site with missing entries, fingerprinted per (site, Pacific-day).
+    #
+    # Unlike the period-close / escalation daemons this does NOT POST an app
+    # route — it queries Postgres directly and calls ntfy over HTTP, so it needs
+    # DATABASE_URL + the ntfy publisher token, not INTERNAL_BASE_URL.
+    #
+    # Fail-soft: when NTFY_PUBLISHER_TOKEN is unset the daemon logs a no-op per
+    # site instead of alerting; primary ntfy failure falls back to the public
+    # ntfy.sh fallback topic (ADR-0036).
+    image: dr3-vision-app:local
+    container_name: dr3-vision-bonus-eod-check
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/bonus-eod-check.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here → false "unhealthy"). See bonus-period-close.
+    healthcheck:
+      disable: true
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/db.env
+      # ntfy publisher token (ADR-0036) — optional, same fail-soft contract as
+      # the app + migrate services. When absent the daemon no-ops per site.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
+        required: false
+    environment:
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'bonus-eod-check'
+    logging: *logging
+
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     container_name: dr3-vision-cloudflared
