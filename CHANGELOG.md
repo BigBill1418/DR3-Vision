@@ -5,6 +5,48 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-15 — Fix: complete the ADR-0028 amendment client wiring + remove the stale today-only gate
+
+The Sprint 4 amendment workflow (ADR-0028, PR #26) shipped the server side, but
+the client glue was missing and a stale gate blocked the feature end-to-end. A
+non-admin Woodland manager (Janette) trying to edit a prior day's bonus record
+hit `403 "Entries may only be recorded for today"` — the change never reached
+the amendment routing.
+
+- **Gate fix (`src/app/api/bonus/entries/route.ts`):** the pre-ADR-0028
+  today-only gate (`date !== appToday()` → 403) is replaced with a future-only
+  gate. A non-admin may now POST for **today** (direct write) or a **prior day**
+  (the data layer routes it through the four-eyes amendment workflow and returns
+  `409 requires_amendment`); only a **future** date is rejected `403`. Admins
+  keep unconstrained back-dating. The client stays untrusted — all draft/period/
+  prior-day scoping is re-enforced in `upsertDailyEntries` →
+  `shouldRequireAmendment`; a prior day in a closed period still returns
+  `month_locked` (409) and an uncovered day still returns `NoOpenPayPeriodError`
+  (409).
+- **409 payload carries `approverName`:** the route resolves the counterpart
+  signer via the signature chain (`resolveAmendmentApprover`) and looks up the
+  user's display name, surfacing it top-level on the `requires_amendment` 409 so
+  the modal can show "sent to X for approval". A requester structurally outside
+  the workflow (Patrick / non-chain manager) is surfaced as the 403 the
+  amendment submit would itself return, rather than dangling an unsubmittable
+  modal.
+- **Client wiring (`src/app/bonus/DailyEntryGrid.tsx`):** `handleSave` now
+  detects the `409 requires_amendment` response and pivots to the previously
+  orphaned `RequestEditModal` instead of showing the raw error string. Each
+  pending change becomes a modal payload, mapping `bonus_employee_id → full_name`
+  from the grid's own rows and old/new values from `pending[i].existing` /
+  `.proposed`. Multiple pending changes are handled as a **queue** — one modal at
+  a time; submit or cancel advances to the next; the last one drained triggers
+  `router.refresh()`. Uses `onClick` (no `<form>`, hard rule #10); brand styling
+  preserved.
+- **Tests:** route — non-admin prior day → 409 `requires_amendment` with
+  `approverName`, non-admin future → 403, admin prior day → direct write; grid —
+  a 409 opens the modal with the mapped payload and a multi-pending queue
+  advances one modal at a time. Full suite green (830 tests), tsc 0, eslint 0,
+  `prisma validate` clean, `next build` succeeds.
+
+This completes ADR-0028's intended flow; no new ADR.
+
 ### 2026-06-16 — Fix: amendment-workflow migration used UUID columns against a TEXT-id schema
 
 The Sprint 4 migration `20260616_amendment_workflow` (ADR-0028) declared every

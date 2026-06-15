@@ -243,6 +243,30 @@ vi.mock('@/lib/prisma', () => {
       return { id: `audit-${auditRows.length}` };
     }),
   };
+  // ADR-0028: the route resolves the amendment approver's DISPLAY NAME on a
+  // `requires_amendment` 409. The chain row makes Morena (ops) the counterpart
+  // of Janette (facility) at Woodland; the user row supplies the display name.
+  const bonusSignatureChain = {
+    findUnique: vi.fn(async ({ where }: { where: { site_id: string } }) => {
+      if (where.site_id !== WOODLAND) return null;
+      return {
+        facility_signer_user_id: 'janette',
+        facility_override_actor_ids: '',
+        ops_signer_user_id: 'morena',
+        ops_override_actor_ids: '',
+        auto_override_actor_user_id: 'bill',
+      };
+    }),
+  };
+  const userStore = new Map<string, { id: string; name: string }>([
+    ['morena', { id: 'morena', name: 'Morena Ruiz' }],
+    ['janette', { id: 'janette', name: 'Janette Cole' }],
+  ]);
+  const user = {
+    findUnique: vi.fn(
+      async ({ where }: { where: { id: string } }) => userStore.get(where.id) ?? null,
+    ),
+  };
   const client = {
     bonusPayPeriod,
     bonusEmployee,
@@ -250,6 +274,8 @@ vi.mock('@/lib/prisma', () => {
     processorBonusRule,
     site,
     auditLog,
+    bonusSignatureChain,
+    user,
   };
   return {
     prisma: {
@@ -464,17 +490,28 @@ describe('POST /api/bonus/entries — admin back-dating + Pacific default', () =
     vi.useRealTimers();
   });
 
-  it('non-admin manager (Janette) is REJECTED 403 when back-dating', async () => {
+  it('non-admin manager (Janette) prior-day insert ROUTES TO AMENDMENT (409), not a direct write (ADR-0028)', async () => {
+    // Pre-ADR-0028 this was a hard 403 ("entries may only be recorded for
+    // today"). ADR-0028 relaxes the gate: a non-admin's prior-day change in a
+    // draft period routes through the four-eyes amendment workflow. With no
+    // existing entry the change is an INSERT amendment. Nothing is written
+    // directly — the amendment must be approved first.
     const { POST } = await import('./route');
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
     const res = await POST(
       makeReq({
-        entry_date: '2026-06-01', // not today — manager may not back-date
+        entry_date: '2026-06-01', // prior day, in draft Period 12
         entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 10 }],
       }),
     );
-    expect(res.status).toBe(403);
-    // Nothing was written.
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      error: string;
+      pending: Array<{ change_type: string }>;
+    };
+    expect(body.error).toBe('requires_amendment');
+    expect(body.pending[0]!.change_type).toBe('insert');
+    // Nothing was written directly — the amendment is not applied here.
     expect(entryStore.size).toBe(0);
   });
 
@@ -515,6 +552,93 @@ describe('POST /api/bonus/entries — admin back-dating + Pacific default', () =
     expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 5))))).toBe(true);
     // ...and NOT on the UTC day (the old bug).
     expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 6))))).toBe(false);
+  });
+});
+
+// ── ADR-0028 amendment routing (non-admin prior-day) ────────────
+//
+// The pre-ADR-0028 gate hard-403'd any non-admin non-today date. ADR-0028
+// relaxes it: a non-admin may submit for a PRIOR day, which the data layer
+// routes through the four-eyes amendment workflow (409 `requires_amendment`)
+// rather than writing directly. FUTURE dates still 403. Admin keeps the direct
+// back-date path. These run under the outer clock pin (Pacific 2026-06-05), so
+// 2026-06-01 is a prior day inside draft Period 12.
+
+describe('POST /api/bonus/entries — ADR-0028 amendment routing', () => {
+  it('non-admin (Janette) prior day in draft → 409 requires_amendment with approverName, no write', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    // Seed an existing prior-day entry so the change is an UPDATE (count change).
+    entryStore.set(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 1))), {
+      id: 'entry-seed',
+      bonus_employee_id: 'emp-amy',
+      bonus_pay_period_id: 'p12',
+      entry_date: new Date(Date.UTC(2026, 5, 1)),
+      mattress_count: toDec(40),
+      note: null,
+      entered_by_user_id: 'janette',
+    });
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-01', // prior day, in the draft period
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 55 }],
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      error: string;
+      monthId: string;
+      approverName: string | null;
+      pending: Array<{
+        bonus_employee_id: string;
+        change_type: string;
+        existing: { mattress_count: number } | null;
+        proposed: { mattress_count: number };
+      }>;
+    };
+    expect(body.error).toBe('requires_amendment');
+    expect(body.monthId).toBe('p12');
+    // Janette is the facility signer → counterpart approver is Morena (ops).
+    expect(body.approverName).toBe('Morena Ruiz');
+    expect(body.pending).toHaveLength(1);
+    expect(body.pending[0]!.change_type).toBe('update');
+    expect(body.pending[0]!.bonus_employee_id).toBe('emp-amy');
+    expect(body.pending[0]!.existing?.mattress_count).toBe(40);
+    expect(body.pending[0]!.proposed.mattress_count).toBe(55);
+    // The original entry is UNTOUCHED — the amendment is not applied here.
+    const stored = entryStore.get(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 1))));
+    expect(stored?.mattress_count.toNumber()).toBe(40);
+  });
+
+  it('non-admin (Janette) FUTURE date → 403 (not amendment)', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-30', // future relative to pinned Pacific 2026-06-05
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 10 }],
+      }),
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/future/i);
+    expect(entryStore.size).toBe(0);
+  });
+
+  it('admin (Bill) prior date → direct write (NOT amendment)', async () => {
+    const { POST } = await import('./route');
+    mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
+    const res = await POST(
+      makeReq({
+        entry_date: '2026-06-01', // prior day — admin back-dates directly
+        entries: [{ bonus_employee_id: 'emp-amy', mattress_count: 33 }],
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: Array<{ mattress_count: number }> };
+    expect(body.entries[0]!.mattress_count).toBe(33);
+    // Direct write landed on the prior calendar day.
+    expect(entryStore.has(entryKey('emp-amy', new Date(Date.UTC(2026, 5, 1))))).toBe(true);
   });
 });
 

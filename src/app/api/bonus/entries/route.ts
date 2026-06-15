@@ -19,6 +19,11 @@ import {
   NoOpenPayPeriodError,
   type DailyEntryInput,
 } from '@/lib/bonus/daily-entry';
+import {
+  resolveAmendmentApprover,
+  AmendmentWorkflowForbiddenError,
+} from '@/lib/bonus/amendment-approvers';
+import { prisma } from '@/lib/prisma';
 import { appToday, appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
@@ -83,13 +88,19 @@ export async function POST(req: Request) {
 
   const date = parseEntryDate(parsed.data.entry_date);
 
-  // Admin-only back-dating (FIX 2): only an admin (Bill) may record against a
-  // day other than Pacific "today". A manager/operator that forges a back-dated
-  // `entry_date` is rejected here — the client is NEVER trusted (hard rule #2).
-  // Comparison is on the canonical UTC-midnight @db.Date key.
-  if (!ctx.isAdmin && date.getTime() !== appToday().getTime()) {
+  // ADR-0028: a non-admin may submit for TODAY (direct write) or a PRIOR day
+  // (which the data layer routes through the four-eyes amendment workflow). Only
+  // a FUTURE date is rejected outright for a non-admin — there is no legitimate
+  // path to record a count for a day that has not happened. Admins (Bill) keep
+  // unconstrained back-dating (the escape valve). The client is NEVER trusted:
+  // the data layer (`upsertDailyEntries` → `shouldRequireAmendment`) re-enforces
+  // draft/period/prior-day scoping and returns `requires_amendment` for an
+  // in-period prior-day count change/insert; a prior day in a CLOSED period
+  // still surfaces `month_locked` (409) and an uncovered day still surfaces
+  // `NoOpenPayPeriodError` (409). Comparison is on the UTC-midnight @db.Date key.
+  if (!ctx.isAdmin && date.getTime() > appToday().getTime()) {
     return NextResponse.json(
-      { error: `Entries may only be recorded for today (${appTodayISO()}).` },
+      { error: `Entries cannot be recorded for a future date (today is ${appTodayISO()}).` },
       { status: 403 },
     );
   }
@@ -127,10 +138,40 @@ export async function POST(req: Request) {
 
   // ADR-0028: a prior-day count change by a non-admin manager routes through the
   // four-eyes amendment workflow instead of writing directly. Surface a 409 with
-  // the pending payload so the client can pivot to the Request Edit modal.
+  // the pending payload so the client can pivot to the Request Edit modal. We
+  // resolve the approver's DISPLAY NAME server-side (the counterpart signer via
+  // the signature chain) so the modal can show "sent to X for approval". One
+  // approver per requester/site, so it lives top-level on the payload — the
+  // client never sees or trusts the requester/approver ids. If the requester is
+  // structurally outside the workflow (Patrick / non-chain manager), the
+  // amendment submit would itself 403; we surface that here rather than dangling
+  // the client on a modal it could never submit.
   if (result.ok === 'requires_amendment') {
+    let approverName: string | null = null;
+    try {
+      const { expectedApproverUserId } = await resolveAmendmentApprover(
+        prisma,
+        ctx.siteId,
+        ctx.userId,
+      );
+      const approver = await prisma.user.findUnique({
+        where: { id: expectedApproverUserId },
+        select: { name: true },
+      });
+      approverName = approver?.name ?? null;
+    } catch (e) {
+      if (e instanceof AmendmentWorkflowForbiddenError) {
+        return NextResponse.json({ error: e.forbiddenReason }, { status: 403 });
+      }
+      throw e;
+    }
     return NextResponse.json(
-      { error: 'requires_amendment', monthId: result.monthId, pending: result.pending },
+      {
+        error: 'requires_amendment',
+        monthId: result.monthId,
+        pending: result.pending,
+        approverName,
+      },
       { status: 409 },
     );
   }
