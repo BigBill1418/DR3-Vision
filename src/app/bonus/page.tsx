@@ -33,13 +33,7 @@ import {
   BONUS_SITE_COOKIE,
 } from '@/lib/bonus/access';
 import { getDailyGrid, NoOpenPayPeriodError } from '@/lib/bonus/daily-entry';
-import {
-  appToday,
-  appTodayISO,
-  dayKeyUTCFromISO,
-  dayISO,
-  pacificDateLabel,
-} from '@/lib/time';
+import { appToday, appTodayISO, dayKeyUTCFromISO, dayISO, pacificDateLabel } from '@/lib/time';
 
 /**
  * Compact pay-period date range for the @db.Date window keys (UTC-midnight), e.g.
@@ -50,7 +44,10 @@ function payPeriodRange(start: Date, end: Date): string {
   const md = (d: Date) =>
     new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(d);
   const year = end.getUTCFullYear();
-  if (start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth()) {
+  if (
+    start.getUTCFullYear() === end.getUTCFullYear() &&
+    start.getUTCMonth() === end.getUTCMonth()
+  ) {
     return `${md(start)}–${end.getUTCDate()}, ${year}`;
   }
   return `${md(start)}, ${start.getUTCFullYear()} – ${md(end)}, ${year}`;
@@ -179,7 +176,14 @@ export default async function BonusDailyEntryPage({
           </nav>
         </header>
 
+        {/* `key` on the entry date forces a remount when the admin picks a
+            different business day. Without it, client-side navigation reuses
+            the same DailyEntryGrid instance and its `useState` seed (from
+            `rows`) never re-runs, so the inputs keep showing the previous
+            day's data until a manual reload. Re-keying re-seeds from the new
+            day's rows. (fix 2026-06-15) */}
         <DailyEntryGrid
+          key={dayISO(grid.entryDate)}
           rule={grid.rule}
           entryDate={dayISO(grid.entryDate)}
           editable={grid.editable}
