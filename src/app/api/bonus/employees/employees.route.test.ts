@@ -32,6 +32,7 @@ interface MockEmployee {
   id: string;
   site_id: string;
   full_name: string;
+  employee_number: string | null;
   previous_names: unknown;
   is_active: boolean;
   notes: string | null;
@@ -71,6 +72,7 @@ function insertEmp(
     id: p.id ?? `emp-${++idCounter}`,
     site_id: p.site_id,
     full_name: p.full_name,
+    employee_number: p.employee_number ?? null,
     previous_names: p.previous_names ?? [],
     is_active: p.is_active ?? true,
     notes: p.notes ?? null,
@@ -88,6 +90,7 @@ function matchesWhere(e: MockEmployee, where: Record<string, unknown>): boolean 
     if (k === 'id' && e.id !== v) return false;
     if (k === 'site_id' && e.site_id !== v) return false;
     if (k === 'is_active' && e.is_active !== v) return false;
+    if (k === 'employee_number' && e.employee_number !== v) return false;
   }
   return true;
 }
@@ -107,6 +110,7 @@ vi.mock('@/lib/prisma', () => {
       const e = insertEmp({
         site_id: data.site_id as string,
         full_name: data.full_name as string,
+        employee_number: (data.employee_number as string | null) ?? null,
         notes: (data.notes as string | null) ?? null,
         previous_names: data.previous_names ?? [],
       });
@@ -118,6 +122,7 @@ vi.mock('@/lib/prisma', () => {
         if (!e) throw new Error('not found');
         for (const k of [
           'full_name',
+          'employee_number',
           'previous_names',
           'is_active',
           'deleted_at',
@@ -253,6 +258,50 @@ describe('POST /api/bonus/employees — create + rehire', () => {
     expect(row?.actor_user_id).toBe('janette');
   });
 
+  it('creates with a valid 4-digit employee_number → 201 and echoes it', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq(
+        'http://x/api/bonus/employees',
+        jsonBody({ full_name: 'Numbered Person', employee_number: '5420' }),
+      ),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { employee: { employee_number: string | null } };
+    expect(body.employee.employee_number).toBe('5420');
+  });
+
+  it('rejects a non-4-digit employee_number with 422', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq(
+        'http://x/api/bonus/employees',
+        jsonBody({ full_name: 'Bad Number', employee_number: '12' }),
+      ),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects a duplicate employee_number at the same site with 409', async () => {
+    insertEmp({
+      id: 'holder',
+      site_id: WOODLAND,
+      full_name: 'Holder',
+      employee_number: '6048',
+      is_active: true,
+    });
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq(
+        'http://x/api/bonus/employees',
+        jsonBody({ full_name: 'Claimant', employee_number: '6048' }),
+      ),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/Employee #/);
+  });
+
   it('re-adding a deactivated name returns the 409 rehire_candidate signal', async () => {
     insertEmp({
       id: 'e-gone',
@@ -309,6 +358,80 @@ describe('PATCH /api/bonus/employees/[id]', () => {
     };
     expect(body.employee.full_name).toBe('New');
     expect(body.employee.previous_names[0]?.name).toBe('Old');
+  });
+
+  it('set_number sets a 4-digit employee_number → 200', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'Setme', is_active: true });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/bonus/employees/e1', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'set_number', employee_number: '5680' }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'e1' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { employee: { employee_number: string | null } };
+    expect(body.employee.employee_number).toBe('5680');
+    expect(auditRows.some((a) => a.action === 'update' && a.row_id === 'e1')).toBe(true);
+  });
+
+  it('set_number with null clears the number → 200', async () => {
+    insertEmp({
+      id: 'e1',
+      site_id: WOODLAND,
+      full_name: 'Clearme',
+      employee_number: '5680',
+      is_active: true,
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/bonus/employees/e1', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'set_number', employee_number: null }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'e1' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { employee: { employee_number: string | null } };
+    expect(body.employee.employee_number).toBeNull();
+  });
+
+  it('set_number rejects an invalid number → 422', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'Setme', is_active: true });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/bonus/employees/e1', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'set_number', employee_number: 'abcd' }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'e1' }) },
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('set_number rejects a duplicate at the same site → 409', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'A', is_active: true });
+    insertEmp({
+      id: 'e2',
+      site_id: WOODLAND,
+      full_name: 'B',
+      employee_number: '6048',
+      is_active: true,
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/bonus/employees/e1', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'set_number', employee_number: '6048' }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'e1' }) },
+    );
+    expect(res.status).toBe(409);
   });
 
   it('deactivate then reactivate', async () => {

@@ -38,12 +38,37 @@ export interface BonusEmployeeDto {
   id: string;
   site_id: string;
   full_name: string;
+  // Legacy roster number extracted from full_name (ADR-0026). Nullable: only
+  // the 21 imported DR3 Woodland legacy rows carry one; processors created in
+  // V2 have none. Always exactly 4 digits when present (`^[0-9]{4}$`).
+  employee_number: string | null;
   previous_names: PreviousName[];
   is_active: boolean;
   notes: string | null;
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+}
+
+// ADR-0026: employee_number is an optional 4-digit string, uniqueness enforced
+// per-site at the APP layer (no DB unique constraint). This is the single
+// canonical validator — every entry path (create, set) routes through it so
+// the format never diverges between API and data layer.
+export const EMPLOYEE_NUMBER_RE = /^[0-9]{4}$/;
+
+/**
+ * Normalize a raw employee_number input into either a validated 4-digit string,
+ * an explicit `null` (cleared / absent), or an `'invalid'` sentinel.
+ *
+ *   - `undefined` / `null` / `''`  → null  (field is optional; clears it)
+ *   - a value matching `^[0-9]{4}$` → the trimmed value
+ *   - anything else                → 'invalid'
+ */
+export function normalizeEmployeeNumber(raw: string | null | undefined): string | null | 'invalid' {
+  if (raw == null) return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  return EMPLOYEE_NUMBER_RE.test(trimmed) ? trimmed : 'invalid';
 }
 
 interface ActorContext {
@@ -74,6 +99,7 @@ function toDto(e: BonusEmployee): BonusEmployeeDto {
     id: e.id,
     site_id: e.site_id,
     full_name: e.full_name,
+    employee_number: e.employee_number,
     previous_names: parsePreviousNames(e.previous_names),
     is_active: e.is_active,
     notes: e.notes,
@@ -129,6 +155,7 @@ export async function listEmployees(
 
 export interface CreateEmployeeInput {
   full_name: string;
+  employee_number?: string | null;
   notes?: string | null;
 }
 
@@ -136,7 +163,9 @@ export type CreateEmployeeResult =
   | { ok: true; employee: BonusEmployeeDto }
   | { ok: false; reason: 'name_required' }
   | { ok: false; reason: 'name_taken'; employee: BonusEmployeeDto }
-  | { ok: false; reason: 'rehire_candidate'; employee: BonusEmployeeDto };
+  | { ok: false; reason: 'rehire_candidate'; employee: BonusEmployeeDto }
+  | { ok: false; reason: 'employee_number_invalid' }
+  | { ok: false; reason: 'employee_number_taken'; employee: BonusEmployeeDto };
 
 /**
  * Find an existing employee at this site whose `full_name` matches
@@ -149,6 +178,27 @@ async function findByName(siteId: string, fullName: string): Promise<BonusEmploy
   return candidates.find((c) => c.full_name.trim().toLowerCase() === target) ?? null;
 }
 
+/**
+ * ADR-0026: enforce employee_number uniqueness per-site at the APP layer (the
+ * column is intentionally NOT a DB unique index — soft-deleted rows can share a
+ * number, and the historical import tolerated transient collisions). Returns
+ * the conflicting ACTIVE employee at this site that already holds `number`, or
+ * null if free. `excludeId` lets an edit ignore the row being edited.
+ *
+ * Only ACTIVE rows block: a deactivated employee's old number is reusable, the
+ * same way a deactivated name frees up for rehire (§9a).
+ */
+async function findByEmployeeNumber(
+  siteId: string,
+  number: string,
+  excludeId?: string,
+): Promise<BonusEmployee | null> {
+  const candidates = await prisma.bonusEmployee.findMany({
+    where: { site_id: siteId, is_active: true, employee_number: number },
+  });
+  return candidates.find((c) => c.id !== excludeId) ?? null;
+}
+
 export async function createEmployee(
   siteId: string,
   input: CreateEmployeeInput,
@@ -156,6 +206,11 @@ export async function createEmployee(
 ): Promise<CreateEmployeeResult> {
   const fullName = input.full_name.trim();
   if (!fullName) return { ok: false, reason: 'name_required' };
+
+  // ADR-0026: validate the (optional) employee_number BEFORE the name checks so
+  // a malformed number is reported regardless of name state.
+  const number = normalizeEmployeeNumber(input.employee_number);
+  if (number === 'invalid') return { ok: false, reason: 'employee_number_invalid' };
 
   // ADR-0019 §9a: a name match flips create into a rehire prompt (if the match
   // is inactive) or a hard conflict (if the match is already active).
@@ -165,11 +220,20 @@ export async function createEmployee(
     return { ok: false, reason: 'rehire_candidate', employee: toDto(existing) };
   }
 
+  // ADR-0026: app-layer per-site uniqueness for the employee_number.
+  if (number !== null) {
+    const numberClash = await findByEmployeeNumber(siteId, number);
+    if (numberClash) {
+      return { ok: false, reason: 'employee_number_taken', employee: toDto(numberClash) };
+    }
+  }
+
   const created = await prisma.$transaction(async (tx) => {
     const e = await tx.bonusEmployee.create({
       data: {
         site_id: siteId,
         full_name: fullName,
+        employee_number: number,
         notes: input.notes ?? null,
         previous_names: [],
       },
@@ -233,6 +297,71 @@ export async function renameEmployee(
         full_name: trimmed,
         previous_names: history as unknown as Prisma.InputJsonValue,
       },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.actorUserId,
+        actor_label: actor.actorLabel ?? null,
+        action: 'update' satisfies AuditAction,
+        table_name: 'bonus_employees',
+        row_id: id,
+        before: serializeForAudit(toDto(existing)),
+        after: serializeForAudit(toDto(e)),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return e;
+  });
+
+  return { ok: true, employee: toDto(updated) };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Set / clear employee_number (ADR-0026)
+// ────────────────────────────────────────────────────────────────────
+
+export type SetEmployeeNumberResult =
+  | { ok: true; employee: BonusEmployeeDto }
+  | { ok: false; reason: 'not_found' | 'employee_number_invalid' }
+  | { ok: false; reason: 'employee_number_taken'; employee: BonusEmployeeDto };
+
+/**
+ * Set or clear an employee's 4-digit `employee_number` (ADR-0026).
+ *
+ *   - `newNumber` of `''` / `null` clears it.
+ *   - A non-empty value must match `^[0-9]{4}$` and be free among ACTIVE rows at
+ *     the same site (app-layer per-site uniqueness — there is no DB constraint).
+ *
+ * Audited exactly like `renameEmployee` (§9b): the before/after DTO snapshots
+ * land in an `update` audit row in the SAME transaction. The change is NOT
+ * recorded in `previous_names` — that array is name history only; the number's
+ * history is reconstructable from the append-only audit log.
+ */
+export async function setEmployeeNumber(
+  siteId: string,
+  id: string,
+  newNumber: string | null,
+  actor: ActorContext,
+): Promise<SetEmployeeNumberResult> {
+  const number = normalizeEmployeeNumber(newNumber);
+  if (number === 'invalid') return { ok: false, reason: 'employee_number_invalid' };
+
+  const existing = await prisma.bonusEmployee.findFirst({ where: { id, site_id: siteId } });
+  if (!existing) return { ok: false, reason: 'not_found' };
+
+  // No-op (already this value, including null→null) writes nothing.
+  if (existing.employee_number === number) return { ok: true, employee: toDto(existing) };
+
+  if (number !== null) {
+    const clash = await findByEmployeeNumber(siteId, number, id);
+    if (clash) return { ok: false, reason: 'employee_number_taken', employee: toDto(clash) };
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const e = await tx.bonusEmployee.update({
+      where: { id },
+      data: { employee_number: number },
     });
     await tx.auditLog.create({
       data: {
@@ -341,4 +470,4 @@ export async function getEmployee(siteId: string, id: string): Promise<BonusEmpl
 }
 
 // Re-export internals tests need to drive without a DB.
-export const __testing = { parsePreviousNames, serializeForAudit };
+export const __testing = { parsePreviousNames, serializeForAudit, normalizeEmployeeNumber };

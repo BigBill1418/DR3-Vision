@@ -5,6 +5,45 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-15 — Added: Employee # surfaced end-to-end in Manage Employees UI (ADR-0026)
+
+ADR-0026 added the `bonus_employees.employee_number` column + backfill but no UI
+or API read or wrote it (`grep employee_number src/` returned nothing). The
+"Manage Employees" screen (`/bonus/employees`) now **shows and manages** the
+field — closing the gap ADR-0026 flagged ("no UI consumes it yet" + "a future
+write path must add the app-level per-site uniqueness check").
+
+- **Display:** each employee row shows `Employee #: <number>` or an italic
+  "No Employee #" empty state (most rows have none — only the 21 legacy Woodland
+  imports carry one).
+- **Create:** the Add-employee row gains an optional "Employee # (optional)"
+  input alongside the name.
+- **Edit:** a per-row "Edit #" inline editor sets or clears the number
+  (clearing = empty input → stored `null`). Uses `onClick` handlers, no `<form>`
+  (CLAUDE.md #10).
+- **Validation:** `employee_number` stays a `String?`; when present it must match
+  `^[0-9]{4}$` (the live prod data format — all 21 rows are exactly 4 digits).
+  Per-site uniqueness is enforced at the **app layer** among **active** rows
+  (`deleted_at IS NULL`, mirroring the §9a rehire freeing) — no DB constraint,
+  per ADR-0026. Duplicate → 409; bad format → 422; both surface inline.
+- **Audit:** the new `set_number` PATCH action writes an `update` audit row with
+  before/after DTO snapshots in the same transaction, exactly like the §9b
+  rename path. The append-only audit log is never mutated destructively
+  (CLAUDE.md #6).
+- **i18n:** the bonus surface had no `I18nProvider` and shipped English-only
+  hardcoded strings. Wired the manager-namespace dictionary into the `/bonus`
+  layout (mirroring `/dashboard`) and added a `bonus_employees` namespace to
+  `en` / `es` / `ur` (RTL) `manager.json`; the Manage Employees page + component
+  are now fully translated (CLAUDE.md #4). Brand stays DR3 green/cyan dark
+  surface — no red/navy/gold introduced (#3).
+
+Files: `src/lib/bonus/employees.ts` (DTO + `setEmployeeNumber` +
+`normalizeEmployeeNumber` + `findByEmployeeNumber`), the two
+`api/bonus/employees` routes, `app/bonus/employees/{page,EmployeeManager}.tsx`,
+`app/bonus/layout.tsx`, the three `manager.json` locales, and the two test
+files (+21 new cases; `npm test` 755 green, `tsc`/ESLint/`prisma validate`
+clean).
+
 ### 2026-06-15 — Added: `employee_number` on bonus processors (ADR-0026)
 
 New nullable `bonus_employees.employee_number` column + `(site_id,
