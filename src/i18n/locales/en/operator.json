@@ -184,5 +184,11 @@
     "hr_ago": "{{n}} hr ago",
     "day_ago_one": "{{n}} day ago",
     "day_ago_other": "{{n}} days ago"
+  },
+  "update_prompt": {
+    "title": "A new version is available",
+    "body": "Tap reload to get the latest. Your saved work is kept.",
+    "reload": "Reload",
+    "dismiss": "Dismiss"
   }
 }

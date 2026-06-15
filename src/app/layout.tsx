@@ -3,6 +3,9 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { dirFor } from '@/i18n/config';
 import { getLocale } from '@/i18n/get-locale';
+import { getDictionary } from '@/i18n/dictionary';
+import { I18nProvider } from '@/i18n/provider';
+import { UpdatePrompt } from './UpdatePrompt';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -43,10 +46,21 @@ export const viewport: Viewport = {
 // the global RTL flip the moment its strings are localized.
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const locale = await getLocale();
+  // The PWA update prompt mounts in the root shell so it appears on every
+  // surface (operator, manager, bonus). It needs translated strings, but the
+  // root layout has no I18nProvider of its own (the route-group layouts each
+  // mount their own). Rather than wrap the whole tree — which would collide
+  // with the child providers — we resolve the locale here (already done above
+  // for <html dir/lang>) and wrap ONLY the prompt in a scoped provider with the
+  // operator dictionary (which carries the app-shell `update_prompt.*` keys).
+  const dict = getDictionary(locale);
   return (
     <html lang={locale} dir={dirFor(locale)} className={inter.variable}>
       <body className="min-h-screen bg-dr3-space font-sans text-dr3-mist antialiased">
         {children}
+        <I18nProvider locale={locale} dict={dict}>
+          <UpdatePrompt />
+        </I18nProvider>
       </body>
     </html>
   );

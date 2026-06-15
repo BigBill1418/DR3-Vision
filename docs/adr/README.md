@@ -34,6 +34,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0024   | All-sites manager (`all_sites` flag) — amends hard-rule #2 + ADR-0019.2 §1                                    | Accepted                                                        |
 | 0025   | Escalation & notification delivery hardening (ntfy retry + t4 archival-state exclusion; extends 0019.1, 0023) | Accepted                                                        |
 | 0026   | Extract legacy employee numbers from `bonus_employees.full_name` (extends 0019, 0023)                         | Accepted                                                        |
+| 0027   | PWA user-prompted update (waiting-SW + tap-to-reload; supersedes the deferred-prompt note in 0006)            | Accepted                                                        |
 
 ## How to write a new ADR
 
