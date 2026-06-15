@@ -16,6 +16,7 @@ interface MockEmployee {
   id: string;
   site_id: string;
   full_name: string;
+  employee_number: string | null;
   previous_names: unknown;
   is_active: boolean;
   user_id: string | null;
@@ -55,6 +56,7 @@ function insertEmp(
     id: p.id ?? `emp-${++idCounter}`,
     site_id: p.site_id,
     full_name: p.full_name,
+    employee_number: p.employee_number ?? null,
     previous_names: p.previous_names ?? [],
     is_active: p.is_active ?? true,
     user_id: p.user_id ?? null,
@@ -72,6 +74,7 @@ function matchesWhere(e: MockEmployee, where: Record<string, unknown>): boolean 
     if (k === 'id' && e.id !== v) return false;
     if (k === 'site_id' && e.site_id !== v) return false;
     if (k === 'is_active' && e.is_active !== v) return false;
+    if (k === 'employee_number' && e.employee_number !== v) return false;
   }
   return true;
 }
@@ -124,6 +127,7 @@ vi.mock('@/lib/prisma', () => {
       const e = insertEmp({
         site_id: data.site_id as string,
         full_name: data.full_name as string,
+        employee_number: (data.employee_number as string | null) ?? null,
         notes: (data.notes as string | null) ?? null,
         previous_names: data.previous_names ?? [],
       });
@@ -135,6 +139,7 @@ vi.mock('@/lib/prisma', () => {
         if (!e) throw new Error('not found');
         for (const k of [
           'full_name',
+          'employee_number',
           'previous_names',
           'is_active',
           'deleted_at',
@@ -220,6 +225,208 @@ describe('createEmployee', () => {
     const { createEmployee } = await import('./employees');
     const r = await createEmployee(WOODLAND, { full_name: 'Cross Site' }, ACTOR);
     expect(r.ok).toBe(true);
+  });
+
+  // ── ADR-0026: employee_number on create ──────────────────────────────
+  it('creates an employee WITH a valid 4-digit employee_number', async () => {
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(
+      WOODLAND,
+      { full_name: 'Numbered Sam', employee_number: '5420' },
+      ACTOR,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBe('5420');
+  });
+
+  it('creates an employee WITHOUT a number (employee_number is null)', async () => {
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(WOODLAND, { full_name: 'No Number' }, ACTOR);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBeNull();
+  });
+
+  it('treats an empty-string employee_number as null (cleared)', async () => {
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(
+      WOODLAND,
+      { full_name: 'Blank Num', employee_number: '  ' },
+      ACTOR,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBeNull();
+  });
+
+  it('rejects a non-4-digit employee_number', async () => {
+    const { createEmployee } = await import('./employees');
+    for (const bad of ['12', '12345', 'abcd', '12a4', '123 ']) {
+      const r = await createEmployee(
+        WOODLAND,
+        { full_name: `Bad ${bad}`, employee_number: bad },
+        ACTOR,
+      );
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toBe('employee_number_invalid');
+    }
+  });
+
+  it('rejects a duplicate employee_number held by another ACTIVE employee at the same site', async () => {
+    insertEmp({
+      id: 'e-num',
+      site_id: WOODLAND,
+      full_name: 'Holder',
+      employee_number: '6048',
+      is_active: true,
+    });
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(
+      WOODLAND,
+      { full_name: 'Claimant', employee_number: '6048' },
+      ACTOR,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('employee_number_taken');
+    if (r.reason !== 'employee_number_taken') return;
+    expect(r.employee.id).toBe('e-num');
+  });
+
+  it('allows a duplicate employee_number if the holder is INACTIVE (freed like a rehire name)', async () => {
+    insertEmp({
+      id: 'e-gone',
+      site_id: WOODLAND,
+      full_name: 'Old Holder',
+      employee_number: '6317',
+      is_active: false,
+      deleted_at: new Date('2026-04-01T00:00:00Z'),
+    });
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(
+      WOODLAND,
+      { full_name: 'New Holder', employee_number: '6317' },
+      ACTOR,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBe('6317');
+  });
+
+  it('is site-scoped: the same number at Eugene does NOT block a Woodland create', async () => {
+    insertEmp({
+      id: 'e-eu-num',
+      site_id: EUGENE,
+      full_name: 'Eugene Num',
+      employee_number: '6344',
+      is_active: true,
+    });
+    const { createEmployee } = await import('./employees');
+    const r = await createEmployee(
+      WOODLAND,
+      { full_name: 'Woodland Num', employee_number: '6344' },
+      ACTOR,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBe('6344');
+  });
+});
+
+describe('setEmployeeNumber (ADR-0026)', () => {
+  it('sets a number and writes an update audit row with before/after', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'Pat', is_active: true });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '5680', ACTOR);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBe('5680');
+
+    const row = auditRows.find((a) => a.action === 'update' && a.row_id === 'e1');
+    expect(row).toBeDefined();
+    expect(row?.table_name).toBe('bonus_employees');
+    expect((row?.before as { employee_number: string | null }).employee_number).toBeNull();
+    expect((row?.after as { employee_number: string | null }).employee_number).toBe('5680');
+  });
+
+  it('clears a number when given an empty string (sets it to null)', async () => {
+    insertEmp({
+      id: 'e1',
+      site_id: WOODLAND,
+      full_name: 'Pat',
+      employee_number: '5680',
+      is_active: true,
+    });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '', ACTOR);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.employee.employee_number).toBeNull();
+    expect(auditRows.find((a) => a.action === 'update' && a.row_id === 'e1')).toBeDefined();
+  });
+
+  it('no-op (same value, including null→null) writes nothing', async () => {
+    insertEmp({
+      id: 'e1',
+      site_id: WOODLAND,
+      full_name: 'Pat',
+      employee_number: null,
+      is_active: true,
+    });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '', ACTOR);
+    expect(r.ok).toBe(true);
+    expect(auditRows.find((a) => a.action === 'update')).toBeUndefined();
+  });
+
+  it('rejects an invalid number', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'Pat', is_active: true });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '12', ACTOR);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('employee_number_invalid');
+  });
+
+  it('rejects a number held by another active employee at the site', async () => {
+    insertEmp({ id: 'e1', site_id: WOODLAND, full_name: 'Pat', is_active: true });
+    insertEmp({
+      id: 'e2',
+      site_id: WOODLAND,
+      full_name: 'Lee',
+      employee_number: '6048',
+      is_active: true,
+    });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '6048', ACTOR);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('employee_number_taken');
+  });
+
+  it('allows keeping the SAME number on the SAME row (excludeId path, no self-collision)', async () => {
+    insertEmp({
+      id: 'e1',
+      site_id: WOODLAND,
+      full_name: 'Pat',
+      employee_number: '6048',
+      is_active: true,
+    });
+    const { setEmployeeNumber } = await import('./employees');
+    // Re-set to the same value is a no-op success (not a self-collision).
+    const r = await setEmployeeNumber(WOODLAND, 'e1', '6048', ACTOR);
+    expect(r.ok).toBe(true);
+  });
+
+  it('refuses to set a number on a row at another site (not_found)', async () => {
+    insertEmp({ id: 'e-eu', site_id: EUGENE, full_name: 'Other', is_active: true });
+    const { setEmployeeNumber } = await import('./employees');
+    const r = await setEmployeeNumber(WOODLAND, 'e-eu', '5420', ACTOR);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('not_found');
   });
 });
 

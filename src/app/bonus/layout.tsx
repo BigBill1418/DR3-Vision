@@ -9,6 +9,9 @@
 // still enforces its own gate (CLAUDE.md hard rule #6 — never trust the layout).
 
 import { tryBonusAccess } from '@/lib/bonus/access';
+import { getLocale } from '@/i18n/get-locale';
+import { getManagerDictionary } from '@/i18n/dictionary';
+import { I18nProvider } from '@/i18n/provider';
 import { SiteSwitchBanner } from './SiteSwitchBanner';
 
 export const dynamic = 'force-dynamic';
@@ -17,10 +20,17 @@ export default async function BonusLayout({ children }: { children: React.ReactN
   const gate = await tryBonusAccess();
   const showBanner = gate.ok && gate.ctx.allowedSites.length > 1;
 
+  // CLAUDE.md hard rule #4 — EN/ES/UR ship on day 1 on every user-facing
+  // surface. The bonus tree mirrors the dashboard: resolve the locale once and
+  // hand the manager-namespace dictionary into a client I18nProvider so bonus
+  // client components (EmployeeManager, ...) can `useT()` with `bonus_*` keys.
+  const locale = await getLocale();
+  const dict = getManagerDictionary(locale);
+
   return (
-    <>
+    <I18nProvider locale={locale} dict={dict}>
       {showBanner ? <SiteSwitchBanner activeSite={gate.ctx.siteCode} /> : null}
       {children}
-    </>
+    </I18nProvider>
   );
 }

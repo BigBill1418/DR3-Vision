@@ -18,6 +18,15 @@ export const dynamic = 'force-dynamic';
 
 const createSchema = z.object({
   full_name: z.string().min(1).max(120),
+  // ADR-0026: optional legacy roster number. Validated as exactly 4 digits at
+  // the data layer (normalizeEmployeeNumber) — here we accept any short string /
+  // empty / null and let the data layer report `employee_number_invalid`, so the
+  // format rule lives in exactly one place. Capped at 8 to reject obvious junk
+  // without duplicating the regex.
+  employee_number: z
+    .union([z.string().max(8), z.literal(''), z.null()])
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : null)),
   notes: z
     .union([z.string().max(2000), z.literal(''), z.null()])
     .optional()
@@ -63,7 +72,11 @@ export async function POST(req: Request) {
 
   const result = await createEmployee(
     ctx.siteId,
-    { full_name: parsed.data.full_name, notes: parsed.data.notes },
+    {
+      full_name: parsed.data.full_name,
+      employee_number: parsed.data.employee_number,
+      notes: parsed.data.notes,
+    },
     actorFrom(req, ctx.userId),
   );
 
@@ -72,6 +85,16 @@ export async function POST(req: Request) {
   switch (result.reason) {
     case 'name_required':
       return NextResponse.json({ error: 'Employee name is required.' }, { status: 422 });
+    case 'employee_number_invalid':
+      return NextResponse.json({ error: 'Employee # must be exactly 4 digits.' }, { status: 422 });
+    case 'employee_number_taken':
+      return NextResponse.json(
+        {
+          error: 'Another active employee already has this Employee #.',
+          employee: result.employee,
+        },
+        { status: 409 },
+      );
     case 'name_taken':
       return NextResponse.json(
         { error: 'An active employee already has this name.', employee: result.employee },

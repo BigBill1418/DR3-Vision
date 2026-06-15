@@ -11,7 +11,11 @@ import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { listEmployees, type EmployeeStatusFilter, type EmployeeSort } from '@/lib/bonus/employees';
+import { getLocale } from '@/i18n/get-locale';
+import { getManagerDictionary, translate } from '@/i18n/dictionary';
 import { EmployeeManager, type EmployeeRow } from './EmployeeManager';
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 export const dynamic = 'force-dynamic';
 
@@ -29,10 +33,14 @@ function parseSort(v: string | undefined): EmployeeSort {
 
 export default async function BonusEmployeesPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
+  const locale = await getLocale();
+  const dict = getManagerDictionary(locale);
+  const t: Translate = (key, vars) => translate(dict, key, vars);
+
   const gate = await tryBonusAccess(parseSiteCode(sp.site));
   if (!gate.ok) {
     if (gate.status === 401) redirect('/login?next=/bonus/employees');
-    return <ForbiddenPage />;
+    return <ForbiddenPage t={t} />;
   }
 
   const status = parseStatus(sp.status);
@@ -42,6 +50,7 @@ export default async function BonusEmployeesPage({ searchParams }: { searchParam
   const rows: EmployeeRow[] = employees.map((e) => ({
     id: e.id,
     full_name: e.full_name,
+    employee_number: e.employee_number,
     previous_names: e.previous_names,
     is_active: e.is_active,
     deleted_at: e.deleted_at ? e.deleted_at.toISOString() : null,
@@ -55,16 +64,15 @@ export default async function BonusEmployeesPage({ searchParams }: { searchParam
             href={HOME_ROUTE}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
           >
-            ← Back to dashboard
+            {t('bonus_employees.back_to_dashboard')}
           </Link>
-          <h1 className="text-3xl font-bold tracking-tight">Bonus Employees</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{t('bonus_employees.page_title')}</h1>
           <p className="text-sm text-dr3-mist-dim">
-            {gate.ctx.siteName} processor roster. Add, rename, and (de)activate the employees whose
-            daily mattress counts drive the bonus.
+            {t('bonus_employees.page_subtitle', { name: gate.ctx.siteName })}
           </p>
         </header>
 
-        <Filters status={status} sort={sort} />
+        <Filters status={status} sort={sort} t={t} />
 
         <EmployeeManager employees={rows} />
       </div>
@@ -72,21 +80,39 @@ export default async function BonusEmployeesPage({ searchParams }: { searchParam
   );
 }
 
-function Filters({ status, sort }: { status: EmployeeStatusFilter; sort: EmployeeSort }) {
+const STATUS_LABEL_KEY: Record<EmployeeStatusFilter, string> = {
+  active: 'bonus_employees.status_active',
+  inactive: 'bonus_employees.status_inactive',
+  all: 'bonus_employees.status_all',
+};
+const SORT_LABEL_KEY: Record<EmployeeSort, string> = {
+  name: 'bonus_employees.sort_name',
+  status: 'bonus_employees.sort_status',
+};
+
+function Filters({
+  status,
+  sort,
+  t,
+}: {
+  status: EmployeeStatusFilter;
+  sort: EmployeeSort;
+  t: Translate;
+}) {
   // URL is the state — plain links, no <form>, no client JS (CLAUDE.md #10).
   return (
     <section className="grid gap-4 sm:grid-cols-2">
-      <FilterGroup label="Status">
+      <FilterGroup label={t('bonus_employees.filter_status')}>
         {STATUSES.map((s) => (
           <FilterLink key={s} href={buildHref({ status: s, sort })} active={status === s}>
-            {capitalize(s)}
+            {t(STATUS_LABEL_KEY[s])}
           </FilterLink>
         ))}
       </FilterGroup>
-      <FilterGroup label="Sort by">
+      <FilterGroup label={t('bonus_employees.filter_sort')}>
         {SORTS.map((s) => (
           <FilterLink key={s} href={buildHref({ status, sort: s })} active={sort === s}>
-            {capitalize(s)}
+            {t(SORT_LABEL_KEY[s])}
           </FilterLink>
         ))}
       </FilterGroup>
@@ -133,22 +159,16 @@ function buildHref(params: { status: EmployeeStatusFilter; sort: EmployeeSort })
   return s ? `/bonus/employees?${s}` : '/bonus/employees';
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function ForbiddenPage() {
+function ForbiddenPage({ t }: { t: Translate }) {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
-      <h1 className="text-2xl font-semibold">Access denied</h1>
-      <p className="mt-2 text-dr3-mist-dim">
-        Bonus management is limited to site managers and administrators.
-      </p>
+      <h1 className="text-2xl font-semibold">{t('bonus_employees.forbidden_heading')}</h1>
+      <p className="mt-2 text-dr3-mist-dim">{t('bonus_employees.forbidden_body')}</p>
       <Link
         href={HOME_ROUTE}
         className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
       >
-        Back to dashboard
+        {t('bonus_employees.back_to_dashboard')}
       </Link>
     </main>
   );

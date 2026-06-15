@@ -1,22 +1,31 @@
 'use client';
 
-// ADR-0019 §9 — Bonus employee management client surface.
+// ADR-0019 §9 + ADR-0026 — Bonus employee management client surface.
 //
-// Add / rename / deactivate / reactivate, all via fetch() to the gated
-// /api/bonus/employees endpoints + router.refresh() on success (CLAUDE.md hard
-// rule #10 — no <form>, no server actions). The server page owns the gate and
-// the initial list; this component re-fetches the page after each mutation.
+// Add / rename / set-Employee# / deactivate / reactivate, all via fetch() to
+// the gated /api/bonus/employees endpoints + router.refresh() on success
+// (CLAUDE.md hard rule #10 — no <form>, no server actions). The server page
+// owns the gate and the initial list; this component re-fetches after each
+// mutation.
 //
 // §9a rehire flow: a create that collides with a deactivated record returns
 // { rehire_candidate: true, employee } (HTTP 409). We surface a confirm prompt
 // — default = reactivate — instead of an error.
+//
+// ADR-0026 Employee #: an optional 4-digit roster number (only the 21 imported
+// legacy Woodland rows carry one). Set on create, edited inline per row.
+// Per-site uniqueness among active rows is enforced server-side; a 409 surfaces
+// as an inline error. Copy is i18n via the bonus layout's I18nProvider
+// (CLAUDE.md hard rule #4).
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useT } from '@/i18n/provider';
 
 export interface EmployeeRow {
   id: string;
   full_name: string;
+  employee_number: string | null;
   previous_names: { name: string; changed_at: string }[];
   is_active: boolean;
   deleted_at: string | null;
@@ -39,13 +48,18 @@ function formatDate(iso: string | null): string {
 }
 
 export function EmployeeManager({ employees }: Props) {
+  const t = useT();
   const router = useRouter();
   const [newName, setNewName] = useState('');
+  const [newNumber, setNewNumber] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [rehire, setRehire] = useState<RehirePrompt | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  // Separate inline editor for the Employee #, independent of the rename editor.
+  const [numberEditId, setNumberEditId] = useState<string | null>(null);
+  const [numberDraft, setNumberDraft] = useState('');
 
   const refresh = () => router.refresh();
 
@@ -53,7 +67,7 @@ export function EmployeeManager({ employees }: Props) {
     setError(null);
     const name = newName.trim();
     if (!name) {
-      setError('Enter an employee name.');
+      setError(t('bonus_employees.add_error_no_name'));
       return;
     }
     setPending(true);
@@ -61,10 +75,11 @@ export function EmployeeManager({ employees }: Props) {
       const res = await fetch('/api/bonus/employees', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: name }),
+        body: JSON.stringify({ full_name: name, employee_number: newNumber.trim() || null }),
       });
       if (res.status === 201) {
         setNewName('');
+        setNewNumber('');
         refresh();
         return;
       }
@@ -81,7 +96,7 @@ export function EmployeeManager({ employees }: Props) {
         });
         return;
       }
-      setError(body.error ?? 'Could not add employee.');
+      setError(body.error ?? t('bonus_employees.add_error_generic'));
     } finally {
       setPending(false);
     }
@@ -101,7 +116,7 @@ export function EmployeeManager({ employees }: Props) {
         return true;
       }
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(body.error ?? 'Action failed.');
+      setError(body.error ?? t('bonus_employees.action_error_generic'));
       return false;
     } finally {
       setPending(false);
@@ -114,19 +129,33 @@ export function EmployeeManager({ employees }: Props) {
     if (ok) {
       setRehire(null);
       setNewName('');
+      setNewNumber('');
     }
   };
 
   const saveRename = async (id: string) => {
     const name = editName.trim();
     if (!name) {
-      setError('Enter an employee name.');
+      setError(t('bonus_employees.add_error_no_name'));
       return;
     }
     const ok = await patch(id, { action: 'rename', full_name: name });
     if (ok) {
       setEditingId(null);
       setEditName('');
+    }
+  };
+
+  const saveNumber = async (id: string) => {
+    // Empty string clears the number (sent as null); a value is validated
+    // server-side as exactly 4 digits.
+    const ok = await patch(id, {
+      action: 'set_number',
+      employee_number: numberDraft.trim() || null,
+    });
+    if (ok) {
+      setNumberEditId(null);
+      setNumberDraft('');
     }
   };
 
@@ -149,8 +178,10 @@ export function EmployeeManager({ employees }: Props) {
           data-testid="bonus-rehire-prompt"
         >
           <p className="text-sm text-dr3-mist">
-            <strong>{rehire.name}</strong> was deactivated on {formatDate(rehire.deactivatedAt)}.
-            Reactivate this employee instead of creating a duplicate?
+            {t('bonus_employees.rehire_body', {
+              name: rehire.name,
+              date: formatDate(rehire.deactivatedAt),
+            })}
           </p>
           <div className="flex flex-wrap gap-3">
             <button
@@ -161,7 +192,7 @@ export function EmployeeManager({ employees }: Props) {
               className="inline-flex items-center rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
               data-testid="bonus-rehire-confirm"
             >
-              Reactivate {rehire.name}
+              {t('bonus_employees.rehire_confirm', { name: rehire.name })}
             </button>
             <button
               type="button"
@@ -169,7 +200,7 @@ export function EmployeeManager({ employees }: Props) {
               className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
               data-testid="bonus-rehire-cancel"
             >
-              Cancel
+              {t('bonus_employees.rehire_cancel')}
             </button>
           </div>
         </div>
@@ -177,14 +208,30 @@ export function EmployeeManager({ employees }: Props) {
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-1 flex-col gap-2">
-          <span className="text-sm font-medium text-dr3-mist-dim">Add employee</span>
+          <span className="text-sm font-medium text-dr3-mist-dim">
+            {t('bonus_employees.add_label')}
+          </span>
           <input
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="Full name"
+            placeholder={t('bonus_employees.add_name_placeholder')}
             className="rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
             data-testid="bonus-employee-new-name"
+          />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium text-dr3-mist-dim">
+            {t('bonus_employees.employee_number_label')}
+          </span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={newNumber}
+            onChange={(e) => setNewNumber(e.target.value)}
+            placeholder={t('bonus_employees.add_number_placeholder')}
+            className="w-44 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
+            data-testid="bonus-employee-new-number"
           />
         </label>
         <button
@@ -194,14 +241,14 @@ export function EmployeeManager({ employees }: Props) {
           className="inline-flex items-center rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="bonus-employee-add"
         >
-          + Add
+          {t('bonus_employees.add_button')}
         </button>
       </div>
 
       <ul className="flex flex-col divide-y divide-dr3-steel-light/20 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2/50">
         {employees.length === 0 ? (
           <li className="px-4 py-6 text-sm text-dr3-mist-dim" data-testid="bonus-employee-empty">
-            No employees match this filter.
+            {t('bonus_employees.list_empty')}
           </li>
         ) : (
           employees.map((e) => (
@@ -227,7 +274,7 @@ export function EmployeeManager({ employees }: Props) {
                       className="rounded-md bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
                       data-testid="bonus-employee-edit-save"
                     >
-                      Save
+                      {t('bonus_employees.save')}
                     </button>
                     <button
                       type="button"
@@ -235,15 +282,59 @@ export function EmployeeManager({ employees }: Props) {
                       className="text-xs text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
                       data-testid="bonus-employee-edit-cancel"
                     >
-                      Cancel
+                      {t('bonus_employees.cancel')}
                     </button>
                   </div>
                 ) : (
                   <span className="text-sm font-medium text-dr3-mist">{e.full_name}</span>
                 )}
+
+                {/* Employee # — inline editor or display + empty state (ADR-0026) */}
+                {numberEditId === e.id ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={numberDraft}
+                      onChange={(ev) => setNumberDraft(ev.target.value)}
+                      placeholder={t('bonus_employees.edit_number_placeholder')}
+                      className="w-28 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-2 py-1 text-dr3-mist placeholder:text-dr3-mist-dim/60 focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
+                      data-testid="bonus-employee-number-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => saveNumber(e.id)}
+                      disabled={pending}
+                      className="rounded-md bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
+                      data-testid="bonus-employee-number-save"
+                    >
+                      {t('bonus_employees.save')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNumberEditId(null)}
+                      className="text-xs text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
+                      data-testid="bonus-employee-number-cancel"
+                    >
+                      {t('bonus_employees.cancel')}
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-dr3-mist-dim" data-testid="bonus-employee-number">
+                    {t('bonus_employees.employee_number_label')}:{' '}
+                    {e.employee_number ? (
+                      <span className="font-mono text-dr3-mist">{e.employee_number}</span>
+                    ) : (
+                      <span className="italic">{t('bonus_employees.employee_number_none')}</span>
+                    )}
+                  </span>
+                )}
+
                 {e.previous_names.length > 0 ? (
                   <span className="text-xs text-dr3-mist-dim">
-                    Formerly: {e.previous_names.map((p) => p.name).join(', ')}
+                    {t('bonus_employees.formerly', {
+                      names: e.previous_names.map((p) => p.name).join(', '),
+                    })}
                   </span>
                 ) : null}
               </div>
@@ -257,9 +348,11 @@ export function EmployeeManager({ employees }: Props) {
                   }`}
                   data-testid="bonus-employee-status"
                 >
-                  {e.is_active ? 'Active' : 'Inactive'}
+                  {e.is_active
+                    ? t('bonus_employees.status_active')
+                    : t('bonus_employees.status_inactive')}
                 </span>
-                {editingId === e.id ? null : (
+                {editingId === e.id || numberEditId === e.id ? null : (
                   <>
                     <button
                       type="button"
@@ -271,7 +364,19 @@ export function EmployeeManager({ employees }: Props) {
                       className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:bg-dr3-space-2/70 hover:text-dr3-cyan"
                       data-testid="bonus-employee-rename"
                     >
-                      Rename
+                      {t('bonus_employees.rename')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNumberEditId(e.id);
+                        setNumberDraft(e.employee_number ?? '');
+                        setError(null);
+                      }}
+                      className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:bg-dr3-space-2/70 hover:text-dr3-cyan"
+                      data-testid="bonus-employee-edit-number"
+                    >
+                      {t('bonus_employees.edit_number')}
                     </button>
                     {e.is_active ? (
                       <button
@@ -281,7 +386,7 @@ export function EmployeeManager({ employees }: Props) {
                         className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:border-red-500/40 hover:bg-red-900/40 hover:text-red-100 disabled:opacity-50"
                         data-testid="bonus-employee-deactivate"
                       >
-                        Deactivate
+                        {t('bonus_employees.deactivate')}
                       </button>
                     ) : (
                       <button
@@ -291,7 +396,7 @@ export function EmployeeManager({ employees }: Props) {
                         className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1 text-xs font-medium text-dr3-mist hover:border-emerald-400/40 hover:bg-emerald-500/15 hover:text-emerald-200 disabled:opacity-50"
                         data-testid="bonus-employee-reactivate"
                       >
-                        Reactivate
+                        {t('bonus_employees.reactivate')}
                       </button>
                     )}
                   </>

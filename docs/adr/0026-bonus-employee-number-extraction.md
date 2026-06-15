@@ -50,6 +50,24 @@ DB unique constraint.
   check (scoped to `deleted_at IS NULL`).
 - The migration is idempotent and safe to re-run.
 
+## Follow-on (2026-06-15) — UI + write path shipped
+
+The two consequences flagged above ("no UI consumes it yet" and "a future
+bonus-employee write path must add the app-level per-site uniqueness check") are
+now resolved. `employee_number` is surfaced end-to-end on the Manage Employees
+screen (`/bonus/employees`): displayed per row with a "No Employee #" empty
+state, settable on create, and editable/clearable inline via a new `set_number`
+PATCH action. The format rule is `^[0-9]{4}$` (matches all 21 live rows),
+validated in one place (`normalizeEmployeeNumber`). Per-site uniqueness is
+enforced at the app layer against **active** rows only (`is_active = true`,
+i.e. `deleted_at IS NULL`) — a deactivated holder frees its number, mirroring
+the §9a rehire-name behavior. `set_number` is audited identically to the §9b
+rename (before/after DTO snapshot in the same transaction); the number's history
+is reconstructable from the append-only audit log rather than `previous_names`
+(which stays name-history-only). No DB unique constraint was added — the
+per-site app-layer rule remains the decision of record. See CHANGELOG Unreleased
+(2026-06-15, "Employee # surfaced end-to-end").
+
 ## Cross-reference
 
 Charter: Bonus Management System (ADR-0019 family). Data ground-truth and full
