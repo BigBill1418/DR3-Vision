@@ -5,6 +5,40 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-15 — Added: PWA "update available — tap to reload" prompt (ADR-0027)
+
+An installed, always-open PWA never reloads on its own, so after a deploy it
+kept serving the **old precached app shell** — whose hashed
+`/_next/static/chunks/*.js` references 404 against the new deploy, rendering
+blank pages. This once read to the operator as "all my data is gone" (nothing
+was lost; the shell was simply stale). DR3-Vision now surfaces an explicit,
+user-controlled update prompt so a stale shell can never silently strand anyone.
+
+- **SW change (minimal):** `src/app/sw.ts` flips `skipWaiting: true` →
+  `false` so a freshly installed SW parks in the `waiting` state where the page
+  can detect it. `clientsClaim` stays `true`; the existing `SKIP_WAITING`
+  message handler is retained and now drives the user-initiated promotion. The
+  **offline-queue / BackgroundSyncPlugin runtime caching is untouched.**
+- **New client component:** `src/app/UpdatePrompt.tsx` watches the SW
+  registration (`getRegistration()` + `updatefound`/`statechange`, and checks
+  `registration.waiting` on mount), and shows a non-intrusive bottom banner —
+  "A new version is available. Reload" — only on a real update (worker
+  `installed` **and** a controller already exists), never the first install.
+  Tap **Reload** → posts `SKIP_WAITING` to the waiting worker, then reloads
+  **once** on `controllerchange` (guarded against reload loops). **Dismiss**
+  defers. Never auto-reloads (operators may be mid data-entry). SSR-safe;
+  no-ops where service workers are unsupported.
+- **Mounted in the root shell** (`src/app/layout.tsx`) so it appears on every
+  surface (operator, manager, bonus). The root layout has no `I18nProvider`, so
+  the prompt is wrapped in a scoped `I18nProvider` with the operator dictionary
+  (smallest correct integration; no collision with route-group providers).
+- **i18n:** `update_prompt.{title,body,reload,dismiss}` added to the operator
+  namespace in **en/es/ur** (CLAUDE.md #4). Banner uses brand green/cyan on the
+  dark space surface (#3) with `onClick` handlers, not `<form>` (#10).
+- **Tests:** `src/app/UpdatePrompt.test.tsx` — banner renders the translated
+  strings + fires callbacks on tap; the prompt surfaces on a waiting worker,
+  posts `SKIP_WAITING`, and reloads exactly once on `controllerchange`.
+
 ### 2026-06-15 — Added: Employee # surfaced end-to-end in Manage Employees UI (ADR-0026)
 
 ADR-0026 added the `bonus_employees.employee_number` column + backfill but no UI

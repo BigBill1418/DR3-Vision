@@ -191,5 +191,11 @@
     "hr_ago": "hace {{n}} h",
     "day_ago_one": "hace {{n}} día",
     "day_ago_other": "hace {{n}} días"
+  },
+  "update_prompt": {
+    "title": "Hay una nueva versión disponible",
+    "body": "Toca recargar para obtener lo último. Tu trabajo guardado se conserva.",
+    "reload": "Recargar",
+    "dismiss": "Descartar"
   }
 }

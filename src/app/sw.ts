@@ -1,12 +1,7 @@
 /// <reference lib="webworker" />
 import { defaultCache } from '@serwist/next/worker';
 import type { PrecacheEntry, SerwistGlobalConfig, RuntimeCaching } from 'serwist';
-import {
-  CacheFirst,
-  ExpirationPlugin,
-  NetworkFirst,
-  Serwist,
-} from 'serwist';
+import { CacheFirst, ExpirationPlugin, NetworkFirst, Serwist } from 'serwist';
 import { BackgroundSyncPlugin } from '@serwist/background-sync';
 
 // Service Worker entry point for DR3-Vision (T-009 / ADR-0006).
@@ -97,8 +92,7 @@ const customCaching: RuntimeCaching[] = [
   },
   // Photo upload-url POST — queue on failure
   {
-    matcher: ({ url, sameOrigin }) =>
-      sameOrigin && url.pathname === '/api/photos/upload-url',
+    matcher: ({ url, sameOrigin }) => sameOrigin && url.pathname === '/api/photos/upload-url',
     method: 'POST',
     handler: new NetworkFirst({
       cacheName: 'dr3-no-cache',
@@ -108,8 +102,7 @@ const customCaching: RuntimeCaching[] = [
   },
   // Photo confirm POST — queue on failure
   {
-    matcher: ({ url, sameOrigin }) =>
-      sameOrigin && url.pathname === '/api/photos/confirm',
+    matcher: ({ url, sameOrigin }) => sameOrigin && url.pathname === '/api/photos/confirm',
     method: 'POST',
     handler: new NetworkFirst({
       cacheName: 'dr3-no-cache',
@@ -151,7 +144,15 @@ const serwist = new Serwist({
   // `?? []` is for `exactOptionalPropertyTypes: true` (tsconfig); at
   // runtime this is always populated.
   precacheEntries: self.__SW_MANIFEST ?? [],
-  skipWaiting: true,
+  // `skipWaiting: false` (ADR-0027) — a freshly installed SW parks in the
+  // `waiting` state instead of self-activating. This is what lets the
+  // in-page UpdatePrompt detect "an update is ready" and let the operator
+  // choose when to reload (operators may be mid data-entry at the dock).
+  // The prompt promotes the waiting worker on tap via the `SKIP_WAITING`
+  // message handler below. `clientsClaim` stays `true` so that — once the
+  // new SW DOES activate — it controls the open page immediately without a
+  // second navigation.
+  skipWaiting: false,
   clientsClaim: true,
   navigationPreload: true,
   cacheId: CACHE_VERSION,
@@ -161,9 +162,10 @@ const serwist = new Serwist({
 serwist.addEventListeners();
 
 // Allow the page to force-promote a waiting SW immediately. Used by
-// the in-page "update available" prompt (T-009 ships the SW; the
-// prompt UI is left as a follow-up since auto skipWaiting + claim
-// already covers the operator iPad use case).
+// the in-page "update available" prompt (`src/app/UpdatePrompt.tsx`,
+// ADR-0027): the client posts `SKIP_WAITING` when the operator taps
+// "Reload", we `skipWaiting()`, the new SW activates, `clientsClaim`
+// takes control, and the client reloads once on `controllerchange`.
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     void self.skipWaiting();
