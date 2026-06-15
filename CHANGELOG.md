@@ -13,8 +13,11 @@ employee_number)` index. Migration `20260615_bonus_employee_number` backfills th
 number, strips the number out of `full_name`, and records the original name in
 `previous_names` (`reason: employee_number_extracted`). Idempotent;
 behavior-neutral (no UI consumes the column yet). Per-site uniqueness enforced at
-the app layer, not the DB. Verified against production 2026-06-15 (21/107 rows;
-one soft-deleted row included).
+the app layer, not the DB. **Deployed and verified live on prod 2026-06-15** —
+migration `20260615_bonus_employee_number` applied at 18:05 UTC (11:05 AM PDT) via
+the auto-deploy `migrate deploy` step; post-deploy verification on the live DB:
+21/107 rows extracted, 0 names still numbered, 21 distinct numbers, 0 bad formats
+(one soft-deleted row included, by design).
 
 ### 2026-06-11 — Fix: manager bonus UI shows the SITE's signers (no hardcoded Woodland names)
 
