@@ -13,7 +13,7 @@
 //      away without a replacement sync).
 
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
@@ -102,5 +102,170 @@ describe('DailyEntryGrid date seeding', () => {
     );
     // Stale on purpose — this is exactly why page.tsx keys the grid by date.
     expect(countInput().value).toBe('94');
+  });
+});
+
+// ── ADR-0028 amendment-modal wiring ─────────────────────────────
+//
+// A non-admin manager editing a PRIOR day's count cannot write directly: the
+// POST returns 409 `requires_amendment`. Instead of dumping the raw error
+// string, the grid must pivot to the RequestEditModal, mapping the response's
+// `pending[]` + `approverName` onto the modal payload and pulling the employee
+// display name from its own rows. Multiple pending changes queue one at a time.
+
+// Set an <input> value the React-controlled way (native setter + input event),
+// so the component's onChange fires and state updates. Wrapped in act() so the
+// resulting state flush is captured (no "not wrapped in act(...)" warning).
+function setInputValue(el: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+  act(() => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+function clickSave() {
+  const btn = container.querySelector('[data-testid="grid-save"]') as HTMLButtonElement;
+  act(() => btn.click());
+}
+
+async function flush() {
+  // Let the awaited fetch().then(...) microtasks settle inside act().
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+describe('DailyEntryGrid — ADR-0028 amendment modal wiring', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a 409 requires_amendment response opens the modal with the mapped payload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: 'requires_amendment',
+              monthId: 'period-123',
+              approverName: 'Morena Ruiz',
+              pending: [
+                {
+                  bonus_employee_id: EMP,
+                  change_type: 'update',
+                  existing: { mattress_count: 40, note: null },
+                  proposed: { mattress_count: 55, note: null },
+                },
+              ],
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+
+    mount(
+      <DailyEntryGrid
+        rule={rule}
+        entryDate="2026-06-12"
+        editable
+        monthState="draft"
+        rows={rowsWith(40)}
+      />,
+    );
+
+    // Manager changes the prior-day count, then saves.
+    setInputValue(countInput(), '55');
+    clickSave();
+    await flush();
+
+    // The modal is open (not the raw error string).
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const text = dialog!.textContent ?? '';
+    // employeeName mapped from the grid's own rows.
+    expect(text).toContain('Aamir Mehmood');
+    // old → new values surfaced from existing/proposed.
+    expect(text).toContain('40');
+    expect(text).toContain('55');
+    // approverName from the response.
+    expect(text).toContain('Morena Ruiz');
+    // The raw error string is NOT shown in the grid error banner.
+    expect(container.querySelector('[data-testid="grid-error"]')).toBeNull();
+  });
+
+  it('multiple pending changes queue one modal at a time; cancelling advances', async () => {
+    const EMP2 = 'emp-bilal';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: 'requires_amendment',
+              monthId: 'period-123',
+              approverName: 'Morena Ruiz',
+              pending: [
+                {
+                  bonus_employee_id: EMP,
+                  change_type: 'update',
+                  existing: { mattress_count: 40, note: null },
+                  proposed: { mattress_count: 55, note: null },
+                },
+                {
+                  bonus_employee_id: EMP2,
+                  change_type: 'update',
+                  existing: { mattress_count: 10, note: null },
+                  proposed: { mattress_count: 22, note: null },
+                },
+              ],
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+
+    const rows: GridRowProps[] = [
+      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40, note: null },
+      { bonus_employee_id: EMP2, full_name: 'Bilal Khan', mattress_count: 10, note: null },
+    ];
+    mount(
+      <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,
+    );
+
+    setInputValue(
+      container.querySelector(`[data-testid="grid-count-${EMP}"]`) as HTMLInputElement,
+      '55',
+    );
+    setInputValue(
+      container.querySelector(`[data-testid="grid-count-${EMP2}"]`) as HTMLInputElement,
+      '22',
+    );
+    clickSave();
+    await flush();
+
+    // First modal is for Aamir.
+    let dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Aamir Mehmood');
+    expect(dialog.textContent).not.toContain('Bilal Khan');
+
+    // Cancel advances to the next queued change (Bilal).
+    const cancelBtn = Array.from(dialog.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Cancel',
+    ) as HTMLButtonElement;
+    act(() => cancelBtn.click());
+
+    dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain('Bilal Khan');
+
+    // Cancelling the last one drains the queue — no modal remains.
+    const cancel2 = Array.from(dialog.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Cancel',
+    ) as HTMLButtonElement;
+    act(() => cancel2.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });
