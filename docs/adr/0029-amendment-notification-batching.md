@@ -122,3 +122,36 @@ approver sees the true work ahead).
 
 - Cross-group bulk actions (deciding multiple groups in one click).
 - Partial-group decisions.
+
+## Rollout & verification (2026-06-16)
+
+Merged to `main` (PR #28) and deployed to svdp-dev prod. The `migrate` init
+container applied `20260616_amendment_submission_group`; the column is verified
+present as `submission_group_id text` (nullable). Typecheck clean; 536/536 tests
+pass, including the route assertions "N-item batch → exactly ONE submitted
+notification" and "grouped → approves the WHOLE group + exactly ONE decided
+notification", and the lib assertions "N rows share ONE submission_group_id" /
+"N=1 → null group singleton" / "approveAmendmentGroup applies all".
+
+### Pre-migration backlog behaves as singletons (expected)
+
+Requests created **before** the migration carry `submission_group_id = NULL`.
+The grouping logic treats NULL as a singleton, so each such row notifies on its
+own. Immediately after rollout the first approver cleared a ~13-row pre-migration
+backlog, which produced **one email per row** — this is the documented singleton
+behavior of legacy un-grouped rows, **not a batching regression**. Only rows
+created post-migration carry a shared group id and collapse to one notification.
+The backlog is drained (0 pending); no migration backfill is warranted for a
+one-time legacy set.
+
+### Live prod self-test (data layer, fully reverted)
+
+A 3-line grouped batch was submitted and approved directly against the production
+DB — exercising the real `createOneAmendmentInTx` / `applyApprovalInTx` write
+shape, **without** invoking the notification fan-out (which lives in the HTTP
+routes, so no email/ntfy was sent). It confirmed: all 3 rows share one non-null
+`submission_group_id`; group approval applies every row atomically in one
+transaction; the route would therefore fire exactly one decided notification for
+the batch. The test then deleted every row it created (requests, applied daily
+entries, audit rows) and asserted before==after counts across all three tables —
+zero residue.

@@ -51,6 +51,23 @@ against root cause" rule).
   N=1 submit is a null-group singleton; batch approve/reject applies all + fires
   ONE result notification; one bad item rolls the batch back; the grid pivots to
   ONE batch modal (not a queue) and POSTs a single `items[]` request.
+- **Deployed & verified (2026-06-16, svdp-dev prod):** merged to `main` (PR #28),
+  built + deployed; the `migrate` init container applied
+  `20260616_amendment_submission_group` (column verified `submission_group_id text
+YES`). Typecheck clean, 536/536 tests pass.
+  - **Legacy-backlog note (important):** amendment requests created **before** the
+    migration carry `submission_group_id = NULL` and — by design — behave as
+    singletons, so each fires its own notification. When the first approver cleared
+    the ~13-row pre-migration backlog right after rollout it produced one email per
+    row. **This is expected, not a regression** — only un-grouped legacy rows do
+    it, and the backlog is now drained (0 pending). New multi-line saves get a
+    shared group → one email.
+  - **Live prod self-test:** a 3-line grouped batch was submitted + approved
+    against the production DB (data layer only, no notifications fired), confirming
+    one shared `submission_group_id` across all rows and atomic group approval,
+    then **fully reverted** with a verified before==after row-count assertion
+    across `bonus_amendment_requests` / `bonus_daily_entries` / audit rows (zero
+    residue). Confirms one-notification-per-batch holds on real prod data.
 
 ### 2026-06-15 — Fix: complete the ADR-0028 amendment client wiring + remove the stale today-only gate
 
