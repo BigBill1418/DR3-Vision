@@ -5,6 +5,53 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-16 — Feature: amendment notification batching — one notification per root action (ADR-0029)
+
+ADR-0028 modelled each amended line item as its own request, so a manager
+correcting N rows in one save fired N approval emails to the approver, N pushes
+to Bill, and would need N approve-clicks + N result emails. A real 16-line
+correction sent Morena 16 emails. ADR-0029 groups the requests submitted
+together and notifies once per root action (applies the ADR-0037 "deduplicate
+against root cause" rule).
+
+- **Schema (`prisma/schema.prisma` + `prisma/migrations/20260616_amendment_submission_group/`):**
+  adds a nullable `submission_group_id TEXT` column (+ index) to
+  `bonus_amendment_requests`. **TEXT, not UUID** — all ids/FKs in this DB are
+  TEXT (the UUID/TEXT mismatch is what broke prod in the ADR-0028 migration).
+  The migration is additive + idempotent (`ADD COLUMN IF NOT EXISTS` /
+  `CREATE INDEX IF NOT EXISTS`), safe against the existing live-test pending row.
+- **Batch submit → ONE notification (`src/lib/bonus/amendment-requests.ts`,
+  `src/app/api/bonus/amendments/route.ts`):** the submit endpoint now accepts a
+  batch body (shared `bonusPayPeriodId` / `targetEntryDate` / `justification` +
+  an `items[]` array) as well as the legacy single-item body. `submitAmendmentBatch`
+  creates all N rows in one transaction, stamps the shared `submission_group_id`
+  (null for N=1), writes a per-row audit row for every item (hard rule #6), and
+  fires exactly one `notifyAmendmentBatchSubmitted` (one approver email, one ntfy
+  to Bill).
+- **Single batch modal (`src/app/bonus/RequestEditBatchModal.tsx`,
+  `DailyEntryGrid.tsx`):** the per-item modal **queue** is replaced by one batch
+  modal that lists every pending prior-day change, takes one ≥20-char
+  justification, shows who it routes to, and POSTs the whole batch in one request.
+  `RequestEditModal.tsx` (the per-item modal) is removed.
+- **Batch approve/reject → ONE result notification
+  (`AmendmentQueue.tsx`, `[id]/approve`, `[id]/reject`):** the queue groups
+  pending requests by `submission_group_id` and offers **Approve all** /
+  **Reject all** (reject shares one reason, entered inline — no `window.prompt`).
+  `approveAmendmentGroup` / `rejectAmendmentGroup` apply every item (each with its
+  own entry write + per-item audit, in one transaction) and fire one
+  `notifyAmendmentBatchDecided`. All ADR-0028 invariants (four-eyes eligibility,
+  requester≠approver, period-still-draft, Patrick carve-out, ping-Bill) hold per
+  request. The queue's prior **red** buttons/banner are corrected to DR3
+  green/black (hard rule #3).
+- **In-app discoverability (`src/app/bonus/page.tsx`):** a "Pending Amendments"
+  nav link with a pending-item count, shown only to admins (all-site) and
+  managers who are a signature-chain signer at their site (Patrick / non-signers
+  never see it).
+- **Tests:** batch submit creates N rows + ONE notification + a shared group id;
+  N=1 submit is a null-group singleton; batch approve/reject applies all + fires
+  ONE result notification; one bad item rolls the batch back; the grid pivots to
+  ONE batch modal (not a queue) and POSTs a single `items[]` request.
+
 ### 2026-06-15 — Fix: complete the ADR-0028 amendment client wiring + remove the stale today-only gate
 
 The Sprint 4 amendment workflow (ADR-0028, PR #26) shipped the server side, but

@@ -1,6 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+// ADR-0028 / ADR-0029 — Pending-amendments review queue.
+//
+// ADR-0029: requests submitted together share a `submission_group_id`. The
+// queue groups them so a multi-line correction is approved/rejected as ONE
+// action ("Approve all" / "Reject all") and produces ONE result notification.
+// Singletons (null group id) render and act exactly as before.
+//
+// CLAUDE.md hard rule #3 — DR3 brand is GREEN + BLACK. Approve is brand-green;
+// reject is a neutral outline (NOT red — the prior red buttons + a red error
+// banner violated the brand). Hard rule #10 — onClick only, no <form>.
+
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 export interface RequestRow {
@@ -11,6 +22,7 @@ export interface RequestRow {
   new_value: { mattress_count: number; note: string | null };
   justification: string;
   bill_pinged_at: Date | string | null;
+  submission_group_id: string | null;
   bonus_pay_period: { period_number: number; period_year: number };
   bonus_employee: { full_name: string; employee_number: string | null };
   requested_by: { name: string };
@@ -22,10 +34,51 @@ interface Props {
   requests: RequestRow[];
 }
 
+interface Group {
+  /** Stable key: the group id, or the lone request id for a singleton. */
+  key: string;
+  /** The id POSTed to approve/reject — any member works (the route expands the group). */
+  actionId: string;
+  isBatch: boolean;
+  rows: RequestRow[];
+}
+
+function dateOf(r: RequestRow): string {
+  return typeof r.target_entry_date === 'string'
+    ? r.target_entry_date.slice(0, 10)
+    : new Date(r.target_entry_date).toISOString().slice(0, 10);
+}
+
 export function AmendmentQueue({ requests }: Props) {
   const router = useRouter();
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Inline reject reason per group (replaces window.prompt).
+  const [rejectFor, setRejectFor] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  // Group rows by submission_group_id (preserving order); singletons stand alone.
+  const groups = useMemo<Group[]>(() => {
+    const byGroup = new Map<string, RequestRow[]>();
+    const order: string[] = [];
+    for (const r of requests) {
+      const k = r.submission_group_id ?? `single:${r.id}`;
+      if (!byGroup.has(k)) {
+        byGroup.set(k, []);
+        order.push(k);
+      }
+      byGroup.get(k)!.push(r);
+    }
+    return order.map((k) => {
+      const rows = byGroup.get(k)!;
+      return {
+        key: k,
+        actionId: rows[0]!.id,
+        isBatch: rows[0]!.submission_group_id !== null && rows.length > 1,
+        rows,
+      };
+    });
+  }, [requests]);
 
   if (requests.length === 0) {
     return (
@@ -35,11 +88,11 @@ export function AmendmentQueue({ requests }: Props) {
     );
   }
 
-  const act = async (id: string, action: 'approve' | 'reject', decisionNotes?: string) => {
-    setBusyId(id);
+  const act = async (g: Group, action: 'approve' | 'reject', decisionNotes?: string) => {
+    setBusyKey(g.key);
     setError(null);
     try {
-      const res = await fetch(`/api/bonus/amendments/${id}/${action}`, {
+      const res = await fetch(`/api/bonus/amendments/${g.actionId}/${action}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: action === 'reject' ? JSON.stringify({ decisionNotes }) : '{}',
@@ -47,85 +100,149 @@ export function AmendmentQueue({ requests }: Props) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setError(body?.error ?? `failed (${res.status})`);
-        setBusyId(null);
+        setBusyKey(null);
         return;
       }
+      setRejectFor(null);
+      setRejectReason('');
       router.refresh();
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusyId(null);
+      setBusyKey(null);
     }
   };
 
   return (
     <div className="mt-6 flex flex-col gap-4">
       {error ? (
-        <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+        <p
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+          role="alert"
+        >
           {error}
         </p>
       ) : null}
-      {requests.map((r) => {
-        const date =
-          typeof r.target_entry_date === 'string'
-            ? r.target_entry_date.slice(0, 10)
-            : new Date(r.target_entry_date).toISOString().slice(0, 10);
-        const oldCount = r.old_value?.mattress_count ?? null;
-        const newCount = r.new_value.mattress_count;
+
+      {groups.map((g) => {
+        const head = g.rows[0]!;
+        const date = dateOf(head);
+        const busy = busyKey === g.key;
+        const approveLabel = g.isBatch ? `Approve all (${g.rows.length})` : 'Approve';
+        const rejectLabel = g.isBatch ? `Reject all (${g.rows.length})` : 'Reject';
         return (
-          <div key={r.id} className="rounded-lg border border-dr3-cyan/20 bg-dr3-space-2/60 p-5">
+          <div
+            key={g.key}
+            className="rounded-lg border border-dr3-cyan/20 bg-dr3-space-2/60 p-5"
+            data-testid={`amendment-group-${g.key}`}
+          >
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <div>
                 <p className="text-sm font-semibold">
-                  {r.bonus_employee.full_name}
-                  {r.bonus_employee.employee_number
-                    ? ` (#${r.bonus_employee.employee_number})`
-                    : ''}{' '}
-                  — {date}
+                  {g.isBatch
+                    ? `${g.rows.length} prior-day corrections — ${date}`
+                    : `${head.bonus_employee.full_name}${
+                        head.bonus_employee.employee_number
+                          ? ` (#${head.bonus_employee.employee_number})`
+                          : ''
+                      } — ${date}`}
                 </p>
                 <p className="text-xs text-dr3-mist-dim">
-                  {r.site.name} · Pay Period {r.bonus_pay_period.period_number}/
-                  {r.bonus_pay_period.period_year} · requested by {r.requested_by.name}
-                  {r.bill_pinged_at ? ' · ⚡ pinged Bill' : ''}
+                  {head.site.name} · Pay Period {head.bonus_pay_period.period_number}/
+                  {head.bonus_pay_period.period_year} · requested by {head.requested_by.name}
+                  {head.bill_pinged_at ? ' · pinged Bill' : ''}
                 </p>
               </div>
-              <p className="font-mono text-sm">
-                {r.change_type === 'insert' ? 'NEW: ' : ''}
-                {oldCount !== null ? `${oldCount} → ` : ''}
-                {newCount}
-              </p>
             </div>
+
+            <ul className="mt-3 flex flex-col gap-1 rounded-md border border-dr3-steel-light/20 bg-dr3-space/60 px-3 py-2 text-sm">
+              {g.rows.map((r) => {
+                const oldCount = r.old_value?.mattress_count ?? null;
+                return (
+                  <li key={r.id} className="flex items-baseline justify-between gap-3">
+                    <span className="text-dr3-mist">
+                      {r.bonus_employee.full_name}
+                      {r.bonus_employee.employee_number
+                        ? ` (#${r.bonus_employee.employee_number})`
+                        : ''}
+                    </span>
+                    <span className="font-mono text-dr3-mist-dim">
+                      {r.change_type === 'insert' ? 'NEW: ' : ''}
+                      {oldCount !== null ? `${oldCount} → ` : ''}
+                      {r.new_value.mattress_count}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+
             <p className="mt-3 rounded-md border border-dr3-steel-light/20 bg-dr3-space/60 px-3 py-2 text-sm">
               <span className="text-dr3-mist-dim">Justification: </span>
-              {r.justification}
+              {head.justification}
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={busyId === r.id}
-                onClick={() => {
-                  if (confirm(`Approve this change for ${r.bonus_employee.full_name}?`)) {
-                    void act(r.id, 'approve');
-                  }
-                }}
-                className="rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-emerald-400 disabled:opacity-50"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                disabled={busyId === r.id}
-                onClick={() => {
-                  const notes = prompt('Reason for rejection:');
-                  if (notes && notes.trim().length > 0) {
-                    void act(r.id, 'reject', notes.trim());
-                  }
-                }}
-                className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-400 disabled:opacity-50"
-              >
-                Reject
-              </button>
-            </div>
+
+            {rejectFor === g.key ? (
+              <div className="mt-4 flex flex-col gap-2" data-testid={`reject-form-${g.key}`}>
+                <label htmlFor={`reject-reason-${g.key}`} className="text-sm font-medium">
+                  Reason for {g.isBatch ? 'rejecting all' : 'rejection'} (required)
+                </label>
+                <textarea
+                  id={`reject-reason-${g.key}`}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  rows={2}
+                  className="w-full rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-sm text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
+                  placeholder="e.g. Counts are correct as originally keyed."
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy || rejectReason.trim().length === 0}
+                    onClick={() => void act(g, 'reject', rejectReason.trim())}
+                    className="rounded-md border border-dr3-cyan/40 px-4 py-2 text-sm font-semibold text-dr3-mist hover:bg-dr3-space-2/80 disabled:opacity-50"
+                    data-testid={`reject-confirm-${g.key}`}
+                  >
+                    Confirm {rejectLabel.toLowerCase()}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setRejectFor(null);
+                      setRejectReason('');
+                    }}
+                    className="rounded-md border border-dr3-steel-light/30 px-4 py-2 text-sm text-dr3-mist-dim hover:bg-dr3-space-2/80"
+                  >
+                    Back
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(g, 'approve')}
+                  className="rounded-md bg-dr3-green px-4 py-2 text-sm font-semibold text-dr3-cream hover:bg-dr3-green-deep disabled:opacity-50"
+                  data-testid={`approve-${g.key}`}
+                >
+                  {busy ? 'Working…' : approveLabel}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setRejectFor(g.key);
+                    setRejectReason('');
+                    setError(null);
+                  }}
+                  className="rounded-md border border-dr3-steel-light/30 px-4 py-2 text-sm font-semibold text-dr3-mist hover:bg-dr3-space-2/80 disabled:opacity-50"
+                  data-testid={`reject-${g.key}`}
+                >
+                  {rejectLabel}
+                </button>
+              </div>
+            )}
           </div>
         );
       })}

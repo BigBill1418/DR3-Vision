@@ -24,45 +24,64 @@ vi.mock('@/lib/bonus/access', () => ({
 import { AmendmentRequestError } from '@/lib/bonus/amendment-requests';
 import { AmendmentWorkflowForbiddenError } from '@/lib/bonus/amendment-approvers';
 
-const submitAmendmentRequest = vi.fn();
+const submitAmendmentBatch = vi.fn();
 const listPendingForApprover = vi.fn();
 const approveAmendmentRequest = vi.fn();
+const approveAmendmentGroup = vi.fn();
 const rejectAmendmentRequest = vi.fn();
+const rejectAmendmentGroup = vi.fn();
 const cancelAmendmentRequest = vi.fn();
 const pingBill = vi.fn();
 vi.mock('@/lib/bonus/amendment-requests', async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
-    submitAmendmentRequest: (...a: unknown[]) => submitAmendmentRequest(...a),
+    submitAmendmentBatch: (...a: unknown[]) => submitAmendmentBatch(...a),
     listPendingForApprover: (...a: unknown[]) => listPendingForApprover(...a),
     approveAmendmentRequest: (...a: unknown[]) => approveAmendmentRequest(...a),
+    approveAmendmentGroup: (...a: unknown[]) => approveAmendmentGroup(...a),
     rejectAmendmentRequest: (...a: unknown[]) => rejectAmendmentRequest(...a),
+    rejectAmendmentGroup: (...a: unknown[]) => rejectAmendmentGroup(...a),
     cancelAmendmentRequest: (...a: unknown[]) => cancelAmendmentRequest(...a),
     pingBill: (...a: unknown[]) => pingBill(...a),
   };
 });
 
 // ── notification spies ───────────────────────────────────────────────
-const notifyAmendmentSubmitted = vi.fn(async () => {});
-const notifyAmendmentApproved = vi.fn(async () => {});
-const notifyAmendmentRejected = vi.fn(async () => {});
+const notifyAmendmentBatchSubmitted = vi.fn(async () => {});
+const notifyAmendmentBatchDecided = vi.fn(async () => {});
 const notifyAmendmentBillPinged = vi.fn(async () => {});
+const buildBatchNotifyContext = vi.fn(async () => ({
+  representativeRequestId: 'amd-1',
+  items: [],
+}));
 const buildNotifyContext = vi.fn(async () => ({ requestId: 'amd-1' }));
+const requestIdsForGroup = vi.fn(async () => ['amd-1', 'amd-2']);
 vi.mock('@/lib/bonus/amendment-notifications', () => ({
   buildNotifyContext: () => buildNotifyContext(),
-  notifyAmendmentSubmitted: (...a: unknown[]) => notifyAmendmentSubmitted(...(a as [])),
-  notifyAmendmentApproved: (...a: unknown[]) => notifyAmendmentApproved(...(a as [])),
-  notifyAmendmentRejected: (...a: unknown[]) => notifyAmendmentRejected(...(a as [])),
+  buildBatchNotifyContext: (...a: unknown[]) => buildBatchNotifyContext(...(a as [])),
+  notifyAmendmentBatchSubmitted: (...a: unknown[]) => notifyAmendmentBatchSubmitted(...(a as [])),
+  notifyAmendmentBatchDecided: (...a: unknown[]) => notifyAmendmentBatchDecided(...(a as [])),
   notifyAmendmentBillPinged: (...a: unknown[]) => notifyAmendmentBillPinged(...(a as [])),
+  requestIdsForGroup: (...a: unknown[]) => requestIdsForGroup(...(a as [])),
 }));
 
-// ── prisma user lookups (approve/reject/ping read reviewer/bill/requester) ──
+// ── prisma lookups ────────────────────────────────────────────────────
+// approve/reject read the request's group id (findUnique on the amendment),
+// then reviewer/bill/requester. The amendment findUnique returns a row whose
+// `submission_group_id` the test controls via `amendmentRow`.
+let amendmentRow: { submission_group_id: string | null; requested_by?: { email: string } } = {
+  submission_group_id: null,
+  requested_by: { email: 'janette@svdp.us' },
+};
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     user: {
       findUnique: async () => ({ name: 'Reviewer', email: 'reviewer@svdp.us' }),
       findFirst: async () => ({ email: 'bill@barnardhq.com' }),
+    },
+    bonusAmendmentRequest: {
+      findUnique: async () => amendmentRow,
     },
   },
 }));
@@ -95,10 +114,33 @@ const validBody = {
   justification: 'Keyed 76 by mistake, the real count is 67 mattresses.',
 };
 
+const batchBody = {
+  bonusPayPeriodId: VALID_PERIOD,
+  targetEntryDate: '2026-06-10',
+  justification: 'Correcting yesterday — keyed several rows from the wrong tally sheet.',
+  items: [
+    {
+      bonusEmployeeId: VALID_EMPLOYEE,
+      changeType: 'update' as const,
+      newValue: { mattress_count: 67, note: null },
+    },
+    {
+      bonusEmployeeId: '33333333-3333-3333-3333-333333333333',
+      changeType: 'update' as const,
+      newValue: { mattress_count: 12, note: null },
+    },
+  ],
+};
+
 beforeEach(() => {
   accessCtx = { siteId: 'site-woodland', userId: 'janette', isAdmin: false, siteName: 'Woodland' };
   vi.clearAllMocks();
+  amendmentRow = { submission_group_id: null, requested_by: { email: 'janette@svdp.us' } };
   buildNotifyContext.mockResolvedValue({ requestId: 'amd-1' } as never);
+  buildBatchNotifyContext.mockResolvedValue({
+    representativeRequestId: 'amd-1',
+    items: [],
+  } as never);
 });
 
 describe('POST /api/bonus/amendments', () => {
@@ -107,11 +149,11 @@ describe('POST /api/bonus/amendments', () => {
     const res = await POST(req(validBody) as never);
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ error: 'admin_uses_direct_path' });
-    expect(submitAmendmentRequest).not.toHaveBeenCalled();
+    expect(submitAmendmentBatch).not.toHaveBeenCalled();
   });
 
   it('Patrick (forbidden) → 403 patrick_or_other_non_chain_manager', async () => {
-    submitAmendmentRequest.mockRejectedValueOnce(
+    submitAmendmentBatch.mockRejectedValueOnce(
       new AmendmentWorkflowForbiddenError('patrick_or_other_non_chain_manager'),
     );
     const res = await POST(req(validBody) as never);
@@ -119,15 +161,35 @@ describe('POST /api/bonus/amendments', () => {
     expect(await res.json()).toMatchObject({ error: 'patrick_or_other_non_chain_manager' });
   });
 
-  it('happy path → 201 with request body + fires the submitted notification', async () => {
-    submitAmendmentRequest.mockResolvedValueOnce({
-      id: 'amd-1',
-      expected_approver_user_id: 'morena',
+  it('single-item body → 201, ONE batch submit + ONE submitted notification', async () => {
+    submitAmendmentBatch.mockResolvedValueOnce({
+      created: [{ id: 'amd-1', expected_approver_user_id: 'morena' }],
+      groupId: null,
     });
     const res = await POST(req(validBody) as never);
     expect(res.status).toBe(201);
-    expect(await res.json()).toMatchObject({ request: { id: 'amd-1' } });
-    expect(notifyAmendmentSubmitted).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toMatchObject({ count: 1 });
+    expect(submitAmendmentBatch).toHaveBeenCalledTimes(1);
+    expect(notifyAmendmentBatchSubmitted).toHaveBeenCalledTimes(1);
+    // The single-item shape is normalised into a 1-element batch.
+    expect(submitAmendmentBatch.mock.calls[0]![0].items).toHaveLength(1);
+  });
+
+  it('batch body (N items) → 201, ONE batch submit + exactly ONE submitted notification', async () => {
+    submitAmendmentBatch.mockResolvedValueOnce({
+      created: [
+        { id: 'amd-1', expected_approver_user_id: 'morena' },
+        { id: 'amd-2', expected_approver_user_id: 'morena' },
+      ],
+      groupId: 'grp-1',
+    });
+    const res = await POST(req(batchBody) as never);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ count: 2 });
+    expect(submitAmendmentBatch).toHaveBeenCalledTimes(1);
+    expect(submitAmendmentBatch.mock.calls[0]![0].items).toHaveLength(2);
+    // The whole batch fires ONE notification, not one per item.
+    expect(notifyAmendmentBatchSubmitted).toHaveBeenCalledTimes(1);
   });
 
   it('invalid body (missing justification) → 422', async () => {
@@ -135,13 +197,11 @@ describe('POST /api/bonus/amendments', () => {
     void _omit;
     const res = await POST(req(bad) as never);
     expect(res.status).toBe(422);
-    expect(submitAmendmentRequest).not.toHaveBeenCalled();
+    expect(submitAmendmentBatch).not.toHaveBeenCalled();
   });
 
   it('maps a service AmendmentRequestError to its status', async () => {
-    submitAmendmentRequest.mockRejectedValueOnce(
-      new AmendmentRequestError('period_not_draft', 409),
-    );
+    submitAmendmentBatch.mockRejectedValueOnce(new AmendmentRequestError('period_not_draft', 409));
     const res = await POST(req(validBody) as never);
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: 'period_not_draft' });
@@ -166,25 +226,44 @@ describe('GET /api/bonus/amendments', () => {
 });
 
 describe('POST /api/bonus/amendments/[id]/approve', () => {
-  it('happy path → 200, fires the approved notification', async () => {
+  it('singleton → 200, approves the one request + fires ONE decided notification', async () => {
     accessCtx = { ...accessCtx, userId: 'morena' };
+    amendmentRow = { submission_group_id: null, requested_by: { email: 'janette@svdp.us' } };
     approveAmendmentRequest.mockResolvedValueOnce({
       request: { id: 'amd-1', state: 'approved', requested_by_user_id: 'janette' },
     });
     const res = await approve(req({}) as never, params('amd-1') as never);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ request: { state: 'approved' } });
-    expect(notifyAmendmentApproved).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(approveAmendmentRequest).toHaveBeenCalledTimes(1);
+    expect(approveAmendmentGroup).not.toHaveBeenCalled();
+    expect(notifyAmendmentBatchDecided).toHaveBeenCalledTimes(1);
+  });
+
+  it('grouped → 200, approves the WHOLE group + fires exactly ONE decided notification', async () => {
+    accessCtx = { ...accessCtx, userId: 'morena' };
+    amendmentRow = { submission_group_id: 'grp-1', requested_by: { email: 'janette@svdp.us' } };
+    approveAmendmentGroup.mockResolvedValueOnce({
+      appliedCount: 3,
+      representativeRequestId: 'amd-1',
+    });
+    const res = await approve(req({}) as never, params('amd-1') as never);
+    expect(res.status).toBe(200);
+    expect(approveAmendmentGroup).toHaveBeenCalledTimes(1);
+    expect(approveAmendmentRequest).not.toHaveBeenCalled();
+    // ONE notification for the whole group, not one per applied item.
+    expect(notifyAmendmentBatchDecided).toHaveBeenCalledTimes(1);
   });
 
   it('by the requester → 403 (service rejects not_eligible_to_approve)', async () => {
+    amendmentRow = { submission_group_id: null, requested_by: { email: 'janette@svdp.us' } };
     approveAmendmentRequest.mockRejectedValueOnce(
       new AmendmentRequestError('not_eligible_to_approve', 403),
     );
     const res = await approve(req({}) as never, params('amd-1') as never);
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({ error: 'not_eligible_to_approve' });
-    expect(notifyAmendmentApproved).not.toHaveBeenCalled();
+    expect(notifyAmendmentBatchDecided).not.toHaveBeenCalled();
   });
 });
 
@@ -195,8 +274,9 @@ describe('POST /api/bonus/amendments/[id]/reject', () => {
     expect(rejectAmendmentRequest).not.toHaveBeenCalled();
   });
 
-  it('happy path → 200, fires the rejected notification', async () => {
+  it('singleton → 200, rejects the one + fires ONE decided notification', async () => {
     accessCtx = { ...accessCtx, userId: 'morena' };
+    amendmentRow = { submission_group_id: null, requested_by: { email: 'janette@svdp.us' } };
     rejectAmendmentRequest.mockResolvedValueOnce({
       id: 'amd-1',
       state: 'rejected',
@@ -207,8 +287,27 @@ describe('POST /api/bonus/amendments/[id]/reject', () => {
       params('amd-1') as never,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ request: { state: 'rejected' } });
-    expect(notifyAmendmentRejected).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(rejectAmendmentRequest).toHaveBeenCalledTimes(1);
+    expect(rejectAmendmentGroup).not.toHaveBeenCalled();
+    expect(notifyAmendmentBatchDecided).toHaveBeenCalledTimes(1);
+  });
+
+  it('grouped → 200, rejects the WHOLE group (one reason) + fires exactly ONE decided notification', async () => {
+    accessCtx = { ...accessCtx, userId: 'morena' };
+    amendmentRow = { submission_group_id: 'grp-1', requested_by: { email: 'janette@svdp.us' } };
+    rejectAmendmentGroup.mockResolvedValueOnce({
+      rejectedCount: 3,
+      representativeRequestId: 'amd-1',
+    });
+    const res = await reject(
+      req({ decisionNotes: 'These counts are correct as originally keyed.' }) as never,
+      params('amd-1') as never,
+    );
+    expect(res.status).toBe(200);
+    expect(rejectAmendmentGroup).toHaveBeenCalledTimes(1);
+    expect(rejectAmendmentRequest).not.toHaveBeenCalled();
+    expect(notifyAmendmentBatchDecided).toHaveBeenCalledTimes(1);
   });
 });
 

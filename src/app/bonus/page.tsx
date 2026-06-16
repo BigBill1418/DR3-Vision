@@ -56,6 +56,35 @@ import { DailyEntryGrid, type GridRowProps } from './DailyEntryGrid';
 import { BonusDatePicker } from './BonusDatePicker';
 import { CloseMonthButton } from './CloseMonthButton';
 import { SitePicker } from './SitePicker';
+import { countPendingForApprover } from '@/lib/bonus/amendment-requests';
+import { getSignatureChain } from '@/lib/bonus/signature-chain';
+
+/**
+ * ADR-0029: the "Pending Amendments" nav link is shown only to users who can
+ * actually approve — admins (all-site), or a manager who is a signer (facility
+ * or ops slot) in their site's signature chain. Patrick (a manager but not a
+ * chain signer) and any non-signer manager never see it. Returns the count of
+ * items pending the caller's review (0 = show with no badge), or null = hide.
+ */
+async function pendingAmendmentsForNav(ctx: {
+  userId: string;
+  isAdmin: boolean;
+  siteId: string;
+}): Promise<number | null> {
+  if (ctx.isAdmin) {
+    return countPendingForApprover(ctx.userId, true, null);
+  }
+  try {
+    const chain = await getSignatureChain(ctx.siteId);
+    const isSigner =
+      ctx.userId === chain.facility_signer_user_id || ctx.userId === chain.ops_signer_user_id;
+    if (!isSigner) return null;
+  } catch {
+    // No chain seeded for this site → can't approve here; hide the link.
+    return null;
+  }
+  return countPendingForApprover(ctx.userId, false, ctx.siteId);
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -164,6 +193,14 @@ export default async function BonusDailyEntryPage({
   // bi-weekly cadence (ADR-0019.1), so the UI names it as a pay period.
   const periodLabel = `Pay Period ${grid.periodNumber} · ${payPeriodRange(grid.periodStart, grid.periodEnd)}`;
 
+  // ADR-0029: in-app discoverability of the amendment review queue (previously
+  // reachable only via the email link). null = caller can't approve → hide.
+  const pendingAmendments = await pendingAmendmentsForNav({
+    userId: gate.ctx.userId,
+    isAdmin: gate.ctx.isAdmin,
+    siteId: gate.ctx.siteId,
+  });
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
@@ -203,6 +240,23 @@ export default async function BonusDailyEntryPage({
             >
               <span aria-hidden="true">🗓️</span> Pay Period History
             </Link>
+            {pendingAmendments !== null ? (
+              <Link
+                href="/bonus/amendments"
+                className="inline-flex items-center gap-2 rounded-md border border-dr3-cyan/40 bg-dr3-space-2/60 px-4 py-2 text-sm font-semibold text-dr3-mist transition-colors hover:border-dr3-cyan hover:bg-dr3-space-2"
+                data-testid="nav-pending-amendments"
+              >
+                <span aria-hidden="true">📝</span> Pending Amendments
+                {pendingAmendments > 0 ? (
+                  <span
+                    className="ml-1 inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-dr3-cyan px-2 py-0.5 text-xs font-bold text-dr3-space"
+                    data-testid="nav-pending-count"
+                  >
+                    {pendingAmendments}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
           </nav>
         </header>
 
