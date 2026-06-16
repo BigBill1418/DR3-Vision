@@ -12,6 +12,7 @@
 // The routing predicate (`shouldRequireAmendment`) is exported here for the
 // daily-entry layer to call before writing.
 
+import { randomUUID } from 'node:crypto';
 import { Prisma, type AuditAction, type PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appToday } from '@/lib/time';
@@ -39,13 +40,22 @@ export class AmendmentRequestError extends Error {
       | 'request_not_pending'
       | 'not_eligible_to_approve'
       | 'reject_requires_notes'
-      | 'cancel_only_by_requester',
+      | 'cancel_only_by_requester'
+      | 'empty_batch'
+      | 'group_not_pending',
     statusCode = 409,
   ) {
     super(`amendment request error: ${reason}`);
     this.name = 'AmendmentRequestError';
     this.status = statusCode;
   }
+}
+
+/** One line of a (possibly multi-line) prior-day correction. */
+export interface AmendmentItemInput {
+  bonusEmployeeId: string;
+  changeType: 'update' | 'insert';
+  newValue: { mattress_count: number; note: string | null };
 }
 
 export interface SubmitAmendmentInput {
@@ -57,6 +67,23 @@ export interface SubmitAmendmentInput {
   newValue: { mattress_count: number; note: string | null };
   justification: string;
   requesterUserId: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+/**
+ * ADR-0029: a batch of prior-day corrections submitted together in one save.
+ * Shares one `bonusPayPeriodId` / `targetEntryDate` / `justification` across N
+ * line items so the workflow can stamp them with a single `submission_group_id`
+ * and notify ONCE per direction.
+ */
+export interface SubmitAmendmentBatchInput {
+  siteId: string;
+  bonusPayPeriodId: string;
+  targetEntryDate: Date;
+  justification: string;
+  requesterUserId: string;
+  items: AmendmentItemInput[];
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -74,12 +101,7 @@ export interface AmendmentDecisionInput {
 // Submit
 // ─────────────────────────────────────────────────────────────────────
 
-export async function submitAmendmentRequest(input: SubmitAmendmentInput) {
-  if (input.justification.trim().length < JUSTIFICATION_MIN_LENGTH) {
-    throw new AmendmentRequestError('justification_too_short', 422);
-  }
-
-  const count = input.newValue.mattress_count;
+function validateCount(count: number): void {
   if (
     !Number.isFinite(count) ||
     count < 0 ||
@@ -88,13 +110,195 @@ export async function submitAmendmentRequest(input: SubmitAmendmentInput) {
   ) {
     throw new AmendmentRequestError('invalid_count', 422);
   }
+}
 
-  // Resolve approver outside the tx (separate read; throws on Patrick).
+/**
+ * Create ONE amendment request inside an already-open transaction. Validates the
+ * employee belongs to the site, the entry exists/doesn't-exist for the change
+ * type, auto-cancels a prior pending request from the same requester for the
+ * same target, and writes the per-request insert audit row (CLAUDE.md hard rule
+ * #6). The period-draft check is done ONCE by the caller before any item runs.
+ *
+ * Shared by both `submitAmendmentRequest` (N=1) and `submitAmendmentBatch` (N≥1)
+ * so a single line and a multi-line save go through identical row/audit logic.
+ */
+async function createOneAmendmentInTx(
+  tx: Prisma.TransactionClient,
+  ctx: {
+    siteId: string;
+    bonusPayPeriodId: string;
+    targetEntryDate: Date;
+    requesterUserId: string;
+    expectedApproverUserId: string;
+    justification: string;
+    submissionGroupId: string | null;
+    ip?: string | null;
+    userAgent?: string | null;
+  },
+  item: AmendmentItemInput,
+) {
+  const employee = await tx.bonusEmployee.findUnique({
+    where: { id: item.bonusEmployeeId },
+    select: { id: true, site_id: true },
+  });
+  if (!employee || employee.site_id !== ctx.siteId) {
+    throw new AmendmentRequestError('employee_not_in_site', 404);
+  }
+
+  const existing = await tx.bonusDailyEntry.findUnique({
+    where: {
+      bonus_employee_id_entry_date: {
+        bonus_employee_id: item.bonusEmployeeId,
+        entry_date: ctx.targetEntryDate,
+      },
+    },
+    select: { id: true, mattress_count: true, note: true },
+  });
+
+  if (item.changeType === 'update' && !existing) {
+    throw new AmendmentRequestError('entry_not_found_for_update', 409);
+  }
+  if (item.changeType === 'insert' && existing) {
+    throw new AmendmentRequestError('entry_exists_for_insert', 409);
+  }
+
+  const oldValueSnapshot =
+    item.changeType === 'update' && existing
+      ? { mattress_count: existing.mattress_count.toNumber(), note: existing.note }
+      : null;
+
+  // Auto-cancel any prior PENDING request from this requester for the same target.
+  const priorPending = await tx.bonusAmendmentRequest.findMany({
+    where: {
+      bonus_employee_id: item.bonusEmployeeId,
+      target_entry_date: ctx.targetEntryDate,
+      requested_by_user_id: ctx.requesterUserId,
+      state: 'pending',
+    },
+    select: { id: true },
+  });
+  for (const p of priorPending) {
+    const now = new Date();
+    await tx.bonusAmendmentRequest.update({
+      where: { id: p.id },
+      data: { state: 'cancelled', reviewed_at: now, updated_at: now },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: ctx.requesterUserId,
+        actor_label: 'system:amendment-supersede',
+        action: 'update' satisfies AuditAction,
+        table_name: 'bonus_amendment_requests',
+        row_id: p.id,
+        before: { state: 'pending' },
+        after: { state: 'cancelled', reason: 'superseded_by_new_request' },
+        ip: ctx.ip ?? null,
+        user_agent: ctx.userAgent ?? null,
+      },
+    });
+  }
+
+  const created = await tx.bonusAmendmentRequest.create({
+    data: {
+      bonus_pay_period_id: ctx.bonusPayPeriodId,
+      site_id: ctx.siteId,
+      target_entry_date: ctx.targetEntryDate,
+      bonus_employee_id: item.bonusEmployeeId,
+      change_type: item.changeType,
+      old_value: oldValueSnapshot
+        ? (serializeJson(oldValueSnapshot) as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
+      new_value: serializeJson(item.newValue) as Prisma.InputJsonValue,
+      justification: ctx.justification,
+      requested_by_user_id: ctx.requesterUserId,
+      expected_approver_user_id: ctx.expectedApproverUserId,
+      submission_group_id: ctx.submissionGroupId,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actor_user_id: ctx.requesterUserId,
+      action: 'insert' satisfies AuditAction,
+      table_name: 'bonus_amendment_requests',
+      row_id: created.id,
+      before: Prisma.JsonNull,
+      after: serializeJson({
+        bonus_pay_period_id: created.bonus_pay_period_id,
+        target_entry_date: created.target_entry_date,
+        bonus_employee_id: created.bonus_employee_id,
+        change_type: created.change_type,
+        old_value: oldValueSnapshot,
+        new_value: item.newValue,
+        justification: created.justification,
+        expected_approver_user_id: created.expected_approver_user_id,
+        submission_group_id: created.submission_group_id,
+      }) as Prisma.InputJsonValue,
+      ip: ctx.ip ?? null,
+      user_agent: ctx.userAgent ?? null,
+    },
+  });
+
+  return created;
+}
+
+export async function submitAmendmentRequest(input: SubmitAmendmentInput) {
+  // A single-item submit is just an N=1 batch (ADR-0029): identical row + audit
+  // logic, one notification. The caller receives the lone created request.
+  const result = await submitAmendmentBatch({
+    siteId: input.siteId,
+    bonusPayPeriodId: input.bonusPayPeriodId,
+    targetEntryDate: input.targetEntryDate,
+    justification: input.justification,
+    requesterUserId: input.requesterUserId,
+    items: [
+      {
+        bonusEmployeeId: input.bonusEmployeeId,
+        changeType: input.changeType,
+        newValue: input.newValue,
+      },
+    ],
+    ip: input.ip ?? null,
+    userAgent: input.userAgent ?? null,
+  });
+  return result.created[0]!;
+}
+
+/**
+ * ADR-0029: submit N prior-day corrections as one batch. All items share a
+ * generated `submission_group_id` (when N>1) so the workflow notifies once per
+ * direction. Every request row + its insert-audit row land in ONE transaction;
+ * any single item's validation failure rolls back the whole batch (no partial
+ * submit). The approver + period-draft checks run once up front.
+ *
+ * Returns the created requests and the (possibly null) group id. The group id is
+ * null for an N=1 submit so singletons stay singletons in the queue.
+ */
+export async function submitAmendmentBatch(input: SubmitAmendmentBatchInput): Promise<{
+  created: Awaited<ReturnType<typeof createOneAmendmentInTx>>[];
+  groupId: string | null;
+}> {
+  if (input.items.length === 0) {
+    throw new AmendmentRequestError('empty_batch', 422);
+  }
+  if (input.justification.trim().length < JUSTIFICATION_MIN_LENGTH) {
+    throw new AmendmentRequestError('justification_too_short', 422);
+  }
+  for (const item of input.items) {
+    validateCount(item.newValue.mattress_count);
+  }
+
+  // Resolve approver outside the tx (separate read; throws on Patrick). One
+  // requester + one site → one approver for the whole batch.
   const { expectedApproverUserId } = await resolveAmendmentApprover(
     prisma,
     input.siteId,
     input.requesterUserId,
   );
+
+  // Singletons keep submission_group_id null; multi-item batches get a shared id.
+  const submissionGroupId = input.items.length > 1 ? randomUUID() : null;
+  const justification = input.justification.trim();
 
   return prisma.$transaction(async (tx) => {
     const period = await tx.bonusPayPeriod.findUnique({
@@ -108,107 +312,27 @@ export async function submitAmendmentRequest(input: SubmitAmendmentInput) {
       throw new AmendmentRequestError('period_not_draft', 409);
     }
 
-    const employee = await tx.bonusEmployee.findUnique({
-      where: { id: input.bonusEmployeeId },
-      select: { id: true, site_id: true },
-    });
-    if (!employee || employee.site_id !== input.siteId) {
-      throw new AmendmentRequestError('employee_not_in_site', 404);
+    const created: Awaited<ReturnType<typeof createOneAmendmentInTx>>[] = [];
+    for (const item of input.items) {
+      created.push(
+        await createOneAmendmentInTx(
+          tx,
+          {
+            siteId: input.siteId,
+            bonusPayPeriodId: input.bonusPayPeriodId,
+            targetEntryDate: input.targetEntryDate,
+            requesterUserId: input.requesterUserId,
+            expectedApproverUserId,
+            justification,
+            submissionGroupId,
+            ip: input.ip ?? null,
+            userAgent: input.userAgent ?? null,
+          },
+          item,
+        ),
+      );
     }
-
-    const existing = await tx.bonusDailyEntry.findUnique({
-      where: {
-        bonus_employee_id_entry_date: {
-          bonus_employee_id: input.bonusEmployeeId,
-          entry_date: input.targetEntryDate,
-        },
-      },
-      select: { id: true, mattress_count: true, note: true },
-    });
-
-    if (input.changeType === 'update' && !existing) {
-      throw new AmendmentRequestError('entry_not_found_for_update', 409);
-    }
-    if (input.changeType === 'insert' && existing) {
-      throw new AmendmentRequestError('entry_exists_for_insert', 409);
-    }
-
-    const oldValueSnapshot =
-      input.changeType === 'update' && existing
-        ? { mattress_count: existing.mattress_count.toNumber(), note: existing.note }
-        : null;
-
-    // Auto-cancel any prior PENDING request from this requester for the same target.
-    const priorPending = await tx.bonusAmendmentRequest.findMany({
-      where: {
-        bonus_employee_id: input.bonusEmployeeId,
-        target_entry_date: input.targetEntryDate,
-        requested_by_user_id: input.requesterUserId,
-        state: 'pending',
-      },
-      select: { id: true },
-    });
-    for (const p of priorPending) {
-      const now = new Date();
-      await tx.bonusAmendmentRequest.update({
-        where: { id: p.id },
-        data: { state: 'cancelled', reviewed_at: now, updated_at: now },
-      });
-      await tx.auditLog.create({
-        data: {
-          actor_user_id: input.requesterUserId,
-          actor_label: 'system:amendment-supersede',
-          action: 'update' satisfies AuditAction,
-          table_name: 'bonus_amendment_requests',
-          row_id: p.id,
-          before: { state: 'pending' },
-          after: { state: 'cancelled', reason: 'superseded_by_new_request' },
-          ip: input.ip ?? null,
-          user_agent: input.userAgent ?? null,
-        },
-      });
-    }
-
-    const created = await tx.bonusAmendmentRequest.create({
-      data: {
-        bonus_pay_period_id: input.bonusPayPeriodId,
-        site_id: input.siteId,
-        target_entry_date: input.targetEntryDate,
-        bonus_employee_id: input.bonusEmployeeId,
-        change_type: input.changeType,
-        old_value: oldValueSnapshot
-          ? (serializeJson(oldValueSnapshot) as Prisma.InputJsonValue)
-          : Prisma.JsonNull,
-        new_value: serializeJson(input.newValue) as Prisma.InputJsonValue,
-        justification: input.justification.trim(),
-        requested_by_user_id: input.requesterUserId,
-        expected_approver_user_id: expectedApproverUserId,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        actor_user_id: input.requesterUserId,
-        action: 'insert' satisfies AuditAction,
-        table_name: 'bonus_amendment_requests',
-        row_id: created.id,
-        before: Prisma.JsonNull,
-        after: serializeJson({
-          bonus_pay_period_id: created.bonus_pay_period_id,
-          target_entry_date: created.target_entry_date,
-          bonus_employee_id: created.bonus_employee_id,
-          change_type: created.change_type,
-          old_value: oldValueSnapshot,
-          new_value: input.newValue,
-          justification: created.justification,
-          expected_approver_user_id: created.expected_approver_user_id,
-        }) as Prisma.InputJsonValue,
-        ip: input.ip ?? null,
-        user_agent: input.userAgent ?? null,
-      },
-    });
-
-    return created;
+    return { created, groupId: submissionGroupId };
   });
 }
 
@@ -299,6 +423,181 @@ export async function cancelAmendmentRequest(
 // Approve (atomic: apply change + audit + mark approved + link audit)
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Apply ONE pending approval inside an already-open transaction: writes the
+ * entry change, the entry-audit row, marks the request approved, links the
+ * audit id, and writes the request-update audit row. Assumes the period-draft
+ * check + the eligibility check have already passed for this request. Shared by
+ * the single-request and group approve paths.
+ */
+async function applyApprovalInTx(
+  tx: Prisma.TransactionClient,
+  req: {
+    id: string;
+    bonus_employee_id: string;
+    bonus_pay_period_id: string;
+    target_entry_date: Date;
+    change_type: string;
+    new_value: Prisma.JsonValue;
+  },
+  input: {
+    reviewerUserId: string;
+    decisionNotes?: string | null;
+    ip?: string | null;
+    userAgent?: string | null;
+  },
+): Promise<{ requestId: string; appliedEntryId: string; entryAuditId: string }> {
+  const now = new Date();
+  const newValue = req.new_value as { mattress_count: number; note: string | null };
+
+  let appliedEntryId: string;
+  let beforeAuditPayload: Prisma.InputJsonValue | typeof Prisma.JsonNull;
+  let afterAuditPayload: Prisma.InputJsonValue;
+  let entryAction: AuditAction;
+
+  if (req.change_type === 'update') {
+    const existing = await tx.bonusDailyEntry.findUnique({
+      where: {
+        bonus_employee_id_entry_date: {
+          bonus_employee_id: req.bonus_employee_id,
+          entry_date: req.target_entry_date,
+        },
+      },
+    });
+    if (!existing) throw new AmendmentRequestError('entry_not_found_for_update', 409);
+
+    beforeAuditPayload = serializeJson({
+      mattress_count: existing.mattress_count.toNumber(),
+      note: existing.note,
+      entered_by_user_id: existing.entered_by_user_id,
+    }) as Prisma.InputJsonValue;
+
+    const updated = await tx.bonusDailyEntry.update({
+      where: { id: existing.id },
+      data: {
+        mattress_count: newValue.mattress_count,
+        note: newValue.note,
+        entered_by_user_id: input.reviewerUserId,
+        entered_at: now,
+      },
+    });
+
+    appliedEntryId = updated.id;
+    afterAuditPayload = serializeJson({
+      mattress_count: updated.mattress_count.toNumber(),
+      note: updated.note,
+      entered_by_user_id: updated.entered_by_user_id,
+    }) as Prisma.InputJsonValue;
+    entryAction = 'update';
+  } else {
+    const existing = await tx.bonusDailyEntry.findUnique({
+      where: {
+        bonus_employee_id_entry_date: {
+          bonus_employee_id: req.bonus_employee_id,
+          entry_date: req.target_entry_date,
+        },
+      },
+    });
+    if (existing) throw new AmendmentRequestError('entry_exists_for_insert', 409);
+
+    const inserted = await tx.bonusDailyEntry.create({
+      data: {
+        bonus_employee_id: req.bonus_employee_id,
+        bonus_pay_period_id: req.bonus_pay_period_id,
+        entry_date: req.target_entry_date,
+        mattress_count: newValue.mattress_count,
+        note: newValue.note,
+        entered_by_user_id: input.reviewerUserId,
+        entered_at: now,
+      },
+    });
+
+    appliedEntryId = inserted.id;
+    beforeAuditPayload = Prisma.JsonNull;
+    afterAuditPayload = serializeJson({
+      mattress_count: inserted.mattress_count.toNumber(),
+      note: inserted.note,
+      entered_by_user_id: inserted.entered_by_user_id,
+    }) as Prisma.InputJsonValue;
+    entryAction = 'insert';
+  }
+
+  const entryAudit = await tx.auditLog.create({
+    data: {
+      actor_user_id: input.reviewerUserId,
+      actor_label: 'system:amendment-approved',
+      action: entryAction,
+      table_name: 'bonus_daily_entries',
+      row_id: appliedEntryId,
+      before: beforeAuditPayload,
+      after: afterAuditPayload,
+      ip: input.ip ?? null,
+      user_agent: input.userAgent ?? null,
+    },
+  });
+
+  await tx.bonusAmendmentRequest.update({
+    where: { id: req.id },
+    data: {
+      state: 'approved',
+      reviewed_by_user_id: input.reviewerUserId,
+      reviewed_at: now,
+      decision_notes: input.decisionNotes ?? null,
+      applied_audit_id: entryAudit.id,
+      updated_at: now,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actor_user_id: input.reviewerUserId,
+      action: 'update' satisfies AuditAction,
+      table_name: 'bonus_amendment_requests',
+      row_id: req.id,
+      before: { state: 'pending' },
+      after: {
+        state: 'approved',
+        reviewed_by_user_id: input.reviewerUserId,
+        applied_audit_id: entryAudit.id,
+      },
+      ip: input.ip ?? null,
+      user_agent: input.userAgent ?? null,
+    },
+  });
+
+  return { requestId: req.id, appliedEntryId, entryAuditId: entryAudit.id };
+}
+
+/**
+ * Eligibility gate for an approve/reject of one request inside a transaction.
+ * Resolves the signature chain and applies `canApproveRequest`. Throws
+ * `not_eligible_to_approve` (403) when the actor may not decide this request.
+ */
+async function assertEligibleInTx(
+  tx: Prisma.TransactionClient,
+  req: {
+    site_id: string;
+    requested_by_user_id: string;
+    expected_approver_user_id: string;
+    bill_pinged_at: Date | null;
+  },
+  reviewerUserId: string,
+  reviewerIsAdmin: boolean,
+): Promise<void> {
+  const chain = await getSignatureChain(req.site_id, tx as unknown as PrismaClient);
+  const eligible = canApproveRequest({
+    actorUserId: reviewerUserId,
+    request: {
+      requested_by_user_id: req.requested_by_user_id,
+      expected_approver_user_id: req.expected_approver_user_id,
+      bill_pinged_at: req.bill_pinged_at,
+    },
+    chain: { auto_override_actor_user_id: chain.auto_override_actor_user_id },
+    actorIsAdmin: reviewerIsAdmin,
+  });
+  if (!eligible) throw new AmendmentRequestError('not_eligible_to_approve', 403);
+}
+
 export async function approveAmendmentRequest(input: AmendmentDecisionInput) {
   return prisma.$transaction(async (tx) => {
     const req = await tx.bonusAmendmentRequest.findUnique({ where: { id: input.requestId } });
@@ -313,144 +612,100 @@ export async function approveAmendmentRequest(input: AmendmentDecisionInput) {
       throw new AmendmentRequestError('period_not_draft', 409);
     }
 
-    const chain = await getSignatureChain(req.site_id, tx as unknown as PrismaClient);
-    const eligible = canApproveRequest({
-      actorUserId: input.reviewerUserId,
-      request: {
-        requested_by_user_id: req.requested_by_user_id,
-        expected_approver_user_id: req.expected_approver_user_id,
-        bill_pinged_at: req.bill_pinged_at,
-      },
-      chain: { auto_override_actor_user_id: chain.auto_override_actor_user_id },
-      actorIsAdmin: input.reviewerIsAdmin,
+    await assertEligibleInTx(tx, req, input.reviewerUserId, input.reviewerIsAdmin);
+    const applied = await applyApprovalInTx(tx, req, input);
+    const decided = await tx.bonusAmendmentRequest.findUnique({ where: { id: req.id } });
+    return {
+      request: decided!,
+      appliedEntryId: applied.appliedEntryId,
+      entryAuditId: applied.entryAuditId,
+    };
+  });
+}
+
+/**
+ * ADR-0029: approve EVERY pending request in a submission group atomically. Each
+ * item is applied with its own entry write + per-item audit row (identical to
+ * the single-request path), all inside ONE transaction. The eligibility +
+ * period-draft checks run per request (every member of a group shares the same
+ * requester/approver/period, so they pass or fail together). Returns the count
+ * applied and a representative request id for notification context.
+ */
+export async function approveAmendmentGroup(input: {
+  submissionGroupId: string;
+  reviewerUserId: string;
+  reviewerIsAdmin: boolean;
+  decisionNotes?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<{ appliedCount: number; representativeRequestId: string }> {
+  return prisma.$transaction(async (tx) => {
+    const reqs = await tx.bonusAmendmentRequest.findMany({
+      where: { submission_group_id: input.submissionGroupId, state: 'pending' },
+      orderBy: { requested_at: 'asc' },
     });
-    if (!eligible) throw new AmendmentRequestError('not_eligible_to_approve', 403);
+    if (reqs.length === 0) throw new AmendmentRequestError('group_not_pending', 409);
 
-    const now = new Date();
-    const newValue = req.new_value as { mattress_count: number; note: string | null };
-
-    let appliedEntryId: string;
-    let beforeAuditPayload: Prisma.InputJsonValue | typeof Prisma.JsonNull;
-    let afterAuditPayload: Prisma.InputJsonValue;
-    let entryAction: AuditAction;
-
-    if (req.change_type === 'update') {
-      const existing = await tx.bonusDailyEntry.findUnique({
-        where: {
-          bonus_employee_id_entry_date: {
-            bonus_employee_id: req.bonus_employee_id,
-            entry_date: req.target_entry_date,
-          },
-        },
+    for (const req of reqs) {
+      const period = await tx.bonusPayPeriod.findUnique({
+        where: { id: req.bonus_pay_period_id },
+        select: { id: true, state: true },
       });
-      if (!existing) throw new AmendmentRequestError('entry_not_found_for_update', 409);
-
-      beforeAuditPayload = serializeJson({
-        mattress_count: existing.mattress_count.toNumber(),
-        note: existing.note,
-        entered_by_user_id: existing.entered_by_user_id,
-      }) as Prisma.InputJsonValue;
-
-      const updated = await tx.bonusDailyEntry.update({
-        where: { id: existing.id },
-        data: {
-          mattress_count: newValue.mattress_count,
-          note: newValue.note,
-          entered_by_user_id: input.reviewerUserId,
-          entered_at: now,
-        },
+      if (!period || period.state !== 'draft') {
+        throw new AmendmentRequestError('period_not_draft', 409);
+      }
+      await assertEligibleInTx(tx, req, input.reviewerUserId, input.reviewerIsAdmin);
+      await applyApprovalInTx(tx, req, {
+        reviewerUserId: input.reviewerUserId,
+        decisionNotes: input.decisionNotes ?? null,
+        ip: input.ip ?? null,
+        userAgent: input.userAgent ?? null,
       });
-
-      appliedEntryId = updated.id;
-      afterAuditPayload = serializeJson({
-        mattress_count: updated.mattress_count.toNumber(),
-        note: updated.note,
-        entered_by_user_id: updated.entered_by_user_id,
-      }) as Prisma.InputJsonValue;
-      entryAction = 'update';
-    } else {
-      const existing = await tx.bonusDailyEntry.findUnique({
-        where: {
-          bonus_employee_id_entry_date: {
-            bonus_employee_id: req.bonus_employee_id,
-            entry_date: req.target_entry_date,
-          },
-        },
-      });
-      if (existing) throw new AmendmentRequestError('entry_exists_for_insert', 409);
-
-      const inserted = await tx.bonusDailyEntry.create({
-        data: {
-          bonus_employee_id: req.bonus_employee_id,
-          bonus_pay_period_id: req.bonus_pay_period_id,
-          entry_date: req.target_entry_date,
-          mattress_count: newValue.mattress_count,
-          note: newValue.note,
-          entered_by_user_id: input.reviewerUserId,
-          entered_at: now,
-        },
-      });
-
-      appliedEntryId = inserted.id;
-      beforeAuditPayload = Prisma.JsonNull;
-      afterAuditPayload = serializeJson({
-        mattress_count: inserted.mattress_count.toNumber(),
-        note: inserted.note,
-        entered_by_user_id: inserted.entered_by_user_id,
-      }) as Prisma.InputJsonValue;
-      entryAction = 'insert';
     }
 
-    const entryAudit = await tx.auditLog.create({
-      data: {
-        actor_user_id: input.reviewerUserId,
-        actor_label: 'system:amendment-approved',
-        action: entryAction,
-        table_name: 'bonus_daily_entries',
-        row_id: appliedEntryId,
-        before: beforeAuditPayload,
-        after: afterAuditPayload,
-        ip: input.ip ?? null,
-        user_agent: input.userAgent ?? null,
-      },
-    });
-
-    const decided = await tx.bonusAmendmentRequest.update({
-      where: { id: req.id },
-      data: {
-        state: 'approved',
-        reviewed_by_user_id: input.reviewerUserId,
-        reviewed_at: now,
-        decision_notes: input.decisionNotes ?? null,
-        applied_audit_id: entryAudit.id,
-        updated_at: now,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        actor_user_id: input.reviewerUserId,
-        action: 'update' satisfies AuditAction,
-        table_name: 'bonus_amendment_requests',
-        row_id: req.id,
-        before: { state: 'pending' },
-        after: {
-          state: 'approved',
-          reviewed_by_user_id: input.reviewerUserId,
-          applied_audit_id: entryAudit.id,
-        },
-        ip: input.ip ?? null,
-        user_agent: input.userAgent ?? null,
-      },
-    });
-
-    return { request: decided, appliedEntryId, entryAuditId: entryAudit.id };
+    return { appliedCount: reqs.length, representativeRequestId: reqs[0]!.id };
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Reject
 // ─────────────────────────────────────────────────────────────────────
+
+/** Mark ONE pending request rejected + audit, inside an open tx. Assumes
+ * eligibility already checked. */
+async function applyRejectionInTx(
+  tx: Prisma.TransactionClient,
+  reqId: string,
+  reviewerUserId: string,
+  decisionNotes: string,
+  ip?: string | null,
+  userAgent?: string | null,
+) {
+  const now = new Date();
+  const decided = await tx.bonusAmendmentRequest.update({
+    where: { id: reqId },
+    data: {
+      state: 'rejected',
+      reviewed_by_user_id: reviewerUserId,
+      reviewed_at: now,
+      decision_notes: decisionNotes,
+      updated_at: now,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      actor_user_id: reviewerUserId,
+      action: 'update' satisfies AuditAction,
+      table_name: 'bonus_amendment_requests',
+      row_id: reqId,
+      before: { state: 'pending' },
+      after: { state: 'rejected', decision_notes: decisionNotes },
+      ip: ip ?? null,
+      user_agent: userAgent ?? null,
+    },
+  });
+  return decided;
+}
 
 export async function rejectAmendmentRequest(input: AmendmentDecisionInput) {
   if (!input.decisionNotes || input.decisionNotes.trim().length === 0) {
@@ -465,45 +720,54 @@ export async function rejectAmendmentRequest(input: AmendmentDecisionInput) {
     if (!req) throw new AmendmentRequestError('request_not_found', 404);
     if (req.state !== 'pending') throw new AmendmentRequestError('request_not_pending', 409);
 
-    const chain = await getSignatureChain(req.site_id, tx as unknown as PrismaClient);
-    const eligible = canApproveRequest({
-      actorUserId: input.reviewerUserId,
-      request: {
-        requested_by_user_id: req.requested_by_user_id,
-        expected_approver_user_id: req.expected_approver_user_id,
-        bill_pinged_at: req.bill_pinged_at,
-      },
-      chain: { auto_override_actor_user_id: chain.auto_override_actor_user_id },
-      actorIsAdmin: input.reviewerIsAdmin,
-    });
-    if (!eligible) throw new AmendmentRequestError('not_eligible_to_approve', 403);
+    await assertEligibleInTx(tx, req, input.reviewerUserId, input.reviewerIsAdmin);
+    return applyRejectionInTx(
+      tx,
+      req.id,
+      input.reviewerUserId,
+      decisionNotes,
+      input.ip,
+      input.userAgent,
+    );
+  });
+}
 
-    const now = new Date();
-    const decided = await tx.bonusAmendmentRequest.update({
-      where: { id: req.id },
-      data: {
-        state: 'rejected',
-        reviewed_by_user_id: input.reviewerUserId,
-        reviewed_at: now,
-        decision_notes: decisionNotes,
-        updated_at: now,
-      },
+/**
+ * ADR-0029: reject EVERY pending request in a submission group atomically, all
+ * sharing one rejection reason. Per-request eligibility is checked; per-request
+ * audit rows are written; one transaction.
+ */
+export async function rejectAmendmentGroup(input: {
+  submissionGroupId: string;
+  reviewerUserId: string;
+  reviewerIsAdmin: boolean;
+  decisionNotes: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<{ rejectedCount: number; representativeRequestId: string }> {
+  const decisionNotes = input.decisionNotes.trim();
+  if (decisionNotes.length === 0) {
+    throw new AmendmentRequestError('reject_requires_notes', 422);
+  }
+  return prisma.$transaction(async (tx) => {
+    const reqs = await tx.bonusAmendmentRequest.findMany({
+      where: { submission_group_id: input.submissionGroupId, state: 'pending' },
+      orderBy: { requested_at: 'asc' },
     });
+    if (reqs.length === 0) throw new AmendmentRequestError('group_not_pending', 409);
 
-    await tx.auditLog.create({
-      data: {
-        actor_user_id: input.reviewerUserId,
-        action: 'update' satisfies AuditAction,
-        table_name: 'bonus_amendment_requests',
-        row_id: req.id,
-        before: { state: 'pending' },
-        after: { state: 'rejected', decision_notes: decisionNotes },
-        ip: input.ip ?? null,
-        user_agent: input.userAgent ?? null,
-      },
-    });
-
-    return decided;
+    for (const req of reqs) {
+      await assertEligibleInTx(tx, req, input.reviewerUserId, input.reviewerIsAdmin);
+      await applyRejectionInTx(
+        tx,
+        req.id,
+        input.reviewerUserId,
+        decisionNotes,
+        input.ip,
+        input.userAgent,
+      );
+    }
+    return { rejectedCount: reqs.length, representativeRequestId: reqs[0]!.id };
   });
 }
 
@@ -511,11 +775,16 @@ export async function rejectAmendmentRequest(input: AmendmentDecisionInput) {
 // Read helpers
 // ─────────────────────────────────────────────────────────────────────
 
-export async function listPendingForApprover(
+/**
+ * The `where` clause selecting the pending requests a given actor may review.
+ * Shared by `listPendingForApprover` (the queue) and `countPendingForApprover`
+ * (the nav badge) so the count and the list never diverge.
+ */
+function pendingForApproverWhere(
   approverUserId: string,
   actorIsAdmin: boolean,
   siteId: string | null,
-) {
+): Prisma.BonusAmendmentRequestWhereInput {
   const where: Prisma.BonusAmendmentRequestWhereInput = { state: 'pending' };
   if (siteId) where.site_id = siteId;
 
@@ -535,6 +804,32 @@ export async function listPendingForApprover(
       },
     ];
   }
+  return where;
+}
+
+/**
+ * ADR-0029: count the items pending the current user's review (for the nav
+ * "Pending Amendments" badge). Admins see all-site pending; managers see the
+ * requests routed to them as approver. This counts ITEMS, not groups — a 16-line
+ * batch shows "16" so the approver knows the work ahead, even though it
+ * approves/rejects in one click.
+ */
+export async function countPendingForApprover(
+  approverUserId: string,
+  actorIsAdmin: boolean,
+  siteId: string | null,
+): Promise<number> {
+  return prisma.bonusAmendmentRequest.count({
+    where: pendingForApproverWhere(approverUserId, actorIsAdmin, siteId),
+  });
+}
+
+export async function listPendingForApprover(
+  approverUserId: string,
+  actorIsAdmin: boolean,
+  siteId: string | null,
+) {
+  const where = pendingForApproverWhere(approverUserId, actorIsAdmin, siteId);
 
   return prisma.bonusAmendmentRequest.findMany({
     where,

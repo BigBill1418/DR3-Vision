@@ -105,19 +105,24 @@ describe('DailyEntryGrid date seeding', () => {
   });
 });
 
-// ── ADR-0028 amendment-modal wiring ─────────────────────────────
+// ── ADR-0029 batch amendment-modal wiring ───────────────────────
 //
 // A non-admin manager editing a PRIOR day's count cannot write directly: the
 // POST returns 409 `requires_amendment`. Instead of dumping the raw error
-// string, the grid must pivot to the RequestEditModal, mapping the response's
-// `pending[]` + `approverName` onto the modal payload and pulling the employee
-// display name from its own rows. Multiple pending changes queue one at a time.
+// string, the grid must pivot to the SINGLE RequestEditBatchModal (ADR-0029),
+// mapping the response's `pending[]` + `approverName` onto the batch items and
+// pulling each employee display name from its own rows. Multiple pending changes
+// are listed in ONE modal (one request batch → one notification), NOT queued.
 
 // Set an <input> value the React-controlled way (native setter + input event),
 // so the component's onChange fires and state updates. Wrapped in act() so the
 // resulting state flush is captured (no "not wrapped in act(...)" warning).
-function setInputValue(el: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const proto =
+    el instanceof window.HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
   act(() => {
     setter.call(el, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -137,12 +142,12 @@ async function flush() {
   });
 }
 
-describe('DailyEntryGrid — ADR-0028 amendment modal wiring', () => {
+describe('DailyEntryGrid — ADR-0029 batch amendment modal wiring', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('a 409 requires_amendment response opens the modal with the mapped payload', async () => {
+  it('a 409 requires_amendment response opens the batch modal with the mapped items', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -196,36 +201,41 @@ describe('DailyEntryGrid — ADR-0028 amendment modal wiring', () => {
     expect(container.querySelector('[data-testid="grid-error"]')).toBeNull();
   });
 
-  it('multiple pending changes queue one modal at a time; cancelling advances', async () => {
+  it('multiple pending changes are listed in ONE batch modal; submit POSTs a single batch', async () => {
     const EMP2 = 'emp-bilal';
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: 'requires_amendment',
-              monthId: 'period-123',
-              approverName: 'Morena Ruiz',
-              pending: [
-                {
-                  bonus_employee_id: EMP,
-                  change_type: 'update',
-                  existing: { mattress_count: 40, note: null },
-                  proposed: { mattress_count: 55, note: null },
-                },
-                {
-                  bonus_employee_id: EMP2,
-                  change_type: 'update',
-                  existing: { mattress_count: 10, note: null },
-                  proposed: { mattress_count: 22, note: null },
-                },
-              ],
-            }),
-            { status: 409, headers: { 'content-type': 'application/json' } },
-          ),
-      ),
-    );
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      // First call = the save attempt → 409 requires_amendment with two items.
+      // Second call = the batch submit → 201 (we assert its shape below).
+      if (init?.body && JSON.parse(init.body as string).items) {
+        return new Response(JSON.stringify({ requests: [{ id: 'a' }, { id: 'b' }], count: 2 }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          error: 'requires_amendment',
+          monthId: 'period-123',
+          approverName: 'Morena Ruiz',
+          pending: [
+            {
+              bonus_employee_id: EMP,
+              change_type: 'update',
+              existing: { mattress_count: 40, note: null },
+              proposed: { mattress_count: 55, note: null },
+            },
+            {
+              bonus_employee_id: EMP2,
+              change_type: 'update',
+              existing: { mattress_count: 10, note: null },
+              proposed: { mattress_count: 22, note: null },
+            },
+          ],
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     const rows: GridRowProps[] = [
       { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40, note: null },
@@ -246,26 +256,33 @@ describe('DailyEntryGrid — ADR-0028 amendment modal wiring', () => {
     clickSave();
     await flush();
 
-    // First modal is for Aamir.
-    let dialog = container.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain('Aamir Mehmood');
-    expect(dialog.textContent).not.toContain('Bilal Khan');
-
-    // Cancel advances to the next queued change (Bilal).
-    const cancelBtn = Array.from(dialog.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Cancel',
-    ) as HTMLButtonElement;
-    act(() => cancelBtn.click());
-
-    dialog = container.querySelector('[role="dialog"]')!;
+    // ONE modal lists BOTH changes (not a queue).
+    const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain('Aamir Mehmood');
     expect(dialog.textContent).toContain('Bilal Khan');
 
-    // Cancelling the last one drains the queue — no modal remains.
-    const cancel2 = Array.from(dialog.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Cancel',
-    ) as HTMLButtonElement;
-    act(() => cancel2.click());
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    // Enter a justification and submit the batch.
+    setInputValue(
+      container.querySelector('[data-testid="batch-justification"]') as HTMLInputElement,
+      'Correcting yesterday — keyed both rows from the wrong tally sheet by mistake.',
+    );
+    const submitBtn = container.querySelector('[data-testid="batch-submit"]') as HTMLButtonElement;
+    act(() => submitBtn.click());
+    await flush();
+
+    // The batch submit fired exactly one POST with an `items` array of length 2.
+    const batchCall = fetchMock.mock.calls.find(
+      (c) => c[1]?.body && JSON.parse(c[1]!.body as string).items,
+    );
+    expect(batchCall).toBeTruthy();
+    const payload = JSON.parse(batchCall![1]!.body as string);
+    expect(payload.items).toHaveLength(2);
+    expect(payload.bonusPayPeriodId).toBe('period-123');
+    // Only ONE batch POST was made (no per-item requests).
+    const batchCalls = fetchMock.mock.calls.filter(
+      (c) => c[1]?.body && JSON.parse(c[1]!.body as string).items,
+    );
+    expect(batchCalls).toHaveLength(1);
   });
 });

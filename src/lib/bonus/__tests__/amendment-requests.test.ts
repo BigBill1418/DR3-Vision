@@ -85,6 +85,7 @@ interface AmendmentRow {
   requested_at: Date;
   state: string;
   expected_approver_user_id: string;
+  submission_group_id: string | null;
   bill_pinged_at: Date | null;
   reviewed_by_user_id: string | null;
   reviewed_at: Date | null;
@@ -218,6 +219,7 @@ function makeStore(): Store {
         requested_at: new Date(),
         state: 'pending',
         expected_approver_user_id: data['expected_approver_user_id'] as string,
+        submission_group_id: (data['submission_group_id'] as string | null) ?? null,
         bill_pinged_at: null,
         reviewed_by_user_id: null,
         reviewed_at: null,
@@ -266,8 +268,11 @@ vi.mock('@/lib/prisma', () => ({
 
 import {
   submitAmendmentRequest,
+  submitAmendmentBatch,
   approveAmendmentRequest,
+  approveAmendmentGroup,
   rejectAmendmentRequest,
+  rejectAmendmentGroup,
   cancelAmendmentRequest,
   pingBill,
   shouldRequireAmendment,
@@ -433,6 +438,199 @@ describe('submitAmendmentRequest', () => {
         (a.after as { reason?: string }).reason === 'superseded_by_new_request',
     );
     expect(supersede).toBeTruthy();
+  });
+});
+
+describe('submitAmendmentBatch (ADR-0029)', () => {
+  function seedTwoEmployees() {
+    store.periods.push({ id: 'p-wo', site_id: WOODLAND, state: 'draft' });
+    store.employees.push({ id: 'emp-amy', site_id: WOODLAND });
+    store.employees.push({ id: 'emp-bob', site_id: WOODLAND });
+  }
+  function batchInput() {
+    return {
+      siteId: WOODLAND,
+      bonusPayPeriodId: 'p-wo',
+      targetEntryDate: PRIOR_DAY,
+      justification: 'Correcting yesterday — keyed two rows from the wrong tally sheet.',
+      requesterUserId: 'janette',
+      items: [
+        {
+          bonusEmployeeId: 'emp-amy',
+          changeType: 'update' as const,
+          newValue: { mattress_count: 67, note: null },
+        },
+        {
+          bonusEmployeeId: 'emp-bob',
+          changeType: 'insert' as const,
+          newValue: { mattress_count: 12, note: null },
+        },
+      ],
+    };
+  }
+
+  it('creates N rows in one tx, all stamped with a SHARED submission_group_id', async () => {
+    seedTwoEmployees();
+    seedEntry('emp-amy', 76);
+    const { created, groupId } = await submitAmendmentBatch(batchInput());
+
+    expect(created).toHaveLength(2);
+    expect(store.amendments.filter((a) => a.state === 'pending')).toHaveLength(2);
+    // A multi-item batch shares ONE non-null group id across every row.
+    expect(groupId).not.toBeNull();
+    expect(created[0]!.submission_group_id).toBe(groupId);
+    expect(created[1]!.submission_group_id).toBe(groupId);
+    expect(created[0]!.expected_approver_user_id).toBe('morena');
+  });
+
+  it('writes a per-row insert audit row for EVERY item (hard rule #6)', async () => {
+    seedTwoEmployees();
+    seedEntry('emp-amy', 76);
+    await submitAmendmentBatch(batchInput());
+    const inserts = store.audit.filter(
+      (a) => a.table_name === 'bonus_amendment_requests' && a.action === 'insert',
+    );
+    expect(inserts).toHaveLength(2);
+  });
+
+  it('one bad item rolls back the WHOLE batch (no partial submit)', async () => {
+    seedTwoEmployees();
+    seedEntry('emp-amy', 76);
+    // emp-bob is changeType update but has NO existing entry → entry_not_found_for_update.
+    const bad = batchInput();
+    bad.items[1] = {
+      bonusEmployeeId: 'emp-bob',
+      changeType: 'update',
+      newValue: { mattress_count: 5, note: null },
+    };
+    await expect(submitAmendmentBatch(bad)).rejects.toMatchObject({
+      reason: 'entry_not_found_for_update',
+    });
+    // $transaction double resolves synchronously, but the first row was created
+    // before the throw — the REAL prisma tx rolls back. Our in-memory store does
+    // not roll back, so assert the throw shape (the atomicity is the tx's job,
+    // exercised by the real-DB path); the unit guard is "it threw, not silently
+    // half-submitted with a 201".
+  });
+
+  it('a single-item batch (N=1) gets a NULL group id — singletons stay singletons', async () => {
+    seedTwoEmployees();
+    seedEntry('emp-amy', 76);
+    const { created, groupId } = await submitAmendmentBatch({
+      ...batchInput(),
+      items: [
+        {
+          bonusEmployeeId: 'emp-amy',
+          changeType: 'update',
+          newValue: { mattress_count: 67, note: null },
+        },
+      ],
+    });
+    expect(created).toHaveLength(1);
+    expect(groupId).toBeNull();
+    expect(created[0]!.submission_group_id).toBeNull();
+  });
+
+  it('empty items → empty_batch (422)', async () => {
+    seedTwoEmployees();
+    await expect(submitAmendmentBatch({ ...batchInput(), items: [] })).rejects.toMatchObject({
+      reason: 'empty_batch',
+      status: 422,
+    });
+  });
+});
+
+describe('approveAmendmentGroup / rejectAmendmentGroup (ADR-0029)', () => {
+  function seedTwoEmployees() {
+    store.periods.push({ id: 'p-wo', site_id: WOODLAND, state: 'draft' });
+    store.employees.push({ id: 'emp-amy', site_id: WOODLAND });
+    store.employees.push({ id: 'emp-bob', site_id: WOODLAND });
+  }
+  async function pendingGroup() {
+    seedTwoEmployees();
+    seedEntry('emp-amy', 76);
+    seedEntry('emp-bob', 30);
+    const { groupId } = await submitAmendmentBatch({
+      siteId: WOODLAND,
+      bonusPayPeriodId: 'p-wo',
+      targetEntryDate: PRIOR_DAY,
+      justification: 'Correcting yesterday — both counts were keyed wrong from the tally sheet.',
+      requesterUserId: 'janette',
+      items: [
+        {
+          bonusEmployeeId: 'emp-amy',
+          changeType: 'update',
+          newValue: { mattress_count: 67, note: null },
+        },
+        {
+          bonusEmployeeId: 'emp-bob',
+          changeType: 'update',
+          newValue: { mattress_count: 33, note: null },
+        },
+      ],
+    });
+    return groupId!;
+  }
+
+  it('approveAmendmentGroup applies EVERY item + marks all approved', async () => {
+    const groupId = await pendingGroup();
+    const result = await approveAmendmentGroup({
+      submissionGroupId: groupId,
+      reviewerUserId: 'morena',
+      reviewerIsAdmin: false,
+    });
+    expect(result.appliedCount).toBe(2);
+    // Both entries now carry the corrected counts, stamped by the reviewer.
+    expect(entryByKey(store, 'emp-amy', PRIOR_DAY)!.mattress_count.toNumber()).toBe(67);
+    expect(entryByKey(store, 'emp-bob', PRIOR_DAY)!.mattress_count.toNumber()).toBe(33);
+    // Every group row is now approved.
+    const grp = store.amendments.filter((a) => a.submission_group_id === groupId);
+    expect(grp.every((a) => a.state === 'approved')).toBe(true);
+    // A per-item entry-audit row was written for each (hard rule #6).
+    const entryAudits = store.audit.filter(
+      (a) =>
+        a.table_name === 'bonus_daily_entries' && a.actor_label === 'system:amendment-approved',
+    );
+    expect(entryAudits).toHaveLength(2);
+  });
+
+  it('rejectAmendmentGroup rejects EVERY item with the shared reason', async () => {
+    const groupId = await pendingGroup();
+    const result = await rejectAmendmentGroup({
+      submissionGroupId: groupId,
+      reviewerUserId: 'morena',
+      reviewerIsAdmin: false,
+      decisionNotes: 'Both counts are correct as originally keyed.',
+    });
+    expect(result.rejectedCount).toBe(2);
+    const grp = store.amendments.filter((a) => a.submission_group_id === groupId);
+    expect(grp.every((a) => a.state === 'rejected')).toBe(true);
+    expect(
+      grp.every((a) => a.decision_notes === 'Both counts are correct as originally keyed.'),
+    ).toBe(true);
+    // Entries untouched on reject.
+    expect(entryByKey(store, 'emp-amy', PRIOR_DAY)!.mattress_count.toNumber()).toBe(76);
+  });
+
+  it('the requester cannot approve their own group → not_eligible_to_approve', async () => {
+    const groupId = await pendingGroup();
+    await expect(
+      approveAmendmentGroup({
+        submissionGroupId: groupId,
+        reviewerUserId: 'janette',
+        reviewerIsAdmin: false,
+      }),
+    ).rejects.toMatchObject({ reason: 'not_eligible_to_approve', status: 403 });
+  });
+
+  it('an empty/already-decided group → group_not_pending', async () => {
+    await expect(
+      approveAmendmentGroup({
+        submissionGroupId: 'no-such-group',
+        reviewerUserId: 'morena',
+        reviewerIsAdmin: false,
+      }),
+    ).rejects.toMatchObject({ reason: 'group_not_pending', status: 409 });
   });
 });
 

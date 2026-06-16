@@ -937,6 +937,13 @@ model BonusAmendmentRequest {
   new_value     Json
   justification String
 
+  // ADR-0029: requests submitted together in one save share this id so that a
+  // multi-line correction fires ONE notification per direction (submit /
+  // approve / reject) instead of one per line. Nullable + additive: rows that
+  // predate ADR-0029 (and any genuinely single-item submit that skips the batch
+  // path) leave it null.
+  submission_group_id String?
+
   requested_by_user_id String
   requested_by         User     @relation("BonusAmendmentRequester", fields: [requested_by_user_id], references: [id])
   requested_at         DateTime @default(now())
@@ -964,5 +971,6 @@ model BonusAmendmentRequest {
   @@index([expected_approver_user_id, state])
   @@index([requested_by_user_id])
   @@index([bonus_employee_id, target_entry_date])
+  @@index([submission_group_id])
   @@map("bonus_amendment_requests")
 }

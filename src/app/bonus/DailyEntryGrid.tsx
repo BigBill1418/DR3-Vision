@@ -21,7 +21,7 @@ import {
   formatCents,
   type BonusRuleParams,
 } from '@/lib/bonus/calculator';
-import { RequestEditModal } from './RequestEditModal';
+import { RequestEditBatchModal, type BatchItem } from './RequestEditBatchModal';
 
 // ADR-0028: the `requires_amendment` 409 shape returned by POST /api/bonus/entries
 // when a non-admin manager edits a prior day's count in the current draft period.
@@ -38,17 +38,15 @@ interface RequiresAmendmentBody {
   approverName: string | null;
 }
 
-// The fully-built payload the RequestEditModal needs for ONE pending change.
-type AmendmentModalPayload = {
+// ADR-0029: the whole set of prior-day changes from one save routes through a
+// SINGLE batch modal → one amendment request batch → one notification per
+// direction. The modal carries the shared period/date/approver plus the items.
+interface AmendmentBatch {
   bonusPayPeriodId: string;
-  bonusEmployeeId: string;
-  employeeName: string;
   targetEntryDate: string;
-  changeType: 'update' | 'insert';
-  oldValue: { mattress_count: number; note: string | null } | null;
-  newValue: { mattress_count: number; note: string | null };
   approverName: string;
-};
+  items: BatchItem[];
+}
 
 export interface GridRowProps {
   bonus_employee_id: string;
@@ -97,14 +95,11 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  // ADR-0028: amendment-request modal queue. A single save can produce multiple
-  // prior-day count changes; each routes through the four-eyes workflow as its
-  // own request. We surface them ONE modal at a time — submitting or cancelling
-  // advances to the next. When the queue empties we refresh so the grid reflects
-  // any direct writes that landed alongside (none in the all-amendment case, but
-  // the refresh also clears the now-stale unsaved edits).
-  const [amendmentQueue, setAmendmentQueue] = useState<AmendmentModalPayload[]>([]);
-  const [queueIndex, setQueueIndex] = useState(0);
+  // ADR-0029: a single save that touches N prior-day count changes routes
+  // through ONE batch amendment request (one notification per direction), not N
+  // separate modals. We collect every pending change into one batch and surface
+  // a single modal. Closing it (submit or cancel) refreshes the grid.
+  const [amendmentBatch, setAmendmentBatch] = useState<AmendmentBatch | null>(null);
 
   const nameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -112,17 +107,9 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     return m;
   }, [rows]);
 
-  const advanceQueue = () => {
-    setQueueIndex((i) => {
-      const next = i + 1;
-      if (next >= amendmentQueue.length) {
-        // Queue drained — clear it and refresh from the server.
-        setAmendmentQueue([]);
-        router.refresh();
-        return 0;
-      }
-      return next;
-    });
+  const closeBatch = () => {
+    setAmendmentBatch(null);
+    router.refresh();
   };
 
   const parsedCount = (raw: string): number | null => {
@@ -204,18 +191,19 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
           Array.isArray(body.pending)
         ) {
           const approverName = body.approverName ?? 'your counterpart';
-          const queue: AmendmentModalPayload[] = body.pending.map((p) => ({
-            bonusPayPeriodId: body.monthId!,
+          const items: BatchItem[] = body.pending.map((p) => ({
             bonusEmployeeId: p.bonus_employee_id,
             employeeName: nameById.get(p.bonus_employee_id) ?? 'this processor',
-            targetEntryDate: entryDate,
             changeType: p.change_type,
             oldValue: p.existing,
             newValue: p.proposed,
-            approverName,
           }));
-          setQueueIndex(0);
-          setAmendmentQueue(queue);
+          setAmendmentBatch({
+            bonusPayPeriodId: body.monthId,
+            targetEntryDate: entryDate,
+            approverName,
+            items,
+          });
           return;
         }
         setError(body.error ?? 'Could not save entries. Please try again.');
@@ -378,16 +366,18 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
         </div>
       ) : null}
 
-      {/* ADR-0028: prior-day count edits route through the four-eyes amendment
-          workflow. The grid surfaces one Request Edit modal at a time from the
-          queue built off the 409 `requires_amendment` response; submit/cancel
-          advances to the next, and the last one drained refreshes the grid. */}
-      {amendmentQueue.length > 0 && amendmentQueue[queueIndex] ? (
-        <RequestEditModal
-          key={`${amendmentQueue[queueIndex]!.bonusEmployeeId}-${queueIndex}`}
+      {/* ADR-0029: prior-day count edits route through the four-eyes amendment
+          workflow as ONE batch request (one notification per direction). The
+          grid surfaces a single batch modal built off the 409 `requires_amendment`
+          response listing every pending change; submit/cancel refreshes the grid. */}
+      {amendmentBatch ? (
+        <RequestEditBatchModal
           open
-          onClose={advanceQueue}
-          payload={amendmentQueue[queueIndex]!}
+          onClose={closeBatch}
+          bonusPayPeriodId={amendmentBatch.bonusPayPeriodId}
+          targetEntryDate={amendmentBatch.targetEntryDate}
+          approverName={amendmentBatch.approverName}
+          items={amendmentBatch.items}
         />
       ) : null}
     </section>
