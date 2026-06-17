@@ -7,6 +7,15 @@
 
 A new automated email fires at the configured time (default 6 PM Pacific) for each site whose config row is enabled. Woodland and Eugene are both seeded enabled with the requested recipients. The email replaces Morena's manual daily report (Woodland) and provides equivalent visibility for Eugene.
 
+**Recipients (seeded):**
+
+- **Woodland:** `bill.barnard@svdp.us`, `bethany.cartledge@svdp.us`, `morena.gomez@svdp.us`
+- **Eugene:** `shannon.rockwell@svdp.us`, `bill.barnard@svdp.us`, `bethany.cartledge@svdp.us`, `rick.albritton@svdp.us`
+
+**Branding:** the email uses the SVdP (parent-org) palette from svdp.us — red `#a3151a` masthead with the white SVdP wordmark, gold/cream accents (this intentionally differs from the DR3 green/black in-app brand). Masthead title is `{Site} Daily Production Report`; subject is `DR3 Daily Production Report — {site} — {date}`.
+
+**Numbers:** per-line units and the bonus dollars are computed on the **same floored basis as the signed payroll PDF** (`calculateDailyBonusCents`), so the report reconciles exactly with the PDF and "today" always reconciles with the month-to-date figure. The "Pace vs. last month" line compares month-to-date against the prior month's same-day window (clamped on month-end) — informational on mismatched-length months; the absolute unit totals are authoritative.
+
 ## Deploy
 
 ```
@@ -63,6 +72,21 @@ This applies migration `20260617_daily_production_report` (additive — adds `is
 ## Test fire (without waiting until 6 PM)
 
 From the admin tile, click "Send test now" on either site card. The email lands in your own inbox (not the configured recipient list) with subject prefixed `[TEST]`. No `bonus_daily_report_log` row is created, so the scheduled 6 PM send still fires normally.
+
+**From the host (no browser session needed)** — the loopback-only internal route renders the production-identical email and sends it to any single address, with an optional `date` to preview a past (populated) day:
+
+```
+docker exec dr3-vision-app node -e '
+  const t = process.env.INTERNAL_CRON_TOKEN;
+  fetch("http://127.0.0.1:3000/api/internal/bonus/daily-report/test", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(t ? { authorization: "Bearer " + t } : {}) },
+    body: JSON.stringify({ siteCode: "woodland", to: "bill.barnard@svdp.us", date: "2026-06-16" }),
+  }).then(async r => console.log(r.status, await r.text()));
+'
+```
+
+`date` is optional (defaults to today, Pacific). The route is guarded against the public Cloudflare tunnel (any request with a `cf-connecting-ip` header gets a 404) and writes no log row. A back-dated day with no active bonus rule returns `422 build_failed` rather than erroring.
 
 ## Force a re-send of today's production email
 
