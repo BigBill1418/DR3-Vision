@@ -50,9 +50,25 @@ ADR-0011 is updated by reference. The existing `processor_bonus_rules.csv` seed 
 
 ### 2. EOD enforcement (ntfy)
 
-If Janette has not entered the day's counts by **5:00 PM Pacific Time**, ntfy fires once to `dr3-vision-system` topic with fingerprint `bonus-entry-missing:woodland:<YYYY-MM-DD>`. Strict — late entry does not retroactively suppress the alert (ntfy has no un-send). Late entry is allowed; it does not skip Bill's notification.
+> **Revised 2026-06-17:** the alert now fires only when a site has **zero**
+> bonus entries for the day — see the revision note below. The original
+> "any active employee missing an entry" rule (struck through) was too noisy:
+> not every processor has a bonus every day (different position, day off), so
+> a partial day is normal and must not page.
+
+If a bonus-enabled site has **no entries at all** by the **5:00 PM Pacific Time**
+cron run, ntfy fires once to the `dr3-vision-system` topic with fingerprint
+`bonus-entry-missing:<site>:<YYYY-MM-DD>`. A day with at least one entry — even a
+single processor — does not page. Weekends, site holidays, and sites with no
+active employees are skipped. Strict — a late entry the next morning does not
+retroactively suppress the alert (ntfy has no un-send); it falls under a
+different day's fingerprint.
 
 The fingerprint guarantees one alert per missed day. Cooldown is moot because the fingerprint already de-duplicates.
+
+> **~~Original rule (superseded 2026-06-17):~~** _~~If Janette has not entered
+> the day's counts by 5:00 PM PT, ntfy fires; the alert body named the count of
+> active employees without an entry, so a partial day paged.~~_
 
 ### 3. PDF delivery (M365 Graph)
 

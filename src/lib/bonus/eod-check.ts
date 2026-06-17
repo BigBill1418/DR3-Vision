@@ -1,10 +1,18 @@
 // T-113 — EOD ntfy enforcement core (ADR-0019 §2).
 //
-// Pure decision logic for the end-of-day "bonus entries missing" check.
-// The `scripts/bonus-eod-check.mjs` cron wires this to Prisma (active
+// Pure decision logic for the end-of-day "no bonus entries for the site"
+// check. The `scripts/bonus-eod-check.mjs` cron wires this to Prisma (active
 // employees, today's entries, site holidays) and the ntfy publisher; this
 // module owns the date math and the alert/skip decision so it is testable
 // without a DB or network.
+//
+// ── What fires the alert (ADR-0019 §2, revised 2026-06-17) ───────────
+// Bill is paged ONLY when a site has *zero* bonus entries for the Pacific
+// day — i.e. nobody on the site logged anything. A partial day (some
+// processors entered, others didn't because they worked a different
+// position or were off) is normal and never pages. Earlier this check
+// fired whenever *any* active employee lacked an entry; that was too
+// noisy and is the behaviour this revision replaces.
 //
 // ── Timezone discipline (CLAUDE.md global rule) ──────────────────────
 // The fleet hosts run their system clocks in UTC; Bill operates on
@@ -62,12 +70,12 @@ export interface EvaluateEodArgs {
   holidayIsoDates: ReadonlySet<string>;
 }
 
-export type EodSkipReason = 'weekend' | 'holiday' | 'no_active_employees' | 'all_entered';
+export type EodSkipReason = 'weekend' | 'holiday' | 'no_active_employees' | 'has_entries';
 
 export interface EodDecision {
   shouldAlert: boolean;
-  /** Count of active employees with no entry for the Pacific day. */
-  missingCount: number;
+  /** Count of distinct employees with an entry for the site on the Pacific day. */
+  enteredCount: number;
   /** `YYYY-MM-DD` of the Pacific day this decision covers. */
   dateIso: string;
   /** Human label for the alert body, e.g. `Sep 14, 2026`. */
@@ -107,10 +115,11 @@ export function pacificDateParts(now: Date): PacificDateParts {
 }
 
 /**
- * Decide whether an EOD missing-entries alert should fire for the Pacific
- * day of `now`. Weekends and site holidays are skipped; a day with no active
- * employees has nothing to miss; otherwise we alert iff any active employee
- * lacks a daily entry for the day.
+ * Decide whether an EOD "no entries" alert should fire for the Pacific day of
+ * `now`. Weekends and site holidays are skipped; a day with no active employees
+ * has nobody expected to enter; otherwise we alert iff the site has *zero*
+ * entries for the day. A partial day (at least one entry) never pages — see the
+ * module header for why (ADR-0019 §2, revised 2026-06-17).
  */
 export function evaluateEod(args: EvaluateEodArgs): EodDecision {
   const parts = pacificDateParts(args.now);
@@ -121,27 +130,25 @@ export function evaluateEod(args: EvaluateEodArgs): EodDecision {
   };
 
   if (parts.isWeekend) {
-    return { ...base, shouldAlert: false, missingCount: 0, skipReason: 'weekend' };
+    return { ...base, shouldAlert: false, enteredCount: 0, skipReason: 'weekend' };
   }
   if (args.holidayIsoDates.has(parts.iso)) {
-    return { ...base, shouldAlert: false, missingCount: 0, skipReason: 'holiday' };
+    return { ...base, shouldAlert: false, enteredCount: 0, skipReason: 'holiday' };
   }
   if (args.activeEmployees.length === 0) {
     return {
       ...base,
       shouldAlert: false,
-      missingCount: 0,
+      enteredCount: 0,
       skipReason: 'no_active_employees',
     };
   }
 
-  const missingCount = args.activeEmployees.reduce(
-    (n, e) => (args.enteredEmployeeIds.has(e.id) ? n : n + 1),
-    0,
-  );
+  const enteredCount = args.enteredEmployeeIds.size;
 
-  if (missingCount === 0) {
-    return { ...base, shouldAlert: false, missingCount: 0, skipReason: 'all_entered' };
+  // Any entry at all means the site logged something today — no page.
+  if (enteredCount > 0) {
+    return { ...base, shouldAlert: false, enteredCount, skipReason: 'has_entries' };
   }
-  return { ...base, shouldAlert: true, missingCount };
+  return { ...base, shouldAlert: true, enteredCount: 0 };
 }
