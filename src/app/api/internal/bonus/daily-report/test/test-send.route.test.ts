@@ -77,6 +77,18 @@ describe('POST /api/internal/bonus/daily-report/test', () => {
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
 
+  it('422s (not 500) when the report build throws — e.g. a back-dated day with no active rule', async () => {
+    buildDailyReport.mockRejectedValueOnce(new Error('no active bonus rule for 2025-01-01'));
+    const res = await POST(
+      req({ siteCode: 'woodland', to: 'bill.barnard@svdp.us', date: '2025-01-01' }),
+    );
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('build_failed');
+    expect(sendDailyReport).not.toHaveBeenCalled();
+    expect(logCreate).not.toHaveBeenCalled();
+  });
+
   it('enforces the bearer token when INTERNAL_CRON_TOKEN is set', async () => {
     process.env['INTERNAL_CRON_TOKEN'] = 'sekret';
     expect((await POST(req({ siteCode: 'woodland', to: 'a@b.co' }))).status).toBe(404);

@@ -102,9 +102,14 @@ async function sumRangeOrNull(siteId: string, start: Date, end: Date): Promise<n
     select: { mattress_count: true },
   });
   if (rows.length === 0) return null;
+  // Floor per-entry (the calculator's canonical reading of a fractional count —
+  // see calculateDailyBonusCents) BEFORE summing, so this range total uses the
+  // exact same per-row basis as the per-line units in buildDailyReport. This is
+  // what guarantees totalToday === MTD on a single-day month (no round-then-sum
+  // vs sum-then-round divergence) and keeps unit figures consistent everywhere.
   let sum = 0;
-  for (const r of rows) sum += r.mattress_count.toNumber();
-  return Math.round(sum);
+  for (const r of rows) sum += Math.floor(r.mattress_count.toNumber());
+  return sum;
 }
 
 async function comparisonOrNull(siteId: string, start: Date, end: Date): Promise<ComparisonTotal> {
@@ -145,7 +150,11 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
 
   const lines: ProcessorLine[] = todayEntries
     .map((e) => {
-      const mattresses = Math.round(e.mattress_count.toNumber());
+      // Floor matches calculateDailyBonusCents' internal floor AND the signed
+      // payroll PDF path (month-list.ts passes raw .toNumber() → the calculator
+      // floors), so the displayed unit, the bonus basis, and the payroll PDF
+      // never diverge — even on the fractional counts ADR-0023 history allows.
+      const mattresses = Math.floor(e.mattress_count.toNumber());
       return {
         employeeId: e.bonus_employee.id,
         fullName: e.bonus_employee.full_name,
@@ -167,15 +176,11 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
   const sameDayLastYear = await comparisonOrNull(siteId, sdlyDate, sdlyDate);
 
   const mtdStart = firstOfMonth(reportDate);
-  const mtd: ComparisonTotal = {
-    startDate: mtdStart,
-    endDate: reportDate,
-    // MTD includes today; "no data" only when this month has zero entries.
-    total:
-      totalToday === 0
-        ? await sumRangeOrNull(siteId, mtdStart, reportDate)
-        : ((await sumRangeOrNull(siteId, mtdStart, reportDate)) ?? totalToday),
-  };
+  // MTD spans [firstOfMonth, reportDate] inclusive. Today is always inside that
+  // window, so the single range sum already includes today's entries — no
+  // special-case, no double DB call, no double-count. total is null only when
+  // the whole month has zero entries (then totalToday is 0 too).
+  const mtd = await comparisonOrNull(siteId, mtdStart, reportDate);
 
   const priorStart = firstOfPriorMonth(reportDate);
   const priorEnd = sameDomPriorMonth(reportDate);

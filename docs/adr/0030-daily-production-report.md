@@ -190,7 +190,30 @@ time and are authoritative:
    fidelity. Default `subject_template` tightened to
    `DR3 Daily Production Report — {site} — {date}`.
 
-5. **Internal test-send route.** `POST /api/internal/bonus/daily-report/test`
+5. **Math-correctness hardening (post-build audit, 2026-06-17).** A correctness
+   audit (Terry) caught a rounding-basis divergence: per-line units were
+   `Math.round`ed then summed for `totalToday`, but range sums (MTD/comparisons)
+   summed raw then rounded — so a fractional `Decimal(5,1)` count could render
+   `MTD < today`, and the per-line bonus basis (rounded) could diverge from the
+   signed payroll PDF (`month-list.ts` passes raw `.toNumber()` → the calculator
+   floors). **Fix: floor each entry consistently everywhere** (units display,
+   bonus basis, and every range sum), matching `calculateDailyBonusCents`' own
+   floor and the PDF path — units never disagree and the report's bonus equals
+   the signed PDF. Also simplified the MTD computation to a single range query
+   (today is always inside `[firstOfMonth, reportDate]`; the old double-query +
+   `?? totalToday` fallback was redundant) and made the test-send route return a
+   clean 422 (not 500) for a back-dated day with no active rule. Regression tests
+   added for all of the above. **Known/accepted limitation (unchanged):** the
+   "pace vs. last month" compares MTD-to-date against the prior month's
+   same-DOM window, which clamps on month-end (e.g. Mar 31 → Feb 28); the
+   percentage is informational on mismatched-length months — the absolute totals
+   are authoritative (documented in the operator runbook).
+
+6. **Masthead title.** Subject leads with "DR3 Daily Production Report …"; the
+   email masthead reads "{Site} Daily Production Report" (no duplicate "DR3" —
+   the SVdP logo carries the masthead brand, footer says "DR3-Vision").
+
+7. **Internal test-send route.** `POST /api/internal/bonus/daily-report/test`
    (loopback + optional `INTERNAL_CRON_TOKEN`, same guard as `close-months`)
    renders the REAL email for a site and sends it to one address with a
    `[TEST]` subject prefix, writing **no** `bonus_daily_report_log` row — so an

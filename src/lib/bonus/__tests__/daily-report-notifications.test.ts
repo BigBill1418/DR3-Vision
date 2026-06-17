@@ -104,12 +104,14 @@ describe('renderSubject', () => {
 });
 
 describe('renderHtmlBody', () => {
-  it('includes the "DR3 - Woodland Automated Production Report" header', () => {
+  it('includes the "{Site} Daily Production Report" masthead (DR3 not duplicated here)', () => {
     const html = renderHtmlBody(makeReport(), {
       includeBonusDollars: true,
       includeComparisons: true,
     });
-    expect(html).toContain('DR3 - Woodland Automated Production Report');
+    expect(html).toContain('Woodland Daily Production Report');
+    // "DR3" must NOT appear in the masthead title (it leads the subject + footer).
+    expect(html).not.toContain('DR3 - Woodland');
   });
 
   it('shows the bonus column when includeBonusDollars: true', () => {

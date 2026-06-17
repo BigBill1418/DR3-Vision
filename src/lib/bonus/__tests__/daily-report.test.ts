@@ -251,13 +251,16 @@ describe('buildDailyReport — Eugene-style empty history', () => {
         bonus_employee: { id: 'emp-amy', full_name: 'Amy' },
       },
     ];
-    // historyRows is empty → every range sum returns null.
+    // Today's entry lives in the same table the MTD range query reads, so it
+    // appears in the MTD window [Jun 1, Jun 16]. The PRIOR windows (same-day-last-
+    // year, prior-month-same-period) are genuinely empty → null (Eugene's case).
+    historyRows = [{ entry_date: REPORT_DATE, mattress_count: dec(60) }];
     const report = await build(REPORT_DATE);
 
     expect(report.sameDayLastYear.total).toBeNull();
     expect(report.priorMonthSamePeriod.total).toBeNull();
     expect(report.paceDeltaPct).toBeNull();
-    // MTD still reflects today even with no other-month history.
+    // MTD reflects today (the only day with data this month).
     expect(report.mtd.total).toBe(report.totalToday);
   });
 });
@@ -334,5 +337,98 @@ describe('buildDailyReport — paceDeltaPct rounding (negative)', () => {
     expect(report.mtd.total).toBe(80);
     expect(report.priorMonthSamePeriod.total).toBe(90);
     expect(report.paceDeltaPct).toBe(-11.1);
+  });
+});
+
+// ── Rounding/basis consistency (Terry audit F1/F8) ──────────────────
+// These lock the fix for the divergence that would have shown MTD < today, and
+// the bonus-vs-signed-PDF basis mismatch, on fractional Decimal(5,1) counts.
+
+describe('buildDailyReport — fractional counts: totalToday === MTD (no round/sum divergence)', () => {
+  it('floors each entry consistently so a single-day month reconciles exactly', async () => {
+    // 30.5 + 40.5: round-then-sum (old line path) = 31+41 = 72; sum-then-round
+    // (old range path) = round(71) = 71 → would mismatch. Floor-everywhere = 30+40 = 70 both.
+    todayRows = [
+      {
+        mattress_count: dec(30.5),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+      {
+        mattress_count: dec(40.5),
+        entered_at: new Date('2026-06-16T10:00:00Z'),
+        bonus_employee: { id: 'emp-b', full_name: 'B' },
+      },
+    ];
+    historyRows = [
+      { entry_date: REPORT_DATE, mattress_count: dec(30.5) },
+      { entry_date: REPORT_DATE, mattress_count: dec(40.5) },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.totalToday).toBe(70);
+    expect(report.mtd.total).toBe(70);
+    expect(report.mtd.total).toBe(report.totalToday);
+    // Displayed per-line units are the floored integers, summing to the total.
+    expect(report.lines.map((l) => l.mattresses)).toEqual([40, 30]);
+  });
+});
+
+describe('buildDailyReport — fractional counts: bonus basis matches the signed PDF (floor)', () => {
+  it('computes per-line bonus on the SAME floored basis as month-list/PDF', async () => {
+    const { calculateDailyBonusCents } = await import('../calculator');
+    // 50.5 is a tier boundary: floor→50 = $0.00 (in-threshold); round→51 = $0.50.
+    // The signed-PDF path passes raw .toNumber() (calculator floors), so the
+    // report MUST match calculateDailyBonusCents(50.5) === floor(50.5)=50 → 0.
+    todayRows = [
+      {
+        mattress_count: dec(50.5),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    const report = await build(REPORT_DATE);
+    const line = report.lines[0]!;
+    expect(line.mattresses).toBe(50);
+    expect(line.bonusCents).toBe(calculateDailyBonusCents(50.5, WOODLAND_RULE));
+    expect(line.bonusCents).toBe(0);
+  });
+});
+
+describe('buildDailyReport — MTD excludes the prior month (left boundary)', () => {
+  it('does not leak a May 31 entry into a June MTD window', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(40),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    historyRows = [
+      { entry_date: new Date(Date.UTC(2026, 4, 31)), mattress_count: dec(99) }, // May 31 — must be excluded
+      { entry_date: REPORT_DATE, mattress_count: dec(40) },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.totalToday).toBe(40);
+    expect(report.mtd.total).toBe(40); // 99 from May 31 not counted
+  });
+});
+
+describe('buildDailyReport — paceDeltaPct is -100.0 for a zero MTD against a non-zero prior', () => {
+  it('treats a real zero-production MTD as -100% (not null/NaN)', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(0),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    historyRows = [
+      { entry_date: REPORT_DATE, mattress_count: dec(0) },
+      { entry_date: new Date(Date.UTC(2026, 4, 10)), mattress_count: dec(90) },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.mtd.total).toBe(0);
+    expect(report.priorMonthSamePeriod.total).toBe(90);
+    expect(report.paceDeltaPct).toBe(-100);
   });
 });

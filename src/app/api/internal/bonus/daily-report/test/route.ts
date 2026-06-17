@@ -67,14 +67,28 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   const reportDate = parsed.data.date ? new Date(`${parsed.data.date}T00:00:00.000Z`) : appToday();
-  const report = await buildDailyReport(site.id, reportDate);
-  const result = await sendDailyReport({
-    report,
-    recipients: [parsed.data.to],
-    subjectTemplate: `[TEST] ${config?.subject_template ?? 'DR3 Daily Production Report — {site} — {date}'}`,
-    includeBonusDollars: config?.include_bonus_dollars ?? true,
-    includeComparisons: config?.include_comparisons ?? true,
-  });
+
+  // buildDailyReport throws NoActiveRuleError (or "site not found") if the
+  // requested date predates the site's earliest bonus rule — return a clean
+  // 422 rather than a 500 (the date param can reach historical days).
+  let result;
+  try {
+    const report = await buildDailyReport(site.id, reportDate);
+    result = await sendDailyReport({
+      report,
+      recipients: [parsed.data.to],
+      subjectTemplate: `[TEST] ${config?.subject_template ?? 'DR3 Daily Production Report — {site} — {date}'}`,
+      includeBonusDollars: config?.include_bonus_dollars ?? true,
+      includeComparisons: config?.include_comparisons ?? true,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'report build failed';
+    log.warn(
+      { siteCode: parsed.data.siteCode, date: parsed.data.date, err: message },
+      '[daily-report] test send build failed',
+    );
+    return NextResponse.json({ error: 'build_failed', message }, { status: 422 });
+  }
 
   log.info(
     { siteCode: parsed.data.siteCode, to: parsed.data.to, delivered: result.delivered_count },

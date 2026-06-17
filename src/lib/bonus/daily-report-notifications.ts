@@ -93,8 +93,10 @@ export interface RenderOptions {
 }
 
 export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string {
-  // Kept verbatim so downstream consumers/tests can key on it.
-  const headerLine = `DR3 - ${report.siteName} Automated Production Report`;
+  // Masthead title. "DR3" is intentionally NOT repeated here — it already
+  // leads the subject line ("DR3 Daily Production Report — …") and the footer
+  // ("DR3-Vision"); the SVdP logo carries the parent-org brand on the masthead.
+  const headerLine = `${report.siteName} Daily Production Report`;
 
   const showBonus = opts.includeBonusDollars;
   const numTd = 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap';
