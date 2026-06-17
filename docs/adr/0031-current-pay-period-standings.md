@@ -1,6 +1,8 @@
 # ADR-0031 — Current pay-period standings (live, in-progress view)
 
-**Status:** Accepted (2026-06-17)
+**Status:** Accepted — shipped to prod (svdp-dev) and operator-confirmed 2026-06-17
+(standings + per-employee banner, canonical period labels, and the historical-rule
+500 hotfix all live; Bill confirmed the history page loads).
 **Related:** ADR-0019 (Bonus Management System), ADR-0019.1 (bi-weekly cadence),
 ADR-0019.2 (Eugene enablement), ADR-0023 (historical import / period nomenclature),
 ADR-0026 (employee number). Builds on the §8 aggregate views (`aggregates.ts`).

@@ -13,6 +13,8 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 **Test.** Failing-first regression in `aggregates.test.ts` reproducing the prod `NoActiveRuleError` (rule effective 2026-01-01 + a 2025 period with entries), now green; the rule mock was upgraded to honor `effective_date`/`end_date` so the fallback path is actually exercised. Suite **919 green**; `tsc` 0; ESLint clean; `next build` ok. No migration.
 
+**Status (ADR-0031 set).** All three pieces — live standings + per-employee banner, canonical `Period N · <range>` labels, and this historical-rule hotfix — are shipped to prod (svdp-dev) and **operator-confirmed 2026-06-17** (Bill confirmed the history page loads).
+
 ### 2026-06-17 — Current pay-period standings (ADR-0031)
 
 **Headline.** Adds a live, in-progress view of where every processor stands in the **open** bi-weekly pay period — the piece the cross-period history and closed-period reports never surfaced. Fixes the Reports "Per-employee history" card, which linked to the employee **roster manager** (`/bonus/employees`) and showed no bonus data: it now opens **"Current pay period — live standings"** (`/bonus/standings`).
