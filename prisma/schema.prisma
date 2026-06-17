@@ -81,6 +81,10 @@ model Site {
   // Bonus amendment workflow (ADR-0028)
   bonus_amendment_requests BonusAmendmentRequest[]
 
+  // Daily production report (ADR-0030)
+  bonus_daily_report_config BonusDailyReportConfig?
+  bonus_daily_report_logs   BonusDailyReportLog[]
+
   @@map("sites")
 }
 
@@ -165,6 +169,11 @@ model User {
   // operators and irrelevant for admins (who already see all sites).
   all_sites Boolean @default(false)
 
+  // ADR-0030 — super-admin gate for the Bill-only daily-production-report
+  // admin tile (`/admin/production-report`). Distinct from `role = admin`:
+  // admin-role Kelsey is NOT super-admin. Promotion is a DB UPDATE, not a UI affordance.
+  is_super_admin Boolean @default(false)
+
   // Processor-specific (V2.1)
   processor_role String? // 'Lead', 'Processor', 'Machine Operator', 'Stryo', 'Floater' (Eugene); null for Woodland
 
@@ -197,6 +206,9 @@ model User {
   bonus_amendments_requested  BonusAmendmentRequest[] @relation("BonusAmendmentRequester")
   bonus_amendments_to_approve BonusAmendmentRequest[] @relation("BonusAmendmentExpectedApprover")
   bonus_amendments_reviewed   BonusAmendmentRequest[] @relation("BonusAmendmentReviewer")
+
+  // Daily production report (ADR-0030)
+  bonus_daily_report_recipients_added BonusDailyReportRecipient[] @relation("BonusDailyReportRecipientAdder")
 
   @@map("users")
 }
@@ -602,6 +614,67 @@ model MymrcReconciliationItem {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Daily production report (ADR-0030) — per-site config, recipients, send log.
+// ────────────────────────────────────────────────────────────────────────
+
+model BonusDailyReportConfig {
+  id      String @id @default(uuid())
+  site_id String @unique
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  enabled               Boolean  @default(false)
+  /// Pacific wall-clock time as HH:MM:SS. DST handled by the daemon/runner.
+  send_time_pt          DateTime @db.Time
+  subject_template      String   @default("[DR3-Vision] {site} processing — {date}")
+  skip_if_zero          Boolean  @default(true)
+  skip_weekends         Boolean  @default(false)
+  skip_holidays         Boolean  @default(false)
+  include_bonus_dollars Boolean  @default(true)
+  include_comparisons   Boolean  @default(true)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  recipients BonusDailyReportRecipient[]
+
+  @@map("bonus_daily_report_config")
+}
+
+model BonusDailyReportRecipient {
+  id               String                 @id @default(uuid())
+  config_id        String
+  config           BonusDailyReportConfig @relation(fields: [config_id], references: [id], onDelete: Cascade)
+  email            String
+  added_by_user_id String?
+  added_by         User?                  @relation("BonusDailyReportRecipientAdder", fields: [added_by_user_id], references: [id])
+  added_at         DateTime               @default(now())
+
+  @@unique([config_id, email])
+  @@index([config_id])
+  @@map("bonus_daily_report_recipients")
+}
+
+model BonusDailyReportLog {
+  id                String   @id @default(uuid())
+  site_id           String
+  site              Site     @relation(fields: [site_id], references: [id])
+  report_date       DateTime @db.Date
+  sent_at           DateTime @default(now())
+  recipient_count   Int
+  total_today       Int
+  total_bonus_cents Int
+  mtd_total         Int
+  delivered_count   Int
+  graph_message_id  String?
+  last_status       Int?
+  created_at        DateTime @default(now())
+
+  @@unique([site_id, report_date])
+  @@index([sent_at(sort: Desc)])
+  @@map("bonus_daily_report_log")
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Audit log (append-only, indefinite retention per ADR-0007)
 // ────────────────────────────────────────────────────────────────────────
 
@@ -928,7 +1001,7 @@ model BonusAmendmentRequest {
   site_id String
   site    Site   @relation(fields: [site_id], references: [id])
 
-  target_entry_date DateTime @db.Date
+  target_entry_date DateTime      @db.Date
   bonus_employee_id String
   bonus_employee    BonusEmployee @relation(fields: [bonus_employee_id], references: [id])
 

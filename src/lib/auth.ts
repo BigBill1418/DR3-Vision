@@ -91,6 +91,7 @@ export interface EntraGateUser {
   role: 'operator' | 'manager' | 'admin';
   primary_site_id: string | null;
   all_sites: boolean;
+  is_super_admin: boolean;
   is_active: boolean;
   deleted_at: Date | null;
 }
@@ -110,7 +111,10 @@ export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<En
   // The email is an identifier, not a secret (unlike pin_hash); it is safe and
   // necessary to log for support.
   const deny = (reason: Extract<EntraGateResult, { ok: false }>['reason']): EntraGateResult => {
-    log.warn({ event: 'entra_signin_denied', email: email || null, reason }, 'Entra sign-in denied');
+    log.warn(
+      { event: 'entra_signin_denied', email: email || null, reason },
+      'Entra sign-in denied',
+    );
     return { ok: false, reason };
   };
 
@@ -125,6 +129,7 @@ export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<En
       role: true,
       primary_site_id: true,
       all_sites: true,
+      is_super_admin: true,
       is_active: true,
       deleted_at: true,
     },
@@ -173,6 +178,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           role: user.role,
           primary_site_id: user.primary_site_id,
           all_sites: false, // operators are single-site (PIN flow); never all-sites
+          is_super_admin: false, // operators are never super-admin (ADR-0030)
         };
       },
     }),
@@ -198,6 +204,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         user.role = result.user.role;
         user.primary_site_id = result.user.primary_site_id;
         user.all_sites = result.user.all_sites; // ADR-0024 all-sites manager
+        user.is_super_admin = result.user.is_super_admin; // ADR-0030 super-admin
 
         await prisma.user.update({
           where: { id: result.user.id },

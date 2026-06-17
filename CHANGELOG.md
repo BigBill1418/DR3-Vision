@@ -5,6 +5,42 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-17 — Sprint 5: daily production report (ADR-0030)
+
+**Headline.** Replaces Morena Gomez's manual 6 PM Pacific daily processing email for Woodland and adds the same automation for Eugene. Both sites are independently configurable from a Bill-only admin tile (`/admin/production-report`). Recipients, send time, subject template, and skip rules are all editable through the UI; every config change is audit-tracked. Email body includes per-employee mattress count + bonus dollars + total processed + total bonus paid + four comparison lines (same day last year, MTD, prior month same period, percentage delta).
+
+**Migration `20260617_daily_production_report`:** three new tables — `bonus_daily_report_config` (per-site, unique on site_id), `bonus_daily_report_recipients` (child table, unique on (config_id, email)), `bonus_daily_report_log` (per-day idempotency, unique on (site_id, report_date)). Plus a new `is_super_admin` boolean column on `users`, defaulting false, with the seed flipping Bill to true.
+
+**Seed:** Both sites enabled at 18:00 Pacific. Woodland recipients: bill, bethany, morena. Eugene recipients: shannon, bill, bethany, rick. Re-running the seed is idempotent (`ON CONFLICT DO NOTHING` on recipients; `ON CONFLICT DO UPDATE` on config).
+
+**Service layer:**
+
+- `src/lib/bonus/daily-report.ts` — pure aggregation. Per-employee bonus via `calculateDailyBonusCents` against the site's effective `processor_bonus_rules`. Date math handles leap years, year boundaries, and short-month clamping. Comparison totals return `null` on empty windows so Eugene's sparse history renders gracefully.
+- `src/lib/bonus/daily-report-config.ts` — config + recipient CRUD with in-transaction audit logging. Email validation app-side (lowercase normalization, regex). Time validation accepts `HH:MM` or `HH:MM:SS`.
+- `src/lib/bonus/daily-report-notifications.ts` — subject + HTML body rendering, per-recipient `sendSystemEmail`. Header reads "DR3 - {Site} Automated Production Report" + dated subtitle. Color-codes the pace delta (green up, red down). Conditional sections honor `include_bonus_dollars` and `include_comparisons`.
+
+**Daemon:**
+
+- `scripts/bonus-daily-report.mjs` — long-running thin Pacific scheduler, same shape as `bonus-period-close.mjs`. Imports only `@prisma/client` (no `tsx`, no `.ts` import — the prod image is `npm ci --omit=dev` and `tsx` is a devDependency). Reads each enabled config's `send_time_pt`, sleeps until the soonest next-fire across all sites, then POSTs to the loopback+bearer-guarded internal route `/api/internal/bonus/daily-report`, which runs the tested TS runner `src/lib/bonus/daily-report-runner.ts` (`runDailyReportFire`) inside the Next app — mirroring the `bonus-period-close.mjs` → `/api/internal/bonus/close-months` pattern. The runner fires per site within a 60-second wake window (handles two sites configured for the same time). Idempotency via `bonus_daily_report_log` uniqueness; container restart cannot re-send a delivered report.
+
+**Admin UI:**
+
+- `/admin/production-report` route gated on `session.user.is_super_admin`. Per-site card with enable toggle, send time picker, subject template, recipient chips (add/remove), skip rule checkboxes, include flag checkboxes, Save/Send Test/View Recent buttons.
+- "Recent sends" table shows last 30 sends across all sites with delivered_count vs attempted, today's total + bonus, and last Graph HTTP status for diagnostics.
+
+**Auth plumbing:** `is_super_admin` propagated through next-auth `jwt` and `session` callbacks; `next-auth.d.ts` extended.
+
+**docker-compose:** New `bonus-daily-report` service alongside the three existing bonus daemons.
+
+**Operator action on first deploy:**
+
+1. `prisma migrate deploy` applies the additive migration.
+2. Seed runs (or run `npx prisma db seed`) to populate both configs and the super-admin flag.
+3. `docker compose up -d` starts the new daemon.
+4. Bill verifies via `/admin/production-report`; first scheduled fire is the next 18:00 PT.
+
+**Tests:** ≥ 32 new vitest cases — aggregation, date math, comparison nulls, config CRUD with audit assertions, notification rendering with conditional sections, route-level super-admin gating (Bill 200, Kelsey 403).
+
 ### 2026-06-17 — Fix: EOD bonus alert now fires only when a site has zero entries (ADR-0019 §2)
 
 Bill was being paged whenever **any** active processor lacked a bonus entry by

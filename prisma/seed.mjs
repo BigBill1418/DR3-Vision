@@ -20,6 +20,11 @@
 //   9. bonus post-seed DDL    -- NOT NULL + canonical unique index, applied
 //                                after the 52 rows are in place (T-201)
 //
+// Also seeded (right after users, before site_holidays): the ADR-0030 daily
+// production report config — 1 BonusDailyReportConfig per site (2 rows) plus
+// their BonusDailyReportRecipient rosters (3 Woodland + 4 Eugene = 7 rows).
+// Idempotent; not asserted in assertCounts (recipients are admin-editable).
+//
 // Re-runs are safe: existing rows update, new rows insert, never duplicate.
 // The post-seed DDL is idempotent (SET NOT NULL re-issue is a no-op;
 // CREATE UNIQUE INDEX IF NOT EXISTS).
@@ -195,6 +200,7 @@ async function seedUsers(siteIds) {
       processor_role: blankToNull(r.processor_role),
       is_active: bool(r.is_active),
       all_sites: bool(r.all_sites), // ADR-0024 all-sites manager (blank → false)
+      is_super_admin: bool(r.is_super_admin), // ADR-0030 super-admin (blank/false → false)
     };
     await prisma.user.upsert({
       where: { email: data.email },
@@ -202,6 +208,17 @@ async function seedUsers(siteIds) {
       update: data,
     });
   }
+
+  // ── ADR-0030 (contract divergence #3): flip Bill to super-admin ──
+  // bill.barnard@svdp.us is Bill's real SSO login but is NOT a row in
+  // users.csv (only the inactive import alias operations@svdp.us is). On a
+  // fresh DB his SSO row doesn't exist yet, so this updateMany matches 0 rows
+  // and is a no-op; once he has signed in (or prod runs the manual UPDATE at
+  // deploy), the row exists and this idempotently sets is_super_admin = true.
+  await prisma.user.updateMany({
+    where: { email: 'bill.barnard@svdp.us' },
+    data: { is_super_admin: true },
+  });
 }
 
 async function seedSiteHolidays(siteIds) {
@@ -379,6 +396,58 @@ async function seedBonusSignatureChains(siteIds) {
       create: data,
       update: data,
     });
+  }
+}
+
+// ─── Daily production report config + recipients (ADR-0030) ──────────────
+// One BonusDailyReportConfig per site (Woodland + Eugene), each enabled and
+// firing at 18:00:00 PT, with its recipient roster. Recipients are from the
+// BUILD-CONTRACT divergence #2 (Morena added per operator request 2026-06-17).
+// Fully idempotent: config upsert is keyed on the unique site_id; each
+// recipient upsert is keyed on the composite unique (config_id, email). Emails
+// are normalized to lowercase so the composite-unique key never collides on
+// case. Re-runs only flip enabled back on and ensure the roster exists; they
+// never delete a recipient an admin may have added via the UI.
+const DAILY_REPORT_RECIPIENTS = {
+  woodland: [
+    'bill.barnard@svdp.us',
+    'bethany.cartledge@svdp.us',
+    'morena.gomez@svdp.us',
+  ],
+  eugene: [
+    'shannon.rockwell@svdp.us',
+    'bill.barnard@svdp.us',
+    'bethany.cartledge@svdp.us',
+    'rick.albritton@svdp.us',
+  ],
+};
+
+async function seedDailyReportConfig(siteIds) {
+  for (const code of ['woodland', 'eugene']) {
+    const site_id = siteIds.get(code);
+    if (!site_id) {
+      throw new Error(`seedDailyReportConfig: unknown site code='${code}'`);
+    }
+    const config = await prisma.bonusDailyReportConfig.upsert({
+      where: { site_id },
+      create: {
+        site_id,
+        enabled: true,
+        // @db.Time column — only the time-of-day matters. 18:00 PT.
+        send_time_pt: new Date('1970-01-01T18:00:00.000Z'),
+        updated_at: new Date(),
+      },
+      update: { enabled: true },
+    });
+
+    for (const rawEmail of DAILY_REPORT_RECIPIENTS[code]) {
+      const email = rawEmail.trim().toLowerCase();
+      await prisma.bonusDailyReportRecipient.upsert({
+        where: { config_id_email: { config_id: config.id, email } },
+        create: { config_id: config.id, email },
+        update: {},
+      });
+    }
   }
 }
 
@@ -764,6 +833,8 @@ async function main() {
   const siteIds = await getSiteIdsByCode();
   console.log('▶ seeding users');
   await seedUsers(siteIds);
+  console.log('▶ seeding daily-report config + recipients (ADR-0030)');
+  await seedDailyReportConfig(siteIds);
   console.log('▶ seeding site_holidays');
   await seedSiteHolidays(siteIds);
   console.log('▶ seeding processor_bonus_rules');

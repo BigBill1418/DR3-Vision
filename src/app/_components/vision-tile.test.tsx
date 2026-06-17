@@ -48,6 +48,26 @@ describe('VisionTile', () => {
     expect(html).toContain('border-dr3-cyan/45');
   });
 
+  it('production-report tile (ADR-0030) renders an active link to /admin/production-report', () => {
+    const productionReport: DashboardTile = {
+      ...base,
+      key: 'production-report',
+      label: 'Production Report',
+      description: 'Daily email automation config',
+      icon: 'FileSpreadsheet',
+      route: '/admin/production-report',
+      status: 'active',
+      scope: 'super-admin-only',
+    };
+    const html = renderToStaticMarkup(<VisionTile tile={productionReport} />);
+    expect(html).toContain('href="/admin/production-report"');
+    expect(html).toContain('data-status="active"');
+    expect(html).not.toMatch(/coming soon/i);
+    // Icon resolves from the allow-list (FileSpreadsheet is registered), so the
+    // tile is not the LayoutDashboard fallback path — an <svg> is present.
+    expect(html).toContain('<svg');
+  });
+
   it('coming-soon tile is non-interactive and exposes no href', () => {
     const soon: DashboardTile = {
       ...base,

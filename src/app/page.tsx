@@ -49,9 +49,11 @@ export default async function Page() {
   const ownSiteCode =
     sites.find((s) => s.id === session.user.primary_site_id)?.code ?? BONUS_SITE_CODE;
 
-  const visible = DASHBOARD_TILES.filter((t) => canSeeTile(session, t, woodlandSiteId)).map((t) =>
-    resolveRoute(t, ownSiteCode),
-  );
+  const isSuperAdmin = session.user.is_super_admin === true;
+
+  const visible = DASHBOARD_TILES.filter((t) =>
+    canSeeTile(session, t, woodlandSiteId, isSuperAdmin),
+  ).map((t) => resolveRoute(t, ownSiteCode));
 
   const active = visible.filter((t) => t.status === 'active');
   const comingSoon = visible.filter((t) => t.status === 'coming-soon');

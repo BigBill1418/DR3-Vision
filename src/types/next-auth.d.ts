@@ -8,6 +8,8 @@ declare module 'next-auth' {
     primary_site_id: string | null;
     /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
     all_sites: boolean;
+    /** ADR-0030 — super-admin: gates super-admin-only surfaces. */
+    is_super_admin: boolean;
   }
 
   interface Session extends DefaultSession {
@@ -19,6 +21,8 @@ declare module 'next-auth' {
       primary_site_id: string | null;
       /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
       all_sites: boolean;
+      /** ADR-0030 — super-admin: gates super-admin-only surfaces. */
+      is_super_admin: boolean;
     } & DefaultSession['user'];
   }
 }
@@ -29,6 +33,8 @@ declare module 'next-auth/jwt' {
     primary_site_id?: string | null;
     /** ADR-0024 — all-sites manager: reaches every site without the admin role. */
     all_sites?: boolean;
+    /** ADR-0030 — super-admin: gates super-admin-only surfaces. */
+    is_super_admin?: boolean;
     last_seen_at?: number;
     // Microsoft Graph delegated access token (User.Read), persisted from the Entra
     // sign-in so the server-only /api/me/photo route can fetch the profile photo

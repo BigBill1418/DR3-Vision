@@ -25,11 +25,15 @@ export type TileStatus = 'active' | 'coming-soon';
 
 /**
  * Who may see a tile.
- *   - 'manager+'   → any manager or admin (the base /-gate audience)
- *   - 'admin-only' → admin role only (Admin & Audit)
- *   - 'bonus'      → the bonus access rule (admin OR Woodland/both-sites manager)
+ *   - 'manager+'         → any manager or admin (the base /-gate audience)
+ *   - 'admin-only'       → admin role only (Admin & Audit)
+ *   - 'bonus'            → the bonus access rule (admin OR Woodland/both-sites manager)
+ *   - 'super-admin-only' → Bill-only super-admin surfaces (ADR-0030 Production
+ *                          Report). Gated on `session.user.is_super_admin`, a
+ *                          flag distinct from the `admin` role — a plain admin
+ *                          does NOT pass this scope.
  */
-export type TileScope = 'manager+' | 'admin-only' | 'bonus';
+export type TileScope = 'manager+' | 'admin-only' | 'bonus' | 'super-admin-only';
 
 export interface DashboardTile {
   /** Stable key (also used as the React list key + test selector). */
@@ -113,6 +117,15 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'admin-only',
   },
+  {
+    key: 'production-report',
+    label: 'Production Report',
+    description: 'Daily email automation config',
+    icon: 'FileSpreadsheet',
+    route: '/admin/production-report',
+    status: 'active',
+    scope: 'super-admin-only',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───
@@ -183,11 +196,17 @@ type SessionLike = Pick<Session, 'user'> | null | undefined;
  * @param woodlandSiteId Woodland's resolved site id (from Prisma), needed only
  *                       for the 'bonus' scope. Pass it for every call so the
  *                       bonus rule matches `src/lib/bonus/access.ts` exactly.
+ * @param isSuperAdmin   whether the session is a super-admin (Bill). Gates the
+ *                       'super-admin-only' scope (ADR-0030); distinct from the
+ *                       `admin` role — a plain admin does NOT pass it. Defaults
+ *                       to `false` so an absent/legacy session is never granted
+ *                       a super-admin tile.
  */
 export function canSeeTile(
   session: SessionLike,
   tile: DashboardTile,
   woodlandSiteId: string | null = null,
+  isSuperAdmin: boolean = false,
 ): boolean {
   const user = session?.user;
   if (!user?.id) return false;
@@ -208,6 +227,10 @@ export function canSeeTile(
       // `woodlandSiteId` arg is intentionally unused now (matrix expanded).
       void woodlandSiteId;
       return true;
+    case 'super-admin-only':
+      // ADR-0030: Bill-only. Distinct from the `admin` role — a plain admin
+      // does not pass. The base manager/admin gate above already ran.
+      return isSuperAdmin === true;
     default:
       return false;
   }
@@ -219,6 +242,7 @@ export function canSeeTile(
 export function visibleTiles(
   session: SessionLike,
   woodlandSiteId: string | null = null,
+  isSuperAdmin: boolean = false,
 ): DashboardTile[] {
-  return DASHBOARD_TILES.filter((t) => canSeeTile(session, t, woodlandSiteId));
+  return DASHBOARD_TILES.filter((t) => canSeeTile(session, t, woodlandSiteId, isSuperAdmin));
 }
