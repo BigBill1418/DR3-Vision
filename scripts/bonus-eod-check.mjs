@@ -4,7 +4,9 @@
 // Long-running daemon, same shape as bonus-period-close + bonus-escalation-check:
 // sleeps until the next 17:00 Pacific instant, fires, repeats. Per-site
 // iteration covers Woodland + Eugene (any site with an active bonus signature
-// chain). One ntfy per site with missing entries, fingerprinted per (site, date).
+// chain). One ntfy per site that has ZERO entries for the day, fingerprinted
+// per (site, date) — a partial day (at least one entry) never pages
+// (revised 2026-06-17, ADR-0019 §2).
 
 import { PrismaClient } from '@prisma/client';
 

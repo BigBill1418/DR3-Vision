@@ -198,8 +198,8 @@ There are **two** bonus cron daemons in `docker-compose.yml`, and the old monthl
 > `bonus-month-close` container still running on the host from a previous
 > release, stop and remove it.
 >
-> `scripts/bonus-eod-check.mjs` (the 17:00 PT "active employee missing today's
-> entry" daily check from Sprint 2) is **not** a separate compose service on this
+> `scripts/bonus-eod-check.mjs` (the 17:00 PT "site has no entries today"
+> daily check from Sprint 2; revised 2026-06-17 per ADR-0019 §2) is **not** a separate compose service on this
 > branch — it is the existing daily EOD enforcement and is orthogonal to the
 > bi-weekly close. Do not expect a third bonus cron container.
 
@@ -286,8 +286,8 @@ implements (ADR-0019.1 §3).
 ### Mon Jun 8
 
 - **17:00 PT** — EOD daily check fires (existing `bonus-eod-check` enforcement)
-  if any active employee at either site is missing today's entry. With Period 12
-  skipped this is informational only.
+  if either site has zero entries today (revised 2026-06-17, ADR-0019 §2). With
+  Period 12 skipped this is informational only.
 - **17:30 PT** — `bonus-period-close` fires. With Period 12 **skipped**, no
   `draft` period has `period_end = 2026-06-08`, so the close logs **"no periods
   to close"** — a clean no-op. (Had Period 12 not been skipped, it would have

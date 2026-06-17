@@ -56,11 +56,16 @@ Expect 200 (or 401 if unauthenticated).
 
 Best on a Wednesday or Thursday afternoon (not a holiday).
 
-1. At ~16:50 PT, log in as Bill, navigate to `/bonus` on each site (Woodland and Eugene). Confirm today's grid shows entries for every active processor on both sites.
-2. Temporarily make one employee on each site missing for today (DB edit or amendment-via-set-to-zero — restore after).
+> **Trigger (revised 2026-06-17, ADR-0019 §2):** the alert fires only when a
+> site has **zero** entries for the day. A partial day (one or more processors
+> entered, others didn't) does **not** page. So the test must leave a site with
+> _no_ entries at all — removing a single processor's entry will not fire.
+
+1. At ~16:50 PT, log in as Bill, navigate to `/bonus` on each site (Woodland and Eugene). Note today's entries on each site.
+2. Temporarily clear **all** of today's entries on each site (DB edit — restore after). Each site must have zero entries for today.
 3. At 17:00 PT exactly, observe your phone — expect two ntfy notifications:
-   - `[DR3-Vision] Bonus entries missing for Woodland — <date>. 1 processor without an entry.`
-   - `[DR3-Vision] Bonus entries missing for Eugene — <date>. 1 processor without an entry.`
+   - `[DR3-Vision] No bonus entries for Woodland — <date>.`
+   - `[DR3-Vision] No bonus entries for Eugene — <date>.`
 4. Restore the entries.
 
 If no ntfy fires:
