@@ -5,6 +5,24 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-17 — Change: EOD bonus alert fires only on a fully empty site-day (ADR-0019 §2)
+
+Bill was being paged whenever **any** active processor lacked a bonus entry by
+the 5:00 PM PT cron — but not every processor has a bonus every day (different
+position, day off), so the alert false-fired on normal partial days. The check
+now pages only when a bonus-enabled site has **zero** entries for the Pacific
+day (nobody logged anything). A partial day never pages.
+
+- `src/lib/bonus/eod-check.ts` — `evaluateEod` now alerts iff `enteredCount === 0`;
+  the `all_entered` skip reason becomes `has_entries`; `missingCount` →
+  `enteredCount`. The pure decision and its tests are the source of truth.
+- `scripts/bonus-eod-check.mjs` — `checkSite` fires only when the site has no
+  entries; the ntfy title/body now read "No bonus entries for &lt;site&gt;"
+  instead of an N-processors-missing count. Fingerprint (`bonus-entry-missing:…`)
+  and dedup behaviour unchanged.
+- Weekend / holiday / no-active-employees skips and the fire-once-per-day
+  fingerprint guarantee are unchanged.
+
 ### 2026-06-16 — Feature: amendment notification batching — one notification per root action (ADR-0029)
 
 ADR-0028 modelled each amended line item as its own request, so a manager

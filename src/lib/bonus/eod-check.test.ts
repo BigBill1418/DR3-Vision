@@ -3,7 +3,7 @@
 // DB-free / network-free: `evaluateEod` is pure. We feed it a resolved
 // "now" instant plus the active-employee list, the set of employee ids
 // that already have a daily entry for today, and the holiday set, and
-// assert the { shouldAlert, missingCount, dateLabel } decision.
+// assert the { shouldAlert, enteredCount, dateLabel } decision.
 //
 // The Pacific-date resolution is exercised through real instants chosen
 // so the UTC clock and the America/Los_Angeles wall clock disagree
@@ -54,7 +54,23 @@ describe('pacificDateParts', () => {
 });
 
 describe('evaluateEod', () => {
-  it('does not alert when every active employee has an entry today', () => {
+  // Revised 2026-06-17 (ADR-0019 §2): page ONLY when the site has zero entries
+  // for the day. A partial day never pages.
+  it('alerts on a workday when the site has zero entries', () => {
+    const res = evaluateEod({
+      now: MON_5PM_PT,
+      siteCode: 'woodland',
+      activeEmployees: [EMP_A, EMP_B, EMP_C],
+      enteredEmployeeIds: new Set(),
+      holidayIsoDates: new Set(),
+    });
+    expect(res.shouldAlert).toBe(true);
+    expect(res.enteredCount).toBe(0);
+    expect(res.dateLabel).toBe('Sep 14, 2026');
+    expect(res.fingerprint).toBe('bonus-entry-missing:woodland:2026-09-14');
+  });
+
+  it('does not alert when at least one employee has an entry today', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
       siteCode: 'woodland',
@@ -63,25 +79,27 @@ describe('evaluateEod', () => {
       holidayIsoDates: new Set(),
     });
     expect(res.shouldAlert).toBe(false);
-    expect(res.missingCount).toBe(0);
+    expect(res.enteredCount).toBe(3);
+    expect(res.skipReason).toBe('has_entries');
     expect(res.dateIso).toBe('2026-09-14');
   });
 
-  it('alerts on a workday when some employees are missing entries', () => {
+  // The core behaviour Bill asked for: a partial day is normal, not an alert.
+  // Some processors entered; others worked a different position or were off.
+  it('does not alert on a partial day (some entered, some missing)', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
       siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B, EMP_C],
-      enteredEmployeeIds: new Set(['emp-a']),
+      enteredEmployeeIds: new Set(['emp-a']), // only one of three logged
       holidayIsoDates: new Set(),
     });
-    expect(res.shouldAlert).toBe(true);
-    expect(res.missingCount).toBe(2);
-    expect(res.dateLabel).toBe('Sep 14, 2026');
-    expect(res.fingerprint).toBe('bonus-entry-missing:woodland:2026-09-14');
+    expect(res.shouldAlert).toBe(false);
+    expect(res.enteredCount).toBe(1);
+    expect(res.skipReason).toBe('has_entries');
   });
 
-  it('does not alert on a weekend even when entries are missing', () => {
+  it('does not alert on a weekend even with zero entries', () => {
     const res = evaluateEod({
       now: SAT_5PM_PT,
       siteCode: 'woodland',
@@ -93,7 +111,7 @@ describe('evaluateEod', () => {
     expect(res.skipReason).toBe('weekend');
   });
 
-  it('does not alert on a site holiday even when entries are missing', () => {
+  it('does not alert on a site holiday even with zero entries', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
       siteCode: 'woodland',
@@ -105,7 +123,7 @@ describe('evaluateEod', () => {
     expect(res.skipReason).toBe('holiday');
   });
 
-  it('does not alert when there are no active employees (nothing to miss)', () => {
+  it('does not alert when there are no active employees (nobody expected)', () => {
     const res = evaluateEod({
       now: MON_5PM_PT,
       siteCode: 'woodland',
@@ -114,7 +132,7 @@ describe('evaluateEod', () => {
       holidayIsoDates: new Set(),
     });
     expect(res.shouldAlert).toBe(false);
-    expect(res.missingCount).toBe(0);
+    expect(res.enteredCount).toBe(0);
     expect(res.skipReason).toBe('no_active_employees');
   });
 
@@ -125,11 +143,11 @@ describe('evaluateEod', () => {
       now: MON_5PM_PT,
       siteCode: 'eugene',
       activeEmployees: [EMP_A, EMP_B],
-      enteredEmployeeIds: new Set(['emp-a']),
+      enteredEmployeeIds: new Set(), // zero entries
       holidayIsoDates: new Set(),
     });
     expect(res.shouldAlert).toBe(true);
-    expect(res.missingCount).toBe(1);
+    expect(res.enteredCount).toBe(0);
     expect(res.fingerprint).toBe('bonus-entry-missing:eugene:2026-09-14');
   });
 
@@ -140,20 +158,20 @@ describe('evaluateEod', () => {
       now: MON_5PM_PT,
       siteCode: 'woodland',
       activeEmployees: [EMP_A, EMP_B],
-      enteredEmployeeIds: new Set(['emp-a', 'emp-b']), // all entered
+      enteredEmployeeIds: new Set(['emp-a']), // has an entry → no page
       holidayIsoDates: new Set(),
     });
     const eugene = evaluateEod({
       now: MON_5PM_PT,
       siteCode: 'eugene',
       activeEmployees: [EMP_A, EMP_B, EMP_C],
-      enteredEmployeeIds: new Set(['emp-a']), // two missing
+      enteredEmployeeIds: new Set(), // zero entries → page
       holidayIsoDates: new Set(),
     });
     expect(woodland.shouldAlert).toBe(false);
-    expect(woodland.skipReason).toBe('all_entered');
+    expect(woodland.skipReason).toBe('has_entries');
     expect(eugene.shouldAlert).toBe(true);
-    expect(eugene.missingCount).toBe(2);
+    expect(eugene.enteredCount).toBe(0);
     expect(woodland.fingerprint).not.toBe(eugene.fingerprint);
     expect(eugene.fingerprint).toBe('bonus-entry-missing:eugene:2026-09-14');
   });

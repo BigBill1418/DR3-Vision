@@ -99,17 +99,16 @@ async function postWithTimeout(url, body, headers, timeoutMs) {
   }
 }
 
-async function publishMissing({ siteCode, siteName, dateLabel, missingCount, fingerprint }) {
+async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
   const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
   // Title MUST NOT be prefixed with [DR3-Vision] — publishNtfy auto-prefixes
   // in TS-land; in the .mjs daemon we set the full title once because we're
   // calling ntfy HTTP directly. Keep "[DR3-Vision]" here so the user-visible
   // title matches the rest of the fleet.
-  const title = `[DR3-Vision] Bonus entries missing for ${siteName}`.slice(0, 250);
+  const title = `[DR3-Vision] No bonus entries for ${siteName}`.slice(0, 250);
   const body =
-    `Bonus entries missing for ${siteName} — ${dateLabel}. ` +
-    `${missingCount} processor${missingCount === 1 ? '' : 's'} without an entry. ` +
-    `Open /bonus to enter.`;
+    `No bonus entries recorded for ${siteName} — ${dateLabel}. ` +
+    `Nobody logged a bonus today. Open /bonus to enter.`;
 
   if (!token) {
     logTs(`NTFY_PUBLISHER_TOKEN unset — skipping publish for ${siteCode} (no-op)`);
@@ -180,19 +179,22 @@ async function checkSite(prisma, site, dateParts) {
     select: { bonus_employee_id: true },
   });
   const entered = new Set(entries.map((e) => e.bonus_employee_id));
-  const missing = activeEmployees.filter((e) => !entered.has(e.id));
 
-  if (missing.length === 0) {
-    logTs(`${site.code}: all ${activeEmployees.length} active employees have entries — no alert`);
+  // Revised 2026-06-17 (ADR-0019 §2): page ONLY when the site has zero entries
+  // for the day. A partial day (some processors entered, others off / on a
+  // different position) is normal and never pages.
+  if (entered.size > 0) {
+    logTs(
+      `${site.code}: ${entered.size} entr${entered.size === 1 ? 'y' : 'ies'} present — no alert`,
+    );
     return;
   }
 
-  logTs(`${site.code}: ${missing.length}/${activeEmployees.length} missing — alerting`);
+  logTs(`${site.code}: no bonus entries for ${dateParts.iso} — alerting`);
   await publishMissing({
     siteCode: site.code,
     siteName: site.name,
     dateLabel: dateParts.label,
-    missingCount: missing.length,
     fingerprint: `bonus-entry-missing:${site.code}:${dateParts.iso}`,
   });
 }
