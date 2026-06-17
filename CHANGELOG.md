@@ -5,6 +5,14 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-17 — Hotfix: per-employee history 500 on historical periods (ADR-0031 / ADR-0023)
+
+**Bug.** Opening a processor's history (`/bonus/employee/[id]`) — newly prominent via the ADR-0031 standings drill-in — returned the generic error page ("The error has been reported…"). Root cause from the app log: `NoActiveRuleError: no active processor_bonus_rules row for site …`. `aggregates.ts` (`employeeHistory` / `annualTotals`) resolved each period's rule with the **strict** `resolveActiveRule`, but the ADR-0023 historical import seeded entries back to **Jan 2025** while the `processor_bonus_rules` table only goes back to **2026-01-01** (verified on prod: 27 Woodland periods pre-2026 with 3,092 entries). Any processor with 2025 entries threw and 500'd the whole page. The same class was already fixed for the historical-PDF path in ADR-0023; the aggregate views were missed.
+
+**Fix.** `ruleResolver` now uses `resolveRuleForHistorical` (the ADR-0023 fallback): a pre-rule period resolves to the site's earliest rule instead of throwing; live periods still resolve strictly. One-line behavioral change; also un-breaks the annual aggregate for prior years. (The new current-period standings/banner were never implicated — they resolve only the open period, which always has a rule.)
+
+**Test.** Failing-first regression in `aggregates.test.ts` reproducing the prod `NoActiveRuleError` (rule effective 2026-01-01 + a 2025 period with entries), now green; the rule mock was upgraded to honor `effective_date`/`end_date` so the fallback path is actually exercised. Suite **919 green**; `tsc` 0; ESLint clean; `next build` ok. No migration.
+
 ### 2026-06-17 — Current pay-period standings (ADR-0031)
 
 **Headline.** Adds a live, in-progress view of where every processor stands in the **open** bi-weekly pay period — the piece the cross-period history and closed-period reports never surfaced. Fixes the Reports "Per-employee history" card, which linked to the employee **roster manager** (`/bonus/employees`) and showed no bonus data: it now opens **"Current pay period — live standings"** (`/bonus/standings`).

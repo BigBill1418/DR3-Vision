@@ -220,13 +220,34 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const processorBonusRule = {
-    findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
-      for (const r of ruleStore.values()) {
-        if (r.site_id !== where['site_id']) continue;
-        return { ...r };
-      }
-      return null;
-    }),
+    // Honors the strict query (effective_date<=on, end_date null|>=on, newest
+    // first) AND the historical fallback (site-only, oldest first) so the
+    // resolveRuleForHistorical fallback path is actually exercised.
+    findFirst: vi.fn(
+      async ({
+        where,
+        orderBy,
+      }: {
+        where: Record<string, unknown>;
+        orderBy?: { effective_date?: 'asc' | 'desc' };
+      }) => {
+        let out = [...ruleStore.values()].filter((r) => r.site_id === where['site_id']);
+        const eff = where['effective_date'] as { lte?: Date } | undefined;
+        const on = eff?.lte;
+        if (on) {
+          out = out.filter((r) => r.effective_date.getTime() <= on.getTime());
+          if ('OR' in where) {
+            out = out.filter((r) => r.end_date === null || r.end_date.getTime() >= on.getTime());
+          }
+        }
+        out.sort((a, b) =>
+          orderBy?.effective_date === 'asc'
+            ? a.effective_date.getTime() - b.effective_date.getTime()
+            : b.effective_date.getTime() - a.effective_date.getTime(),
+        );
+        return out[0] ? { ...out[0] } : null;
+      },
+    ),
   };
 
   return { prisma: { bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
@@ -273,6 +294,29 @@ describe('employeeHistory', () => {
     const short = h.months.map((m) => m.shortLabel);
     expect(short).toContain('Period 13');
     expect(short).toContain('Period 14');
+  });
+
+  it('does not throw on historical periods that predate the rule table (ADR-0023 fallback)', async () => {
+    // Repro of the prod 500: the only rule is effective 2026-01-01, but the
+    // employee has entries in a 2025 period (ADR-0023 historical import). Strict
+    // resolveActiveRule threw NoActiveRuleError → the whole detail page errored.
+    // employeeHistory must use resolveRuleForHistorical and fall back to the
+    // earliest rule for pre-rule periods (the live 2026 period stays strict).
+    ruleStore.get('rule-wo')!.effective_date = um(2026, 0); // 2026-01-01
+    const dec2025 = addMonth(2025, 11, 'historical_imported', { day: 9, period_number: 26 });
+    const jun2026 = addMonth(2026, 5, 'draft', { day: 9, period_number: 13 });
+    addEntry(dec2025.id, 'emp-amy', 10, 80);
+    addEntry(jun2026.id, 'emp-amy', 10, 80);
+    addEmp('emp-amy', 'Amy');
+
+    const h = await employeeHistory(WOODLAND, 'emp-amy');
+    expect(h).not.toBeNull();
+    const labels = h!.months.map((m) => m.label);
+    expect(labels).toContain('Period 26 · Dec 9–22, 2025'); // historical, via fallback
+    expect(labels).toContain('Period 13 · Jun 9–22, 2026'); // live, strict
+    // 2025 bonus computed via the earliest-rule fallback (threshold 50 @ $0.50).
+    const dec = h!.months.find((m) => m.label.startsWith('Period 26'))!;
+    expect(dec.bonusCents).toBe(dayBonus(80));
   });
 
   it('rolls up monthly totals == calculator and surfaces YTD', async () => {

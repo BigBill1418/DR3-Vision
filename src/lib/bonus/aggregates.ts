@@ -21,7 +21,7 @@
 import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
-import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { resolveRuleForHistorical } from '@/lib/bonus/daily-entry';
 import { periodLabel, periodShortLabel } from '@/lib/bonus/period-label';
 import { appCurrentYear } from '@/lib/time';
 
@@ -105,19 +105,26 @@ function parsePreviousNames(raw: unknown): PreviousNameEntry[] {
 }
 
 /**
- * Resolve the rule for a month, caching by `ym` so a multi-month or multi-employee
- * rollup never re-queries the same month's rule. The rule effective on the
- * month's first day governs that whole month (mid-month rate changes are out of
- * scope for V2 — the daily grid would have used the day's rule; aggregates use
- * the month-start rule, which is identical when a month has one rule).
+ * Resolve the rule for a period, caching by `ym` so a multi-period or
+ * multi-employee rollup never re-queries the same period's rule. The rule
+ * effective on the period's first day governs that period.
+ *
+ * Uses {@link resolveRuleForHistorical} (NOT strict `resolveActiveRule`): the
+ * ADR-0023 historical import seeded entries back to Jan 2025, but the
+ * `processor_bonus_rules` table only goes back to 2026-01-01. For a pre-rule
+ * period the strict resolver throws `NoActiveRuleError`, which 500'd the entire
+ * per-employee history page. The historical fallback resolves the period's rule
+ * when one exists and otherwise the site's earliest rule — the same graceful
+ * read-path behavior ADR-0023 gave the historical PDF render. Live periods are
+ * unaffected (the inner strict resolve still succeeds for them).
  */
-function ruleResolver(siteId: string): (monthStart: Date) => Promise<BonusRuleParams> {
+function ruleResolver(siteId: string): (periodStart: Date) => Promise<BonusRuleParams> {
   const cache = new Map<string, Promise<BonusRuleParams>>();
-  return (monthStart: Date) => {
-    const key = ym(monthStart);
+  return (periodStart: Date) => {
+    const key = ym(periodStart);
     const hit = cache.get(key);
     if (hit) return hit;
-    const p = resolveActiveRule(siteId, monthStart).then((r) => ({
+    const p = resolveRuleForHistorical(siteId, periodStart).then((r) => ({
       threshold_low: r.threshold_low,
       rate_low: r.rate_low,
       threshold_high: r.threshold_high,

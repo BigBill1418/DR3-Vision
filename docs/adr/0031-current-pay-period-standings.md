@@ -100,3 +100,21 @@ calendar month now carry distinct canonical labels. The `EmployeeMonthTotal.ym`
 field is retained as a sort key only (explicitly documented as non-unique — never
 a display label). The PDF/email surfaces keep their own `monthLabel` helpers and
 are untouched (separate concern).
+
+## Hotfix — history 500 on pre-rule historical periods (2026-06-17)
+
+Making the history page prominently reachable surfaced a **latent** crash unrelated
+to the new code. `aggregates.ts` (`employeeHistory` + `annualTotals`) resolved each
+period's rule with the strict `resolveActiveRule`, which throws `NoActiveRuleError`
+when no `processor_bonus_rules` row is effective on the period start. The ADR-0023
+historical import seeded entries back to **Jan 2025**, but the rule table only goes
+back to **2026-01-01** (prod: 27 Woodland periods pre-2026 with 3,092 entries) — so
+opening any processor with 2025 history 500'd the page.
+
+Fix: `ruleResolver` switched to `resolveRuleForHistorical` — the exact fallback
+ADR-0023 introduced for the historical-PDF render (the aggregate views were simply
+missed in that hotfix). Pre-rule periods fall back to the site's earliest rule;
+live periods still resolve strictly. A failing-first regression test in
+`aggregates.test.ts` reproduces the `NoActiveRuleError` and is now green. The
+ADR-0031 standings/banner were never implicated (they resolve only the open
+period, which always has a rule).
