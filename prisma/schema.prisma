@@ -625,7 +625,7 @@ model BonusDailyReportConfig {
   enabled               Boolean  @default(false)
   /// Pacific wall-clock time as HH:MM:SS. DST handled by the daemon/runner.
   send_time_pt          DateTime @db.Time
-  subject_template      String   @default("[DR3-Vision] {site} processing — {date}")
+  subject_template      String   @default("DR3 Daily Production Report — {site} — {date}")
   skip_if_zero          Boolean  @default(true)
   skip_weekends         Boolean  @default(false)
   skip_holidays         Boolean  @default(false)

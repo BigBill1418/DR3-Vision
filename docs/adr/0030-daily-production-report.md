@@ -179,6 +179,25 @@ time and are authoritative:
    — a no-op on a fresh DB, flipping Bill once his SSO row exists. Live prod
    gets the same one-line UPDATE at deploy. No fake login row is invented.
 
+4. **SVdP-branded email (operator request 2026-06-17).** The outgoing report
+   uses the St. Vincent de Paul Society of Lane County parent-org palette
+   sampled from `svdp.us` — red masthead `#a3151a`, gold accent `#ffcc69`,
+   cream `#f7f3ea`, with the white SVdP wordmark
+   (`svdp.us/.../svdp-logo-white-300x300.png`). This deliberately differs from
+   the DR3 green/black in-app brand (CLAUDE.md rule #3 reserves the SVdP red
+   palette for the parent org); Bill explicitly asked for svdp.us branding on
+   this email. Layout is table-based, inline-styled, ≤600px for Outlook/M365
+   fidelity. Default `subject_template` tightened to
+   `DR3 Daily Production Report — {site} — {date}`.
+
+5. **Internal test-send route.** `POST /api/internal/bonus/daily-report/test`
+   (loopback + optional `INTERNAL_CRON_TOKEN`, same guard as `close-months`)
+   renders the REAL email for a site and sends it to one address with a
+   `[TEST]` subject prefix, writing **no** `bonus_daily_report_log` row — so an
+   operator can preview production-identical output from the host without a
+   browser session and without blocking the scheduled fire. Body:
+   `{ "siteCode": "woodland"|"eugene", "to": "name@svdp.us" }`.
+
 ## Consequences
 
 ### Positive

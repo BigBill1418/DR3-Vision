@@ -18,7 +18,7 @@ CREATE TABLE "bonus_daily_report_config" (
   "enabled"               BOOLEAN NOT NULL DEFAULT false,
   -- Pacific wall-clock time, HH:MM. Stored as TIME for SQL ergonomics.
   "send_time_pt"          TIME NOT NULL DEFAULT '18:00:00',
-  "subject_template"      TEXT NOT NULL DEFAULT '[DR3-Vision] {site} processing — {date}',
+  "subject_template"      TEXT NOT NULL DEFAULT 'DR3 Daily Production Report — {site} — {date}',
   "skip_if_zero"          BOOLEAN NOT NULL DEFAULT true,
   "skip_weekends"         BOOLEAN NOT NULL DEFAULT false,
   "skip_holidays"         BOOLEAN NOT NULL DEFAULT false,

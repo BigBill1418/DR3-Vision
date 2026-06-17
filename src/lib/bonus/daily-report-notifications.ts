@@ -67,7 +67,25 @@ export function renderSubject(report: DailyReport, template: string): string {
 
 // ─────────────────────────────────────────────────────────────────────
 // HTML body
+//
+// Branded to St. Vincent de Paul Society of Lane County (svdp.us) per
+// operator request 2026-06-17: SVdP red masthead + white SVdP logo + cream
+// panels. (This intentionally uses the SVdP parent-org palette, distinct from
+// the DR3 green/black in-app brand — Bill asked for svdp.us branding on the
+// outgoing report email specifically.) Table-based, inline-styled, ≤600px so
+// it renders consistently across Outlook / M365 / mobile mail clients.
 // ─────────────────────────────────────────────────────────────────────
+
+// SVdP brand tokens (sampled from www.svdp.us).
+const SVDP_RED = '#a3151a';
+const SVDP_GOLD = '#ffcc69';
+const SVDP_CREAM = '#f7f3ea';
+const INK = '#2b2b2b';
+const MUTED = '#6b6b6b';
+const HAIRLINE = '#e6ddca';
+const UP_GREEN = '#2e7d32';
+// White SVdP wordmark — content-negotiates to PNG for clients that don't take webp.
+const SVDP_LOGO_URL = 'https://www.svdp.us/wp-content/uploads/2021/09/svdp-logo-white-300x300.png';
 
 export interface RenderOptions {
   includeBonusDollars: boolean;
@@ -75,59 +93,88 @@ export interface RenderOptions {
 }
 
 export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string {
+  // Kept verbatim so downstream consumers/tests can key on it.
   const headerLine = `DR3 - ${report.siteName} Automated Production Report`;
 
   const showBonus = opts.includeBonusDollars;
+  const numTd = 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap';
+  const th = `text-align:right;padding:0 0 6px;font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em`;
 
   const rows = report.lines
-    .map((l) => {
+    .map((l, i) => {
       const name = escapeHtml(l.fullName);
-      if (showBonus) {
-        return `<tr><td style="padding:4px 0">${name}</td><td style="padding:4px 12px 4px 0;text-align:right;font-variant-numeric:tabular-nums"><strong>${l.mattresses}</strong></td><td style="padding:4px 0;text-align:right;font-variant-numeric:tabular-nums">${formatCents(l.bonusCents)}</td></tr>`;
-      }
-      return `<tr><td style="padding:4px 0">${name}</td><td style="padding:4px 0;text-align:right;font-variant-numeric:tabular-nums"><strong>${l.mattresses}</strong></td></tr>`;
+      const rowBorder = i === 0 ? '' : `border-top:1px solid ${HAIRLINE};`;
+      const cell = `padding:7px 0;${rowBorder}font-size:14px;color:${INK}`;
+      const bonusCell = showBonus
+        ? `<td style="${cell};${numTd};padding-left:16px;color:${MUTED}">${formatCents(l.bonusCents)}</td>`
+        : '';
+      return `<tr><td style="${cell}">${name}</td><td style="${cell};${numTd};padding-left:16px"><strong>${l.mattresses.toLocaleString('en-US')}</strong></td>${bonusCell}</tr>`;
     })
-    .join('\n');
+    .join('');
 
-  const headerRow = showBonus
-    ? `<tr style="border-bottom:0.5px solid #ccc"><th style="text-align:left;padding:6px 0;font-weight:500;font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.04em">Processor</th><th style="text-align:right;padding:6px 12px 6px 0;font-weight:500;font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.04em">Units</th><th style="text-align:right;padding:6px 0;font-weight:500;font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.04em">Bonus</th></tr>`
-    : `<tr style="border-bottom:0.5px solid #ccc"><th style="text-align:left;padding:6px 0;font-weight:500;font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.04em">Processor</th><th style="text-align:right;padding:6px 0;font-weight:500;font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.04em">Units</th></tr>`;
+  const headerRow = `<tr><th style="text-align:left;padding:0 0 6px;font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em">Processor</th><th style="${th};padding-left:16px">Units</th>${showBonus ? `<th style="${th};padding-left:16px">Bonus</th>` : ''}</tr>`;
 
-  const footerRow = showBonus
-    ? `<tr style="border-top:0.5px solid #999;font-weight:500"><td style="padding:8px 0">Total Processed Today</td><td style="padding:8px 12px 8px 0;text-align:right;font-variant-numeric:tabular-nums">${report.totalToday.toLocaleString('en-US')}</td><td style="padding:8px 0;text-align:right;font-variant-numeric:tabular-nums">${formatCents(report.totalBonusCents)}</td></tr>`
-    : `<tr style="border-top:0.5px solid #999;font-weight:500"><td style="padding:8px 0">Total Processed Today</td><td style="padding:8px 0;text-align:right;font-variant-numeric:tabular-nums">${report.totalToday.toLocaleString('en-US')}</td></tr>`;
+  const totalCell = `padding:10px 0 0;border-top:2px solid ${SVDP_RED};font-size:14px;font-weight:700;color:${INK}`;
+  const footerRow = `<tr><td style="${totalCell}">Total processed today</td><td style="${totalCell};${numTd};padding-left:16px">${report.totalToday.toLocaleString('en-US')}</td>${showBonus ? `<td style="${totalCell};${numTd};padding-left:16px">${formatCents(report.totalBonusCents)}</td>` : ''}</tr>`;
 
   let comparisonBlock = '';
   if (opts.includeComparisons) {
     const paceLine = (() => {
       if (report.paceDeltaPct === null) {
-        return `Pace vs. last month: <em>no comparable history</em>`;
+        return `<span style="color:${MUTED}">Pace vs. last month: <em>no comparable history yet</em></span>`;
       }
-      const sign = report.paceDeltaPct >= 0 ? '+' : '';
-      const arrow = report.paceDeltaPct >= 0 ? '▲' : '▼';
-      const color = report.paceDeltaPct >= 0 ? '#3B6D11' : '#A32D2D';
+      const up = report.paceDeltaPct >= 0;
+      const sign = up ? '+' : '';
+      const arrow = up ? '▲' : '▼';
+      const color = up ? UP_GREEN : SVDP_RED;
       return `Pace vs. last month: <strong style="color:${color}">${sign}${report.paceDeltaPct.toFixed(1)}% ${arrow}</strong>`;
     })();
+    const cmp = (label: string, c: ComparisonTotal) =>
+      `<tr><td style="padding:3px 0;font-size:13px;color:${INK}">${comparisonLineHtml(label, c)}</td></tr>`;
     comparisonBlock = `
-  <hr style="border:none;border-top:0.5px solid #ccc;margin:16px 0" />
-  <div style="font-size:14px;line-height:1.8">
-    <div>${comparisonLineHtml(`Same day last year (${fmtShort(report.sameDayLastYear.startDate)})`, report.sameDayLastYear)}</div>
-    <div>${comparisonLineHtml(`Month-to-date (${fmtRange(report.mtd.startDate, report.mtd.endDate)})`, report.mtd)}</div>
-    <div>${comparisonLineHtml(`Same period last month (${fmtRange(report.priorMonthSamePeriod.startDate, report.priorMonthSamePeriod.endDate)})`, report.priorMonthSamePeriod)}</div>
-    <div>${paceLine}</div>
-  </div>`;
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:18px 0 0;background:${SVDP_CREAM};border-left:3px solid ${SVDP_GOLD};border-radius:4px">
+    <tr><td style="padding:14px 16px">
+      <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">Trend</div>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        ${cmp(`Same day last year (${fmtShort(report.sameDayLastYear.startDate)})`, report.sameDayLastYear)}
+        ${cmp(`Month-to-date (${fmtRange(report.mtd.startDate, report.mtd.endDate)})`, report.mtd)}
+        ${cmp(`Same period last month (${fmtRange(report.priorMonthSamePeriod.startDate, report.priorMonthSamePeriod.endDate)})`, report.priorMonthSamePeriod)}
+        <tr><td style="padding:3px 0;font-size:13px;color:${INK}">${paceLine}</td></tr>
+      </table>
+    </td></tr>
+  </table>`;
   }
 
   return `<!DOCTYPE html>
-<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;max-width:640px">
-  <h2 style="margin:0 0 4px;font-size:18px;font-weight:500">${escapeHtml(headerLine)}</h2>
-  <p style="margin:0 0 16px;color:#666;font-size:13px">${escapeHtml(fmtFull(report.reportDate))}</p>
-  <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px">
-    <thead>${headerRow}</thead>
-    <tbody>${rows}</tbody>
-    <tfoot>${footerRow}</tfoot>
-  </table>${comparisonBlock}
-  <p style="color:#999;font-size:12px;margin:20px 0 0">—DR3-Vision (sent automatically; replaces manual report)</p>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:${SVDP_CREAM}">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${SVDP_CREAM}">
+    <tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="width:600px;max-width:100%;background:#ffffff;border-radius:8px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+        <tr><td style="background:${SVDP_RED};padding:18px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>
+            <td style="vertical-align:middle"><img src="${SVDP_LOGO_URL}" width="44" height="44" alt="St. Vincent de Paul Society of Lane County" style="display:block;border:0;width:44px;height:44px"></td>
+            <td style="vertical-align:middle;padding-left:14px">
+              <div style="color:#ffffff;font-size:17px;font-weight:700;line-height:1.25">${escapeHtml(headerLine)}</div>
+              <div style="color:#f3d7d8;font-size:13px;padding-top:2px">${escapeHtml(fmtFull(report.reportDate))}</div>
+            </td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="height:4px;background:${SVDP_GOLD};font-size:0;line-height:0">&nbsp;</td></tr>
+        <tr><td style="padding:22px 24px 26px">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">
+            <thead>${headerRow}</thead>
+            <tbody>${rows}</tbody>
+            <tfoot>${footerRow}</tfoot>
+          </table>${comparisonBlock}
+          <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:22px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
+            Sent automatically by DR3-Vision — replaces the manual daily processing email.<br>
+            St. Vincent de Paul Society of Lane County
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
 </body></html>`;
 }
 
