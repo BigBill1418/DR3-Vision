@@ -22,6 +22,7 @@ import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { periodLabel, periodShortLabel } from '@/lib/bonus/period-label';
 import { appCurrentYear } from '@/lib/time';
 
 export interface PreviousNameEntry {
@@ -29,13 +30,16 @@ export interface PreviousNameEntry {
   changed_at: string;
 }
 
-/** Per-month rollup for a single employee. */
+/** Per-period rollup for a single employee. */
 export interface EmployeeMonthTotal {
   monthId: string;
-  /** UTC YYYY-MM, stable sort/display key. */
+  /** UTC YYYY-MM of the period start; a stable sort key only (NOT unique — two
+   * bi-weekly periods can share a month, so never use it as a display label). */
   ym: string;
-  /** Human label, e.g. "May 2026". */
+  /** Canonical bi-weekly label, e.g. "Period 13 · Jun 9–22, 2026" (ADR-0031). */
   label: string;
+  /** Compact label for tight columns, e.g. "Period 13". */
+  shortLabel: string;
   monthStart: Date;
   state: string;
   /** Sum of mattress counts across the employee's keyed days this month. */
@@ -82,15 +86,6 @@ function ym(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   return `${y}-${m}`;
-}
-
-/** Human month label, en-US, in UTC so it matches the stored calendar month. */
-function monthLabel(d: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(d);
 }
 
 function parsePreviousNames(raw: unknown): PreviousNameEntry[] {
@@ -185,7 +180,13 @@ export async function employeeHistory(
   const months = await prisma.bonusPayPeriod.findMany({
     where: { site_id: siteId },
     orderBy: { period_start: 'desc' },
-    select: { id: true, period_start: true, state: true },
+    select: {
+      id: true,
+      period_number: true,
+      period_start: true,
+      period_end: true,
+      state: true,
+    },
   });
 
   const entries = await prisma.bonusDailyEntry.findMany({
@@ -211,7 +212,8 @@ export async function employeeHistory(
     allMonthTotals.push({
       monthId: m.id,
       ym: ym(m.period_start),
-      label: monthLabel(m.period_start),
+      label: periodLabel(m),
+      shortLabel: periodShortLabel(m),
       monthStart: m.period_start,
       state: m.state,
       mattresses: acc.mattresses,

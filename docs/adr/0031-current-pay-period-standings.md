@@ -81,11 +81,22 @@ Add a **current pay-period standings** capability, read-only, computed live.
   no-open-period state, site scoping, and the inactive-processor focused query.
   Total suite 917 green; tsc 0; ESLint clean; `next build` ok.
 
-## Out of scope (flagged, not fixed)
+## History-table labels (resolved 2026-06-17)
 
-The cross-period **history** table on the detail page still labels each period by
-calendar month (`monthLabel`, e.g. "June 2026"), a pre-cadence artifact in
-`aggregates.ts` — so two bi-weekly periods inside one calendar month render
-duplicate labels. Separate from this change; left as-is. A follow-up should move
-that table to canonical `Period N · <range>` labels (the format this ADR's
-banner and standings table already use).
+Initially deferred, then fixed in the same ADR. The cross-period **history**
+table on the detail page had labeled each period by calendar month (`monthLabel`,
+e.g. "June 2026"), a pre-cadence artifact in `aggregates.ts` — so two bi-weekly
+periods inside one calendar month rendered **duplicate** labels.
+
+Fix: a shared `src/lib/bonus/period-label.ts` is now the single source of truth
+for the canonical bi-weekly label (`Period 13 · Jun 9–22, 2026`), consumed by the
+standings table, the current-period banner, **and** the history table — so all
+three read identically. `employeeHistory` now selects `period_number` /
+`period_end` and emits `label` (full) + `shortLabel` (`Period 13`, for the trend
+bar list). The detail page's stale "month" copy is corrected: "Last 12 months" →
+"Last 12 pay periods", "Monthly totals" → "Per-period totals", "Month" column →
+"Pay period". A regression test asserts two periods that both start in one
+calendar month now carry distinct canonical labels. The `EmployeeMonthTotal.ym`
+field is retained as a sort key only (explicitly documented as non-unique — never
+a display label). The PDF/email surfaces keep their own `monthLabel` helpers and
+are untouched (separate concern).

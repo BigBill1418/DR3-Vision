@@ -23,7 +23,9 @@ const toDec = (n: number): Dec => new Prisma.Decimal(n);
 interface MockMonth {
   id: string;
   site_id: string;
+  period_number: number;
   period_start: Date;
+  period_end: Date;
   state: string;
 }
 interface MockEmployee {
@@ -73,11 +75,21 @@ function um(year: number, monthIndex0: number): Date {
   return new Date(Date.UTC(year, monthIndex0, 1));
 }
 
-function addMonth(year: number, monthIndex0: number, state = 'paid'): MockMonth {
+function addMonth(
+  year: number,
+  monthIndex0: number,
+  state = 'paid',
+  opts: { day?: number; period_number?: number; period_end?: Date } = {},
+): MockMonth {
+  const startDay = opts.day ?? 1;
+  const period_start = new Date(Date.UTC(year, monthIndex0, startDay));
+  const period_end = opts.period_end ?? new Date(Date.UTC(year, monthIndex0, startDay + 13));
   const m: MockMonth = {
     id: `month-${++idCounter}`,
     site_id: WOODLAND,
-    period_start: um(year, monthIndex0),
+    period_number: opts.period_number ?? idCounter,
+    period_start,
+    period_end,
     state,
   };
   monthStore.set(m.id, m);
@@ -238,6 +250,31 @@ function dayBonus(count: number): number {
 }
 
 describe('employeeHistory', () => {
+  it('labels each period canonically and distinctly within one calendar month (ADR-0031)', async () => {
+    // The pre-cadence bug: two bi-weekly periods both START in June 2026, so the
+    // old calendar-month label rendered "June 2026" for BOTH rows.
+    const p13 = addMonth(2026, 5, 'paid', { day: 9, period_number: 13 }); // Jun 9–22
+    const p14 = addMonth(2026, 5, 'paid', {
+      day: 23,
+      period_number: 14,
+      period_end: new Date(Date.UTC(2026, 6, 6)), // Jul 6 (spans the month)
+    });
+    addEntry(p13.id, 'emp-amy', 10, 60);
+    addEntry(p14.id, 'emp-amy', 24, 60);
+    addEmp('emp-amy', 'Amy');
+
+    const h = (await employeeHistory(WOODLAND, 'emp-amy'))!;
+    const labels = h.months.map((m) => m.label);
+    expect(labels).toContain('Period 13 · Jun 9–22, 2026');
+    expect(labels).toContain('Period 14 · Jun 23, 2026 – Jul 6, 2026');
+    // Distinct — the defect was both rows reading "June 2026".
+    expect(new Set(labels).size).toBe(labels.length);
+
+    const short = h.months.map((m) => m.shortLabel);
+    expect(short).toContain('Period 13');
+    expect(short).toContain('Period 14');
+  });
+
   it('rolls up monthly totals == calculator and surfaces YTD', async () => {
     const may = addMonth(THIS_YEAR, 4); // May
     const jun = addMonth(THIS_YEAR, 5); // June

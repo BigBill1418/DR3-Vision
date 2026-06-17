@@ -20,9 +20,9 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 **Reports card.** "Per-employee history" → **"Current pay period — live standings"** pointing at `/bonus/standings`. The roster manager stays reachable from the `/bonus` landing ("Manage Employees"), so nothing is orphaned.
 
-**Known limitation (flagged in ADR-0031, not fixed here).** The cross-period history _table_ on the detail page still labels periods by calendar month (`monthLabel`), a pre-cadence artifact — so two bi-weekly periods in one month render duplicate labels. Separate follow-up.
+**History-table labels fixed (same ADR).** The cross-period history table on the detail page had labeled periods by calendar month (`monthLabel`, e.g. "June 2026"), a pre-cadence artifact — so two bi-weekly periods in one month rendered **duplicate** labels. Now a shared `src/lib/bonus/period-label.ts` is the single source of truth for the canonical `Period 13 · Jun 9–22, 2026` label, used by the standings table, the current-period banner, and the history table alike. `employeeHistory` emits `label` (full) + `shortLabel` ("Period 13", for the trend bar list); detail-page copy corrected ("Last 12 months" → "Last 12 pay periods", "Monthly totals" → "Per-period totals", "Month" column → "Pay period"). The PDF/email surfaces keep their own labels (separate concern, untouched).
 
-**Gates.** New unit tests `current-period.test.ts` (8 cases) + updated `BonusReports.test.tsx`. Full suite **917 green** (was 909); `tsc --noEmit` 0; ESLint clean; `next build` ok. No migration (read-only over existing tables).
+**Gates.** New `current-period.test.ts` (8 cases) + a duplicate-label regression test in `aggregates.test.ts` + updated `BonusReports.test.tsx`. Full suite **918 green** (was 909); `tsc --noEmit` 0; ESLint clean; `next build` ok. No migration (read-only over existing tables).
 
 ### 2026-06-17 — Sprint 5: daily production report (ADR-0030)
 

@@ -25,6 +25,7 @@ import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calc
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { listEmployees } from '@/lib/bonus/employees';
 import type { PreviousName } from '@/lib/bonus/employees';
+import { periodLabel } from '@/lib/bonus/period-label';
 import { appToday } from '@/lib/time';
 
 /** Shape of the open-period row this module reads (a superset of BonusMonthRow). */
@@ -102,24 +103,6 @@ export interface CurrentPeriodStandings {
   thresholdLow: number | null;
   /** All active processors, name-sorted, each with their live standing. */
   rows: CurrentPeriodStanding[];
-}
-
-/** Compact pay-period date range, UTC-anchored (matches the daily grid header). */
-function payPeriodRange(start: Date, end: Date): string {
-  const md = (d: Date) =>
-    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(d);
-  const year = end.getUTCFullYear();
-  if (
-    start.getUTCFullYear() === end.getUTCFullYear() &&
-    start.getUTCMonth() === end.getUTCMonth()
-  ) {
-    return `${md(start)}–${end.getUTCDate()}, ${year}`;
-  }
-  return `${md(start)}, ${start.getUTCFullYear()} – ${md(end)}, ${year}`;
-}
-
-function periodLabel(p: { period_number: number; period_start: Date; period_end: Date }): string {
-  return `Period ${p.period_number} · ${payPeriodRange(p.period_start, p.period_end)}`;
 }
 
 interface Tally {

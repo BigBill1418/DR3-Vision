@@ -4,10 +4,13 @@
 // 403 → render the forbidden surface in-place (Rick / operators land here). The
 // page never trusts middleware alone (CLAUDE.md hard rule #6).
 //
-// Shows one employee's monthly totals (newest first), year-to-date totals, and a
-// plain HTML/Tailwind last-12-months bar list (no chart lib). Per ADR-0019 §9b
-// the CURRENT name is the heading; a "previously known as" badge appears when the
-// employee has prior names. Each month row links to that month's detail page.
+// Leads with the live current-pay-period banner (ADR-0031), then shows one
+// employee's per-period totals (newest first), year-to-date totals, and a plain
+// HTML/Tailwind last-12-periods bar list (no chart lib). Periods use the
+// canonical "Period N · <range>" label from `@/lib/bonus/period-label` (ADR-0031
+// — never the old calendar-month label, which duplicated within a month). Per
+// ADR-0019 §9b the CURRENT name is the heading; a "previously known as" badge
+// appears when the employee has prior names. Each row links to that period.
 
 import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
@@ -71,8 +74,8 @@ export default async function BonusEmployeeDetailPage({
             )}
           </div>
           <p className="text-sm text-dr3-mist-dim">
-            {gate.ctx.siteName} processor bonus history. Each month uses the bonus rule effective
-            that month; figures match the daily grid and the signed PDF.
+            {gate.ctx.siteName} processor bonus history. Each pay period uses the bonus rule
+            effective that period; figures match the daily grid and the signed PDF.
           </p>
         </header>
 
@@ -86,16 +89,18 @@ export default async function BonusEmployeeDetailPage({
           <SummaryCard label="Days qualified (YTD)" value={String(history.ytd.daysQualified)} />
         </section>
 
-        {/* Last-12-months bar list (plain HTML/Tailwind, no chart lib). */}
+        {/* Last-12-periods bar list (plain HTML/Tailwind, no chart lib). */}
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">Last 12 months</h2>
+          <h2 className="text-lg font-semibold">Last 12 pay periods</h2>
           {history.last12.length === 0 ? (
-            <p className="text-sm text-dr3-mist-dim">No bonus months recorded yet.</p>
+            <p className="text-sm text-dr3-mist-dim">No bonus periods recorded yet.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {history.last12.map((m) => (
                 <li key={m.monthId} className="flex items-center gap-3 text-sm">
-                  <span className="w-28 shrink-0 text-dr3-mist-dim">{m.label}</span>
+                  <span className="w-28 shrink-0 text-dr3-mist-dim" title={m.label}>
+                    {m.shortLabel}
+                  </span>
                   <span className="relative h-5 flex-1 overflow-hidden rounded bg-dr3-space-2">
                     <span
                       className="absolute inset-y-0 left-0 rounded bg-dr3-cyan"
@@ -111,17 +116,19 @@ export default async function BonusEmployeeDetailPage({
           )}
         </section>
 
-        {/* Per-month table, newest first, each row drills into the month. */}
+        {/* Per-period table, newest first, each row drills into the period. */}
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">Monthly totals</h2>
+          <h2 className="text-lg font-semibold">Per-period totals</h2>
           {history.months.length === 0 ? (
-            <p className="text-sm text-dr3-mist-dim">This processor has no keyed months yet.</p>
+            <p className="text-sm text-dr3-mist-dim">
+              This processor has no keyed pay periods yet.
+            </p>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-dr3-steel-light/25">
               <table className="w-full text-left text-sm">
                 <thead className="bg-dr3-space-2/80 text-dr3-cyan">
                   <tr>
-                    <th className="px-4 py-2 font-medium">Month</th>
+                    <th className="px-4 py-2 font-medium">Pay period</th>
                     <th className="px-4 py-2 font-medium">Status</th>
                     <th className="px-4 py-2 text-right font-medium">Mattresses</th>
                     <th className="px-4 py-2 text-right font-medium">Days qualified</th>
