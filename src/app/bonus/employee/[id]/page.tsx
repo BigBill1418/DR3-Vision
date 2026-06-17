@@ -14,6 +14,10 @@ import { HOME_ROUTE } from '@/lib/routes';
 import { notFound, redirect } from 'next/navigation';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { employeeHistory, type EmployeeMonthTotal } from '@/lib/bonus/aggregates';
+import {
+  currentPeriodForEmployee,
+  type CurrentPeriodForEmployee,
+} from '@/lib/bonus/current-period';
 import { formatCents } from '@/lib/bonus/calculator';
 
 export const dynamic = 'force-dynamic';
@@ -35,6 +39,8 @@ export default async function BonusEmployeeDetailPage({
   const { id } = await params;
   const history = await employeeHistory(gate.ctx.siteId, id, { months: 24 });
   if (!history) notFound();
+
+  const current = await currentPeriodForEmployee(gate.ctx.siteId, id);
 
   const maxBonus = Math.max(1, ...history.last12.map((m) => m.bonusCents));
 
@@ -69,6 +75,9 @@ export default async function BonusEmployeeDetailPage({
             that month; figures match the daily grid and the signed PDF.
           </p>
         </header>
+
+        {/* Current pay period — live, in-progress standing (ADR-0031). */}
+        <CurrentPeriodBanner current={current} />
 
         {/* Year-to-date summary */}
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -131,6 +140,75 @@ export default async function BonusEmployeeDetailPage({
         </section>
       </div>
     </main>
+  );
+}
+
+function CurrentPeriodBanner({ current }: { current: CurrentPeriodForEmployee }) {
+  const { period, thresholdLow, standing } = current;
+  return (
+    <section
+      className="flex flex-col gap-4 rounded-lg border border-dr3-cyan/40 bg-dr3-space-2/60 px-5 py-4"
+      data-testid="employee-current-period"
+    >
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h2 className="text-lg font-semibold">Current pay period</h2>
+        {period ? (
+          <>
+            <span className="text-sm text-dr3-mist-dim">{period.label}</span>
+            <span className="rounded-full bg-dr3-cyan/15 px-2 py-0.5 text-xs font-medium text-dr3-cyan">
+              in progress
+            </span>
+          </>
+        ) : (
+          <span className="text-sm text-dr3-mist-dim">no open period covers today</span>
+        )}
+      </div>
+
+      {period && standing ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Metric label="Units so far" value={String(standing.units)} />
+          <Metric label="Days qualified" value={String(standing.daysQualified)} />
+          <Metric
+            label="Days short"
+            value={String(standing.daysShort)}
+            accent={standing.daysShort > 0}
+          />
+          <Metric label="Bonus accrued" value={formatCents(standing.bonusCents)} />
+        </div>
+      ) : (
+        <p className="text-sm text-dr3-mist-dim">
+          No keyed days this period yet.
+          {thresholdLow != null ? ` Qualifies above ${thresholdLow} units/day.` : ''}
+        </p>
+      )}
+
+      {period && standing && thresholdLow != null ? (
+        <p className="text-xs text-dr3-mist-dim">
+          Qualifies above {thresholdLow} units/day; figures match the daily grid and the signed PDF.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-dr3-mist-dim">{label}</p>
+      <p
+        className={`mt-1 text-2xl font-bold tabular-nums ${accent ? 'text-amber-300' : 'text-dr3-mist'}`}
+      >
+        {value}
+      </p>
+    </div>
   );
 }
 

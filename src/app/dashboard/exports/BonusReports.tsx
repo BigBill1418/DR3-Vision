@@ -44,11 +44,11 @@ export function BonusReports({ year }: { year: number }) {
           }}
         />
         <ReportCard
-          title="Per-employee history"
-          helper="Processor roster with cross-month bonus history. Open an employee for their full per-month detail."
-          href="/bonus/employees"
-          linkLabel="Open employee history"
-          dataTestId="bonus-report-employees"
+          title="Current pay period — live standings"
+          helper="Where every processor stands RIGHT NOW in the open pay period: units so far, days qualified, days short of the minimum, and bonus accrued. Tap a processor for their full cross-period history."
+          href="/bonus/standings"
+          linkLabel="Open live standings"
+          dataTestId="bonus-report-standings"
         />
       </div>
     </section>

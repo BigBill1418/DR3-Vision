@@ -14,10 +14,14 @@ import { BonusReports } from './BonusReports';
 describe('BonusReports', () => {
   const html = renderToStaticMarkup(<BonusReports year={2026} />);
 
-  it('links to the three existing bonus report surfaces', () => {
+  it('links to the three bonus report surfaces, incl. live current-period standings', () => {
     expect(html).toContain('href="/bonus/months"');
     expect(html).toContain('href="/bonus/annual"');
-    expect(html).toContain('href="/bonus/employees"');
+    // ADR-0031: the per-employee card now points at the live standings report
+    // (the open pay period), not the roster manager at /bonus/employees.
+    expect(html).toContain('href="/bonus/standings"');
+    expect(html).toContain('data-testid="bonus-report-standings"');
+    expect(html).not.toContain('href="/bonus/employees"');
   });
 
   it('exposes the existing annual CSV export route for the given year', () => {

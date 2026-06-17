@@ -5,6 +5,25 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-17 — Current pay-period standings (ADR-0031)
+
+**Headline.** Adds a live, in-progress view of where every processor stands in the **open** bi-weekly pay period — the piece the cross-period history and closed-period reports never surfaced. Fixes the Reports "Per-employee history" card, which linked to the employee **roster manager** (`/bonus/employees`) and showed no bonus data: it now opens **"Current pay period — live standings"** (`/bonus/standings`).
+
+**What you see.** Per active processor for the open period (e.g. _Period 13 · Jun 9–22_): **units so far · days qualified · days short of the minimum · bonus accrued**. "Days short" = a keyed day whose bonus is $0 because units didn't exceed the rule's daily minimum (Woodland: >50/day); `daysQualified + daysShort = days keyed`. Days with no entry count on neither side. The qualifying threshold is read from the effective `processor_bonus_rules` row, never hardcoded.
+
+**Surfaces (the operator's "both").**
+
+- `/bonus/standings` — new `force-dynamic` report: live all-processor table, name-sorted, each row drilling into that processor's full history. Same `tryBonusAccess` gate as the other bonus surfaces; Eugene + Woodland via `?site=`. "No open period" empty state when today falls outside every seeded period.
+- `/bonus/employee/[id]` — now leads with a **Current pay period** banner (the four live metrics, marked _in progress_) above the existing YTD + last-12 + history.
+
+**Service layer — `src/lib/bonus/current-period.ts`** (new, isolated, read-only). Resolves the period covering Pacific "today" by the daily grid's date-range contract, then tallies every keyed entry through the shared `calculateDailyBonusCents`, so standings can never diverge from the daily grid or the signed PDF (hard rule #3). `currentPeriodStandings(siteId)` returns all active processors (a processor with no keyed day yet shows at zero, so the full roster is visible); `currentPeriodForEmployee(siteId, employeeId)` is a focused per-employee query (correct for a since-deactivated processor; never loads the roster).
+
+**Reports card.** "Per-employee history" → **"Current pay period — live standings"** pointing at `/bonus/standings`. The roster manager stays reachable from the `/bonus` landing ("Manage Employees"), so nothing is orphaned.
+
+**Known limitation (flagged in ADR-0031, not fixed here).** The cross-period history _table_ on the detail page still labels periods by calendar month (`monthLabel`), a pre-cadence artifact — so two bi-weekly periods in one month render duplicate labels. Separate follow-up.
+
+**Gates.** New unit tests `current-period.test.ts` (8 cases) + updated `BonusReports.test.tsx`. Full suite **917 green** (was 909); `tsc --noEmit` 0; ESLint clean; `next build` ok. No migration (read-only over existing tables).
+
 ### 2026-06-17 — Sprint 5: daily production report (ADR-0030)
 
 **Headline.** Replaces Morena Gomez's manual 6 PM Pacific daily processing email for Woodland and adds the same automation for Eugene. Both sites are independently configurable from a Bill-only admin tile (`/admin/production-report`). Recipients, send time, subject template, and skip rules are all editable through the UI; every config change is audit-tracked. Email body includes per-employee mattress count + bonus dollars + total processed + total bonus paid + four comparison lines (same day last year, MTD, prior month same period, percentage delta).

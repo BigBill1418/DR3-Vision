@@ -38,6 +38,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0028   | Bonus daily-entry prior-day amendment workflow (four-eyes, soft-control; extends 0019/0019.1/0019.2/0024)     | Accepted                                                        |
 | 0029   | Amendment notification batching — one notification per root action (extends 0028; applies 0037)               | Accepted                                                        |
 | 0030   | Daily production report automation (per-site config + daemon; extends 0019/0019.2; delivers via 0021)         | Accepted                                                        |
+| 0031   | Current pay-period standings — live in-progress view (/bonus/standings + detail-page banner; extends 0019.1)  | Accepted                                                        |
 
 ## How to write a new ADR
 
