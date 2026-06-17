@@ -5,7 +5,7 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
-### 2026-06-17 — Change: EOD bonus alert fires only on a fully empty site-day (ADR-0019 §2)
+### 2026-06-17 — Fix: EOD bonus alert now fires only when a site has zero entries (ADR-0019 §2)
 
 Bill was being paged whenever **any** active processor lacked a bonus entry by
 the 5:00 PM PT cron — but not every processor has a bonus every day (different
@@ -303,23 +303,4 @@ Kelsey — reaching Eugene via the ADR-0024 `all_sites` flag — opened a Eugene
 report and saw the wrong signers. Ground truth (who signs which slot at which
 site) lives in the `bonus_signature_chains` data; the data layer was already
 site-scoped everywhere, and the **bonus-pdf page already resolved names from the
-chain correctly** — only these three presentation surfaces lagged. This violated
-CLAUDE.md **hard rule #2** (Eugene and Woodland are strictly separated; no
-per-site signer identity is baked into presentation). The hardcoded literals
-predate ADR-0024 — `all_sites` simply gave Kelsey the cross-site reach that
-exposed the latent defect.
-
-**Root cause:** three presentation surfaces carried `"Janette Tomas"` /
-`"Morena Gomez"` (and `Janette`/`Morena` short forms) as literals rather than
-resolving the period's signature chain.
-
-**Fix (presentation only — no data-layer or authority change):**
-
-- **`src/app/bonus/months/[id]/page.tsx`** — resolves the period's signers from
-  the chain via a new shared helper and passes the names to both signature cards
-  and the signature panel. "Awaiting signature" logic untouched.
-- **New `src/lib/bonus/signer-names.ts`** (`resolveSlotSignerNames`) — lifts the
-  exact chain-resolve-then-`user.findMany` pattern the bonus-pdf page already
-  uses into one unit-testable helper, so the page and panel share one
-  implementation. Falls back to the user UUID if a name is unresolved (same as
-  the PDF).
+chain correctly** — only these three presentation surfaces
