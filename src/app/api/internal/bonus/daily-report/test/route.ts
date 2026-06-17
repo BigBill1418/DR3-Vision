@@ -27,6 +27,12 @@ export const dynamic = 'force-dynamic';
 const Body = z.object({
   siteCode: z.enum(['woodland', 'eugene']),
   to: z.string().email(),
+  // Optional Pacific calendar day (YYYY-MM-DD) to preview a past day with data.
+  // Defaults to today (Pacific). Stored as the UTC-midnight @db.Date key.
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -60,7 +66,8 @@ export async function POST(req: Request): Promise<Response> {
     select: { subject_template: true, include_bonus_dollars: true, include_comparisons: true },
   });
 
-  const report = await buildDailyReport(site.id, appToday());
+  const reportDate = parsed.data.date ? new Date(`${parsed.data.date}T00:00:00.000Z`) : appToday();
+  const report = await buildDailyReport(site.id, reportDate);
   const result = await sendDailyReport({
     report,
     recipients: [parsed.data.to],
