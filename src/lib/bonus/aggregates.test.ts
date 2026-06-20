@@ -57,6 +57,14 @@ const monthStore = new Map<string, MockMonth>();
 const empStore = new Map<string, MockEmployee>();
 const entryStore = new Map<string, MockEntry>();
 const ruleStore = new Map<string, MockRule>();
+// ADR-0032: reporting-only production adjustments (signed unit deltas keyed by day).
+interface MockAdjustment {
+  id: string;
+  site_id: string;
+  entry_date: Date;
+  units: number;
+}
+const adjStore = new Map<string, MockAdjustment>();
 let idCounter = 0;
 
 const WOODLAND = 'site-woodland';
@@ -127,11 +135,17 @@ function addEntry(monthId: string, empId: string, day: number, count: number): v
   entryStore.set(e.id, e);
 }
 
+function addAdjustment(site_id: string, entry_date: Date, units: number): void {
+  const id = `adj-${++idCounter}`;
+  adjStore.set(id, { id, site_id, entry_date, units });
+}
+
 function reset(): void {
   monthStore.clear();
   empStore.clear();
   entryStore.clear();
   ruleStore.clear();
+  adjStore.clear();
   idCounter = 0;
   ruleStore.set('rule-wo', {
     id: 'rule-wo',
@@ -250,13 +264,37 @@ vi.mock('@/lib/prisma', () => {
     ),
   };
 
-  return { prisma: { bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
+  // ADR-0032: annualAdjustmentUnits range-scans adjustments by site + entry_date.
+  const bonusReportingAdjustment = {
+    findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
+      const ed = where['entry_date'] as { gte?: Date; lt?: Date } | undefined;
+      return [...adjStore.values()]
+        .filter((a) => {
+          if (where['site_id'] && a.site_id !== where['site_id']) return false;
+          if (ed?.gte && a.entry_date.getTime() < ed.gte.getTime()) return false;
+          if (ed?.lt && a.entry_date.getTime() >= ed.lt.getTime()) return false;
+          return true;
+        })
+        .map((a) => ({ units: a.units }));
+    }),
+  };
+
+  return {
+    prisma: {
+      bonusPayPeriod,
+      bonusEmployee,
+      bonusDailyEntry,
+      processorBonusRule,
+      bonusReportingAdjustment,
+    },
+  };
 });
 
 // Import AFTER the mock is registered.
 import {
   employeeHistory,
   annualTotals,
+  annualAdjustmentUnits,
   csvForAnnual,
   type AnnualEmployeeRow,
 } from '@/lib/bonus/aggregates';
@@ -525,5 +563,65 @@ describe('csvForAnnual', () => {
     expect(csv.trim()).toBe(
       'employee,previously_known_as,active,total_mattresses,days_qualified,total_bonus_usd',
     );
+  });
+});
+
+// ── ADR-0032: reporting-only production adjustments ──────────────────
+
+describe('annualAdjustmentUnits', () => {
+  it('sums signed adjustments whose entry_date is in the year, site-scoped', async () => {
+    // Net the operator's five June corrections: -4 +13 +694 +653 +451 = +1807.
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR, 5, 1)), -4);
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR, 5, 2)), 13);
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR, 5, 4)), 694);
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR, 5, 5)), 653);
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR, 5, 8)), 451);
+    // Out-of-year and other-site rows must be excluded.
+    addAdjustment(WOODLAND, new Date(Date.UTC(THIS_YEAR - 1, 11, 31)), 999);
+    addAdjustment(EUGENE, new Date(Date.UTC(THIS_YEAR, 5, 4)), 500);
+
+    expect(await annualAdjustmentUnits(WOODLAND, THIS_YEAR)).toBe(1807);
+  });
+
+  it('returns 0 when no adjustments exist for the year', async () => {
+    expect(await annualAdjustmentUnits(WOODLAND, THIS_YEAR)).toBe(0);
+  });
+});
+
+describe('csvForAnnual — ADR-0032 adjustment provenance row', () => {
+  const rows: AnnualEmployeeRow[] = [
+    {
+      employeeId: 'a',
+      name: 'Amy',
+      previousNames: [],
+      isActive: true,
+      mattresses: 100,
+      daysQualified: 2,
+      bonusCents: 1275,
+    },
+  ];
+
+  it('appends a production-only adjustment row with bonus 0.00 when units != 0', () => {
+    const csv = csvForAnnual(rows, 1807);
+    const lines = csv.trim().split('\n');
+    const last = lines[lines.length - 1];
+    // mattress column carries +1807, bonus column is 0.00 (frozen-payout invariant).
+    // papaparse quotes the label because it contains a comma.
+    expect(last).toBe('"Reporting adjustment (ADR-0032, production-only)",,—,1807,0,0.00');
+    // The real employee's bonus row is untouched.
+    expect(lines[1]).toBe('Amy,,yes,100,2,12.75');
+  });
+
+  it('emits NO extra row when adjustmentUnits is 0 (default)', () => {
+    const csv = csvForAnnual(rows);
+    const lines = csv.trim().split('\n');
+    expect(lines).toHaveLength(2); // header + the single employee row
+    expect(lines.some((l) => l.includes('Reporting adjustment'))).toBe(false);
+  });
+
+  it('renders a negative net adjustment correctly', () => {
+    const csv = csvForAnnual(rows, -4);
+    const last = csv.trim().split('\n').pop();
+    expect(last).toBe('"Reporting adjustment (ADR-0032, production-only)",,—,-4,0,0.00');
   });
 });

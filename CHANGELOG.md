@@ -5,6 +5,25 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-20 — Reporting-only production adjustments, decoupled from bonus math (ADR-0032)
+
+**Headline.** Woodland **production totals** (daily-report month-to-date and the annual year-over-year aggregate) now reflect the operator's true paper figures, **without moving any bonus/payout dollar**. The closed pay period 2026-05-26…2026-06-08 stays frozen at `legacy_total_payout_cents = 96475` ($964.75), byte-for-byte. Operator decision 2026-06-19 ("Option B": reporting-only, keep payroll frozen).
+
+**Mechanism.** A new, additive table `bonus_reporting_adjustments` (migration `20260620_bonus_reporting_adjustments`) — one signed unit delta per site per day (`UNIQUE(site_id, entry_date)`, TEXT ids/FKs per convention). Chosen over a "phantom employee" (would leak — bonus paths don't filter `is_active`) and over a `reporting_only` column on `bonus_daily_entries` (would force a filter onto every bonus-dollar query; high blast radius). **No bonus-dollar read path queries this table**, so an adjustment is structurally incapable of reaching payroll math.
+
+**Invariant.** Production-QUANTITY read paths INCLUDE adjustments; every bonus-DOLLAR read path EXCLUDES them. Wired the complete production-quantity set: `sumRangeOrNull` in `daily-report.ts` (covers MTD, prior-month, **and same-day-last-year** YoY); the annual page `totalMattresses` (new `annualAdjustmentUnits` helper in `aggregates.ts`); the annual CSV export (a single `"Reporting adjustment (ADR-0032, production-only)"` provenance row, mattress column carries the delta, bonus column `0.00`). Left untouched: `employeeHistory`, per-employee `annualTotals` rows, `pdf-data.ts`, the bonus-PDF page, and `current-period.ts` standings — all bonus dollars / per-employee.
+
+**Launch-month load.** Five Woodland adjustments — 6/1 −4, 6/2 +13, 6/4 +694, 6/5 +653, 6/8 +451 (net **+1,807**). Reason recorded on each row: _"Launch-month backfill: missing-day production (6/4,6/5,6/8) / paper reconciliation (6/1,6/2); reporting-only, payroll frozen per operator 2026-06-19."_
+
+**Proof (before → after).**
+
+- Frozen closed-period payout `legacy_total_payout_cents`: **96475 → 96475** (unchanged).
+- Annual 2026 bonus-dollar total for Woodland: **unchanged** (adjustments never enter it).
+- Woodland June MTD through 2026-06-18: **9,067 → 10,874**; per-day 6/1→940, 6/2→695, 6/4→694, 6/5→653, 6/8→451.
+- Annual 2026 production-quantity aggregate: **+1,807** (now includes the adjustments).
+
+**Test.** New cases in `daily-report.test.ts` (MTD includes ±adjustments; same-day-last-year non-null on adjustment-only window; bonus-dollar totals invariant under a large adjustment) and `aggregates.test.ts` + `export.route.test.ts` (`annualAdjustmentUnits` year/site scoping; CSV provenance row present/absent/negative; export integration). Suite **928 green**; `tsc` 0; ESLint clean. Migration auto-runs on deploy.
+
 ### 2026-06-17 — Hotfix: per-employee history 500 on historical periods (ADR-0031 / ADR-0023)
 
 **Bug.** Opening a processor's history (`/bonus/employee/[id]`) — newly prominent via the ADR-0031 standings drill-in — returned the generic error page ("The error has been reported…"). Root cause from the app log: `NoActiveRuleError: no active processor_bonus_rules row for site …`. `aggregates.ts` (`employeeHistory` / `annualTotals`) resolved each period's rule with the **strict** `resolveActiveRule`, but the ADR-0023 historical import seeded entries back to **Jan 2025** while the `processor_bonus_rules` table only goes back to **2026-01-01** (verified on prod: 27 Woodland periods pre-2026 with 3,092 entries). Any processor with 2025 entries threw and 500'd the whole page. The same class was already fixed for the historical-PDF path in ADR-0023; the aggregate views were missed.

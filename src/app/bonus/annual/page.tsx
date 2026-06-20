@@ -13,7 +13,11 @@ import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { redirect } from 'next/navigation';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
-import { annualTotals, type AnnualEmployeeRow } from '@/lib/bonus/aggregates';
+import {
+  annualTotals,
+  annualAdjustmentUnits,
+  type AnnualEmployeeRow,
+} from '@/lib/bonus/aggregates';
 import { formatCents } from '@/lib/bonus/calculator';
 import { appCurrentYear } from '@/lib/time';
 
@@ -41,8 +45,14 @@ export default async function BonusAnnualPage({ searchParams }: { searchParams: 
   const year = parseYear(sp.year);
   const rows = await annualTotals(gate.ctx.siteId, year);
 
+  // grandTotalCents is a BONUS-DOLLAR total → reporting-only adjustments (ADR-0032)
+  // must NOT touch it; it stays exactly the sum of per-employee bonusCents.
   const grandTotalCents = rows.reduce((s, r) => s + r.bonusCents, 0);
-  const totalMattresses = rows.reduce((s, r) => s + r.mattresses, 0);
+  // totalMattresses is a PRODUCTION-QUANTITY total → add the reporting-only
+  // adjustments so the year-over-year production figure reflects the operator's
+  // true paper numbers (ADR-0032).
+  const adjustmentUnits = await annualAdjustmentUnits(gate.ctx.siteId, year);
+  const totalMattresses = rows.reduce((s, r) => s + r.mattresses, 0) + adjustmentUnits;
   const currentYear = appCurrentYear();
   // Offer the last 5 years plus next year (for an early-January boundary).
   const yearOptions: number[] = [];

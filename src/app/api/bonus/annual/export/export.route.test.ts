@@ -52,6 +52,13 @@ interface MockEntry {
 const monthStore = new Map<string, MockMonth>();
 const empStore = new Map<string, MockEmployee>();
 const entries: MockEntry[] = [];
+// ADR-0032: reporting-only production adjustments (default empty; a test pushes rows).
+interface MockAdjustment {
+  site_id: string;
+  entry_date: Date;
+  units: number;
+}
+const adjustments: MockAdjustment[] = [];
 
 function inList(where: Record<string, unknown>, key: string, value: string): boolean {
   if (!(key in where)) return true;
@@ -116,7 +123,29 @@ vi.mock('@/lib/prisma', () => {
       end_date: null,
     })),
   };
-  return { prisma: { site, bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
+  const bonusReportingAdjustment = {
+    findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
+      const ed = where['entry_date'] as { gte?: Date; lt?: Date } | undefined;
+      return adjustments
+        .filter((a) => {
+          if (where['site_id'] && a.site_id !== where['site_id']) return false;
+          if (ed?.gte && a.entry_date.getTime() < ed.gte.getTime()) return false;
+          if (ed?.lt && a.entry_date.getTime() >= ed.lt.getTime()) return false;
+          return true;
+        })
+        .map((a) => ({ units: a.units }));
+    }),
+  };
+  return {
+    prisma: {
+      site,
+      bonusPayPeriod,
+      bonusEmployee,
+      bonusDailyEntry,
+      processorBonusRule,
+      bonusReportingAdjustment,
+    },
+  };
 });
 
 import { GET } from '@/app/api/bonus/annual/export/route';
@@ -130,6 +159,7 @@ beforeEach(() => {
   monthStore.clear();
   empStore.clear();
   entries.length = 0;
+  adjustments.length = 0;
 });
 
 function seed(): void {
@@ -203,5 +233,25 @@ describe('GET /api/bonus/annual/export', () => {
     );
     // Amy keyed 60 mattresses → bonus = (60-50)*50 = 500 cents = $5.00.
     expect(lines[1]).toBe('Amy,,yes,60,1,5.00');
+  });
+
+  it('appends the ADR-0032 production-only adjustment row, bonus column untouched', async () => {
+    seed();
+    // A net +1807 reporting-only adjustment in-year for Woodland.
+    adjustments.push({
+      site_id: WOODLAND,
+      entry_date: new Date(Date.UTC(THIS_YEAR, 5, 4)),
+      units: 1807,
+    });
+    mockSession = { user: { id: 'u-jan', role: 'manager', primary_site_id: WOODLAND } };
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const lines = (await res.text()).trim().split('\n');
+    // Employee bonus rows are unchanged …
+    expect(lines[1]).toBe('Amy,,yes,60,1,5.00');
+    // … and a single production-only provenance row carries the units with $0.00 bonus.
+    expect(lines[lines.length - 1]).toBe(
+      '"Reporting adjustment (ADR-0032, production-only)",,—,1807,0,0.00',
+    );
   });
 });

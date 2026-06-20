@@ -47,10 +47,16 @@ interface HistoryRow {
   entry_date: Date;
   mattress_count: { toNumber(): number };
 }
+// ADR-0032: reporting-only production adjustments (signed unit deltas keyed by day).
+interface AdjustmentRow {
+  entry_date: Date;
+  units: number;
+}
 
 let siteRow: { id: string; code: string; name: string } | null;
 let todayRows: TodayRow[];
 let historyRows: HistoryRow[];
+let adjustmentRows: AdjustmentRow[];
 
 vi.mock('@/lib/bonus/daily-entry', () => ({
   resolveActiveRule: vi.fn(async () => WOODLAND_RULE),
@@ -81,6 +87,19 @@ vi.mock('@/lib/prisma', () => ({
         },
       ),
     },
+    // ADR-0032: production-quantity range sums also pull reporting adjustments.
+    // Only called with a { gte, lte } range (sumRangeOrNull).
+    bonusReportingAdjustment: {
+      findMany: vi.fn(async ({ where }: { where: { entry_date: { gte: Date; lte: Date } } }) => {
+        const { gte, lte } = where.entry_date;
+        return adjustmentRows
+          .filter(
+            (r) =>
+              r.entry_date.getTime() >= gte.getTime() && r.entry_date.getTime() <= lte.getTime(),
+          )
+          .map((r) => ({ units: r.units }));
+      }),
+    },
   },
 }));
 
@@ -88,6 +107,7 @@ beforeEach(() => {
   siteRow = { id: WOODLAND, code: 'woodland', name: 'Woodland' };
   todayRows = [];
   historyRows = [];
+  adjustmentRows = [];
 });
 
 // Import buildDailyReport AFTER the mocks are registered.
@@ -430,5 +450,87 @@ describe('buildDailyReport — paceDeltaPct is -100.0 for a zero MTD against a n
     expect(report.mtd.total).toBe(0);
     expect(report.priorMonthSamePeriod.total).toBe(90);
     expect(report.paceDeltaPct).toBe(-100);
+  });
+});
+
+// ── ADR-0032: reporting-only production adjustments ──────────────────
+//
+// Adjustments are signed unit deltas keyed by day, summed by sumRangeOrNull into
+// every PRODUCTION-QUANTITY total (MTD, prior-month, same-day-last-year), but they
+// NEVER touch any BONUS-DOLLAR total (per-line bonusCents / totalBonusCents),
+// because those come from bonus_daily_entries alone. This is the invariant that
+// keeps the frozen closed-period payout untouched.
+
+describe('buildDailyReport — ADR-0032 reporting adjustments', () => {
+  it('MTD includes positive AND negative adjustments alongside real entries', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(100),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    historyRows = [
+      { entry_date: new Date(Date.UTC(2026, 5, 1)), mattress_count: dec(944) },
+      { entry_date: new Date(Date.UTC(2026, 5, 2)), mattress_count: dec(682) },
+      { entry_date: REPORT_DATE, mattress_count: dec(100) },
+    ];
+    // Mirrors the operator's five June corrections (subset that lands in [Jun 1..16]):
+    // 6/1 -4, 6/2 +13, 6/4 +694, 6/5 +653, 6/8 +451 = +1807 net.
+    adjustmentRows = [
+      { entry_date: new Date(Date.UTC(2026, 5, 1)), units: -4 },
+      { entry_date: new Date(Date.UTC(2026, 5, 2)), units: 13 },
+      { entry_date: new Date(Date.UTC(2026, 5, 4)), units: 694 },
+      { entry_date: new Date(Date.UTC(2026, 5, 5)), units: 653 },
+      { entry_date: new Date(Date.UTC(2026, 5, 8)), units: 451 },
+    ];
+    const report = await build(REPORT_DATE);
+    // base entries 944 + 682 + 100 = 1726, plus net adjustments 1807 = 3533.
+    expect(report.mtd.total).toBe(1726 + 1807);
+  });
+
+  it('a same-day-last-year window with ONLY an adjustment is non-null (not "no data")', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(50),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    historyRows = []; // no real entries anywhere
+    // Adjustment on the same-day-last-year date (2025-06-16) — the prior-year
+    // comparison must surface +12 rather than null.
+    adjustmentRows = [{ entry_date: new Date(Date.UTC(2025, 5, 16)), units: 12 }];
+    const report = await build(REPORT_DATE);
+    expect(report.sameDayLastYear.total).toBe(12);
+  });
+
+  it('adjustments do NOT change any bonus-dollar total (frozen-payout invariant)', async () => {
+    const { calculateDailyBonusCents } = await import('../calculator');
+    todayRows = [
+      {
+        mattress_count: dec(79),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-a', full_name: 'A' },
+      },
+    ];
+    historyRows = [{ entry_date: REPORT_DATE, mattress_count: dec(79) }];
+
+    // Build once with NO adjustments, once with a large adjustment in-window.
+    const before = await build(REPORT_DATE);
+    adjustmentRows = [{ entry_date: REPORT_DATE, units: 5000 }];
+    const after = await build(REPORT_DATE);
+
+    const expectedBonus = calculateDailyBonusCents(79, WOODLAND_RULE);
+    // Per-line + total bonus cents are identical regardless of the adjustment.
+    expect(before.totalBonusCents).toBe(expectedBonus);
+    expect(after.totalBonusCents).toBe(expectedBonus);
+    expect(after.lines[0]?.bonusCents).toBe(before.lines[0]?.bonusCents);
+    expect(after.lines[0]?.bonusCents).toBe(expectedBonus);
+    // totalToday (today's per-employee unit sum) is also adjustment-free — only
+    // the range comparisons (MTD etc.) pick up adjustments.
+    expect(after.totalToday).toBe(before.totalToday);
+    // But the MTD production total DID move by exactly the adjustment.
+    expect((after.mtd.total ?? 0) - (before.mtd.total ?? 0)).toBe(5000);
   });
 });

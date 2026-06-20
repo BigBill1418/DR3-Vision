@@ -85,6 +85,9 @@ model Site {
   bonus_daily_report_config BonusDailyReportConfig?
   bonus_daily_report_logs   BonusDailyReportLog[]
 
+  // Reporting-only production adjustments (ADR-0032)
+  bonus_reporting_adjustments BonusReportingAdjustment[]
+
   @@map("sites")
 }
 
@@ -809,6 +812,36 @@ model BonusDailyEntry {
   @@index([entry_date])
   @@index([import_session_id])
   @@map("bonus_daily_entries")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Reporting-only production adjustments (ADR-0032).
+//
+// A SEPARATE, additive layer of signed per-day unit deltas that correct the
+// Woodland production TOTALS (daily-report MTD + annual year-over-year quantity)
+// to the operator's true paper figures — WITHOUT touching any bonus/payout
+// dollars. Every bonus-DOLLAR read path queries `bonus_daily_entries` and never
+// this table, so an adjustment can NEVER leak into payroll math; only
+// production-QUANTITY read paths sum these rows. See ADR-0032.
+//
+// `created_by` is a scalar FK (ON DELETE SET NULL in SQL) with no Prisma relation
+// field on User, intentionally — these rows are operator-loaded and we do not
+// need to navigate user → adjustments.
+// ────────────────────────────────────────────────────────────────────────
+model BonusReportingAdjustment {
+  id      String @id @default(uuid())
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  entry_date DateTime @db.Date // UTC-midnight key for the Pacific calendar day
+  units      Int // signed unit delta (+add / -subtract); whole mattresses
+  reason     String
+  created_by String?
+  created_at DateTime @default(now())
+
+  @@unique([site_id, entry_date])
+  @@index([site_id, entry_date])
+  @@map("bonus_reporting_adjustments")
 }
 
 model BonusPayPeriod {

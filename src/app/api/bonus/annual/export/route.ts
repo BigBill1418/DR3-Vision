@@ -9,7 +9,7 @@
 // the on-screen totals or the signed PDF (CLAUDE.md hard rule #3).
 
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
-import { annualTotals, csvForAnnual } from '@/lib/bonus/aggregates';
+import { annualTotals, annualAdjustmentUnits, csvForAnnual } from '@/lib/bonus/aggregates';
 import { appCurrentYear } from '@/lib/time';
 
 export const runtime = 'nodejs';
@@ -37,7 +37,10 @@ export async function GET(req: Request) {
   const year = parseYear(url.searchParams.get('year'));
 
   const rows = await annualTotals(ctx.siteId, year);
-  const csv = csvForAnnual(rows);
+  // Production-quantity adjustments (ADR-0032) appear as a single provenance row in
+  // the CSV's mattress column; bonus dollars are untouched.
+  const adjustmentUnits = await annualAdjustmentUnits(ctx.siteId, year);
+  const csv = csvForAnnual(rows, adjustmentUnits);
 
   const filename = `bonus-${ctx.siteCode}-annual-${year}.csv`;
   return new Response(csv, {

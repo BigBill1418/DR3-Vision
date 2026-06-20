@@ -325,6 +325,34 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
 }
 
 // ────────────────────────────────────────────────────────────────────
+// annualAdjustmentUnits — reporting-only production adjustments, one year
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Sum of reporting-only production adjustments (ADR-0032) whose `entry_date`
+ * falls in calendar `year` (UTC), site-scoped. This is a PRODUCTION-QUANTITY
+ * figure only: it is added to the annual mattress (units) total so the
+ * year-over-year production comparison reflects the operator's true paper
+ * figures. It is NEVER added to any bonus-dollar total — these adjustments live
+ * in `bonus_reporting_adjustments`, which no bonus-dollar path queries, so the
+ * frozen closed-period payout can never move.
+ *
+ * Returns a signed integer (may be negative); 0 when no adjustments exist for
+ * the year.
+ */
+export async function annualAdjustmentUnits(siteId: string, year: number): Promise<number> {
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const yearEnd = new Date(Date.UTC(year + 1, 0, 1)); // exclusive
+  const rows = await prisma.bonusReportingAdjustment.findMany({
+    where: { site_id: siteId, entry_date: { gte: yearStart, lt: yearEnd } },
+    select: { units: true },
+  });
+  let sum = 0;
+  for (const r of rows) sum += r.units;
+  return sum;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // csvForAnnual — CSV text for the export
 // ────────────────────────────────────────────────────────────────────
 
@@ -334,8 +362,15 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
  * column imports cleanly into a spreadsheet as a number. `previous_names` is a
  * semicolon-joined list of prior names (empty when none) for the "previously
  * known as" provenance.
+ *
+ * `adjustmentUnits` (ADR-0032) is the net reporting-only production adjustment for
+ * the year. When non-zero, a single provenance row is appended whose mattress
+ * column carries the unit delta and whose bonus column is 0.00 — so the CSV's
+ * production (mattress) total matches the on-screen production total while the
+ * bonus-dollar column stays untouched by adjustments (the frozen payout is
+ * unaffected). When zero, no extra row is emitted.
  */
-export function csvForAnnual(rows: AnnualEmployeeRow[]): string {
+export function csvForAnnual(rows: AnnualEmployeeRow[], adjustmentUnits = 0): string {
   const records = rows.map((r) => ({
     employee: r.name,
     previously_known_as: r.previousNames.map((p) => p.name).join('; '),
@@ -344,6 +379,17 @@ export function csvForAnnual(rows: AnnualEmployeeRow[]): string {
     days_qualified: r.daysQualified,
     total_bonus_usd: (r.bonusCents / 100).toFixed(2),
   }));
+
+  if (adjustmentUnits !== 0) {
+    records.push({
+      employee: 'Reporting adjustment (ADR-0032, production-only)',
+      previously_known_as: '',
+      active: '—',
+      total_mattresses: adjustmentUnits,
+      days_qualified: 0,
+      total_bonus_usd: (0).toFixed(2),
+    });
+  }
 
   // Stable, explicit column order regardless of object key iteration / empty set.
   const columns = [

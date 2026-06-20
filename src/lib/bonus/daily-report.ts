@@ -90,18 +90,32 @@ export function sameDomPriorMonth(d: Date): Date {
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * Sum mattress_count across all site-scoped entries with entry_date in [start, end].
- * Returns null when zero rows match (lets the renderer show "no previous data available").
+ * Sum mattress_count across all site-scoped entries with entry_date in [start, end],
+ * PLUS any reporting-only production adjustments (ADR-0032) in the same window.
+ * Returns null when neither entries nor adjustments exist (lets the renderer show
+ * "no previous data available").
+ *
+ * PRODUCTION-QUANTITY path: this is a units total, so it includes the reporting
+ * adjustments. Bonus-DOLLAR paths (per-line bonusCents / totalBonusCents in
+ * buildDailyReport) deliberately do NOT — adjustments live in
+ * `bonus_reporting_adjustments`, a table no bonus-dollar query touches, so the
+ * frozen closed-period payout can never move (ADR-0032).
  */
 async function sumRangeOrNull(siteId: string, start: Date, end: Date): Promise<number | null> {
-  const rows = await prisma.bonusDailyEntry.findMany({
-    where: {
-      bonus_employee: { site_id: siteId },
-      entry_date: { gte: start, lte: end },
-    },
-    select: { mattress_count: true },
-  });
-  if (rows.length === 0) return null;
+  const [rows, adjustments] = await Promise.all([
+    prisma.bonusDailyEntry.findMany({
+      where: {
+        bonus_employee: { site_id: siteId },
+        entry_date: { gte: start, lte: end },
+      },
+      select: { mattress_count: true },
+    }),
+    prisma.bonusReportingAdjustment.findMany({
+      where: { site_id: siteId, entry_date: { gte: start, lte: end } },
+      select: { units: true },
+    }),
+  ]);
+  if (rows.length === 0 && adjustments.length === 0) return null;
   // Floor per-entry (the calculator's canonical reading of a fractional count —
   // see calculateDailyBonusCents) BEFORE summing, so this range total uses the
   // exact same per-row basis as the per-line units in buildDailyReport. This is
@@ -109,6 +123,8 @@ async function sumRangeOrNull(siteId: string, start: Date, end: Date): Promise<n
   // vs sum-then-round divergence) and keeps unit figures consistent everywhere.
   let sum = 0;
   for (const r of rows) sum += Math.floor(r.mattress_count.toNumber());
+  // Adjustment units are already whole signed integers (+add / -subtract).
+  for (const a of adjustments) sum += a.units;
   return sum;
 }
 
