@@ -5,6 +5,20 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-22 — DB backups + MyMRC portal-redesign login fix
+
+**Backups (NEW — DB previously had NONE):** nightly encrypted Postgres backups to
+Cloudflare R2 via restic — `scripts/dr3-pg-backup.sh` + systemd
+`dr3-vision-pg-backup.{service,timer}` (03:45 PT, retention 7d/4w/12m/5y, AES-256).
+First snapshot verified. RESTIC_PASSWORD (recovery key) → 1Password. See
+`docs/operator/backups.md`.
+
+**MyMRC:** MRC redesigned the Salesforce portal; the old scraper silently failed
+(logged-out 404 parsed as "0 hauls ok"). Login selectors fixed + verified live, no
+MFA (SELECTOR_VERSION 2026-06-22). Data pages moved/expanded (`/s/hauls`,
+`/s/processed-materials`, `/s/outbound-materials`); parser rebuild + loads/inventory
+ingestion handed off to claude.ai. See `docs/MYMRC-PORTAL-REDESIGN-2026-06-22.md`.
+
 ### 2026-06-22 — SVdP ad-hoc mail sender (scripts/send-svdp-mail.sh)
 
 Added `scripts/send-svdp-mail.sh`: sends ad-hoc Vision email **from dr3-vision@svdp.us**
