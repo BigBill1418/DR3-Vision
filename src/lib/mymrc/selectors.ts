@@ -13,17 +13,17 @@
 
 import type { SiteCode } from './types';
 
-export const SELECTOR_VERSION = '2026-05-06';
+export const SELECTOR_VERSION = '2026-06-22';
 
 export const SELECTORS = {
   /** MyMRC login form — email + password + submit. */
-  loginEmailField: 'input[name="username"]',
-  loginPasswordField: 'input[name="password"]',
-  loginSubmitButton: 'button[type="submit"]',
+  loginEmailField: 'input[placeholder="Username"]',
+  loginPasswordField: 'input[type="password"]',
+  loginSubmitButton: 'button:has-text("Log in")',
   /** Post-login signal: any chrome that only renders for an authenticated session. */
   authedShellMarker: 'nav[aria-label="recycler-portal"], a[href*="/scheduled-hauls"]',
   /** Login redirect signal — Salesforce redirects unauthenticated requests here. */
-  loginRedirectMarker: 'input[name="username"]',
+  loginRedirectMarker: 'input[placeholder="Username"]',
 
   /** Scheduled-hauls table on the per-site landing. */
   scheduledHaulsTable: 'table[data-purpose="scheduled-hauls"]',
