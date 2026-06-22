@@ -5,6 +5,16 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-22 — SVdP ad-hoc mail sender (scripts/send-svdp-mail.sh)
+
+Added `scripts/send-svdp-mail.sh`: sends ad-hoc Vision email **from dr3-vision@svdp.us**
+via Microsoft Graph, reusing the running app container Entra credentials, with To + CC
+support (the in-app `sendSystemEmail` has no CC field). Vision is the Society of St.
+Vincent de Paul — a separate org from BarnardHQ — so Vision correspondence must originate
+from an @svdp.us identity; this is the sanctioned channel for one-off reports. Used to
+re-deliver the Woodland June 1–8 reconciliation report to morena.gomez@svdp.us
+(cc bill.barnard@svdp.us) from the correct org identity.
+
 ### 2026-06-20 — Reporting-only production adjustments, decoupled from bonus math (ADR-0032)
 
 **Headline.** Woodland **production totals** (daily-report month-to-date and the annual year-over-year aggregate) now reflect the operator's true paper figures, **without moving any bonus/payout dollar**. The closed pay period 2026-05-26…2026-06-08 stays frozen at `legacy_total_payout_cents = 96475` ($964.75), byte-for-byte. Operator decision 2026-06-19 ("Option B": reporting-only, keep payroll frozen).
