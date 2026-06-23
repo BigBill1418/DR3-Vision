@@ -88,13 +88,13 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
   return (
     <main style={{ background: '#f7f3ea', minHeight: '100vh', padding: '32px 16px' }}>
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
-        <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
+        <div style={{ marginBottom: 14 }}>
           <button
             type="button"
             onClick={() => router.push('/admin/operations/intel')}
-            style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: 0 }}
+            style={{ background: '#fff', border: '1px solid #e8e2d4', borderRadius: 6, color: '#a3151a', cursor: 'pointer', padding: '8px 14px', fontSize: 14, fontWeight: 600 }}
           >
-            Admin / Operations / Intelligence Survey
+            ← Back to all campaigns
           </button>
         </div>
 
