@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+# Correctness gate before push (ADR-0033 / P0-4).
+#
+# This is the gate the `total_payout_cents: number` type-lie that zeroed the
+# 2026-06-22 sign-time lock would have tripped: an enforced `tsc --noEmit` catches
+# the Decimal-vs-number mismatch at push time instead of in production. Paired with
+# the bonus/payroll vitest suite so a payroll regression cannot be pushed.
+#
+# DEPLOY-CLONE SAFE: the on-box `~/DR3-Vision` deploy clone builds in-container and
+# has NO node_modules. Running tsc/vitest there is impossible AND unwanted (it must
+# still be able to commit + push). If node_modules is absent we SKIP with a clear
+# message and exit 0 so the deploy box is never wedged. Local dev clones (with
+# node_modules) get the full gate.
+
+if [ ! -d node_modules ]; then
+  echo "pre-push: node_modules absent — skipping tsc/vitest gate (deploy clone). Push allowed."
+  exit 0
+fi
+
+# Allow an explicit, deliberate bypass (e.g. an emergency hotfix the operator is
+# pushing knowingly). Must be set intentionally; never the default.
+if [ "${SKIP_PREPUSH:-}" = "1" ]; then
+  echo "pre-push: SKIP_PREPUSH=1 set — bypassing gate (operator override)."
+  exit 0
+fi
+
+echo "pre-push: typecheck (tsc --noEmit)…"
+if ! npm run --silent typecheck; then
+  echo "pre-push: ✗ tsc failed — fix type errors before pushing (this is the gate the payroll Decimal type-lie would have tripped)." >&2
+  exit 1
+fi
+
+# Focused, fast payroll-critical suite: the bonus engine + payroll path. Keeps the
+# hook quick (full suite runs in CI) while still blocking a payroll regression.
+echo "pre-push: payroll-critical vitest (bonus suite)…"
+if ! npx vitest run "src/lib/bonus" --silent; then
+  echo "pre-push: ✗ bonus/payroll tests failed — do not push a payroll regression." >&2
+  exit 1
+fi
+
+echo "pre-push: ✓ gate passed."
+exit 0

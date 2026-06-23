@@ -21,9 +21,23 @@ import { prisma } from '@/lib/prisma';
 import { r2UploadSuccess } from '@/lib/observability/metrics';
 import { log } from '@/lib/observability/logger';
 import { pdfMonthYm } from '@/lib/bonus/pdf-data';
+import { assertPayoutReconciles } from '@/lib/bonus/reconcile-fetch';
 
 export interface GenerateBonusPdfResult {
   storageKey: string;
+}
+
+/**
+ * Thrown when the P0-1 reconciliation tripwire (ADR-0033) refuses generation
+ * because the locked total disagrees with the recomputed grand total. Distinct
+ * from a render/R2 failure: nothing was rendered or uploaded, and the urgent
+ * `payout-reconcile-mismatch` page has already fired. The caller must NOT mail.
+ */
+export class PayoutReconciliationError extends Error {
+  constructor(monthId: string) {
+    super(`bonus month ${monthId} failed payout reconciliation; PDF generation refused`);
+    this.name = 'PayoutReconciliationError';
+  }
 }
 
 function r2Client(): S3Client {
@@ -88,6 +102,14 @@ export async function generateBonusPdf(monthId: string): Promise<GenerateBonusPd
     include: { site: { select: { code: true } } },
   });
   if (!month) throw new Error(`bonus month ${monthId} not found`);
+
+  // P0-1 reconciliation tripwire (ADR-0033): BEFORE rendering or uploading, the
+  // locked total_payout_cents must match the freshly-recomputed grand total for a
+  // reconciled-state (signed/paid) period. A mismatch refuses generation (no PDF
+  // is rendered, nothing is stored) and fires an urgent page, so a payroll PDF
+  // whose total disagrees with the lock can never reach R2 or payroll.
+  const reconcile = await assertPayoutReconciles(monthId);
+  if (!reconcile.pass) throw new PayoutReconciliationError(monthId);
 
   const ym = pdfMonthYm(month.period_start);
   const short = randomUUID().slice(0, 8);

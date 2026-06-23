@@ -22,11 +22,37 @@
 // for a period that did deliver.
 
 import { prisma } from '@/lib/prisma';
-import { generateBonusPdf } from '@/lib/bonus/pdf';
+import { generateBonusPdf, PayoutReconciliationError } from '@/lib/bonus/pdf';
 import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { sendPayrollPdf } from '@/lib/m365-mail';
 import { transitionMonth, TransitionError } from '@/lib/bonus/state-machine';
+import { assertPayoutReconciles, assertNotSuspectedWrongZero } from '@/lib/bonus/reconcile-fetch';
+import { publishNtfy } from '@/lib/ntfy';
 import { log, newRequestId } from '@/lib/observability/logger';
+
+const APP_BASE_URL = (process.env['APP_BASE_URL'] ?? 'https://dr3-vision.svdp.us').replace(
+  /\/+$/,
+  '',
+);
+
+/** P0-3: page the operator on an otherwise-silent payroll-delivery failure. */
+async function pagePayrollFailure(opts: {
+  monthId: string;
+  title: string;
+  body: string;
+  fingerprint: string;
+  priority: 'high' | 'urgent';
+}): Promise<void> {
+  await publishNtfy({
+    topic: 'dr3-vision-system',
+    title: opts.title,
+    body: opts.body,
+    priority: opts.priority,
+    tags: ['error', 'bonus', 'payroll', 'dr3-vision'],
+    clickUrl: `${APP_BASE_URL}/bonus/months/${opts.monthId}`,
+    fingerprint: opts.fingerprint,
+  });
+}
 
 /**
  * Fire the post-signature payroll delivery for `monthId` WITHOUT blocking the
@@ -39,10 +65,31 @@ export function triggerPayrollDelivery(monthId: string): void {
     try {
       await generateBonusPdf(monthId);
     } catch (err) {
+      // P0-1: a reconciliation refusal already fired its own urgent page in
+      // generateBonusPdf — do NOT double-page here; just log and stop.
+      if (err instanceof PayoutReconciliationError) {
+        log.error(
+          { requestId, monthId },
+          '[payroll-delivery] PDF generation refused by reconciliation tripwire; skipping mail (already paged)',
+        );
+        return;
+      }
+      // P0-3: PDF generation failed for a signed period → an unsigned-but-due
+      // payroll report will silently never ship. Page the operator (urgent — a
+      // signed period missing its PDF blocks payroll) then stop.
       log.error(
         { requestId, monthId, err },
         '[payroll-delivery] PDF generation failed; skipping mail',
       );
+      await pagePayrollFailure({
+        monthId,
+        title: 'Bonus PDF generation failed for a signed period',
+        body: `generateBonusPdf threw for month ${monthId}. The period is signed but no payroll PDF was produced, so nothing will be delivered to payroll. Re-trigger from the manager portal. Error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        fingerprint: `payroll-pdf-failed:${monthId}`,
+        priority: 'urgent',
+      });
       return;
     }
     try {
@@ -59,10 +106,19 @@ export function triggerPayrollDelivery(monthId: string): void {
         },
       });
       if (!month?.pdf_storage_key) {
+        // P0-3: PDF gen reported success but the key never persisted — payroll
+        // would silently get nothing. Page (urgent — signed period, no artifact).
         log.error(
           { requestId, monthId },
           '[payroll-delivery] no pdf_storage_key after generation; skipping mail',
         );
+        await pagePayrollFailure({
+          monthId,
+          title: 'Bonus PDF missing after generation (no storage key)',
+          body: `Month ${monthId} reported successful PDF generation but has no pdf_storage_key, so the signed payroll PDF cannot be attached or delivered. Re-trigger generation from the manager portal.`,
+          fingerprint: `payroll-pdf-missing-key:${monthId}`,
+          priority: 'urgent',
+        });
         return;
       }
       const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
@@ -71,10 +127,21 @@ export function triggerPayrollDelivery(monthId: string): void {
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
       const bucket = process.env['R2_BUCKET'];
       if (!accountId || !accessKeyId || !secretAccessKey || !bucket) {
+        // P0-3: R2 unconfigured. This is a CONFIG-ABSENT state, not a transient
+        // failure — but a signed period DID generate a key (we passed the check
+        // above), so reaching here means R2 creds went missing AFTER the PDF was
+        // stored. That blocks delivery and is operator-actionable → page (high).
         log.warn(
           { requestId, monthId },
           '[payroll-delivery] R2 not configured; cannot attach pdf for mail',
         );
+        await pagePayrollFailure({
+          monthId,
+          title: 'R2 not configured — cannot deliver signed bonus PDF',
+          body: `Month ${monthId} is signed with a stored PDF, but R2 credentials are not configured in this process, so the PDF cannot be fetched to mail to payroll. Check the R2_* env on the app host.`,
+          fingerprint: `payroll-r2-unconfigured:${monthId}`,
+          priority: 'high',
+        });
         return;
       }
       const r2 = new S3Client({
@@ -87,6 +154,32 @@ export function triggerPayrollDelivery(monthId: string): void {
         new GetObjectCommand({ Bucket: bucket, Key: month.pdf_storage_key }),
       );
       const pdfBuffer = Buffer.from(await obj.Body!.transformToByteArray());
+
+      // P0-1 + P0-2 pre-send gates (ADR-0033), defense-in-depth on top of the
+      // tripwire in generateBonusPdf. Recompute ONCE and run both:
+      //   - reconciliation: the locked total must match the recompute (refuse +
+      //     urgent page on a disagreement; the page was already fired inside).
+      //   - zero-guard: a locked $0 that DISAGREES with the entries is a suspected
+      //     wrong $0 → block + urgent page. A locked $0 that agrees (genuinely
+      //     sub-threshold) is allowed.
+      // A refused PDF must NEVER be mailed to payroll.
+      const reconcile = await assertPayoutReconciles(monthId);
+      if (!reconcile.pass) {
+        log.error(
+          { requestId, monthId },
+          '[payroll-delivery] reconciliation failed at send time; refusing to mail (already paged)',
+        );
+        return;
+      }
+      const zeroGuard = await assertNotSuspectedWrongZero(monthId, reconcile.period);
+      if (!zeroGuard.pass) {
+        log.error(
+          { requestId, monthId },
+          '[payroll-delivery] suspected wrong $0 payout; blocking mail (already paged)',
+        );
+        return;
+      }
+
       const ym = `${month.period_start.getUTCFullYear()}-${String(
         month.period_start.getUTCMonth() + 1,
       ).padStart(2, '0')}`;

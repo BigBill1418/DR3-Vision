@@ -29,6 +29,14 @@ vi.mock('@/lib/audit', () => ({
 // ── prisma default (unused — we inject a fake db) ────────────────
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 
+// ── ntfy double (P0-3) — capture pages on silent failure paths ───
+const publishNtfyMock = vi.fn<
+  (args: Record<string, unknown>) => Promise<{ ok: boolean; outcome: 'sent' }>
+>(async () => ({ ok: true, outcome: 'sent' as const }));
+vi.mock('@/lib/ntfy', () => ({
+  publishNtfy: (args: Record<string, unknown>) => publishNtfyMock(args),
+}));
+
 import { notifyPendingSigner, resolveSlotSigner } from './signature-notifications';
 
 const WOODLAND = 'site-woodland';
@@ -151,6 +159,7 @@ const slotSignerOf = (u: FakeUser) => ({ id: u.id, name: u.name, email: u.email 
 beforeEach(() => {
   auditRows.length = 0;
   sendSystemEmail.mockClear();
+  publishNtfyMock.mockClear();
 });
 
 describe('resolveSlotSigner', () => {
@@ -287,7 +296,7 @@ describe('notifyPendingSigner — no-op cases', () => {
     expect(sendSystemEmail).not.toHaveBeenCalled();
   });
 
-  it('fail-open when mail is disabled (M365 unconfigured): no audit, no throw', async () => {
+  it('fail-open when mail is disabled (M365 unconfigured): no audit, no throw, NO page (config-absent stays silent)', async () => {
     sendSystemEmail.mockResolvedValueOnce({
       delivered: false,
       disabled: true,
@@ -299,15 +308,63 @@ describe('notifyPendingSigner — no-op cases', () => {
     const r = await notifyPendingSigner('m1', db as never);
     expect(r).toEqual({ notified: false, slot: 'facility', reason: 'mail_disabled' });
     expect(auditRows).toHaveLength(0);
+    // P0-3: M365 unset is a boot-safe config gap — must NOT page.
+    expect(publishNtfyMock).not.toHaveBeenCalled();
   });
 
-  it('skips (no throw) when the responsible signer has no email', async () => {
+  it('skips (no throw) when the responsible signer has no email AND pages high (P0-3)', async () => {
     // The facility signer (chain default u-jan) exists but has no email on file.
     const noEmailJanette: FakeUser = { ...JANETTE, email: null };
     const { db } = fakeDb({ month: month(), users: [noEmailJanette, MORENA] });
     const r = await notifyPendingSigner('m1', db as never);
     expect(r).toMatchObject({ notified: false, slot: 'facility', reason: 'no_signer_email' });
     expect(sendSystemEmail).not.toHaveBeenCalled();
+    // P0-3 (a): a required signature with no resolvable email is the 2026-06-22
+    // missed-deadline failure mode — it must page.
+    expect(publishNtfyMock).toHaveBeenCalledTimes(1);
+    const arg = publishNtfyMock.mock.calls[0]![0];
+    expect(arg['topic']).toBe('dr3-vision-system');
+    expect(arg['priority']).toBe('high');
+    expect(arg['fingerprint']).toBe('signer-unresolved:m1:facility');
+  });
+
+  it('pages high when the signer is unresolvable from the chain (inactive) — P0-3', async () => {
+    // Facility signer present, but the ops signer is inactive → unresolvable.
+    const inactiveMorena: FakeUser = { ...MORENA, is_active: false };
+    const { db } = fakeDb({
+      month: month({ state: 'partially_signed', facility_signed_by_user_id: 'u-jan' }),
+      users: [JANETTE, inactiveMorena],
+    });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toMatchObject({ notified: false, slot: 'ops', reason: 'no_signer_email' });
+    expect(publishNtfyMock).toHaveBeenCalledTimes(1);
+    const arg = publishNtfyMock.mock.calls[0]![0];
+    expect(arg['fingerprint']).toBe('signer-unresolved:m1:ops');
+    expect(String(arg['body'])).toContain('no active signer is resolvable');
+  });
+
+  it('pages high when the signature-request mail FAILS to send (M365 configured) — P0-3', async () => {
+    sendSystemEmail.mockResolvedValueOnce({
+      delivered: false,
+      disabled: false, // configured, but the send failed
+      messageId: 'req-x',
+      retries: 5,
+      lastStatus: 503,
+    });
+    const { db } = fakeDb({ month: month(), users: [JANETTE, MORENA] });
+    const r = await notifyPendingSigner('m1', db as never);
+    expect(r).toMatchObject({ notified: false, slot: 'facility', reason: 'mail_failed' });
+    expect(publishNtfyMock).toHaveBeenCalledTimes(1);
+    const arg = publishNtfyMock.mock.calls[0]![0];
+    expect(arg['priority']).toBe('high');
+    expect(arg['fingerprint']).toBe('signer-mail-failed:m1:facility');
+    expect(String(arg['body'])).toContain('503');
+  });
+
+  it('does NOT page on a successful send', async () => {
+    const { db } = fakeDb({ month: month(), users: [JANETTE, MORENA] });
+    await notifyPendingSigner('m1', db as never);
+    expect(publishNtfyMock).not.toHaveBeenCalled();
   });
 
   it('returns month_not_found when the month is missing', async () => {

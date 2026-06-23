@@ -88,9 +88,34 @@ vi.mock('@/lib/m365-mail', () => ({
 }));
 
 // generateBonusPdf: no Chromium/R2 in tests — stamp pdf_storage_key so the
-// payroll-delivery side-effect proceeds to the mail leg.
+// payroll-delivery side-effect proceeds to the mail leg. PayoutReconciliationError
+// is re-exported so payroll-delivery's `instanceof` check resolves to a real class.
 const generateBonusPdf = vi.fn<(monthId: string) => Promise<{ storageKey: string }>>();
-vi.mock('@/lib/bonus/pdf', () => ({ generateBonusPdf: (id: string) => generateBonusPdf(id) }));
+vi.mock('@/lib/bonus/pdf', () => ({
+  generateBonusPdf: (id: string) => generateBonusPdf(id),
+  // Define the error class inside the (hoisted) factory so it is initialised
+  // before payroll-delivery imports it for its `instanceof` check.
+  PayoutReconciliationError: class PayoutReconciliationError extends Error {},
+}));
+
+// reconcile-fetch (P0-1/P0-2 gates): pass-through in the e2e. These end-to-end
+// lifecycle tests exercise the DELIVERY orchestration (PDF → R2 → mail → paid),
+// not the reconciliation logic — that has its own dedicated suite
+// (reconcile-payout.test.ts / reconcile-fetch.test.ts). Stubbing the gates to
+// pass keeps the e2e focused on what it asserts; the gates' refusal behavior is
+// proven where it lives. (Several scenarios deliberately set a synthetic
+// total_payout_cents that would not reconcile against the in-memory entries.)
+vi.mock('@/lib/bonus/reconcile-fetch', () => ({
+  assertPayoutReconciles: vi.fn(async (monthId: string) => ({
+    pass: true,
+    verdict: { ok: true, reconciled: true },
+    period: { monthId, state: 'signed', lockedTotalCents: 0, recomputedTotalCents: 0 },
+  })),
+  assertNotSuspectedWrongZero: vi.fn(async (monthId: string) => ({
+    pass: true,
+    period: { monthId, state: 'signed', lockedTotalCents: 0, recomputedTotalCents: 0 },
+  })),
+}));
 
 // @aws-sdk/client-s3: stub the R2 fetch so the REAL triggerPayrollDelivery runs
 // end-to-end (PDF → R2 GetObject → sendPayrollPdf → signed -> paid) in-process.

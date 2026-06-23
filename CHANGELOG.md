@@ -5,6 +5,48 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-23 — Payroll-correctness guardrails: reconciliation tripwire, zero-payout guard, loud failures, correctness gate (ADR-0033)
+
+Four P0 enterprise-hardening guardrails closing the OUTER RING around the
+payroll-critical path, all on top of the Decimal-lock fix below. No payout/period
+data touched; no calculator math changed. **NOT deployed** — operator coordinates
+deploy after the in-flight signature.
+
+- **P0-1 — Reconciliation tripwire.** New invariant: for a `signed`/`paid` period,
+  the recomputed grand total MUST equal the locked `total_payout_cents`. Pure
+  logic in `src/lib/bonus/reconcile-payout.ts`; independent recompute + page in
+  `src/lib/bonus/reconcile-fetch.ts`. Wired into `generateBonusPdf` (pre-upload)
+  and `triggerPayrollDelivery` (pre-mail) so a mismatched PDF can never reach R2 or
+  payroll. On mismatch → refuse + URGENT ntfy `payout-reconcile-mismatch:<monthId>`.
+  Exact integer equality of the same computation → no false positives by design.
+  This is the assertion that would have caught tonight's $0-lock-vs-$2,125.50-PDF
+  disagreement.
+- **P0-2 — Implausible-(zero)-payout delivery guard.** Predicate: block delivery
+  iff `lockedTotalCents === 0` AND `recomputedTotalCents > 0`. A `$0` that AGREES
+  with the entries (everyone sub-threshold, e.g. Timothy Elich 24 mattresses) is a
+  real `$0` and is ALLOWED; a `$0` that DISAGREES is blocked + URGENT ntfy
+  `payout-zero-suspected:<monthId>` for human confirmation.
+- **P0-3 — Loud payroll failures.** ntfy pages added to previously log-only paths:
+  signer unresolvable / no email (`signer-unresolved`), signature-request mail
+  failed (`signer-mail-failed`), PDF generation failed for a signed period
+  (`payroll-pdf-failed`), missing `pdf_storage_key` (`payroll-pdf-missing-key`),
+  R2 unconfigured (`payroll-r2-unconfigured`), sign-route notify threw
+  (`signer-notify-threw`). Per-fingerprint cooldowns. CONFIG-ABSENT (M365 unset)
+  stays SILENT and fail-open — the app still boots without M365 (hard rule #5).
+- **P0-4 — Correctness gate.** `.husky/pre-push` runs `tsc --noEmit` + the
+  bonus/payroll vitest suite, blocking the push on failure, and SKIPS cleanly when
+  `node_modules` is absent (the in-container deploy clone can still commit/push).
+  `.github/workflows/ci.yml` runs `tsc` + lint + full `vitest run` + `next build`
+  on push/PR (targets `ubuntu-latest`; self-hosted runner labels unconfirmed —
+  switch `runs-on` if desired). This is the gate the original `total_payout_cents:
+number` type-lie would have tripped.
+
+Tests: `reconcile-payout.test.ts` (pure matrix), `reconcile-fetch.test.ts`
+(recompute coercion + mismatch pages + zero-guard agree/disagree),
+`payroll-delivery.test.ts` (P0-3 pages + pre-send blocking), and additions to
+`signature-notifications.test.ts` (P0-3 signer pages, config-absent stays silent).
+See `docs/adr/0033-payroll-payout-reconciliation-guards.md`.
+
 ### 2026-06-23 — Payroll-correctness fix: sign-time payout lock zeroed by Prisma Decimal
 
 Confirmed payroll-correctness defect. When a bonus pay period reached `signed`,

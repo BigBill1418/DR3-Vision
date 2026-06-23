@@ -31,6 +31,7 @@
 import { prisma } from '@/lib/prisma';
 import { sendSystemEmail } from '@/lib/m365-mail';
 import { writeAudit } from '@/lib/audit';
+import { publishNtfy } from '@/lib/ntfy';
 import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { log } from '@/lib/observability/logger';
 import { getSignatureChain, type SignatureChainDb } from '@/lib/bonus/signature-chain';
@@ -172,10 +173,28 @@ export async function notifyPendingSigner(
 
   const signer = await resolveSlotSigner(slot, month.site_id, db);
   if (!signer?.email) {
+    // P0-3 (a): a signature is REQUIRED but the responsible signer cannot be
+    // resolved (chain names no signer / user inactive) or has no email. This is
+    // exactly the silent failure that caused the 2026-06-22 missed payroll
+    // deadline — the ops signer was never emailed and nobody knew. Page (high):
+    // the period is stuck awaiting a signature that no one is being asked for.
     log.warn(
       { month_id: monthId, slot, signer_id: signer?.id ?? null },
       'signature-request: no email for the responsible signer; skipping',
     );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'Bonus signer cannot be notified — signature stuck',
+      body: `Month ${monthId} is awaiting the ${slot} signature, but ${
+        signer
+          ? `the configured signer has no email on file (signer ${signer.id})`
+          : 'no active signer is resolvable from the signature chain'
+      }. No signature request was sent, so the period will silently miss its deadline unless someone signs manually. Fix the signer/email in the chain or sign via override.`,
+      priority: 'high',
+      tags: ['error', 'bonus', 'payroll', 'signature', 'dr3-vision'],
+      clickUrl: `${APP_BASE_URL}/bonus/months/${monthId}`,
+      fingerprint: `signer-unresolved:${monthId}:${slot}`,
+    });
     return { notified: false, slot, reason: 'no_signer_email' };
   }
 
@@ -183,6 +202,8 @@ export async function notifyPendingSigner(
   const res = await sendSystemEmail({ to: signer.email, subject, htmlBody, importance: 'high' });
 
   if (res.disabled) {
+    // CONFIG-ABSENT (M365 not configured) is fail-open and stays SILENT — the app
+    // must boot/serve without M365 (hard rule #5). Do not page on a config gap.
     log.info(
       { month_id: monthId, slot },
       'signature-request: M365 not configured; skipping (fail-open)',
@@ -190,10 +211,22 @@ export async function notifyPendingSigner(
     return { notified: false, slot, reason: 'mail_disabled' };
   }
   if (!res.delivered) {
+    // P0-3 (a): M365 IS configured but the signature-request mail failed to send.
+    // A real (not config-absent) failure that leaves the signer un-prompted →
+    // page (high). Per-month+slot fingerprint dedupes repeated attempts.
     log.warn(
       { month_id: monthId, slot, last_status: res.lastStatus },
       'signature-request: mail not delivered',
     );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'Bonus signature-request email failed to send',
+      body: `Month ${monthId}: the ${slot} signature-request email to ${signer.email} failed (last status ${res.lastStatus ?? 'network'}). The signer was not prompted; the period may miss its signing deadline. Investigate M365/Graph.`,
+      priority: 'high',
+      tags: ['error', 'bonus', 'payroll', 'signature', 'dr3-vision'],
+      clickUrl: `${APP_BASE_URL}/bonus/months/${monthId}`,
+      fingerprint: `signer-mail-failed:${monthId}:${slot}`,
+    });
     return { notified: false, slot, reason: 'mail_failed' };
   }
 

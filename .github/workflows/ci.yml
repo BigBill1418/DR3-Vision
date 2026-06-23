@@ -1,0 +1,64 @@
+# Correctness gate CI (ADR-0033 / P0-4).
+#
+# The enforced typecheck this workflow runs is the gate that the
+# `SignatureDb.total_payout_cents: number` type-lie — which zeroed the
+# 2026-06-22 sign-time payout lock — would have tripped before reaching prod.
+# Runs on every push and PR: typecheck + full test suite + production build.
+#
+# RUNNER NOTE: the fleet has self-hosted GitHub Actions runners on BOS-HQ, but
+# their labels are not confirmed from this workspace. This targets the hosted
+# `ubuntu-latest` runner, which needs no fleet access (no DB, no secrets — the
+# build uses a dummy DATABASE_URL and the suite mocks every boundary). If the
+# repo should run on the self-hosted pool instead, change `runs-on` to the
+# confirmed self-hosted label (e.g. `[self-hosted, bos-hq]`).
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    env:
+      # next build / prisma client only need a syntactically-valid URL — nothing
+      # in this pipeline connects to a database (routes are force-dynamic; the
+      # test suite mocks @/lib/prisma). A real DB is never reached.
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci?schema=public
+      # Keep Next build telemetry off in CI.
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck (tsc --noEmit) — the payroll Decimal type-lie gate
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test (vitest run — full suite)
+        run: npm test
+
+      - name: Production build (next build)
+        run: npm run build

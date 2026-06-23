@@ -24,6 +24,7 @@ import { prisma } from '@/lib/prisma';
 import { recordSignature, recordStateGauge } from '@/lib/bonus/signatures';
 import { triggerPayrollDelivery } from '@/lib/bonus/payroll-delivery';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
+import { publishNtfy } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -36,7 +37,21 @@ function clientIp(req: Request): string | null {
 /** Email the remaining signer after the FIRST signature, off the request path. */
 function triggerSignaturePrompt(monthId: string): void {
   void notifyPendingSigner(monthId).catch((err) => {
+    // P0-3: notifyPendingSigner is fail-open and pages on its own resolvable
+    // failures (no signer / mail failed). Reaching THIS catch means it threw
+    // unexpectedly (DB error, etc.) — an otherwise-silent failure that leaves the
+    // next signer un-prompted. Page (high) so it is not lost.
     log.error({ monthId, err }, '[sign] signature-request email failed (non-fatal)');
+    void publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'Bonus signature-request notify threw',
+      body: `notifyPendingSigner threw for month ${monthId} after the first signature, so the remaining signer was not prompted. Error: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      priority: 'high',
+      tags: ['error', 'bonus', 'payroll', 'signature', 'dr3-vision'],
+      fingerprint: `signer-notify-threw:${monthId}`,
+    });
   });
 }
 
