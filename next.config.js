@@ -48,34 +48,66 @@ const nextConfig = {
     ],
   },
   async headers() {
+    // The base CSP applied to every route. The survey route reuses this EXACT
+    // value and appends `frame-ancestors 'self'`, so an admin can preview the
+    // survey inside a same-origin <iframe> (ADR-0034 InvitePreview). One source
+    // array → the two CSPs can never drift.
+    const baseCsp = [
+      "default-src 'self'",
+      "img-src 'self' https://*.r2.cloudflarestorage.com data: blob:",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "connect-src 'self' https://*.r2.cloudflarestorage.com",
+      "media-src 'self' blob:",
+      "worker-src 'self' blob:",
+      "manifest-src 'self'",
+    ];
+    // Security headers shared by every route (everything except the
+    // per-route CSP and X-Frame-Options, which differ for /survey).
+    const sharedSecurityHeaders = [
+      {
+        key: 'Strict-Transport-Security',
+        value: 'max-age=63072000; includeSubDomains; preload',
+      },
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+      {
+        key: 'Permissions-Policy',
+        value: 'camera=(self), microphone=(self), geolocation=()',
+      },
+    ];
+
     return [
       {
-        source: '/:path*',
+        // Survey route ONLY: allow SAME-ORIGIN framing so the admin invite
+        // preview iframe renders. `frame-ancestors 'self'` is appended to the
+        // identical base CSP, and X-Frame-Options is relaxed to SAMEORIGIN.
+        // (DENY forbids ALL framing — including same-origin — which is the bug
+        // that broke "preview" in InvitePreview.tsx.)
+        source: '/survey/:path*',
         headers: [
-          {
-            key: 'Strict-Transport-Security',
-            value: 'max-age=63072000; includeSubDomains; preload',
-          },
+          ...sharedSecurityHeaders,
           {
             key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              "img-src 'self' https://*.r2.cloudflarestorage.com data: blob:",
-              "script-src 'self' 'unsafe-inline'",
-              "style-src 'self' 'unsafe-inline'",
-              "connect-src 'self' https://*.r2.cloudflarestorage.com",
-              "media-src 'self' blob:",
-              "worker-src 'self' blob:",
-              "manifest-src 'self'",
-            ].join('; '),
+            value: [...baseCsp, "frame-ancestors 'self'"].join('; '),
+          },
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        ],
+      },
+      {
+        // Every OTHER route keeps the hard `DENY`. The negative-lookahead
+        // EXCLUDES `/survey` and `/survey/...` so Next never emits a second,
+        // conflicting X-Frame-Options block on the survey route — Next emits a
+        // header block for EVERY matching `source`, so the global matcher must
+        // not also match /survey, or DENY would leak back onto it.
+        source: '/((?!survey$|survey/).*)',
+        headers: [
+          ...sharedSecurityHeaders,
+          {
+            key: 'Content-Security-Policy',
+            value: baseCsp.join('; '),
           },
           { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-          {
-            key: 'Permissions-Policy',
-            value: 'camera=(self), microphone=(self), geolocation=()',
-          },
         ],
       },
       {
