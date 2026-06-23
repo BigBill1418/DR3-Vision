@@ -1,3 +1,5 @@
+> **CURRENT STATE (2026-06-23):** see `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md` — incident resolution, P0 hardening (ADR-0033), enterprise-readiness gameplan, and the buildout-readiness checklist.
+
 # HANDOFF.md — Claude Code bootstrapping runbook
 
 This file documents how to start Sprint 1 from a clean clone. It is the second file Claude Code reads after `CLAUDE.md`.

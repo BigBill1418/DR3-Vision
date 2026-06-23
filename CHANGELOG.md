@@ -5,6 +5,17 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-23 — Payroll incident resolved + enterprise P0 hardening
+
+Resolved the 2026-06-22→23 Woodland P13 incident: the delivered payroll PDF was
+always correct ($2,125.50, verified from R2 bytes); only the internal
+`total_payout_cents` field was wrongly $0 (Decimal type bug). **Audited backfill**
+0→212550¢ (audit_log row, fresh restic snapshot). Three root causes fixed
+(`5192345`, `526f46d`). Four P0 guardrails added (ADR-0033, `6d14406`): payout
+reconciliation tripwire, implausible-$0 delivery guard, loud payroll-failure ntfy,
+and a pre-push/CI correctness gate. Enterprise-readiness gameplan + buildout
+checklist: `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md`.
+
 ### 2026-06-23 — Payroll-correctness guardrails: reconciliation tripwire, zero-payout guard, loud failures, correctness gate (ADR-0033)
 
 Four P0 enterprise-hardening guardrails closing the OUTER RING around the

@@ -1,3 +1,5 @@
+> **SUPERSEDED by `2026-06-23-current-state-and-buildout-readiness.md`** (kept for history).
+
 # Handoff: MyMRC sync → loads/inventory/reporting buildout
 
 **Date:** 2026-06-22 · **From:** Claude Code (svdp-dev session) · **For:** claude.ai design + system implementation of the next large-scale buildout.
