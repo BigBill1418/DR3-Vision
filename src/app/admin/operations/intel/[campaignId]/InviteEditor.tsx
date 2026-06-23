@@ -25,6 +25,19 @@ interface EditableQuestion {
 
 const KINDS: QuestionKind[] = ['short_text', 'long_text', 'single_select', 'multi_select'];
 
+function saveErrorMessage(reason: string | undefined, status: number): string {
+  switch (reason) {
+    case 'invalid_input':
+      return 'Some questions are invalid — every question needs a prompt, and select questions need options.';
+    case 'invalid_status':
+      return 'This invite can no longer be edited (it has already been sent).';
+    case 'not_found':
+      return 'This invite no longer exists — it may have been removed.';
+    default:
+      return `Save failed (${status}). Please try again.`;
+  }
+}
+
 function toEditable(invite: Invite): EditableQuestion[] {
   return invite.questions.map((q) => ({
     position: q.position,
@@ -51,6 +64,8 @@ export function InviteEditor({
   const [questions, setQuestions] = useState<EditableQuestion[]>(() => toEditable(invite));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-question validation messages, keyed by index, set on a blocked save.
+  const [fieldErrors, setFieldErrors] = useState<Record<number, string>>({});
 
   function renumber(list: EditableQuestion[]): EditableQuestion[] {
     return list.map((q, i) => ({ ...q, position: i + 1 }));
@@ -58,6 +73,12 @@ export function InviteEditor({
 
   function updateQuestion(idx: number, patch: Partial<EditableQuestion>) {
     setQuestions((prev) => prev.map((q, i) => (i === idx ? { ...q, ...patch } : q)));
+    setFieldErrors((prev) => {
+      if (!(idx in prev)) return prev;
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
   }
 
   function addQuestion() {
@@ -94,7 +115,33 @@ export function InviteEditor({
     });
   }
 
+  // Mirror the server contract (prompt min(1); a select kind needs ≥1 option)
+  // so the operator gets a precise inline message instead of a bare 422.
+  function validate(): Record<number, string> {
+    const errs: Record<number, string> = {};
+    questions.forEach((q, i) => {
+      if (q.prompt.trim() === '') {
+        errs[i] = 'Prompt is required.';
+        return;
+      }
+      if (
+        (q.kind === 'single_select' || q.kind === 'multi_select') &&
+        (q.options?.length ?? 0) === 0
+      ) {
+        errs[i] = 'Add at least one answer option (Label|value), or change the kind.';
+      }
+    });
+    return errs;
+  }
+
   async function save() {
+    const errs = validate();
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      setError('Some questions need attention before saving.');
+      return;
+    }
+    setFieldErrors({});
     setSaving(true);
     setError(null);
     try {
@@ -119,7 +166,7 @@ export function InviteEditor({
       );
       if (!r.ok) {
         const body = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `save failed: ${r.status}`);
+        throw new Error(saveErrorMessage(body.error, r.status));
       }
       onSaved();
     } catch (e) {
@@ -153,7 +200,7 @@ export function InviteEditor({
             <div
               key={idx}
               style={{
-                border: '1px solid #e8e2d4',
+                border: fieldErrors[idx] ? '1px solid #a3151a' : '1px solid #e8e2d4',
                 borderRadius: 6,
                 padding: 14,
                 marginBottom: 10,
@@ -225,6 +272,17 @@ export function InviteEditor({
                   }
                   style={{ ...inputStyle, marginTop: 6, fontFamily: 'monospace', resize: 'vertical' }}
                 />
+              )}
+              {(q.kind === 'single_select' || q.kind === 'multi_select') && (
+                <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                  One choice per line. Use <code>Label|value</code> to set a stored value, or just a
+                  label.
+                </div>
+              )}
+              {fieldErrors[idx] && (
+                <div style={{ fontSize: 12, color: '#a3151a', marginTop: 8 }}>
+                  {fieldErrors[idx]}
+                </div>
               )}
               {editable && (
                 <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>

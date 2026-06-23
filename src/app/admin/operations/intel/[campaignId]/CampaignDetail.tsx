@@ -35,6 +35,17 @@ function fmt(dt: Date | string | null): string {
   return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
+function statusPill(status: string): { background: string; color: string } {
+  switch (status) {
+    case 'open':
+      return { background: '#e3f4e8', color: '#1c7c3b' };
+    case 'closed':
+      return { background: '#ece9e2', color: '#6b6b6b' };
+    default:
+      return { background: '#eeeeee', color: '#555555' };
+  }
+}
+
 export function CampaignDetail({ campaign }: { campaign: Campaign }) {
   const router = useRouter();
   const [editorInvite, setEditorInvite] = useState<Invite | null>(null);
@@ -43,13 +54,20 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
 
   const approved = campaign.invites.filter((i) => i.status === 'approved');
+  const submitted = campaign.invites.filter((i) => i.status === 'submitted');
   const isClosed = campaign.status === 'closed';
+  const canSend = !isClosed && approved.length > 0;
 
   function refresh() {
     router.refresh();
+  }
+
+  function flash(kind: 'info' | 'error', text: string) {
+    setNotice({ kind, text });
+    if (kind === 'info') setTimeout(() => setNotice(null), 6000);
   }
 
   async function closeCampaign() {
@@ -58,11 +76,12 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
       const r = await fetch(`/api/admin/operations/intel/campaigns/${campaign.id}/close`, {
         method: 'POST',
       });
-      if (!r.ok) throw new Error(`close failed: ${r.status}`);
+      if (!r.ok) throw new Error(`Close failed (${r.status}).`);
       setShowCloseConfirm(false);
+      flash('info', 'Campaign closed. The markdown export was generated.');
       refresh();
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'close failed');
+      flash('error', e instanceof Error ? e.message : 'Close failed.');
     } finally {
       setBusy(false);
     }
@@ -70,16 +89,17 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
 
   async function exportNow() {
     setBusy(true);
+    setNotice(null);
     try {
       const r = await fetch(
         `/api/admin/operations/intel/campaigns/${campaign.id}/close?export_only=true`,
         { method: 'POST' },
       );
-      if (!r.ok) throw new Error(`export failed: ${r.status}`);
+      if (!r.ok) throw new Error(`Export failed (${r.status}).`);
       const body = (await r.json()) as { files: Array<{ path: string }> };
-      setNotice(`Export ready: ${body.files.length} file(s).`);
+      flash('info', `Export ready: ${body.files.length} file(s) generated.`);
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'export failed');
+      flash('error', e instanceof Error ? e.message : 'Export failed.');
     } finally {
       setBusy(false);
     }
@@ -109,9 +129,24 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <div>
-              <h1 style={{ margin: 0, fontSize: 24, color: '#1a1a1a' }}>{campaign.title}</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h1 style={{ margin: 0, fontSize: 24, color: '#1a1a1a' }}>{campaign.title}</h1>
+                <span
+                  style={{
+                    ...statusPill(campaign.status),
+                    padding: '2px 10px',
+                    borderRadius: 12,
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {campaign.status}
+                </span>
+              </div>
               <div style={{ fontSize: 13, color: '#666', marginTop: 6 }}>
-                Status: {campaign.status} · Created by {campaign.created_by.name}
+                Created by {campaign.created_by.name} · {campaign.invites.length}{' '}
+                {campaign.invites.length === 1 ? 'invite' : 'invites'} · {approved.length} approved ·{' '}
+                {submitted.length} submitted
               </div>
               <div style={{ fontSize: 13, color: '#666', marginTop: 2 }}>
                 Opened {fmt(campaign.opened_at)} · Closed {fmt(campaign.closed_at)}
@@ -121,17 +156,29 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
               <button
                 type="button"
                 onClick={() => setShowSend(true)}
-                disabled={isClosed || approved.length === 0 || busy}
+                disabled={!canSend || busy}
+                title={
+                  isClosed
+                    ? 'Campaign is closed'
+                    : approved.length === 0
+                      ? 'Approve at least one invite first'
+                      : `Review and send ${approved.length} approved invite(s)`
+                }
                 style={{
                   ...primaryStyle,
-                  cursor: isClosed || approved.length === 0 ? 'not-allowed' : 'pointer',
-                  opacity: isClosed || approved.length === 0 ? 0.5 : 1,
+                  cursor: canSend && !busy ? 'pointer' : 'not-allowed',
+                  opacity: canSend ? 1 : 0.5,
                 }}
               >
                 Send Campaign{approved.length > 0 ? ` (${approved.length})` : ''}
               </button>
-              <button type="button" onClick={exportNow} disabled={busy} style={cancelStyle}>
-                Export now
+              <button
+                type="button"
+                onClick={exportNow}
+                disabled={busy}
+                style={{ ...cancelStyle, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }}
+              >
+                {busy ? 'Working…' : 'Export now'}
               </button>
               <button
                 type="button"
@@ -141,15 +188,36 @@ export function CampaignDetail({ campaign }: { campaign: Campaign }) {
                   ...cancelStyle,
                   color: '#a3151a',
                   borderColor: '#a3151a',
-                  opacity: isClosed ? 0.5 : 1,
-                  cursor: isClosed ? 'not-allowed' : 'pointer',
+                  opacity: isClosed || busy ? 0.5 : 1,
+                  cursor: isClosed || busy ? 'not-allowed' : 'pointer',
                 }}
               >
                 Close Campaign
               </button>
             </div>
           </div>
-          {notice && <div style={{ fontSize: 13, color: '#555', marginTop: 12 }}>{notice}</div>}
+          {!isClosed && approved.length === 0 && (
+            <div style={{ fontSize: 12, color: '#888', marginTop: 12 }}>
+              Preview an invite and approve it to enable sending. Nothing is sent until you approve
+              and confirm.
+            </div>
+          )}
+          {notice && (
+            <div
+              role={notice.kind === 'error' ? 'alert' : undefined}
+              style={{
+                fontSize: 13,
+                marginTop: 12,
+                padding: '8px 12px',
+                borderRadius: 4,
+                color: notice.kind === 'error' ? '#a3151a' : '#1c7c3b',
+                background: notice.kind === 'error' ? '#fbf2f2' : '#e3f4e8',
+                border: `1px solid ${notice.kind === 'error' ? '#e7c9c9' : '#bfe3cb'}`,
+              }}
+            >
+              {notice.text}
+            </div>
+          )}
         </div>
 
         <div
