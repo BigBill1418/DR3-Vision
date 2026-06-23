@@ -1,7 +1,11 @@
 -- ADR-0034 — Operational intelligence survey system.
+-- NOTE: ids/FKs are TEXT (NOT uuid) to match this repo's convention — users.id
+-- and all existing ids are TEXT, and Prisma `String @id @default(uuid())`
+-- generates the id app-side (no DB gen_random_uuid default). The original spec
+-- used uuid, which failed on deploy with FK type-incompatibility (uuid vs text).
 
 CREATE TABLE "survey_campaigns" (
-  "id"                  UUID NOT NULL DEFAULT gen_random_uuid(),
+  "id"                  TEXT NOT NULL,
   "title"               TEXT NOT NULL,
   "slug"                TEXT NOT NULL,
   "intro_text"          TEXT NOT NULL,
@@ -10,7 +14,7 @@ CREATE TABLE "survey_campaigns" (
   "from_display_name"   TEXT NOT NULL DEFAULT 'Bill Barnard via DR3-Vision',
   "reply_to"            TEXT NOT NULL DEFAULT 'bill.barnard@svdp.us',
   "status"              TEXT NOT NULL DEFAULT 'draft',
-  "created_by_user_id"  UUID NOT NULL,
+  "created_by_user_id"  TEXT NOT NULL,
   "opened_at"           TIMESTAMP(3),
   "closed_at"           TIMESTAMP(3),
   "created_at"          TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -24,14 +28,14 @@ CREATE TABLE "survey_campaigns" (
 CREATE INDEX "survey_campaigns_status_idx" ON "survey_campaigns"("status");
 
 CREATE TABLE "survey_invites" (
-  "id"                  UUID NOT NULL DEFAULT gen_random_uuid(),
-  "campaign_id"         UUID NOT NULL,
+  "id"                  TEXT NOT NULL,
+  "campaign_id"         TEXT NOT NULL,
   "recipient_name"      TEXT NOT NULL,
   "recipient_email"     TEXT NOT NULL,
   "role_label"          TEXT NOT NULL,
   "token"               TEXT NOT NULL,
   "status"              TEXT NOT NULL DEFAULT 'draft',
-  "approved_by_user_id" UUID,
+  "approved_by_user_id" TEXT,
   "approved_at"         TIMESTAMP(3),
   "sent_at"             TIMESTAMP(3),
   "first_opened_at"     TIMESTAMP(3),
@@ -53,8 +57,8 @@ CREATE INDEX "survey_invites_campaign_idx" ON "survey_invites"("campaign_id");
 CREATE INDEX "survey_invites_status_idx" ON "survey_invites"("status");
 
 CREATE TABLE "survey_questions" (
-  "id"           UUID NOT NULL DEFAULT gen_random_uuid(),
-  "invite_id"    UUID NOT NULL,
+  "id"           TEXT NOT NULL,
+  "invite_id"    TEXT NOT NULL,
   "position"     INTEGER NOT NULL,
   "kind"         TEXT NOT NULL,
   "prompt"       TEXT NOT NULL,
@@ -72,9 +76,9 @@ CREATE TABLE "survey_questions" (
 CREATE INDEX "survey_questions_invite_idx" ON "survey_questions"("invite_id", "position");
 
 CREATE TABLE "survey_responses" (
-  "id"           UUID NOT NULL DEFAULT gen_random_uuid(),
-  "invite_id"    UUID NOT NULL,
-  "question_id"  UUID NOT NULL,
+  "id"           TEXT NOT NULL,
+  "invite_id"    TEXT NOT NULL,
+  "question_id"  TEXT NOT NULL,
   "answer_text"  TEXT,
   "answer_json"  JSONB,
   "is_draft"     BOOLEAN NOT NULL DEFAULT true,
