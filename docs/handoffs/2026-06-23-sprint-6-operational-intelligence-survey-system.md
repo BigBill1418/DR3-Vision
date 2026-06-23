@@ -1716,3 +1716,768 @@ export function ThankYou({
 ```
 
 (End of chunk 2. Admin UI, API routes follow in chunk 3.)
+
+
+
+
+---
+
+## §11 — Admin UI under `/admin/operations/intel`
+
+All admin routes super-admin gated via the existing pattern. Reference `/admin/production-report/` for the surrounding layout, header, and breadcrumb conventions.
+
+### §11.1 — `src/app/admin/operations/intel/page.tsx`
+
+Server component. Gates on `session.user.is_super_admin === true` → otherwise 403 redirect. Calls `listCampaigns()` and passes the result to `CampaignList`. Layout follows existing admin pages — SVdP-branded shell, breadcrumb `Admin / Operations / Intelligence Survey`.
+
+```tsx
+import { redirect } from 'next/navigation';
+import { auth } from '@/auth';
+import { listCampaigns } from '@/lib/survey/campaigns';
+import { CampaignList } from './CampaignList';
+
+export const dynamic = 'force-dynamic';
+
+export default async function OperationsIntelPage() {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) redirect('/');
+
+  const campaigns = await listCampaigns();
+  return <CampaignList campaigns={campaigns} />;
+}
+```
+
+### §11.2 — `src/app/admin/operations/intel/CampaignList.tsx`
+
+Client component. Renders the table of campaigns (title, status badge, invite count, opened_at, closed_at, link to detail page) plus a "New campaign" button that POSTs to `/api/admin/operations/intel/campaigns`. Status badges: gray for `draft`, green for `open`, neutral for `closed`. Each row links to `/admin/operations/intel/{campaignId}`.
+
+Key behaviors:
+- "New campaign" opens a modal collecting title, slug (auto-generated from title), intro_text, optional override of subject/from_address/from_display_name/reply_to. Defaults are the ADR-0034 values.
+- Slug must match `^[a-z0-9-]+$`; client-validates before POST.
+- On success, router push to the new campaign's detail page.
+
+### §11.3 — `src/app/admin/operations/intel/[campaignId]/page.tsx`
+
+Server component. Gates same as §11.1. Calls `getCampaignWithInvites(campaignId)`; 404s if not found. Passes campaign + invites to `CampaignDetail`.
+
+```tsx
+import { notFound, redirect } from 'next/navigation';
+import { auth } from '@/auth';
+import { getCampaignWithInvites } from '@/lib/survey/campaigns';
+import { CampaignDetail } from './CampaignDetail';
+
+export const dynamic = 'force-dynamic';
+
+interface PageProps {
+  params: Promise<{ campaignId: string }>;
+}
+
+export default async function CampaignDetailPage({ params }: PageProps) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) redirect('/');
+
+  const { campaignId } = await params;
+  const campaign = await getCampaignWithInvites(campaignId);
+  if (!campaign) notFound();
+  return <CampaignDetail campaign={campaign} />;
+}
+```
+
+### §11.4 — `src/app/admin/operations/intel/[campaignId]/CampaignDetail.tsx`
+
+Client component. Three regions:
+
+1. **Header** — campaign title, status badge, created-by, opened_at/closed_at, action buttons: "Send Campaign" (opens `SendInterstitial`, disabled if no approved invites), "Close Campaign" (opens confirmation, calls `/api/admin/operations/intel/campaigns/{id}/close`), "Export now" (calls `/api/admin/operations/intel/campaigns/{id}/close?export_only=true` — pushes the markdown export without state-changing the campaign).
+2. **Invite list** — table of invites (name, email, role label, status badge, approved-by, sent_at, opened_at, submitted_at). Each row has a "View" button that opens `InviteEditor` for editing or `InvitePreview` for preview-and-approve, depending on status.
+3. **"Add invite" button** — opens a modal to add a new recipient (name, email, role label, question packet — the question packet starts empty and the user adds questions one at a time, OR clicks "Use template" to load one of the pre-seeded packets).
+
+Status badges:
+- `draft` (gray) — questions can be edited
+- `approved` (gold #ffcc69) — questions locked, preview shows the email and survey preview side-by-side
+- `sent` (blue) — emailed, awaiting recipient
+- `opened` (green border) — recipient opened the link
+- `submitted` (green solid) — done
+
+Editing questions on an `approved` invite clears approval back to `draft` (must re-preview and re-approve).
+
+### §11.5 — `src/app/admin/operations/intel/[campaignId]/InviteEditor.tsx`
+
+Client component. Modal with two columns:
+
+Left — invite metadata: recipient_name, recipient_email, role_label (editable while in `draft`; readonly afterward).
+
+Right — question packet editor. Each question is a card showing prompt, description, kind, options (for select kinds), required toggle, and reorder/delete buttons. Empty state shows the templated packets ("Load template: Bethany / Leisha / Shannon / Mary / Rick / Janette / Morena / Kelsey / Juan / Patrick").
+
+Save calls `PATCH /api/admin/operations/intel/campaigns/{id}/invites/{inviteId}` with the full question list. Returns the updated invite (which is back in `draft` if it had been `approved`).
+
+### §11.6 — `src/app/admin/operations/intel/[campaignId]/InvitePreview.tsx`
+
+Client component. Modal with two tabs:
+
+- **Email preview** — server-rendered iframe showing the EXACT HTML the recipient will receive (from `POST /api/admin/operations/intel/campaigns/{id}/invites/{inviteId}/preview`). Shows the From/Reply-To/Subject headers above the iframe so Bill can verify them.
+- **Survey page preview** — server-rendered iframe of `/survey/{token}` (read-only preview mode — passes a query parameter `?preview=1` that the public route honors by not marking the invite as opened).
+
+Footer buttons: "Edit questions" (closes preview, opens InviteEditor), "Approve" (POSTs `/api/admin/operations/intel/campaigns/{id}/invites/{inviteId}/approve`, status → `approved`).
+
+After approval, the modal stays open showing a green "Approved at {timestamp} by {user}" banner; the Approve button is replaced with "Revoke approval" (PATCHes back to `draft`).
+
+### §11.7 — `src/app/admin/operations/intel/[campaignId]/SendInterstitial.tsx`
+
+Client component. Modal that appears when "Send Campaign" is clicked. Three states:
+
+1. **Confirmation form** — lists every approved invite (name, email, role label) and shows the count: "**You are about to send 10 emails to 10 recipients.**" Asks the user to type the campaign title into an input to confirm (defense against accidental clicks). "Cancel" / "Send {count} emails" buttons.
+2. **In-progress** — shows a progress list (recipient name + spinner / ✓ / ✗ for each).
+3. **Completed** — shows the final results (success/failure per recipient). On any failure, the failed invites stay in `approved` state (NOT `sent`) so they can be retried.
+
+The submit calls `POST /api/admin/operations/intel/campaigns/{id}/send` with body `{ confirmed_recipient_count: N }`. The endpoint refuses if the count diverges from the actual approved-count at request time.
+
+---
+
+## §12 — API routes
+
+### §12.1 — `src/app/api/survey/[token]/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { getInviteByToken } from '@/lib/survey/campaigns';
+import { isValidTokenShape } from '@/lib/survey/tokens';
+
+export const dynamic = 'force-dynamic';
+
+interface Ctx {
+  params: Promise<{ token: string }>;
+}
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const { token } = await ctx.params;
+  if (!isValidTokenShape(token)) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
+  const invite = await getInviteByToken(token);
+  if (!invite) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  // Public payload — never echo the token.
+  return NextResponse.json({
+    invite: {
+      id: invite.id,
+      recipient_name: invite.recipient_name,
+      role_label: invite.role_label,
+      status: invite.status,
+      submitted_at: invite.submitted_at,
+    },
+    campaign: {
+      title: invite.campaign.title,
+      intro_text: invite.campaign.intro_text,
+      from_display_name: invite.campaign.from_display_name,
+      status: invite.campaign.status,
+    },
+    questions: invite.questions.map((q) => ({
+      id: q.id,
+      position: q.position,
+      kind: q.kind,
+      prompt: q.prompt,
+      description: q.description,
+      options: q.options,
+      is_required: q.is_required,
+    })),
+    responses: invite.responses.map((r) => ({
+      question_id: r.question_id,
+      answer_text: r.answer_text,
+      answer_json: r.answer_json,
+    })),
+  });
+}
+```
+
+### §12.2 — `src/app/api/survey/[token]/draft/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { z } from 'zod';
+import { getInviteByToken, saveDraft, SurveyCampaignError } from '@/lib/survey/campaigns';
+import { isValidTokenShape } from '@/lib/survey/tokens';
+
+const Body = z.object({
+  answers: z.array(
+    z.object({
+      question_id: z.string().uuid(),
+      answer_text: z.string().nullable().optional(),
+      answer_json: z.unknown().optional(),
+    }),
+  ),
+});
+
+interface Ctx {
+  params: Promise<{ token: string }>;
+}
+
+export async function PUT(req: Request, ctx: Ctx) {
+  const { token } = await ctx.params;
+  if (!isValidTokenShape(token)) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
+  const invite = await getInviteByToken(token);
+  if (!invite) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  const parsed = Body.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
+
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    await saveDraft(invite.id, parsed.data.answers, { ip, userAgent });
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+### §12.3 — `src/app/api/survey/[token]/submit/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import {
+  getInviteByToken,
+  submitResponse,
+  SurveyCampaignError,
+} from '@/lib/survey/campaigns';
+import { isValidTokenShape } from '@/lib/survey/tokens';
+
+interface Ctx {
+  params: Promise<{ token: string }>;
+}
+
+export async function POST(_req: Request, ctx: Ctx) {
+  const { token } = await ctx.params;
+  if (!isValidTokenShape(token)) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
+  const invite = await getInviteByToken(token);
+  if (!invite) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    const updated = await submitResponse(invite.id, { ip, userAgent });
+    return NextResponse.json({ ok: true, submitted_at: updated.submitted_at });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+### §12.4 — `src/app/api/admin/operations/intel/campaigns/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { z } from 'zod';
+import { auth } from '@/auth';
+import { createCampaign, listCampaigns } from '@/lib/survey/campaigns';
+
+const Body = z.object({
+  title: z.string().min(1),
+  slug: z.string().regex(/^[a-z0-9-]+$/),
+  intro_text: z.string().min(1),
+  subject_template: z.string().optional(),
+  from_address: z.string().email().optional(),
+  from_display_name: z.string().optional(),
+  reply_to: z.string().email().optional(),
+});
+
+export const dynamic = 'force-dynamic';
+
+export async function GET() {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  return NextResponse.json({ campaigns: await listCampaigns() });
+}
+
+export async function POST(req: Request) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const parsed = Body.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  const created = await createCampaign(parsed.data, {
+    userId: session.user.id,
+    ip,
+    userAgent,
+  });
+  return NextResponse.json({ campaign: created }, { status: 201 });
+}
+```
+
+### §12.5 — `src/app/api/admin/operations/intel/campaigns/[id]/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
+import { getCampaignWithInvites } from '@/lib/survey/campaigns';
+
+interface Ctx {
+  params: Promise<{ id: string }>;
+}
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { id } = await ctx.params;
+  const campaign = await getCampaignWithInvites(id);
+  if (!campaign) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  return NextResponse.json({ campaign });
+}
+```
+
+### §12.6 — `src/app/api/admin/operations/intel/campaigns/[id]/invites/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { z } from 'zod';
+import { auth } from '@/auth';
+import { addInvite, SurveyCampaignError } from '@/lib/survey/campaigns';
+
+const QuestionSchema = z.object({
+  position: z.number().int().nonnegative(),
+  kind: z.enum(['short_text', 'long_text', 'single_select', 'multi_select']),
+  prompt: z.string().min(1),
+  description: z.string().nullable().optional(),
+  options: z
+    .array(z.object({ label: z.string(), value: z.string() }))
+    .nullable()
+    .optional(),
+  is_required: z.boolean().optional(),
+});
+
+const Body = z.object({
+  recipient_name: z.string().min(1),
+  recipient_email: z.string().email(),
+  role_label: z.string().min(1),
+  questions: z.array(QuestionSchema).min(1),
+});
+
+interface Ctx {
+  params: Promise<{ id: string }>;
+}
+
+export async function POST(req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { id } = await ctx.params;
+  const parsed = Body.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    const created = await addInvite(id, parsed.data, {
+      userId: session.user.id,
+      ip,
+      userAgent,
+    });
+    return NextResponse.json({ invite: created }, { status: 201 });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+### §12.7 — `src/app/api/admin/operations/intel/campaigns/[id]/invites/[inviteId]/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { z } from 'zod';
+import { auth } from '@/auth';
+import {
+  getInviteWithQuestions,
+  SurveyCampaignError,
+  updateInviteQuestions,
+} from '@/lib/survey/campaigns';
+
+const Body = z.object({
+  questions: z
+    .array(
+      z.object({
+        position: z.number().int().nonnegative(),
+        kind: z.enum(['short_text', 'long_text', 'single_select', 'multi_select']),
+        prompt: z.string().min(1),
+        description: z.string().nullable().optional(),
+        options: z
+          .array(z.object({ label: z.string(), value: z.string() }))
+          .nullable()
+          .optional(),
+        is_required: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+});
+
+interface Ctx {
+  params: Promise<{ id: string; inviteId: string }>;
+}
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { inviteId } = await ctx.params;
+  const invite = await getInviteWithQuestions(inviteId);
+  if (!invite) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  return NextResponse.json({ invite });
+}
+
+export async function PATCH(req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { inviteId } = await ctx.params;
+  const parsed = Body.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    await updateInviteQuestions(inviteId, parsed.data.questions, {
+      userId: session.user.id,
+      ip,
+      userAgent,
+    });
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+### §12.8 — `src/app/api/admin/operations/intel/campaigns/[id]/invites/[inviteId]/approve/route.ts`
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { auth } from '@/auth';
+import { approveInvite, SurveyCampaignError } from '@/lib/survey/campaigns';
+
+interface Ctx {
+  params: Promise<{ id: string; inviteId: string }>;
+}
+
+export async function POST(_req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { inviteId } = await ctx.params;
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    const updated = await approveInvite(inviteId, {
+      userId: session.user.id,
+      ip,
+      userAgent,
+    });
+    return NextResponse.json({ invite: updated });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+### §12.9 — `src/app/api/admin/operations/intel/campaigns/[id]/invites/[inviteId]/preview/route.ts`
+
+Renders the EXACT email HTML for the invite. Returns the HTML body, subject, sender display, reply-to, recipient.
+
+```ts
+import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
+import { renderInviteHtml } from '@/lib/survey/notifications';
+import { getInviteWithQuestions } from '@/lib/survey/campaigns';
+
+interface Ctx {
+  params: Promise<{ id: string; inviteId: string }>;
+}
+
+function baseUrl(): string {
+  return process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') ?? 'https://dr3-vision.svdp.us';
+}
+
+export async function POST(_req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { inviteId } = await ctx.params;
+  const invite = await getInviteWithQuestions(inviteId);
+  if (!invite) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  const html = renderInviteHtml({
+    campaign: invite.campaign,
+    invite: {
+      recipient_name: invite.recipient_name,
+      recipient_email: invite.recipient_email,
+      role_label: invite.role_label,
+      token: invite.token,
+    },
+    baseUrl: baseUrl(),
+  });
+
+  return NextResponse.json({
+    preview: {
+      subject: invite.campaign.subject_template,
+      from_address: invite.campaign.from_address,
+      from_display_name: invite.campaign.from_display_name,
+      reply_to: invite.campaign.reply_to,
+      to_email: invite.recipient_email,
+      to_name: invite.recipient_name,
+      html_body: html,
+    },
+  });
+}
+```
+
+### §12.10 — `src/app/api/admin/operations/intel/campaigns/[id]/send/route.ts`
+
+Critical route. Refuses to send unless every targeted invite is `approved` AND `confirmed_recipient_count` matches.
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { z } from 'zod';
+import { auth } from '@/auth';
+import { prisma } from '@/lib/prisma';
+import { sendInvite } from '@/lib/survey/notifications';
+import { markInviteSent, SurveyCampaignError } from '@/lib/survey/campaigns';
+import { log } from '@/lib/observability/logger';
+
+const Body = z.object({
+  confirmed_recipient_count: z.number().int().nonnegative(),
+});
+
+interface Ctx {
+  params: Promise<{ id: string }>;
+}
+
+function baseUrl(): string {
+  return process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') ?? 'https://dr3-vision.svdp.us';
+}
+
+interface PerRecipientResult {
+  invite_id: string;
+  recipient_name: string;
+  delivered: boolean;
+  last_status: number | null;
+  error?: string;
+}
+
+export async function POST(req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { id: campaignId } = await ctx.params;
+  const parsed = Body.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  const campaign = await prisma.surveyCampaign.findUnique({
+    where: { id: campaignId },
+    include: { invites: { where: { status: 'approved' } } },
+  });
+  if (!campaign) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  if (campaign.status === 'closed') {
+    return NextResponse.json({ error: 'campaign_locked' }, { status: 409 });
+  }
+
+  const approvedCount = campaign.invites.length;
+  if (parsed.data.confirmed_recipient_count !== approvedCount) {
+    return NextResponse.json(
+      {
+        error: 'count_diverged',
+        expected: approvedCount,
+        provided: parsed.data.confirmed_recipient_count,
+      },
+      { status: 422 },
+    );
+  }
+
+  if (approvedCount === 0) {
+    return NextResponse.json({ error: 'no_approved_invites' }, { status: 422 });
+  }
+
+  // Open the campaign if it's still draft.
+  if (campaign.status === 'draft') {
+    await prisma.surveyCampaign.update({
+      where: { id: campaignId },
+      data: { status: 'open', opened_at: new Date() },
+    });
+  }
+
+  const results: PerRecipientResult[] = [];
+  for (const invite of campaign.invites) {
+    try {
+      const r = await sendInvite({
+        campaign: {
+          title: campaign.title,
+          intro_text: campaign.intro_text,
+          subject_template: campaign.subject_template,
+          from_address: campaign.from_address,
+          from_display_name: campaign.from_display_name,
+          reply_to: campaign.reply_to,
+        },
+        invite: {
+          recipient_name: invite.recipient_name,
+          recipient_email: invite.recipient_email,
+          role_label: invite.role_label,
+          token: invite.token,
+        },
+        baseUrl: baseUrl(),
+      });
+      if (r.delivered) {
+        await markInviteSent(invite.id, r.last_status, {
+          userId: session.user.id,
+          ip,
+          userAgent,
+        });
+      }
+      results.push({
+        invite_id: invite.id,
+        recipient_name: invite.recipient_name,
+        delivered: r.delivered,
+        last_status: r.last_status,
+      });
+      log.info(
+        { inviteId: invite.id, delivered: r.delivered, lastStatus: r.last_status },
+        '[survey] invite sent',
+      );
+    } catch (e) {
+      if (e instanceof SurveyCampaignError) {
+        results.push({
+          invite_id: invite.id,
+          recipient_name: invite.recipient_name,
+          delivered: false,
+          last_status: null,
+          error: e.reason,
+        });
+      } else {
+        log.warn({ err: e, inviteId: invite.id }, '[survey] send error');
+        results.push({
+          invite_id: invite.id,
+          recipient_name: invite.recipient_name,
+          delivered: false,
+          last_status: null,
+          error: 'unknown',
+        });
+      }
+    }
+  }
+
+  return NextResponse.json({ ok: true, results });
+}
+```
+
+### §12.11 — `src/app/api/admin/operations/intel/campaigns/[id]/close/route.ts`
+
+Close + auto-export. On `?export_only=true` it produces the ClaudeSync push without state change; otherwise transitions the campaign to `closed`.
+
+```ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { auth } from '@/auth';
+import { closeCampaign, SurveyCampaignError } from '@/lib/survey/campaigns';
+import { buildExport } from '@/lib/survey/export';
+import { log } from '@/lib/observability/logger';
+
+interface Ctx {
+  params: Promise<{ id: string }>;
+}
+
+export async function POST(req: Request, ctx: Ctx) {
+  const session = await auth();
+  if (!session?.user?.is_super_admin || !session.user.id) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const { id } = await ctx.params;
+  const url = new URL(req.url);
+  const exportOnly = url.searchParams.get('export_only') === 'true';
+
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+
+  try {
+    if (!exportOnly) {
+      await closeCampaign(id, { userId: session.user.id, ip, userAgent });
+    }
+    const files = await buildExport(id);
+    for (const f of files) {
+      log.info({ path: f.path, bytes: f.body.length }, '[survey] export ready');
+    }
+    // The actual ClaudeSync push is wired in a follow-up via a queued job that
+    // calls into the ClaudeSync write tool path the operator already uses.
+    // For now we surface the files in the response so the operator can review.
+    return NextResponse.json({
+      ok: true,
+      files: files.map((f) => ({ path: f.path, bytes: f.body.length })),
+    });
+  } catch (e) {
+    if (e instanceof SurveyCampaignError) {
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    throw e;
+  }
+}
+```
+
+(End of chunk 3. Seed packets, tests, runbook, CHANGELOG, closing follow in chunk 4.)
