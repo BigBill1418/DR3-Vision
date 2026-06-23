@@ -8,11 +8,19 @@
 //      still-unsigned slot's signer (normally the "ops" slot; if a slot was
 //      filled out of order via override, this targets whichever slot remains).
 //
-// Recipients are resolved DYNAMICALLY from the users table (never hardcoded):
-//   - facility-manager slot ("facility") -> active manager whose primary_site_id is
-//     the bonus site (Woodland)
-//   - operations-manager slot ("ops") -> active manager whose primary_site_id is
-//     null (the both-sites ops manager)
+// Recipients are resolved from the AUTHORITATIVE `bonus_signature_chains` row for
+// the period's site (never hardcoded, never a legacy heuristic) — the SAME source
+// the sign route (naturalSlotFor), the month page, and signer-names.ts use:
+//   - facility slot ("facility") -> the chain's facility_signer_user_id
+//   - ops slot ("ops")           -> the chain's ops_signer_user_id
+// then that user is loaded (active, not deleted) for their email.
+//
+// HISTORY: an earlier heuristic resolved the ops signer as "the active manager
+// whose primary_site_id IS NULL". That DISAGREED with the chain whenever a site's
+// ops signer has a real primary_site_id (e.g. Woodland's ops signer Morena Gomez,
+// whose primary_site_id IS Woodland): the null query returned no one, so the ops
+// signer was NEVER emailed their signature request. That contributed to a missed
+// payroll deadline (incident 2026-06-22). Resolving from the chain fixes it.
 //
 // Channel: Microsoft Graph email via sendSystemEmail (ADR-0021) — NOT ntfy (ntfy is
 // Bill's incident channel per ADR-0037). FAIL-OPEN: a mail outage (or M365 not yet
@@ -25,6 +33,7 @@ import { sendSystemEmail } from '@/lib/m365-mail';
 import { writeAudit } from '@/lib/audit';
 import { bareSiteName } from '@/lib/bonus/pdf-data';
 import { log } from '@/lib/observability/logger';
+import { getSignatureChain, type SignatureChainDb } from '@/lib/bonus/signature-chain';
 import type { SignatureSlot } from './signatures';
 
 const APP_BASE_URL = (process.env['APP_BASE_URL'] ?? 'https://dr3-vision.svdp.us').replace(
@@ -38,8 +47,12 @@ export interface SlotSigner {
   email: string | null;
 }
 
-/** Minimal `bonusPayPeriod` surface this module needs (Prisma client or a test double). */
-export interface SignatureNotificationDb {
+/**
+ * Minimal Prisma surface this module needs (Prisma client or a test double).
+ * Extends `SignatureChainDb` because the signer is now resolved FROM the chain
+ * (`bonusSignatureChain.findUnique`) and then loaded from `user`.
+ */
+export interface SignatureNotificationDb extends SignatureChainDb {
   bonusPayPeriod: {
     findUnique: (args: {
       where: { id: string };
@@ -68,18 +81,27 @@ export interface NotifyResult {
   reason?: string;
 }
 
-/** Resolve the user responsible for a signature slot from the users table. */
+/**
+ * Resolve the user responsible for a signature slot at a site.
+ *
+ * Authoritative source: the `bonus_signature_chains` row for `siteId` — the SAME
+ * source the sign route (`naturalSlotFor`), the month page, and signer-names.ts
+ * use. We read the chain, pick the slot's configured signer UUID, and load that
+ * user (active, not deleted). Returns null only when the chain names no signer
+ * for the slot, or that user is inactive/deleted/absent.
+ */
 export async function resolveSlotSigner(
   slot: SignatureSlot,
   siteId: string,
   db: SignatureNotificationDb = prisma as unknown as SignatureNotificationDb,
 ): Promise<SlotSigner | null> {
-  const base = { role: 'manager', is_active: true, deleted_at: null } as const;
-  const where =
-    slot === 'facility'
-      ? { ...base, primary_site_id: siteId } // facility manager (Woodland)
-      : { ...base, primary_site_id: null }; // both-sites operations manager
-  return db.user.findFirst({ where, select: { id: true, name: true, email: true } });
+  const chain = await getSignatureChain(siteId, db);
+  const signerId = slot === 'facility' ? chain.facility_signer_user_id : chain.ops_signer_user_id;
+  if (!signerId) return null;
+  return db.user.findFirst({
+    where: { id: signerId, is_active: true, deleted_at: null },
+    select: { id: true, name: true, email: true },
+  });
 }
 
 /** The first still-unsigned slot, in signing order (facility first). Null if both signed. */

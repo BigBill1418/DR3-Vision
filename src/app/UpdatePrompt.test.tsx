@@ -60,6 +60,12 @@ afterEach(() => {
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  // Reset any per-test visibility override back to the jsdom default.
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => 'visible',
+  });
 });
 
 describe('UpdateBanner', () => {
@@ -97,10 +103,13 @@ describe('UpdatePrompt', () => {
     installing?: ServiceWorker | null;
   }) {
     // The registration is a real EventTarget (so `updatefound` can dispatch)
-    // with the waiting/installing fields the component reads.
+    // with the waiting/installing fields the component reads. `update` is the
+    // server poll the hardened component runs on an interval / on tab focus.
+    const update = vi.fn().mockResolvedValue(undefined);
     const registration = Object.assign(new EventTarget(), {
       waiting: reg.waiting ?? null,
       installing: reg.installing ?? null,
+      update,
     }) as unknown as ServiceWorkerRegistration;
 
     const swTarget = new EventTarget();
@@ -109,7 +118,15 @@ describe('UpdatePrompt', () => {
       getRegistration: vi.fn().mockResolvedValue(registration),
     });
     vi.stubGlobal('navigator', { serviceWorker: swMock });
-    return { swMock, swTarget, registration };
+    return { swMock, swTarget, registration, update };
+  }
+
+  /** Force document.visibilityState (jsdom defaults to 'visible'). */
+  function setVisibility(state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => state,
+    });
   }
 
   it('renders nothing when no update is pending', async () => {
@@ -168,5 +185,68 @@ describe('UpdatePrompt', () => {
     )!;
     act(() => dismissBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(container.querySelector('[data-testid="update-prompt"]')).toBeNull();
+  });
+
+  // ── hardened behavior (2026-06-23 stale-shell incident) ──────────────────
+
+  it('auto-promotes a waiting worker SILENTLY when the tab is hidden (no banner)', async () => {
+    setVisibility('hidden');
+    const waiting = new FakeWorker();
+    stubServiceWorker({ waiting: waiting as unknown as ServiceWorker });
+    await act(async () => {
+      mount(wrap(<UpdatePrompt />));
+    });
+    // No banner — the operator isn't looking; we just refresh in the background.
+    expect(container.querySelector('[data-testid="update-prompt"]')).toBeNull();
+    // …and we promoted the waiting worker so the fresh shell is ready on return.
+    expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
+  });
+
+  it('promotes a pending worker when the tab transitions to hidden', async () => {
+    setVisibility('visible');
+    const waiting = new FakeWorker();
+    stubServiceWorker({ waiting: waiting as unknown as ServiceWorker });
+    await act(async () => {
+      mount(wrap(<UpdatePrompt />));
+    });
+    // Visible → banner shown, not yet promoted.
+    expect(container.querySelector('[data-testid="update-prompt"]')).not.toBeNull();
+    expect(waiting.postMessage).not.toHaveBeenCalled();
+    // Operator switches away → safe to refresh in the background.
+    setVisibility('hidden');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
+  });
+
+  it('polls registration.update() on an interval so an open tab notices a deploy', async () => {
+    vi.useFakeTimers();
+    const { update } = stubServiceWorker({ waiting: null, installing: null });
+    await act(async () => {
+      mount(wrap(<UpdatePrompt />));
+    });
+    // getRegistration resolves a microtask after mount; flush it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(update).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('re-checks for updates when the tab becomes visible', async () => {
+    setVisibility('hidden');
+    const { update } = stubServiceWorker({ waiting: null, installing: null });
+    await act(async () => {
+      mount(wrap(<UpdatePrompt />));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    update.mockClear();
+    setVisibility('visible');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(update).toHaveBeenCalled();
   });
 });

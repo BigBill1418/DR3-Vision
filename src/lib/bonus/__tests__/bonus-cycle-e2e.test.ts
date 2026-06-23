@@ -373,13 +373,24 @@ function makeStore(): Store {
       where: Record<string, unknown>;
       select?: Record<string, true>;
     }) => {
-      const u = s.users.find(
-        (x) =>
-          x.role === where['role'] &&
-          x.is_active === where['is_active'] &&
-          x.deleted_at === where['deleted_at'] &&
-          x.primary_site_id === (where['primary_site_id'] ?? null),
-      );
+      // signature-notifications resolves the signer FROM THE CHAIN and loads the
+      // user by id (filtered active + not deleted) — match that when an id is
+      // given. Other callers still use the attribute match.
+      const u =
+        where['id'] !== undefined
+          ? s.users.find(
+              (x) =>
+                x.id === where['id'] &&
+                (where['is_active'] === undefined || x.is_active === where['is_active']) &&
+                (where['deleted_at'] === undefined || x.deleted_at === where['deleted_at']),
+            )
+          : s.users.find(
+              (x) =>
+                x.role === where['role'] &&
+                x.is_active === where['is_active'] &&
+                x.deleted_at === where['deleted_at'] &&
+                x.primary_site_id === (where['primary_site_id'] ?? null),
+            );
       if (!u) return null;
       return select
         ? Object.fromEntries(

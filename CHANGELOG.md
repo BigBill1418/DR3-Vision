@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-23 — Payroll-signing incident fixes: signer-notification + PWA stale-shell
+
+Two confirmed defects from the 2026-06-22 payroll-signing incident (contributed
+to a missed deadline). NOT yet deployed — held until payroll clears (a deploy
+re-triggers the PWA shell swap).
+
+**Defect 1 — signer notification resolved the WRONG signer (signers never emailed).**
+`resolveSlotSigner` (`src/lib/bonus/signature-notifications.ts`) resolved the ops
+signer by a legacy heuristic (`primary_site_id IS NULL`), which disagreed with the
+authoritative `bonus_signature_chains` row used by the sign route and the month
+page. Woodland's ops signer (Morena Gomez) has a non-null `primary_site_id`
+(Woodland), so the null query returned nobody and she was **never emailed her
+signature request** ("no email for the responsible signer; skipping", signer_id
+null). Fix: resolve the signer from `getSignatureChain(siteId)` (the same source
+`naturalSlotFor` / the month page / `signer-names.ts` use), then load that user by
+id. Regression test added (ops signer with a non-null `primary_site_id` must still
+be found + emailed). No payout/`bonus_pay_period` data touched.
+
+**Defect 2 — PWA stale-shell stranded signers after a deploy (read-only error).**
+`src/app/UpdatePrompt.tsx` (ADR-0027) only detected a waiting SW on `updatefound`
+(navigation / ~24h browser cadence), so an open signer tab could keep serving the
+stale read-only shell indefinitely. Hardened: poll `registration.update()` every
+60s and on tab-visible; **auto-promote** the waiting worker silently when the tab
+is hidden (safe — operator not mid-entry), keeping the explicit reload banner only
+while the tab is visible. `skipWaiting:false` and the offline-queue caching are
+unchanged. See ADR-0027 addendum.
+
 ### 2026-06-22 — DB backups + MyMRC portal-redesign login fix
 
 **Backups (NEW — DB previously had NONE):** nightly encrypted Postgres backups to

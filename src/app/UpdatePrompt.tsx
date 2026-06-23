@@ -1,28 +1,48 @@
 'use client';
 
-// PWA "update available — tap to reload" prompt (ADR-0027).
+// PWA "update available" prompt + safe auto-refresh (ADR-0027, hardened
+// 2026-06-23 after the payroll-signing stale-shell incident).
 //
 // DR3-Vision is an installed Serwist PWA. After a deploy the open/installed
 // PWA keeps serving the OLD precached shell; its `/_next/static/chunks/*.js`
-// references 404 and pages render blank — which once read to the operator as
-// "all my data is gone." With `skipWaiting: false` (sw.ts, ADR-0027) a freshly
-// installed SW now PARKS in the `waiting` state instead of self-activating, so
-// the page can detect it and offer an explicit, user-controlled reload.
+// references 404 and pages render blank / read-only — which read to a signer
+// (Morena, 2026-06-22) as a "read-only error" that stranded her mid-deadline.
+// With `skipWaiting: false` (sw.ts, ADR-0027) a freshly installed SW PARKS in
+// the `waiting` state instead of self-activating, so the page controls WHEN it
+// promotes.
+//
+// Two failure modes the original prompt left open, both fixed here:
+//
+//   (1) The waiting worker was only ever DETECTED on `updatefound`, which the
+//       browser fires on navigation or its own slow (~24h) cadence. A signer
+//       sitting on an open tab after a deploy might never see the banner. FIX:
+//       poll `registration.update()` on an interval AND whenever the tab
+//       becomes visible — so a freshly deployed worker is found within ~60s.
+//
+//   (2) A stranded read-only shell is exactly when the banner is least usable
+//       (blank page / the operator may not notice or understand it). FIX:
+//       AUTO-promote the waiting worker when it is SAFE — i.e. when the tab is
+//       HIDDEN (operator is not actively looking, so a reload can't interrupt
+//       data entry). When the tab is VISIBLE we still only show the explicit
+//       banner, because an operator may be mid-entry at the dock. Net effect:
+//       a signer who left the tab open and comes back gets the fresh shell
+//       already loaded instead of a stale read-only one.
 //
 // Flow:
 //   1. On mount, grab the registration and check `registration.waiting` — a
 //      worker may already be waiting from a deploy that happened while the tab
 //      was closed.
-//   2. Listen for `updatefound`; when the new `installing` worker reaches the
-//      `installed` state AND `navigator.serviceWorker.controller` exists (i.e.
-//      this is an UPDATE, not the first-ever install), surface the banner.
-//   3. On tap: post `SKIP_WAITING` to the waiting worker (sw.ts promotes it),
+//   2. Listen for `updatefound`; when the new `installing` worker reaches
+//      `installed` AND `navigator.serviceWorker.controller` exists (i.e. this
+//      is an UPDATE, not the first-ever install), record the waiting worker.
+//   3. Decide: tab hidden → auto-promote silently; tab visible → show banner.
+//   4. Promote: post `SKIP_WAITING` to the waiting worker (sw.ts promotes it),
 //      then reload exactly once on `controllerchange` (guarded by a `refreshing`
 //      flag so we never loop).
 //
-// We never auto-reload — operators may be mid data-entry at the dock. The
-// component renders nothing until an update is genuinely pending, is SSR-safe,
-// and no-ops gracefully where service workers are unsupported.
+// The component renders nothing until an update is genuinely pending and the
+// tab is visible, is SSR-safe, and no-ops gracefully where service workers are
+// unsupported.
 //
 // The DOM/effect logic is split from the presentational banner so the banner's
 // behavior (renders strings, calls back on tap/dismiss) is unit-testable
@@ -30,6 +50,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
+
+// How often an open tab re-checks the server for a newer SW. 60s keeps the
+// post-deploy refresh latency tolerable without hammering the edge (the /sw.js
+// fetch is `max-age=0, must-revalidate` — one conditional request per tick).
+const UPDATE_POLL_MS = 60_000;
 
 export function UpdateBanner({
   onReload,
@@ -72,12 +97,27 @@ export function UpdateBanner({
   );
 }
 
+/** Is the tab safe to silently reload right now? Hidden = operator not looking. */
+function tabIsHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
 export function UpdatePrompt() {
   const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
   const [dismissed, setDismissed] = useState(false);
   // Guards the single reload on `controllerchange` — without it a fast
   // activate could fire `controllerchange` more than once and reload-loop.
   const refreshing = useRef(false);
+  // The worker we've recorded as waiting, kept in a ref so the visibility
+  // handler can promote it without re-subscribing on every state change.
+  const waitingRef = useRef<ServiceWorker | null>(null);
+
+  // Promote a waiting worker: ask sw.ts to skipWaiting; the actual reload then
+  // happens once on `controllerchange`. Idempotent — safe to call from the
+  // banner tap, the auto-promote path, or a visibility change.
+  const promoteNow = useCallback((worker: ServiceWorker) => {
+    worker.postMessage({ type: 'SKIP_WAITING' });
+  }, []);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
@@ -87,32 +127,65 @@ export function UpdatePrompt() {
     let cancelled = false;
     const cleanups: Array<() => void> = [];
 
-    // A worker is a genuine UPDATE (not the first install) only when the page
-    // is already controlled by a SW. On the very first install there is no
-    // controller yet — that worker should activate silently, not prompt.
-    const promote = (worker: ServiceWorker | null) => {
-      if (!cancelled && worker && sw.controller) setWaiting(worker);
+    // Record a genuine UPDATE (page already controlled — not the first install).
+    // If the tab is HIDDEN we promote silently (the safe auto-refresh path);
+    // otherwise we surface the banner and let the operator choose.
+    const record = (worker: ServiceWorker | null) => {
+      if (cancelled || !worker || !sw.controller) return;
+      waitingRef.current = worker;
+      if (tabIsHidden()) {
+        promoteNow(worker); // reload happens on controllerchange
+      } else {
+        setWaiting(worker);
+      }
     };
 
     const watchInstalling = (reg: ServiceWorkerRegistration) => {
       const installing = reg.installing;
       if (!installing) return;
       const onState = () => {
-        if (installing.state === 'installed') promote(reg.waiting ?? installing);
+        if (installing.state === 'installed') record(reg.waiting ?? installing);
       };
       installing.addEventListener('statechange', onState);
       cleanups.push(() => installing.removeEventListener('statechange', onState));
     };
 
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+
     void sw.getRegistration().then((reg) => {
       if (cancelled || !reg) return;
       // A worker may already be parked from a deploy while the tab was closed.
-      if (reg.waiting) promote(reg.waiting);
+      if (reg.waiting) record(reg.waiting);
       // …or one may be installing right now.
       watchInstalling(reg);
       const onUpdateFound = () => watchInstalling(reg);
       reg.addEventListener('updatefound', onUpdateFound);
       cleanups.push(() => reg.removeEventListener('updatefound', onUpdateFound));
+
+      // (1) Periodically ask the server whether a newer SW exists, so an
+      // open tab notices a deploy without the operator navigating. `update()`
+      // is a no-op when nothing changed; on a real change it drives
+      // `updatefound` → `record`.
+      const checkForUpdate = () => {
+        if (!cancelled) void reg.update().catch(() => {});
+      };
+      pollTimer = setInterval(checkForUpdate, UPDATE_POLL_MS);
+      cleanups.push(() => clearInterval(pollTimer));
+
+      // (2) On tab re-focus: re-check for updates, and if one is already
+      // waiting and the tab is now hidden again, promote it. The visibility
+      // change to "visible" is also the natural moment to check the server.
+      const onVisibility = () => {
+        if (cancelled) return;
+        if (document.visibilityState === 'visible') {
+          checkForUpdate();
+        } else if (waitingRef.current) {
+          // Tab just went hidden while an update was pending → safe to refresh.
+          promoteNow(waitingRef.current);
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibility);
+      cleanups.push(() => document.removeEventListener('visibilitychange', onVisibility));
     });
 
     // When the promoted worker takes control, reload once so the page is served
@@ -129,18 +202,18 @@ export function UpdatePrompt() {
       cancelled = true;
       for (const c of cleanups) c();
     };
-  }, []);
+  }, [promoteNow]);
 
   const onReload = useCallback(() => {
     if (waiting) {
-      waiting.postMessage({ type: 'SKIP_WAITING' });
+      promoteNow(waiting);
       // The actual reload happens on `controllerchange` once the new SW
       // activates and claims the client.
     } else {
       // Defensive: no waiting worker reference but the user asked to reload.
       window.location.reload();
     }
-  }, [waiting]);
+  }, [waiting, promoteNow]);
 
   const onDismiss = useCallback(() => setDismissed(true), []);
 

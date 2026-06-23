@@ -86,6 +86,36 @@ safer (the operator chooses the moment to reload).
 - First-ever installs do not prompt (no controller yet), avoiding a spurious
   "update available" on first launch.
 
+## Addendum — 2026-06-23: proactive detection + safe auto-refresh
+
+The 2026-06-22 payroll-signing incident exposed two gaps in the
+user-prompted-only design:
+
+1. **Detection was passive.** The waiting worker was surfaced only on
+   `updatefound`, which the browser fires on navigation or its own slow (~24h)
+   cadence. A signer sitting on an already-open tab after a deploy could go a
+   long time without ever seeing the banner — and meanwhile the shell was the
+   stale, read-only one (Morena's "read-only error").
+2. **The banner is least usable exactly when it matters.** When the precached
+   shell is stale and chunks 404, the page is blank/read-only and the operator
+   may not notice or understand a banner.
+
+Hardening (no change to `skipWaiting:false` or the offline-queue caching):
+
+- **Poll for updates.** `UpdatePrompt` now calls `registration.update()` on a
+  60s interval and whenever the tab becomes visible, so a deployed worker is
+  detected within ~a minute instead of waiting for a navigation.
+- **Safe auto-refresh.** When a worker is waiting AND the tab is **hidden**
+  (operator not actively looking — cannot interrupt data entry), the worker is
+  promoted silently (`SKIP_WAITING` → activate → one `controllerchange` reload),
+  so a signer who left the tab open returns to a fresh shell, not a stale one.
+  When the tab is **visible**, behavior is unchanged: the explicit banner is
+  shown and the operator chooses when to reload.
+
+The `controllerchange` single-reload guard still prevents loops. Precache
+invalidation is unchanged — Serwist's `injectManifest` already emits a
+per-build precache hash; the defect was activation, not invalidation.
+
 ## References
 
 - ADR-0006 — Offline queue strategy (the SW this builds on).
