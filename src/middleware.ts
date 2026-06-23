@@ -33,6 +33,10 @@ function isPublic(pathname: string): boolean {
   // gated to role=operator there), so middleware doesn't need to.
   if (pathname === '/operator') return true;
   if (pathname.startsWith('/operator/')) return true;
+  // ADR-0034 — public, token-gated operational-intelligence survey. The token
+  // IS the access (no session); covers the page + its draft/submit API.
+  if (pathname.startsWith('/survey/')) return true;
+  if (pathname.startsWith('/api/survey/')) return true;
   return false;
 }
 
