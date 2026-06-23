@@ -56,8 +56,7 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
     }
     return init;
   });
-  const [savingStatus, setSavingStatus] =
-    useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [savingStatus, setSavingStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Question ids that failed required-field validation on the last submit
@@ -200,7 +199,9 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
   );
 
   return (
-    <main style={{ background: '#f7f3ea', minHeight: '100vh' }}>
+    <main
+      style={{ background: '#f7f3ea', minHeight: '100vh', color: '#1a1a1a', colorScheme: 'light' }}
+    >
       <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px 96px' }}>
         <header
           style={{
@@ -244,9 +245,10 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
             const isMissing = missing.has(q.id);
             const promptId = `q-${q.id}-prompt`;
             const descId = q.description ? `q-${q.id}-desc` : undefined;
-            const hasOptions = (q.kind === 'single_select' || q.kind === 'multi_select')
-              ? (q.options?.length ?? 0) > 0
-              : true;
+            const hasOptions =
+              q.kind === 'single_select' || q.kind === 'multi_select'
+                ? (q.options?.length ?? 0) > 0
+                : true;
             return (
               <li
                 key={q.id}
@@ -307,8 +309,12 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
                       onChange={(e) => setText(q.id, e.target.value)}
                       style={{
                         width: '100%',
-                        padding: '8px 10px',
-                        fontSize: 14,
+                        padding: '10px 12px',
+                        fontSize: 16,
+                        color: '#1a1a1a',
+                        WebkitTextFillColor: '#1a1a1a',
+                        background: '#fff',
+                        colorScheme: 'light',
                         border: `1px solid ${isMissing ? '#a3151a' : '#d0c8b4'}`,
                         borderRadius: 4,
                         boxSizing: 'border-box',
@@ -327,7 +333,11 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
                       style={{
                         width: '100%',
                         padding: '10px 12px',
-                        fontSize: 14,
+                        fontSize: 16,
+                        color: '#1a1a1a',
+                        WebkitTextFillColor: '#1a1a1a',
+                        background: '#fff',
+                        colorScheme: 'light',
                         border: `1px solid ${isMissing ? '#a3151a' : '#d0c8b4'}`,
                         borderRadius: 4,
                         fontFamily: 'inherit',
@@ -489,8 +499,8 @@ export function SurveyForm({ invite }: { invite: InviteForForm }) {
               Submit your responses?
             </h2>
             <p style={{ fontSize: 14, color: '#555', lineHeight: 1.5 }}>
-              Once submitted, your answers are locked and you won&apos;t be able to edit them. If you
-              need to change something later, reply to Bill&apos;s email and he can reopen your
+              Once submitted, your answers are locked and you won&apos;t be able to edit them. If
+              you need to change something later, reply to Bill&apos;s email and he can reopen your
               survey.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
