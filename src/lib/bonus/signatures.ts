@@ -62,6 +62,30 @@ export { getAutoOverrideActor } from '@/lib/bonus/signature-chain';
  */
 export type SignatureSlot = 'facility' | 'ops';
 
+/**
+ * `mattress_count` is a Prisma `Decimal` at runtime (schema `Decimal(5,1)`, ADR-0023).
+ * The DB row therefore carries a Decimal object, NOT a JS number — passing it raw to
+ * the cents calculator makes `Number.isFinite(Decimal)` false and silently zeros the
+ * payout (the 2026-06 Woodland $0-lock incident). We accept "a Decimal or a plain
+ * number" structurally and coerce at the lock site via `toCount`.
+ */
+export type DecimalLike = number | { toNumber(): number };
+
+/**
+ * Coerce a `mattress_count` (Prisma Decimal or plain number) to a JS number for the
+ * cents calculator. Mirrors the `.toNumber()` coercion used by the on-screen, PDF,
+ * and CSV paths (`month-list.ts`, `aggregates.ts`) so the signed total can never
+ * diverge from the displayed total. THROWS on an unexpected shape rather than letting
+ * a bad value silently become $0 — a payout must never be silently dropped.
+ */
+function toCount(value: DecimalLike): number {
+  const n = typeof value === 'number' ? value : value.toNumber();
+  if (!Number.isFinite(n)) {
+    throw new TypeError(`mattress_count did not coerce to a finite number (got ${String(value)})`);
+  }
+  return n;
+}
+
 /** Structural type for the prisma/tx client this layer uses. */
 export interface SignatureDb {
   bonusPayPeriod: {
@@ -76,7 +100,7 @@ export interface SignatureDb {
   bonusDailyEntry: {
     findMany(args: {
       where: { bonus_pay_period_id: string };
-    }): Promise<{ mattress_count: number }[]>;
+    }): Promise<{ mattress_count: DecimalLike }[]>;
   };
   processorBonusRule: {
     findFirst(args: {
@@ -397,7 +421,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
       });
       if (!ruleRow) throw new NoActiveRuleError(signer.siteId);
       const total = calculateMonthlyBonusCents(
-        entries.map((e) => e.mattress_count),
+        entries.map((e) => toCount(e.mattress_count)),
         {
           threshold_low: ruleRow.threshold_low,
           rate_low: ruleRow.rate_low.toString(),

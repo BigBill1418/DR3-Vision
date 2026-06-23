@@ -58,10 +58,24 @@ describe('calculateDailyBonusCents — below threshold and edge cases', () => {
     expect(calculateDailyBonusCents(49, WOODLAND)).toBe(0);
   });
 
-  it('treats negative / non-finite counts as 0', () => {
+  it('treats negative / non-finite NUMERIC counts as 0 (unchanged contract)', () => {
     expect(calculateDailyBonusCents(-5, WOODLAND)).toBe(0);
     expect(calculateDailyBonusCents(Number.NaN, WOODLAND)).toBe(0);
     expect(calculateDailyBonusCents(Number.POSITIVE_INFINITY, WOODLAND)).toBe(0);
+  });
+
+  // HARDENING (2026-06 Woodland $0 payroll incident): a Prisma `Decimal` object (or a
+  // numeric string) is NOT a number — passing it raw previously failed `Number.isFinite`
+  // and silently returned 0, zeroing a real payout. A payout calc must never silently
+  // yield 0 from a type error, so non-number input now THROWS. Callers must `.toNumber()`
+  // their Decimals first (see signatures.ts `toCount`).
+  it('THROWS on a Prisma Decimal-like object instead of silently returning 0', () => {
+    const decimalLike = { toNumber: () => 75, valueOf: () => 75 } as unknown as number;
+    expect(() => calculateDailyBonusCents(decimalLike, WOODLAND)).toThrow(TypeError);
+  });
+
+  it('THROWS on a numeric string (e.g. "75") rather than coercing or zeroing', () => {
+    expect(() => calculateDailyBonusCents('75' as unknown as number, WOODLAND)).toThrow(TypeError);
   });
 
   it('floors fractional counts', () => {

@@ -7,6 +7,7 @@
 // state rejection, cross-site not-found, and the T-111 override seam.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 vi.mock('@/lib/observability/metrics', () => ({
   bonusPayPeriodsByState: { inc: vi.fn(), dec: vi.fn() },
@@ -16,9 +17,12 @@ import {
   recordSignature,
   naturalSlotFor,
   type SignatureDb,
+  type DecimalLike,
   type BonusMonthSignatureRow,
   type SignerContext,
 } from './signatures';
+
+const toDec = (n: number): Prisma.Decimal => new Prisma.Decimal(n);
 import { clearSignatureChainCache, type SignatureChainDb } from './signature-chain';
 
 const WOODLAND = 'site-woodland';
@@ -77,7 +81,11 @@ interface Row extends BonusMonthSignatureRow {
 }
 
 let row: Row;
-let entries: Array<{ mattress_count: number }>;
+// mattress_count is `Decimal(5,1)` in the schema, so REAL Prisma hands the lock site
+// `Prisma.Decimal` objects, not JS numbers. The double therefore allows either shape
+// (DecimalLike) so a regression test can push genuine Decimals through the lock path —
+// the form that previously zeroed the payout (2026-06 Woodland $0 incident).
+let entries: Array<{ mattress_count: DecimalLike }>;
 const audit: Array<{ action: string; table_name: string; actor_user_id: string | null }> = [];
 
 function makeDb(): SignatureDb {
@@ -223,6 +231,40 @@ describe('recordSignature', () => {
     expect(row.state).toBe('signed');
     expect(row.ops_signed_by_user_id).toBe('morena');
     expect(row.total_payout_cents).toBe(1775);
+  });
+
+  // REGRESSION (2026-06 Woodland $0 payroll incident): real Prisma returns
+  // `Decimal` mattress_count objects, not JS numbers. Before the fix, the lock site
+  // passed raw Decimals to the calculator, `Number.isFinite(Decimal)` was false, every
+  // entry contributed 0, and a $2,125.50 period locked to $0 — then went to payroll.
+  // This test feeds genuine Decimals through the SAME lock path and asserts the correct
+  // non-zero total. It FAILS on the pre-fix code and passes after the `toCount` coercion.
+  it('locks correct total when entries carry Prisma Decimal counts (not JS numbers)', async () => {
+    row.state = 'partially_signed';
+    row.facility_signed_by_user_id = 'janette';
+    row.facility_signed_at = new Date();
+    // Same counts as the number-based test above, but as real Decimals: 1275 + 500 = 1775.
+    entries = [{ mattress_count: toDec(75) }, { mattress_count: toDec(60) }];
+    const res = await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
+    expect(res).toMatchObject({ ok: true, slot: 'ops', state: 'signed', fullySigned: true });
+    expect(row.total_payout_cents).toBe(1775);
+    expect(row.total_payout_cents).not.toBe(0); // the exact failure mode being guarded
+  });
+
+  // Mirrors the real Woodland period 9b3dc951 shape (fractional-capable Decimal counts):
+  // a multi-entry month whose Decimals must sum to a real payout, never $0.
+  it('locks a non-zero total across many Decimal entries (Woodland-shaped)', async () => {
+    row.state = 'partially_signed';
+    row.facility_signed_by_user_id = 'janette';
+    row.facility_signed_at = new Date();
+    // 80,80,80 → each MAX(80-50,0)*50 + MAX(80-74,0)*25 = 1500 + 150 = 1650; ×3 = 4950.
+    entries = [
+      { mattress_count: toDec(80) },
+      { mattress_count: toDec(80) },
+      { mattress_count: toDec(80) },
+    ];
+    await recordSignature({ db: makeDb(), chainDb, monthId: 'm1', signer: morena });
+    expect(row.total_payout_cents).toBe(4950);
   });
 
   it('signatures may land in either order (Morena first, then Janette)', async () => {

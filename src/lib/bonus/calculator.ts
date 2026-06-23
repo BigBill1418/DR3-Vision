@@ -42,10 +42,21 @@ function ratePerUnitCents(rate: number | string): number {
 
 /**
  * Daily bonus for a single processor, in integer cents. Non-positive, non-finite,
- * or below-threshold counts return 0. Fractional counts are floored (counts are
- * whole mattresses; the schema enforces Int, this is belt-and-suspenders).
+ * or below-threshold *numeric* counts return 0. Fractional counts are floored (counts
+ * are whole mattresses; the schema enforces Int, this is belt-and-suspenders).
+ *
+ * A non-`number` `units` (e.g. a Prisma `Decimal` object or a numeric string) THROWS.
+ * This is deliberate payroll hardening: a Decimal silently fails `Number.isFinite`,
+ * which previously made every entry contribute 0 and locked a real Woodland period to
+ * $0 (2026-06 incident). A payout calc must never silently yield 0 from a type error —
+ * callers MUST coerce with `.toNumber()` (see signatures.ts `toCount`) before calling.
  */
 export function calculateDailyBonusCents(units: number, rule: BonusRuleParams): number {
+  if (typeof units !== 'number') {
+    throw new TypeError(
+      `calculateDailyBonusCents expected a number, got ${typeof units} — coerce Prisma Decimal via .toNumber() first`,
+    );
+  }
   if (!Number.isFinite(units) || units <= 0) return 0;
   const u = Math.floor(units);
   const lowTier = Math.max(u - rule.threshold_low, 0) * ratePerUnitCents(rule.rate_low);

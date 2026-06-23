@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### 2026-06-23 — Payroll-correctness fix: sign-time payout lock zeroed by Prisma Decimal
+
+Confirmed payroll-correctness defect. When a bonus pay period reached `signed`,
+the sign-time lock in `src/lib/bonus/signatures.ts` (the `if (fullySigned)` block)
+passed each entry's `mattress_count` **raw** into `calculateMonthlyBonusCents`.
+`mattress_count` is a `Decimal(5,1)` — Prisma returns a `Decimal` object, not a JS
+number — and the calculator's `Number.isFinite()` guard rejects a non-number, so
+**every entry contributed 0 and the period locked to `total_payout_cents = 0`**.
+The on-screen / PDF / CSV paths coerce with `.toNumber()` and computed the correct
+figure, which is why the screen showed a real bonus while the locked (and paid)
+total was $0. Woodland period `9b3dc951-4c0c-4c2c-b68c-e3e7ac726211` (2026-06-09→22,
+99 entries) locked **$0** but should be **$2,125.50 (212550 cents)** — verified by
+reproducing the corrected formula against the live entries + active rule.
+
+Why static typing didn't catch it: the `SignatureDb` structural type declared
+`bonusDailyEntry.findMany` as returning `{ mattress_count: number }[]` (a type lie),
+so `tsc` saw a number and the number-based mock in `signatures.test.ts` never
+exercised a real `Decimal`.
+
+**Fixes:**
+
+- **Lock site:** coerce via a new `toCount()` helper before calling the calculator
+  (`entries.map((e) => toCount(e.mattress_count))`), mirroring the `.toNumber()`
+  coercion the on-screen/PDF/CSV paths already use so the signed total can never
+  diverge from the displayed total. `SignatureDb.bonusDailyEntry` retyped to the
+  truthful `DecimalLike` (`number | { toNumber(): number }`).
+- **Calculator hardening:** `calculateDailyBonusCents` now THROWS `TypeError` on a
+  non-`number` `units` (Prisma `Decimal`, numeric string, object) instead of
+  silently returning 0 — a payout calc must never silently yield $0 from a type
+  error. Existing numeric behavior is unchanged: genuine `NaN` / `Infinity` /
+  negative / below-threshold numbers still return 0.
+- **Regression tests:** `signatures.test.ts` feeds real `Prisma.Decimal` counts
+  through the sign-time lock path and asserts the correct non-zero total (FAILS on
+  pre-fix code: locks `+0`); `calculator.test.ts` asserts non-number input throws.
+
+NOT deployed. **No payout / `bonus_pay_periods` data mutated** — the operator
+re-triggers the recompute via the amendment flow once this fix ships.
+
 ### 2026-06-23 — Payroll-signing incident fixes: signer-notification + PWA stale-shell
 
 Two confirmed defects from the 2026-06-22 payroll-signing incident (contributed
