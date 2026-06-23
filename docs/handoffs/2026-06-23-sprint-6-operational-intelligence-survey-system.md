@@ -384,3 +384,1335 @@ Inside `model User`, add:
 ```
 
 (Chunk 1 ends here. Service modules in chunk 2; routes + UI in chunk 3; seed + tests + runbook + closing in chunk 4.)
+
+
+
+
+---
+
+## §6 — Service module: `src/lib/survey/`
+
+### §6.1 — `src/lib/survey/types.ts`
+
+```ts
+// ADR-0034 — Shared types for the operational intelligence survey system.
+
+export type CampaignStatus = 'draft' | 'open' | 'closed';
+export type InviteStatus = 'draft' | 'approved' | 'sent' | 'opened' | 'submitted';
+export type QuestionKind = 'short_text' | 'long_text' | 'single_select' | 'multi_select';
+
+export interface QuestionOption {
+  label: string;
+  value: string;
+}
+
+export interface QuestionInput {
+  position: number;
+  kind: QuestionKind;
+  prompt: string;
+  description?: string | null;
+  options?: QuestionOption[] | null;
+  is_required?: boolean;
+}
+
+export interface InviteInput {
+  recipient_name: string;
+  recipient_email: string;
+  role_label: string;
+  questions: QuestionInput[];
+}
+
+export interface CampaignInput {
+  title: string;
+  slug: string;
+  intro_text: string;
+  subject_template?: string;
+  from_address?: string;
+  from_display_name?: string;
+  reply_to?: string;
+}
+
+export interface DraftAnswer {
+  question_id: string;
+  answer_text?: string | null;
+  answer_json?: unknown;
+}
+
+export interface ActorContext {
+  userId: string;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+export interface PublicActor {
+  ip: string | null;
+  userAgent: string | null;
+}
+```
+
+### §6.2 — `src/lib/survey/campaigns.ts`
+
+```ts
+import { prisma } from '@/lib/prisma';
+import type { Prisma } from '@prisma/client';
+import type {
+  ActorContext,
+  CampaignInput,
+  DraftAnswer,
+  InviteInput,
+  PublicActor,
+  QuestionInput,
+} from './types';
+import { generateToken } from './tokens';
+
+export class SurveyCampaignError extends Error {
+  readonly status: number;
+  constructor(
+    public readonly reason:
+      | 'not_found'
+      | 'invalid_status'
+      | 'duplicate_email'
+      | 'invalid_input'
+      | 'campaign_locked'
+      | 'already_submitted',
+    statusCode = 422,
+  ) {
+    super(`survey-campaign: ${reason}`);
+    this.name = 'SurveyCampaignError';
+    this.status = statusCode;
+  }
+}
+
+function serialize(v: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
+}
+
+// ─── Admin reads ───────────────────────────────────────────────
+
+export async function listCampaigns() {
+  return prisma.surveyCampaign.findMany({
+    orderBy: { created_at: 'desc' },
+    include: {
+      created_by: { select: { name: true, email: true } },
+      _count: { select: { invites: true } },
+    },
+  });
+}
+
+export async function getCampaignWithInvites(id: string) {
+  return prisma.surveyCampaign.findUnique({
+    where: { id },
+    include: {
+      created_by: { select: { name: true, email: true } },
+      invites: {
+        orderBy: { recipient_name: 'asc' },
+        include: {
+          approved_by: { select: { name: true, email: true } },
+          questions: { orderBy: { position: 'asc' } },
+          _count: { select: { responses: { where: { is_draft: false } } } },
+        },
+      },
+    },
+  });
+}
+
+export async function getInviteWithQuestions(inviteId: string) {
+  return prisma.surveyInvite.findUnique({
+    where: { id: inviteId },
+    include: {
+      campaign: true,
+      approved_by: { select: { name: true, email: true } },
+      questions: { orderBy: { position: 'asc' } },
+      responses: true,
+    },
+  });
+}
+
+// ─── Admin writes ──────────────────────────────────────────────
+
+export async function createCampaign(input: CampaignInput, actor: ActorContext) {
+  return prisma.$transaction(async (tx) => {
+    const campaign = await tx.surveyCampaign.create({
+      data: {
+        title: input.title,
+        slug: input.slug,
+        intro_text: input.intro_text,
+        ...(input.subject_template ? { subject_template: input.subject_template } : {}),
+        ...(input.from_address ? { from_address: input.from_address } : {}),
+        ...(input.from_display_name ? { from_display_name: input.from_display_name } : {}),
+        ...(input.reply_to ? { reply_to: input.reply_to } : {}),
+        created_by_user_id: actor.userId,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'insert',
+        table_name: 'survey_campaigns',
+        row_id: campaign.id,
+        before: null,
+        after: serialize(campaign),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return campaign;
+  });
+}
+
+export async function addInvite(
+  campaignId: string,
+  invite: InviteInput,
+  actor: ActorContext,
+) {
+  return prisma.$transaction(async (tx) => {
+    const campaign = await tx.surveyCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new SurveyCampaignError('not_found', 404);
+    if (campaign.status === 'closed') throw new SurveyCampaignError('campaign_locked', 409);
+
+    const lowerEmail = invite.recipient_email.toLowerCase();
+    const existing = await tx.surveyInvite.findUnique({
+      where: {
+        campaign_id_recipient_email: { campaign_id: campaignId, recipient_email: lowerEmail },
+      },
+    });
+    if (existing) throw new SurveyCampaignError('duplicate_email', 409);
+
+    const token = generateToken();
+    const created = await tx.surveyInvite.create({
+      data: {
+        campaign_id: campaignId,
+        recipient_name: invite.recipient_name,
+        recipient_email: lowerEmail,
+        role_label: invite.role_label,
+        token,
+        status: 'draft',
+        questions: {
+          create: invite.questions.map((q) => ({
+            position: q.position,
+            kind: q.kind,
+            prompt: q.prompt,
+            description: q.description ?? null,
+            options: (q.options ?? null) as Prisma.InputJsonValue | null,
+            is_required: q.is_required ?? false,
+          })),
+        },
+      },
+      include: { questions: { orderBy: { position: 'asc' } } },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'insert',
+        table_name: 'survey_invites',
+        row_id: created.id,
+        before: null,
+        after: serialize({
+          recipient_name: created.recipient_name,
+          recipient_email: created.recipient_email,
+          role_label: created.role_label,
+          question_count: created.questions.length,
+        }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return created;
+  });
+}
+
+export async function updateInviteQuestions(
+  inviteId: string,
+  questions: QuestionInput[],
+  actor: ActorContext,
+) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new SurveyCampaignError('not_found', 404);
+    if (invite.status !== 'draft' && invite.status !== 'approved') {
+      throw new SurveyCampaignError('invalid_status', 409);
+    }
+
+    const before = await tx.surveyQuestion.findMany({
+      where: { invite_id: inviteId },
+      orderBy: { position: 'asc' },
+    });
+
+    await tx.surveyQuestion.deleteMany({ where: { invite_id: inviteId } });
+    await tx.surveyQuestion.createMany({
+      data: questions.map((q) => ({
+        invite_id: inviteId,
+        position: q.position,
+        kind: q.kind,
+        prompt: q.prompt,
+        description: q.description ?? null,
+        options: (q.options ?? null) as Prisma.InputJsonValue | null,
+        is_required: q.is_required ?? false,
+      })),
+    });
+
+    // Approval clears when questions change (re-preview required).
+    const statusReset = invite.status === 'approved';
+    if (statusReset) {
+      await tx.surveyInvite.update({
+        where: { id: inviteId },
+        data: { status: 'draft', approved_by_user_id: null, approved_at: null },
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'update',
+        table_name: 'survey_invites',
+        row_id: inviteId,
+        before: serialize({ question_count: before.length, status: invite.status }),
+        after: serialize({ question_count: questions.length, status_reset: statusReset }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+  });
+}
+
+export async function approveInvite(inviteId: string, actor: ActorContext) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new SurveyCampaignError('not_found', 404);
+    if (invite.status !== 'draft') throw new SurveyCampaignError('invalid_status', 409);
+
+    const updated = await tx.surveyInvite.update({
+      where: { id: inviteId },
+      data: {
+        status: 'approved',
+        approved_by_user_id: actor.userId,
+        approved_at: new Date(),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'update',
+        table_name: 'survey_invites',
+        row_id: inviteId,
+        before: serialize({ status: 'draft' }),
+        after: serialize({ status: 'approved', approved_at: updated.approved_at }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function markInviteSent(
+  inviteId: string,
+  lastStatus: number | null,
+  actor: ActorContext,
+) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new SurveyCampaignError('not_found', 404);
+    if (invite.status !== 'approved') throw new SurveyCampaignError('invalid_status', 409);
+
+    const updated = await tx.surveyInvite.update({
+      where: { id: inviteId },
+      data: { status: 'sent', sent_at: new Date(), last_status: lastStatus },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'update',
+        table_name: 'survey_invites',
+        row_id: inviteId,
+        before: serialize({ status: 'approved' }),
+        after: serialize({ status: 'sent', sent_at: updated.sent_at, last_status: lastStatus }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function openCampaign(campaignId: string, actor: ActorContext) {
+  return prisma.$transaction(async (tx) => {
+    const campaign = await tx.surveyCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new SurveyCampaignError('not_found', 404);
+    if (campaign.status !== 'draft') throw new SurveyCampaignError('invalid_status', 409);
+
+    const updated = await tx.surveyCampaign.update({
+      where: { id: campaignId },
+      data: { status: 'open', opened_at: new Date() },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'update',
+        table_name: 'survey_campaigns',
+        row_id: campaignId,
+        before: serialize({ status: 'draft' }),
+        after: serialize({ status: 'open', opened_at: updated.opened_at }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function closeCampaign(campaignId: string, actor: ActorContext) {
+  return prisma.$transaction(async (tx) => {
+    const campaign = await tx.surveyCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new SurveyCampaignError('not_found', 404);
+    if (campaign.status === 'closed') throw new SurveyCampaignError('invalid_status', 409);
+
+    const updated = await tx.surveyCampaign.update({
+      where: { id: campaignId },
+      data: { status: 'closed', closed_at: new Date() },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.userId,
+        action: 'update',
+        table_name: 'survey_campaigns',
+        row_id: campaignId,
+        before: serialize({ status: campaign.status }),
+        after: serialize({ status: 'closed', closed_at: updated.closed_at }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return updated;
+  });
+}
+
+// ─── Public reads/writes (token-gated, no userId) ──────────────
+
+export async function getInviteByToken(token: string) {
+  return prisma.surveyInvite.findUnique({
+    where: { token },
+    include: {
+      campaign: {
+        select: {
+          id: true,
+          title: true,
+          intro_text: true,
+          status: true,
+          from_display_name: true,
+        },
+      },
+      questions: { orderBy: { position: 'asc' } },
+      responses: true,
+    },
+  });
+}
+
+export async function markInviteOpened(inviteId: string, actor: PublicActor) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) return;
+    if (invite.status !== 'sent') return;
+    await tx.surveyInvite.update({
+      where: { id: inviteId },
+      data: { status: 'opened', first_opened_at: new Date() },
+    });
+    await tx.auditLog.create({
+      data: {
+        actor_label: 'public:survey-respondent',
+        action: 'update',
+        table_name: 'survey_invites',
+        row_id: inviteId,
+        before: serialize({ status: 'sent' }),
+        after: serialize({ status: 'opened' }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+  });
+}
+
+export async function saveDraft(
+  inviteId: string,
+  answers: readonly DraftAnswer[],
+  actor: PublicActor,
+) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new SurveyCampaignError('not_found', 404);
+    if (invite.submitted_at !== null) throw new SurveyCampaignError('already_submitted', 409);
+
+    for (const a of answers) {
+      await tx.surveyResponse.upsert({
+        where: {
+          invite_id_question_id: { invite_id: inviteId, question_id: a.question_id },
+        },
+        create: {
+          invite_id: inviteId,
+          question_id: a.question_id,
+          answer_text: a.answer_text ?? null,
+          answer_json: (a.answer_json ?? null) as Prisma.InputJsonValue | null,
+          is_draft: true,
+        },
+        update: {
+          answer_text: a.answer_text ?? null,
+          answer_json: (a.answer_json ?? null) as Prisma.InputJsonValue | null,
+          is_draft: true,
+          updated_at: new Date(),
+        },
+      });
+    }
+
+    // Audit captures counts + timestamp, not raw answer text.
+    await tx.auditLog.create({
+      data: {
+        actor_label: 'public:survey-respondent',
+        action: 'update',
+        table_name: 'survey_responses',
+        row_id: inviteId,
+        before: null,
+        after: serialize({ saved_count: answers.length }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+  });
+}
+
+export async function submitResponse(inviteId: string, actor: PublicActor) {
+  return prisma.$transaction(async (tx) => {
+    const invite = await tx.surveyInvite.findUnique({
+      where: { id: inviteId },
+      include: {
+        responses: true,
+        questions: { where: { is_required: true } },
+      },
+    });
+    if (!invite) throw new SurveyCampaignError('not_found', 404);
+    if (invite.submitted_at !== null) throw new SurveyCampaignError('already_submitted', 409);
+
+    const respByQ = new Map(invite.responses.map((r) => [r.question_id, r]));
+    for (const q of invite.questions) {
+      const r = respByQ.get(q.id);
+      const hasText = r?.answer_text && r.answer_text.trim() !== '';
+      const hasJson = r?.answer_json != null;
+      if (!hasText && !hasJson) {
+        throw new SurveyCampaignError('invalid_input', 422);
+      }
+    }
+
+    await tx.surveyResponse.updateMany({
+      where: { invite_id: inviteId },
+      data: { is_draft: false },
+    });
+    const updated = await tx.surveyInvite.update({
+      where: { id: inviteId },
+      data: { status: 'submitted', submitted_at: new Date() },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actor_label: 'public:survey-respondent',
+        action: 'update',
+        table_name: 'survey_invites',
+        row_id: inviteId,
+        before: serialize({ status: invite.status }),
+        after: serialize({ status: 'submitted', submitted_at: updated.submitted_at }),
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+    return updated;
+  });
+}
+```
+
+---
+
+## §7 — `src/lib/survey/tokens.ts`
+
+```ts
+// ADR-0034 — URL-safe cryptographic tokens for survey invite access.
+//
+// 32-char base64url tokens. crypto.randomBytes(24) gives 24 bytes = 192 bits
+// entropy; base64url-encoded yields exactly 32 chars (no padding).
+//
+// Never log the token. Never include it in error messages. Always reference
+// invites by their internal UUID in logs and audit rows.
+
+import { randomBytes } from 'node:crypto';
+
+const TOKEN_BYTES = 24;
+const TOKEN_RE = /^[A-Za-z0-9_-]{32}$/;
+
+export function generateToken(): string {
+  return randomBytes(TOKEN_BYTES).toString('base64url');
+}
+
+export function isValidTokenShape(token: unknown): token is string {
+  return typeof token === 'string' && TOKEN_RE.test(token);
+}
+```
+
+---
+
+## §8 — `src/lib/survey/notifications.ts`
+
+```ts
+// ADR-0034 — Render and send the survey invite email.
+//
+// SVdP-branded shell matching the daily production report email:
+//   - red #a3151a masthead with SVdP wordmark
+//   - gold #ffcc69 accent bar
+//   - cream #f7f3ea panels
+//   - inline-styled table-based ≤600px Outlook fidelity
+//
+// Per-recipient send. From, display name, reply-to drive from the campaign
+// record. Never throws — fail-soft logs and returns delivered=false.
+
+import { sendSystemEmail } from '@/lib/m365-mail';
+import { log } from '@/lib/observability/logger';
+import type { SurveyCampaign, SurveyInvite } from '@prisma/client';
+
+export interface SendInviteArgs {
+  campaign: Pick<
+    SurveyCampaign,
+    | 'title'
+    | 'intro_text'
+    | 'subject_template'
+    | 'from_address'
+    | 'from_display_name'
+    | 'reply_to'
+  >;
+  invite: Pick<SurveyInvite, 'recipient_name' | 'recipient_email' | 'role_label' | 'token'>;
+  baseUrl: string;
+}
+
+export interface SendInviteResult {
+  delivered: boolean;
+  last_status: number | null;
+  graph_message_id: string | undefined;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderIntro(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map(
+      (p) =>
+        `<p style="margin:0 0 12px;line-height:1.55;color:#2a2a2a;font-size:14px">${escapeHtml(p).replace(/\n/g, '<br />')}</p>`,
+    )
+    .join('');
+}
+
+export function renderInviteHtml(args: SendInviteArgs): string {
+  const surveyUrl = `${args.baseUrl.replace(/\/+$/, '')}/survey/${args.invite.token}`;
+  const intro = renderIntro(args.campaign.intro_text);
+  return `<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f7f3ea;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f7f3ea">
+    <tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;background:#ffffff;border-radius:6px;overflow:hidden;border:1px solid #e8e2d4">
+        <tr><td style="background:#a3151a;padding:18px 24px;color:#ffffff">
+          <div style="font-size:18px;font-weight:600;letter-spacing:0.02em">St. Vincent de Paul · DR3</div>
+          <div style="font-size:13px;opacity:0.9;margin-top:4px">DR3 Operational Intelligence</div>
+        </td></tr>
+        <tr><td style="background:#ffcc69;height:3px;line-height:3px;font-size:0">&nbsp;</td></tr>
+        <tr><td style="padding:28px 28px 8px">
+          <p style="margin:0 0 16px;font-size:15px;color:#1a1a1a">Hi ${escapeHtml(args.invite.recipient_name)},</p>
+          ${intro}
+        </td></tr>
+        <tr><td style="padding:8px 28px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr><td style="background:#a3151a;border-radius:4px">
+              <a href="${escapeHtml(surveyUrl)}" style="display:inline-block;padding:12px 28px;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;letter-spacing:0.02em">Open your survey</a>
+            </td></tr>
+          </table>
+          <p style="margin:16px 0 0;font-size:12px;color:#666666">No login required. Responses save as you type; you can come back to finish later. Should take 20-45 minutes depending on how much detail you want to share.</p>
+          <p style="margin:8px 0 0;font-size:11px;color:#999999;word-break:break-all">Direct link: ${escapeHtml(surveyUrl)}</p>
+        </td></tr>
+        <tr><td style="background:#f7f3ea;padding:14px 24px;border-top:1px solid #e8e2d4">
+          <p style="margin:0;font-size:11px;color:#888888;line-height:1.4">This survey was created by Bill Barnard. Responses feed directly into the design of a new DR3 data management system intended to safeguard and automate processes, free up staff time, verify data accuracy, and improve overall operational tracking. Reply to this email if anything is unclear.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+export async function sendInvite(args: SendInviteArgs): Promise<SendInviteResult> {
+  const subject = args.campaign.subject_template;
+  const htmlBody = renderInviteHtml(args);
+  try {
+    const r = await sendSystemEmail({
+      to: { address: args.invite.recipient_email, name: args.invite.recipient_name },
+      subject,
+      htmlBody,
+      importance: 'normal',
+      fromDisplayName: args.campaign.from_display_name,
+      replyTo: args.campaign.reply_to,
+    });
+    if (r.disabled) {
+      log.warn({ inviteEmail: args.invite.recipient_email }, '[survey] M365 disabled — skip');
+      return { delivered: false, last_status: null, graph_message_id: undefined };
+    }
+    return {
+      delivered: r.delivered,
+      last_status: r.lastStatus ?? null,
+      graph_message_id: r.messageId,
+    };
+  } catch (e) {
+    log.warn({ err: e, inviteEmail: args.invite.recipient_email }, '[survey] send threw');
+    return { delivered: false, last_status: null, graph_message_id: undefined };
+  }
+}
+```
+
+### §8.1 — `src/lib/m365-mail.ts` extensions
+
+Extend the `SendSystemEmailArgs` interface with three optional fields:
+
+```ts
+export interface SendSystemEmailArgs {
+  to: string | { address: string; name?: string };
+  subject: string;
+  htmlBody: string;
+  importance?: 'normal' | 'high';
+  // ADR-0034 additions:
+  fromDisplayName?: string;
+  replyTo?: string;
+  cc?: string[];
+}
+```
+
+In the Graph send-mail payload construction:
+
+```ts
+const recipient =
+  typeof args.to === 'string'
+    ? { emailAddress: { address: args.to } }
+    : {
+        emailAddress: {
+          address: args.to.address,
+          ...(args.to.name ? { name: args.to.name } : {}),
+        },
+      };
+
+const message: Record<string, unknown> = {
+  subject: args.subject,
+  body: { contentType: 'HTML', content: args.htmlBody },
+  toRecipients: [recipient],
+  importance: args.importance ?? 'normal',
+};
+
+if (args.fromDisplayName) {
+  // The 'from' field overrides the default sender display name; mailbox must
+  // still be one the app has SendAs permission for.
+  message.from = {
+    emailAddress: {
+      address: senderMailbox,
+      name: args.fromDisplayName,
+    },
+  };
+}
+
+if (args.replyTo) {
+  message.replyTo = [{ emailAddress: { address: args.replyTo } }];
+}
+
+if (args.cc && args.cc.length > 0) {
+  message.ccRecipients = args.cc.map((addr) => ({ emailAddress: { address: addr } }));
+}
+```
+
+Existing callers keep their existing behavior — the three new fields are optional.
+
+---
+
+## §9 — `src/lib/survey/export.ts`
+
+```ts
+// ADR-0034 — Export survey responses as markdown to docs/operations-intel/.
+//
+// Generates one .md file per submitted invite plus a consolidated _summary.md.
+// Files are pushed via the same ClaudeSync handoff mechanism used by sprint
+// handoffs, just under docs/operations-intel/{campaign-slug}/.
+
+import { prisma } from '@/lib/prisma';
+import { log } from '@/lib/observability/logger';
+import type { SurveyQuestion, SurveyResponse } from '@prisma/client';
+
+const SLUG_NORMALIZE_RE = /[^a-z0-9-]+/g;
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(SLUG_NORMALIZE_RE, '');
+}
+
+function renderAnswer(q: SurveyQuestion, r: SurveyResponse | undefined): string {
+  if (!r) return '*(no response)*';
+  if (q.kind === 'multi_select') {
+    const json = r.answer_json as unknown;
+    if (Array.isArray(json)) {
+      return (json as unknown[]).map((v) => `- ${String(v)}`).join('\n');
+    }
+    return r.answer_text ?? '*(no response)*';
+  }
+  return (r.answer_text && r.answer_text.trim()) || '*(no response)*';
+}
+
+export interface ExportFile {
+  path: string;
+  body: string;
+}
+
+export async function buildExport(campaignId: string): Promise<ExportFile[]> {
+  const campaign = await prisma.surveyCampaign.findUnique({
+    where: { id: campaignId },
+    include: {
+      created_by: { select: { name: true, email: true } },
+      invites: {
+        where: { submitted_at: { not: null } },
+        orderBy: { recipient_name: 'asc' },
+        include: {
+          questions: { orderBy: { position: 'asc' } },
+          responses: true,
+        },
+      },
+    },
+  });
+  if (!campaign) return [];
+
+  const dir = `docs/operations-intel/${campaign.slug}`;
+  const files: ExportFile[] = [];
+
+  for (const invite of campaign.invites) {
+    const respByQ = new Map(invite.responses.map((r) => [r.question_id, r]));
+    const recipientSlug = slugify(invite.recipient_name);
+    const lines: string[] = [];
+    lines.push(`# ${invite.recipient_name} — ${invite.role_label}`);
+    lines.push('');
+    lines.push(`**Campaign:** ${campaign.title}`);
+    lines.push(`**Recipient email:** ${invite.recipient_email}`);
+    lines.push(`**Submitted at:** ${invite.submitted_at?.toISOString() ?? '—'}`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    for (const q of invite.questions) {
+      lines.push(`## ${q.position}. ${q.prompt}`);
+      if (q.description) {
+        lines.push('');
+        lines.push(`> ${q.description}`);
+      }
+      lines.push('');
+      lines.push(renderAnswer(q, respByQ.get(q.id)));
+      lines.push('');
+    }
+    files.push({ path: `${dir}/${recipientSlug}.md`, body: lines.join('\n') });
+  }
+
+  const summaryLines: string[] = [];
+  summaryLines.push(`# ${campaign.title} — submission summary`);
+  summaryLines.push('');
+  summaryLines.push(`**Slug:** \`${campaign.slug}\`  `);
+  summaryLines.push(`**Owner:** ${campaign.created_by.name} (${campaign.created_by.email})  `);
+  summaryLines.push(`**Opened:** ${campaign.opened_at?.toISOString() ?? '—'}  `);
+  summaryLines.push(`**Closed:** ${campaign.closed_at?.toISOString() ?? '—'}  `);
+  summaryLines.push(`**Submissions:** ${campaign.invites.length}`);
+  summaryLines.push('');
+  summaryLines.push('## Respondents');
+  summaryLines.push('');
+  summaryLines.push('| Recipient | Role | Submitted | File |');
+  summaryLines.push('|---|---|---|---|');
+  for (const invite of campaign.invites) {
+    const recipientSlug = slugify(invite.recipient_name);
+    summaryLines.push(
+      `| ${invite.recipient_name} | ${invite.role_label} | ${invite.submitted_at?.toISOString() ?? '—'} | \`${recipientSlug}.md\` |`,
+    );
+  }
+  files.push({ path: `${dir}/_summary.md`, body: summaryLines.join('\n') });
+
+  return files;
+}
+
+/**
+ * Logs the export file plan. The actual ClaudeSync push is invoked from the
+ * admin UI route handler (which has the operator's auth context); this module
+ * only builds the file contents and returns them.
+ */
+export async function logExportSummary(campaignId: string): Promise<void> {
+  const files = await buildExport(campaignId);
+  for (const f of files) {
+    log.info({ path: f.path, bytes: f.body.length }, '[survey] export file ready');
+  }
+}
+```
+
+---
+
+## §10 — Public survey route
+
+### §10.1 — `src/app/survey/[token]/page.tsx`
+
+```tsx
+import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
+import { getInviteByToken, markInviteOpened } from '@/lib/survey/campaigns';
+import { isValidTokenShape } from '@/lib/survey/tokens';
+import { SurveyForm } from './SurveyForm';
+import { ThankYou } from './ThankYou';
+
+export const dynamic = 'force-dynamic';
+
+interface PageProps {
+  params: Promise<{ token: string }>;
+}
+
+export default async function SurveyTokenPage({ params }: PageProps) {
+  const { token } = await params;
+  if (!isValidTokenShape(token)) notFound();
+
+  const invite = await getInviteByToken(token);
+  if (!invite) notFound();
+  if (invite.campaign.status === 'closed') notFound();
+
+  const hdrs = await headers();
+  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const userAgent = hdrs.get('user-agent');
+  await markInviteOpened(invite.id, { ip, userAgent }).catch(() => undefined);
+
+  if (invite.submitted_at !== null) {
+    return (
+      <ThankYou
+        submittedAt={invite.submitted_at}
+        recipientName={invite.recipient_name}
+      />
+    );
+  }
+
+  // SurveyForm receives only what the client needs — never the raw token in
+  // any place that could be logged. The token in the URL is sufficient for
+  // /api/survey/[token]/draft and /submit.
+  return (
+    <SurveyForm
+      invite={{
+        id: invite.id,
+        recipient_name: invite.recipient_name,
+        role_label: invite.role_label,
+        campaign: {
+          title: invite.campaign.title,
+          intro_text: invite.campaign.intro_text,
+          from_display_name: invite.campaign.from_display_name,
+        },
+        questions: invite.questions.map((q) => ({
+          id: q.id,
+          position: q.position,
+          kind: q.kind as 'short_text' | 'long_text' | 'single_select' | 'multi_select',
+          prompt: q.prompt,
+          description: q.description,
+          options: (q.options as Array<{ label: string; value: string }> | null) ?? null,
+          is_required: q.is_required,
+        })),
+        responses: invite.responses.map((r) => ({
+          question_id: r.question_id,
+          answer_text: r.answer_text,
+          answer_json: r.answer_json,
+        })),
+        token,
+      }}
+    />
+  );
+}
+```
+
+### §10.2 — `src/app/survey/[token]/SurveyForm.tsx`
+
+Client component, no auth, 800ms debounced draft autosave, supports all four question kinds, SVdP-branded shell. Full source:
+
+```tsx
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+
+interface QuestionPropsBase {
+  id: string;
+  position: number;
+  kind: 'short_text' | 'long_text' | 'single_select' | 'multi_select';
+  prompt: string;
+  description: string | null;
+  options: Array<{ label: string; value: string }> | null;
+  is_required: boolean;
+}
+
+interface InviteForForm {
+  id: string;
+  recipient_name: string;
+  role_label: string;
+  campaign: { title: string; intro_text: string; from_display_name: string };
+  questions: QuestionPropsBase[];
+  responses: Array<{ question_id: string; answer_text: string | null; answer_json: unknown }>;
+  token: string;
+}
+
+interface AnswerMap {
+  [questionId: string]: { answer_text?: string; answer_json?: unknown };
+}
+
+export function SurveyForm({ invite }: { invite: InviteForForm }) {
+  const router = useRouter();
+  const [answers, setAnswers] = useState<AnswerMap>(() => {
+    const init: AnswerMap = {};
+    for (const r of invite.responses) {
+      init[r.question_id] = {
+        answer_text: r.answer_text ?? undefined,
+        answer_json: r.answer_json ?? undefined,
+      };
+    }
+    return init;
+  });
+  const [savingStatus, setSavingStatus] =
+    useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const dirtyRef = useRef<Set<string>>(new Set());
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+
+  function scheduleSave() {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => void saveDrafts(), 800);
+  }
+
+  function setText(qid: string, text: string) {
+    setAnswers((prev) => ({ ...prev, [qid]: { ...prev[qid], answer_text: text } }));
+    dirtyRef.current.add(qid);
+    scheduleSave();
+  }
+
+  function setMulti(qid: string, values: string[]) {
+    setAnswers((prev) => ({ ...prev, [qid]: { ...prev[qid], answer_json: values } }));
+    dirtyRef.current.add(qid);
+    scheduleSave();
+  }
+
+  async function saveDrafts() {
+    const dirty = [...dirtyRef.current];
+    if (dirty.length === 0) return;
+    dirtyRef.current.clear();
+    setSavingStatus('saving');
+    try {
+      const current = answersRef.current;
+      const payload = dirty.map((qid) => ({
+        question_id: qid,
+        answer_text: current[qid]?.answer_text ?? null,
+        answer_json: current[qid]?.answer_json ?? null,
+      }));
+      const r = await fetch(`/api/survey/${invite.token}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: payload }),
+      });
+      if (!r.ok) throw new Error(`save failed: ${r.status}`);
+      setSavingStatus('saved');
+      setTimeout(() => setSavingStatus('idle'), 1500);
+    } catch {
+      setSavingStatus('error');
+      dirty.forEach((q) => dirtyRef.current.add(q));
+    }
+  }
+
+  async function handleSubmit() {
+    await saveDrafts();
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const r = await fetch(`/api/survey/${invite.token}/submit`, { method: 'POST' });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: 'unknown' }));
+        throw new Error(
+          err.error === 'invalid_input'
+            ? 'Please answer all required questions.'
+            : 'Submission failed. Try again.',
+        );
+      }
+      router.refresh();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Submission failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    },
+    [],
+  );
+
+  return (
+    <main style={{ background: '#f7f3ea', minHeight: '100vh' }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px 80px' }}>
+        <header
+          style={{
+            background: '#a3151a',
+            color: '#fff',
+            padding: '20px 24px',
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 600 }}>St. Vincent de Paul · DR3</div>
+          <div style={{ fontSize: 13, opacity: 0.9, marginTop: 4 }}>{invite.campaign.title}</div>
+        </header>
+        <section
+          style={{
+            background: '#fff',
+            padding: '24px',
+            marginTop: 12,
+            borderRadius: 6,
+            border: '1px solid #e8e2d4',
+          }}
+        >
+          <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>
+            Hi {invite.recipient_name},
+          </p>
+          <p style={{ marginTop: 4, fontSize: 13, color: '#666' }}>Role: {invite.role_label}</p>
+          <div
+            style={{
+              marginTop: 16,
+              color: '#1a1a1a',
+              whiteSpace: 'pre-wrap',
+              lineHeight: 1.55,
+            }}
+          >
+            {invite.campaign.intro_text}
+          </div>
+        </section>
+        <ol style={{ listStyle: 'none', padding: 0, marginTop: 24 }}>
+          {invite.questions.map((q) => (
+            <li
+              key={q.id}
+              style={{
+                background: '#fff',
+                padding: '20px 24px',
+                marginBottom: 12,
+                borderRadius: 6,
+                border: '1px solid #e8e2d4',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                <span style={{ fontSize: 12, color: '#999', fontFamily: 'monospace' }}>
+                  {q.position}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a' }}>
+                    {q.prompt}
+                    {q.is_required && (
+                      <span style={{ color: '#a3151a', marginLeft: 4 }}>*</span>
+                    )}
+                  </div>
+                  {q.description && (
+                    <div style={{ marginTop: 4, fontSize: 13, color: '#666' }}>
+                      {q.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={{ marginTop: 14 }}>
+                {q.kind === 'short_text' && (
+                  <input
+                    type="text"
+                    value={answers[q.id]?.answer_text ?? ''}
+                    onChange={(e) => setText(q.id, e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      fontSize: 14,
+                      border: '1px solid #d0c8b4',
+                      borderRadius: 4,
+                    }}
+                  />
+                )}
+                {q.kind === 'long_text' && (
+                  <textarea
+                    value={answers[q.id]?.answer_text ?? ''}
+                    onChange={(e) => setText(q.id, e.target.value)}
+                    rows={6}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      fontSize: 14,
+                      border: '1px solid #d0c8b4',
+                      borderRadius: 4,
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                    }}
+                  />
+                )}
+                {q.kind === 'single_select' && q.options && (
+                  <div>
+                    {q.options.map((opt) => (
+                      <label
+                        key={opt.value}
+                        style={{ display: 'block', padding: '4px 0', cursor: 'pointer' }}
+                      >
+                        <input
+                          type="radio"
+                          name={q.id}
+                          value={opt.value}
+                          checked={answers[q.id]?.answer_text === opt.value}
+                          onChange={() => setText(q.id, opt.value)}
+                          style={{ marginRight: 8 }}
+                        />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {q.kind === 'multi_select' && q.options && (
+                  <div>
+                    {q.options.map((opt) => {
+                      const current = (answers[q.id]?.answer_json as string[]) ?? [];
+                      const checked = current.includes(opt.value);
+                      return (
+                        <label
+                          key={opt.value}
+                          style={{ display: 'block', padding: '4px 0', cursor: 'pointer' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...current, opt.value]
+                                : current.filter((v) => v !== opt.value);
+                              setMulti(q.id, next);
+                            }}
+                            style={{ marginRight: 8 }}
+                          />
+                          {opt.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <div
+          style={{
+            background: '#fff',
+            padding: 20,
+            borderRadius: 6,
+            border: '1px solid #e8e2d4',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ fontSize: 12, color: '#888' }}>
+            {savingStatus === 'saving' && 'Saving…'}
+            {savingStatus === 'saved' && 'Draft saved ✓'}
+            {savingStatus === 'error' && (
+              <span style={{ color: '#a3151a' }}>Save error — will retry</span>
+            )}
+            {savingStatus === 'idle' && 'Draft auto-saves as you type'}
+          </div>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={submitting}
+            style={{
+              background: '#a3151a',
+              color: '#fff',
+              padding: '10px 24px',
+              border: 'none',
+              borderRadius: 4,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.6 : 1,
+            }}
+          >
+            {submitting ? 'Submitting…' : 'Submit responses'}
+          </button>
+        </div>
+        {submitError && (
+          <p style={{ marginTop: 12, color: '#a3151a', fontSize: 13 }}>{submitError}</p>
+        )}
+      </div>
+    </main>
+  );
+}
+```
+
+### §10.3 — `src/app/survey/[token]/ThankYou.tsx`
+
+```tsx
+export function ThankYou({
+  submittedAt,
+  recipientName,
+}: {
+  submittedAt: Date;
+  recipientName: string;
+}) {
+  return (
+    <main style={{ background: '#f7f3ea', minHeight: '100vh' }}>
+      <div style={{ maxWidth: 560, margin: '0 auto', padding: '60px 16px' }}>
+        <div
+          style={{
+            background: '#fff',
+            padding: '40px 32px',
+            borderRadius: 6,
+            border: '1px solid #e8e2d4',
+            textAlign: 'center',
+          }}
+        >
+          <div
+            style={{
+              background: '#a3151a',
+              color: '#fff',
+              padding: '16px 20px',
+              borderRadius: 6,
+              marginBottom: 24,
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 600 }}>St. Vincent de Paul · DR3</div>
+            <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>
+              DR3 Operational Intelligence
+            </div>
+          </div>
+          <h1 style={{ fontSize: 22, margin: '0 0 12px', color: '#1a1a1a' }}>
+            Thank you, {recipientName}.
+          </h1>
+          <p style={{ fontSize: 14, color: '#666', margin: '0 0 8px' }}>
+            Your responses were submitted on {submittedAt.toISOString().slice(0, 10)} at{' '}
+            {submittedAt.toISOString().slice(11, 16)} UTC.
+          </p>
+          <p style={{ fontSize: 13, color: '#999', margin: '24px 0 0' }}>
+            If you need to amend your responses, reply to the original email and Bill can
+            reopen your invite.
+          </p>
+        </div>
+      </div>
+    </main>
+  );
+}
+```
+
+(End of chunk 2. Admin UI, API routes follow in chunk 3.)
