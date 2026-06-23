@@ -80,7 +80,7 @@ vi.mock('@/lib/observability/metrics', () => ({
 }));
 
 // Import AFTER mocks are registered.
-import { sendPayrollPdf, __testing } from './m365-mail';
+import { sendPayrollPdf, sendSystemEmail, __testing } from './m365-mail';
 
 // ── Fake graph client ───────────────────────────────────────────
 //
@@ -336,5 +336,78 @@ describe('sendPayrollPdf — exhausted retries', () => {
     // a fresh client is built for the post-401 refresh
     expect(factoryCalls).toBeGreaterThanOrEqual(2);
     expect(month.payroll_sent_at).toBeInstanceOf(Date);
+  });
+});
+
+// ── ADR-0034: sendSystemEmail per-message sender/reply-to/cc + object `to` ──
+//
+// New optional fields on SystemEmailArgs (fromDisplayName, replyTo, cc) and the
+// object form of `to`. These must land in the Graph message payload without
+// disturbing existing string-`to` callers. We capture the posted payload.
+
+function capturingClient(): {
+  client: FakeClient;
+  lastPayload: () => Record<string, unknown> | undefined;
+} {
+  let captured: Record<string, unknown> | undefined;
+  const client: FakeClient = {
+    api: () => {
+      const req: FakeRequest = {
+        header: () => req,
+        post: async (body: unknown) => {
+          captured = (body as { message: Record<string, unknown> }).message;
+          return undefined; // 202
+        },
+      };
+      return req;
+    },
+  };
+  return { client, lastPayload: () => captured };
+}
+
+describe('sendSystemEmail — ADR-0034 sender overrides', () => {
+  it('sets from (display name), replyTo, and ccRecipients in the Graph message', async () => {
+    const { client, lastPayload } = capturingClient();
+    __testing.setClientFactory(() => client as never);
+
+    const res = await sendSystemEmail({
+      to: { address: 'rick@svdp.us', name: 'Rick Albritton' },
+      subject: 'Your input requested',
+      htmlBody: '<p>hi</p>',
+      fromDisplayName: 'Bill Barnard via DR3-Vision',
+      replyTo: 'bill.barnard@svdp.us',
+      cc: ['kelsey@svdp.us'],
+    });
+
+    expect(res.delivered).toBe(true);
+    const msg = lastPayload();
+    // Object `to` carries the display name.
+    expect(msg?.['toRecipients']).toEqual([
+      { emailAddress: { address: 'rick@svdp.us', name: 'Rick Albritton' } },
+    ]);
+    // from overrides the display name; the mailbox stays the configured sender.
+    expect(msg?.['from']).toEqual({
+      emailAddress: { address: 'dr3-vision@svdp.us', name: 'Bill Barnard via DR3-Vision' },
+    });
+    expect(msg?.['replyTo']).toEqual([{ emailAddress: { address: 'bill.barnard@svdp.us' } }]);
+    expect(msg?.['ccRecipients']).toEqual([{ emailAddress: { address: 'kelsey@svdp.us' } }]);
+  });
+
+  it('omits from/replyTo/cc when not supplied and accepts a plain string `to` (back-compat)', async () => {
+    const { client, lastPayload } = capturingClient();
+    __testing.setClientFactory(() => client as never);
+
+    const res = await sendSystemEmail({
+      to: 'payroll@svdp.us',
+      subject: 's',
+      htmlBody: '<p>x</p>',
+    });
+
+    expect(res.delivered).toBe(true);
+    const msg = lastPayload();
+    expect(msg?.['toRecipients']).toEqual([{ emailAddress: { address: 'payroll@svdp.us' } }]);
+    expect(msg?.['from']).toBeUndefined();
+    expect(msg?.['replyTo']).toBeUndefined();
+    expect(msg?.['ccRecipients']).toBeUndefined();
   });
 });

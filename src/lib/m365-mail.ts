@@ -70,14 +70,24 @@ export interface SendPayrollPdfResult {
 }
 
 export interface SystemEmailArgs {
-  /** Plain recipient address. */
-  to: string;
+  /** Plain recipient address, or an address + optional display name. */
+  to: string | { address: string; name?: string };
   subject: string;
   htmlBody: string;
   /** Optional single PDF attachment. */
   attachment?: { filename: string; buffer: Buffer; contentType?: string };
   /** Graph `importance`. */
   importance?: 'low' | 'normal' | 'high';
+  // ADR-0034 additions — all optional; existing callers are unaffected.
+  /**
+   * Override the sender display name. The mailbox is still the configured
+   * `M365_MAIL_FROM_ADDRESS`; the app must have SendAs permission for it.
+   */
+  fromDisplayName?: string;
+  /** Reply-To address (Graph `replyTo`). */
+  replyTo?: string;
+  /** CC addresses (Graph `ccRecipients`). */
+  cc?: string[];
 }
 
 export interface SystemEmailResult {
@@ -167,13 +177,43 @@ function backoffDelay(attemptIndex: number): number {
 // Graph send — generalised transport core
 // ────────────────────────────────────────────────────────────────────────
 
-function buildMessage(args: SystemEmailArgs, requestId: string) {
+function buildMessage(args: SystemEmailArgs, requestId: string, senderMailbox: string) {
+  const recipient =
+    typeof args.to === 'string'
+      ? { emailAddress: { address: args.to } }
+      : {
+          emailAddress: {
+            address: args.to.address,
+            ...(args.to.name ? { name: args.to.name } : {}),
+          },
+        };
+
   const message: Record<string, unknown> = {
     subject: args.subject,
     body: { contentType: 'HTML', content: args.htmlBody },
-    toRecipients: [{ emailAddress: { address: args.to } }],
+    toRecipients: [recipient],
     importance: args.importance ?? 'normal',
   };
+
+  if (args.fromDisplayName) {
+    // The 'from' field overrides the default sender display name; mailbox must
+    // still be one the app has SendAs permission for.
+    message['from'] = {
+      emailAddress: {
+        address: senderMailbox,
+        name: args.fromDisplayName,
+      },
+    };
+  }
+
+  if (args.replyTo) {
+    message['replyTo'] = [{ emailAddress: { address: args.replyTo } }];
+  }
+
+  if (args.cc && args.cc.length > 0) {
+    message['ccRecipients'] = args.cc.map((addr) => ({ emailAddress: { address: addr } }));
+  }
+
   if (args.attachment) {
     message['attachments'] = [
       {
@@ -224,7 +264,7 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
     };
   }
 
-  const { requestPayload } = buildMessage(args, requestId);
+  const { requestPayload } = buildMessage(args, requestId, config.fromMailbox);
 
   let client = clientFactory();
   let retries = 0;

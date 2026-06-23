@@ -135,7 +135,14 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       visibleTiles(billSuper, WOODLAND, true)
         .filter((t) => t.status === 'active')
         .map((t) => t.key),
-    ).toEqual(['bonus', 'exports', 'admin', 'production-report', 'observability']);
+    ).toEqual([
+      'bonus',
+      'exports',
+      'admin',
+      'production-report',
+      'operational-intelligence',
+      'observability',
+    ]);
   });
 
   it('is hidden from a plain admin who is NOT super-admin', () => {

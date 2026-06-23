@@ -126,6 +126,17 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'super-admin-only',
   },
+  {
+    // ADR-0034 — operational intelligence survey admin (Bill-only via
+    // is_super_admin, same gate as Production Report).
+    key: 'operational-intelligence',
+    label: 'Operational Intelligence',
+    description: 'Per-recipient survey campaigns for operational intelligence gathering.',
+    icon: 'ClipboardList',
+    route: '/admin/operations/intel',
+    status: 'active',
+    scope: 'super-admin-only',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───

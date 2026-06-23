@@ -213,6 +213,10 @@ model User {
   // Daily production report (ADR-0030)
   bonus_daily_report_recipients_added BonusDailyReportRecipient[] @relation("BonusDailyReportRecipientAdder")
 
+  // Operational intelligence survey (ADR-0034)
+  survey_campaigns_created SurveyCampaign[] @relation("SurveyCampaignCreator")
+  survey_invites_approved  SurveyInvite[]   @relation("SurveyInviteApprover")
+
   @@map("users")
 }
 
@@ -1079,4 +1083,89 @@ model BonusAmendmentRequest {
   @@index([bonus_employee_id, target_entry_date])
   @@index([submission_group_id])
   @@map("bonus_amendment_requests")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Operational intelligence survey (ADR-0034)
+// ────────────────────────────────────────────────────────────────────────
+
+model SurveyCampaign {
+  id                String   @id @default(uuid())
+  title             String
+  slug              String   @unique
+  intro_text        String
+  subject_template  String   @default("DR3 Operations — your input requested for our new data system")
+  from_address      String   @default("dr3-vision@svdp.us")
+  from_display_name String   @default("Bill Barnard via DR3-Vision")
+  reply_to          String   @default("bill.barnard@svdp.us")
+  status            String   @default("draft")
+  created_by_user_id String
+  created_by         User    @relation("SurveyCampaignCreator", fields: [created_by_user_id], references: [id])
+  opened_at  DateTime?
+  closed_at  DateTime?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  invites SurveyInvite[]
+  @@index([status])
+  @@map("survey_campaigns")
+}
+
+model SurveyInvite {
+  id                  String  @id @default(uuid())
+  campaign_id         String
+  campaign            SurveyCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  recipient_name      String
+  recipient_email     String
+  role_label          String
+  token               String  @unique
+  status              String  @default("draft")
+  approved_by_user_id String?
+  approved_by         User?   @relation("SurveyInviteApprover", fields: [approved_by_user_id], references: [id])
+  approved_at      DateTime?
+  sent_at          DateTime?
+  first_opened_at  DateTime?
+  submitted_at     DateTime?
+  last_status      Int?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  questions SurveyQuestion[]
+  responses SurveyResponse[]
+  @@unique([campaign_id, recipient_email])
+  @@index([campaign_id])
+  @@index([status])
+  @@map("survey_invites")
+}
+
+model SurveyQuestion {
+  id          String  @id @default(uuid())
+  invite_id   String
+  invite      SurveyInvite @relation(fields: [invite_id], references: [id], onDelete: Cascade)
+  position    Int
+  kind        String
+  prompt      String
+  description String?
+  options     Json?
+  is_required Boolean @default(false)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  responses SurveyResponse[]
+  @@unique([invite_id, position])
+  @@index([invite_id, position])
+  @@map("survey_questions")
+}
+
+model SurveyResponse {
+  id          String  @id @default(uuid())
+  invite_id   String
+  invite      SurveyInvite @relation(fields: [invite_id], references: [id], onDelete: Cascade)
+  question_id String
+  question    SurveyQuestion @relation(fields: [question_id], references: [id], onDelete: Cascade)
+  answer_text String?
+  answer_json Json?
+  is_draft    Boolean @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  @@unique([invite_id, question_id])
+  @@index([invite_id])
+  @@map("survey_responses")
 }
