@@ -27,10 +27,11 @@ c. Review the question packet. Each question shows: position, kind (short_text/l
 d. Edit individual questions if needed. Add, remove, or reorder questions.
 e. When satisfied, click "Preview".
 f. The preview modal shows two tabs:
-   - **Email preview** — the EXACT email the recipient will receive, with sender display name, reply-to, and subject visible above the rendered body.
-   - **Survey page preview** — the EXACT survey page the recipient will see when they click the link.
-g. If anything's off, click "Edit questions" and adjust. The invite stays in `draft` until you approve.
-h. When everything looks right, click "Approve". Invite moves to status `approved`.
+
+- **Email preview** — the EXACT email the recipient will receive, with sender display name, reply-to, and subject visible above the rendered body.
+- **Survey page preview** — the EXACT survey page the recipient will see when they click the link.
+  g. If anything's off, click "Edit questions" and adjust. The invite stays in `draft` until you approve.
+  h. When everything looks right, click "Approve". Invite moves to status `approved`.
 
 If you edit questions on an `approved` invite, approval clears back to `draft` and you must re-preview and re-approve.
 
@@ -79,3 +80,7 @@ LEFT JOIN survey_responses r ON r.invite_id = i.id AND r.is_draft = false
 WHERE i.campaign_id = (SELECT id FROM survey_campaigns WHERE slug = 'dr3-intel-2026-06')
 GROUP BY i.recipient_name ORDER BY i.recipient_name;
 ```
+
+## Launch status — LIVE (2026-06-23)
+
+The `dr3-intel-2026-06` campaign is **live**: all 10 invites sent 2026-06-23 ~1:38 PM PT from `dr3-vision@svdp.us`. Sending is gated — the **Send Campaign** button requires typing the campaign title and the server re-verifies `confirmed_recipient_count == approved-count`; only `approved` invites are emailed. As of 2026-06-24 AM: 4 submitted, 3 opened, 3 not yet opened. **Paused — close the campaign (which triggers the ClaudeSync markdown export) once enough responses are in.** Full launch record, the live PT-converted tracker query, and how the send was driven: `docs/handoffs/2026-06-23-survey-launch.md`.

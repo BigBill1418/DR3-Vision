@@ -1,4 +1,5 @@
-> **CURRENT STATE (2026-06-23):** see `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md` — incident resolution, P0 hardening (ADR-0033), enterprise-readiness gameplan, and the buildout-readiness checklist.
+> **CURRENT STATE (2026-06-23):** Operational Intelligence survey (ADR-0034) is **LIVE** — all 10 invites sent, responses arriving; see `docs/handoffs/2026-06-23-survey-launch.md` (tracker query + how the send fires + 2 post-launch fixes). Paused, awaiting remaining responses before close/export.
+> Prior state — incident resolution, P0 hardening (ADR-0033), enterprise-readiness gameplan, buildout-readiness checklist: `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md`.
 
 # HANDOFF.md — Claude Code bootstrapping runbook
 
