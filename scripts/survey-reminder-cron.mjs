@@ -69,10 +69,22 @@ function nextFireInstantAt(from, hour, minute) {
 
 // ── POST the internal route ──────────────────────────────────────────
 
+/** Keep logged response bodies short — an unexpected HTML page (e.g. a login
+ * redirect target) must not dump kilobytes into the container log. */
+function truncateBody(text, max = 300) {
+  return text.length <= max ? text : `${text.slice(0, max)}… [truncated ${text.length} chars]`;
+}
+
 /**
  * Drive one fire: POST the internal, loopback-guarded reminder-tick route.
- * Resolves on success; throws on transport / non-2xx so the caller's try/catch
- * logs it.
+ * Resolves on success; throws on transport / redirect / non-200 so the caller's
+ * try/catch logs it.
+ *
+ * `redirect: 'manual'` is load-bearing: on 2026-07-03 the auth middleware was
+ * missing the /api/internal/survey/ exemption and 307'd this POST to /login —
+ * fetch's default redirect-following turned that into the login page's 200 and
+ * the tick "succeeded" while sending nothing. A redirect is ALWAYS a failure
+ * here; only a direct 200 from the route counts.
  */
 async function runFireOnce() {
   const headers = { 'content-type': 'application/json' };
@@ -80,12 +92,16 @@ async function runFireOnce() {
   const res = await fetch(`${BASE}/api/internal/survey/reminder-tick`, {
     method: 'POST',
     headers,
+    redirect: 'manual',
   });
   const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text}`);
+  if (res.status !== 200) {
+    const loc = res.headers.get('location');
+    throw new Error(
+      `HTTP ${res.status}${loc ? ` (redirect → ${loc})` : ''}: ${truncateBody(text)}`,
+    );
   }
-  return text;
+  return truncateBody(text);
 }
 
 // ── Schedule ─────────────────────────────────────────────────────────
@@ -148,4 +164,4 @@ if (isEntrypoint) {
   });
 }
 
-export { nextFireInstantAt };
+export { nextFireInstantAt, runFireOnce, truncateBody };

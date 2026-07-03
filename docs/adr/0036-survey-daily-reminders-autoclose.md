@@ -55,3 +55,24 @@ After processing reminders, if the campaign has **≥1 invite `submitted`** AND 
 - `scripts/` is already COPY'd wholesale into the runner image and there is no `.dockerignore`, so the new `.mjs` ships with no Dockerfile change.
 - Idempotent by construction: the 20h DB gate makes a restart-triggered re-fire, or a slightly-early fire, a no-op; a no-op also fires cleanly when no campaign is open.
 - Out of scope: reminder throttling/cap, per-recipient opt-out, SMS/other channels, reminders for closed/draft campaigns.
+
+## Post-acceptance addendum — 2026-07-03 first-fire incident
+
+The first production tick (2026-07-03 09:00 PT) sent nothing while logging
+success. Two stacked defects:
+
+1. **Middleware gap.** The auth middleware's public-path list exempted
+   `/api/internal/bonus/` but not the new `/api/internal/survey/` prefix, so the
+   session-less cron POST was 307'd to `/login`.
+2. **Redirect-following masked the failure.** The daemon's `fetch` followed the
+   307 to the login page, whose HTML arrived as a 200 — `res.ok` was true, so the
+   daemon logged the login page as a successful tick.
+
+Fix (same day): the predicate was extracted to `src/lib/public-paths.ts` (pure,
+edge-safe, unit-tested — the whole exemption list now has a regression test) with
+the `/api/internal/survey/` exemption added; the daemon POSTs with
+`redirect: 'manual'` and treats any redirect or non-200 as a failure; logged
+response bodies are truncated. The missed tick was re-fired manually in-network
+after deploy. Lesson recorded: **every new `/api/internal/*` route family needs a
+middleware exemption + a `public-paths.test.ts` case, and a session-less caller
+must never follow redirects.**

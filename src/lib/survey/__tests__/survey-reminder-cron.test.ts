@@ -7,8 +7,12 @@
 // daemon, and (b) the load-bearing "next fire" computation lands exactly on
 // 09:00 Pacific across both DST regimes.
 
-import { describe, it, expect } from 'vitest';
-import { nextFireInstantAt } from '../../../../scripts/survey-reminder-cron.mjs';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  nextFireInstantAt,
+  runFireOnce,
+  truncateBody,
+} from '../../../../scripts/survey-reminder-cron.mjs';
 
 /** The Pacific wall-clock "HH:MM" an absolute UTC instant lands on. */
 function pacificHHMM(at: Date): string {
@@ -58,5 +62,48 @@ describe('survey-reminder cron — nextFireInstantAt', () => {
       expect(pacificHHMM(fire)).toBe('09:00');
       expect(fire.getTime()).toBeGreaterThan(from.getTime());
     }
+  });
+});
+
+// Regression for 2026-07-03: the auth middleware (missing the
+// /api/internal/survey/ exemption) 307'd the tick POST to /login; fetch's
+// default redirect-following turned that into the login page's 200 and the
+// daemon logged a "successful" tick that sent nothing. runFireOnce must treat
+// ANY redirect or non-200 as a failure and never follow redirects.
+describe('survey-reminder cron — runFireOnce', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(status: number, body: string, headers: Record<string, string> = {}) {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      // The daemon must ask fetch NOT to follow redirects.
+      expect(init.redirect).toBe('manual');
+      return new Response(status === 204 ? null : body, { status, headers });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('returns the body on a direct 200', async () => {
+    stubFetch(200, '{"ok":true,"remindersSent":2}');
+    await expect(runFireOnce()).resolves.toContain('"remindersSent":2');
+  });
+
+  it('throws on a 307 login redirect instead of following it', async () => {
+    stubFetch(307, '', { location: '/login?next=%2Fapi%2Finternal%2Fsurvey%2Freminder-tick' });
+    await expect(runFireOnce()).rejects.toThrow(/HTTP 307.*\/login/s);
+  });
+
+  it('throws on a non-200 with the (truncated) body in the message', async () => {
+    stubFetch(503, 'x'.repeat(1000));
+    await expect(runFireOnce()).rejects.toThrow(/HTTP 503.*truncated 1000 chars/s);
+  });
+
+  it('truncateBody caps long bodies and passes short ones through', () => {
+    expect(truncateBody('short')).toBe('short');
+    const long = truncateBody('y'.repeat(500));
+    expect(long.length).toBeLessThan(400);
+    expect(long).toContain('[truncated 500 chars]');
   });
 });
