@@ -44,6 +44,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0034   | Operational intelligence survey system (`/admin/operations/intel` + `/survey/{token}`)                        | Accepted                                                        |
 | 0035   | Migration ordering: clean-replay invariant + CI clean-DB migration gate                                       | Accepted                                                        |
 | 0036   | Survey daily reminders + campaign auto-close (thin scheduler + internal route + 20h gate; extends 0034)       | Accepted                                                        |
+| 0037   | Loads & inventory foundations (rules table, outbound/commodity model, processed-units close, running balance) | Accepted                                                        |
 
 ## How to write a new ADR
 
