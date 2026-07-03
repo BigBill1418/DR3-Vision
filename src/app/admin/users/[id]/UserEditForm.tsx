@@ -36,6 +36,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
   const [siteId, setSiteId] = useState<string>(user.primary_site_id ?? sites[0]?.id ?? '');
   const [processorRole, setProcessorRole] = useState<string>(user.processor_role ?? '');
   const [allSites, setAllSites] = useState<boolean>(user.all_sites);
+  const [canManageRates, setCanManageRates] = useState<boolean>(user.can_manage_rates);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -71,6 +72,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           primary_site_id: siteId,
           processor_role: showProcessorRole ? processorRole || null : null,
           all_sites: role === 'manager' ? allSites : false,
+          can_manage_rates: role === 'manager' ? canManageRates : false,
         }),
       });
       if (!res.ok) {
@@ -224,6 +226,21 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
             <span className="flex flex-col gap-1">
               <span className="text-sm font-medium text-dr3-mist">{M.form.allSitesLabel}</span>
               <span className="text-xs text-dr3-mist-dim">{M.form.allSitesHelp}</span>
+            </span>
+          </label>
+        ) : null}
+        {role === 'manager' ? (
+          <label className="flex items-start gap-3" data-testid="admin-edit-can-manage-rates-field">
+            <input
+              type="checkbox"
+              checked={canManageRates}
+              onChange={(e) => setCanManageRates(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-dr3-steel-light/40 bg-dr3-space-2 text-dr3-cyan focus:ring-2 focus:ring-dr3-cyan"
+              data-testid="admin-edit-can-manage-rates"
+            />
+            <span className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-dr3-mist">{M.form.canManageRatesLabel}</span>
+              <span className="text-xs text-dr3-mist-dim">{M.form.canManageRatesHelp}</span>
             </span>
           </label>
         ) : null}

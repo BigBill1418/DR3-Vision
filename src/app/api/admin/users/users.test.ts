@@ -39,6 +39,7 @@ interface MockUser {
   pin_locked_until: Date | null;
   is_active: boolean;
   all_sites: boolean;
+  can_manage_rates: boolean;
   last_login_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -107,6 +108,7 @@ function insertUser(p: Partial<MockUser> & { id: string; name: string; role: Moc
     pin_locked_until: null,
     is_active: p.is_active ?? true,
     all_sites: p.all_sites ?? false,
+    can_manage_rates: p.can_manage_rates ?? false,
     last_login_at: null,
     created_at: now,
     updated_at: now,
@@ -188,6 +190,7 @@ vi.mock('@/lib/prisma', () => {
         pin_hash: data.pin_hash ?? null,
         is_active: data.is_active ?? true,
         all_sites: data.all_sites ?? false,
+        can_manage_rates: data.can_manage_rates ?? false,
       });
       return withSite(u);
     }),
@@ -204,6 +207,7 @@ vi.mock('@/lib/prisma', () => {
           'pin_hash',
           'is_active',
           'all_sites',
+          'can_manage_rates',
           'deleted_at',
           'last_login_at',
           'pin_failed_attempts',
@@ -297,6 +301,7 @@ interface UserResponseShape {
   primary_site_code: string | null;
   is_active: boolean;
   all_sites: boolean;
+  can_manage_rates: boolean;
   has_pin: boolean;
   deleted_at: string | null;
 }
@@ -611,6 +616,97 @@ describe('all_sites flag (ADR-0024) — create + update', () => {
     const body = (await res.json()) as { user: UserResponseShape };
     expect(body.user.role).toBe('admin');
     expect(body.user.all_sites).toBe(false);
+  });
+});
+
+describe('can_manage_rates flag (ADR-0040 D5) — create + update', () => {
+  beforeEach(() => {
+    mockSession = { user: { id: 'admin-1', role: 'admin' } };
+  });
+
+  it('creates a manager with can_manage_rates=true (Rick)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Rick',
+          role: 'manager',
+          email: 'rick@example.com',
+          primary_site_id: 'site-woodland',
+          can_manage_rates: true,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.can_manage_rates).toBe(true);
+  });
+
+  it('coerces can_manage_rates to false when creating an operator', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Op',
+          role: 'operator',
+          primary_site_id: 'site-woodland',
+          can_manage_rates: true,
+          pin: '1379',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.can_manage_rates).toBe(false);
+  });
+
+  it('toggles can_manage_rates on an existing manager via update', async () => {
+    insertUser({
+      id: 'mgr-rates',
+      name: 'Mgr Rates',
+      email: 'mgrrates@example.com',
+      role: 'manager',
+      primary_site_id: 'site-woodland',
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/admin/users/mgr-rates', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'update', can_manage_rates: true }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'mgr-rates' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.can_manage_rates).toBe(true);
+  });
+
+  it('clears can_manage_rates when a rate-manager is changed to admin', async () => {
+    insertUser({
+      id: 'mgr-to-admin',
+      name: 'Mgr ToAdmin',
+      email: 'mta@example.com',
+      role: 'manager',
+      primary_site_id: 'site-woodland',
+      can_manage_rates: true,
+    });
+    const { PATCH } = await import('./[id]/route');
+    const res = await PATCH(
+      makeReq('http://x/api/admin/users/mgr-to-admin', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'update', role: 'admin' }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      { params: Promise.resolve({ id: 'mgr-to-admin' }) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.can_manage_rates).toBe(false);
   });
 });
 

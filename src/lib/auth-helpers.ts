@@ -150,3 +150,87 @@ export async function checkAdmin(): Promise<AdminResult> {
     throw e;
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0040 D5 — scoped rate-table access
+//
+// Two gates for the four billing-rate tables (transport_rate_tiers,
+// account_haul_rates, container_rental_sites, fuel_prices):
+//   - READ  = manager OR admin (`requireRateRead`)
+//   - WRITE = admin OR the `can_manage_rates` flag (`requireRateManager`)
+//
+// `can_manage_rates` is read FRESH from the DB on every write (never carried in the
+// session token) and is consulted NOWHERE ELSE — it grants exactly these four
+// tables' writes and NEVER any admin power (hard rule #2 discipline). Because
+// `requireAdmin()` above checks `role === 'admin'` only, the flag cannot unlock any
+// `/admin/*` surface by construction.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface RateReadContext {
+  userId: string;
+  role: 'manager' | 'admin';
+}
+
+/** READ gate for the rate tables. no session → 401; operator → 403. */
+export async function requireRateRead(): Promise<RateReadContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  const role = session.user.role;
+  if (role !== 'manager' && role !== 'admin') throw new Response('forbidden', { status: 403 });
+  return { userId: session.user.id, role };
+}
+
+export interface RateManagerContext {
+  userId: string;
+  role: 'manager' | 'admin';
+  /** How write access was granted — for the audit/log line. */
+  via: 'admin' | 'can_manage_rates';
+}
+
+/**
+ * WRITE gate for the rate tables. Grants iff `role === 'admin'` OR the caller's
+ * (fresh-from-DB) `can_manage_rates` flag is true. no session → 401; anyone else
+ * (operator, or a manager without the flag) → 403.
+ */
+export async function requireRateManager(): Promise<RateManagerContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  const role = session.user.role;
+  if (role === 'admin') return { userId: session.user.id, role, via: 'admin' };
+  if (role === 'manager') {
+    const u = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { can_manage_rates: true },
+    });
+    if (u?.can_manage_rates) return { userId: session.user.id, role, via: 'can_manage_rates' };
+  }
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type RateReadResult = { ok: true; ctx: RateReadContext } | { ok: false; status: 401 | 403 };
+
+export async function checkRateRead(): Promise<RateReadResult> {
+  try {
+    return { ok: true, ctx: await requireRateRead() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}
+
+export type RateManagerResult =
+  | { ok: true; ctx: RateManagerContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkRateManager(): Promise<RateManagerResult> {
+  try {
+    return { ok: true, ctx: await requireRateManager() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}

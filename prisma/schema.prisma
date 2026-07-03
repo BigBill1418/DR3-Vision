@@ -196,6 +196,7 @@ model User {
   // (user management, bonus amendment/override, /admin). Always false for
   // operators and irrelevant for admins (who already see all sites).
   all_sites Boolean @default(false)
+  can_manage_rates Boolean @default(false) // ADR-0040 — rate-table write access (D5)
 
   // ADR-0030 — super-admin gate for the Bill-only daily-production-report
   // admin tile (`/admin/production-report`). Distinct from `role = admin`:
@@ -1844,4 +1845,118 @@ model AuditRun {
 
   @@index([site_id, started_at])
   @@map("audit_runs")
+}
+
+// ADR-0040 — billing rate infrastructure
+//
+// Every rate the P2 invoice layer (ADR-0041) reads that is NOT already in
+// `state_program_rules` lives here, in effective-dated tables, so invoice
+// generation is pure computation. All money is integer CENTS; effective
+// windows are `@db.Date` with the same strict resolver semantics as
+// `state_program_rules` / `processor_bonus_rules`.
+//
+// COORDINATION (ADR-0040): this whole block is self-contained at the end of
+// the schema (sibling agents own audit/mymrc/loads models). To avoid touching
+// the shared `Source`/`Site` models with back-relation fields, the FK columns
+// below (`source_id`, `site_id`, `created_by`) are declared as plain scalars —
+// the referential-integrity constraints are created at the DB level in the
+// migration `20260706_billing_rate_infrastructure`, exactly as
+// `state_program_rules.created_by` is a bare column today.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0040 D1 (Addendum B2) — freight is a ZONE table, not $/mile: the mileage
+/// band a haul falls in determines the flat freight charge. Jurisdiction is CA|OR
+/// (the freight table's own key, distinct from the site `Jurisdiction` enum). Tiers
+/// for a jurisdiction+effective window MUST be contiguous from 0 and non-overlapping
+/// — the writer validates the whole effective set (`tier-validation.ts`); no DB
+/// constraint expresses it cleanly. A renegotiation lands as NEW rows with a new
+/// `effective_from`; history is never edited. No OR tiers are seeded (unknown until
+/// Rick provides them — the resolver returns a typed error for OR freight meanwhile).
+enum TransportRateJurisdiction {
+  CA
+  OR
+}
+
+model TransportRateTier {
+  id             String                    @id @default(uuid())
+  jurisdiction   TransportRateJurisdiction
+  min_miles      Int // inclusive lower bound
+  max_miles      Int // inclusive upper bound
+  rate_cents     Int // flat freight charge for a haul in this band
+  effective_from DateTime                  @db.Date
+  effective_to   DateTime?                 @db.Date
+  note           String?
+  created_by     String? // users.id of the actor; bare column (see block header)
+  created_at     DateTime                  @default(now())
+  updated_at     DateTime                  @updatedAt
+
+  @@index([jurisdiction, effective_from])
+  @@map("transport_rate_tiers")
+}
+
+/// ADR-0040 D2 (Addendum B2 `variables!H1:Q~86`) — per-account freight override. In
+/// the freight resolver an override in force for a source's date beats the tier
+/// table. Seeded EMPTY (populated from the workbook variables sheet only after Rick
+/// confirms which overrides are current — ADR-0040 consequences).
+model AccountHaulRate {
+  id             String    @id @default(uuid())
+  source_id      String // FK → sources.id (constraint in migration)
+  rate_cents     Int
+  effective_from DateTime  @db.Date
+  effective_to   DateTime? @db.Date
+  note           String?
+  created_by     String?
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  @@index([source_id, effective_from])
+  @@map("account_haul_rates")
+}
+
+/// ADR-0040 D3 (mission §3.1) — monthly trailer/container rentals. Monthly total =
+/// Σ active rows in force for the month. Seeded EMPTY (Rick settles the
+/// $10,800-vs-$10,500 June/July discrepancy when he enters real rows — seeding
+/// contested numbers would launder a discrepancy into "truth", ADR-0040 D3).
+model ContainerRentalSite {
+  id                 String    @id @default(uuid())
+  site_id            String // FK → sites.id (which DR3 facility carries the cost)
+  location_name      String // human label for the rental location
+  source_id          String? // optional FK → sources.id (rental tied to a source)
+  trailer_count      Int
+  trailer_size       String? // e.g. "53ft", "40ft"; free text, sizes vary
+  monthly_rate_cents Int
+  active             Boolean   @default(true)
+  effective_from     DateTime  @db.Date
+  effective_to       DateTime? @db.Date
+  note               String?
+  created_by         String?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  @@index([site_id, effective_from])
+  @@map("container_rental_sites")
+}
+
+/// ADR-0040 D4 (Addendum B3) — weekly diesel index for the CA fuel surcharge. One
+/// row per ISO week (`week_of` = the Monday of that week, UNIQUE). `source=manual`
+/// wins over a later `eia_api` fetch for the same week only via an explicit, audited
+/// overwrite. A missing week's price at invoice time is a typed error, never a
+/// silent $0 (`fuel.ts` `MissingFuelPriceError`).
+enum FuelPriceSource {
+  eia_api
+  manual
+}
+
+model FuelPrice {
+  id          String          @id @default(uuid())
+  week_of     DateTime        @unique @db.Date // Monday of the ISO week
+  usd_per_gal Decimal         @db.Decimal(5, 3)
+  source      FuelPriceSource
+  fetched_at  DateTime // when this price was fetched/entered
+  note        String?
+  created_by  String?
+  created_at  DateTime        @default(now())
+  updated_at  DateTime        @updatedAt
+
+  @@map("fuel_prices")
 }

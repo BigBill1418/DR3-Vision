@@ -70,6 +70,9 @@ export const adminMessages = {
     allSitesLabel: 'Access to all sites',
     allSitesHelp:
       'Lets this manager see both Eugene and Woodland — not just their primary site. Grants no admin powers (no user management, bonus amendment, or override). For managers only.',
+    canManageRatesLabel: 'Can manage billing rates',
+    canManageRatesHelp:
+      'Lets this manager edit the billing-rate tables (transport tiers, account overrides, container rentals, fuel prices) under Admin → Billing Rates. Grants no other admin power. For managers only (ADR-0040).',
     pinLabel: 'PIN (4 digits)',
     pinConfirmLabel: 'Confirm PIN',
     pinHelp:

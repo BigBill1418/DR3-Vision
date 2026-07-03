@@ -50,6 +50,7 @@ const createSchema = z.object({
   processor_role: optionalProcessorRole,
   pin: optionalPin,
   all_sites: z.boolean().optional(), // ADR-0024 (manager-only; coerced in the model)
+  can_manage_rates: z.boolean().optional(), // ADR-0040 D5 (manager-only; coerced in the model)
 });
 
 const listQuerySchema = z.object({
@@ -93,6 +94,7 @@ export async function POST(req: Request) {
     processor_role: parsed.data.processor_role,
     pin: parsed.data.pin,
     all_sites: parsed.data.all_sites ?? false,
+    can_manage_rates: parsed.data.can_manage_rates ?? false,
   };
 
   const result = await createUser(input, {

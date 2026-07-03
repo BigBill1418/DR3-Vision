@@ -5,6 +5,56 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-03 (ADR-0040 — billing rate infrastructure)
+
+- **Billing rate infrastructure (ADR-0040, P2; first of 0040/0041/0042).** Puts every
+  rate the invoice layer needs that isn't already in `state_program_rules` into
+  effective-dated tables so ADR-0041 invoicing becomes pure computation. **Schema
+  (one additive migration `20260706_billing_rate_infrastructure`, clean-replays on
+  empty PG16):** four new tables — `transport_rate_tiers` (freight ZONE table,
+  jurisdiction `CA|OR`, mileage band → flat `rate_cents`, effective-dated),
+  `account_haul_rates` (per-account freight override, FK→sources, effective-dated),
+  `container_rental_sites` (monthly trailer rentals, FK→sites/sources, `active`,
+  effective-dated), `fuel_prices` (`week_of @db.Date UNIQUE`, `usd_per_gal
+  Decimal(5,3)`, source `eia_api|manual`, `fetched_at`) — plus `users.can_manage_rates`
+  (scoped rate-write flag). FK constraints are created at the DB level (migration) so
+  the ADR-0040 schema block stays self-contained (no back-relation fields on the
+  sibling-owned `Source`/`Site` models).
+- **Seeds:** the CA freight zone table (7 tiers, effective 2026-01-01) is seeded;
+  `account_haul_rates` and `container_rental_sites` seed **empty by design** (Rick
+  populates from the workbook after confirming current values — seeding contested
+  numbers would launder a discrepancy into "truth"); **no OR tiers** are seeded (the
+  freight resolver returns a typed error for OR until they exist).
+- **Money-path libraries (`src/lib/billing-rates/`, all TDD):** `tier-validation.ts`
+  (a proposed tier set must be contiguous-from-0, non-overlapping, no gaps — typed
+  problems name the offending rows); `freight-resolver.ts` (`resolveFreightCents` —
+  account override → tier by `Source.canonical_mileage` → typed
+  `FreightUnresolvableError`, with provenance ref for the retro-audit; never a silent
+  $0); `fuel.ts` (Monday-of-week normalization, `price > $5.05` trigger predicate,
+  `(price/mpg)×miles` surcharge, typed `MissingFuelPriceError`; OR guarded by the
+  existing `RuleStructurallyDisallowedError`); `eia.ts` (EIA API **v2**
+  `petroleum/pri/gnd` weekly West-Coast PADD-5 ULSD fetch; **fail-open** — absent
+  `EIA_API_KEY` never crashes).
+- **Weekly fuel fetch:** `scripts/fuel-price-cron.mjs` (thin Pacific daemon, Tue 06:00
+  PT) → internal route `/api/internal/billing/fuel-fetch` (loopback-guarded; **added
+  to `public-paths.ts` + its test on day one** per the ADR-0036 lesson) → upserts
+  `fuel_prices` (manual entries never overwritten; a fetch failure pages
+  `dr3-vision-system` fingerprint `fuel-fetch-failed`, success silent). New compose
+  service `fuel-price-fetch`; `EIA_API_KEY` wired fail-open in `app` env +
+  `.env.example`.
+- **Scoped rate-write access (D5):** `users.can_manage_rates` grants writes to the four
+  rate tables ONLY (never any admin power — enforced by construction:
+  `requireAdmin` checks role, the flag is never in the session and is read fresh from
+  the DB in `requireRateManager`). Grantable from `/admin/users` (mirrors the
+  `all_sites` toggle, manager-only). Admin rate-table CRUD under
+  `/api/admin/billing-rates/*` (write = admin|can_manage_rates, read = manager+); every
+  write emits an audit row + structured log (actor, table, before→after).
+- **Variance report (D6):** `/dashboard/billing-variance` + CSV export
+  (`/api/manager/billing-rates/variance?format=csv`) — per trans-charge source,
+  tier-now vs tier-last-billed, per-haul delta, monthly leakage. Last-billed history
+  reads through a provider seam; until the ADR-0039 audit-engine workbook staging
+  lands the report shows an honest empty state (tier-now only) with a TODO banner.
+
 ### Added — 2026-07-03
 
 - **Loads & inventory foundations (ADR-0037, P1 groundwork; reconciled to mission
