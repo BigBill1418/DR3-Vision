@@ -9,28 +9,32 @@ export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ token: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function SurveyTokenPage({ params }: PageProps) {
+export default async function SurveyTokenPage({ params, searchParams }: PageProps) {
   const { token } = await params;
   if (!isValidTokenShape(token)) notFound();
+
+  // Admin preview (?preview=1, set by InvitePreview.tsx) must be a pure read:
+  // it must NOT flip a real, sent invite to `opened` or stamp first_opened_at.
+  // Only an actual recipient hit (no preview flag) records the open.
+  const { preview } = await searchParams;
+  const isPreview = preview === '1';
 
   const invite = await getInviteByToken(token);
   if (!invite) notFound();
   if (invite.campaign.status === 'closed') notFound();
 
-  const hdrs = await headers();
-  const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
-  const userAgent = hdrs.get('user-agent');
-  await markInviteOpened(invite.id, { ip, userAgent }).catch(() => undefined);
+  if (!isPreview) {
+    const hdrs = await headers();
+    const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    const userAgent = hdrs.get('user-agent');
+    await markInviteOpened(invite.id, { ip, userAgent }).catch(() => undefined);
+  }
 
   if (invite.submitted_at !== null) {
-    return (
-      <ThankYou
-        submittedAt={invite.submitted_at}
-        recipientName={invite.recipient_name}
-      />
-    );
+    return <ThankYou submittedAt={invite.submitted_at} recipientName={invite.recipient_name} />;
   }
 
   // SurveyForm receives only what the client needs — never the raw token in

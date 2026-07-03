@@ -27,10 +27,11 @@ c. Review the question packet. Each question shows: position, kind (short_text/l
 d. Edit individual questions if needed. Add, remove, or reorder questions.
 e. When satisfied, click "Preview".
 f. The preview modal shows two tabs:
-   - **Email preview** — the EXACT email the recipient will receive, with sender display name, reply-to, and subject visible above the rendered body.
-   - **Survey page preview** — the EXACT survey page the recipient will see when they click the link.
-g. If anything's off, click "Edit questions" and adjust. The invite stays in `draft` until you approve.
-h. When everything looks right, click "Approve". Invite moves to status `approved`.
+
+- **Email preview** — the EXACT email the recipient will receive, with sender display name, reply-to, and subject visible above the rendered body.
+- **Survey page preview** — the EXACT survey page the recipient will see when they click the link.
+  g. If anything's off, click "Edit questions" and adjust. The invite stays in `draft` until you approve.
+  h. When everything looks right, click "Approve". Invite moves to status `approved`.
 
 If you edit questions on an `approved` invite, approval clears back to `draft` and you must re-preview and re-approve.
 
@@ -79,3 +80,55 @@ LEFT JOIN survey_responses r ON r.invite_id = i.id AND r.is_draft = false
 WHERE i.campaign_id = (SELECT id FROM survey_campaigns WHERE slug = 'dr3-intel-2026-06')
 GROUP BY i.recipient_name ORDER BY i.recipient_name;
 ```
+
+## Launch status — LIVE (2026-06-23)
+
+The `dr3-intel-2026-06` campaign is **live**: all 10 invites sent 2026-06-23 ~1:38 PM PT from `dr3-vision@svdp.us`. Sending is gated — the **Send Campaign** button requires typing the campaign title and the server re-verifies `confirmed_recipient_count == approved-count`; only `approved` invites are emailed. As of 2026-06-24 AM: 4 submitted, 3 opened, 3 not yet opened. **Paused — close the campaign (which triggers the ClaudeSync markdown export) once enough responses are in.** Full launch record, the live PT-converted tracker query, and how the send was driven: `docs/handoffs/2026-06-23-survey-launch.md`.
+
+### Nudge round — 2026-07-02 (PT)
+
+Standing at 7/10 submitted (Shannon Rockwell came in 2026-07-02 9:20 AM PT), Bill directed a
+nudge round for the three outstanding invites. All three sends were accepted by Graph (202),
+same branded shell, from `dr3-vision@svdp.us` as "Bill Barnard via DR3-Vision", reply-to
+`bill.barnard@svdp.us`, existing tokens re-linked (no token rotation, no DB mutation —
+`sent_at`/status untouched, so the diagnostic queries above still reflect the ORIGINAL send):
+
+- **Leisha Wallace** (opened 6/23, zero answers) — "Reminder:" subject, nudge copy.
+- **Kelsey Ruhland** (opened 6/24, 10 answers saved) — "Reminder:" subject, copy notes her
+  progress is saved and waiting; button reads "Finish your survey".
+- **Mary Scott** (never opened) — original subject + original intro re-sent, prefixed with a
+  "resending in case the June 23 original didn't reach you" line. If this one also shows no
+  open, assume delivery/filtering trouble and switch channels (hallway ask / different address)
+  rather than sending a third copy.
+
+Mechanics: the app has no resend endpoint (adding one is a candidate follow-up if a second
+round is ever needed); the sends were driven by a one-off zero-dependency Node script executed
+inside `dr3-vision-app` on CHAD-HQ (env supplies the Entra creds), replicating
+`sendSystemEmail`'s Graph `POST /users/{from}/sendMail` call and the ADR-0034 invite shell
+verbatim. Script was deleted from the host and container after the run (it embeds live tokens).
+
+### Automated daily reminders — 2026-07-03 (ADR-0036)
+
+The manual nudge round is now a standing system. The `dr3-vision-survey-reminder` container
+(compose service `survey-reminder`) fires **once a day at 09:00 PT** and, for every OPEN
+campaign, sends **one reminder per unsubmitted invite per day** until they submit — the same
+three tiers as the manual round, chosen automatically from each invite's live state:
+
+- opened with saved answers → "your progress is saved", button _Finish your survey_
+- opened but nothing saved → friendly nudge, button _Open your survey_
+- sent but never opened → original subject + a "resending in case it got buried" line
+
+A 20h database gate means a container restart or a slightly-early fire never double-sends. When
+the **last** response comes in (every invite is `submitted`, with only drafts remaining), the
+campaign **auto-closes** and Bill gets one `dr3-vision-system` ntfy — then export as usual with
+the admin **Export** button (auto-close does NOT export for you).
+
+**How to stop the reminders** (they are unbounded by design — daily until complete):
+
+- Preferred: **Close the campaign** in the admin UI (`/admin/operations/intel/<campaign>`).
+  Reminders only touch OPEN campaigns, so closing stops them immediately.
+- Or stop the daemon: `docker stop dr3-vision-survey-reminder` (stops reminders for ALL
+  campaigns until it is started again).
+
+First automated reminders fire at the first 09:00 PT after deploy (`last_reminder_at` starts
+NULL; the 2026-07-02 manual round did not set it).

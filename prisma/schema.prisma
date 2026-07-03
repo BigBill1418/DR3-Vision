@@ -1126,6 +1126,11 @@ model SurveyInvite {
   first_opened_at  DateTime?
   submitted_at     DateTime?
   last_status      Int?
+  // ADR-0036 — daily reminder tracking. `last_reminder_at` gates the once-per-day
+  // cron (send only when NULL or older than the 20h window); `reminder_count`
+  // records how many reminders have gone out. Stamped only on a successful send.
+  last_reminder_at DateTime?
+  reminder_count   Int @default(0)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   questions SurveyQuestion[]

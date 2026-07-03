@@ -84,10 +84,7 @@ describe('createCampaign', () => {
     const campaignRow = { id: 'camp-1', title: 'T', slug: 's', from_address: 'dr3-vision@svdp.us' };
     tx.surveyCampaign.create.mockResolvedValue(campaignRow);
 
-    const out = await createCampaign(
-      { title: 'T', slug: 's', intro_text: 'hello' },
-      ACTOR,
-    );
+    const out = await createCampaign({ title: 'T', slug: 's', intro_text: 'hello' }, ACTOR);
 
     expect(out).toBe(campaignRow);
     expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
@@ -149,7 +146,12 @@ describe('addInvite', () => {
 
     await addInvite(
       'camp-1',
-      { recipient_name: 'Rick', recipient_email: 'Rick@svdp.us', role_label: 'Eugene', questions: QUESTIONS },
+      {
+        recipient_name: 'Rick',
+        recipient_email: 'Rick@svdp.us',
+        role_label: 'Eugene',
+        questions: QUESTIONS,
+      },
       ACTOR,
     );
 
@@ -169,7 +171,12 @@ describe('addInvite', () => {
     await expect(
       addInvite(
         'camp-1',
-        { recipient_name: 'Rick', recipient_email: 'rick@svdp.us', role_label: 'Eugene', questions: QUESTIONS },
+        {
+          recipient_name: 'Rick',
+          recipient_email: 'rick@svdp.us',
+          role_label: 'Eugene',
+          questions: QUESTIONS,
+        },
         ACTOR,
       ),
     ).rejects.toMatchObject({ reason: 'duplicate_email', status: 409 });
@@ -179,11 +186,22 @@ describe('addInvite', () => {
   it('6. is case-insensitive on recipient_email (normalizes to lowercase)', async () => {
     tx.surveyCampaign.findUnique.mockResolvedValue({ id: 'camp-1', status: 'draft' });
     tx.surveyInvite.findUnique.mockResolvedValue(null);
-    tx.surveyInvite.create.mockResolvedValue({ id: 'inv-1', recipient_name: 'R', recipient_email: 'rick@svdp.us', role_label: 'E', questions: [] });
+    tx.surveyInvite.create.mockResolvedValue({
+      id: 'inv-1',
+      recipient_name: 'R',
+      recipient_email: 'rick@svdp.us',
+      role_label: 'E',
+      questions: [],
+    });
 
     await addInvite(
       'camp-1',
-      { recipient_name: 'R', recipient_email: 'RICK@SVDP.US', role_label: 'E', questions: QUESTIONS },
+      {
+        recipient_name: 'R',
+        recipient_email: 'RICK@SVDP.US',
+        role_label: 'E',
+        questions: QUESTIONS,
+      },
       ACTOR,
     );
 
@@ -201,7 +219,12 @@ describe('addInvite', () => {
     await expect(
       addInvite(
         'camp-1',
-        { recipient_name: 'R', recipient_email: 'r@svdp.us', role_label: 'E', questions: QUESTIONS },
+        {
+          recipient_name: 'R',
+          recipient_email: 'r@svdp.us',
+          role_label: 'E',
+          questions: QUESTIONS,
+        },
         ACTOR,
       ),
     ).rejects.toMatchObject({ reason: 'campaign_locked', status: 409 });
@@ -243,7 +266,11 @@ describe('updateInviteQuestions', () => {
 describe('approveInvite', () => {
   it('10. flips draft → approved, records approved_by_user_id, writes audit', async () => {
     tx.surveyInvite.findUnique.mockResolvedValue({ id: 'inv-1', status: 'draft' });
-    tx.surveyInvite.update.mockResolvedValue({ id: 'inv-1', status: 'approved', approved_at: new Date() });
+    tx.surveyInvite.update.mockResolvedValue({
+      id: 'inv-1',
+      status: 'approved',
+      approved_at: new Date(),
+    });
 
     await approveInvite('inv-1', ACTOR);
 
@@ -322,7 +349,11 @@ describe('submitResponse', () => {
       responses: [{ question_id: 'q1', answer_text: 'an answer', answer_json: null }],
       questions: [{ id: 'q1', is_required: true }],
     });
-    tx.surveyInvite.update.mockResolvedValue({ id: 'inv-1', status: 'submitted', submitted_at: new Date() });
+    tx.surveyInvite.update.mockResolvedValue({
+      id: 'inv-1',
+      status: 'submitted',
+      submitted_at: new Date(),
+    });
 
     await submitResponse('inv-1', PUBLIC_ACTOR);
 
@@ -349,7 +380,9 @@ describe('saveDraft', () => {
       where: { invite_id_question_id: { invite_id: string; question_id: string } };
     };
     expect(arg.where.invite_id_question_id.invite_id).toBe('inv-1');
-    expect(arg.where.invite_id_question_id.question_id).toBe('11111111-1111-1111-1111-111111111111');
+    expect(arg.where.invite_id_question_id.question_id).toBe(
+      '11111111-1111-1111-1111-111111111111',
+    );
   });
 
   it('17. rejects with already_submitted after submit', async () => {
@@ -385,7 +418,11 @@ describe('markInviteOpened', () => {
 describe('closeCampaign', () => {
   it('19. flips status to closed and writes audit; idempotent re-close throws invalid_status', async () => {
     tx.surveyCampaign.findUnique.mockResolvedValueOnce({ id: 'camp-1', status: 'open' });
-    tx.surveyCampaign.update.mockResolvedValue({ id: 'camp-1', status: 'closed', closed_at: new Date() });
+    tx.surveyCampaign.update.mockResolvedValue({
+      id: 'camp-1',
+      status: 'closed',
+      closed_at: new Date(),
+    });
 
     await closeCampaign('camp-1', ACTOR);
     const upd = callArg(tx.surveyCampaign.update) as { data: { status: string } };
@@ -400,6 +437,25 @@ describe('closeCampaign', () => {
       status: 409,
     });
     expect(tx.surveyCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it('19b. (ADR-0036) a SystemActor audits under actor_label, not actor_user_id', async () => {
+    tx.surveyCampaign.findUnique.mockResolvedValueOnce({ id: 'camp-1', status: 'open' });
+    tx.surveyCampaign.update.mockResolvedValue({
+      id: 'camp-1',
+      status: 'closed',
+      closed_at: new Date(),
+    });
+
+    await closeCampaign('camp-1', { actorLabel: 'system:survey-reminder-cron' });
+
+    const audit = callArg(tx.auditLog.create) as { data: Record<string, unknown> };
+    expect(audit.data['actor_label']).toBe('system:survey-reminder-cron');
+    expect(audit.data['actor_user_id']).toBeUndefined();
+    expect(audit.data['ip']).toBeNull();
+    expect(audit.data['user_agent']).toBeNull();
+    expect(audit.data['action']).toBe('update');
+    expect((audit.data['after'] as { status: string }).status).toBe('closed');
   });
 });
 
