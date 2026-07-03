@@ -2,7 +2,7 @@
 
 **Status:** PROPOSED — awaiting operator review (Bill)
 **Date:** 2026-07-03
-**Relates to:** mission record §6-P1 (P1 promoted on the accepted 8/1 coverage gap), §2.2 #4, §4.1; **Addendum A §A1/§A2** (Audit Workbench + unit categories); ADR-0037 (operational tables incl. category-quantified daily-close lines), ADR-0038 (mirror tables); survey build-inputs doc §B (`docs/operations-intel/dr3-intel-2026-06/build-inputs-2026-07-03.md`)
+**Relates to:** mission record §6-P1 (P1 promoted on the accepted 8/1 coverage gap), §2.2 #4, §4.1; **Addendum A §A1** (Audit Workbench) as corrected by **Addendum B §B1/§B4** (source-type categories, close model); ADR-0037 (operational tables, post-Addendum-B shape), ADR-0038 (mirror tables); survey build-inputs doc §B (`docs/operations-intel/dr3-intel-2026-06/build-inputs-2026-07-03.md`)
 **Series:** third of three P1 ADRs — 0037 foundations (accepted), 0038 ingestion (accepted), **0039 audit (this)**
 
 ## Context
@@ -30,9 +30,9 @@ first, OR follows — same code, per-site rules):
 |---|---|---|
 | C1 | Inbound units: verified `inbound_loads` vs `mymrc_hauls_mirror` (by retrac/haul id, units, date) | logs ↔ MyMRC |
 | C2 | Processed: `processed_units_daily` (program + non-program) vs `mymrc_processed_mirror` | logs ↔ MyMRC |
-| C3 | Outbound: `outbound_materials`+`renovator_shipments`+`landfilled_units` vs `mymrc_outbound_mirror` (by ticket/material id, weight, date) | logs ↔ MyMRC |
+| C3 | Outbound: `outbound_materials` (all sub-categories incl. renovation) + `landfilled_units` vs `mymrc_outbound_mirror` (by ticket/material id, weight, date) | logs ↔ MyMRC |
 | C4 | Billing basis: program-units-processed in window vs billed program units (P2 invoices; workbooks for historical windows) | logs ↔ billing |
-| C5 | Program/non-program conservation: processed program units ≤ program units available (inbound program − prior processed program − program renovator outflow); renovation attribution rule (Rick Q11) | internal invariant |
+| C5 | Program/non-program conservation: processed program units ≤ program units available (inbound program − prior processed program − program renovation outflow); renovation attribution rule (Rick Q11; renovation = outbound sub-category per B1) | internal invariant |
 | C6 | Inventory continuity: computed running balance day-over-day vs any physical snapshot; flags the "Friday doesn't carry to Monday" class (Janette Q11) | internal invariant |
 | C7 | Deadline compliance: MyMRC entry lateness vs contract clocks (3-business-day inbound, 1-business-day processed, 3-day outbound weights) — **outbound lateness clock starts at EOD**, not ticket time (Janette Q1: Material # only exists at end-of-day MyMRC entry) | logs ↔ MyMRC |
 
