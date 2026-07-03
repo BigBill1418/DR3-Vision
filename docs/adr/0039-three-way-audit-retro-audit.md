@@ -36,6 +36,10 @@ first, OR follows — same code, per-site rules):
 | C6 | Inventory continuity: computed running balance day-over-day vs any physical snapshot; flags the "Friday doesn't carry to Monday" class (Janette Q11) | internal invariant |
 | C7 | Deadline compliance: MyMRC entry lateness vs contract clocks (3-business-day inbound, 1-business-day processed, 3-day outbound weights) — **outbound lateness clock starts at EOD**, not ticket time (Janette Q1: Material # only exists at end-of-day MyMRC entry) | logs ↔ MyMRC |
 
+C6's continuity equation is Addendum B §B4 verbatim: `End = Start + Inbound −
+Stripped − WholeUnitsSold − Landfilled`, with the non-program ledger checked
+separately and `Saved` excluded until its semantics land (B10-2).
+
 Missing-counterpart, value-mismatch, and date-mismatch are distinct finding types.
 **Tolerance windows are data, not code** (per-check rows in a small
 `audit_check_config`): e.g. C3 tolerates same-day gaps until EOD+1; vendor-invoice
@@ -87,6 +91,16 @@ The comparators take windows as arguments — the "retro" part is a data problem
   §4.1 sum-range-drift audit**: recompute every Summary figure from the workbook's
   own detail rows and flag rows the template's ranges dropped (the fuel rows
   71–130 class → "money already dropped" report).
+- **Known defects the retro-audit must reproduce** (now three named exhibits):
+  the Friday→Monday carryover failure (Janette Q11); the **DAY6 broken inventory
+  roll** (hardcoded 2863 instead of the prior-day formula — Addendum B §B4);
+  and the **two-artifact drift** between the daily log and the billing workbook
+  (June rentals $10,800 vs $10,500 — §B8; surfaced as a finding for Rick to
+  classify per B10-7). The §B9 defect classes (hand-stretched SUM end-rows,
+  validation windows that exclude valid values) inform parser warnings.
+- **Site-name alias resolution is a precondition** for historical joins —
+  ADR-0037's `source_aliases` table (B7) is the mechanism; unresolvable names
+  surface as their own finding kind rather than silently dropping rows.
 - **Acceptance (§7-d):** reproduces Kelsey's known June/July findings; quantifies
   the Friday→Monday carryover defect; runs over the 8/1→ship gap on demand.
 
@@ -96,10 +110,13 @@ P1 is **engine + workbench**: the engine (D1–D4) computes; the workbench is th
 site-scoped surface transcribing the shortcuts Kelsey hand-built into the dynamic
 daily log:
 
-- **Category rollups** — daily inbound/processed counts by unit category
-  (ADR-0037's `daily_close_lines` × `unit_categories`, minimum
-  mattress/foundation; auto-extends as categories land from Kelsey's live file —
-  the workbench renders whatever categories exist, no code change per category).
+- **Category rollups** (per Addendum B §B1 — categories are load-source types,
+  not unit types): inbound counts by source type (standard hauls / unpaid drop-off
+  / incentive drop-off / illegal drop-off / event) as queries over
+  `inbound_loads` + `consumer_dropoffs`; outbound by commodity × sub-category
+  (the daily-log 9 commodities × renovation/baled/shredded). Program vs
+  non-program derives from the source-site classification (B7) — the rollup
+  shows both ledgers.
 - **Auto outbound weight calculation** — derived display only, never entered:
   bale count × avg-per-bale from `outbound_materials`; flagged when a manual
   weight disagrees with the derivation.
@@ -125,8 +142,9 @@ surface = the findings review for the billing window, closed out before invoices
 
 ## Out of scope
 
-Invoice/Summary generation (P2) · **Addendum A §A3 `collection_site_transport_rates`
-+ rate-variance report (P2)** — but the retro-audit is designed for it: historical
+Invoice/Summary generation (P2) · **transport rate card (P2; Addendum B §B2 corrected model:
+effective-dated `transport_rate_tiers` zone table + `account_haul_rates`
+overrides + per-site canonical mileage) and the rate-variance report** — but the retro-audit is designed for it: historical
 transport-charged hauls will be priced under the effective-dated rate in force, so
 the A3 underbilling (Stockton-era mileage, +34%→+1240% deltas) is quantifiable the
 moment the rate table lands · **§A4 renovator component-only shape** (landed in
