@@ -1,0 +1,71 @@
+{
+  "orderedByInfo": [
+    {
+      "label": "Haul ID",
+      "isAscending": true
+    }
+  ],
+  "scope": [
+    "All hauls"
+  ],
+  "filteredByLabels": [
+    "Status",
+    "My Haul",
+    "Docking Appointment"
+  ],
+  "recordIdActionsList": [
+    {
+      "recordId": "a2KUJ00000FQDgv2AH"
+    },
+    {
+      "recordId": "a2KUJ00000FeFHR2A3"
+    },
+    {
+      "recordId": "a2KUJ00000FzBab2AF"
+    },
+    {
+      "recordId": "a2KUJ00000G4QSX2A3"
+    },
+    {
+      "recordId": "a2KUJ00000G5Gir2AF"
+    }
+  ],
+  "columnWidthMapping": {
+    "Recycling_Center_Lookup__r.Name": 106,
+    "Docking_Appointment_Time__c": 140,
+    "Docking_Appointment_Dock_Door__c": 181,
+    "Docking_Appointment_Date__c": 78,
+    "Rate_ID__c": 726,
+    "Docking_Appointment_Id__c": 82,
+    "Status__c": 119,
+    "Name": 74
+  },
+  "wrappedColumns": [],
+  "offset": 14,
+  "hasMoreData": false,
+  "filterTitle": "Docking Appointments (RC)",
+  "isErrorListView": false,
+  "entityLabelPlural": "hauls",
+  "fields": [
+    "LastModifiedDate",
+    "Recycling_Center_Lookup__r.CreatedDate",
+    "Recycling_Center_Lookup__r.RecordTypeId",
+    "Docking_Appointment_Date__c",
+    "Recycling_Center_Lookup__c",
+    "Name",
+    "SystemModstamp",
+    "Recycling_Center_Lookup__r.Name",
+    "Docking_Appointment_Dock_Door__c",
+    "Docking_Appointment_Time__c",
+    "Recycling_Center_Lookup__r.SystemModstamp",
+    "CreatedDate",
+    "Rate_ID__c",
+    "Recycling_Center_Lookup__r.Id",
+    "Docking_Appointment_Id__c",
+    "Id",
+    "Status__c",
+    "LastModifiedById",
+    "Recycling_Center_Lookup__r.LastModifiedById",
+    "Recycling_Center_Lookup__r.LastModifiedDate"
+  ]
+}

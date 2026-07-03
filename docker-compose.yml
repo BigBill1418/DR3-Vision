@@ -179,16 +179,19 @@ services:
       retries: 3
 
   mymrc-scrape:
-    # DISABLED 2026-06-06 (operator request) — the MyMRC scrape is OFF until the
-    # MyMRC service-account credentials are provisioned. The `mymrc` Compose
-    # profile keeps this config intact but excludes the service from the default
-    # `docker compose up -d` (and the swarmpilot deployer's up -d), so the
-    # container is never created/started. To RE-ENABLE: (1) drop MYMRC_* creds
-    # per docs/operator/mymrc-setup.md, (2) ensure the mymrc-auth volume is owned
-    # by uid 1001 (the runner runs as `nextjs`; bring back the Dockerfile chown
-    # or run `docker run --rm -v dr3-vision_mymrc-auth-state:/v alpine chown -R
-    # 1001:1001 /v`), (3) start with `docker compose --profile mymrc up -d`, and
-    # (4) re-add `mymrc-scrape` to the noc-master service-registry containers[].
+    # REBUILT under ADR-0038 (MyMRC ingestion rebuild, 2026-07-03) — the worker
+    # now runs the JSON-transport mirror sync (hauls/processed/outbound → mirror
+    # tables + run ledger; hauls also feed expected_loads). It stays PROFILE-GATED
+    # (`mymrc`): activation is a deliberate operator action, NOT auto-started by
+    # `docker compose up -d` or the swarmpilot deployer. To ENABLE, follow
+    # docs/operator/mymrc-ingestion.md: (1) drop MYMRC_* creds into
+    # ~/.dr3-vision-secrets/mymrc.env (mode 600), (2) ensure the mymrc-auth volume
+    # is owned by uid 1001 (`docker run --rm -v dr3-vision_mymrc-auth-state:/v
+    # alpine chown -R 1001:1001 /v`), (3) start with
+    # `docker compose --profile mymrc up -d`, and (4) re-add `mymrc-scrape` to the
+    # noc-master service-registry containers[]. A healthy run is silent; failures
+    # page `dr3-vision-system` (auth_failed / contract_drift / zero-anomaly /
+    # deadman) per ADR-0038 D4.
     profiles: ['mymrc']
     # Hourly cron host for the MyMRC scheduled-hauls scrape (T-015 /
     # ADR-0009). Long-running Node process that re-spawns

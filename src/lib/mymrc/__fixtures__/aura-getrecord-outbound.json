@@ -1,0 +1,312 @@
+{
+  "apiName": "Materials__c",
+  "childRelationships": {},
+  "eTag": "f3cdd026f40f094a09525176a36377e9",
+  "fields": {
+    "Account__c": {
+      "displayValue": null,
+      "value": "0014600000is4tFAAQ"
+    },
+    "Account__r": {
+      "displayValue": "DR3 Woodland",
+      "value": {
+        "apiName": "Account",
+        "childRelationships": {},
+        "eTag": "80aed32ac8aa554677506d62f7f247bb",
+        "fields": {
+          "CreatedDate": {
+            "displayValue": "5/30/2017 2:01 PM",
+            "value": "2017-05-30T21:01:02.000Z"
+          },
+          "Id": {
+            "displayValue": null,
+            "value": "0014600000is4tFAAQ"
+          },
+          "LastModifiedById": {
+            "displayValue": null,
+            "value": "005UJ0000011jixYAA"
+          },
+          "LastModifiedDate": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          },
+          "Name": {
+            "displayValue": null,
+            "value": "DR3 Woodland"
+          },
+          "RecordTypeId": {
+            "displayValue": null,
+            "value": "01246000000qpShAAI"
+          },
+          "SystemModstamp": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          }
+        },
+        "id": "0014600000is4tFAAQ",
+        "lastModifiedById": "005UJ0000011jixYAA",
+        "lastModifiedDate": "2026-07-03T17:13:22.000Z",
+        "recordTypeId": "01246000000qpShAAI",
+        "recordTypeInfo": {
+          "available": true,
+          "defaultRecordTypeMapping": true,
+          "master": false,
+          "name": "MRC Account",
+          "recordTypeId": "01246000000qpShAAI"
+        },
+        "systemModstamp": "2026-07-03T17:13:22.000Z",
+        "weakEtag": 1783098802000
+      }
+    },
+    "BOL_ID__c": {
+      "displayValue": null,
+      "value": "125829"
+    },
+    "Cardboard_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Cardboard__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Cotton_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Cotton__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "CreatedBy": {
+      "displayValue": "[redacted]",
+      "value": "[redacted]"
+    },
+    "CreatedById": {
+      "displayValue": null,
+      "value": "005UJ0000011jYpYAI"
+    },
+    "CreatedDate": {
+      "displayValue": "3/4/2024 8:47 AM",
+      "value": "2024-03-04T16:47:42.000Z"
+    },
+    "Entry_Date__c": {
+      "displayValue": "3/1/2024",
+      "value": "2024-03-01"
+    },
+    "Foam_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Foam__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Id": {
+      "displayValue": null,
+      "value": "a2LUJ000001Mu1N2AS"
+    },
+    "LastModifiedBy": {
+      "displayValue": "[redacted]",
+      "value": "[redacted]"
+    },
+    "LastModifiedById": {
+      "displayValue": null,
+      "value": "005UJ000002Hma9YAC"
+    },
+    "LastModifiedDate": {
+      "displayValue": "7/31/2024 11:49 AM",
+      "value": "2024-07-31T18:49:27.000Z"
+    },
+    "MRC_Comment__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Materials_Status__c": {
+      "displayValue": "Active",
+      "value": "Active"
+    },
+    "Name": {
+      "displayValue": null,
+      "value": "M-000264"
+    },
+    "Natural_Fiber_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Natural_Fiber__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Number_of_Attached_Files__c": {
+      "displayValue": null,
+      "value": 1
+    },
+    "Number_of_Non_Program_Units__c": {
+      "displayValue": null,
+      "value": 0
+    },
+    "Number_of_Program_Units__c": {
+      "displayValue": null,
+      "value": 0
+    },
+    "Other_Description__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Other_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Other__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Outbound_Vendor_Materials_List__c": {
+      "displayValue": null,
+      "value": "a2MUJ000000u8ir2AA"
+    },
+    "Outbound_Vendor_Materials_List__r": {
+      "displayValue": "VC-000024",
+      "value": {
+        "apiName": "Vendor_Contract__c",
+        "childRelationships": {},
+        "eTag": "d05ac7b93b7adde5d5c2c606be5bd3c5",
+        "fields": {
+          "Id": {
+            "displayValue": null,
+            "value": "a2MUJ000000u8ir2AA"
+          },
+          "Name": {
+            "displayValue": null,
+            "value": "VC-000024"
+          }
+        },
+        "id": "a2MUJ000000u8ir2AA",
+        "lastModifiedById": "0054p000004VKPGAA4",
+        "lastModifiedDate": "2024-10-16T18:43:10.000Z",
+        "recordTypeId": "012000000000000AAA",
+        "recordTypeInfo": null,
+        "systemModstamp": "2024-10-16T18:43:10.000Z",
+        "weakEtag": 1729104190000
+      }
+    },
+    "Outbound_Vendor_Name__c": {
+      "displayValue": null,
+      "value": "Green Zone"
+    },
+    "Plastics_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Plastics__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Quilt_and_Toppers_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Quilt_and_Toppers__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "RecordTypeId": {
+      "displayValue": null,
+      "value": "0124p000000Zwx0AAC"
+    },
+    "Record_Locked__c": {
+      "displayValue": null,
+      "value": true
+    },
+    "Review_Status__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Shipment_Date__c": {
+      "displayValue": "3/1/2024",
+      "value": "2024-03-01"
+    },
+    "Shoddy_Felt_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Shoddy_Felt__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Steel_Disposition__c": {
+      "displayValue": "Recycling",
+      "value": "Recycling"
+    },
+    "Steel__c": {
+      "displayValue": null,
+      "value": 98060
+    },
+    "Synthetic_Fiber_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Synthetic_Fiber__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "SystemModstamp": {
+      "displayValue": "7/31/2024 11:49 AM",
+      "value": "2024-07-31T18:49:27.000Z"
+    },
+    "Type__c": {
+      "displayValue": "Outbound",
+      "value": "Outbound"
+    },
+    "Unlock_Record__c": {
+      "displayValue": null,
+      "value": false
+    },
+    "User_Review_Feedback__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "User_Reviewed__c": {
+      "displayValue": null,
+      "value": false
+    },
+    "Waste_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Waste__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Whole_Mattresses_Foundations_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Whole_Mattresses_and_Foundations__c": {
+      "displayValue": null,
+      "value": 0
+    },
+    "Wood_Disposition__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "Wood__c": {
+      "displayValue": null,
+      "value": null
+    }
+  },
+  "id": "a2LUJ000001Mu1N2AS",
+  "lastModifiedById": "005UJ000002Hma9YAC",
+  "lastModifiedDate": "2024-07-31T18:49:27.000Z",
+  "recordTypeId": "0124p000000Zwx0AAC",
+  "recordTypeInfo": {
+    "available": true,
+    "defaultRecordTypeMapping": false,
+    "master": false,
+    "name": "Outbound",
+    "recordTypeId": "0124p000000Zwx0AAC"
+  },
+  "systemModstamp": "2024-07-31T18:49:27.000Z",
+  "weakEtag": 1722451767000
+}
