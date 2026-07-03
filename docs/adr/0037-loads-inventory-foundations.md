@@ -175,3 +175,158 @@ incentive daily-cap pure function (cap boundary, multi-dropoff same person same 
 snapshot reconcile records delta) · verify-gate split math · Decimal boundary tests
 with real `Prisma.Decimal` on every count/weight/money edge · migration clean-replay
 (CI gate, automatic) · e2e: dropoff→incentive→balance and inbound→verify→balance.
+
+## Post-acceptance implementation notes (2026-07-03)
+
+Recorded per CLAUDE.md documentation discipline — these are the points where the
+implementation added to or clarified the accepted text above. No accepted
+decision was reversed.
+
+### Deviations / additions applied
+
+- **Investigation 1a finding (verify gate):** on `main` there was **no** verify
+  action at all — `submitted → verified` existed only as an entry in the
+  load-service `ALLOWED_PRIOR` state table, with no function, route, UI, or
+  program/non-program columns. The mission §8 "shipped" fallback was not shipped.
+  So the D2 `program_unit_count`/`non_program_unit_count` columns ARE the
+  persistence, and this build adds the server-side verify gate
+  (`src/lib/loads/verify-gate.ts` + `POST /api/manager/<site>/loads/<id>/verify`)
+  that enforces `program + non_program == total_units` in a transaction with an
+  audit row.
+- **Investigation 1b finding (processed-units vs. existing daily flow):** the
+  ADR-0030 daily production total is a query over `bonus_daily_entries` (per
+  processor) + `bonus_reporting_adjustments`. `processed_units_daily` is a NEW,
+  distinct **site-level billing** record — it does not duplicate those payroll
+  tables and does not touch payroll math. Its entry surface lives beside the
+  existing admin production surfaces (`/admin/processed-units`, super-admin).
+- **Survey amendment — program/non-program pool split (Rick Albritton, survey
+  Q11; applies to OR + CA):** `processed_units_daily` carries
+  `program_units_processed` + `non_program_units_processed` (total derived, never
+  stored; billing reads program only); `renovator_shipments` and `landfilled_units`
+  carry `program_units` + `non_program_units` (sum == whole/units, validated); the
+  D6 running balance is pool-aware and returns `{ program, nonProgram, total }`.
+- **Survey amendment — CA fuel formula captured (Rick Albritton, survey Q6):** the
+  CA `fuel_surcharge` seed `params` now carries the formula
+  `(eia_rate_usd_per_gal / mpg) * miles_driven`, mpg 6.5, EIA West-Coast-ULSD
+  index. `rate_cents` stays null and `computeFuelSurchargeCents` still refuses —
+  the per-haul EIA-rate × miles calculator is P2 billing scope.
+- **`source` provenance on all six tables (D8):** D4's field lists for
+  `renovator_shipments`/`landfilled_units` did not spell out `source`, but D8
+  requires every table carry business-date + `source` provenance for the ADR-0039
+  retro-audit; a `RecordSource` enum (`manual`/`mymrc`/`import`) is on all of them
+  and on the snapshot extension.
+- **`locked_at` on the four CRUD-lite tables:** the deliverable requires
+  "edit-before-any-lock." A nullable `locked_at` column is the lock signal the
+  edit guard checks. (No locking workflow is wired yet; the column + guard exist.)
+- **Inventory anchor pool attribution (Q-3):** physical snapshots carry no
+  program/non-program split, so the running-balance DB adapter attributes the
+  whole physical anchor to the PROGRAM pool by default (the pure computation stays
+  general). See docs/QUESTIONS.md Q-3.
+
+### Two decisions kept deliberately open (as the ADR intended)
+
+- `outbound_materials.allocation_pct` remains a nullable placeholder — nothing
+  computes from it.
+- CA fuel-surcharge computation remains refused (formula captured, calculator is
+  P2).
+
+### NOT implemented — mission Addenda A/B (routed to Bill) — SUPERSEDED 2026-07-03
+
+> **Superseded:** Bill ruled 2026-07-03 to adopt Addendum B; the model below was
+> reconciled against it in a follow-up build. See "Post-acceptance revision —
+> Addendum B (2026-07-03)" at the end of this ADR and docs/QUESTIONS.md Q-4
+> (ANSWERED). The text below is preserved as the historical record of the decision
+> point.
+
+After acceptance, ADR-0036 mission **Addendum A** and **Addendum B** were merged
+(PR #47, workbook reverse-engineering of `JUNE 2026 DAILY LOG WOODLAND.xlsm`).
+They propose a materially different D4/D5/D6 model than this ADR — e.g. dropping
+`renovator_shipments` in favor of an `outbound_materials.sub_category`, a
+different `commodity` taxonomy, `Source`-driven program/non-program with a
+`source_aliases` table, a `consumer_dropoffs.kind` enum, and a restructured daily
+close. Those changes were **not** implemented in this build: they conflict with
+the accepted ADR-0037 decisions above and with the explicit named deliverables,
+and they arrived as coordinator relays (no user authority) and as a moving target
+(A corrected by B) mid-build. They are surfaced for Bill in docs/QUESTIONS.md Q-4
+with a recommendation to commission an ADR-0037 revision if the Addendum-B model
+is the intended target; the current core (rules resolver, incentive cap,
+running-balance engine, verify gate, audit/PII disciplines) carries straight over
+to that model.
+
+## Post-acceptance revision — Addendum B (2026-07-03)
+
+**Status of this section:** operator-directed revision (Bill, 2026-07-03; no
+further approval required per the requirements order). ADR-0036 mission **Addendum
+B** (PR #47, `docs/handoffs/2026-07-03-adr-0036-addendum-b-daily-log-reverse-engineering.md`)
+corrects Addendum A's category model and supersedes the conflicting parts of the
+accepted ADR-0037 text above. This section itemizes every change vs the accepted
+decisions; the accepted text (D1–D8) is preserved above as the historical record.
+The **one** ADR-0037 migration (`20260703b_loads_inventory_foundations`) was
+regenerated in place — it had never deployed anywhere, so this is a single coherent
+migration, not a corrective second one (clean-replay re-verified on PG16).
+
+### Changes vs the accepted text
+
+- **D4 outbound restructure (Addendum B1).** `renovator_shipments` is **DROPPED**
+  (model, DDL, service `src/lib/loads/renovator.ts`, routes, UI panel, tests) and
+  folded into `outbound_materials` as `sub_category = renovation`. The
+  `OutboundCommodity` enum is re-based to the **daily-log 9** (verbatim `list!I`):
+  `trash, toppers, foam, metal, wood, cardboard, plastic, shoddy, cotton` (the
+  accepted `landfill/steel/biomass/wte/…` were billing-workbook blocks, not the
+  daily-log commodities the office captures). New `OutboundSubCategory` enum
+  (`renovation, baled, shredded`). `outbound_materials` gains nullable `whole_units`
+  + `program_units` + `non_program_units`: a **renovation** row is a whole-unit sale
+  (`program + non_program == whole_units` when `whole_units` is present) and feeds
+  the running balance's WholeUnitsSold term; **baled/shredded** rows are weight-based
+  commodity sales (unit columns null; never subtract units). The daily-log-9 →
+  billing-workbook-11 block mapping (trash→Landfill vs WTE is destination-driven) is
+  **NOT built** — OPEN per Addendum B10-5.
+- **D3 drop-off kinds (Addendum B1).** `consumer_dropoffs` gains
+  `kind enum(incentive, unpaid, illegal)` NOT NULL. Incentive computation applies
+  **only** to `kind = incentive`; `unpaid` / `illegal` rows never carry an
+  `incentive_cents`. `LoadSourceType` gains `event`.
+- **B7 site-driven program-ness.** `Source` gains `is_non_program`,
+  `is_trans_charge`, `canonical_mileage`, plus a new `source_aliases(id, source_id,
+  alias UNIQUE, created_at)` table for the workbook's heavy spelling drift. The
+  verify gate's DEFAULT program/non-program split now derives from the load's source
+  flag (non-program source → units default to the non-program pool; a manager
+  override wins). The `program + non_program == total_units` check is unchanged.
+- **D5 daily close (Addendum B4).** `processed_units_daily` is restructured:
+  `program_units_processed`/`non_program_units_processed` → `stripped_program` /
+  `stripped_non_program` (the entered quantities); adds `saved_units Decimal(7,1)?`
+  (captured but **EXCLUDED from all inventory math** — semantics open, B10-2),
+  `material_ticket_number`, `employees_count`, `processors_count`,
+  `pocketcoil_estimate`. The super-admin gate, close/audit, and post-close block are
+  unchanged. The close surface **DISPLAYS derived** whole-units-sold + landfilled
+  (from renovation outbound rows + `landfilled_units` for the site/date) for
+  confirmation — never entered twice.
+- **D6 running balance (Addendum B4).** Equation is now
+  `End = Start + Inbound − Stripped − WholeUnitsSold − Landfilled`, program and
+  non-program ledgers computed separately. WholeUnitsSold reads the
+  renovation-sub-category outbound rows (the folded-in renovator channel);
+  `saved_units` is excluded. Tests updated to the worked shapes incl. Rick's
+  150 program + 25 non-program stripping day.
+- **D1 seeds (Addendum B5).** New rule kinds: `driver_hourly` 12500¢ (CA),
+  `general_labor_hourly` 9000¢ (CA), `per_diem_nightly` 27500¢ (CA),
+  `unit_weight_estimate` params `{lbs:55, estimate_only:true}` (both sites). CA
+  `fuel_surcharge` params gains `trigger_usd_per_gal: 5.05`. CA `processing_rate`
+  becomes a full effective-dated schedule (2025 = 1600¢ / 2026 = 1650¢ / 2027 =
+  1700¢). **No** mattress/foundation categories anywhere. **No** DR3#/Material#
+  sequence issuance (OPEN per Addendum B10-6 — the existing TODO note stands).
+
+### What carried over unchanged
+
+The `state_program_rules` resolver + OR-fuel structural disallow, the pure incentive
+daily-cap function, the pool-aware running-balance engine, the verify gate's
+transaction + audit discipline, the CRUD-lite edit-before-lock guards, the D7
+activation gate (admin-only until the ops gates close), and the CIP-PII disciplines
+(`person_name` never exported) all carried straight over, as Q-4 predicted.
+
+### Deliberately still open (Addendum B10)
+
+- Daily-log-9 → billing-workbook-11 outbound→invoice block mapping (B10-5).
+- `saved_units` semantics (B10-2).
+- DR3# / Material# sequence issuance rule (B10-6).
+- CA `fuel_surcharge` COMPUTATION remains refused (formula + $5.05 trigger captured;
+  the per-haul EIA-rate × miles calculator is P2 billing scope).
+- `outbound_materials.allocation_pct` remains a nullable placeholder.

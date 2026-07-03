@@ -88,6 +88,13 @@ model Site {
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
+  // Loads & inventory foundations (ADR-0037)
+  state_program_rules   StateProgramRule[]
+  consumer_dropoffs     ConsumerDropoff[]
+  outbound_materials    OutboundMaterial[]
+  landfilled_units      LandfilledUnit[]
+  processed_units_daily ProcessedUnitsDaily[]
+
   @@map("sites")
 }
 
@@ -125,7 +132,19 @@ model SiteInventorySnapshot {
   units_total         Int? // OR only
   units_in_processing Int      @default(0)
 
+  // ADR-0037 D6 — reconciliation of the computed running balance to a
+  // physical count. A `physical` snapshot becomes the new anchor for
+  // `running-balance.ts`; `computed` marks a system-derived snapshot.
+  // Existing rows default to `physical` (they were hand-taken counts).
+  snapshot_kind    InventorySnapshotKind @default(physical)
+  // `physical − computed` at reconcile time; recorded, never silently
+  // absorbed. Null for non-reconcile snapshots.
+  reconciled_delta Int?
+  // Provenance of the snapshot (who/what produced it).
+  source           RecordSource          @default(manual)
+
   @@index([site_id, snapshot_at])
+  @@index([site_id, snapshot_kind, snapshot_at])
   @@map("site_inventory_snapshots")
 }
 
@@ -235,15 +254,41 @@ model Source {
   zip        String?
   is_active  Boolean  @default(true)
   notes      String?
+  // ADR-0037 Addendum B7 — site-driven program-ness + trans-charge classifier.
+  // Program-ness is a property of the collection SITE, not the commodity: a
+  // non-program source's units default to the non-program pool at the verify gate
+  // (manager can override). `is_trans_charge` splits the two Inbound tabs;
+  // `canonical_mileage` feeds the (P2) freight tier table. Spelling drift in the
+  // source workbook lists is resolved via `source_aliases`.
+  is_non_program    Boolean @default(false)
+  is_trans_charge   Boolean @default(false)
+  canonical_mileage Int?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   inbound_loads  InboundLoad[]
   expected_loads ExpectedLoad[]
+  aliases        SourceAlias[]
 
   @@unique([site_id, name])
   @@index([site_id, is_active])
   @@map("sources")
+}
+
+/// ADR-0037 Addendum B7 — alias table for source-name spelling drift. The
+/// workbook's own site lists carry heavy variant spellings (`VAcaville`,
+/// `Chester Tranfer`, …); historical data cannot be joined without alias
+/// resolution. One canonical `Source` may have many aliases; each alias resolves
+/// to exactly one source (UNIQUE).
+model SourceAlias {
+  id         String   @id @default(uuid())
+  source_id  String
+  source     Source   @relation(fields: [source_id], references: [id])
+  alias      String   @unique
+  created_at DateTime @default(now())
+
+  @@index([source_id])
+  @@map("source_aliases")
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -301,6 +346,7 @@ model ExpectedLoad {
 enum LoadSourceType {
   b2b_haul // standard transporter delivery (MVP)
   cip_consumer // consumer drop-off (V2.2 per ADR-0010)
+  event // ADR-0037 Addendum B1 — event units (daily-log `list!Q` source type)
 }
 
 enum LoadStatus {
@@ -392,6 +438,20 @@ model InboundLoad {
   external_mymrc_materials_id String?
   mymrc_submission_deadline   DateTime? // arrived_at + 3 business days
 
+  // ADR-0037 D2 — workbook Inbound-tab parity + Q8 segregation gate.
+  // Re-TRAC is the universal external join key across every workbook record
+  // type; kept DISTINCT from external_mymrc_haul_id (different systems). Not
+  // unique — Re-TRAC ids can repeat across record types.
+  retrac_id              String?
+  slip_number            String? // workbook Slip # (present on every inbound tab)
+  transport_charged      Boolean @default(false) // splits the two Inbound tabs
+  freight_cents          Int? // load-level transportation charge (CA)
+  fuel_surcharge_cents   Int? // CA only; an OR load can never carry one (D1 resolver refuses)
+  // Q8 verify-gate split: program + non_program == total_units, enforced
+  // server-side at the submitted→verified transition (verify-gate.ts).
+  program_unit_count     Int?
+  non_program_unit_count Int?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -402,6 +462,8 @@ model InboundLoad {
   @@index([site_id, status])
   @@index([site_id, arrived_at])
   @@index([assigned_operator_id, status])
+  @@index([retrac_id]) // ADR-0037 D2 — external join key for workbook parity
+  @@index([site_id, transport_charged]) // ADR-0037 — Inbound-tab split queries
   @@map("inbound_loads")
 }
 
@@ -1090,51 +1152,53 @@ model BonusAmendmentRequest {
 // ────────────────────────────────────────────────────────────────────────
 
 model SurveyCampaign {
-  id                String   @id @default(uuid())
-  title             String
-  slug              String   @unique
-  intro_text        String
-  subject_template  String   @default("DR3 Operations — your input requested for our new data system")
-  from_address      String   @default("dr3-vision@svdp.us")
-  from_display_name String   @default("Bill Barnard via DR3-Vision")
-  reply_to          String   @default("bill.barnard@svdp.us")
-  status            String   @default("draft")
+  id                 String         @id @default(uuid())
+  title              String
+  slug               String         @unique
+  intro_text         String
+  subject_template   String         @default("DR3 Operations — your input requested for our new data system")
+  from_address       String         @default("dr3-vision@svdp.us")
+  from_display_name  String         @default("Bill Barnard via DR3-Vision")
+  reply_to           String         @default("bill.barnard@svdp.us")
+  status             String         @default("draft")
   created_by_user_id String
-  created_by         User    @relation("SurveyCampaignCreator", fields: [created_by_user_id], references: [id])
-  opened_at  DateTime?
-  closed_at  DateTime?
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  invites SurveyInvite[]
+  created_by         User           @relation("SurveyCampaignCreator", fields: [created_by_user_id], references: [id])
+  opened_at          DateTime?
+  closed_at          DateTime?
+  created_at         DateTime       @default(now())
+  updated_at         DateTime       @updatedAt
+  invites            SurveyInvite[]
+
   @@index([status])
   @@map("survey_campaigns")
 }
 
 model SurveyInvite {
-  id                  String  @id @default(uuid())
+  id                  String           @id @default(uuid())
   campaign_id         String
-  campaign            SurveyCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  campaign            SurveyCampaign   @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
   recipient_name      String
   recipient_email     String
   role_label          String
-  token               String  @unique
-  status              String  @default("draft")
+  token               String           @unique
+  status              String           @default("draft")
   approved_by_user_id String?
-  approved_by         User?   @relation("SurveyInviteApprover", fields: [approved_by_user_id], references: [id])
-  approved_at      DateTime?
-  sent_at          DateTime?
-  first_opened_at  DateTime?
-  submitted_at     DateTime?
-  last_status      Int?
+  approved_by         User?            @relation("SurveyInviteApprover", fields: [approved_by_user_id], references: [id])
+  approved_at         DateTime?
+  sent_at             DateTime?
+  first_opened_at     DateTime?
+  submitted_at        DateTime?
+  last_status         Int?
   // ADR-0036 — daily reminder tracking. `last_reminder_at` gates the once-per-day
   // cron (send only when NULL or older than the 20h window); `reminder_count`
   // records how many reminders have gone out. Stamped only on a successful send.
-  last_reminder_at DateTime?
-  reminder_count   Int @default(0)
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  questions SurveyQuestion[]
-  responses SurveyResponse[]
+  last_reminder_at    DateTime?
+  reminder_count      Int              @default(0)
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @updatedAt
+  questions           SurveyQuestion[]
+  responses           SurveyResponse[]
+
   @@unique([campaign_id, recipient_email])
   @@index([campaign_id])
   @@index([status])
@@ -1142,35 +1206,306 @@ model SurveyInvite {
 }
 
 model SurveyQuestion {
-  id          String  @id @default(uuid())
+  id          String           @id @default(uuid())
   invite_id   String
-  invite      SurveyInvite @relation(fields: [invite_id], references: [id], onDelete: Cascade)
+  invite      SurveyInvite     @relation(fields: [invite_id], references: [id], onDelete: Cascade)
   position    Int
   kind        String
   prompt      String
   description String?
   options     Json?
-  is_required Boolean @default(false)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
-  responses SurveyResponse[]
+  is_required Boolean          @default(false)
+  created_at  DateTime         @default(now())
+  updated_at  DateTime         @updatedAt
+  responses   SurveyResponse[]
+
   @@unique([invite_id, position])
   @@index([invite_id, position])
   @@map("survey_questions")
 }
 
 model SurveyResponse {
-  id          String  @id @default(uuid())
+  id          String         @id @default(uuid())
   invite_id   String
-  invite      SurveyInvite @relation(fields: [invite_id], references: [id], onDelete: Cascade)
+  invite      SurveyInvite   @relation(fields: [invite_id], references: [id], onDelete: Cascade)
   question_id String
   question    SurveyQuestion @relation(fields: [question_id], references: [id], onDelete: Cascade)
   answer_text String?
   answer_json Json?
-  is_draft    Boolean @default(true)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
+  is_draft    Boolean        @default(true)
+  created_at  DateTime       @default(now())
+  updated_at  DateTime       @updatedAt
+
   @@unique([invite_id, question_id])
   @@index([invite_id])
   @@map("survey_responses")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Loads & inventory foundations (ADR-0037)
+//
+// P1 groundwork that takes the loads/inventory/commodity layer from
+// built-but-dormant to production, CA-first. Every rate and program rule is
+// DATA (`state_program_rules`), never code; every table carries a business
+// date + `source` provenance so the ADR-0039 retro-audit can run over ANY
+// historical window (D8). Money is integer CENTS (bonus-system convention);
+// weights are integer lbs (charter Q22); unit counts that can be fractional
+// use Decimal(x,1) (bonus half-unit precision).
+// ════════════════════════════════════════════════════════════════════════
+
+/// Provenance of a loads/inventory record. `manual` = keyed by office/manager;
+/// `mymrc` = ingested from the MyMRC feed (ADR-0038); `import` = historical
+/// workbook load (ADR-0039). Present on every ADR-0037 table for retro-audit
+/// compatibility (D8).
+enum RecordSource {
+  manual
+  mymrc
+  import
+}
+
+/// ADR-0037 D1 — program-rule kinds. `fuel_surcharge` is CA-only: it is never
+/// seeded for an Oregon site AND the resolver throws for an OR jurisdiction,
+/// so a future seeding mistake still can't silently bill it. The labor/per-diem
+/// and `unit_weight_estimate` kinds are Addendum B5 parameterized constants
+/// (never code, never retyped); `unit_weight_estimate` carries a null rate and an
+/// `estimate_only` param (MRC weight reporting uses actual scale weights).
+enum StateProgramRuleKind {
+  processing_rate
+  satellite_collection_rate
+  collector_incentive
+  fuel_surcharge
+  driver_hourly
+  general_labor_hourly
+  per_diem_nightly
+  unit_weight_estimate
+}
+
+/// ADR-0037 D4 (Addendum B1) — outbound commodity taxonomy: the daily-log 9,
+/// verbatim from `list!I`. This CORRECTS the accepted ADR-0037 taxonomy
+/// (landfill/steel/biomass/wte/… were billing-workbook blocks, not the daily-log
+/// commodities the office actually captures). The daily-log-9 → billing-workbook-11
+/// block mapping is destination-driven (trash→Landfill vs WTE by vendor) and stays
+/// OPEN pending Kelsey/Janette (Addendum B10-5); it is NOT built here.
+enum OutboundCommodity {
+  trash
+  toppers
+  foam
+  metal
+  wood
+  cardboard
+  plastic
+  shoddy
+  cotton
+}
+
+/// ADR-0037 D4 (Addendum B1) — outbound sub-category (`list!K`). `renovation` is
+/// the whole-unit renovator channel (folded in here, replacing the accepted
+/// ADR-0037 `renovator_shipments` table); `baled`/`shredded` are the weight-based
+/// commodity-sale forms.
+enum OutboundSubCategory {
+  renovation
+  baled
+  shredded
+}
+
+/// ADR-0037 D3 (Addendum B1) — consumer drop-off kind. Incentive is computed
+/// ONLY for `incentive`; `unpaid` and `illegal` rows never carry an
+/// `incentive_cents`.
+enum ConsumerDropoffKind {
+  incentive
+  unpaid
+  illegal
+}
+
+/// ADR-0037 D4 — landfilled whole-unit disposal reasons (workbook block).
+enum LandfilledReason {
+  bed_bug
+  soiled
+  water_logged
+  other
+}
+
+/// ADR-0037 D6 — inventory snapshot origin. `physical` counts anchor the
+/// running balance; `computed` marks a system-derived snapshot.
+enum InventorySnapshotKind {
+  physical
+  computed
+}
+
+/// ADR-0037 D1 — effective-dated, site-scoped program rules. Same resolution
+/// pattern as `processor_bonus_rules`: a strict named resolver picks the row
+/// whose `effective_from <= onDate` and `effective_to` is null or `>= onDate`.
+/// `rate_cents` is null for rules whose amount is formula-driven (CA fuel
+/// surcharge, formula pending); `params` carries rule-kind-specific config
+/// (e.g. `daily_cap_units` for `collector_incentive`, `formula` for fuel).
+model StateProgramRule {
+  id             String               @id @default(uuid())
+  site_id        String
+  site           Site                 @relation(fields: [site_id], references: [id])
+  rule_kind      StateProgramRuleKind
+  effective_from DateTime             @db.Date
+  effective_to   DateTime?            @db.Date
+  rate_cents     Int? // integer cents; null when formula-driven
+  params         Json? // rule-kind config: daily_cap_units, formula, …
+  notes          String?
+  created_by     String?
+  created_at     DateTime             @default(now())
+  updated_at     DateTime             @updatedAt
+
+  @@index([site_id, rule_kind, effective_from])
+  @@map("state_program_rules")
+}
+
+/// ADR-0037 D3 — public consumer drop-offs (workbook Paid-Unpaid tab; CA CIP).
+/// NOT dock loads — a separate table. `person_name` is MRC Personal Data
+/// (charter Exhibit I / ADR-0010): PII, excluded from exports by default,
+/// breach-notification scope, 10-business-day deletion-on-termination.
+/// `incentive_cents` is computed via D1 (`units × collector_incentive`, capped
+/// at `daily_cap_units` per person per day — see dropoffs/incentive.ts).
+model ConsumerDropoff {
+  id              String              @id @default(uuid())
+  site_id         String
+  site            Site                @relation(fields: [site_id], references: [id])
+  dropoff_date    DateTime            @db.Date
+  // ADR-0037 Addendum B1 — drop-off kind drives incentive: only `incentive` rows
+  // are ever paid; `unpaid`/`illegal` rows never carry an incentive_cents.
+  kind            ConsumerDropoffKind
+  person_name     String // CIP PII — Exhibit I / ADR-0010; never exported
+  slip_number     String?
+  units           Int
+  incentive_cents Int? // computed via D1 (incentive kind only); capped per person per day
+  check_number    String?
+  paid_at         DateTime?
+  retrac_id       String?
+  source          RecordSource @default(manual)
+  locked_at       DateTime? // edit-before-any-lock guard (CRUD-lite)
+  created_by      String?
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
+
+  @@index([site_id, dropoff_date])
+  @@index([site_id, person_name, dropoff_date]) // daily-cap aggregation
+  @@index([retrac_id])
+  @@map("consumer_dropoffs")
+}
+
+/// ADR-0037 D4 (Addendum B1) — outbound materials on two axes: commodity ×
+/// sub-category. The `renovator_shipments` table of the accepted ADR is folded in
+/// here as `sub_category = renovation` (a whole-unit sale), replacing the separate
+/// channel.
+///
+/// - `renovation` rows carry whole units + a program/non-program split
+///   (`program_units + non_program_units == whole_units` when `whole_units` is
+///   present) and feed the running balance's WholeUnitsSold term. They are the
+///   recovery-rate-workable shape.
+/// - `baled` / `shredded` rows are weight-based commodity SALES: `whole_units` and
+///   both unit-split columns are NULL; only `weight_lbs` is meaningful. They do
+///   NOT subtract from the running balance (post-deconstruction commodities;
+///   deconstruction is what `processed` already counts).
+///
+/// `allocation_pct` stays a NULLABLE placeholder (semantics pending Kelsey —
+/// nothing computes from it). Avg-per-bale is derived at read time
+/// (`weight_lbs / bale_count`), NEVER stored — one source of truth.
+model OutboundMaterial {
+  id                String              @id @default(uuid())
+  site_id           String
+  site              Site                @relation(fields: [site_id], references: [id])
+  ship_date         DateTime            @db.Date
+  commodity         OutboundCommodity
+  sub_category      OutboundSubCategory
+  weight_lbs        Int
+  // Renovation (whole-unit) rows only; null for baled/shredded commodity sales.
+  // When `whole_units` is set, `program_units + non_program_units == whole_units`
+  // (validated). Program units sold to renovation come out of PROGRAM inventory
+  // and can NEVER be billed as processed.
+  whole_units       Int?
+  program_units     Int?
+  non_program_units Int?
+  ticket_number     String?
+  retrac_id         String?
+  bale_count        Int?
+  allocation_pct    Decimal?            @db.Decimal(5, 2) // placeholder; nothing computes from it
+  buyer             String?
+  source            RecordSource        @default(manual)
+  locked_at         DateTime?
+  created_by        String?
+  created_at        DateTime            @default(now())
+  updated_at        DateTime            @updatedAt
+
+  @@index([site_id, ship_date])
+  @@index([site_id, commodity, ship_date])
+  @@index([site_id, sub_category, ship_date]) // renovation WholeUnitsSold query (running balance)
+  @@index([retrac_id])
+  @@map("outbound_materials")
+}
+
+/// ADR-0037 D4 — whole-unit landfill disposal (workbook Landfilled Units
+/// block). `units` subtract from the inventory running balance.
+model LandfilledUnit {
+  id                String           @id @default(uuid())
+  site_id           String
+  site              Site             @relation(fields: [site_id], references: [id])
+  disposal_date     DateTime         @db.Date
+  units             Int
+  // ADR-0037 D6 + survey amendment (2026-07-03): pool-aware inventory —
+  // `program_units + non_program_units == units` (validated). Defaulting all to
+  // one pool is wrong; the entry surface captures the split.
+  program_units     Int              @default(0)
+  non_program_units Int              @default(0)
+  slip_number       String?
+  reason            LandfilledReason
+  source            RecordSource     @default(manual)
+  locked_at         DateTime?
+  created_by        String?
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @updatedAt
+
+  @@index([site_id, disposal_date])
+  @@map("landfilled_units")
+}
+
+/// ADR-0037 D5 — the number billing bills from: processed units per site per
+/// day. DISTINCT from per-processor `bonus_daily_entries` (those drive payroll;
+/// this is the site-level billing basis). One row per site per day. Entry is
+/// office-desktop, super-admin gated; closing a day writes an audit row;
+/// post-close corrections follow the amendment pattern (never in-place edits).
+/// Decimal(7,1) matches the bonus system's half-unit precision.
+model ProcessedUnitsDaily {
+  id              String   @id @default(uuid())
+  site_id         String
+  site            Site     @relation(fields: [site_id], references: [id])
+  production_date DateTime @db.Date
+
+  // ADR-0037 D5 (Addendum B4) — the STRIPPED (deconstructed) quantities entered at
+  // the daily close, split program vs non-program (the billing basis: on a 175-unit
+  // day with 150 program units on the floor MRC is billed ONLY the 150). Billing
+  // (P2) reads `stripped_program` only. The total is DERIVED at read time (never
+  // stored). Decimal(7,1) matches the bonus system's half-unit precision. These are
+  // the equation's `Stripped` term: End = Start + Inbound − Stripped − WholeUnitsSold − Landfilled.
+  stripped_program     Decimal @db.Decimal(7, 1)
+  stripped_non_program Decimal @default(0) @db.Decimal(7, 1)
+
+  // ADR-0037 Addendum B4 — captured at close but EXCLUDED from ALL inventory math:
+  // the `Saved` (workbook I42) semantics are still unknown (Addendum B10-2, routed
+  // to Kelsey/Janette). It is recorded so the number is not lost, and deliberately
+  // NOT read by the running balance until its meaning is confirmed.
+  saved_units Decimal? @db.Decimal(7, 1)
+
+  // ADR-0037 Addendum B4 — daily-close metadata (workbook fields). Display-only in
+  // P1; no computation reads them yet.
+  material_ticket_number String? // workbook M-xxxxxx
+  employees_count        Int?
+  processors_count       Int?
+  pocketcoil_estimate    Int?
+
+  source     RecordSource @default(manual)
+  entered_by String?
+  closed_at  DateTime? // set on close; post-close edits are blocked
+  notes      String?
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+
+  @@unique([site_id, production_date])
+  @@index([site_id, production_date])
+  @@map("processed_units_daily")
 }
