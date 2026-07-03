@@ -134,3 +134,26 @@ Campaign `dr3-intel-2026-06` closes **Monday 2026-07-06** after Mary Scott submi
 Decimal boundary rules at every money/weight edge · migration ordering + clean-replay invariant (ADR-0035) · audit-log invariants: rows never deleted, secrets never serialized (ADR-0007/0017) · no `<form>` — `onClick` handlers (hard rule #10) · rates/program rules in `state_program_rules`, never code · OR fuel surcharge structurally impossible · i18n via ADR-0015 loader pattern; operator surfaces en/es/ur · new schema/architecture decisions get their own numbered ADRs (0037+); this document is the mission record, not a substitute for ADR discipline · readiness-checklist gates from the 2026-06-23 handoff apply before any loads-feature activation beyond what is already shipped.
 
 **End of mission record. Claude Code: read §6 order, propose the P1 implementation plan as ADR drafts before writing code, and treat §7 as the definition of done.**
+
+---
+
+## Amendment 1 — 2026-07-03 (operator, via build session)
+
+- **Timeline: iPad rollout pushed out.** Bill, 2026-07-03: the ~07-08/09 Woodland
+  go-live moves "beyond Wednesday, beyond a week — we need a bit more time." New
+  dates TBD by Bill; Eugene shifts correspondingly. The §7 validation window
+  compresses toward 08-01 — the retro-audit requirement (§6-P1) covers whatever
+  overlap is lost, which is exactly why it is P1.
+- **Survey data pulled early (2026-07-03)** ahead of the Monday close, per locked
+  decision 2.2 #1, and synthesized into the canonical requirements input:
+  `docs/operations-intel/dr3-intel-2026-06/build-inputs-2026-07-03.md`. Operator
+  directive: ALL survey findings must influence what and how we build. Highlights
+  already applied: program/non-program processed split + renovation billing rules
+  (Rick) folded into the ADR-0037 build mid-flight; CA fuel-surcharge formula
+  captured (Rick — closes a §2.5 July-capture item); CA mid-month cutoff answered
+  ("1st–15th regardless of weekday", closes an open-register item); Re-TRAC = MyMRC
+  id mapping confirmed (Kelsey). ADR-0039 spec inputs (Rick's billing trust gate,
+  Morena's discrepancy-surface requirements, Janette's template generations +
+  weekend-carryover defect) recorded in the build-inputs doc §B.
+- ADR status: 0037 accepted + building; 0038 accepted + building; 0039 drafts next
+  against build-inputs §B.
