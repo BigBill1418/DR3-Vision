@@ -7,6 +7,78 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ### Added — 2026-07-03
 
+- **Loads & inventory foundations (ADR-0037, P1 groundwork; reconciled to mission
+  Addendum B).** Takes the loads/inventory/commodity layer from built-but-dormant
+  toward production, CA-first, in the **Addendum B** shape (operator-directed,
+  2026-07-03; docs/QUESTIONS.md Q-4 ANSWERED). **Schema (one additive migration
+  `20260703b_loads_inventory_foundations`, clean-replays on empty PG16):** five new
+  tables — `state_program_rules` (effective-dated rate/rule table; rates are DATA,
+  never code), `consumer_dropoffs` (CA CIP drop-offs, with a
+  `kind` incentive|unpaid|illegal), `outbound_materials` (commodity × sub-category —
+  renovation folds the old renovator channel in), `landfilled_units`,
+  `processed_units_daily` (the daily close) — plus a `source_aliases` table and
+  `sources` flags (`is_non_program`, `is_trans_charge`, `canonical_mileage`),
+  `inbound_loads` extensions (`retrac_id` indexed, `slip_number`, `transport_charged`,
+  `freight_cents`, `fuel_surcharge_cents`, `program_unit_count`,
+  `non_program_unit_count`), `site_inventory_snapshots` extensions (`snapshot_kind`
+  physical|computed, `reconciled_delta`, `source`), and `LoadSourceType` + `event`.
+  `outbound_materials.commodity` is the **daily-log 9** (`trash, toppers, foam, metal,
+  wood, cardboard, plastic, shoddy, cotton`), with `sub_category`
+  (renovation|baled|shredded) + nullable `whole_units`/`program_units`/
+  `non_program_units` on renovation rows. `processed_units_daily` carries
+  `stripped_program`/`stripped_non_program`, `saved_units` (captured, EXCLUDED from
+  inventory math — B10-2 open), and daily-close metadata (`material_ticket_number`,
+  `employees_count`, `processors_count`, `pocketcoil_estimate`). All ids TEXT; money
+  integer cents; unit counts Decimal(7,1). Idempotent `state_program_rules` seed
+  (Addendum B5): CA processing effective-dated 2025=1600¢/2026=1650¢/2027=1700¢, OR
+  processing 1700¢, OR satellite 225¢, CA collector_incentive 300¢ cap 5/day, CA
+  fuel_surcharge formula-driven with a $5.05/gal trigger — **never seeded for
+  Oregon** — plus CA driver_hourly 12500¢, general_labor_hourly 9000¢,
+  per_diem_nightly 27500¢, and `unit_weight_estimate` {lbs:55, estimate_only} both
+  sites. No mattress/foundation categories anywhere; no DR3#/Material# sequence
+  issuance yet (B10-6 open).
+  **Libs (TDD):** `program-rules/resolver.ts` — strict effective-date resolver; OR
+  fuel surcharge structurally disallowed at BOTH layers (never seeded AND the
+  resolver throws `RuleStructurallyDisallowedError`, reading site jurisdiction, not
+  hardcoding ids); fuel computation refuses (typed error).
+  `dropoffs/incentive.ts` — pure per-person-per-day cap function (cap on UNITS paid;
+  incentive kind only). `inventory/running-balance.ts` — the ONE shared pool-aware
+  balance `End = Start + Inbound − Stripped − WholeUnitsSold − Landfilled`
+  (WholeUnitsSold reads renovation-sub-category outbound; baled/shredded never
+  subtract; saved excluded) + `reconcilePhysicalCount` (records
+  `reconciled_delta = physical − computed` with an audit row). `loads/verify-gate.ts`
+  — server-side enforcement that a load cannot reach `verified` unless
+  `program + non_program == total_units`, with the DEFAULT split derived from the
+  load's source `is_non_program` flag (manager override wins, B7).
+  `loads/processed-units.ts` — daily close derives whole-units-sold + landfilled
+  from the day's renovation outbound + landfilled rows for confirmation (never
+  entered twice). **Surfaces:** super-admin `/admin/processed-units` daily close
+  (stripped split + saved + close metadata; close writes audit; post-close edits
+  blocked → amendment path); admin-gated manager `/dashboard/<site>/loads-inventory`
+  CRUD-lite for drop-offs / outbound (commodity × sub-category) / landfilled + a
+  running-balance readout; all site-scoped, `onClick` handlers (no `<form>`), audit
+  row in the same transaction as every mutation. Drop-off `person_name` is CIP PII
+  (Exhibit I / ADR-0010) — kept off every export. New surfaces linked from the
+  dashboard tile matrix but **admin-only for now** (ADR-0037 D7 activation gate — the
+  manager audience opens once the restore-drill + off-box-backup ops gates close).
+  **Investigation findings (1a/1b):** (1a) there was **no** verify action on `main`
+  at all — `submitted → verified` existed only in the load-service state table with
+  no implementation, so the new columns are the persistence and this build adds the
+  gate; (1b) `processed_units_daily` is a NEW site-level billing record, distinct
+  from the ADR-0030 daily production total (a query over `bonus_daily_entries` +
+  adjustments) — it does not duplicate the payroll tables and does not touch payroll.
+  **Reconciled to Addendum B** (PR #47, workbook reverse-engineering): dropped
+  `renovator_shipments` (folded into `outbound_materials.sub_category = renovation`),
+  re-based the commodity taxonomy to the daily-log 9, added `sub_category` +
+  whole-unit pool columns, `consumer_dropoffs.kind`, `LoadSourceType` + `event`,
+  site-driven program-ness (`sources` flags + `source_aliases` + verify-gate
+  default), the restructured daily close (stripped + saved + metadata; whole-sold +
+  landfilled derived), the `End = Start + Inbound − Stripped − WholeUnitsSold −
+  Landfilled` balance, and the Addendum B5 rate seeds. Still open per B10: outbound→
+  invoice block mapping (B10-5), `saved_units` semantics (B10-2), DR3#/Material#
+  sequences (B10-6), CA fuel COMPUTATION (P2). ADR-0037 "Post-acceptance revision —
+  Addendum B" itemizes every change vs the accepted text. Operator guide:
+  `docs/operator/loads-inventory-foundations.md`. (ADR-0037)
 - **Survey daily reminders + campaign auto-close (ADR-0036).** For every OPEN survey campaign, a new 09:00 America/Los*Angeles daemon (`scripts/survey-reminder-cron.mjs`) POSTs an internal, loopback-guarded route (`/api/internal/survey/reminder-tick`) that sends **one reminder per day** to each still-unsubmitted invite until it completes, then **auto-closes** the campaign once the last response lands. Reminder copy is tiered on the invite's live state: opened-with-saved-answers ("your progress is saved" → \_Finish your survey*), opened-but-empty (friendly nudge → _Open your survey_), and sent-but-never-opened (original subject + a "resending in case it got buried" line). A 20h DB gate (`survey_invites.last_reminder_at`/`reminder_count`, additive migration `20260703_survey_invite_reminder_tracking`) makes reminders idempotent — a restart or slightly-early fire never double-sends, and a no-op fires cleanly when no campaign is open. Auto-close closes under a system actor (`actor_label: 'system:survey-reminder-cron'`), fires a `dr3-vision-system` ntfy (fingerprint `survey-campaign-autoclosed:<id>`), and does NOT run the export — the admin Export button still works after close. Drafts do not block auto-close; approved/sent/opened invites do. Reminders are unbounded by design (operator directive) — stop them by closing the campaign in the admin UI or `docker stop dr3-vision-survey-reminder`. New compose service `survey-reminder` (no `db.env` — the daemon reads nothing). The invite + three reminder tiers now share one branded email shell. (ADR-0036)
 
 ### Fixed — 2026-07-03

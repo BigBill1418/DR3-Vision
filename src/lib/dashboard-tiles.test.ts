@@ -44,11 +44,12 @@ const activeKeys = (s: Session) =>
     .map((t) => t.key);
 
 describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
-  it('Bill (admin) sees Bonus + Exports + Admin + Observability active (ops/compliance/recon paused)', () => {
+  it('Bill (admin) sees Bonus + Exports + Admin + Loads-Inventory + Observability active (ops/compliance/recon paused)', () => {
     const bill = makeSession('admin', EUGENE); // admin primary site is irrelevant
     // Observability lit up 2026-06-06 (admin-only); it lives in the COMING_SOON
-    // array so it trails the ACTIVE_TILES actives in registry order.
-    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'observability']);
+    // array so it trails the ACTIVE_TILES actives in registry order. loads-inventory
+    // (ADR-0037, admin-only) sits in ACTIVE_TILES before observability.
+    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'loads-inventory', 'observability']);
   });
 
   it('Janette (Woodland manager) sees Bonus + Exports active, no Admin', () => {
@@ -141,6 +142,8 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'admin',
       'production-report',
       'operational-intelligence',
+      'loads-inventory',
+      'processed-units',
       'observability',
     ]);
   });

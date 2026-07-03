@@ -270,6 +270,97 @@ async function seedProcessorBonusRules(siteIds) {
   }
 }
 
+// ─── ADR-0037 D1 (Addendum B5) — state_program_rules (rates are DATA, never code) ──
+// Every rate the loads/inventory/billing layer reads resolves from here via the
+// strict named resolver `src/lib/program-rules/resolver.ts`. Idempotent upsert
+// keyed on (site_id, rule_kind, effective_from) — the CA processing fee is a full
+// effective-dated schedule (2025/2026/2027), so multiple rows share a rule_kind
+// and differ by effective_from.
+//
+// STRUCTURAL GUARD (D1): OR fuel surcharge is IMPOSSIBLE — no fuel_surcharge rule
+// is ever seeded for Eugene (Oregon), AND the resolver throws for an OR fuel
+// lookup. The CA fuel formula is captured (Rick Albritton, survey Q6, 2026-07-03)
+// but COMPUTATION stays refused until P2 billing wires the EIA-rate × miles
+// calculator (rate_cents is null; the amount is formula-driven).
+//
+// No mattress/foundation categories anywhere (Addendum B1). No DR3#/Material#
+// sequence issuance yet (Addendum B10-6 open — see the loads runbook TODO).
+async function seedStateProgramRules(siteIds) {
+  const woodland = siteIds.get('woodland');
+  const eugene = siteIds.get('eugene');
+  if (!woodland || !eugene) {
+    throw new Error('state_program_rules seed: missing woodland/eugene site id');
+  }
+  const D2025 = new Date('2025-01-01T00:00:00Z');
+  const D2026 = new Date('2026-01-01T00:00:00Z');
+  const D2027 = new Date('2027-01-01T00:00:00Z');
+  const END2025 = new Date('2025-12-31T00:00:00Z');
+  const END2026 = new Date('2026-12-31T00:00:00Z');
+  const rules = [
+    // CA processing (per-unit fee) — full effective-dated schedule (Summary!Q8:R11
+    // existed and was ignored; Vision wires the table). $16.00 → $16.50 → $17.00.
+    { site_id: woodland, rule_kind: 'processing_rate', rate_cents: 1600, effective_from: D2025, effective_to: END2025,
+      params: null, notes: 'CA processing rate $16.00/unit (2025; Summary!Q8:R11).' },
+    { site_id: woodland, rule_kind: 'processing_rate', rate_cents: 1650, effective_from: D2026, effective_to: END2026,
+      params: null, notes: 'CA processing rate $16.50/unit (2026; Summary!Q8:R11).' },
+    { site_id: woodland, rule_kind: 'processing_rate', rate_cents: 1700, effective_from: D2027, effective_to: null,
+      params: null, notes: 'CA processing rate $17.00/unit (2027; Summary!Q8:R11).' },
+    // OR processing $17.00/unit (end-of-month only).
+    { site_id: eugene, rule_kind: 'processing_rate', rate_cents: 1700, effective_from: D2026, effective_to: null,
+      params: null, notes: 'OR processing rate $17.00/unit (mission §3).' },
+    // OR satellite collection $2.25/unit.
+    { site_id: eugene, rule_kind: 'satellite_collection_rate', rate_cents: 225, effective_from: D2026, effective_to: null,
+      params: null, notes: 'OR satellite collection rate $2.25/unit (mission §3).' },
+    // CA collector incentive $3.00/unit, capped 5 units/person/day (list!T2).
+    { site_id: woodland, rule_kind: 'collector_incentive', rate_cents: 300, effective_from: D2026, effective_to: null,
+      params: { daily_cap_units: 5 }, notes: 'CA collector incentive $3.00/unit, cap 5 units/person/day.' },
+    // CA fuel surcharge — formula + trigger captured (Addendum B3); computation P2.
+    { site_id: woodland, rule_kind: 'fuel_surcharge', rate_cents: null, effective_from: D2026, effective_to: null,
+      params: {
+        formula: '(eia_rate_usd_per_gal / mpg) * miles_driven',
+        mpg: 6.5,
+        trigger_usd_per_gal: 5.05,
+        index_series: 'EIA West Coast PADD-5 ULSD weekly retail',
+        index_url: 'https://www.eia.gov/dnav/pet/pet_pri_gnd_dcus_r50_w.htm',
+        captured_from: 'survey dr3-intel-2026-06, Rick Albritton, 2026-07-03',
+      },
+      notes: 'CA fuel surcharge; formula + $5.05/gal trigger captured (Addendum B3), computation P2. NEVER seed for OR.' },
+    // CA labor / per-diem constants (Addendum B5) — parameterized, never retyped.
+    { site_id: woodland, rule_kind: 'driver_hourly', rate_cents: 12500, effective_from: D2026, effective_to: null,
+      params: null, notes: 'CA driver rate $125.00/hr (Addendum B5).' },
+    { site_id: woodland, rule_kind: 'general_labor_hourly', rate_cents: 9000, effective_from: D2026, effective_to: null,
+      params: null, notes: 'CA general labor $90.00/hr (Addendum B5).' },
+    { site_id: woodland, rule_kind: 'per_diem_nightly', rate_cents: 27500, effective_from: D2026, effective_to: null,
+      params: null, notes: 'CA per diem $275.00/night (Addendum B5).' },
+    // Unit-weight estimate 55 lbs/unit — ESTIMATE ONLY (MRC reporting uses actual
+    // scale weights on outbound). Both sites; no rate (params-only).
+    { site_id: woodland, rule_kind: 'unit_weight_estimate', rate_cents: null, effective_from: D2026, effective_to: null,
+      params: { lbs: 55, estimate_only: true }, notes: '55 lbs/unit estimate only (Addendum B5).' },
+    { site_id: eugene, rule_kind: 'unit_weight_estimate', rate_cents: null, effective_from: D2026, effective_to: null,
+      params: { lbs: 55, estimate_only: true }, notes: '55 lbs/unit estimate only (Addendum B5).' },
+  ];
+  for (const r of rules) {
+    const existing = await prisma.stateProgramRule.findFirst({
+      where: { site_id: r.site_id, rule_kind: r.rule_kind, effective_from: r.effective_from },
+      select: { id: true },
+    });
+    const data = {
+      site_id: r.site_id,
+      rule_kind: r.rule_kind,
+      effective_from: r.effective_from,
+      effective_to: r.effective_to,
+      rate_cents: r.rate_cents,
+      params: r.params ?? undefined,
+      notes: r.notes,
+    };
+    if (existing) {
+      await prisma.stateProgramRule.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.stateProgramRule.create({ data });
+    }
+  }
+}
+
 async function seedSources(siteIds) {
   const rows = parseCsv('sources.csv');
   for (const r of rows) {
@@ -1486,6 +1577,8 @@ async function main() {
   await seedSiteHolidays(siteIds);
   console.log('▶ seeding processor_bonus_rules');
   await seedProcessorBonusRules(siteIds);
+
+  await seedStateProgramRules(siteIds);
   console.log('▶ seeding sources');
   await seedSources(siteIds);
   console.log('▶ seeding bonus pay periods');

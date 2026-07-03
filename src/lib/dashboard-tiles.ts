@@ -137,6 +137,30 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'super-admin-only',
   },
+  {
+    // ADR-0037 D3/D4/D6 — manager loads & inventory CRUD-lite + running balance.
+    // D7 activation gate: admin-only until the ops gates close (schema + surfaces
+    // merge, but only admins see them for now). Route carries [site] → resolved
+    // to the caller's own site by the `/` launcher.
+    key: 'loads-inventory',
+    label: 'Loads & Inventory',
+    description: 'Drop-offs, outbound commodities (incl. renovation), landfilled units, and the running balance.',
+    icon: 'Boxes',
+    route: '/dashboard/[site]/loads-inventory',
+    status: 'active',
+    scope: 'admin-only',
+  },
+  {
+    // ADR-0037 D5 — the billing basis: processed units per site per day, daily
+    // close. Office desktop, super-admin gated (mission §3).
+    key: 'processed-units',
+    label: 'Processed Units',
+    description: 'Daily processed-units close (the number billing bills from).',
+    icon: 'CalendarCheck',
+    route: '/admin/processed-units',
+    status: 'active',
+    scope: 'super-admin-only',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───

@@ -19,6 +19,8 @@ import * as React from 'react';
 import Link from 'next/link';
 import {
   Activity,
+  Boxes,
+  CalendarCheck,
   ClipboardList,
   Coins,
   FileSpreadsheet,
@@ -36,6 +38,8 @@ import type { DashboardTile } from '@/lib/dashboard-tiles';
 
 const ICONS: Record<string, LucideIcon> = {
   Activity,
+  Boxes,
+  CalendarCheck,
   ClipboardList,
   Coins,
   FileSpreadsheet,
