@@ -46,6 +46,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0036   | Survey daily reminders + campaign auto-close (thin scheduler + internal route + 20h gate; extends 0034)       | Accepted                                                        |
 | 0037   | Loads & inventory foundations (rules table, outbound/commodity model, processed-units close, running balance) | Accepted                                                        |
 | 0038   | MyMRC ingestion rebuild (JSON transport, mirror tables, run ledger, loud failure)                              | Accepted                                                        |
+| 0039   | 3-way audit engine + Audit Workbench + retro-audit (findings lifecycle, workbook imports, billing trust gate)   | Accepted                                                        |
 
 ## How to write a new ADR
 
