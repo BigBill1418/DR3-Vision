@@ -1,6 +1,6 @@
 # ADR-0037 — Loads & inventory foundations (P1 groundwork: schema activation, commodity model, processed-units close, program rules)
 
-**Status:** PROPOSED — awaiting operator review (Bill), per the ADR-0036 mission record §6-P1
+**Status:** Accepted (2026-07-03, approved by Bill)
 **Date:** 2026-07-03
 **Relates to:** mission record `docs/handoffs/2026-07-03-adr-0036-build-mission-…`, 2026-06-23 readiness handoff, PROJECT-CHARTER §4.4/§6/§6.5, ADR-0011 (processor form), ADR-0030 (daily production report), ADR-0032 (reporting-only adjustments), ADR-0033 (guards), ADR-0035 (migration invariant)
 **Series:** first of three P1 ADRs — 0037 foundations (this), 0038 MyMRC ingestion rebuild, 0039 3-way audit + retro-audit
