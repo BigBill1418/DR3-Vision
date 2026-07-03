@@ -123,6 +123,25 @@ the **last** response comes in (every invite is `submitted`, with only drafts re
 campaign **auto-closes** and Bill gets one `dr3-vision-system` ntfy — then export as usual with
 the admin **Export** button (auto-close does NOT export for you).
 
+### Campaign log — 2026-07-03 (PT)
+
+- **First tick (09:00 PT) silently failed** — the auth middleware was missing the
+  `/api/internal/survey/` exemption and the daemon followed the login redirect to a 200, so it
+  logged success while sending nothing. Fixed same-day (PR #40 `23e27e8`, three-layer hardening;
+  see the ADR-0036 addendum). The missed tick was re-fired manually in-network after the deploy.
+- **Kelsey Ruhland — operator-submitted 9:41 AM.** She had answered all 10 questions in draft
+  and told Bill she'd submitted (saving ≠ submitting). On Bill's direction her invite was
+  finalized through the real public submit route (`POST /api/survey/<token>/submit`), so the
+  normal audit + status transition applied. UX follow-up candidate: the thank-you/submit
+  distinction clearly reads as "done" before the final submit.
+- **Leisha Wallace — WITHDRAWN on Bill's direction** (input no longer needed). Applied directly
+  on prod with an audit row under Bill's admin user: `status='withdrawn'` + **token rotated**
+  (her original link now 404s). `withdrawn` is a terminal operator status: it is not in the
+  reminder pool (`sent`/`opened`) and does not block auto-close (`approved`/`sent`/`opened` do).
+  Use this same recipe to pull any recipient out of a live campaign.
+- **Standing after the above: 8 submitted · 1 withdrawn (Leisha) · 1 outstanding (Mary Scott).**
+  Mary gets one reminder per day; her submission triggers auto-close + the ntfy.
+
 **How to stop the reminders** (they are unbounded by design — daily until complete):
 
 - Preferred: **Close the campaign** in the admin UI (`/admin/operations/intel/<campaign>`).
