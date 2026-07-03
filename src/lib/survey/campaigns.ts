@@ -7,6 +7,7 @@ import type {
   InviteInput,
   PublicActor,
   QuestionInput,
+  SystemActor,
 } from './types';
 import { generateToken } from './tokens';
 
@@ -36,6 +37,22 @@ function serialize(v: unknown): Prisma.InputJsonValue {
 // raw `null` — to write a JSON null. Prisma 5's strict input types reject `null`.
 function jsonOrNull(v: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
   return v == null ? Prisma.JsonNull : (v as Prisma.InputJsonValue);
+}
+
+// ADR-0036 — resolve the audit-log actor columns from either a signed-in admin
+// (`actor_user_id`) or an autonomous system actor (`actor_label`). Lets
+// `closeCampaign` serve both the admin close route and the reminder cron with a
+// single audited path.
+function actorAuditFields(actor: ActorContext | SystemActor):
+  | { actor_user_id: string; ip: string | null; user_agent: string | null }
+  | {
+      actor_label: string;
+      ip: string | null;
+      user_agent: string | null;
+    } {
+  return 'actorLabel' in actor
+    ? { actor_label: actor.actorLabel, ip: actor.ip ?? null, user_agent: actor.userAgent ?? null }
+    : { actor_user_id: actor.userId, ip: actor.ip, user_agent: actor.userAgent };
 }
 
 // ─── Admin reads ───────────────────────────────────────────────
@@ -111,11 +128,7 @@ export async function createCampaign(input: CampaignInput, actor: ActorContext) 
   });
 }
 
-export async function addInvite(
-  campaignId: string,
-  invite: InviteInput,
-  actor: ActorContext,
-) {
+export async function addInvite(campaignId: string, invite: InviteInput, actor: ActorContext) {
   return prisma.$transaction(async (tx) => {
     const campaign = await tx.surveyCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign) throw new SurveyCampaignError('not_found', 404);
@@ -314,7 +327,10 @@ export async function openCampaign(campaignId: string, actor: ActorContext) {
   });
 }
 
-export async function closeCampaign(campaignId: string, actor: ActorContext) {
+// Accepts either a signed-in admin (`ActorContext`, from the admin close route)
+// or an autonomous `SystemActor` (the reminder cron's auto-close, audited under
+// `actor_label: 'system:survey-reminder-cron'`). ADR-0036.
+export async function closeCampaign(campaignId: string, actor: ActorContext | SystemActor) {
   return prisma.$transaction(async (tx) => {
     const campaign = await tx.surveyCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign) throw new SurveyCampaignError('not_found', 404);
@@ -326,14 +342,12 @@ export async function closeCampaign(campaignId: string, actor: ActorContext) {
     });
     await tx.auditLog.create({
       data: {
-        actor_user_id: actor.userId,
+        ...actorAuditFields(actor),
         action: 'update',
         table_name: 'survey_campaigns',
         row_id: campaignId,
         before: serialize({ status: campaign.status }),
         after: serialize({ status: 'closed', closed_at: updated.closed_at }),
-        ip: actor.ip,
-        user_agent: actor.userAgent,
       },
     });
     return updated;

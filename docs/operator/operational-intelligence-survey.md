@@ -106,3 +106,29 @@ round is ever needed); the sends were driven by a one-off zero-dependency Node s
 inside `dr3-vision-app` on CHAD-HQ (env supplies the Entra creds), replicating
 `sendSystemEmail`'s Graph `POST /users/{from}/sendMail` call and the ADR-0034 invite shell
 verbatim. Script was deleted from the host and container after the run (it embeds live tokens).
+
+### Automated daily reminders — 2026-07-03 (ADR-0036)
+
+The manual nudge round is now a standing system. The `dr3-vision-survey-reminder` container
+(compose service `survey-reminder`) fires **once a day at 09:00 PT** and, for every OPEN
+campaign, sends **one reminder per unsubmitted invite per day** until they submit — the same
+three tiers as the manual round, chosen automatically from each invite's live state:
+
+- opened with saved answers → "your progress is saved", button _Finish your survey_
+- opened but nothing saved → friendly nudge, button _Open your survey_
+- sent but never opened → original subject + a "resending in case it got buried" line
+
+A 20h database gate means a container restart or a slightly-early fire never double-sends. When
+the **last** response comes in (every invite is `submitted`, with only drafts remaining), the
+campaign **auto-closes** and Bill gets one `dr3-vision-system` ntfy — then export as usual with
+the admin **Export** button (auto-close does NOT export for you).
+
+**How to stop the reminders** (they are unbounded by design — daily until complete):
+
+- Preferred: **Close the campaign** in the admin UI (`/admin/operations/intel/<campaign>`).
+  Reminders only touch OPEN campaigns, so closing stops them immediately.
+- Or stop the daemon: `docker stop dr3-vision-survey-reminder` (stops reminders for ALL
+  campaigns until it is started again).
+
+First automated reminders fire at the first 09:00 PT after deploy (`last_reminder_at` starts
+NULL; the 2026-07-02 manual round did not set it).
