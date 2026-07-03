@@ -46,20 +46,86 @@ export interface ScrapedHaul {
   scheduled_at_mymrc: Date | null;
 }
 
+// `ScrapedHaul` above is consumed by the `expected_loads` feed (upsert.ts). The
+// old scrape-result / per-site-outcome types were retired with the DOM scraper;
+// the ADR-0038 transport returns typed records via `portal-client.ts` instead.
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-0038 — MyMRC JSON transport + mirror types
+// ════════════════════════════════════════════════════════════════════════
+
+/** The three ingestion feeds. Values match `mymrc_sync_runs.feed`. */
+export type FeedName = 'hauls' | 'processed' | 'outbound';
+
+export const FEED_NAMES: readonly FeedName[] = ['hauls', 'processed', 'outbound'] as const;
+
 /**
- * Outcome of a single per-site scrape — the unit the upsert + ntfy
- * decision rides on. Caller is responsible for calling the upsert
- * function on success and the ntfy publisher on failure.
+ * One field of a Salesforce UI-API RecordRepresentation. `value` is the raw
+ * typed value (string | number | boolean | null, or a nested record); some
+ * fields also carry a human `displayValue`. Captured live 2026-07-03.
  */
-export interface ScrapeResult {
-  site: SiteCode;
-  hauls: ScrapedHaul[];
-  /** Timestamp when this scrape began. Used as `last_synced_at`. */
-  scraped_at: Date;
+export interface SfField {
+  displayValue: string | null;
+  value: unknown;
 }
 
-/** Discriminated union for the cron wrapper's per-site outcome reporting. */
-export type SiteScrapeOutcome =
-  | { site: SiteCode; status: 'ok'; haulCount: number; upserted: number; cancelled: number }
-  | { site: SiteCode; status: 'no-credentials' }
-  | { site: SiteCode; status: 'error'; error: string };
+/**
+ * A Salesforce UI-API RecordRepresentation, as returned by
+ * `RecordUiController/ACTION$getRecordWithFields`. Only the members the mappers
+ * read are typed; the raw record is retained verbatim in the mirror `payload`.
+ */
+export interface SfRecord {
+  apiName: string;
+  id: string;
+  fields: Record<string, SfField>;
+}
+
+/**
+ * The `getItems` returnValue from `ListViewDataManagerController`. The portal's
+ * virtualized grid returns record ids + column metadata here; cell VALUES load
+ * per-record via `getRecordWithFields` (the detail pass). We depend only on
+ * `recordIdActionsList` (the ordered set of Salesforce record ids in the feed).
+ */
+export interface GetItemsReturnValue {
+  recordIdActionsList?: Array<{ recordId?: string | null } | null> | null;
+  isErrorListView?: boolean | null;
+}
+
+/**
+ * Common lifecycle columns every mirror upsert sets. `id` is the Salesforce
+ * record id (the upsert key, always present from the list feed).
+ */
+interface MirrorBase {
+  id: string;
+  external_id: string | null; // portal number (H-… / M-…), from the detail pass
+  retrac_id: string | null;
+  weight_lbs: number | null;
+  payload: unknown;
+}
+
+export interface HaulMirrorRow extends MirrorBase {
+  status: string | null;
+  rate_id: string | null;
+  docking_appointment_at: Date | null;
+  door: string | null;
+  units: number | null;
+}
+
+export interface ProcessedMirrorRow extends MirrorBase {
+  bol_id: string | null;
+  entry_date: Date | null;
+  processed_date: Date | null;
+  units: number | null;
+}
+
+export interface OutboundMirrorRow extends MirrorBase {
+  bol_id: string | null;
+  entry_date: Date | null;
+  shipment_date: Date | null;
+  vendor: string | null;
+}
+
+export type MirrorRow = HaulMirrorRow | ProcessedMirrorRow | OutboundMirrorRow;
+
+/** Terminal status of one per-site-per-feed sync run — mirrors `MymrcSyncStatus`. */
+export type SyncRunStatus = 'ok' | 'auth_failed' | 'contract_drift' | 'error';

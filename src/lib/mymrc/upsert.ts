@@ -38,6 +38,13 @@ import type { ScrapedHaul, SiteCode } from './types';
 const SCRAPE_WINDOW_DAYS = 7;
 const ACTOR_LABEL = 'system:mymrc-scrape';
 
+// Scrape-ownership marker (source=manual protection — ADR-0038 D2, mission §8).
+// Real MyMRC haul ids are "H-<digits>"; the stale-cancel sweep may only cancel
+// rows it owns (a MyMRC haul that dropped off the feed). Operator/manual expected
+// loads use a non-"H-" id (e.g. "MANUAL-…") and are NEVER auto-cancelled by a
+// scrape — Janette's manual morning entries must never be clobbered.
+const MYMRC_OWNED_HAUL_ID = /^H-/i;
+
 export interface UpsertSummary {
   inserted: number;
   updated: number;
@@ -204,6 +211,8 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   });
   for (const row of stale) {
     if (scrapedIds.has(row.external_mymrc_haul_id)) continue;
+    // Never cancel a manually-entered row (source=manual protection).
+    if (!MYMRC_OWNED_HAUL_ID.test(row.external_mymrc_haul_id)) continue;
     await ctx.prisma.expectedLoad.update({
       where: { id: row.id },
       data: { cancelled_at: now },

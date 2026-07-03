@@ -1,0 +1,175 @@
+{
+  "apiName": "Materials__c",
+  "childRelationships": {},
+  "eTag": "678629c222bdd21ae9609f22c60564f9",
+  "fields": {
+    "Account__c": {
+      "displayValue": null,
+      "value": "0014600000is4tFAAQ"
+    },
+    "Account__r": {
+      "displayValue": "DR3 Woodland",
+      "value": {
+        "apiName": "Account",
+        "childRelationships": {},
+        "eTag": "80aed32ac8aa554677506d62f7f247bb",
+        "fields": {
+          "CreatedDate": {
+            "displayValue": "5/30/2017 2:01 PM",
+            "value": "2017-05-30T21:01:02.000Z"
+          },
+          "Id": {
+            "displayValue": null,
+            "value": "0014600000is4tFAAQ"
+          },
+          "LastModifiedById": {
+            "displayValue": null,
+            "value": "005UJ0000011jixYAA"
+          },
+          "LastModifiedDate": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          },
+          "Name": {
+            "displayValue": null,
+            "value": "DR3 Woodland"
+          },
+          "RecordTypeId": {
+            "displayValue": null,
+            "value": "01246000000qpShAAI"
+          },
+          "SystemModstamp": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          }
+        },
+        "id": "0014600000is4tFAAQ",
+        "lastModifiedById": "005UJ0000011jixYAA",
+        "lastModifiedDate": "2026-07-03T17:13:22.000Z",
+        "recordTypeId": "01246000000qpShAAI",
+        "recordTypeInfo": {
+          "available": true,
+          "defaultRecordTypeMapping": true,
+          "master": false,
+          "name": "MRC Account",
+          "recordTypeId": "01246000000qpShAAI"
+        },
+        "systemModstamp": "2026-07-03T17:13:22.000Z",
+        "weakEtag": 1783098802000
+      }
+    },
+    "BOL_ID__c": {
+      "displayValue": null,
+      "value": null
+    },
+    "CreatedBy": {
+      "displayValue": "[redacted]",
+      "value": "[redacted]"
+    },
+    "CreatedById": {
+      "displayValue": null,
+      "value": "005UJ0000011jYpYAI"
+    },
+    "CreatedDate": {
+      "displayValue": "3/4/2024 12:34 PM",
+      "value": "2024-03-04T20:34:06.000Z"
+    },
+    "Entry_Date__c": {
+      "displayValue": "3/1/2024",
+      "value": "2024-03-01"
+    },
+    "Id": {
+      "displayValue": null,
+      "value": "a2LUJ000001N4gf2AC"
+    },
+    "LastModifiedBy": {
+      "displayValue": "[redacted]",
+      "value": "[redacted]"
+    },
+    "LastModifiedById": {
+      "displayValue": null,
+      "value": "0054p000004VKPGAA4"
+    },
+    "LastModifiedDate": {
+      "displayValue": "10/16/2024 12:13 PM",
+      "value": "2024-10-16T19:13:18.000Z"
+    },
+    "MRC_Comment__c": {
+      "displayValue": null,
+      "value": "Review as possible duplicate with material record M-000218 & M-000256"
+    },
+    "Materials_Status__c": {
+      "displayValue": "Active",
+      "value": "Active"
+    },
+    "Name": {
+      "displayValue": null,
+      "value": "M-000300"
+    },
+    "Number_of_Attached_Files__c": {
+      "displayValue": null,
+      "value": 0
+    },
+    "Number_of_Cutting_Employees__c": {
+      "displayValue": null,
+      "value": 7
+    },
+    "Number_of_Non_Program_Units__c": {
+      "displayValue": null,
+      "value": 0
+    },
+    "Number_of_Program_Units__c": {
+      "displayValue": null,
+      "value": 510
+    },
+    "Processed_Date__c": {
+      "displayValue": "3/1/2024",
+      "value": "2024-03-01"
+    },
+    "RecordTypeId": {
+      "displayValue": null,
+      "value": "0124p000000Zwx1AAC"
+    },
+    "Record_Locked__c": {
+      "displayValue": null,
+      "value": true
+    },
+    "Review_Status__c": {
+      "displayValue": "Approved",
+      "value": "Approved"
+    },
+    "SystemModstamp": {
+      "displayValue": "10/16/2024 12:13 PM",
+      "value": "2024-10-16T19:13:18.000Z"
+    },
+    "Type__c": {
+      "displayValue": "Processing",
+      "value": "Processing"
+    },
+    "Unlock_Record__c": {
+      "displayValue": null,
+      "value": false
+    },
+    "User_Review_Feedback__c": {
+      "displayValue": null,
+      "value": "Legit"
+    },
+    "User_Reviewed__c": {
+      "displayValue": null,
+      "value": true
+    }
+  },
+  "id": "a2LUJ000001N4gf2AC",
+  "lastModifiedById": "0054p000004VKPGAA4",
+  "lastModifiedDate": "2024-10-16T19:13:18.000Z",
+  "recordTypeId": "0124p000000Zwx1AAC",
+  "recordTypeInfo": {
+    "available": true,
+    "defaultRecordTypeMapping": false,
+    "master": false,
+    "name": "Processing",
+    "recordTypeId": "0124p000000Zwx1AAC"
+  },
+  "systemModstamp": "2024-10-16T19:13:18.000Z",
+  "weakEtag": 1729105998000
+}

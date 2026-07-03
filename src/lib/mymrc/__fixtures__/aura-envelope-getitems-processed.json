@@ -1,0 +1,87 @@
+{
+  "actions": [
+    {
+      "id": "427;a",
+      "state": "SUCCESS",
+      "returnValue": {
+        "orderedByInfo": [
+          {
+            "label": "Materials ID",
+            "isAscending": true
+          }
+        ],
+        "scope": [
+          "All materials"
+        ],
+        "filteredByLabels": [
+          "Record Type",
+          "Materials Status",
+          "My Materials"
+        ],
+        "recordIdActionsList": [
+          {
+            "recordId": "a2LUJ000001N4gf2AC"
+          },
+          {
+            "recordId": "a2LUJ000001OHYb2AO"
+          },
+          {
+            "recordId": "a2LUJ000001PGgv2AG"
+          },
+          {
+            "recordId": "a2LUJ000001QN6r2AG"
+          },
+          {
+            "recordId": "a2LUJ000001RGL32AO"
+          }
+        ],
+        "columnWidthMapping": {
+          "BOL_ID__c": -1,
+          "Processed_Date__c": -1,
+          "CreatedBy.Name": -1,
+          "Entry_Date__c": -1,
+          "Account__r.Name": -1,
+          "Name": -1
+        },
+        "wrappedColumns": [],
+        "offset": 50,
+        "hasMoreData": true,
+        "filterTitle": "All Active Processed Materials",
+        "isErrorListView": false,
+        "entityLabelPlural": "materials",
+        "fields": [
+          "LastModifiedDate",
+          "Account__r.SystemModstamp",
+          "Account__r.Id",
+          "Account__r.LastModifiedDate",
+          "Account__r.CreatedDate",
+          "Account__r.RecordTypeId",
+          "Name",
+          "CreatedBy.Id",
+          "BOL_ID__c",
+          "CreatedById",
+          "Processed_Date__c",
+          "CreatedBy.Name",
+          "RecordTypeId",
+          "Account__r.LastModifiedById",
+          "CreatedBy.LastModifiedById",
+          "Entry_Date__c",
+          "Account__r.Name",
+          "CreatedBy.CreatedDate",
+          "SystemModstamp",
+          "CreatedBy.LastModifiedDate",
+          "CreatedBy.SystemModstamp",
+          "CreatedDate",
+          "Account__c",
+          "Id",
+          "LastModifiedById"
+        ]
+      },
+      "error": []
+    }
+  ],
+  "context": {
+    "fwuid": "cmpKNldRZXRSMkdjemxQdjBkbl9uQWtVMjdnTGFERUU2S3FfSVdrcU92bkExNC4xOTIuODM4ODYwOA",
+    "app": "siteforce:communityApp"
+  }
+}

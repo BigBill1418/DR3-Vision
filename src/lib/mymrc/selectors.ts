@@ -4,46 +4,30 @@
 //
 // Verified against the MyMRC Salesforce Experience Cloud portal on:
 //   - 2026-05-06 (initial T-015 ship)
+//   - 2026-06-22 (Experience Cloud redesign — login form lost `name` attrs)
+//   - 2026-07-03 (ADR-0038 discovery — confirmed login still valid; data feeds
+//                 moved to Aura/JSON, so the old scheduled-hauls DOM selectors
+//                 were retired. The list/detail transport now lives in
+//                 `portal-client.ts` and never parses Lightning DOM.)
 //
 // When the portal changes:
 //   1. Confirm via manual inspection.
 //   2. Bump the SELECTOR_VERSION constant.
-//   3. Update both the runbook (`docs/MYMRC-INTEGRATION.md`) and this file.
+//   3. Update both the runbook (`docs/operator/mymrc-ingestion.md`) and this file.
 //   4. Ship a CHANGELOG entry under "Selectors".
-
-import type { SiteCode } from './types';
 
 export const SELECTOR_VERSION = '2026-06-22';
 
 export const SELECTORS = {
-  /** MyMRC login form — email + password + submit. */
+  /** MyMRC login form — username + password + submit (Lightning, no `name` attrs). */
   loginEmailField: 'input[placeholder="Username"]',
   loginPasswordField: 'input[type="password"]',
   loginSubmitButton: 'button:has-text("Log in")',
-  /** Post-login signal: any chrome that only renders for an authenticated session. */
-  authedShellMarker: 'nav[aria-label="recycler-portal"], a[href*="/scheduled-hauls"]',
-  /** Login redirect signal — Salesforce redirects unauthenticated requests here. */
+  /** Login redirect signal — Salesforce renders this field when unauthenticated. */
   loginRedirectMarker: 'input[placeholder="Username"]',
-
-  /** Scheduled-hauls table on the per-site landing. */
-  scheduledHaulsTable: 'table[data-purpose="scheduled-hauls"]',
-  /** Fallback selector for legacy table markup (no data-purpose attribute). */
-  scheduledHaulsTableFallback: 'table.scheduled-hauls',
-  /** "No upcoming hauls" empty-state marker. */
-  scheduledHaulsEmptyState: '[data-purpose="scheduled-hauls-empty"]',
 } satisfies Record<string, string>;
 
 export type SelectorKey = keyof typeof SELECTORS;
-
-/**
- * Per-site MyMRC URL builder. The `recycler` query parameter is what
- * scopes the page to one MRC account; we always pass the long form
- * matching the Recycler column in the haul export.
- */
-export function scheduledHaulsUrl(site: SiteCode): string {
-  const recycler = site === 'eugene' ? 'DR3 Eugene' : 'DR3 Woodland';
-  return `https://mrc-us.my.site.com/s/scheduled-hauls?recycler=${encodeURIComponent(recycler)}`;
-}
 
 /** Shared login URL — same for both sites; the credentials decide tenancy. */
 export const LOGIN_URL = 'https://mrc-us.my.site.com/s/login/';

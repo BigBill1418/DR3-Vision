@@ -244,27 +244,27 @@ model User {
 // ────────────────────────────────────────────────────────────────────────
 
 model Source {
-  id         String   @id @default(uuid())
-  site_id    String
-  site       Site     @relation(fields: [site_id], references: [id])
-  name       String // verbatim from MyMRC for reconciliation match
-  street     String?
-  city       String?
-  state      String?
-  zip        String?
-  is_active  Boolean  @default(true)
-  notes      String?
+  id                String   @id @default(uuid())
+  site_id           String
+  site              Site     @relation(fields: [site_id], references: [id])
+  name              String // verbatim from MyMRC for reconciliation match
+  street            String?
+  city              String?
+  state             String?
+  zip               String?
+  is_active         Boolean  @default(true)
+  notes             String?
   // ADR-0037 Addendum B7 — site-driven program-ness + trans-charge classifier.
   // Program-ness is a property of the collection SITE, not the commodity: a
   // non-program source's units default to the non-program pool at the verify gate
   // (manager can override). `is_trans_charge` splits the two Inbound tabs;
   // `canonical_mileage` feeds the (P2) freight tier table. Spelling drift in the
   // source workbook lists is resolved via `source_aliases`.
-  is_non_program    Boolean @default(false)
-  is_trans_charge   Boolean @default(false)
+  is_non_program    Boolean  @default(false)
+  is_trans_charge   Boolean  @default(false)
   canonical_mileage Int?
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
 
   inbound_loads  InboundLoad[]
   expected_loads ExpectedLoad[]
@@ -1377,11 +1377,11 @@ model ConsumerDropoff {
   check_number    String?
   paid_at         DateTime?
   retrac_id       String?
-  source          RecordSource @default(manual)
+  source          RecordSource        @default(manual)
   locked_at       DateTime? // edit-before-any-lock guard (CRUD-lite)
   created_by      String?
-  created_at      DateTime     @default(now())
-  updated_at      DateTime     @updatedAt
+  created_at      DateTime            @default(now())
+  updated_at      DateTime            @updatedAt
 
   @@index([site_id, dropoff_date])
   @@index([site_id, person_name, dropoff_date]) // daily-cap aggregation
@@ -1508,4 +1508,122 @@ model ProcessedUnitsDaily {
   @@unique([site_id, production_date])
   @@index([site_id, production_date])
   @@map("processed_units_daily")
+}
+
+// ADR-0038 — MyMRC mirrors
+//
+// Raw mirror of the MyMRC (Salesforce Experience Cloud) portal feeds. These
+// are AUDIT-EVIDENCE tables, not operational tables: the 3-way audit (ADR-0039)
+// compares daily-logs ↔ MyMRC ↔ billing, so MyMRC data must land in its own
+// independent leg. Only Hauls additionally feed `expected_loads` (operational
+// queue) via the existing scrape upsert path. `processed`/`outbound` feed
+// nothing operational.
+//
+// Keying: `id` is the Salesforce record id (stable portal external id, always
+// present from the list feed — the upsert key). `external_*_id` is the human
+// portal number (Haul "H-…" / Materials "M-…"), populated on the detail pass
+// (nullable until then; unique-when-present). `payload` retains the full raw
+// record representation for audit + future column needs.
+//
+// `site_id` is a scalar FK (constraint added in the migration SQL) — no Prisma
+// relation field, deliberately, so this block stays self-contained and does not
+// edit the Site model.
+// ────────────────────────────────────────────────────────────────────────
+
+enum MymrcSyncStatus {
+  ok
+  auth_failed
+  contract_drift
+  error
+}
+
+model MymrcHaulsMirror {
+  id                     String    @id // Salesforce record id (e.g. a2KUJ00000G6id32AB)
+  site_id                String
+  external_haul_id       String?   @unique // portal Haul number, e.g. "H-133323" (detail pass)
+  status                 String? // Status__c, e.g. "Confirmed"
+  rate_id                String? // Rate_ID__c (landfill - transporter - recycler)
+  docking_appointment_at DateTime? // parsed from Docking_Appointment_Time__c / _Date__c
+  door                   String? // Docking_Appointment_Dock_Door__c
+  units                  Int? // program unit count when available on the record
+  weight_lbs             Decimal?  @db.Decimal(12, 2)
+  retrac_id              String? // Re-TRAC id; maps 1:1 to external_haul_id per ADR post-note
+  payload                Json? // full raw record representation (audit evidence)
+  first_seen_at          DateTime  @default(now())
+  last_seen_at           DateTime  @default(now())
+  disappeared_at         DateTime? // stamped when absent from a full list fetch
+  detail_fetched_at      DateTime? // stamped when the getRecordWithFields detail pass succeeds
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  @@index([site_id])
+  @@index([disappeared_at])
+  @@index([detail_fetched_at])
+  @@map("mymrc_hauls_mirror")
+}
+
+model MymrcProcessedMirror {
+  id                    String    @id // Salesforce record id
+  site_id               String
+  external_materials_id String?   @unique // portal Materials number, e.g. "M-000300"
+  bol_id                String? // BOL_ID__c
+  entry_date            DateTime? // Entry_Date__c
+  processed_date        DateTime? // Processed_Date__c
+  units                 Int? // Number_of_Program_Units__c
+  weight_lbs            Decimal?  @db.Decimal(12, 2)
+  retrac_id             String?
+  payload               Json?
+  first_seen_at         DateTime  @default(now())
+  last_seen_at          DateTime  @default(now())
+  disappeared_at        DateTime?
+  detail_fetched_at     DateTime?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  @@index([site_id])
+  @@index([disappeared_at])
+  @@index([detail_fetched_at])
+  @@map("mymrc_processed_mirror")
+}
+
+model MymrcOutboundMirror {
+  id                    String    @id // Salesforce record id
+  site_id               String
+  external_materials_id String?   @unique // portal Materials number, e.g. "M-000264"
+  bol_id                String? // BOL_ID__c
+  entry_date            DateTime? // Entry_Date__c
+  shipment_date         DateTime? // Shipment_Date__c
+  vendor                String? // Outbound_Vendor_Name__c
+  weight_lbs            Decimal?  @db.Decimal(12, 2)
+  retrac_id             String?
+  payload               Json?
+  first_seen_at         DateTime  @default(now())
+  last_seen_at          DateTime  @default(now())
+  disappeared_at        DateTime?
+  detail_fetched_at     DateTime?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  @@index([site_id])
+  @@index([disappeared_at])
+  @@index([detail_fetched_at])
+  @@map("mymrc_outbound_mirror")
+}
+
+model MymrcSyncRun {
+  id              String          @id @default(uuid())
+  site_id         String
+  feed            String // 'hauls' | 'processed' | 'outbound'
+  started_at      DateTime        @default(now())
+  finished_at     DateTime?
+  status          MymrcSyncStatus
+  rows_listed     Int             @default(0)
+  rows_upserted   Int             @default(0)
+  details_fetched Int             @default(0)
+  error           String? // human error text (never contains credentials)
+  created_at      DateTime        @default(now())
+
+  @@index([site_id, feed, started_at])
+  @@index([feed, status, started_at])
+  @@map("mymrc_sync_runs")
 }

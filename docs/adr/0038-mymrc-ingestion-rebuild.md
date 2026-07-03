@@ -149,3 +149,94 @@ mirrors' `retrac_id` is expected to equal the portal's external Haul/Materials i
 in current data — capture both fields anyway (nomenclature differs across the
 workbook and the portal, and history may diverge), but ingestion maps them 1:1
 unless the record detail shows otherwise.
+
+## Post-acceptance implementation notes (2026-07-03, build)
+
+### Discovery outcome (live, read-only)
+
+Discovery ran successfully against the live portal (DR3 Woodland) inside
+`dr3-vision-app:local`. Login with the committed selectors worked; all three list
+feeds + one record detail per type were captured. Fixtures are **REAL** (redacted
+of person names) under `src/lib/mymrc/__fixtures__/` — see that dir's README.
+
+The portal is standard Salesforce Experience Cloud plumbing, not a custom UI:
+- **List** = `ListViewDataManagerController/ACTION$getItems` → returns the ordered
+  Salesforce **record ids** (`recordIdActionsList`) + column metadata. The grid is
+  virtualized: `wrappedColumns` is empty, so cell VALUES are **not** in the list
+  response — they load per-record.
+- **Detail** = `RecordUiController/ACTION$getRecordWithFields` → the full UI-API
+  RecordRepresentation (`fields: {ApiName: {displayValue, value}}`).
+
+Field mapping (captured live):
+- `Haul_Request__c`: `Name` (H-…), `Status__c`, `Rate_ID__c`,
+  `Docking_Appointment_Time__c` ("YYYY/MM/DD HH:MM PT", **Pacific**),
+  `Docking_Appointment_Date__c`, `Docking_Appointment_Dock_Door__c`.
+- `Materials__c` (Processing): `Name` (M-…), `BOL_ID__c`, `Entry_Date__c`,
+  `Processed_Date__c`, `Number_of_Program_Units__c`.
+- `Materials__c` (Outbound): `Name`, `BOL_ID__c`, `Entry_Date__c`,
+  `Shipment_Date__c`, `Outbound_Vendor_Name__c` (+ composition weights).
+
+### Ladder decision — **#2 (in-page interception)**, with evidence for #1
+
+Implemented **ladder #2** (Playwright navigates the list/detail page; we intercept
+the `/s/sfsites/aura` responses the page issues). Rationale, empirical:
+
+1. **Ladder #1's raw transport is proven viable** — a captured Aura POST replayed
+   with fresh Playwright cookies via plain `fetch` returned **HTTP 200 + a valid
+   `{"actions":[…SUCCESS…]}` JSON envelope** (evidence retained in the discovery
+   capture `replay-test-hauls.json`). So cookie-based replay works.
+2. **But** the list `getItems` returns only record **ids**; field values require a
+   per-record `getRecordWithFields` regardless of ladder — there is no single-call
+   fast path to avoid.
+3. Ladder #1 replay must reconstruct the Aura envelope (`aura.context` with
+   **`fwuid`**, `aura.token`, page-scope id) for getItems + getRecordWithFields.
+   The `fwuid` rotates on **every Salesforce release**, so ladder #1 reintroduces
+   exactly the per-release fragility this ADR isolates — it just moves it from DOM
+   selectors to envelope construction.
+4. Ladder #2 intercepts the identical JSON the browser produces (the browser
+   rebuilds the envelope for us) — immune to `fwuid`/envelope drift. A missing
+   expected action surfaces as `PortalContractDriftError` (D4), never a silent 0.
+
+Cost is acceptable: 3 list-page loads + a **bounded ≤3** detail-page pass hourly,
+and steady-state detail fetches are only new records (detail_fetched_at IS NULL).
+Ladder #1 remains the documented future fast-path if page-load cost ever matters;
+the transport boundary (`portal-client.ts`) is unchanged either way.
+
+### Deviations / clarifications vs. the accepted ADR
+
+- **Mirror `id` = Salesforce record id**, not the human number. The list feed only
+  exposes the Salesforce record id, which is the stable "portal external id" and
+  the upsert key (D3). The human `Name` (H-…/M-…) lands in `external_*_id`
+  (UNIQUE-when-present), populated on the detail pass — nullable until then, which
+  is exactly the D3 "detail is a second pass" contract.
+- **`site_id` is a scalar FK** (constraint in the migration SQL), with **no Prisma
+  relation field**, so the ADR-0038 schema block stays one contiguous unit at the
+  end of `schema.prisma` and never edits the `Site` model (keeps the merge with
+  ADR-0037 trivial).
+- **source=manual protection**: the referenced protection did **not** exist in
+  `upsert.ts` (no manual-origin marker on `expected_loads`). Implemented as a
+  minimal, testable guard: the stale-cancel sweep only cancels rows whose
+  `external_mymrc_haul_id` starts with `H-` (MyMRC-owned); operator/manual rows
+  (any non-`H-` id, e.g. `MANUAL-…`) are never auto-cancelled. Proven by a new
+  upsert test.
+- **Hauls → `expected_loads` mapping is lossy**: the `Haul_Request__c` record has
+  no discrete collection-site or transporter field, so `source_name_at_sync` is
+  set from `Rate_ID__c` (best available: "landfill - transporter - recycler") and
+  transporter/bol are null. Unmatched source names persist with a null FK (existing
+  behavior). `expected_arrival_at`/`scheduled_at_mymrc` come from the Pacific
+  `Docking_Appointment_Time__c`.
+- **Detail URL** uses the generic Experience Cloud `/s/detail/<recordId>` view. If a
+  per-object route differs, the record's `getRecordWithFields` still fires and is
+  intercepted; a wrong URL degrades to a loud `PortalContractDriftError` (no silent
+  empty). Verify on first enable.
+- **Cross-tick paging dedup**: the worker is spawned per hourly tick, so the
+  in-process cooldown ledger only dedups within a tick. Cross-tick dedup is derived
+  from the run ledger — page on the leading edge of a failure (prior run had a
+  different status) or after a 6h re-page window. Deadman (>26h no success) is the
+  backstop.
+- **`docking_appointment_at` / `Docking_Appointment_Time__c` is Pacific.** Parsed
+  DST-correctly to a UTC instant (same `Intl` technique as `src/lib/time.ts`,
+  replicated self-contained because the mymrc module compiles standalone).
+- **Shared, symlinked `node_modules`** in the build worktree means `prisma generate`
+  writes the client into the main repo's tree; regenerate before typecheck. The
+  generated client is a derived artifact (main repo regenerates its own on build).

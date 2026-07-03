@@ -307,4 +307,33 @@ describe('upsertScrapedHauls — stale cancellation', () => {
     const cancelData = (cancelUpdate![0] as { data: { cancelled_at: Date } }).data;
     expect(cancelData.cancelled_at.toISOString()).toBe(NOW.toISOString());
   });
+
+  it('NEVER cancels a manually-entered row (source=manual protection, ADR-0038 D2)', async () => {
+    // An operator's manual expected load (non-"H-" id) sits in the scrape window
+    // but is absent from the current MyMRC scrape. It must survive untouched —
+    // Janette's manual morning entries must never be clobbered (mission §8).
+    const stale = [
+      { id: 'manual-1', external_mymrc_haul_id: 'MANUAL-am-entry-1', cancelled_at: null },
+      { id: 'mymrc-gone', external_mymrc_haul_id: 'H-GONE', cancelled_at: null },
+    ];
+    const prisma = buildPrismaMock({
+      sources: [{ id: 'src-1', name: 'Source Alpha' }],
+      transporters: [{ id: 'tx-1', name: 'Carrier One' }],
+      staleRows: stale,
+    });
+    const summary = await upsertScrapedHauls({
+      prisma: prisma as unknown as Parameters<typeof upsertScrapedHauls>[0]['prisma'],
+      site: 'eugene',
+      hauls: [buildHaul('H-STILL-THERE')],
+      scrapedAt: NOW,
+      now: NOW,
+    });
+    // Only the MyMRC-owned "H-GONE" is cancelled; the manual row is protected.
+    expect(summary.cancelled).toBe(1);
+    const cancelledIds = prisma._spies.expectedUpdate.mock.calls.map(
+      (c) => (c[0] as { where: { id: string } }).where.id,
+    );
+    expect(cancelledIds).toContain('mymrc-gone');
+    expect(cancelledIds).not.toContain('manual-1');
+  });
 });

@@ -1,0 +1,121 @@
+{
+  "apiName": "Haul_Request__c",
+  "childRelationships": {},
+  "eTag": "86cc9ea5fc042b76543fc3aa0b318113",
+  "fields": {
+    "CreatedDate": {
+      "displayValue": "6/30/2026 4:25 PM",
+      "value": "2026-06-30T23:25:56.000Z"
+    },
+    "Docking_Appointment_Date__c": {
+      "displayValue": "7/3/2026",
+      "value": "2026-07-03"
+    },
+    "Docking_Appointment_Dock_Door__c": {
+      "displayValue": null,
+      "value": "Dock Door 1"
+    },
+    "Docking_Appointment_Id__c": {
+      "displayValue": null,
+      "value": "DA-039175"
+    },
+    "Docking_Appointment_Time__c": {
+      "displayValue": null,
+      "value": "2026/07/03 14:30 PT"
+    },
+    "Docking_Appointment__c": {
+      "displayValue": null,
+      "value": "a1vUJ0000034W4PYAU"
+    },
+    "Id": {
+      "displayValue": null,
+      "value": "a2KUJ00000G6id32AB"
+    },
+    "LastModifiedById": {
+      "displayValue": null,
+      "value": "005UJ0000011jXaYAI"
+    },
+    "LastModifiedDate": {
+      "displayValue": "7/2/2026 4:30 PM",
+      "value": "2026-07-02T23:30:14.000Z"
+    },
+    "Name": {
+      "displayValue": null,
+      "value": "H-133323"
+    },
+    "Rate_ID__c": {
+      "displayValue": null,
+      "value": "Yolo County Central Landfill - Ron Lawrence & Son - DR3 Woodland"
+    },
+    "Recycling_Center_Lookup__c": {
+      "displayValue": null,
+      "value": "0014600000is4tFAAQ"
+    },
+    "Recycling_Center_Lookup__r": {
+      "displayValue": "DR3 Woodland",
+      "value": {
+        "apiName": "Account",
+        "childRelationships": {},
+        "eTag": "80aed32ac8aa554677506d62f7f247bb",
+        "fields": {
+          "CreatedDate": {
+            "displayValue": "5/30/2017 2:01 PM",
+            "value": "2017-05-30T21:01:02.000Z"
+          },
+          "Id": {
+            "displayValue": null,
+            "value": "0014600000is4tFAAQ"
+          },
+          "LastModifiedById": {
+            "displayValue": null,
+            "value": "005UJ0000011jixYAA"
+          },
+          "LastModifiedDate": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          },
+          "Name": {
+            "displayValue": null,
+            "value": "DR3 Woodland"
+          },
+          "RecordTypeId": {
+            "displayValue": null,
+            "value": "01246000000qpShAAI"
+          },
+          "SystemModstamp": {
+            "displayValue": "7/3/2026 10:13 AM",
+            "value": "2026-07-03T17:13:22.000Z"
+          }
+        },
+        "id": "0014600000is4tFAAQ",
+        "lastModifiedById": "005UJ0000011jixYAA",
+        "lastModifiedDate": "2026-07-03T17:13:22.000Z",
+        "recordTypeId": "01246000000qpShAAI",
+        "recordTypeInfo": {
+          "available": true,
+          "defaultRecordTypeMapping": true,
+          "master": false,
+          "name": "MRC Account",
+          "recordTypeId": "01246000000qpShAAI"
+        },
+        "systemModstamp": "2026-07-03T17:13:22.000Z",
+        "weakEtag": 1783098802000
+      }
+    },
+    "Status__c": {
+      "displayValue": "Confirmed",
+      "value": "Confirmed"
+    },
+    "SystemModstamp": {
+      "displayValue": "7/2/2026 4:30 PM",
+      "value": "2026-07-02T23:30:14.000Z"
+    }
+  },
+  "id": "a2KUJ00000G6id32AB",
+  "lastModifiedById": "005UJ0000011jXaYAI",
+  "lastModifiedDate": "2026-07-02T23:30:14.000Z",
+  "recordTypeId": "012000000000000AAA",
+  "recordTypeInfo": null,
+  "systemModstamp": "2026-07-02T23:30:14.000Z",
+  "weakEtag": 1783035014000
+}
