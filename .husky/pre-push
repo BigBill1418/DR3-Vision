@@ -12,6 +12,24 @@
 # message and exit 0 so the deploy box is never wedged. Local dev clones (with
 # node_modules) get the full gate.
 
+# DELETION-ONLY pushes (e.g. `git push origin --delete <branch>`) push no code, so
+# the gate is pure friction there — it blocked the 2026-07-02 stale-branch sweep on
+# type errors from an unrelated stale generated client. Git hands the refs on stdin
+# as "<local ref> <local sha> <remote ref> <remote sha>"; a deletion carries the
+# all-zero local sha. Skip only when EVERY pushed ref is a deletion — a mixed push
+# still gets the full gate.
+ZERO_SHA=0000000000000000000000000000000000000000
+has_non_deletion=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  if [ "$local_sha" != "$ZERO_SHA" ]; then
+    has_non_deletion=1
+  fi
+done
+if [ "$has_non_deletion" = "0" ]; then
+  echo "pre-push: deletion-only push (no code) — skipping tsc/vitest gate."
+  exit 0
+fi
+
 if [ ! -d node_modules ]; then
   echo "pre-push: node_modules absent — skipping tsc/vitest gate (deploy clone). Push allowed."
   exit 0

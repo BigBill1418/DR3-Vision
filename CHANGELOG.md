@@ -5,6 +5,10 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-03
+
+- **Pre-push gate (ADR-0033 / P0-4) no longer blocks deletion-only pushes.** `git push origin --delete <branch>` pushes no code, but the hook still ran the full tsc + payroll-suite gate — which blocked the 2026-07-02 stale-branch sweep on type errors from an unrelated stale generated Prisma client. The hook now reads the ref list git supplies on stdin and skips the gate only when EVERY pushed ref is a deletion (all-zero local sha); a mixed push (deletion + real ref) still gets the full gate. Regression tests in `src/__tests__/pre-push-hook.test.ts` cover deletion-only, empty-ref, mixed, and normal pushes.
+
 ### Added — Sprint 6
 
 - **Operational intelligence survey system (ADR-0034)** — Vision-native survey for structured intelligence gathering across the DR3 team. New tables `survey_campaigns`, `survey_invites`, `survey_questions`, `survey_responses`. Public token-gated route `/survey/{token}` with no auth (token IS the access). Super-admin route group `/admin/operations/intel` for campaign management with per-invite approval gate and send confirmation interstitial that requires matching `confirmed_recipient_count`. Email send via existing M365 path, extended to support per-campaign sender display name, reply-to, and CC. SVdP-branded email shell matching the daily production report style. Idempotent seed pre-loads the DR3 Intel 2026-06 campaign with all 10 recipient packets (Bethany, Leisha, Shannon, Mary, Rick, Janette, Morena, Kelsey, Juan, Patrick) in draft status. Closing question "What are we missing?" appended to every packet. On campaign close, responses export as markdown to `docs/operations-intel/{slug}/` via the same ClaudeSync handoff mechanism used for sprint work. (#34)
