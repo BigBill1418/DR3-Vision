@@ -1,6 +1,6 @@
 # ADR-0039 — 3-way audit engine + Audit Workbench + retro-audit (daily logs ↔ MyMRC ↔ billing)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-03, approved by Bill)
 **Date:** 2026-07-03
 **Relates to:** mission record §6-P1 (P1 promoted on the accepted 8/1 coverage gap), §2.2 #4, §4.1; **Addendum A §A1** (Audit Workbench) as corrected by **Addendum B §B1/§B4** (source-type categories, close model); ADR-0037 (operational tables, post-Addendum-B shape), ADR-0038 (mirror tables); survey build-inputs doc §B (`docs/operations-intel/dr3-intel-2026-06/build-inputs-2026-07-03.md`)
 **Series:** third of three P1 ADRs — 0037 foundations (accepted), 0038 ingestion (accepted), **0039 audit (this)**
