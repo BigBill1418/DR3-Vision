@@ -173,3 +173,164 @@ from Rick Q11) · fingerprint dedupe + auto-resolve lifecycle · workbook parser
 against fixtures for all three template generations + a synthetic sum-range-drift
 workbook (must flag the dropped fuel rows) · gate function (block / override /
 clean) · run-failure paging · migration clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-03)
+
+Implemented on branch `feat/adr-0039-audit-engine` (engine + workbench + retro).
+All gates green: typecheck 0 · eslint 0 (touched) · full vitest (1174 tests) ·
+`next build` · migration clean-replays standalone on throwaway PG16.
+
+### Dependency isolation (the load-bearing constraint)
+
+ADR-0037 and ADR-0038 tables were NOT yet on `main` during this build. To keep
+the module type-checking and building against current `main`:
+
+- `src/lib/audit/types.ts` defines **plain TS row interfaces** for every leg
+  (`InboundLegRow`, `ProcessedLegRow`, `OutboundLegRow`, `MirrorHaulRow`, …),
+  shaped exactly per the sibling ADRs including their post-Addendum-B revisions
+  (program/non-program splits, outbound commodity × sub-category with nullable
+  `wholeUnits`, the §B4 close fields). **Comparators consume ONLY these
+  interfaces** — never a sibling Prisma model.
+- The DB-fetch layer that maps sibling Prisma models → these interfaces is
+  `src/lib/audit/leg-fetchers.INTEGRATION-PENDING.ts`, written best-effort
+  against the specced shapes but **kept out of compilation** via a
+  `/* eslint-disable */` + `// @ts-nocheck` header (tsconfig's `**/*.ts` glob
+  would otherwise pick it up). It is imported by nothing compiled. See the
+  "INTEGRATION-PENDING" merge checklist at the top of that file.
+- The nightly sweep (`src/lib/audit/sweep.ts`) takes the comparator runner via
+  an **injected `runChecks` callback** so the compiled code never references a
+  sibling model. Until integration, no callback is passed → the sweep is a clean
+  no-op that still writes an `audit_runs` record.
+
+### Own tables only
+
+The migration creates **only this ADR's tables** — `audit_findings`,
+`audit_check_config`, `workbook_imports`, `workbook_import_rows`, plus the
+`audit_runs` ledger (needed for the "writes a run record" requirement and the
+freshness/deadman surface, mirroring ADR-0038's `mymrc_sync_runs`). It references
+no sibling table. It was generated with `prisma migrate diff` and then trimmed to
+the additive objects only (the raw diff surfaced pre-existing drift between the
+hand-written migrations and `schema.prisma` — bonus_/survey_ constraint renames —
+which is NOT part of this change and was excluded).
+
+### exceljs choice
+
+The repo had **no** xlsx library (`papaparse` is CSV-only), so `exceljs@^4.4.0`
+was added as a dependency for the workbook parser. Rationale: pure-JS, actively
+maintained, reads `.xlsm` by ignoring the VBA part, and can both read and write
+(the test fixtures are synthesized with it, so the suite never needs the real —
+and unavailable — daily-log file). Alternatives considered: `xlsx`/SheetJS (the
+open-source CE build has had maintenance/security concerns and a heavier surface).
+
+### Things discovered
+
+- **Business-day helper reused, not reinvented**: `addBusinessDays(date, n,
+  holidays)` already existed in `src/lib/compliance.ts` (holiday-aware, UTC
+  day-key based). C7 reuses it via thin ISO-day-key wrappers in
+  `comparators/helpers.ts`.
+- **Fingerprint window-independence**: record-level checks (C1/C3/C7) fingerprint
+  on the record identity, NOT the window, so the same discrepancy dedupes across
+  overlapping sweep windows and a later retro run — the `fingerprint UNIQUE`
+  column then makes upsert-by-fingerprint the natural cross-window primitive.
+- **Workbench provider is stubbed, not faked**: the three rollup frames render
+  `integration_pending` empty states from a typed provider until the ADR-0037
+  tables land. No fabricated data (operator directive).
+- **UI is English-first** for this office super-admin surface (permitted by
+  ADR-0037 consequences); the operator iPad flow is untouched.
+
+## Post-acceptance implementation notes — integration (2026-07-03)
+
+The engine was integrated against the now-merged ADR-0037 (loads/inventory) and
+ADR-0038 (mirrors) models. `leg-fetchers.INTEGRATION-PENDING.ts` became
+`leg-fetchers.ts` (compiled, wired). All gates green on this worktree's own
+node_modules: `prisma generate` · `tsc --noEmit` 0 · eslint 0 (touched) · full
+`vitest run` (1297 tests) · `next build` · full migration chain (…703b + …704 +
+…705) clean-replays on a throwaway PG16 with **zero drift on the ADR-0039 tables**
+(the 22 pre-existing bonus/mymrc/survey constraint-rename drift statements are
+inherited from `main`, not this change).
+
+### Real sibling shapes forced these comparator/fetcher adjustments
+
+The blueprint's `select`s assumed columns that the merged schema does not have.
+Reconciled as follows (each is a deliberate, documented mapping — not a silent
+fallback):
+
+- **No Vision-side "submitted to MyMRC" timestamp exists.** `inbound_loads`,
+  `processed_units_daily`, and `outbound_materials` carry no submit column. The
+  mirror IS the record of when MyMRC received a row, so **C7's lateness clock
+  reads the matched mirror's entry instant** — `mymrc_processed_mirror.entry_date`
+  / `mymrc_outbound_mirror.entry_date`, and `mymrc_hauls_mirror.first_seen_at`
+  for hauls (no haul entry-date column; first-seen is the entry proxy). A Vision
+  row with no mirror counterpart keeps a null instant → C7 correctly flags it
+  overdue once its clock lapses. Enrichment is a cross-leg join done in
+  `buildRunChecksForWindow` after the fetches.
+- **`inbound_loads` has no scalar `RecordSource`** → provenance is `manual`
+  (operator-entered at the dock; MyMRC feeds `expected_loads`, not
+  `inbound_loads`) and the source SITE name comes from the `source` relation.
+  No `verified_at` column exists (the verify transition lives in `audit_log`),
+  so `verifiedAtISO` is null — unused by C1/C7.
+- **`processed_units_daily` stores STRIPPED program/non-program** (Decimal), not
+  `units_processed`; the total is derived. The MyMRC entry instant / date come
+  from the processed mirror.
+- **`mymrc_processed_mirror` has no program/non-program split** (only the program
+  total `units`) → **C2's split sub-checks degrade to the total-units
+  comparison** via the existing `bothPresent` guards (graceful, no false
+  positives).
+- **`mymrc_outbound_mirror` uses `shipment_date`, has no `ticket_number`/`units`
+  columns** → the Material-# join key is `external_materials_id` (the portal
+  `M-…` number the Vision outbound row carries in `ticket_number`); the mirror
+  leg has no unit count.
+- **`outbound_materials` has no `eod_closed_at`/submit columns** → the C7 EOD
+  close clock uses `locked_at` (the day-lock instant).
+- **`external_haul_id` / `external_materials_id` are nullable** until the detail
+  pass → mirror rows fall back to the stable Salesforce `id` for the join key so
+  C1/C2/C3 never key on null; the Re-TRAC path still matches.
+
+### C5/C6 derivation + the C6 cross-check
+
+C5/C6 inputs are DERIVED per-day from the operational rows, anchored at the
+running balance's on-hand position at window start. Both **reuse the ONE shared
+`computeRunningBalance` (ADR-0037 D6)** rather than forking a second inventory
+formula: `rollInventoryDays` computes each day's End with `computeRunningBalance`
+using the prior day's End as the anchor, so C6's own `Start + Inbound − Stripped
+− WholeUnitsSold − Landfilled` reproduces it exactly and **live data is
+continuity-clean by construction** — only the physical-count reconcile can fire
+(which is the point on live data; the roll-break/DAY6 defects are workbook-only,
+handled in the retro path). The cross-check requirement is met by a test asserting
+the day-by-day roll's final End equals a single `computeRunningBalance` over the
+summed window flows.
+
+`InventoryDayRow` gained an **optional `npStripped`** term and `c6.computedNpEnd`
+now subtracts it — the merged schema has `processed_units_daily.stripped_non_program`
+(Woodland co-processes non-program units), which the pre-merge C6 didn't model;
+without it, a clean live window with NP stripping would emit false NP-continuity
+findings. Optional + default-0 keeps the existing fixtures/tests unchanged.
+
+### Other wirings
+
+- **Workbench is live** (`dbWorkbenchProvider`) over the real tables; category
+  rollups follow Addendum B §B1 (source-type, not unit-type); the inventory
+  ledger reuses `buildInventoryDays` (same shared balance). Empty windows render
+  an honest "no activity" line — still no fabricated data. `stubWorkbenchProvider`
+  is retained as the honest fallback / test double.
+- **On-demand run**: `POST /api/audit/<site>/run` (site-scoped manager/admin,
+  same `resolveSiteAccess` shape as the finding-transition route) runs one
+  site/window through the shared `auditSiteWindow` (extracted from the sweep loop;
+  `trigger = on_demand`). A window ending today keeps grace clocks; a purely
+  historical window drops `asOfISO`.
+- **Alias resolution**: `sourceAliasResolver(db)` reads `sources` + `source_aliases`
+  once and returns a synchronous resolver (the `SiteAliasResolver` contract is
+  sync) — exact canonical `Source.name` first, then the alias table, canonical
+  winning a normalized-key collision. The workbook route uses it in place of the
+  empty in-memory stub.
+- **`Commodity` type correction**: the audit `Commodity` union was the old
+  landfill/steel/biomass/wte taxonomy; corrected to the daily-log-9
+  (`trash|toppers|foam|metal|wood|cardboard|plastic|shoddy|cotton`) to match the
+  merged `OutboundCommodity` enum. Only used as a display label in findings; the
+  two comparator test literals (`foam`, `toppers`) exist in both taxonomies.
+- **Test idiom**: the repo has no test Postgres — route/DB tests use a fake
+  prisma client. Integration coverage follows that idiom (`leg-fetchers.test.ts`
+  drives `buildRunChecksForWindow` over a small in-memory query engine; the
+  lifecycle round-trips — create / last_seen refresh / auto-resolve — remain
+  covered by the pure `lifecycle.test.ts` reconciler). `site-alias.db.test.ts`
+  covers the DB resolver.

@@ -95,6 +95,12 @@ model Site {
   landfilled_units      LandfilledUnit[]
   processed_units_daily ProcessedUnitsDaily[]
 
+
+  // 3-way audit engine (ADR-0039)
+  audit_findings     AuditFinding[]
+  audit_check_config AuditCheckConfig[]
+  workbook_imports   WorkbookImport[]
+  audit_runs         AuditRun[]
   @@map("sites")
 }
 
@@ -236,6 +242,10 @@ model User {
   survey_campaigns_created SurveyCampaign[] @relation("SurveyCampaignCreator")
   survey_invites_approved  SurveyInvite[]   @relation("SurveyInviteApprover")
 
+
+  // 3-way audit engine (ADR-0039)
+  audit_findings_resolved   AuditFinding[]   @relation("AuditFindingResolver")
+  workbook_imports_uploaded WorkbookImport[] @relation("WorkbookImportUploader")
   @@map("users")
 }
 
@@ -1626,4 +1636,211 @@ model MymrcSyncRun {
   @@index([site_id, feed, started_at])
   @@index([feed, status, started_at])
   @@map("mymrc_sync_runs")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 3-way audit engine + retro-audit (ADR-0039)
+//
+// Three structurally-independent legs are compared by pure comparators
+// (src/lib/audit/): Vision operational data (ADR-0037 tables), MyMRC mirrors
+// (ADR-0038), and billing (P2 / historical workbooks). Findings are durable,
+// deduplicated by fingerprint, and carry a review lifecycle. All tables are
+// additive — none feed the operational tables (findings never mutate source
+// data; fixing happens in the source records via their own audited flows).
+// ════════════════════════════════════════════════════════════════════════
+
+enum AuditCheckCode {
+  c1_inbound
+  c2_processed
+  c3_outbound
+  c4_billing_basis
+  c5_conservation
+  c6_inventory_continuity
+  c7_deadline
+  summary_recompute
+}
+
+enum AuditFindingKind {
+  missing_counterpart
+  value_mismatch
+  date_mismatch
+  unresolved_site
+  dropped_row
+}
+
+enum AuditFindingStatus {
+  open
+  acknowledged
+  resolved
+  not_an_issue
+}
+
+// Separates data-entry mistakes from real operational causes (Morena Q5/Q8).
+enum AuditFindingCause {
+  data_entry
+  operational
+  external_mymrc
+  template_defect
+  unknown
+}
+
+enum AuditSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum AuditRunStatus {
+  ok
+  partial
+  error
+}
+
+enum WorkbookImportStatus {
+  uploaded
+  parsing
+  parsed
+  failed
+}
+
+// A single durable discrepancy. Re-runs upsert by `fingerprint` (check_code +
+// normalized refs + window semantics): unchanged → refresh last_seen_at;
+// corrected → auto-resolve. Findings NEVER mutate the underlying data.
+model AuditFinding {
+  id                  String             @id @default(uuid())
+  site_id             String
+  site                Site               @relation(fields: [site_id], references: [id])
+  check_code          AuditCheckCode
+  window_start        DateTime           @db.Date
+  window_end          DateTime           @db.Date
+  severity            AuditSeverity
+  finding_kind        AuditFindingKind
+  // Opaque references into the two legs (Vision row id / external id / cell ref).
+  leg_a_ref           String?
+  leg_b_ref           String?
+  expected            Json? // what leg A / the invariant expected
+  actual              Json? // what leg B / the data actually showed
+  detail_json         Json? // provenance + evidence payload rendered in the review UI
+  fingerprint         String             @unique
+  status              AuditFindingStatus @default(open)
+  // Nullable until a reviewer classifies the discrepancy.
+  cause_category      AuditFindingCause?
+  resolution_note     String?
+  resolved_by_user_id String?
+  resolved_by         User?              @relation("AuditFindingResolver", fields: [resolved_by_user_id], references: [id])
+  resolved_at         DateTime?
+  // Set for retro-audit findings sourced from a historical workbook import.
+  import_id           String?
+  workbook_import     WorkbookImport?    @relation(fields: [import_id], references: [id])
+  first_detected_at   DateTime           @default(now())
+  last_seen_at        DateTime           @default(now())
+  created_at          DateTime           @default(now())
+  updated_at          DateTime           @updatedAt
+
+  @@index([site_id, status])
+  @@index([site_id, check_code, window_start])
+  @@index([import_id])
+  @@map("audit_findings")
+}
+
+// Per-check tolerance/severity data — tolerances are DATA, not code (ADR-0039
+// D1). A row with `site_id = null` is the global default; a per-site row (same
+// check_code, site set) overrides it.
+model AuditCheckConfig {
+  id                   String         @id @default(uuid())
+  site_id              String?
+  site                 Site?          @relation(fields: [site_id], references: [id])
+  check_code           AuditCheckCode
+  enabled              Boolean        @default(true)
+  severity             AuditSeverity  @default(medium)
+  unit_tolerance       Int            @default(0)
+  weight_tolerance_lbs Int            @default(0)
+  // Grace business days before a same-day gap becomes a finding (C3 EOD+1 = 1).
+  grace_business_days  Int            @default(0)
+  // Long open window for slow-settling legs (vendor invoices — Kelsey Q8 45 days).
+  open_window_days     Int?
+  // Whether a finding from this check contributes to the P2 billing trust gate.
+  blocks_billing       Boolean        @default(true)
+  params               Json?
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+
+  @@unique([site_id, check_code])
+  @@map("audit_check_config")
+}
+
+// Retro-audit staging: an admin uploads a historical monthly workbook (xlsx);
+// the parser maps the §4 tab structure into staging rows tagged `import_id`
+// (NEVER into operational tables). The original file is retained in R2 for
+// evidence (`storage_key`).
+model WorkbookImport {
+  id                  String               @id @default(uuid())
+  site_id             String
+  site                Site                 @relation(fields: [site_id], references: [id])
+  original_filename   String
+  storage_key         String? // R2 evidence key (workbook-imports/ prefix)
+  // Which of the ≥3 template generations the parser detected (Janette Q8).
+  template_generation String? // 'no_calc' | 'calc' | 'eod_carryover' | 'unknown'
+  period_label        String? // e.g. 'June 2026'
+  status              WorkbookImportStatus @default(uploaded)
+  uploaded_by_user_id String
+  uploaded_by         User                 @relation("WorkbookImportUploader", fields: [uploaded_by_user_id], references: [id])
+  parse_error         String?
+  sheet_count         Int?
+  row_count           Int                  @default(0)
+  created_at          DateTime             @default(now())
+  updated_at          DateTime             @updatedAt
+
+  rows     WorkbookImportRow[]
+  findings AuditFinding[]
+
+  @@index([site_id, created_at])
+  @@map("workbook_imports")
+}
+
+// One parsed cell/record with full tab/row/col provenance (ADR-0039 D4:
+// "every parsed cell keeps its tab/row/col provenance for evidence").
+model WorkbookImportRow {
+  id               String         @id @default(uuid())
+  import_id        String
+  workbook_import  WorkbookImport @relation(fields: [import_id], references: [id], onDelete: Cascade)
+  tab_name         String
+  row_index        Int
+  col_ref          String // 'N85', a column letter, or a logical key
+  section          String? // 'inbound' | 'outbound' | 'summary' | 'inventory' | ...
+  field_key        String? // normalized field name
+  raw_value        String?
+  numeric_value    Decimal?       @db.Decimal(14, 2)
+  // Verbatim site name for alias resolution (workbook lists carry spelling drift).
+  site_name_raw    String?
+  resolved_site_id String?
+  provenance       Json? // { tab, row, col, formula? }
+  created_at       DateTime       @default(now())
+
+  @@index([import_id, tab_name])
+  @@map("workbook_import_rows")
+}
+
+// Run ledger — every sweep / on-demand / retro run writes a row (freshness +
+// deadman + summary surface; mirrors ADR-0038's mymrc_sync_runs). A green run
+// with no findings is normal; a thrown run is `error` and pages ntfy.
+model AuditRun {
+  id                String         @id @default(uuid())
+  site_id           String?
+  site              Site?          @relation(fields: [site_id], references: [id])
+  trigger           String // 'nightly_sweep' | 'on_demand' | 'retro_workbook'
+  window_start      DateTime       @db.Date
+  window_end        DateTime       @db.Date
+  status            AuditRunStatus @default(ok)
+  checks_run        String[]
+  findings_opened   Int            @default(0)
+  findings_updated  Int            @default(0)
+  findings_resolved Int            @default(0)
+  error_text        String?
+  started_at        DateTime       @default(now())
+  finished_at       DateTime?
+
+  @@index([site_id, started_at])
+  @@map("audit_runs")
 }

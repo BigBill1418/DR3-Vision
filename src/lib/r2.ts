@@ -86,3 +86,35 @@ export async function mintUploadUrl(args: {
   const upload_url = await getSignedUrl(getClient(), cmd, { expiresIn: 600 });
   return { storage_key, upload_url };
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Workbook-import evidence (ADR-0039 D4)
+// ────────────────────────────────────────────────────────────────────────
+
+// The historical workbook is parsed server-side and only staging rows persist,
+// but the ORIGINAL xlsx is retained in R2 (prefix `workbook-imports/`) as audit
+// evidence, keyed on the import row. Unlike the operator photo flow the bytes
+// already live on the server here (the admin uploaded a file), so we PUT them
+// straight to R2 rather than minting a browser-side signed URL. Fail-soft:
+// returns null when R2 is unconfigured so the import still records its staging
+// rows (the evidence blob is best-effort, not load-bearing for the audit).
+
+export async function putWorkbookEvidence(args: {
+  importId: string;
+  filename: string;
+  bytes: Uint8Array;
+}): Promise<string | null> {
+  if (!isConfigured()) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const safeName = args.filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'workbook.xlsx';
+  const storage_key = `workbook-imports/${args.importId}/${safeName}`;
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: storage_key,
+      Body: args.bytes,
+      ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }),
+  );
+  return storage_key;
+}
