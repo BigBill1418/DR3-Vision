@@ -22,12 +22,20 @@
 
 import { type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { log } from '@/lib/observability/logger';
 
 /** Split does not reconcile, or the load cannot be verified from its current state. */
 export class VerifyGateError extends Error {
   readonly status: 409 | 422;
   constructor(
-    readonly reason: 'split_mismatch' | 'missing_total' | 'invalid_split' | 'wrong_state' | 'not_found' | 'wrong_site',
+    readonly reason:
+      | 'split_mismatch'
+      | 'missing_total'
+      | 'invalid_split'
+      | 'wrong_state'
+      | 'not_found'
+      | 'wrong_site'
+      | 'no_source_for_default',
     message: string,
     status: 409 | 422 = 422,
   ) {
@@ -129,9 +137,31 @@ export async function verifyLoad(args: {
     if (load.total_units == null) {
       throw new VerifyGateError('missing_total', 'cannot default the split with no total_units — capture the count first');
     }
-    const def = defaultProgramSplit(load.total_units, load.source?.is_non_program ?? false);
+    // Billing pool attribution must NEVER default blind. If the load has no source,
+    // there is no basis to decide program vs non-program — refuse loudly (422) and
+    // require the manager to supply an explicit split rather than silently crediting
+    // the whole load to the program (billed) pool.
+    if (!load.source) {
+      throw new VerifyGateError(
+        'no_source_for_default',
+        `load ${args.loadId} has no source — cannot default the program split blind; supply an explicit program/non-program split`,
+        422,
+      );
+    }
+    const def = defaultProgramSplit(load.total_units, load.source.is_non_program);
     programUnits = def.programUnits;
     nonProgramUnits = def.nonProgramUnits;
+    log.info(
+      {
+        loadId: args.loadId,
+        siteId: args.siteId,
+        defaulted: true,
+        source_is_non_program: load.source.is_non_program,
+        programUnits,
+        nonProgramUnits,
+      },
+      '[verify-gate] program split defaulted from source flag',
+    );
   } else if (programUnits === undefined || nonProgramUnits === undefined) {
     throw new VerifyGateError('invalid_split', 'supply BOTH program and non-program units, or neither (to default from source)');
   }

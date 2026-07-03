@@ -56,11 +56,6 @@ function buildPrismaMock(opts: {
       findMany: vi.fn(async () => opts.transporters ?? []),
     },
     expectedLoad: {
-      findUnique: vi.fn(async (args: { where: { external_mymrc_haul_id: string } }) => {
-        const map = opts.existingByHaulId ?? new Map();
-        const row = map.get(args.where.external_mymrc_haul_id);
-        return row ?? null;
-      }),
       create: vi.fn(async (args: { data: { external_mymrc_haul_id: string } }) => {
         expectedCreate(args);
         return { id: `created-${args.data.external_mymrc_haul_id}` };
@@ -69,7 +64,21 @@ function buildPrismaMock(opts: {
         expectedUpdate(args);
         return { id: args.where.id };
       }),
-      findMany: vi.fn(async () => opts.staleRows ?? []),
+      // Two callers: the batched existing-load lookup keys off
+      // `where.external_mymrc_haul_id.in`; the stale-window scan does not.
+      findMany: vi.fn(async (args: { where?: { external_mymrc_haul_id?: { in: string[] } } }) => {
+        const inIds = args.where?.external_mymrc_haul_id?.in;
+        if (inIds) {
+          const map = opts.existingByHaulId ?? new Map();
+          return inIds
+            .map((id) => {
+              const row = map.get(id);
+              return row ? { ...row, external_mymrc_haul_id: id } : null;
+            })
+            .filter((r): r is ExistingExpected => r !== null);
+        }
+        return opts.staleRows ?? [];
+      }),
     },
     auditLog: {
       create: vi.fn(async (args: { data: unknown }) => {
@@ -127,6 +136,8 @@ describe('upsertScrapedHauls — preconditions', () => {
       cancelled: 0,
       unmatched_source_count: 0,
       unmatched_transporter_count: 0,
+      unmatched_source_names: [],
+      unmatched_transporter_names: [],
     });
     expect(prisma._spies.expectedCreate).not.toHaveBeenCalled();
     expect(prisma._spies.auditCreate).not.toHaveBeenCalled();
@@ -180,6 +191,33 @@ describe('upsertScrapedHauls — insert path', () => {
     expect(createArgs.data['transporter_id']).toBeNull();
     expect(createArgs.data['source_name_at_sync']).toBe('Source Alpha');
     expect(createArgs.data['transporter_name_at_sync']).toBe('Carrier One');
+  });
+
+  it('returns DEDUPED unmatched names and warns ONCE per run naming them', async () => {
+    const prisma = buildPrismaMock({ sources: [], transporters: [] });
+    const logged: Array<{ level: string; message: string }> = [];
+    const summary = await upsertScrapedHauls({
+      prisma: prisma as unknown as Parameters<typeof upsertScrapedHauls>[0]['prisma'],
+      site: 'eugene',
+      // Two hauls sharing the SAME unmatched source name → count 2, deduped names 1.
+      hauls: [
+        buildHaul('H-A', { source_name: 'Ghost Depot', transporter_name: 'Phantom Freight' }),
+        buildHaul('H-B', { source_name: 'Ghost Depot', transporter_name: null }),
+      ],
+      scrapedAt: NOW,
+      now: NOW,
+      log: (level, message) => logged.push({ level, message }),
+    });
+    expect(summary.unmatched_source_count).toBe(2);
+    expect(summary.unmatched_source_names).toEqual(['Ghost Depot']);
+    expect(summary.unmatched_transporter_names).toEqual(['Phantom Freight']);
+    // Exactly one warn per category, and it names the offending values.
+    const sourceWarns = logged.filter((l) => l.level === 'warn' && l.message.includes('unmatched source name'));
+    expect(sourceWarns).toHaveLength(1);
+    expect(sourceWarns[0]?.message).toContain('Ghost Depot');
+    const txWarns = logged.filter((l) => l.level === 'warn' && l.message.includes('unmatched transporter name'));
+    expect(txWarns).toHaveLength(1);
+    expect(txWarns[0]?.message).toContain('Phantom Freight');
   });
 });
 

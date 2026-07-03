@@ -53,20 +53,36 @@ vi.mock('@/lib/prisma', () => {
   };
 });
 
-// Resolver returns the CA collector incentive: 300¢/unit, cap 5/day.
-vi.mock('@/lib/program-rules/resolver', () => ({
-  resolveProgramRule: async () => ({
-    id: 'inc',
-    siteId: 'S1',
-    ruleKind: 'collector_incentive',
-    effectiveFrom: new Date('2026-01-01T00:00:00Z'),
-    effectiveTo: null,
-    rateCents: 300,
-    params: { daily_cap_units: 5 },
-  }),
-}));
+// Switchable resolver: default returns the CA collector incentive (300¢/unit,
+// cap 5/day); `h.noRule` flips it to throw NoActiveProgramRuleError (finding 5a).
+const h = vi.hoisted(() => ({ noRule: false }));
+vi.mock('@/lib/program-rules/resolver', () => {
+  class NoActiveProgramRuleError extends Error {
+    readonly status = 409 as const;
+    constructor() {
+      super('no active rule');
+      this.name = 'NoActiveProgramRuleError';
+    }
+  }
+  return {
+    NoActiveProgramRuleError,
+    resolveProgramRule: async () => {
+      if (h.noRule) throw new NoActiveProgramRuleError();
+      return {
+        id: 'inc',
+        siteId: 'S1',
+        ruleKind: 'collector_incentive',
+        effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+        effectiveTo: null,
+        rateCents: 300,
+        params: { daily_cap_units: 5 },
+      };
+    },
+  };
+});
 
-import { createDropoff, updateDropoff, listDropoffs } from './service';
+import { createDropoff, updateDropoff, listDropoffs, IncentiveComputationError } from './service';
+import { NoActiveProgramRuleError } from '@/lib/program-rules/resolver';
 import { RecordLockedError } from '@/lib/loads/record-guards';
 
 const SITE = 'S1';
@@ -75,6 +91,7 @@ const DAY = new Date('2026-07-03T00:00:00Z');
 beforeEach(() => {
   store.rows.length = 0;
   store.audits.length = 0;
+  h.noRule = false;
 });
 
 describe('createDropoff — incentive with per-person daily cap', () => {
@@ -136,6 +153,46 @@ describe('updateDropoff — edit-before-lock', () => {
     await expect(updateDropoff({ id: v.id, siteId: SITE, units: 3, actorUserId: 'U1' })).rejects.toBeInstanceOf(
       RecordLockedError,
     );
+  });
+});
+
+describe('incentive computation failure paths (finding 5)', () => {
+  it('rethrows NoActiveProgramRuleError when the collector_incentive rule is missing (no blind $0)', async () => {
+    h.noRule = true;
+    await expect(
+      createDropoff({ siteId: SITE, dropoffDate: DAY, kind: 'incentive', personName: 'Jane Public', units: 3, actorUserId: 'U1' }),
+    ).rejects.toBeInstanceOf(NoActiveProgramRuleError);
+    // Nothing written — the create never reached the transaction.
+    expect(store.rows).toHaveLength(0);
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('surfaces a typed 500 (not a bare RangeError) when a prior incentive_cents is not divisible by the rate', async () => {
+    // Seed a prior same-day row for this person whose stored incentive_cents (250)
+    // is not divisible by the current rate (300) — recovery must fail loud+typed.
+    store.rows.push({
+      id: 'corrupt',
+      site_id: SITE,
+      dropoff_date: DAY,
+      kind: 'incentive',
+      person_name: 'Jane Public',
+      slip_number: null,
+      units: 1,
+      incentive_cents: 250,
+      check_number: null,
+      paid_at: null,
+      retrac_id: null,
+      source: 'manual',
+      locked_at: null,
+    });
+    try {
+      await createDropoff({ siteId: SITE, dropoffDate: DAY, kind: 'incentive', personName: 'Jane Public', units: 2, actorUserId: 'U1' });
+      expect.unreachable('should have thrown a typed error');
+    } catch (e) {
+      expect(e).toBeInstanceOf(IncentiveComputationError);
+      expect((e as IncentiveComputationError).status).toBe(500);
+      expect((e as IncentiveComputationError).reason).toBe('incentive_recovery_failed');
+    }
   });
 });
 

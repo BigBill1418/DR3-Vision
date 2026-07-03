@@ -17,11 +17,12 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { onHand } from '@/lib/inventory/running-balance';
 
 export class ProcessedUnitsError extends Error {
   readonly status: number;
   constructor(
-    readonly reason: 'closed' | 'not_found' | 'invalid',
+    readonly reason: 'closed' | 'not_found' | 'invalid' | 'negative_balance',
     message: string,
     status = 422,
   ) {
@@ -216,11 +217,25 @@ export async function upsertProcessedUnits(args: {
   return toView(row, derived);
 }
 
-/** Close a processed-units day: stamp `closed_at`, write an audit row. Idempotent-guarded. */
+/**
+ * Close a processed-units day: stamp `closed_at`, write an audit row. Idempotent-
+ * guarded.
+ *
+ * Negative-balance guard (D6): closing a day locks in that day's stripping as the
+ * billing/inventory basis. Before stamping, we compute the pool-aware running
+ * balance (the ONE {@link onHand}/computeRunningBalance) as of the END of this
+ * production day. If either pool would go negative — more stripped/sold/landfilled
+ * than the anchor + inbound can support, i.e. an upstream inbound data gap — we
+ * REFUSE with a typed 422 carrying the pool numbers, UNLESS the caller passes
+ * `acknowledgeNegative: true`. This is a warn-and-confirm posture: the office may
+ * legitimately close a day that exposes a real upstream gap; that acknowledgment is
+ * then recorded in the close audit row (never silently absorbed).
+ */
 export async function closeProcessedUnitsDay(args: {
   id: string;
   siteId: string;
   actorUserId: string;
+  acknowledgeNegative?: boolean;
 }): Promise<ProcessedUnitsView> {
   const row = await prisma.processedUnitsDaily.findUnique({ where: { id: args.id } });
   if (!row || row.site_id !== args.siteId) {
@@ -229,6 +244,21 @@ export async function closeProcessedUnitsDay(args: {
   if (row.closed_at) {
     throw new ProcessedUnitsError('closed', 'day is already closed', 409);
   }
+
+  // End-of-day boundary: include this day's stripping + any same-day inbound/sold/
+  // landfilled, but exclude the next day (production_date is a @db.Date at UTC 00:00).
+  const day = productionDateUTC(row.production_date);
+  const endOfDay = new Date(day.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const balance = await onHand(args.siteId, endOfDay);
+  const wouldGoNegative = balance.program.isNegative() || balance.nonProgram.isNegative();
+  if (wouldGoNegative && !args.acknowledgeNegative) {
+    throw new ProcessedUnitsError(
+      'negative_balance',
+      `closing ${day.toISOString().slice(0, 10)} drives inventory negative (program=${balance.program.toString()}, non_program=${balance.nonProgram.toString()}) — resolve the upstream inbound gap, or re-submit with acknowledgeNegative to close anyway`,
+      422,
+    );
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.processedUnitsDaily.update({
       where: { id: args.id },
@@ -241,13 +271,64 @@ export async function closeProcessedUnitsDay(args: {
         table_name: 'processed_units_daily',
         row_id: args.id,
         before: { closed_at: null },
-        after: { closed_at: u.closed_at?.toISOString() ?? null },
+        after: {
+          closed_at: u.closed_at?.toISOString() ?? null,
+          // Record the acknowledgment (and the numbers it waved through) so a
+          // closed-negative day is auditable, never silent.
+          ...(wouldGoNegative
+            ? {
+                acknowledged_negative: true,
+                balance_program: balance.program.toString(),
+                balance_non_program: balance.nonProgram.toString(),
+              }
+            : {}),
+        },
       },
     });
     return u;
   });
   const derived = await deriveDailyOutflow(args.siteId, updated.production_date);
   return toView(updated, derived);
+}
+
+/**
+ * Batched equivalent of {@link deriveDailyOutflow} for a set of days: two grouped
+ * aggregate queries (renovation outbound by ship_date, landfilled by disposal_date)
+ * over the whole date range, mapped back per day. Kills the per-row N+1 in
+ * {@link listProcessedUnits} while preserving EXACT per-day semantics — a day with
+ * no outflow maps to {@link ZERO_OUTFLOW}, identical to the single-day path.
+ */
+async function deriveDailyOutflowBatch(siteId: string, days: readonly Date[]): Promise<Map<number, DerivedDailyOutflow>> {
+  const out = new Map<number, DerivedDailyOutflow>();
+  if (days.length === 0) return out;
+  const uniqueDays = [...new Map(days.map((d) => [d.getTime(), d])).values()];
+  const [reno, land] = await Promise.all([
+    prisma.outboundMaterial.groupBy({
+      by: ['ship_date'],
+      _sum: { program_units: true, non_program_units: true },
+      where: { site_id: siteId, sub_category: 'renovation', ship_date: { in: uniqueDays } },
+    }),
+    prisma.landfilledUnit.groupBy({
+      by: ['disposal_date'],
+      _sum: { program_units: true, non_program_units: true },
+      where: { site_id: siteId, disposal_date: { in: uniqueDays } },
+    }),
+  ]);
+  const renoByDate = new Map(reno.map((r) => [r.ship_date.getTime(), r._sum]));
+  const landByDate = new Map(land.map((r) => [r.disposal_date.getTime(), r._sum]));
+  for (const day of uniqueDays) {
+    const rr = renoByDate.get(day.getTime());
+    const ll = landByDate.get(day.getTime());
+    const rp = rr?.program_units ?? 0;
+    const rn = rr?.non_program_units ?? 0;
+    const lp = ll?.program_units ?? 0;
+    const ln = ll?.non_program_units ?? 0;
+    out.set(day.getTime(), {
+      wholeUnitsSold: { program: rp, nonProgram: rn, total: rp + rn },
+      landfilled: { program: lp, nonProgram: ln, total: lp + ln },
+    });
+  }
+  return out;
 }
 
 /** List the most recent processed-units rows for a site, each with its derived outflow. */
@@ -257,5 +338,9 @@ export async function listProcessedUnits(siteId: string, limit = 60): Promise<Pr
     orderBy: { production_date: 'desc' },
     take: limit,
   });
-  return Promise.all(rows.map(async (r) => toView(r, await deriveDailyOutflow(siteId, r.production_date))));
+  const byDate = await deriveDailyOutflowBatch(
+    siteId,
+    rows.map((r) => productionDateUTC(r.production_date)),
+  );
+  return rows.map((r) => toView(r, byDate.get(productionDateUTC(r.production_date).getTime()) ?? ZERO_OUTFLOW));
 }

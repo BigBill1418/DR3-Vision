@@ -34,7 +34,7 @@ vi.mock('@/lib/prisma', () => ({
         sites.find((s) => s.id === where.id) ?? null,
     },
     stateProgramRule: {
-      findFirst: async ({
+      findMany: async ({
         where,
         orderBy,
       }: {
@@ -46,7 +46,7 @@ vi.mock('@/lib/prisma', () => ({
         };
         orderBy: { effective_from: 'desc' };
       }) => {
-        const matches = rules
+        return rules
           .filter(
             (r) =>
               r.site_id === where.site_id &&
@@ -60,7 +60,6 @@ vi.mock('@/lib/prisma', () => ({
               ? b.effective_from.getTime() - a.effective_from.getTime()
               : a.effective_from.getTime() - b.effective_from.getTime(),
           );
-        return matches[0] ?? null;
       },
     },
   },
@@ -72,6 +71,7 @@ import {
   computeFuelSurchargeCents,
   NoActiveProgramRuleError,
   RuleStructurallyDisallowedError,
+  AmbiguousProgramRuleError,
   FuelSurchargeNotComputableError,
   type ResolvedProgramRule,
 } from './resolver';
@@ -162,6 +162,62 @@ describe('resolveProgramRule — strict effective dating', () => {
     await expect(
       resolveProgramRule('nope', 'processing_rate', D('2026-07-03')),
     ).rejects.toBeInstanceOf(NoActiveProgramRuleError);
+  });
+
+  it('throws AmbiguousProgramRuleError naming the tied ids when two rows share the winning effective_from (finding 12)', async () => {
+    rules.push(
+      {
+        id: 'dup-a',
+        site_id: CA,
+        rule_kind: 'collector_incentive',
+        effective_from: D('2026-01-01'),
+        effective_to: null,
+        rate_cents: 300,
+        params: { daily_cap_units: 5 },
+      },
+      {
+        id: 'dup-b',
+        site_id: CA,
+        rule_kind: 'collector_incentive',
+        effective_from: D('2026-01-01'),
+        effective_to: null,
+        rate_cents: 350,
+        params: { daily_cap_units: 5 },
+      },
+    );
+    try {
+      await resolveProgramRule(CA, 'collector_incentive', D('2026-07-03'));
+      expect.unreachable('should have thrown on ambiguous rule set');
+    } catch (e) {
+      expect(e).toBeInstanceOf(AmbiguousProgramRuleError);
+      expect((e as AmbiguousProgramRuleError).ruleIds.sort()).toEqual(['dup-a', 'dup-b']);
+      expect((e as AmbiguousProgramRuleError).status).toBe(409);
+    }
+  });
+
+  it('does NOT treat legitimate supersession (different effective_from) as ambiguous', async () => {
+    rules.push(
+      {
+        id: 'sup-old',
+        site_id: CA,
+        rule_kind: 'collector_incentive',
+        effective_from: D('2026-01-01'),
+        effective_to: null,
+        rate_cents: 300,
+        params: { daily_cap_units: 5 },
+      },
+      {
+        id: 'sup-new',
+        site_id: CA,
+        rule_kind: 'collector_incentive',
+        effective_from: D('2026-06-01'),
+        effective_to: null,
+        rate_cents: 325,
+        params: { daily_cap_units: 5 },
+      },
+    );
+    const r = await resolveProgramRule(CA, 'collector_incentive', D('2026-07-03'));
+    expect(r.id).toBe('sup-new');
   });
 });
 

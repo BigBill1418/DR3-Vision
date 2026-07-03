@@ -6,6 +6,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { childLogger, newRequestId } from '@/lib/observability/logger';
+import { clampLimit } from '@/lib/loads/route-helpers';
 import {
   upsertProcessedUnits,
   listProcessedUnits,
@@ -34,24 +36,45 @@ async function siteIdForCode(code: string): Promise<string | null> {
 }
 
 export async function GET(req: Request) {
+  const rlog = childLogger(req.headers.get('x-request-id') ?? newRequestId());
   const session = await auth();
-  if (!session?.user?.is_super_admin) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  const actor = session?.user?.id ?? null;
+  if (!session?.user?.is_super_admin) {
+    rlog.warn({ op: 'processed-units.list', actor, status: 403, reason: 'forbidden' }, '[processed-units] rejected');
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
   const code = new URL(req.url).searchParams.get('site');
-  if (!code) return NextResponse.json({ error: 'site required' }, { status: 400 });
+  if (!code) {
+    rlog.warn({ op: 'processed-units.list', actor, status: 400, reason: 'site_required' }, '[processed-units] rejected');
+    return NextResponse.json({ error: 'site required' }, { status: 400 });
+  }
   const siteId = await siteIdForCode(code);
-  if (!siteId) return NextResponse.json({ error: 'site not found' }, { status: 404 });
-  return NextResponse.json({ rows: await listProcessedUnits(siteId) });
+  if (!siteId) {
+    rlog.warn({ op: 'processed-units.list', actor, site: code, status: 404, reason: 'site_not_found' }, '[processed-units] rejected');
+    return NextResponse.json({ error: 'site not found' }, { status: 404 });
+  }
+  const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 60);
+  return NextResponse.json({ rows: await listProcessedUnits(siteId, limit) });
 }
 
 export async function POST(req: Request) {
+  const rlog = childLogger(req.headers.get('x-request-id') ?? newRequestId());
   const session = await auth();
+  const actor = session?.user?.id ?? null;
   if (!session?.user?.is_super_admin || !session.user.id) {
+    rlog.warn({ op: 'processed-units.upsert', actor, status: 403, reason: 'forbidden' }, '[processed-units] rejected');
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
   const parsed = Body.safeParse(await req.json());
-  if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  if (!parsed.success) {
+    rlog.warn({ op: 'processed-units.upsert', actor, status: 422, reason: 'invalid_input' }, '[processed-units] rejected');
+    return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+  }
   const siteId = await siteIdForCode(parsed.data.site);
-  if (!siteId) return NextResponse.json({ error: 'site not found' }, { status: 404 });
+  if (!siteId) {
+    rlog.warn({ op: 'processed-units.upsert', actor, site: parsed.data.site, status: 404, reason: 'site_not_found' }, '[processed-units] rejected');
+    return NextResponse.json({ error: 'site not found' }, { status: 404 });
+  }
 
   try {
     const row = await upsertProcessedUnits({
@@ -69,7 +92,14 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ row }, { status: 201 });
   } catch (e) {
-    if (e instanceof ProcessedUnitsError) return NextResponse.json({ error: e.reason }, { status: e.status });
+    if (e instanceof ProcessedUnitsError) {
+      rlog.warn(
+        { op: 'processed-units.upsert', actor, site: parsed.data.site, status: e.status, reason: e.reason },
+        '[processed-units] rejected',
+      );
+      return NextResponse.json({ error: e.reason }, { status: e.status });
+    }
+    rlog.error({ op: 'processed-units.upsert', actor, site: parsed.data.site, err: e }, '[processed-units] unexpected error (500)');
     throw e;
   }
 }

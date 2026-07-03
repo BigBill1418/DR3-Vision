@@ -1631,6 +1631,7 @@ model MymrcSyncRun {
   rows_upserted   Int             @default(0)
   details_fetched Int             @default(0)
   error           String? // human error text (never contains credentials)
+  run_id          String? // per-run correlation id (crypto.randomUUID); ties every log line of a run to this ledger row
   created_at      DateTime        @default(now())
 
   @@index([site_id, feed, started_at])

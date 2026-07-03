@@ -34,6 +34,7 @@
 
 import { Prisma, type AuditAction, type PrismaClient } from '@prisma/client';
 import type { ScrapedHaul, SiteCode } from './types';
+import type { Logger } from './sync';
 
 const SCRAPE_WINDOW_DAYS = 7;
 const ACTOR_LABEL = 'system:mymrc-scrape';
@@ -49,8 +50,14 @@ export interface UpsertSummary {
   inserted: number;
   updated: number;
   cancelled: number;
+  /** Per-haul occurrences with no matching `sources` row (a repeated name counts each time). */
   unmatched_source_count: number;
+  /** Per-haul occurrences with no matching `transporters` row. */
   unmatched_transporter_count: number;
+  /** DEDUPED list of the unmatched source names (drives the once-per-run warn + operator seed fix). */
+  unmatched_source_names: string[];
+  /** DEDUPED list of the unmatched transporter names. */
+  unmatched_transporter_names: string[];
 }
 
 export interface UpsertContext {
@@ -60,6 +67,8 @@ export interface UpsertContext {
   scrapedAt: Date;
   /** Test seam — defaults to `Date.now()` when caller omits. */
   now?: Date;
+  /** Optional structured logger — used to warn (once per run) about unmatched names. */
+  log?: Logger;
 }
 
 /**
@@ -107,36 +116,56 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   const sourceByName = new Map(sourceRows.map((r) => [r.name, r.id]));
   const transporterByName = new Map(transporterRows.map((r) => [r.name, r.id]));
 
+  // Batch-load every existing expected_loads row for the scraped haul ids in ONE
+  // query (kills the per-haul findUnique N+1). Keyed by external_mymrc_haul_id;
+  // the map is kept live below (re-insert after a create) so a duplicated id in a
+  // single batch behaves exactly like the old per-iteration findUnique.
+  const haulIds = ctx.hauls.map((h) => h.external_mymrc_haul_id);
+  const existingRows =
+    haulIds.length > 0
+      ? await ctx.prisma.expectedLoad.findMany({
+          where: { external_mymrc_haul_id: { in: haulIds } },
+          select: {
+            id: true,
+            site_id: true,
+            external_mymrc_haul_id: true,
+            expected_arrival_at: true,
+            source_id: true,
+            source_name_at_sync: true,
+            transporter_id: true,
+            transporter_name_at_sync: true,
+            expected_unit_count: true,
+            bol_number: true,
+            scheduled_at_mymrc: true,
+            cancelled_at: true,
+          },
+        })
+      : [];
+  const existingByHaulId = new Map(existingRows.map((r) => [r.external_mymrc_haul_id, r]));
+
   let inserted = 0;
   let updated = 0;
   let cancelled = 0;
   let unmatchedSources = 0;
   let unmatchedTransporters = 0;
+  const unmatchedSourceNames = new Set<string>();
+  const unmatchedTransporterNames = new Set<string>();
 
   for (const haul of ctx.hauls) {
     const sourceId = sourceByName.get(haul.source_name) ?? null;
-    if (sourceId === null) unmatchedSources += 1;
+    if (sourceId === null) {
+      unmatchedSources += 1;
+      unmatchedSourceNames.add(haul.source_name);
+    }
     const transporterId = haul.transporter_name
       ? transporterByName.get(haul.transporter_name) ?? null
       : null;
-    if (haul.transporter_name && transporterId === null) unmatchedTransporters += 1;
+    if (haul.transporter_name && transporterId === null) {
+      unmatchedTransporters += 1;
+      unmatchedTransporterNames.add(haul.transporter_name);
+    }
 
-    const existing = await ctx.prisma.expectedLoad.findUnique({
-      where: { external_mymrc_haul_id: haul.external_mymrc_haul_id },
-      select: {
-        id: true,
-        site_id: true,
-        expected_arrival_at: true,
-        source_id: true,
-        source_name_at_sync: true,
-        transporter_id: true,
-        transporter_name_at_sync: true,
-        expected_unit_count: true,
-        bol_number: true,
-        scheduled_at_mymrc: true,
-        cancelled_at: true,
-      },
-    });
+    const existing = existingByHaulId.get(haul.external_mymrc_haul_id) ?? null;
 
     const nextData = {
       site_id: siteId,
@@ -158,6 +187,22 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
     if (!existing) {
       const row = await ctx.prisma.expectedLoad.create({ data: nextData });
       inserted += 1;
+      // Keep the batch map live so a duplicated id later in THIS scrape resolves
+      // to the row we just created (mirrors the old per-haul findUnique exactly).
+      existingByHaulId.set(haul.external_mymrc_haul_id, {
+        id: row.id,
+        site_id: siteId,
+        external_mymrc_haul_id: haul.external_mymrc_haul_id,
+        expected_arrival_at: nextData.expected_arrival_at,
+        source_id: nextData.source_id,
+        source_name_at_sync: nextData.source_name_at_sync,
+        transporter_id: nextData.transporter_id,
+        transporter_name_at_sync: nextData.transporter_name_at_sync,
+        expected_unit_count: nextData.expected_unit_count,
+        bol_number: nextData.bol_number,
+        scheduled_at_mymrc: nextData.scheduled_at_mymrc,
+        cancelled_at: null,
+      });
       await writeAudit(ctx.prisma, {
         actor_label: ACTOR_LABEL,
         action: 'insert',
@@ -228,12 +273,33 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
     });
   }
 
+  // One warn per run naming the deduped unmatched names — an unmatched name means
+  // a `sources`/`transporters` seed row is missing, so the FK stays null and the
+  // load is unattributed until an operator adds the seed. Counts alone hid WHICH
+  // name; the names are the actionable signal.
+  const sourceNamesList = [...unmatchedSourceNames];
+  const transporterNamesList = [...unmatchedTransporterNames];
+  if (ctx.log && sourceNamesList.length > 0) {
+    ctx.log(
+      'warn',
+      `mymrc-upsert: ${ctx.site} — ${sourceNamesList.length} unmatched source name(s) (source_id=null, name_at_sync retained): ${sourceNamesList.join(', ')}`,
+    );
+  }
+  if (ctx.log && transporterNamesList.length > 0) {
+    ctx.log(
+      'warn',
+      `mymrc-upsert: ${ctx.site} — ${transporterNamesList.length} unmatched transporter name(s): ${transporterNamesList.join(', ')}`,
+    );
+  }
+
   return {
     inserted,
     updated,
     cancelled,
     unmatched_source_count: unmatchedSources,
     unmatched_transporter_count: unmatchedTransporters,
+    unmatched_source_names: sourceNamesList,
+    unmatched_transporter_names: transporterNamesList,
   };
 }
 

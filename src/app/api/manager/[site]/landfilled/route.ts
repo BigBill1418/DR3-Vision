@@ -20,13 +20,13 @@ const Create = z.object({
   slipNumber: z.string().max(120).optional(),
 });
 
-export async function GET(_req: Request, { params }: { params: Promise<{ site: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
     const ctx = await requireActivatedManager(site);
     return NextResponse.json({ rows: await listLandfilledUnits(ctx.siteId) });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, op: 'landfilled.list', requestId: req.headers.get('x-request-id') });
   }
 }
 
@@ -49,6 +49,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     });
     return NextResponse.json({ row }, { status: 201 });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, op: 'landfilled.create', requestId: req.headers.get('x-request-id') });
   }
 }

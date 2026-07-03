@@ -24,9 +24,25 @@ interface Row {
 const store = {
   rows: [] as Row[],
   audits: [] as unknown[],
-  // Derived-outflow aggregates (renovation outbound + landfilled).
+  // Derived-outflow aggregates (renovation outbound + landfilled). Also serve the
+  // close-path onHand() wholeUnitsSold/landfilled aggregates (same shape).
   reno: { program_units: 0, non_program_units: 0 } as Record<string, number | null>,
   land: { program_units: 0, non_program_units: 0 } as Record<string, number | null>,
+  // Per-date outflow (drives both the date-aware single aggregate and the batched
+  // groupBy) so list==per-day-derive equivalence is assertable. Keyed by day epoch.
+  renoByDate: new Map<number, { program_units: number; non_program_units: number }>(),
+  landByDate: new Map<number, { program_units: number; non_program_units: number }>(),
+  // onHand() inputs for the close negative-balance guard.
+  anchor: null as null | {
+    snapshot_at: Date;
+    units_indoor: number | null;
+    units_outdoor: number | null;
+    units_total: number | null;
+    units_in_processing: number;
+  },
+  inboundAgg: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
+  dropoffAgg: { units: 0 } as Record<string, number | null>,
+  strippedAgg: { stripped_program: 0, stripped_non_program: 0 } as Record<string, number | null>,
 };
 
 vi.mock('@/lib/prisma', () => {
@@ -59,12 +75,45 @@ vi.mock('@/lib/prisma', () => {
       Object.assign(r, data);
       return r;
     },
+    // onHand()'s stripped aggregate (close negative-balance guard).
+    aggregate: async () => ({ _sum: store.strippedAgg }),
   };
   return {
     prisma: {
       processedUnitsDaily: model,
-      outboundMaterial: { aggregate: async () => ({ _sum: store.reno }) },
-      landfilledUnit: { aggregate: async () => ({ _sum: store.land }) },
+      outboundMaterial: {
+        // Exact-date where (deriveDailyOutflow) reads per-date data, falling back to
+        // the global store.reno; a range where (onHand) uses the global store.reno.
+        aggregate: async (args?: { where?: { ship_date?: Date | Record<string, unknown> } }) => {
+          const sd = args?.where?.ship_date;
+          if (sd instanceof Date) return { _sum: store.renoByDate.get(sd.getTime()) ?? store.reno };
+          return { _sum: store.reno };
+        },
+        // Batched list path (deriveDailyOutflowBatch).
+        groupBy: async (args?: { where?: { ship_date?: { in?: Date[] } } }) => {
+          const inDays = args?.where?.ship_date?.in ?? [];
+          return inDays
+            .filter((d) => store.renoByDate.has(d.getTime()))
+            .map((d) => ({ ship_date: d, _sum: store.renoByDate.get(d.getTime())! }));
+        },
+      },
+      landfilledUnit: {
+        aggregate: async (args?: { where?: { disposal_date?: Date | Record<string, unknown> } }) => {
+          const dd = args?.where?.disposal_date;
+          if (dd instanceof Date) return { _sum: store.landByDate.get(dd.getTime()) ?? store.land };
+          return { _sum: store.land };
+        },
+        groupBy: async (args?: { where?: { disposal_date?: { in?: Date[] } } }) => {
+          const inDays = args?.where?.disposal_date?.in ?? [];
+          return inDays
+            .filter((d) => store.landByDate.has(d.getTime()))
+            .map((d) => ({ disposal_date: d, _sum: store.landByDate.get(d.getTime())! }));
+        },
+      },
+      // onHand() inputs (close negative-balance guard).
+      siteInventorySnapshot: { findFirst: async () => store.anchor },
+      inboundLoad: { aggregate: async () => ({ _sum: store.inboundAgg }) },
+      consumerDropoff: { aggregate: async () => ({ _sum: store.dropoffAgg }) },
       auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) },
       $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
         fn({ processedUnitsDaily: model, auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) } }),
@@ -76,6 +125,7 @@ import {
   upsertProcessedUnits,
   closeProcessedUnitsDay,
   listProcessedUnits,
+  deriveDailyOutflow,
   ProcessedUnitsError,
 } from './processed-units';
 
@@ -87,6 +137,12 @@ beforeEach(() => {
   store.audits.length = 0;
   store.reno = { program_units: 0, non_program_units: 0 };
   store.land = { program_units: 0, non_program_units: 0 };
+  store.renoByDate.clear();
+  store.landByDate.clear();
+  store.anchor = null;
+  store.inboundAgg = { program_unit_count: 0, non_program_unit_count: 0 };
+  store.dropoffAgg = { units: 0 };
+  store.strippedAgg = { stripped_program: 0, stripped_non_program: 0 };
 });
 
 describe('upsertProcessedUnits', () => {
@@ -178,10 +234,86 @@ describe('closeProcessedUnitsDay', () => {
   });
 });
 
+describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', () => {
+  it('REFUSES (422 negative_balance) a close that drives the PROGRAM pool negative, no ack', async () => {
+    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    // No anchor, no inbound → 200 stripped drives program to −200.
+    store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
+    try {
+      await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
+      expect.unreachable('should have refused');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ProcessedUnitsError);
+      expect((e as ProcessedUnitsError).reason).toBe('negative_balance');
+      expect((e as ProcessedUnitsError).status).toBe(422);
+      expect((e as ProcessedUnitsError).message).toContain('program=-200');
+    }
+    // Never stamped closed.
+    expect(store.rows[0]?.closed_at ?? null).toBeNull();
+  });
+
+  it('detects a negative NON-PROGRAM pool as well', async () => {
+    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 0, strippedNonProgram: 50, actorUserId: 'U1' });
+    store.strippedAgg = { stripped_program: 0, stripped_non_program: 50 };
+    await expect(closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' })).rejects.toBeInstanceOf(
+      ProcessedUnitsError,
+    );
+    expect(store.rows[0]?.closed_at ?? null).toBeNull();
+  });
+
+  it('CLOSES a negative day when acknowledgeNegative is set, and audits the acknowledgment + numbers', async () => {
+    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
+    const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1', acknowledgeNegative: true });
+    expect(closed.closedAt).not.toBeNull();
+    const closeAudit = store.audits.at(-1) as { after: Record<string, unknown> };
+    expect(closeAudit.after['acknowledged_negative']).toBe(true);
+    expect(closeAudit.after['balance_program']).toBe('-200');
+  });
+
+  it('CLOSES normally (no ack, no acknowledgment audit) when the balance stays non-negative', async () => {
+    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    // A 500-unit physical anchor absorbs the 200 stripped → +300, non-negative.
+    store.anchor = { snapshot_at: new Date('2026-07-01T00:00:00Z'), units_indoor: 500, units_outdoor: null, units_total: null, units_in_processing: 0 };
+    store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
+    const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
+    expect(closed.closedAt).not.toBeNull();
+    const closeAudit = store.audits.at(-1) as { after: Record<string, unknown> };
+    expect(closeAudit.after['acknowledged_negative']).toBeUndefined();
+  });
+});
+
 describe('listProcessedUnits', () => {
   it('returns rows for the site', async () => {
     await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 150, strippedNonProgram: 25, actorUserId: 'U1' });
     const rows = await listProcessedUnits(SITE);
     expect(rows).toHaveLength(1);
+  });
+
+  it('batched list-derived outflow EQUALS the per-day deriveDailyOutflow for every row (finding 7)', async () => {
+    const d1 = new Date('2026-07-01T00:00:00Z');
+    const d2 = new Date('2026-07-02T00:00:00Z');
+    const d3 = new Date('2026-07-03T00:00:00Z');
+    await upsertProcessedUnits({ siteId: SITE, productionDate: d1, strippedProgram: 10, strippedNonProgram: 0, actorUserId: 'U1' });
+    await upsertProcessedUnits({ siteId: SITE, productionDate: d2, strippedProgram: 20, strippedNonProgram: 0, actorUserId: 'U1' });
+    await upsertProcessedUnits({ siteId: SITE, productionDate: d3, strippedProgram: 30, strippedNonProgram: 0, actorUserId: 'U1' });
+    // Distinct per-date outflow; d2 has NONE (must map to ZERO_OUTFLOW, exactly as the
+    // single-day path returns for a day with no rows).
+    store.renoByDate.set(d1.getTime(), { program_units: 5, non_program_units: 1 });
+    store.landByDate.set(d1.getTime(), { program_units: 2, non_program_units: 0 });
+    store.renoByDate.set(d3.getTime(), { program_units: 7, non_program_units: 3 });
+
+    const rows = await listProcessedUnits(SITE);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      const single = await deriveDailyOutflow(SITE, row.productionDate);
+      expect(row.derived).toEqual(single);
+    }
+    const r1 = rows.find((r) => r.productionDate.getTime() === d1.getTime())!;
+    expect(r1.derived.wholeUnitsSold.total).toBe(6);
+    expect(r1.derived.landfilled.total).toBe(2);
+    const r2 = rows.find((r) => r.productionDate.getTime() === d2.getTime())!;
+    expect(r2.derived.wholeUnitsSold.total).toBe(0);
+    expect(r2.derived.landfilled.total).toBe(0);
   });
 });

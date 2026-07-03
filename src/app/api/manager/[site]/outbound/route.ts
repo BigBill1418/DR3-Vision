@@ -3,7 +3,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createOutbound, listOutbound } from '@/lib/loads/outbound';
-import { requireActivatedManager, loadsErrorResponse } from '@/lib/loads/route-helpers';
+import { requireActivatedManager, loadsErrorResponse, clampLimit } from '@/lib/loads/route-helpers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,13 +27,14 @@ const Create = z.object({
   buyer: z.string().max(200).optional(),
 });
 
-export async function GET(_req: Request, { params }: { params: Promise<{ site: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
     const ctx = await requireActivatedManager(site);
-    return NextResponse.json({ rows: await listOutbound(ctx.siteId) });
+    const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 100);
+    return NextResponse.json({ rows: await listOutbound(ctx.siteId, limit) });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, op: 'outbound.list', requestId: req.headers.get('x-request-id') });
   }
 }
 
@@ -61,6 +62,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     });
     return NextResponse.json({ row }, { status: 201 });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, op: 'outbound.create', requestId: req.headers.get('x-request-id') });
   }
 }

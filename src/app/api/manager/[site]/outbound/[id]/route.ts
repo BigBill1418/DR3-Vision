@@ -29,6 +29,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ site: 
     const row = await updateOutbound({ id, siteId: ctx.siteId, actorUserId: ctx.userId, ...parsed.data });
     return NextResponse.json({ row });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, id, op: 'outbound.update', requestId: req.headers.get('x-request-id') });
   }
 }
