@@ -86,6 +86,66 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ### Fixed — 2026-07-03
 
+- **P1 observability & correctness hardening of the just-merged ADR-0037/0038 code
+  (operator-directed: "make sure error logging is baked into everything so we can
+  diag later easily").** One pass, TDD where behavior changed, all diagnosable now.
+  - **Loud, structured logging on every non-2xx.** The `processed_units_daily`
+    routes (GET/POST + `[id]/close`) now emit a request-correlated (`x-request-id`
+    child logger) `warn`/`error` line — `{op, actor, site, status, reason}` — on
+    every rejection incl. `forbidden`/`invalid_input`/`site_not_found`/service
+    errors/unexpected 500s. `loadsErrorResponse` (the four manager resource families
+    — dropoffs, outbound, landfilled, loads-verify) now logs the mapped error with
+    `reason`/`status` (and an `error`-level line before re-throwing an unexpected
+    500), threading a `{site, id, op, requestId}` context from every call site.
+  - **MyMRC sync run correlation + failure logging (ADR-0038).** Each site+feed run
+    mints a `runId` (crypto.randomUUID), prefixes every log line with it, and
+    persists it on the `mymrc_sync_runs` row (new nullable `run_id`, additive
+    migration `20260704b_sync_run_correlation`, clean-replays on PG16). The
+    run-ledger write is now a real try/catch that logs the **error class** + run
+    context (never a silent `.catch`); detail-fetch failures log the record's
+    business `externalId` alongside the Salesforce record id. `upsertScrapedHauls`
+    now logs (warn, once per run) the **deduped unmatched source/transporter NAMES**
+    (a missing seed row → null FK) and returns them in `UpsertSummary`, not just
+    counts.
+  - **Verify-gate never defaults billing attribution blind (ADR-0037 D2).** When an
+    inbound load has **no source** and no explicit split is supplied, `verifyLoad`
+    now THROWS a typed `VerifyGateError('no_source_for_default')` (422) instead of
+    silently crediting the whole load to the program (billed) pool; a source-driven
+    default now logs `{loadId, defaulted:true, source flag}`.
+  - **Daily-close negative-balance guard (ADR-0037 D6).** Closing a
+    `processed_units_daily` day now computes the pool-aware running balance (the ONE
+    `onHand`/`computeRunningBalance`) as of end-of-day; if either pool would go
+    negative (an upstream inbound gap) it returns a typed 422 with the numbers —
+    UNLESS `acknowledgeNegative: true` accompanies the request, in which case the
+    close proceeds and the acknowledgment + balances are recorded in the close audit
+    row (warn-and-confirm posture).
+  - **Effective-dated rate resolution proven unambiguous (ADR-0037 D1).**
+    `resolveProgramRule` now fetches all covering rows and throws a typed
+    `AmbiguousProgramRuleError` (naming the tied row ids) when two rows share the
+    winning `effective_from` — money math never coin-flips a rate. Legitimate
+    supersession (distinct `effective_from`) is unaffected.
+  - **Dropoff incentive failures fail loud + typed (ADR-0037 D3).** A missing
+    `collector_incentive` rule (`NoActiveProgramRuleError`) is logged with
+    `{site, date}` before re-throw; recovering prior paid units from a stored
+    `incentive_cents` that no longer divides the rate now throws a typed
+    `IncentiveComputationError` (500 with `{person, date, incentive_cents}` logged)
+    instead of a bare `RangeError`.
+  - **Efficiency (N+1 kills, behavior identical).** `listProcessedUnits` replaces
+    per-row `deriveDailyOutflow` with two grouped aggregate queries over the date
+    range (tests assert list == per-day-derive equivalence); `upsertScrapedHauls`
+    replaces the per-haul `expectedLoad.findUnique` with one batched `findMany` +
+    live map.
+  - **Route-layer pagination clamp.** The manager list surfaces (dropoffs, outbound,
+    processed-units) now clamp a client `?limit=` to `[1, 200]`, falling back to the
+    default on absurd/non-numeric input, so no request can force an unbounded scan.
+  - **Portal list completeness diagnostics (ADR-0038 D4).** The MyMRC Aura getItems
+    payload carries no absolute record total (verified against the captured
+    fixtures — only `hasMoreData`/`offset`), and `hasMoreData=true` is a NORMAL live
+    state for large feeds, so a throwing count-guard would false-page every run;
+    instead `extractListView` surfaces the `hasMoreData` window signal and the
+    transport WARNs loudly when a list is windowed (disappeared-detection sees only
+    that page), while the existing "no getItems action" / error-list-view / settle
+    guards stand.
 - **Survey reminder-tick was blocked by the auth middleware (ADR-0036 hotfix).** `/api/internal/survey/reminder-tick` was missing from the middleware public-path exemptions (only `/api/internal/bonus/` was listed), so the daemon's first 09:00 PT fire was 307'd to `/login` — and because `fetch` follows redirects by default, the login page's 200 made the tick log **success while sending nothing**. Three-layer fix: (1) the public-path predicate moved to `src/lib/public-paths.ts` (pure, edge-safe) with the `/api/internal/survey/` exemption added and a regression test over the whole exemption list (`src/__tests__/public-paths.test.ts`); (2) the daemon now uses `redirect: 'manual'` and treats any redirect or non-200 as a failure (a login 307 can never masquerade as success again); (3) response bodies in daemon logs are truncated to 300 chars (the failure had dumped a full HTML page). The route's own loopback/cf-connecting-ip + bearer guards are unchanged — the exemption only lets the session-less in-fleet caller reach them, same trust model as the bonus cron routes. After deploy the missed 2026-07-03 tick was re-fired manually (in-network POST), so the outstanding invites still got their day's reminder.
 - **Pre-push gate (ADR-0033 / P0-4) no longer blocks deletion-only pushes.** `git push origin --delete <branch>` pushes no code, but the hook still ran the full tsc + payroll-suite gate — which blocked the 2026-07-02 stale-branch sweep on type errors from an unrelated stale generated Prisma client. The hook now reads the ref list git supplies on stdin and skips the gate only when EVERY pushed ref is a deletion (all-zero local sha); a mixed push (deletion + real ref) still gets the full gate. Regression tests in `src/__tests__/pre-push-hook.test.ts` cover deletion-only, empty-ref, mixed, and normal pushes.
 

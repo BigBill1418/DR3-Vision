@@ -34,6 +34,29 @@ export class NoActiveProgramRuleError extends Error {
   }
 }
 
+/**
+ * More than one `state_program_rules` row shares the winning `effective_from` for
+ * the requested (site, kind, date) — the effective-dated set is ambiguous and the
+ * resolver cannot pick a single rate deterministically. Names the tied row ids so
+ * an operator can end-date the stray row. Money math must never coin-flip a rate.
+ */
+export class AmbiguousProgramRuleError extends Error {
+  readonly status = 409 as const;
+  constructor(
+    siteId: string,
+    ruleKind: StateProgramRuleKind,
+    onDate: Date,
+    readonly ruleIds: string[],
+  ) {
+    super(
+      `ambiguous state_program_rules for site ${siteId} kind ${ruleKind} on ${onDate
+        .toISOString()
+        .slice(0, 10)}: ${ruleIds.length} rows share the same effective_from (ids: ${ruleIds.join(', ')}) — end-date the stale row`,
+    );
+    this.name = 'AmbiguousProgramRuleError';
+  }
+}
+
 /** The requested rule kind is structurally impossible for the site's jurisdiction. */
 export class RuleStructurallyDisallowedError extends Error {
   readonly status = 422 as const;
@@ -111,7 +134,12 @@ export async function resolveProgramRule(
   }
 
   const on = ruleDateUTC(onDate);
-  const rule = await prisma.stateProgramRule.findFirst({
+  // Fetch ALL covering rows (not just findFirst) so we can PROVE the resolution is
+  // unambiguous: the effective-dated model must yield exactly one winning rate. A
+  // later effective_from legitimately supersedes an earlier one; but two rows
+  // sharing the SAME (winning) effective_from is an unresolvable data error that
+  // findFirst would silently coin-flip.
+  const covering = await prisma.stateProgramRule.findMany({
     where: {
       site_id: siteId,
       rule_kind: ruleKind,
@@ -120,7 +148,12 @@ export async function resolveProgramRule(
     },
     orderBy: { effective_from: 'desc' },
   });
+  const rule = covering[0];
   if (!rule) throw new NoActiveProgramRuleError(siteId, ruleKind, onDate);
+  const tied = covering.filter((r) => r.effective_from.getTime() === rule.effective_from.getTime());
+  if (tied.length > 1) {
+    throw new AmbiguousProgramRuleError(siteId, ruleKind, onDate, tied.map((r) => r.id));
+  }
 
   return {
     id: rule.id,

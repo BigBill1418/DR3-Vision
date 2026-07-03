@@ -5,12 +5,14 @@ import {
   AuthFailedError,
   PortalContractDriftError,
   extractListRecordIds,
+  extractListView,
   extractRecord,
   looksLoggedOut,
   parseAuraActions,
 } from './portal-client';
 
 import envelopeGetItems from './__fixtures__/aura-envelope-getitems-processed.json';
+import haulsGetItems from './__fixtures__/aura-getitems-hauls.json';
 import haulRecord from './__fixtures__/aura-getrecord-haul.json';
 
 function fixture(name: string): string {
@@ -52,6 +54,29 @@ describe('extractListRecordIds', () => {
       actions: [{ state: 'SUCCESS', returnValue: { recordIdActionsList: [], isErrorListView: true } }],
     });
     expect(() => extractListRecordIds([errView], 'processed')).toThrow(/isErrorListView/);
+  });
+});
+
+describe('extractListView — completeness signal (finding 11)', () => {
+  const haulsBody = JSON.stringify({ actions: [{ state: 'SUCCESS', returnValue: haulsGetItems }] });
+
+  it('reports hasMoreData=false for a full page (real hauls capture, offset 14)', () => {
+    const view = extractListView([haulsBody], 'hauls');
+    expect(view.ids.length).toBe(5);
+    expect(view.hasMoreData).toBe(false);
+  });
+
+  it('reports hasMoreData=true for a WINDOWED page (real processed capture, offset 50)', () => {
+    // The processed/outbound live captures genuinely windowed (hasMoreData=true) —
+    // so extraction must SURFACE it (transport warns), never throw, or every large
+    // feed would false-page.
+    const view = extractListView([envelopeBody], 'processed');
+    expect(view.ids.length).toBe(5);
+    expect(view.hasMoreData).toBe(true);
+  });
+
+  it('still throws drift when the getItems action is absent', () => {
+    expect(() => extractListView(['{"actions":[]}'], 'hauls')).toThrow(PortalContractDriftError);
   });
 });
 

@@ -330,3 +330,27 @@ activation gate (admin-only until the ops gates close), and the CIP-PII discipli
 - CA `fuel_surcharge` COMPUTATION remains refused (formula + $5.05 trigger captured;
   the per-haul EIA-rate × miles calculator is P2 billing scope).
 - `outbound_materials.allocation_pct` remains a nullable placeholder.
+
+## Post-acceptance hardening addendum (2026-07-03)
+
+A P1 observability/correctness hardening pass over the merged ADR-0037/0038 code (see
+CHANGELOG "Fixed — 2026-07-03") is non-architectural — no decision here is reopened —
+with **one behavior change worth recording** because it changes an API contract:
+
+- **D2 verify gate no longer defaults billing attribution blind.** The accepted text
+  defaulted a load's program/non-program split from its source's `is_non_program`
+  flag when the manager supplied no explicit split (Addendum B7). That default now
+  requires a source to exist: if `inbound_loads.source` is **NULL** and no explicit
+  split is supplied, `verifyLoad` throws a typed `VerifyGateError('no_source_for_default')`
+  (HTTP 422) instead of silently crediting the whole load to the program (billed)
+  pool. Rationale: billing pool attribution is money — a sourceless load has no basis
+  to pick a pool, and a silent all-program default over-bills the MRC program. A
+  manager-supplied explicit split still verifies a sourceless load; a source-driven
+  default now emits an info log (`{loadId, defaulted:true, source flag}`). The
+  `program + non_program == total_units` reconciliation is unchanged.
+
+Other items in the pass (structured non-2xx logging, MyMRC `run_id` correlation +
+loud ledger/detail failure logging, the D6 daily-close negative-balance warn-and-
+confirm guard, the D1 ambiguous-effective-dated-rule guard, the D3 dropoff incentive
+typed failures, the `listProcessedUnits`/`upsertScrapedHauls` N+1 removals, and the
+manager-list pagination clamp) are additive hardening with no contract change.

@@ -120,6 +120,29 @@ describe('verifyLoad — server-side gate', () => {
     expect(upd.non_program_unit_count).toBe(0);
   });
 
+  it('THROWS no_source_for_default (422) when source is null AND no split supplied — never defaults blind', async () => {
+    store.load = { id: 'L1', site_id: 'S1', status: 'submitted', total_units: 175, source: null };
+    try {
+      await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
+      expect.unreachable('should throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(VerifyGateError);
+      expect((e as VerifyGateError).reason).toBe('no_source_for_default');
+      expect((e as VerifyGateError).status).toBe(422);
+    }
+    expect(store.updates).toHaveLength(0);
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('still verifies a null-source load when an EXPLICIT reconciling split is supplied', async () => {
+    store.load = { id: 'L1', site_id: 'S1', status: 'submitted', total_units: 175, source: null };
+    await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1', programUnits: 100, nonProgramUnits: 75 });
+    expect(store.updates).toHaveLength(1);
+    const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
+    expect(upd.program_unit_count).toBe(100);
+    expect(upd.non_program_unit_count).toBe(75);
+  });
+
   it('rejects a half-supplied split (both or neither)', async () => {
     await expect(
       verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1', programUnits: 100 }),

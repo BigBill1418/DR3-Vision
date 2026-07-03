@@ -25,6 +25,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ site: 
     const row = await updateDropoff({ id, siteId: ctx.siteId, actorUserId: ctx.userId, ...parsed.data });
     return NextResponse.json({ row });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, id, op: 'dropoffs.update', requestId: req.headers.get('x-request-id') });
   }
 }

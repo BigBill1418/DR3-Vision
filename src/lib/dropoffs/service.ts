@@ -15,11 +15,26 @@
 
 import { type ConsumerDropoffKind } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { resolveProgramRule } from '@/lib/program-rules/resolver';
+import { log } from '@/lib/observability/logger';
+import { resolveProgramRule, NoActiveProgramRuleError } from '@/lib/program-rules/resolver';
 import { computeDropoffIncentive, paidUnitsFromIncentiveCents } from '@/lib/dropoffs/incentive';
 import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
 
 const TABLE = 'consumer_dropoffs';
+
+/**
+ * A stored `incentive_cents` could not be reconciled to the current rate (a mid-day
+ * rate change or corrupt data). Surfaced as a 500 with context rather than letting a
+ * bare RangeError escape — the office needs to know WHOSE row and WHICH day so the
+ * data gap can be fixed, not a stack trace.
+ */
+export class IncentiveComputationError extends Error {
+  readonly status = 500 as const;
+  constructor(readonly reason: string, message: string) {
+    super(message);
+    this.name = 'IncentiveComputationError';
+  }
+}
 
 function dropoffDateUTC(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -99,10 +114,22 @@ async function computeIncentiveCents(
   units: number,
   excludeId?: string,
 ): Promise<number> {
-  const rule = await resolveProgramRule(siteId, 'collector_incentive', day);
+  const dateKey = day.toISOString().slice(0, 10);
+  let rule;
+  try {
+    rule = await resolveProgramRule(siteId, 'collector_incentive', day);
+  } catch (e) {
+    // A missing rule means we'd have to credit $0 blind — log the (site, date) so
+    // the office knows which effective-dated rule row to seed, then rethrow.
+    if (e instanceof NoActiveProgramRuleError) {
+      log.warn({ siteId, date: dateKey, ruleKind: 'collector_incentive' }, '[dropoffs] no active collector_incentive rule — cannot compute incentive');
+    }
+    throw e;
+  }
   if (rule.rateCents == null) {
     throw new RecordValidationError('collector_incentive rule has no rate_cents');
   }
+  const rateCents = rule.rateCents;
   const cap = dailyCapUnits(rule.params);
   const priors = await prisma.consumerDropoff.findMany({
     where: {
@@ -113,13 +140,28 @@ async function computeIncentiveCents(
     },
     select: { incentive_cents: true },
   });
-  const priorPaidUnitsToday = priors.reduce(
-    (sum, p) => sum + paidUnitsFromIncentiveCents(p.incentive_cents, rule.rateCents as number),
-    0,
-  );
+  let priorPaidUnitsToday: number;
+  try {
+    priorPaidUnitsToday = priors.reduce((sum, p) => sum + paidUnitsFromIncentiveCents(p.incentive_cents, rateCents), 0);
+  } catch (e) {
+    // paidUnitsFromIncentiveCents throws when a stored incentive_cents is not
+    // divisible by the current rate. A bare RangeError would 500 with no context;
+    // log the offending row ids/date and rethrow a typed 500 the office can act on.
+    // Deliberately NOT logging person_name: it is CIP PII (Exhibit I / ADR-0010)
+    // and log retention is not the DB — the row ids identify the records for
+    // anyone with legitimate access.
+    log.error(
+      { siteId, date: dateKey, rateCents, priorRowCount: priors.length, err: e },
+      '[dropoffs] failed to recover prior paid units from a stored incentive_cents',
+    );
+    throw new IncentiveComputationError(
+      'incentive_recovery_failed',
+      `could not recover prior paid units for a drop-off on ${dateKey} — a stored incentive_cents is not divisible by the current rate (${rateCents}¢); resolve the data gap`,
+    );
+  }
   return computeDropoffIncentive({
     units,
-    rateCents: rule.rateCents,
+    rateCents,
     dailyCapUnits: cap,
     priorPaidUnitsToday,
   }).incentiveCents;

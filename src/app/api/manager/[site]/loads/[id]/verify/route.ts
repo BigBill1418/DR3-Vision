@@ -32,6 +32,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    return loadsErrorResponse(e);
+    return loadsErrorResponse(e, { site, id, op: 'loads.verify', requestId: req.headers.get('x-request-id') });
   }
 }

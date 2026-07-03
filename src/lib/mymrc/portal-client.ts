@@ -95,12 +95,24 @@ function isGetItemsReturnValue(v: unknown): v is GetItemsReturnValue {
   return !!v && typeof v === 'object' && 'recordIdActionsList' in v;
 }
 
+/** The list-view slice we extract: the record ids + whether the portal windowed it. */
+export interface ListViewExtract {
+  ids: string[];
+  /**
+   * `true` when the getItems returnValue reported `hasMoreData` — the id set is a
+   * PARTIAL page. There is no absolute total in the Aura payload (verified against
+   * the captured fixtures), so this boolean is the only completeness signal.
+   */
+  hasMoreData: boolean;
+}
+
 /**
  * Find the first getItems returnValue across intercepted Aura bodies and return
- * its record ids. Throws PortalContractDriftError when no such action is present
- * (the whole point of D4 — never return a silent empty list).
+ * its record ids PLUS the completeness signal. Throws PortalContractDriftError when
+ * no such action is present, or when it is an error list view (D4 — never a silent
+ * empty list).
  */
-export function extractListRecordIds(bodies: readonly string[], feed: FeedName): string[] {
+export function extractListView(bodies: readonly string[], feed: FeedName): ListViewExtract {
   for (const body of bodies) {
     for (const action of parseAuraActions(body)) {
       if (action.state === 'SUCCESS' && isGetItemsReturnValue(action.returnValue)) {
@@ -108,13 +120,21 @@ export function extractListRecordIds(bodies: readonly string[], feed: FeedName):
         if (rv.isErrorListView === true) {
           throw new PortalContractDriftError(`${feed}: list view reported isErrorListView=true`);
         }
-        return listRecordIds(rv);
+        return { ids: listRecordIds(rv), hasMoreData: rv.hasMoreData === true };
       }
     }
   }
   throw new PortalContractDriftError(
     `${feed}: no ListViewDataManager getItems action found in ${bodies.length} Aura response(s)`,
   );
+}
+
+/**
+ * Back-compat convenience: just the record ids from {@link extractListView}.
+ * (`hasMoreData` is surfaced by the transport as a warn — see fetchListRecordIds.)
+ */
+export function extractListRecordIds(bodies: readonly string[], feed: FeedName): string[] {
+  return extractListView(bodies, feed).ids;
 }
 
 function looksLikeRecord(o: unknown): o is SfRecord {
@@ -300,7 +320,15 @@ export async function createPortalClient(
       await ensureAuthenticated(url);
       const bodies = await collectAura(url);
       if (await isLoginPage()) throw new AuthFailedError(`mymrc: logged out during ${feed} list`);
-      const ids = extractListRecordIds(bodies, feed);
+      const { ids, hasMoreData } = extractListView(bodies, feed);
+      // Completeness signal (D4 diagnosability): the Aura payload has no absolute
+      // record total, so a windowed page is the only over-mark risk we can detect.
+      // We do NOT throw — hasMoreData=true is a normal state for large feeds
+      // (processed/outbound routinely exceed one page) — but we WARN loudly so a
+      // truncated list is diagnosable rather than silently over-marking disappeared.
+      if (hasMoreData) {
+        log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection sees only this page`);
+      }
       log('info', `mymrc: ${feed} list → ${ids.length} record ids`);
       // Persist fresh session best-effort.
       await context.storageState({ path: stateFile }).catch(() => undefined);

@@ -89,6 +89,14 @@ export interface SfRecord {
 export interface GetItemsReturnValue {
   recordIdActionsList?: Array<{ recordId?: string | null } | null> | null;
   isErrorListView?: boolean | null;
+  /**
+   * The ListView is windowed: `true` means the portal returned only a page and
+   * MORE records exist beyond `recordIdActionsList`. The Aura returnValue carries
+   * no absolute total — this boolean (+ `offset`) is the only completeness signal.
+   * A `true` here means the extracted id set is NOT the full feed, which matters
+   * for disappeared-detection (a partial list would over-mark rows as gone).
+   */
+  hasMoreData?: boolean | null;
 }
 
 /**

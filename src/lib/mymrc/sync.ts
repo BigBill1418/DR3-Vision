@@ -9,6 +9,7 @@
 // data is impossible. Zero-anomaly: 0 listed where the previous successful run
 // listed >0 is `error`, never `ok`.
 
+import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
@@ -76,10 +77,21 @@ interface FeedAdapter {
   upsertListed(ids: readonly string[], seenAt: Date): Promise<number>;
   /** Set disappeared_at=at for active rows whose id is not in keepIds. */
   markDisappeared(keepIds: readonly string[], at: Date): Promise<number>;
-  /** Among listed ids, which mirror rows still lack a detail fetch. */
-  idsNeedingDetail(listedIds: readonly string[]): Promise<string[]>;
+  /**
+   * Among listed ids, which mirror rows still lack a detail fetch — paired with
+   * the row's business external id (may be null before the first detail fetch) so
+   * a failure can be logged against BOTH the Salesforce record id and the human
+   * MyMRC id (H-…/M-…) when it is already known.
+   */
+  idsNeedingDetail(listedIds: readonly string[]): Promise<DetailTarget[]>;
   /** Fetch + map + persist one record's detail; throws on transport failure. */
   applyDetail(recordId: string, at: Date): Promise<void>;
+}
+
+/** A record awaiting a detail fetch: Salesforce record id + (best-known) external id. */
+interface DetailTarget {
+  id: string;
+  externalId: string | null;
 }
 
 function toJson(v: unknown): Prisma.InputJsonValue {
@@ -110,9 +122,9 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, siteId: string
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
         where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
-        select: { id: true },
+        select: { id: true, external_haul_id: true },
       });
-      return rows.map((r) => r.id);
+      return rows.map((r) => ({ id: r.id, externalId: r.external_haul_id }));
     },
     async applyDetail(recordId, at) {
       const row: HaulMirrorRow = mapHaulRecord(await client.fetchRecordDetail('hauls', recordId));
@@ -159,9 +171,9 @@ function processedAdapter(prisma: PrismaClient, client: PortalClient, siteId: st
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
         where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
-        select: { id: true },
+        select: { id: true, external_materials_id: true },
       });
-      return rows.map((r) => r.id);
+      return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
     async applyDetail(recordId, at) {
       const row: ProcessedMirrorRow = mapProcessedRecord(await client.fetchRecordDetail('processed', recordId));
@@ -207,9 +219,9 @@ function outboundAdapter(prisma: PrismaClient, client: PortalClient, siteId: str
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
         where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
-        select: { id: true },
+        select: { id: true, external_materials_id: true },
       });
-      return rows.map((r) => r.id);
+      return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
     async applyDetail(recordId, at) {
       const row: OutboundMirrorRow = mapOutboundRecord(await client.fetchRecordDetail('outbound', recordId));
@@ -248,6 +260,8 @@ export interface SyncFeedContext {
   log?: Logger;
   now?: () => Date;
   detailConcurrency?: number;
+  /** Per-run correlation id. Defaults to a fresh crypto.randomUUID when omitted. */
+  runId?: string;
 }
 
 export interface SyncFeedResult {
@@ -271,6 +285,10 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   const nowFn = ctx.now ?? ((): Date => new Date());
   const started = nowFn();
   const concurrency = ctx.detailConcurrency ?? DETAIL_CONCURRENCY;
+  const runId = ctx.runId ?? randomUUID();
+  // Prefix every line of this run with its correlation id so a run's logs and its
+  // ledger row (which persists the same `run_id`) join without timestamp guessing.
+  const tag = `run=${runId} ${ctx.site}/${ctx.feed}`;
 
   const siteRow = await ctx.prisma.site.findUnique({ where: { code: ctx.site }, select: { id: true } });
   if (!siteRow) throw new Error(`mymrc-sync: site code "${ctx.site}" not found`);
@@ -306,7 +324,7 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     if (isZeroAnomaly(ids.length, lastOk?.rows_listed ?? null)) {
       status = 'error';
       error = `zero-anomaly: 0 listed where previous successful run listed ${lastOk?.rows_listed}`;
-      log('error', `mymrc-sync: ${ctx.site}/${ctx.feed} ${error}`);
+      log('error', `mymrc-sync: ${tag} ${error}`);
       await pageOnce('zero_anomaly', fingerprint.zeroAnomaly(ctx.site, ctx.feed), error);
       return finalize();
     }
@@ -316,22 +334,26 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
 
     const needDetail = await adapter.idsNeedingDetail(ids);
     for (const group of chunk(needDetail, concurrency)) {
-      const settled = await Promise.allSettled(group.map((id) => adapter.applyDetail(id, started)));
+      const settled = await Promise.allSettled(group.map((t) => adapter.applyDetail(t.id, started)));
       for (const [i, res] of settled.entries()) {
         if (res.status === 'fulfilled') detailsFetched += 1;
         else {
-          const id = group[i];
+          const target = group[i];
           if (res.reason instanceof AuthFailedError) throw res.reason; // auth is fatal for the run
-          log('warn', `mymrc-sync: ${ctx.feed} detail ${id ?? '?'} failed (retry next run): ${describe(res.reason)}`);
+          const extId = target?.externalId ?? '(unfetched)';
+          log(
+            'warn',
+            `mymrc-sync: ${tag} detail record=${target?.id ?? '?'} external=${extId} failed (retry next run): ${describe(res.reason)}`,
+          );
         }
       }
     }
 
     if (ctx.feed === 'hauls') {
-      await feedExpectedLoads(ctx.prisma, siteId, ctx.site, started);
+      await feedExpectedLoads(ctx.prisma, siteId, ctx.site, started, (lvl, msg) => log(lvl, `${tag} ${msg}`));
     }
 
-    log('info', `mymrc-sync: ${ctx.site}/${ctx.feed} ok — listed=${rowsListed} details=${detailsFetched}`);
+    log('info', `mymrc-sync: ${tag} ok — listed=${rowsListed} details=${detailsFetched}`);
     return finalize();
   } catch (err) {
     if (err instanceof AuthFailedError) {
@@ -347,14 +369,16 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
       error = describe(err);
       await pageOnce('error', fingerprint.error(ctx.site, ctx.feed), error);
     }
-    log('error', `mymrc-sync: ${ctx.site}/${ctx.feed} FAILED (${status}) — ${error}`);
+    log('error', `mymrc-sync: ${tag} FAILED (${status}) — ${error}`);
     return finalize();
   }
 
   async function finalize(): Promise<SyncFeedResult> {
-    // Run-ledger row ALWAYS (D4). A ledger-write failure must not mask the run.
-    await ctx.prisma.mymrcSyncRun
-      .create({
+    // Run-ledger row ALWAYS (D4). A ledger-write failure must NEVER be swallowed
+    // silently: catch ANY throw, log it with its error class + full run context so
+    // a wedged ledger is diagnosable, and still return the run result.
+    try {
+      await ctx.prisma.mymrcSyncRun.create({
         data: {
           site_id: siteId,
           feed: ctx.feed,
@@ -365,9 +389,15 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
           rows_upserted: rowsUpserted,
           details_fetched: detailsFetched,
           error,
+          run_id: runId,
         },
-      })
-      .catch((e: unknown) => log('error', `mymrc-sync: ledger write failed: ${describe(e)}`));
+      });
+    } catch (e: unknown) {
+      log(
+        'error',
+        `mymrc-sync: ${tag} LEDGER WRITE FAILED (${errorClass(e)}) status=${status} listed=${rowsListed} — ${describe(e)}`,
+      );
+    }
     return { site: ctx.site, feed: ctx.feed, status, rowsListed, rowsUpserted, detailsFetched, error };
   }
 }
@@ -379,6 +409,7 @@ async function feedExpectedLoads(
   siteId: string,
   site: SiteCode,
   scrapedAt: Date,
+  log: Logger,
 ): Promise<void> {
   const rows = await prisma.mymrcHaulsMirror.findMany({
     where: {
@@ -410,7 +441,7 @@ async function feedExpectedLoads(
       scheduled_at_mymrc: r.docking_appointment_at,
     });
   }
-  await upsertScrapedHauls({ prisma, site, hauls, scrapedAt });
+  await upsertScrapedHauls({ prisma, site, hauls, scrapedAt, log });
 }
 
 // ── Whole-site run + deadman ─────────────────────────────────────────────────
@@ -490,4 +521,10 @@ function describe(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
   return JSON.stringify(err);
+}
+
+/** Error class/constructor name for diagnostics (e.g. 'PrismaClientKnownRequestError'). */
+function errorClass(err: unknown): string {
+  if (err instanceof Error) return err.name || err.constructor.name;
+  return typeof err;
 }
