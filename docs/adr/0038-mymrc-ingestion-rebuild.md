@@ -1,6 +1,6 @@
 # ADR-0038 — MyMRC ingestion rebuild (Salesforce portal: JSON transport, mirror tables, loud failure)
 
-**Status:** PROPOSED — awaiting operator review (Bill), per the ADR-0036 mission record §6-P1
+**Status:** Accepted (2026-07-03, approved by Bill)
 **Date:** 2026-07-03
 **Relates to:** ADR-0009 (Playwright write path), ADR-0037 (foundations), mission record §6-P1/§8, `docs/MYMRC-PORTAL-REDESIGN-2026-06-22.md`, 2026-06-23 readiness item P1-2
 **Series:** second of three P1 ADRs — 0037 foundations (accepted), **0038 ingestion (this)**, 0039 3-way audit + retro-audit
@@ -139,3 +139,13 @@ JSON mappers against captured fixtures (all three feeds + detail shapes) ·
 / disappeared / manual-row protection) · zero-anomaly + deadman + auth-fail paging
 (mock ntfy, fingerprint + cooldown asserted) · run-ledger written on every path
 incl. throw · detail-fetch retry on next run · migration clean-replay (CI gate).
+
+## Post-acceptance note — survey finding (2026-07-03)
+
+Rick Albritton (survey, dr3-intel-2026-06): "Re-Trac is the previous version of
+MyMRC… A Re-TRAC ID simply refers to the unique Haul number or Material number
+assigned to each inbound and outbound load through the MyMRC portal." So the
+mirrors' `retrac_id` is expected to equal the portal's external Haul/Materials id
+in current data — capture both fields anyway (nomenclature differs across the
+workbook and the portal, and history may diverge), but ingestion maps them 1:1
+unless the record detail shows otherwise.
