@@ -10,7 +10,16 @@ vi.mock('@/lib/m365-mail', () => ({
   sendSystemEmail: (...a: unknown[]) => sendSystemEmail(...a),
 }));
 
-import { renderInviteHtml, sendInvite, type SendInviteArgs } from '../notifications';
+import {
+  renderInviteHtml,
+  renderReminderHtml,
+  reminderSubject,
+  sendInvite,
+  sendReminder,
+  type SendInviteArgs,
+  type SendReminderArgs,
+  type ReminderTier,
+} from '../notifications';
 
 const ARGS: SendInviteArgs = {
   campaign: {
@@ -96,5 +105,119 @@ describe('sendInvite', () => {
     sendSystemEmail.mockRejectedValue(new Error('boom'));
     const r = await sendInvite(ARGS);
     expect(r.delivered).toBe(false);
+  });
+});
+
+// ─── ADR-0036 — reminder render + send ─────────────────────────────────
+
+function reminderArgs(tier: ReminderTier): SendReminderArgs {
+  return {
+    campaign: {
+      intro_text: 'Original intro para.\n\nSecond para with the sign-off.',
+      subject_template: 'Your input requested',
+      from_address: 'dr3-vision@svdp.us',
+      from_display_name: 'Bill Barnard via DR3-Vision',
+      reply_to: 'bill.barnard@svdp.us',
+    },
+    invite: {
+      recipient_name: 'Rick <Albritton>',
+      recipient_email: 'rick@svdp.us',
+      role_label: 'Eugene Manager',
+      token: 'AbCd_-90AbCd_-90AbCd_-90AbCd_-90',
+    },
+    tier,
+    baseUrl: 'https://dr3-vision.svdp.us/',
+  };
+}
+
+describe('reminderSubject', () => {
+  it('prefixes "Reminder:" for saved_progress and opened_no_answers', () => {
+    expect(reminderSubject('saved_progress', 'Your input requested')).toBe(
+      'Reminder: Your input requested',
+    );
+    expect(reminderSubject('opened_no_answers', 'Your input requested')).toBe(
+      'Reminder: Your input requested',
+    );
+  });
+
+  it('keeps the ORIGINAL subject (no prefix) for never_opened', () => {
+    expect(reminderSubject('never_opened', 'Your input requested')).toBe('Your input requested');
+  });
+});
+
+describe('renderReminderHtml', () => {
+  it('shares the branded shell (masthead colors) and includes the token link, normalized', () => {
+    const html = renderReminderHtml(reminderArgs('saved_progress'));
+    expect(html).toContain('#a3151a'); // masthead
+    expect(html).toContain('#ffcc69'); // gold accent
+    expect(html).toContain('#f7f3ea'); // cream
+    expect(html).toContain('https://dr3-vision.svdp.us/survey/AbCd_-90AbCd_-90AbCd_-90AbCd_-90');
+    expect(html).not.toContain('svdp.us//survey');
+    // Recipient name is HTML-escaped in the shared shell.
+    expect(html).toContain('Hi Rick &lt;Albritton&gt;,');
+  });
+
+  it('tier saved_progress: "Finish your survey" button + Bill sign-off', () => {
+    const html = renderReminderHtml(reminderArgs('saved_progress'));
+    expect(html).toContain('>Finish your survey<');
+    expect(html).toContain('progress is saved');
+    expect(html).toContain('— Bill Barnard, Director of Operations');
+  });
+
+  it('tier opened_no_answers: "Open your survey" button + nudge + Bill sign-off', () => {
+    const html = renderReminderHtml(reminderArgs('opened_no_answers'));
+    expect(html).toContain('>Open your survey<');
+    expect(html).toContain('save as you type');
+    expect(html).toContain('— Bill Barnard, Director of Operations');
+    // Not the finish-and-submit tier.
+    expect(html).not.toContain('>Finish your survey<');
+  });
+
+  it('tier never_opened: resend line + the original intro, no injected sign-off', () => {
+    const html = renderReminderHtml(reminderArgs('never_opened'));
+    expect(html).toContain('>Open your survey<');
+    expect(html).toContain('Resending this in case an earlier copy');
+    expect(html).toContain('Original intro para.');
+    // The intro carries its own sign-off; we do NOT append Bill's a/b sign-off.
+    expect(html).not.toContain('— Bill Barnard, Director of Operations');
+  });
+});
+
+describe('sendReminder', () => {
+  it('sends with the tier subject + campaign sender identity on success', async () => {
+    sendSystemEmail.mockResolvedValue({
+      delivered: true,
+      disabled: false,
+      messageId: 'req-9',
+      retries: 0,
+      lastStatus: 202,
+    });
+    const r = await sendReminder(reminderArgs('saved_progress'));
+    expect(r.delivered).toBe(true);
+    expect(r.last_status).toBe(202);
+    const callArg = sendSystemEmail.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg['subject']).toBe('Reminder: Your input requested');
+    expect(callArg['fromDisplayName']).toBe('Bill Barnard via DR3-Vision');
+    expect(callArg['replyTo']).toBe('bill.barnard@svdp.us');
+  });
+
+  it('uses the ORIGINAL subject for the never_opened tier', async () => {
+    sendSystemEmail.mockResolvedValue({
+      delivered: true,
+      disabled: false,
+      messageId: 'req-10',
+      retries: 0,
+      lastStatus: 202,
+    });
+    await sendReminder(reminderArgs('never_opened'));
+    const callArg = sendSystemEmail.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg['subject']).toBe('Your input requested');
+  });
+
+  it('fails soft (delivered=false) when M365 is disabled and when it throws', async () => {
+    sendSystemEmail.mockResolvedValue({ delivered: false, disabled: true });
+    expect((await sendReminder(reminderArgs('opened_no_answers'))).delivered).toBe(false);
+    sendSystemEmail.mockRejectedValue(new Error('boom'));
+    expect((await sendReminder(reminderArgs('opened_no_answers'))).delivered).toBe(false);
   });
 });

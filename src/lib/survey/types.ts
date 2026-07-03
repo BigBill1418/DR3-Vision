@@ -51,3 +51,12 @@ export interface PublicActor {
   ip: string | null;
   userAgent: string | null;
 }
+
+// ADR-0036 — an autonomous system actor (e.g. the survey-reminder cron). Audits
+// under `actor_label` rather than `actor_user_id`, mirroring the public/system
+// audit style already used by `markInviteOpened` ('public:survey-respondent').
+export interface SystemActor {
+  actorLabel: string;
+  ip?: string | null;
+  userAgent?: string | null;
+}
