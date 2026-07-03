@@ -47,6 +47,8 @@ export interface AdminUserDto {
   processor_role: string | null;
   is_active: boolean;
   all_sites: boolean;
+  /** ADR-0040 — scoped rate-table write access (manager-only; see D5). */
+  can_manage_rates: boolean;
   has_pin: boolean;
   last_login_at: Date | null;
   created_at: Date;
@@ -65,6 +67,7 @@ type AuditableUser = Pick<
   | 'processor_role'
   | 'is_active'
   | 'all_sites'
+  | 'can_manage_rates'
   | 'pin_hash'
   | 'deleted_at'
 >;
@@ -118,6 +121,7 @@ function toDto(u: UserWithSite): AdminUserDto {
     processor_role: u.processor_role,
     is_active: u.is_active,
     all_sites: u.all_sites,
+    can_manage_rates: u.can_manage_rates,
     has_pin: u.pin_hash != null,
     last_login_at: u.last_login_at,
     created_at: u.created_at,
@@ -170,6 +174,10 @@ export interface CreateUserInput {
   /** ADR-0024 — all-sites manager. Only meaningful for `manager`; coerced to
    * false for any other role (admins already see all sites; operators never). */
   all_sites?: boolean;
+  /** ADR-0040 D5 — scoped rate-table write access. Only meaningful for `manager`
+   * (admins already have rate-write via role; operators never). Coerced false
+   * otherwise. Grants EXACTLY the four rate-table writes — no admin power. */
+  can_manage_rates?: boolean;
 }
 
 export type CreateUserResult =
@@ -239,6 +247,8 @@ export async function createUser(
         processor_role: input.processor_role,
         // ADR-0024: all_sites only applies to managers; force false otherwise.
         all_sites: input.role === 'manager' ? (input.all_sites ?? false) : false,
+        // ADR-0040 D5: can_manage_rates only applies to managers; force false otherwise.
+        can_manage_rates: input.role === 'manager' ? (input.can_manage_rates ?? false) : false,
         // Operators flip to active after the PIN write; SSO users
         // are active immediately so they can sign in.
         is_active: input.role !== 'operator',
@@ -326,6 +336,9 @@ export interface UpdateUserInput {
    * role is not `manager` (so promoting an all-sites manager to admin, or
    * demoting to operator, clears the flag). */
   all_sites?: boolean;
+  /** ADR-0040 D5 — scoped rate-table write access. Same manager-only coercion as
+   * `all_sites`: a role change away from `manager` clears it. */
+  can_manage_rates?: boolean;
 }
 
 export type UpdateUserResult =
@@ -380,6 +393,13 @@ export async function updateUser(
   if (input.all_sites !== undefined || input.role !== undefined) {
     const nextAllSites = nextRole === 'manager' ? (input.all_sites ?? existing.all_sites) : false;
     if (nextAllSites !== existing.all_sites) data.all_sites = nextAllSites;
+  }
+
+  // ADR-0040 D5: same manager-only coercion for can_manage_rates.
+  if (input.can_manage_rates !== undefined || input.role !== undefined) {
+    const nextCanManageRates =
+      nextRole === 'manager' ? (input.can_manage_rates ?? existing.can_manage_rates) : false;
+    if (nextCanManageRates !== existing.can_manage_rates) data.can_manage_rates = nextCanManageRates;
   }
 
   const updated = await prisma.$transaction(async (tx) => {

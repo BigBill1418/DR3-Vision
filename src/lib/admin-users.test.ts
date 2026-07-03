@@ -19,6 +19,7 @@ describe('scrubUserForAudit', () => {
     processor_role: null,
     is_active: true,
     all_sites: false,
+    can_manage_rates: false,
     pin_hash: '$argon2id$v=19$m=19456,t=2,p=1$abc$xyz',
     deleted_at: null,
   };
@@ -62,6 +63,7 @@ describe('serializeForAudit', () => {
       processor_role: null,
       is_active: true,
       all_sites: false,
+      can_manage_rates: false,
       pin_hash: 'should-not-appear',
       deleted_at: null,
     });

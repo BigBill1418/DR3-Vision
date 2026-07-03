@@ -132,3 +132,47 @@ mileage → typed error; OR transport rows never consult fuel) · fuel trigger e
 paging + manual-overwrite audit) · can_manage_rates gate (grant/revoke/deny
 matrix incl. the flag NOT unlocking any admin surface) · variance report math on
 a fixture set · migration clean-replay (CI).
+
+## Implementation notes (post-acceptance, 2026-07-03)
+
+Delivered as `20260706_billing_rate_infrastructure` + `src/lib/billing-rates/*`.
+Deviations and specifics worth recording:
+
+- **EIA v2 specifics.** The fetch (`eia.ts`) hits the v2 REST route
+  `https://api.eia.gov/v2/petroleum/pri/gnd/data/` with facets
+  `product=EPD2DXL0` (No 2 Diesel, Ultra Low Sulfur), `process=PTE` (retail /
+  prices-to-end-users), `duoarea=R50` (PADD 5 / West Coast), `frequency=weekly`,
+  `data[]=value`. This is the v2 equivalent of legacy series
+  `PET.EMD_EPD2DXL0_PTE_R50_DPG.W`. **A key IS required** (the v2 route is not
+  key-free — the ADR's "key-free v2 route" assumption was wrong): `EIA_API_KEY` is
+  read from env, and the design is **fail-open** — an absent key returns a typed
+  `no_api_key` result that the cron logs and skips (no page, no crash); the manual
+  entry surface remains the fallback. Real fetch failures (http/network/payload)
+  page `dr3-vision-system` fingerprint `fuel-fetch-failed` (6 h cooldown).
+- **Week convention.** A load's fuel week is the **UTC Monday** of the ISO week it
+  falls in (`mondayOfWeekUTC`). EIA stamps the weekly West-Coast price on the
+  Monday, so `fuel_prices.week_of` stores that Monday and the manual-entry route
+  normalizes any submitted date onto it.
+- **DB-level FKs, not Prisma relations (deliberate).** To keep the ADR-0040 schema
+  additions in one self-contained block (no back-relation fields on the
+  sibling-owned `Source`/`Site` models — coordination with the audit/loads agents),
+  `account_haul_rates.source_id`, `container_rental_sites.site_id/source_id` are
+  plain scalar columns whose FOREIGN KEY constraints are created in the migration
+  SQL. Consequence: `prisma migrate dev`/`db pull` would see the relation as
+  "drift" (Prisma doesn't model it), but `migrate deploy` clean-replay (the
+  ADR-0035 CI invariant) passes and referential integrity is enforced at the DB.
+- **`can_manage_rates` is never in the session.** The write gate
+  (`requireRateManager`) reads the flag fresh from the DB per request; it is
+  consulted nowhere else. `requireAdmin` still checks `role === 'admin'` only, so
+  the flag cannot unlock any admin surface — asserted by a test that drives the
+  real `/api/admin/audit` and `/api/admin/users` routes with a flag-holding manager
+  and expects 403.
+- **Freight is COMPUTED, never typed.** `resolveFreightCents` returns `{cents, ref}`
+  where `ref` is the provenance (`override`/`tier` row id) that the ADR-0037
+  `freight_rate_ref` column stores for the retro-audit.
+- **Variance report last-billed source (D6).** The workbook/invoice-history staging
+  tables (ADR-0039 audit engine) are not on `main` at this build, so the report
+  reads last-billed mileage + haul frequency through an injected
+  `VarianceProvider`. The default provider reports `available:false` and the report
+  renders tier-now only with an honest empty state + `TODO(ADR-0040 D6)` to wire a
+  provider over the workbook staging once it lands.

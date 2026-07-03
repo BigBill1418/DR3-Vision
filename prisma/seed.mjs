@@ -361,6 +361,50 @@ async function seedStateProgramRules(siteIds) {
   }
 }
 
+// ─── ADR-0040 D1 — transport_rate_tiers (CA freight zone table; rates are DATA) ──
+// The CA freight table from ADR-0040 D1, effective 2026-01-01: a ZONE table
+// (mileage band → flat charge), NOT $/mile. Contiguous from 0, non-overlapping —
+// the same shape `src/lib/billing-rates/tier-validation.ts` enforces on every write.
+// Idempotent upsert keyed on (jurisdiction, min_miles, effective_from).
+//
+// DELIBERATE EMPTIES (ADR-0040 consequences): NO Oregon tiers are seeded (unknown
+// until Rick provides them — the freight resolver returns a typed error for OR
+// meanwhile). `account_haul_rates` and `container_rental_sites` are seeded EMPTY too
+// (populated by Rick from the workbook only after he confirms current values;
+// seeding contested numbers would launder a discrepancy into "truth").
+async function seedTransportRateTiers() {
+  const CA_FROM = new Date('2026-01-01T00:00:00Z');
+  const tiers = [
+    { min_miles: 0, max_miles: 25, rate_cents: 42500 },
+    { min_miles: 26, max_miles: 50, rate_cents: 60000 },
+    { min_miles: 51, max_miles: 100, rate_cents: 92500 },
+    { min_miles: 101, max_miles: 200, rate_cents: 145000 },
+    { min_miles: 201, max_miles: 300, rate_cents: 200000 },
+    { min_miles: 301, max_miles: 400, rate_cents: 250000 },
+    { min_miles: 401, max_miles: 500, rate_cents: 300000 },
+  ];
+  for (const t of tiers) {
+    const existing = await prisma.transportRateTier.findFirst({
+      where: { jurisdiction: 'CA', min_miles: t.min_miles, effective_from: CA_FROM },
+      select: { id: true },
+    });
+    const data = {
+      jurisdiction: 'CA',
+      min_miles: t.min_miles,
+      max_miles: t.max_miles,
+      rate_cents: t.rate_cents,
+      effective_from: CA_FROM,
+      effective_to: null,
+      note: 'ADR-0040 D1 CA freight zone table (effective 2026-01-01).',
+    };
+    if (existing) {
+      await prisma.transportRateTier.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.transportRateTier.create({ data });
+    }
+  }
+}
+
 async function seedSources(siteIds) {
   const rows = parseCsv('sources.csv');
   for (const r of rows) {
@@ -877,6 +921,7 @@ async function assertCounts() {
     processor_bonus_rules: 2,
     bonus_pay_periods: 104, // 52 (2026) + 52 (2025) = 104 (ADR-0023 §Q3)
     bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
+    transport_rate_tiers: 7, // ADR-0040 D1 CA freight zone table (no OR tiers seeded)
   };
   // Runtime-growable tables: the seed sets a baseline, but the app legitimately
   // adds rows (users via the admin UI; sources/transporters may be extended).
@@ -899,6 +944,7 @@ async function assertCounts() {
     transporters: await prisma.transporter.count(),
     bonus_pay_periods: await prisma.bonusPayPeriod.count(),
     bonus_signature_chains: await prisma.bonusSignatureChain.count(),
+    transport_rate_tiers: await prisma.transportRateTier.count(),
     bonus_employees: await prisma.bonusEmployee.count(),
     bonus_employee_aliases: await prisma.bonusEmployeeAlias.count(),
     bonus_imports: await prisma.bonusImport.count(),
@@ -1579,6 +1625,8 @@ async function main() {
   await seedProcessorBonusRules(siteIds);
 
   await seedStateProgramRules(siteIds);
+  console.log('▶ seeding transport_rate_tiers (ADR-0040 D1)');
+  await seedTransportRateTiers();
   console.log('▶ seeding sources');
   await seedSources(siteIds);
   console.log('▶ seeding bonus pay periods');
