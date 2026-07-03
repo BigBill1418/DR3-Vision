@@ -92,3 +92,45 @@ The live workbook silently under-reports through sum-range drift: fuel totals on
 ## 5. COR generator (Exhibit 5 — Certificate of Recycling, Employment and Inventory)
 
 Monthly, per CA facility, currently hand-written. Vision pre-fills: month covered; **unprocessed units in inventory at month close** from `site_inventory_snapshots` (anchor: June 2026 Woodland = **4,062 units** — Vision's Pool-A snapshot must reproduce this number at close); **FT/PT headcount** from the daily total-facility-headcount field (June's handwritten count is ambiguous — reads 15 or 18 — precisely the defect generation eliminates); signer block standardized to **Rick Albritton** (title TBC with MRC). Certificate is signed **under penalty of perjury — Vision pre-fills and renders; a human always reviews and signs; Vision never auto-certifies.** Daily close remains a button click with an audit row; inventory cap warnings stay warn-only at 90%/100%, never blocking.
+
+
+
+---
+
+## 6. Build plan & sequencing
+
+**Phase 0 (Bill, ops — not Claude Code):** deploy pending P0 payroll guardrails after verifying Eugene P13 signature state; iPad rollout per §8. Deploy precedes new schema work landing in prod.
+
+**P1 — 3-way audit + foundations.** Finish the loads/inventory/reporting buildout **CA-first** per the readiness checklist in the 2026-06-22/23 handoffs, including the MyMRC ingestion rebuild (portal is now Salesforce-based; login solved, ingestion pending). Then the reconciliation layer: daily logs ↔ MyMRC ↔ billing data, auto-flagged mismatches with a discrepancy review surface. **Hard requirement: retro-audit** — the module must run over any historical window (the accepted 8/1→ship coverage gap, and prior months' workbooks per §4.1). This is P1 because Bill accepted the audit gap on the explicit condition the module ships ASAP.
+
+**P2 — Billing generation.** Invoice set (§3.1: CA mid-month, CA EOM with offset line, CA EOM transportation; OR EOM equivalents), container-rental table + Rick's manager-scoped write, COR generator (§5), billing-ready Great Plains export (adapter design blocked on integration-path answer; build the export boundary now, adapter later). Acceptance = §4 parity checklist.
+
+**P3 — Alerts.** Recycling rate (exists on compliance dashboard), recovery rate (include renovator channel per MRC rules), missing-record detection; configurable thresholds; alert CA team in-app + email digest. ntfy remains Bill-only.
+
+**P4 — Terex module.** Throughput derived from processed-materials; cost entry surface; trend view for equipment strategy.
+
+**P5 — Task ledger + Updates digest + contact-form routing.** Meeting notes, assigned tasks, auto-reminders; digest generation (Morena sends); website contact-form intake with tours→Rick routing.
+
+**P6 — CalRecycle + DTSC report generation.** Blocked on data specs (Kelsey capture / open register). Build when specs land.
+
+**P7 — Manager self-serve operator creation.** Site-scoped, operator-role-only carve-out from ADR-0017's admin-only gate; reuses `setPin()` and the audit pattern; every other admin surface stays 403. Follow-up from the 07-03 RBAC finding.
+
+**Vendor-invoice approval workflow** (any phase after P1): Morena + Janette, first-action-wins atomic transition, reuse existing approval machinery, full audit.
+
+## 7. Acceptance — anchored to Kelsey's validation window (~07-09 → 08-01)
+
+(a) Woodland iPad inbound data matches Kelsey's manual audit for the overlap period — every discrepancy she flags is triaged as bug or business rule and resolved or documented. (b) July COR generates with inventory tying to the Pool-A snapshot and headcount from the daily field. (c) Parity checklist (§4) validated line-by-line against the July workbook she keeps in parallel. (d) Retro-audit reproduces her known June/July findings. Her sign-off is the acceptance test; after 08-01, acceptance falls back to parity-checklist + retro-audit evidence.
+
+## 8. iPad rollout runbook (Bill-owned ops; recorded for context)
+
+Woodland go-live **~07-08/09**: Bill seeds operator accounts from Janette's roster (name, locale en/es/ur, processor role) via `/admin/users` (admin-only per ADR-0017); mounts, PWA install, per-device iPadOS language; **straight cutover after one supervised test load including the offline ride-out test** (wifi off mid-load → complete → sync verify; no paper fallback exists by design). Interim procedure until MyMRC ingestion rebuild: Janette manually enters expected hauls each morning via "Schedule a load" (`source=manual`, scrape-overwrite-protected); program/non-program split entered at verify (shipped fallback; verify gate enforces the math — doubles as the MRC segregation documentation for co-processed Stockton-redirect volume). Eugene follows ~week of 07-20, same runbook, Rick's roster.
+
+## 9. Survey ingestion (follow-up input, not a gate)
+
+Campaign `dr3-intel-2026-06` closes **Monday 2026-07-06** after Mary Scott submits; Leisha Wallace unsubmitted-by-design (export includes submitted invites only). Export lands at `docs/operations-intel/dr3-intel-2026-06/` via ClaudeSync draft PR — **merge required before findings are readable.** Fold into open items: CA mid-month cutoff rule (Rick), DR3#/Material# sequences (Janette), fee schedules + Re-TRAC cadence (Kelsey), GP path (Mary), floor-level insights (Juan, Patrick), plus every "What are we missing?" answer. Amendments to this document from survey findings arrive as follow-up commits/appends.
+
+## 10. Constraints (non-negotiable, from charter + ADRs)
+
+Decimal boundary rules at every money/weight edge · migration ordering + clean-replay invariant (ADR-0035) · audit-log invariants: rows never deleted, secrets never serialized (ADR-0007/0017) · no `<form>` — `onClick` handlers (hard rule #10) · rates/program rules in `state_program_rules`, never code · OR fuel surcharge structurally impossible · i18n via ADR-0015 loader pattern; operator surfaces en/es/ur · new schema/architecture decisions get their own numbered ADRs (0037+); this document is the mission record, not a substitute for ADR discipline · readiness-checklist gates from the 2026-06-23 handoff apply before any loads-feature activation beyond what is already shipped.
+
+**End of mission record. Claude Code: read §6 order, propose the P1 implementation plan as ADR drafts before writing code, and treat §7 as the definition of done.**
