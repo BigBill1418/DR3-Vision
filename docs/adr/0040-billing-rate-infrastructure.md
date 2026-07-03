@@ -1,6 +1,6 @@
 # ADR-0040 — Billing rate infrastructure (transport tiers, account overrides, container rentals, fuel prices, scoped rate-write access)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-03, approved by Bill)
 **Date:** 2026-07-03
 **Relates to:** mission record §3/§3.1/§6-P2 + locked decision #6 (Rick maintains rate tables, manager-scoped); Addendum A §A3; **Addendum B §B2/§B3/§B5** (corrected transport model, fuel mechanics); ADR-0037 (state_program_rules, Source.canonical_mileage/is_trans_charge); survey build-inputs §C
 **Series:** first of three P2 ADRs — **0040 rate infrastructure (this)**, 0041 invoice generation, 0042 COR generator

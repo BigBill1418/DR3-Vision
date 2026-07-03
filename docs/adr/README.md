@@ -47,6 +47,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0037   | Loads & inventory foundations (rules table, outbound/commodity model, processed-units close, running balance) | Accepted                                                        |
 | 0038   | MyMRC ingestion rebuild (JSON transport, mirror tables, run ledger, loud failure)                              | Accepted                                                        |
 | 0039   | 3-way audit engine + Audit Workbench + retro-audit (findings lifecycle, workbook imports, billing trust gate)   | Accepted                                                        |
+| 0040   | Billing rate infrastructure (transport tiers, account overrides, container rentals, fuel prices, can_manage_rates) | Accepted                                                        |
 
 ## How to write a new ADR
 
