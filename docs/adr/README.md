@@ -42,6 +42,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0032   | Reporting-only production adjustments, decoupled from bonus math                                              | Accepted                                                        |
 | 0033   | Payroll payout reconciliation guards + correctness gate                                                       | Accepted                                                        |
 | 0034   | Operational intelligence survey system (`/admin/operations/intel` + `/survey/{token}`)                        | Accepted                                                        |
+| 0035   | Migration ordering: clean-replay invariant + CI clean-DB migration gate                                       | Accepted                                                        |
 | 0036   | Survey daily reminders + campaign auto-close (thin scheduler + internal route + 20h gate; extends 0034)       | Accepted                                                        |
 
 ## How to write a new ADR

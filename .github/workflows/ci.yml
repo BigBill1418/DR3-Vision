@@ -62,3 +62,92 @@ jobs:
 
       - name: Production build (next build)
         run: npm run build
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Migration-check gate (ADR-0035).
+  #
+  # The class of bug this catches: a migration that PASSES against the live DB
+  # but FAILS on a fresh/empty database — because CI never ran migrations, it
+  # only reached prod. The 2026-06-22→23 survey migration
+  # (`20260622_operational_intelligence_survey`) declared a uuid FK to
+  # `users.id` which is actually TEXT, so `prisma migrate deploy` blew up only
+  # at deploy time (the live recovery: apply corrected TEXT tables by hand, mark
+  # applied, resync checksum). The same class includes an `ALTER TYPE … ADD
+  # VALUE` whose `CREATE TYPE` lives in a later-timestamped migration: GREEN
+  # against a live DB that already has the type, RED on every clean
+  # provision / DR restore-to-empty.
+  #
+  # This job spins up an EPHEMERAL Postgres 16 and runs the full migration set
+  # in order against an EMPTY database — exactly the path a fresh provision or a
+  # DR restore takes — so a bad migration fails CI BEFORE any deploy. Throwaway
+  # DB, no secrets, no fleet access.
+  migrations:
+    name: prisma migrate deploy (clean DB)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: dr3_ci
+        ports:
+          - 5432:5432
+        # Wait for the server to accept connections before the job's steps run.
+        options: >-
+          --health-cmd "pg_isready -U ci -d dr3_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Points at the ephemeral service container — a REAL, empty database.
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/dr3_ci?schema=public
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply ALL migrations to a clean DB (prisma migrate deploy)
+        # `migrate deploy` replays every migration in `prisma/migrations/` in
+        # timestamp order against the empty DB. A uuid-vs-TEXT FK mismatch, an
+        # ALTER-before-CREATE, a checksum drift, or any SQL that only works
+        # against an already-populated schema fails HERE, in CI, not on deploy.
+        run: npx prisma migrate deploy
+
+      - name: Assert migrations are in sync (prisma migrate status)
+        # Belt to the deploy step: after a clean apply, status must report the
+        # schema up to date. A non-zero exit (drift / failed / pending) fails CI.
+        run: npx prisma migrate status
+
+      - name: Report Prisma schema vs migrated DB drift (advisory — non-blocking)
+        # Surfaces a schema.prisma change that was NOT captured in a migration
+        # (the "edited schema, forgot to add the migration" class). `migrate
+        # diff --exit-code` returns 2 when a diff exists.
+        #
+        # NON-BLOCKING by design (continue-on-error): as of 2026-06-23 there is
+        # PRE-EXISTING, mostly-cosmetic drift on main (Prisma wants to rename
+        # hand-authored `*_fk` constraints to its `*_fkey`/`*_key` convention,
+        # plus a few benign structural items). Making this a hard gate today
+        # would red-on-arrival every PR and MASK the real ordering gate below.
+        # The HARD gate is the clean-DB `migrate deploy` + `migrate status`
+        # steps above (those catch tonight's uuid-vs-TEXT / ALTER-before-CREATE
+        # class). This step is a visible warning until the drift is reconciled
+        # in a dedicated migration; promote it to a hard gate (drop
+        # continue-on-error) once that lands. See ADR-0035.
+        continue-on-error: true
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+          && echo "schema in sync with migrated clean DB" \
+          || echo "::warning::schema.prisma drifts from the migrated clean DB (pre-existing, advisory — see ADR-0035). The hard ordering gate (migrate deploy + status) still passed."
