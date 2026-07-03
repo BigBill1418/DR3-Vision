@@ -2,9 +2,9 @@
 //
 // These are PLAIN TypeScript row interfaces, deliberately decoupled from Prisma.
 // The comparators (C1–C7) and the workbook checks consume ONLY these interfaces.
-// The DB-fetch layer that maps the sibling ADR-0037/0038 Prisma models onto
-// these shapes lives in `leg-fetchers.INTEGRATION-PENDING.ts` and is NOT compiled
-// into anything until the sibling tables land on main (see that file's header).
+// The DB-fetch layer that maps the merged ADR-0037/0038 Prisma models onto these
+// shapes lives in `leg-fetchers.ts` (`buildRunChecksForWindow`) — the comparators
+// never reference a Prisma model.
 //
 // Every leg row is shaped exactly per the sibling ADRs, incorporating their
 // post-Addendum-B revisions:
@@ -52,17 +52,22 @@ export function severityRank(s: Severity): number {
 
 export type LegSource = 'manual' | 'mymrc' | 'import';
 
-/** outbound_materials commodity taxonomy (ADR-0037 D4 — the invoice/billing axis). */
+/**
+ * `outbound_materials` commodity taxonomy — the daily-log-9 (ADR-0037 D4 as
+ * CORRECTED by Addendum B §B1: the office captures these nine, verbatim from
+ * `list!I`; the billing-workbook blocks landfill/steel/biomass/wte were a
+ * destination-driven mapping, not the captured commodities). Mirrors the merged
+ * Prisma `OutboundCommodity` enum.
+ */
 export type Commodity =
-  | 'landfill'
-  | 'steel'
-  | 'biomass'
-  | 'wte'
-  | 'wood'
+  | 'trash'
   | 'toppers'
   | 'foam'
+  | 'metal'
+  | 'wood'
   | 'cardboard'
   | 'plastic'
+  | 'shoddy'
   | 'cotton';
 
 /** Addendum B §B1 sub-categories. `renovation` splits the renovator channel. */
@@ -310,9 +315,12 @@ export interface InventoryDayRow {
   landfilled: number;
   /** The value the log/system stored as End (compared to the computed End). */
   recordedEnd: number | null;
-  // Non-program ledger (separate).
+  // Non-program ledger (separate). `npStripped` models Woodland co-processing of
+  // non-program units (merged `processed_units_daily.stripped_non_program`); it
+  // defaults to 0 for legs/fixtures that don't track a separate NP strip.
   npRecordedStart: number | null;
   npInbound: number;
+  npStripped?: number;
   npSold: number;
   npLandfilled: number;
   npRecordedEnd: number | null;

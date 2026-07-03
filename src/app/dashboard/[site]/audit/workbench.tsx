@@ -1,10 +1,11 @@
 // ADR-0039 D4a — the Audit Workbench frame. Renders three rollups (inbound
 // source-type / outbound commodity×sub-category / inventory day-ledger) from the
-// typed provider. The shipped provider is a STUB (integration_pending): the UI
-// shows honest empty states and names each drill-down wiring point — it never
-// fabricates data. Swap `stubWorkbenchProvider` for the real one post-merge.
+// typed provider. Live against the merged ADR-0037 tables via
+// `dbWorkbenchProvider`; an empty window renders an honest "no activity" state
+// (never fabricated data), and each frame names its drill-down wiring point.
 
-import { stubWorkbenchProvider } from '@/lib/audit/workbench-providers';
+import { prisma } from '@/lib/prisma';
+import { dbWorkbenchProvider } from '@/lib/audit/workbench-providers';
 
 function Frame({
   title,
@@ -33,6 +34,14 @@ function PendingEmptyState({ note }: { note: string }) {
   );
 }
 
+function NoActivity({ what }: { what: string }) {
+  return (
+    <div className="rounded border border-dashed border-gray-200 bg-gray-50 px-3 py-5 text-center text-xs text-gray-400">
+      No {what} recorded in this window.
+    </div>
+  );
+}
+
 export async function AuditWorkbench({
   siteId,
   windowStartISO,
@@ -42,7 +51,7 @@ export async function AuditWorkbench({
   windowStartISO: string;
   windowEndISO: string;
 }) {
-  const rollups = await stubWorkbenchProvider.rollups(siteId, windowStartISO, windowEndISO);
+  const rollups = await dbWorkbenchProvider(prisma).rollups(siteId, windowStartISO, windowEndISO);
   const pending = rollups.state === 'integration_pending';
 
   return (
@@ -58,6 +67,8 @@ export async function AuditWorkbench({
       >
         {pending ? (
           <PendingEmptyState note={rollups.pendingNote} />
+        ) : rollups.inboundBySourceType.length === 0 ? (
+          <NoActivity what="inbound units" />
         ) : (
           <ul className="text-sm text-gray-800">
             {rollups.inboundBySourceType.map((r) => (
@@ -75,6 +86,8 @@ export async function AuditWorkbench({
       >
         {pending ? (
           <PendingEmptyState note={rollups.pendingNote} />
+        ) : rollups.outboundByCommodity.length === 0 ? (
+          <NoActivity what="outbound materials" />
         ) : (
           <ul className="text-sm text-gray-800">
             {rollups.outboundByCommodity.map((r) => (
@@ -92,6 +105,8 @@ export async function AuditWorkbench({
       >
         {pending ? (
           <PendingEmptyState note={rollups.pendingNote} />
+        ) : rollups.inventoryLedger.length === 0 ? (
+          <NoActivity what="inventory movement" />
         ) : (
           <table className="w-full text-left text-sm text-gray-800">
             <thead>

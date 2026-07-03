@@ -19,7 +19,7 @@ function computedEnd(r: InventoryDayRow): number | null {
 
 function computedNpEnd(r: InventoryDayRow): number | null {
   if (r.npRecordedStart === null) return null;
-  return r.npRecordedStart + r.npInbound - r.npSold - r.npLandfilled;
+  return r.npRecordedStart + r.npInbound - (r.npStripped ?? 0) - r.npSold - r.npLandfilled;
 }
 
 export function c6InventoryContinuity(

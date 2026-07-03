@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { ingestWorkbook } from '@/lib/audit/workbook-import';
-import { inMemoryAliasResolver } from '@/lib/audit/workbook/site-alias';
+import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,9 +47,10 @@ export async function POST(req: Request): Promise<Response> {
   const bytes = new Uint8Array(await file.arrayBuffer());
 
   try {
-    // The alias resolver is wired to ADR-0037's source_aliases post-merge; until
-    // then it resolves nothing, so unknown site names surface honestly as
+    // Resolve workbook site names through ADR-0037's `source_aliases` (canonical
+    // Source.name first, then the alias table). Unknown names surface honestly as
     // `unresolved_site` findings rather than being dropped.
+    const resolver = await sourceAliasResolver(prisma);
     const result = await ingestWorkbook({
       db: prisma,
       siteId: site.id,
@@ -58,7 +59,7 @@ export async function POST(req: Request): Promise<Response> {
       buffer: bytes,
       window: { siteId: site.id, startISO: windowStart, endISO: windowEnd },
       periodLabel: typeof periodLabel === 'string' ? periodLabel : null,
-      resolver: inMemoryAliasResolver({}),
+      resolver,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {

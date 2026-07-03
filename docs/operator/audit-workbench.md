@@ -75,10 +75,13 @@ Transcribes the shortcuts Kelsey hand-built into the daily log:
   auto weight derivation.
 - **Inventory day-ledger** — the rolling balance with reconciliation deltas.
 
-> **Current status:** the Workbench frames show an **"integration pending"** empty
-> state. They activate automatically once the ADR-0037 loads/inventory tables
-> land — until then they intentionally show no data rather than fabricating it.
-> Each frame names its drill-down target for the wiring.
+> **Status: live.** The Workbench reads the loads/inventory tables (ADR-0037)
+> directly. A frame with nothing to show for the selected window renders an honest
+> **"No … recorded in this window."** line — never fabricated numbers. The inventory
+> ledger reuses the ONE shared running balance (`computeRunningBalance`), so its
+> day-by-day End matches every other inventory surface exactly; the physical-count
+> Δ column is the reconciliation gap against a snapshot taken that day. Each frame
+> names its drill-down target (loads/inventory list, filtered to the cell).
 
 ## Retro-audit: importing a historical workbook (admin)
 
@@ -106,9 +109,18 @@ detected template generation, staged row count, and status.
 ## Nightly sweep
 
 A daemon fires at **02:30 America/Los_Angeles** and audits a trailing 14-day
-window per site. It writes an `audit_runs` ledger row every time. A healthy run is
-silent; only a **failed** run pages `dr3-vision-system` (fingerprinted per site).
-You can also run any window on demand from the review surface.
+window per site over the **live** legs (C1–C7 run against the Vision loads /
+inventory tables and the MyMRC mirrors). It writes an `audit_runs` ledger row
+every time. A healthy run is silent; only a **failed** run pages
+`dr3-vision-system` (fingerprinted per site).
+
+You can also run any window **on demand** (`POST /api/audit/<site>/run` with an
+optional `windowStart`/`windowEnd`; a manager reaching that site, or an admin) —
+same engine, `trigger = on_demand` in the ledger. A window ending today keeps the
+grace clocks (C3 EOD+1, C7 not-yet-late); a purely historical window elapses every
+clock. Because C7's "entered in MyMRC" instant is read from the matched mirror row
+(no Vision-side submit column exists), a record missing from the mirror past its
+contract deadline surfaces as an overdue finding.
 
 ## Billing trust gate (for P2)
 

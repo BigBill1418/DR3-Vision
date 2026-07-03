@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { runAuditSweep } from '@/lib/audit/sweep';
+import { buildRunChecksForWindow } from '@/lib/audit/leg-fetchers';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -32,7 +33,7 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  const summary = await runAuditSweep({ db: prisma });
+  const summary = await runAuditSweep({ db: prisma, runChecks: buildRunChecksForWindow(prisma) });
   log.info(
     {
       runs: summary.runs.length,
