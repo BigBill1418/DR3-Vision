@@ -20,6 +20,7 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/bonus/close-months',
     '/api/internal/bonus/escalation-check',
     '/api/internal/survey/reminder-tick', // ADR-0036 — the 2026-07-03 regression
+    '/api/internal/audit/sweep', // ADR-0039 — same loopback-guarded cron pattern
     '/operator',
     '/operator/site',
     '/survey/sometoken',

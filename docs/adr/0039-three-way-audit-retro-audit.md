@@ -173,3 +173,67 @@ from Rick Q11) · fingerprint dedupe + auto-resolve lifecycle · workbook parser
 against fixtures for all three template generations + a synthetic sum-range-drift
 workbook (must flag the dropped fuel rows) · gate function (block / override /
 clean) · run-failure paging · migration clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-03)
+
+Implemented on branch `feat/adr-0039-audit-engine` (engine + workbench + retro).
+All gates green: typecheck 0 · eslint 0 (touched) · full vitest (1174 tests) ·
+`next build` · migration clean-replays standalone on throwaway PG16.
+
+### Dependency isolation (the load-bearing constraint)
+
+ADR-0037 and ADR-0038 tables were NOT yet on `main` during this build. To keep
+the module type-checking and building against current `main`:
+
+- `src/lib/audit/types.ts` defines **plain TS row interfaces** for every leg
+  (`InboundLegRow`, `ProcessedLegRow`, `OutboundLegRow`, `MirrorHaulRow`, …),
+  shaped exactly per the sibling ADRs including their post-Addendum-B revisions
+  (program/non-program splits, outbound commodity × sub-category with nullable
+  `wholeUnits`, the §B4 close fields). **Comparators consume ONLY these
+  interfaces** — never a sibling Prisma model.
+- The DB-fetch layer that maps sibling Prisma models → these interfaces is
+  `src/lib/audit/leg-fetchers.INTEGRATION-PENDING.ts`, written best-effort
+  against the specced shapes but **kept out of compilation** via a
+  `/* eslint-disable */` + `// @ts-nocheck` header (tsconfig's `**/*.ts` glob
+  would otherwise pick it up). It is imported by nothing compiled. See the
+  "INTEGRATION-PENDING" merge checklist at the top of that file.
+- The nightly sweep (`src/lib/audit/sweep.ts`) takes the comparator runner via
+  an **injected `runChecks` callback** so the compiled code never references a
+  sibling model. Until integration, no callback is passed → the sweep is a clean
+  no-op that still writes an `audit_runs` record.
+
+### Own tables only
+
+The migration creates **only this ADR's tables** — `audit_findings`,
+`audit_check_config`, `workbook_imports`, `workbook_import_rows`, plus the
+`audit_runs` ledger (needed for the "writes a run record" requirement and the
+freshness/deadman surface, mirroring ADR-0038's `mymrc_sync_runs`). It references
+no sibling table. It was generated with `prisma migrate diff` and then trimmed to
+the additive objects only (the raw diff surfaced pre-existing drift between the
+hand-written migrations and `schema.prisma` — bonus_/survey_ constraint renames —
+which is NOT part of this change and was excluded).
+
+### exceljs choice
+
+The repo had **no** xlsx library (`papaparse` is CSV-only), so `exceljs@^4.4.0`
+was added as a dependency for the workbook parser. Rationale: pure-JS, actively
+maintained, reads `.xlsm` by ignoring the VBA part, and can both read and write
+(the test fixtures are synthesized with it, so the suite never needs the real —
+and unavailable — daily-log file). Alternatives considered: `xlsx`/SheetJS (the
+open-source CE build has had maintenance/security concerns and a heavier surface).
+
+### Things discovered
+
+- **Business-day helper reused, not reinvented**: `addBusinessDays(date, n,
+  holidays)` already existed in `src/lib/compliance.ts` (holiday-aware, UTC
+  day-key based). C7 reuses it via thin ISO-day-key wrappers in
+  `comparators/helpers.ts`.
+- **Fingerprint window-independence**: record-level checks (C1/C3/C7) fingerprint
+  on the record identity, NOT the window, so the same discrepancy dedupes across
+  overlapping sweep windows and a later retro run — the `fingerprint UNIQUE`
+  column then makes upsert-by-fingerprint the natural cross-window primitive.
+- **Workbench provider is stubbed, not faked**: the three rollup frames render
+  `integration_pending` empty states from a typed provider until the ADR-0037
+  tables land. No fabricated data (operator directive).
+- **UI is English-first** for this office super-admin surface (permitted by
+  ADR-0037 consequences); the operator iPad flow is untouched.

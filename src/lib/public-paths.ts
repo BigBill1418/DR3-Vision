@@ -31,6 +31,13 @@ export function isPublic(pathname: string): boolean {
   // follows the redirect to a 200 HTML page, and the tick silently no-ops while
   // logging success (bit us on the first 09:00 PT fire, 2026-07-03).
   if (pathname.startsWith('/api/internal/survey/')) return true;
+  // ADR-0039 — audit nightly-sweep cron endpoint: identical loopback-guarded
+  // internal-route pattern. Same 2026-07-03 lesson as the survey route above —
+  // WITHOUT this exemption the middleware 307s the session-less cron POST to
+  // /login, the daemon's fetch follows to a 200 HTML page, and the sweep silently
+  // no-ops while logging success. The daemon uses `redirect:'manual'` as the
+  // second line of defence; this exemption is the first.
+  if (pathname.startsWith('/api/internal/audit/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.
