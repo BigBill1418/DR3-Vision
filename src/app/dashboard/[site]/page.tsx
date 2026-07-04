@@ -126,6 +126,17 @@ export default async function SiteDashboardPage({ params }: Props) {
             >
               Reconciliation
             </Link>
+            {/* ADR-0042 — COR (Exhibit 5) is a California-only surface; hidden for
+                Oregon (no Exhibit 5 exists there). The page itself also 404s for OR. */}
+            {site.jurisdiction === 'california' && (
+              <Link
+                href={`/dashboard/${site.code}/cor`}
+                className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
+                data-testid="dashboard-cor-link"
+              >
+                COR
+              </Link>
+            )}
           </nav>
         </header>
 

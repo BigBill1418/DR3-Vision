@@ -2170,3 +2170,112 @@ model InvoiceLine {
   @@index([invoice_id, position])
   @@map("invoice_lines")
 }
+
+// ADR-0042 — COR
+//
+// Exhibit 5: the Certificate of Recycling, Employment and Inventory. Monthly,
+// per CA facility (Woodland — CA jurisdiction only; there is NO Exhibit 5 in
+// Oregon and the service throws a typed error for an OR site). Currently
+// hand-written and signed under penalty of perjury; the motivating defect is the
+// June copy whose headcount reads "15 or 18" depending on who squints. Vision
+// pre-fills every number it can prove (D2), a human reviews, and a human signs.
+// Governing principle (mission, verbatim): Vision pre-fills and renders; a human
+// always reviews and signs; Vision NEVER auto-certifies. The rendered PDF's
+// signature block is therefore EMPTY (Rick prints, signs, submits) — D3.
+//
+// Same immutable-version discipline as ADR-0041 invoices (D1): a draft
+// regenerates freely (prior draft voided, version+1); a FINALIZED certificate is
+// immutable and is corrected only by a NEW version in a `supersedes_id` chain,
+// both rows retained (the audit trail IS the point). The three pre-filled numbers
+// each carry provenance JSON (`inventory_source` / `headcount_source`): the
+// inventory figure is the ONE pool-aware running balance (ADR-0037 D6) cross-
+// referenced to the nearest physical snapshot; the FT/PT split is the ONE human
+// judgment, entered at review with the daily-close pre-fill retained.
+//
+// COORDINATION (mirrors the ADR-0040 / ADR-0041 block headers): this block is
+// self-contained at the end of the schema. The FK columns to sibling-owned models
+// (`site_id`, and the audit-actor columns `prepared_by`/`finalized_by`) are plain
+// scalars — their referential-integrity constraints are created at the DB level in
+// the migration `20260708_cor_certificates`, exactly as the ADR-0041 invoices
+// block does. The ONE Prisma relation here is the `cor_certificates` self-relation
+// for the supersede chain, wholly owned by this ADR. `signer_name`/`signer_title`
+// are DENORMALIZED onto each certificate at generation from the site config
+// (`cor_site_config`) so a title change never rewrites a finalized artifact.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0042 D1 — draft regenerates freely; finalized is immutable (supersede
+/// chain for corrections); void discards. Parallels `InvoiceStatus`.
+enum CorStatus {
+  draft
+  finalized
+  void
+}
+
+/// ADR-0042 D2.3 — site-scoped signer config for the COR. Standardized, NOT typed
+/// per certificate: Rick Albritton, title seeded "Transportation Manager" (what
+/// the June COR read) — flagged TBC with MRC. A confirmed title is ONE row edit,
+/// never a code change and never retyped per certificate. One row per CA site.
+model CorSiteConfig {
+  id           String   @id @default(uuid())
+  site_id      String   @unique // FK → sites.id (constraint in migration)
+  signer_name  String
+  signer_title String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@map("cor_site_config")
+}
+
+/// ADR-0042 D1 — an immutable-versioned Certificate of Recycling, Employment and
+/// Inventory. One (site, cover_month) may have many versions; at most one is
+/// not-void within a supersede chain. `cover_month` is the first-of-month
+/// @db.Date the certificate covers. Every printed number is provable: the three
+/// pre-filled figures each carry a provenance JSON (D2); the FT/PT split is the
+/// single human judgment, null until entered at review and REQUIRED at finalize.
+model CorCertificate {
+  id            String    @id @default(uuid())
+  site_id       String // FK → sites.id (constraint in migration)
+  cover_month   DateTime  @db.Date // first-of-month @db.Date
+  version       Int
+  // Self-relation: a new version SUPERSEDES the finalized row it corrects. The
+  // chain is append-only; nothing in it is ever edited or deleted.
+  supersedes_id String?
+  supersedes    CorCertificate?  @relation("CorSupersede", fields: [supersedes_id], references: [id])
+  superseded_by CorCertificate[] @relation("CorSupersede")
+  status        CorStatus        @default(draft)
+
+  // D2.1 — unprocessed inventory at month close = the pool-aware running balance
+  // (ADR-0037 D6) as of the month's last day, cross-referenced to the nearest
+  // physical snapshot. `inventory_source` records the anchor snapshot id, the
+  // computed figure, and any reconcile delta in between (drill-down provenance).
+  inventory_units  Int
+  inventory_source Json
+
+  // D2.2 — FT/PT headcount. The daily close captures TOTALS, not an FT/PT split;
+  // the preparer enters the split at review (they know the roster). Null until
+  // entered; BOTH are REQUIRED at finalize. `headcount_source` retains the daily-
+  // close pre-fill (month-end counts + the month's consulted close-row ids + method).
+  ft_headcount     Int?
+  pt_headcount     Int?
+  headcount_source Json
+
+  // D2.3 — signer block, denormalized from `cor_site_config` at generation.
+  signer_name  String
+  signer_title String
+
+  prepared_by  String? // users.id (bare column — see block header)
+  prepared_at  DateTime  @default(now())
+  finalized_by String?
+  finalized_at DateTime?
+
+  // D3 — rendered artifact key in R2 (`cor/…`). Null until rendered.
+  pdf_storage_key String?
+  notes           String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@index([site_id, cover_month])
+  @@index([site_id, status])
+  @@index([supersedes_id])
+  @@map("cor_certificates")
+}

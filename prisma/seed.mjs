@@ -372,6 +372,25 @@ async function seedStateProgramRules(siteIds) {
 // meanwhile). `account_haul_rates` and `container_rental_sites` are seeded EMPTY too
 // (populated by Rick from the workbook only after he confirms current values;
 // seeding contested numbers would launder a discrepancy into "truth").
+// ADR-0042 D2.3 — the COR signer block, standardized per CA site (NOT typed per
+// certificate). Woodland is the only CA facility; Eugene (OR) has no Exhibit 5.
+// Title "Transportation Manager" is what the June COR read — flagged TBC with MRC
+// (docs/QUESTIONS.md Q-5); confirming it is ONE row edit, never a code change.
+async function seedCorSiteConfig(siteIds) {
+  const woodland = siteIds.get('woodland');
+  if (!woodland) throw new Error('cor_site_config seed: missing woodland site id');
+  const data = {
+    site_id: woodland,
+    signer_name: 'Rick Albritton',
+    signer_title: 'Transportation Manager',
+  };
+  await prisma.corSiteConfig.upsert({
+    where: { site_id: woodland },
+    create: data,
+    update: data,
+  });
+}
+
 async function seedTransportRateTiers() {
   const CA_FROM = new Date('2026-01-01T00:00:00Z');
   const tiers = [
@@ -1654,6 +1673,8 @@ async function main() {
   await seedProcessorBonusRules(siteIds);
 
   await seedStateProgramRules(siteIds);
+  console.log('▶ seeding cor_site_config (ADR-0042 D2.3 — CA signer)');
+  await seedCorSiteConfig(siteIds);
   console.log('▶ seeding transport_rate_tiers (ADR-0040 D1)');
   await seedTransportRateTiers();
   console.log('▶ seeding document_sequences (ADR-0041 — DR3# counter)');

@@ -20,6 +20,14 @@ export function isPublic(pathname: string): boolean {
   // it without an auth redirect. The route's own loopback / cf-connecting-ip 404
   // guard is the real protection (the public tunnel still gets 404).
   if (pathname.startsWith('/internal/bonus-pdf/')) return true;
+  // ADR-0042 — internal COR print source (T/D3): the session-less Playwright
+  // generator (@/lib/cor/pdf.ts) navigates here over loopback to render the
+  // certificate PDF. Same loopback / cf-connecting-ip 404 guard as the bonus-pdf
+  // route is the real protection (the public tunnel still gets 404); this
+  // exemption just stops the auth middleware bouncing the session-less generator
+  // to /login. WITHOUT it the fetch follows the 307 to a 200 HTML login page and
+  // Playwright prints the login screen (the ADR-0036 regression, made mandatory).
+  if (pathname.startsWith('/internal/cor-pdf/')) return true;
   // Internal bonus cron / seed endpoints (close-months T-125, escalation-check,
   // generate-pdf T-321): same loopback-guarded pattern — each route 404s any
   // public-tunnel request and optionally checks a bearer token, so the auth
