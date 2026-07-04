@@ -2149,7 +2149,7 @@ model Invoice {
 }
 
 /// ADR-0041 D1 — one priced line with full provenance. `line_code` is the
-/// workbook §3.1 map code ('B6','B7','B8','B15','B20','B22','B16.freight',
+/// workbook §3.1 map code — LEAF lines only ('B6','B7','B8','B20','B22.offset','B16.freight',
 /// 'B16.fuel','B16.rentals','B16.event_freight','satellite'). `rate_ref` records
 /// WHICH rule/tier/override row priced it; `source` records the query window +
 /// the row ids/counts that produced the number (drill-down provenance). A line

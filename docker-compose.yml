@@ -211,7 +211,7 @@ services:
     # Fail-soft: when MYMRC_*_USERNAME / MYMRC_*_PASSWORD are unset,
     # the worker logs "creds not configured, skipping" and exits 0
     # without ntfy publish — that's an operator state, not a system
-    # error. Drop credentials per `docs/operator/mymrc-setup.md` and
+    # error. Drop credentials per `docs/operator/mymrc-ingestion.md` and
     # the next hourly tick begins populating the queue.
     image: dr3-vision-app:local
     container_name: dr3-vision-mymrc-scrape
@@ -222,7 +222,7 @@ services:
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
       # MyMRC credentials — optional file. When absent, worker no-ops
-      # per-tick and never alerts. See docs/operator/mymrc-setup.md.
+      # per-tick and never alerts. See docs/operator/mymrc-ingestion.md.
       - path: /home/bbarnard065/.dr3-vision-secrets/mymrc.env
         required: false
       # Re-uses the same ntfy publisher token as the app + migrate
