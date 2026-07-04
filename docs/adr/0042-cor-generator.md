@@ -108,3 +108,50 @@ refusal on tampered figure · FT/PT entry audit trail (pre-fill retained) ·
 lifecycle immutability matrix (finalized rejects mutation; supersede chains) ·
 CA-only typed error for OR sites · PDF snapshot structure test · signer block
 from config incl. title change without code · migration clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-04)
+
+Built as accepted. Files:
+
+- **Schema + migration `20260708_cor_certificates`** (one contiguous end-block
+  `// ADR-0042 — COR`): `cor_certificates` (D1, immutable-versioned, supersede
+  self-relation) + `cor_site_config` (D2.3 signer) + enum `CorStatus`. Bare-FK
+  convention (site_id constraints at the DB level in the migration, no Prisma
+  relation on `Site`), mirroring ADR-0040/0041. Clean-replays on empty PG16;
+  sorts after `20260707_invoice_generation`.
+- **Service (`src/lib/cor/`)**: `prefill.ts` (the three numbers with provenance —
+  inventory via the ONE `onHand` balance as of month-end + anchor snapshot ref +
+  reconcile delta; headcount pre-fill from the month-end close + full series);
+  `service.ts` (`generateCorDraft`, `setCorHeadcountSplit`, the
+  `assertCorInventoryReconciles` pre-render tripwire, CA-only guard, reads);
+  `lifecycle.ts` (finalize / supersede / void + `canFinalize`, mirroring ADR-0041
+  semantics — not importing them); `signer.ts`; `view.ts` (typed errors +
+  `toCorView`); `route-helpers.ts`.
+- **Render (D3)**: internal loopback-guarded print route
+  `/internal/cor-pdf/[id]` (added to `src/lib/public-paths.ts` + its regression
+  test — the mandatory ADR-0036 lesson). `pdf.ts` renders via the bonus-PDF
+  Playwright pipeline pattern FROM the stored row, re-asserts the reconcile
+  tripwire before render, stores to R2 under `cor/`. **Signature block renders
+  EMPTY** (D3, verbatim).
+- **UI (D4)**: `/dashboard/[site]/cor` — CA-only (Oregon 404s; nav link hidden for
+  OR), month picker, three numbers with drill-down, FT/PT entry, display-only
+  capacity banner (indoor limit, warn at 90% — derived from the seeded site
+  config, no hardcoded number), version diff, penalty-of-perjury finalize
+  confirmation. `onClick` throughout (hard rule #10), site-scoped (#2).
+- **Observability (D5)**: `cor.generate` / `cor.finalize` / `cor.supersede` /
+  `cor.reconcile.refused` structured logs carry cert id / month / site / actor;
+  typed errors carry numbers (`CorReconcileMismatchError` carries stored +
+  recomputed). A COR has no PII.
+- **June-4,062 fixture (§7-b)**: `src/lib/cor/prefill.test.ts` reproduces the
+  Woodland June inventory from an anchor + June flow netting to 4,062 via the
+  balance function's own semantics (fixture math documented in the test).
+
+**Decision recorded (D2.3 config choice):** implemented as a **simple site-scoped
+config row** (`cor_site_config`), NOT a `state_program_rules`-style effective-dated
+table — the signer is a single standing fact per site. Seeded Woodland with
+Rick Albritton / "Transportation Manager"; the title is **flagged TBC with MRC**
+(`docs/QUESTIONS.md` Q-5) and is a one-row edit to confirm.
+
+**Reconcile placement:** the ADR-0033-style tripwire runs in BOTH `finalizeCor`
+(never freeze a stale draft) and `generateCorPdf` (never render/store a figure
+that disagrees with the ledger) — refusing with both numbers on either path.

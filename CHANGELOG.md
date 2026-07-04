@@ -5,6 +5,47 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-04 (ADR-0042 — COR generator: Exhibit 5 pre-fill + human-signs-always boundary)
+
+- **ADR-0042 COR generator (P2, third of three).** Generates the monthly CA
+  Certificate of Recycling, Employment and Inventory (Exhibit 5) with every number
+  pre-filled from provable Vision data — a human reviews, enters the FT/PT split,
+  and **signs the printed copy** (Vision never auto-certifies; the rendered
+  signature block is empty). CA-only: an Oregon site gets a typed error / 404 (no
+  Exhibit 5 exists there).
+- **Schema (one additive migration `20260708_cor_certificates`, sorts after
+  ADR-0041's `20260707_…`; clean-replays on empty PG16):** `cor_certificates`
+  (immutable-versioned artifact with a `supersedes_id` chain — draft regenerates
+  freely, finalized is immutable, corrections are new versions) + `cor_site_config`
+  (site-scoped signer) + enum `CorStatus`. `site_id` FKs are DB-level (migration),
+  keeping the ADR block self-contained (no back-relation on `Site`), mirroring
+  ADR-0040/0041.
+- **Service (`src/lib/cor/`, TDD):** `prefill.ts` pre-fills the three numbers with
+  provenance — inventory = the ONE pool-aware running balance (ADR-0037 D6) as of
+  month-end + anchor-snapshot ref + reconcile delta (`inventory_source`); headcount
+  = the month-end daily-close totals + the full month series (`headcount_source`),
+  the FT/PT split entered by the preparer at review with the pre-fill retained.
+  `lifecycle.ts` finalize / supersede / void mirror the ADR-0041 immutability
+  discipline (manager-of-site or admin; audited). A **pre-render reconcile tripwire**
+  (ADR-0033 style) recomputes inventory via the one balance function and refuses on
+  mismatch with both numbers, in both finalize and PDF render.
+- **Render (D3):** internal loopback-guarded print route `/internal/cor-pdf/[id]`
+  (added to the middleware public-paths allowlist + its regression test — the
+  mandatory ADR-0036 lesson) rendered to PDF via the bonus-PDF Playwright pipeline
+  FROM the stored row, stored to R2 under `cor/`. The **signature block renders
+  EMPTY** — Rick prints, signs, submits.
+- **UI (D4):** `/dashboard/[site]/cor` (CA-only; hidden/404 for OR) — month picker,
+  the three numbers with drill-down (inventory → balance ledger + snapshot;
+  headcount → the daily-close series), FT/PT entry, display-only capacity banner,
+  version diff, penalty-of-perjury finalize confirmation, print-and-sign download.
+- **Observability (D5):** generation / finalize / supersede / reconcile-refusal log
+  with certificate id / month / site / actor; typed errors carry the numbers. No PII.
+- **June acceptance fixture (§7-b):** `prefill.test.ts` reproduces the Woodland June
+  2026 inventory of **4,062** from the balance function's own semantics.
+- **Config choice (D2.3):** signer implemented as a simple site-scoped `cor_site_config`
+  row (Rick Albritton / "Transportation Manager"); the title is flagged **TBC with
+  MRC** (`docs/QUESTIONS.md` Q-5) — a one-row edit to confirm, never a code change.
+
 ### Added — 2026-07-04 (ADR-0041 capture half — collection events, OR counts, DR3# sequences)
 
 - **ADR-0041 capture half (P2; the invoice-engine half ships separately).** Closes the

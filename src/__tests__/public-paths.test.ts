@@ -17,6 +17,7 @@ describe('middleware public-path exemptions', () => {
     '/metrics',
     '/api/auth/callback/microsoft-entra-id',
     '/internal/bonus-pdf/abc123',
+    '/internal/cor-pdf/abc123', // ADR-0042 — COR print source, same loopback-guarded pattern
     '/api/internal/bonus/close-months',
     '/api/internal/bonus/escalation-check',
     '/api/internal/survey/reminder-tick', // ADR-0036 — the 2026-07-03 regression
