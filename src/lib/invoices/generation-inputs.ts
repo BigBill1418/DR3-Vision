@@ -3,10 +3,9 @@
 // ADR-0037/0040 named resolvers so a rate is NEVER hardcoded and a missing input
 // fails LOUD (freight-unresolvable, missing-fuel-price) rather than billing $0.
 //
-// The events (B8 / event-freight) leg is INTEGRATION-PENDING: the sibling owns
-// `collection_events`. Until the merge wires `event-leg.ts`, `loadEventLeg`
-// returns an empty leg with `pending: true`, so the composers emit a B8 /
-// event-freight line at 0¢ with `source.pending` — never silently absent (D3/D6).
+// The events (B8 / event-freight) leg reads `collection_events` through
+// `event-leg.ts` (wired at merge); OR collection-site-count lines read the
+// stored `or_collection_site_counts` capture rows (entered once, never re-typed).
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
@@ -25,6 +24,7 @@ import type {
   RentalLeg,
 } from './generate';
 import type { EventCostRow, JsonValue } from './types';
+import { fetchEventCostRows } from './event-leg';
 
 /** The events leg the composers consume, plus the pending flag. */
 export interface EventLeg {
@@ -33,23 +33,47 @@ export interface EventLeg {
 }
 
 /**
- * Load the collection-events cost leg for a window. INTEGRATION-PENDING: returns
- * empty + `pending:true` until the sibling's `collection_events` feed is wired at
- * merge (swap for `fetchEventCostRows` from `event-leg.ts`). Kept as a single
- * named seam so the merge is a one-line change, not a refactor.
+ * Load the collection-events cost leg for a window — wired to the capture
+ * half's `collection_events` via `fetchEventCostRows` (the one-line integration
+ * this seam was designed for).
  */
 export async function loadEventLeg(
   siteId: string,
   windowStartISO: string,
   windowEndISO: string,
 ): Promise<EventLeg> {
-  // Observability: the events leg is priced at 0¢ with a pending marker until the
-  // sibling feed is wired — logged so a $0 events leg is never a silent surprise.
+  const events = await fetchEventCostRows(siteId, windowStartISO, windowEndISO);
+  return { events, pending: false };
+}
+
+/**
+ * OR collection-site-count lines from the STORED capture rows (the sibling's
+ * `or_collection_site_counts` entry surface) for a billing month. Stored rows
+ * are the canonical input; any request-supplied manual lines are appended after
+ * (both carry manual provenance — D2's honest island, now entered once).
+ */
+export async function loadOrCountManualLines(
+  siteId: string,
+  billingMonthISO: string,
+): Promise<import('./types').ManualLine[]> {
+  const monthKey = dayKeyUTCFromISO(billingMonthISO.slice(0, 8) + '01');
+  const [rows, rateCents] = await Promise.all([
+    prisma.orCollectionSiteCount.findMany({
+      where: { site_id: siteId, billing_month: monthKey },
+      orderBy: { location: 'asc' },
+    }),
+    resolveRateCents(siteId, 'satellite_collection_rate', monthKey),
+  ]);
   log.debug(
-    { op: 'invoice.events_leg', site_id: siteId, window: [windowStartISO, windowEndISO], pending: true },
-    '[invoices] events leg pending integration — priced at 0¢',
+    { op: 'invoice.or_count_lines', site_id: siteId, billing_month: billingMonthISO, rows: rows.length },
+    '[invoices] OR collection-site-count lines loaded from stored capture rows',
   );
-  return { events: [], pending: true };
+  return rows.map((r) => ({
+    description: r.location,
+    quantity: r.units,
+    amountCents: r.units * rateCents,
+    rateRef: { rule_kind: 'satellite_collection_rate', rate_cents: rateCents, count_row_id: r.id },
+  }));
 }
 
 /** UTC bounds for a @db.Date column over an inclusive `YYYY-MM-DD` window. */

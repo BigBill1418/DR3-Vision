@@ -12,7 +12,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
 import { composeProcessing, composeTransportation, composeCollectionSiteCount } from './generate';
-import { resolveProcessingInputs, resolveTransportationInputs } from './generation-inputs';
+import { resolveProcessingInputs, resolveTransportationInputs, loadOrCountManualLines } from './generation-inputs';
 import { windowForKind, billingMonthStartISO } from './periods';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import {
@@ -90,8 +90,10 @@ async function composeForKind(args: {
     });
     return composeTransportation(input);
   }
-  // or_collection_site_count — manual lines only (D2).
-  return composeCollectionSiteCount(args.manualLines);
+  // or_collection_site_count — STORED capture rows first (entered once on the
+  // sibling's or-counts surface), any request-supplied manual lines appended.
+  const storedLines = await loadOrCountManualLines(args.siteId, args.billingMonthISO);
+  return composeCollectionSiteCount([...storedLines, ...args.manualLines]);
 }
 
 export interface GenerateDraftArgs {
