@@ -109,7 +109,7 @@ export interface InvoiceComposition {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// B8 events integration contract (INTEGRATION-PENDING — sibling owns the table)
+// B8 events integration contract (wired 2026-07-04 — event-leg.ts reads collection_events)
 // ────────────────────────────────────────────────────────────────────────
 
 /**
@@ -118,7 +118,7 @@ export interface InvoiceComposition {
  * `collection_events`; this engine reads events ONLY through this interface, so
  * the two halves compile independently. The fetch that maps a real
  * `collection_events` row onto this shape lives in
- * `event-leg.INTEGRATION-PENDING.ts` (ts-nocheck, not compiled) and is wired at
+ * `event-leg.ts` and was wired at
  * merge. Until then the events leg is treated as zero-with-warning and the B8
  * line renders with `source.pending = 'events-integration'` — never silently
  * absent (D6).
