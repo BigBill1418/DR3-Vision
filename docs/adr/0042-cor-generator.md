@@ -1,6 +1,6 @@
 # ADR-0042 — COR generator (Exhibit 5: Certificate of Recycling, Employment and Inventory)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-04, approved by Bill)
 **Date:** 2026-07-04
 **Relates to:** mission record §5; Addendum B §B4 (daily-close fields, capacity); forward handoff §3.2; ADR-0037 (pool-aware balance, snapshots, daily close), ADR-0041 (immutable-version pattern reused)
 **Series:** third of three P2 ADRs — 0040 rates (built), 0041 invoices (building), **0042 COR (this)**
