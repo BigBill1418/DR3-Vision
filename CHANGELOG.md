@@ -5,6 +5,50 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-04 (ADR-0041 capture half — collection events, OR counts, DR3# sequences)
+
+- **ADR-0041 capture half (P2; the invoice-engine half ships separately).** Closes the
+  two capture gaps the invoice math needs — collection events and the DR3#
+  document-number sequence — plus Oregon collection-site counts. **Schema (one
+  additive migration `20260706b_events_and_sequences`, sorts after ADR-0040's
+  `20260706_…` and before the engine half's `20260707…`; clean-replays on empty
+  PG16):** three new tables — `collection_events` (daily-log Events tab: freight,
+  driver/labor hours + wages, mileage, per diem, misc — money in cents, dates
+  `@db.Date`), `or_collection_site_counts` (Oregon monthly per-location unit counts),
+  `document_sequences` (per-`(site, sequence_code)` atomic counter) — plus a nullable
+  `inbound_loads.dr3_number` column. FK constraints are DB-level (migration) so the
+  capture block stays self-contained (no back-relation fields on the sibling-touched
+  `Site` model), mirroring ADR-0040.
+- **Collection events (`src/lib/events/service.ts`, TDD):** create / list /
+  update-before-lock. **Wages are stored as entered**; the B5 rules (`driver_hourly`,
+  `general_labor_hourly`, `per_diem_nightly`, via the ADR-0037 program-rule resolver)
+  only DEFAULT blank wages from `hours × rate` — deviation is derivable, never flagged;
+  a missing rule leaves the wage null rather than blocking capture. **Mileage is
+  captured twice:** `mileage` (informational miles) + `mileage_cents` (the billed
+  dollars that feed the §3.1 B8 event total); freight is a distinct B8 term.
+  `EventCostRow` (`src/lib/events/types.ts`) + `eventMiscCents` are the cross-agent
+  seam the invoice engine codes against.
+- **Oregon collection-site counts (`src/lib/events/or-counts.ts`, TDD):** Eugene-scoped
+  create / list / update-before-lock; a non-Oregon site is refused with a typed
+  `JurisdictionNotAllowedError`. The $2.25/unit rate stays in `state_program_rules`;
+  no invoice math here (the engine half consumes at merge).
+- **DR3# issuance (`src/lib/events/sequences.ts`, TDD + real-DB concurrency proof):**
+  `issueDocumentNumber` hands out a per-site number via a single atomic
+  `UPDATE … RETURNING` (row-lock serialized; a 64-way concurrent test against Postgres
+  yields 64 unique contiguous numbers). Woodland-style (CA) inbound loads get a
+  Vision-assigned DR3# at the office **verify** step (inside the verify transaction,
+  so a failed verify rolls the counter back); Eugene (OR) gets none; **Material # is
+  MyMRC-owned and never issued by Vision**. Trigger is `jurisdiction == california`
+  with a `TODO(B10-6)` to become a per-site config flag.
+- **Manager surfaces:** `/api/manager/[site]/events` (+ `[id]`) and
+  `/api/manager/[site]/or-counts` (+ `[id]`), and two new tabs (**Collection events**,
+  **OR collection counts**) on the loads/inventory page — admin-only behind the same
+  ADR-0037 D7 activation gate.
+- **Seed:** Woodland `dr3_number` counter seeded at a **safe-high `5000`** (> the June
+  daily-log ceiling 4805). **⚠ Operator action before go-live: align `next_value` to
+  the real current counter** (runbook: `docs/operator/events-and-sequences.md`).
+  Eugene gets no counter.
+
 ### Added — 2026-07-03 (ADR-0040 — billing rate infrastructure)
 
 - **Billing rate infrastructure (ADR-0040, P2; first of 0040/0041/0042).** Puts every

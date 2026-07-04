@@ -405,6 +405,33 @@ async function seedTransportRateTiers() {
   }
 }
 
+// ─── ADR-0041 (capture half; Addendum B6/B10-6) — document_sequences (DR3#) ──
+// Woodland (CA) gets a `dr3_number` counter issued atomically at the office verify
+// step. Eugene (Oregon) gets NO counter — their DR3# stays null (scan-timestamp
+// path). Material # is MyMRC-owned and is NEVER issued by Vision, so no counter for
+// it exists here.
+//
+// SAFE HIGH START (5000): the June daily-log DR3# ceiling observed in Addendum B6
+// was 4805. Seeding at 5000 guarantees a Vision-issued number can never collide
+// with a historical hand-written one during the transition.
+// ⚠ OPERATOR ACTION BEFORE GO-LIVE: align `next_value` to the REAL current DR3#
+// counter (ask Janette for the last number issued; set next_value = last + 1).
+// See docs/operator/events-and-sequences.md.
+async function seedDocumentSequences(siteIds) {
+  const woodland = siteIds.get('woodland');
+  if (!woodland) throw new Error('document_sequences seed: missing woodland site id');
+  const existing = await prisma.documentSequence.findUnique({
+    where: { site_id_sequence_code: { site_id: woodland, sequence_code: 'dr3_number' } },
+    select: { id: true },
+  });
+  if (!existing) {
+    // Create only when absent — never RESET a live counter that the app has advanced.
+    await prisma.documentSequence.create({
+      data: { site_id: woodland, sequence_code: 'dr3_number', next_value: 5000 },
+    });
+  }
+}
+
 async function seedSources(siteIds) {
   const rows = parseCsv('sources.csv');
   for (const r of rows) {
@@ -922,6 +949,7 @@ async function assertCounts() {
     bonus_pay_periods: 104, // 52 (2026) + 52 (2025) = 104 (ADR-0023 §Q3)
     bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
     transport_rate_tiers: 7, // ADR-0040 D1 CA freight zone table (no OR tiers seeded)
+    document_sequences: 1, // ADR-0041 Woodland dr3_number counter (Eugene has none)
   };
   // Runtime-growable tables: the seed sets a baseline, but the app legitimately
   // adds rows (users via the admin UI; sources/transporters may be extended).
@@ -945,6 +973,7 @@ async function assertCounts() {
     bonus_pay_periods: await prisma.bonusPayPeriod.count(),
     bonus_signature_chains: await prisma.bonusSignatureChain.count(),
     transport_rate_tiers: await prisma.transportRateTier.count(),
+    document_sequences: await prisma.documentSequence.count(),
     bonus_employees: await prisma.bonusEmployee.count(),
     bonus_employee_aliases: await prisma.bonusEmployeeAlias.count(),
     bonus_imports: await prisma.bonusImport.count(),
@@ -1627,6 +1656,8 @@ async function main() {
   await seedStateProgramRules(siteIds);
   console.log('▶ seeding transport_rate_tiers (ADR-0040 D1)');
   await seedTransportRateTiers();
+  console.log('▶ seeding document_sequences (ADR-0041 — DR3# counter)');
+  await seedDocumentSequences(siteIds);
   console.log('▶ seeding sources');
   await seedSources(siteIds);
   console.log('▶ seeding bonus pay periods');

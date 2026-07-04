@@ -1,136 +1,143 @@
-# ADR-0041 — Invoice generation (the six-invoice set, offset-line math, events capture, Rick's approval gate, GP export boundary)
+# ADR-0041 — Invoice generation (data-driven invoices, immutable versions, minimal event capture, DR3# sequences)
 
 **Status:** Accepted (2026-07-04, approved by Bill — D1–D6 walked through and approved individually)
-**Date:** 2026-07-03
-**Relates to:** mission record §3/§3.1/§4/§6-P2; Addendum B §B5 (rate constants), §B8 (two-artifact duplication this kills); ADR-0037 (operational data), ADR-0039 (billing trust gate), ADR-0040 (rates); survey build-inputs §C (Rick's flow + mid-month cutoff + trust bar)
-**Series:** second of three P2 ADRs — 0040 rates (accepted, built), **0041 invoices (this)**, 0042 COR generator
+**Date:** 2026-07-04
+**Relates to:** mission record §3/§3.1/§4/§6-P2; **Addendum B** §B1 (commodity/source
+model), §B2/B3 (freight/fuel — priced by ADR-0040), §B4/B5 (inventory + parameterized
+constants), §B6/B10-6 (document-number sequences), §B8 (event cost formula); ADR-0037
+(loads/inventory foundations, `state_program_rules`, verify gate); ADR-0039 (3-way
+audit billing-trust gate `gateForWindow`); ADR-0040 (rate infrastructure — the tables
+this layer reads)
+**Series:** third of the P2 trio — 0040 rate infrastructure, **0041 invoice generation
+(this)**, 0042 COR generator
 
 ## Context
 
-Workstream A's core: Vision generates what Rick assembles by hand today from
-"several spreadsheets" — and what the workbook silently under-reports through
-sum-range drift (§4.1). Kelsey validates line-by-line against her parallel July
-workbook (§7-c); Rick approves nothing he can't verify (survey Q9). Six invoices
-per month: **CA** mid-month processing, EOM processing (with the explicit offset
-line — the "$118,239 trade discount" artifact becomes an honest subtraction), EOM
-transportation; **OR** EOM processing, EOM transportation, collection-site count.
+P2 renders invoices from data. ADR-0040 put every rate into effective-dated tables;
+this ADR makes invoice construction a pure read of `state_program_rules` + those rate
+tables + operational data, produces immutable invoice versions with per-line
+provenance, and puts Rick's approval behind the ADR-0039 billing-trust gate. It also
+closes the last two capture gaps the invoice math needs but that no surface yet
+records: **collection events** (satellite runs billed as freight + labor, §B8) and
+the **DR3# document-number sequence** (§B6/B10-6).
+
+The build is split across two parallel agents to avoid collision:
+
+- **Capture half** — `collection_events`, Oregon collection-site counts, and DR3#
+  document-sequence issuance (this half; see the post-acceptance notes below).
+- **Engine half** — `invoices` / `invoice_lines` schema, the §3.1 generation math,
+  the approval flow, and the rendered outputs.
 
 ## Decisions
 
-### D1 — Invoice model: immutable versions, line-level provenance
+### D1 — Immutable invoice versions with line provenance _(engine half)_
 
-```
-invoices(id, site_id, kind enum(ca_processing_mid_month, ca_processing_eom,
-         ca_transportation_eom, or_processing_eom, or_transportation_eom,
-         or_collection_site_count), billing_month @db.Date, window_start,
-         window_end, version Int, supersedes_id?, status enum(draft, approved,
-         void), total_cents Int, generated_by, generated_at, approved_by?,
-         approved_at?, …audit)
-invoice_lines(id, invoice_id FK, line_code (e.g. 'B6','B7','B8','B20','B22',
-         'B16.freight','B16.fuel','B16.rentals'), description, quantity
-         Decimal?, rate_ref jsonb (which rule/tier/override row priced it),
-         amount_cents Int, source jsonb (the query window + row ids/counts
-         that produced the number), position)
-```
+An invoice is generated as an immutable version; a regeneration is a new version, not
+an edit. Every line carries provenance (which rule/rate row and which operational
+records priced it) so the retro-audit can trace any number back to its inputs.
 
-Draft invoices regenerate freely (new version, prior draft voided);
-**approved invoices are immutable** — corrections are a new version with
-`supersedes_id`, both retained (the audit trail IS the point). Totals are
-derived from lines at read; never hand-entered (Summary tab is "generated —
-never hand-entered", mission §4).
+### D2 — §3.1 math is pure computation over data _(engine half)_
 
-### D2 — The math, §3.1 verbatim, all inputs already data
+All inputs are now data (ADR-0037 operational records + ADR-0040 rates +
+`state_program_rules`). The invoice engine computes; it never re-types a rate or a
+total. Mid-month cutoff, offset lines, and the commodity→billing-block mapping
+(B10-5, pending Kelsey/Janette) resolve here.
 
-- **B6** processing = window's `processed_units_daily.stripped_program` ×
-  effective `processing_rate` (program units ONLY — Rick's rule; NP never bills).
-- **B7** = Σ `consumer_dropoffs.incentive_cents` (kind=incentive, paid in window).
-- **B8** event misc = Σ per-event (driver hours × driver_hourly + labor hours ×
-  general_labor_hourly + mileage + per diem + misc) — see D3.
-- **B15** = B6+B7+B8. **B20** mid-month = stripped_program **1st–15th regardless
-  of weekday** (Rick Q2, closes the open-register item) × rate. **B22 EOM =
-  B15 − B20**, rendered as an explicit labeled offset line.
-- **B16** transportation (separate invoice) = Σ `resolveFreightCents` over
-  transport-charged inbound loads (provenance ref per load) + event freight +
-  fuel surcharge (ADR-0040 `fuel.ts`: weekly EIA price, $5.05 trigger, per-load
-  miles = `Source.canonical_mileage`) + Σ active `container_rental_sites`
-  monthly rates.
-- **OR**: EOM processing only (no mid-month structurally — kind enum has no OR
-  mid-month value); transportation without fuel (structurally disallowed,
-  already guarded); collection-site count = $2.25 × site counts. ⚠ OR
-  collection-site count DATA has no capture surface yet (counts come from MRC's
-  remote sites) — ships as a manual-entry line set with provenance
-  `source=manual` until a feed exists; flagged in the open register.
+### D3 — Minimal capture: collection events, OR counts, DR3# sequences _(capture half)_
 
-### D3 — `collection_events` capture (the workbook Events tab, minimal)
+- **`collection_events`** — the daily-log Events tab (§B4/§B8). Per-event capture of
+  freight, driver/labor hours + wages, mileage, per diem, and misc. Wage amounts are
+  **stored as entered**; the B5 rules (`driver_hourly`, `general_labor_hourly`,
+  `per_diem_nightly`) only **default** blank wages from hours × rate — deviation is
+  derivable, never flagged. Money math lives in the engine half; this is capture only.
+- **Oregon collection-site counts** — hand-entered monthly per-location unit counts
+  (Eugene/OR only; the $2.25/unit rate stays in `state_program_rules`; no invoice
+  math here).
+- **DR3# document-number issuance** (§B6/B10-6) — a per-site atomic counter
+  (`document_sequences`); Woodland-style (CA) loads get a Vision-assigned DR3# at the
+  office verify step; Eugene (OR) does not. **Material # is MyMRC-owned and is never
+  issued by Vision.**
 
-```
-collection_events(id, site_id, event_date, customer, county?, slip_number?,
-    units Int?, freight_cents Int?, driver_hours Decimal?, driver_wages_cents?,
-    labor_hours Decimal?, labor_wages_cents?, mileage Int?, per_diem_cents?,
-    misc_cents?, retrac_id?, notes?, …audit)
-```
+### D4 — Rick's approval behind the billing-trust gate _(engine half)_
 
-Manager-scoped entry (site-scoped; same CRUD-lite pattern as outbound). Wage
-fields default from the B5 rules (driver $125/hr, labor $90/hr, per diem $275)
-but are stored as entered — events are irregular and the workbook stores actuals.
-Kelsey's role in events was "provide the worker" (Janette Q5) — entry lands with
-whoever runs the event; open register: confirm the owner.
+Invoice approval for a window is gated on the ADR-0039 3-way audit
+(`gateForWindow`) — an invoice cannot be approved for a window the audit does not
+trust.
 
-### D4 — Generation gate + Rick's approval flow
+### D5 — Rendered outputs _(engine half)_
 
-Generating a non-draft (approvable) invoice for a window REQUIRES the ADR-0039
-billing trust gate clean for that window (open findings above threshold →
-generation refuses with the finding list; super-admin override with justification,
-audited — ADR-0033 tripwire philosophy at month scale). The approval surface
-renders every line with **drill-down to its source rows** (the D1 `source` jsonb
-→ records), diff-vs-prior-version, and the window's audit findings inline.
-Approval = `can_manage_rates` NOT sufficient — approver is manager-of-site or
-admin, recorded with audit row. Approved invoices render to **xlsx** (exceljs —
-already a dependency) matching the workbook Summary/parity structure, plus a
-neutral **`invoice_export` JSON** (stable shape documented in the ADR) as the
-Great-Plains boundary — the GP adapter itself stays blocked on Mary's packet
-(open register), but the boundary ships now so the adapter is a consumer, not a
-refactor.
+Invoice/summary/offset-line renders + the GP export path.
 
-### D5 — Parity acceptance (§7-c) and what "parity" means now
+### D6 — Parity acceptance
 
-Acceptance = the §4 checklist line-by-line against Kelsey's July workbook for
-the processing + transportation invoices and the Paid-Unpaid/Inbound tabs.
-Commodities-block rendering is EXCLUDED from this ADR (the daily-log-9 →
-billing-11 mapping is still pending Kelsey/Janette, B10-5) — the invoice set
-doesn't need it; it joins the workbook-export surface when the mapping lands.
-
-### D6 — Observability (standing directive)
-
-Every line carries rate_ref + source provenance; generation writes one
-structured log per invoice (window, line count, total, gate verdict) and one per
-refused generation (finding count, codes); approval/void/supersede each audit +
-log. A generated total of 0¢ for a window with nonzero processed units is a
-typed error, never a silent zero (the ADR-0033 lesson at invoice scale).
+The generated July invoice must reproduce the parallel July workbook to the mission
+§4 parity checklist during Kelsey's validation window.
 
 ## Out of scope
 
-GP adapter (blocked on Mary — boundary ships here) · commodity→block workbook
-export (B10-5) · COR (**ADR-0042**) · TONU handling (open register; Rick
-mentioned it — needs a definition before it can bill) · rate/recovery alerts
-(P3) · Re-TRAC/MyMRC submission of any invoice data (Vision feeds GP and MRC
-paper flows; MyMRC entry stays the existing manual/1-day-deadline process).
+COR generation (**ADR-0042**); the commodity→billing-block mapping remains pending
+Kelsey/Janette (B10-5) at acceptance; TONU handling parked on the open register.
 
 ## Consequences
 
-- Three new tables (invoices, invoice_lines, collection_events), all additive.
-- The two-artifact duplication (§B8) dies: the daily log IS the input; the
-  invoice IS the output; nothing is maintained twice.
-- Rick's typo class (survey Q8: "a typo in load number can delay payment") dies
-  at the root — every number on an invoice is a query result with provenance.
-- Two honest manual islands remain, both flagged: OR collection-site counts
-  (no feed) and event actuals (irregular by nature).
+- Invoice construction becomes a pure, auditable read.
+- Three new capture tables + one nullable `inbound_loads.dr3_number` column, all
+  additive.
+- The DR3# counter must be aligned to the real current counter before go-live (see
+  the operator doc).
 
-## Test plan (summary)
+---
 
-Line-math matrix per invoice kind on fixture data (incl. B22 = B15−B20 exactness,
-mid-month boundary Jun 15/16, program-only billing with NP present, zero-window
-typed error) · freight/fuel/rentals composition with provenance refs asserted ·
-gate refusal + override paths · version/supersede immutability (approved rows
-reject mutation at service layer + audit) · xlsx snapshot vs parity fixture ·
-export-JSON shape contract test · migration clean-replay (CI).
+## Post-acceptance implementation notes
+
+### Capture half (2026-07-04)
+
+Delivered as migration `20260706b_events_and_sequences` (sorts after ADR-0040's
+`20260706_billing_rate_infrastructure`, before the engine half's `20260707…`) +
+`src/lib/events/*`, the manager routes under `src/app/api/manager/[site]/events`
+and `…/or-counts`, two new tabs on the loads/inventory surface, and the DR3#
+wiring in the verify gate. Specifics worth recording:
+
+- **Schema isolation via DB-level FKs (deliberate, mirrors ADR-0040).** All capture
+  additions live in ONE contiguous end-block; `site_id` columns carry DB-level
+  FOREIGN KEY constraints created in the migration rather than Prisma relations, so
+  there are **no back-relation fields on the sibling-touched `Site` model**. The one
+  exception is the scalar `inbound_loads.dr3_number` column (a column can't live in an
+  end-block). Consequence: `prisma migrate dev`/`db pull` would see the FK as "drift",
+  but `migrate deploy` clean-replay (ADR-0035) passes and referential integrity is
+  enforced at the DB.
+
+- **Mileage interpretation (flagged for review).** The workbook Events tab has a
+  single "Mileage" column that the §3.1 **B8** formula
+  (`driver wages + labor wages + mileage + per diem + misc`) treats as **dollars**.
+  To lose nothing, `collection_events` stores **both** `mileage Int?` (informational
+  miles) and `mileage_cents Int?` (the billed dollars). **`mileage_cents` is what
+  bills**; `mileage` is reference only. Freight is a **distinct** B8 term (its own
+  column), never folded into the event's misc total. `eventMiscCents(row)` sums
+  exactly the five B8 ancillary terms (driver wages + labor wages + mileage_cents +
+  per diem + misc), freight excluded.
+
+- **Cross-agent seam.** The engine half codes against `EventCostRow` (exported from
+  `src/lib/events/types.ts`) — the billing projection (`event_date`, `site_id`,
+  `freight_cents`, and the wage/mileage/per-diem/misc cents). `listEventCostRows`
+  (service) is a ready date-window read the engine can reuse. Do not rename either.
+
+- **Wage defaults are best-effort, not money-owning.** Unlike `consumer_dropoffs`
+  (where the incentive IS the system-computed billed number and a missing rule
+  throws), event wages are entered data; a missing wage rule leaves the wage null
+  and logs at debug rather than blocking capture.
+
+- **DR3# issued at verify, atomically.** The office verify step is where a load
+  becomes a confirmed record, so DR3# is issued there (not at operator load-start —
+  that would burn numbers on rejectable loads), inside the verify transaction so a
+  failed verify rolls the counter back. `issueDocumentNumber` uses a single
+  `UPDATE … RETURNING` (row-lock serialized) — a 64-way concurrent-issue test against
+  Postgres yields 64 unique contiguous numbers. Woodland's counter is seeded at a
+  safe-high `5000` (> the observed June ceiling 4805); **operator must align it to the
+  real counter before go-live** (runbook: `docs/operator/events-and-sequences.md`).
+  Trigger is `jurisdiction == california` FOR NOW with a `TODO(ADR-0041 / B10-6)` to
+  become a per-site config flag once Janette confirms per-site vs. company-wide.
+
+### Engine half
+
+_(to be appended by the invoice-engine agent)_

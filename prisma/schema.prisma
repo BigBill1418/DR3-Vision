@@ -463,6 +463,14 @@ model InboundLoad {
   program_unit_count     Int?
   non_program_unit_count Int?
 
+  // ADR-0041 (capture half) — Vision-assigned DR3 document number. Issued
+  // atomically from `document_sequences` at the office VERIFY step for
+  // Woodland-style (CA-jurisdiction) sites only; Eugene (OR) leaves this null
+  // (their scan-timestamp lives in existing arrival fields). This ONE column on
+  // an existing model is the documented exception to the "one contiguous
+  // end-block" convention (a scalar column can't live in an end-block).
+  dr3_number String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1959,4 +1967,93 @@ model FuelPrice {
   updated_at  DateTime        @updatedAt
 
   @@map("fuel_prices")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ADR-0041 — events capture + sequences (CAPTURE HALF; the sibling half owns
+// invoices/invoice_lines and the generation/approval/render pipeline). Every
+// addition below lives in this ONE contiguous block (the `dr3_number` column on
+// `inbound_loads` above is the sole exception — a scalar can't live here).
+//
+// FK columns (`site_id`) carry DB-level FOREIGN KEY constraints created in the
+// migration rather than Prisma relations, mirroring the ADR-0040 block — so this
+// block adds NO back-relation fields on the sibling-touched `Site` model.
+// Money is integer CENTS; dates are @db.Date.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// ADR-0041 D3 — collection_events: the daily-log Events tab (satellite/collection
+/// runs the office bills as freight + labor). Wage/per-diem/misc amounts are STORED
+/// AS ENTERED; the B5 rules (`driver_hourly`, `general_labor_hourly`,
+/// `per_diem_nightly`) only DEFAULT the wage cents when the operator leaves them
+/// blank — deviation-from-default is derivable (hours × resolved rate vs stored
+/// wages), never flagged. `mileage` is informational miles; `mileage_cents` is the
+/// billed mileage dollars that feeds the §3.1 B8 formula (see the operator doc).
+model CollectionEvent {
+  id                 String       @id @default(uuid())
+  site_id            String // FK → sites.id (constraint in migration)
+  event_date         DateTime     @db.Date
+  customer           String
+  county             String?
+  slip_number        String?
+  units              Int?
+  freight_cents      Int? // load-level freight charge for the event (CA)
+  driver_hours       Decimal?     @db.Decimal(5, 2)
+  driver_wages_cents Int?
+  labor_hours        Decimal?     @db.Decimal(5, 2)
+  labor_wages_cents  Int?
+  mileage            Int? // miles driven — informational (workbook Events "Mileage" col)
+  mileage_cents      Int? // billed mileage dollars — the value that feeds B8
+  per_diem_cents     Int?
+  misc_cents         Int?
+  retrac_id          String?
+  notes              String?
+  source             RecordSource @default(manual)
+  locked_at          DateTime? // edit-before-any-lock guard (CRUD-lite)
+  created_by         String?
+  created_at         DateTime     @default(now())
+  updated_at         DateTime     @updatedAt
+
+  @@index([site_id, event_date])
+  @@index([retrac_id])
+  @@map("collection_events")
+}
+
+/// ADR-0041 D3 — Oregon satellite collection-site unit counts, hand-entered monthly
+/// (the OR program bills $2.25/unit — rate stays in `state_program_rules`; NO
+/// invoice math here, the sibling consumes at merge). Eugene-scoped: the service
+/// rejects a non-OR site with a typed jurisdiction error. `billing_month` is the
+/// first-of-month anchor.
+model OrCollectionSiteCount {
+  id            String       @id @default(uuid())
+  site_id       String // FK → sites.id (Eugene/OR only — enforced in the service)
+  billing_month DateTime     @db.Date // first-of-month anchor
+  location      String
+  units         Int
+  source        RecordSource @default(manual)
+  locked_at     DateTime? // edit-before-any-lock guard (CRUD-lite)
+  created_by    String?
+  created_at    DateTime     @default(now())
+  updated_at    DateTime     @updatedAt
+
+  @@index([site_id, billing_month])
+  @@map("or_collection_site_counts")
+}
+
+/// ADR-0041 D3 (Addendum B6 / B10-6) — per-(site, sequence_code) atomic document
+/// counter. `issueDocumentNumber` hands out `next_value` and increments it in a
+/// single `UPDATE … RETURNING`, atomic under concurrency (row lock serializes
+/// concurrent issues). Woodland's `dr3_number` counter is seeded at a SAFE HIGH
+/// start (> the observed June ceiling) and MUST be aligned to the real current
+/// counter before go-live. Material # is MyMRC-owned and is NEVER issued here.
+model DocumentSequence {
+  id            String   @id @default(uuid())
+  site_id       String // FK → sites.id (constraint in migration)
+  sequence_code String // e.g. 'dr3_number'
+  next_value    Int // the next number to hand out
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@unique([site_id, sequence_code])
+  @@map("document_sequences")
 }
