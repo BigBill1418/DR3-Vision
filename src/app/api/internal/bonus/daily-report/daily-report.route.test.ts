@@ -7,9 +7,16 @@ const runDailyReportFire = vi.fn(async () => ({
   ],
 }));
 
+const runAlertDigestFire = vi.fn(async () => ({
+  outcomes: [{ siteCode: 'woodland', status: 'sent', findingCount: 2, delivered: 2, attempted: 2 }],
+}));
+
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/bonus/daily-report-runner', () => ({
   runDailyReportFire: (...a: unknown[]) => runDailyReportFire(...(a as [])),
+}));
+vi.mock('@/lib/audit/alert-digest', () => ({
+  runAlertDigestFire: (...a: unknown[]) => runAlertDigestFire(...(a as [])),
 }));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -26,6 +33,7 @@ function req(headers: Record<string, string> = {}): Request {
 
 beforeEach(() => {
   runDailyReportFire.mockClear();
+  runAlertDigestFire.mockClear();
   delete process.env['INTERNAL_CRON_TOKEN'];
 });
 
@@ -36,7 +44,7 @@ describe('POST /api/internal/bonus/daily-report', () => {
     expect(runDailyReportFire).not.toHaveBeenCalled();
   });
 
-  it('fires the runner and returns the outcomes (loopback)', async () => {
+  it('fires the runner + alert digest and returns both outcomes (loopback)', async () => {
     const res = await POST(req());
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -45,8 +53,19 @@ describe('POST /api/internal/bonus/daily-report', () => {
         { siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 },
         { siteCode: 'eugene', status: 'skipped_not_due' },
       ],
+      alertOutcomes: [{ siteCode: 'woodland', status: 'sent', findingCount: 2, delivered: 2, attempted: 2 }],
     });
     expect(runDailyReportFire).toHaveBeenCalledTimes(1);
+    expect(runAlertDigestFire).toHaveBeenCalledTimes(1);
+  });
+
+  it('a thrown alert digest does not 500 the cron (daily report still returns)', async () => {
+    runAlertDigestFire.mockRejectedValueOnce(new Error('digest blip'));
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.outcomes).toHaveLength(2);
+    expect(body.alertOutcomes).toEqual([]);
   });
 
   it('enforces the bearer token when INTERNAL_CRON_TOKEN is set', async () => {

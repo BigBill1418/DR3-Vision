@@ -5,6 +5,55 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-04 (ADR-0043 — P3 rate alerts + missing-record detection)
+
+- **ADR-0043 (P3, first post-P2).** Early warning before MRC computes the official
+  numbers: recycling/recovery rates and missing daily records become four new check
+  codes on the existing ADR-0039 audit engine (same nightly sweep, same findings
+  lifecycle, same `audit_check_config` thresholds, same review surface) — plus two
+  dashboard rate tiles and one daily digest email. No new pipeline, no new container.
+- **Schema (one additive migration `20260709_alert_recipients`, sorts after
+  `20260708_cor_certificates`; clean-replays on empty PG16):** four `AuditCheckCode`
+  enum values (`r1_recycling_rate`, `r2_recovery_rate`, `m1_missing_close`,
+  `m2_missing_snapshot`) + `alert_recipients` (digest roster, `active` toggle,
+  admin-editable) + `alert_digest_logs` (the `(site, digest_date)` idempotency
+  ledger). Recipients seeded idempotently: Morena + Janette → Woodland, Rick →
+  Eugene (emails from `prisma/seed/users.csv`).
+- **Rate computations (`src/lib/rates/`, pure, TDD):** `recyclingRate` (by weight —
+  non-`trash` outbound ÷ total; `trash` counted DISPOSED conservatively pending
+  Addendum B10-5, so the alert fires early, never late; landfilled units × the
+  55-lb `unit_weight_estimate` carry an `estimated` marker) and `recoveryRate` (by
+  units, renovation whole-units credited). Both return
+  `{ rate, numerator, denominator, components, estimatedInputs }`; a zero
+  denominator yields a typed no-data result — never `NaN`, never a throw-through.
+- **Four checks (`src/lib/audit/comparators/`, registered exactly like C1–C7):**
+  R1/R2 grade the rolling ~9-month rate against `floor + margin` (CA 75 / OR 70,
+  warn +3 pts · high +1 pt — all data in `audit_check_config`), window-normalized
+  so a persisting low rate UPDATEs one finding instead of duplicating. M1 flags a
+  business day (site-calendar-aware via `site_holidays` + weekend logic) with
+  inbound activity but no daily close past a 1-business-day grace; M2 flags no
+  physical snapshot within 35 days. R-findings link any concurrent open M-finding
+  ids into their detail (explain-don't-flag: a low rate over a data gap is likely
+  data, not operational).
+- **Dashboard (`/dashboard/[site]`):** two site-scoped rate tiles — current rolling
+  rate vs floor, trend arrow vs the prior equal-length window, an `estimated` badge
+  when the 55-lb estimate contributed; the whole tile links into the site audit
+  queue filtered to the R-check.
+- **Digest (`src/lib/audit/alert-digest.ts`):** rides the existing daily-report
+  cron tick (the internal route runs it after the production-report send) — one
+  SVdP-shell email per site per day, ONLY when open R/M findings exist, to the
+  `alert_recipients` roster via `sendSystemEmail` from `dr3-vision@svdp.us`,
+  idempotent through `alert_digest_logs`. A total delivery failure pages
+  `dr3-vision-system` (fingerprint `alert-digest-failed:<site>`, 6-h cooldown); a
+  healthy send is silent; ntfy is otherwise untouched (hard rule #5).
+- **Operator doc:** `docs/operator/rate-alerts.md` (editing thresholds via
+  `audit_check_config`, editing recipients, what the tiles mean, the estimate
+  caveat).
+- **Deviation from the ADR (documented):** the digest rides the existing daily-report
+  tick, which fires at each site's `send_time_pt` (18:00 PT today), not the 07:00 PT
+  the ADR assumed — there is no separate 07:00 tick and the ADR mandates no new
+  container. The dedup ledger keeps it to one email per site per day regardless.
+
 ### Added — 2026-07-04 (ADR-0042 — COR generator: Exhibit 5 pre-fill + human-signs-always boundary)
 
 - **ADR-0042 COR generator (P2, third of three).** Generates the monthly CA

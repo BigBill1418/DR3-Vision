@@ -103,3 +103,54 @@ R1/R2 threshold boundary at floor+margin exactly · M1 business-day/holiday
 calendar cases + grace · M2 cadence · R↔M cross-annotation · digest: sends only
 on open findings, recipient config respected, failure pages · config
 edit-ability via audit_check_config rows · migration clean-replay (CI).
+
+## Post-acceptance notes (built 2026-07-04)
+
+Implemented as a thin build on the ADR-0039 engine. What landed, and where it
+diverged from the plan:
+
+- **Migration `20260709_alert_recipients`** (clean-replayed on a fresh PG16):
+  four `AuditCheckCode` enum values + `alert_recipients` +
+  `alert_digest_logs` (the `(site, digest_date)` idempotency ledger — D3 needs
+  it and it rides this migration). Recipients seeded idempotently in
+  `prisma/seed.mjs` (Morena + Janette → Woodland, Rick → Eugene). The new enum
+  values are not referenced in the migration (config seeds live in code), so the
+  Postgres "new enum value in the same transaction" rule never applies.
+- **Rate functions** live in `src/lib/rates/` (pure) with the DB aggregation in
+  `rates/aggregate.ts` (shared by the nightly check AND the dashboard tiles, so
+  the tile number and the finding number can never drift). Thresholds resolve in
+  `rates/thresholds.ts` (per-jurisdiction floor from `audit_check_config` params).
+- **Checks** are `comparators/{r1-recycling,r2-recovery,m1-missing-close,m2-missing-snapshot}.ts`,
+  wired into `leg-fetchers.buildRunChecksForWindow`. R1/R2 run over a rolling
+  ~9-month window (config `rate_window_days`, default 273), DISTINCT from the
+  sweep's trailing window; their fingerprint is window-normalized (`[siteId]`)
+  so a persisting low rate updates one finding. Fingerprints include `siteId`
+  (unlike C5/C6, which key on day only) to stay cross-site collision-safe.
+- **Floors are data.** R1/R2 config params carry `ca_floor_pct: 75`,
+  `or_floor_pct: 70`, `warn_margin_pts: 3`, `high_margin_pts: 1`; the resolver
+  picks the floor by site jurisdiction. Editable per-site via an
+  `audit_check_config` row (global default overlaid by a per-site row).
+- **Digest** is `src/lib/audit/alert-digest.ts`, invoked by the internal
+  daily-report route AFTER `runDailyReportFire`. It runs for ALL sites
+  independent of the production-report skip gates (so a quiet/weekend day never
+  suppresses an alert), sends only when open R/M findings exist, and is
+  idempotent through `alert_digest_logs`.
+- **DEVIATION — digest fires at the daily-report tick time (18:00 PT), not
+  07:00 PT.** D3 assumed a 07:00 tick to piggyback; the only existing
+  daily-report cron tick fires at each site's configured `send_time_pt` (18:00
+  PT today). Honouring the binding "no new container / piggyback the existing
+  tick" constraint, the digest inherits that tick. The `(site, digest_date)`
+  dedup ledger keeps it to one email per site per day regardless of when the tick
+  lands. To move it to 07:00, add a dedicated 07:00 daily-report config send
+  time (or a small standalone tick) — no code change to the digest.
+
+## Operator follow-ups (non-blocking)
+
+1. **Digest send time (07:00 vs 18:00).** If Bill wants the digest at 07:00 PT
+   rather than riding the 18:00 production-report tick, decide whether to shift
+   the daily-report `send_time_pt` or add a second tick. Tracked as the deviation
+   above.
+2. **Recovery-rate floor.** R2 defaults to the same 75/70 jurisdiction floors as
+   R1 ("same pattern" in the ADR). If MRC's recovery-rate contract floor differs
+   from the recycling floor, set R2's `ca_floor_pct`/`or_floor_pct` via an
+   `audit_check_config` row — no code change.

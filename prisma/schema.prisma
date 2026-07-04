@@ -101,6 +101,10 @@ model Site {
   audit_check_config AuditCheckConfig[]
   workbook_imports   WorkbookImport[]
   audit_runs         AuditRun[]
+
+  // P3 rate alerts + missing-record detection (ADR-0043)
+  alert_recipients  AlertRecipient[]
+  alert_digest_logs AlertDigestLog[]
   @@map("sites")
 }
 
@@ -1668,6 +1672,14 @@ enum AuditCheckCode {
   c6_inventory_continuity
   c7_deadline
   summary_recompute
+  // ADR-0043 (P3) — rate alerts + missing-record detection. Registered on the
+  // same engine as C1–C7 (comparator fn + audit_check_config row + fingerprinted
+  // findings). R = rate below contract floor + margin; M = a required record is
+  // missing past its grace/cadence.
+  r1_recycling_rate
+  r2_recovery_rate
+  m1_missing_close
+  m2_missing_snapshot
 }
 
 enum AuditFindingKind {
@@ -1853,6 +1865,48 @@ model AuditRun {
 
   @@index([site_id, started_at])
   @@map("audit_runs")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-0043 (P3) — rate alerts + missing-record detection
+// ════════════════════════════════════════════════════════════════════════
+
+/// The digest recipient roster (D3). One row per (site, email); `active`
+/// toggles a recipient without deleting the row (keeps an audit trail).
+/// Seeded Morena + Janette → Woodland, Rick → Eugene; admin-editable.
+model AlertRecipient {
+  id         String   @id @default(uuid())
+  site_id    String
+  site       Site     @relation(fields: [site_id], references: [id])
+  email      String
+  active     Boolean  @default(true)
+  created_by String? // bare audit-actor column (mirrors invoices.generated_by)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([site_id, email])
+  @@index([site_id, active])
+  @@map("alert_recipients")
+}
+
+/// Idempotency ledger for the daily alert digest (D3/D5). The unique
+/// (site_id, digest_date) makes a same-day re-fire a no-op, mirroring the
+/// `bonus_daily_report_log` pattern.
+model AlertDigestLog {
+  id               String   @id @default(uuid())
+  site_id          String
+  site             Site     @relation(fields: [site_id], references: [id])
+  digest_date      DateTime @db.Date
+  finding_count    Int
+  recipient_count  Int
+  delivered_count  Int
+  graph_message_id String?
+  last_status      Int?
+  created_at       DateTime @default(now())
+
+  @@unique([site_id, digest_date])
+  @@index([site_id, digest_date])
+  @@map("alert_digest_logs")
 }
 
 // ADR-0040 — billing rate infrastructure

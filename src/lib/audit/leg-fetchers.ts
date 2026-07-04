@@ -28,6 +28,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { computeRunningBalance, type PoolPair } from '@/lib/inventory/running-balance';
+import { aggregateSiteRates, resolveRateThresholds } from '@/lib/rates';
 import {
   c1Inbound,
   c2Processed,
@@ -36,8 +37,15 @@ import {
   c5Conservation,
   c6InventoryContinuity,
   c7Deadline,
+  r1RecyclingRate,
+  r2RecoveryRate,
+  m1MissingClose,
+  m2MissingSnapshot,
+  type M1DayRow,
 } from './comparators';
 import { resolveCheckConfigs } from './config';
+import { dayISO, dayKeyUTCFromISO } from '@/lib/time';
+import { log } from '@/lib/observability/logger';
 import type {
   AuditWindow,
   BillingLegRow,
@@ -577,6 +585,58 @@ function enrichOutboundSubmission(outbound: OutboundLegRow[], mirror: readonly M
   }
 }
 
+// ── ADR-0043 (P3) rate + missing-record inputs ───────────────────────────
+//
+// R1/R2 rate over a rolling ~9-month window (the CA reconciliation window; per
+// R1 config `rate_window_days`), DISTINCT from the sweep's trailing window. M1
+// reuses the sweep window (recent-day grace); M2 reads the latest physical
+// snapshot as of the run day.
+
+function shiftDaysISO(iso: string, deltaDays: number): string {
+  const d = dayKeyUTCFromISO(iso);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return dayISO(d);
+}
+
+/** Consumer-drop-off business days in a window (an inbound-activity signal for M1). */
+async function fetchDropoffDays(db: PrismaClient, w: AuditWindow): Promise<Set<string>> {
+  const rows = await db.consumerDropoff.findMany({
+    where: { site_id: w.siteId, dropoff_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    select: { dropoff_date: true },
+  });
+  const days = new Set<string>();
+  for (const r of rows) {
+    const iso = toISO(r.dropoff_date);
+    if (iso) days.add(iso);
+  }
+  return days;
+}
+
+/** The latest physical snapshot day as of the run (M2), or null. */
+async function fetchLastPhysicalSnapshotISO(db: PrismaClient, w: AuditWindow): Promise<string | null> {
+  const asOfISO = w.asOfISO ?? w.endISO;
+  const snap = await db.siteInventorySnapshot.findFirst({
+    where: { site_id: w.siteId, snapshot_kind: 'physical', snapshot_at: { lt: rangeDate(shiftDaysISO(asOfISO, 1)) } },
+    orderBy: { snapshot_at: 'desc' },
+    select: { snapshot_at: true },
+  });
+  return snap ? toISO(snap.snapshot_at) : null;
+}
+
+/** Build the M1 activity-day rows from inbound loads + drop-offs vs closes. */
+function buildM1Days(
+  inbound: readonly InboundLegRow[],
+  dropoffDays: ReadonlySet<string>,
+  processed: readonly ProcessedLegRow[],
+): M1DayRow[] {
+  const activity = new Set<string>(dropoffDays);
+  for (const r of inbound) activity.add(r.businessDateISO);
+  const closes = new Set(processed.map((p) => p.productionDateISO));
+  return [...activity]
+    .sort()
+    .map((dateISO) => ({ dateISO, hadInboundActivity: true, hasProcessedRow: closes.has(dateISO) }));
+}
+
 // ── Assemble the per-window comparator runner the sweep injects ──────────
 
 export function buildRunChecksForWindow(db: PrismaClient) {
@@ -588,6 +648,25 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     const holidays = (
       await db.siteHoliday.findMany({ where: { site_id: window.siteId }, select: { holiday_date: true } })
     ).map((h) => h.holiday_date);
+
+    // ADR-0043 — the site jurisdiction picks the R1/R2 floor; null → skip R checks.
+    const site = await db.site.findUnique({ where: { id: window.siteId }, select: { jurisdiction: true } });
+    const jurisdiction = site?.jurisdiction ?? null;
+
+    // R1/R2 run over a rolling ~9-month rate window (per R1 config), NOT the
+    // sweep's trailing window. asOf anchors the window end.
+    const asOfISO = window.asOfISO ?? window.endISO;
+    const r1Config = configs.get('r1_recycling_rate');
+    const rateWindowDays = (() => {
+      const v = r1Config?.params['rate_window_days'];
+      return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 273;
+    })();
+    const rateWindow: AuditWindow = {
+      siteId: window.siteId,
+      startISO: shiftDaysISO(asOfISO, -rateWindowDays),
+      endISO: asOfISO,
+      ...(window.asOfISO ? { asOfISO: window.asOfISO } : {}),
+    };
 
     const [
       inbound,
@@ -612,6 +691,26 @@ export function buildRunChecksForWindow(db: PrismaClient) {
       buildConservationRows(db, window),
       buildInventoryDays(db, window),
     ]);
+
+    // ADR-0043 inputs (rate window + missing-record signals).
+    const [rateInputs, dropoffDays, lastPhysicalSnapshotISO] = await Promise.all([
+      aggregateSiteRates(db, rateWindow.siteId, rateWindow.startISO, rateWindow.endISO),
+      fetchDropoffDays(db, window),
+      fetchLastPhysicalSnapshotISO(db, window),
+    ]);
+    const m1Days = buildM1Days(inbound, dropoffDays, processed);
+
+    // ADR-0043 D4 — rate computations log window + components at debug.
+    log.debug(
+      {
+        siteId: window.siteId,
+        rateWindowStartISO: rateWindow.startISO,
+        rateWindowEndISO: rateWindow.endISO,
+        recycling: rateInputs.recycling,
+        recovery: rateInputs.recovery,
+      },
+      '[audit-rates] rate window computed',
+    );
 
     // Derive the C7 lateness clocks from the mirror (no Vision-side submit column).
     enrichInboundSubmission(inbound, haulMirror);
@@ -640,6 +739,58 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     run('c7_deadline', () =>
       c7Deadline(window, { inbound, processed, outbound }, configs.get('c7_deadline')!, holidays),
     );
+
+    // ── ADR-0043 (P3) rate + missing-record checks ──────────────────────
+    if (jurisdiction) {
+      run('r1_recycling_rate', () =>
+        r1RecyclingRate(
+          rateWindow,
+          rateInputs.recycling,
+          configs.get('r1_recycling_rate')!,
+          resolveRateThresholds(configs.get('r1_recycling_rate')!.params, jurisdiction),
+          jurisdiction,
+        ),
+      );
+      run('r2_recovery_rate', () =>
+        r2RecoveryRate(
+          rateWindow,
+          rateInputs.recovery,
+          configs.get('r2_recovery_rate')!,
+          resolveRateThresholds(configs.get('r2_recovery_rate')!.params, jurisdiction),
+          jurisdiction,
+        ),
+      );
+    }
+    run('m1_missing_close', () => m1MissingClose(window, { days: m1Days }, configs.get('m1_missing_close')!, holidays));
+    run('m2_missing_snapshot', () =>
+      m2MissingSnapshot(window, { lastPhysicalSnapshotISO }, configs.get('m2_missing_snapshot')!),
+    );
+
+    // Explain-don't-flag cross-annotation (ADR-0043 D2 / survey §B): a low rate
+    // that coincides with an open missing-record finding is likely a data gap,
+    // not an operational breach. Link the concurrent OPEN M-finding ids into each
+    // R-finding's detail so the reviewer sees the probable cause. (M findings
+    // opened THIS run have no id yet; they link on the next nightly refresh.)
+    const rFindings = findings.filter(
+      (f) => f.checkCode === 'r1_recycling_rate' || f.checkCode === 'r2_recovery_rate',
+    );
+    if (rFindings.length > 0) {
+      const openMissing = await db.auditFinding.findMany({
+        where: {
+          site_id: window.siteId,
+          check_code: { in: ['m1_missing_close', 'm2_missing_snapshot'] },
+          status: { in: ['open', 'acknowledged'] },
+        },
+        select: { id: true, check_code: true },
+      });
+      if (openMissing.length > 0) {
+        const links = openMissing.map((m) => ({ id: m.id, checkCode: m.check_code }));
+        for (const f of rFindings) {
+          const base = f.detail && typeof f.detail === 'object' && !Array.isArray(f.detail) ? f.detail : {};
+          f.detail = { ...base, linkedMissingFindings: links };
+        }
+      }
+    }
 
     return { checkCodes, findings };
   };

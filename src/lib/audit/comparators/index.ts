@@ -9,3 +9,9 @@ export { c4BillingBasis, sumProgramUnitsProcessed } from './c4-billing';
 export { c5Conservation } from './c5-conservation';
 export { c6InventoryContinuity } from './c6-inventory';
 export { c7Deadline, type C7Input } from './c7-deadline';
+// ADR-0043 (P3) — rate + missing-record checks.
+export { r1RecyclingRate } from './r1-recycling';
+export { r2RecoveryRate } from './r2-recovery';
+export { gradeRate, buildRateFindings, type RateThresholds, type RateGrade } from './rate-check';
+export { m1MissingClose, type M1Input, type M1DayRow } from './m1-missing-close';
+export { m2MissingSnapshot, type M2Input } from './m2-missing-snapshot';

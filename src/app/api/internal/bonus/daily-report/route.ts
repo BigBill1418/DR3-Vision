@@ -14,6 +14,7 @@
 
 import { NextResponse } from 'next/server';
 import { runDailyReportFire } from '@/lib/bonus/daily-report-runner';
+import { runAlertDigestFire, type DigestOutcome } from '@/lib/audit/alert-digest';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -32,9 +33,24 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  const { outcomes } = await runDailyReportFire(new Date());
+  const now = new Date();
+  const { outcomes } = await runDailyReportFire(now);
 
   const sent = outcomes.filter((o) => o.status === 'sent').length;
   log.info({ sites: outcomes.length, sent }, '[daily-report] run complete');
-  return NextResponse.json({ outcomes });
+
+  // ADR-0043 D3 — the alert digest rides this same tick (no new container). It
+  // runs for ALL sites independent of the production-report skip gates, so a
+  // quiet/weekend day never suppresses an open-finding alert. Never throws
+  // (each site is wrapped internally); a failure to run it must not 500 the cron.
+  let alertOutcomes: DigestOutcome[] = [];
+  try {
+    ({ outcomes: alertOutcomes } = await runAlertDigestFire(now));
+    const digestsSent = alertOutcomes.filter((o) => o.status === 'sent').length;
+    log.info({ sites: alertOutcomes.length, digestsSent }, '[alert-digest] run complete');
+  } catch (err) {
+    log.error({ err }, '[alert-digest] fire threw (non-fatal to daily-report route)');
+  }
+
+  return NextResponse.json({ outcomes, alertOutcomes });
 }

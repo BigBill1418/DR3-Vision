@@ -33,6 +33,10 @@ const VALID_CHECK = new Set<CheckCode>([
   'c6_inventory_continuity',
   'c7_deadline',
   'summary_recompute',
+  'r1_recycling_rate',
+  'r2_recovery_rate',
+  'm1_missing_close',
+  'm2_missing_snapshot',
 ]);
 
 function iso(d: Date): string {

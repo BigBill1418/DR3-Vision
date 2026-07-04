@@ -23,6 +23,21 @@ export function businessDayAddISO(startISO: string, n: number, holidays: Date[])
   return dayISO(addBusinessDays(dayKeyUTCFromISO(startISO), n, holidays));
 }
 
+/** True when `dayISO` is a weekday (Mon–Fri) and not in the holiday set. */
+export function isBusinessDayISO(iso: string, holidays: Date[]): boolean {
+  const d = dayKeyUTCFromISO(iso);
+  const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+  if (dow === 0 || dow === 6) return false;
+  const key = dayISO(d);
+  return !holidays.some((h) => dayISO(dayKeyUTCFromISO(h.toISOString().slice(0, 10))) === key);
+}
+
+/** Whole-day count from `fromISO` to `toISO` (`to − from`), UTC day keys. */
+export function daysBetweenISO(fromISO: string, toISO: string): number {
+  const ms = dayKeyUTCFromISO(toISO).getTime() - dayKeyUTCFromISO(fromISO).getTime();
+  return Math.round(ms / 86_400_000);
+}
+
 /** The Pacific calendar day (`YYYY-MM-DD`) of an ISO instant string. */
 export function instantToPacificDayISO(instantISO: string): string {
   return pacificDayISO(new Date(instantISO));
