@@ -15,7 +15,7 @@ export interface EventCostRow {
   id: string;
   siteId: string;
   eventDate: Date;
-  /** Load-level freight charge for the event (CA). A DISTINCT B8 term — never folded into misc. */
+  /** Load-level freight charge for the event (CA). Rides the B16 TRANSPORTATION invoice (never B8; never folded into misc). */
   freightCents: number | null;
   driverWagesCents: number | null;
   laborWagesCents: number | null;

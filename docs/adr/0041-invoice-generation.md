@@ -140,4 +140,22 @@ wiring in the verify gate. Specifics worth recording:
 
 ### Engine half
 
-_(to be appended by the invoice-engine agent)_
+The engine half merged in PR #58 (`e76aed6`, 2026-07-04) with these implementation
+decisions: the **trust gate enforces at approval** (drafts always generate as
+non-billable previews with the gate verdict shown read-only — D4's "non-draft"
+reading); **only leaf lines are persisted** (B6/B7/B8/B20/`B22.offset`) with
+B15/B22 derived at read so `total_cents == Σ lines` stays exact (the xlsx
+re-inserts a B15 subtotal for parity); the **zero-guard fires on the processing
+charge** (B6/B20), not the net — a fully-pre-billed CA-EOM legitimately nets 0;
+**B7 keys on `dropoff_date`** in-window as the paid-in-window proxy; renders are
+xlsx (Summary structure, commodity blocks excluded per D5) + the frozen
+`invoice_export` JSON v1 (contract test). Integration wiring (post-merge):
+`event-leg.ts` reads `collection_events` directly with generated types, and
+`or_collection_site_count` invoices compose from STORED `or_collection_site_counts`
+rows first, request lines appended. **Deliberate duplication note (audit
+2026-07-04):** `EventCostRow`/`eventMiscCents` exist in BOTH `src/lib/events/types.ts`
+(capture-side, nullable cents) and `src/lib/invoices/types.ts` (billing-side,
+non-null cents + customer/retracId) — billing uses ONLY the invoices copy via
+`event-leg.ts`; the events-side `listEventCostRows` seam is currently uncalled and
+is retained as the capture module's public read API. If the B8 term set ever
+changes, change `src/lib/invoices/types.ts` (the billed copy) first.

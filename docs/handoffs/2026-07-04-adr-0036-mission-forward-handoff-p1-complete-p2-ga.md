@@ -1,3 +1,10 @@
+> **⚠ PARTIALLY SUPERSEDED (2026-07-04, same day):** §1's "0041 PROPOSED / 0042 not
+> drafted" and §2-1/§3-1/§3-2 are DONE — ADR-0041 was walked through D1–D6, accepted,
+> and BUILT (PRs #57 capture + #58 engine, both merged); ADR-0042 was drafted,
+> accepted (PR #56), and its build is in flight. Do not re-review or rebuild them.
+> Current state lives in docs/adr/README.md + CHANGELOG. The ops lane (§4), go-live
+> week (§5), and Kelsey capture (§6) remain the live marching order.
+
 # ADR-0036 Mission — Forward Handoff: P1 Complete, P2 Gated on 0041, Go-Live Week
 
 **Date:** 2026-07-03 (evening) · **Supersedes as marching order:** none — extends the mission record + Addenda A/B · **State verified against:** main @ sync 2026-07-03T21:15Z
