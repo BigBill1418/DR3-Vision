@@ -1,6 +1,6 @@
 # ADR-0043 — P3 alerts: recycling/recovery rate monitoring + missing-record detection (thin, rides the audit engine)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-04, approved by Bill)
 **Date:** 2026-07-04
 **Relates to:** mission record §2.1 (2)/§6-P3; forward handoff §3.3 ("propose as a thin ADR — much of the plumbing exists in 0039"); ADR-0039 (findings/config/sweep machinery — REUSED, not duplicated); charter §1.5 (75%/70% contract rates, formulas); survey build-inputs §E (Morena's exceptions) + §B (explain-don't-flag)
 **Series:** P3, first post-P2 ADR
