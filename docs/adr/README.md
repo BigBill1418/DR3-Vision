@@ -49,6 +49,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0039   | 3-way audit engine + Audit Workbench + retro-audit (findings lifecycle, workbook imports, billing trust gate)   | Accepted                                                        |
 | 0040   | Billing rate infrastructure (transport tiers, account overrides, container rentals, fuel prices, can_manage_rates) | Accepted                                                        |
 | 0041   | Invoice generation (six-invoice set, offset line, events capture, trust-gated approval, GP export boundary)      | Accepted                                                        |
+| 0042   | COR generator (Exhibit 5 pre-fill, immutable versions, human-signs-always boundary)                             | Accepted                                                        |
 
 ## How to write a new ADR
 
