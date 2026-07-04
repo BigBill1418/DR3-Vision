@@ -17,6 +17,7 @@ export default [
       'next-env.d.ts',
       'playwright-report/**',
       'test-results/**',
+      '**/*.INTEGRATION-PENDING.ts',
     ],
   },
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
