@@ -634,6 +634,34 @@ async function seedDailyReportConfig(siteIds) {
   }
 }
 
+// ─── Alert recipients (ADR-0043 D1) ──────────────────────────────────────
+// The P3 daily-digest roster: Morena + Janette → Woodland, Rick → Eugene
+// (emails from prisma/seed/users.csv). Admin-editable at runtime. Fully
+// idempotent: upsert keyed on the composite unique (site_id, email); re-runs
+// only ensure the seeded roster exists and never delete a recipient an admin
+// may have added or deactivated via the UI (no `active` overwrite on update).
+const ALERT_RECIPIENTS = {
+  woodland: ['morena.gomez@svdp.us', 'janette.tomas@svdp.us'],
+  eugene: ['rick.albritton@svdp.us'],
+};
+
+async function seedAlertRecipients(siteIds) {
+  for (const code of ['woodland', 'eugene']) {
+    const site_id = siteIds.get(code);
+    if (!site_id) {
+      throw new Error(`seedAlertRecipients: unknown site code='${code}'`);
+    }
+    for (const rawEmail of ALERT_RECIPIENTS[code]) {
+      const email = rawEmail.trim().toLowerCase();
+      await prisma.alertRecipient.upsert({
+        where: { site_id_email: { site_id, email } },
+        create: { site_id, email, updated_at: new Date() },
+        update: {},
+      });
+    }
+  }
+}
+
 // ─── Post-seed DDL (T-201) ───────────────────────────────────────────────
 // The migration added period_number / period_year / pay_date as NULL-allowed
 // so the in-place table rename could land before data existed. Now that the
@@ -1667,6 +1695,8 @@ async function main() {
   await seedUsers(siteIds);
   console.log('▶ seeding daily-report config + recipients (ADR-0030)');
   await seedDailyReportConfig(siteIds);
+  console.log('▶ seeding alert recipients (ADR-0043)');
+  await seedAlertRecipients(siteIds);
   console.log('▶ seeding site_holidays');
   await seedSiteHolidays(siteIds);
   console.log('▶ seeding processor_bonus_rules');

@@ -78,6 +78,27 @@ function table(rows: Row[]) {
       }
       return { _sum };
     }),
+    groupBy: vi.fn(async (args: { by: string[]; _sum: Record<string, boolean>; where?: Row }) => {
+      const matched = rows.filter((r) => matchWhere(r, args.where));
+      const groups = new Map<string, Row>();
+      for (const r of matched) {
+        const key = args.by.map((b) => String(r[b])).join('|');
+        let g = groups.get(key);
+        if (!g) {
+          g = {};
+          for (const b of args.by) g[b] = r[b];
+          const sums: Record<string, number | null> = {};
+          for (const s of Object.keys(args._sum)) sums[s] = null;
+          g['_sum'] = sums;
+          groups.set(key, g);
+        }
+        const sums = g['_sum'] as Record<string, number | null>;
+        for (const s of Object.keys(args._sum)) {
+          if (r[s] != null) sums[s] = (sums[s] ?? 0) + Number(r[s]);
+        }
+      }
+      return [...groups.values()];
+    }),
   };
 }
 
@@ -95,10 +116,13 @@ interface Seed {
   snapshots?: Row[];
   configRows?: Row[];
   holidays?: Row[];
+  jurisdiction?: string;
+  openFindings?: Row[];
 }
 
 function fakeDb(seed: Seed): PrismaClient {
   return {
+    site: { findUnique: vi.fn(async () => ({ jurisdiction: seed.jurisdiction ?? 'california' })) },
     inboundLoad: table(seed.inbound ?? []),
     mymrcHaulsMirror: table(seed.haulMirror ?? []),
     processedUnitsDaily: table(seed.processed ?? []),
@@ -109,14 +133,25 @@ function fakeDb(seed: Seed): PrismaClient {
     consumerDropoff: table(seed.dropoffs ?? []),
     siteInventorySnapshot: table(seed.snapshots ?? []),
     auditCheckConfig: table(seed.configRows ?? []),
+    auditFinding: table(seed.openFindings ?? []),
     siteHoliday: table(seed.holidays ?? []),
   } as unknown as PrismaClient;
 }
 
-// Disable the internal-invariant checks (C5/C6) for the mirror-join tests so a
-// derived-inventory edge never masks a C1/C2/C3/C7 assertion. They are covered
-// directly by the pure-roll tests below.
-const disableInvariants: Row[] = (['c5_conservation', 'c6_inventory_continuity'] as const).map((code) => ({
+// Disable the internal-invariant checks (C5/C6) AND the ADR-0043 rate/missing
+// checks (R1/R2/M1/M2) for the mirror-join tests so a derived-inventory edge or
+// a rate/gap finding never masks a C1/C2/C3/C7 assertion. They are covered
+// directly by their own pure-comparator suites.
+const disableInvariants: Row[] = (
+  [
+    'c5_conservation',
+    'c6_inventory_continuity',
+    'r1_recycling_rate',
+    'r2_recovery_rate',
+    'm1_missing_close',
+    'm2_missing_snapshot',
+  ] as const
+).map((code) => ({
   site_id: null,
   check_code: code,
   enabled: false,
@@ -378,5 +413,46 @@ describe('rollConservationRows — cumulative pool availability (Rick Q11 shape)
     expect(rows[1]!.priorProcessedProgram).toBe(60);
     // day-2 available = 100 − 60 − 0 = 40; processed 30 ≤ 40 (legal).
     expect(rows[1]!.inboundProgram - rows[1]!.priorProcessedProgram).toBe(40);
+  });
+});
+
+// ── ADR-0043 (P3) — R/M check wiring + R↔M cross-annotation ───────────────
+
+describe('buildRunChecksForWindow — ADR-0043 rate + missing-record wiring', () => {
+  const rateWin: AuditWindow = { siteId: 'site-1', startISO: '2026-06-01', endISO: '2026-06-30', asOfISO: '2026-06-30' };
+
+  it('runs R1/R2/M1/M2 by default and links open M-findings into a breaching R-finding', async () => {
+    // Mostly-trash outbound → recycling rate ~9% → R1 breaches (CA floor 75).
+    const db = fakeDb({
+      jurisdiction: 'california',
+      outbound: [
+        { id: 'o1', site_id: 'site-1', ship_date: D('2026-06-10'), commodity: 'foam', sub_category: 'baled', weight_lbs: 100, whole_units: null, program_units: null, non_program_units: null, ticket_number: null, retrac_id: null, bale_count: null, buyer: null, source: 'manual', locked_at: null },
+        { id: 'o2', site_id: 'site-1', ship_date: D('2026-06-11'), commodity: 'trash', sub_category: 'baled', weight_lbs: 1000, whole_units: null, program_units: null, non_program_units: null, ticket_number: null, retrac_id: null, bale_count: null, buyer: null, source: 'manual', locked_at: null },
+      ],
+      // A concurrent open M-finding the R-finding should reference.
+      openFindings: [{ id: 'm-open-1', site_id: 'site-1', check_code: 'm2_missing_snapshot', status: 'open' }],
+    });
+    const { checkCodes, findings } = await buildRunChecksForWindow(db)(rateWin);
+
+    expect(checkCodes).toEqual(expect.arrayContaining(['r1_recycling_rate', 'r2_recovery_rate', 'm1_missing_close', 'm2_missing_snapshot']));
+
+    const r1 = findings.filter((f) => f.checkCode === 'r1_recycling_rate');
+    expect(r1).toHaveLength(1);
+    expect(r1[0]!.fingerprint).toBe('r1_recycling_rate|value_mismatch|site-1');
+    expect((r1[0]!.detail as { linkedMissingFindings: { id: string }[] }).linkedMissingFindings).toEqual([
+      { id: 'm-open-1', checkCode: 'm2_missing_snapshot' },
+    ]);
+  });
+
+  it('skips R checks when the site jurisdiction is unresolved (null)', async () => {
+    const db = {
+      ...fakeDb({}),
+      site: { findUnique: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const { checkCodes } = await buildRunChecksForWindow(db)(rateWin);
+    expect(checkCodes).not.toContain('r1_recycling_rate');
+    expect(checkCodes).not.toContain('r2_recovery_rate');
+    // M checks are jurisdiction-independent and still run.
+    expect(checkCodes).toEqual(expect.arrayContaining(['m1_missing_close', 'm2_missing_snapshot']));
   });
 });

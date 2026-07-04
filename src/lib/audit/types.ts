@@ -32,7 +32,12 @@ export type CheckCode =
   | 'c5_conservation'
   | 'c6_inventory_continuity'
   | 'c7_deadline'
-  | 'summary_recompute';
+  | 'summary_recompute'
+  // ADR-0043 (P3) — rate alerts + missing-record detection.
+  | 'r1_recycling_rate'
+  | 'r2_recovery_rate'
+  | 'm1_missing_close'
+  | 'm2_missing_snapshot';
 
 export type FindingKind =
   | 'missing_counterpart'

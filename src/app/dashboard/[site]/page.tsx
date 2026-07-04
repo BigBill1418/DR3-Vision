@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { DockPoller } from './dock-poller';
 import { DockTile } from './dock-tile';
+import { RateTiles } from './rate-tiles';
+import { computeSiteRateTiles } from '@/lib/dashboard/rate-tiles';
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
@@ -72,6 +74,10 @@ export default async function SiteDashboardPage({ params }: Props) {
     );
   }
 
+  // ADR-0043 — contract rate tiles (site-scoped). Never throw the whole page on
+  // a rate-computation hiccup; degrade to no tiles.
+  const rateTiles = await computeSiteRateTiles(site.id, site.jurisdiction).catch(() => null);
+
   // Operator-active loads at this site, oldest-arrival first so the
   // tile order matches the order the operators got on the dock.
   const loads = await prisma.inboundLoad.findMany({
@@ -139,6 +145,8 @@ export default async function SiteDashboardPage({ params }: Props) {
             )}
           </nav>
         </header>
+
+        {rateTiles && <RateTiles tiles={rateTiles} siteCode={site.code} />}
 
         <DockPoller>
           {loads.length === 0 ? (

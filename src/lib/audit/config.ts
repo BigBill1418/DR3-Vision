@@ -120,6 +120,61 @@ export const DEFAULT_CHECK_CONFIGS: readonly DefaultCheckConfig[] = [
     blocksBilling: true,
     params: {},
   },
+  // ── ADR-0043 (P3) rate + missing-record checks ──────────────────────────
+  // R1/R2 floors are DATA (per jurisdiction, editable): CA 75 / OR 70. The
+  // resolver picks `ca_floor_pct` vs `or_floor_pct` by the site jurisdiction.
+  // A rate below `floor + warn_margin_pts` warns (medium); below `floor +
+  // high_margin_pts` escalates to high. `rate_window_days` is the rolling
+  // window (≈9 months, the CA reconciliation window). These never block billing
+  // (early-warning only) — the P2 billing gate stays anchored on C4.
+  {
+    checkCode: 'r1_recycling_rate',
+    enabled: true,
+    severity: 'medium',
+    unitTolerance: 0,
+    weightToleranceLbs: 0,
+    graceBusinessDays: 0,
+    openWindowDays: null,
+    blocksBilling: false,
+    params: { ca_floor_pct: 75, or_floor_pct: 70, warn_margin_pts: 3, high_margin_pts: 1, rate_window_days: 273 },
+  },
+  {
+    checkCode: 'r2_recovery_rate',
+    enabled: true,
+    severity: 'medium',
+    unitTolerance: 0,
+    weightToleranceLbs: 0,
+    graceBusinessDays: 0,
+    openWindowDays: null,
+    blocksBilling: false,
+    params: { ca_floor_pct: 75, or_floor_pct: 70, warn_margin_pts: 3, high_margin_pts: 1, rate_window_days: 273 },
+  },
+  // M1 — a business day with inbound activity but no processed_units_daily row
+  // by EOD + grace (1 business day, site-calendar-aware via site_holidays).
+  {
+    checkCode: 'm1_missing_close',
+    enabled: true,
+    severity: 'high',
+    unitTolerance: 0,
+    weightToleranceLbs: 0,
+    graceBusinessDays: 1,
+    openWindowDays: null,
+    blocksBilling: false,
+    params: {},
+  },
+  // M2 — no physical snapshot within N days (the reconcile cadence backing the
+  // COR + quarterly MRC counts).
+  {
+    checkCode: 'm2_missing_snapshot',
+    enabled: true,
+    severity: 'medium',
+    unitTolerance: 0,
+    weightToleranceLbs: 0,
+    graceBusinessDays: 0,
+    openWindowDays: null,
+    blocksBilling: false,
+    params: { snapshot_cadence_days: 35 },
+  },
 ];
 
 /** Turn a default into a runtime `CheckConfig`. */
