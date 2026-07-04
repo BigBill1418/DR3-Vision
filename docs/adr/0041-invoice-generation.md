@@ -1,6 +1,6 @@
 # ADR-0041 — Invoice generation (the six-invoice set, offset-line math, events capture, Rick's approval gate, GP export boundary)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-04, approved by Bill — D1–D6 walked through and approved individually)
 **Date:** 2026-07-03
 **Relates to:** mission record §3/§3.1/§4/§6-P2; Addendum B §B5 (rate constants), §B8 (two-artifact duplication this kills); ADR-0037 (operational data), ADR-0039 (billing trust gate), ADR-0040 (rates); survey build-inputs §C (Rick's flow + mid-month cutoff + trust bar)
 **Series:** second of three P2 ADRs — 0040 rates (accepted, built), **0041 invoices (this)**, 0042 COR generator
