@@ -566,6 +566,29 @@ services:
     command: ['node', 'scripts/audit-sweep-cron.mjs']
     # Cron daemon, not the web app — disable the inherited HTTP /healthz
     # HEALTHCHECK (would always fail here → false "unhealthy").
+    healthcheck:
+      disable: true
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (bearer for the internal route).
+      # Optional: when absent both sides skip the bearer check.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback —
+      # this is a separate container). The route's cf-connecting-ip guard still
+      # rejects any public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'audit-sweep'
+    logging: *logging
+
   fuel-price-fetch:
     # Weekly EIA fuel-price fetch cron host (ADR-0040 D4).
     #
@@ -617,7 +640,6 @@ services:
       - dr3net
     labels:
       <<: *barnardhq-labels
-      com.barnardhq.service: 'audit-sweep'
       com.barnardhq.service: 'fuel-price-fetch'
     logging: *logging
 
