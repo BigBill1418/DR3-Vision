@@ -19,7 +19,7 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/__tests__/**/*.test.ts'],
-    exclude: ['node_modules', '.next', 'legacy'],
+    exclude: ['node_modules', '.next', 'legacy', '**/*.INTEGRATION-PENDING.ts'],
   },
   resolve: {
     alias: {

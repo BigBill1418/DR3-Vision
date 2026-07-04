@@ -48,6 +48,50 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
   daily-log ceiling 4805). **⚠ Operator action before go-live: align `next_value` to
   the real current counter** (runbook: `docs/operator/events-and-sequences.md`).
   Eugene gets no counter.
+### Added — 2026-07-04 (ADR-0041 — invoice generation, engine half)
+
+- **Invoice engine (ADR-0041, P2; second of 0040/0041/0042).** Vision now generates
+  what Rick assembles by hand from several spreadsheets — the six-invoice set with
+  line-level provenance, immutable-once-approved versioning, Rick's approval gate, and
+  the Great-Plains export boundary. Every number on an invoice is a query result with
+  a `rate_ref` + `source` provenance trail (Rick's typo class, survey Q8, dies at the
+  root). **Schema (one additive migration `20260707_invoice_generation`, clean-replays
+  on empty PG16):** two new tables — `invoices` (six-kind enum with NO
+  `or_processing_mid_month` by construction; `billing_month @db.Date`; `version` +
+  `supersedes_id` self-chain; `status draft|approved|void`; `total_cents` DERIVED but
+  stored for query efficiency with a service-layer Σ-lines invariant enforced on every
+  write and re-asserted at approval) and `invoice_lines` (`line_code`, `quantity`,
+  `rate_ref` jsonb, `amount_cents` incl. negatives, `source` jsonb, `position`).
+  Site-FK is a bare DB-level constraint (self-contained block, mirrors ADR-0040).
+- **Math (§3.1 verbatim, pure + TDD).** `generate.ts` composers: B6 processing
+  (stripped_program × effective `processing_rate`), B7 incentives, B8 event misc
+  (via the `EventCostRow` interface — INTEGRATION-PENDING on the sibling's
+  `collection_events`), B15 = B6+B7+B8, B20 mid-month (1st–15th inclusive, Pacific
+  calendar), B22 = B15 − B20 rendered as an explicit NEGATIVE offset line (the
+  "$118,239 trade discount" artifact becomes an honest subtraction). B16
+  transportation = per-load `resolveFreightCents` (ADR-0040, per-load ref in source)
+  + event freight + fuel surcharge (`fuel.ts`, CA-only, missing-week = typed error)
+  + Σ active `container_rental_sites`. OR: EOM-only, transportation with NO fuel line
+  (structural guard, tested), collection-site count = manual lines (`source.manual`).
+  Zero-guard: a 0¢ processing charge on nonzero units → typed `InvoiceZeroError`.
+- **Trust gate + lifecycle.** Approval enforces the ADR-0039 `gateForWindow`
+  (refuse-with-finding-codes; super-admin override with audited justification),
+  the `can_manage_rates`-is-NOT-sufficient approver rule (manager-of-site or admin),
+  and immutability (approved rows never mutate — corrections are a superseding new
+  version). Draft regenerate voids the prior draft and takes the next version.
+- **Renders + surfaces.** xlsx Summary (exceljs, processing + transportation kinds;
+  commodity blocks excluded per D5) + neutral `invoice_export` JSON (frozen v1
+  contract) as the GP boundary. Routes `/api/manager/[site]/invoices` (list/generate)
+  + `/[id]` (detail w/ inline gate findings + prior-version diff) +
+  `/[id]/{approve,void,supersede,export}`. Manager UI at
+  `/dashboard/[site]/invoices` (list/generate + line drill-down to source rows,
+  approve-with-confirmation). D6 structured logging on every path; no PII in lines
+  or logs.
+- **INTEGRATION-PENDING (wired at merge with the CAPTURE half):** the events (B8 /
+  event-freight) leg — `event-leg.INTEGRATION-PENDING.ts` (ts-nocheck, excluded from
+  tsc/eslint/vitest) maps `collection_events` → `EventCostRow`; until wired,
+  generation prices events at 0¢ with `source.pending = 'events-integration'` (never
+  silently absent).
 
 ### Added — 2026-07-03 (ADR-0040 — billing rate infrastructure)
 

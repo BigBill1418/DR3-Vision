@@ -2057,3 +2057,116 @@ model DocumentSequence {
   @@unique([site_id, sequence_code])
   @@map("document_sequences")
 }
+
+// ADR-0041 — invoices
+//
+// The P2 invoice set: six invoice kinds/month across CA+OR (D1). An invoice is
+// an immutable-once-approved, line-itemized artifact whose every number is a
+// query result with provenance (mission §4 — "generated, never hand-entered";
+// Rick's typo class dies at the root). Drafts regenerate freely (prior draft
+// voided, version+1); an APPROVED invoice is corrected only by a NEW version in
+// a `supersedes_id` chain — both rows retained (the audit trail IS the point).
+//
+// `total_cents` is a DERIVED value (Σ of the line `amount_cents`) stored on the
+// row for query efficiency (a list surface must not N+1 the lines to show a
+// total). The store is a denormalization, so the service layer enforces the
+// invariant `total_cents == Σ lines.amount_cents` on EVERY write, and the
+// approval path re-asserts it before freezing the row (ADR-0033 tripwire
+// philosophy: a money total that silently disagrees with its lines is a defect,
+// never a rounding footnote). See `src/lib/invoices/lifecycle.ts`.
+//
+// COORDINATION (mirrors the ADR-0040 block header): this block is self-contained
+// at the end of the schema. The FK columns to sibling-owned models (`site_id`,
+// and the audit-actor columns `generated_by`/`approved_by`/`voided_by`) are
+// plain scalars — their referential-integrity constraints are created at the DB
+// level in the migration `20260707_invoice_generation`, exactly as
+// `state_program_rules.created_by` / the ADR-0040 tables do. The ONE Prisma
+// relation here is internal (`invoice_lines` → `invoices`) plus the `invoices`
+// self-relation for the supersede chain — both wholly owned by this ADR.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0041 D1 — the six invoice kinds. There is NO `or_processing_mid_month`
+/// value BY CONSTRUCTION: Oregon bills end-of-month only (BillingCadence
+/// `end_of_month_only`), so a mid-month OR invoice is structurally impossible —
+/// the generator can never be asked to build one.
+enum InvoiceKind {
+  ca_processing_mid_month
+  ca_processing_eom
+  ca_transportation_eom
+  or_processing_eom
+  or_transportation_eom
+  or_collection_site_count
+}
+
+enum InvoiceStatus {
+  draft
+  approved
+  void
+}
+
+/// ADR-0041 D1 — an immutable-versioned, line-provenance invoice. One (site,
+/// kind, billing_month) may have many versions; at most one is not-void at a
+/// time within a supersede chain. `window_start`/`window_end` are the billing
+/// window the lines were generated over (the mid-month window is the 1st–15th
+/// inclusive; EOM is the whole month). `billing_month` is the first-of-month
+/// @db.Date the invoice belongs to.
+model Invoice {
+  id            String        @id @default(uuid())
+  site_id       String // FK → sites.id (constraint in migration)
+  kind          InvoiceKind
+  billing_month DateTime      @db.Date // first-of-month @db.Date
+  window_start  DateTime      @db.Date
+  window_end    DateTime      @db.Date
+  version       Int
+  // Self-relation: a new version SUPERSEDES the approved row it corrects. The
+  // chain is append-only; nothing in it is ever edited or deleted.
+  supersedes_id String?
+  supersedes    Invoice?      @relation("InvoiceSupersede", fields: [supersedes_id], references: [id])
+  superseded_by Invoice[]     @relation("InvoiceSupersede")
+  status        InvoiceStatus @default(draft)
+  // DERIVED = Σ lines.amount_cents. Stored for query efficiency; the service
+  // layer asserts the invariant on every write and re-asserts at approval.
+  total_cents   Int
+  generated_by  String? // users.id (bare column — see block header)
+  generated_at  DateTime      @default(now())
+  approved_by   String?
+  approved_at   DateTime?
+  voided_by     String?
+  voided_at     DateTime?
+  // Set on an approvable generation that proceeded past a BLOCKED trust gate via
+  // a super-admin override (D4). Null for a clean-gate or draft-preview invoice.
+  gate_override_note String?
+  notes         String?
+  created_at    DateTime      @default(now())
+  updated_at    DateTime      @updatedAt
+
+  lines InvoiceLine[]
+
+  @@index([site_id, kind, billing_month])
+  @@index([site_id, status])
+  @@index([supersedes_id])
+  @@map("invoices")
+}
+
+/// ADR-0041 D1 — one priced line with full provenance. `line_code` is the
+/// workbook §3.1 map code ('B6','B7','B8','B15','B20','B22','B16.freight',
+/// 'B16.fuel','B16.rentals','B16.event_freight','satellite'). `rate_ref` records
+/// WHICH rule/tier/override row priced it; `source` records the query window +
+/// the row ids/counts that produced the number (drill-down provenance). A line
+/// amount may be NEGATIVE (the B20 offset line on the CA EOM invoice).
+model InvoiceLine {
+  id           String   @id @default(uuid())
+  invoice_id   String
+  invoice      Invoice  @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  line_code    String
+  description  String
+  quantity     Decimal? @db.Decimal(14, 2)
+  rate_ref     Json? // which rule/tier/override row priced this line
+  amount_cents Int // integer cents; may be negative (offset line)
+  source       Json? // query window + row ids/counts + provenance flags
+  position     Int
+  created_at   DateTime @default(now())
+
+  @@index([invoice_id, position])
+  @@map("invoice_lines")
+}
