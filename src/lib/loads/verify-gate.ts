@@ -23,6 +23,11 @@
 import { type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
+import {
+  issueDocumentNumber,
+  siteGetsVisionDr3Number,
+  DR3_NUMBER_SEQUENCE,
+} from '@/lib/events/sequences';
 
 /** Split does not reconcile, or the load cannot be verified from its current state. */
 export class VerifyGateError extends Error {
@@ -115,7 +120,9 @@ export async function verifyLoad(args: {
       site_id: true,
       status: true,
       total_units: true,
+      dr3_number: true,
       source: { select: { is_non_program: true } },
+      site: { select: { jurisdiction: true } },
     },
   });
   if (!load) throw new VerifyGateError('not_found', `load ${args.loadId} not found`, 422);
@@ -135,7 +142,10 @@ export async function verifyLoad(args: {
   let nonProgramUnits = args.nonProgramUnits;
   if (programUnits === undefined && nonProgramUnits === undefined) {
     if (load.total_units == null) {
-      throw new VerifyGateError('missing_total', 'cannot default the split with no total_units — capture the count first');
+      throw new VerifyGateError(
+        'missing_total',
+        'cannot default the split with no total_units — capture the count first',
+      );
     }
     // Billing pool attribution must NEVER default blind. If the load has no source,
     // there is no basis to decide program vs non-program — refuse loudly (422) and
@@ -163,18 +173,36 @@ export async function verifyLoad(args: {
       '[verify-gate] program split defaulted from source flag',
     );
   } else if (programUnits === undefined || nonProgramUnits === undefined) {
-    throw new VerifyGateError('invalid_split', 'supply BOTH program and non-program units, or neither (to default from source)');
+    throw new VerifyGateError(
+      'invalid_split',
+      'supply BOTH program and non-program units, or neither (to default from source)',
+    );
   }
 
   assertProgramSplit(load.total_units, programUnits, nonProgramUnits);
 
+  // ADR-0041 (capture half; B6/B10-6) — the office VERIFY step is the moment a
+  // load becomes a confirmed record, so it is where a Vision-assigned DR3 number
+  // is issued (never at operator-start — that would burn counter numbers on loads
+  // that may be rejected). Woodland-style (CA) sites only; Eugene (OR) leaves it
+  // null (their scan-timestamp lives in existing arrival fields). Issued INSIDE the
+  // verify transaction so the atomic counter increment rolls back with a failed
+  // verify. `verified` is reached exactly once per load, and we only issue when
+  // `dr3_number` is still null, so a number is never double-assigned.
+  const issuesDr3 =
+    load.site != null && siteGetsVisionDr3Number(load.site.jurisdiction) && load.dr3_number == null;
+
   await prisma.$transaction(async (tx) => {
+    const dr3Number = issuesDr3
+      ? String(await issueDocumentNumber(load.site_id, DR3_NUMBER_SEQUENCE, tx))
+      : null;
     await tx.inboundLoad.update({
       where: { id: args.loadId },
       data: {
         status: 'verified',
         program_unit_count: programUnits,
         non_program_unit_count: nonProgramUnits,
+        ...(dr3Number != null ? { dr3_number: dr3Number } : {}),
       },
     });
     await tx.auditLog.create({
@@ -188,8 +216,15 @@ export async function verifyLoad(args: {
           status: 'verified',
           program_unit_count: programUnits,
           non_program_unit_count: nonProgramUnits,
+          ...(dr3Number != null ? { dr3_number: dr3Number } : {}),
         },
       },
     });
+    if (dr3Number != null) {
+      log.info(
+        { loadId: args.loadId, siteId: load.site_id, dr3_number: dr3Number },
+        '[verify-gate] issued Vision DR3 number',
+      );
+    }
   });
 }

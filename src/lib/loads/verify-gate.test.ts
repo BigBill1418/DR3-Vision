@@ -9,6 +9,10 @@ interface MockLoad {
   status: string;
   total_units: number | null;
   source: { is_non_program: boolean } | null;
+  // ADR-0041 (capture half) — present on real selects; optional here so the
+  // pre-0041 cases (no site/dr3) exercise the "no DR3# issued" path unchanged.
+  site?: { jurisdiction: string } | null;
+  dr3_number?: string | null;
 }
 const store = {
   load: null as MockLoad | null,
@@ -41,7 +45,24 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { assertProgramSplit, defaultProgramSplit, verifyLoad, VerifyGateError } from './verify-gate';
+// ADR-0041 (capture half) — issuance is exercised for real in sequences.test.ts;
+// here it is stubbed so the verify-gate test asserts only the WIRING (issue when
+// CA + dr3 null; skip otherwise). The real siteGetsVisionDr3Number / constant pass
+// through so the jurisdiction trigger is genuinely under test.
+vi.mock('@/lib/events/sequences', async (orig) => {
+  const actual = await orig<typeof import('@/lib/events/sequences')>();
+  return { ...actual, issueDocumentNumber: vi.fn(async () => 5000) };
+});
+
+import {
+  assertProgramSplit,
+  defaultProgramSplit,
+  verifyLoad,
+  VerifyGateError,
+} from './verify-gate';
+import { issueDocumentNumber } from '@/lib/events/sequences';
+
+const issueMock = issueDocumentNumber as unknown as ReturnType<typeof vi.fn>;
 
 describe('assertProgramSplit — pure boundary math', () => {
   it('passes when program + non-program equals total', () => {
@@ -85,7 +106,13 @@ describe('defaultProgramSplit — source-driven default (B7)', () => {
 
 describe('verifyLoad — server-side gate', () => {
   beforeEach(() => {
-    store.load = { id: 'L1', site_id: 'S1', status: 'submitted', total_units: 175, source: { is_non_program: false } };
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 175,
+      source: { is_non_program: false },
+    };
     store.updates.length = 0;
     store.audits.length = 0;
   });
@@ -106,7 +133,13 @@ describe('verifyLoad — server-side gate', () => {
   });
 
   it('defaults the split from a NON-PROGRAM source when no split is supplied (B7)', async () => {
-    store.load = { id: 'L1', site_id: 'S1', status: 'submitted', total_units: 175, source: { is_non_program: true } };
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 175,
+      source: { is_non_program: true },
+    };
     await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
     const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
     expect(upd.program_unit_count).toBe(0);
@@ -136,7 +169,13 @@ describe('verifyLoad — server-side gate', () => {
 
   it('still verifies a null-source load when an EXPLICIT reconciling split is supplied', async () => {
     store.load = { id: 'L1', site_id: 'S1', status: 'submitted', total_units: 175, source: null };
-    await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1', programUnits: 100, nonProgramUnits: 75 });
+    await verifyLoad({
+      loadId: 'L1',
+      siteId: 'S1',
+      verifierUserId: 'U1',
+      programUnits: 100,
+      nonProgramUnits: 75,
+    });
     expect(store.updates).toHaveLength(1);
     const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
     expect(upd.program_unit_count).toBe(100);
@@ -151,16 +190,34 @@ describe('verifyLoad — server-side gate', () => {
 
   it('blocks (no writes) when the split does not reconcile', async () => {
     await expect(
-      verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1', programUnits: 150, nonProgramUnits: 20 }),
+      verifyLoad({
+        loadId: 'L1',
+        siteId: 'S1',
+        verifierUserId: 'U1',
+        programUnits: 150,
+        nonProgramUnits: 20,
+      }),
     ).rejects.toBeInstanceOf(VerifyGateError);
     expect(store.updates).toHaveLength(0);
     expect(store.audits).toHaveLength(0);
   });
 
   it('refuses a load not in submitted state (409 wrong_state)', async () => {
-    store.load = { id: 'L1', site_id: 'S1', status: 'in_progress', total_units: 175, source: { is_non_program: false } };
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'in_progress',
+      total_units: 175,
+      source: { is_non_program: false },
+    };
     try {
-      await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1', programUnits: 150, nonProgramUnits: 25 });
+      await verifyLoad({
+        loadId: 'L1',
+        siteId: 'S1',
+        verifierUserId: 'U1',
+        programUnits: 150,
+        nonProgramUnits: 25,
+      });
       expect.unreachable('should throw');
     } catch (e) {
       expect((e as VerifyGateError).reason).toBe('wrong_state');
@@ -170,7 +227,85 @@ describe('verifyLoad — server-side gate', () => {
 
   it('refuses a load at another site', async () => {
     await expect(
-      verifyLoad({ loadId: 'L1', siteId: 'OTHER', verifierUserId: 'U1', programUnits: 150, nonProgramUnits: 25 }),
+      verifyLoad({
+        loadId: 'L1',
+        siteId: 'OTHER',
+        verifierUserId: 'U1',
+        programUnits: 150,
+        nonProgramUnits: 25,
+      }),
     ).rejects.toBeInstanceOf(VerifyGateError);
+  });
+});
+
+describe('verifyLoad — ADR-0041 DR3# issuance at the office verify step', () => {
+  beforeEach(() => {
+    issueMock.mockClear();
+    store.updates.length = 0;
+    store.audits.length = 0;
+  });
+
+  it('issues a Vision DR3# for a CA-jurisdiction load with none yet, stamped as a string', async () => {
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 175,
+      source: { is_non_program: false },
+      site: { jurisdiction: 'california' },
+      dr3_number: null,
+    };
+    await verifyLoad({
+      loadId: 'L1',
+      siteId: 'S1',
+      verifierUserId: 'U1',
+      programUnits: 175,
+      nonProgramUnits: 0,
+    });
+    expect(issueMock).toHaveBeenCalledTimes(1);
+    const upd = store.updates[0] as { dr3_number?: string };
+    expect(upd.dr3_number).toBe('5000');
+  });
+
+  it('does NOT issue for an Oregon load (dr3_number left unset)', async () => {
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 10,
+      source: { is_non_program: false },
+      site: { jurisdiction: 'oregon' },
+      dr3_number: null,
+    };
+    await verifyLoad({
+      loadId: 'L1',
+      siteId: 'S1',
+      verifierUserId: 'U1',
+      programUnits: 10,
+      nonProgramUnits: 0,
+    });
+    expect(issueMock).not.toHaveBeenCalled();
+    const upd = store.updates[0] as { dr3_number?: string };
+    expect(upd.dr3_number).toBeUndefined();
+  });
+
+  it('does NOT re-issue when the load already carries a DR3#', async () => {
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 10,
+      source: { is_non_program: false },
+      site: { jurisdiction: 'california' },
+      dr3_number: '4805',
+    };
+    await verifyLoad({
+      loadId: 'L1',
+      siteId: 'S1',
+      verifierUserId: 'U1',
+      programUnits: 10,
+      nonProgramUnits: 0,
+    });
+    expect(issueMock).not.toHaveBeenCalled();
   });
 });
