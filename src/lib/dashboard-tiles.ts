@@ -150,6 +150,19 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'admin-only',
   },
+  // ADR-0045 — ops ledger tile (meeting notes + task follow-ups + overdue tile).
+  // Manager+ audience; the page itself scopes to the caller's site (hard rule #2).
+  // The [site] placeholder is resolved to the caller's own site by the `/`
+  // launcher, exactly like the loads-inventory tile above.
+  {
+    key: 'ops-ledger',
+    label: 'Ops Ledger',
+    description: 'Meeting notes and task follow-ups, with overdue / due-today reminders.',
+    icon: 'ListTodo',
+    route: '/dashboard/[site]/ops',
+    status: 'active',
+    scope: 'manager+',
+  },
   {
     // ADR-0037 D5 — the billing basis: processed units per site per day, daily
     // close. Office desktop, super-admin gated (mission §3).

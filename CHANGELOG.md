@@ -48,6 +48,47 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
   launcher **Equipment** tile (manager+) and the site-dashboard tile.
 - **Docs:** operator guide `docs/operator/equipment.md`; ADR-0044 post-acceptance
   implementation notes.
+### Added — 2026-07-05 (ADR-0045 — P5 ops ledger + Updates digest + contact routing)
+
+- **ADR-0045 (P5).** Three of Kelsey's residual functions become thin, audited
+  surfaces over existing machinery (no new pipeline, no new container): a
+  meeting-notes + task-follow-up ledger, a Vision-drafted / human-sent DR3 Updates
+  digest + board pack, and website contact-form routing. Everything human-sent stays
+  human-sent — Vision never impersonates Morena/Bethany.
+- **Schema (one additive migration `20260711_ops_ledger_intake`, sorts after
+  `20260709_alert_recipients` and the parallel ADR-0044 `20260710_`; clean-replays on
+  empty PG16):** four enums (`OpsTaskStatus`, `OpsTaskSource`, `UpdateDigestStatus`,
+  `UpdateDigestKind`) + five tables — `ops_notes`, `ops_tasks` (source
+  manual/meeting/contact_form, `note_id` FK), `update_digests` (draft/finalized, no
+  send column), `contact_intakes` (visitor-PII columns), `contact_routes` (seeded
+  idempotently in-migration: `tour*` → rick.albritton@, `*` → morena.gomez@). Sibling
+  FK columns (`site_id`, audit-actor cols) are bare DB-level constraints per the
+  ADR-0040/0041/0042 precedent; the two intra-block relations (`ops_tasks.note`,
+  `contact_intakes.task`) carry Prisma relations.
+- **Ledger (`src/lib/ops/`, TDD):** notes + tasks services with hard-rule-#2 reach
+  (site rows site-scoped; `site_id = NULL` rows org-wide, admin/all_sites only),
+  the meeting → action-items motion (one note + N tasks in one transaction), audited
+  status transitions, and `dueSummaryForSite` (overdue / due-today). Dashboard tile
+  + `/dashboard/[site]/ops` surface (notes list/editor, task queue with filters). The
+  ADR-0043 daily digest gains a second **Follow-ups due** section and now sends when
+  findings OR due tasks exist (a quiet day still sends nothing).
+- **Updates digest + board pack (`src/lib/ops/update-digest.ts`, D2):** weekly draft
+  on the Monday tick + board pack on the 2nd-Wednesday-and-preceding-Monday cadence
+  (`digest-calendar.ts`, pure, TDD incl. month/year edges), composed from
+  closes/movement/open-findings/completed-tasks and equipment events via an injected
+  provider with a documented **absent-table fallback** (ADR-0044 equipment table not
+  in this worktree — see MERGE-WIRING note). Review surface `/dashboard/ops/digests`
+  (admin/all_sites): markdown edit, audited finalize, copy-ready HTML + copy button.
+  The module has **no mail path** (a test scans the source and fails on any send).
+- **Contact intake (`src/lib/intake/`, D3):** `POST /api/intake/contact` — public,
+  fail-closed shared-secret (`x-intake-token`, absent env → 503), honeypot, in-memory
+  per-IP rate limit, zod validation; routes via `contact_routes` (first active match,
+  `*`-suffix glob) → creates an `ops_task` + `sendSystemEmail` to the routed address.
+  PII discipline: name/email/phone never logged (row ids only; log-absence test).
+  Middleware exemption `/api/intake/` + `public-paths.test.ts` case. `.env.example`
+  gains `INTAKE_TOKEN`.
+- **Docs:** operator runbook `docs/operator/ops-ledger-and-intake.md` (incl. the WP
+  form wiring), ADR-0045 post-acceptance notes.
 
 ### Added — 2026-07-04 (ADR-0043 — P3 rate alerts + missing-record detection)
 

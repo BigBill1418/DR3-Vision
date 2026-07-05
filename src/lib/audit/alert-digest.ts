@@ -18,8 +18,9 @@
 import { prisma } from '@/lib/prisma';
 import { sendSystemEmail } from '@/lib/m365-mail';
 import { publishNtfy } from '@/lib/ntfy';
-import { appToday } from '@/lib/time';
+import { appToday, dayISO } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
+import { dueSummaryForSite } from '@/lib/ops/tasks';
 import type { CheckCode, Severity } from './types';
 
 const R_M_CHECKS: CheckCode[] = [
@@ -87,11 +88,21 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ADR-0045 D1 — a due/overdue task line for the digest's second section.
+export interface DigestTaskLine {
+  id: string;
+  title: string;
+  dueISO: string | null;
+  overdue: boolean;
+}
+
 export function renderDigestHtml(
   site: { code: string; name: string },
   findings: readonly DigestFinding[],
+  dueTasks: readonly DigestTaskLine[] = [],
 ): string {
   const auditUrl = `${baseUrl()}/dashboard/${site.code}/audit`;
+  const opsUrl = `${baseUrl()}/dashboard/${site.code}/ops`;
   const rows = findings
     .map((f, i) => {
       const border = i === 0 ? '' : `border-top:1px solid ${HAIRLINE};`;
@@ -105,6 +116,42 @@ export function renderDigestHtml(
     })
     .join('');
 
+  // ADR-0045 D1 — second section: overdue / due-today ops tasks for this site.
+  const taskRows = dueTasks
+    .map((t, i) => {
+      const border = i === 0 ? '' : `border-top:1px solid ${HAIRLINE};`;
+      const cell = `padding:8px 0;${border}font-size:14px;color:${INK}`;
+      const tag = t.overdue ? 'OVERDUE' : 'DUE TODAY';
+      const tagColor = t.overdue ? SVDP_RED : '#b8860b';
+      const due = t.dueISO ? `due ${escapeHtml(t.dueISO)}` : 'no due date';
+      return `<tr>
+        <td style="${cell}"><span style="display:inline-block;min-width:72px;color:${tagColor};font-weight:700;text-transform:uppercase;font-size:11px">${tag}</span></td>
+        <td style="${cell}">${escapeHtml(t.title)}<div style="color:${MUTED};font-size:12px">${due}</div></td>
+      </tr>`;
+    })
+    .join('');
+
+  const findingsBlock =
+    findings.length === 0
+      ? ''
+      : `<h2 style="color:${SVDP_RED};font-size:15px;margin:0 0 8px">Contract-rate &amp; record alerts</h2>
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${rows}</table>
+          <p style="margin:14px 0 0"><a href="${auditUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the audit review queue</a></p>`;
+
+  const tasksBlock =
+    dueTasks.length === 0
+      ? ''
+      : `<h2 style="color:${SVDP_RED};font-size:15px;margin:${findings.length === 0 ? '0' : '24px'} 0 8px">Follow-ups due</h2>
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${taskRows}</table>
+          <p style="margin:14px 0 0"><a href="${opsUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the ops ledger</a></p>`;
+
+  const summaryParts: string[] = [];
+  if (findings.length > 0)
+    summaryParts.push(`${findings.length} open finding${findings.length === 1 ? '' : 's'}`);
+  if (dueTasks.length > 0)
+    summaryParts.push(`${dueTasks.length} follow-up${dueTasks.length === 1 ? '' : 's'} due`);
+  const summary = summaryParts.join(' · ') || 'items needing review';
+
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:${SVDP_CREAM}">
@@ -112,13 +159,13 @@ export function renderDigestHtml(
     <tr><td align="center" style="padding:24px 12px">
       <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="width:600px;max-width:100%;background:#ffffff;border-radius:8px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
         <tr><td style="background:${SVDP_RED};padding:18px 24px">
-          <div style="color:#ffffff;font-size:17px;font-weight:700;line-height:1.25">${escapeHtml(site.name)} — contract-rate &amp; record alerts</div>
-          <div style="color:#f3d7d8;font-size:13px;padding-top:2px">${findings.length} open finding${findings.length === 1 ? '' : 's'} needing review</div>
+          <div style="color:#ffffff;font-size:17px;font-weight:700;line-height:1.25">${escapeHtml(site.name)} — daily digest</div>
+          <div style="color:#f3d7d8;font-size:13px;padding-top:2px">${summary}</div>
         </td></tr>
         <tr><td style="height:4px;background:${SVDP_GOLD};font-size:0;line-height:0">&nbsp;</td></tr>
         <tr><td style="padding:22px 24px 26px">
-          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${rows}</table>
-          <p style="margin:22px 0 0"><a href="${auditUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the audit review queue</a></p>
+          ${findingsBlock}
+          ${tasksBlock}
           <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:18px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Early-warning from DR3-Vision — before MRC computes the official rate. A low rate that coincides with a missing-record finding is likely a data gap; open the finding for its linked cause.<br>
             St. Vincent de Paul Society of Lane County
@@ -154,7 +201,22 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
         orderBy: [{ severity: 'desc' }, { last_seen_at: 'desc' }],
         select: { id: true, check_code: true, severity: true, window_start: true, window_end: true },
       });
-      if (findingRows.length === 0) {
+
+      // ADR-0045 D1 — overdue / due-today ops tasks for this site (site-scoped
+      // only; org-wide follow-ups live on the dashboard tile, not per-site email,
+      // so they are never duplicated across both sites' digests).
+      const due = await dueSummaryForSite(site.id, digestDate, false);
+      const dueTasks: DigestTaskLine[] = [...due.overdue, ...due.dueToday].map((t) => ({
+        id: t.id,
+        title: t.title,
+        dueISO: t.dueDate ? dayISO(t.dueDate) : null,
+        overdue: t.overdue,
+      }));
+
+      // The digest still sends ONLY when there is something to report: open
+      // findings OR due tasks. A quiet day sends nothing (ADR-0043 invariant,
+      // extended by ADR-0045 D1).
+      if (findingRows.length === 0 && dueTasks.length === 0) {
         outcomes.push({ siteCode: site.code, status: 'skipped_no_findings' });
         continue;
       }
@@ -178,8 +240,13 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
         windowEndISO: f.window_end.toISOString().slice(0, 10),
       }));
 
-      const subject = `DR3-Vision alerts — ${site.name} — ${findings.length} open finding${findings.length === 1 ? '' : 's'}`;
-      const htmlBody = renderDigestHtml(site, findings);
+      const subjParts: string[] = [];
+      if (findings.length > 0)
+        subjParts.push(`${findings.length} open finding${findings.length === 1 ? '' : 's'}`);
+      if (dueTasks.length > 0)
+        subjParts.push(`${dueTasks.length} follow-up${dueTasks.length === 1 ? '' : 's'} due`);
+      const subject = `DR3-Vision daily digest — ${site.name} — ${subjParts.join(' · ')}`;
+      const htmlBody = renderDigestHtml(site, findings, dueTasks);
 
       // Per-recipient send so one bad address never blocks the others.
       const results = [];

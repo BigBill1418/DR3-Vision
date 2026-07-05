@@ -2406,3 +2406,167 @@ model EquipmentEvent {
   @@index([site_id, kind])
   @@map("equipment_events")
 }
+
+// ADR-0045 — ops ledger + intake
+//
+// P5: the weekly meeting-notes / task-follow-up ledger (D1), the DR3 Updates +
+// board-pack digest generator (D2 — Vision DRAFTS, a human SENDS; there is no
+// mail path in the digest module), and the website contact-form intake + routing
+// (D3). Five small, additive tables.
+//
+// COORDINATION (mirrors the ADR-0040/0041/0042 block headers, and shares the
+// schema tail with the parallel ADR-0044 equipment build): this whole block is
+// self-contained at the end of the schema. FK columns to SIBLING-owned models
+// (`site_id`, and the audit-actor columns `author_user_id` / `assignee_user_id` /
+// `created_by` / `completed_by` / `generated_by` / `finalized_by`) are declared
+// as plain scalars — their referential-integrity constraints are created at the
+// DB level in the migration `20260711_ops_ledger_intake`, exactly as
+// `alert_recipients` / `cor_certificates` do it. The Prisma relations declared
+// here (`ops_tasks.note` → `ops_notes`, `contact_intakes.task` → `ops_tasks`) are
+// WHOLLY within this block, so they add no back-relation field to any shared
+// model. Reach rules (hard rule #2): a row with `site_id` set is site-scoped; a
+// `site_id = NULL` row is org-wide (Bill/Morena cross-site follow-ups), visible
+// only to admin or an all_sites manager. Enforced in `src/lib/ops/reach.ts`.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0045 D1 — task lifecycle. `open` on creation; `done` records
+/// completed_at/completed_by; `dropped` closes without completion. Transitions
+/// are audited (`writeAudit` on `ops_tasks`).
+enum OpsTaskStatus {
+  open
+  done
+  dropped
+}
+
+/// ADR-0045 D1 — task provenance. `manual` (typed in the queue), `meeting` (born
+/// from a note's action-items, same transaction), `contact_form` (born from a D3
+/// intake).
+enum OpsTaskSource {
+  manual
+  meeting
+  contact_form
+}
+
+/// ADR-0045 D2 — digest lifecycle. A `draft` regenerates freely (idempotent per
+/// (kind, period_start)); `finalized` records finalized_by/finalized_at and is the
+/// copy-ready artifact Morena/Bethany sends by hand. Vision NEVER sends it.
+enum UpdateDigestStatus {
+  draft
+  finalized
+}
+
+/// ADR-0045 D2 — which generator produced the digest. `weekly` = the DR3 Updates
+/// digest (Monday tick). `board_pack` = Bethany's board cadence (2nd Wednesday +
+/// the preceding Monday). Not in the ADR's illustrative DDL; added so both live
+/// in one table with per-kind, per-period idempotency (post-acceptance note).
+enum UpdateDigestKind {
+  weekly
+  board_pack
+}
+
+/// ADR-0045 D1 — a meeting/ops note. `site_id = NULL` is an org-wide note. A note
+/// can spawn N tasks in one motion (meeting → action items), linked via
+/// `ops_tasks.note_id`.
+model OpsNote {
+  id             String   @id @default(uuid())
+  site_id        String? // null = org-wide; FK constraint in the migration
+  note_date      DateTime @db.Date
+  title          String?
+  body           String
+  author_user_id String? // bare audit-actor column (see block header)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  tasks OpsTask[]
+
+  @@index([site_id, note_date])
+  @@map("ops_notes")
+}
+
+/// ADR-0045 D1 — a task/follow-up. Reminders are in-app + digest, NEVER push
+/// (hard rule #5): overdue/due-today tasks surface on the dashboard tile and ride
+/// the ADR-0043 daily digest as a second section.
+model OpsTask {
+  id               String        @id @default(uuid())
+  site_id          String? // null = org-wide; FK constraint in the migration
+  title            String
+  body             String?
+  assignee_user_id String? // bare column
+  due_date         DateTime?     @db.Date
+  status           OpsTaskStatus @default(open)
+  source           OpsTaskSource @default(manual)
+  note_id          String?
+  note             OpsNote?      @relation(fields: [note_id], references: [id])
+  created_by       String? // bare column
+  completed_at     DateTime?
+  completed_by     String? // bare column
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+
+  contact_intake ContactIntake? // back-relation for contact_intakes.task_id
+
+  @@index([site_id, status, due_date])
+  @@index([note_id])
+  @@map("ops_tasks")
+}
+
+/// ADR-0045 D2 — a generated digest DRAFT (weekly Updates or board pack). The
+/// review surface edits `body_md`; finalize renders copy-ready HTML + a copy
+/// button. There is deliberately NO send column and NO mail call anywhere in the
+/// digest module (the locked disposition: a human owns the send).
+model UpdateDigest {
+  id           String             @id @default(uuid())
+  kind         UpdateDigestKind   @default(weekly)
+  period_start DateTime           @db.Date
+  period_end   DateTime           @db.Date
+  body_md      String
+  status       UpdateDigestStatus @default(draft)
+  generated_by String? // bare column ('system:update-digest' for the tick)
+  finalized_by String? // bare column
+  finalized_at DateTime?
+  created_at   DateTime           @default(now())
+  updated_at   DateTime           @updatedAt
+
+  @@unique([kind, period_start])
+  @@index([status, period_start])
+  @@map("update_digests")
+}
+
+/// ADR-0045 D3 — a received website contact-form submission. `name`/`email`/
+/// `phone` are visitor PII: excluded from every export surface, retained per a
+/// documented window (default 2 years), and NEVER logged (row ids in logs only).
+model ContactIntake {
+  id              String   @id @default(uuid())
+  received_at     DateTime @default(now())
+  topic           String
+  name            String?
+  email           String?
+  phone           String?
+  message         String
+  routed_to_email String
+  route_id        String? // the contact_routes row that matched (logged, not the address)
+  task_id         String?  @unique
+  task            OpsTask? @relation(fields: [task_id], references: [id])
+  source_form     String
+  created_at      DateTime @default(now())
+
+  @@index([received_at])
+  @@map("contact_intakes")
+}
+
+/// ADR-0045 D3 — a topic→email routing rule. `topic_match` supports an exact
+/// match or a `*`-suffix glob (`tour*`) or the catch-all `*`; first ACTIVE match
+/// by ascending `priority` wins. Seeded (migration): `tour*` → Rick, `*` → Morena.
+model ContactRoute {
+  id             String   @id @default(uuid())
+  topic_match    String   @unique
+  route_to_email String
+  active         Boolean  @default(true)
+  priority       Int      @default(100) // lower matches earlier; catch-all is highest
+  created_by     String? // bare column
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@index([active])
+  @@map("contact_routes")
+}

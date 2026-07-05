@@ -23,6 +23,7 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/survey/reminder-tick', // ADR-0036 — the 2026-07-03 regression
     '/api/internal/audit/sweep', // ADR-0039 — same loopback-guarded cron pattern
     '/api/internal/billing/fuel-fetch', // ADR-0040 D4 — mandatory day-one exemption
+    '/api/intake/contact', // ADR-0045 D3 — public token-guarded contact intake
     '/operator',
     '/operator/site',
     '/survey/sometoken',

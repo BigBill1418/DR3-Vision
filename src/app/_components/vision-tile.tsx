@@ -26,6 +26,7 @@ import {
   FileSpreadsheet,
   IdCard,
   LayoutDashboard,
+  ListTodo,
   PenTool,
   Plug,
   Scale,
@@ -46,6 +47,7 @@ const ICONS: Record<string, LucideIcon> = {
   FileSpreadsheet,
   IdCard,
   LayoutDashboard,
+  ListTodo, // ADR-0045 — ops ledger tile
   PenTool,
   Plug,
   Scale,
