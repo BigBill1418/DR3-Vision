@@ -6,6 +6,7 @@ const logFindUnique = vi.fn();
 const logCreate = vi.fn();
 const findingFindMany = vi.fn();
 const recipientFindMany = vi.fn();
+const opsTaskFindMany = vi.fn();
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -16,6 +17,7 @@ vi.mock('@/lib/prisma', () => ({
     },
     auditFinding: { findMany: (...a: unknown[]) => findingFindMany(...a) },
     alertRecipient: { findMany: (...a: unknown[]) => recipientFindMany(...a) },
+    opsTask: { findMany: (...a: unknown[]) => opsTaskFindMany(...a) },
   },
 }));
 
@@ -26,7 +28,10 @@ const publishNtfy = vi.fn();
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: (...a: unknown[]) => publishNtfy(...a) }));
 
 const DAY_KEY = new Date(Date.UTC(2026, 6, 4)); // 2026-07-04
-vi.mock('@/lib/time', () => ({ appToday: () => DAY_KEY }));
+vi.mock('@/lib/time', () => ({
+  appToday: () => DAY_KEY,
+  dayISO: (d: Date) => d.toISOString().slice(0, 10),
+}));
 
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -54,6 +59,7 @@ beforeEach(() => {
   logFindUnique.mockResolvedValue(null);
   logCreate.mockResolvedValue({ id: 'log1' });
   findingFindMany.mockResolvedValue([findingRow()]);
+  opsTaskFindMany.mockResolvedValue([]); // no due tasks by default
   recipientFindMany.mockResolvedValue([{ email: 'morena.gomez@svdp.us' }, { email: 'janette.tomas@svdp.us' }]);
   sendSystemEmail.mockResolvedValue({ delivered: true, disabled: false, messageId: 'm-1', retries: 0, lastStatus: undefined });
   publishNtfy.mockResolvedValue({ ok: true, outcome: 'sent' });
@@ -77,12 +83,31 @@ describe('runAlertDigestFire', () => {
     expect(publishNtfy).not.toHaveBeenCalled();
   });
 
-  it('skips when there are no open R/M findings (no email, no log)', async () => {
+  it('skips when there are no open R/M findings AND no due tasks (no email, no log)', async () => {
     findingFindMany.mockResolvedValue([]);
+    opsTaskFindMany.mockResolvedValue([]);
     const { outcomes } = await runAlertDigestFire(NOW);
     expect(outcomes[0]).toEqual({ siteCode: 'woodland', status: 'skipped_no_findings' });
     expect(sendSystemEmail).not.toHaveBeenCalled();
     expect(logCreate).not.toHaveBeenCalled();
+  });
+
+  it('ADR-0045 — sends a tasks-only digest when there are due tasks but no findings', async () => {
+    findingFindMany.mockResolvedValue([]);
+    // one overdue (due before DAY_KEY) + one due today (== DAY_KEY)
+    opsTaskFindMany.mockResolvedValue([
+      { id: 't1', site_id: 'site-w', title: 'Call MRC rep', due_date: new Date(Date.UTC(2026, 6, 1)), assignee_user_id: null },
+      { id: 't2', site_id: 'site-w', title: 'Snapshot yard', due_date: DAY_KEY, assignee_user_id: null },
+    ]);
+    const { outcomes } = await runAlertDigestFire(NOW);
+    expect(outcomes[0]!.status).toBe('sent');
+    expect(sendSystemEmail).toHaveBeenCalledTimes(2); // per recipient
+    const html = sendSystemEmail.mock.calls[0]![0].htmlBody as string;
+    expect(html).toContain('Follow-ups due');
+    expect(html).toContain('Call MRC rep');
+    expect(html).toContain('OVERDUE');
+    expect(html).toContain('DUE TODAY');
+    expect(logCreate.mock.calls[0]![0].data).toMatchObject({ finding_count: 0 });
   });
 
   it('is idempotent — a same-day re-fire is skipped via the digest log', async () => {

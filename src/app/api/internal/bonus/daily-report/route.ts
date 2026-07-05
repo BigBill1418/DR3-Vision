@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server';
 import { runDailyReportFire } from '@/lib/bonus/daily-report-runner';
 import { runAlertDigestFire, type DigestOutcome } from '@/lib/audit/alert-digest';
+import { runUpdateDigestFire, type UpdateDigestFireOutcome } from '@/lib/ops/update-digest';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -52,5 +53,18 @@ export async function POST(req: Request): Promise<Response> {
     log.error({ err }, '[alert-digest] fire threw (non-fatal to daily-report route)');
   }
 
-  return NextResponse.json({ outcomes, alertOutcomes });
+  // ADR-0045 D2 — the Updates digest + board pack ride this same tick. Both are
+  // idempotent per (kind, period_start): the weekly draft generates on a Monday,
+  // the board pack on the 2nd Wednesday + preceding Monday (pure date logic), and
+  // a re-fire is a no-op so a human's edits are never clobbered. Vision only
+  // DRAFTS — it never sends these (locked disposition). Never throws out of here.
+  let updateDigest: UpdateDigestFireOutcome | null = null;
+  try {
+    updateDigest = await runUpdateDigestFire(now);
+    log.info({ updateDigest }, '[update-digest] run complete');
+  } catch (err) {
+    log.error({ err }, '[update-digest] fire threw (non-fatal to daily-report route)');
+  }
+
+  return NextResponse.json({ outcomes, alertOutcomes, updateDigest });
 }

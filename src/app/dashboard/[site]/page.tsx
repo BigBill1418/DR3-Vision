@@ -148,6 +148,15 @@ export default async function SiteDashboardPage({ params }: Props) {
                 COR
               </Link>
             )}
+            {/* ADR-0045 — ops ledger (meeting notes + task follow-ups). Reach is
+                enforced on the page itself (manager of the site / all_sites / admin). */}
+            <Link
+              href={`/dashboard/${site.code}/ops`}
+              className="rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 px-3 py-1.5 text-dr3-mist transition-colors hover:border-dr3-cyan/50 hover:bg-dr3-steel/40"
+              data-testid="dashboard-ops-link"
+            >
+              Ops ledger
+            </Link>
           </nav>
         </header>
 

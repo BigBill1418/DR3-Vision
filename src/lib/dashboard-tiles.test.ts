@@ -57,6 +57,15 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
   it('Janette (Woodland manager) sees Bonus + Exports + Equipment active, no Admin', () => {
     const janette = makeSession('manager', WOODLAND);
     expect(activeKeys(janette)).toEqual(['bonus', 'exports', 'equipment']);
+    // ADR-0045 — the ops-ledger tile (manager+) sits in ACTIVE_TILES after
+    // loads-inventory, before the super-admin processed-units, so it appears
+    // between loads-inventory and observability for an admin.
+    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'loads-inventory', 'ops-ledger', 'observability']);
+  });
+
+  it('Janette (Woodland manager) sees Bonus + Exports + Ops-Ledger active, no Admin', () => {
+    const janette = makeSession('manager', WOODLAND);
+    expect(activeKeys(janette)).toEqual(['bonus', 'exports', 'ops-ledger']);
     expect(canSeeTile(janette, tileByKey('admin'), WOODLAND)).toBe(false);
     expect(canSeeTile(janette, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
@@ -68,11 +77,17 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
   });
 
   it('Rick (Eugene manager) now sees Bonus + Exports + Equipment — ADR-0019.2 §1, NO Admin', () => {
+    expect(activeKeys(morena)).toEqual(['bonus', 'exports', 'ops-ledger']);
+    expect(canSeeTile(morena, tileByKey('bonus'), WOODLAND)).toBe(true);
+  });
+
+  it('Rick (Eugene manager) now sees Bonus + Exports + Ops-Ledger — ADR-0019.2 §1, NO Admin', () => {
     // The bonus tile matrix expanded (hard rule 6): Rick (Eugene) passes the
     // bonus gate. He still has no Admin & Audit (admin-only). ADR-0044 adds the
     // manager+ Equipment tile.
     const rick = makeSession('manager', EUGENE);
     expect(activeKeys(rick)).toEqual(['bonus', 'exports', 'equipment']);
+    expect(activeKeys(rick)).toEqual(['bonus', 'exports', 'ops-ledger']);
     expect(canSeeTile(rick, tileByKey('bonus'), WOODLAND)).toBe(true);
     expect(canSeeTile(rick, tileByKey('admin'), WOODLAND)).toBe(false);
   });
@@ -146,6 +161,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'production-report',
       'operational-intelligence',
       'loads-inventory',
+      'ops-ledger', // ADR-0045
       'processed-units',
       'equipment', // ADR-0044 (manager+, active)
       'observability',

@@ -11,12 +11,17 @@ const runAlertDigestFire = vi.fn(async () => ({
   outcomes: [{ siteCode: 'woodland', status: 'sent', findingCount: 2, delivered: 2, attempted: 2 }],
 }));
 
+const runUpdateDigestFire = vi.fn(async () => ({ weekly: 'created', boardPack: 'skipped_not_due' }));
+
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/bonus/daily-report-runner', () => ({
   runDailyReportFire: (...a: unknown[]) => runDailyReportFire(...(a as [])),
 }));
 vi.mock('@/lib/audit/alert-digest', () => ({
   runAlertDigestFire: (...a: unknown[]) => runAlertDigestFire(...(a as [])),
+}));
+vi.mock('@/lib/ops/update-digest', () => ({
+  runUpdateDigestFire: (...a: unknown[]) => runUpdateDigestFire(...(a as [])),
 }));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -34,6 +39,7 @@ function req(headers: Record<string, string> = {}): Request {
 beforeEach(() => {
   runDailyReportFire.mockClear();
   runAlertDigestFire.mockClear();
+  runUpdateDigestFire.mockClear();
   delete process.env['INTERNAL_CRON_TOKEN'];
 });
 
@@ -54,9 +60,11 @@ describe('POST /api/internal/bonus/daily-report', () => {
         { siteCode: 'eugene', status: 'skipped_not_due' },
       ],
       alertOutcomes: [{ siteCode: 'woodland', status: 'sent', findingCount: 2, delivered: 2, attempted: 2 }],
+      updateDigest: { weekly: 'created', boardPack: 'skipped_not_due' },
     });
     expect(runDailyReportFire).toHaveBeenCalledTimes(1);
     expect(runAlertDigestFire).toHaveBeenCalledTimes(1);
+    expect(runUpdateDigestFire).toHaveBeenCalledTimes(1);
   });
 
   it('a thrown alert digest does not 500 the cron (daily report still returns)', async () => {

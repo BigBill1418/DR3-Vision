@@ -102,3 +102,50 @@ draft composition from fixtures · board-cadence date function (2nd-Wednesday +
 preceding-Monday matrix incl. month edges) · intake: auth, honeypot, rate limit,
 routing precedence, task+notify creation, PII log-absence test · digest tick
 idempotence · migration clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-05)
+
+Built in worktree `feat/adr-0045-ledger` alongside the parallel ADR-0044 build.
+Deviations and decisions worth recording:
+
+1. **`update_digests.kind` enum added (not in the D2 illustrative DDL).** Both the
+   weekly Updates digest and the board pack live in one table; a `kind`
+   (`weekly` | `board_pack`) plus the unique `(kind, period_start)` gives each
+   generator its own per-period idempotency. A re-fire is a no-op so a human's
+   edits are never clobbered — this is why the board pack fires on BOTH the 2nd
+   Wednesday and the preceding Monday yet only ever produces one draft per month
+   (both dates map to the same `period_start` = first-of-previous-month).
+
+2. **Equipment events (D2) — absent-table fallback (ADR-0039 leg-fetcher precedent).**
+   The ADR-0044 `equipment_events` table is a sibling build not present in this
+   worktree, so `src/lib/ops/equipment-provider.ts` defines an injectable
+   `EquipmentProvider` interface and ships `absentEquipmentProvider` (returns
+   nothing, `available: false`) as the default the digest fire uses. The composer
+   prints an honest "equipment events unavailable" line instead of crashing.
+   **MERGE-WIRING:** after ADR-0044 lands, implement a `prismaEquipmentProvider` and
+   pass it into `runUpdateDigestFire` / `generateBoardPackDraft` — a one-line swap
+   (marked in the provider file).
+
+3. **Schema coordination.** One contiguous end-block `// ADR-0045 — ops ledger +
+   intake`. Sibling-owned FK columns (`site_id`, audit-actor columns) are bare
+   scalars with DB-level constraints created in the migration (ADR-0040/0041/0042
+   precedent); only the two intra-block relations carry Prisma relations. This keeps
+   the shared `Site`/`User` models untouched (no back-relation fields), so the
+   0044/0045 merge is conflict-free on those models.
+
+4. **The daily digest gate changed (ADR-0043 extension).** `runAlertDigestFire` now
+   also gathers overdue/due-today tasks and sends when findings OR due tasks exist.
+   The tasks section is **site-scoped only** (org-wide follow-ups surface on the
+   dashboard tile, never duplicated across both sites' emails).
+
+5. **Intake is genuinely public (fail-CLOSED), unlike the internal crons.** The WP
+   plugin POSTs over the public tunnel, so `/api/intake/` is a real public exemption
+   guarded by the `x-intake-token` shared secret (absent env → 503, never open) +
+   honeypot + per-IP rate limit — not a `cf-connecting-ip` 404. Contrast the M365
+   mail path, which is fail-OPEN: a missing OUTBOUND-mail secret must not break the
+   app, but a missing INBOUND-auth secret must never open a public write path.
+
+6. **The Updates digest + board pack have no send path.** `update-digest.ts` imports
+   no mail transport and calls no send helper; a companion test scans the source and
+   fails on any such reference. The D3 intake notification is the only email Vision
+   itself sends.

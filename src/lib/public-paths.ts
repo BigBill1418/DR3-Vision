@@ -62,5 +62,13 @@ export function isPublic(pathname: string): boolean {
   // IS the access (no session); covers the page + its draft/submit API.
   if (pathname.startsWith('/survey/')) return true;
   if (pathname.startsWith('/api/survey/')) return true;
+  // ADR-0045 D3 — public contact-form intake. UNLIKE the loopback-guarded
+  // internal crons above, this endpoint is genuinely internet-reachable (the
+  // WordPress form plugin POSTs to it over the public tunnel): the shared-secret
+  // `x-intake-token` header + honeypot + rate limit ARE the protection, not a
+  // cf-connecting-ip 404. Without this exemption the middleware 307s the
+  // session-less POST to /login and the form silently breaks — the mandatory
+  // day-one case per ADR-0045 D3.
+  if (pathname.startsWith('/api/intake/')) return true;
   return false;
 }
