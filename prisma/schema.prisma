@@ -2333,3 +2333,76 @@ model CorCertificate {
   @@index([supersedes_id])
   @@map("cor_certificates")
 }
+
+// ADR-0044 — equipment
+//
+// P4: the Terex equipment module. ONE additive capture table (`equipment_events`)
+// plus two derived read surfaces (a trend page + a dashboard tile). Throughput is
+// NOT captured here — it is DERIVED from `processed_units_daily` (ADR-0037 D5),
+// the one number the office already closes daily (D2, one source of truth). This
+// block adds only the downtime/cost/maintenance/note log.
+//
+// COORDINATION (mirrors the ADR-0040/0041/0042 block headers): this block is
+// self-contained at the end of the schema. The `site_id` FK and the audit-actor
+// columns (`created_by`/`voided_by`) are plain scalars — their referential-
+// integrity constraint (site_id) is created at the DB level in the migration
+// `20260710_equipment_events`, exactly as the ADR-0042 COR block does, so no
+// back-relation field is added to the shared `Site` model.
+//
+// `equipment_code` is a plain string (seeded UI filter 'terex'), NOT an enum — a
+// second machine is a data value, never a migration (D1). There is NO `locked_at`:
+// events are freely editable; the complete history lives in `audit_log` (an audit
+// row on every write). Hard delete is forbidden (CLAUDE.md hard rule #6 audit
+// discipline) — removal is a soft-void (`voided_at`), itself audited.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0044 D1 — equipment event kinds. `hours_down` is only meaningful for the
+/// operational-interruption kinds (downtime/maintenance/repair); `cost` and `note`
+/// never carry it (service-enforced). `cost` is the pure spend-context kind
+/// (`cost_cents`); any kind MAY additionally carry a cost (e.g. a repair with a
+/// vendor invoice). Terex-first but not Terex-hardcoded (see `equipment_code`).
+enum EquipmentEventKind {
+  downtime
+  maintenance
+  repair
+  cost
+  note
+}
+
+/// ADR-0044 D1 — the Terex-first equipment log: downtime, maintenance, repair,
+/// cost, and free notes. Site-scoped (CLAUDE.md hard rule #2), manager-entered,
+/// every write audited. Freely editable (no lock); removal is a soft-void
+/// (`voided_at` set, row retained) — never a hard delete. Throughput is derived
+/// elsewhere and never captured here (D2).
+model EquipmentEvent {
+  id             String             @id @default(uuid())
+  site_id        String // FK → sites.id (constraint in migration)
+  equipment_code String             @default("terex")
+  event_date     DateTime           @db.Date
+  kind           EquipmentEventKind
+
+  // hours_down: operational-interruption kinds only (service-enforced). Decimal(5,2)
+  // → up to 999.99 hours, quarter/tenth-hour precision.
+  hours_down Decimal? @db.Decimal(5, 2)
+  // cost_cents: integer cents, >= 0 (service-enforced). Operational spend context
+  // (D4 — NOT depreciation/asset accounting; GP remains the ledger of record).
+  cost_cents Int?
+  vendor     String?
+  notes      String?
+
+  source     RecordSource @default(manual)
+  created_by String? // users.id (bare column — see block header)
+
+  // Soft-void (no hard delete). A voided row is excluded from every derived series
+  // and the tile, but retained for the audit trail.
+  voided_at DateTime?
+  voided_by String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([site_id, event_date])
+  @@index([site_id, equipment_code, event_date])
+  @@index([site_id, kind])
+  @@map("equipment_events")
+}

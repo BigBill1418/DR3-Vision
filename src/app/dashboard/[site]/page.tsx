@@ -6,6 +6,7 @@ import { DockPoller } from './dock-poller';
 import { DockTile } from './dock-tile';
 import { RateTiles } from './rate-tiles';
 import { computeSiteRateTiles } from '@/lib/dashboard/rate-tiles';
+import { computeEquipmentTile } from '@/lib/equipment/tile'; // ADR-0044
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
@@ -78,6 +79,10 @@ export default async function SiteDashboardPage({ params }: Props) {
   // a rate-computation hiccup; degrade to no tiles.
   const rateTiles = await computeSiteRateTiles(site.id, site.jurisdiction).catch(() => null);
 
+  // ADR-0044 — small equipment tile (last event + 7-day units/day). Never throw
+  // the page on an equipment-read hiccup; degrade to no tile.
+  const equipmentTile = await computeEquipmentTile(site.id).catch(() => null);
+
   // Operator-active loads at this site, oldest-arrival first so the
   // tile order matches the order the operators got on the dock.
   const loads = await prisma.inboundLoad.findMany({
@@ -147,6 +152,36 @@ export default async function SiteDashboardPage({ params }: Props) {
         </header>
 
         {rateTiles && <RateTiles tiles={rateTiles} siteCode={site.code} />}
+
+        {/* ADR-0044 — equipment tile: last event + 7-day units/day. */}
+        {equipmentTile && (
+          <Link
+            href={`/dashboard/${site.code}/equipment`}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4 transition-colors hover:border-dr3-cyan/50"
+            data-testid="dashboard-equipment-tile"
+          >
+            <div>
+              <div className="text-xs uppercase tracking-wide text-dr3-mist-dim">Equipment (Terex)</div>
+              <div className="mt-1 text-sm">
+                {equipmentTile.lastEvent ? (
+                  <>
+                    Last: <span className="font-semibold">{equipmentTile.lastEvent.kind}</span> on{' '}
+                    {equipmentTile.lastEvent.dateISO}
+                    {equipmentTile.lastEvent.hoursDown ? ` · ${equipmentTile.lastEvent.hoursDown}h down` : ''}
+                  </>
+                ) : (
+                  <span className="text-dr3-mist-dim">No events logged yet</span>
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xs uppercase tracking-wide text-dr3-mist-dim">7-day units/day</div>
+              <div className="text-2xl font-bold">
+                {equipmentTile.last7UnitsPerDay == null ? '—' : equipmentTile.last7UnitsPerDay.toFixed(1)}
+              </div>
+            </div>
+          </Link>
+        )}
 
         <DockPoller>
           {loads.length === 0 ? (

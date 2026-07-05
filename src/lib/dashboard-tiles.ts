@@ -161,6 +161,18 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'super-admin-only',
   },
+  // ADR-0044 — P4 Terex equipment module: derived throughput trend + downtime/cost
+  // log. Manager surface (own site), route carries [site] → resolved by the `/`
+  // launcher to the caller's own site.
+  {
+    key: 'equipment',
+    label: 'Equipment',
+    description: 'Terex throughput trend, downtime, and cost — derived from the daily close.',
+    icon: 'Wrench',
+    route: '/dashboard/[site]/equipment',
+    status: 'active',
+    scope: 'manager+',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───

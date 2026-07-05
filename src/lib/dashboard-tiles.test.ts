@@ -49,27 +49,30 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     // Observability lit up 2026-06-06 (admin-only); it lives in the COMING_SOON
     // array so it trails the ACTIVE_TILES actives in registry order. loads-inventory
     // (ADR-0037, admin-only) sits in ACTIVE_TILES before observability.
-    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'loads-inventory', 'observability']);
+    // ADR-0044 — the manager+ 'equipment' tile is active; admin sees it too, in
+    // registry order after loads-inventory and before observability.
+    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'loads-inventory', 'equipment', 'observability']);
   });
 
-  it('Janette (Woodland manager) sees Bonus + Exports active, no Admin', () => {
+  it('Janette (Woodland manager) sees Bonus + Exports + Equipment active, no Admin', () => {
     const janette = makeSession('manager', WOODLAND);
-    expect(activeKeys(janette)).toEqual(['bonus', 'exports']);
+    expect(activeKeys(janette)).toEqual(['bonus', 'exports', 'equipment']);
     expect(canSeeTile(janette, tileByKey('admin'), WOODLAND)).toBe(false);
     expect(canSeeTile(janette, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
 
   it('Morena (both-sites manager, primary_site_id null) sees the same as Janette', () => {
     const morena = makeSession('manager', null);
-    expect(activeKeys(morena)).toEqual(['bonus', 'exports']);
+    expect(activeKeys(morena)).toEqual(['bonus', 'exports', 'equipment']);
     expect(canSeeTile(morena, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
 
-  it('Rick (Eugene manager) now sees Bonus + Exports — ADR-0019.2 §1, NO Admin', () => {
+  it('Rick (Eugene manager) now sees Bonus + Exports + Equipment — ADR-0019.2 §1, NO Admin', () => {
     // The bonus tile matrix expanded (hard rule 6): Rick (Eugene) passes the
-    // bonus gate. He still has no Admin & Audit (admin-only).
+    // bonus gate. He still has no Admin & Audit (admin-only). ADR-0044 adds the
+    // manager+ Equipment tile.
     const rick = makeSession('manager', EUGENE);
-    expect(activeKeys(rick)).toEqual(['bonus', 'exports']);
+    expect(activeKeys(rick)).toEqual(['bonus', 'exports', 'equipment']);
     expect(canSeeTile(rick, tileByKey('bonus'), WOODLAND)).toBe(true);
     expect(canSeeTile(rick, tileByKey('admin'), WOODLAND)).toBe(false);
   });
@@ -144,6 +147,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'operational-intelligence',
       'loads-inventory',
       'processed-units',
+      'equipment', // ADR-0044 (manager+, active)
       'observability',
     ]);
   });
