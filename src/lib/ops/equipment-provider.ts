@@ -56,3 +56,55 @@ export const absentEquipmentProvider: EquipmentProvider = {
     return [];
   },
 };
+
+/**
+ * Live provider over ADR-0044's `equipment_events` (wired at the 0044/0045
+ * merge per the MERGE-WIRING block above). Voided rows excluded; `label`
+ * composes kind + equipment_code + a note snippet for digest copy.
+ */
+export function prismaEquipmentProvider(prisma: import('@prisma/client').PrismaClient): EquipmentProvider {
+  const dayKey = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+  const toEvent = (r: {
+    id: string;
+    site_id: string;
+    equipment_code: string;
+    event_date: Date;
+    kind: string;
+    cost_cents: number | null;
+    notes: string | null;
+  }): EquipmentEvent => ({
+    id: r.id,
+    siteId: r.site_id,
+    occurredAt: r.event_date,
+    kind: r.kind,
+    label: `${r.equipment_code} ${r.kind}${r.notes ? ` — ${r.notes.slice(0, 80)}` : ''}`,
+    costCents: r.cost_cents,
+  });
+  return {
+    available: true,
+    async notableEvents(siteId, startISO, endISO) {
+      const rows = await prisma.equipmentEvent.findMany({
+        where: {
+          site_id: siteId,
+          voided_at: null,
+          event_date: { gte: dayKey(startISO), lte: dayKey(endISO) },
+          kind: { in: ['downtime', 'maintenance', 'repair'] },
+        },
+        orderBy: { event_date: 'asc' },
+      });
+      return rows.map(toEvent);
+    },
+    async bigCostEvents(siteId, startISO, endISO, thresholdCents) {
+      const rows = await prisma.equipmentEvent.findMany({
+        where: {
+          site_id: siteId,
+          voided_at: null,
+          event_date: { gte: dayKey(startISO), lte: dayKey(endISO) },
+          cost_cents: { gte: thresholdCents },
+        },
+        orderBy: { cost_cents: 'desc' },
+      });
+      return rows.map(toEvent);
+    },
+  };
+}

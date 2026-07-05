@@ -27,7 +27,7 @@ import {
   previousMonthStart,
   previousWeekRange,
 } from './digest-calendar';
-import { absentEquipmentProvider, type EquipmentProvider } from './equipment-provider';
+import { absentEquipmentProvider, prismaEquipmentProvider, type EquipmentProvider } from './equipment-provider';
 
 const GENERATED_BY = 'system:update-digest';
 // Board-pack "big known cost bump" threshold (ADR-0044 equipment `cost` events).
@@ -342,7 +342,8 @@ export async function runUpdateDigestFire(
   now: Date = new Date(),
   deps: UpdateDigestDeps = {},
 ): Promise<UpdateDigestFireOutcome> {
-  const equipment = deps.equipment ?? absentEquipmentProvider;
+  const equipment = deps.equipment ?? prismaEquipmentProvider(prisma); // wired at the 0044/0045 merge; absentEquipmentProvider remains for tests
+void absentEquipmentProvider;
   const today = appToday(now);
   const sites = await prisma.site.findMany({ select: { id: true, code: true, name: true } });
 
