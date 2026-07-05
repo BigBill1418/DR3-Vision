@@ -1,6 +1,6 @@
 # ADR-0045 — P5: ops task ledger + meeting notes, DR3 Updates digest, contact-form routing
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-04, approved by Bill)
 **Date:** 2026-07-04
 **Relates to:** mission record §2.1(6)(7)(8)/§6-P5; survey build-inputs §D (Morena: one place for notes/follow-ups — "if someone is out it is hard to understand the full picture"), §E (Bethany's hard board cadence: processed prev-month + MTD due **every 2nd Wednesday AND the Monday preceding it**); open register (dispatch inbox overlaps but is NOT this ADR)
 **Series:** P5, after 0044
