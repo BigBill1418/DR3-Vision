@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   Upload,
   UserCog,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import type { DashboardTile } from '@/lib/dashboard-tiles';
@@ -51,6 +52,7 @@ const ICONS: Record<string, LucideIcon> = {
   ShieldCheck,
   Upload,
   UserCog,
+  Wrench,
 };
 
 /** The logo "eye" watermark + a left-fade so tile copy stays legible. */

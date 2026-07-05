@@ -5,6 +5,50 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-05 (ADR-0044 — P4 Terex equipment module)
+
+- **ADR-0044 (P4).** The Terex operational record moves out of a side spreadsheet
+  and hallway conversation into Vision: one capture table for
+  downtime/maintenance/repair/cost/notes, a derived-throughput trend view, and a
+  small site-dashboard tile. Throughput needs NO new capture — it is DERIVED from
+  the daily processed-units close (the same number billing bills from). No new
+  container, no second entry path.
+- **Schema (one additive migration `20260710_equipment_events`, sorts after
+  `20260709_alert_recipients`; clean-replays on empty PG16):** the
+  `EquipmentEventKind` enum (`downtime`/`maintenance`/`repair`/`cost`/`note`) +
+  `equipment_events` (`equipment_code` String default `'terex'`, `event_date`
+  @db.Date, `hours_down` Decimal(5,2)?, `cost_cents` Int?, `vendor`, `notes`,
+  `source`, audit-actor columns, `voided_at`/`voided_by`). There is **no
+  `locked_at`** — events are freely editable and the full history lives in
+  `audit_log`; removal is a **soft-void** (never a hard delete, hard rule #6).
+  `equipment_code` is a plain string so a second machine is a data value, never a
+  migration.
+- **Service (`src/lib/equipment/service.ts`, TDD):** `create`/`list`/`update` +
+  `void` (soft, audited, idempotent) — no delete. Site-scoped; every write emits an
+  `audit_log` row. Validation: `hours_down` only meaningful for
+  downtime/maintenance/repair (rejected on cost/note), `cost_cents >= 0`.
+- **Derived throughput (`src/lib/equipment/throughput.ts`, pure builders + one
+  aggregator, TDD):** units/day (`stripped_program + stripped_non_program`),
+  units/run-hour where downtime hours exist (`assumed_day_hours − hours_down`, the
+  8h assumption a labeled module constant — not a config table), 7/30-day rolling
+  means (null days skipped, never counted as zero), monthly cost series, downtime
+  bands, and the `pocketcoil_estimate` overlay series. Downtime hours for the
+  run-hour denominator + red bands use `kind=downtime` only (planned
+  maintenance/repair hours are captured but not folded in — documented decision).
+- **Tile (`src/lib/equipment/tile.ts`, TDD):** last event + 7-day units/day mean,
+  site-scoped.
+- **Routes (`/api/manager/[site]/equipment` + `[id]`):** manager-scoped
+  (`requireManagerForSite` — NOT the ADR-0037 D7 activation gate). GET lists events
+  or (`?view=throughput`) the derived series; POST creates; PATCH edits; DELETE
+  soft-voids.
+- **UI (`/dashboard/[site]/equipment`):** English-first office surface, green/black
+  palette, `onClick` handlers (no `<form>`, hard rule #10). Trend chart (units/day
+  bars + 7-day mean line + red downtime bands + pocketcoil overlay), monthly-cost
+  bars, CSV export, and an event entry row + audited log with soft-void. Plus the
+  launcher **Equipment** tile (manager+) and the site-dashboard tile.
+- **Docs:** operator guide `docs/operator/equipment.md`; ADR-0044 post-acceptance
+  implementation notes.
+
 ### Added — 2026-07-04 (ADR-0043 — P3 rate alerts + missing-record detection)
 
 - **ADR-0043 (P3, first post-P2).** Early warning before MRC computes the official

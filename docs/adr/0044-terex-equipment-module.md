@@ -69,3 +69,55 @@ Event service CRUD + audit rows + site scoping · derived-throughput provider
 (days without closes, downtime-hour math incl. the labeled 8h assumption, rolling
 windows) · pocketcoil overlay data shape · tile provider · migration
 clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-05)
+
+Shipped per D1–D4. Files: migration `prisma/migrations/20260710_equipment_events`
+(+ the `// ADR-0044 — equipment` end-block in `prisma/schema.prisma`); service
+`src/lib/equipment/service.ts`; derived provider `src/lib/equipment/throughput.ts`;
+tile provider `src/lib/equipment/tile.ts`; routes `src/app/api/manager/[site]/equipment/{route,[id]/route}.ts`;
+UI `src/app/dashboard/[site]/equipment/{page,EquipmentClient}.tsx`; launcher tile +
+site-dashboard tile.
+
+- **NO hard delete (D1 + hard rule #6).** The model has no `locked_at` (freely
+  editable, history via an `audit_log` row on every write). Removal is a
+  **soft-void**: `voided_at`/`voided_by` set, a `soft_delete` audit row written,
+  the row retained and excluded from every derived series + the tile. The API maps
+  HTTP `DELETE` → soft-void (not a physical delete); a voided row cannot be edited.
+  Re-voiding is idempotent (no second audit row).
+
+- **`hours_down` shape (D1).** Meaningful ONLY for `downtime`/`maintenance`/`repair`;
+  a `cost`/`note` row carrying it is rejected (422). `cost_cents >= 0`, integer.
+  Any kind may additionally carry a cost (a repair with a vendor invoice).
+
+- **DECISION — downtime hours for run-hour + red bands use `kind=downtime` ONLY.**
+  D2's `units/run-hour = units/day ÷ (assumed_day_hours − hours_down)` and D3's red
+  bands must describe the same "downtime". Maintenance/repair hours are captured
+  but are *planned* interventions, not line-stopping downtime, so they are NOT
+  folded into the run-hour denominator or the bands. If the board later wants
+  planned-hours folded in, it is a one-line change in `throughput.ts`
+  (`downtimeByDay` filter) — flagged here so the choice is explicit, not implicit.
+
+- **`assumed_day_hours = 8` (D2).** A documented module constant
+  (`ASSUMED_DAY_HOURS` in `throughput.ts`), surfaced to the UI legend by its label
+  — NOT a config table (overkill for one number, per D2). Changing it is a
+  one-line edit; it is never silently baked into a stored value.
+
+- **Throughput is DERIVED, never captured (D2).** The provider only READS
+  `processed_units_daily` (units/day = `stripped_program + stripped_non_program`)
+  and the equipment log. There is no throughput-entry path anywhere.
+
+- **Manager-scoped, NOT behind the ADR-0037 D7 activation gate.** Equipment is its
+  own surface; it uses `requireManagerForSite` directly (manager-on-own-site or
+  admin / all-sites manager). It is not admin-gated like loads-inventory.
+
+## Operator follow-ups (non-blocking)
+
+1. **Second machine.** `equipment_code` is a plain string (default `terex`). A
+   second machine is a data value — pass `equipmentCode` on entry and add it to the
+   UI filter; no migration. The trend page + tile accept an `equipmentCode` query
+   filter today but default to all equipment at the site.
+2. **`pocketcoil_estimate` overlay scale.** The overlay is drawn on its OWN axis (a
+   shape-correlation cue for Juan's Q4 pocket-coil-slows-the-line hypothesis), not
+   the units axis. If the board wants a quantified correlation (not just a visible
+   shape), that is a follow-on analysis, deliberately out of P4 scope (D4).
