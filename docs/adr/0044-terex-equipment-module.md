@@ -1,6 +1,6 @@
 # ADR-0044 — P4: Terex equipment module (downtime/cost log + derived throughput + trend view)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-04, approved by Bill)
 **Date:** 2026-07-04
 **Relates to:** mission record §2.1(3)/§6-P4; survey build-inputs §D3 (Bethany: machine downtime reaches the board with no data; Juan: downtime reported by word-of-mouth; Janette: a side spreadsheet holds Terex productivity + machine notes — "Terex is down" was found handwritten in a numeric cell of the daily log)
 **Series:** P4, after 0043
