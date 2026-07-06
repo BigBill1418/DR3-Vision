@@ -5,6 +5,10 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Ops — 2026-07-06
+
+- **Restore drill PASSED (readiness P1-3 closed).** Latest restic/R2 snapshot restored into a throwaway postgres and verified against prod on five invariants (migration head, entry counts, paid-payroll cents exact). Two DR-procedure gotchas discovered and documented in `docs/operator/restore-drills.md` (R2_* env mapping; the postgres init-server race that yields a silent empty restore). Remaining D7 activation gate item: RESTIC_PASSWORD off-box confirmation (operator).
+
 ### Added — 2026-07-06 (ADR-0046 — vendor-invoice approval via Graph mailbox ingestion)
 
 - **ADR-0046.** Vision's FIRST inbound-email transport. Accounting mails an
