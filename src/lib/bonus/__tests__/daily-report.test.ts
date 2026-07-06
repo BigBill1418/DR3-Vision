@@ -534,3 +534,21 @@ describe('buildDailyReport — ADR-0032 reporting adjustments', () => {
     expect((after.mtd.total ?? 0) - (before.mtd.total ?? 0)).toBe(5000);
   });
 });
+
+// Lock-in cases from the 2026-07-06 "June not July" report (investigated: the
+// math was CORRECT — the June was either the Jun-30 report's correct SDLY or
+// the same-period-last-month line. These pin the behavior permanently.)
+describe('2026-07-06 investigation lock-ins', () => {
+  it('Jul 3 2026 SDLY is Jul 3 2025 (July, never June)', () => {
+    const d = sameDayPriorYear(new Date(Date.UTC(2026, 6, 3)));
+    expect([d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]).toEqual([2025, 7, 3]);
+  });
+  it('Jun 30 2026 SDLY is Jun 30 2025 (a June SDLY on a June report is correct)', () => {
+    const d = sameDayPriorYear(new Date(Date.UTC(2026, 5, 30)));
+    expect([d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]).toEqual([2025, 6, 30]);
+  });
+  it('Jul 31 same-period-last-month clamps to Jun 30 (overflow-safe)', () => {
+    const d = sameDomPriorMonth(new Date(Date.UTC(2026, 6, 31)));
+    expect([d.getUTCMonth() + 1, d.getUTCDate()]).toEqual([6, 30]);
+  });
+});
