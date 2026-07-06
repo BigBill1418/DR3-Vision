@@ -138,9 +138,9 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
     <tr><td style="padding:14px 16px">
       <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">Trend</div>
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
-        ${cmp(`Same day last year (${fmtShort(report.sameDayLastYear.startDate)})`, report.sameDayLastYear)}
+        ${cmp(`Same day last year — ${report.sameDayLastYear.startDate.getUTCFullYear()} (${fmtShort(report.sameDayLastYear.startDate)})`, report.sameDayLastYear)}
         ${cmp(`Month-to-date (${fmtRange(report.mtd.startDate, report.mtd.endDate)})`, report.mtd)}
-        ${cmp(`Same period last month (${fmtRange(report.priorMonthSamePeriod.startDate, report.priorMonthSamePeriod.endDate)})`, report.priorMonthSamePeriod)}
+        ${cmp(`Same period last month — ${report.priorMonthSamePeriod.startDate.getUTCFullYear()} (${fmtRange(report.priorMonthSamePeriod.startDate, report.priorMonthSamePeriod.endDate)})`, report.priorMonthSamePeriod)}
         <tr><td style="padding:3px 0;font-size:13px;color:${INK}">${paceLine}</td></tr>
       </table>
     </td></tr>
