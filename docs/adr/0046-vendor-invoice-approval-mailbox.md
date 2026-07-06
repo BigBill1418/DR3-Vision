@@ -157,3 +157,42 @@ count; both audited) · quarantine notification content (row id + domain ONLY �
 log/PII-absence assertions) · decision-mail contract (fixed recipients, GP
 matching fields) · deadman + ledger-always-written incl. throw paths · migration
 clean-replay (CI).
+
+## Post-acceptance implementation notes (2026-07-06)
+
+Built end-to-end against the mock transport; migration `20260712_ap_approvals`
+clean-replays on empty PG16 (28 migrations) with zero AP drift. Decisions taken
+during implementation, and where they refine the ADR:
+
+- **Thin daemon, transport in the app (reconciled).** Per D5 the daemon is a thin
+  10-min scheduler that POSTs `/api/internal/ap/poll`; the Graph transport +
+  sanitize + persist run INSIDE the Next app (`runApPoll`). So the
+  `msgraph-mail.env` creds are mounted on the **`app`** service (where the
+  transport executes). The profile-gated `ap-poll` service also carries the file
+  (`required:false`, for parity/forward-compat) but does not consume it.
+- **`ap_senders` realized as two tables.** The D2 "single config row + optional
+  entries" is `ap_sender_config` (singleton, holds `mode`) + `ap_sender_entries`
+  (the explicit allowlist). A missing config row defaults to `tenant_wide`.
+- **Decision-recipient config = `ap_decision_recipients`** (reuse of the
+  `alert_recipients` pattern rather than an `ap_config` singleton, per D2's "small
+  row OR reuse pattern"). Seeded EMPTY; a decision with zero active recipients
+  records the state change but refuses to mail and pages
+  `ap-decision-recipients-empty` (never silent).
+- **Delta-token persistence = `ap_delta_tokens`** (per mailbox+folder). Tokens are
+  stored opaque (the full `@odata.deltaLink` URL for the live transport).
+- **Approver set as data = org reach.** AP requests are org-level (no `site_id`);
+  the queue + "act" permission use `requireOrgReach` (admin OR all_sites), so
+  Morena/Janette are the approver set by being all_sites managers (operator
+  action; see the operator doc). No new `User` column was needed.
+- **Digest line rides, does not trigger.** The ADR-0043 digest gains an org-wide
+  pending-AP count line, but AP alone does NOT trigger a digest send (the existing
+  findings/tasks gate is unchanged); a count shown in both sites' digests is
+  harmless (unlike task rows).
+- **Move keeps the mock id stable.** In the live transport Graph re-issues the id
+  on move; the pipeline does all per-message work (attachments, persist) BEFORE
+  the move and the `internet_message_id` UNIQUE key is the true idempotency guard,
+  so this is immaterial.
+- **`listDelta` takes the persisted token.** The transport signature adds a
+  `deltaToken` parameter to `listDelta` (returns the new token) so the DB-backed
+  `ap_delta_tokens` store loads/saves it — the functional shape of "delta-token
+  persistence per mailbox+folder" from D1.

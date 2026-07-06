@@ -1,5 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import type { PhotoKind } from '@prisma/client';
@@ -117,4 +117,51 @@ export async function putWorkbookEvidence(args: {
     }),
   );
   return storage_key;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// AP approval attachments (ADR-0046 C10.3)
+// ────────────────────────────────────────────────────────────────────────
+
+// Vendor-invoice attachments (PDFs, and unwrapped nested-message files) go to R2
+// under the PRIVATE `ap/` prefix — bank details may be inside, so they NEVER
+// touch a log/notification (ADR-0045 discipline; hard rule #7). The bytes already
+// live on the server (the Graph transport decoded them), so we PUT them straight
+// to R2 rather than minting a browser signed URL. Fail-soft: returns null when R2
+// is unconfigured, and the pipeline records a non-fetchable `pending-r2-ap-…`
+// placeholder key so the request still forms (v1 reads by human; the operator
+// provisions R2 per the runbook).
+
+export async function putApAttachment(args: {
+  requestId: string;
+  attachmentId: string;
+  filename: string | null;
+  contentType: string | null;
+  bytes: Uint8Array;
+}): Promise<string | null> {
+  if (!isConfigured()) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const safeName = (args.filename ?? 'attachment.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'attachment.bin';
+  const storage_key = `ap/${args.requestId}/${args.attachmentId}/${safeName}`;
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: storage_key,
+      Body: args.bytes,
+      ContentType: args.contentType ?? 'application/octet-stream',
+    }),
+  );
+  return storage_key;
+}
+
+/**
+ * Mint a short-lived presigned GET for an AP attachment so an approver's browser
+ * fetches the PDF directly from R2 (the app never proxies the bytes). Returns null
+ * when R2 is unconfigured or the key is a non-fetchable `pending-r2-…` placeholder.
+ */
+export async function signApAttachmentDownload(storageKey: string, expiresIn = 300): Promise<string | null> {
+  if (!isConfigured()) return null;
+  if (storageKey.startsWith('pending-r2-')) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: bucket, Key: storageKey }), { expiresIn });
 }

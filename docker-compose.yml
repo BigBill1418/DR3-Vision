@@ -144,6 +144,14 @@ services:
       # enable auto-fetch. See docs/operator/billing-rates.md.
       - path: /home/bbarnard065/.dr3-vision-secrets/billing.env
         required: false
+      # ADR-0046 — Graph-mail transport creds (MSGRAPH_MAIL_{TENANT_ID,CLIENT_ID,
+      # SECRET,MAILBOX}) + optional AP_QUARANTINE_EMAIL. The AP poll route +
+      # transport run INSIDE this app process (thin daemon → internal route), so
+      # the creds live here. Optional / FAIL-OPEN: absent → the transport selects
+      # the fixture-driven MOCK (logged loudly at each poll), the app still boots.
+      # See docs/operator/ap-approvals.md.
+      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
+        required: false
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
@@ -641,6 +649,66 @@ services:
     labels:
       <<: *barnardhq-labels
       com.barnardhq.service: 'fuel-price-fetch'
+    logging: *logging
+
+  ap-poll:
+    # AP mailbox poll cron host (ADR-0046 D5). PROFILE-GATED (`ap`): enabling is a
+    # deliberate operator action once SVdP IT delivers the shared mailbox + Graph
+    # app registration + tenant-admin consent + ApplicationAccessPolicy — NOT
+    # auto-started by `docker compose up -d` or the swarmpilot deployer. To ENABLE,
+    # follow docs/operator/ap-approvals.md: (1) drop MSGRAPH_MAIL_* into
+    # ~/.dr3-vision-secrets/msgraph-mail.env (mode 600) — this is read by the `app`
+    # service (the transport runs there), (2) configure ap_decision_recipients
+    # (Mary's address) + optionally flip ap_sender_config to explicit_list,
+    # (3) start with `docker compose --profile ap up -d`, and (4) add `ap-poll` to
+    # the noc-master service-registry containers[].
+    #
+    # Same shape as survey-reminder / bonus-escalation-check: a single long-running
+    # Node process under `unless-stopped` that is a THIN scheduler. Every 10 minutes
+    # it POSTs the app's internal, loopback-guarded route (`/api/internal/ap/poll`).
+    # That route does ALL the work compiled inside the Next app via `runApPoll`
+    # (transport select, delta, ingest, move, ledger-always, 45-min deadman). The
+    # daemon imports NO TS and no @prisma/client. Until msgraph-mail.env lands the
+    # transport self-reports MOCK mode in every ledger row and processes fixtures.
+    #
+    # Idempotent: `internet_message_id` UNIQUE means a restart-driven re-fire or an
+    # overlapping tick can never double-ingest; a green run that read nothing while
+    # mail exists is impossible by construction (delta contract + ledger counts).
+    profiles: ['ap']
+    image: dr3-vision-app:local
+    container_name: dr3-vision-ap-poll
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/ap-poll-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK
+    # (would always fail here → false "unhealthy"). See bonus-period-close.
+    healthcheck:
+      disable: true
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
+      # internal route). Optional: when absent both sides skip the bearer check and
+      # the loopback/cf-connecting-ip guard remains the boundary.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+      # Carried for parity with the AP transport family (the creds are consumed by
+      # the `app` service, where the transport actually runs); harmless here and
+      # documents this service's membership. Optional / fail-open.
+      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
+        required: false
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback — this
+      # is a separate container). The route's cf-connecting-ip guard still rejects
+      # any public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'ap-poll'
     logging: *logging
 
   cloudflared:

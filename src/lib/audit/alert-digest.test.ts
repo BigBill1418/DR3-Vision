@@ -7,6 +7,7 @@ const logCreate = vi.fn();
 const findingFindMany = vi.fn();
 const recipientFindMany = vi.fn();
 const opsTaskFindMany = vi.fn();
+const apRequestCount = vi.fn(async () => 0);
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -18,6 +19,8 @@ vi.mock('@/lib/prisma', () => ({
     auditFinding: { findMany: (...a: unknown[]) => findingFindMany(...a) },
     alertRecipient: { findMany: (...a: unknown[]) => recipientFindMany(...a) },
     opsTask: { findMany: (...a: unknown[]) => opsTaskFindMany(...a) },
+    // ADR-0046 D4 — the digest now reads the org-wide pending-AP count.
+    apRequest: { count: () => apRequestCount() },
   },
 }));
 

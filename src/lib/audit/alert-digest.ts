@@ -21,6 +21,7 @@ import { publishNtfy } from '@/lib/ntfy';
 import { appToday, dayISO } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
 import { dueSummaryForSite } from '@/lib/ops/tasks';
+import { pendingApCount } from '@/lib/ap/approvals';
 import type { CheckCode, Severity } from './types';
 
 const R_M_CHECKS: CheckCode[] = [
@@ -100,9 +101,15 @@ export function renderDigestHtml(
   site: { code: string; name: string },
   findings: readonly DigestFinding[],
   dueTasks: readonly DigestTaskLine[] = [],
+  // ADR-0046 D4 — org-wide pending vendor-invoice approvals. A COUNT (not rows),
+  // so showing the same org number in both sites' digests is harmless (unlike the
+  // task rows, which are deliberately not duplicated). Rides the digest when it
+  // sends; it does not itself trigger a send.
+  pendingAp = 0,
 ): string {
   const auditUrl = `${baseUrl()}/dashboard/${site.code}/audit`;
   const opsUrl = `${baseUrl()}/dashboard/${site.code}/ops`;
+  const apUrl = `${baseUrl()}/dashboard/ops/ap`;
   const rows = findings
     .map((f, i) => {
       const border = i === 0 ? '' : `border-top:1px solid ${HAIRLINE};`;
@@ -145,11 +152,20 @@ export function renderDigestHtml(
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${taskRows}</table>
           <p style="margin:14px 0 0"><a href="${opsUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the ops ledger</a></p>`;
 
+  const apBlock =
+    pendingAp === 0
+      ? ''
+      : `<h2 style="color:${SVDP_RED};font-size:15px;margin:${findings.length === 0 && dueTasks.length === 0 ? '0' : '24px'} 0 8px">Accounting</h2>
+          <p style="margin:0;font-size:14px;color:${INK}">${pendingAp} vendor-invoice approval${pendingAp === 1 ? '' : 's'} pending (org-wide).</p>
+          <p style="margin:10px 0 0"><a href="${apUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the AP approval queue</a></p>`;
+
   const summaryParts: string[] = [];
   if (findings.length > 0)
     summaryParts.push(`${findings.length} open finding${findings.length === 1 ? '' : 's'}`);
   if (dueTasks.length > 0)
     summaryParts.push(`${dueTasks.length} follow-up${dueTasks.length === 1 ? '' : 's'} due`);
+  if (pendingAp > 0)
+    summaryParts.push(`${pendingAp} AP approval${pendingAp === 1 ? '' : 's'} pending`);
   const summary = summaryParts.join(' · ') || 'items needing review';
 
   return `<!DOCTYPE html>
@@ -166,6 +182,7 @@ export function renderDigestHtml(
         <tr><td style="padding:22px 24px 26px">
           ${findingsBlock}
           ${tasksBlock}
+          ${apBlock}
           <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:18px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Early-warning from DR3-Vision — before MRC computes the official rate. A low rate that coincides with a missing-record finding is likely a data gap; open the finding for its linked cause.<br>
             St. Vincent de Paul Society of Lane County
@@ -183,6 +200,8 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
   const digestDate = appToday(now);
   const sites = await prisma.site.findMany({ select: { id: true, code: true, name: true } });
   const outcomes: DigestOutcome[] = [];
+  // ADR-0046 D4 — org-wide pending AP count, computed once (same for every site).
+  const pendingAp = await pendingApCount();
 
   for (const site of sites) {
     try {
@@ -246,7 +265,7 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
       if (dueTasks.length > 0)
         subjParts.push(`${dueTasks.length} follow-up${dueTasks.length === 1 ? '' : 's'} due`);
       const subject = `DR3-Vision daily digest — ${site.name} — ${subjParts.join(' · ')}`;
-      const htmlBody = renderDigestHtml(site, findings, dueTasks);
+      const htmlBody = renderDigestHtml(site, findings, dueTasks, pendingAp);
 
       // Per-recipient send so one bad address never blocks the others.
       const results = [];

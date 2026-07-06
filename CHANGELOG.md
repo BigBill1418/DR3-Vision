@@ -5,6 +5,63 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-06 (ADR-0046 — vendor-invoice approval via Graph mailbox ingestion)
+
+- **ADR-0046.** Vision's FIRST inbound-email transport. Accounting mails an
+  approval request to `approvals-dr3@svdp.us`; Vision polls the mailbox by
+  Microsoft Graph delta, turns each valid message into an approval request,
+  Morena/Janette (as data: org-reach approvers) decide inside Vision
+  (first-action-wins, atomic), and Vision mails the decision back to a FIXED
+  recipient list for Mary's Great Plains filing. Built **mock-first**: it runs
+  complete against a fixture-driven transport and flips to live creds with
+  configuration only (SVdP IT delivers the mailbox + Graph app + tenant consent +
+  ApplicationAccessPolicy — the 8/1 risk is IT lead time, not code).
+- **Generic transport `src/lib/msgraph-mail/`** (deliberately NOT AP-scoped —
+  Morena's parked dispatch↔Outlook ask consumes it later): a `MailTransport`
+  interface (`listDelta`/`getMessage`/`listAttachments`/`moveMessage`, typed
+  `AuthFailedError`/`GraphContractDriftError`), `graphTransport`
+  (client-credentials via `@azure/identity` + plain `fetch` against Graph v1.0 —
+  no heavy Graph SDK, `MSGRAPH_MAIL_{TENANT_ID,CLIENT_ID,SECRET,MAILBOX}`,
+  `Mail.ReadWrite`), and `mockTransport` (the DEFAULT until creds land). Mode is
+  self-reported at startup + in every ledger row; the transport NEVER sends
+  (outbound stays `sendSystemEmail`). Delta tokens persist per mailbox+folder
+  (`ap_delta_tokens`); a lost token degrades to a full resync, absorbed by
+  idempotency.
+- **Sanitization (C10.2, non-negotiable):** email HTML is allowlist-sanitized
+  with `sanitize-html` AT INGEST into `body_html_sanitized` (raw HTML is never
+  stored for render); the queue additionally renders it inside a maximally
+  restrictive `<iframe sandbox="">`. Regression test asserts a
+  script/onerror/iframe/style-url fixture renders inert.
+- **Pipeline (D3):** every polled message reaches exactly one terminal state
+  (created/followup/quarantined/duplicate). Sender validation on the
+  authenticated envelope sender (forwarder rule, C10.4); full Graph attachment
+  taxonomy (fileAttachment → R2 `ap/`; itemAttachment unwrapped one level, deeper
+  nesting kept as a visible marker; referenceAttachment recorded, NEVER fetched);
+  idempotency on `internet_message_id` UNIQUE; same-conversation follow-ups;
+  move-to-Processed hygiene; **quarantine-never-drop** with a Bill page/email
+  carrying row id + sender DOMAIN only (no body/attachment/amount — PII-absence
+  tested).
+- **Approvals (D4):** `/dashboard/ops/ap` queue (org reach — admin or all_sites),
+  atomic first-action-wins (`updateMany` count; loser sees "already decided by
+  {actor} at {time}"; both attempts audited), optional vendor/amount at decision,
+  decision email to the FIXED `ap_decision_recipients` (refuses + pages when the
+  list is empty — never the inbound Reply-To), new-request notification to
+  approvers, and a pending-AP count line on the ADR-0043 daily digest.
+- **Daemon + ops (D5):** thin `scripts/ap-poll-cron.mjs` (10-min tick) →
+  loopback-guarded `/api/internal/ap/poll` (+ `public-paths.ts` exemption with a
+  mandatory regression test). Profile-gated compose service `ap-poll`
+  (`profiles: [ap]`) cloned from `mymrc-scrape`'s shape. Poll-run ledger
+  (`ap_poll_runs`) ALWAYS written incl. throw paths; 45-min deadman page.
+- **Schema (one additive migration `20260712_ap_approvals`, sorts after
+  `20260711_ops_ledger_intake`; clean-replays on empty PG16):** five enums +
+  `ap_requests` (org-level, not site-scoped) / `ap_attachments` / `ap_followups` /
+  `ap_sender_config` + `ap_sender_entries` (mode `tenant_wide` default |
+  `explicit_list`) / `ap_decision_recipients` (seeded EMPTY) / `ap_delta_tokens` /
+  `ap_poll_runs`.
+- **Dependency:** `sanitize-html` (+ `@types/sanitize-html` dev). Operator doc
+  `docs/operator/ap-approvals.md`; `.env.example` gains `MSGRAPH_MAIL_*` +
+  `AP_QUARANTINE_EMAIL`.
+
 ### Added — 2026-07-05 (ADR-0044 — P4 Terex equipment module)
 
 - **ADR-0044 (P4).** The Terex operational record moves out of a side spreadsheet
