@@ -53,6 +53,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0043   | P3 rate alerts + missing-record detection (R1/R2/M1/M2 checks on the audit engine, digest, recipients)          | Accepted                                                        |
 | 0044   | Terex equipment module (equipment_events log, derived throughput, trend view)                                  | Accepted                                                        |
 | 0045   | Ops task ledger + Updates digest (Morena sends) + contact-form routing (tours→Rick)                            | Accepted                                                        |
+| 0046   | Vendor-invoice approval via Graph mailbox ingestion (mock-first; msgraph-mail transport; quarantine ring)      | Accepted                                                        |
 
 ## How to write a new ADR
 
