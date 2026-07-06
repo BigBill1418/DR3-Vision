@@ -157,3 +157,18 @@ Decimal boundary rules at every money/weight edge · migration ordering + clean-
   weekend-carryover defect) recorded in the build-inputs doc §B.
 - ADR status: 0037 accepted + building; 0038 accepted + building; 0039 drafts next
   against build-inputs §B.
+
+## Amendment 2 — 2026-07-06 (operator): go-live dates LOCKED
+
+- **Woodland goes live Wednesday 2026-07-09** (Bill, 2026-07-06 — supersedes
+  Amendment 1's "dates TBD" and re-validates the forward handoff §5 shape with
+  the locked date). Eugene follow-on date not yet stated.
+- Kelsey validation window: 07-09 → 08-01 (mission §7 unchanged).
+- Pre-go-live critical path (from the forward handoff §4/§5, now date-anchored):
+  Mon 7/7 — Janette's roster → operator seeding via /admin/users; Mary survey
+  close-out; Rick rate rows + can_manage_rates; **align the Woodland DR3#
+  counter to Janette's last-issued+1** (currently safe-high 5000). Tue 7/8 —
+  iPad prep (mounts, PWA, per-device language, cellular check), morning
+  "Schedule a load" walkthrough, close the D7 ops gates (restore drill +
+  RESTIC_PASSWORD) so Janette's manager surfaces open. Wed 7/9 — one supervised
+  test load incl. offline ride-out, then straight cutover per locked decision.
