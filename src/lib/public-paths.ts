@@ -53,6 +53,14 @@ export function isPublic(pathname: string): boolean {
   // the tick silently no-ops while logging success (the ADR-0036 regression, made a
   // mandatory day-one case here per ADR-0040 D4).
   if (pathname.startsWith('/api/internal/billing/')) return true;
+  // ADR-0046 D5 — internal AP mailbox poll cron endpoint
+  // (`/api/internal/ap/poll`). Same loopback-guarded internal-route pattern as
+  // the survey/bonus/audit crons above: without this exemption the middleware
+  // 307s the session-less `ap-poll-cron.mjs` POST to /login, its fetch follows
+  // to a 200 HTML page, and the poll silently no-ops while logging success (the
+  // ADR-0036 regression, made a mandatory day-one case per ADR-0046 D5). The
+  // daemon uses `redirect:'manual'` as the second line of defence.
+  if (pathname.startsWith('/api/internal/ap/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.

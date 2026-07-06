@@ -2570,3 +2570,209 @@ model ContactRoute {
   @@index([active])
   @@map("contact_routes")
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-0046 — Vendor-invoice approval via Graph mailbox ingestion.
+//
+// Accounting mails an approval request to approvals-dr3@svdp.us; Vision polls
+// the mailbox by Graph delta (or a mock transport until IT delivers creds),
+// turns each valid message into an ap_request, Morena/Janette (as data: org
+// reach approvers) decide inside Vision (first-action-wins, atomic), and Vision
+// mails the decision to a FIXED configured recipient list for Mary's Great
+// Plains filing. These records are ORG-level AP — deliberately NOT site-scoped
+// (no site_id / Site relation): they belong to accounting, not a facility.
+// PII discipline (ADR-0045): attachments + bodies stay in R2 / this DB; logs and
+// notifications carry row ids + sender DOMAIN only, never amounts/vendor/bank.
+// ════════════════════════════════════════════════════════════════════════
+
+enum ApRequestStatus {
+  pending
+  approved
+  rejected
+  quarantined
+}
+
+/// The Graph attachment taxonomy (C10.3). `file` = a downloaded fileAttachment (or
+/// an unwrapped one-level itemAttachment file) stored in R2; `nested_message` = an
+/// itemAttachment forwarded message (subject/marker recorded; deeper nesting kept
+/// as-is with a visible marker); `reference_link` = a referenceAttachment
+/// (OneDrive/SharePoint), recorded for the approver but NEVER fetched by Vision.
+enum ApAttachmentKind {
+  file
+  nested_message
+  reference_link
+}
+
+/// Terminal status of one poll run — mirrors `MymrcSyncStatus` (ADR-0038 shape,
+/// C6). A green run that read nothing while mail exists is impossible by
+/// construction (delta contract + ledger counts).
+enum ApPollRunStatus {
+  ok
+  auth_failed
+  error
+}
+
+/// C9-D2 sender-validation mode. `tenant_wide` (default): any authenticated
+/// internal `@svdp.us` sender creates an approvable request. `explicit_list`:
+/// only `ap_sender_entries` addresses do — tightening is an admin toggle, never a
+/// code change.
+enum ApSenderMode {
+  tenant_wide
+  explicit_list
+}
+
+/// Which transport produced a poll run — self-reported at startup + in every
+/// ledger row (D1). `mock` is the fixture-driven default until Graph creds land.
+enum ApTransportMode {
+  mock
+  graph
+}
+
+/// C4/C10 — one ingested approval request. Exactly one terminal state per polled
+/// message. `internet_message_id` UNIQUE is the true idempotency guard (a re-poll
+/// or a DB/move race can never double-ingest). Raw email HTML is NEVER stored:
+/// `body_html_sanitized` holds the allowlist-sanitized HTML (rendered in a
+/// sandboxed container), `body_text` the text/plain part.
+model ApRequest {
+  id                    String          @id @default(uuid())
+  status                ApRequestStatus @default(pending)
+  internet_message_id   String          @unique
+  conversation_id       String?
+  received_at           DateTime
+  sender_address        String
+  sender_validated      Boolean
+  subject               String?
+  body_html_sanitized   String? // allowlist-sanitized at ingest; raw HTML never stored
+  body_text             String?
+  vendor                String? // optional, keyed at decision (C9-D5)
+  amount_cents          Int? // optional, keyed at decision (C9-D5)
+  decided_by            String? // bare audit-actor column (user id)
+  decided_at            DateTime?
+  decision_note         String?
+  decision_mail_sent_at DateTime?
+  quarantine_reason     String? // set iff status=quarantined (external sender / parse failure)
+  created_at            DateTime        @default(now())
+  updated_at            DateTime        @updatedAt
+
+  attachments ApAttachment[]
+  followups   ApFollowup[]
+
+  @@index([status, received_at])
+  @@index([conversation_id])
+  @@map("ap_requests")
+}
+
+/// C10.3 — one attachment on a request. Bank details may live in `file` blobs →
+/// R2 only (`storage_key`), never inline in a log/notification.
+model ApAttachment {
+  id             String           @id @default(uuid())
+  request_id     String
+  request        ApRequest        @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  kind           ApAttachmentKind
+  filename       String?
+  storage_key    String? // R2 key (kind=file); private `ap/` prefix
+  content_type   String?
+  link_url       String? // kind=reference_link (recorded, never fetched)
+  nested_subject String? // kind=nested_message
+  byte_size      Int?
+  created_at     DateTime         @default(now())
+
+  @@index([request_id])
+  @@map("ap_attachments")
+}
+
+/// C4 — a same-conversation follow-up email that arrived while a request is open.
+/// Attached as a note; never a second request. `internet_message_id` UNIQUE so a
+/// re-poll never double-attaches.
+model ApFollowup {
+  id                  String    @id @default(uuid())
+  request_id          String
+  request             ApRequest @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  internet_message_id String    @unique
+  received_at         DateTime
+  sender_address      String
+  body_text           String?
+  created_at          DateTime  @default(now())
+
+  @@index([request_id])
+  @@map("ap_followups")
+}
+
+/// C9-D2 — sender-validation mode config (singleton; fixed pk enforces one row).
+/// Default `tenant_wide`. Explicit entries live in `ap_sender_entries`.
+model ApSenderConfig {
+  id         String       @id @default("singleton")
+  mode       ApSenderMode @default(tenant_wide)
+  updated_by String? // bare audit-actor column
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+
+  @@map("ap_sender_config")
+}
+
+/// C9-D2 — explicit sender allowlist, consulted only when mode=explicit_list.
+model ApSenderEntry {
+  id         String   @id @default(uuid())
+  address    String   @unique
+  active     Boolean  @default(true)
+  note       String?
+  created_by String? // bare audit-actor column
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([active])
+  @@map("ap_sender_entries")
+}
+
+/// C3.3 / C5 — the FIXED decision-mail recipient roster (Mary's Great Plains
+/// filing address lands post-Monday-call). Mirrors `alert_recipients`. Seeded
+/// EMPTY: with zero active rows a decision REFUSES to mail and pages
+/// `dr3-vision-system` (operator action: add Mary's address here). The decision
+/// reply NEVER goes to the inbound Reply-To (attacker-controlled).
+model ApDecisionRecipient {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  active     Boolean  @default(true)
+  created_by String? // bare audit-actor column
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([active])
+  @@map("ap_decision_recipients")
+}
+
+/// D1 — Graph delta-token persistence per mailbox+folder. A lost token degrades
+/// to a full-folder resync; idempotency (internet_message_id UNIQUE) absorbs it.
+model ApDeltaToken {
+  id          String   @id @default(uuid())
+  mailbox     String
+  folder      String
+  delta_token String
+  updated_at  DateTime @updatedAt
+
+  @@unique([mailbox, folder])
+  @@map("ap_delta_tokens")
+}
+
+/// C6 — poll-run ledger (the `mymrc_sync_runs` shape). ALWAYS written, including
+/// on throw. `transport_mode` self-reports mock-vs-live in every row.
+model ApPollRun {
+  id                String          @id @default(uuid())
+  started_at        DateTime        @default(now())
+  finished_at       DateTime?
+  status            ApPollRunStatus
+  transport_mode    ApTransportMode
+  mailbox           String?
+  folder            String?
+  messages_listed   Int             @default(0)
+  requests_created  Int             @default(0)
+  followups_created Int             @default(0)
+  quarantined       Int             @default(0)
+  moved             Int             @default(0)
+  error             String? // human error text (never contains credentials / PII)
+  run_id            String? // per-run correlation id (crypto.randomUUID)
+  created_at        DateTime        @default(now())
+
+  @@index([status, started_at])
+  @@map("ap_poll_runs")
+}
