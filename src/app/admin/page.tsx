@@ -38,6 +38,18 @@ const TILES = [
     description: 'Pilot→live control for every staff-facing surface × site (ADR-0047). Flip to ramp; audited.',
     testid: 'admin-tile-rollout',
   },
+  {
+    href: '/admin/audit/workbook',
+    label: 'Workbook import & backfill',
+    description: 'Upload monthly workbooks, then promote June staging rows into the operational tables (ADR-0048).',
+    testid: 'admin-tile-workbook',
+  },
+  {
+    href: '/admin/equipment/import',
+    label: 'Terex history import',
+    description: "Import Janette's Terex spreadsheet into the equipment log (ADR-0048 D3).",
+    testid: 'admin-tile-terex-import',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {
