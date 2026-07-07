@@ -83,7 +83,11 @@ export default async function WorkbookImportPage() {
             ) : (
               recent.map((r) => (
                 <tr key={r.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-800">{r.original_filename}</td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    <Link href={`/admin/audit/workbook/${r.id}`} className="text-emerald-700 hover:underline">
+                      {r.original_filename}
+                    </Link>
+                  </td>
                   <td className="px-3 py-2">{r.site.name}</td>
                   <td className="px-3 py-2">{r.period_label ?? '—'}</td>
                   <td className="px-3 py-2">{r.template_generation ?? '—'}</td>

@@ -152,6 +152,8 @@ model SiteInventorySnapshot {
   reconciled_delta Int?
   // Provenance of the snapshot (who/what produced it).
   source           RecordSource          @default(manual)
+  // ADR-0048 — workbook_promotions.id when this row was promoted from staging.
+  import_id        String?
 
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
@@ -452,6 +454,8 @@ model InboundLoad {
   external_mymrc_haul_id      String?   @unique
   external_mymrc_materials_id String?
   mymrc_submission_deadline   DateTime? // arrived_at + 3 business days
+  // ADR-0048 — workbook_promotions.id when this load was promoted from staging.
+  import_id                   String?
 
   // ADR-0037 D2 — workbook Inbound-tab parity + Q8 segregation gate.
   // Re-TRAC is the universal external join key across every workbook record
@@ -1401,6 +1405,7 @@ model ConsumerDropoff {
   paid_at         DateTime?
   retrac_id       String?
   source          RecordSource        @default(manual)
+  import_id       String? // ADR-0048 — workbook_promotions.id when promoted from staging
   locked_at       DateTime? // edit-before-any-lock guard (CRUD-lite)
   created_by      String?
   created_at      DateTime            @default(now())
@@ -1450,6 +1455,7 @@ model OutboundMaterial {
   allocation_pct    Decimal?            @db.Decimal(5, 2) // placeholder; nothing computes from it
   buyer             String?
   source            RecordSource        @default(manual)
+  import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
   locked_at         DateTime?
   created_by        String?
   created_at        DateTime            @default(now())
@@ -1478,6 +1484,7 @@ model LandfilledUnit {
   slip_number       String?
   reason            LandfilledReason
   source            RecordSource     @default(manual)
+  import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
   locked_at         DateTime?
   created_by        String?
   created_at        DateTime         @default(now())
@@ -1522,6 +1529,7 @@ model ProcessedUnitsDaily {
   pocketcoil_estimate    Int?
 
   source     RecordSource @default(manual)
+  import_id  String? // ADR-0048 — workbook_promotions.id when promoted from staging
   entered_by String?
   closed_at  DateTime? // set on close; post-close edits are blocked
   notes      String?
@@ -2457,6 +2465,7 @@ model EquipmentEvent {
   notes      String?
 
   source     RecordSource @default(manual)
+  import_id  String? // ADR-0048 — equipment_history_imports.id when promoted from a Terex upload
   created_by String? // users.id (bare column — see block header)
 
   // Soft-void (no hard delete). A voided row is excluded from every derived series
@@ -2841,4 +2850,75 @@ model ApPollRun {
 
   @@index([status, started_at])
   @@map("ap_poll_runs")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0048 — backfill promotion
+//
+// The one-shot, idempotent, audited promotion of parsed workbook staging rows
+// (ADR-0039 `workbook_import_rows`) into the operational tables — the ADR-0023
+// historical-import discipline (SHA gate + idempotency + provenance + audit)
+// applied to loads/inventory. Two ledger tables:
+//
+//   - `workbook_promotions` — one row per promoted `WorkbookImport`
+//     (`import_id` UNIQUE = the re-run no-op). Records the scope, the SHA over
+//     the staged content that was promoted, who/when, and per-table counts.
+//   - `equipment_history_imports` — one row per Terex spreadsheet upload
+//     (`source_sha256` UNIQUE = the re-run no-op) driving `equipment_events`
+//     (`source=import`, `import_id` back-reference).
+//
+// Both blocks are self-contained at the schema tail: FK columns to sibling-owned
+// models (`import_id` → `workbook_imports`, the actor columns) are plain scalars,
+// their referential-integrity constraints created at the DB level in migration
+// `20260714_june_backfill` (mirrors `equipment_events` / `alert_recipients`). The
+// operational tables each gained a bare nullable `import_id` column (one ALTER
+// each) so a promoted row is traceable AND the idempotency/conflict checks are
+// cheap. No Prisma relation is added to any shared model.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0048 D1/D2 — promotion ledger. One row per promoted workbook import.
+/// `import_id` is UNIQUE: a second promotion of the same import is refused at the
+/// application layer (SHA-matched re-run = no-op; SHA-changed = typed error).
+/// `scope` retains the exact {siteId, from, to, expectedCloseBalance} the
+/// promotion ran under; `counts` the per-table row counts (reconciled to the
+/// workbook's own totals per the acceptance criteria).
+model WorkbookPromotion {
+  id          String   @id @default(uuid())
+  import_id   String   @unique // FK → workbook_imports.id (constraint in migration)
+  scope       Json // { siteId, from, to, expectedCloseBalance }
+  sha256      String // SHA-256 over the canonical serialization of the staged content promoted
+  promoted_by String // users.id (bare column — constraint in migration)
+  promoted_at DateTime @default(now())
+  counts      Json // { processed_units_daily, inbound_loads, outbound_materials, landfilled_units, consumer_dropoffs, site_inventory_snapshots }
+  computed_close_program      Decimal? @db.Decimal(10, 1) // proven June-close program balance (D2 live assertion)
+  computed_close_total        Decimal? @db.Decimal(10, 1)
+  notes       String?
+  created_at  DateTime @default(now())
+
+  @@map("workbook_promotions")
+}
+
+/// ADR-0048 D3 — Terex equipment-history import batch. `source_sha256` is UNIQUE:
+/// re-uploading the identical file is a no-op. Idempotency of the derived
+/// `equipment_events` is `(site, event_date, kind, note-hash)` so a re-run that
+/// finds the same events skips them. The parser is written against a documented
+/// flexible header-detection mapping until Janette's real file lands, at which
+/// point it is finalized against the real shape (the upload UI says so loudly).
+model EquipmentHistoryImport {
+  id                 String   @id @default(uuid())
+  site_id            String // FK → sites.id (constraint in migration)
+  original_filename  String
+  source_sha256      String   @unique
+  storage_key        String? // R2 evidence key (equipment-imports/ prefix), best-effort
+  imported_by        String // users.id (bare column — constraint in migration)
+  imported_at        DateTime @default(now())
+  events_created     Int      @default(0)
+  events_skipped     Int      @default(0)
+  rows_parsed        Int      @default(0)
+  header_mapping     Json? // the detected column → field mapping (forensic)
+  notes              String?
+  created_at         DateTime @default(now())
+
+  @@index([site_id, imported_at])
+  @@map("equipment_history_imports")
 }

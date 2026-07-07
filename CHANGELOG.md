@@ -66,6 +66,50 @@ release-discipline fixes, deployed together.
   (checked in at `public/brand/svdp-logo-white.png`), not the dead
   `svdp.us/wp-content` WordPress hotlink. No other live hotlinked logo exists (the
   bonus-PDF uses an embedded data URI; the audit digest has no logo).
+### Added — 2026-07-07 (ADR-0048 — June operational backfill + Terex history import)
+
+- **Staging→operational promotion (`src/lib/audit/workbook-promotion.ts`).** The
+  ADR-0023 historical-import discipline (SHA gate + idempotency + provenance +
+  audit) applied to loads/inventory. `promoteWorkbookImport(importId, scope)`
+  reads a workbook's parsed staging rows (ADR-0039 `workbook_import_rows`) and
+  promotes them, in ONE transaction, into `processed_units_daily`,
+  `inbound_loads`, `outbound_materials`, `landfilled_units`, `consumer_dropoffs`,
+  and the anchor `site_inventory_snapshots` — every row `source=import` (or, for
+  `inbound_loads` which has no RecordSource column, tagged by `import_id`) with the
+  promotion id stamped in a new bare `import_id` column on each table.
+  - **Idempotent** on `workbook_promotions.import_id` (UNIQUE) — a re-run is a
+    no-op that returns the prior counts; a re-run whose staged content changed is
+    REFUSED (SHA mismatch).
+  - **Conflict refusal** — any live (non-import) row in the (site, table, window)
+    is a typed `PromotionConflictError` listing table + dates; no partial merge.
+  - **Scope enforcement** — table-driven allow-list (`backfill-scopes.ts`):
+    Woodland Jun 1–30, Eugene Jun 24–30; rows outside the window are clipped.
+    Enforced in the promote ROUTE (a request may only promote an allowed window).
+  - **D2 live assertion** — the June-1 opening inventory is promoted as the
+    physical anchor and the June-close balance is recomputed via the shared
+    `computeRunningBalance`; the transaction REFUSES COMMIT unless Woodland closes
+    to exactly **4,062** (the expected total is scope config, not a hardcode).
+  - One audit row per promoted table with counts (append-only, hard rule #6).
+- **Terex history import (`src/lib/equipment/import.ts`).** Admin upload
+  (xlsx/csv) → `equipment_events` (`source=import`). Flexible header detection
+  (date/notes/hours/downtime); downtime rows → `kind=downtime` (hours where
+  stated), everything else → `kind=note`. FAILS LOUD (typed `TerexParseError`,
+  listing what it saw) on an unrecognized shape — never guesses rows. Idempotent
+  on (site, event_date, kind, note-hash); re-uploading the identical file is a
+  no-op (`equipment_history_imports.source_sha256` UNIQUE). The mapping is
+  **finalized against Janette's real file on receipt** — the upload UI says so.
+- **Admin surfaces.** Promotion panel on the workbook-import detail
+  (`/admin/audit/workbook/[importId]`): scope options → dry-run preview (per-table
+  counts + conflicts + recomputed close vs the known figure) → commit. Terex
+  upload page (`/admin/equipment/import`). Both admin-only, both audited.
+- **Migration `20260714_june_backfill`.** Purely additive: two ledger tables
+  (`workbook_promotions`, `equipment_history_imports`) + a nullable `import_id`
+  column (with a sparse partial index) on each of the seven promotable operational
+  tables. Clean-replays on an empty PG16.
+- **Blocked on Bill's three files (ADR-0048 D4):** the June Woodland `.xlsm`, the
+  Eugene June log, and Janette's Terex spreadsheet. Until supplied, everything
+  ships tested against Addendum-B-shaped fixtures. Click-path in
+  `docs/operator/june-backfill.md`.
 
 ### Ops — 2026-07-06
 
