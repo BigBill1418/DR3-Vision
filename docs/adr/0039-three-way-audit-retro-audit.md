@@ -334,3 +334,15 @@ findings. Optional + default-0 keeps the existing fixtures/tests unchanged.
   lifecycle round-trips — create / last_seen refresh / auto-resolve — remain
   covered by the pure `lifecycle.test.ts` reconciler). `site-alias.db.test.ts`
   covers the DB resolver.
+
+## Amendment 1 — bootstrap gating (2026-07-07, incident directive §3)
+
+Missing-counterpart checks (c4_billing_basis, m1_missing_close,
+m2_missing_snapshot, and any future check whose premise is "leg empty for
+window") MUST NOT emit findings for a site until (a) the leg has EVER
+contained data for that site, or (b) an admin-editable per-site/per-leg
+`go_live_date` has passed. Suppressed evaluations write run-ledger rows with
+status `suppressed_bootstrap` — visible in admin, never silent. Existing
+bootstrap findings auto-resolve with cause `bootstrap_suppression` +
+provenance note (never deleted). Comparator logic untouched — the checks were
+correct; the release discipline was not.
