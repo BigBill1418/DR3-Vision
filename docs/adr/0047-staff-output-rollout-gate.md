@@ -1,6 +1,6 @@
 # ADR-0047 — Staff-output rollout gate: notifyStaff() chokepoint + per-surface/per-site pilot→live states (+ UI surface-audience flags)
 
-**Status:** PROPOSED — awaiting operator review (Bill; incident directive 2026-07-07 §4 + §8 Stage-0)
+**Status:** Accepted (2026-07-06 evening PT, approved by Bill — incident priority)
 **Date:** 2026-07-07 (incident-priority)
 
 ## Context
