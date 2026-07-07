@@ -31,6 +31,9 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 COPY . .
+# Bake the deploy identity (ADR: alerts must show the real SHA, not package.json 0.1.0).
+# node:22-slim has no git binary — parse .git directly (works for both detached and ref HEADs).
+RUN sh -c 'SHA=$(cat .git/HEAD 2>/dev/null); case "$SHA" in ref:*) SHA=$(cat .git/$(echo "$SHA" | cut -d" " -f2) 2>/dev/null);; esac; printf "{\"sha\":\"%s\",\"builtAt\":\"%s\"}" "${SHA:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .build-info.json; cat .build-info.json'
 # Prisma client generation only parses the schema; it never opens a connection.
 # Provide a syntactically valid placeholder DATABASE_URL so `env("DATABASE_URL")`
 # resolves at build time. Runtime gets the real URL from the orchestrator.
@@ -69,6 +72,7 @@ RUN groupadd --system --gid 1001 nodejs && \
     useradd --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/.build-info.json ./.build-info.json
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
