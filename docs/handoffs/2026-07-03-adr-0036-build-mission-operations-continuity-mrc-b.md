@@ -172,3 +172,11 @@ Decimal boundary rules at every money/weight edge · migration ordering + clean-
   "Schedule a load" walkthrough, close the D7 ops gates (restore drill +
   RESTIC_PASSWORD) so Janette's manager surfaces open. Wed 7/9 — one supervised
   test load incl. offline ride-out, then straight cutover per locked decision.
+
+## Amendment 3 — 2026-07-06 evening (operator confirmations)
+
+- **Woodland go-live Wednesday 2026-07-09 RE-CONFIRMED** ("7/9 stands") — the
+  incident directive §8's "Stage 1 — wk of 7/13" header is superseded on this
+  point; all other §8 content stands.
+- **RESTIC_PASSWORD confirmed in 1Password (P1-4 closed).** Together with the
+  passed restore drill (P1-3, same day) the D7 ops gates are fully closed.

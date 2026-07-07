@@ -19,4 +19,10 @@
 3. Restore with `--no-owner --no-privileges` into a scratch role; the dump's
    `dr3` ownership is prod-specific.
 
+**P1-4 CLOSED (2026-07-06 evening PT):** Bill confirmed RESTIC_PASSWORD is filed
+in 1Password. With the 2026-07-06 drill (P1-3), BOTH readiness gates from the
+2026-06-23 buildout checklist are closed — the ADR-0037 D7 activation
+preconditions are fully met; manager exposure proceeds via the ADR-0047 staged
+flips per docs/plans/2026-07-06-staged-golive-activation-and-comms.md.
+
 Drill cadence: repeat quarterly or after any backup-pipeline change.
