@@ -36,3 +36,54 @@ Hotfix (§3) + policy gate (§4) are one working session; deploy today. **Contin
 ## 7. Human follow-up (Bill)
 
 Two-line note to Rick today: the flags were startup artifacts of the new audit system comparing against records that don't exist yet — his numbers are fine; the system won't email staff again until it's been validated. This preserves the audit's credibility for the moment it flags something real.
+
+
+
+---
+
+## 8. STAGED ACTIVATION PLAN — controlled ramp of built capability (Bill-gated, one flip at a time)
+
+**Principle:** the build being done does not make it live. Each surface reaches each audience through an explicit Bill flip (ADR-0047 `rollout_state`), only after the prior stage's validation criteria pass. One new workflow per person per stage wherever possible. Rollback for any stage = flip back to pilot, one admin action, no code.
+
+**Where §8 needs code:** ADR-0047 gates *notifications*; UI-surface visibility needs the same treatment where noted below — extend the rollout_state concept to per-site **surface audience flags** for dashboard tabs (the ADR-0037 D7 gate is the template). Small build; listed as Stage-0 work.
+
+### Stage 0 — this week (wk of 7/6): admin-only, foundations true
+- ADR-0047 gate + bootstrap suppression deployed (incident fix). **All surfaces pilot.** Bill reviews pilot digests daily.
+- Extend audience gating to UI surfaces per above (Workbench manager-read flag, events/OR-counts tabs, Terex tab).
+- Ops gates CLOSED: restore drill + off-box backup (the standing D7 blocker — nothing ramps to managers before this).
+- MyMRC profile enabled → audit legs fill (admin-visible only). June workbook retro-imported. DR3# counter aligned to Janette's real current number.
+- Rick populates `account_haul_rates` + `container_rental_sites` (data entry under `can_manage_rates`; not a workflow ramp).
+- Staff email (drafted) goes out — the map of what's coming. Rick's two-line bootstrap-artifact note (§7) sent.
+- **Exit criteria:** 2 consecutive pilot digests with zero bootstrap noise; ops gates closed; DR3# verified; MyMRC sync green ≥3 consecutive runs.
+
+### Stage 1 — wk of 7/13: capture layer, Woodland only
+- **Woodland iPad go-live** (operators get exactly one surface: the operator flow; supervised test load + offline ride-out first, straight cutover per locked decision).
+- **Janette** flips live on the minimum manager set: Schedule-a-load, verify gate, daily close (processed units + categories). NOT Workbench, NOT alerts, NOT Terex.
+- Janette runs Vision daily close **in parallel with her spreadsheet** (she maintains it anyway); Kelsey cross-checks both.
+- **Exit criteria:** 3 consecutive clean closes where Vision ties Janette's spreadsheet (or every variance is triaged bug-vs-business-rule and resolved); operator flow needs no floor intervention for 2 consecutive days.
+
+### Stage 2 — wk of 7/20: Eugene capture + Workbench to managers
+- **Eugene iPads + Rick's** minimum manager set (same as Janette's Stage 1; Eugene's lighter volume makes this a smaller lift).
+- **Woodland managers (Janette, Morena) get Workbench READ** — findings visible in-app; digest emails remain pilot. Kelsey adopts the Workbench as her primary audit tool for the remainder of her validation window — her usage IS the P1 acceptance test.
+- Terex capture flips for Morena/Janette (equipment_events entry only; trend views stay admin until data exists).
+- **Exit criteria:** Eugene mirrors Stage-1 criteria; Kelsey signs off that Workbench findings match her manual audit for one full week.
+
+### Stage 3 — 7/16 through EOM: money in SHADOW (default; Bill may override)
+- **July is a shadow-billing month: the spreadsheet invoice remains the invoice of record.** Vision generates the mid-month set (~7/16) and EOM set; Rick compares line-by-line (mission §4 parity checklist is the instrument). Rick exercises the approval workflow on the shadow invoices — validating the workflow without it carrying money.
+- **July COR** (~8/1): Vision generates; Rick validates the 4,062-style inventory tie and headcount against his manual count; signs whichever he trusts, variance filed as a finding either way.
+- **Exit criteria (→ Vision becomes invoice of record for August):** mid-month AND EOM parity clean or fully triaged; Rick states — in writing, in the ledger — that he'd have signed the Vision set.
+
+### Stage 4 — wk of 7/27: staff-facing communications ramp
+- **Alert digest → live** for Morena/Janette/Rick only after ≥5 consecutive reviewed pilot digests with zero noise AND ≥1 true finding handled end-to-end in pilot.
+- Task-ledger reminders live for leads; contact-intake routing live (tours→Rick); Morena begins sending the Updates digest from Vision's draft.
+- **Exit criteria:** one week of live digests with no confused-recipient escalations.
+
+### Stage 5 — 8/1: cutover
+- Vision is system of record: August invoices native; Woodland daily-log spreadsheet **retired after July EOM parity passes** (Eugene's retires after its own EOM cycle); Terex trend views + remaining P4/P5 audiences live.
+- **ADR-0046 AP mailbox ramps independently** of 8/1 — born pilot when built; goes live when IT consent lands + Bill validates the first real quarantine/request cycle. If IT lags, the interim is accounting emailing Morena/Janette directly (the pre-Vision workflow with the new approvers) — the cutover does not wait on Graph consent.
+
+### Standing rules
+1. No stage starts before the prior stage's exit criteria are met — schedule pressure changes the calendar, never the criteria.
+2. Every flip is audited with the criteria evidence noted in the flip.
+3. Any Sev-worthy surprise at any stage → the affected surface back to pilot first, diagnose second.
+4. Kelsey's availability ends 8/1 — Stages 1–3 are the window where her cross-checks are possible; if a stage slips past her, its validation falls back to parity artifacts + retro-audit, which is weaker. Protect her window.
