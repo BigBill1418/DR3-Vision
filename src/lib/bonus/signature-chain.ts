@@ -87,7 +87,13 @@ export function parseOverrideActorIds(raw: string | null | undefined): string[] 
  * so the entry is collected when the db instance is. We cache the PROMISE so
  * concurrent callers in the same request coalesce onto one query.
  */
-const chainCache = new WeakMap<object, Map<string, Promise<SignatureChain>>>();
+const chainCache = new WeakMap<object, Map<string, { at: number; chain: Promise<SignatureChain> }>>();
+
+// 2026-07-07 payroll incident: this cache was effectively process-lifetime for
+// the prisma singleton, so a chain repair in the DB was invisible until an app
+// restart — the t3 auto-override kept resolving a deactivated actor. A short
+// TTL keeps the request-coalescing benefit while bounding staleness.
+const CHAIN_CACHE_TTL_MS = 30_000;
 
 export class SignatureChainNotFoundError extends Error {
   constructor(public readonly siteId: string) {
@@ -116,10 +122,10 @@ export function getSignatureChain(
     chainCache.set(db as object, perSite);
   }
   const cached = perSite.get(siteId);
-  if (cached) return cached;
+  if (cached && Date.now() - cached.at < CHAIN_CACHE_TTL_MS) return cached.chain;
 
   const loading = loadSignatureChain(siteId, db);
-  perSite.set(siteId, loading);
+  perSite.set(siteId, { at: Date.now(), chain: loading });
   // On failure, evict so a later call can retry rather than re-throwing a stale
   // rejected promise for the rest of the request.
   void loading.catch(() => perSite!.delete(siteId));

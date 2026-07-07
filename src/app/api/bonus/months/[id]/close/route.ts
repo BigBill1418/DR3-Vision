@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
+import { appToday } from '@/lib/time';
 import { transitionMonth } from '@/lib/bonus/state-machine';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
 import { recordStateGauge } from '@/lib/bonus/signatures';
@@ -36,7 +37,7 @@ export async function POST(
   // Site-scope the month so a manager can never close another site's month by id.
   const month = await prisma.bonusPayPeriod.findFirst({
     where: { id, site_id: ctx.siteId },
-    select: { id: true, state: true },
+    select: { id: true, state: true, period_end: true },
   });
   if (!month) {
     return NextResponse.json({ error: 'Bonus month not found.' }, { status: 404 });
@@ -44,6 +45,22 @@ export async function POST(
   if (month.state !== 'draft') {
     return NextResponse.json(
       { error: 'This month is already closed for signatures.' },
+      { status: 409 },
+    );
+  }
+  // 2026-07-07 incident guard: a period that has not ENDED cannot be closed —
+  // Eugene's brand-new P15 was closed by mistake during a signature scramble,
+  // blocking daily entry site-wide. Early close on the final day is allowed;
+  // closing a period whose end date is still in the future is not.
+  if (month.period_end.getTime() > appToday().getTime()) {
+    return NextResponse.json(
+      {
+        error:
+          'This pay period has not ended yet — it runs through ' +
+          month.period_end.toISOString().slice(0, 10) +
+          '. Closing early would lock daily bonus entry for the rest of the period. ' +
+          'If you meant to sign the previous period, use the signature link instead.',
+      },
       { status: 409 },
     );
   }

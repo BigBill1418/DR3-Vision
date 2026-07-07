@@ -22,7 +22,7 @@ vi.mock('@/lib/bonus/signature-notifications', () => ({
 vi.mock('@/lib/bonus/signatures', () => ({ recordStateGauge: vi.fn() }));
 
 // ── prisma double ────────────────────────────────────────────────
-let monthRow: { id: string; site_id: string; state: string } | null = null;
+let monthRow: { id: string; site_id: string; state: string; period_end?: Date } | null = null;
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     site: {
@@ -41,7 +41,11 @@ vi.mock('@/lib/prisma', () => ({
     bonusPayPeriod: {
       findFirst: vi.fn(async ({ where }: { where: { id: string; site_id: string } }) =>
         monthRow && monthRow.id === where.id && monthRow.site_id === where.site_id
-          ? { id: monthRow.id, state: monthRow.state }
+          ? {
+              id: monthRow.id,
+              state: monthRow.state,
+              period_end: monthRow.period_end ?? new Date(Date.UTC(2020, 0, 31)),
+            }
           : null,
       ),
     },
@@ -112,5 +116,31 @@ describe('POST /api/bonus/months/[id]/close — close flow', () => {
     monthRow = { id: 'm1', site_id: EUGENE, state: 'draft' };
     mockSession = { user: { id: 'bill', role: 'admin', primary_site_id: null } };
     expect((await POST(req(), { params })).status).toBe(404);
+  });
+});
+
+// ── 2026-07-07 incident lock-ins: future-period close guard ─────────────────
+// Eugene's current period (P15, ended Jul 20) was manually closed on Jul 7
+// during the P14 signature scramble, locking daily entry site-wide.
+describe('close guard — periods that have not ended', () => {
+  it('refuses (409, plain-English) when period_end is in the future', async () => {
+    vi.setSystemTime(new Date('2026-07-07T19:00:00Z')); // Jul 7, noon PT
+    mockSession = { user: { id: 'jan', role: 'manager', primary_site_id: WOODLAND } };
+    monthRow = { id: 'm1', site_id: WOODLAND, state: 'draft', period_end: new Date(Date.UTC(2026, 6, 20)) };
+    const res = await POST(req(), { params });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('has not ended yet');
+    expect(transitionMonth).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('allows close ON the final day (early close after counts complete)', async () => {
+    vi.setSystemTime(new Date('2026-07-20T19:00:00Z')); // Jul 20, noon PT
+    mockSession = { user: { id: 'jan', role: 'manager', primary_site_id: WOODLAND } };
+    monthRow = { id: 'm1', site_id: WOODLAND, state: 'draft', period_end: new Date(Date.UTC(2026, 6, 20)) };
+    const res = await POST(req(), { params });
+    expect(res.status).toBe(200);
+    expect(transitionMonth).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

@@ -5,6 +5,19 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-07 payroll-morning hotfix
+
+- **Signature-chain cache TTL (30s).** The per-site chain cache was keyed on the
+  prisma singleton and lived for the process lifetime — the 2026-07-07 chain
+  repair (override actors pointed at a deactivated duplicate admin user) was
+  invisible to the t3 auto-override until an app restart. Config repairs now
+  take effect within 30s.
+- **Future-period close guard.** The manual "ready to sign" close now refuses
+  (409, plain-English) any period whose end date is still in the future —
+  Eugene's current P15 was closed by mistake during the P14 signature scramble,
+  locking daily bonus entry site-wide. Early close on the final day remains
+  allowed.
+
 ### Added — 2026-07-07 (ADR-0047 — staff-output rollout gate + ADR-0039 A1 bootstrap gating; INCIDENT)
 
 Response to the 2026-07-06 incident (the ADR-0043 digest emailed a site manager
