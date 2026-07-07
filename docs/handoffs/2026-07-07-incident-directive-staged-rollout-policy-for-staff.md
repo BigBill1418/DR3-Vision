@@ -87,3 +87,36 @@ Two-line note to Rick today: the flags were startup artifacts of the new audit s
 2. Every flip is audited with the criteria evidence noted in the flip.
 3. Any Sev-worthy surprise at any stage → the affected surface back to pilot first, diagnose second.
 4. Kelsey's availability ends 8/1 — Stages 1–3 are the window where her cross-checks are possible; if a stage slips past her, its validation falls back to parity artifacts + retro-audit, which is weaker. Protect her window.
+
+
+
+---
+
+## 9. EXECUTION COORDINATION PROTOCOL — detail-for-detail (locked by Bill, 2026-07-06)
+
+Every stage of §8 executes as one **coordinated packet**. A flip without its comm, a comm without its flip, or a date that moves one without the others is an incident-class deviation from this protocol.
+
+### 9.1 The atomic pairing rule
+Each ADR-0047 flip (or flip-set for a stage) pairs with its designated communication (E0–E5, plan Part 3) **sent the same day**. The email tells exactly the affected people what changed and what deliberately did not. Nobody discovers a new surface, workflow, or email in their inbox before the comm that frames it.
+
+### 9.2 Dates move as a unit
+If a go-live date moves, its flips + its email + its validation window + its named validators move together. No partial slips. (Live example: the Woodland iPad date — 7/9 per Amendment 2 vs "next week" per Bill 7/5 — must be resolved as ONE decision that repositions E0, E1, Stage-1 flips, and the Kelsey cross-check window together.)
+
+### 9.3 The stage packet (run in order, every stage)
+1. **Pre-flight (Bill + Claude, day before):** verify preconditions against repo AND runtime (commands supplied in copyable form); attach prior stage's exit-criteria evidence; finalize the email draft (names, dates, ES translation where operator-facing); confirm the flip list surface-by-surface against plan Part 1.
+2. **Execution day:** Bill executes flips at `/admin/rollout`, criteria note referencing the evidence; Bill sends the paired comm; operator actions run per the linked runbook.
+3. **Validation window:** named validator + named instrument (Janette's parallel spreadsheet · Kelsey cross-check · pilot-digest review · Rick's parity checklist); evidence lands in the ledger as it accrues.
+4. **Stage close:** exit criteria verified **verbatim against §8 text** — not paraphrase, not vibes; evidence recorded (flip note + ops ledger); only then does the next stage unlock.
+5. **Deviation:** any Sev-worthy surprise → affected surface back to `pilot` FIRST (standing rule 3), diagnose second, protocol resumes at 9.3.1 for the re-attempt.
+
+### 9.4 Roles
+- **Bill:** the only flip authority; the only comm sender; resolves date/criteria questions.
+- **Claude (planning channel):** pre-flight verification, email finalization, evidence review, execution log pushed to the repo as dated handoff appendices — the running record of what flipped, when, on what evidence.
+- **Claude Code:** fixes surfaced by validation (bug-vs-business-rule triage output); never flips anything.
+- **Architect sessions:** plan amendments only, via this document; a plan change is not an execution.
+
+### 9.5 Current coordination state (as of lock)
+- **Tonight:** E-Rick (drafted verbatim-ready, plan Part 3) — precedes everything.
+- **Open date decision gating E0/E1:** Woodland iPad go-live (7/9 vs wk of 7/13) — §9.2 applies.
+- **Open blocker gating all Stage-1 flips:** P1-4 RESTIC off-box confirmation.
+- **Next packet:** Stage 0 → 1 pre-flight, scheduled once the two items above resolve.
