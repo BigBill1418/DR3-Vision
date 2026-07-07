@@ -55,6 +55,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0045   | Ops task ledger + Updates digest (Morena sends) + contact-form routing (tours→Rick)                            | Accepted                                                        |
 | 0046   | Vendor-invoice approval via Graph mailbox ingestion (mock-first; msgraph-mail transport; quarantine ring)      | Accepted                                                        |
 | 0047   | Staff-output rollout gate (notifyStaff chokepoint, pilot→live per surface×site, UI audience flags)             | Accepted                                                        |
+| 0048   | June operational backfill + Terex history import (staging→operational promotion, ADR-0023 discipline)          | Accepted                                                        |
 
 ## How to write a new ADR
 

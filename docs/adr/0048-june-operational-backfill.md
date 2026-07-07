@@ -1,6 +1,6 @@
 # ADR-0048 — June operational backfill + Terex history import (the tracking month)
 
-**Status:** PROPOSED — awaiting operator review (Bill)
+**Status:** Accepted (2026-07-06 evening PT, approved by Bill)
 **Date:** 2026-07-06 evening PT
 **Directive:** Bill 2026-07-06: "backfill all of June — that is our tracking month" · "all Terex history needs pulled in" · "Eugene: last week of June". Supersedes the go-live plan's anchor-forward + manual-Terex recommendations (PR #74 Part 4 #1/#2).
 
