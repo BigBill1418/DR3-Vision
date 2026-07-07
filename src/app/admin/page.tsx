@@ -32,6 +32,12 @@ const TILES = [
     description: 'Transport tiers, account haul overrides, container rentals, and fuel prices.',
     testid: 'admin-tile-billing-rates',
   },
+  {
+    href: '/admin/rollout',
+    label: 'Rollout gate',
+    description: 'Pilot→live control for every staff-facing surface × site (ADR-0047). Flip to ramp; audited.',
+    testid: 'admin-tile-rollout',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {

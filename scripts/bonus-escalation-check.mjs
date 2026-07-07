@@ -11,8 +11,10 @@
 // fire each tier and POSTs the route — exactly the split T-204 uses, so the
 // state machine is never re-implemented in plain `.mjs`.
 //
-// Four daily fires (Pacific wall clock — ADR-0019.1 §3 timeline):
-//   06:00 PT → tier t1  (low-urgency "still unsigned" ntfy)
+// Four daily fires (Pacific wall clock — ADR-0019.1 §3 timeline, 2026-07-07
+// amendment: the close now fires 07:00 PT on the payroll day, so t1 moved from
+// 06:00 — which now predates the close — to 07:10, a post-close nudge):
+//   07:10 PT → tier t1  (low-urgency "still unsigned" post-close nudge)
 //   07:30 PT → tier t2  (urgent ntfy + override-authorized humans in the body)
 //   08:30 PT → tier t3  (AUTO-OVERRIDE: system-sign unsigned slots, fire PDF+mail)
 //   09:00 PT → tier t4  (T-206 payroll-deadline-missed ntfy if not yet `paid`)
@@ -36,7 +38,7 @@ const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 // The four fire times (Pacific wall clock) → tier. Order does not matter; the
 // scheduler always picks the soonest upcoming one.
 const FIRES = [
-  { hour: 6, minute: 0, tier: 't1' },
+  { hour: 7, minute: 10, tier: 't1' },
   { hour: 7, minute: 30, tier: 't2' },
   { hour: 8, minute: 30, tier: 't3' },
   { hour: 9, minute: 0, tier: 't4' },
@@ -167,6 +169,6 @@ const isEntrypoint =
   process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
 if (isEntrypoint) {
   setupShutdown();
-  logTs('cron host started — escalation tiers anchored to 06:00/07:30/08:30/09:00 America/Los_Angeles');
+  logTs('cron host started — escalation tiers anchored to 07:10/07:30/08:30/09:00 America/Los_Angeles');
   scheduleNext();
 }

@@ -27,17 +27,18 @@ describe('bonus-escalation cron — nextEscalationFire', () => {
     expect(typeof nextEscalationFire).toBe('function');
   });
 
-  it('picks t1 06:00 PT when before all fires (summer PDT)', () => {
-    // 2026-07-15 05:00 PDT = 12:00 UTC. Next fire is t1 at 06:00 PDT same day.
+  it('picks t1 07:10 PT when before all fires (summer PDT)', () => {
+    // 2026-07-15 05:00 PDT = 12:00 UTC. Next fire is t1 at 07:10 PDT same day
+    // (ADR-0019.1 2026-07-07 amendment: t1 moved from 06:00 to a post-close nudge).
     const from = new Date('2026-07-15T12:00:00Z');
     const next = nextEscalationFire(from);
     expect(next.tier).toBe('t1');
-    expect(pacificHHMM(from, next.delay)).toBe('06:00');
+    expect(pacificHHMM(from, next.delay)).toBe('07:10');
   });
 
-  it('picks t2 07:30 PT when between 06:00 and 07:30', () => {
-    // 2026-07-15 06:30 PDT = 13:30 UTC. Next fire is t2 at 07:30 PDT.
-    const from = new Date('2026-07-15T13:30:00Z');
+  it('picks t2 07:30 PT when between 07:10 and 07:30', () => {
+    // 2026-07-15 07:20 PDT = 14:20 UTC. Next fire is t2 at 07:30 PDT.
+    const from = new Date('2026-07-15T14:20:00Z');
     const next = nextEscalationFire(from);
     expect(next.tier).toBe('t2');
     expect(pacificHHMM(from, next.delay)).toBe('07:30');
@@ -60,26 +61,26 @@ describe('bonus-escalation cron — nextEscalationFire', () => {
   });
 
   it('rolls to next-day t1 after 09:00 PT', () => {
-    // 2026-07-15 10:00 PDT = 17:00 UTC. All today fired → tomorrow 06:00 t1.
+    // 2026-07-15 10:00 PDT = 17:00 UTC. All today fired → tomorrow 07:10 t1.
     const from = new Date('2026-07-15T17:00:00Z');
     const next = nextEscalationFire(from);
     expect(next.tier).toBe('t1');
-    expect(pacificHHMM(from, next.delay)).toBe('06:00');
+    expect(pacificHHMM(from, next.delay)).toBe('07:10');
     expect(next.delay).toBeGreaterThan(0);
     expect(next.delay).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
   });
 
   it('lands on the right Pacific tier time in winter (PST, -8)', () => {
-    // 2026-01-15 05:00 PST = 13:00 UTC. Next is t1 06:00 PST.
+    // 2026-01-15 05:00 PST = 13:00 UTC. Next is t1 07:10 PST.
     const from = new Date('2026-01-15T13:00:00Z');
     const next = nextEscalationFire(from);
     expect(next.tier).toBe('t1');
-    expect(pacificHHMM(from, next.delay)).toBe('06:00');
+    expect(pacificHHMM(from, next.delay)).toBe('07:10');
   });
 
   it('every computed fire lands exactly on its tier wall-clock time across a day', () => {
     const expected: Record<string, string> = {
-      t1: '06:00',
+      t1: '07:10',
       t2: '07:30',
       t3: '08:30',
       t4: '09:00',

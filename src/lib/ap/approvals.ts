@@ -11,7 +11,8 @@
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
-import { sendSystemEmail } from '@/lib/m365-mail';
+import { notifyStaff } from '@/lib/notify/notify-staff';
+import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { publishNtfy } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
 
@@ -231,21 +232,22 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
     </ul>
     <p>Request id + original subject are the Great Plains matching keys.</p>`;
 
-  let anyDelivered = false;
-  let anyDisabled = false;
-  for (const to of recipients) {
-    const res = await sendSystemEmail({
-      to,
-      subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
-      htmlBody,
-      fromDisplayName: 'DR3-Vision AP',
-    });
-    if (res.disabled) anyDisabled = true;
-    if (res.delivered) anyDelivered = true;
-  }
+  // ADR-0047 — the AP module is org-wide + born pilot; the actual delivery
+  // routes through the rollout gate (in pilot it reroutes to admins). The
+  // empty-recipient REFUSE above still guards the LIVE roster (Mary's GP filing)
+  // so a config gap pages before ramp — the gate does not mask it.
+  const notified = await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients,
+    subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    db: prisma,
+  });
 
-  if (anyDisabled && !anyDelivered) return 'disabled'; // M365 not configured — fail-open no-op
-  if (!anyDelivered) {
+  if (notified.disabled) return 'disabled'; // M365 not configured — fail-open no-op
+  if (notified.delivered === 0) {
     log.warn({ requestId }, '[ap-approvals] decision email failed to all recipients');
     return 'failed';
   }

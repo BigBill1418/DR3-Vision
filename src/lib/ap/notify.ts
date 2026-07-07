@@ -8,7 +8,8 @@
 // mail failure must never fail the poll.
 
 import { publishNtfy } from '@/lib/ntfy';
-import { sendSystemEmail } from '@/lib/m365-mail';
+import { notifyStaff } from '@/lib/notify/notify-staff';
+import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { log } from '@/lib/observability/logger';
 
 const SYSTEM_TOPIC = 'dr3-vision-system';
@@ -49,14 +50,17 @@ export async function alertQuarantine(args: { requestId: string; senderDomain: s
       <li>Sender domain: ${escapeHtml(args.senderDomain)}</li>
     </ul>
     <p>No message body, attachment names, or amounts are included by design (ADR-0045). Open the AP queue to review.</p>`;
-  const res = await sendSystemEmail({
-    to,
+  // ADR-0047 — AP module is org-wide + born pilot; route mail through the gate.
+  const res = await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [to],
     subject: `DR3-Vision — AP message quarantined (${args.requestId})`,
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
     importance: 'high',
-  });
-  if (!res.delivered && !res.disabled) {
+  }).catch(() => null);
+  if (res && res.delivered === 0 && !res.disabled) {
     log.warn({ requestId: args.requestId }, '[ap-notify] quarantine email not delivered (ntfy still fired)');
   }
 }
@@ -96,14 +100,16 @@ export async function notifyNewRequest(args: {
       <li>Request id: ${escapeHtml(args.requestId)}</li>
     </ul>
     <p><a href="${apQueueUrl()}">Open the AP approval queue</a> to review the invoice and approve or reject. First action wins.</p>`;
-  for (const to of args.approverEmails) {
-    await sendSystemEmail({
-      to,
-      subject: `DR3-Vision — new AP approval request: ${subj}`.slice(0, 200),
-      htmlBody,
-      fromDisplayName: 'DR3-Vision AP',
-    }).catch(() => undefined);
-  }
+  // ADR-0047 — org-wide AP surface, born pilot. One gated send to the approver
+  // set (in pilot it reroutes to admins; the approvers receive nothing yet).
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [...args.approverEmails],
+    subject: `DR3-Vision — new AP approval request: ${subj}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+  }).catch(() => undefined);
 }
 
 function escapeHtml(s: string): string {

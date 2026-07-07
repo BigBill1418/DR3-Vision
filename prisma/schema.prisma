@@ -1704,6 +1704,10 @@ enum AuditFindingCause {
   external_mymrc
   template_defect
   unknown
+  // ADR-0039 Amendment 1 / ADR-0047 — a finding auto-resolved because its leg
+  // had not gone live (bootstrap artifact, not a real discrepancy). Never
+  // deleted; the ledger stays honest.
+  bootstrap_suppression
 }
 
 enum AuditSeverity {
@@ -1859,12 +1863,74 @@ model AuditRun {
   findings_opened   Int            @default(0)
   findings_updated  Int            @default(0)
   findings_resolved Int            @default(0)
+  // ADR-0039 Amendment 1 — per-check count of findings withheld this run because
+  // the check's leg had not gone live (bootstrap gating). Shape: { checkCode: n }.
+  // Null/absent = nothing suppressed. Surfaced in the admin audit page; never silent.
+  suppressed_bootstrap Json?
   error_text        String?
   started_at        DateTime       @default(now())
   finished_at       DateTime?
 
   @@index([site_id, started_at])
   @@map("audit_runs")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-0047 — staff-output rollout gate + ADR-0039 A1 leg-liveness bootstrap gate
+// ════════════════════════════════════════════════════════════════════════
+
+enum RolloutSurfaceKind {
+  notification
+  ui
+}
+
+enum RolloutState {
+  pilot
+  live
+}
+
+/// One registered staff-facing surface (a notification path or a UI surface)
+/// per site. Default `pilot`: output/visibility is admin-only until an admin
+/// flips it `live` (audited, criteria noted). `site_id` null = an org-wide
+/// surface (no per-site scope, e.g. the AP module). FK columns are plain
+/// scalars (repo convention, mirrors ADR-0040) — the constraints live in the
+/// migration so this block never edits the shared Site/User relation lists.
+model RolloutSurface {
+  id            String             @id @default(uuid())
+  kind          RolloutSurfaceKind
+  surface_code  String
+  site_id       String? // null = org-wide surface
+  rollout_state RolloutState       @default(pilot)
+  flipped_by    String? // user id of the admin who last flipped state (bare FK column)
+  flipped_at    DateTime?
+  criteria_note String? // the evidence/criteria recorded at the last flip (directive §8 rule 2)
+  created_at    DateTime           @default(now())
+  updated_at    DateTime           @updatedAt
+
+  // surface_code is globally unique per site scope; the (code, site) pair is the
+  // stable identity notifyStaff()/the UI gate resolve against. Postgres treats
+  // NULL site_id rows as distinct, so a partial unique index also guards the
+  // org-wide (site_id IS NULL) case — created in the migration.
+  @@unique([surface_code, site_id])
+  @@index([kind])
+  @@map("rollout_surfaces")
+}
+
+/// ADR-0039 Amendment 1 — admin-editable per-(site, leg) go-live override for
+/// bootstrap gating. A missing-counterpart check (c4/m1/m2 + future) emits
+/// findings only once its leg has EVER had data OR this `go_live_date` has
+/// passed. Absence of a row ⇒ derived liveness only (leg-has-ever-had-data).
+model AuditBootstrapGate {
+  id           String    @id @default(uuid())
+  site_id      String // bare FK column (constraint in migration)
+  leg          String // 'billing' | 'close' | 'snapshot' (registry-defined)
+  go_live_date DateTime? @db.Date
+  note         String?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  @@unique([site_id, leg])
+  @@map("audit_bootstrap_gates")
 }
 
 // ════════════════════════════════════════════════════════════════════════

@@ -101,6 +101,17 @@ export function appTodayISO(instant: Date = new Date()): string {
   return pacificDayISO(instant);
 }
 
+/**
+ * The @db.Date-shaped day one calendar day before `day`. Safe across DST: a
+ * @db.Date is a pure UTC-midnight date with no wall-clock, so subtracting 24h
+ * always lands on the previous calendar day. Used by the period-close cron
+ * (ADR-0019.1 amendment): the close fires at 07:00 PT the day AFTER period_end,
+ * so it targets `previousDayKey(appToday())`.
+ */
+export function previousDayKey(day: Date): Date {
+  return new Date(day.getTime() - 86_400_000);
+}
+
 /** First-of-month (UTC midnight) for the Pacific calendar month of `instant`. */
 export function appCurrentMonthStart(instant: Date = new Date()): Date {
   const d = appToday(instant);

@@ -11,7 +11,7 @@
 // supplies that callback (wired in the internal sweep route + on-demand run
 // route). If no callback is passed, the sweep is a clean no-op (still ledgered).
 
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { appTodayISO, dayISO, dayKeyUTCFromISO } from '@/lib/time';
 import { publishNtfy, type PublishNtfyArgs, type PublishNtfyResult } from '@/lib/ntfy';
 import { persistRun } from './lifecycle';
@@ -20,7 +20,7 @@ import type { AuditWindow, CheckCode, Finding } from './types';
 /** Per-site comparator runner (supplied post-integration by the leg-fetchers). */
 export type RunChecksForWindow = (
   window: AuditWindow,
-) => Promise<{ checkCodes: CheckCode[]; findings: Finding[] }>;
+) => Promise<{ checkCodes: CheckCode[]; findings: Finding[]; suppressedBootstrap?: Record<string, number> }>;
 
 export interface SweepSiteResult {
   siteId: string;
@@ -82,7 +82,11 @@ export async function auditSiteWindow(args: AuditSiteWindowArgs): Promise<SweepS
   const startISO = window.startISO;
   const endISO = window.endISO;
   try {
-    const result = args.runChecks ? await args.runChecks(window) : { checkCodes: [] as CheckCode[], findings: [] as Finding[] };
+    const result = args.runChecks
+      ? await args.runChecks(window)
+      : { checkCodes: [] as CheckCode[], findings: [] as Finding[], suppressedBootstrap: {} };
+    const suppressed = result.suppressedBootstrap ?? {};
+    const suppressedTotal = Object.values(suppressed).reduce((a, b) => a + b, 0);
 
     const lifecycle =
       result.checkCodes.length > 0
@@ -106,6 +110,9 @@ export async function auditSiteWindow(args: AuditSiteWindowArgs): Promise<SweepS
         findings_opened: lifecycle.opened,
         findings_updated: lifecycle.updated,
         findings_resolved: lifecycle.resolved,
+        // ADR-0039 A1 — per-check bootstrap-suppressed counts (null when none),
+        // so a fresh site's ledger row proves the checks ran but were gated off.
+        suppressed_bootstrap: suppressedTotal > 0 ? suppressed : Prisma.JsonNull,
         finished_at: new Date(),
       },
     });

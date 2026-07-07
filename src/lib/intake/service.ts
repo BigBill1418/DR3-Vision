@@ -11,7 +11,8 @@
 // the endpoint being DOWN is caught by normal app health, not paged here.
 
 import { prisma } from '@/lib/prisma';
-import { sendSystemEmail } from '@/lib/m365-mail';
+import { notifyStaff } from '@/lib/notify/notify-staff';
+import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { writeAudit } from '@/lib/audit';
 import { log } from '@/lib/observability/logger';
 import { contactIntakeSchema, HONEYPOT_FIELD, type ContactIntakeInput } from './schema';
@@ -109,8 +110,12 @@ export async function handleContactIntake(raw: unknown): Promise<IntakeResult> {
 
   if (routedEmail) {
     try {
-      await sendSystemEmail({
-        to: routedEmail,
+      // ADR-0047 — org-wide contact-intake surface. In pilot this reroutes to
+      // admins (the routed staffer receives nothing until Bill ramps it).
+      await notifyStaff({
+        surfaceCode: NOTIFY_SURFACE.CONTACT_INTAKE_NOTIFY,
+        site: null,
+        recipients: [routedEmail],
         subject: `New website contact — ${input.topic}`,
         htmlBody: notificationHtml(input.topic, input),
         fromDisplayName: 'DR3-Vision Contact',

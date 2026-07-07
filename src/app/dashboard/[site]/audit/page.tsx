@@ -11,6 +11,7 @@ import { prisma } from '@/lib/prisma';
 import { findingStats, listFindings, type FindingFilter } from '@/lib/audit/findings-query';
 import { FindingCard, type FindingCardItem } from './finding-card';
 import { AuditWorkbench } from './workbench';
+import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import type { CheckCode, Severity } from '@/lib/audit/types';
 import type { FindingStatus } from '@/lib/audit/lifecycle';
 
@@ -70,7 +71,12 @@ export default async function AuditPage({ params, searchParams }: Props) {
     );
   }
 
-  const tab = sp.tab === 'workbench' ? 'workbench' : 'findings';
+  // ADR-0047 UI gate — the Workbench is admin-only in pilot; a site manager reads
+  // it only once `workbench_manager_read` is flipped live for this site.
+  const workbenchLive = await isUiSurfaceLive(UI_SURFACE.WORKBENCH_MANAGER_READ, site.id);
+  const canSeeWorkbench = isAdmin || workbenchLive;
+
+  const tab = sp.tab === 'workbench' && canSeeWorkbench ? 'workbench' : 'findings';
 
   const filter: FindingFilter = {};
   if (sp.status && VALID_STATUS.has(sp.status as FindingStatus)) filter.status = sp.status as FindingStatus;
@@ -134,12 +140,14 @@ export default async function AuditPage({ params, searchParams }: Props) {
         >
           Findings
         </Link>
-        <Link
-          href={tabHref('workbench')}
-          className={`-mb-px border-b-2 px-1 pb-2 text-sm font-medium ${tab === 'workbench' ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-gray-500'}`}
-        >
-          Workbench
-        </Link>
+        {canSeeWorkbench && (
+          <Link
+            href={tabHref('workbench')}
+            className={`-mb-px border-b-2 px-1 pb-2 text-sm font-medium ${tab === 'workbench' ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-gray-500'}`}
+          >
+            Workbench
+          </Link>
+        )}
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3 text-sm">

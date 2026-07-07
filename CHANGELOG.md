@@ -5,6 +5,68 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-07 (ADR-0047 — staff-output rollout gate + ADR-0039 A1 bootstrap gating; INCIDENT)
+
+Response to the 2026-07-06 incident (the ADR-0043 digest emailed a site manager
+two true-but-useless bootstrap findings the day the feature merged). Two
+release-discipline fixes, deployed together.
+
+- **`notifyStaff()` chokepoint (`src/lib/notify/`).** The ONLY sanctioned path to
+  non-admin recipients. Resolves the `(surface_code, site)` rollout state:
+  `pilot` reroutes to admins with a `[PILOT — would have sent to: …]` subject +
+  body banner (validates content AND targeting); `live` sends to the real
+  recipients; an unregistered surface throws `UnregisteredSurfaceError` (never a
+  silent send). Every decision is audited + logged.
+- **Rollout registry (`rollout_surfaces`, migration `20260713_rollout_gate`).**
+  One row per staff-facing surface × site, default `pilot`. Notification
+  surfaces seeded pilot (alert_digest, task_reminders, contact_intake_notify,
+  invoice_approval_notify, cor_notify, ap_notify) except the grandfathered
+  production surfaces (bonus_signature_chain, survey_sends) → live. UI surfaces
+  (workbench_manager_read, loads_events_or_tabs, equipment_entry, equipment_trend)
+  seeded pilot (admin-only, the ADR-0037 D7 template made data-driven).
+- **Rewired through the gate:** the ADR-0043 alert digest (which still fires in
+  pilot for admin validation even while the roster is muted), ADR-0045
+  contact-intake routing, ADR-0046 AP notifications (new-request + quarantine +
+  decision email). Task reminders ride the digest.
+- **Repo guard (`src/lib/notify/__tests__/no-direct-mail.test.ts`).** Scans the
+  real `src/` tree and fails if feature code imports `@/lib/m365-mail` outside the
+  allowlist (transport core, notify layer, auth, payroll delivery, and the
+  grandfathered signature-chain + survey + daily-report + amendment senders).
+  Proven with an in-memory synthetic-import test-of-the-test.
+- **Admin panel `/admin/rollout`** (admin role) — every surface × site with
+  state + last-flip evidence; flip requires a criteria note; audited + immediate;
+  rollback = inverse flip (no code).
+- **Bootstrap gating (ADR-0039 Amendment 1, `src/lib/audit/bootstrap-gate.ts`).**
+  `c4_billing_basis` / `m1_missing_close` / `m2_missing_snapshot` (registry-driven)
+  emit findings only once their leg (billing/close/snapshot) has ever had data
+  OR an admin `go_live_date` (`audit_bootstrap_gates`) has passed. Suppressed
+  counts land in `audit_runs.suppressed_bootstrap` (visible in admin, never
+  silent). Comparators untouched. Existing bootstrap findings auto-resolve with
+  cause `bootstrap_suppression` + provenance via migration
+  `20260713b_bootstrap_resolve` (never deleted).
+
+### Changed — 2026-07-07 (bonus period-close moves to payroll-day 07:00 PT — ADR-0019.1 amendment)
+
+- **Period close now fires 07:00 PT on the payroll day (the day AFTER
+  `period_end`)**, not 17:30 on `period_end` itself. `scripts/bonus-period-close.mjs`
+  fire time 17:30 → 07:00 (`msUntilNext1730Pacific` → `msUntilNext0700Pacific`);
+  the close route predicate moved from `period_end == appToday()` to
+  `period_end == previousDayKey(appToday())` (idempotency preserved — still filters
+  `state = 'draft'`). Escalation tier **t1 moved 06:00 → 07:10** (a post-close
+  nudge; t2 07:30 / t3 08:30 / t4 09:00 unchanged). Pacific date matrix + DST
+  boundary tested; the escalation route already keyed off yesterday, so its logic
+  is unchanged.
+- **Amendment error messages** are now plain English at the UI layer
+  (`src/lib/bonus/amendment-error-messages.ts`) — no more raw `period_not_draft`
+  codes on the request-creation + approve/reject surfaces; every
+  AmendmentRequestError code has a sentence (period_not_draft references the new
+  7:00 AM payroll-day close window).
+- **Report-email logo fix.** `SVDP_LOGO_URL` in the daily production report now
+  points at our own asset `https://dr3-vision.svdp.us/brand/svdp-logo-white.png`
+  (checked in at `public/brand/svdp-logo-white.png`), not the dead
+  `svdp.us/wp-content` WordPress hotlink. No other live hotlinked logo exists (the
+  bonus-PDF uses an embedded data URI; the audit digest has no logo).
+
 ### Ops — 2026-07-06
 
 - **Restore drill PASSED (readiness P1-3 closed).** Latest restic/R2 snapshot restored into a throwaway postgres and verified against prod on five invariants (migration head, entry counts, paid-payroll cents exact). Two DR-procedure gotchas discovered and documented in `docs/operator/restore-drills.md` (R2_* env mapping; the postgres init-server race that yields a silent empty restore). Remaining D7 activation gate item: RESTIC_PASSWORD off-box confirmation (operator).

@@ -65,3 +65,32 @@ This file is where Claude Code logs questions encountered during development tha
 **Proposed answer:** (a). Seeded `cor_site_config` for Woodland with `signer_name = "Rick Albritton"`, `signer_title = "Transportation Manager"`. The resolver reads the config row (falling back to the same value as a documented default), and the title is DENORMALIZED onto each certificate at generation, so confirming a different title is one row edit and never rewrites a finalized artifact. Config model choice: a simple site-scoped config ROW rather than a `state_program_rules`-style effective-dated table — the signer is a single standing fact per site with no history/effective-dating need.
 **Recommendation to Bill / MRC:** Confirm the exact title MRC expects on Exhibit 5. If it differs, edit the one `cor_site_config` row (or reseed) — no code change, no redeploy for the data.
 **Resolution:** Pending MRC confirmation.
+
+## Q-0047-1: Should the ADR-0030 daily production report be brought under the rollout gate?
+
+**Date:** 2026-07-07
+**Encountered in:** ADR-0047 §4.4 completeness sweep (`src/lib/bonus/daily-report-notifications.ts`)
+**Question:** The daily production report emails its configured recipients (managers) via `sendSystemEmail`. It is a staff-facing outbound path that was NOT named in directive §4.4 and NOT in the grandfathered out-of-scope list (signature-chain, survey, Updates). Directive §3 says: any other outbound staff path found → STOP and report, do not guess.
+**Alternatives considered:** (a) route it through `notifyStaff()` as a new pilot surface — matches the "structurally impossible" principle but reroutes a long-established, relied-upon production email to admins-only on an incident-night deploy (an operational regression); (b) grandfather it (allowlist) — preserves the working surface, matches how signature-chain/survey were treated; (c) leave it un-allowlisted — fails the repo test, blocks the incident deploy.
+**Proposed answer:** (b) — **grandfathered (allowlisted)** for the incident deploy. It is an established production surface, in daily use, and was NOT implicated in the incident (which was the new ADR-0043 audit digest). Grandfathering preserves the status quo; gating it would expand the incident-night blast radius to a working, non-implicated surface. Flagged here for your explicit disposition rather than silently decided.
+**Recommendation to Bill:** If the daily production report should also be gated (defensible on the "everything staff-facing is gated" principle), say so and it converts to `notifyStaff()` (register a `daily_production_report` surface, born pilot) in a follow-up — a small, mechanical change, not an incident-night one.
+**Resolution:** Pending Bill's disposition.
+
+## Q-0047-2: Should the ADR-0028/0029 amendment lifecycle mail be brought under the rollout gate?
+
+**Date:** 2026-07-07
+**Encountered in:** ADR-0047 §4.4 completeness sweep (`src/lib/bonus/amendment-notifications.ts`)
+**Question:** The amendment notifications send via `sendSystemEmail` to the approver (admin), Bill (admin), and — on a decided notification — the requester (a manager, i.e. one staff recipient). Not named in §4.4, not grandfathered explicitly.
+**Alternatives considered:** (a) gate via `notifyStaff()`; (b) grandfather (allowlist).
+**Proposed answer:** (b) — **grandfathered (allowlisted)**. Same reasoning as Q-0047-1: established production bonus subsystem, not incident-implicated, mostly admin/Bill-facing (only the requester on a decided notification is a non-admin). Preserving behavior on the incident deploy is the conservative call.
+**Recommendation to Bill:** If you want the requester-facing "decided" notification gated, the cleanest scope is a `bonus_amendment_notify` surface (born pilot) routed through `notifyStaff()`, leaving the admin/Bill ntfy path as-is.
+**Resolution:** Pending Bill's disposition.
+
+## Q-0047-3: The AP decision email was routed through `notifyStaff(ap_notify)` — confirm the surface mapping.
+
+**Date:** 2026-07-07
+**Encountered in:** ADR-0047 §4.4 completeness sweep (`src/lib/ap/approvals.ts` `sendDecisionEmail`)
+**Question:** Directive §4.4 named the AP notify surface as `src/lib/ap/notify.ts` specifically. The AP module ALSO sends a decision email (to Mary's fixed GP-filing recipients) from `ap/approvals.ts`. It is the same dormant AP module (ADR-0046, born pilot).
+**Proposed answer:** Routed the decision email through `notifyStaff()` on the **`ap_notify`** surface — treating `ap_notify` as "AP module staff notifications" (new-request + quarantine + decision). This is coherent, born-pilot, and NON-disruptive (the AP module is dormant until IT consent lands). The empty-recipient REFUSE + page guard is preserved (checks the live GP roster before the gated send), so a config gap still pages before ramp.
+**Recommendation to Bill:** If AP decision emails should have their OWN surface (separate from `ap_notify`), add an `ap_decision_notify` row and point `sendDecisionEmail` at it — a one-line change. Otherwise `ap_notify` covers the whole AP module and the current mapping stands.
+**Resolution:** Pending Bill's confirmation (interim: mapped to `ap_notify`).

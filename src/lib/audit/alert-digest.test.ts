@@ -27,6 +27,48 @@ vi.mock('@/lib/prisma', () => ({
 const sendSystemEmail = vi.fn();
 vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: (...a: unknown[]) => sendSystemEmail(...a) }));
 
+// ADR-0047 — the digest routes through notifyStaff(). Mock it as a live-mode
+// pass-through to the (mocked) transport so the roster-recipient behaviour +
+// outcome assertions below are unchanged; the rollout gate itself is covered by
+// src/lib/notify/__tests__.
+type MockSend = { delivered: boolean; disabled: boolean; messageId: string; lastStatus: number | undefined };
+vi.mock('@/lib/notify/notify-staff', () => ({
+  notifyStaff: async (args: {
+    recipients: ReadonlyArray<string | { address: string; name?: string }>;
+    subject: string;
+    htmlBody: string;
+    fromDisplayName?: string;
+    site: { id: string; code?: string } | null;
+    surfaceCode: string;
+  }) => {
+    const recips = args.recipients.map((r) => (typeof r === 'string' ? r : r.address));
+    const sends: MockSend[] = [];
+    for (const to of recips) {
+      sends.push(
+        (await sendSystemEmail({
+          to,
+          subject: args.subject,
+          htmlBody: args.htmlBody,
+          fromDisplayName: args.fromDisplayName,
+        })) as MockSend,
+      );
+    }
+    const disabled = sends.length > 0 && sends.every((s) => s.disabled);
+    const delivered = sends.filter((s) => s.delivered).length;
+    return {
+      mode: 'live' as const,
+      disabled,
+      delivered,
+      actualRecipients: recips,
+      intendedRecipients: recips,
+      sends,
+      surfaceCode: args.surfaceCode,
+      siteId: args.site?.id ?? null,
+    };
+  },
+}));
+vi.mock('@/lib/notify/rollout', () => ({ NOTIFY_SURFACE: { ALERT_DIGEST: 'alert_digest' } }));
+
 const publishNtfy = vi.fn();
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: (...a: unknown[]) => publishNtfy(...a) }));
 

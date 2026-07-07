@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { onHand } from '@/lib/inventory/running-balance';
+import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { LoadsInventoryClient } from './LoadsInventoryClient';
 
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,11 @@ export default async function LoadsInventoryPage({ params }: Props) {
     );
   }
 
+  // ADR-0047 UI gate — the events/OR-counts tabs ramp via `loads_events_or_tabs`
+  // (admins always see them; this page is otherwise admin-only via the D7 gate).
+  const eventsOrTabsLive = await isUiSurfaceLive(UI_SURFACE.LOADS_EVENTS_OR_TABS, result.ctx.siteId);
+  const showEventsOrTabs = result.ctx.role === 'admin' || eventsOrTabsLive;
+
   const balance = await onHand(result.ctx.siteId, new Date());
 
   return (
@@ -73,7 +79,7 @@ export default async function LoadsInventoryPage({ params }: Props) {
           whole units sold, and landfilled units. Baled / shredded commodities never subtract units.
         </p>
 
-        <LoadsInventoryClient siteCode={siteCode} />
+        <LoadsInventoryClient siteCode={siteCode} showEventsOrTabs={showEventsOrTabs} />
       </div>
     </main>
   );

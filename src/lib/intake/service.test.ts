@@ -17,6 +17,32 @@ vi.mock('@/lib/prisma', () => ({
 const sendSystemEmail = vi.fn();
 vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: (...a: unknown[]) => sendSystemEmail(...a) }));
 
+// ADR-0047 — intake now routes through notifyStaff(); mock it as a pass-through
+// to the (mocked) transport so the recipient/PII assertions below still hold.
+vi.mock('@/lib/notify/notify-staff', () => ({
+  notifyStaff: async (args: {
+    recipients: ReadonlyArray<string | { address: string; name?: string }>;
+    subject: string;
+    htmlBody: string;
+    fromDisplayName?: string;
+  }) => {
+    for (const r of args.recipients) {
+      const to = typeof r === 'string' ? r : r.address;
+      await sendSystemEmail({ to, subject: args.subject, htmlBody: args.htmlBody, fromDisplayName: args.fromDisplayName });
+    }
+    return {
+      mode: 'live' as const,
+      delivered: args.recipients.length,
+      disabled: false,
+      actualRecipients: [],
+      intendedRecipients: [],
+      sends: [],
+      surfaceCode: 'contact_intake_notify',
+      siteId: null,
+    };
+  },
+}));
+
 const writeAudit = vi.fn();
 vi.mock('@/lib/audit', () => ({ writeAudit: (...a: unknown[]) => writeAudit(...a) }));
 
