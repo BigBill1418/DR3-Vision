@@ -99,6 +99,15 @@ export function CampaignList({ campaigns }: { campaigns: CampaignRow[] }) {
   return (
     <main style={{ background: '#f7f3ea', minHeight: '100vh', padding: '32px 16px' }}>
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div style={{ marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={() => router.push('/admin')}
+            style={{ background: '#fff', border: '1px solid #e8e2d4', borderRadius: 6, color: '#a3151a', cursor: 'pointer', padding: '8px 14px', fontSize: 14, fontWeight: 600 }}
+          >
+            ← Back to admin
+          </button>
+        </div>
         <div
           style={{
             fontSize: 12,

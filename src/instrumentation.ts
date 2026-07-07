@@ -42,12 +42,9 @@ export async function register(): Promise<void> {
 
   // Boot publish — fire-and-forget; cold-start request handling must not block
   // on a network call to a separate host.
-  const version = process.env['npm_package_version'] ?? '0.1.0';
-  const commitSha =
-    process.env['GIT_SHA'] ??
-    process.env['DR3_GIT_COMMIT_SHA'] ??
-    process.env['VERCEL_GIT_COMMIT_SHA'];
-  void publishContainerStart({ version, commitSha });
+  // Deploy identity baked at image build (never package.json's scaffold 0.1.0).
+  const { buildInfo, shortSha } = await import('@/lib/build-info');
+  void publishContainerStart({ version: `built ${buildInfo().builtAt}`, commitSha: shortSha() });
 
   // Idempotency guard — Next.js dev mode re-runs `register` per HMR event.
   const g = globalThis as unknown as { __dr3VisionNtfyHandlersWired?: boolean };
