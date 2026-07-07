@@ -1,3 +1,13 @@
+// Deploy identity (ADR: alerts show the real sha, never package.json 0.1.0).
+// Read ONCE at config-eval time — no runtime fs, edge-safe by construction.
+let dr3BuildInfo = { sha: 'dev', builtAt: 'unknown' };
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  dr3BuildInfo = JSON.parse(require('node:fs').readFileSync('.build-info.json', 'utf8'));
+} catch {
+  /* dev / CI without the baked file */
+}
+
 /* eslint-disable @typescript-eslint/no-require-imports -- this is a CommonJS Next
    config file; `require()` is the correct (and only) way to load the @serwist/next
    and @sentry/nextjs config wrappers here. */
@@ -18,6 +28,10 @@ const withSerwist = require('@serwist/next').default({
 });
 
 const nextConfig = {
+  env: {
+    DR3_BUILD_SHA: dr3BuildInfo.sha,
+    DR3_BUILD_AT: dr3BuildInfo.builtAt,
+  },
   output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
