@@ -154,3 +154,11 @@ diverged from the plan:
    R1 ("same pattern" in the ADR). If MRC's recovery-rate contract floor differs
    from the recycling floor, set R2's `ca_floor_pct`/`or_floor_pct` via an
    `audit_check_config` row — no code change.
+
+## Amendment 1 — bootstrap gating + digest under the rollout gate (2026-07-07)
+
+M1/M2 inherit ADR-0039 Amendment 1's leg-liveness bootstrap gating. The daily
+digest becomes a registered `notification_surface` under ADR-0047, seeded
+**pilot** (the 2026-07-06 incident surface): output reroutes to admins with the
+would-have-sent header until Bill flips it live per §8 Stage-4 criteria
+(≥5 clean reviewed pilot digests + ≥1 true finding handled end-to-end).
