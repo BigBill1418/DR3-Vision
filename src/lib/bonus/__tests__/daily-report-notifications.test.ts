@@ -114,6 +114,12 @@ describe('renderHtmlBody', () => {
     expect(html).not.toContain('DR3 - Woodland');
   });
 
+  it('uses our own logo asset, not the dead svdp.us/wp-content hotlink (rider 3)', () => {
+    const html = renderHtmlBody(makeReport(), { includeBonusDollars: true, includeComparisons: true });
+    expect(html).toContain('src="https://dr3-vision.svdp.us/brand/svdp-logo-white.png"');
+    expect(html).not.toContain('svdp.us/wp-content');
+  });
+
   it('shows the bonus column when includeBonusDollars: true', () => {
     const report = makeReport();
     const html = renderHtmlBody(report, {

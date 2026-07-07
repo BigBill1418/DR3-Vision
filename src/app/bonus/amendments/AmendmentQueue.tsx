@@ -13,6 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
 
 export interface RequestRow {
   id: string;
@@ -98,8 +99,8 @@ export function AmendmentQueue({ requests }: Props) {
         body: action === 'reject' ? JSON.stringify({ decisionNotes }) : '{}',
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body?.error ?? `failed (${res.status})`);
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(amendmentErrorMessage(body?.error, `Could not complete this action (${res.status}).`));
         setBusyKey(null);
         return;
       }

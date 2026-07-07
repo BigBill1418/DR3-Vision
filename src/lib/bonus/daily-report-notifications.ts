@@ -84,8 +84,10 @@ const INK = '#2b2b2b';
 const MUTED = '#6b6b6b';
 const HAIRLINE = '#e6ddca';
 const UP_GREEN = '#2e7d32';
-// White SVdP wordmark — content-negotiates to PNG for clients that don't take webp.
-const SVDP_LOGO_URL = 'https://www.svdp.us/wp-content/uploads/2021/09/svdp-logo-white-300x300.png';
+// White SVdP wordmark — served from our own public asset (dr3-vision.svdp.us),
+// not hotlinked off the WordPress site (that URL 404'd / is not reliable in mail
+// clients). The PNG is checked in at public/brand/svdp-logo-white.png.
+const SVDP_LOGO_URL = 'https://dr3-vision.svdp.us/brand/svdp-logo-white.png';
 
 export interface RenderOptions {
   includeBonusDollars: boolean;

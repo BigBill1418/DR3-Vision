@@ -18,6 +18,31 @@ const publishNtfy = vi.fn(async () => ({ ok: true, outcome: 'sent' as const }));
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/audit', () => ({ writeAudit: (...a: unknown[]) => writeAudit(...a) }));
 vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: () => sendSystemEmail() }));
+// ADR-0047 — the decision email routes through notifyStaff(); mock it as a
+// live-mode pass-through to the transport (one send per recipient) so the
+// call-count + mail-outcome assertions are unchanged.
+vi.mock('@/lib/notify/notify-staff', () => ({
+  notifyStaff: async (args: { recipients: ReadonlyArray<string | { address: string }> }) => {
+    const recips = args.recipients.map((r) => (typeof r === 'string' ? r : r.address));
+    const sends: Array<{ delivered: boolean; disabled: boolean }> = [];
+    for (let i = 0; i < recips.length; i++) {
+      sends.push((await sendSystemEmail()) as { delivered: boolean; disabled: boolean });
+    }
+    const disabled = sends.length > 0 && sends.every((s) => s.disabled);
+    const delivered = sends.filter((s) => s.delivered).length;
+    return {
+      mode: 'live' as const,
+      disabled,
+      delivered,
+      actualRecipients: recips,
+      intendedRecipients: recips,
+      sends,
+      surfaceCode: 'ap_notify',
+      siteId: null,
+    };
+  },
+}));
+vi.mock('@/lib/notify/rollout', () => ({ NOTIFY_SURFACE: { AP_NOTIFY: 'ap_notify' } }));
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: () => publishNtfy() }));
 vi.mock('@/lib/observability/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 

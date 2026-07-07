@@ -37,16 +37,25 @@ interface FieldMsg {
 export function EquipmentClient({
   siteCode,
   throughput,
+  showTrend = true,
+  showEntry = true,
 }: {
   siteCode: string;
   throughput: EquipmentThroughput;
+  // ADR-0047 UI gate — the trend view and event entry ramp independently per site.
+  showTrend?: boolean;
+  showEntry?: boolean;
 }) {
   return (
     <div className="mt-8 flex flex-col gap-10">
-      <SummaryTiles throughput={throughput} />
-      <TrendPanel throughput={throughput} siteCode={siteCode} />
-      <CostPanel throughput={throughput} />
-      <EventEntry siteCode={siteCode} />
+      {showTrend && (
+        <>
+          <SummaryTiles throughput={throughput} />
+          <TrendPanel throughput={throughput} siteCode={siteCode} />
+          <CostPanel throughput={throughput} />
+        </>
+      )}
+      {showEntry && <EventEntry siteCode={siteCode} />}
     </div>
   );
 }

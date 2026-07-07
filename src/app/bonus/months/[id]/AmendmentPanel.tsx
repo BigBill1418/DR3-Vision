@@ -23,6 +23,7 @@ import {
   formatCents,
   type BonusRuleParams,
 } from '@/lib/bonus/calculator';
+import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
 
 export interface AmendEmployeeRow {
   bonus_employee_id: string;
@@ -279,7 +280,7 @@ function AmendedEditor({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(body.error ?? 'Could not save corrected counts. Please try again.');
+        setError(amendmentErrorMessage(body.error, 'Could not save corrected counts. Please try again.'));
         return;
       }
       setSaved(true);

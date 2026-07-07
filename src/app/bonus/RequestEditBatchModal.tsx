@@ -15,6 +15,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
 
 export interface BatchItem {
   bonusEmployeeId: string;
@@ -71,8 +72,8 @@ export function RequestEditBatchModal({
         }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body?.error ?? `failed (${res.status})`);
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(amendmentErrorMessage(body?.error, `Could not submit these corrections (${res.status}).`));
         setSubmitting(false);
         return;
       }

@@ -2,22 +2,23 @@
 // Bonus period-close cron (ADR-0019.1 §3/§6, T-204). Replaces the monthly
 // `scripts/bonus-month-close.mjs`.
 //
-// Cadence (ADR-0019.1 §3): the bi-weekly close fires Mon 17:30 PT — but the
-// schedule is "daily 17:30 PT", not "every other Monday", because cron cannot
-// express "every other Monday" cleanly and the underlying decision is keyed off
-// the SEEDED `bonus_pay_periods.period_end = appToday()` (Pacific) anyway. On
-// any day that is NOT a period-end Monday, nothing matches `state = 'draft' AND
-// period_end = today`, so the fire is a clean no-op. This is the daily-tick +
-// Pacific-aware date check that ADR-0019.1 §6 / "Alternatives considered"
-// explicitly prefers over a real every-other-Monday cron (DST-robust).
+// Cadence (ADR-0019.1 §3 + 2026-07-07 amendment): the close fires at 07:00 PT on
+// the PAYROLL DAY — the day AFTER `period_end` — not 17:30 on period_end itself.
+// The schedule is "daily 07:00 PT", not "every other Tuesday", because cron
+// cannot express "every other Tuesday" cleanly and the underlying decision is
+// keyed off the SEEDED `bonus_pay_periods.period_end = appToday() - 1 day`
+// (Pacific) anyway. On any day that is NOT a payroll day, nothing matches
+// `state = 'draft' AND period_end = yesterday`, so the fire is a clean no-op.
+// This is the daily-tick + Pacific-aware date check that ADR-0019.1 §6 /
+// "Alternatives considered" explicitly prefers over a real cron (DST-robust).
 //
 // Shape: a LONG-RUNNING daemon (mirrors `scripts/mymrc-cron.mjs`), single
 // process / single restart policy (`unless-stopped` in compose). It sleeps
-// until the next 17:30 America/Los_Angeles instant — recomputed each cycle from
+// until the next 07:00 America/Los_Angeles instant — recomputed each cycle from
 // the Pacific wall clock so it stays correct across the Mar/Nov DST shifts — and
 // on each fire drives the close. If the loop ever throws past the per-fire
 // try/catch, the container restart brings us back to the same shape (compute
-// next 17:30 PT → sleep → fire).
+// next 07:00 PT → sleep → fire).
 //
 // Why POST the internal Next route rather than import the state machine here:
 // the period-close ORCHESTRATION is the transition (`closePayPeriodsDueForSignature`)
@@ -38,9 +39,10 @@
 const BASE = process.env.INTERNAL_BASE_URL ?? 'http://127.0.0.1:3000';
 const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 
-// Close fire time, Pacific wall clock. ADR-0019.1 §3: Mon 17:30 PT.
-const FIRE_HOUR_PT = 17;
-const FIRE_MINUTE_PT = 30;
+// Close fire time, Pacific wall clock. ADR-0019.1 (2026-07-07 amendment):
+// 07:00 PT on the payroll day (the day after period_end).
+const FIRE_HOUR_PT = 7;
+const FIRE_MINUTE_PT = 0;
 
 // Parts formatter to read the Pacific wall clock off a UTC instant — same
 // technique as `src/lib/time.ts` (`PACIFIC_PARTS_FMT` / `pacificOffsetMs`), so
@@ -91,10 +93,10 @@ function pacificOffsetMs(at) {
  * The next UTC instant at which the Pacific wall clock reads
  * `FIRE_HOUR_PT:FIRE_MINUTE_PT:00`, strictly after `from`. DST-correct: it
  * resolves the target Pacific wall time on the candidate Pacific calendar day,
- * converting to UTC via the offset in effect that day. If today's 17:30 PT has
- * already passed, it rolls to tomorrow's 17:30 PT.
+ * converting to UTC via the offset in effect that day. If today's 07:00 PT has
+ * already passed, it rolls to tomorrow's 07:00 PT.
  */
-export function msUntilNext1730Pacific(from = new Date()) {
+export function msUntilNext0700Pacific(from = new Date()) {
   for (let addDays = 0; addDays <= 2; addDays++) {
     const p = pacificParts(new Date(from.getTime() + addDays * 86_400_000));
     // Pacific wall clock reinterpreted as UTC for the target time on day p.
@@ -112,8 +114,9 @@ export function msUntilNext1730Pacific(from = new Date()) {
 
 /**
  * Drive one close: POST the internal, loopback-guarded close route. The route
- * transitions every `draft` period whose `period_end == appToday()` (Pacific)
- * to `pending_signatures` via the audited state machine and fires the
+ * transitions every `draft` period whose `period_end == appToday() - 1 day`
+ * (Pacific — the payroll day is the day after period_end) to
+ * `pending_signatures` via the audited state machine and fires the
  * signature-request email per newly-closed period. Resolves on success;
  * throws on transport / non-2xx so the caller's try/catch logs it.
  */
@@ -133,9 +136,9 @@ async function runCloseOnce() {
 
 function scheduleNext() {
   if (stopping) return;
-  const delay = msUntilNext1730Pacific();
+  const delay = msUntilNext0700Pacific();
   const fireAt = new Date(Date.now() + delay).toISOString();
-  logTs(`next close fire at ${fireAt} (in ${(delay / 1000 / 60).toFixed(1)}min) — 17:30 PT`);
+  logTs(`next close fire at ${fireAt} (in ${(delay / 1000 / 60).toFixed(1)}min) — 07:00 PT`);
   setTimeout(() => {
     runCloseOnce()
       .then((text) => logTs(`close run complete: ${text}`))
@@ -161,6 +164,6 @@ const isEntrypoint =
   process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
 if (isEntrypoint) {
   setupShutdown();
-  logTs('cron host started — daily close anchored to 17:30 America/Los_Angeles');
+  logTs('cron host started — daily close anchored to 07:00 America/Los_Angeles (payroll day)');
   scheduleNext();
 }

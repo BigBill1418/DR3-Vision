@@ -16,7 +16,8 @@
 // to one email per site per day regardless of when the tick lands.
 
 import { prisma } from '@/lib/prisma';
-import { sendSystemEmail } from '@/lib/m365-mail';
+import { notifyStaff } from '@/lib/notify/notify-staff';
+import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { publishNtfy } from '@/lib/ntfy';
 import { appToday, dayISO } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
@@ -240,16 +241,17 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
         continue;
       }
 
-      const recipients = (
+      // The roster is the LIVE-state recipient list. Under ADR-0047 the digest
+      // routes through notifyStaff(): in `pilot` (the incident default) the
+      // roster is IGNORED — output goes to admins with the would-have-sent
+      // header — so the digest still fires for admin validation even while the
+      // roster is muted. In `live` it goes to the active roster.
+      const rosterEmails = (
         await prisma.alertRecipient.findMany({
           where: { site_id: site.id, active: true },
           select: { email: true },
         })
       ).map((r) => r.email);
-      if (recipients.length === 0) {
-        outcomes.push({ siteCode: site.code, status: 'skipped_no_recipients' });
-        continue;
-      }
 
       const findings: DigestFinding[] = findingRows.map((f) => ({
         id: f.id,
@@ -267,36 +269,47 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
       const subject = `DR3-Vision daily digest — ${site.name} — ${subjParts.join(' · ')}`;
       const htmlBody = renderDigestHtml(site, findings, dueTasks, pendingAp);
 
-      // Per-recipient send so one bad address never blocks the others.
-      const results = [];
-      for (const to of recipients) {
-        results.push(await sendSystemEmail({ to, subject, htmlBody, fromDisplayName: 'DR3-Vision Alerts' }));
-      }
+      const notified = await notifyStaff({
+        surfaceCode: NOTIFY_SURFACE.ALERT_DIGEST,
+        site: { id: site.id, code: site.code },
+        recipients: rosterEmails,
+        subject,
+        htmlBody,
+        fromDisplayName: 'DR3-Vision Alerts',
+      });
 
       // M365 not configured → fail-open no-op: don't log, don't page (retry next tick).
-      if (results.some((r) => r.disabled)) {
+      if (notified.disabled) {
         log.warn({ siteCode: site.code }, '[alert-digest] M365 disabled — digest not sent (fail-open)');
         outcomes.push({ siteCode: site.code, status: 'disabled', findingCount: findings.length });
         continue;
       }
 
-      const delivered = results.filter((r) => r.delivered).length;
-      const lastStatus = results.map((r) => r.lastStatus).filter((v): v is number => v !== undefined).pop() ?? null;
-      const messageId = (results.find((r) => r.delivered) ?? results[0])?.messageId ?? null;
+      // Nobody to send to (live with an empty roster, or no admins in pilot) —
+      // a config gap the operator fixes; not a delivery failure, no ledger row.
+      if (notified.actualRecipients.length === 0) {
+        outcomes.push({ siteCode: site.code, status: 'skipped_no_recipients' });
+        continue;
+      }
+
+      const delivered = notified.delivered;
+      const lastStatus = notified.sends.map((r) => r.lastStatus).filter((v): v is number => v !== undefined).pop() ?? null;
+      const messageId = (notified.sends.find((r) => r.delivered) ?? notified.sends[0])?.messageId ?? null;
 
       await prisma.alertDigestLog.create({
         data: {
           site_id: site.id,
           digest_date: digestDate,
           finding_count: findings.length,
-          recipient_count: recipients.length,
+          recipient_count: notified.actualRecipients.length,
           delivered_count: delivered,
           graph_message_id: messageId,
           last_status: lastStatus,
         },
       });
+      const attempted = notified.actualRecipients.length;
       log.info(
-        { siteCode: site.code, findings: findings.length, recipients: recipients.length, delivered },
+        { siteCode: site.code, findings: findings.length, mode: notified.mode, recipients: attempted, delivered },
         '[alert-digest] digest processed',
       );
 
@@ -304,15 +317,15 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
         await publishNtfy({
           topic: 'dr3-vision-system',
           title: `Alert digest delivery failed for ${site.code}`,
-          body: `0/${recipients.length} recipients received the ${findings.length}-finding alert digest (last status ${lastStatus ?? 'network'}). Retry from the audit surface.`,
+          body: `0/${attempted} recipients received the ${findings.length}-finding alert digest (${notified.mode} mode; last status ${lastStatus ?? 'network'}). Retry from the audit surface.`,
           priority: 'high',
           tags: ['error', 'alert-digest', 'dr3-vision'],
           fingerprint: `alert-digest-failed:${site.code}`,
           cooldownMs: DIGEST_FAIL_COOLDOWN_MS,
         });
-        outcomes.push({ siteCode: site.code, status: 'failed', findingCount: findings.length, delivered, attempted: recipients.length });
+        outcomes.push({ siteCode: site.code, status: 'failed', findingCount: findings.length, delivered, attempted });
       } else {
-        outcomes.push({ siteCode: site.code, status: 'sent', findingCount: findings.length, delivered, attempted: recipients.length });
+        outcomes.push({ siteCode: site.code, status: 'sent', findingCount: findings.length, delivered, attempted });
       }
     } catch (err) {
       log.error({ err, siteCode: site.code }, '[alert-digest] site fire failed (non-fatal)');

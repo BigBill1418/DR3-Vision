@@ -45,6 +45,7 @@ import {
 } from './comparators';
 import { resolveCheckConfigs } from './config';
 import { dayISO, dayKeyUTCFromISO } from '@/lib/time';
+import { resolveLegLiveness, type BootstrapLeg } from './bootstrap-gate';
 import { log } from '@/lib/observability/logger';
 import type {
   AuditWindow,
@@ -640,7 +641,9 @@ function buildM1Days(
 // ── Assemble the per-window comparator runner the sweep injects ──────────
 
 export function buildRunChecksForWindow(db: PrismaClient) {
-  return async (window: AuditWindow): Promise<{ checkCodes: CheckCode[]; findings: Finding[] }> => {
+  return async (
+    window: AuditWindow,
+  ): Promise<{ checkCodes: CheckCode[]; findings: Finding[]; suppressedBootstrap: Record<string, number> }> => {
     const configRows = await db.auditCheckConfig.findMany({
       where: { OR: [{ site_id: null }, { site_id: window.siteId }] },
     });
@@ -717,13 +720,36 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     enrichProcessedSubmission(processed, processedMirror);
     enrichOutboundSubmission(outbound, outboundMirror);
 
+    // ADR-0039 Amendment 1 — resolve leg liveness once per run (cached). A
+    // missing-counterpart check on a non-live leg has its findings WITHHELD and
+    // counted into the ledger, never emitted.
+    const liveness = await resolveLegLiveness(db, window.siteId, rangeDate(asOfISO));
+
     const findings: Finding[] = [];
     const checkCodes: CheckCode[] = [];
+    const suppressedBootstrap: Record<string, number> = {};
     const run = (code: CheckCode, produce: () => Finding[]) => {
       const cfg = configs.get(code);
       if (!cfg?.enabled) return;
       checkCodes.push(code);
       findings.push(...produce());
+    };
+    // Bootstrap-gated variant: when the leg is not live, produce (to count) but
+    // WITHHOLD the findings and record the suppressed count; the check is not
+    // added to checkCodes so the lifecycle reconciler leaves the (already
+    // auto-resolved) bootstrap findings untouched (their provenance is
+    // `bootstrap_suppression`, set by the one-shot resolve, not a generic
+    // "corrected" auto-resolve).
+    const runGated = (code: CheckCode, leg: BootstrapLeg, produce: () => Finding[]) => {
+      const cfg = configs.get(code);
+      if (!cfg?.enabled) return;
+      const produced = produce();
+      if (liveness.isLive(leg)) {
+        checkCodes.push(code);
+        findings.push(...produced);
+      } else if (produced.length > 0) {
+        suppressedBootstrap[code] = (suppressedBootstrap[code] ?? 0) + produced.length;
+      }
     };
 
     run('c1_inbound', () => c1Inbound(window, inbound, haulMirror, configs.get('c1_inbound')!));
@@ -731,7 +757,9 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     run('c3_outbound', () =>
       c3Outbound(window, { outbound, landfilled }, outboundMirror, configs.get('c3_outbound')!, holidays),
     );
-    run('c4_billing_basis', () => c4BillingBasis(window, processed, billing, configs.get('c4_billing_basis')!));
+    runGated('c4_billing_basis', 'billing', () =>
+      c4BillingBasis(window, processed, billing, configs.get('c4_billing_basis')!),
+    );
     run('c5_conservation', () => c5Conservation(window, conservation, configs.get('c5_conservation')!));
     run('c6_inventory_continuity', () =>
       c6InventoryContinuity(window, inventoryDays, configs.get('c6_inventory_continuity')!),
@@ -761,8 +789,10 @@ export function buildRunChecksForWindow(db: PrismaClient) {
         ),
       );
     }
-    run('m1_missing_close', () => m1MissingClose(window, { days: m1Days }, configs.get('m1_missing_close')!, holidays));
-    run('m2_missing_snapshot', () =>
+    runGated('m1_missing_close', 'close', () =>
+      m1MissingClose(window, { days: m1Days }, configs.get('m1_missing_close')!, holidays),
+    );
+    runGated('m2_missing_snapshot', 'snapshot', () =>
       m2MissingSnapshot(window, { lastPhysicalSnapshotISO }, configs.get('m2_missing_snapshot')!),
     );
 
@@ -792,6 +822,6 @@ export function buildRunChecksForWindow(db: PrismaClient) {
       }
     }
 
-    return { checkCodes, findings };
+    return { checkCodes, findings, suppressedBootstrap };
   };
 }

@@ -14,6 +14,7 @@ vi.mock('@/lib/bonus/signature-notifications', () => ({
 }));
 
 import { POST } from './route';
+import { appToday, previousDayKey } from '@/lib/time';
 
 function req(headers: Record<string, string> = {}): Request {
   return new Request('http://127.0.0.1:3000/api/internal/bonus/close-months', {
@@ -41,6 +42,15 @@ describe('POST /api/internal/bonus/close-months', () => {
     const body = await res.json();
     expect(body).toEqual({ closed: ['m1', 'm2'], notified: ['m1', 'm2'] });
     expect(notifyPendingSigner).toHaveBeenCalledTimes(2);
+  });
+
+  it('targets periods whose period_end was YESTERDAY (payroll-day close, ADR-0019.1 amendment)', async () => {
+    await POST(req());
+    const firstCall = closePayPeriodsDueForSignature.mock.calls[0] as unknown as unknown[];
+    const passedNow = firstCall[1] as Date;
+    // The route passes previousDayKey(appToday()) — the day BEFORE Pacific today.
+    expect(passedNow.getTime()).toBe(previousDayKey(appToday()).getTime());
+    expect(passedNow.getTime()).toBe(appToday().getTime() - 86_400_000);
   });
 
   it('enforces the bearer token when INTERNAL_CRON_TOKEN is set', async () => {

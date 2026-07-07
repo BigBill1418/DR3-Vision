@@ -5,7 +5,10 @@
 // times every day (no-op on a non-Tuesday because nothing matches the
 // "yesterday's-close" window), one tier per fire:
 //
-//   tier=t1  06:00 PT  low-urgency ntfy per still-unsigned slot
+//   tier=t1  07:10 PT  low-urgency post-close nudge per still-unsigned slot
+//                      (moved from 06:00 per the ADR-0019.1 2026-07-07
+//                      amendment — the close now fires 07:00 PT, so t1 lands
+//                      just after it)
 //   tier=t2  07:30 PT  urgent ntfy per still-unsigned slot, body lists the
 //                      override-authorized humans from the signature chain
 //   tier=t3  08:30 PT  AUTO-OVERRIDE: system-sign each still-unsigned slot AS
@@ -21,11 +24,15 @@
 //   tier=t4  09:00 PT  (T-206) urgent payroll-deadline-missed ntfy for any
 //                      yesterday's-period row that has not reached `paid`.
 //
-// SCOPE — "yesterday's-close" periods (ADR-0019.1 §6): the close cron fires
-// Mon 17:30 PT moving `draft -> pending_signatures`; the escalation tiers fire
-// the FOLLOWING morning (Tue), so they examine periods whose `period_end` is
-// the Pacific calendar day BEFORE today. We derive that key from `appToday()`
-// (Pacific) minus one day so the run is deterministic and DST-safe.
+// SCOPE — "yesterday's-close" periods (ADR-0019.1 §6): the close cron now fires
+// 07:00 PT on the payroll day (the day after period_end) moving
+// `draft -> pending_signatures`; the escalation tiers fire the SAME morning
+// starting 07:10, so they examine periods whose `period_end` is the Pacific
+// calendar day BEFORE today. We derive that key from `appToday()` (Pacific)
+// minus one day so the run is deterministic and DST-safe. (This "yesterday"
+// scoping is unchanged by the 2026-07-07 amendment — only the close's own fire
+// time moved from 17:30-on-period_end to 07:00-on-payroll-day, which now aligns
+// with the escalation window.)
 //
 // INTERNAL-ONLY: like /api/internal/bonus/close-months, any request carrying a
 // `cf-connecting-ip` header (public Cloudflare tunnel) gets a 404. The cron

@@ -26,6 +26,8 @@ You are working on **DR3-Vision**, a 100% browser-based PWA that replaces paper-
 10. **Forms in React must use `onClick` handlers, not HTML `<form>` elements.** This is a fleet-wide convention.
 11. **The canonical DR3-Vision brand mark is `public/brand/dr3-vision-logo.jpg`** (per ADR-0014). Use it on every surface that shows a brand mark — placeholder, login (T-003), splash, app-shell brand strip, marketing, PDF headers. Auth surfaces (placeholder + `/login`) use a black background to match the mark's space backdrop; operator + manager working surfaces stay on `--dr3-green-deep` per ADR-0008. The cyan accent in the logo is asset-internal and does not become a `tailwind.config.ts` token.
 
+12. **Staff-facing output ships PILOT (ADR-0047 rollout gate).** Any change that adds or expands staff-visible output — email/ntfy notifications, new recipient rosters, new dashboards or UI surfaces linked from emails — ships in `pilot` and is ramped only by Bill from `/admin/rollout`. Feature code MUST NOT import the raw mail sender (`@/lib/m365-mail`) — route staff mail through `notifyStaff()`, which resolves the `(surface_code, site)` rollout state (pilot ⇒ admins-only with a would-have-sent header; live ⇒ real recipients). Register every new staff-facing surface with a `rollout_surfaces` row (born pilot). The repo test `src/lib/notify/__tests__/no-direct-mail.test.ts` enforces the chokepoint; the allowlist is the transport core, the notify layer, auth, the payroll delivery path, and the grandfathered signature-chain + survey + daily-report + amendment senders. Recipient rosters named in directives/handoffs are the EVENTUAL audience, never day-one.
+
 ## What "done" looks like
 
 A feature is done when:

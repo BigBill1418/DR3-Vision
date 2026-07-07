@@ -5,7 +5,8 @@
 
 /**
  * Milliseconds from `from` until the next instant whose Pacific
- * (America/Los_Angeles) wall clock reads 17:30:00. DST-correct across the
- * PDT/PST boundary. Always > 0.
+ * (America/Los_Angeles) wall clock reads 07:00:00 (ADR-0019.1 2026-07-07
+ * amendment — close on the payroll day). DST-correct across the PDT/PST
+ * boundary. Always > 0.
  */
-export function msUntilNext1730Pacific(from?: Date): number;
+export function msUntilNext0700Pacific(from?: Date): number;

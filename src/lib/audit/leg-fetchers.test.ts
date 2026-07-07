@@ -135,6 +135,16 @@ function fakeDb(seed: Seed): PrismaClient {
     auditCheckConfig: table(seed.configRows ?? []),
     auditFinding: table(seed.openFindings ?? []),
     siteHoliday: table(seed.holidays ?? []),
+    // ADR-0039 A1 — force all bootstrap-gated legs LIVE (past go_live) so these
+    // comparator-wiring tests evaluate c4/m1/m2 normally. The leg-liveness gate
+    // itself is covered by src/lib/audit/__tests__/bootstrap-gate.test.ts.
+    auditBootstrapGate: {
+      findMany: vi.fn(async () => [
+        { leg: 'billing', go_live_date: D('2020-01-01') },
+        { leg: 'close', go_live_date: D('2020-01-01') },
+        { leg: 'snapshot', go_live_date: D('2020-01-01') },
+      ]),
+    },
   } as unknown as PrismaClient;
 }
 

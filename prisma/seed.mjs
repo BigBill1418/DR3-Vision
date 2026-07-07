@@ -662,6 +662,40 @@ async function seedAlertRecipients(siteIds) {
   }
 }
 
+// ─── ADR-0047 rollout surfaces (staff-output gate) ───────────────────────
+// Every staff-facing surface × site, born `pilot` (admin-only) except the two
+// grandfathered production surfaces (bonus signature-chain + survey sends),
+// seeded `live` per §4.4. Idempotent via createMany({ skipDuplicates }) so a
+// re-seed NEVER reverts a live flip an admin has made (only missing rows are
+// inserted). Adding a future surface = add its code here AND a registry entry in
+// src/lib/notify/rollout.ts.
+async function seedRolloutSurfaces(siteIds) {
+  const NOTIFY_PILOT = [
+    'alert_digest',
+    'task_reminders', // rides the alert_digest mail path; registered for future standalone use
+    'contact_intake_notify',
+    'invoice_approval_notify', // ADR-0041 mail path not built yet — registered so it is born gated
+    'cor_notify', // ADR-0042 has no mail path today — registered so it is born gated
+    'ap_notify',
+  ];
+  const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];
+  const UI_PILOT = ['workbench_manager_read', 'loads_events_or_tabs', 'equipment_entry', 'equipment_trend'];
+
+  const rows = [];
+  for (const code of ['woodland', 'eugene']) {
+    const site_id = siteIds.get(code);
+    if (!site_id) throw new Error(`seedRolloutSurfaces: unknown site code='${code}'`);
+    for (const surface_code of NOTIFY_PILOT)
+      rows.push({ kind: 'notification', surface_code, site_id, rollout_state: 'pilot', updated_at: new Date() });
+    for (const surface_code of NOTIFY_LIVE)
+      rows.push({ kind: 'notification', surface_code, site_id, rollout_state: 'live', updated_at: new Date() });
+    for (const surface_code of UI_PILOT)
+      rows.push({ kind: 'ui', surface_code, site_id, rollout_state: 'pilot', updated_at: new Date() });
+  }
+  const res = await prisma.rolloutSurface.createMany({ data: rows, skipDuplicates: true });
+  console.log(`  rollout_surfaces: ${res.count} inserted (idempotent; existing admin flips preserved)`);
+}
+
 // ─── Post-seed DDL (T-201) ───────────────────────────────────────────────
 // The migration added period_number / period_year / pay_date as NULL-allowed
 // so the in-place table rename could land before data existed. Now that the
@@ -1697,6 +1731,8 @@ async function main() {
   await seedDailyReportConfig(siteIds);
   console.log('▶ seeding alert recipients (ADR-0043)');
   await seedAlertRecipients(siteIds);
+  console.log('▶ seeding rollout surfaces (ADR-0047 staff-output gate)');
+  await seedRolloutSurfaces(siteIds);
   console.log('▶ seeding site_holidays');
   await seedSiteHolidays(siteIds);
   console.log('▶ seeding processor_bonus_rules');

@@ -15,6 +15,9 @@ import type { EventView } from '@/lib/events/service';
 import type { OrCountView } from '@/lib/events/or-counts';
 
 type Tab = 'dropoffs' | 'outbound' | 'landfilled' | 'events' | 'orcounts';
+// ADR-0047 UI gate — the events + OR-counts tabs are gated by
+// `loads_events_or_tabs`; the base drop-off/outbound/landfilled tabs are not.
+const EVENTS_OR_TABS: ReadonlySet<Tab> = new Set(['events', 'orcounts']);
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dropoffs', label: 'Consumer drop-offs' },
   { id: 'outbound', label: 'Outbound materials' },
@@ -56,12 +59,21 @@ interface FieldMsg {
   text: string;
 }
 
-export function LoadsInventoryClient({ siteCode }: { siteCode: string }) {
+export function LoadsInventoryClient({
+  siteCode,
+  showEventsOrTabs = true,
+}: {
+  siteCode: string;
+  // ADR-0047 UI gate — hide the events/OR-counts tabs unless flipped live for
+  // the site (or the viewer is an admin). Passed from the server page.
+  showEventsOrTabs?: boolean;
+}) {
   const [tab, setTab] = useState<Tab>('dropoffs');
+  const tabs = showEventsOrTabs ? TABS : TABS.filter((t) => !EVENTS_OR_TABS.has(t.id));
   return (
     <div className="mt-8">
       <div className="flex flex-wrap gap-2 border-b border-white/15">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"

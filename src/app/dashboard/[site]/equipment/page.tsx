@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
+import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { EquipmentClient } from './EquipmentClient';
 
 export const dynamic = 'force-dynamic';
@@ -36,6 +37,32 @@ export default async function EquipmentPage({ params }: Props) {
     );
   }
 
+  // ADR-0047 UI gate — entry and trend ramp independently. In pilot both stay
+  // admin-only; the trend view stays admin even after event ENTRY goes live (§8
+  // Stage 2 separation) until `equipment_trend` is flipped too.
+  const isAdmin = result.ctx.role === 'admin';
+  const [entryLive, trendLive] = await Promise.all([
+    isUiSurfaceLive(UI_SURFACE.EQUIPMENT_ENTRY, result.ctx.siteId),
+    isUiSurfaceLive(UI_SURFACE.EQUIPMENT_TREND, result.ctx.siteId),
+  ]);
+  const showEntry = isAdmin || entryLive;
+  const showTrend = isAdmin || trendLive;
+
+  if (!showEntry && !showTrend) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+        <h1 className="text-2xl font-semibold">Not yet activated</h1>
+        <p className="mt-2 max-w-md opacity-80">
+          The equipment surface (ADR-0044) is staged but not yet activated for managers at this site.
+          Admin access only until it is ramped from the rollout panel (ADR-0047).
+        </p>
+        <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
+          Back to dashboard
+        </Link>
+      </main>
+    );
+  }
+
   const throughput = await computeEquipmentThroughput(result.ctx.siteId, { windowDays: 90 });
 
   return (
@@ -50,7 +77,12 @@ export default async function EquipmentPage({ params }: Props) {
           close — the same number billing bills from; nothing is entered twice.
         </p>
 
-        <EquipmentClient siteCode={siteCode} throughput={throughput} />
+        <EquipmentClient
+          siteCode={siteCode}
+          throughput={throughput}
+          showTrend={showTrend}
+          showEntry={showEntry}
+        />
       </div>
     </main>
   );
