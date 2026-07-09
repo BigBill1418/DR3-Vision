@@ -56,7 +56,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0046   | Vendor-invoice approval via Graph mailbox ingestion (mock-first; msgraph-mail transport; quarantine ring)      | Accepted                                                        |
 | 0047   | Staff-output rollout gate (notifyStaff chokepoint, pilot→live per surface×site, UI audience flags)             | Accepted                                                        |
 | 0048   | June operational backfill + Terex history import (staging→operational promotion, ADR-0023 discipline)          | Accepted                                                        |
-| 0049   | Woodland workbook → Vision sync bridge to cutover (Graph `Files.Read.All`, 10-min poll, workbook-wins, R2 archival) | Proposed (build gated on IT `Files.Read.All` grant + real workbook file) |
+| 0049   | Woodland workbook → Vision sync bridge to cutover (Graph `Files.Read.All`, 10-min poll, workbook-wins, R2 archival) | Accepted (2026-07-09 — operator build-all; mock-first, parser finalization + enable flip gated) |
 | 0050   | Compliance-admin ledger (owner-per-item evidence ledger + expiration alerts)                                   | Proposed (post-cutover build, not before 8/1)                   |
 
 ## How to write a new ADR

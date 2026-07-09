@@ -756,6 +756,40 @@ async function seedRolloutSurfaces(siteIds) {
   console.log(`  rollout_surfaces: ${res.count} inserted (idempotent; existing admin flips preserved)`);
 }
 
+// ─── ADR-0049 workbook sync (Woodland source + cutover surface) ───────────
+// Woodland ships day 1. The source is born `is_syncing=false` — the operator
+// enables it from /admin/workbook-sync once the Files.Read.All grant is live. The
+// `workbook_sync` rollout surface is born `pilot` (= sync active; `live` = cut
+// over). Both are idempotent so a re-seed NEVER reverts an operator enable or a
+// cutover flip. Eugene is added as a config row when Rick confirms (D9), not seeded.
+const WOODLAND_DRIVE_UPN = 'kelsey_ruhland@svdp.us'; // D4 — Kelsey's OneDrive owner UPN
+async function seedWorkbookSync(siteIds) {
+  const woodland = siteIds.get('woodland');
+  if (!woodland) throw new Error('seedWorkbookSync: missing woodland site id');
+
+  // Cutover surface (kind=workbook_sync). Idempotent via the (surface_code, site_id) unique.
+  const surfRes = await prisma.rolloutSurface.createMany({
+    data: [{ kind: 'workbook_sync', surface_code: 'workbook_sync', site_id: woodland, rollout_state: 'pilot', updated_at: new Date() }],
+    skipDuplicates: true,
+  });
+
+  // Woodland source — create-if-missing (site_id unique); never clobber operator edits.
+  const existing = await prisma.workbookSource.findUnique({ where: { site_id: woodland }, select: { id: true } });
+  if (!existing) {
+    await prisma.workbookSource.create({
+      data: {
+        site_id: woodland,
+        drive_upn: WOODLAND_DRIVE_UPN,
+        folder_path: '',
+        naming_pattern: '{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm',
+        is_syncing: false,
+        updated_at: new Date(),
+      },
+    });
+  }
+  console.log(`  workbook_sync: surface +${surfRes.count}, Woodland source ${existing ? 'present' : 'created'} (is_syncing=false; enable in /admin/workbook-sync)`);
+}
+
 // ─── Post-seed DDL (T-201) ───────────────────────────────────────────────
 // The migration added period_number / period_year / pay_date as NULL-allowed
 // so the in-place table rename could land before data existed. Now that the
@@ -1793,6 +1827,8 @@ async function main() {
   await seedAlertRecipients(siteIds);
   console.log('▶ seeding rollout surfaces (ADR-0047 staff-output gate)');
   await seedRolloutSurfaces(siteIds);
+  console.log('▶ seeding workbook sync (ADR-0049 — Woodland source + cutover surface)');
+  await seedWorkbookSync(siteIds);
   console.log('▶ seeding AP approver roster (ADR-0046 §3 — rollup §1.6)');
   await seedApApprovers();
   console.log('▶ seeding board-pack digest recipients (ADR-0045 §3 — rollup §1.8)');

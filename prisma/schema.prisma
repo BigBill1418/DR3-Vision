@@ -1903,6 +1903,11 @@ model AuditRun {
 enum RolloutSurfaceKind {
   notification
   ui
+  // ADR-0049 — the Woodland workbook→Vision sync/cutover surface. Semantics are
+  // INVERTED vs a UI gate: `pilot` = sync ACTIVE (workbook wins, engine upserts),
+  // `live` = CUT OVER (sync no-ops, Vision owns its own data). Interpreted by the
+  // sync engine, never by `isUiSurfaceLive`. Per-site (Woodland day 1).
+  workbook_sync
 }
 
 enum RolloutState {
@@ -3042,4 +3047,94 @@ model YardTrailer {
 
   @@index([site_id])
   @@map("yard_trailers")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ADR-0049 — workbook sync
+//
+// Woodland workbook → Vision sync bridge. Polls Kelsey's OneDrive (Graph
+// `Files.Read.All`) for the current month's daily-log `.xlsm`, delta-detects,
+// parses via the SHARED ADR-0048/0039 parser, and upserts into the operational
+// daily-production table under the workbook-wins conflict rule (pre-cutover).
+// Mock-first (ADR-0046 discipline): a real Graph Files transport and a fixture
+// transport satisfy one interface, so the engine is testable without the tenant.
+// FK columns are PLAIN SCALARS (repo convention, mirrors rollout_surfaces /
+// yard_trailers) — constraints live in the migration; the Site relation list is
+// never edited by this block.
+// ════════════════════════════════════════════════════════════════════════
+
+/// D1 self-reported transport for a sync run (mirrors ApTransportMode). `mock` is
+/// the fixture-driven default until the Files.Read.All grant + real file land.
+enum WorkbookSyncTransportMode {
+  mock
+  graph
+}
+
+/// Run-ledger status (mymrc_sync_runs shape). `forbidden` is the D6/test-plan-8
+/// fail-soft state: the `Files.Read.All` grant is missing (Graph 403) — logged +
+/// ntfy'd, never a crash. `not_found` = the current month's file was not
+/// discoverable (a possibly-empty new-month state, D5).
+enum WorkbookSyncStatus {
+  ok
+  forbidden
+  not_found
+  error
+}
+
+/// D9 — one syncing source (a site's monthly workbook location). Woodland ships
+/// day 1; Eugene is a config row when Rick confirms. Born `is_syncing=false` — a
+/// deliberate operator enable turns real polling on (the engine no-ops disabled
+/// sources). `drive_upn` is the OneDrive owner UPN (Kelsey), resolved to a drive
+/// per D4; `share_url` is an optional operator-configurable share pointer kept for
+/// reference/audit. `last_file_ctag` is the delta guard (D2): unchanged cTag ⇒ no
+/// re-download / re-parse.
+model WorkbookSource {
+  id             String    @id @default(uuid())
+  site_id        String    @unique // one source per site (bare FK; constraint in migration)
+  drive_upn      String // OneDrive owner UPN (Kelsey), D4 — resolves to a user drive
+  folder_path    String    @default("") // OneDrive path under the drive root ('' = root)
+  share_url      String? // optional operator-configurable share link (reference/audit)
+  naming_pattern String    @default("{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm") // D5 rollover pattern
+  is_syncing     Boolean   @default(false) // born disabled; operator enables (D9)
+  last_polled_at DateTime?
+  last_file_id   String? // Graph item id of the last-synced monthly file
+  last_file_name String? // resolved file name of the last-synced file
+  last_file_ctag String? // D2 change-detection guard (unchanged ⇒ skip re-download)
+  created_by     String? // bare audit-actor column
+  updated_by     String? // bare audit-actor column
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  runs WorkbookSyncRun[]
+
+  @@map("workbook_sources")
+}
+
+/// mymrc_sync_runs-shape run ledger. ALWAYS written, including on throw / fail-soft.
+/// `changes_detected=false` marks a delta no-op (unchanged cTag). Mid-edit rows
+/// (required cells empty, D11) are counted in `rows_skipped_midedit` and retried
+/// next poll with NO alert. `rows_overwritten` counts workbook-wins overwrites of a
+/// disagreeing Vision-captured row (each carries an audit_log entry, D3).
+model WorkbookSyncRun {
+  id                   String                    @id @default(uuid())
+  source_id            String
+  source               WorkbookSource            @relation(fields: [source_id], references: [id], onDelete: Cascade)
+  site_id              String
+  started_at           DateTime                  @default(now())
+  finished_at          DateTime?
+  status               WorkbookSyncStatus
+  transport_mode       WorkbookSyncTransportMode
+  file_name            String? // the month's file name resolved this poll
+  changes_detected     Boolean                   @default(false)
+  rows_upserted        Int                       @default(0)
+  rows_skipped_midedit Int                       @default(0)
+  rows_overwritten     Int                       @default(0)
+  cutover_noop         Boolean                   @default(false) // true when the surface is live (post-cutover): sync no-op'd
+  error_text           String? // human error (never credentials)
+  run_id               String? // per-run correlation id (crypto.randomUUID)
+  created_at           DateTime                  @default(now())
+
+  @@index([source_id, started_at])
+  @@index([status, started_at])
+  @@map("workbook_sync_runs")
 }

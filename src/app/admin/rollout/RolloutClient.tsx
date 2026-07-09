@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 
 export interface SurfaceRow {
   id: string;
-  kind: 'notification' | 'ui';
+  kind: 'notification' | 'ui' | 'workbook_sync';
   surfaceCode: string;
   siteLabel: string;
   state: 'pilot' | 'live';
@@ -22,10 +22,12 @@ export interface SurfaceRow {
 const KIND_LABEL: Record<SurfaceRow['kind'], string> = {
   notification: 'Notification surfaces',
   ui: 'UI surfaces',
+  // ADR-0049 — the workbook sync/cutover surface. `live` = CUT OVER (sync stops).
+  workbook_sync: 'Workbook sync / cutover',
 };
 
 export function RolloutClient({ rows }: { rows: SurfaceRow[] }) {
-  const groups: SurfaceRow['kind'][] = ['notification', 'ui'];
+  const groups: SurfaceRow['kind'][] = ['notification', 'ui', 'workbook_sync'];
   return (
     <div className="mt-8 space-y-10">
       {groups.map((kind) => {

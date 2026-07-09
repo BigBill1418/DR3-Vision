@@ -39,6 +39,12 @@ const TILES = [
     testid: 'admin-tile-rollout',
   },
   {
+    href: '/admin/workbook-sync',
+    label: 'Workbook sync',
+    description: 'Mirror the Woodland daily-log workbook into Vision (ADR-0049). Sources, run ledger, and cutover.',
+    testid: 'admin-tile-workbook-sync',
+  },
+  {
     href: '/admin/audit/workbook',
     label: 'Workbook import & backfill',
     description: 'Upload monthly workbooks, then promote June staging rows into the operational tables (ADR-0048).',
