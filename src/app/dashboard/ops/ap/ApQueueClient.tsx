@@ -174,6 +174,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
   const [note, setNote] = useState('');
   const [vendor, setVendor] = useState(detail.vendor ?? '');
   const [amount, setAmount] = useState(detail.amountCents !== null ? (detail.amountCents / 100).toFixed(2) : '');
+  const [siteCode, setSiteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -191,6 +192,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             note: note.trim() || undefined,
             vendor: vendor.trim() || undefined,
             amountCents: Number.isFinite(amountCents) ? amountCents : undefined,
+            siteId: siteCode || undefined,
           }),
         });
         const body = await res.json().catch(() => ({}));
@@ -216,7 +218,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         onDecided();
       }
     },
-    [amount, note, vendor, detail.id, onDecided],
+    [amount, note, vendor, siteCode, detail.id, onDecided],
   );
 
   const resend = useCallback(async () => {
@@ -325,6 +327,18 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
                 onChange={(e) => setAmount(e.target.value)}
                 className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
               />
+            </label>
+            <label className="text-xs opacity-80">
+              Site (optional)
+              <select
+                value={siteCode}
+                onChange={(e) => setSiteCode(e.target.value)}
+                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+              >
+                <option value="">— none —</option>
+                <option value="eugene">Eugene</option>
+                <option value="woodland">Woodland</option>
+              </select>
             </label>
           </div>
           <label className="mt-2 block text-xs opacity-80">

@@ -243,3 +243,13 @@ time and are authoritative:
   for an ad-hoc fire, an operator deletes today's log row and restarts.
 - A "preview the email body before send" view in the admin tile (could be
   a follow-up; the test-send button covers the same need at first).
+
+## Post-acceptance note — rollout-gate grandfather (planning rollup 2026-07-08, Q-0047-1)
+
+The ADR-0047 §4.4 sweep found this daily production report's mail path
+(`src/lib/bonus/daily-report-notifications.ts`) importing `sendSystemEmail`
+directly. Per Bill's Q-0047-1 disposition it is **grandfathered** (on the
+`no-direct-mail` allowlist) through cutover, rather than rerouted through
+`notifyStaff()` on the incident-night deploy. ADR-0049 (workbook sync) structurally
+fixes the underlying report-accuracy problem this grandfathering was necessary for,
+so gating it became moot; a post-8/1 revisit is optional.

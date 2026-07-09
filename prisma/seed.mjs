@@ -662,6 +662,59 @@ async function seedAlertRecipients(siteIds) {
   }
 }
 
+// ─── ADR-0046 §3 AP approver roster (planning rollup 2026-07-08 §1.6) ─────
+// The explicit AP-approver roster: Morena, Rick, Janette, Kelsey (until 8/1) as
+// non-admin approvers. Bill is admin and can always act, so he needs no row.
+// Idempotent: resolves each approver's user by email and upserts a row ONLY when
+// the user exists (Bill's real SSO row and any not-yet-created user are skipped
+// without error). Kelsey's row carries active_until = 2026-08-01 00:00 America/
+// Los_Angeles (PDT, UTC-7) → 2026-08-01T07:00:00Z; the daily expiry job removes it.
+const AP_APPROVERS = [
+  { email: 'morena.gomez@svdp.us', activeUntil: null },
+  { email: 'rick.albritton@svdp.us', activeUntil: null },
+  { email: 'janette.tomas@svdp.us', activeUntil: null },
+  { email: 'kelsey.ruhland@svdp.us', activeUntil: new Date('2026-08-01T07:00:00.000Z') },
+];
+async function seedApApprovers() {
+  let seeded = 0;
+  for (const a of AP_APPROVERS) {
+    const user = await prisma.user.findUnique({ where: { email: a.email }, select: { id: true } });
+    if (!user) continue; // user row not present yet (e.g. created on first SSO) — skip, re-runnable
+    await prisma.apApprover.upsert({
+      where: { user_id: user.id },
+      create: { user_id: user.id, active_until: a.activeUntil, updated_at: new Date() },
+      // Re-seed keeps Kelsey's expiry aligned but never resurrects an admin removal:
+      // the daily expiry job DELETES the row, so an absent row stays absent (upsert
+      // only touches an existing row's active_until, and a deleted row is re-created
+      // here only on a full re-seed — acceptable, documented in the operator doc).
+      update: { active_until: a.activeUntil },
+    });
+    seeded += 1;
+  }
+  console.log(`  ap_approvers: ${seeded} present (idempotent; Bill acts as admin without a row)`);
+}
+
+// ─── ADR-0045 §3 board-pack digest recipients (rollup §1.8) ──────────────
+// Bethany + Bill are the mandatory board-pack recipients. Bethany has no user row
+// yet, so her address is a documented PLACEHOLDER (docs/operator/board-pack-digest.md
+// — update before the first live send). Mirrors ap_decision_recipients. Idempotent.
+const BOARD_PACK_RECIPIENTS = [
+  'bill.barnard@svdp.us',
+  // PLACEHOLDER — replace with Bethany's real address before flipping board_pack_digest live.
+  'bethany.PLACEHOLDER@svdp.us',
+];
+async function seedBoardPackRecipients() {
+  for (const rawEmail of BOARD_PACK_RECIPIENTS) {
+    const email = rawEmail.trim().toLowerCase();
+    await prisma.boardPackRecipient.upsert({
+      where: { email },
+      create: { email, updated_at: new Date() },
+      update: {},
+    });
+  }
+  console.log(`  board_pack_recipients: ${BOARD_PACK_RECIPIENTS.length} present (Bethany address is a placeholder)`);
+}
+
 // ─── ADR-0047 rollout surfaces (staff-output gate) ───────────────────────
 // Every staff-facing surface × site, born `pilot` (admin-only) except the two
 // grandfathered production surfaces (bonus signature-chain + survey sends),
@@ -677,9 +730,16 @@ async function seedRolloutSurfaces(siteIds) {
     'invoice_approval_notify', // ADR-0041 mail path not built yet — registered so it is born gated
     'cor_notify', // ADR-0042 has no mail path today — registered so it is born gated
     'ap_notify',
+    'board_pack_digest', // ADR-0045 §3 addendum (rollup §1.8) — Bethany's board pack, born pilot
   ];
   const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];
-  const UI_PILOT = ['workbench_manager_read', 'loads_events_or_tabs', 'equipment_entry', 'equipment_trend'];
+  const UI_PILOT = [
+    'workbench_manager_read',
+    'loads_events_or_tabs',
+    'equipment_entry',
+    'equipment_trend',
+    'yard_list', // rollup §1.8 — manager Yard view, born pilot (admin-only until flipped)
+  ];
 
   const rows = [];
   for (const code of ['woodland', 'eugene']) {
@@ -1733,6 +1793,10 @@ async function main() {
   await seedAlertRecipients(siteIds);
   console.log('▶ seeding rollout surfaces (ADR-0047 staff-output gate)');
   await seedRolloutSurfaces(siteIds);
+  console.log('▶ seeding AP approver roster (ADR-0046 §3 — rollup §1.6)');
+  await seedApApprovers();
+  console.log('▶ seeding board-pack digest recipients (ADR-0045 §3 — rollup §1.8)');
+  await seedBoardPackRecipients();
   console.log('▶ seeding site_holidays');
   await seedSiteHolidays(siteIds);
   console.log('▶ seeding processor_bonus_rules');

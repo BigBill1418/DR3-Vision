@@ -157,3 +157,39 @@ them re-send.
   and notifications carry row ids + sender domain, never amounts/vendor/bank data.
 - Decision replies go only to the fixed configured addresses, never the inbound
   Reply-To.
+
+## 2026-07-08 expansion (ADR-0046 §3 amendment)
+
+**Scope:** the mailbox now covers ALL Woodland + Eugene invoices (both sites), not
+just DR3 vendor invoices.
+
+**Approver roster (5, explicit):** Morena, Rick, Janette, Bill, Kelsey (until 8/1).
+Approvers live in the `ap_approvers` table (seeded for Morena/Rick/Janette/Kelsey).
+Bill is an admin and can always act, so he needs no row. All approvers see all
+pending invoices; first action wins.
+
+- **Rick and Janette are single-site managers** but are full AP approvers here —
+  the AP queue/decide permission is now "admin OR active `ap_approvers` member",
+  not `all_sites`.
+- **Kelsey auto-removes 8/1.** Her `ap_approvers` row carries
+  `active_until = 2026-08-01 00:00 PT`. A daily `ap-approver-expiry` cron removes
+  expired approvers with an audit row + a `dr3-vision-system` ntfy to Bill. To add
+  or remove an approver by hand, insert/delete an `ap_approvers` row (by `user_id`).
+
+**Optional site tag:** at approve/reject time an approver may tag the request
+Eugene / Woodland / blank (a dropdown). Intake stays untagged.
+
+**Decision routing:** the decision email now goes to the **original internal SVdP
+forwarder** (the intake message's From, already validated `@svdp.us` at intake),
+carrying a **stamped PDF** of the approved item ("Approved by [Name] on [Timestamp
+PT] via DR3-Vision" — a visible stamp, no cryptographic signature). The stamped
+PDF's sha256 is recorded on the request + in the audit log as a tamper record. The
+whole decision mail still routes through the `ap_notify` rollout surface — in pilot
+it reroutes to admins.
+
+**Note on the stamp:** because the repo has no PDF-editing library (and none may be
+added), the stamp is produced with the same Playwright→PDF mechanism as the bonus
+PDFs. A body-only invoice is rendered to a stamped PDF; a PDF attachment gets a
+stamped approval page carrying the original's filename + hash, sent alongside the
+original.
+

@@ -8,17 +8,19 @@
 // access-controlled manager surface, but it is NEVER routed to an export.
 
 import { useCallback, useEffect, useState } from 'react';
+import { useT } from '@/i18n/provider';
 import type { DropoffView } from '@/lib/dropoffs/service';
 import type { OutboundView } from '@/lib/loads/outbound';
 import type { LandfilledView } from '@/lib/loads/landfilled';
 import type { EventView } from '@/lib/events/service';
 import type { OrCountView } from '@/lib/events/or-counts';
 
-type Tab = 'dropoffs' | 'outbound' | 'landfilled' | 'events' | 'orcounts';
+type Tab = 'physical' | 'dropoffs' | 'outbound' | 'landfilled' | 'events' | 'orcounts';
 // ADR-0047 UI gate — the events + OR-counts tabs are gated by
-// `loads_events_or_tabs`; the base drop-off/outbound/landfilled tabs are not.
+// `loads_events_or_tabs`; the base physical/drop-off/outbound/landfilled tabs are not.
 const EVENTS_OR_TABS: ReadonlySet<Tab> = new Set(['events', 'orcounts']);
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'physical', label: 'Physical count' },
   { id: 'dropoffs', label: 'Consumer drop-offs' },
   { id: 'outbound', label: 'Outbound materials' },
   { id: 'landfilled', label: 'Landfilled units' },
@@ -62,13 +64,17 @@ interface FieldMsg {
 export function LoadsInventoryClient({
   siteCode,
   showEventsOrTabs = true,
+  computedTotal,
 }: {
   siteCode: string;
   // ADR-0047 UI gate — hide the events/OR-counts tabs unless flipped live for
   // the site (or the viewer is an admin). Passed from the server page.
   showEventsOrTabs?: boolean;
+  // ADR-0037 §3 — the server-computed running total (from onHand), shown in the
+  // physical-count panel as the reconcile-delta preview. Optional/additive.
+  computedTotal?: string;
 }) {
-  const [tab, setTab] = useState<Tab>('dropoffs');
+  const [tab, setTab] = useState<Tab>('physical');
   const tabs = showEventsOrTabs ? TABS : TABS.filter((t) => !EVENTS_OR_TABS.has(t.id));
   return (
     <div className="mt-8">
@@ -89,6 +95,9 @@ export function LoadsInventoryClient({
         ))}
       </div>
       <div className="mt-5">
+        {tab === 'physical' && (
+          <PhysicalCountPanel siteCode={siteCode} computedTotal={computedTotal} />
+        )}
         {tab === 'dropoffs' && <DropoffsPanel siteCode={siteCode} />}
         {tab === 'outbound' && <OutboundPanel siteCode={siteCode} />}
         {tab === 'landfilled' && <LandfilledPanel siteCode={siteCode} />}
@@ -111,6 +120,229 @@ function Msg({ msg }: { msg: FieldMsg | null }) {
     <span className={msg.kind === 'ok' ? 'text-sm text-dr3-chartreuse' : 'text-sm text-red-300'}>
       {msg.text}
     </span>
+  );
+}
+
+// Physical count (ADR-0037 §3 pool split) --------------------------------
+/** A count field: whole number or null when blank. */
+function unitOrNull(s: string): number | null {
+  if (s.trim() === '') return null;
+  const v = Number(s);
+  return Number.isFinite(v) ? Math.trunc(v) : null;
+}
+/** A live numeric value for the running total (blank/invalid → 0). */
+function liveNum(s: string): number {
+  const v = Number(s);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function PhysicalCountPanel({
+  siteCode,
+  computedTotal,
+}: {
+  siteCode: string;
+  computedTotal?: string | undefined;
+}) {
+  const t = useT();
+  const [date, setDate] = useState(todayIso());
+  const [indoor, setIndoor] = useState('');
+  const [outdoor, setOutdoor] = useState('');
+  const [total, setTotal] = useState('');
+  const [processing, setProcessing] = useState('');
+  const [program, setProgram] = useState('');
+  const [nonProgram, setNonProgram] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<FieldMsg | null>(null);
+
+  // Live physical-count total = the jurisdiction unit fields + in-processing.
+  const physicalTotal =
+    liveNum(indoor) + liveNum(outdoor) + liveNum(total) + liveNum(processing);
+  const bothPools = program.trim() !== '' && nonProgram.trim() !== '';
+  const splitSum = liveNum(program) + liveNum(nonProgram);
+  const mismatch = bothPools && splitSum !== physicalTotal;
+  const computed = computedTotal != null && computedTotal !== '' ? Number(computedTotal) : null;
+  const reconcileDelta = computed != null ? physicalTotal - computed : null;
+
+  const add = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/manager/${siteCode}/snapshots`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          countedAt: date,
+          units_indoor: unitOrNull(indoor),
+          units_outdoor: unitOrNull(outdoor),
+          units_total: unitOrNull(total),
+          units_in_processing: liveNum(processing),
+          program_units: unitOrNull(program) ?? undefined,
+          non_program_units: unitOrNull(nonProgram) ?? undefined,
+          pool_attribution: 'measured',
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+        setMsg({
+          kind: 'err',
+          text: err.message ?? `${t('physical_count.save_failed')} (${res.status}).`,
+        });
+        return;
+      }
+      setMsg({ kind: 'ok', text: t('physical_count.save_success') });
+      setIndoor('');
+      setOutdoor('');
+      setTotal('');
+      setProcessing('');
+      setProgram('');
+      setNonProgram('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canSave = physicalTotal > 0 && !mismatch;
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-lg font-semibold text-dr3-chartreuse">
+          {t('physical_count.heading')}
+        </h2>
+        <p className="mt-1 text-xs opacity-70">{t('physical_count.help')}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.date_label')}</span>
+          <input
+            type="date"
+            className={inputCls}
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.units_indoor_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={indoor}
+            onChange={(e) => setIndoor(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.units_outdoor_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={outdoor}
+            onChange={(e) => setOutdoor(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.units_total_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={total}
+            onChange={(e) => setTotal(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.units_processing_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={processing}
+            onChange={(e) => setProcessing(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.program_units_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={program}
+            onChange={(e) => setProgram(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.non_program_units_label')}</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={nonProgram}
+            onChange={(e) => setNonProgram(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <CountStat label={t('physical_count.count_total_label')} value={String(physicalTotal)} accent />
+        <CountStat
+          label={t('physical_count.split_entered_label')}
+          value={bothPools ? String(splitSum) : '—'}
+          warn={mismatch}
+        />
+        <CountStat
+          label={t('physical_count.computed_total_label')}
+          value={computed != null ? String(computed) : '—'}
+        />
+        <CountStat
+          label={t('physical_count.reconcile_delta_label')}
+          value={reconcileDelta != null ? (reconcileDelta > 0 ? `+${reconcileDelta}` : String(reconcileDelta)) : '—'}
+        />
+      </div>
+      {mismatch && (
+        <Msg
+          msg={{
+            kind: 'err',
+            text: t('physical_count.mismatch_error', {
+              program: liveNum(program),
+              nonProgram: liveNum(nonProgram),
+              sum: splitSum,
+              total: physicalTotal,
+            }),
+          }}
+        />
+      )}
+      <div className="flex items-center gap-4">
+        <button type="button" disabled={!canSave || busy} onClick={add} className={btnCls}>
+          {busy ? t('physical_count.recording') : t('physical_count.record_button')}
+        </button>
+        <Msg msg={msg} />
+      </div>
+    </div>
+  );
+}
+
+function CountStat({
+  label,
+  value,
+  accent,
+  warn,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  warn?: boolean;
+}) {
+  const border = warn
+    ? 'border-red-400/60'
+    : accent
+      ? 'border-dr3-chartreuse/50'
+      : 'border-white/15';
+  return (
+    <div className={`rounded-lg border ${border} bg-black/10 p-3`}>
+      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
+      <div className={`mt-1 text-xl font-bold ${warn ? 'text-red-300' : ''}`}>{value}</div>
+    </div>
   );
 }
 

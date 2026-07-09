@@ -79,7 +79,11 @@ export default async function LoadsInventoryPage({ params }: Props) {
           whole units sold, and landfilled units. Baled / shredded commodities never subtract units.
         </p>
 
-        <LoadsInventoryClient siteCode={siteCode} showEventsOrTabs={showEventsOrTabs} />
+        <LoadsInventoryClient
+          siteCode={siteCode}
+          showEventsOrTabs={showEventsOrTabs}
+          computedTotal={balance.total.toString()}
+        />
       </div>
     </main>
   );

@@ -137,3 +137,12 @@ constraint (defense in depth).
 - Bulk-amend.
 - Pre-approval delegation.
 - Auto-escalation on time-of-day (deliberately not introduced).
+
+## Post-acceptance note — permanent rollout-gate grandfather (planning rollup 2026-07-08, Q-0047-2)
+
+The ADR-0047 §4.4 sweep found the amendment lifecycle mail
+(`src/lib/bonus/amendment-notifications.ts`, shared with ADR-0029) importing
+`sendSystemEmail` directly. Per Bill's Q-0047-2 disposition this is a **permanent
+grandfather** — a working production surface, not incident-implicated. It keeps its
+signature-chain treatment and is NOT rerouted through `notifyStaff()`; it stays on
+the `no-direct-mail` allowlist.

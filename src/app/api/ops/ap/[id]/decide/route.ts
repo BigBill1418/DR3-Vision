@@ -3,12 +3,15 @@
 // authenticated Vision session over the stored record (D6).
 
 import { NextResponse } from 'next/server';
-import { requireOrgReach } from '@/lib/ops/viewer';
+import { prisma } from '@/lib/prisma';
+import { requireApApprover } from '@/lib/ap/approvers';
 import {
   ApAlreadyDecidedError,
+  ApInvalidSiteError,
   ApNotActionableError,
   ApRequestNotFoundError,
   decideRequest,
+  resolveDecisionSiteId,
   type ApDecision,
 } from '@/lib/ap/approvals';
 
@@ -20,11 +23,13 @@ interface DecideBody {
   note?: string;
   vendor?: string;
   amountCents?: number;
+  /** ADR-0046 §3 amendment — optional site tag: a site id or 'eugene'/'woodland' code. */
+  siteId?: string;
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
-    const identity = await requireOrgReach();
+    const identity = await requireApApprover();
     const { id } = await params;
     const body = (await req.json().catch(() => ({}))) as DecideBody;
     if (body.decision !== 'approved' && body.decision !== 'rejected') {
@@ -34,6 +39,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       typeof body.amountCents === 'number' && Number.isFinite(body.amountCents) && body.amountCents >= 0
         ? Math.round(body.amountCents)
         : undefined;
+    // Validate + resolve the optional site tag (id or 'eugene'/'woodland' code)
+    // BEFORE the decision — a bad site id must not flip the request.
+    const siteId = await resolveDecisionSiteId(prisma, body.siteId);
 
     const result = await decideRequest({
       requestId: id,
@@ -42,10 +50,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       ...(typeof body.note === 'string' && body.note.trim() ? { note: body.note.trim() } : {}),
       ...(typeof body.vendor === 'string' && body.vendor.trim() ? { vendor: body.vendor.trim() } : {}),
       ...(amountCents !== undefined ? { amountCents } : {}),
+      ...(siteId ? { siteId } : {}),
     });
     return NextResponse.json(result);
   } catch (e) {
     if (e instanceof Response) return e;
+    if (e instanceof ApInvalidSiteError) return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof ApRequestNotFoundError) return NextResponse.json({ error: e.message }, { status: 404 });
     if (e instanceof ApAlreadyDecidedError) {
       return NextResponse.json({ error: e.message, alreadyDecided: true }, { status: 409 });

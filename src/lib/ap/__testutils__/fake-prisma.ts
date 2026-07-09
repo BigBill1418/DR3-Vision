@@ -36,6 +36,29 @@ export interface FakeApRequest {
   decision_note: string | null;
   decision_mail_sent_at: Date | null;
   quarantine_reason: string | null;
+  // ADR-0046 §3 amendment (handoff §1.6c/e).
+  site_id: string | null;
+  decision_pdf_sha256: string | null;
+}
+export interface FakeApApprover {
+  id: string;
+  user_id: string;
+  active_until: Date | null;
+  created_by: string | null;
+}
+export interface FakeSite {
+  id: string;
+  code: string;
+  name: string;
+}
+export interface FakeAuditLog {
+  actor_user_id: string | null;
+  actor_label: string | null;
+  action: string;
+  table_name: string;
+  row_id: string;
+  before: unknown;
+  after: unknown;
 }
 export interface FakeApFollowup {
   id: string;
@@ -81,6 +104,9 @@ export interface FakeDb {
   followups: FakeApFollowup[];
   attachments: FakeApAttachment[];
   users: FakeUser[];
+  approvers: FakeApApprover[];
+  sites: FakeSite[];
+  auditLogs: FakeAuditLog[];
   senderMode: 'tenant_wide' | 'explicit_list';
   senderEntries: Array<{ address: string; active: boolean }>;
   decisionRecipients: Array<{ email: string; active: boolean }>;
@@ -94,6 +120,9 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     followups: seed.followups ?? [],
     attachments: seed.attachments ?? [],
     users: seed.users ?? [],
+    approvers: seed.approvers ?? [],
+    sites: seed.sites ?? [],
+    auditLogs: seed.auditLogs ?? [],
     senderMode: seed.senderMode ?? 'tenant_wide',
     senderEntries: seed.senderEntries ?? [],
     decisionRecipients: seed.decisionRecipients ?? [],
@@ -113,7 +142,7 @@ function pick<T extends object>(row: T, select?: AnyRecord): T {
 
 /** Build a fake PrismaClient over `db`. Cast to PrismaClient at the call site. */
 export function makeFakePrisma(db: FakeDb) {
-  return {
+  const client = {
     apRequest: {
       async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
         const w = args.where;
@@ -158,6 +187,8 @@ export function makeFakePrisma(db: FakeDb) {
           decision_note: (d['decision_note'] as string | null) ?? null,
           decision_mail_sent_at: null,
           quarantine_reason: (d['quarantine_reason'] as string | null) ?? null,
+          site_id: (d['site_id'] as string | null) ?? null,
+          decision_pdf_sha256: (d['decision_pdf_sha256'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -220,6 +251,11 @@ export function makeFakePrisma(db: FakeDb) {
         db.attachments.push(row);
         return { ...row };
       },
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.attachments.filter((a) => w['request_id'] === undefined || a.request_id === w['request_id']);
+        return rows.map((a) => (args.select ? pick(a, args.select) : { ...a }));
+      },
     },
     apSenderConfig: {
       async findUnique() {
@@ -279,11 +315,110 @@ export function makeFakePrisma(db: FakeDb) {
         const row = db.users.find((u) => u.id === args.where['id']);
         return row ? pick(row, args.select) : null;
       },
-      async findMany() {
-        return db.users
-          .filter((u) => u.is_active && u.email !== null && (u.role === 'admin' || u.all_sites))
-          .map((u) => ({ email: u.email }));
+      // Honors the shapes the AP roster + rollout paths use: `id: { in: [...] }`,
+      // `is_active`, `email: { not: null }`, `role`, `all_sites`.
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
+        const rows = db.users.filter((u) => {
+          if (idIn && !idIn.includes(u.id)) return false;
+          if (w['is_active'] !== undefined && u.is_active !== w['is_active']) return false;
+          if (w['email'] && (w['email'] as AnyRecord)['not'] === null && u.email === null) return false;
+          if (w['role'] !== undefined && u.role !== w['role']) return false;
+          if (w['all_sites'] !== undefined && u.all_sites !== w['all_sites']) return false;
+          return true;
+        });
+        return rows.map((u) => (args.select ? pick(u, args.select) : { ...u }));
       },
     },
+    apApprover: {
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const now = new Date();
+        const w = args.where ?? {};
+        const rows = db.approvers.filter((a) => matchApprover(a, w, now));
+        return rows.map((a) => (args.select ? pick(a, args.select) : { ...a }));
+      },
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const now = new Date();
+        const w = args.where ?? {};
+        const row = db.approvers.find((a) => matchApprover(a, w, now));
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+      async count(args: { where?: AnyRecord } = {}) {
+        const now = new Date();
+        const w = args.where ?? {};
+        return db.approvers.filter((a) => matchApprover(a, w, now)).length;
+      },
+      async delete(args: { where: AnyRecord }) {
+        const idx = db.approvers.findIndex((a) => a.id === args.where['id'] || a.user_id === args.where['user_id']);
+        if (idx === -1) throw new Error('not found');
+        const [removed] = db.approvers.splice(idx, 1);
+        return removed;
+      },
+    },
+    site: {
+      async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
+        const row = db.sites.find((s) => s.id === args.where['id'] || s.code === args.where['code']);
+        return row ? pick(row, args.select) : null;
+      },
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const or = (w['OR'] as AnyRecord[] | undefined) ?? [w];
+        const row = db.sites.find((s) =>
+          or.some((clause) => {
+            if (clause['id'] !== undefined && s.id !== clause['id']) return false;
+            if (clause['code'] !== undefined && s.code !== clause['code']) return false;
+            return clause['id'] !== undefined || clause['code'] !== undefined;
+          }),
+        );
+        return row ? pick(row, args.select) : null;
+      },
+    },
+    auditLog: {
+      async create(args: { data: AnyRecord }) {
+        const d = args.data;
+        const row: FakeAuditLog = {
+          actor_user_id: (d['actor_user_id'] as string | null) ?? null,
+          actor_label: (d['actor_label'] as string | null) ?? null,
+          action: d['action'] as string,
+          table_name: d['table_name'] as string,
+          row_id: d['row_id'] as string,
+          before: d['before'] ?? null,
+          after: d['after'] ?? null,
+        };
+        db.auditLogs.push(row);
+        return { id: uid('audit'), ...row };
+      },
+    },
+    async $transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+      return fn(client);
+    },
   };
+  return client;
+}
+
+/** Match an ap_approver row against the AP roster/expiry where shapes. */
+function matchApprover(a: FakeApApprover, w: Record<string, unknown>, now: Date): boolean {
+  if (w['user_id'] !== undefined && a.user_id !== w['user_id']) return false;
+  const or = w['OR'] as Array<Record<string, unknown>> | undefined;
+  if (or) {
+    const anyActiveClause = or.some((clause) => {
+      if ('active_until' in clause && clause['active_until'] === null) return a.active_until === null;
+      const au = clause['active_until'] as { gt?: Date } | undefined;
+      if (au && au.gt) return a.active_until !== null && a.active_until.getTime() > au.gt.getTime();
+      return false;
+    });
+    if (!anyActiveClause) return false;
+  }
+  const au = w['active_until'] as { lte?: Date; gt?: Date } | null | undefined;
+  if (au && typeof au === 'object') {
+    if (au.lte) {
+      if (a.active_until === null || a.active_until.getTime() > au.lte.getTime()) return false;
+    }
+    if (au.gt) {
+      if (a.active_until === null || a.active_until.getTime() <= au.gt.getTime()) return false;
+    }
+  }
+  void now;
+  return true;
 }

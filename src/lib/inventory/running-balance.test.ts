@@ -20,6 +20,9 @@ const store = {
     units_outdoor: number | null;
     units_total: number | null;
     units_in_processing: number;
+    program_units?: Prisma.Decimal | null;
+    non_program_units?: Prisma.Decimal | null;
+    pool_attribution?: string;
   },
   inbound: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
   dropoffs: { units: 0 } as Record<string, number | null>,
@@ -69,6 +72,7 @@ import {
   snapshotTotalUnits,
   onHand,
   reconcilePhysicalCount,
+  PoolSplitMismatchError,
   type BalanceComponents,
 } from './running-balance';
 
@@ -251,5 +255,146 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     const snap = store.createdSnapshots[0] as { snapshot_kind: string; reconciled_delta: number };
     expect(snap.snapshot_kind).toBe('physical');
     expect(snap.reconciled_delta).toBe(-10);
+  });
+});
+
+// ── ADR-0037 §3 pool split (handoff §1.4) ────────────────────────────────
+describe('reconcilePhysicalCount — measured pool split validation', () => {
+  beforeEach(() => {
+    store.createdSnapshots.length = 0;
+    store.auditRows.length = 0;
+    store.anchor = {
+      snapshot_at: new Date('2026-06-30T00:00:00Z'),
+      units_total: 4000,
+      units_indoor: null,
+      units_outdoor: null,
+      units_in_processing: 0,
+    };
+    store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
+    store.dropoffs = { units: 0 };
+    store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
+    store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
+    store.landfilled = { program_units: 0, non_program_units: 0 };
+  });
+
+  it('measured: program + non-program === physical total persists the split', async () => {
+    const res = await reconcilePhysicalCount({
+      siteId: 'site-eugene',
+      countedAt: new Date('2026-07-08T00:00:00Z'),
+      physical: { units_total: 100, units_in_processing: 0 },
+      programUnits: 60,
+      nonProgramUnits: 40,
+      poolAttribution: 'measured',
+      actorUserId: 'user-bill',
+    });
+    expect(res.physicalTotal).toBe(100);
+    const snap = store.createdSnapshots[0] as {
+      program_units: number | null;
+      non_program_units: number | null;
+      pool_attribution: string;
+    };
+    expect(snap.program_units).toBe(60);
+    expect(snap.non_program_units).toBe(40);
+    expect(snap.pool_attribution).toBe('measured');
+    // Pool fields land in the append-only audit `after` payload too.
+    const audit = store.auditRows[0] as { after: { program_units: number | null; pool_attribution: string } };
+    expect(audit.after.program_units).toBe(60);
+    expect(audit.after.pool_attribution).toBe('measured');
+  });
+
+  it('measured: program + non-program !== physical total throws PoolSplitMismatchError (nothing persisted)', async () => {
+    await expect(
+      reconcilePhysicalCount({
+        siteId: 'site-eugene',
+        countedAt: new Date('2026-07-08T00:00:00Z'),
+        physical: { units_total: 100, units_in_processing: 0 },
+        programUnits: 60,
+        nonProgramUnits: 30, // 90 ≠ 100
+        poolAttribution: 'measured',
+        actorUserId: 'user-bill',
+      }),
+    ).rejects.toBeInstanceOf(PoolSplitMismatchError);
+    // Refused pre-transaction: no snapshot, no audit row.
+    expect(store.createdSnapshots).toHaveLength(0);
+    expect(store.auditRows).toHaveLength(0);
+  });
+
+  it('measured error carries a 422 status and pool_mismatch reason', async () => {
+    const err: unknown = await reconcilePhysicalCount({
+      siteId: 'site-eugene',
+      countedAt: new Date('2026-07-08T00:00:00Z'),
+      physical: { units_total: 100, units_in_processing: 0 },
+      programUnits: 10,
+      nonProgramUnits: 10,
+      poolAttribution: 'measured',
+      actorUserId: 'user-bill',
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PoolSplitMismatchError);
+    const pe = err as PoolSplitMismatchError;
+    expect(pe.status).toBe(422);
+    expect(pe.reason).toBe('pool_mismatch');
+  });
+});
+
+describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
+  beforeEach(() => {
+    // No flow since the anchor → the anchor's pools ARE the balance.
+    store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
+    store.dropoffs = { units: 0 };
+    store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
+    store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
+    store.landfilled = { program_units: 0, non_program_units: 0 };
+  });
+
+  it('measured anchor uses the entered program/non-program split as the anchor pool', async () => {
+    store.anchor = {
+      snapshot_at: new Date('2026-07-01T00:00:00Z'),
+      units_total: 1000,
+      units_indoor: null,
+      units_outdoor: null,
+      units_in_processing: 0,
+      program_units: D(700),
+      non_program_units: D(300),
+      pool_attribution: 'measured',
+    };
+    const r = await onHand('site-eugene', new Date('2026-07-08T00:00:00Z'));
+    expect(r.program.toString()).toBe('700');
+    expect(r.nonProgram.toString()).toBe('300');
+    expect(r.total.toString()).toBe('1000');
+    expect(r.anchorPool).toBe('measured');
+  });
+
+  it('legacy anchor attributes the whole anchor to the program pool, non-program = 0', async () => {
+    store.anchor = {
+      snapshot_at: new Date('2026-07-01T00:00:00Z'),
+      units_total: 1000,
+      units_indoor: null,
+      units_outdoor: null,
+      units_in_processing: 0,
+      program_units: null,
+      non_program_units: null,
+      pool_attribution: 'legacy',
+    };
+    const r = await onHand('site-eugene', new Date('2026-07-08T00:00:00Z'));
+    expect(r.program.toString()).toBe('1000');
+    expect(r.nonProgram.toString()).toBe('0');
+    expect(r.anchorPool).toBe('legacy');
+  });
+
+  it('measured attribution but null pool fields falls back to legacy (whole → program)', async () => {
+    store.anchor = {
+      snapshot_at: new Date('2026-07-01T00:00:00Z'),
+      units_total: 1000,
+      units_indoor: null,
+      units_outdoor: null,
+      units_in_processing: 0,
+      program_units: null,
+      non_program_units: null,
+      pool_attribution: 'measured',
+    };
+    const r = await onHand('site-eugene', new Date('2026-07-08T00:00:00Z'));
+    expect(r.program.toString()).toBe('1000');
+    expect(r.nonProgram.toString()).toBe('0');
+    expect(r.anchorPool).toBe('legacy');
   });
 });

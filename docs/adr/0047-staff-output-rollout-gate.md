@@ -109,3 +109,21 @@ by Bill from `/admin/rollout`. Recipient rosters named in directives/handoffs ar
 the EVENTUAL audience, never the day-one audience. New staff-facing output
 inherits the gate by construction (register a `rollout_surfaces` row — born
 pilot — and route through `notifyStaff()`; the repo test enforces the latter).
+
+## Post-acceptance note — Q-0047 resolutions (planning rollup 2026-07-08 §1.2/§3)
+
+Bill's dispositions on the three §4.4-sweep grandfathering questions:
+
+- **Q-0047-1 (ADR-0030 daily production report):** permanent grandfather through
+  cutover; revisit post-8/1 is optional. ADR-0049 (workbook sync) fixes the
+  underlying accuracy problem structurally, so gating it became moot. It stays on
+  the allowlist.
+- **Q-0047-2 (ADR-0028/0029 amendment lifecycle mail):** **permanent grandfather.**
+  Working production surface, not incident-implicated; keeps its signature-chain
+  treatment and is not rerouted through `notifyStaff()`.
+- **Q-0047-3 (AP mailbox emails):** both AP email kinds (the incoming-request alert
+  AND the decision-back-to-accounting mail) flip together under the one `ap_notify`
+  surface. Already routed through `notifyStaff('ap_notify')` (born pilot).
+
+New surfaces registered since acceptance (all born pilot): `board_pack_digest`
+(notification, org-wide — ADR-0045 §3 addendum) and `yard_list` (UI — rollup §1.8).

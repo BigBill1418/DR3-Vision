@@ -27,6 +27,9 @@ export const NOTIFY_SURFACE = {
   INVOICE_APPROVAL_NOTIFY: 'invoice_approval_notify',
   COR_NOTIFY: 'cor_notify',
   AP_NOTIFY: 'ap_notify',
+  // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — Bethany's board-pack
+  // digest. Org-wide surface, born pilot (resolves pilot unless BOTH sites live).
+  BOARD_PACK_DIGEST: 'board_pack_digest',
   // Grandfathered — established production surfaces, seeded `live` (§4.4 out-of-scope).
   BONUS_SIGNATURE_CHAIN: 'bonus_signature_chain',
   SURVEY_SENDS: 'survey_sends',
@@ -38,6 +41,8 @@ export const UI_SURFACE = {
   LOADS_EVENTS_OR_TABS: 'loads_events_or_tabs',
   EQUIPMENT_ENTRY: 'equipment_entry',
   EQUIPMENT_TREND: 'equipment_trend',
+  // handoff §1.8 — manager-facing Yard view, born pilot (admin-only until flipped).
+  YARD_LIST: 'yard_list',
 } as const;
 
 export type NotifySurfaceCode = (typeof NOTIFY_SURFACE)[keyof typeof NOTIFY_SURFACE];

@@ -38,6 +38,12 @@ export interface NotifyStaffArgs {
   fromDisplayName?: string;
   replyTo?: string;
   cc?: string[];
+  /**
+   * Optional file attachments, passed through to the transport (ADR-0046 §3 —
+   * the AP decision mail carries a stamped PDF). The chokepoint is preserved:
+   * feature code still calls notifyStaff(), never sendSystemEmail() directly.
+   */
+  attachments?: Array<{ filename: string; buffer: Buffer; contentType?: string }>;
   /** Test seam. */
   db?: PrismaClient;
 }
@@ -132,6 +138,7 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
         ...(args.fromDisplayName ? { fromDisplayName: args.fromDisplayName } : {}),
         ...(args.replyTo ? { replyTo: args.replyTo } : {}),
         ...(args.cc ? { cc: args.cc } : {}),
+        ...(args.attachments && args.attachments.length > 0 ? { attachments: args.attachments } : {}),
       }),
     );
   }

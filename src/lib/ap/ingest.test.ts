@@ -156,6 +156,8 @@ describe('ingestMessage — idempotency + follow-ups (C4)', () => {
           decision_note: null,
           decision_mail_sent_at: null,
           quarantine_reason: null,
+          site_id: null,
+          decision_pdf_sha256: null,
         },
       ],
     });

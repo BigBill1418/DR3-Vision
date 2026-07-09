@@ -5,6 +5,47 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-09 (planning rollup 2026-07-08 — build-now subset)
+
+The OPERATOR-ordered build-now subset of the 2026-07-08 planning rollup
+(`docs/handoffs/2026-07-09-planning-session-decisions-rollup-2026-07-08.md`). Four
+features + two proposal ADRs. Every new staff-facing surface is **born pilot**
+(ADR-0047); no email is sent by anything added here in pilot (decision/board-pack
+mail reroutes to admins). Migrations `20260715_pool_split` +
+`20260715b_rollup_ap_boardpack_yard` clean-replay on empty PG16.
+
+- **ADR-0037 §3 — inventory pool split.** `site_inventory_snapshots` gains
+  `program_units` / `non_program_units` (`Decimal(7,1)`) + `pool_attribution`
+  (`measured` | `legacy`). Physical counts record the program and non-program pools
+  separately; a `measured` count is validated `program + non_program == total`
+  (typed `PoolSplitMismatchError`, 422). Existing rows backfilled `legacy`
+  (all-to-program). The count-entry UI gains the two fields + a live running-total
+  helper + plain-language mismatch error (EN/ES/UR). `running-balance.ts` `onHand()`
+  uses the measured split as the anchor when present, else legacy fallback;
+  `{ program, nonProgram, total }` return shape unchanged.
+- **ADR-0046 §3 — AP mailbox expansion.** Explicit `ap_approvers` roster (Morena,
+  Rick, Janette, Kelsey; Bill acts as admin) with `active_until` — single-site
+  managers are now full approvers (queue permission = admin OR active approver).
+  Kelsey auto-removes 8/1 via a daily `ap-approver-expiry` cron (audit + Bill ntfy).
+  Optional site tag at decision (`ap_requests.site_id`). Decision email routes to
+  the original internal `@svdp.us` forwarder (intake sender validation unchanged),
+  carrying a visible-stamp PDF (no crypto) whose sha256 is a tamper record
+  (`ap_requests.decision_pdf_sha256`); stamping reuses the repo's Playwright→PDF
+  mechanism (no PDF library added — see the ADR §3 amendment for the deviation).
+- **ADR-0045 §3 — board-pack digest.** New org-wide `board_pack_digest` notification
+  surface (born pilot) sent via `notifyStaff`. `board_pack_recipients` roster
+  (Bethany + Bill; Bethany is a documented placeholder). Fires the 2nd Wednesday +
+  preceding Monday (Pacific, reusing `digest-calendar.ts`), one send/month
+  (`board_pack_send_log`). Payload: prev-month processed units, MTD, YoY, P&L
+  placeholder, no safety section. First LIVE send targets 2026-08-10 (ships pilot).
+- **Trailer/yard list scaffold (rollup §1.8).** Manager `/dashboard/<site>/yard`
+  view behind the new `yard_list` UI surface (born pilot ⇒ admin-only). Reads
+  `container_rental_sites` + on-hand context; `yard_trailers` table (label,
+  location, status) with add/edit (audited). EN/ES/UR.
+- **ADRs 0049 (workbook sync bridge) + 0050 (compliance-admin ledger)** drafted as
+  Proposed (no code) and indexed. ADR post-acceptance notes added to 0030 / 0028 /
+  0029 / 0047 (Q-0047 grandfather resolutions).
+
 ### Fixed — 2026-07-07 payroll-morning hotfix
 
 - **Signature-chain cache TTL (30s).** The per-site chain cache was keyed on the
