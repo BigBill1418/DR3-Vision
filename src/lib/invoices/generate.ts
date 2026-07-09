@@ -152,6 +152,9 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
     // GP terminology (rollup §1.3): the EOM invoice's subtraction line is the
     // literal GP "Trade discount" field Mary types. Line code stays B22.offset
     // (workbook §3.1); only the label speaks GP so her entry maps one-to-one.
+    // NOTE: rows generated before 2026-07-09 carry the older wording ("Less:
+    // mid-month processing already invoiced (offset)") — `line_code =
+    // 'B22.offset'` is the ONLY stable join key; never match on description.
     lines.push({
       lineCode: LINE_CODE.eomOffset,
       description: 'Trade discount — mid-month processing already invoiced',
@@ -161,10 +164,20 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
       source: input.midMonthOffsetSource ?? { offset: true },
       position: position++,
     });
+    // The trade-discount FIELDS are data about a REAL mid-month amount: a 0¢
+    // offset with no referenced invoice (first month live, no 1st–15th
+    // production) stores NULLs, not a phantom "$0.00 Trade discount" line for
+    // Mary to look for in GP. The 0-amount offset LINE still renders (honest
+    // subtraction, §3.1 parity).
+    const hasRealDiscount = offset > 0 || input.midMonthReferenceInvoiceId != null;
     return {
       ...finalize(lines),
-      tradeDiscountCents: offset,
-      tradeDiscountReferenceInvoiceId: input.midMonthReferenceInvoiceId ?? null,
+      ...(hasRealDiscount
+        ? {
+            tradeDiscountCents: offset,
+            tradeDiscountReferenceInvoiceId: input.midMonthReferenceInvoiceId ?? null,
+          }
+        : {}),
     };
   }
 

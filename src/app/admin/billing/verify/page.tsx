@@ -11,6 +11,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { HOME_ROUTE } from '@/lib/routes';
 import { checkBillingVerifyRead } from '@/lib/auth-helpers';
+import { KIND_LABEL } from '@/lib/invoices/types';
+import { formatUsdCents as usd } from '@/lib/invoices/format';
 import {
   buildBillingVerifyModel,
   type VerifyInvoiceEntry,
@@ -22,7 +24,7 @@ export const dynamic = 'force-dynamic';
 const M = {
   title: 'Billing verification',
   subtitle:
-    'Read-only pre-GP check: the latest invoice per kind for the current and previous billing months, with the three-way-audit posture of each window. Green — type it into GP. Yellow — read the findings first. Red — the trust gate blocks this window; loop back before entering anything.',
+    'Read-only pre-GP check: the latest invoice per kind for the current and previous Pacific billing months, with the three-way-audit posture of each window. Green — approved and clean: type it into GP. Yellow — findings to read first, or the invoice is still a draft (draft numbers regenerate and are never GP-safe). Red — the trust gate blocks this window; loop back before entering anything.',
   forbiddenHeading: '403 — billing verification access required',
   forbiddenBody:
     'This page is restricted to administrators and users granted billing-verify access.',
@@ -36,28 +38,11 @@ const M = {
   gateOverridden: 'gate overridden (super-admin)',
 } as const;
 
-const KIND_LABEL: Record<string, string> = {
-  ca_processing_mid_month: 'CA Processing — Mid-Month',
-  ca_processing_eom: 'CA Processing — End of Month',
-  ca_transportation_eom: 'CA Transportation — End of Month',
-  or_processing_eom: 'OR Processing — End of Month',
-  or_transportation_eom: 'OR Transportation — End of Month',
-  or_collection_site_count: 'OR Collection-Site Count',
-};
-
 const LIGHT_STYLE: Record<VerifyLight, { dot: string; label: string }> = {
-  green: { dot: 'bg-emerald-400', label: 'Clear to enter' },
-  yellow: { dot: 'bg-amber-400', label: 'Findings — review first' },
+  green: { dot: 'bg-emerald-400', label: 'Approved + clean — clear to enter' },
+  yellow: { dot: 'bg-amber-400', label: 'Review first (findings or still a draft)' },
   red: { dot: 'bg-red-500', label: 'Blocked — do not enter' },
 };
-
-function usd(cents: number): string {
-  const v = (Math.abs(cents) / 100).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return cents < 0 ? `($${v})` : `$${v}`;
-}
 
 function InvoiceCard({ inv }: { inv: VerifyInvoiceEntry }) {
   const light = LIGHT_STYLE[inv.light];
@@ -67,9 +52,7 @@ function InvoiceCard({ inv }: { inv: VerifyInvoiceEntry }) {
         <div>
           <div className="flex items-center gap-2">
             <span className={`inline-block h-2.5 w-2.5 rounded-full ${light.dot}`} aria-hidden />
-            <span className="text-sm font-semibold text-dr3-mist">
-              {KIND_LABEL[inv.kind] ?? inv.kind}
-            </span>
+            <span className="text-sm font-semibold text-dr3-mist">{KIND_LABEL[inv.kind]}</span>
             <span className="text-xs text-dr3-mist-dim">
               v{inv.version} · {inv.status}
             </span>
@@ -138,7 +121,14 @@ export default async function BillingVerifyPage() {
     return <ForbiddenPage />;
   }
 
-  const sites = await buildBillingVerifyModel();
+  // Hard rule #2 site reach: admins + all-sites managers see both sites; a
+  // single-site manager sees exactly their primary site. A flagged manager
+  // with no primary site has no reach — treat as forbidden.
+  const { ctx } = gate;
+  if (!ctx.allSites && !ctx.primarySiteId) return <ForbiddenPage />;
+  const sites = await buildBillingVerifyModel(
+    ctx.allSites ? { kind: 'all' } : { kind: 'site', siteId: ctx.primarySiteId! },
+  );
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-8">

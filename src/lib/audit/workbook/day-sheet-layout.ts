@@ -105,7 +105,10 @@ export function commodityBlocksForDaySheet(sheetName: string): CommodityBlock[] 
   if (sheetName.trim().toUpperCase() === COTTON_DAY_SHEET) {
     blocks.push({
       commodity: COTTON_COMMODITY,
-      startCol: COTTON_START_COL, // 4 + 8*8 = 68 (confirmed anchor)
+      // Derived from the SAME stride as blocks 1–8 so a §8.2 grid correction
+      // moves every block together; the CONFIRMED col-68 anchor is pinned as a
+      // test invariant against COTTON_START_COL (day-sheet-layout.test.ts).
+      startCol: startColForBlock(9),
       headerFields: BLOCK_HEADER_FIELDS,
     });
   }

@@ -76,7 +76,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           processor_role: showProcessorRole ? processorRole || null : null,
           all_sites: role === 'manager' ? allSites : false,
           can_manage_rates: role === 'manager' ? canManageRates : false,
-          can_view_billing_verify: role !== 'admin' ? canViewBillingVerify : false,
+          can_view_billing_verify: role === 'manager' ? canViewBillingVerify : false,
         }),
       });
       if (!res.ok) {
@@ -250,7 +250,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
             </span>
           </label>
         ) : null}
-        {role !== 'admin' ? (
+        {role === 'manager' ? (
           <label
             className="flex items-start gap-3"
             data-testid="admin-edit-can-view-billing-verify-field"

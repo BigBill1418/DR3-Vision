@@ -218,10 +218,14 @@ model User {
   can_manage_rates Boolean @default(false) // ADR-0040 — rate-table write access (D5)
   // 2026-07-09 rollup §1.2 (ADR-0041/0039 addendum) — READ-ONLY access to the
   // /admin/billing/verify page (invoices ready for GP entry + the ADR-0039
-  // findings touching their windows). Grants exactly that one read surface;
-  // never any write, never any other /admin page (hard rule #2 discipline,
-  // mirrors can_manage_rates). Intended grantee: Mary Scott (GP entry) once her
-  // account exists; admins see the page via role — the flag is for non-admin staff.
+  // findings touching their windows). MANAGER-ONLY, exactly like
+  // can_manage_rates (hard rule #2: never an operator grant; coerced false on
+  // any role change away from manager). Grants exactly that one read surface;
+  // never any write, never any other /admin page. Site reach on the page
+  // follows rule #2: all_sites managers (+ admins) see both sites; a
+  // single-site manager sees only their primary site. Intended grantee: Mary
+  // Scott (GP entry, bills both CA and OR) as manager + all_sites + this flag,
+  // once her account exists.
   can_view_billing_verify Boolean @default(false)
 
   // ADR-0030 — super-admin gate for the Bill-only daily-production-report

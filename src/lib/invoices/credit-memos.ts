@@ -18,6 +18,7 @@
 // `supersedeInvoice` and records its id on the memo — the draft then goes
 // through the normal ADR-0041 approval (gate included).
 
+import type { CreditMemo as PrismaCreditMemo } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
 import { supersedeInvoice } from './lifecycle';
@@ -62,7 +63,12 @@ export class CreditMemoTransitionError extends Error {
 export class CreditMemoValidationError extends Error {
   readonly status = 422 as const;
   constructor(
-    readonly reason: 'invoice_not_approved' | 'amount_not_positive' | 'reason_required',
+    readonly reason:
+      | 'invoice_not_approved'
+      | 'amount_not_positive'
+      | 'amount_exceeds_invoice'
+      | 'open_memo_exists'
+      | 'reason_required',
     message: string,
   ) {
     super(message);
@@ -94,23 +100,7 @@ export interface CreditMemoView {
   createdAt: Date;
 }
 
-interface MemoRow {
-  id: string;
-  invoice_id: string;
-  site_id: string;
-  amount_cents: number;
-  reason: string;
-  status: string;
-  superseding_invoice_id: string | null;
-  created_by: string | null;
-  sent_at: Date | null;
-  decided_at: Date | null;
-  decided_note: string | null;
-  applied_at: Date | null;
-  created_at: Date;
-}
-
-function toView(row: MemoRow): CreditMemoView {
+function toView(row: PrismaCreditMemo): CreditMemoView {
   return {
     id: row.id,
     invoiceId: row.invoice_id,
@@ -158,7 +148,7 @@ export async function createCreditMemo(args: CreateCreditMemoArgs): Promise<Cred
   }
   const invoice = await prisma.invoice.findFirst({
     where: { id: args.invoiceId, site_id: args.siteId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, total_cents: true },
   });
   if (!invoice) throw new InvoiceNotFoundError(args.invoiceId);
   if (invoice.status !== 'approved') {
@@ -166,6 +156,29 @@ export async function createCreditMemo(args: CreateCreditMemoArgs): Promise<Cred
       'invoice_not_approved',
       `invoice ${invoice.id} is ${invoice.status}; a credit memo corrects only an APPROVED invoice ` +
         `(a draft is simply regenerated)`,
+    );
+  }
+  // An over-credit leaves the building (the memo is what MRC receives) — bound
+  // it to the invoiced amount, and refuse a second concurrent correction: one
+  // open memo per invoice at a time (terminal memos don't block a new one).
+  if (args.amountCents > invoice.total_cents) {
+    throw new CreditMemoValidationError(
+      'amount_exceeds_invoice',
+      `credit memo amount (${args.amountCents}¢) exceeds the invoice total (${invoice.total_cents}¢)`,
+    );
+  }
+  const openMemo = await prisma.creditMemo.findFirst({
+    where: {
+      invoice_id: args.invoiceId,
+      status: { in: ['proposed', 'sent_to_mrc', 'accepted', 'rejected'] },
+    },
+    select: { id: true, status: true },
+  });
+  if (openMemo) {
+    throw new CreditMemoValidationError(
+      'open_memo_exists',
+      `invoice ${invoice.id} already has an open credit memo (${openMemo.id}, ${openMemo.status}) — ` +
+        `walk it to a terminal state first`,
     );
   }
 
@@ -214,12 +227,22 @@ export interface TransitionCreditMemoArgs {
 }
 
 /**
- * Walk a credit memo one legal step. Side effects by target state:
+ * Walk a credit memo one legal step. The transition is an atomic
+ * compare-and-swap — `updateMany({ where: { id, status: from } })` — so a
+ * concurrent/duplicate request loses the race and gets the typed 409 instead
+ * of silently double-transitioning (the earlier check-then-act shape let two
+ * callers both pass the guard). Side effects by target state:
  *   sent_to_mrc → stamps sent_at.
  *   accepted / rejected → stamps decided_at (+ optional note).
  *   applied → stamps applied_at (Mary confirms MRC applied the credit in GP).
- *   void_and_reissue_triggered → generates the superseding DRAFT via the
- *     ADR-0041 supersede chain and records its id on the memo.
+ *   void_and_reissue_triggered → CAS-claims the memo FIRST (so exactly one
+ *     caller generates the draft), then runs the ADR-0041 supersede chain and
+ *     records the draft id. If the supersede fails (e.g. the invoice was voided
+ *     out-of-band after rejection), the claim is compensated back to `rejected`
+ *     and the invoice-level error propagates — the memo is never left terminal
+ *     without its draft. (A crash between claim and compensation can strand the
+ *     memo in `void_and_reissue_triggered` with a null draft id; the audit rows
+ *     make that visible, and a memo-cancel state is an open §D review item.)
  */
 export async function transitionCreditMemo(
   args: TransitionCreditMemoArgs,
@@ -233,51 +256,85 @@ export async function transitionCreditMemo(
     throw new CreditMemoTransitionError(from, args.to);
   }
 
-  // The reissue path composes with the supersede chain OUTSIDE the memo update
-  // transaction: generateInvoiceDraft owns its own transaction + audit row, and
-  // a failed draft generation must abort the transition (memo stays `rejected`).
-  let supersedingInvoiceId: string | null = null;
-  if (args.to === 'void_and_reissue_triggered') {
-    const draft = await supersedeInvoice({
-      siteId: args.siteId,
-      invoiceId: row.invoice_id,
-      actorUserId: args.actorUserId,
-      notes: `credit memo ${row.id} rejected by MRC — void-and-reissue (rollup §1.4)`,
+  const now = new Date();
+
+  // Atomic claim: only the caller whose CAS matches `from` proceeds.
+  const claim = async (data: Record<string, unknown>): Promise<void> => {
+    const res = await prisma.$transaction(async (tx) => {
+      const updated = await tx.creditMemo.updateMany({
+        where: { id: row.id, site_id: args.siteId, status: from },
+        data: { status: args.to, ...data },
+      });
+      if (updated.count === 0) return false;
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: args.actorUserId,
+          action: 'update',
+          table_name: TABLE,
+          row_id: row.id,
+          before: { status: from },
+          after: { status: args.to, ...(args.note ? { note: args.note } : {}) },
+        },
+      });
+      return true;
     });
-    supersedingInvoiceId = draft.id;
+    if (!res) {
+      const current = await prisma.creditMemo.findUnique({
+        where: { id: row.id },
+        select: { status: true },
+      });
+      throw new CreditMemoTransitionError((current?.status ?? from) as CreditMemoStatus, args.to);
+    }
+  };
+
+  if (args.to !== 'void_and_reissue_triggered') {
+    await claim({
+      ...(args.to === 'sent_to_mrc' ? { sent_at: now } : {}),
+      ...(args.to === 'accepted' || args.to === 'rejected'
+        ? { decided_at: now, decided_note: args.note?.trim() || null }
+        : {}),
+      ...(args.to === 'applied' ? { applied_at: now } : {}),
+    });
+  } else {
+    // Claim first (exactly one caller wins), then the side effect.
+    await claim({});
+    let supersedingInvoiceId: string;
+    try {
+      const draft = await supersedeInvoice({
+        siteId: args.siteId,
+        invoiceId: row.invoice_id,
+        actorUserId: args.actorUserId,
+        notes: `credit memo ${row.id} rejected by MRC — void-and-reissue (rollup §1.4)`,
+      });
+      supersedingInvoiceId = draft.id;
+    } catch (e) {
+      // Compensate: give the memo its `rejected` state back so the operator can
+      // retry (or resolve the invoice problem — e.g. it was voided out-of-band).
+      await prisma.$transaction(async (tx) => {
+        await tx.creditMemo.updateMany({
+          where: { id: row.id, status: 'void_and_reissue_triggered' },
+          data: { status: 'rejected' },
+        });
+        await tx.auditLog.create({
+          data: {
+            actor_user_id: args.actorUserId,
+            action: 'update',
+            table_name: TABLE,
+            row_id: row.id,
+            before: { status: 'void_and_reissue_triggered' },
+            after: { status: 'rejected', note: 'reissue draft generation failed — compensated' },
+          },
+        });
+      });
+      throw e;
+    }
+    await prisma.creditMemo.update({
+      where: { id: row.id },
+      data: { superseding_invoice_id: supersedingInvoiceId },
+    });
   }
 
-  const now = new Date();
-  const updated = await prisma.$transaction(async (tx) => {
-    const u = await tx.creditMemo.update({
-      where: { id: row.id },
-      data: {
-        status: args.to,
-        ...(args.to === 'sent_to_mrc' ? { sent_at: now } : {}),
-        ...(args.to === 'accepted' || args.to === 'rejected'
-          ? { decided_at: now, decided_note: args.note?.trim() || null }
-          : {}),
-        ...(args.to === 'applied' ? { applied_at: now } : {}),
-        ...(supersedingInvoiceId ? { superseding_invoice_id: supersedingInvoiceId } : {}),
-      },
-    });
-    await tx.auditLog.create({
-      data: {
-        actor_user_id: args.actorUserId,
-        action: 'update',
-        table_name: TABLE,
-        row_id: row.id,
-        before: { status: from },
-        after: {
-          status: args.to,
-          ...(args.note ? { note: args.note } : {}),
-          ...(supersedingInvoiceId ? { superseding_invoice_id: supersedingInvoiceId } : {}),
-        },
-      },
-    });
-    return u;
-  });
-
+  const updated = await prisma.creditMemo.findUniqueOrThrow({ where: { id: row.id } });
   log.info(
     {
       op: 'credit_memo.transition',
@@ -285,7 +342,7 @@ export async function transitionCreditMemo(
       memo_id: row.id,
       from,
       to: args.to,
-      superseding_invoice_id: supersedingInvoiceId,
+      superseding_invoice_id: updated.superseding_invoice_id,
     },
     '[credit-memos] transitioned',
   );

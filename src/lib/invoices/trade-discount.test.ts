@@ -138,12 +138,18 @@ describe('buildInvoiceSummaryModel — GP framing on CA EOM (rollup §1.3)', () 
     expect(total?.amountCents).toBe(3208 * RATE_CA - 1614000);
   });
 
-  it('non-CA-EOM kinds keep the plain "Invoice total" label', () => {
+  it('an invoice WITHOUT a stored offset line keeps the plain "Invoice total" label', () => {
+    // The GP framing keys on the STORED B22.offset line (not the kind) so all
+    // surfaces derive it from one source of truth — an OR EOM (never has an
+    // offset) and a CA EOM with nothing pre-billed both read plainly.
+    const base = caEomView();
     const v = {
-      ...caEomView(),
+      ...base,
       kind: 'or_processing_eom' as const,
       tradeDiscountCents: null,
       tradeDiscountReferenceInvoiceId: null,
+      lines: base.lines.filter((l) => l.lineCode !== 'B22.offset'),
+      totalCents: 3208 * RATE_CA,
     };
     const m = buildInvoiceSummaryModel(v);
     expect(m.rows.find((r) => r.code === 'TOTAL')?.label).toBe('Invoice total');

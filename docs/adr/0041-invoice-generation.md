@@ -194,11 +194,32 @@ accepted → applied; rejected → void_and_reissue_triggered` (the reissue step
   the API + machine ship first so the correction ledger exists from day 1.
 - Migration `20260717_trade_discount_credit_memos_verify` (additive,
   clean-replays on empty PG16 per ADR-0035; also carries the ADR-0039 note's
-  `users.can_view_billing_verify`).
+  `users.can_view_billing_verify` and a BACKFILL copying each pre-existing
+  B22.offset line into the new columns so pre-migration invoices show the GP
+  three-line block too).
+- **Hardening from the same-day review pass:** the mid-month offset reference
+  now prefers an APPROVED mid-month invoice only (a draft's total was never
+  invoiced and voids on regenerate — persisting its id would freeze provenance
+  at a voided number; no approved invoice ⇒ the recompute fallback). A 0¢
+  offset with no reference stores NULL trade-discount fields (no phantom
+  "$0.00 Trade discount" for Mary to hunt in GP). `generateInvoiceDraft` gains
+  a write-time tripwire asserting `trade_discount_cents` mirrors the stored
+  offset line (ADR-0033 philosophy). Credit-memo transitions are an atomic
+  compare-and-swap (`updateMany` on `{id, status: from}`) so concurrent or
+  double-submitted requests get the typed 409 instead of double-running the
+  reissue; the reissue path claims first, then supersedes, and COMPENSATES the
+  claim back to `rejected` if draft generation fails (e.g. the invoice was
+  voided out-of-band). `createCreditMemo` bounds the amount to the invoice
+  total and refuses a second open memo per invoice.
 
-**§D review items (open, from the rollup):** (1) whether the GP adapter's
-export should carry the trade-discount fields as a v2 contract bump or a
-side-channel; (2) credit-memo admin UI shape (list + transition buttons on the
-invoice detail vs a standalone queue); (3) whether a credit memo should
-soft-link to the ADR-0039 finding that motivated it (provenance chain
-finding → memo → superseding invoice).
+**§D review items (open, from the rollup + review pass):** (1) whether the GP
+adapter's export should carry the trade-discount fields as a v2 contract bump
+or a side-channel (the frozen v1 was deliberately left untouched — the adapter
+is still blocked on Mary's packet); (2) credit-memo admin UI shape (list +
+transition buttons on the invoice detail vs a standalone queue); (3) whether a
+credit memo should soft-link to the ADR-0039 finding that motivated it
+(provenance chain finding → memo → superseding invoice); (4) a memo
+cancel/withdrawn state — today a memo whose invoice was voided out-of-band can
+only bounce between `rejected` and a failing reissue; (5) resolver provenance
+telemetry for §8.2 (flag category tabs that only resolve via the name-fallback
+tier, so unconfirmed row-2 label rules fail loudly when real files land).

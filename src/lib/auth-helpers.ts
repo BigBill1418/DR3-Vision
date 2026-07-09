@@ -240,31 +240,49 @@ export async function checkRateManager(): Promise<RateManagerResult> {
 //
 // One gate for the single read surface `/admin/billing/verify` (invoices ready
 // for GP entry + the ADR-0039 findings touching their windows). Grants iff
-// `role === 'admin'` OR the caller's fresh-from-DB `can_view_billing_verify`
-// flag is true (any role — the intended grantee, Mary in accounting, is not a
-// site manager). Mirrors the `can_manage_rates` discipline: the flag is read
-// fresh on every request, never carried in the session token, and consulted
-// NOWHERE ELSE — it unlocks exactly this one read-only page and never any
-// write or other /admin surface.
+// `role === 'admin'` OR a MANAGER whose fresh-from-DB `can_view_billing_verify`
+// flag is true — exactly the `can_manage_rates` shape (hard rule #2: admin
+// powers stay `role === 'admin'`; a scoped manager flag grants exactly one
+// surface and no admin power; operators never). The context carries the
+// caller's SITE REACH so the page scopes what it renders (rule #2's cross-site
+// clause): admin or manager+`all_sites` → both sites; a single-site manager
+// sees only their primary site. Mary's intended grant is therefore manager +
+// `all_sites` + this flag (she bills both CA and OR). The flag is read fresh
+// on every request, never carried in the session token, and consulted
+// NOWHERE ELSE.
 // ────────────────────────────────────────────────────────────────────────
 
 export interface BillingVerifyContext {
   userId: string;
   /** How access was granted — for the log line. */
   via: 'admin' | 'can_view_billing_verify';
+  /** Cross-site reach (admin, or manager with all_sites — ADR-0024). */
+  allSites: boolean;
+  /** The manager's primary site id when reach is single-site; null for admin. */
+  primarySiteId: string | null;
 }
 
 /** READ gate for /admin/billing/verify. no session → 401; ungranted → 403. */
 export async function requireBillingVerifyRead(): Promise<BillingVerifyContext> {
   const session = await auth();
   if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
-  if (session.user.role === 'admin') return { userId: session.user.id, via: 'admin' };
-  const u = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { can_view_billing_verify: true },
-  });
-  if (u?.can_view_billing_verify)
-    return { userId: session.user.id, via: 'can_view_billing_verify' };
+  if (session.user.role === 'admin') {
+    return { userId: session.user.id, via: 'admin', allSites: true, primarySiteId: null };
+  }
+  if (session.user.role === 'manager') {
+    const u = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { can_view_billing_verify: true, all_sites: true, primary_site_id: true },
+    });
+    if (u?.can_view_billing_verify) {
+      return {
+        userId: session.user.id,
+        via: 'can_view_billing_verify',
+        allSites: u.all_sites,
+        primarySiteId: u.primary_site_id,
+      };
+    }
+  }
   throw new Response('forbidden', { status: 403 });
 }
 

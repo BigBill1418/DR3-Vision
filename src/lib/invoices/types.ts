@@ -51,6 +51,25 @@ export function jurisdictionOfKind(kind: InvoiceKind): Jurisdiction {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Kind display labels (single source — render-xlsx + admin/manager surfaces)
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Human labels for the six kinds. Lives here (the home of `InvoiceKind`) so
+ * every surface Mary cross-checks — the xlsx render, the verify page, the
+ * manager list — says the same words. (An earlier per-file copy had already
+ * drifted: "EOM" vs "End of Month".)
+ */
+export const KIND_LABEL: Record<InvoiceKind, string> = {
+  ca_processing_mid_month: 'CA Processing — Mid-Month',
+  ca_processing_eom: 'CA Processing — End of Month',
+  ca_transportation_eom: 'CA Transportation — End of Month',
+  or_processing_eom: 'OR Processing — End of Month',
+  or_transportation_eom: 'OR Transportation — End of Month',
+  or_collection_site_count: 'OR Collection-Site Count',
+};
+
+// ────────────────────────────────────────────────────────────────────────
 // Line-code map (workbook §3.1)
 // ────────────────────────────────────────────────────────────────────────
 

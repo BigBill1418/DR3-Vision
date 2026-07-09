@@ -83,7 +83,7 @@ export function UserCreateForm({ sites }: Props) {
           processor_role: showProcessorRole ? processorRole || null : null,
           all_sites: role === 'manager' ? allSites : false,
           can_manage_rates: role === 'manager' ? canManageRates : false,
-          can_view_billing_verify: role !== 'admin' ? canViewBillingVerify : false,
+          can_view_billing_verify: role === 'manager' ? canViewBillingVerify : false,
           pin: role === 'operator' ? pin : null,
         }),
       });
@@ -223,7 +223,7 @@ export function UserCreateForm({ sites }: Props) {
         </label>
       ) : null}
 
-      {role !== 'admin' ? (
+      {role === 'manager' ? (
         <label
           className="flex items-start gap-3"
           data-testid="admin-create-can-view-billing-verify-field"

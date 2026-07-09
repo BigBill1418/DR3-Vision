@@ -45,10 +45,14 @@ export class InvoiceGateBlockedError extends Error {
   }
 }
 
-const OVERRIDE_LABEL = 'billing-gate-override';
+export const OVERRIDE_LABEL = 'billing-gate-override';
 
 /** Audit `row_id` shape `recordGateOverride` writes for a window override. */
-function overrideRowId(siteId: string, windowStartISO: string, windowEndISO: string): string {
+export function overrideRowId(
+  siteId: string,
+  windowStartISO: string,
+  windowEndISO: string,
+): string {
   return `gate:${siteId}:${windowStartISO}:${windowEndISO}`;
 }
 

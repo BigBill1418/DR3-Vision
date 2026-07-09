@@ -142,6 +142,20 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
   // by construction, but this is the write-time enforcement point).
   assertTotalMatchesLines('<new>', composition.totalCents, composition.lines);
 
+  // Same tripwire philosophy for the denormalized trade discount (rollup §1.3):
+  // when the composition carries it, it MUST mirror the stored offset line —
+  // Mary's verify page derives gross from this column, so a silent disagreement
+  // is wrong money on the surface built to be trusted.
+  if (composition.tradeDiscountCents != null) {
+    const offsetLine = composition.lines.find((l) => l.lineCode === 'B22.offset');
+    if (!offsetLine || offsetLine.amountCents !== -composition.tradeDiscountCents) {
+      throw new Error(
+        `trade_discount_cents (${composition.tradeDiscountCents}¢) does not mirror the ` +
+          `B22.offset line (${offsetLine?.amountCents ?? 'missing'}¢) — refusing to persist`,
+      );
+    }
+  }
+
   const billingMonth = dayKeyUTCFromISO(billingMonthISO);
   const windowStart = dayKeyUTCFromISO(window.startISO);
   const windowEnd = dayKeyUTCFromISO(window.endISO);

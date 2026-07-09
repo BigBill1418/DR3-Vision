@@ -40,11 +40,15 @@ rejected → applied | void_and_reissue_triggered` (MRC acceptance REQUIRED
   `src/lib/invoices/credit-memos.ts` + manager routes; admin UI is a follow-up.
 - **Billing verification view for Mary (rollup §1.2).** Read-only
   `/admin/billing/verify`: latest non-void invoice per (kind, month) for the
-  current + previous billing months, each with its ADR-0039 window posture
-  (green / yellow findings-review / red gate-blocked) and the GP three-line
-  structure on CA-EOM. New `users.can_view_billing_verify` flag (fresh-from-DB
-  gate mirroring `can_manage_rates`; grantable from the user admin forms —
-  grant to Mary once her account exists).
+  current + previous PACIFIC billing months, each with its ADR-0039 window
+  posture (green = approved + clean / yellow = findings or still-a-draft /
+  red = gate-blocked) and the GP three-line structure on CA-EOM. New
+  `users.can_view_billing_verify` flag — MANAGER-ONLY with the exact
+  `can_manage_rates` coercion (hard rule #2; operators never; cleared on role
+  change), site reach per rule #2 (all_sites managers + admins see both
+  sites). Grant Mary manager + all-sites + this flag once her account exists.
+  The page reads one findings fetch per site feeding both the gate and the
+  rendered list (light and list can never disagree; constant 4 queries/site).
 - **Seeds.** `sources.csv` +3 Eugene paper-form sites from the rollup §4.3
   sample (Thompsons Sanitary Service, Stayton Community Center, Deschutes —
   names/addresses to confirm with Rick); `Glenwood TC 143/144` documented as
@@ -55,6 +59,21 @@ rejected → applied | void_and_reissue_triggered` (MRC acceptance REQUIRED
   saved verbatim at `tests/fixtures/adr-0048/sample-rows.json`; 19 new vitest
   cases round-trip them through exceljs and pin the known-good rows (Bass Hill
   2026-06-19 · 52 units · $1,619.14 total; EIA fuel week 2026-03-02 @ 4.534).
+- **Review-pass hardening (same day, 8-angle review).** Credit-memo
+  transitions are atomic compare-and-swaps (typed 409 on a lost race; reissue
+  claims-then-supersedes with compensation on failure); memo amounts bounded
+  to the invoice total + one open memo per invoice; the mid-month offset
+  reference is APPROVED-invoices-only (a draft's total was never invoiced);
+  no phantom $0.00 Trade discount fields; a write-time tripwire asserts the
+  column mirrors the stored offset line; migration backfills the columns from
+  pre-existing B22.offset lines; the GP "Balance due" framing keys on the
+  STORED offset line (not the kind) across xlsx + manager detail + verify;
+  shared `KIND_LABEL` (types.ts) + `formatUsdCents` (format.ts) + workbook
+  `cells.ts` replace per-file copies; the section resolver runs
+  header-signatures before row-2 labels (a data row containing a label word
+  can't out-vote a sheet's own header fingerprint) and short-circuits DAY
+  sheets; historical B22.offset rows keep the old description — `line_code`
+  is the only stable join key.
 - **Docs.** Post-acceptance notes on ADR-0037 (cotton permanent), ADR-0039
   (read-only findings surface), ADR-0041 (addendum above + §D review items),
   ADR-0046 (outgoing stewardship AP stays out of scope — ADR-0051 candidate).

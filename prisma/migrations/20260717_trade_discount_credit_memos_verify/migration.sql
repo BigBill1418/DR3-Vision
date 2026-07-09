@@ -77,3 +77,22 @@ ALTER TABLE "credit_memos"
 
 -- AlterTable: the read-only billing-verify permission (rollup §1.2).
 ALTER TABLE "users" ADD COLUMN "can_view_billing_verify" BOOLEAN NOT NULL DEFAULT false;
+
+-- Backfill: pre-existing CA-EOM invoices carry the mid-month subtraction ONLY
+-- as their stored B22.offset line — copy it into the new explicit columns so
+-- the verify page shows the GP three-line block for invoices generated before
+-- this migration (the offset line's source JSON carries the referenced
+-- mid-month invoice id when the offset came from a real invoice). A 0-amount
+-- offset (nothing pre-billed) stays NULL by the amount_cents < 0 guard.
+-- Clean-replay safe: a no-op on an empty database.
+UPDATE "invoices" i
+SET
+  "trade_discount_cents" = -il."amount_cents",
+  "trade_discount_reference_invoice_id" = ref."id"
+FROM "invoice_lines" il
+LEFT JOIN "invoices" ref ON ref."id" = (il."source" ->> 'invoice_id')
+WHERE
+  il."invoice_id" = i."id"
+  AND il."line_code" = 'B22.offset'
+  AND il."amount_cents" < 0
+  AND i."trade_discount_cents" IS NULL;

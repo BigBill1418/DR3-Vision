@@ -355,7 +355,12 @@ I do not see") and she cannot audit them before typing an invoice. Findings are
 now additionally exposed READ-ONLY at `/admin/billing/verify`
 (`src/lib/invoices/verify-view.ts`): for each latest invoice, the active
 findings overlapping its window plus the D5 gate verdict, rendered
-green / yellow / red. Access is the new `users.can_view_billing_verify` flag
-(admin role included; the flag unlocks exactly that one page — mirrors the
-`can_manage_rates` discipline). No finding lifecycle action is reachable from
-that surface — resolve/classify stays on the existing audit surfaces.
+green (approved + clean) / yellow (findings, or still a draft) / red (gate
+blocked). Access is the new `users.can_view_billing_verify` flag —
+MANAGER-ONLY with the exact `can_manage_rates` coercion discipline (hard rule
+#2: operators never; cleared on any role change away from manager); site reach
+on the page follows rule #2 (all_sites managers + admins see both sites, a
+single-site manager only their primary). No finding lifecycle action is
+reachable from that surface — resolve/classify stays on the existing audit
+surfaces. The page reads the SAME finding rows it feeds the pure gate
+evaluation, so the light and the listed findings can never disagree.

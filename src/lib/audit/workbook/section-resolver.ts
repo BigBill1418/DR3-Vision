@@ -19,10 +19,15 @@
 // It NEVER throws on an unrecognized sheet — it returns 'unknown' (the workbook
 // is operator-authored and will contain shapes we have not catalogued yet).
 //
-// Cell coercion mirrors parser.ts / daily-adapter.ts verbatim so formula cells,
-// dates and shared-string cells read identically across the audit stack.
+// Cell coercion is the shared `cells.ts` implementation (one copy for the whole
+// audit workbook stack) so formula cells, dates and shared-string cells read
+// identically across parser + resolver.
 
-import ExcelJS from 'exceljs';
+import type ExcelJS from 'exceljs';
+import { cellText, cellNumber } from './cells';
+import { isDaySheet } from './day-sheet-layout';
+
+export { cellText, cellNumber };
 
 export type WorksheetSemanticType =
   | 'inb_trans_charges'
@@ -53,34 +58,8 @@ export interface ResolveInput {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Cell helpers (identical coercion to parser.ts — keep in lock-step)
+// Row projection helpers
 // ────────────────────────────────────────────────────────────────────────
-
-export function cellText(value: ExcelJS.CellValue): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value.trim() || null;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object' && 'result' in value && value.result !== undefined) {
-    return cellText(value.result as ExcelJS.CellValue);
-  }
-  if (typeof value === 'object' && 'text' in value && typeof value.text === 'string') {
-    return value.text.trim() || null;
-  }
-  return null;
-}
-
-export function cellNumber(value: ExcelJS.CellValue): number | null {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'object' && value !== null && 'result' in value) {
-    const r = (value as { result?: unknown }).result;
-    if (typeof r === 'number') return r;
-  }
-  const t = cellText(value);
-  if (t === null) return null;
-  const n = Number(t.replace(/[$,\s]/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
 
 /** Read a contiguous run of cells from `rowIndex` as coerced text (1-based, inclusive). */
 export function readSectionRow(
@@ -230,8 +209,6 @@ const BASE_NAME_TYPES: ReadonlyMap<string, WorksheetSemanticType> = new Map([
 // Resolution
 // ────────────────────────────────────────────────────────────────────────
 
-const DAY_SHEET_RE = /^DAY\d{1,2}$/i;
-
 function normalizeCell(text: string | null): string | null {
   if (text === null) return null;
   const n = text.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -269,26 +246,32 @@ function matchNameFallback(name: string): WorksheetSemanticType | null {
  * Resolve a worksheet's semantic type from its name + row projections.
  *
  * Resolution order (documented in the module header):
- *   1. DAY sheets by name (`^DAY\d{1,2}$` — stable across all months)
- *   2. row-2 section-label pattern match
- *   3. header-row column-signature match
+ *   1. DAY sheets by name (stable across all months — `isDaySheet`)
+ *   2. header-row column-signature match (a sheet's own fingerprint beats a
+ *      label word appearing in row-2 DATA on header-row-1 tabs)
+ *   3. row-2 section-label pattern match
  *   4. prefix-stripped name fallback against known base names
  *   5. 'unknown' (never throws)
  */
 export function resolveSectionType(input: ResolveInput): WorksheetSemanticType {
-  // (1) DAY sheets — names are stable June↔July (both DAY0..DAY31).
-  if (DAY_SHEET_RE.test(input.name.trim())) return 'day';
+  // (1) DAY sheets — names are stable June↔July (both DAY0..DAY31). Shared
+  // predicate with day-sheet-layout.ts so "what is a DAY sheet" has ONE owner.
+  if (isDaySheet(input.name)) return 'day';
 
-  // (2) row-2 section label (durable across month renames).
-  if (input.row2) {
-    const byLabel = matchRow2Label(input.row2);
-    if (byLabel) return byLabel;
-  }
-
-  // (3) header-row column signature (unambiguous shapes only).
+  // (2) header-row column signature (unambiguous shapes only). Signatures run
+  // BEFORE the row-2 label patterns: on header-row-1 tabs (variables, list)
+  // row 2 is a DATA row, and a data value containing a label word (e.g. a
+  // category cell reading "Renovation") must not out-vote the sheet's own
+  // header fingerprint.
   if (input.headerRows) {
     const bySignature = matchHeaderSignature(input.headerRows);
     if (bySignature) return bySignature;
+  }
+
+  // (3) row-2 section label (durable across month renames).
+  if (input.row2) {
+    const byLabel = matchRow2Label(input.row2);
+    if (byLabel) return byLabel;
   }
 
   // (4) normalized-name fallback (strip month/year prefix, exact base-name match).
@@ -316,9 +299,18 @@ function projectRow(ws: ExcelJS.Worksheet, rowIndex: number): (string | null)[] 
 export function classifyWorkbookSheets(wb: ExcelJS.Workbook): Map<string, WorksheetSemanticType> {
   const out = new Map<string, WorksheetSemanticType>();
   for (const ws of wb.worksheets) {
+    // DAY sheets resolve by name alone — skip projecting their 68–76-column
+    // rows (up to 32 DAY sheets per workbook; the projections would be
+    // discarded work).
+    if (isDaySheet(ws.name)) {
+      out.set(ws.name, 'day');
+      continue;
+    }
     const row2 = projectRow(ws, 2);
-    const headerRows: Record<number, (string | null)[]> = {};
-    for (const r of HEADER_ROW_CANDIDATES) headerRows[r] = projectRow(ws, r);
+    const headerRows: Record<number, (string | null)[]> = { 2: row2 };
+    for (const r of HEADER_ROW_CANDIDATES) {
+      if (r !== 2) headerRows[r] = projectRow(ws, r);
+    }
     out.set(ws.name, resolveSectionType({ name: ws.name, row2, headerRows }));
   }
   return out;

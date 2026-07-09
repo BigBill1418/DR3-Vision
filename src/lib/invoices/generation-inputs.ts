@@ -184,12 +184,16 @@ async function resolveMidMonthOffset(
   >
 > {
   const billingMonth = dayKeyUTCFromISO(billingMonthISO);
+  // APPROVED only: a draft's total was never actually invoiced, and drafts
+  // void on regenerate — persisting a draft's id/total into the new
+  // trade_discount_* columns would freeze provenance pointing at a voided
+  // number. No approved mid-month invoice ⇒ the recompute fallback below.
   const midInvoice = await prisma.invoice.findFirst({
     where: {
       site_id: siteId,
       kind: 'ca_processing_mid_month',
       billing_month: billingMonth,
-      status: { not: 'void' },
+      status: 'approved',
     },
     orderBy: [{ version: 'desc' }],
     include: { lines: true },
