@@ -64,6 +64,29 @@ export interface RunningBalance {
   program: Prisma.Decimal;
   nonProgram: Prisma.Decimal;
   total: Prisma.Decimal;
+  /**
+   * ADR-0037 §3 (pool split, handoff §1.4) — how the anchor's pools were derived:
+   * `measured` when the anchor snapshot carried an entered program/non-program
+   * split; `legacy` when the whole anchor was attributed to the program pool
+   * (pre-amendment rows, or a measured row missing either pool value). Additive —
+   * existing consumers may ignore it.
+   */
+  anchorPool?: 'measured' | 'legacy';
+}
+
+/**
+ * A `measured` physical count was submitted with a program/non-program split that
+ * does not sum to the physical total. Refused rather than persisted — a wrong split
+ * would silently mis-bill MRC (program-only). 422: the office fixes the pools and
+ * resubmits. Mirrors the typed-status-error shape of the loads/dropoffs services so
+ * `loadsErrorResponse` maps it uniformly.
+ */
+export class PoolSplitMismatchError extends Error {
+  readonly status = 422 as const;
+  constructor(readonly reason: string, message: string) {
+    super(message);
+    this.name = 'PoolSplitMismatchError';
+  }
 }
 
 /**
@@ -129,10 +152,26 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       units_outdoor: true,
       units_total: true,
       units_in_processing: true,
+      program_units: true,
+      non_program_units: true,
+      pool_attribution: true,
     },
   });
 
   const anchorUnits = anchor ? snapshotTotalUnits(anchor) : 0;
+  // ADR-0037 §3 pool split: a `measured` anchor carries an entered program/non-program
+  // split (which was validated to sum to the total at write time), so use it directly.
+  // Otherwise fall back to the LEGACY default — attribute the whole anchor to the
+  // program pool. Either way `program + nonProgram === total` holds for the anchor.
+  const measuredAnchor =
+    anchor != null &&
+    anchor.pool_attribution === 'measured' &&
+    anchor.program_units != null &&
+    anchor.non_program_units != null;
+  const anchorPair: PoolPair = measuredAnchor
+    ? { program: anchor.program_units as Prisma.Decimal, nonProgram: anchor.non_program_units as Prisma.Decimal }
+    : { program: anchorUnits, nonProgram: 0 };
+  const anchorPool: 'measured' | 'legacy' = measuredAnchor ? 'measured' : 'legacy';
   // No physical anchor yet → count everything from the epoch up to asOf.
   const since = anchor ? anchor.snapshot_at : new Date(0);
   const dateWindow = { gt: since, lte: asOf };
@@ -162,8 +201,8 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     }),
   ]);
 
-  return computeRunningBalance({
-    anchor: { program: anchorUnits, nonProgram: 0 },
+  const balance = computeRunningBalance({
+    anchor: anchorPair,
     verifiedInbound: {
       program: inbound._sum.program_unit_count ?? 0,
       nonProgram: inbound._sum.non_program_unit_count ?? 0,
@@ -182,6 +221,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       nonProgram: landfilled._sum.non_program_units ?? 0,
     },
   });
+  return { ...balance, anchorPool };
 }
 
 /** Result of a physical-count reconciliation. */
@@ -211,15 +251,37 @@ export async function reconcilePhysicalCount(args: {
   siteId: string;
   countedAt: Date;
   physical: PhysicalCountInput;
+  /** ADR-0037 §3 pool split — entered program pool for this count (whole units). */
+  programUnits?: number | null;
+  /** ADR-0037 §3 pool split — entered non-program pool for this count. */
+  nonProgramUnits?: number | null;
+  /** `measured` (default) validates the split; `legacy` records the count unsplit. */
+  poolAttribution?: 'measured' | 'legacy';
   actorUserId: string | null;
 }): Promise<ReconcileResult> {
-  const computed = await onHand(args.siteId, args.countedAt);
+  const poolAttribution = args.poolAttribution ?? 'measured';
   const physicalTotal = snapshotTotalUnits({
     units_indoor: args.physical.units_indoor ?? null,
     units_outdoor: args.physical.units_outdoor ?? null,
     units_total: args.physical.units_total ?? null,
     units_in_processing: args.physical.units_in_processing ?? 0,
   });
+
+  // ADR-0037 §3 — a `measured` count with BOTH pools entered must sum to the physical
+  // total (MRC is billed on program units only; a wrong split silently mis-bills).
+  // Validate pre-transaction so nothing is persisted on refusal.
+  const bothPools = args.programUnits != null && args.nonProgramUnits != null;
+  if (poolAttribution === 'measured' && bothPools) {
+    const sum = new D(args.programUnits as number).plus(args.nonProgramUnits as number);
+    if (!sum.equals(new D(physicalTotal))) {
+      throw new PoolSplitMismatchError(
+        'pool_mismatch',
+        `program (${args.programUnits}) + non-program (${args.nonProgramUnits}) = ${sum.toString()}, which does not equal the physical total ${physicalTotal}`,
+      );
+    }
+  }
+
+  const computed = await onHand(args.siteId, args.countedAt);
   const reconciledDelta = new D(physicalTotal).minus(computed.total).toNearest(1).toNumber();
 
   const snapshot = await prisma.$transaction(async (tx) => {
@@ -234,6 +296,9 @@ export async function reconcilePhysicalCount(args: {
         units_total: args.physical.units_total ?? null,
         units_in_processing: args.physical.units_in_processing ?? 0,
         reconciled_delta: reconciledDelta,
+        program_units: args.programUnits ?? null,
+        non_program_units: args.nonProgramUnits ?? null,
+        pool_attribution: poolAttribution,
       },
       select: { id: true },
     });
@@ -249,6 +314,9 @@ export async function reconcilePhysicalCount(args: {
           physical_total: physicalTotal,
           computed_total: computed.total.toString(),
           reconciled_delta: reconciledDelta,
+          program_units: args.programUnits ?? null,
+          non_program_units: args.nonProgramUnits ?? null,
+          pool_attribution: poolAttribution,
         },
       },
     });

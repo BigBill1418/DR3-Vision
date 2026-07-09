@@ -149,3 +149,35 @@ Deviations and decisions worth recording:
    no mail transport and calls no send helper; a companion test scans the source and
    fails on any such reference. The D3 intake notification is the only email Vision
    itself sends.
+
+## §3 addendum — board-pack digest becomes a sent notification surface (planning rollup 2026-07-08 §1.8)
+
+D2 built the board-pack as a DRAFT-only generator (human sends). Bethany's hard
+board cadence + the §1.8 disposition promote it to an **actual sent digest**, born
+pilot per ADR-0047. This addendum adds a send path **alongside** the existing draft
+generator (the draft in `update_digests` is untouched).
+
+- **New surface `board_pack_digest`** — org-wide, registered in
+  `src/lib/notify/rollout.ts` (`NOTIFY_SURFACE.BOARD_PACK_DIGEST`), seeded per site,
+  **born pilot** (resolves `pilot` unless BOTH sites are live — the org-wide
+  fail-safe). All sends go through `notifyStaff('board_pack_digest', site: null)`;
+  in pilot they reroute to admins for content+targeting validation.
+- **Recipients:** `board_pack_recipients` roster (mirrors `ap_decision_recipients`).
+  Bethany + Bill mandatory; seeded with Bill's login + a documented Bethany
+  PLACEHOLDER address (`docs/operator/board-pack-digest.md`) until her real address
+  lands.
+- **Schedule:** 2nd Wednesday of the month + the Monday preceding it (Pacific),
+  reusing `isBoardPackDay` from `src/lib/ops/digest-calendar.ts`. A thin daily
+  `board-pack-digest` cron fires 07:00 PT and POSTs `/api/internal/board-pack/send`;
+  the route decides whether today is a board-pack day. Idempotency: a
+  `board_pack_send_log` row keyed on `period_start` (first-of-previous-month) makes
+  the 2nd-Wed + preceding-Mon double-trigger — and any restart re-fire — a single
+  send per month (mirrors `alert_digest_log`).
+- **Payload** (`src/lib/board-pack/digest.ts`): prev-month processed units
+  (`processed_units_daily`), MTD current, YoY (same month prior year, via the
+  `time.ts` UTC-Y/M/D invariants), a P&L PLACEHOLDER line ("Financials: pending GP
+  integration"), and **no safety/injuries section** (dropped per §1.8). Rendered in
+  the SVdP-branded email shell (same masthead + self-hosted public logo as the daily
+  production report).
+- **First LIVE send target: 2026-08-10** — but it ships PILOT and is ramped only by
+  Bill from `/admin/rollout`.

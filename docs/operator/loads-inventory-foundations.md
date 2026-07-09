@@ -161,3 +161,20 @@ workbook-11 block mapping (trash → Landfill vs WTE is destination-driven; B10-
 the `saved` units semantics (B10-2) · DR3# / Material # sequence issuance (B10-6) ·
 CA fuel-surcharge computation (P2). These are captured as data / structure but no
 logic computes from them yet.
+
+## Physical inventory count — program / non-program pool split (ADR-0037 §3, rollup §1.4)
+
+When you record a physical inventory count, enter the **program** and
+**non-program** unit pools separately (MRC is billed on program units only). The
+entry surface shows a live running total: the two pools must add up to the physical
+count total, or the save is refused with a plain-language message. A count entered
+with the split is stored as `pool_attribution = 'measured'`.
+
+- Rows counted before this change are marked `'legacy'` (all units attributed to the
+  program pool). They still work — the running balance falls back to legacy
+  attribution for a legacy anchor — but clean, billed-accurate pool data starts once
+  counters enter both fields.
+- The running balance uses the measured split as its anchor whenever the latest
+  physical count is `'measured'`; otherwise it uses legacy attribution. Either way
+  `program + non-program = total`.
+

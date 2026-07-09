@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireOrgReach } from '@/lib/ops/viewer';
+import { requireApApprover } from '@/lib/ap/approvers';
 import { signApAttachmentDownload } from '@/lib/r2';
 
 export const runtime = 'nodejs';
@@ -17,7 +17,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string; attId: string }> },
 ): Promise<Response> {
   try {
-    await requireOrgReach();
+    await requireApApprover();
     const { id, attId } = await params;
     const att = await prisma.apAttachment.findFirst({
       where: { id: attId, request_id: id },

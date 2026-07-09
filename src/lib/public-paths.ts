@@ -61,6 +61,14 @@ export function isPublic(pathname: string): boolean {
   // ADR-0036 regression, made a mandatory day-one case per ADR-0046 D5). The
   // daemon uses `redirect:'manual'` as the second line of defence.
   if (pathname.startsWith('/api/internal/ap/')) return true;
+  // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — internal board-pack
+  // digest cron endpoint (`/api/internal/board-pack/send`). Same loopback-guarded
+  // internal-route pattern as the survey/bonus/audit/ap crons above: without this
+  // exemption the middleware 307s the session-less `board-pack-digest-cron.mjs` POST
+  // to /login, its fetch follows to a 200 HTML page, and the digest silently no-ops
+  // while logging success (the ADR-0036 regression, mandatory day-one). The daemon
+  // uses `redirect:'manual'` as the second line of defence.
+  if (pathname.startsWith('/api/internal/board-pack/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.

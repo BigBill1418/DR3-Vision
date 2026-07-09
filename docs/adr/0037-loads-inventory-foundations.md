@@ -354,3 +354,32 @@ loud ledger/detail failure logging, the D6 daily-close negative-balance warn-and
 confirm guard, the D1 ambiguous-effective-dated-rule guard, the D3 dropoff incentive
 typed failures, the `listProcessedUnits`/`upsertScrapedHauls` N+1 removals, and the
 manager-list pagination clamp) are additive hardening with no contract change.
+
+## §3 amendment — D6 physical-snapshot pool split (planning rollup 2026-07-08 §1.4)
+
+The D6 running balance already returns `{ program, nonProgram, total }`, but the
+**physical snapshots** that anchor it carried no pool split — the DB adapter
+attributed the whole anchor to the program pool (Q-3). This amendment records the
+split at the source. `site_inventory_snapshots` gains (migration
+`20260715_pool_split`):
+
+- `program_units Decimal(7,1)?`, `non_program_units Decimal(7,1)?`
+- `pool_attribution TEXT NOT NULL DEFAULT 'measured'` — `'measured'` (both pools
+  entered) or `'legacy'` (pre-amendment; all counts attributed to the program pool).
+
+**Validation** (service layer, typed `PoolSplitMismatchError`, HTTP 422): when
+`pool_attribution = 'measured'`, `program_units + non_program_units` MUST equal the
+physical count total, checked with `Prisma.Decimal`. The physical-count entry UI
+gains the two pool fields + a live running-total helper and a plain-language
+mismatch message.
+
+**Backfill:** existing rows migrated to `pool_attribution = 'legacy'`,
+`program_units = total`, `non_program_units = 0` (attributed-all-to-program per
+§1.4). Clean measured data starts once counters enter both fields.
+
+**Balance:** `onHand()` uses the measured split as the anchor pool pair when the
+anchor snapshot is `'measured'` with both pool fields present; otherwise it keeps
+the legacy attribution (anchor → program, non-program = 0). This resolves the Q-3
+"physical snapshots carry no pool split" note. `computeRunningBalance` and the
+`{ program, nonProgram, total }` return shape are unchanged (backward-compatible);
+`program + nonProgram === total` still holds.

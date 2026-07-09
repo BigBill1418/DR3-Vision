@@ -15,8 +15,15 @@ import { notifyStaff } from '@/lib/notify/notify-staff';
 import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { publishNtfy } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
+import { isInternal, internalDomain } from './senders';
+import { stampApproval, type PdfRenderer, type StampInput } from './stamp';
 
 const TABLE = 'ap_requests';
+
+// ADR-0046 §3 amendment — the approver set is now the expiry-aware ap_approvers
+// ROSTER (approvers.ts), NOT the old all_sites reach set. Re-exported here so
+// poll.ts keeps importing `apApproverEmails` from `./approvals` unchanged.
+export { apApproverEmails } from './approvers';
 
 export type ApDecision = 'approved' | 'rejected';
 
@@ -66,19 +73,38 @@ export interface DecideArgs {
   note?: string;
   vendor?: string; // optional, keyed at decision (C9-D5)
   amountCents?: number; // optional
+  /** ADR-0046 §3 amendment — optional site tag (RESOLVED site id) set at decision. */
+  siteId?: string;
+  /** Test seam — inject a deterministic PDF renderer so unit tests never launch Chromium. */
+  renderer?: PdfRenderer;
 }
 
-/** The approver set as data (C5): active users with org reach (admin OR all_sites) + an email. */
-export async function apApproverEmails(prisma: PrismaClient = defaultPrisma): Promise<string[]> {
-  const rows = await prisma.user.findMany({
-    where: {
-      is_active: true,
-      email: { not: null },
-      OR: [{ role: 'admin' }, { all_sites: true }],
-    },
-    select: { email: true },
+/** Thrown when a decide request carries a site id/code that does not exist. */
+export class ApInvalidSiteError extends Error {
+  readonly status = 400 as const;
+  constructor(readonly given: string) {
+    super(`unknown site '${given}'`);
+    this.name = 'ApInvalidSiteError';
+  }
+}
+
+/**
+ * Resolve an optional site input (a real site id OR an 'eugene'/'woodland' code)
+ * to a site id. Returns null for empty/absent input; throws ApInvalidSiteError
+ * when a non-empty input matches no site.
+ */
+export async function resolveDecisionSiteId(
+  prisma: PrismaClient,
+  input: string | undefined | null,
+): Promise<string | null> {
+  const trimmed = (input ?? '').trim();
+  if (!trimmed) return null;
+  const site = await prisma.site.findFirst({
+    where: { OR: [{ id: trimmed }, { code: trimmed.toLowerCase() }] },
+    select: { id: true },
   });
-  return rows.map((r) => r.email).filter((e): e is string => !!e);
+  if (!site) throw new ApInvalidSiteError(trimmed);
+  return site.id;
 }
 
 /** Count of pending AP requests — for the ADR-0043 digest line (D4). */
@@ -118,6 +144,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       ...(args.note ? { decision_note: args.note } : {}),
       ...(args.vendor ? { vendor: args.vendor } : {}),
       ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
+      ...(args.siteId ? { site_id: args.siteId } : {}),
     },
   });
 
@@ -153,10 +180,11 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       has_note: !!args.note,
       has_vendor: !!args.vendor,
       has_amount: typeof args.amountCents === 'number',
+      has_site: !!args.siteId,
     },
   });
 
-  const mail = await sendDecisionEmail(prisma, args.requestId);
+  const mail = await sendDecisionEmail(prisma, args.requestId, args.renderer);
   return { requestId: args.requestId, decision: args.decision, mail };
 }
 
@@ -169,13 +197,21 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * Mail the decision to the FIXED recipient list (Mary's GP filing). Carries request
- * id, original subject, decision, approver, timestamp, optional note — sufficient
- * for GP matching under any input shape (C10.5). With zero active recipients it
- * REFUSES and pages (the decision stands; the notification is the operator's to
- * fix by configuring recipients — documented action).
+ * Mail the decision back to the ORIGINAL internal forwarder (ADR-0046 §3
+ * amendment): the intake message's `sender_address` (already validated @svdp.us
+ * at intake per D2 — we do NOT relax that gate). The fixed ap_decision_recipients
+ * roster (Mary's GP filing) rides along as CC, and is the FALLBACK recipient when
+ * `sender_address` is somehow empty/non-internal. Carries request id, original
+ * subject, decision, approver, timestamp, optional note — sufficient for GP
+ * matching under any input shape (C10.5) — plus a visible-stamped decision PDF
+ * (§1.6e). With genuinely no valid recipient it REFUSES and pages (the decision
+ * stands; configuring recipients + re-send is the documented operator action).
  */
-export async function sendDecisionEmail(prisma: PrismaClient, requestId: string): Promise<ApMailOutcome> {
+export async function sendDecisionEmail(
+  prisma: PrismaClient,
+  requestId: string,
+  renderer?: PdfRenderer,
+): Promise<ApMailOutcome> {
   const req = await prisma.apRequest.findUnique({
     where: { id: requestId },
     select: {
@@ -187,20 +223,31 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
       vendor: true,
       amount_cents: true,
       decided_by: true,
+      sender_address: true,
+      body_html_sanitized: true,
+      body_text: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
 
-  const recipients = (
+  const roster = (
     await prisma.apDecisionRecipient.findMany({ where: { active: true }, select: { email: true } })
   ).map((r) => r.email);
 
+  // Primary recipient = the original internal forwarder (sender_address, @svdp.us).
+  // Roster = CC (additional) when the forwarder is valid; roster = fallback
+  // recipient when the forwarder is empty/non-internal.
+  const forwarder = (req.sender_address ?? '').trim();
+  const forwarderInternal = !!forwarder && isInternal(forwarder, internalDomain());
+  const recipients = forwarderInternal ? [forwarder] : roster;
+  const cc = forwarderInternal ? roster.filter((e) => e.toLowerCase() !== forwarder.toLowerCase()) : [];
+
   if (recipients.length === 0) {
-    log.error({ requestId }, '[ap-approvals] decision-recipient list is EMPTY — refusing to send, paging operator');
+    log.error({ requestId }, '[ap-approvals] no valid decision recipient (forwarder + roster empty) — refusing to send, paging operator');
     await publishNtfy({
       topic: 'dr3-vision-system',
       title: 'AP decision email NOT sent — no recipients configured',
-      body: `AP request ${requestId} was decided (${req.status}) but the decision-recipient list is empty, so no email was sent to accounting. Configure ap_decision_recipients (Mary's address) then re-send from the AP queue.`,
+      body: `AP request ${requestId} was decided (${req.status}) but there is no valid recipient (the original forwarder address is missing and the ap_decision_recipients roster is empty), so no email was sent to accounting. Configure ap_decision_recipients (Mary's address) then re-send from the AP queue.`,
       priority: 'high',
       tags: ['error', 'ap', 'config', 'dr3-vision'],
       clickUrl: `${baseUrl()}/dashboard/ops/ap`,
@@ -212,7 +259,8 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
 
   const approverName = await resolveName(prisma, req.decided_by);
   const subject = req.subject ?? '(no subject)';
-  const decidedISO = req.decided_at ? req.decided_at.toISOString() : new Date().toISOString();
+  const decidedAt = req.decided_at ?? new Date();
+  const decidedISO = decidedAt.toISOString();
   const amountLine =
     typeof req.amount_cents === 'number'
       ? `<li>Amount: $${(req.amount_cents / 100).toFixed(2)}</li>`
@@ -232,6 +280,25 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
     </ul>
     <p>Request id + original subject are the Great Plains matching keys.</p>`;
 
+  // §1.6e — visible-stamped decision PDF. BODY-only originals re-render the
+  // (re-)sanitized body; file/PDF attachments get a stamped COVER page (we can't
+  // overlay existing PDF vector bytes without a PDF lib — documented deviation).
+  // Fail-soft: a render failure must NOT block the decision mail to accounting.
+  const stamped = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch((e) => {
+    log.warn({ requestId, err: e instanceof Error ? e.message : String(e) }, '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)');
+    return null;
+  });
+  if (stamped) {
+    await prisma.apRequest.update({ where: { id: requestId }, data: { decision_pdf_sha256: stamped.sha256 } });
+    await writeAudit({
+      actor_user_id: req.decided_by,
+      action: 'update',
+      table_name: TABLE,
+      row_id: requestId,
+      after: { decision_pdf_sha256: stamped.sha256, stamped_kind: stamped.kind },
+    });
+  }
+
   // ADR-0047 — the AP module is org-wide + born pilot; the actual delivery
   // routes through the rollout gate (in pilot it reroutes to admins). The
   // empty-recipient REFUSE above still guards the LIVE roster (Mary's GP filing)
@@ -240,9 +307,11 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
     surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
     site: null,
     recipients,
+    ...(cc.length > 0 ? { cc } : {}),
     subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
+    ...(stamped ? { attachments: [{ filename: `ap-decision-${req.id}.pdf`, buffer: stamped.pdf, contentType: 'application/pdf' }] } : {}),
     db: prisma,
   });
 
@@ -253,4 +322,50 @@ export async function sendDecisionEmail(prisma: PrismaClient, requestId: string)
   }
   await prisma.apRequest.update({ where: { id: requestId }, data: { decision_mail_sent_at: new Date() } });
   return 'sent';
+}
+
+interface StampSourceRequest {
+  id: string;
+  subject: string | null;
+  status: string;
+  body_html_sanitized: string | null;
+  body_text: string | null;
+  decided_by: string | null;
+}
+
+/**
+ * Choose the stamp mode and render the decision PDF. Body present ⇒ 'body'
+ * (re-render the sanitized body). No body but a file attachment ⇒ 'attachment'
+ * (stamped cover page). No body and no file ⇒ 'body' with an empty original.
+ */
+async function buildDecisionStamp(
+  prisma: PrismaClient,
+  req: StampSourceRequest,
+  approverName: string,
+  decidedAt: Date,
+  renderer?: PdfRenderer,
+): Promise<{ pdf: Buffer; sha256: string; kind: StampInput['kind'] }> {
+  const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
+  const base = {
+    requestId: req.id,
+    subject: req.subject ?? '(no subject)',
+    approverName,
+    decision,
+    decidedAt,
+  };
+  let input: StampInput;
+  if (req.body_html_sanitized && req.body_html_sanitized.trim()) {
+    input = { ...base, kind: 'body', bodyHtmlSanitized: req.body_html_sanitized };
+  } else {
+    const files = await prisma.apAttachment.findMany({
+      where: { request_id: req.id },
+      select: { kind: true, filename: true },
+    });
+    const file = files.find((a: { kind: string }) => a.kind === 'file');
+    input = file
+      ? { ...base, kind: 'attachment', originalFilename: (file as { filename: string | null }).filename }
+      : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
+  }
+  const { pdf, sha256 } = await stampApproval(input, renderer);
+  return { pdf, sha256, kind: input.kind };
 }

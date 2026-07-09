@@ -711,6 +711,89 @@ services:
       com.barnardhq.service: 'ap-poll'
     logging: *logging
 
+  ap-approver-expiry:
+    # AP approver-expiry cron host (ADR-0046 §3, planning rollup 2026-07-08 §1.6a).
+    #
+    # Same shape as survey-reminder: a single long-running Node process under
+    # `unless-stopped` that is a THIN Pacific scheduler. It sleeps until the next
+    # 00:05 America/Los_Angeles instant (recomputed each cycle off the Pacific wall
+    # clock so it survives the Mar/Nov DST shifts) and on each fire POSTs the app's
+    # internal, loopback-guarded route (`/api/internal/ap/expiry`). That route does
+    # the real work compiled inside the Next app via `runApApproverExpiry`: it
+    # removes ap_approvers whose active_until has passed (Kelsey auto-removes 8/1),
+    # each with an append-only audit row + a dr3-vision-system ntfy to Bill. The
+    # daemon imports NO TS and no @prisma/client — the fire time is fixed.
+    #
+    # Idempotent: a re-fire finds no still-expired rows and is a clean no-op.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-ap-approver-expiry
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/ap-approver-expiry-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
+      # internal route). Optional: when absent both sides skip the bearer check.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'ap-approver-expiry'
+    logging: *logging
+
+  board-pack-digest:
+    # Board-pack digest cron host (ADR-0045 §3 addendum, planning rollup §1.8).
+    #
+    # Same shape as survey-reminder: a single long-running Node process under
+    # `unless-stopped`, a THIN Pacific scheduler. It sleeps until the next 07:00
+    # America/Los_Angeles instant and on each fire POSTs the app's internal,
+    # loopback-guarded route (`/api/internal/board-pack/send`). The ROUTE decides
+    # whether today is a board-pack day (2nd Wednesday OR the preceding Monday, via
+    # the ADR-0045 digest-calendar) — on any other day the fire is a clean no-op.
+    # On a board-pack day it builds the payload (prev-month processed units, MTD,
+    # YoY, P&L placeholder) and sends via notifyStaff('board_pack_digest') (org-wide,
+    # born pilot ⇒ reroutes to admins). The daemon imports NO TS and no
+    # @prisma/client — the fire time is fixed.
+    #
+    # Idempotent: the send records a per-period ledger so a same-day re-fire or a
+    # container restart never double-sends. First LIVE send targets 2026-08-10, but
+    # the surface ships PILOT (admin-validation only) until Bill ramps it.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-board-pack-digest
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/board-pack-digest-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
+      # internal route). Optional: when absent both sides skip the bearer check.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'board-pack-digest'
+    logging: *logging
+
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     container_name: dr3-vision-cloudflared

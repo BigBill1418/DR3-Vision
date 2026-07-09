@@ -196,3 +196,49 @@ during implementation, and where they refine the ADR:
   `deltaToken` parameter to `listDelta` (returns the new token) so the DB-backed
   `ap_delta_tokens` store loads/saves it — the functional shape of "delta-token
   persistence per mailbox+folder" from D1.
+
+## §3 amendment — AP mailbox expansion (planning rollup 2026-07-08 §1.6)
+
+Significant scope expansion. The mock-first architecture (C1–C10) is unchanged;
+these amend §C1/§C5/§C10.
+
+- **§C1 scope:** from "DR3 vendor invoices" to **ALL Woodland + Eugene invoices**
+  (one mailbox, both sites).
+- **§C5 approver roster — 2 → 5, now EXPLICIT.** The original build resolved
+  approvers implicitly as "active users with org reach (admin OR all_sites)". This
+  amendment introduces an explicit `ap_approvers` roster (bare `user_id` FK,
+  `active_until TIMESTAMPTZ?`) so single-site managers (Rick = Eugene, Janette =
+  Woodland) are approvers who see **all** invoices without granting them
+  `all_sites`. Roster: Morena, Rick, Janette, Bill, Kelsey. **Admins can always
+  act** (checked separately), so Bill needs no row. Approver resolution excludes
+  rows whose `active_until <= now()`. The AP queue/decide/attachment/resend routes
+  move from `requireOrgReach` to `requireApApprover` (admin OR active approver).
+- **§C5 Kelsey auto-removal 8/1.** Kelsey's `ap_approvers` row carries
+  `active_until = 2026-08-01 00:00 PT`. A daily `ap-approver-expiry` cron
+  (00:05 PT → `/api/internal/ap/expiry` → `runApApproverExpiry`) removes expired
+  approvers with an append-only audit row + a `dr3-vision-system` ntfy to Bill (a
+  system event, Bill-only, allowed).
+- **§C5 all-approvers-see-all + first-action-wins.** AP requests stay org-level (no
+  per-request site filter); all approvers see all pending. First-action-wins (the
+  conditional `updateMany` from D4) is unchanged — verified + locked in with a test.
+- **§C5 OPTIONAL site tag at decision.** `ap_requests` gains nullable `site_id`, set
+  via a dropdown (Eugene/Woodland/blank) at approve/reject time. Intake stays
+  untagged (incoming email doesn't know the site).
+- **§C5 decision routing → original forwarder.** The decision email now routes to
+  the **original internal SVdP forwarder** (the intake message's `sender_address`,
+  already validated `@svdp.us` at intake per D2) instead of only the fixed
+  `ap_decision_recipients` list. **D2 intake sender validation is unchanged.** The
+  send still passes through `notifyStaff('ap_notify')` (born pilot ⇒ reroutes to
+  admins in pilot — correct).
+- **§C10 signed PDF of the approved item on the decision email.** Visible stamp
+  only, NO cryptography ("Approved by [Name] on [Timestamp PT] via DR3-Vision").
+  The stamped PDF's sha256 is stored on `ap_requests.decision_pdf_sha256` + in the
+  audit row (tamper record) and attached to the decision mail. **Implementation
+  constraint / deviation:** the repo has no PDF-manipulation library (no pdf-lib)
+  and none may be added, so stamping reuses the repo's only PDF mechanism —
+  Playwright HTML→PDF (as the bonus PDFs do). Body-only originals render body +
+  stamp overlay → PDF; existing PDF attachments get a Playwright-rendered approval
+  stamp PAGE (carrying the stamp text + the original's filename and sha256) sent
+  alongside the original, rather than an in-place vector overlay. See the build
+  report / code comments in `src/lib/ap/stamp.ts` for the exact behavior. §C10
+  sanitization rules still apply to any rendered HTML.

@@ -4,7 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireOrgReach } from '@/lib/ops/viewer';
+import { requireApApprover } from '@/lib/ap/approvers';
 import { ApRequestNotFoundError, sendDecisionEmail } from '@/lib/ap/approvals';
 
 export const runtime = 'nodejs';
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
-    await requireOrgReach();
+    await requireApApprover();
     const { id } = await params;
     const row = await prisma.apRequest.findUnique({ where: { id }, select: { status: true } });
     if (!row) return NextResponse.json({ error: 'not found' }, { status: 404 });

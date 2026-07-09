@@ -76,6 +76,12 @@ export interface SystemEmailArgs {
   htmlBody: string;
   /** Optional single PDF attachment. */
   attachment?: { filename: string; buffer: Buffer; contentType?: string };
+  /**
+   * Optional additional attachments (ADR-0046 §3 amendment — the AP decision
+   * mail carries a stamped PDF, potentially alongside `attachment`). Appended
+   * after `attachment` if both are present.
+   */
+  attachments?: Array<{ filename: string; buffer: Buffer; contentType?: string }>;
   /** Graph `importance`. */
   importance?: 'low' | 'normal' | 'high';
   // ADR-0034 additions — all optional; existing callers are unaffected.
@@ -214,15 +220,17 @@ function buildMessage(args: SystemEmailArgs, requestId: string, senderMailbox: s
     message['ccRecipients'] = args.cc.map((addr) => ({ emailAddress: { address: addr } }));
   }
 
-  if (args.attachment) {
-    message['attachments'] = [
-      {
-        '@odata.type': '#microsoft.graph.fileAttachment',
-        name: args.attachment.filename,
-        contentType: args.attachment.contentType ?? 'application/pdf',
-        contentBytes: args.attachment.buffer.toString('base64'),
-      },
-    ];
+  const allAttachments = [
+    ...(args.attachment ? [args.attachment] : []),
+    ...(args.attachments ?? []),
+  ];
+  if (allAttachments.length > 0) {
+    message['attachments'] = allAttachments.map((a) => ({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: a.filename,
+      contentType: a.contentType ?? 'application/pdf',
+      contentBytes: a.buffer.toString('base64'),
+    }));
   }
   return {
     requestPayload: { message, saveToSentItems: true },

@@ -2,7 +2,7 @@
 // the sandboxed-iframe render), attachments, and follow-ups.
 
 import { NextResponse } from 'next/server';
-import { requireOrgReach } from '@/lib/ops/viewer';
+import { requireApApprover } from '@/lib/ap/approvers';
 import { getApRequestDetail } from '@/lib/ap/queue';
 
 export const runtime = 'nodejs';
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
-    await requireOrgReach();
+    await requireApApprover();
     const { id } = await params;
     const detail = await getApRequestDetail(id);
     if (!detail) return NextResponse.json({ error: 'not found' }, { status: 404 });

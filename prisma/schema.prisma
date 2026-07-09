@@ -155,6 +155,19 @@ model SiteInventorySnapshot {
   // ADR-0048 — workbook_promotions.id when this row was promoted from staging.
   import_id        String?
 
+  // ADR-0037 §3 amendment (D6 pool split, handoff §1.4) — a physical count records
+  // the program and non-program pools SEPARATELY (MRC is billed on program units
+  // only). `pool_attribution`:
+  //   'measured' → both `program_units` + `non_program_units` were entered and MUST
+  //                 sum to the snapshot total (validated at the service layer);
+  //   'legacy'   → a pre-amendment row: all counts attributed to the program pool
+  //                 (backfilled in migration 20260715_pool_split). The running
+  //                 balance uses the measured split when present, else legacy.
+  // TEXT (not an enum) per the §3 amendment spec.
+  program_units     Decimal? @db.Decimal(7, 1)
+  non_program_units Decimal? @db.Decimal(7, 1)
+  pool_attribution  String   @default("measured")
+
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
   @@map("site_inventory_snapshots")
@@ -2726,6 +2739,13 @@ model ApRequest {
   decision_note         String?
   decision_mail_sent_at DateTime?
   quarantine_reason     String? // set iff status=quarantined (external sender / parse failure)
+  // ADR-0046 §3 amendment (handoff §1.6c) — OPTIONAL site tag set at approve/reject
+  // time via a dropdown (Eugene/Woodland/blank). Intake stays untagged (incoming
+  // email doesn't inherently know the site). Bare FK column; constraint in migration.
+  site_id               String?
+  // ADR-0046 §3 amendment (handoff §1.6e) — sha256 of the stamped decision PDF
+  // attached to the decision mail (tamper record; visible-stamp only, no crypto).
+  decision_pdf_sha256   String?
   created_at            DateTime        @default(now())
   updated_at            DateTime        @updatedAt
 
@@ -2852,6 +2872,27 @@ model ApPollRun {
   @@map("ap_poll_runs")
 }
 
+/// ADR-0046 §3 amendment (handoff §1.6a/b) — the EXPLICIT AP-approver roster.
+/// The original ADR-0046 build resolved approvers implicitly as "active users with
+/// org reach (admin OR all_sites)". The amendment makes the roster explicit so
+/// single-site managers (Rick=Eugene, Janette=Woodland) can be approvers who see
+/// ALL invoices without granting them all_sites. Approver resolution = active users
+/// with a row whose `active_until` is null OR in the future. Admins can ALWAYS act
+/// (checked separately), so Bill needs no row. Kelsey's row carries
+/// active_until = 2026-08-01 00:00 PT and is auto-removed by the daily expiry job
+/// (audit + ntfy). `user_id` UNIQUE (one row per user). Bare FK column; constraint
+/// in migration 20260715b_rollup_ap_boardpack_yard.
+model ApApprover {
+  id           String    @id @default(uuid())
+  user_id      String    @unique // FK → users.id (constraint in migration)
+  active_until DateTime? // null = no expiry; excluded from resolution once <= now()
+  created_by   String? // bare audit-actor column
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  @@map("ap_approvers")
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // ADR-0048 — backfill promotion
 //
@@ -2921,4 +2962,71 @@ model EquipmentHistoryImport {
 
   @@index([site_id, imported_at])
   @@map("equipment_history_imports")
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 2026-07-08 planning rollup — build-now subset (self-contained tail blocks;
+// bare FK columns with DB-level constraints created in migration
+// 20260715b_rollup_ap_boardpack_yard, so the shared Site/User relation lists
+// stay untouched — repo convention, mirrors ADR-0040/0041/0045).
+// ════════════════════════════════════════════════════════════════════════
+
+/// ADR-0045 §3 addendum (handoff §1.8) — the board-pack digest recipient roster.
+/// Bethany + Bill are mandatory; seeded with Bill's login + a documented Bethany
+/// placeholder (docs/operator/board-pack-digest.md) until her real address lands.
+/// Mirrors `ap_decision_recipients`. The digest send routes through
+/// notifyStaff('board_pack_digest') (org-wide surface, born pilot) — in pilot it
+/// reroutes to admins; this roster is the LIVE audience.
+model BoardPackRecipient {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  active     Boolean  @default(true)
+  created_by String? // bare audit-actor column
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([active])
+  @@map("board_pack_recipients")
+}
+
+/// ADR-0045 §3 addendum (handoff §1.8) — board-pack digest send idempotency ledger.
+/// `period_start` (first-of-previous-month @db.Date) is UNIQUE, so a same-day
+/// re-fire OR the 2nd-Wednesday + preceding-Monday double-trigger both map to ONE
+/// send per month (mirrors `alert_digest_log` / `bonus_daily_report_log`).
+model BoardPackSendLog {
+  id               String   @id @default(uuid())
+  period_start     DateTime @unique @db.Date // first-of-previous-month anchor
+  sent_at          DateTime @default(now())
+  recipients_count Int      @default(0)
+  mode             String // 'live' | 'pilot' — how notifyStaff resolved the surface
+  created_at       DateTime @default(now())
+
+  @@map("board_pack_send_log")
+}
+
+/// handoff §1.8 — where a yard trailer/container currently is (Yard view scaffold).
+enum YardTrailerStatus {
+  on_yard
+  at_account
+  in_service
+}
+
+/// handoff §1.8 — a minimal trailer/yard position for the manager Yard view. A
+/// SCAFFOLD: list + add/edit, no workflow. Site-scoped (bare FK column; constraint
+/// in migration). Complements `container_rental_sites` (rental containers) — this
+/// tracks the physical whereabouts of individual trailers container_rental_sites
+/// does not model.
+model YardTrailer {
+  id            String            @id @default(uuid())
+  site_id       String // FK → sites.id (constraint in migration)
+  label         String
+  location_note String?
+  status        YardTrailerStatus @default(on_yard)
+  created_by    String? // bare audit-actor column
+  updated_by    String? // bare audit-actor column
+  created_at    DateTime          @default(now())
+  updated_at    DateTime          @updatedAt
+
+  @@index([site_id])
+  @@map("yard_trailers")
 }

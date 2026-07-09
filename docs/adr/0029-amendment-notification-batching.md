@@ -155,3 +155,10 @@ transaction; the route would therefore fire exactly one decided notification for
 the batch. The test then deleted every row it created (requests, applied daily
 entries, audit rows) and asserted before==after counts across all three tables —
 zero residue.
+
+## Post-acceptance note — permanent rollout-gate grandfather (planning rollup 2026-07-08, Q-0047-2)
+
+Per Bill's Q-0047-2 disposition, the amendment lifecycle mail (shared with
+ADR-0028; `src/lib/bonus/amendment-notifications.ts`) is a **permanent
+grandfather** — it stays on the ADR-0047 `no-direct-mail` allowlist and is not
+rerouted through `notifyStaff()`.
