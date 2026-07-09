@@ -8,9 +8,11 @@
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 
+export type ApStatus = 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+
 export interface ApListRow {
   id: string;
-  status: 'pending' | 'approved' | 'rejected' | 'quarantined';
+  status: ApStatus;
   subject: string | null;
   senderAddress: string;
   senderValidated: boolean;
@@ -19,6 +21,9 @@ export interface ApListRow {
   amountCents: number | null;
   attachmentCount: number;
   followupCount: number;
+  /** Amendment 3 — hold record (present iff status=pending_review). */
+  heldByName: string | null;
+  holdNote: string | null;
 }
 
 export interface ApAttachmentView {
@@ -42,11 +47,14 @@ export interface ApDetailView extends ApListRow {
   decidedAt: string | null;
   decisionNote: string | null;
   decisionMailSentAt: string | null;
+  /** Amendment 3 — hold record. */
+  heldAt: string | null;
+  holdNote: string | null;
   attachments: ApAttachmentView[];
   followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
 }
 
-const LIST_STATUSES = ['pending', 'approved', 'rejected', 'quarantined'] as const;
+const LIST_STATUSES = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined'] as const;
 export type ApListFilter = (typeof LIST_STATUSES)[number] | 'all';
 
 export function isApListFilter(v: string | null): v is ApListFilter {
@@ -71,12 +79,29 @@ export async function listApRequests(
         received_at: true,
         vendor: true,
         amount_cents: true,
+        held_by: true,
+        hold_note: true,
         _count: { select: { attachments: true, followups: true } },
       },
     }),
     prisma.apRequest.groupBy({ by: ['status'], _count: { _all: true } }),
   ]);
-  const counts: Record<string, number> = { pending: 0, approved: 0, rejected: 0, quarantined: 0 };
+  // Batch-resolve holder names for on-hold rows (avoids N+1).
+  const holderIds = Array.from(
+    new Set(rows.filter((r) => r.status === 'pending_review' && r.held_by).map((r) => r.held_by as string)),
+  );
+  const holderNames = new Map<string, string>();
+  if (holderIds.length > 0) {
+    const users = await prisma.user.findMany({ where: { id: { in: holderIds } }, select: { id: true, name: true } });
+    for (const u of users) holderNames.set(u.id, u.name);
+  }
+  const counts: Record<string, number> = {
+    pending: 0,
+    pending_review: 0,
+    approved: 0,
+    rejected: 0,
+    quarantined: 0,
+  };
   for (const g of grouped) counts[g.status] = g._count._all;
   return {
     rows: rows.map((r) => ({
@@ -90,6 +115,8 @@ export async function listApRequests(
       amountCents: r.amount_cents,
       attachmentCount: r._count.attachments,
       followupCount: r._count.followups,
+      heldByName: r.status === 'pending_review' && r.held_by ? holderNames.get(r.held_by) ?? null : null,
+      holdNote: r.status === 'pending_review' ? r.hold_note : null,
     })),
     counts,
   };
@@ -110,6 +137,9 @@ export async function getApRequestDetail(
   const decidedByName = r.decided_by
     ? (await prisma.user.findUnique({ where: { id: r.decided_by }, select: { name: true } }))?.name ?? null
     : null;
+  const heldByName = r.held_by
+    ? (await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ?? null
+    : null;
   return {
     id: r.id,
     status: r.status,
@@ -121,6 +151,7 @@ export async function getApRequestDetail(
     amountCents: r.amount_cents,
     attachmentCount: r.attachments.length,
     followupCount: r.followups.length,
+    heldByName,
     conversationId: r.conversation_id,
     bodyHtmlSanitized: r.body_html_sanitized,
     bodyText: r.body_text,
@@ -130,6 +161,8 @@ export async function getApRequestDetail(
     decidedAt: r.decided_at ? r.decided_at.toISOString() : null,
     decisionNote: r.decision_note,
     decisionMailSentAt: r.decision_mail_sent_at ? r.decision_mail_sent_at.toISOString() : null,
+    heldAt: r.held_at ? r.held_at.toISOString() : null,
+    holdNote: r.hold_note,
     attachments: r.attachments.map((a) => ({
       id: a.id,
       kind: a.kind,

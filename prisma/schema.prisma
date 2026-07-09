@@ -2675,6 +2675,11 @@ model ContactRoute {
 
 enum ApRequestStatus {
   pending
+  // AP go-live features — 2026-07-09 (ADR-0046 Amendment 3): an approver may place
+  // a pending request on HOLD ("pending review") with a required hold note, so
+  // accounting can see it is actively being held before a final decision. From
+  // pending_review any approver may still approve/reject (first-action-wins).
+  pending_review
   approved
   rejected
   quarantined
@@ -2739,6 +2744,14 @@ model ApRequest {
   decision_note         String?
   decision_mail_sent_at DateTime?
   quarantine_reason     String? // set iff status=quarantined (external sender / parse failure)
+  // AP go-live features — 2026-07-09 (ADR-0046 Amendment 3) — hold / "pending review".
+  // Set when an approver places the request on hold (status=pending_review). held_by
+  // is a bare audit-actor column (user id), matching decided_by. hold_note is REQUIRED
+  // at hold time (a hold must say why it is being held). Cleared conceptually once a
+  // terminal decision is made (they remain as the historical hold record).
+  held_by               String?
+  held_at               DateTime?
+  hold_note             String?
   // ADR-0046 §3 amendment (handoff §1.6c) — OPTIONAL site tag set at approve/reject
   // time via a dropdown (Eugene/Woodland/blank). Intake stays untagged (incoming
   // email doesn't inherently know the site). Bare FK column; constraint in migration.

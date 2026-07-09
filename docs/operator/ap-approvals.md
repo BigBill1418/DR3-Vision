@@ -193,3 +193,59 @@ PDFs. A body-only invoice is rendered to a stamped PDF; a PDF attachment gets a
 stamped approval page carrying the original's filename + hash, sent alongside the
 original.
 
+## 2026-07-09 go-live features (ADR-0046 Amendment 3)
+
+Operator-directed, ahead of AP going LIVE ~2026-07-11.
+
+### New-invoice notification to all approvers
+
+Every new invoice fires ONE email (per request, not per poll) to **all active
+approvers** (the `ap_approvers` roster, excluding anyone past `active_until`). The
+email carries the requester, subject, received-at (Pacific), attachment count, and a
+**direct link to that specific request** in the queue. It routes through the
+`ap_notify` rollout surface — in **pilot** it reroutes to admins with a
+"would-have-sent" header; it reaches the real approvers only once you flip
+`ap_notify` **live** (see the go-live runbook below).
+
+### Approval / rejection notes
+
+The decision panel has a **Note** field. A note is **optional to approve** but
+**required to reject** (a rejection must say why — the Reject button is disabled
+until a note is entered, and the server rejects a note-less rejection). The note
+appears in the decision email to accounting, on the **stamped decision PDF**, and in
+the audit trail.
+
+### Hold — "pending review"
+
+An approver who is not ready to decide can place a pending invoice **on hold** with a
+**required hold note**. Effects:
+
+- Accounting (the original forwarder) is **emailed that it is being held** — who
+  holds it, the note, and that a final decision will follow.
+- The queue shows a distinct **amber "ON HOLD" chip**; the holder and hold note are
+  visible to all approvers on the request.
+- From hold, **any approver** can still Approve or Reject (first action wins), or
+  **Update hold note**.
+- Every transition (place hold, update note, final decision) is audited.
+
+There is no per-invoice "stale/aging" alert today; if one is added later it must
+exclude on-hold (`pending_review`) items, which are being actively worked.
+
+### Go-live flip runbook (~2026-07-11)
+
+1. **Secrets** — provision `~/.dr3-vision-secrets/msgraph-mail.env` on CHAD-HQ (§2)
+   once SVdP IT delivers the mailbox + Graph app + consent + ApplicationAccessPolicy.
+2. **Decision recipients** — insert Mary's GP filing address into
+   `ap_decision_recipients` (§3). Without it, decisions record but refuse to mail and
+   page `ap-decision-recipients-empty`.
+3. **Enable the poll daemon** — `docker compose --profile ap up -d` (§6); add
+   `ap-poll` to the noc-master service registry.
+4. **Flip `ap_notify` live** — from `/admin/rollout`, ramp the `ap_notify` surface
+   from pilot to **live for BOTH sites** (an org-wide surface stays pilot until every
+   per-site row is live). Until then all AP mail (new-request, hold notice, decision)
+   goes to admins only.
+5. **Verify the first real cycle** — confirm `ap_poll_runs.transport_mode='graph'`,
+   a real invoice creates a request, all active approvers receive the new-request
+   email, a hold notice reaches the forwarder, and a decision email + stamped PDF
+   reach the forwarder (Mary CC'd).
+

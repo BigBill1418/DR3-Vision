@@ -242,3 +242,70 @@ these amend §C1/§C5/§C10.
   alongside the original, rather than an in-place vector overlay. See the build
   report / code comments in `src/lib/ap/stamp.ts` for the exact behavior. §C10
   sanitization rules still apply to any rendered HTML.
+
+## Amendment 3 — AP go-live features (operator-directed 2026-07-09)
+
+Bill, on 2026-07-09, ahead of AP going LIVE ~2026-07-11: "make sure that all
+approvers get a email notification when there are new invoices to approve and make
+sure there is a section to add approval notes or reject notes — also introduce a
+'pending review / hold' status that will let accounting know that it is currently
+being held." Production-grade, break nothing. This amends §C5 (approver notice,
+notes, lifecycle); the mock-first transport architecture (C1–C10) is unchanged.
+Migration `20260716_ap_hold_and_notes` is purely additive and clean-replays on
+empty PG16.
+
+### A3.1 — New-invoice notification to ALL active approvers
+
+The new-request notification (`notifyNewRequest`, fired on the `created` terminal
+state — one email per request, never per-poll) already targeted the full
+expiry-aware roster (`apApproverEmails`, which excludes any approver past
+`active_until`). It is ENRICHED to carry, for a tier-1 triage email: the requester
+(the internal forwarder `sender_address`), subject, received-at in **Pacific**,
+attachment count, and a **tier-1 deep link** to the specific queue item
+(`/dashboard/ops/ap?request=<id>` — the queue reads `?request=` on mount and opens
+it). Still routed through `notifyStaff('ap_notify')` — born pilot, so in pilot it
+reroutes to admins with the would-have-sent header; it reaches the real approvers
+only when Bill flips `ap_notify` live from `/admin/rollout`. PII discipline holds:
+subject + forwarder address are from an authenticated internal sender; no amounts,
+vendor, or attachment bytes ride the email (ADR-0045).
+
+### A3.2 — Approval / rejection notes
+
+`ap_requests.decision_note` already existed. Enforcement is added: **a rejection
+MUST carry a note** explaining why (`assertDecisionNote`, plain-English 400 at the
+decide route; approvals stay note-optional). The UI requires a note before Reject
+(button disabled + guard). The note already rode the decision email; it now ALSO
+appears on the **stamped decision PDF** ("Note: …") and remains in the audit row.
+The AP queue is a manager/approver-facing surface with plain-English strings (no
+i18n today); the new strings match that existing pattern, per the standing
+"manager-facing follows existing locale pattern" rule.
+
+### A3.3 — `pending_review` (hold) status
+
+New enum value `ApRequestStatus.pending_review` + three nullable `ap_requests`
+columns (`held_by` — a bare audit-actor user id, matching `decided_by`; `held_at`;
+`hold_note`).
+
+State machine: `pending → pending_review → approved|rejected`; the direct
+`pending → approved|rejected` path is unchanged. Effects:
+
+- **(a) Accounting is told it is held.** Placing a hold requires a hold note and
+  emails the **original forwarder** (same forwarder/roster-fallback routing as the
+  decision email, via `notifyStaff('ap_notify')`) stating who holds it, the note,
+  and that a final decision follows. Unlike the terminal decision mail, the hold
+  notice does NOT page on an empty recipient set (a hold is non-terminal — a warn is
+  logged; the decision mail still guards Mary's roster loudly).
+- **(b) Distinct in the queue.** An **amber "ON HOLD" chip** (pending shifts to sky
+  so they are unmistakable), with the holder + hold note visible to all approvers on
+  the request detail (and holder/note surfaced on the list read model).
+- **(c) From hold**, any approver may approve or reject (first-action-wins
+  unchanged — the atomic conditional `updateMany` now matches `status IN (pending,
+  pending_review)`) or **update the hold note** (holder unchanged; editor audited).
+- **(d) Aging/staleness.** The AP module has **no per-request staleness/aging alert
+  today** (the only deadman is poll-freshness, unrelated to request age), so there is
+  nothing to exclude. Recorded here: **any future AP staleness alert MUST exclude
+  `pending_review`** (a held item is being actively worked, not stalled).
+- **(e) Audit** row per transition (place-hold won/lost, update-note, decide-from-
+  hold carries `from_hold: true`). Idempotency + concurrent-action safety reuse the
+  existing first-action-wins row-level guard (a losing concurrent hold gets
+  `ApAlreadyDecidedError`, attributed to the current holder/decider; both audited).

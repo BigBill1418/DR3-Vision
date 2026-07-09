@@ -20,7 +20,7 @@ function p2002(target: string): Error {
 
 export interface FakeApRequest {
   id: string;
-  status: 'pending' | 'approved' | 'rejected' | 'quarantined';
+  status: 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
   internet_message_id: string;
   conversation_id: string | null;
   received_at: Date;
@@ -39,6 +39,10 @@ export interface FakeApRequest {
   // ADR-0046 §3 amendment (handoff §1.6c/e).
   site_id: string | null;
   decision_pdf_sha256: string | null;
+  // ADR-0046 Amendment 3 — hold / "pending review".
+  held_by: string | null;
+  held_at: Date | null;
+  hold_note: string | null;
 }
 export interface FakeApApprover {
   id: string;
@@ -189,15 +193,25 @@ export function makeFakePrisma(db: FakeDb) {
           quarantine_reason: (d['quarantine_reason'] as string | null) ?? null,
           site_id: (d['site_id'] as string | null) ?? null,
           decision_pdf_sha256: (d['decision_pdf_sha256'] as string | null) ?? null,
+          held_by: (d['held_by'] as string | null) ?? null,
+          held_at: (d['held_at'] as Date | null) ?? null,
+          hold_note: (d['hold_note'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
       },
       async updateMany(args: { where: AnyRecord; data: AnyRecord }) {
         const w = args.where;
-        const targets = db.requests.filter(
-          (r) => r.id === w['id'] && (w['status'] === undefined || r.status === w['status']),
-        );
+        // status may be a scalar (`status: 'pending'`) or a set (`status: { in: [...] }`).
+        const statusMatches = (s: FakeApRequest['status']): boolean => {
+          const cond = w['status'];
+          if (cond === undefined) return true;
+          if (cond && typeof cond === 'object' && Array.isArray((cond as { in?: unknown[] }).in)) {
+            return ((cond as { in: string[] }).in).includes(s);
+          }
+          return s === cond;
+        };
+        const targets = db.requests.filter((r) => r.id === w['id'] && statusMatches(r.status));
         for (const r of targets) Object.assign(r, args.data);
         return { count: targets.length };
       },

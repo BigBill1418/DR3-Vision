@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-type Status = 'pending' | 'approved' | 'rejected' | 'quarantined';
+type Status = 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
 type Filter = Status | 'all';
 
 interface ListRow {
@@ -22,6 +22,8 @@ interface ListRow {
   amountCents: number | null;
   attachmentCount: number;
   followupCount: number;
+  heldByName: string | null;
+  holdNote: string | null;
 }
 interface AttachmentView {
   id: string;
@@ -42,11 +44,24 @@ interface Detail extends ListRow {
   decidedAt: string | null;
   decisionNote: string | null;
   decisionMailSentAt: string | null;
+  heldByName: string | null;
+  heldAt: string | null;
+  holdNote: string | null;
   attachments: AttachmentView[];
   followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
 }
 
-const TABS: Filter[] = ['pending', 'approved', 'rejected', 'quarantined', 'all'];
+const TABS: Filter[] = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined', 'all'];
+
+/** Tab/label text — the raw enum value `pending_review` reads as "On hold". */
+const STATUS_LABEL: Record<Filter, string> = {
+  pending: 'pending',
+  pending_review: 'on hold',
+  approved: 'approved',
+  rejected: 'rejected',
+  quarantined: 'quarantined',
+  all: 'all',
+};
 
 function fmt(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -91,6 +106,16 @@ export function ApQueueClient() {
     }
   }, []);
 
+  // Tier-1 deep link: the new-request email links to /dashboard/ops/ap?request=<id>.
+  // Open that request on mount (client-only — 'use client', no SSR/Suspense concern).
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get('request');
+    if (requested) {
+      setFilter('all');
+      setSelectedId(requested);
+    }
+  }, []);
+
   useEffect(() => {
     void loadList(filter);
   }, [filter, loadList]);
@@ -115,7 +140,7 @@ export function ApQueueClient() {
               filter === t ? 'bg-dr3-chartreuse text-dr3-ink' : 'bg-white/10 text-white hover:bg-white/20'
             }`}
           >
-            {t}
+            {STATUS_LABEL[t]}
             {t !== 'all' && ` (${counts[t] ?? 0})`}
           </button>
         ))}
@@ -162,12 +187,15 @@ export function ApQueueClient() {
 
 function StatusBadge({ status }: { status: Status }) {
   const color: Record<Status, string> = {
-    pending: 'bg-amber-400 text-dr3-ink',
+    // pending shifts to sky so the amber hold chip is unmistakably distinct.
+    pending: 'bg-sky-400 text-dr3-ink',
+    pending_review: 'bg-amber-400 text-dr3-ink',
     approved: 'bg-emerald-500 text-white',
     rejected: 'bg-red-500 text-white',
     quarantined: 'bg-zinc-500 text-white',
   };
-  return <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}>{status}</span>;
+  const label = status === 'pending_review' ? 'on hold' : status;
+  return <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}>{label}</span>;
 }
 
 function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
@@ -180,6 +208,12 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
 
   const decide = useCallback(
     async (decision: 'approved' | 'rejected') => {
+      // Amendment 3 — a rejection must say why (plain-English client guard; the
+      // server re-validates). Approvals stay note-optional.
+      if (decision === 'rejected' && !note.trim()) {
+        setMsg('A rejection needs a note explaining why. Add a note, then Reject.');
+        return;
+      }
       setBusy(true);
       setMsg(null);
       try {
@@ -234,6 +268,58 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
     }
   }, [detail.id, onDecided]);
 
+  // Amendment 3 — place the request on hold ("pending review"), REQUIRED note.
+  const placeHold = useCallback(async () => {
+    if (!note.trim()) {
+      setMsg('A hold needs a note explaining why it is being held. Add a note, then Hold.');
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/ops/ap/${detail.id}/hold`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body.alreadyDecided) setMsg(`This request was ${body.error}. Refreshing.`);
+      else if (!res.ok) setMsg(body.error ?? `hold failed (${res.status})`);
+      else setMsg('Placed on hold; accounting was notified it is under review.');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'hold failed');
+    } finally {
+      setBusy(false);
+      onDecided();
+    }
+  }, [note, detail.id, onDecided]);
+
+  // Amendment 3 — update the hold note on an on-hold request, REQUIRED note.
+  const saveHoldNote = useCallback(async () => {
+    if (!note.trim()) {
+      setMsg('The hold note cannot be empty.');
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/ops/ap/${detail.id}/hold`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      setMsg(res.ok ? 'Hold note updated.' : body.error ?? `update failed (${res.status})`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'update failed');
+    } finally {
+      setBusy(false);
+      onDecided();
+    }
+  }, [note, detail.id, onDecided]);
+
+  const actionable = detail.status === 'pending' || detail.status === 'pending_review';
+
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -250,6 +336,15 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         <p className="mt-3 rounded bg-zinc-700/40 px-3 py-2 text-sm">
           Quarantined ({detail.quarantineReason ?? 'unprocessable'}) — admin review only, not approvable.
         </p>
+      )}
+
+      {detail.status === 'pending_review' && (
+        <div className="mt-3 rounded border border-amber-400/60 bg-amber-400/15 px-3 py-2 text-sm">
+          <span className="font-semibold text-amber-200">ON HOLD — pending review</span>
+          {detail.heldByName && <span className="opacity-90"> · held by {detail.heldByName}</span>}
+          {detail.heldAt && <span className="opacity-70"> · {fmt(detail.heldAt)}</span>}
+          {detail.holdNote && <div className="mt-1 opacity-90">“{detail.holdNote}”</div>}
+        </div>
       )}
 
       {detail.decidedByName && (
@@ -307,7 +402,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         </section>
       )}
 
-      {detail.status === 'pending' && (
+      {actionable && (
         <section className="mt-5 border-t border-white/10 pt-4">
           <h3 className="text-sm font-semibold opacity-90">Decision</h3>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -342,15 +437,16 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             </label>
           </div>
           <label className="mt-2 block text-xs opacity-80">
-            Note (optional)
+            Note <span className="opacity-70">(optional to approve · required to reject or hold)</span>
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
+              placeholder={detail.status === 'pending_review' ? 'Update the hold note, or add a reason to approve/reject' : 'Reason (required to reject or hold)'}
               className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
             />
           </label>
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => decide('approved')}
               disabled={busy}
@@ -360,11 +456,32 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             </button>
             <button
               onClick={() => decide('rejected')}
-              disabled={busy}
+              disabled={busy || !note.trim()}
+              title={note.trim() ? undefined : 'A rejection requires a note'}
               className="rounded bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
               Reject
             </button>
+            {detail.status === 'pending' && (
+              <button
+                onClick={placeHold}
+                disabled={busy || !note.trim()}
+                title={note.trim() ? undefined : 'A hold requires a note'}
+                className="rounded bg-amber-400 px-4 py-2 text-sm font-semibold text-dr3-ink disabled:opacity-50"
+              >
+                Hold — pending review
+              </button>
+            )}
+            {detail.status === 'pending_review' && (
+              <button
+                onClick={saveHoldNote}
+                disabled={busy || !note.trim()}
+                title={note.trim() ? undefined : 'Enter a note to update the hold'}
+                className="rounded bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50"
+              >
+                Update hold note
+              </button>
+            )}
           </div>
         </section>
       )}

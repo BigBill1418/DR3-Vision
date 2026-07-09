@@ -70,6 +70,12 @@ describe('ingestMessage — taxonomy matrix (C10)', () => {
     expect(files).toHaveLength(1);
     expect(files[0]!.storage_key).toMatch(/^pending-r2-ap-/); // R2 unconfigured → placeholder
     expect(n.newRequestCalls).toHaveLength(1);
+    // ADR-0046 Amendment 3 deliverable 1 — the all-approvers notification carries
+    // requester + received-at + attachment count (for a tier-1 email).
+    const call = n.newRequestCalls[0] as { senderAddress?: string; receivedAt?: Date; attachmentCount?: number };
+    expect(call.senderAddress).toBe(req.sender_address);
+    expect(call.receivedAt).toBeInstanceOf(Date);
+    expect(call.attachmentCount).toBe(1);
   });
 
   it('bare forward (no attachment) → created, 0 attachments, fully approvable', async () => {
@@ -158,6 +164,9 @@ describe('ingestMessage — idempotency + follow-ups (C4)', () => {
           quarantine_reason: null,
           site_id: null,
           decision_pdf_sha256: null,
+          held_by: null,
+          held_at: null,
+          hold_note: null,
         },
       ],
     });
