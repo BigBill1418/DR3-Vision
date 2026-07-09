@@ -73,6 +73,9 @@ export const adminMessages = {
     canManageRatesLabel: 'Can manage billing rates',
     canManageRatesHelp:
       'Lets this manager edit the billing-rate tables (transport tiers, account overrides, container rentals, fuel prices) under Admin → Billing Rates. Grants no other admin power. For managers only (ADR-0040).',
+    canViewBillingVerifyLabel: 'Can view billing verification',
+    canViewBillingVerifyHelp:
+      'Grants read-only access to Admin → Billing Verification (invoices ready for GP entry plus the audit posture of their windows). No writes, no other admin pages. Any non-admin role (2026-07-09 rollup §1.2 — intended for accounting).',
     pinLabel: 'PIN (4 digits)',
     pinConfirmLabel: 'Confirm PIN',
     pinHelp:

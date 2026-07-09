@@ -26,15 +26,15 @@ billing leg).
 `(window, legA rows, legB rows)` returning typed findings. Initial check set (CA
 first, OR follows — same code, per-site rules):
 
-| # | Check | Legs |
-|---|---|---|
-| C1 | Inbound units: verified `inbound_loads` vs `mymrc_hauls_mirror` (by retrac/haul id, units, date) | logs ↔ MyMRC |
-| C2 | Processed: `processed_units_daily` (program + non-program) vs `mymrc_processed_mirror` | logs ↔ MyMRC |
-| C3 | Outbound: `outbound_materials` (all sub-categories incl. renovation) + `landfilled_units` vs `mymrc_outbound_mirror` (by ticket/material id, weight, date) | logs ↔ MyMRC |
-| C4 | Billing basis: program-units-processed in window vs billed program units (P2 invoices; workbooks for historical windows) | logs ↔ billing |
-| C5 | Program/non-program conservation: processed program units ≤ program units available (inbound program − prior processed program − program renovation outflow); renovation attribution rule (Rick Q11; renovation = outbound sub-category per B1) | internal invariant |
-| C6 | Inventory continuity: computed running balance day-over-day vs any physical snapshot; flags the "Friday doesn't carry to Monday" class (Janette Q11) | internal invariant |
-| C7 | Deadline compliance: MyMRC entry lateness vs contract clocks (3-business-day inbound, 1-business-day processed, 3-day outbound weights) — **outbound lateness clock starts at EOD**, not ticket time (Janette Q1: Material # only exists at end-of-day MyMRC entry) | logs ↔ MyMRC |
+| #   | Check                                                                                                                                                                                                                                                               | Legs               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| C1  | Inbound units: verified `inbound_loads` vs `mymrc_hauls_mirror` (by retrac/haul id, units, date)                                                                                                                                                                    | logs ↔ MyMRC       |
+| C2  | Processed: `processed_units_daily` (program + non-program) vs `mymrc_processed_mirror`                                                                                                                                                                              | logs ↔ MyMRC       |
+| C3  | Outbound: `outbound_materials` (all sub-categories incl. renovation) + `landfilled_units` vs `mymrc_outbound_mirror` (by ticket/material id, weight, date)                                                                                                          | logs ↔ MyMRC       |
+| C4  | Billing basis: program-units-processed in window vs billed program units (P2 invoices; workbooks for historical windows)                                                                                                                                            | logs ↔ billing     |
+| C5  | Program/non-program conservation: processed program units ≤ program units available (inbound program − prior processed program − program renovation outflow); renovation attribution rule (Rick Q11; renovation = outbound sub-category per B1)                     | internal invariant |
+| C6  | Inventory continuity: computed running balance day-over-day vs any physical snapshot; flags the "Friday doesn't carry to Monday" class (Janette Q11)                                                                                                                | internal invariant |
+| C7  | Deadline compliance: MyMRC entry lateness vs contract clocks (3-business-day inbound, 1-business-day processed, 3-day outbound weights) — **outbound lateness clock starts at EOD**, not ticket time (Janette Q1: Material # only exists at end-of-day MyMRC entry) | logs ↔ MyMRC       |
 
 C6's continuity equation is Addendum B §B4 verbatim: `End = Start + Inbound −
 Stripped − WholeUnitsSold − Landfilled`, with the non-program ledger checked
@@ -210,7 +210,7 @@ The migration creates **only this ADR's tables** — `audit_findings`,
 freshness/deadman surface, mirroring ADR-0038's `mymrc_sync_runs`). It references
 no sibling table. It was generated with `prisma migrate diff` and then trimmed to
 the additive objects only (the raw diff surfaced pre-existing drift between the
-hand-written migrations and `schema.prisma` — bonus_/survey_ constraint renames —
+hand-written migrations and `schema.prisma` — bonus*/survey* constraint renames —
 which is NOT part of this change and was excluded).
 
 ### exceljs choice
@@ -225,7 +225,7 @@ open-source CE build has had maintenance/security concerns and a heavier surface
 ### Things discovered
 
 - **Business-day helper reused, not reinvented**: `addBusinessDays(date, n,
-  holidays)` already existed in `src/lib/compliance.ts` (holiday-aware, UTC
+holidays)` already existed in `src/lib/compliance.ts` (holiday-aware, UTC
   day-key based). C7 reuses it via thin ISO-day-key wrappers in
   `comparators/helpers.ts`.
 - **Fingerprint window-independence**: record-level checks (C1/C3/C7) fingerprint
@@ -346,3 +346,16 @@ status `suppressed_bootstrap` — visible in admin, never silent. Existing
 bootstrap findings auto-resolve with cause `bootstrap_suppression` +
 provenance note (never deleted). Comparator logic untouched — the checks were
 correct; the release discipline was not.
+
+## Post-acceptance note — 2026-07-09 (read-only findings surface for accounting)
+
+Mary Scott's survey (rollup §1.2): billing errors originate upstream of GP entry
+("miss count in units or a location missed — this is in the reporting side that
+I do not see") and she cannot audit them before typing an invoice. Findings are
+now additionally exposed READ-ONLY at `/admin/billing/verify`
+(`src/lib/invoices/verify-view.ts`): for each latest invoice, the active
+findings overlapping its window plus the D5 gate verdict, rendered
+green / yellow / red. Access is the new `users.can_view_billing_verify` flag
+(admin role included; the flag unlocks exactly that one page — mirrors the
+`can_manage_rates` discipline). No finding lifecycle action is reachable from
+that surface — resolve/classify stays on the existing audit surfaces.

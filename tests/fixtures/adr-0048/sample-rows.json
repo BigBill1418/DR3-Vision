@@ -1,0 +1,395 @@
+{
+  "june_inb_trans": {
+    "sheet": "June2026 inb trans charges",
+    "header_row": 3,
+    "sample_rows": [
+      [
+        "2026-06-19T00:00:00",
+        "Bass Hill Landfill - LRSWMA",
+        52,
+        2860,
+        null,
+        4763,
+        130971,
+        1450,
+        181,
+        "Primary (1st)",
+        46,
+        169.13753846153847,
+        1619.1375384615385
+      ],
+      [
+        "2026-06-18T00:00:00",
+        "GVCC - Stockton Yard",
+        27,
+        1485,
+        null,
+        4746,
+        131732,
+        425,
+        5,
+        "Primary (1st)",
+        554,
+        4.672307692307692,
+        429.6723076923077
+      ],
+      [
+        "2026-06-18T00:00:00",
+        "Humboldt Waste Management Authority (HWMA)",
+        106,
+        5830,
+        null,
+        4742,
+        131365,
+        2000,
+        271,
+        "Primary (1st)",
+        34,
+        253.23907692307694,
+        2253.239076923077
+      ],
+      [
+        "2026-06-18T00:00:00",
+        "Recology of the Coast - Pacifica",
+        70,
+        3850,
+        null,
+        4738,
+        131446,
+        925,
+        59,
+        "Primary (1st)",
+        330,
+        55.133230769230764,
+        980.1332307692307
+      ]
+    ],
+    "label": "inbound WITH trans charge sample - Woodland",
+    "columns": [
+      "Date",
+      "Site",
+      "inbound unit #",
+      "LBS. (55 per Unit)",
+      "BOL # or Check #",
+      "DR3 #",
+      "Haul #",
+      "Freight Rate",
+      "Mileage",
+      "Mileage_Table.Assignment",
+      "ID",
+      "Fuel Surcharge",
+      "Total"
+    ]
+  },
+  "june_nonprogram": {
+    "sheet": "NonProgram",
+    "header_row": 2,
+    "sample_rows": [
+      ["2026-06-29T00:00:00", "Petaluma", "inbound units", 100, 5500, null, null, null, null, "NP"]
+    ],
+    "columns": [
+      "Date",
+      "Site",
+      "commodity",
+      "inbound unit #",
+      "LBS. (55 per Unit)",
+      "BOL # or Check #",
+      "DR3 #",
+      "Haul #",
+      "Office Use Only",
+      "trans charge"
+    ]
+  },
+  "june_fuel": {
+    "sheet": "Fuel",
+    "header_row": 2,
+    "sample_rows": [
+      ["2026-03-02T00:00:00", "2026-03-08T00:00:00", 4.534],
+      ["2026-03-09T00:00:00", "2026-03-15T00:00:00", 5.556],
+      ["2026-03-16T00:00:00", "2026-03-22T00:00:00", 5.856],
+      ["2026-03-23T00:00:00", "2026-03-29T00:00:00", 6.31]
+    ],
+    "columns": ["Begin Date", "End Date", "Price per Gallon"],
+    "label": "EIA PADD-5 weekly diesel prices (feeds ADR-0040 fuel surcharge)"
+  },
+  "june_variables": {
+    "sheet": "variables",
+    "header_row": 1,
+    "sample_rows": [
+      [
+        "Bass Hill Landfill - LRSWMA",
+        46,
+        "Bass Hill Landfill, 469-700 Johnsonville Dump Rd., Susanville, CA 96130",
+        "DR3 Woodland",
+        null,
+        "Primary (1st)",
+        null,
+        "Bass Hill Landfill - LRSWMA",
+        "DR3 Woodland",
+        1450,
+        181,
+        "Primary (1st)",
+        46,
+        500
+      ],
+      [
+        "Bay Counties SMART Station",
+        139,
+        "Bay Counties SMART Station, 301 Carl Rd. Sunnyvale",
+        "DR3 - Livermore",
+        null,
+        "Secondary (2nd)",
+        null,
+        "Bay Counties SMART Station",
+        "DR3 Stockton",
+        600,
+        32,
+        "Primary (1st)",
+        139,
+        250
+      ],
+      [
+        "Big Oak Flat (Groveland) Transfer Station - County of Tuolumne",
+        175,
+        "Big Oak Flat (Groveland) Transfer Station, 10700 Merrell Rd, Big Oak Flat, CA 95321",
+        "DR3 Stockton",
+        null,
+        "Tertiary (3rd)",
+        null,
+        "Big Oak Flat (Groveland) Transfer Station - County of Tuolumne",
+        "DR3 Stockton",
+        925,
+        73,
+        "Primary (1st)",
+        175,
+        250
+      ],
+      [
+        "Black Butte Transfer Station",
+        793,
+        "Black Butte Transfer Station, 3710 Springhill Rd., Mt. Shasta",
+        null,
+        null,
+        null,
+        null,
+        "Black Butte Transfer Station",
+        "DR3 Woodland",
+        2000,
+        201,
+        "Primary (1st)",
+        793,
+        250
+      ]
+    ],
+    "label": "source master: Re-Trac ID + haul rate lookup. Confirms Kelsey Q3: Re-Trac ID = account ID (col 14 label 'Re-Trac Random ID'). Also confirms columns 10-11 = Haul Rate + Mileage."
+  },
+  "june_day6_cotton": {
+    "sheet": "DAY6",
+    "header_row": 51,
+    "extra_cols": "68-75 (permanent template feature)",
+    "sample_rows": [
+      ["Date", "Site", "Commodity", "Weight", "BOL# or Check #", "DR3#", "Haul#", "revenue"],
+      ["no entries found", null, null, null, null, null, null, null]
+    ],
+    "label": "DAY6 uniquely has 9th commodity block (COTTON) at cols 68-75. Present in both June AND July — confirms permanent template. Kelsey's 'x5' formula-level note still needs her walkthrough."
+  },
+  "july_inb_trans": {
+    "sheet": "inb trans charges",
+    "header_row": 3,
+    "sample_rows": [
+      [
+        "2026-07-07T00:00:00",
+        "Bass Hill Landfill - LRSWMA",
+        51,
+        2805,
+        null,
+        4213,
+        130973,
+        1450,
+        181,
+        "Primary (1st)",
+        46,
+        0,
+        1450
+      ],
+      [
+        "2026-07-03T00:00:00",
+        "Guerneville Transfer Station",
+        95,
+        5225,
+        null,
+        4178,
+        133193,
+        1450,
+        112,
+        "Primary (1st)",
+        328,
+        95.2516923076923,
+        1545.2516923076923
+      ],
+      [
+        "2026-07-03T00:00:00",
+        "Happy Camp Transfer Station - George M. Chambers",
+        79,
+        4345,
+        null,
+        4177,
+        133012,
+        2500,
+        309,
+        "Primary (1st)",
+        811,
+        262.7926153846154,
+        2762.7926153846156
+      ]
+    ],
+    "label": "July equivalent tab. Note tab name dropped month prefix — parser must resolve by row-2 section label instead of sheet name."
+  },
+  "terex_jun26": {
+    "sheet": "Jun26",
+    "header_row": 2,
+    "sample_rows": [
+      [
+        1,
+        168,
+        null,
+        null,
+        2306.75,
+        2315.45,
+        8.699999999999818,
+        19.31034482758661,
+        "Tim",
+        "G",
+        "orange rubber is shredding"
+      ],
+      [
+        2,
+        152,
+        null,
+        null,
+        2315.45,
+        2323.4,
+        7.950000000000273,
+        19.119496855345254,
+        "Tim",
+        "G",
+        "orange rubber is shredding"
+      ],
+      [
+        3,
+        168,
+        null,
+        null,
+        2323.4,
+        2331.85,
+        8.449999999999818,
+        19.881656804734156,
+        "Tim",
+        "G",
+        "orange rubber is shredding"
+      ]
+    ],
+    "columns": [
+      "Day",
+      "Pocket coil",
+      "Springs",
+      "Wood",
+      "Start Hours",
+      "End Hours",
+      "Day Total Hrs Used",
+      "Units per hour",
+      "Operator",
+      "condition*",
+      "Notes"
+    ]
+  },
+  "terex_maint_2026": {
+    "sheet": "Maintenance Log2026",
+    "header_row": 2,
+    "sample_rows": [
+      [
+        "example",
+        "October     10/9/2024",
+        "11:52am",
+        "dripping oil from the back",
+        "called Jonathan at Powerscreen to request maintenance",
+        "2 weeks",
+        null,
+        "Jonathan and said someone would be out tomorrow morning to fix it.  Fixed by 3:30pm on 10/10/2024",
+        null,
+        null
+      ]
+    ],
+    "columns": [
+      "Year/section",
+      "Date",
+      "Time",
+      "Issue",
+      "Measures taken",
+      "Estimated repair time",
+      "Estimated cost",
+      "Notes",
+      "Actual Repair Cost",
+      "Amount Credited"
+    ]
+  },
+  "terex_diesel": {
+    "sheet": "diesel",
+    "header_row": 3,
+    "sample_rows": [
+      ["2026-01-05T00:00:00", null, 33, null, null, null, null, null, null, null, null],
+      [
+        "2026-01-12T00:00:00",
+        null,
+        27,
+        759,
+        0.03557312252964427,
+        3.43,
+        92.61,
+        null,
+        7,
+        37.6,
+        1.3925925925925926
+      ],
+      [
+        "2026-01-14T00:00:00",
+        null,
+        70,
+        374,
+        0.18716577540106952,
+        3.56,
+        249.20000000000002,
+        null,
+        2,
+        12,
+        0.17142857142857143
+      ],
+      [
+        "2026-01-21T00:00:00",
+        "x",
+        41,
+        813,
+        0.05043050430504305,
+        3.56,
+        145.96,
+        null,
+        7,
+        28.95,
+        0.7060975609756097
+      ]
+    ],
+    "columns": [
+      "Date",
+      "DEF",
+      "Gallons added",
+      "Units processed",
+      "gal/unit",
+      "$/gal",
+      "total $",
+      "spacer",
+      "days between fills",
+      "run time per fill (hrs)",
+      "hours/gal"
+    ]
+  }
+}

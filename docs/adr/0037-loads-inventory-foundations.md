@@ -80,19 +80,19 @@ deletion-on-termination. This ADR carries only the fields the workbook needs
 Three shapes, matching how the workbook actually records outbound:
 
 - `outbound_materials(id, site_id, ship_date, commodity enum, weight_lbs Int,
-  ticket_number?, retrac_id?, bale_count Int?, allocation_pct Decimal(5,2)?,
-  buyer?, source enum(manual|mymrc|import), …audit)` — commodity taxonomy exactly
+ticket_number?, retrac_id?, bale_count Int?, allocation_pct Decimal(5,2)?,
+buyer?, source enum(manual|mymrc|import), …audit)` — commodity taxonomy exactly
   per mission §4: `landfill, steel, biomass, wte, wood, toppers, foam, cardboard,
-  plastic, cotton`. `allocation_pct` is a **nullable placeholder** (mission decision
+plastic, cotton`. `allocation_pct` is a **nullable placeholder** (mission decision
   2.2 #2 — semantics pending Kelsey; nothing computes from it until answered).
   Avg-per-bale is derived at read time (`weight_lbs / bale_count`), never stored —
   one source of truth per the 06-23 lesson.
 - `renovator_shipments(id, site_id, ship_date, buyer, dr3_number?, retrac_id?,
-  whole_units Int, wood_lbs Int?, steel_lbs Int?, foam_lbs Int?, …audit)` — distinct
+whole_units Int, wood_lbs Int?, steel_lbs Int?, foam_lbs Int?, …audit)` — distinct
   channel (whole units, not commodity weights); **included in recovery-rate math**
   per MRC rules (feeds P3 alerts and OR's broader recycling-rate formula).
 - `landfilled_units(id, site_id, disposal_date, units Int, slip_number?,
-  reason enum(bed_bug, soiled, water_logged, other), …audit)` — whole-unit disposal
+reason enum(bed_bug, soiled, water_logged, other), …audit)` — whole-unit disposal
   (workbook Landfilled Units block); different shape from weight-based commodities.
 
 ### D5 — `processed_units_daily`: the number billing bills from
@@ -113,10 +113,10 @@ Per the operator decision recorded 2026-06-22 and the readiness checklist:
 
 - **One shared pure function** (`src/lib/inventory/running-balance.ts`):
   `onHand(site, asOf) = anchor.units + Σ inbound (verified inbound_loads.total_units
-  + consumer_dropoffs.units) − Σ processed (processed_units_daily) − Σ whole-unit
-  outbound (renovator_shipments.whole_units + landfilled_units.units)` since the
-  anchor. Weight-based `outbound_materials` do NOT subtract units (they are
-  post-deconstruction commodities — deconstruction is what `processed` counts).
+  - consumer_dropoffs.units) − Σ processed (processed_units_daily) − Σ whole-unit
+    outbound (renovator_shipments.whole_units + landfilled_units.units)`since the
+anchor. Weight-based`outbound_materials`do NOT subtract units (they are
+post-deconstruction commodities — deconstruction is what`processed` counts).
 - `site_inventory_snapshots` gains `snapshot_kind enum(physical, computed)` +
   `reconciled_delta Int?` + provenance. A **physical count** becomes the new anchor;
   the delta vs. the computed balance is recorded and audited, never silently
@@ -275,19 +275,19 @@ migration, not a corrective second one (clean-replay re-verified on PG16).
   accepted `landfill/steel/biomass/wte/…` were billing-workbook blocks, not the
   daily-log commodities the office captures). New `OutboundSubCategory` enum
   (`renovation, baled, shredded`). `outbound_materials` gains nullable `whole_units`
-  + `program_units` + `non_program_units`: a **renovation** row is a whole-unit sale
-  (`program + non_program == whole_units` when `whole_units` is present) and feeds
-  the running balance's WholeUnitsSold term; **baled/shredded** rows are weight-based
-  commodity sales (unit columns null; never subtract units). The daily-log-9 →
-  billing-workbook-11 block mapping (trash→Landfill vs WTE is destination-driven) is
-  **NOT built** — OPEN per Addendum B10-5.
+  - `program_units` + `non_program_units`: a **renovation** row is a whole-unit sale
+    (`program + non_program == whole_units` when `whole_units` is present) and feeds
+    the running balance's WholeUnitsSold term; **baled/shredded** rows are weight-based
+    commodity sales (unit columns null; never subtract units). The daily-log-9 →
+    billing-workbook-11 block mapping (trash→Landfill vs WTE is destination-driven) is
+    **NOT built** — OPEN per Addendum B10-5.
 - **D3 drop-off kinds (Addendum B1).** `consumer_dropoffs` gains
   `kind enum(incentive, unpaid, illegal)` NOT NULL. Incentive computation applies
   **only** to `kind = incentive`; `unpaid` / `illegal` rows never carry an
   `incentive_cents`. `LoadSourceType` gains `event`.
 - **B7 site-driven program-ness.** `Source` gains `is_non_program`,
   `is_trans_charge`, `canonical_mileage`, plus a new `source_aliases(id, source_id,
-  alias UNIQUE, created_at)` table for the workbook's heavy spelling drift. The
+alias UNIQUE, created_at)` table for the workbook's heavy spelling drift. The
   verify gate's DEFAULT program/non-program split now derives from the load's source
   flag (non-program source → units default to the non-program pool; a manager
   override wins). The `program + non_program == total_units` check is unchanged.
@@ -383,3 +383,16 @@ the legacy attribution (anchor → program, non-program = 0). This resolves the 
 "physical snapshots carry no pool split" note. `computeRunningBalance` and the
 `{ program, nonProgram, total }` return shape are unchanged (backward-compatible);
 `program + nonProgram === total` still holds.
+
+## Post-acceptance note — 2026-07-09 (cotton is a PERMANENT template feature)
+
+The Addendum-B daily-log-9 taxonomy already carried `cotton` (verbatim from
+`list!I`), but its DAY-sheet placement read as a June anomaly: only DAY6 carried
+a 9th COTTON outbound block (cols 68–75), so PR #87 treated it as an ad-hoc
+mid-month template edit. The July workbook settles it: **DAY6 carries the same
+9th cotton block in July too** — the "×5 quirk" Kelsey flagged is a permanent
+structural feature of the template, not an anomaly (2026-07-09 rollup §3.1).
+The parser layout expectation is encoded in
+`src/lib/audit/workbook/day-sheet-layout.ts` (`commodityBlocksForDaySheet` —
+DAY6 → 9 blocks, cotton last at col 68; every other DAY → 8). The formula-level
+`×5` reading still needs Kelsey's walkthrough (open capture item).

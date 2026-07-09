@@ -12,7 +12,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
 import { composeProcessing, composeTransportation, composeCollectionSiteCount } from './generate';
-import { resolveProcessingInputs, resolveTransportationInputs, loadOrCountManualLines } from './generation-inputs';
+import {
+  resolveProcessingInputs,
+  resolveTransportationInputs,
+  loadOrCountManualLines,
+} from './generation-inputs';
 import { windowForKind, billingMonthStartISO } from './periods';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import {
@@ -36,7 +40,10 @@ const TABLE = 'invoices';
 /** The kind's jurisdiction does not match the site (e.g. a CA invoice on Eugene). */
 export class InvoiceKindSiteMismatchError extends Error {
   readonly status = 422 as const;
-  constructor(readonly kind: InvoiceKind, readonly siteJurisdiction: string) {
+  constructor(
+    readonly kind: InvoiceKind,
+    readonly siteJurisdiction: string,
+  ) {
     super(`invoice kind ${kind} does not match site jurisdiction ${siteJurisdiction}`);
     this.name = 'InvoiceKindSiteMismatchError';
   }
@@ -52,7 +59,10 @@ function isTransportationKind(kind: InvoiceKind): boolean {
 }
 
 async function assertKindMatchesSite(siteId: string, kind: InvoiceKind): Promise<void> {
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { jurisdiction: true } });
+  const site = await prisma.site.findUnique({
+    where: { id: siteId },
+    select: { jurisdiction: true },
+  });
   if (!site) throw new InvoiceKindSiteMismatchError(kind, 'unknown');
   const siteJur = site.jurisdiction === 'california' ? 'CA' : 'OR';
   if (jurisdictionOfKind(kind) !== siteJur) {
@@ -139,7 +149,12 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
   const created = await prisma.$transaction(async (tx) => {
     // Void any prior draft(s) in this chain — a regenerate replaces, never edits.
     await tx.invoice.updateMany({
-      where: { site_id: args.siteId, kind: args.kind, billing_month: billingMonth, status: 'draft' },
+      where: {
+        site_id: args.siteId,
+        kind: args.kind,
+        billing_month: billingMonth,
+        status: 'draft',
+      },
       data: { status: 'void', voided_by: args.actorUserId, voided_at: new Date() },
     });
 
@@ -160,6 +175,10 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
         supersedes_id: args.supersedesId ?? null,
         status: 'draft',
         total_cents: composition.totalCents,
+        // rollup §1.3 — the GP Trade discount as data (ca_processing_eom only;
+        // undefined → null for every other kind by composition contract).
+        trade_discount_cents: composition.tradeDiscountCents ?? null,
+        trade_discount_reference_invoice_id: composition.tradeDiscountReferenceInvoiceId ?? null,
         generated_by: args.actorUserId,
         notes: args.notes ?? null,
         lines: {
@@ -233,7 +252,9 @@ export async function listInvoices(
     where: {
       site_id: siteId,
       ...(filter.kind ? { kind: filter.kind } : {}),
-      ...(filter.billingMonthISO ? { billing_month: dayKeyUTCFromISO(billingMonthStartISO(filter.billingMonthISO)) } : {}),
+      ...(filter.billingMonthISO
+        ? { billing_month: dayKeyUTCFromISO(billingMonthStartISO(filter.billingMonthISO)) }
+        : {}),
     },
     orderBy: [{ billing_month: 'desc' }, { kind: 'asc' }, { version: 'desc' }],
     take: limit,
@@ -271,15 +292,28 @@ export interface InvoiceDetail {
 }
 
 export async function getInvoiceDetail(siteId: string, id: string): Promise<InvoiceDetail | null> {
-  const row = await prisma.invoice.findFirst({ where: { id, site_id: siteId }, include: INVOICE_INCLUDE });
+  const row = await prisma.invoice.findFirst({
+    where: { id, site_id: siteId },
+    include: INVOICE_INCLUDE,
+  });
   if (!row) return null;
   const invoice = toInvoiceView(row);
 
   const [gate, priorRow] = await Promise.all([
-    evaluateWindowGate(prisma, siteId, invoice.windowStart.toISOString().slice(0, 10), invoice.windowEnd.toISOString().slice(0, 10)),
+    evaluateWindowGate(
+      prisma,
+      siteId,
+      invoice.windowStart.toISOString().slice(0, 10),
+      invoice.windowEnd.toISOString().slice(0, 10),
+    ),
     invoice.version > 1
       ? prisma.invoice.findFirst({
-          where: { site_id: siteId, kind: row.kind, billing_month: row.billing_month, version: invoice.version - 1 },
+          where: {
+            site_id: siteId,
+            kind: row.kind,
+            billing_month: row.billing_month,
+            version: invoice.version - 1,
+          },
           include: INVOICE_INCLUDE,
         })
       : Promise.resolve(null),

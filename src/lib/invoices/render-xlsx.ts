@@ -66,12 +66,32 @@ export function buildInvoiceSummaryModel(inv: InvoiceView): InvoiceSummaryModel 
       const b15 = inv.lines
         .filter((x) => x.lineCode !== LINE_CODE.eomOffset)
         .reduce((acc, x) => acc + x.amountCents, 0);
-      rows.push({ code: 'B15', label: 'Processing subtotal (B6 + B7 + B8)', quantity: null, amountCents: b15, kind: 'subtotal' });
+      rows.push({
+        code: 'B15',
+        label: 'Gross month total (B6 + B7 + B8)',
+        quantity: null,
+        amountCents: b15,
+        kind: 'subtotal',
+      });
     }
-    rows.push({ code: l.lineCode, label: l.description, quantity: l.quantity, amountCents: l.amountCents, kind: 'line' });
+    rows.push({
+      code: l.lineCode,
+      label: l.description,
+      quantity: l.quantity,
+      amountCents: l.amountCents,
+      kind: 'line',
+    });
   });
 
-  rows.push({ code: 'TOTAL', label: 'Invoice total', quantity: null, amountCents: inv.totalCents, kind: 'total' });
+  // rollup §1.3 — the CA EOM summary reads exactly as Mary's GP entry: gross
+  // month total → Trade discount (the stored offset line) → balance due.
+  rows.push({
+    code: 'TOTAL',
+    label: isCaEomProcessing ? 'Balance due (gross less Trade discount)' : 'Invoice total',
+    quantity: null,
+    amountCents: inv.totalCents,
+    kind: 'total',
+  });
 
   return {
     title: 'DR3 — MRC Invoice (Summary)',

@@ -37,6 +37,9 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
   const [processorRole, setProcessorRole] = useState<string>(user.processor_role ?? '');
   const [allSites, setAllSites] = useState<boolean>(user.all_sites);
   const [canManageRates, setCanManageRates] = useState<boolean>(user.can_manage_rates);
+  const [canViewBillingVerify, setCanViewBillingVerify] = useState<boolean>(
+    user.can_view_billing_verify,
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -73,6 +76,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           processor_role: showProcessorRole ? processorRole || null : null,
           all_sites: role === 'manager' ? allSites : false,
           can_manage_rates: role === 'manager' ? canManageRates : false,
+          can_view_billing_verify: role !== 'admin' ? canViewBillingVerify : false,
         }),
       });
       if (!res.ok) {
@@ -239,8 +243,30 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
               data-testid="admin-edit-can-manage-rates"
             />
             <span className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-dr3-mist">{M.form.canManageRatesLabel}</span>
+              <span className="text-sm font-medium text-dr3-mist">
+                {M.form.canManageRatesLabel}
+              </span>
               <span className="text-xs text-dr3-mist-dim">{M.form.canManageRatesHelp}</span>
+            </span>
+          </label>
+        ) : null}
+        {role !== 'admin' ? (
+          <label
+            className="flex items-start gap-3"
+            data-testid="admin-edit-can-view-billing-verify-field"
+          >
+            <input
+              type="checkbox"
+              checked={canViewBillingVerify}
+              onChange={(e) => setCanViewBillingVerify(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-dr3-steel-light/40 bg-dr3-space-2 text-dr3-cyan focus:ring-2 focus:ring-dr3-cyan"
+              data-testid="admin-edit-can-view-billing-verify"
+            />
+            <span className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-dr3-mist">
+                {M.form.canViewBillingVerifyLabel}
+              </span>
+              <span className="text-xs text-dr3-mist-dim">{M.form.canViewBillingVerifyHelp}</span>
             </span>
           </label>
         ) : null}

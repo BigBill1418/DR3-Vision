@@ -234,3 +234,51 @@ export async function checkRateManager(): Promise<RateManagerResult> {
     throw e;
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// 2026-07-09 rollup §1.2 — read-only billing-verify access
+//
+// One gate for the single read surface `/admin/billing/verify` (invoices ready
+// for GP entry + the ADR-0039 findings touching their windows). Grants iff
+// `role === 'admin'` OR the caller's fresh-from-DB `can_view_billing_verify`
+// flag is true (any role — the intended grantee, Mary in accounting, is not a
+// site manager). Mirrors the `can_manage_rates` discipline: the flag is read
+// fresh on every request, never carried in the session token, and consulted
+// NOWHERE ELSE — it unlocks exactly this one read-only page and never any
+// write or other /admin surface.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface BillingVerifyContext {
+  userId: string;
+  /** How access was granted — for the log line. */
+  via: 'admin' | 'can_view_billing_verify';
+}
+
+/** READ gate for /admin/billing/verify. no session → 401; ungranted → 403. */
+export async function requireBillingVerifyRead(): Promise<BillingVerifyContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  if (session.user.role === 'admin') return { userId: session.user.id, via: 'admin' };
+  const u = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { can_view_billing_verify: true },
+  });
+  if (u?.can_view_billing_verify)
+    return { userId: session.user.id, via: 'can_view_billing_verify' };
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type BillingVerifyResult =
+  | { ok: true; ctx: BillingVerifyContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkBillingVerifyRead(): Promise<BillingVerifyResult> {
+  try {
+    return { ok: true, ctx: await requireBillingVerifyRead() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}

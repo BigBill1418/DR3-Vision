@@ -79,13 +79,7 @@ export const LINE_CODE = {
 // JSON provenance value
 // ────────────────────────────────────────────────────────────────────────
 
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [k: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 
 // ────────────────────────────────────────────────────────────────────────
 // Pure math I/O
@@ -106,6 +100,15 @@ export interface InvoiceLineDraft {
 export interface InvoiceComposition {
   lines: InvoiceLineDraft[];
   totalCents: number;
+  /**
+   * ca_processing_eom only (rollup §1.3 / ADR-0041 addendum): the GP "Trade
+   * discount" as data — the POSITIVE mid-month amount the stored B22.offset
+   * line subtracts, plus the mid-month invoice it references (null when the
+   * offset was recomputed with no mid-month invoice on file). Persisted to
+   * `invoices.trade_discount_cents` / `trade_discount_reference_invoice_id`.
+   */
+  tradeDiscountCents?: number;
+  tradeDiscountReferenceInvoiceId?: string | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────

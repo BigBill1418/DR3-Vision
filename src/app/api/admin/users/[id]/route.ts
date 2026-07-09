@@ -54,6 +54,7 @@ const updateAction = z.object({
   processor_role: optionalProcessorRole,
   all_sites: z.boolean().optional(), // ADR-0024 (manager-only; coerced in the model)
   can_manage_rates: z.boolean().optional(), // ADR-0040 D5 (manager-only; coerced in the model)
+  can_view_billing_verify: z.boolean().optional(), // rollup §1.2 (read-only verify page)
 });
 
 const resetPinAction = z.object({
@@ -117,6 +118,8 @@ export async function PATCH(req: Request, { params }: Params) {
       if (parsed.data.all_sites !== undefined) input.all_sites = parsed.data.all_sites;
       if (parsed.data.can_manage_rates !== undefined)
         input.can_manage_rates = parsed.data.can_manage_rates;
+      if (parsed.data.can_view_billing_verify !== undefined)
+        input.can_view_billing_verify = parsed.data.can_view_billing_verify;
 
       const r = await updateUser(id, input, actor);
       if (!r.ok) return reasonToResponse(r.reason);

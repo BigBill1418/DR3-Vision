@@ -49,10 +49,7 @@ function sum(lines: readonly InvoiceLineDraft[]): number {
 // Processing (B6/B7/B8 → B15; mid-month B20; EOM offset → B22)
 // ────────────────────────────────────────────────────────────────────────
 
-export type ProcessingKind =
-  | 'ca_processing_mid_month'
-  | 'ca_processing_eom'
-  | 'or_processing_eom';
+export type ProcessingKind = 'ca_processing_mid_month' | 'ca_processing_eom' | 'or_processing_eom';
 
 export interface ProcessingGenerationInput {
   kind: ProcessingKind;
@@ -74,6 +71,11 @@ export interface ProcessingGenerationInput {
   midMonthOffsetCents?: number;
   midMonthOffsetUnits?: number | null;
   midMonthOffsetSource?: JsonValue;
+  /**
+   * CA EOM only — the mid-month invoice the offset subtracts (rollup §1.3).
+   * Null when the offset was recomputed with no mid-month invoice on file.
+   */
+  midMonthReferenceInvoiceId?: string | null;
 }
 
 /**
@@ -147,15 +149,23 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
 
   if (input.kind === 'ca_processing_eom') {
     const offset = input.midMonthOffsetCents ?? 0;
+    // GP terminology (rollup §1.3): the EOM invoice's subtraction line is the
+    // literal GP "Trade discount" field Mary types. Line code stays B22.offset
+    // (workbook §3.1); only the label speaks GP so her entry maps one-to-one.
     lines.push({
       lineCode: LINE_CODE.eomOffset,
-      description: 'Less: mid-month processing already invoiced (offset)',
+      description: 'Trade discount — mid-month processing already invoiced',
       quantity: input.midMonthOffsetUnits ?? null,
       rateRef: input.processingRateRef,
       amountCents: -offset,
       source: input.midMonthOffsetSource ?? { offset: true },
       position: position++,
     });
+    return {
+      ...finalize(lines),
+      tradeDiscountCents: offset,
+      tradeDiscountReferenceInvoiceId: input.midMonthReferenceInvoiceId ?? null,
+    };
   }
 
   return finalize(lines);
@@ -179,9 +189,7 @@ function eventB8Source(events: readonly EventCostRow[], pending: boolean): JsonV
     customer: e.customer,
     misc_cents: eventMiscCents(e),
   }));
-  return pending
-    ? { pending: 'events-integration', events: eventRefs }
-    : { events: eventRefs };
+  return pending ? { pending: 'events-integration', events: eventRefs } : { events: eventRefs };
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -371,7 +379,10 @@ export function assertKindHasComposer(kind: InvoiceKind): void {
     or_collection_site_count: true,
   };
   if (!known[kind]) {
-    throw new InvoiceStructuralError('wrong_kind_for_composer', `no composer for invoice kind ${kind}`);
+    throw new InvoiceStructuralError(
+      'wrong_kind_for_composer',
+      `no composer for invoice kind ${kind}`,
+    );
   }
 }
 

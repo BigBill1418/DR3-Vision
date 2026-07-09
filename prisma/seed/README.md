@@ -63,7 +63,7 @@ Both rules become effective 2026-01-01 with no end date. When a rate or threshol
 
 ADR-0011 covers why this is parameterized rather than hardcoded.
 
-### `sources.csv` — 111 rows
+### `sources.csv` — 114 rows
 
 Mattress collection sites that deliver to DR3 facilities. Drives the **Source** dropdown on the inbound-load form.
 
@@ -71,6 +71,7 @@ Mattress collection sites that deliver to DR3 facilities. Drives the **Source** 
 
 - 105 rows: real Woodland sources extracted from the MyMRC haul-level export (`report1777920718332.xls`), covering 4,906 hauls dated 2023-09-20 through 2026-05-04. Address fields parsed from the most-recent haul to that source.
 - 6 rows: Eugene placeholder stubs for Oregon Collection Site Count locations (Salem, Albany, Cottage Grove, Florence per MRC OR contract Exhibit) and known Lane County waste facilities. **Addresses TBD** — backfill from the Oregon MyMRC export when available.
+- 3 rows (2026-07-09): Eugene sites observed on the scanned paper daily-log sample (rollup §4.3): Thompsons Sanitary Service, Stayton Community Center, Deschutes. **Addresses TBD; names to be confirmed against Rick's forms.** The sample's other Site values are NOT sources: `Glenwood TC 143/144` are trailer-tagged aliases of the seeded Glenwood Transfer & Recycling Station, and `Illegal Drop` / `Sponsors` are drop-off kinds (`consumer_dropoffs.kind`), not collection sites.
 
 Source `name` values **must match MyMRC verbatim** — including punctuation and capitalization — for the reconciliation match to work. Don't "clean up" names in the seed file.
 
