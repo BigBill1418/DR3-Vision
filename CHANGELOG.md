@@ -5,6 +5,17 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-09 (dr3-intel-2026-06 survey export — campaign closure)
+
+- **Survey campaign `dr3-intel-2026-06` closure completed.** Mary Scott (final
+  outstanding respondent) self-submitted 2026-07-07 12:29 PM PT after 5 automated
+  reminders; ADR-0036 auto-close fired 3 minutes later. Response export (9
+  respondent files + `_summary.md`) generated from the prod DB in `buildExport`
+  format and committed under `docs/operations-intel/dr3-intel-2026-06/` — the
+  close route builds but does not push the export (ClaudeSync push is still a
+  follow-up), so this commit is the export artifact. Operator runbook campaign
+  log updated with the final standing.
+
 ### Added — 2026-07-09 (ADR-0046 Amendment 3 — AP go-live features)
 
 Operator-directed (Bill, 2026-07-09) ahead of AP going LIVE ~2026-07-11. Amends
