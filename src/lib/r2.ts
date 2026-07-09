@@ -154,6 +154,37 @@ export async function putApAttachment(args: {
   return storage_key;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Workbook cutover archival (ADR-0049 D8)
+// ────────────────────────────────────────────────────────────────────────
+
+// On the cutover flip, every monthly workbook that was syncing is copied to R2
+// under `workbooks/{siteCode}/{yearMonth}.xlsm` — immutable, forever retention, so
+// the workbook data survives Kelsey's role transitions. The bytes already live on
+// the server (the Files transport downloaded them). Fail-soft: returns null when R2
+// is unconfigured so the flip still completes (archival is recorded on the run/audit
+// as skipped; the flip is the authoritative state change).
+
+export async function putWorkbookArchive(args: {
+  siteCode: string;
+  yearMonth: string; // 'YYYY-MM'
+  bytes: Uint8Array;
+}): Promise<string | null> {
+  if (!isConfigured()) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const safeSite = args.siteCode.replace(/[^a-z0-9_-]/gi, '_').toLowerCase() || 'site';
+  const storage_key = `workbooks/${safeSite}/${args.yearMonth}.xlsm`;
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: storage_key,
+      Body: args.bytes,
+      ContentType: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    }),
+  );
+  return storage_key;
+}
+
 /**
  * Mint a short-lived presigned GET for an AP attachment so an approver's browser
  * fetches the PDF directly from R2 (the app never proxies the bytes). Returns null

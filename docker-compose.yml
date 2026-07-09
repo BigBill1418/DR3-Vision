@@ -811,6 +811,66 @@ services:
       com.barnardhq.service: 'cloudflared'
     logging: *logging
 
+  workbook-sync:
+    # Workbook sync poll cron host (ADR-0049 D2). PROFILE-GATED (`workbook-sync`):
+    # enabling is a deliberate operator action once SVdP IT's Files.Read.All grant is
+    # live AND a workbook_source is enabled from /admin/workbook-sync — NOT
+    # auto-started by `docker compose up -d` or the swarmpilot deployer. Until then
+    # the engine no-ops (0 active sources) so running it is harmless; the profile
+    # gate mirrors the "born disabled" posture of the source itself.
+    #
+    # Same shape as survey-reminder / ap-poll: a single long-running Node process
+    # under `unless-stopped` that is a THIN scheduler. Every 10 minutes it POSTs the
+    # app's internal, loopback-guarded route (`/api/internal/workbook-sync/poll`).
+    # That route ENFORCES business hours (6 AM–8 PM PT, Mon-Fri — off-hours ticks are
+    # a clean no-op) and does ALL the work compiled inside the Next app via
+    # `runWorkbookSyncPoll` (transport select, current-month discovery + rollover,
+    # cTag delta, parse, workbook-wins upsert with audit-per-overwrite, mid-edit skip,
+    # ledger-always). The daemon imports NO TS and no @prisma/client. Until
+    # msgraph-files.env (or the shared msgraph-mail.env) lands the transport
+    # self-reports MOCK mode in every ledger row and reads a fixture workbook.
+    #
+    # Idempotent: the cTag delta guard means an overlapping/re-fired tick never
+    # re-downloads or double-upserts unchanged data; a green run that changed nothing
+    # is normal (changes_detected=false).
+    profiles: ['workbook-sync']
+    image: dr3-vision-app:local
+    container_name: dr3-vision-workbook-sync
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/workbook-sync-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK
+    # (would always fail here → false "unhealthy"). See survey-reminder.
+    healthcheck:
+      disable: true
+    env_file:
+      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
+      # internal route). Optional: when absent both sides skip the bearer check and
+      # the loopback/cf-connecting-ip guard remains the boundary.
+      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+        required: false
+      # The Graph Files creds are consumed by the `app` service (where the transport
+      # runs); carried here for parity with the transport family. Optional / fail-open.
+      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-files.env
+        required: false
+      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
+        required: false
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback — this
+      # is a separate container). The route's cf-connecting-ip guard still rejects any
+      # public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'workbook-sync'
+    logging: *logging
+
 networks:
   dr3net:
     name: dr3-vision_dr3net

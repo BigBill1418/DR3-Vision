@@ -71,6 +71,28 @@ mail reroutes to admins). Migrations `20260715_pool_split` +
 - **ADRs 0049 (workbook sync bridge) + 0050 (compliance-admin ledger)** drafted as
   Proposed (no code) and indexed. ADR post-acceptance notes added to 0030 / 0028 /
   0029 / 0047 (Q-0047 grandfather resolutions).
+- **ADR-0049 — Woodland workbook → Vision sync bridge (BUILT, mock-first).** Status
+  → Accepted (2026-07-09 operator build-all order; parser finalization + enable flip
+  gated). The `Files.Read.All` tenant grant landed 2026-07-09 (app
+  `2da2…`). Mirrors each site's monthly Woodland daily-log workbook from Kelsey's
+  OneDrive into `processed_units_daily` every 10 min (business hours, PT). New
+  `src/lib/msgraph-files/` READ-ONLY Graph Files transport (live + fixture mock; creds
+  fall back to the shared `MSGRAPH_MAIL_*` app — one app, two capabilities) and
+  `src/lib/workbook-sync/` engine: current-month discovery + auto rollover (D5), cTag
+  delta (no re-download when unchanged, D2), **workbook-wins** upsert with an audit row
+  per Vision-overwrite (D3), mid-edit skip+count (D11), `workbook_sync_runs` ledger
+  (mymrc shape, always written), 403 fail-soft (log + ntfy, no crash, D6). Cutover flip
+  (in `/admin/rollout` OR `/admin/workbook-sync`) stops sync + fires R2 archival to
+  `workbooks/{site}/{yearMonth}.xlsm` (D8), soft-gated on Rick's parity signoff (D7).
+  `/admin/workbook-sync` admin surface (sources add/edit/enable, run ledger, cutover).
+  10-min cron (`scripts/workbook-sync-cron.mjs`) + business-hours-enforcing internal
+  route + public-paths exemption (+ regression test) + `workbook-sync` compose profile.
+  Migration `20260716b_workbook_sync` (`workbook_sources` + `workbook_sync_runs`,
+  `RolloutSurfaceKind` gains `workbook_sync`) clean-replays on empty PG16. Seed adds the
+  Woodland source (born `is_syncing=false`) + `workbook_sync` surface (born `pilot`),
+  idempotent. GATED: the per-day parser mapping (`daily-adapter.ts`) reads the
+  Addendum-B fixture layout until Kelsey's real `.xlsm` lands (D12); each source is
+  born disabled pending a deliberate operator enable.
 
 ### Fixed — 2026-07-07 payroll-morning hotfix
 

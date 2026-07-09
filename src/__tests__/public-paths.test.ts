@@ -26,6 +26,7 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/ap/poll', // ADR-0046 D5 — mandatory day-one exemption for the AP poll cron
     '/api/internal/ap/expiry', // ADR-0046 §3 — AP approver expiry cron (reuses the /ap/ exemption)
     '/api/internal/board-pack/send', // ADR-0045 §3 addendum — board-pack digest cron
+    '/api/internal/workbook-sync/poll', // ADR-0049 D2 — mandatory day-one exemption for the workbook-sync poll cron
     '/api/intake/contact', // ADR-0045 D3 — public token-guarded contact intake
     '/operator',
     '/operator/site',

@@ -70,5 +70,33 @@ export async function flipRolloutSurface(args: FlipArgs) {
     user_agent: args.userAgent ?? null,
   });
 
+  // ADR-0049 D7/D8 — flipping a `workbook_sync` surface to `live` IS the cutover:
+  // it stops sync (the engine no-ops) and fires R2 archival. Runs here so a flip
+  // from EITHER /admin/rollout or the dedicated /admin/workbook-sync page archives.
+  // Fail-soft + audited: an R2/transport error never fails the flip (the state
+  // change is authoritative); the archival outcome is recorded as its own audit row.
+  if (before.kind === 'workbook_sync' && args.toState === 'live' && before.site_id) {
+    await runCutoverArchival(db, before.site_id, args.actorUserId).catch(() => undefined);
+  }
+
   return updated;
+}
+
+/** Best-effort cutover archival + its own audit record (ADR-0049 D8). */
+async function runCutoverArchival(db: PrismaClient, siteId: string, actorUserId: string): Promise<void> {
+  const { archiveWorkbooksToR2 } = await import('@/lib/workbook-sync/archive');
+  const site = await db.site.findUnique({ where: { id: siteId }, select: { code: true } });
+  const result = await archiveWorkbooksToR2({ db, siteId, siteCode: site?.code ?? siteId });
+  await writeAudit({
+    actor_user_id: actorUserId,
+    action: 'insert',
+    table_name: 'workbook_cutover_archival',
+    row_id: siteId,
+    after: {
+      archived_keys: result.archivedKeys,
+      files_considered: result.filesConsidered,
+      skipped: result.skipped,
+      error: result.error,
+    },
+  });
 }

@@ -1,6 +1,6 @@
 # ADR-0049 — Woodland workbook → Vision sync bridge to cutover
 
-**Status:** Proposed — approved direction 2026-07-08 (Bill × Claude planning session). Build is GATED on (1) SVdP IT granting the `Files.Read.All` tenant-wide application permission to the existing dr3-vision Graph app, and (2) Kelsey's real `JUNE 2026 DAILY LOG WOODLAND.xlsm` file in hand to finalize the parser. **No code is written for this ADR yet** — this document captures the locked direction so the build can start the moment the gate clears.
+**Status:** Accepted (2026-07-09 — operator build-all order; parser finalization pending the real workbook file). The `Files.Read.All` tenant-wide grant landed 2026-07-09 (`docs/handoffs/2026-07-09-it-permissions-execution-complete-script-fixes-202.md`; app `2da92424-7397-435d-96a1-d2a382293a53`). The bridge is built mock-first per the ADR-0046 transport discipline: a real Graph Files transport and a fixture transport both satisfy one interface, so the entire engine is testable without the tenant. Two things remain GATED and are called out loudly below: (1) the parser maps the Addendum-B fixture shape until Kelsey's real `.xlsm` is in hand (D12), and (2) each `workbook_sources` row is born `is_syncing=false` — a deliberate operator enable turns real polling on. See the post-acceptance notes at the foot of this file.
 **Date:** 2026-07-08
 **Related:** ADR-0030 (accuracy source), ADR-0037 (loads/inventory model), ADR-0038 (parallel transport pattern), ADR-0039 (becomes Leg C), ADR-0046 (parallel Graph transport), ADR-0047 (cutover flip), ADR-0048 (shares parser)
 **Source:** `docs/handoffs/2026-07-09-planning-session-decisions-rollup-2026-07-08.md` §2.1 (verbatim)
@@ -74,4 +74,48 @@ Beyond fixing ADR-0030 accuracy, sync enables:
 
 ## Runbook
 
-`docs/operator/workbook-sync.md` — enable, check status, cutover flip. (Written with the build.)
+`docs/operator/workbook-sync.md` — enable, check status, cutover flip, the
+`Files.Read.All` dependency + 403 symptom. Written with the build.
+
+## Post-acceptance notes (build 2026-07-09)
+
+Built under Bill's 2026-07-09 "build all out that we can" order, mock-first per the
+ADR-0046 transport discipline. Status flipped to Accepted; the migration shipped as
+`20260716b_workbook_sync` (not the placeholder `20260709_*` — the `20260716b_`
+prefix sorts after the sibling AP `20260716_*` and the main tip
+`20260715b_rollup_ap_boardpack_yard`, preserving ADR-0035 lexical ordering).
+
+**What shipped, testable without the tenant:**
+
+- `src/lib/msgraph-files/` — a generic READ-ONLY Graph Files transport (interface +
+  live `graphFilesTransport` (client-credentials, `Files.Read.All`, drive-by-UPN per
+  D4, path-addressed children, cTag delta per D2) + fixture `mockFilesTransport`).
+  The Files creds fall back to the shared `MSGRAPH_MAIL_*` app registration (one app,
+  two capabilities — D6). 403 ⇒ `FilesForbiddenError` ⇒ fail-soft.
+- `src/lib/workbook-sync/` — the engine (discover current-month file, cTag delta,
+  parse, workbook-wins upsert into `processed_units_daily` with an audit row per
+  Vision-overwrite (D3), mid-edit skip+count (D11), ledger-always), business-hours
+  predicate (PT+DST), monthly rollover (D5), R2 archival (D8), parity soft-gate (D7),
+  cutover.
+- Internal poll route + `scripts/workbook-sync-cron.mjs` (10-min, business-hours
+  enforced at the route) + public-paths exemption (+ regression test — the ADR-0036
+  lesson) + the `workbook-sync` compose profile.
+- `/admin/workbook-sync` (sources add/edit/enable, run ledger, cutover with parity
+  soft-gate). The `workbook_sync` cutover surface also appears in `/admin/rollout`;
+  flipping it to `live` there ALSO fires archival (the hook lives in `notify/flip.ts`).
+- Seed: Woodland source (born `is_syncing=false`) + `workbook_sync` rollout surface
+  (born `pilot`), both idempotent.
+
+**LOUD — what remains gated:**
+
+1. **Parser finalization (D12).** The per-day column mapping in
+   `src/lib/workbook-sync/daily-adapter.ts` reads the **Addendum-B fixture** `Daily`
+   sheet layout. When Kelsey's real `JUNE 2026 DAILY LOG WOODLAND.xlsm` lands, that
+   ONE adapter file is where the mapping is finalized — the transport, engine,
+   ledger, cutover, and tests stay put. The shared ADR-0048 `parseWorkbook` runs
+   alongside for staging/provenance (its output is not re-persisted per poll — a
+   10-min WorkbookImport would pollute the retro-audit ledger; the live upsert needs
+   only the derived daily rows).
+2. **Enable flip.** Each `workbook_sources` row is born `is_syncing=false`; a
+   deliberate operator enable turns real polling on. The `workbook-sync` compose
+   service is profile-gated for the same reason.
