@@ -5,6 +5,32 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-09 (ADR-0046 Amendment 3 — AP go-live features)
+
+Operator-directed (Bill, 2026-07-09) ahead of AP going LIVE ~2026-07-11. Amends
+ADR-0046 §C5; mock-first transport architecture unchanged. Migration
+`20260716_ap_hold_and_notes` is purely additive and clean-replays on empty PG16.
+All AP mail still routes through `notifyStaff('ap_notify')` (born pilot — reroutes
+to admins until Bill flips it live).
+
+- **New-invoice notification to ALL active approvers, enriched.** The one-per-request
+  new-request email (already sent to the full expiry-aware roster, excluding any
+  approver past `active_until`) now carries the requester, subject, received-at
+  (Pacific), attachment count, and a **tier-1 deep link** to the specific queue item
+  (`/dashboard/ops/ap?request=<id>`).
+- **Approval / rejection notes.** A **rejection now REQUIRES a note** (plain-English
+  400 at the decide route + disabled Reject until a note is present); approvals stay
+  note-optional. The note rides the decision email, the **stamped decision PDF**, and
+  the audit row.
+- **`pending_review` (hold) status.** An approver may place a pending request **on
+  hold** with a required hold note (`ap_requests.held_by`/`held_at`/`hold_note`,
+  enum value `pending_review`). Accounting (the original forwarder) is emailed that
+  it is held (who + note + "a final decision follows"). The queue shows an amber
+  **ON HOLD** chip with holder + note visible to all approvers. From hold, any
+  approver may approve/reject (first-action-wins unchanged) or update the hold note.
+  Held items are excluded by design from any future staleness alert (none exists
+  today). Every transition is audited.
+
 ### Added — 2026-07-09 (planning rollup 2026-07-08 — build-now subset)
 
 The OPERATOR-ordered build-now subset of the 2026-07-08 planning rollup

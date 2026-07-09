@@ -36,6 +36,8 @@ export interface StampInput {
   approverName: string;
   decision: ApDecisionLabel;
   decidedAt: Date;
+  /** ADR-0046 Amendment 3 — the approver's decision note, shown on the stamp. */
+  note?: string | null;
   /** kind='body': the C10-sanitized message body HTML (re-sanitized before render). */
   bodyHtmlSanitized?: string | null;
   /** kind='attachment': the original attachment filename (display only). */
@@ -131,6 +133,7 @@ export function buildStampHtml(input: StampInput): string {
     <div>Subject: <b>${subject}</b></div>
     <div>Approver: ${escapeHtml(input.approverName)}</div>
     <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
+    ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
   </div>
   ${inner}
   <div class="watermark">${decisionUpper}</div>

@@ -8,8 +8,10 @@ import { requireApApprover } from '@/lib/ap/approvers';
 import {
   ApAlreadyDecidedError,
   ApInvalidSiteError,
+  ApNoteRequiredError,
   ApNotActionableError,
   ApRequestNotFoundError,
+  assertDecisionNote,
   decideRequest,
   resolveDecisionSiteId,
   type ApDecision,
@@ -35,6 +37,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (body.decision !== 'approved' && body.decision !== 'rejected') {
       return NextResponse.json({ error: "decision must be 'approved' or 'rejected'" }, { status: 400 });
     }
+    // Amendment 3 — a rejection MUST carry a note explaining why (approvals stay
+    // note-optional). Validate BEFORE any state change.
+    assertDecisionNote(body.decision as ApDecision, body.note);
     const amountCents =
       typeof body.amountCents === 'number' && Number.isFinite(body.amountCents) && body.amountCents >= 0
         ? Math.round(body.amountCents)
@@ -55,6 +60,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json(result);
   } catch (e) {
     if (e instanceof Response) return e;
+    if (e instanceof ApNoteRequiredError) return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof ApInvalidSiteError) return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof ApRequestNotFoundError) return NextResponse.json({ error: e.message }, { status: 404 });
     if (e instanceof ApAlreadyDecidedError) {

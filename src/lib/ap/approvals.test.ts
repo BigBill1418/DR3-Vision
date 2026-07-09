@@ -15,9 +15,14 @@ import {
 } from './__testutils__/fake-prisma';
 import {
   ApAlreadyDecidedError,
+  ApNoteRequiredError,
+  ApNotActionableError,
   apApproverEmails,
+  assertDecisionNote,
   decideRequest,
+  holdRequest,
   pendingApCount,
+  updateHoldNote,
 } from './approvals';
 
 const writeAudit = vi.fn();
@@ -83,6 +88,9 @@ function pendingReq(over: Partial<FakeApRequest> = {}): FakeApRequest {
     quarantine_reason: null,
     site_id: null,
     decision_pdf_sha256: null,
+    held_by: null,
+    held_at: null,
+    hold_note: null,
     ...over,
   };
 }
@@ -220,10 +228,127 @@ describe('approver set + pending count (roster data)', () => {
     const db = newFakeDb({ users, approvers });
     expect((await apApproverEmails(fp(db))).sort()).toEqual(['janette@svdp.us', 'morena@svdp.us']);
   });
+  it('apApproverEmails EXCLUDES an approver past active_until (deliverable 1 — all ACTIVE approvers)', async () => {
+    const withExpired: FakeApApprover[] = [
+      ...approvers,
+      { id: 'ap-kelsey', user_id: 'u-kelsey', active_until: new Date('2020-01-01T00:00:00Z'), created_by: null },
+    ];
+    const usersPlusKelsey: FakeUser[] = [
+      ...users,
+      { id: 'u-kelsey', name: 'Kelsey', email: 'kelsey@svdp.us', role: 'manager', all_sites: false, is_active: true },
+    ];
+    const db = newFakeDb({ users: usersPlusKelsey, approvers: withExpired });
+    const emails = await apApproverEmails(fp(db));
+    expect(emails).not.toContain('kelsey@svdp.us'); // expired → excluded
+    expect(emails.sort()).toEqual(['janette@svdp.us', 'morena@svdp.us']);
+  });
   it('pendingApCount counts only pending', async () => {
     const db = newFakeDb({
       requests: [pendingReq({ id: 'a' }), pendingReq({ id: 'b', internet_message_id: '<b>', status: 'approved' })],
     });
     expect(await pendingApCount(fp(db))).toBe(1);
+  });
+});
+
+// ADR-0046 Amendment 3 — reject-requires-note (deliverable 2).
+describe('assertDecisionNote — a rejection must say why', () => {
+  it('throws ApNoteRequiredError for a rejection with no / blank note', () => {
+    expect(() => assertDecisionNote('rejected', undefined)).toThrow(ApNoteRequiredError);
+    expect(() => assertDecisionNote('rejected', '   ')).toThrow(ApNoteRequiredError);
+  });
+  it('allows a rejection WITH a note, and an approval with or without a note', () => {
+    expect(() => assertDecisionNote('rejected', 'duplicate of #4471')).not.toThrow();
+    expect(() => assertDecisionNote('approved', undefined)).not.toThrow();
+    expect(() => assertDecisionNote('approved', 'ok')).not.toThrow();
+  });
+});
+
+// ADR-0046 Amendment 3 — hold / "pending review" lifecycle (deliverable 3).
+describe('holdRequest — place hold (pending → pending_review)', () => {
+  const recips = [{ email: 'mary@svdp.us', active: true }];
+
+  it('holds a pending request, sets the hold record, notifies the forwarder, audits', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ sender_address: 'morena@svdp.us' })], users, approvers, decisionRecipients: recips });
+    const res = await holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'waiting on PO match' });
+    expect(res.status).toBe('pending_review');
+    expect(res.mail).toBe('sent');
+    const row = db.requests[0]!;
+    expect(row.status).toBe('pending_review');
+    expect(row.held_by).toBe('u-morena');
+    expect(row.held_at).not.toBeNull();
+    expect(row.hold_note).toBe('waiting on PO match');
+    // winning transition audited
+    expect(writeAudit).toHaveBeenCalled();
+    const auditArgs = writeAudit.mock.calls.map((c) => c[0] as { after?: { attempted?: string; outcome?: string } });
+    expect(auditArgs.some((a) => a.after?.attempted === 'hold' && a.after?.outcome === 'won')).toBe(true);
+  });
+
+  it('REQUIRES a hold note', async () => {
+    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+    await expect(holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '  ' })).rejects.toBeInstanceOf(ApNoteRequiredError);
+    expect(db.requests[0]!.status).toBe('pending'); // untouched
+  });
+
+  it('hold-notice content: routes to the forwarder via ap_notify, carries the note + holder', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ sender_address: 'accounting@svdp.us' })], users, approvers, decisionRecipients: recips });
+    await holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'need vendor W-9' });
+    const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[]; cc?: string[]; surfaceCode: string; htmlBody: string };
+    expect(args.surfaceCode).toBe('ap_notify'); // pilot-routing: gated surface, never raw mail
+    expect(args.recipients).toEqual(['accounting@svdp.us']);
+    expect(args.cc).toEqual(['mary@svdp.us']);
+    expect(args.htmlBody).toContain('need vendor W-9');
+    expect(args.htmlBody).toContain('Morena');
+    expect(args.htmlBody).toContain('ON HOLD');
+  });
+
+  it('concurrent holds — first action wins; the second gets ApAlreadyDecidedError', async () => {
+    const db = newFakeDb({ requests: [pendingReq()], users, approvers, decisionRecipients: recips });
+    const prisma = fp(db);
+    await holdRequest({ prisma, requestId: 'req-1', actorUserId: 'u-morena', note: 'first' });
+    await expect(holdRequest({ prisma, requestId: 'req-1', actorUserId: 'u-janette', note: 'second' })).rejects.toBeInstanceOf(ApAlreadyDecidedError);
+    expect(db.requests[0]!.held_by).toBe('u-morena'); // holder unchanged
+    expect(db.requests[0]!.hold_note).toBe('first');
+  });
+
+  it('cannot hold a quarantined request', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'quarantined' })], users, decisionRecipients: recips });
+    await expect(holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' })).rejects.toBeInstanceOf(ApNotActionableError);
+  });
+});
+
+describe('hold → resolve + update note', () => {
+  const recips = [{ email: 'mary@svdp.us', active: true }];
+
+  it('an on-hold request can be APPROVED by any approver (pending_review → approved)', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'hold' })], users, approvers, decisionRecipients: recips });
+    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-janette' });
+    expect(res.decision).toBe('approved');
+    expect(db.requests[0]!.status).toBe('approved');
+    const won = writeAudit.mock.calls.map((c) => c[0] as { after?: { outcome?: string; from_hold?: boolean } }).find((a) => a.after?.outcome === 'won');
+    expect(won?.after?.from_hold).toBe(true);
+  });
+
+  it('an on-hold request can be REJECTED (pending_review → rejected)', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })], users, approvers, decisionRecipients: recips });
+    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'rejected', actorUserId: 'u-morena', note: 'not ours' });
+    expect(res.decision).toBe('rejected');
+    expect(db.requests[0]!.status).toBe('rejected');
+  });
+
+  it('updateHoldNote refines the note on an on-hold row; keeps the holder', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'old' })], users, approvers });
+    await updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-janette', note: 'new reason' });
+    expect(db.requests[0]!.hold_note).toBe('new reason');
+    expect(db.requests[0]!.held_by).toBe('u-morena'); // holder unchanged
+  });
+
+  it('updateHoldNote refuses a non-on-hold request', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'pending' })], users });
+    await expect(updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' })).rejects.toBeInstanceOf(ApNotActionableError);
+  });
+
+  it('updateHoldNote requires a non-empty note', async () => {
+    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })], users });
+    await expect(updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '' })).rejects.toBeInstanceOf(ApNoteRequiredError);
   });
 });

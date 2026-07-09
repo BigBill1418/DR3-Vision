@@ -15,6 +15,7 @@ import { notifyStaff } from '@/lib/notify/notify-staff';
 import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { publishNtfy } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
+import { formatPacificDateTime } from '@/lib/time';
 import { isInternal, internalDomain } from './senders';
 import { stampApproval, type PdfRenderer, type StampInput } from './stamp';
 
@@ -27,6 +28,13 @@ export { apApproverEmails } from './approvers';
 
 export type ApDecision = 'approved' | 'rejected';
 
+/**
+ * The statuses from which a request can still be approved/rejected: an untouched
+ * `pending` request OR one an approver has placed on hold (`pending_review`).
+ * ADR-0046 Amendment 3.
+ */
+const ACTIONABLE_STATUSES = ['pending', 'pending_review'] as const;
+
 export class ApRequestNotFoundError extends Error {
   readonly status = 404 as const;
   constructor(id: string) {
@@ -38,8 +46,37 @@ export class ApRequestNotFoundError extends Error {
 export class ApNotActionableError extends Error {
   readonly status = 409 as const;
   constructor(readonly currentStatus: string) {
-    super(`AP request is ${currentStatus}; only a pending request can be decided`);
+    super(`AP request is ${currentStatus}; only a pending or on-hold request can be actioned`);
     this.name = 'ApNotActionableError';
+  }
+}
+
+/**
+ * ADR-0046 Amendment 3 — a rejection MUST carry a note explaining why (plain-English
+ * validation, enforced at the API boundary; approvals stay note-optional). Also
+ * thrown for a hold / hold-note-update with no note. Kept out of `decideRequest`
+ * itself so the pure lib race-tests can reject without a note.
+ */
+export class ApNoteRequiredError extends Error {
+  readonly status = 400 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApNoteRequiredError';
+  }
+}
+
+/** True when a non-empty note is present. */
+function hasNote(note: string | undefined | null): note is string {
+  return typeof note === 'string' && note.trim().length > 0;
+}
+
+/**
+ * Enforce "a rejection must say why" at the decision boundary. Approvals are
+ * note-optional. Throws {@link ApNoteRequiredError} for a rejection with no note.
+ */
+export function assertDecisionNote(decision: ApDecision, note: string | undefined | null): void {
+  if (decision === 'rejected' && !hasNote(note)) {
+    throw new ApNoteRequiredError('A rejection must include a note explaining why the invoice was rejected.');
   }
 }
 
@@ -133,10 +170,13 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   if (!row) throw new ApRequestNotFoundError(args.requestId);
   if (row.status === 'quarantined') throw new ApNotActionableError('quarantined');
 
+  const priorStatus = row.status;
   const decidedAt = new Date();
-  // Atomic conditional transition — only flips a still-pending row.
+  // Atomic conditional transition — only flips a row still in an actionable state
+  // (pending OR on-hold pending_review). First action wins; a row already decided
+  // (or racing) matches nothing → count 0 → ApAlreadyDecidedError below.
   const res = await prisma.apRequest.updateMany({
-    where: { id: args.requestId, status: 'pending' },
+    where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
     data: {
       status: args.decision,
       decided_by: args.actorUserId,
@@ -172,11 +212,12 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
     action: 'update',
     table_name: TABLE,
     row_id: args.requestId,
-    before: { status: 'pending' },
+    before: { status: priorStatus },
     after: {
       attempted: args.decision,
       outcome: 'won',
       status: args.decision,
+      from_hold: priorStatus === 'pending_review',
       has_note: !!args.note,
       has_vendor: !!args.vendor,
       has_amount: typeof args.amountCents === 'number',
@@ -194,6 +235,195 @@ function baseUrl(): string {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Resolve the recipient set for a request-scoped email (decision OR hold notice):
+ * PRIMARY = the original internal forwarder (`sender_address`, @svdp.us, validated
+ * at intake); the fixed `ap_decision_recipients` roster (Mary's GP filing) rides as
+ * CC when the forwarder is valid, or is the FALLBACK recipient when the forwarder
+ * is somehow empty/non-internal. ADR-0046 §3 amendment / Amendment 3.
+ */
+async function resolveForwarderRecipients(
+  prisma: PrismaClient,
+  senderAddress: string | null,
+): Promise<{ recipients: string[]; cc: string[] }> {
+  const roster = (
+    await prisma.apDecisionRecipient.findMany({ where: { active: true }, select: { email: true } })
+  ).map((r) => r.email);
+  const forwarder = (senderAddress ?? '').trim();
+  const forwarderInternal = !!forwarder && isInternal(forwarder, internalDomain());
+  const recipients = forwarderInternal ? [forwarder] : roster;
+  const cc = forwarderInternal ? roster.filter((e) => e.toLowerCase() !== forwarder.toLowerCase()) : [];
+  return { recipients, cc };
+}
+
+export interface HoldArgs {
+  prisma?: PrismaClient;
+  requestId: string;
+  actorUserId: string;
+  /** REQUIRED — a hold must say why it is being held (Amendment 3). */
+  note: string;
+}
+
+export interface HoldResult {
+  requestId: string;
+  status: 'pending_review';
+  /** Outcome of the "it is being held" notice to the original forwarder. */
+  mail: ApMailOutcome;
+}
+
+/**
+ * Place a PENDING request on HOLD ("pending review", Amendment 3). Atomic +
+ * first-action-wins: only a still-`pending` row flips; a row already decided,
+ * quarantined, or already on hold loses (ApAlreadyDecidedError, both attempts
+ * audited). Accounting is notified via a hold-notice email to the original
+ * forwarder (fail-soft). Requires a non-empty hold note.
+ */
+export async function holdRequest(args: HoldArgs): Promise<HoldResult> {
+  const prisma = args.prisma ?? defaultPrisma;
+  if (!hasNote(args.note)) {
+    throw new ApNoteRequiredError('A hold must include a note explaining why the invoice is being held.');
+  }
+  const note = args.note.trim();
+  const row = await prisma.apRequest.findUnique({
+    where: { id: args.requestId },
+    select: { id: true, status: true, decided_by: true, decided_at: true, held_by: true, held_at: true },
+  });
+  if (!row) throw new ApRequestNotFoundError(args.requestId);
+  if (row.status === 'quarantined') throw new ApNotActionableError('quarantined');
+
+  const heldAt = new Date();
+  // Hold is placed ONLY from pending (you don't re-hold an on-hold row — you update
+  // its note; see updateHoldNote). Atomic conditional transition.
+  const res = await prisma.apRequest.updateMany({
+    where: { id: args.requestId, status: 'pending' },
+    data: { status: 'pending_review', held_by: args.actorUserId, held_at: heldAt, hold_note: note },
+  });
+
+  if (res.count === 0) {
+    const cur = await prisma.apRequest.findUnique({
+      where: { id: args.requestId },
+      select: { status: true, decided_by: true, decided_at: true, held_by: true, held_at: true },
+    });
+    await writeAudit({
+      actor_user_id: args.actorUserId,
+      action: 'update',
+      table_name: TABLE,
+      row_id: args.requestId,
+      after: { attempted: 'hold', outcome: 'lost', current_status: cur?.status ?? 'unknown' },
+    });
+    // Attribute the conflicting state: a held row → its holder; a decided row → its decider.
+    const heldNow = cur?.status === 'pending_review';
+    const whoId = heldNow ? cur?.held_by ?? row.held_by : cur?.decided_by ?? row.decided_by;
+    const whenAt = heldNow ? cur?.held_at ?? row.held_at : cur?.decided_at ?? row.decided_at;
+    const name = await resolveName(prisma, whoId ?? null);
+    throw new ApAlreadyDecidedError(cur?.status ?? row.status, name, whenAt ?? null);
+  }
+
+  await writeAudit({
+    actor_user_id: args.actorUserId,
+    action: 'update',
+    table_name: TABLE,
+    row_id: args.requestId,
+    before: { status: 'pending' },
+    after: { attempted: 'hold', outcome: 'won', status: 'pending_review', has_note: true },
+  });
+
+  const mail = await sendHoldNotice(prisma, args.requestId);
+  return { requestId: args.requestId, status: 'pending_review', mail };
+}
+
+/**
+ * Update the hold note on an on-hold (`pending_review`) request (Amendment 3). Any
+ * approver may refine the note while it is held; the holder (held_by/held_at) is
+ * unchanged, and the edit is audited with the editor as actor. Requires a non-empty
+ * note. Throws ApNotActionableError if the request is not currently on hold.
+ */
+export async function updateHoldNote(args: HoldArgs): Promise<void> {
+  const prisma = args.prisma ?? defaultPrisma;
+  if (!hasNote(args.note)) {
+    throw new ApNoteRequiredError('A hold note cannot be empty.');
+  }
+  const note = args.note.trim();
+  const row = await prisma.apRequest.findUnique({
+    where: { id: args.requestId },
+    select: { id: true, status: true, hold_note: true },
+  });
+  if (!row) throw new ApRequestNotFoundError(args.requestId);
+  if (row.status !== 'pending_review') throw new ApNotActionableError(row.status);
+
+  // Guard the status in the write too, so a concurrent decide can't be clobbered.
+  const res = await prisma.apRequest.updateMany({
+    where: { id: args.requestId, status: 'pending_review' },
+    data: { hold_note: note },
+  });
+  if (res.count === 0) {
+    const cur = await prisma.apRequest.findUnique({ where: { id: args.requestId }, select: { status: true } });
+    throw new ApNotActionableError(cur?.status ?? 'unknown');
+  }
+  await writeAudit({
+    actor_user_id: args.actorUserId,
+    action: 'update',
+    table_name: TABLE,
+    row_id: args.requestId,
+    before: { hold_note_present: hasNote(row.hold_note) },
+    after: { hold_note_updated: true },
+  });
+}
+
+/**
+ * Notify accounting (the original forwarder) that a request is being HELD for
+ * review (Amendment 3, effect (a)). States who holds it, the hold note, and that a
+ * final decision will follow. Routes through notifyStaff('ap_notify') (in pilot it
+ * reroutes to admins — correct). Fail-soft: a mail failure never fails the hold.
+ * Unlike the decision mail this does NOT page on an empty recipient set (a hold is
+ * non-terminal; a warn is logged) — the terminal decision mail still guards Mary's
+ * roster loudly.
+ */
+export async function sendHoldNotice(prisma: PrismaClient, requestId: string): Promise<ApMailOutcome> {
+  const req = await prisma.apRequest.findUnique({
+    where: { id: requestId },
+    select: { id: true, subject: true, sender_address: true, held_by: true, held_at: true, hold_note: true },
+  });
+  if (!req) throw new ApRequestNotFoundError(requestId);
+
+  const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
+  if (recipients.length === 0) {
+    log.warn({ requestId }, '[ap-approvals] hold notice not sent — no valid recipient (forwarder + roster empty)');
+    return 'refused_no_recipients';
+  }
+
+  const holderName = await resolveName(prisma, req.held_by);
+  const subject = req.subject ?? '(no subject)';
+  const heldAt = req.held_at ?? new Date();
+  const noteLine = req.hold_note ? `<li>Hold note: ${escapeHtml(req.hold_note)}</li>` : '';
+  const htmlBody = `<p>A vendor-invoice approval request is now <b>ON HOLD (pending review)</b> in DR3-Vision. It has not yet been approved or rejected — a final decision will follow.</p>
+    <ul>
+      <li>Original subject: ${escapeHtml(subject)}</li>
+      <li>Request id: ${escapeHtml(req.id)}</li>
+      <li>Held by: ${escapeHtml(holderName)}</li>
+      <li>Held at: ${escapeHtml(formatPacificDateTime(heldAt))} PT</li>
+      ${noteLine}
+    </ul>
+    <p>No action is needed from you right now; you will receive a decision email once the invoice is approved or rejected.</p>`;
+
+  const notified = await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients,
+    ...(cc.length > 0 ? { cc } : {}),
+    subject: `DR3-Vision AP — request ON HOLD (pending review): ${subject}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    db: prisma,
+  });
+  if (notified.disabled) return 'disabled';
+  if (notified.delivered === 0) {
+    log.warn({ requestId }, '[ap-approvals] hold notice failed to all recipients');
+    return 'failed';
+  }
+  return 'sent';
 }
 
 /**
@@ -230,17 +460,7 @@ export async function sendDecisionEmail(
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
 
-  const roster = (
-    await prisma.apDecisionRecipient.findMany({ where: { active: true }, select: { email: true } })
-  ).map((r) => r.email);
-
-  // Primary recipient = the original internal forwarder (sender_address, @svdp.us).
-  // Roster = CC (additional) when the forwarder is valid; roster = fallback
-  // recipient when the forwarder is empty/non-internal.
-  const forwarder = (req.sender_address ?? '').trim();
-  const forwarderInternal = !!forwarder && isInternal(forwarder, internalDomain());
-  const recipients = forwarderInternal ? [forwarder] : roster;
-  const cc = forwarderInternal ? roster.filter((e) => e.toLowerCase() !== forwarder.toLowerCase()) : [];
+  const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
 
   if (recipients.length === 0) {
     log.error({ requestId }, '[ap-approvals] no valid decision recipient (forwarder + roster empty) — refusing to send, paging operator');
@@ -331,6 +551,7 @@ interface StampSourceRequest {
   body_html_sanitized: string | null;
   body_text: string | null;
   decided_by: string | null;
+  decision_note: string | null;
 }
 
 /**
@@ -352,6 +573,8 @@ async function buildDecisionStamp(
     approverName,
     decision,
     decidedAt,
+    // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too.
+    note: req.decision_note,
   };
   let input: StampInput;
   if (req.body_html_sanitized && req.body_html_sanitized.trim()) {

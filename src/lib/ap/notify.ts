@@ -11,6 +11,7 @@ import { publishNtfy } from '@/lib/ntfy';
 import { notifyStaff } from '@/lib/notify/notify-staff';
 import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { log } from '@/lib/observability/logger';
+import { formatPacificDateTime } from '@/lib/time';
 
 const SYSTEM_TOPIC = 'dr3-vision-system';
 const QUARANTINE_COOLDOWN_MS = 30 * 60 * 1000; // container/self-mon class (ADR-0037 §3)
@@ -21,6 +22,10 @@ function baseUrl(): string {
 }
 function apQueueUrl(): string {
   return `${baseUrl()}/dashboard/ops/ap`;
+}
+/** Tier-1 deep link to the specific request in the AP queue (ADR-0036 click policy). */
+function apRequestUrl(requestId: string): string {
+  return `${apQueueUrl()}?request=${encodeURIComponent(requestId)}`;
 }
 
 /**
@@ -80,28 +85,46 @@ export async function alertDeadman(hoursSince: number, thresholdMinutes: number)
 }
 
 /**
- * New-request notification to the approver set (their addresses from the DB).
- * Row id + subject only (subject is from an authenticated internal sender, safe
- * to include for triage — never attachment bytes/amounts). Fail-soft.
+ * New-request notification to ALL active approvers (their addresses resolved once
+ * per poll from the expiry-aware ap_approvers roster; an expired `active_until`
+ * excludes an approver). ONE email per new request (fired only on the `created`
+ * terminal state — never per-poll, never for follow-ups/duplicates). Carries the
+ * requester (internal forwarder), subject, received-at (Pacific), attachment count,
+ * and a TIER-1 deep link to the specific queue item. Row id + subject + forwarder
+ * address are all from an authenticated internal sender (safe for triage); never
+ * attachment bytes/amounts (ADR-0045). Fail-soft. ADR-0046 Amendment 3 deliverable 1.
  */
 export async function notifyNewRequest(args: {
   requestId: string;
   subject: string | null;
+  senderAddress?: string | null;
+  receivedAt?: Date | null;
+  attachmentCount?: number;
   approverEmails: readonly string[];
 }): Promise<void> {
   if (args.approverEmails.length === 0) {
-    log.warn({ requestId: args.requestId }, '[ap-notify] no approver addresses configured — new-request email skipped');
+    log.warn({ requestId: args.requestId }, '[ap-notify] no active approver addresses — new-request email skipped');
     return;
   }
   const subj = args.subject ?? '(no subject)';
+  const requester = (args.senderAddress ?? '').trim() || '(unknown sender)';
+  const receivedLine = args.receivedAt
+    ? `<li>Received: ${escapeHtml(formatPacificDateTime(args.receivedAt))} PT</li>`
+    : '';
+  const count = typeof args.attachmentCount === 'number' ? args.attachmentCount : 0;
+  const attachLine = `<li>Attachments: ${count}</li>`;
   const htmlBody = `<p>A new vendor-invoice approval request is waiting in the DR3-Vision AP queue.</p>
     <ul>
+      <li>Requested by: ${escapeHtml(requester)}</li>
       <li>Subject: ${escapeHtml(subj)}</li>
+      ${receivedLine}
+      ${attachLine}
       <li>Request id: ${escapeHtml(args.requestId)}</li>
     </ul>
-    <p><a href="${apQueueUrl()}">Open the AP approval queue</a> to review the invoice and approve or reject. First action wins.</p>`;
-  // ADR-0047 — org-wide AP surface, born pilot. One gated send to the approver
-  // set (in pilot it reroutes to admins; the approvers receive nothing yet).
+    <p><a href="${apRequestUrl(args.requestId)}">Open this request in the AP approval queue</a> to review and approve, reject, or place it on hold. First action wins.</p>`;
+  // ADR-0047 — org-wide AP surface, born pilot. One gated send to ALL active
+  // approvers (in pilot it reroutes to admins; the approvers receive nothing until
+  // Bill flips ap_notify live). notifyStaff is the mandated chokepoint (CLAUDE.md #12).
   await notifyStaff({
     surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
     site: null,

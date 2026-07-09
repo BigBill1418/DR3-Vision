@@ -32,7 +32,14 @@ const noopLog: IngestLogger = () => undefined;
 /** Notifier seam — production wires ntfy/mail; tests substitute spies. */
 export interface IngestNotifier {
   quarantine(args: { requestId: string; senderDomain: string; reason: string }): Promise<void>;
-  newRequest(args: { requestId: string; subject: string | null; approverEmails: readonly string[] }): Promise<void>;
+  newRequest(args: {
+    requestId: string;
+    subject: string | null;
+    senderAddress?: string | null;
+    receivedAt?: Date | null;
+    attachmentCount?: number;
+    approverEmails: readonly string[];
+  }): Promise<void>;
 }
 
 const defaultNotifier: IngestNotifier = {
@@ -267,7 +274,14 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     row_id: requestId,
     after: { status: 'pending', sender_domain: domainOf(msg.from), attachment_count: attachments.length },
   });
-  await notifier.newRequest({ requestId, subject: msg.subject, approverEmails: ctx.approverEmails });
+  await notifier.newRequest({
+    requestId,
+    subject: msg.subject,
+    senderAddress: msg.from,
+    receivedAt: new Date(msg.receivedDateTime),
+    attachmentCount: attachments.length,
+    approverEmails: ctx.approverEmails,
+  });
   return { kind: 'created', requestId };
 }
 
