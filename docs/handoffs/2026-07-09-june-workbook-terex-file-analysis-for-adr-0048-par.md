@@ -125,6 +125,8 @@ This aligns exactly with **ADR-0037 Addendum B's daily-log-9 taxonomy** (`trash 
 
 The "×5" note Kelsey wrote is still worth verifying with her — it may point to a specific formula multiplier inside the cotton block (e.g. `=weight*5` somewhere for a conversion), not the structural quirk itself. **Structural quirk fully understood; formula-level `×5` still needs Kelsey's walkthrough to confirm.**
 
+> **Update 2026-07-09 (full rollup §3.1):** the July workbook carries the SAME 9th cotton block on DAY6 — the structural quirk is a **permanent template feature**, not a June-only ad-hoc addition. The paragraph above's "template wasn't updated at the start of June" reading is superseded. Layout expectation encoded in `src/lib/audit/workbook/day-sheet-layout.ts`. The formula-level `×5` remains open for Kelsey.
+
 ### §3.3 — B10-4 (event units validity as inbound type)
 
 **Partial answer from Events tab structure.** The Events sheet has a `Units` column (col E, row 3 header) alongside Date, Customer, County, Slip, Freight, Driver Hours, Drivers Wages, Labor Hours, Labor Wages, Mileage Reimb, Per Diem, Misc., ID#. This suggests events DO carry inbound-unit counts. Kelsey walkthrough still needed to confirm whether these units feed the running balance the same way as standard inbounds, or whether they're accounted separately.
