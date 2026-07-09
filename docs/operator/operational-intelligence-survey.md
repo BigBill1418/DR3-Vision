@@ -151,3 +151,21 @@ the admin **Export** button (auto-close does NOT export for you).
 
 First automated reminders fire at the first 09:00 PT after deploy (`last_reminder_at` starts
 NULL; the 2026-07-02 manual round did not set it).
+
+### Campaign log — 2026-07-07 → 2026-07-09 (PT) — CAMPAIGN COMPLETE
+
+- **Mary Scott submitted on her own, 2026-07-07 12:29 PM PT.** After 5 automated daily
+  reminders (never-opened tier), she opened her link 12:05 PM, answered all 7 questions
+  over ~23 minutes (185 autosave audit rows, `public:survey-respondent`), and hit submit
+  through the public route. No operator action was needed.
+- **Auto-close fired 12:32 PM PT** under `actor_label: system:survey-reminder-cron`
+  (9 submitted, 1 withdrawn, 0 outstanding) — the ADR-0036 machinery worked end-to-end
+  on its first real campaign.
+- **Post-close reminder ticks are clean no-ops** (verified 2026-07-09 09:00 PT:
+  `{"campaigns":0,"remindersSent":0}`).
+- **Export completed 2026-07-09.** The admin close route only *builds* the export (the
+  ClaudeSync push was left as a follow-up), so the response files were generated from the
+  prod DB in `buildExport`'s exact format and committed to
+  `docs/operations-intel/dr3-intel-2026-06/` — one file per respondent + `_summary.md`.
+
+**Final standing: 9/9 reachable invites submitted · 1 withdrawn (Leisha Wallace) · closed.**
