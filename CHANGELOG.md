@@ -5,6 +5,14 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-10 (open-items register)
+
+- **`docs/OPEN-ITEMS.md`** — the single live register of everything hanging
+  (operator actions incl. the AP go-live flip and the §7 file-fetch decision,
+  stakeholder blocks, accepted code residuals from the 2026-07-10 sweep, and
+  the §8.2 queue). Anchor deadline recorded: Kelsey's window ends 8/1. Sessions
+  append loose ends there and move closed items to Done.
+
 ### Fixed — 2026-07-10 (production-readiness stack sweep — ops + 3-subsystem audit)
 
 Operator-ordered top-to-bottom sweep (Bill, 2026-07-10) ahead of AP go-live:
