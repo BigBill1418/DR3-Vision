@@ -64,4 +64,8 @@ This project does not have a synchronous human reviewer for every decision. When
 - **Stack:** Next.js 15 App Router + TypeScript, Postgres 16 + Prisma, Auth.js v5, Tailwind + shadcn/ui, R2 storage, Playwright for MyMRC scraping
 - **V1 archive:** `legacy/` — V1 PHP code, do not touch, retained for reference only
 
+Loose ends live in **`docs/OPEN-ITEMS.md`** (the single hanging-items register:
+operator actions, stakeholder blocks, accepted residuals). Finish work with a
+loose end → append it there; close one → mark it Done there.
+
 When in doubt: read the charter, read the ADRs, then act.
