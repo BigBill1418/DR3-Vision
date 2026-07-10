@@ -82,7 +82,9 @@ function scheduleNext() {
   setTimeout(() => {
     runScrapeOnce();
     scheduleNext();
-  }, delay).unref();
+  }, delay); // NOT .unref() — this timer must keep the daemon alive (else the
+  // process exits after the boot scrape and `unless-stopped` turns it into a
+  // continuous restart/scrape loop).
 }
 
 function setupShutdown() {

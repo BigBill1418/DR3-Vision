@@ -13,7 +13,10 @@ export const dynamic = 'force-dynamic';
 const ManualLine = z.object({
   description: z.string().min(1).max(500),
   quantity: z.number().finite().nullable().optional(),
-  amountCents: z.number().int(),
+  // Negative lines are legitimate (offsets); magnitude is bounded so a typo'd
+  // −$1,000,000 manual line cannot compose cleanly ($500k cap, generous vs any
+  // real OR collection-site amount).
+  amountCents: z.number().int().gte(-50_000_000).lte(50_000_000),
 });
 
 const Supersede = z.object({
@@ -21,7 +24,10 @@ const Supersede = z.object({
   notes: z.string().max(1000).optional(),
 });
 
-export async function POST(req: Request, { params }: { params: Promise<{ site: string; id: string }> }) {
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ site: string; id: string }> },
+) {
   const { site, id } = await params;
   try {
     const ctx = await requireManagerForSite(site);
@@ -32,12 +38,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       invoiceId: id,
       actorUserId: ctx.userId,
       ...(parsed.data.manualLines
-        ? { manualLines: parsed.data.manualLines.map((m) => ({ description: m.description, quantity: m.quantity ?? null, amountCents: m.amountCents })) }
+        ? {
+            manualLines: parsed.data.manualLines.map((m) => ({
+              description: m.description,
+              quantity: m.quantity ?? null,
+              amountCents: m.amountCents,
+            })),
+          }
         : {}),
       ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
     });
     return NextResponse.json({ invoice }, { status: 201 });
   } catch (e) {
-    return invoiceErrorResponse(e, { site, id, op: 'invoices.supersede', requestId: req.headers.get('x-request-id') });
+    return invoiceErrorResponse(e, {
+      site,
+      id,
+      op: 'invoices.supersede',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }

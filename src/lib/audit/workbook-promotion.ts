@@ -35,7 +35,7 @@ import {
   type LandfilledReason,
   type LoadSourceType,
 } from '@prisma/client';
-import { dayKeyUTCFromISO } from '@/lib/time';
+import { dayKeyUTCFromISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
 import {
   computeRunningBalance,
   snapshotTotalUnits,
@@ -136,7 +136,9 @@ export class PromotionShaMismatchError extends Error {
     readonly priorSha: string,
     readonly currentSha: string,
   ) {
-    super(`import ${importId} was already promoted under a different staged content SHA (tampered staging?)`);
+    super(
+      `import ${importId} was already promoted under a different staged content SHA (tampered staging?)`,
+    );
     this.name = 'PromotionShaMismatchError';
   }
 }
@@ -196,7 +198,12 @@ const OUTBOUND_COMMODITIES = new Set<OutboundCommodity>([
 ]);
 const OUTBOUND_SUBCATEGORIES = new Set<OutboundSubCategory>(['renovation', 'baled', 'shredded']);
 const DROPOFF_KINDS = new Set<ConsumerDropoffKind>(['incentive', 'unpaid', 'illegal']);
-const LANDFILLED_REASONS = new Set<LandfilledReason>(['bed_bug', 'soiled', 'water_logged', 'other']);
+const LANDFILLED_REASONS = new Set<LandfilledReason>([
+  'bed_bug',
+  'soiled',
+  'water_logged',
+  'other',
+]);
 const LOAD_SOURCE_TYPES = new Set<LoadSourceType>(['b2b_haul', 'cip_consumer', 'event']);
 
 /** A staging row as read from `workbook_import_rows` (the subset the promotion reads). */
@@ -290,7 +297,8 @@ function provLabel(prov: unknown): string {
 }
 
 function decodePayload(raw: string | null, where: string): Payload {
-  if (raw === null || raw.trim() === '') throw new PromotionParseError(`empty staging payload at ${where}`);
+  if (raw === null || raw.trim() === '')
+    throw new PromotionParseError(`empty staging payload at ${where}`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -306,14 +314,18 @@ function decodePayload(raw: string | null, where: string): Payload {
 function reqDay(p: Payload, key: string, where: string): string {
   const v = p[key];
   if (typeof v !== 'string' || !ISO_DAY.test(v)) {
-    throw new PromotionParseError(`${where}: field "${key}" must be a YYYY-MM-DD date (got ${String(v)})`);
+    throw new PromotionParseError(
+      `${where}: field "${key}" must be a YYYY-MM-DD date (got ${String(v)})`,
+    );
   }
   return v;
 }
 function reqNum(p: Payload, key: string, where: string): number {
   const v = p[key];
   if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new PromotionParseError(`${where}: field "${key}" must be a finite number (got ${String(v)})`);
+    throw new PromotionParseError(
+      `${where}: field "${key}" must be a finite number (got ${String(v)})`,
+    );
   }
   return v;
 }
@@ -321,19 +333,23 @@ function optNum(p: Payload, key: string, where: string): number | null {
   const v = p[key];
   if (v === undefined || v === null) return null;
   if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new PromotionParseError(`${where}: field "${key}" must be a finite number when present (got ${String(v)})`);
+    throw new PromotionParseError(
+      `${where}: field "${key}" must be a finite number when present (got ${String(v)})`,
+    );
   }
   return v;
 }
 function optInt(p: Payload, key: string, where: string): number | null {
   const v = optNum(p, key, where);
   if (v === null) return null;
-  if (!Number.isInteger(v)) throw new PromotionParseError(`${where}: field "${key}" must be a whole number`);
+  if (!Number.isInteger(v))
+    throw new PromotionParseError(`${where}: field "${key}" must be a whole number`);
   return v;
 }
 function reqInt(p: Payload, key: string, where: string): number {
   const v = reqNum(p, key, where);
-  if (!Number.isInteger(v)) throw new PromotionParseError(`${where}: field "${key}" must be a whole number`);
+  if (!Number.isInteger(v))
+    throw new PromotionParseError(`${where}: field "${key}" must be a whole number`);
   return v;
 }
 function optStr(p: Payload, key: string): string | null {
@@ -410,7 +426,9 @@ export function decodeStagingRows(
       // Non-promotable staging rows (summary/detail evidence) are ignored, not errors.
       if (section && ['summary', 'detail'].includes(section)) continue;
       if (section === null) continue;
-      throw new PromotionParseError(`unrecognized promotion section "${section}" at ${provLabel(row.provenance)}`);
+      throw new PromotionParseError(
+        `unrecognized promotion section "${section}" at ${provLabel(row.provenance)}`,
+      );
     }
     const where = `${section}@${provLabel(row.provenance)}`;
     const p = decodePayload(row.raw_value, where);
@@ -422,7 +440,10 @@ export function decodeStagingRows(
         out.clippedRowCount++;
         continue;
       }
-      if (out.opening) throw new PromotionParseError(`${where}: more than one opening_inventory row in the import`);
+      if (out.opening)
+        throw new PromotionParseError(
+          `${where}: more than one opening_inventory row in the import`,
+        );
       out.opening = {
         date,
         unitsIndoor: optInt(p, 'unitsIndoor', where),
@@ -499,7 +520,9 @@ export function decodeStagingRows(
             );
           }
         } else if (p['wholeUnits'] !== undefined || p['programUnits'] !== undefined) {
-          throw new PromotionParseError(`${where}: baled/shredded rows are weight-only (no unit split)`);
+          throw new PromotionParseError(
+            `${where}: baled/shredded rows are weight-only (no unit split)`,
+          );
         }
         out.outbound.push({
           date,
@@ -525,7 +548,9 @@ export function decodeStagingRows(
         const programUnits = optInt(p, 'programUnits', where) ?? units;
         const nonProgramUnits = optInt(p, 'nonProgramUnits', where) ?? 0;
         if (programUnits + nonProgramUnits !== units) {
-          throw new PromotionParseError(`${where}: programUnits + nonProgramUnits must equal units(${units})`);
+          throw new PromotionParseError(
+            `${where}: programUnits + nonProgramUnits must equal units(${units})`,
+          );
         }
         out.landfilled.push({
           date,
@@ -590,19 +615,28 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
 
   const sum = (arr: readonly { programUnits: number; nonProgramUnits: number }[]) =>
     arr.reduce(
-      (a, r) => ({ program: a.program + r.programUnits, nonProgram: a.nonProgram + r.nonProgramUnits }),
+      (a, r) => ({
+        program: a.program + r.programUnits,
+        nonProgram: a.nonProgram + r.nonProgramUnits,
+      }),
       { program: 0, nonProgram: 0 },
     );
 
   const inbound = sum(c.inbound);
   const stripped = c.dailyCloses.reduce(
-    (a, r) => ({ program: a.program.plus(r.strippedProgram), nonProgram: a.nonProgram.plus(r.strippedNonProgram) }),
+    (a, r) => ({
+      program: a.program.plus(r.strippedProgram),
+      nonProgram: a.nonProgram.plus(r.strippedNonProgram),
+    }),
     { program: new D(0), nonProgram: new D(0) },
   );
   const reno = c.outbound
     .filter((o) => o.subCategory === 'renovation')
     .reduce(
-      (a, r) => ({ program: a.program + (r.programUnits ?? 0), nonProgram: a.nonProgram + (r.nonProgramUnits ?? 0) }),
+      (a, r) => ({
+        program: a.program + (r.programUnits ?? 0),
+        nonProgram: a.nonProgram + (r.nonProgramUnits ?? 0),
+      }),
       { program: 0, nonProgram: 0 },
     );
   const landfilled = sum(c.landfilled);
@@ -663,7 +697,11 @@ const CONFLICT_TABLES: {
     find: (tx, siteId, from, to) =>
       tx.processedUnitsDaily
         .findMany({
-          where: { site_id: siteId, production_date: { gte: from, lte: to }, source: { not: 'import' } },
+          where: {
+            site_id: siteId,
+            production_date: { gte: from, lte: to },
+            source: { not: 'import' },
+          },
           select: { production_date: true },
         })
         .then((r) => r.map((x) => ({ date: x.production_date }))),
@@ -674,10 +712,22 @@ const CONFLICT_TABLES: {
     // rides on `import_id` alone — so a live (non-promoted) inbound row is exactly
     // `import_id IS NULL`. This is why ADR-0048 adds the bare `import_id` column.
     table: 'inbound_loads',
+    // INSTANT column: bound by the Pacific-day window [midnight(from),
+    // midnight(to+1)), not the @db.Date UTC-midnight keys — the old bounds
+    // missed live loads captured after 5 PM UTC-offset on the window's last
+    // day (a promotion could then double-count that day) and falsely matched
+    // late-evening loads from the day before the window.
     find: (tx, siteId, from, to) =>
       tx.inboundLoad
         .findMany({
-          where: { site_id: siteId, arrived_at: { gte: from, lte: to }, import_id: null },
+          where: {
+            site_id: siteId,
+            arrived_at: {
+              gte: pacificMidnightInstantOfDayISO(isoOf(from)),
+              lt: pacificMidnightInstantOfDayISO(isoOf(new Date(to.getTime() + 86_400_000))),
+            },
+            import_id: null,
+          },
           select: { arrived_at: true },
         })
         .then((r) => r.map((x) => ({ date: x.arrived_at as Date }))),
@@ -697,7 +747,11 @@ const CONFLICT_TABLES: {
     find: (tx, siteId, from, to) =>
       tx.landfilledUnit
         .findMany({
-          where: { site_id: siteId, disposal_date: { gte: from, lte: to }, source: { not: 'import' } },
+          where: {
+            site_id: siteId,
+            disposal_date: { gte: from, lte: to },
+            source: { not: 'import' },
+          },
           select: { disposal_date: true },
         })
         .then((r) => r.map((x) => ({ date: x.disposal_date }))),
@@ -707,17 +761,29 @@ const CONFLICT_TABLES: {
     find: (tx, siteId, from, to) =>
       tx.consumerDropoff
         .findMany({
-          where: { site_id: siteId, dropoff_date: { gte: from, lte: to }, source: { not: 'import' } },
+          where: {
+            site_id: siteId,
+            dropoff_date: { gte: from, lte: to },
+            source: { not: 'import' },
+          },
           select: { dropoff_date: true },
         })
         .then((r) => r.map((x) => ({ date: x.dropoff_date }))),
   },
   {
     table: 'site_inventory_snapshots',
+    // INSTANT column — same Pacific-day bounds as inbound_loads above.
     find: (tx, siteId, from, to) =>
       tx.siteInventorySnapshot
         .findMany({
-          where: { site_id: siteId, snapshot_at: { gte: from, lte: to }, source: { not: 'import' } },
+          where: {
+            site_id: siteId,
+            snapshot_at: {
+              gte: pacificMidnightInstantOfDayISO(isoOf(from)),
+              lt: pacificMidnightInstantOfDayISO(isoOf(new Date(to.getTime() + 86_400_000))),
+            },
+            source: { not: 'import' },
+          },
           select: { snapshot_at: true },
         })
         .then((r) => r.map((x) => ({ date: x.snapshot_at }))),
@@ -738,7 +804,10 @@ async function detectConflicts(
   for (const c of CONFLICT_TABLES) {
     const rows = await c.find(tx, siteId, from, to);
     if (rows.length > 0) {
-      conflicts.push({ table: c.table, dates: [...new Set(rows.map((r) => isoOf(r.date)))].sort() });
+      conflicts.push({
+        table: c.table,
+        dates: [...new Set(rows.map((r) => isoOf(r.date)))].sort(),
+      });
     }
   }
   return conflicts;
@@ -764,15 +833,26 @@ export interface PromotionPreview {
  */
 export async function previewPromotion(args: PromoteArgs): Promise<PromotionPreview> {
   const { db, importId, scope, resolver } = args;
-  const imp = await db.workbookImport.findUnique({ where: { id: importId }, select: { id: true, site_id: true } });
+  const imp = await db.workbookImport.findUnique({
+    where: { id: importId },
+    select: { id: true, site_id: true },
+  });
   if (!imp) throw new PromotionImportNotFoundError(importId);
   if (imp.site_id !== scope.siteId) {
-    throw new PromotionScopeMismatchError(`import site ${imp.site_id} does not match scope site ${scope.siteId}`);
+    throw new PromotionScopeMismatchError(
+      `import site ${imp.site_id} does not match scope site ${scope.siteId}`,
+    );
   }
 
   const stagingRows = (await db.workbookImportRow.findMany({
     where: { import_id: importId },
-    select: { section: true, raw_value: true, numeric_value: true, site_name_raw: true, provenance: true },
+    select: {
+      section: true,
+      raw_value: true,
+      numeric_value: true,
+      site_name_raw: true,
+      provenance: true,
+    },
   })) as StagingRowInput[];
   const sha = stagedContentSha(stagingRows);
   const existing = await db.workbookPromotion.findUnique({ where: { import_id: importId } });
@@ -796,7 +876,11 @@ export async function previewPromotion(args: PromoteArgs): Promise<PromotionPrev
     counts: countCandidates(candidates),
     clippedRowCount: candidates.clippedRowCount,
     conflicts,
-    computedClose: { program: close.program.toString(), nonProgram: close.nonProgram.toString(), total: close.total.toString() },
+    computedClose: {
+      program: close.program.toString(),
+      nonProgram: close.nonProgram.toString(),
+      total: close.total.toString(),
+    },
     expectedCloseTotal: scope.expectedCloseTotal ?? null,
     balanceOk,
     sha256: sha,
@@ -812,7 +896,8 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
   if (!ISO_DAY.test(scope.from) || !ISO_DAY.test(scope.to)) {
     throw new PromotionScopeMismatchError('scope.from / scope.to must be YYYY-MM-DD');
   }
-  if (scope.from > scope.to) throw new PromotionScopeMismatchError('scope.from must be <= scope.to');
+  if (scope.from > scope.to)
+    throw new PromotionScopeMismatchError('scope.from must be <= scope.to');
 
   const imp = await db.workbookImport.findUnique({
     where: { id: importId },
@@ -827,7 +912,13 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
 
   const stagingRows = (await db.workbookImportRow.findMany({
     where: { import_id: importId },
-    select: { section: true, raw_value: true, numeric_value: true, site_name_raw: true, provenance: true },
+    select: {
+      section: true,
+      raw_value: true,
+      numeric_value: true,
+      site_name_raw: true,
+      provenance: true,
+    },
   })) as StagingRowInput[];
 
   const sha = stagedContentSha(stagingRows);
@@ -835,7 +926,8 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
   // Re-run guard (idempotency): the (import_id) UNIQUE ledger row.
   const existing = await db.workbookPromotion.findUnique({ where: { import_id: importId } });
   if (existing) {
-    if (existing.sha256 !== sha) throw new PromotionShaMismatchError(importId, existing.sha256, sha);
+    if (existing.sha256 !== sha)
+      throw new PromotionShaMismatchError(importId, existing.sha256, sha);
     const counts = existing.counts as unknown as PromotionCounts;
     return {
       promotionId: existing.id,
@@ -847,7 +939,9 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
         existing.computed_close_total !== null
           ? {
               program: existing.computed_close_program?.toString() ?? '0',
-              nonProgram: new D(existing.computed_close_total).minus(existing.computed_close_program ?? 0).toString(),
+              nonProgram: new D(existing.computed_close_total)
+                .minus(existing.computed_close_program ?? 0)
+                .toString(),
               total: existing.computed_close_total.toString(),
             }
           : null,
@@ -928,7 +1022,11 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
           site_id: scope.siteId,
           load_source_type: i.loadSourceType,
           status: 'verified' as const,
-          arrived_at: dayKeyUTCFromISO(i.date),
+          // INSTANT column: Pacific midnight of the workbook day, NOT the
+          // @db.Date UTC-midnight key (which is 4/5 PM Pacific the PREVIOUS
+          // day — it excluded day-1 loads from their own month's Pacific
+          // billing window and priced fuel off the prior ISO week).
+          arrived_at: pacificMidnightInstantOfDayISO(i.date),
           bol_number: i.bolNumber,
           slip_number: i.slipNumber,
           total_units: i.units,

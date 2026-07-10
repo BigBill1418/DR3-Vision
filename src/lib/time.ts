@@ -177,6 +177,21 @@ export function pacificDayStartInstant(instant: Date = new Date()): Date {
   return new Date(approx.getTime() - pacificOffsetMs(approx));
 }
 
+/**
+ * The true UTC instant of Pacific local midnight for a `YYYY-MM-DD` day KEY.
+ * The day-key twin of `pacificDayStartInstant`: use it when a @db.Date-shaped
+ * day (workbook rows, window bounds) must become a value for an INSTANT column
+ * or an instant-column query bound. Writing `dayKeyUTCFromISO(day)` into an
+ * instant column instead puts the row at 4/5 PM Pacific on the PREVIOUS day —
+ * the 2026-07-10 promotion defect that leaked window-edge loads across months.
+ */
+export function pacificMidnightInstantOfDayISO(dayISO: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dayISO);
+  if (!m) throw new Error(`pacificMidnightInstantOfDayISO: not a YYYY-MM-DD day key: ${dayISO}`);
+  const approx = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0));
+  return new Date(approx.getTime() - pacificOffsetMs(approx));
+}
+
 /** Pacific local midnight instant `days` after the day of `instant`. */
 export function pacificDayStartInstantPlus(days: number, instant: Date = new Date()): Date {
   const base = pacificDayStartInstant(instant);

@@ -55,35 +55,63 @@ function pacificDateParts(now) {
   return { iso, label, dayKeyUTC, isWeekend };
 }
 
-// Next 17:00 PT instant after `from`. Safe across DST shifts: we project `from`
-// into Pacific wall-clock parts, compute the seconds-of-day delta to 17:00 PT,
-// and add the delta in UTC. The Intl formatter does all the DST math for us.
-function nextFireInstant(from) {
-  const FMT = new Intl.DateTimeFormat('en-CA', {
-    timeZone: PACIFIC_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = Object.fromEntries(FMT.formatToParts(from).map((p) => [p.type, p.value]));
-  const ptNow = {
-    hour: Number(parts.hour),
-    minute: Number(parts.minute),
-    second: Number(parts.second),
+// Read the Pacific wall clock off a UTC instant — same technique as
+// `src/lib/time.ts` and `scripts/bonus-period-close.mjs`, so "what time is it in
+// Pacific" is DST-correct without hardcoding the -7/-8 offset.
+const PACIFIC_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: PACIFIC_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** The Pacific wall-clock parts (numbers) for a UTC instant. */
+function pacificParts(at) {
+  const parts = PACIFIC_PARTS_FMT.formatToParts(at);
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
   };
-  const currentSecondsOfDay = ptNow.hour * 3600 + ptNow.minute * 60 + ptNow.second;
-  const fireSecondsOfDay = FIRE_HOUR_PT * 3600 + FIRE_MINUTE_PT * 60;
-  let deltaSec;
-  if (currentSecondsOfDay < fireSecondsOfDay) {
-    deltaSec = fireSecondsOfDay - currentSecondsOfDay;
-  } else {
-    deltaSec = 86400 - currentSecondsOfDay + fireSecondsOfDay;
+}
+
+/** Signed offset (ms) such that `utc = pacificWallClockAsUTC - offset`. */
+function pacificOffsetMs(at) {
+  const p = pacificParts(at);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUTC - at.getTime();
+}
+
+/**
+ * Next UTC instant at which the Pacific wall clock reads 17:00:00 (FIRE_HOUR_PT:
+ * FIRE_MINUTE_PT), strictly after `from`. DST-correct via the OFFSET-REPROBE
+ * technique ported from `scripts/bonus-period-close.mjs` (`msUntilNext0700Pacific`):
+ * resolve the target Pacific wall time on each candidate Pacific calendar day and
+ * convert to a true UTC instant using the offset in effect ON THAT DAY.
+ *
+ * This replaces the earlier "delta seconds-of-day added to `from`" version, which
+ * assumed every Pacific day is 86400s and so misfired across DST: it DOUBLE-FIRED
+ * on fall-back (the 25h day — it landed 1h early, then the loop recomputed and
+ * fired again at the real wall clock) and fired 1h LATE on spring-forward (the 23h
+ * day).
+ */
+function nextFireInstant(from) {
+  for (let addDays = 0; addDays <= 2; addDays++) {
+    const p = pacificParts(new Date(from.getTime() + addDays * 86_400_000));
+    const targetAsUTC = Date.UTC(p.year, p.month - 1, p.day, FIRE_HOUR_PT, FIRE_MINUTE_PT, 0);
+    const approx = new Date(targetAsUTC - pacificOffsetMs(new Date(targetAsUTC)));
+    const fireUtc = new Date(targetAsUTC - pacificOffsetMs(approx));
+    if (fireUtc.getTime() - from.getTime() > 1_000) return fireUtc;
   }
-  return new Date(from.getTime() + deltaSec * 1000);
+  return new Date(from.getTime() + 24 * 60 * 60 * 1000); // defensive fallback (should never hit)
 }
 
 // ── ntfy publish (fail-soft, primary→fallback) ──────────────────────
@@ -256,7 +284,18 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('bonus-eod-check: fatal', err);
-  process.exit(1);
-});
+// Only start the daemon when run as the entrypoint — keeps the module importable
+// (for the schedule-helper test) without spawning timers or a DB client. Every
+// sibling daemon uses this guard; bonus-eod-check previously auto-ran main() on
+// import, which meant importing it under test would start the loop and exit(2)
+// on the missing DATABASE_URL.
+const isEntrypoint =
+  process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+if (isEntrypoint) {
+  main().catch((err) => {
+    console.error('bonus-eod-check: fatal', err);
+    process.exit(1);
+  });
+}
+
+export { nextFireInstant };

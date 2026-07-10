@@ -36,34 +36,70 @@ function logTs(message) {
 
 // ── Pacific weekly fire helper (DST-correct via Intl) ────────────────────
 
-const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+// Read the Pacific wall clock off a UTC instant — same technique as
+// `src/lib/time.ts` and `scripts/bonus-period-close.mjs`, so "what time is it in
+// Pacific" is DST-correct without hardcoding the -7/-8 offset. Re-derived here
+// (not imported from `@/lib/time`) because this wrapper stays plain JS and runs
+// from the runner stage without a TS compile step.
+const PACIFIC_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: PACIFIC_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** The Pacific wall-clock parts (numbers) for a UTC instant. */
+function pacificParts(at) {
+  const parts = PACIFIC_PARTS_FMT.formatToParts(at);
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
+  };
+}
+
+/** Signed offset (ms) such that `utc = pacificWallClockAsUTC - offset`. */
+function pacificOffsetMs(at) {
+  const p = pacificParts(at);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUTC - at.getTime();
+}
 
 /**
  * Next UTC instant at which the Pacific wall clock reads `weekday hour:minute:00`,
- * strictly at/after `from`. DST-correct: the Intl formatter does the zone math. If
- * this week's fire has already passed, it rolls to next week's.
+ * strictly after `from`. DST-correct via the OFFSET-REPROBE technique ported from
+ * `scripts/bonus-period-close.mjs` (`msUntilNext0700Pacific`), adapted to a WEEKLY
+ * cadence: walk forward one Pacific calendar day at a time until we hit the target
+ * weekday, then resolve that day's `hour:minute` PT to a true UTC instant using the
+ * offset in effect ON THAT DAY. `weekday` is 0=Sun … 6=Sat (day-of-week is a
+ * property of the calendar date, so it is derived zone-free from the Pacific date).
+ *
+ * This replaces the earlier "delta seconds-of-day + dayDelta*86400 added to `from`"
+ * version, which assumed every Pacific day is 86400s and so misfired across DST —
+ * on a week spanning a fall-back it fired 1h early (and could double-fire) and
+ * across a spring-forward it fired 1h late.
  */
 function nextWeeklyFireInstant(from, weekday, hour, minute) {
-  const FMT = new Intl.DateTimeFormat('en-CA', {
-    timeZone: PACIFIC_TZ,
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = Object.fromEntries(FMT.formatToParts(from).map((p) => [p.type, p.value]));
-  const currentWeekday = WEEKDAY_INDEX[parts.weekday];
-  const currentSecondsOfDay =
-    Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  const fireSecondsOfDay = hour * 3600 + minute * 60;
-
-  let dayDelta = (weekday - currentWeekday + 7) % 7;
-  if (dayDelta === 0 && currentSecondsOfDay >= fireSecondsOfDay) {
-    dayDelta = 7; // today's fire time has passed → next week
+  for (let addDays = 0; addDays <= 8; addDays++) {
+    const p = pacificParts(new Date(from.getTime() + addDays * 86_400_000));
+    // Day-of-week of the candidate Pacific calendar day (zone-free once we have
+    // the y/m/d — the UTC-midnight of that date has the same weekday).
+    const dow = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay();
+    if (dow !== weekday) continue;
+    const targetAsUTC = Date.UTC(p.year, p.month - 1, p.day, hour, minute, 0);
+    const approx = new Date(targetAsUTC - pacificOffsetMs(new Date(targetAsUTC)));
+    const fireUtc = new Date(targetAsUTC - pacificOffsetMs(approx));
+    if (fireUtc.getTime() - from.getTime() > 1_000) return fireUtc;
   }
-  const secondsUntil = dayDelta * 86400 - currentSecondsOfDay + fireSecondsOfDay;
-  return new Date(from.getTime() + secondsUntil * 1000);
+  return new Date(from.getTime() + 7 * 24 * 60 * 60 * 1000); // defensive fallback (should never hit)
 }
 
 // ── POST the internal route ──────────────────────────────────────────

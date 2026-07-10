@@ -62,11 +62,24 @@ function isUniqueViolation(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
 }
 
-/** Has this message already been ingested (as a request OR a follow-up)? */
-async function alreadySeen(prisma: PrismaClient, internetMessageId: string): Promise<boolean> {
+/**
+ * Has this message already been ingested (as a request OR a follow-up)? Exported
+ * so the poll loop can PRE-CHECK before hydrating a message's full body — a
+ * re-listed duplicate costs one cheap DB read, not a Graph `getMessage` round-trip.
+ */
+export async function alreadySeen(
+  prisma: PrismaClient,
+  internetMessageId: string,
+): Promise<boolean> {
   const [req, fu] = await Promise.all([
-    prisma.apRequest.findUnique({ where: { internet_message_id: internetMessageId }, select: { id: true } }),
-    prisma.apFollowup.findUnique({ where: { internet_message_id: internetMessageId }, select: { id: true } }),
+    prisma.apRequest.findUnique({
+      where: { internet_message_id: internetMessageId },
+      select: { id: true },
+    }),
+    prisma.apFollowup.findUnique({
+      where: { internet_message_id: internetMessageId },
+      select: { id: true },
+    }),
   ]);
   return req !== null || fu !== null;
 }
@@ -119,11 +132,24 @@ async function persistAttachments(
 ): Promise<void> {
   for (const att of attachments) {
     if (att.kind === 'file') {
-      await persistFile(ctx, requestId, att.id, att.name, att.contentType, att.size, att.contentBytesBase64);
+      await persistFile(
+        ctx,
+        requestId,
+        att.id,
+        att.name,
+        att.contentType,
+        att.size,
+        att.contentBytesBase64,
+      );
     } else if (att.kind === 'reference_link') {
       // C10.3 — recorded for the approver, NEVER fetched.
       await ctx.prisma.apAttachment.create({
-        data: { request_id: requestId, kind: 'reference_link', filename: att.name, link_url: att.sourceUrl },
+        data: {
+          request_id: requestId,
+          kind: 'reference_link',
+          filename: att.name,
+          link_url: att.sourceUrl,
+        },
       });
     } else {
       // nested_message — one-level unwrap: a marker row + its own files.
@@ -138,7 +164,15 @@ async function persistAttachments(
         },
       });
       for (const f of att.nestedFiles) {
-        await persistFile(ctx, requestId, f.id, f.name, f.contentType, f.size, f.contentBytesBase64);
+        await persistFile(
+          ctx,
+          requestId,
+          f.id,
+          f.name,
+          f.contentType,
+          f.size,
+          f.contentBytesBase64,
+        );
       }
     }
   }
@@ -186,8 +220,15 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
   if (!msg.internetMessageId) {
     // A message with no stable idempotency key cannot be safely ingested; treat as
     // unprocessable so it is visible, never silently skipped.
-    log('warn', `[ap-ingest] message ${msg.id} has no internetMessageId — quarantining as unprocessable`);
-    return createQuarantine(ctx, { ...msg, internetMessageId: `no-imid-${msg.id}` }, 'unprocessable');
+    log(
+      'warn',
+      `[ap-ingest] message ${msg.id} has no internetMessageId — quarantining as unprocessable`,
+    );
+    return createQuarantine(
+      ctx,
+      { ...msg, internetMessageId: `no-imid-${msg.id}` },
+      'unprocessable',
+    );
   }
 
   if (await alreadySeen(ctx.prisma, msg.internetMessageId)) {
@@ -200,11 +241,14 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     return createQuarantine(ctx, msg, verdict.reason ?? 'unprocessable');
   }
 
-  // Follow-up: a same-conversation message while a request is OPEN (pending) →
-  // a note on that request, never a second request (C4).
+  // Follow-up: a same-conversation message while a request is still OPEN — either
+  // untouched `pending` OR on-hold `pending_review` (ADR-0046 Amendment 3 made hold
+  // a live state) → a note on that request, never a second request nor a second
+  // all-approver alert (C4). Threading only on 'pending' let a follow-up onto an
+  // on-hold request create a duplicate; both open states thread here.
   if (msg.conversationId) {
     const open = await ctx.prisma.apRequest.findFirst({
-      where: { conversation_id: msg.conversationId, status: 'pending' },
+      where: { conversation_id: msg.conversationId, status: { in: ['pending', 'pending_review'] } },
       orderBy: { received_at: 'asc' },
       select: { id: true },
     });
@@ -240,7 +284,10 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
   try {
     attachments = msg.hasAttachments ? await ctx.transport.listAttachments(msg.id) : [];
   } catch (e) {
-    log('warn', `[ap-ingest] attachment fetch/parse failed for ${msg.internetMessageId}: ${describe(e)} — quarantining`);
+    log(
+      'warn',
+      `[ap-ingest] attachment fetch/parse failed for ${msg.internetMessageId}: ${describe(e)} — quarantining`,
+    );
     return createQuarantine(ctx, msg, 'attachment_parse_failure');
   }
 
@@ -272,7 +319,11 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     action: 'insert',
     table_name: 'ap_requests',
     row_id: requestId,
-    after: { status: 'pending', sender_domain: domainOf(msg.from), attachment_count: attachments.length },
+    after: {
+      status: 'pending',
+      sender_domain: domainOf(msg.from),
+      attachment_count: attachments.length,
+    },
   });
   await notifier.newRequest({
     requestId,
@@ -283,6 +334,24 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     approverEmails: ctx.approverEmails,
   });
   return { kind: 'created', requestId };
+}
+
+/**
+ * Quarantine a message the poll loop could not ingest (a poison message whose
+ * ingest threw). Public wrapper over the same createQuarantine path used for a bad
+ * sender / parse failure, so an unexpected failure lands in the SAME visible ring
+ * (C3 — never a silent drop). Substitutes a synthetic idempotency key when the
+ * message lacks one, mirroring ingestMessage. Rethrows if the quarantine write
+ * itself fails so the caller can preserve token-not-saved (the message re-lists
+ * next poll rather than being lost).
+ */
+export async function quarantineMessage(
+  ctx: IngestContext,
+  msg: MailMessage,
+  reason: QuarantineReason,
+): Promise<IngestOutcome> {
+  const safe = msg.internetMessageId ? msg : { ...msg, internetMessageId: `no-imid-${msg.id}` };
+  return createQuarantine(ctx, safe, reason);
 }
 
 function describe(err: unknown): string {

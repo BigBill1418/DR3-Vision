@@ -4,10 +4,21 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
-import { makeFakePrisma, newFakeDb, type FakeApApprover, type FakeDb, type FakeUser } from './__testutils__/fake-prisma';
+import {
+  makeFakePrisma,
+  newFakeDb,
+  type FakeApApprover,
+  type FakeDb,
+  type FakeUser,
+} from './__testutils__/fake-prisma';
 
 interface MockSession {
-  user?: { id: string; role: 'operator' | 'manager' | 'admin'; primary_site_id: string | null; all_sites: boolean };
+  user?: {
+    id: string;
+    role: 'operator' | 'manager' | 'admin';
+    primary_site_id: string | null;
+    all_sites: boolean;
+  };
 }
 let mockSession: MockSession | null = null;
 
@@ -26,11 +37,46 @@ const PAST = new Date(Date.now() - 60_000);
 const FUTURE = new Date(Date.now() + 3_600_000);
 
 const users: FakeUser[] = [
-  { id: 'u-morena', name: 'Morena', email: 'morena@svdp.us', role: 'manager', all_sites: true, is_active: true },
-  { id: 'u-rick', name: 'Rick', email: 'rick@svdp.us', role: 'manager', all_sites: false, is_active: true },
-  { id: 'u-kelsey', name: 'Kelsey', email: 'kelsey@svdp.us', role: 'manager', all_sites: false, is_active: true },
-  { id: 'u-noemail', name: 'NoEmail', email: null, role: 'manager', all_sites: false, is_active: true },
-  { id: 'u-inactive', name: 'Gone', email: 'gone@svdp.us', role: 'manager', all_sites: false, is_active: false },
+  {
+    id: 'u-morena',
+    name: 'Morena',
+    email: 'morena@svdp.us',
+    role: 'manager',
+    all_sites: true,
+    is_active: true,
+  },
+  {
+    id: 'u-rick',
+    name: 'Rick',
+    email: 'rick@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
+  {
+    id: 'u-kelsey',
+    name: 'Kelsey',
+    email: 'kelsey@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
+  {
+    id: 'u-noemail',
+    name: 'NoEmail',
+    email: null,
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
+  {
+    id: 'u-inactive',
+    name: 'Gone',
+    email: 'gone@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: false,
+  },
 ];
 
 function fp(db: FakeDb): PrismaClient {
@@ -90,14 +136,32 @@ describe('isActiveApprover / canActOnApRequest', () => {
     expect(await canActOnApRequest({ role: 'manager', userId: 'u-morena' }, p)).toBe(false);
     expect(await canActOnApRequest({ role: 'operator', userId: 'u-rick' }, p)).toBe(true); // roster membership, not role
   });
+
+  // The AP queue page (src/app/dashboard/ops/ap/page.tsx) gates on THIS helper. The
+  // pre-amendment page gated on hasOrgReach (admin OR all_sites) — locking single-
+  // site roster approvers out and letting non-roster all_sites managers in. Lock the
+  // corrected contract: access = admin OR active roster member, all_sites irrelevant.
+  it('page-gate parity: access is roster membership, NOT org reach / all_sites', async () => {
+    const p = fp(newFakeDb({ approvers }));
+    // Rick is single-site (no all_sites) but on the roster → allowed (hasOrgReach
+    // would have LOCKED HIM OUT of the queue).
+    expect(await canActOnApRequest({ role: 'manager', userId: 'u-rick' }, p)).toBe(true);
+    // A manager with org reach but no roster row → denied (hasOrgReach would have
+    // let them IN). all_sites is not even an input to this gate.
+    expect(await canActOnApRequest({ role: 'manager', userId: 'u-morena' }, p)).toBe(false);
+  });
 });
 
 describe('requireApApprover — guard', () => {
-  const approvers: FakeApApprover[] = [{ id: 'a1', user_id: 'u-rick', active_until: null, created_by: null }];
+  const approvers: FakeApApprover[] = [
+    { id: 'a1', user_id: 'u-rick', active_until: null, created_by: null },
+  ];
 
   it('throws 401 when unauthenticated', async () => {
     mockSession = null;
-    await expect(requireApApprover(fp(newFakeDb({ approvers })))).rejects.toMatchObject({ status: 401 });
+    await expect(requireApApprover(fp(newFakeDb({ approvers })))).rejects.toMatchObject({
+      status: 401,
+    });
   });
 
   it('admin passes (no roster row required)', async () => {
@@ -107,13 +171,19 @@ describe('requireApApprover — guard', () => {
   });
 
   it('single-site manager who is a roster approver passes (no all_sites needed)', async () => {
-    mockSession = { user: { id: 'u-rick', role: 'manager', primary_site_id: 'site-eug', all_sites: false } };
+    mockSession = {
+      user: { id: 'u-rick', role: 'manager', primary_site_id: 'site-eug', all_sites: false },
+    };
     const id = await requireApApprover(fp(newFakeDb({ approvers })));
     expect(id.userId).toBe('u-rick');
   });
 
   it('a manager who is NOT a roster approver is rejected 403', async () => {
-    mockSession = { user: { id: 'u-nobody', role: 'manager', primary_site_id: 'site-eug', all_sites: true } };
-    await expect(requireApApprover(fp(newFakeDb({ approvers })))).rejects.toMatchObject({ status: 403 });
+    mockSession = {
+      user: { id: 'u-nobody', role: 'manager', primary_site_id: 'site-eug', all_sites: true },
+    };
+    await expect(requireApApprover(fp(newFakeDb({ approvers })))).rejects.toMatchObject({
+      status: 403,
+    });
   });
 });

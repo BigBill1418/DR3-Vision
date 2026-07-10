@@ -117,9 +117,22 @@ export function nextEscalationFire(from = new Date()) {
   return best;
 }
 
+/** Keep logged response bodies short — an unexpected HTML page (e.g. a login
+ * redirect target) must not dump kilobytes into the container log. */
+function truncateBody(text, max = 300) {
+  return text.length <= max ? text : `${text.slice(0, max)}… [truncated ${text.length} chars]`;
+}
+
 /**
  * POST the internal, loopback-guarded escalation route for one tier. Resolves on
- * success; throws on transport / non-2xx so the caller's try/catch logs it.
+ * success; throws on transport / redirect / non-200 so the caller's try/catch
+ * logs it.
+ *
+ * `redirect: 'manual'` is load-bearing (the 2026-07-03 survey-cron lesson): if
+ * the /api/internal/bonus/ public-paths exemption were ever missing, the auth
+ * middleware would 307 this POST to /login and fetch's default redirect-follow
+ * would turn the login page's 200 into a "successful" tier run that escalates
+ * nothing. A redirect is ALWAYS a failure here; only a direct 200 counts.
  */
 async function runTierOnce(tier) {
   const headers = { 'content-type': 'application/json' };
@@ -127,12 +140,14 @@ async function runTierOnce(tier) {
   const res = await fetch(`${BASE}/api/internal/bonus/escalation-check?tier=${tier}`, {
     method: 'POST',
     headers,
+    redirect: 'manual',
   });
   const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text}`);
+  if (res.status !== 200) {
+    const loc = res.headers.get('location');
+    throw new Error(`HTTP ${res.status}${loc ? ` (redirect → ${loc})` : ''}: ${truncateBody(text)}`);
   }
-  return text;
+  return truncateBody(text);
 }
 
 function scheduleNext() {
@@ -162,6 +177,8 @@ function setupShutdown() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
+
+export { runTierOnce, truncateBody };
 
 // Only start the daemon when run as the entrypoint — keeps the module importable
 // (for the schedule-helper test) without spawning timers.

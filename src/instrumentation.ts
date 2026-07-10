@@ -124,7 +124,8 @@ async function initOpenTelemetry(): Promise<void> {
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: 'dr3-vision',
-      [ATTR_SERVICE_VERSION]: process.env['GIT_SHA'] ?? 'dev',
+      // Single deploy-identity source (see build-info.ts — inlined sha).
+      [ATTR_SERVICE_VERSION]: (await import('@/lib/build-info')).buildInfo().sha,
       'deployment.environment.name': process.env['NODE_ENV'] ?? 'development',
     }),
     traceExporter: new OTLPTraceExporter({ url: endpoint }),

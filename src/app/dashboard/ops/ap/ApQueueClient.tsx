@@ -48,7 +48,12 @@ interface Detail extends ListRow {
   heldAt: string | null;
   holdNote: string | null;
   attachments: AttachmentView[];
-  followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
+  followups: Array<{
+    id: string;
+    receivedAt: string;
+    senderAddress: string;
+    bodyText: string | null;
+  }>;
 }
 
 const TABS: Filter[] = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined', 'all'];
@@ -63,8 +68,17 @@ const STATUS_LABEL: Record<Filter, string> = {
   all: 'all',
 };
 
+// Render timestamps in Bill's Pacific wall clock, not the browser's local zone —
+// toLocaleString() with no timeZone trusts wherever the viewer's machine is set.
+// Pin the zone explicitly and label ' PT', matching the AP email + stamp surfaces
+// (formatPacificDateTime's medium/short shape).
 function fmt(iso: string): string {
-  return new Date(iso).toLocaleString();
+  const at = new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+  return `${at} PT`;
 }
 function dollars(cents: number | null): string {
   return cents === null ? '' : `$${(cents / 100).toFixed(2)}`;
@@ -137,7 +151,9 @@ export function ApQueueClient() {
             key={t}
             onClick={() => setFilter(t)}
             className={`rounded-full px-3 py-1 text-sm capitalize ${
-              filter === t ? 'bg-dr3-chartreuse text-dr3-ink' : 'bg-white/10 text-white hover:bg-white/20'
+              filter === t
+                ? 'bg-dr3-chartreuse text-dr3-ink'
+                : 'bg-white/10 text-white hover:bg-white/20'
             }`}
           >
             {STATUS_LABEL[t]}
@@ -146,7 +162,9 @@ export function ApQueueClient() {
         ))}
       </div>
 
-      {error && <p className="mt-4 rounded bg-red-900/40 px-3 py-2 text-sm text-red-100">{error}</p>}
+      {error && (
+        <p className="mt-4 rounded bg-red-900/40 px-3 py-2 text-sm text-red-100">{error}</p>
+      )}
 
       <div className="mt-4 grid gap-4 md:grid-cols-[minmax(280px,360px)_1fr]">
         <ul className="space-y-2">
@@ -157,11 +175,15 @@ export function ApQueueClient() {
               <button
                 onClick={() => setSelectedId(r.id)}
                 className={`w-full rounded-lg border px-3 py-2 text-left ${
-                  selectedId === r.id ? 'border-dr3-chartreuse bg-white/10' : 'border-white/10 bg-white/5 hover:bg-white/10'
+                  selectedId === r.id
+                    ? 'border-dr3-chartreuse bg-white/10'
+                    : 'border-white/10 bg-white/5 hover:bg-white/10'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium">{r.subject ?? '(no subject)'}</span>
+                  <span className="truncate text-sm font-medium">
+                    {r.subject ?? '(no subject)'}
+                  </span>
                   <StatusBadge status={r.status} />
                 </div>
                 <div className="mt-1 truncate text-xs opacity-70">
@@ -170,7 +192,8 @@ export function ApQueueClient() {
                 </div>
                 <div className="mt-1 text-xs opacity-60">
                   {r.attachmentCount} attachment{r.attachmentCount === 1 ? '' : 's'}
-                  {r.followupCount > 0 && ` · ${r.followupCount} follow-up${r.followupCount === 1 ? '' : 's'}`}
+                  {r.followupCount > 0 &&
+                    ` · ${r.followupCount} follow-up${r.followupCount === 1 ? '' : 's'}`}
                   {r.vendor && ` · ${r.vendor}`}
                   {r.amountCents !== null && ` · ${dollars(r.amountCents)}`}
                 </div>
@@ -179,7 +202,13 @@ export function ApQueueClient() {
           ))}
         </ul>
 
-        <div>{detail ? <DetailPanel detail={detail} onDecided={refresh} /> : <p className="text-sm opacity-60">Select a request to review.</p>}</div>
+        <div>
+          {detail ? (
+            <DetailPanel detail={detail} onDecided={refresh} />
+          ) : (
+            <p className="text-sm opacity-60">Select a request to review.</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -195,13 +224,21 @@ function StatusBadge({ status }: { status: Status }) {
     quarantined: 'bg-zinc-500 text-white',
   };
   const label = status === 'pending_review' ? 'on hold' : status;
-  return <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}>{label}</span>;
+  return (
+    <span
+      className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
   const [note, setNote] = useState('');
   const [vendor, setVendor] = useState(detail.vendor ?? '');
-  const [amount, setAmount] = useState(detail.amountCents !== null ? (detail.amountCents / 100).toFixed(2) : '');
+  const [amount, setAmount] = useState(
+    detail.amountCents !== null ? (detail.amountCents / 100).toFixed(2) : '',
+  );
   const [siteCode, setSiteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -261,7 +298,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
     try {
       const res = await fetch(`/api/ops/ap/${detail.id}/resend`, { method: 'POST' });
       const body = await res.json().catch(() => ({}));
-      setMsg(res.ok ? `Re-send result: ${body.mail}` : body.error ?? `re-send failed (${res.status})`);
+      setMsg(
+        res.ok ? `Re-send result: ${body.mail}` : (body.error ?? `re-send failed (${res.status})`),
+      );
     } finally {
       setBusy(false);
       onDecided();
@@ -283,7 +322,8 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         body: JSON.stringify({ note: note.trim() }),
       });
       const body = await res.json().catch(() => ({}));
-      if (res.status === 409 && body.alreadyDecided) setMsg(`This request was ${body.error}. Refreshing.`);
+      if (res.status === 409 && body.alreadyDecided)
+        setMsg(`This request was ${body.error}. Refreshing.`);
       else if (!res.ok) setMsg(body.error ?? `hold failed (${res.status})`);
       else setMsg('Placed on hold; accounting was notified it is under review.');
     } catch (e) {
@@ -309,7 +349,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         body: JSON.stringify({ note: note.trim() }),
       });
       const body = await res.json().catch(() => ({}));
-      setMsg(res.ok ? 'Hold note updated.' : body.error ?? `update failed (${res.status})`);
+      setMsg(res.ok ? 'Hold note updated.' : (body.error ?? `update failed (${res.status})`));
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'update failed');
     } finally {
@@ -326,7 +366,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         <div>
           <h2 className="text-lg font-semibold">{detail.subject ?? '(no subject)'}</h2>
           <p className="mt-0.5 text-xs opacity-70">
-            {detail.senderAddress} {detail.senderValidated ? '· internal' : '· EXTERNAL (unapprovable)'} · {fmt(detail.receivedAt)}
+            {detail.senderAddress}{' '}
+            {detail.senderValidated ? '· internal' : '· EXTERNAL (unapprovable)'} ·{' '}
+            {fmt(detail.receivedAt)}
           </p>
         </div>
         <StatusBadge status={detail.status} />
@@ -334,7 +376,8 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
 
       {detail.status === 'quarantined' && (
         <p className="mt-3 rounded bg-zinc-700/40 px-3 py-2 text-sm">
-          Quarantined ({detail.quarantineReason ?? 'unprocessable'}) — admin review only, not approvable.
+          Quarantined ({detail.quarantineReason ?? 'unprocessable'}) — admin review only, not
+          approvable.
         </p>
       )}
 
@@ -352,7 +395,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
           Decided by {detail.decidedByName}
           {detail.decidedAt && ` at ${fmt(detail.decidedAt)}`}
           {detail.decisionNote && ` — “${detail.decisionNote}”`}
-          {detail.decisionMailSentAt ? ' · decision emailed.' : ' · decision email NOT confirmed sent.'}
+          {detail.decisionMailSentAt
+            ? ' · decision emailed.'
+            : ' · decision email NOT confirmed sent.'}
         </p>
       )}
 
@@ -395,7 +440,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
                 <div className="text-xs opacity-70">
                   {f.senderAddress} · {fmt(f.receivedAt)}
                 </div>
-                {f.bodyText && <div className="mt-1 whitespace-pre-wrap opacity-90">{f.bodyText}</div>}
+                {f.bodyText && (
+                  <div className="mt-1 whitespace-pre-wrap opacity-90">{f.bodyText}</div>
+                )}
               </li>
             ))}
           </ul>
@@ -437,12 +484,17 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             </label>
           </div>
           <label className="mt-2 block text-xs opacity-80">
-            Note <span className="opacity-70">(optional to approve · required to reject or hold)</span>
+            Note{' '}
+            <span className="opacity-70">(optional to approve · required to reject or hold)</span>
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
-              placeholder={detail.status === 'pending_review' ? 'Update the hold note, or add a reason to approve/reject' : 'Reason (required to reject or hold)'}
+              placeholder={
+                detail.status === 'pending_review'
+                  ? 'Update the hold note, or add a reason to approve/reject'
+                  : 'Reason (required to reject or hold)'
+              }
               className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
             />
           </label>
@@ -488,7 +540,11 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
 
       {(detail.status === 'approved' || detail.status === 'rejected') && (
         <div className="mt-4">
-          <button onClick={resend} disabled={busy} className="rounded bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20 disabled:opacity-50">
+          <button
+            onClick={resend}
+            disabled={busy}
+            className="rounded bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20 disabled:opacity-50"
+          >
             Re-send decision email
           </button>
         </div>
@@ -521,7 +577,12 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
       <li className="rounded border border-white/10 bg-white/5 px-2 py-1">
         🔗 Reference link: {att.filename ?? 'link'} —{' '}
         {att.linkUrl ? (
-          <a href={att.linkUrl} target="_blank" rel="noopener noreferrer nofollow" className="underline">
+          <a
+            href={att.linkUrl}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="underline"
+          >
             open in SharePoint/OneDrive
           </a>
         ) : (

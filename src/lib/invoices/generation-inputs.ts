@@ -285,7 +285,19 @@ export async function resolveTransportationInputs(args: {
 
     // Fuel surcharge — CA only (OR is structurally disallowed; skip entirely).
     if (jurisdiction === 'CA') {
-      const miles = load.source?.canonical_mileage ?? 0;
+      // Fail loud, never $0 (D7): a CA transport-charged load with no canonical
+      // mileage cannot price its surcharge. Overrides in account_haul_rates
+      // price the FREIGHT without touching the source row, so mileage can be
+      // legitimately absent there — before this guard that path silently
+      // billed fuel = (price/mpg) × 0 with applied:true, forever.
+      const miles = load.source?.canonical_mileage;
+      if (miles == null) {
+        throw new FreightInputError(
+          load.id,
+          `source ${load.source_id} has no canonical_mileage — CA fuel surcharge cannot price ` +
+            `(set the mileage on the source, or zero it explicitly if the lane is truly 0 mi)`,
+        );
+      }
       const fuel = await computeFuelSurchargeCents({ siteId, date: priceDate, miles });
       fuelLoads.push({
         loadId: load.id,

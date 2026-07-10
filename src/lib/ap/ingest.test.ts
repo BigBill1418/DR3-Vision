@@ -13,7 +13,11 @@ vi.mock('@/lib/audit', () => ({ writeAudit: vi.fn(async () => undefined) }));
 // R2 unconfigured in tests → placeholder key path (never touches network).
 vi.mock('@/lib/r2', () => ({ putApAttachment: vi.fn(async () => null) }));
 
-const policy: SenderPolicy = { mode: 'tenant_wide', internalDomain: 'svdp.us', explicitAllow: new Set() };
+const policy: SenderPolicy = {
+  mode: 'tenant_wide',
+  internalDomain: 'svdp.us',
+  explicitAllow: new Set(),
+};
 
 function makeCtx(db: FakeDb, notifier: IngestNotifier): IngestContext {
   return {
@@ -25,7 +29,10 @@ function makeCtx(db: FakeDb, notifier: IngestNotifier): IngestContext {
   };
 }
 
-function spyNotifier(): IngestNotifier & { quarantineCalls: unknown[]; newRequestCalls: unknown[] } {
+function spyNotifier(): IngestNotifier & {
+  quarantineCalls: unknown[];
+  newRequestCalls: unknown[];
+} {
   const quarantineCalls: unknown[] = [];
   const newRequestCalls: unknown[] = [];
   return {
@@ -41,7 +48,12 @@ function spyNotifier(): IngestNotifier & { quarantineCalls: unknown[]; newReques
 }
 
 async function inboxMessages(): Promise<MailMessage[]> {
-  return (await mockTransport().listDelta('inbox', null)).messages;
+  // The delta list is body-less (preview only); production hydrates each message
+  // via getMessage before ingest, so these ingest tests operate on hydrated
+  // (full-body) messages too — matching the real pipeline.
+  const t = mockTransport();
+  const listed = (await t.listDelta('inbox', null)).messages;
+  return Promise.all(listed.map((m) => t.getMessage(m.id)));
 }
 
 let messages: MailMessage[];
@@ -72,7 +84,11 @@ describe('ingestMessage — taxonomy matrix (C10)', () => {
     expect(n.newRequestCalls).toHaveLength(1);
     // ADR-0046 Amendment 3 deliverable 1 — the all-approvers notification carries
     // requester + received-at + attachment count (for a tier-1 email).
-    const call = n.newRequestCalls[0] as { senderAddress?: string; receivedAt?: Date; attachmentCount?: number };
+    const call = n.newRequestCalls[0] as {
+      senderAddress?: string;
+      receivedAt?: Date;
+      attachmentCount?: number;
+    };
     expect(call.senderAddress).toBe(req.sender_address);
     expect(call.receivedAt).toBeInstanceOf(Date);
     expect(call.attachmentCount).toBe(1);
@@ -88,7 +104,10 @@ describe('ingestMessage — taxonomy matrix (C10)', () => {
 
   it('one-level itemAttachment → created, a nested_message marker + its unwrapped file', async () => {
     const db = newFakeDb();
-    const out = await ingestMessage(makeCtx(db, spyNotifier()), byImid('<nested-forward-1@svdp.us>'));
+    const out = await ingestMessage(
+      makeCtx(db, spyNotifier()),
+      byImid('<nested-forward-1@svdp.us>'),
+    );
     expect(out.kind).toBe('created');
     const kinds = db.attachments.map((a) => a.kind).sort();
     expect(kinds).toEqual(['file', 'nested_message']);
@@ -187,5 +206,55 @@ describe('ingestMessage — idempotency + follow-ups (C4)', () => {
     expect(out.requestId).toBe('req-open');
     expect(db.requests).toHaveLength(1); // no new request
     expect(db.followups).toHaveLength(1);
+  });
+
+  it('a same-conversation message while a request is ON HOLD (pending_review) → follow-up, no second request, no second alert (Amendment 3)', async () => {
+    const db = newFakeDb({
+      requests: [
+        {
+          id: 'req-hold',
+          status: 'pending_review', // on hold — a LIVE open state (Amendment 3)
+          internet_message_id: '<orig-hold@svdp.us>',
+          conversation_id: 'conv-hold',
+          received_at: new Date('2026-07-06T10:00:00Z'),
+          sender_address: 'morena@svdp.us',
+          sender_validated: true,
+          subject: 'orig on hold',
+          body_html_sanitized: null,
+          body_text: null,
+          vendor: null,
+          amount_cents: null,
+          decided_by: null,
+          decided_at: null,
+          decision_note: null,
+          decision_mail_sent_at: null,
+          quarantine_reason: null,
+          site_id: null,
+          decision_pdf_sha256: null,
+          held_by: 'u-morena',
+          held_at: new Date('2026-07-06T10:30:00Z'),
+          hold_note: 'waiting on PO match',
+        },
+      ],
+    });
+    const n = spyNotifier();
+    const followup: MailMessage = {
+      id: 'msg-fu-hold',
+      internetMessageId: '<fu-hold-1@svdp.us>',
+      conversationId: 'conv-hold',
+      receivedDateTime: '2026-07-06T11:00:00.000Z',
+      from: 'morena@svdp.us',
+      fromName: 'Morena',
+      subject: 'RE: orig on hold',
+      bodyHtml: '<p>PO attached now</p>',
+      bodyText: 'PO attached now',
+      hasAttachments: false,
+    };
+    const out = await ingestMessage(makeCtx(db, n), followup);
+    expect(out.kind).toBe('followup'); // threaded, NOT a duplicate second request
+    expect(out.requestId).toBe('req-hold');
+    expect(db.requests).toHaveLength(1); // no second request created
+    expect(db.followups).toHaveLength(1);
+    expect(n.newRequestCalls).toHaveLength(0); // no second all-approver alert
   });
 });

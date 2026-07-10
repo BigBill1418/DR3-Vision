@@ -226,7 +226,10 @@ export class InvoiceZeroError extends Error {
 export class InvoiceStructuralError extends Error {
   readonly status = 422 as const;
   constructor(
-    readonly reason: 'or_transportation_no_fuel' | 'wrong_kind_for_composer',
+    readonly reason:
+      | 'or_transportation_no_fuel'
+      | 'wrong_kind_for_composer'
+      | 'negative_total_needs_credit_memo',
     message: string,
   ) {
     super(message);

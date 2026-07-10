@@ -21,7 +21,8 @@ const KINDS = [
 const ManualLine = z.object({
   description: z.string().min(1).max(500),
   quantity: z.number().finite().nullable().optional(),
-  amountCents: z.number().int(),
+  // Same magnitude bound as the supersede route ($500k cap; negatives legal).
+  amountCents: z.number().int().gte(-50_000_000).lte(50_000_000),
 });
 
 const Generate = z.object({
@@ -39,12 +40,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
     const kind = url.searchParams.get('kind');
     const billingMonth = url.searchParams.get('billingMonth');
     const rows = await listInvoices(ctx.siteId, {
-      ...(kind && (KINDS as readonly string[]).includes(kind) ? { kind: kind as (typeof KINDS)[number] } : {}),
-      ...(billingMonth ? { billingMonthISO: `${billingMonth}${billingMonth.length === 7 ? '-01' : ''}` } : {}),
+      ...(kind && (KINDS as readonly string[]).includes(kind)
+        ? { kind: kind as (typeof KINDS)[number] }
+        : {}),
+      ...(billingMonth
+        ? { billingMonthISO: `${billingMonth}${billingMonth.length === 7 ? '-01' : ''}` }
+        : {}),
     });
     return NextResponse.json({ rows });
   } catch (e) {
-    return invoiceErrorResponse(e, { site, op: 'invoices.list', requestId: req.headers.get('x-request-id') });
+    return invoiceErrorResponse(e, {
+      site,
+      op: 'invoices.list',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }
 
@@ -62,12 +71,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       billingMonthISO,
       actorUserId: ctx.userId,
       ...(d.manualLines
-        ? { manualLines: d.manualLines.map((m) => ({ description: m.description, quantity: m.quantity ?? null, amountCents: m.amountCents })) }
+        ? {
+            manualLines: d.manualLines.map((m) => ({
+              description: m.description,
+              quantity: m.quantity ?? null,
+              amountCents: m.amountCents,
+            })),
+          }
         : {}),
       ...(d.notes ? { notes: d.notes } : {}),
     });
     return NextResponse.json({ invoice }, { status: 201 });
   } catch (e) {
-    return invoiceErrorResponse(e, { site, op: 'invoices.generate', requestId: req.headers.get('x-request-id') });
+    return invoiceErrorResponse(e, {
+      site,
+      op: 'invoices.generate',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }

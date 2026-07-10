@@ -20,6 +20,7 @@ describe('middleware public-path exemptions', () => {
     '/internal/cor-pdf/abc123', // ADR-0042 — COR print source, same loopback-guarded pattern
     '/api/internal/bonus/close-months',
     '/api/internal/bonus/escalation-check',
+    '/api/internal/bonus/daily-report', // ADR-0030 — daily production-report cron, under the /api/internal/bonus/ exemption
     '/api/internal/survey/reminder-tick', // ADR-0036 — the 2026-07-03 regression
     '/api/internal/audit/sweep', // ADR-0039 — same loopback-guarded cron pattern
     '/api/internal/billing/fuel-fetch', // ADR-0040 D4 — mandatory day-one exemption

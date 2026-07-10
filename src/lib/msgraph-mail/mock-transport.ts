@@ -32,6 +32,12 @@ export interface MockTransportOptions {
 export interface MockTransport extends MailTransport {
   /** Pages consumed on the last listDelta — lets a test assert paging happened. */
   readonly lastPageCount: number;
+  /**
+   * Graph ids passed to getMessage, in call order — lets a test assert the poll
+   * loop HYDRATES the full body for new messages (the delta list is body-less, so
+   * a missing getMessage call is exactly the bug that shipped preview-only bodies).
+   */
+  readonly getMessageCalls: readonly string[];
   /** Current folder of a message by internetMessageId — lets a test assert a move. */
   folderOf(internetMessageId: string): string | undefined;
 }
@@ -39,9 +45,11 @@ export interface MockTransport extends MailTransport {
 export function mockTransport(opts: MockTransportOptions = {}): MockTransport {
   // Own, mutable copy of the mailbox (moveMessage relocates entries).
   const store = new Map<string, MockMessageSpec>();
-  for (const m of opts.messages ?? DEFAULT_MOCK_FIXTURES) store.set(m.id, { ...m, attachments: [...m.attachments] });
+  for (const m of opts.messages ?? DEFAULT_MOCK_FIXTURES)
+    store.set(m.id, { ...m, attachments: [...m.attachments] });
   const pageSize = opts.pageSize && opts.pageSize > 0 ? opts.pageSize : Number.POSITIVE_INFINITY;
   let lastPageCount = 0;
+  const getMessageCalls: string[] = [];
 
   function inFolder(folder: string): MockMessageSpec[] {
     return [...store.values()]
@@ -49,6 +57,7 @@ export function mockTransport(opts: MockTransportOptions = {}): MockTransport {
       .sort((a, b) => a.receivedDateTime.localeCompare(b.receivedDateTime));
   }
 
+  /** The FULL message (both body parts) — what a live getMessage(id) returns. */
   function toMailMessage(spec: MockMessageSpec): MailMessage {
     return {
       id: spec.id,
@@ -64,19 +73,40 @@ export function mockTransport(opts: MockTransportOptions = {}): MockTransport {
     };
   }
 
+  /**
+   * The DELTA-listed projection — faithful to the live `delta?$select=…` set, which
+   * carries `bodyPreview` but NOT `body`. So `bodyHtml` is null and `bodyText` is the
+   * ~255-char preview; the FULL body only arrives via a subsequent getMessage(id).
+   * A consumer that ingests this projection directly (no hydration) persists an empty
+   * HTML body — exactly the defect the hydration step fixes.
+   */
+  function toDeltaMessage(spec: MockMessageSpec): MailMessage {
+    const preview = (spec.bodyText ?? '').slice(0, 255);
+    return {
+      ...toMailMessage(spec),
+      bodyHtml: null,
+      bodyText: preview.length > 0 ? preview : null,
+    };
+  }
+
   return {
     mode: 'mock',
     get lastPageCount() {
       return lastPageCount;
     },
+    get getMessageCalls() {
+      return getMessageCalls;
+    },
     folderOf(internetMessageId: string): string | undefined {
-      for (const m of store.values()) if (m.internetMessageId === internetMessageId) return m.folder;
+      for (const m of store.values())
+        if (m.internetMessageId === internetMessageId) return m.folder;
       return undefined;
     },
 
     async listDelta(folder: string, deltaToken: string | null): Promise<DeltaResult> {
       if (opts.failAuth) throw new AuthFailedError('mock: simulated auth failure on listDelta');
-      if (opts.driftOn === 'listDelta') throw new GraphContractDriftError('mock: simulated contract drift on listDelta');
+      if (opts.driftOn === 'listDelta')
+        throw new GraphContractDriftError('mock: simulated contract drift on listDelta');
 
       const resynced = deltaToken === null || opts.rejectDeltaToken === true;
       const all = inFolder(folder);
@@ -86,8 +116,11 @@ export function mockTransport(opts: MockTransportOptions = {}): MockTransport {
       let pages = 0;
       for (let i = 0; i < all.length || (i === 0 && all.length === 0); i += pageSize) {
         pages += 1;
-        for (const spec of all.slice(i, i === 0 && pageSize === Number.POSITIVE_INFINITY ? all.length : i + pageSize)) {
-          messages.push(toMailMessage(spec));
+        for (const spec of all.slice(
+          i,
+          i === 0 && pageSize === Number.POSITIVE_INFINITY ? all.length : i + pageSize,
+        )) {
+          messages.push(toDeltaMessage(spec));
         }
         if (pageSize === Number.POSITIVE_INFINITY) break;
       }
@@ -97,14 +130,17 @@ export function mockTransport(opts: MockTransportOptions = {}): MockTransport {
     },
 
     async getMessage(id: string): Promise<MailMessage> {
-      if (opts.driftOn === 'getMessage') throw new GraphContractDriftError('mock: simulated contract drift on getMessage');
+      getMessageCalls.push(id);
+      if (opts.driftOn === 'getMessage')
+        throw new GraphContractDriftError('mock: simulated contract drift on getMessage');
       const spec = store.get(id);
       if (!spec) throw new GraphContractDriftError(`mock: message ${id} not found`);
       return toMailMessage(spec);
     },
 
     async listAttachments(id: string): Promise<NormAttachment[]> {
-      if (opts.driftOn === 'listAttachments') throw new GraphContractDriftError('mock: simulated contract drift on listAttachments');
+      if (opts.driftOn === 'listAttachments')
+        throw new GraphContractDriftError('mock: simulated contract drift on listAttachments');
       const spec = store.get(id);
       if (!spec) throw new GraphContractDriftError(`mock: message ${id} not found`);
       return spec.attachments.map((a) => ({ ...a }));

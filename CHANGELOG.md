@@ -5,6 +5,103 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-10 (production-readiness stack sweep — ops + 3-subsystem audit)
+
+Operator-ordered top-to-bottom sweep (Bill, 2026-07-10) ahead of AP go-live:
+CHAD ops audit + parallel code audits of the AP module, the 10 cron daemons /
+internal routes, and the billing/workbook money code. Ops fixes applied live
+same-day; code fixes below. Migration `20260718_billing_hardening` is purely
+additive (two unique indexes; both tables empty in prod).
+
+**AP module (go-live blockers):**
+
+- **Live poll now hydrates the FULL message body** via `transport.getMessage`
+  before ingest — the Graph delta `$select` has no `body`, so every live-mode
+  invoice would have persisted a ~255-char `bodyPreview` as its content
+  (body-only invoices truncated silently; masked by mock fixtures that carried
+  full bodies — the mock now mirrors the real body-less delta projection).
+  Duplicates are pre-checked before hydration (no wasted Graph round-trip).
+- **Queue page no longer locks out single-site approvers.** It still gated on
+  the pre-amendment org-reach rule (admin/all_sites) while the routes had
+  moved to the ap_approvers roster — Rick (Eugene) would have gotten "Access
+  denied" from the very deep link the new-invoice email sends.
+- A follow-up arriving while a request is ON HOLD threads as a follow-up
+  (was: created a duplicate request + second all-approver alert).
+- Decision email + queue banner + queue UI timestamps are Pacific (were raw
+  UTC / browser-zone).
+- A poison message now quarantines (`ingest_error`) instead of stalling the
+  mailbox's delta token forever; an auth failure still fails the run closed.
+
+**Cron daemons / internal routes:**
+
+- `mymrc-cron` recurring timer un-`.unref()`'d — the daemon exited after one
+  scrape and `unless-stopped` turned "hourly" into a continuous scrape loop
+  (service currently profile-disabled; safe to re-enable now).
+- The three bonus daemons (daily-report, period-close, escalation-check) now
+  follow the ADR-0036-addendum fetch contract (`redirect:'manual'`, non-200
+  throws) — they were the last daemons that would have followed a login 307
+  to a fake 200 while payroll close/auto-sign silently no-op'd.
+- The naive "DST-correct" fire-time helper (double-fire on fall-back, 1h late
+  on spring-forward) replaced with the offset-reprobe pattern in all seven
+  daemons that carried it; DST-transition-day tests added for every schedule.
+- Period-close gains bounded same-day retry (30-min × 6) — a transient 07:00
+  failure on payroll day no longer permanently skips the close. (Widening the
+  route's `period_end == yesterday` matcher was evaluated and REJECTED: past
+  `draft` periods are legitimate — a wider matcher would mass-close them and
+  mass-email signers on fresh seeds/onboarding.)
+- Route-guard regression tests added for board-pack/send, workbook-sync/poll,
+  bonus/generate-pdf; explicit public-paths case for bonus/daily-report.
+
+**Billing / workbook money code:**
+
+- **CA fuel surcharge fails loud instead of billing $0** when an
+  override-priced source has no `canonical_mileage` (was: `miles ?? 0` →
+  $0.00 `applied:true` per load, forever).
+- **Workbook promotion writes `arrived_at` as the Pacific-midnight instant**
+  (was: @db.Date UTC-midnight = 4/5 PM Pacific the PREVIOUS day — a promoted
+  June-1 load fell into May's billing window and priced fuel off the prior
+  ISO week). Conflict scans on the two instant columns (`arrived_at`,
+  `snapshot_at`) now bound by the Pacific-day window.
+- **A billing-gate override is no longer a permanent skeleton key**: it covers
+  only findings first-detected before it was recorded; a newer blocking
+  finding re-blocks the window and demands a fresh audited justification.
+- **CA EOM refuses to compose a NEGATIVE total** (mid-month exceeds the
+  revised gross) with a typed error pointing at the credit-memo path.
+- Invoice approve/void are atomic CAS transitions (concurrent transition →
+  typed 409, never approve-over-void); void of an APPROVED invoice now
+  requires the D4 approver rule (was reach-only — an all-sites manager could
+  cancel any site's approved invoice) and APPENDS its reason to notes instead
+  of overwriting the generation note.
+- DB backstops (`20260718_billing_hardening`): unique version per
+  (site, kind, month) chain; ONE open credit memo per invoice (partial unique
+  index; service maps the conflict to the typed error).
+- Haul-rate admin refuses inverted windows (`effective_to < effective_from`
+  silently never matched — the negotiated override quietly fell back to the
+  tier rate) and duplicate `effective_from` per source; the freight resolver
+  detects override/tier ties as typed errors instead of coin-flipping.
+- Workbook-sync fails SAFE on an unreadable cutover state (skip the poll —
+  never workbook-wins-overwrite a possibly-cut-over site); cutover also flips
+  `is_syncing=false` as durable belt; the naming-pattern regex tolerates a
+  repeated `{MONTH}`/`{YEAR}` token; manual invoice lines are magnitude-capped.
+
+**Observability:**
+
+- Prod logs, OTel traces, and boot alerts now carry the REAL deploy sha —
+  next.config's env inlining rewrites only dotted `process.env.X`, and the
+  repo's bracket-access convention (`noPropertyAccessFromIndexSignature`)
+  silently missed the inline everywhere, stamping `version:"dev"` since the
+  mechanism shipped. Fixed via a `ProcessEnv` declaration merge + dotted
+  access in one `buildInfo()` source.
+
+**Ops (applied live on CHAD 2026-07-10, no deploy needed):**
+
+- `ap-poll` was running the previous day's image: the deployer's plain
+  `up -d` never includes the `ap` compose profile, so every deploy stranded
+  the profile-gated service on the old build. Recreated on the current image
+  and made durable via `COMPOSE_PROFILES=ap` in the host `.env`.
+- Prod seed run (idempotent): the 3 Eugene paper-form sources landed
+  (111→114); everything else no-op.
+
 ### Added — 2026-07-09 (rollup §8.1 build queue — ships-without-files subset)
 
 The OPERATOR-ordered §8.1 build queue of the 2026-07-09 full rollup

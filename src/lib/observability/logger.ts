@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import pino, { type LoggerOptions } from 'pino';
+import { buildInfo } from '@/lib/build-info';
 
 /**
  * Fields scrubbed from every log line, per ADR-0022 §3. Leading-`*` paths match
@@ -39,7 +40,11 @@ export function buildLoggerOptions(): LoggerOptions {
     level: process.env['LOG_LEVEL'] ?? 'info',
     base: {
       service: 'dr3-vision',
-      version: process.env['GIT_SHA'] ?? 'dev',
+      // Real deploy identity (never a bare 'dev' in prod) — the single
+      // buildInfo() source (GIT_SHA override, else the next.config-inlined
+      // sha from the baked .build-info.json). Before 2026-07-10 this read a
+      // never-set env var and stamped version:"dev" on every prod log line.
+      version: buildInfo().sha,
       env: process.env['NODE_ENV'],
     },
     // ISO-8601 timestamps (e.g. "2026-06-05T12:34:56.789Z") so Loki/Grafana

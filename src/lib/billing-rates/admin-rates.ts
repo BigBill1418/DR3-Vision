@@ -29,7 +29,8 @@ export interface RateActor {
 
 /** `YYYY-MM-DD` → UTC-midnight Date, matching `@db.Date` storage. Throws on garbage. */
 export function dateUTC(iso: string): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error(`invalid date '${iso}' (expected YYYY-MM-DD)`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso))
+    throw new Error(`invalid date '${iso}' (expected YYYY-MM-DD)`);
   const d = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) throw new Error(`invalid date '${iso}'`);
   return d;
@@ -241,14 +242,40 @@ export interface HaulRateInput {
 
 export type HaulRateResult =
   | { ok: true; rate: HaulRateDto }
-  | { ok: false; reason: 'source_not_found' | 'not_found' | 'invalid_amount' };
+  | {
+      ok: false;
+      reason:
+        | 'source_not_found'
+        | 'not_found'
+        | 'invalid_amount'
+        | 'invalid_window'
+        | 'duplicate_effective_from';
+    };
 
-export async function createHaulRate(input: HaulRateInput, actor: RateActor): Promise<HaulRateResult> {
+export async function createHaulRate(
+  input: HaulRateInput,
+  actor: RateActor,
+): Promise<HaulRateResult> {
   if (!Number.isInteger(input.rate_cents) || input.rate_cents <= 0) {
     return { ok: false, reason: 'invalid_amount' };
   }
-  const source = await prisma.source.findUnique({ where: { id: input.source_id }, select: { id: true } });
+  const source = await prisma.source.findUnique({
+    where: { id: input.source_id },
+    select: { id: true },
+  });
   if (!source) return { ok: false, reason: 'source_not_found' };
+  // Window sanity (2026-07-10 audit): an inverted window silently never
+  // matches — the negotiated override would quietly fall back to the tier
+  // rate on every load. And two overrides for one source with the SAME
+  // effective_from would coin-flip in the freight resolver's findFirst.
+  if (input.effective_to && dateUTC(input.effective_to) < dateUTC(input.effective_from)) {
+    return { ok: false, reason: 'invalid_window' };
+  }
+  const dupe = await prisma.accountHaulRate.findFirst({
+    where: { source_id: input.source_id, effective_from: dateUTC(input.effective_from) },
+    select: { id: true },
+  });
+  if (dupe) return { ok: false, reason: 'duplicate_effective_from' };
 
   const row = await prisma.$transaction(async (tx) => {
     const created = await tx.accountHaulRate.create({
@@ -286,16 +313,38 @@ export async function updateHaulRate(
   input: HaulRateUpdate,
   actor: RateActor,
 ): Promise<HaulRateResult> {
-  if (input.rate_cents !== undefined && (!Number.isInteger(input.rate_cents) || input.rate_cents <= 0)) {
+  if (
+    input.rate_cents !== undefined &&
+    (!Number.isInteger(input.rate_cents) || input.rate_cents <= 0)
+  ) {
     return { ok: false, reason: 'invalid_amount' };
   }
   const existing = await prisma.accountHaulRate.findUnique({ where: { id } });
   if (!existing) return { ok: false, reason: 'not_found' };
 
+  // Same window sanity as create, evaluated against the MERGED row.
+  const nextFrom =
+    input.effective_from !== undefined ? dateUTC(input.effective_from) : existing.effective_from;
+  const nextTo =
+    input.effective_to !== undefined
+      ? input.effective_to
+        ? dateUTC(input.effective_to)
+        : null
+      : existing.effective_to;
+  if (nextTo && nextTo < nextFrom) return { ok: false, reason: 'invalid_window' };
+  if (nextFrom.getTime() !== existing.effective_from.getTime()) {
+    const dupe = await prisma.accountHaulRate.findFirst({
+      where: { source_id: existing.source_id, effective_from: nextFrom, id: { not: id } },
+      select: { id: true },
+    });
+    if (dupe) return { ok: false, reason: 'duplicate_effective_from' };
+  }
+
   const data: Prisma.AccountHaulRateUpdateInput = {};
   if (input.rate_cents !== undefined) data.rate_cents = input.rate_cents;
   if (input.effective_from !== undefined) data.effective_from = dateUTC(input.effective_from);
-  if (input.effective_to !== undefined) data.effective_to = input.effective_to ? dateUTC(input.effective_to) : null;
+  if (input.effective_to !== undefined)
+    data.effective_to = input.effective_to ? dateUTC(input.effective_to) : null;
   if (input.note !== undefined) data.note = input.note;
 
   const row = await prisma.$transaction(async (tx) => {
@@ -392,7 +441,10 @@ export async function createRental(input: RentalInput, actor: RateActor): Promis
   const site = await prisma.site.findUnique({ where: { id: input.site_id }, select: { id: true } });
   if (!site) return { ok: false, reason: 'site_not_found' };
   if (input.source_id) {
-    const src = await prisma.source.findUnique({ where: { id: input.source_id }, select: { id: true } });
+    const src = await prisma.source.findUnique({
+      where: { id: input.source_id },
+      select: { id: true },
+    });
     if (!src) return { ok: false, reason: 'source_not_found' };
   }
 
@@ -451,7 +503,10 @@ export async function updateRental(
   const existing = await prisma.containerRentalSite.findUnique({ where: { id } });
   if (!existing) return { ok: false, reason: 'not_found' };
   if (input.source_id) {
-    const src = await prisma.source.findUnique({ where: { id: input.source_id }, select: { id: true } });
+    const src = await prisma.source.findUnique({
+      where: { id: input.source_id },
+      select: { id: true },
+    });
     if (!src) return { ok: false, reason: 'source_not_found' };
   }
 
@@ -463,7 +518,8 @@ export async function updateRental(
   if (input.monthly_rate_cents !== undefined) data.monthly_rate_cents = input.monthly_rate_cents;
   if (input.active !== undefined) data.active = input.active;
   if (input.effective_from !== undefined) data.effective_from = dateUTC(input.effective_from);
-  if (input.effective_to !== undefined) data.effective_to = input.effective_to ? dateUTC(input.effective_to) : null;
+  if (input.effective_to !== undefined)
+    data.effective_to = input.effective_to ? dateUTC(input.effective_to) : null;
   if (input.note !== undefined) data.note = input.note;
 
   const row = await prisma.$transaction(async (tx) => {

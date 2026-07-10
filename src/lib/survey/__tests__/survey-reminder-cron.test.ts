@@ -65,6 +65,34 @@ describe('survey-reminder cron — nextFireInstantAt', () => {
   });
 });
 
+// DST-transition regression for the offset-reprobe port (stack-sweep 2026-07-10).
+// The prior "delta seconds-of-day added to `from`" scheduler assumed every Pacific
+// day is 86400s, so it misfired across the twice-yearly DST shifts. These pin the
+// two transition days the fleet crosses.
+describe('survey-reminder cron — DST transition days', () => {
+  it('fires exactly ONCE at 09:00 PT on fall-back day (2026-11-01), then rolls to the next day', () => {
+    // 2026-11-01 02:00 PDT → 01:00 PST is a 25h Pacific day. The naive scheduler
+    // landed 1h early (08:00) and then re-fired at the real 09:00 — a DOUBLE FIRE.
+    const from = new Date('2026-11-01T07:30:00Z'); // Nov 1 00:30 PDT (before the 02:00 fall-back)
+    const fire1 = nextFireInstantAt(from, 9, 0);
+    expect(pacificHHMM(fire1)).toBe('09:00');
+    expect(fire1.toISOString()).toBe('2026-11-01T17:00:00.000Z'); // 09:00 PST (-8)
+    // Re-arming from just after fire1 must roll to the NEXT day — not re-fire Nov 1.
+    const fire2 = nextFireInstantAt(fire1, 9, 0);
+    expect(pacificHHMM(fire2)).toBe('09:00');
+    expect(fire2.toISOString()).toBe('2026-11-02T17:00:00.000Z');
+  });
+
+  it('fires at 09:00 PT (not 10:00) on spring-forward day (2027-03-14)', () => {
+    // 2027-03-14 02:00 PST → 03:00 PDT is a 23h Pacific day. The naive scheduler
+    // fired 1h LATE (10:00).
+    const from = new Date('2027-03-14T08:30:00Z'); // Mar 14 00:30 PST (before the 02:00 spring-forward)
+    const fire = nextFireInstantAt(from, 9, 0);
+    expect(pacificHHMM(fire)).toBe('09:00');
+    expect(fire.toISOString()).toBe('2027-03-14T16:00:00.000Z'); // 09:00 PDT (-7)
+  });
+});
+
 // Regression for 2026-07-03: the auth middleware (missing the
 // /api/internal/survey/ exemption) 307'd the tick POST to /login; fetch's
 // default redirect-following turned that into the login page's 200 and the
