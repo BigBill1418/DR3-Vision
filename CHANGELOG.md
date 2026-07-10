@@ -5,6 +5,20 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Ops — 2026-07-10 (RAOP mail incident: daily reports 403 since the 7/9 policy)
+
+The 2026-07-09 ApplicationAccessPolicy (IT-permissions execution, PR #86)
+scoped the Graph app to the approvals scoping group — which does not contain
+`dr3-vision@svdp.us`, the payroll/daily-report sender. First fire after the
+policy (7/9 6 PM PT daily reports) failed 403 at both sites with zero
+deliveries; P15 payroll mail (7/21) would have failed identically. Mitigated
+same-day by pointing `M365_MAIL_FROM_ADDRESS` at `approvals-dr3@svdp.us`
+(in-policy; verified delivered via the internal test-send). PROPER FIX is an
+operator action — add the dr3-vision mailbox to the scoping group and restore
+the env (docs/OPEN-ITEMS.md O-0). Discovered during the 2026-07-10 sweep's
+follow-through, not by an alert: a 403'd report writes a log row and pages
+nothing — a delivery-failure alert is a candidate hardening item.
+
 ### Added — 2026-07-10 (open-items register)
 
 - **`docs/OPEN-ITEMS.md`** — the single live register of everything hanging
