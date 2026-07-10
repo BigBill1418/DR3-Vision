@@ -64,6 +64,7 @@ senders + unprocessable messages only**.
 ### D3 — Pipeline (C4 + C10, v1 deliberately modest)
 
 Poll (10 min, C9-D3) → delta list → per message, exactly ONE terminal state:
+
 1. **Sender validation** on the authenticated envelope sender (never display
    name; for forwards the internal FORWARDER is the auth subject — the vendor
    address inside the body is display context only, C10.4).
@@ -97,7 +98,7 @@ Poll (10 min, C9-D3) → delta list → per message, exactly ONE terminal state:
   attachments from R2 + reference links + follow-ups), approve/reject with
   optional note + optional vendor/amount (C9-D5).
 - **First action wins, atomically**: conditional `updateMany({where: {id,
-  status:'pending'}})` count check; the loser gets "already decided by {actor}
+status:'pending'}})` count check; the loser gets "already decided by {actor}
   at {time}"; **both attempts audited** (ADR-0028/0041 machinery).
 - New-request notification to both approvers via `sendSystemEmail`; the
   ADR-0043 digest gains a pending-AP count line (implementer's-call item —
@@ -300,7 +301,7 @@ State machine: `pending → pending_review → approved|rejected`; the direct
   the request detail (and holder/note surfaced on the list read model).
 - **(c) From hold**, any approver may approve or reject (first-action-wins
   unchanged — the atomic conditional `updateMany` now matches `status IN (pending,
-  pending_review)`) or **update the hold note** (holder unchanged; editor audited).
+pending_review)`) or **update the hold note** (holder unchanged; editor audited).
 - **(d) Aging/staleness.** The AP module has **no per-request staleness/aging alert
   today** (the only deadman is poll-freshness, unrelated to request age), so there is
   nothing to exclude. Recorded here: **any future AP staleness alert MUST exclude
@@ -309,3 +310,15 @@ State machine: `pending → pending_review → approved|rejected`; the direct
   hold carries `from_hold: true`). Idempotency + concurrent-action safety reuse the
   existing first-action-wins row-level guard (a losing concurrent hold gets
   `ApAlreadyDecidedError`, attributed to the current holder/decider; both audited).
+
+## Post-acceptance note — 2026-07-09 (outgoing AP stays OUT of scope; ADR-0051 candidate)
+
+Mary Scott's survey (rollup §1.6): beyond typing MRC invoices she also "makes
+and books the AP payment for the stewardship fees." That is an OUTGOING payment
+booking — a different lane from this ADR's INCOMING vendor-invoice approval
+flow (email intake → approver decision → decision mail back to accounting).
+Decision: ADR-0046 deliberately stays in the incoming lane; a Mary-facing
+outgoing-AP-payment surface is flagged as **ADR-0051 (candidate, not drafted)**
+rather than an expansion of this scope. Open question for Bill/Mary first:
+which direction the stewardship fee actually flows (DR3 → stewardship program,
+or invoiced through MRC) — the rollup marks it ambiguous.

@@ -761,7 +761,11 @@ async function seedRolloutSurfaces(siteIds) {
 // enables it from /admin/workbook-sync once the Files.Read.All grant is live. The
 // `workbook_sync` rollout surface is born `pilot` (= sync active; `live` = cut
 // over). Both are idempotent so a re-seed NEVER reverts an operator enable or a
-// cutover flip. Eugene is added as a config row when Rick confirms (D9), not seeded.
+// cutover flip. Eugene is DELIBERATELY absent and stays absent: Rick's site runs
+// on hand-filled paper forms — no shared workbook exists (confirmed definitively
+// 2026-07-09, rollup §4.2; the Eugene sample was a scanned paper SHIPMENT/LOGIN
+// sheet). Do NOT add an Eugene workbook_sources row; the Eugene iPad UI goes
+// direct paper→Vision.
 const WOODLAND_DRIVE_UPN = 'kelsey_ruhland@svdp.us'; // D4 — Kelsey's OneDrive owner UPN
 async function seedWorkbookSync(siteIds) {
   const woodland = siteIds.get('woodland');

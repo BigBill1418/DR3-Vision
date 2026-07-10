@@ -33,21 +33,31 @@ const TILES = [
     testid: 'admin-tile-billing-rates',
   },
   {
+    href: '/admin/billing/verify',
+    label: 'Billing verification',
+    description:
+      'Read-only pre-GP check: latest invoices with the audit posture of their windows (rollup §1.2).',
+    testid: 'admin-tile-billing-verify',
+  },
+  {
     href: '/admin/rollout',
     label: 'Rollout gate',
-    description: 'Pilot→live control for every staff-facing surface × site (ADR-0047). Flip to ramp; audited.',
+    description:
+      'Pilot→live control for every staff-facing surface × site (ADR-0047). Flip to ramp; audited.',
     testid: 'admin-tile-rollout',
   },
   {
     href: '/admin/workbook-sync',
     label: 'Workbook sync',
-    description: 'Mirror the Woodland daily-log workbook into Vision (ADR-0049). Sources, run ledger, and cutover.',
+    description:
+      'Mirror the Woodland daily-log workbook into Vision (ADR-0049). Sources, run ledger, and cutover.',
     testid: 'admin-tile-workbook-sync',
   },
   {
     href: '/admin/audit/workbook',
     label: 'Workbook import & backfill',
-    description: 'Upload monthly workbooks, then promote June staging rows into the operational tables (ADR-0048).',
+    description:
+      'Upload monthly workbooks, then promote June staging rows into the operational tables (ADR-0048).',
     testid: 'admin-tile-workbook',
   },
   {
@@ -66,7 +76,10 @@ export default async function AdminIndexPage() {
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">{AM.forbiddenHeading}</h1>
         <p className="mt-2 text-dr3-mist-dim">{AM.forbiddenBody}</p>
-        <Link href={HOME_ROUTE} className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline">
+        <Link
+          href={HOME_ROUTE}
+          className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
+        >
           {AM.backToDashboard}
         </Link>
       </main>
@@ -77,11 +90,16 @@ export default async function AdminIndexPage() {
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-8">
         <header className="flex flex-col gap-1">
-          <Link href={HOME_ROUTE} className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline">
+          <Link
+            href={HOME_ROUTE}
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
+          >
             ← {AM.backToDashboard}
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Admin</h1>
-          <p className="text-sm text-dr3-mist-dim">User management, the append-only audit log, and billing rates.</p>
+          <p className="text-sm text-dr3-mist-dim">
+            User management, the append-only audit log, and billing rates.
+          </p>
         </header>
         <section className="grid gap-4 sm:grid-cols-2">
           {TILES.map((t) => (

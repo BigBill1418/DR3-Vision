@@ -51,6 +51,7 @@ const createSchema = z.object({
   pin: optionalPin,
   all_sites: z.boolean().optional(), // ADR-0024 (manager-only; coerced in the model)
   can_manage_rates: z.boolean().optional(), // ADR-0040 D5 (manager-only; coerced in the model)
+  can_view_billing_verify: z.boolean().optional(), // rollup §1.2 (read-only verify page)
 });
 
 const listQuerySchema = z.object({
@@ -95,6 +96,7 @@ export async function POST(req: Request) {
     pin: parsed.data.pin,
     all_sites: parsed.data.all_sites ?? false,
     can_manage_rates: parsed.data.can_manage_rates ?? false,
+    can_view_billing_verify: parsed.data.can_view_billing_verify ?? false,
   };
 
   const result = await createUser(input, {

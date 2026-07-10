@@ -49,6 +49,10 @@ export interface AdminUserDto {
   all_sites: boolean;
   /** ADR-0040 — scoped rate-table write access (manager-only; see D5). */
   can_manage_rates: boolean;
+  /** 2026-07-09 rollup §1.2 — read-only /admin/billing/verify access
+   * (manager-only, coerced like can_manage_rates; admins see the page via
+   * role). Grants exactly that one read surface, never a write. */
+  can_view_billing_verify: boolean;
   has_pin: boolean;
   last_login_at: Date | null;
   created_at: Date;
@@ -68,6 +72,7 @@ type AuditableUser = Pick<
   | 'is_active'
   | 'all_sites'
   | 'can_manage_rates'
+  | 'can_view_billing_verify'
   | 'pin_hash'
   | 'deleted_at'
 >;
@@ -122,6 +127,7 @@ function toDto(u: UserWithSite): AdminUserDto {
     is_active: u.is_active,
     all_sites: u.all_sites,
     can_manage_rates: u.can_manage_rates,
+    can_view_billing_verify: u.can_view_billing_verify,
     has_pin: u.pin_hash != null,
     last_login_at: u.last_login_at,
     created_at: u.created_at,
@@ -178,6 +184,10 @@ export interface CreateUserInput {
    * (admins already have rate-write via role; operators never). Coerced false
    * otherwise. Grants EXACTLY the four rate-table writes — no admin power. */
   can_manage_rates?: boolean;
+  /** rollup §1.2 — read-only billing-verify page access. Manager-only, same
+   * coercion as can_manage_rates (hard rule #2: operators never; admins via
+   * role). Grants one read page and nothing else. */
+  can_view_billing_verify?: boolean;
 }
 
 export type CreateUserResult =
@@ -249,6 +259,9 @@ export async function createUser(
         all_sites: input.role === 'manager' ? (input.all_sites ?? false) : false,
         // ADR-0040 D5: can_manage_rates only applies to managers; force false otherwise.
         can_manage_rates: input.role === 'manager' ? (input.can_manage_rates ?? false) : false,
+        // rollup §1.2: same manager-only coercion as can_manage_rates.
+        can_view_billing_verify:
+          input.role === 'manager' ? (input.can_view_billing_verify ?? false) : false,
         // Operators flip to active after the PIN write; SSO users
         // are active immediately so they can sign in.
         is_active: input.role !== 'operator',
@@ -339,6 +352,9 @@ export interface UpdateUserInput {
   /** ADR-0040 D5 — scoped rate-table write access. Same manager-only coercion as
    * `all_sites`: a role change away from `manager` clears it. */
   can_manage_rates?: boolean;
+  /** rollup §1.2 — read-only billing-verify page access. Same manager-only
+   * coercion as can_manage_rates: a role change away from manager clears it. */
+  can_view_billing_verify?: boolean;
 }
 
 export type UpdateUserResult =
@@ -399,7 +415,19 @@ export async function updateUser(
   if (input.can_manage_rates !== undefined || input.role !== undefined) {
     const nextCanManageRates =
       nextRole === 'manager' ? (input.can_manage_rates ?? existing.can_manage_rates) : false;
-    if (nextCanManageRates !== existing.can_manage_rates) data.can_manage_rates = nextCanManageRates;
+    if (nextCanManageRates !== existing.can_manage_rates)
+      data.can_manage_rates = nextCanManageRates;
+  }
+
+  // rollup §1.2: same manager-only coercion as can_manage_rates.
+  if (input.can_view_billing_verify !== undefined || input.role !== undefined) {
+    const nextCanViewBillingVerify =
+      nextRole === 'manager'
+        ? (input.can_view_billing_verify ?? existing.can_view_billing_verify)
+        : false;
+    if (nextCanViewBillingVerify !== existing.can_view_billing_verify) {
+      data.can_view_billing_verify = nextCanViewBillingVerify;
+    }
   }
 
   const updated = await prisma.$transaction(async (tx) => {

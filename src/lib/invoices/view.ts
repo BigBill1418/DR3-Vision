@@ -38,6 +38,9 @@ export interface InvoiceView {
   voidedBy: string | null;
   voidedAt: Date | null;
   gateOverrideNote: string | null;
+  /** rollup §1.3 — GP Trade discount (ca_processing_eom only; else null). */
+  tradeDiscountCents: number | null;
+  tradeDiscountReferenceInvoiceId: string | null;
   notes: string | null;
   lines: InvoiceLineView[];
 }
@@ -58,9 +61,7 @@ export interface InvoiceListItem {
 /** The `total_cents` == Σ lines invariant was violated (a denormalization bug). */
 export class InvoiceInvariantError extends Error {
   readonly status = 500 as const;
-  constructor(
-    readonly context: { invoiceId: string; storedTotal: number; lineSum: number },
-  ) {
+  constructor(readonly context: { invoiceId: string; storedTotal: number; lineSum: number }) {
     super(
       `invoice ${context.invoiceId} total_cents (${context.storedTotal}¢) != Σ lines (${context.lineSum}¢) — ` +
         `refusing to proceed with a total that disagrees with its lines`,
@@ -73,7 +74,9 @@ export class InvoiceInvariantError extends Error {
 export class InvoiceImmutableError extends Error {
   readonly status = 409 as const;
   constructor(readonly invoiceId: string) {
-    super(`invoice ${invoiceId} is approved and immutable — correct it with a superseding new version`);
+    super(
+      `invoice ${invoiceId} is approved and immutable — correct it with a superseding new version`,
+    );
     this.name = 'InvoiceImmutableError';
   }
 }
@@ -132,6 +135,8 @@ interface InvoiceRow {
   voided_by: string | null;
   voided_at: Date | null;
   gate_override_note: string | null;
+  trade_discount_cents?: number | null;
+  trade_discount_reference_invoice_id?: string | null;
   notes: string | null;
   lines: LineRow[];
 }
@@ -155,6 +160,8 @@ export function toInvoiceView(row: InvoiceRow): InvoiceView {
     voidedBy: row.voided_by,
     voidedAt: row.voided_at,
     gateOverrideNote: row.gate_override_note,
+    tradeDiscountCents: row.trade_discount_cents ?? null,
+    tradeDiscountReferenceInvoiceId: row.trade_discount_reference_invoice_id ?? null,
     notes: row.notes,
     lines: [...row.lines]
       .sort((a, b) => a.position - b.position)

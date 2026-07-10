@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { formatUsdCents } from '@/lib/invoices/format';
 
 interface InvoiceListItem {
   id: string;
@@ -29,18 +30,17 @@ const KINDS: { id: string; label: string; site: 'CA' | 'OR' }[] = [
 
 const KIND_LABEL = new Map(KINDS.map((k) => [k.id, k.label]));
 
-export function money(cents: number): string {
-  const neg = cents < 0;
-  const v = (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return neg ? `($${v})` : `$${v}`;
-}
+// Delegates to the shared invoice formatter so every surface renders
+// negatives identically (kept as `money` for existing importers).
+export const money = formatUsdCents;
 
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
-const btnCls = 'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnCls =
+  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 
 const STATUS_STYLE: Record<string, string> = {
   draft: 'bg-white/15 text-white',
@@ -107,18 +107,28 @@ export function InvoicesClient({ siteCode }: { siteCode: string }) {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="opacity-80">Billing month</span>
-            <input type="month" className={inputCls} value={month} onChange={(e) => setMonth(e.target.value)} />
+            <input
+              type="month"
+              className={inputCls}
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+            />
           </label>
           <button type="button" className={btnCls} onClick={() => void generate()} disabled={busy}>
             {busy ? 'Generating…' : 'Generate draft'}
           </button>
           {msg && (
-            <span className={`text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}>{msg.text}</span>
+            <span
+              className={`text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}
+            >
+              {msg.text}
+            </span>
           )}
         </div>
         <p className="mt-3 text-xs opacity-60">
-          A draft is a preview — it is not billable until approved. Regenerating replaces the current draft with a new
-          version. The OR collection-site-count invoice is built from manually-entered lines (no data feed yet).
+          A draft is a preview — it is not billable until approved. Regenerating replaces the
+          current draft with a new version. The OR collection-site-count invoice is built from
+          manually-entered lines (no data feed yet).
         </p>
       </section>
 
@@ -148,7 +158,9 @@ export function InvoicesClient({ siteCode }: { siteCode: string }) {
                     {r.supersedesId ? <span className="ml-1 opacity-50">(supersede)</span> : null}
                   </td>
                   <td className="py-2 pr-3">
-                    <span className={`rounded px-2 py-0.5 text-xs ${STATUS_STYLE[r.status] ?? ''}`}>{r.status}</span>
+                    <span className={`rounded px-2 py-0.5 text-xs ${STATUS_STYLE[r.status] ?? ''}`}>
+                      {r.status}
+                    </span>
                   </td>
                   <td className="py-2 pr-3 text-right tabular-nums">{money(r.totalCents)}</td>
                   <td className="py-2 text-right">

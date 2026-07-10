@@ -31,6 +31,7 @@ export function UserCreateForm({ sites }: Props) {
   const [processorRole, setProcessorRole] = useState<string>('');
   const [allSites, setAllSites] = useState(false);
   const [canManageRates, setCanManageRates] = useState(false);
+  const [canViewBillingVerify, setCanViewBillingVerify] = useState(false);
   const [pin, setPin] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +83,7 @@ export function UserCreateForm({ sites }: Props) {
           processor_role: showProcessorRole ? processorRole || null : null,
           all_sites: role === 'manager' ? allSites : false,
           can_manage_rates: role === 'manager' ? canManageRates : false,
+          can_view_billing_verify: role === 'manager' ? canViewBillingVerify : false,
           pin: role === 'operator' ? pin : null,
         }),
       });
@@ -217,6 +219,27 @@ export function UserCreateForm({ sites }: Props) {
           <span className="flex flex-col gap-1">
             <span className="text-sm font-medium text-dr3-mist">{M.form.canManageRatesLabel}</span>
             <span className="text-xs text-dr3-mist-dim">{M.form.canManageRatesHelp}</span>
+          </span>
+        </label>
+      ) : null}
+
+      {role === 'manager' ? (
+        <label
+          className="flex items-start gap-3"
+          data-testid="admin-create-can-view-billing-verify-field"
+        >
+          <input
+            type="checkbox"
+            checked={canViewBillingVerify}
+            onChange={(e) => setCanViewBillingVerify(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-dr3-steel-light/40 bg-dr3-space-2 text-dr3-cyan focus:ring-2 focus:ring-dr3-cyan"
+            data-testid="admin-create-can-view-billing-verify"
+          />
+          <span className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-dr3-mist">
+              {M.form.canViewBillingVerifyLabel}
+            </span>
+            <span className="text-xs text-dr3-mist-dim">{M.form.canViewBillingVerifyHelp}</span>
           </span>
         </label>
       ) : null}

@@ -216,6 +216,17 @@ model User {
   // operators and irrelevant for admins (who already see all sites).
   all_sites Boolean @default(false)
   can_manage_rates Boolean @default(false) // ADR-0040 — rate-table write access (D5)
+  // 2026-07-09 rollup §1.2 (ADR-0041/0039 addendum) — READ-ONLY access to the
+  // /admin/billing/verify page (invoices ready for GP entry + the ADR-0039
+  // findings touching their windows). MANAGER-ONLY, exactly like
+  // can_manage_rates (hard rule #2: never an operator grant; coerced false on
+  // any role change away from manager). Grants exactly that one read surface;
+  // never any write, never any other /admin page. Site reach on the page
+  // follows rule #2: all_sites managers (+ admins) see both sites; a
+  // single-site manager sees only their primary site. Intended grantee: Mary
+  // Scott (GP entry, bills both CA and OR) as manager + all_sites + this flag,
+  // once her account exists.
+  can_view_billing_verify Boolean @default(false)
 
   // ADR-0030 — super-admin gate for the Bill-only daily-production-report
   // admin tile (`/admin/production-report`). Distinct from `role = admin`:
@@ -2282,11 +2293,24 @@ model Invoice {
   // Set on an approvable generation that proceeded past a BLOCKED trust gate via
   // a super-admin override (D4). Null for a clean-gate or draft-preview invoice.
   gate_override_note String?
+  // 2026-07-09 rollup §1.3 (ADR-0041 addendum) — the GP "Trade discount" made
+  // explicit. Populated ONLY on ca_processing_eom drafts: the mid-month amount
+  // already invoiced (positive cents; the stored B22.offset line carries the
+  // negative) + the mid-month invoice it references. Mary types the GP EOM
+  // invoice as gross → Trade discount → balance due; these fields are that
+  // structure as data, so the GP adapter/verify surface never re-derives it
+  // from line JSON. Null on every other kind, and null when the offset was
+  // recomputed with no mid-month invoice on file (reference only).
+  trade_discount_cents                Int?
+  trade_discount_reference_invoice_id String?
+  trade_discount_reference            Invoice?  @relation("InvoiceTradeDiscountRef", fields: [trade_discount_reference_invoice_id], references: [id])
+  trade_discount_referenced_by        Invoice[] @relation("InvoiceTradeDiscountRef")
   notes         String?
   created_at    DateTime      @default(now())
   updated_at    DateTime      @updatedAt
 
-  lines InvoiceLine[]
+  lines        InvoiceLine[]
+  credit_memos CreditMemo[]
 
   @@index([site_id, kind, billing_month])
   @@index([site_id, status])
@@ -2315,6 +2339,53 @@ model InvoiceLine {
 
   @@index([invoice_id, position])
   @@map("invoice_lines")
+}
+
+/// 2026-07-09 rollup §1.4 (ADR-0041 addendum) — the over-billed correction path.
+/// Mary's GP reality: under-billed → void-and-reissue (the existing supersede
+/// chain); over-billed → a credit memo IF MRC agrees, else void-and-reissue.
+/// MRC's acceptance is REQUIRED for the credit path, so a credit memo cannot be
+/// applied unilaterally — hence the state machine (transitions enforced in
+/// `src/lib/invoices/credit-memos.ts`, every step audited):
+///   proposed → sent_to_mrc → accepted | rejected;
+///   accepted → applied (Mary confirms MRC applied the credit);
+///   rejected → void_and_reissue_triggered (a superseding draft is generated
+///   via the ADR-0041 supersede chain; its id is recorded here).
+enum CreditMemoStatus {
+  proposed
+  sent_to_mrc
+  accepted
+  rejected
+  applied
+  void_and_reissue_triggered
+}
+
+/// One credit memo against an APPROVED invoice. `amount_cents` is POSITIVE (the
+/// credit owed back to MRC). Rows are append-only through the state machine —
+/// no deletes; a wrong proposal is walked to rejected/void_and_reissue. Audit
+/// actor columns are bare user-id scalars (block-header convention).
+model CreditMemo {
+  id                      String           @id @default(uuid())
+  invoice_id              String
+  invoice                 Invoice          @relation(fields: [invoice_id], references: [id])
+  site_id                 String // FK → sites.id (constraint in migration; scoping reads)
+  amount_cents            Int
+  reason                  String
+  status                  CreditMemoStatus @default(proposed)
+  // Set when status = void_and_reissue_triggered: the superseding DRAFT that
+  // replaces the over-billed invoice (ADR-0041 supersede chain).
+  superseding_invoice_id  String?
+  created_by              String? // users.id (bare audit-actor column)
+  sent_at                 DateTime?
+  decided_at              DateTime?
+  decided_note            String?
+  applied_at              DateTime?
+  created_at              DateTime         @default(now())
+  updated_at              DateTime         @updatedAt
+
+  @@index([invoice_id])
+  @@index([site_id, status])
+  @@map("credit_memos")
 }
 
 // ADR-0042 — COR
@@ -3082,7 +3153,11 @@ enum WorkbookSyncStatus {
 }
 
 /// D9 — one syncing source (a site's monthly workbook location). Woodland ships
-/// day 1; Eugene is a config row when Rick confirms. Born `is_syncing=false` — a
+/// day 1. Eugene will NEVER have a row: Rick's site runs on hand-filled paper
+/// forms, no shared workbook exists (confirmed definitively 2026-07-09, rollup
+/// §4.2 — the Eugene sample was a scanned paper SHIPMENT/LOGIN sheet). The
+/// Eugene iPad UI goes direct paper→Vision; do not add a source row for it.
+/// Born `is_syncing=false` — a
 /// deliberate operator enable turns real polling on (the engine no-ops disabled
 /// sources). `drive_upn` is the OneDrive owner UPN (Kelsey), resolved to a drive
 /// per D4; `share_url` is an optional operator-configurable share pointer kept for

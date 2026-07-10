@@ -57,9 +57,12 @@ interface Detail {
   priorVersion: InvoiceView | null;
 }
 
-const btnPrimary = 'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
-const btnDanger = 'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
-const btnGhost = 'rounded border border-white/25 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40';
+const btnPrimary =
+  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnDanger =
+  'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
+const btnGhost =
+  'rounded border border-white/25 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40';
 
 function iso(d: string): string {
   return d.slice(0, 10);
@@ -74,7 +77,13 @@ function sourceRefs(source: Json): { loadIds: string[]; rentalIds: string[] } {
   };
 }
 
-export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string; invoiceId: string }) {
+export function InvoiceDetailClient({
+  siteCode,
+  invoiceId,
+}: {
+  siteCode: string;
+  invoiceId: string;
+}) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -95,7 +104,11 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
   }, [load]);
 
   const act = useCallback(
-    async (action: 'approve' | 'void' | 'supersede', body: Record<string, unknown>, confirmText: string) => {
+    async (
+      action: 'approve' | 'void' | 'supersede',
+      body: Record<string, unknown>,
+      confirmText: string,
+    ) => {
       if (!window.confirm(confirmText)) return;
       setBusy(true);
       setMsg(null);
@@ -105,7 +118,11 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        const data = (await res.json()) as { error?: string; findingCodes?: string[]; invoice?: InvoiceView };
+        const data = (await res.json()) as {
+          error?: string;
+          findingCodes?: string[];
+          invoice?: InvoiceView;
+        };
         if (!res.ok) {
           const codes = data.findingCodes ? ` [${data.findingCodes.join(', ')}]` : '';
           setMsg({ kind: 'err', text: `${data.error ?? action + ' failed'}${codes}` });
@@ -145,18 +162,24 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
 
       {/* Inline trust-gate findings (D4) */}
       <section className="mt-5 rounded-lg border border-white/15 bg-black/20 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide opacity-80">Window trust gate</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide opacity-80">
+          Window trust gate
+        </h2>
         {gate.blocked ? (
           <p className="mt-2 text-sm text-red-300">
-            Blocked — {gate.blockingFindings.length} open finding(s) on {gate.findingCodes.join(', ')}. Resolve them
-            (or a super-admin may override at approval).
+            Blocked — {gate.blockingFindings.length} open finding(s) on{' '}
+            {gate.findingCodes.join(', ')}. Resolve them (or a super-admin may override at
+            approval).
           </p>
         ) : gate.overridden ? (
           <p className="mt-2 text-sm text-amber-300">
-            Overridden by a super-admin justification (findings: {gate.findingCodes.join(', ') || 'none'}).
+            Overridden by a super-admin justification (findings:{' '}
+            {gate.findingCodes.join(', ') || 'none'}).
           </p>
         ) : (
-          <p className="mt-2 text-sm text-dr3-chartreuse">Clean — no blocking findings for this window.</p>
+          <p className="mt-2 text-sm text-dr3-chartreuse">
+            Clean — no blocking findings for this window.
+          </p>
         )}
       </section>
 
@@ -170,7 +193,9 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
               <th className="py-2 pr-3">Description</th>
               <th className="py-2 pr-3 text-right">Qty</th>
               <th className="py-2 pr-3 text-right">Amount</th>
-              {priorVersion && <th className="py-2 pr-3 text-right">Δ vs v{priorVersion.version}</th>}
+              {priorVersion && (
+                <th className="py-2 pr-3 text-right">Δ vs v{priorVersion.version}</th>
+              )}
               <th className="py-2" />
             </tr>
           </thead>
@@ -189,7 +214,13 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
                     <td className="py-2 pr-3 text-right tabular-nums">{money(l.amountCents)}</td>
                     {priorVersion && (
                       <td className="py-2 pr-3 text-right tabular-nums">
-                        {delta == null ? <span className="opacity-40">new</span> : delta === 0 ? '—' : money(delta)}
+                        {delta == null ? (
+                          <span className="opacity-40">new</span>
+                        ) : delta === 0 ? (
+                          '—'
+                        ) : (
+                          money(delta)
+                        )}
                       </td>
                     )}
                     <td className="py-2 text-right">
@@ -214,7 +245,11 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
                       <td colSpan={priorVersion ? 6 : 5} className="px-3 py-3">
                         <div className="flex flex-wrap gap-3 text-xs">
                           {refs.loadIds.map((lid) => (
-                            <Link key={lid} href={`/dashboard/${siteCode}/load/${lid}`} className="text-dr3-chartreuse underline">
+                            <Link
+                              key={lid}
+                              href={`/dashboard/${siteCode}/load/${lid}`}
+                              className="text-dr3-chartreuse underline"
+                            >
                               load {lid.slice(0, 8)}
                             </Link>
                           ))}
@@ -233,12 +268,21 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
             })}
             <tr className="border-t-2 border-white/30 font-semibold">
               <td className="py-2 pr-3" />
-              <td className="py-2 pr-3">Invoice total</td>
+              {/* rollup §1.3 — same GP framing as the xlsx render when the
+                  invoice stores a mid-month offset line (keyed on the line,
+                  not the kind, so all surfaces agree). */}
+              <td className="py-2 pr-3">
+                {invoice.lines.some((l) => l.lineCode === 'B22.offset')
+                  ? 'Balance due (gross less Trade discount)'
+                  : 'Invoice total'}
+              </td>
               <td className="py-2 pr-3" />
               <td className="py-2 pr-3 text-right tabular-nums">{money(invoice.totalCents)}</td>
               {priorVersion && (
                 <td className="py-2 pr-3 text-right tabular-nums">
-                  {invoice.totalCents - priorVersion.totalCents === 0 ? '—' : money(invoice.totalCents - priorVersion.totalCents)}
+                  {invoice.totalCents - priorVersion.totalCents === 0
+                    ? '—'
+                    : money(invoice.totalCents - priorVersion.totalCents)}
                 </td>
               )}
               <td className="py-2" />
@@ -250,13 +294,19 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
       {/* Actions */}
       <section className="mt-8 rounded-lg border border-white/15 bg-black/20 p-4">
         {msg && (
-          <p className={`mb-3 text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}>{msg.text}</p>
+          <p
+            className={`mb-3 text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}
+          >
+            {msg.text}
+          </p>
         )}
         {invoice.status === 'draft' && (
           <div className="flex flex-col gap-3">
             {gate.blocked && (
               <label className="flex flex-col gap-1 text-sm">
-                <span className="opacity-80">Super-admin override justification (required to approve past a blocked gate)</span>
+                <span className="opacity-80">
+                  Super-admin override justification (required to approve past a blocked gate)
+                </span>
                 <input
                   className="rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
                   value={override}
@@ -315,13 +365,18 @@ export function InvoiceDetailClient({ siteCode, invoiceId }: { siteCode: string;
             >
               Void
             </button>
-            <a className={btnGhost} href={`/api/manager/${siteCode}/invoices/${invoiceId}/export?format=xlsx`}>
+            <a
+              className={btnGhost}
+              href={`/api/manager/${siteCode}/invoices/${invoiceId}/export?format=xlsx`}
+            >
               Download xlsx
             </a>
           </div>
         )}
         {invoice.gateOverrideNote && (
-          <p className="mt-3 text-xs text-amber-300">Gate override on record: {invoice.gateOverrideNote}</p>
+          <p className="mt-3 text-xs text-amber-300">
+            Gate override on record: {invoice.gateOverrideNote}
+          </p>
         )}
       </section>
     </div>

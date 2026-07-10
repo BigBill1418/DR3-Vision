@@ -22,6 +22,7 @@
 //   - Sheet "Inventory" (eod_carryover generation only): day ledger.
 
 import ExcelJS from 'exceljs';
+import { cellText, cellNumber } from './cells';
 
 export type TemplateGeneration = 'no_calc' | 'calc' | 'eod_carryover' | 'unknown';
 
@@ -99,32 +100,6 @@ export function columnLetterToNumber(letter: string): number {
     n = n * 26 + (ch.charCodeAt(0) - 64);
   }
   return n;
-}
-
-function cellText(value: ExcelJS.CellValue): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value.trim() || null;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object' && 'result' in value && value.result !== undefined) {
-    return cellText(value.result as ExcelJS.CellValue);
-  }
-  if (typeof value === 'object' && 'text' in value && typeof value.text === 'string') {
-    return value.text.trim() || null;
-  }
-  return null;
-}
-
-function cellNumber(value: ExcelJS.CellValue): number | null {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'object' && value !== null && 'result' in value) {
-    const r = (value as { result?: unknown }).result;
-    if (typeof r === 'number') return r;
-  }
-  const t = cellText(value);
-  if (t === null) return null;
-  const n = Number(t.replace(/[$,\s]/g, ''));
-  return Number.isFinite(n) ? n : null;
 }
 
 // ────────────────────────────────────────────────────────────────────────

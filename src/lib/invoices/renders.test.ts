@@ -37,6 +37,8 @@ function invoice(kind: InvoiceKind, lines: InvoiceLineView[], totalCents: number
     voidedBy: null,
     voidedAt: null,
     gateOverrideNote: null,
+    tradeDiscountCents: null,
+    tradeDiscountReferenceInvoiceId: null,
     notes: null,
     lines,
   };
@@ -46,10 +48,34 @@ function invoice(kind: InvoiceKind, lines: InvoiceLineView[], totalCents: number
 const caEom = invoice(
   'ca_processing_eom',
   [
-    line({ lineCode: 'B6', description: 'Processing', quantity: '300', amountCents: 495000, position: 0 }),
-    line({ lineCode: 'B7', description: 'Incentives', quantity: '20', amountCents: 6000, position: 1 }),
-    line({ lineCode: 'B8', description: 'Event misc', quantity: '1', amountCents: 54000, position: 2 }),
-    line({ lineCode: 'B22.offset', description: 'Less: mid-month', quantity: '150', amountCents: -247500, position: 3 }),
+    line({
+      lineCode: 'B6',
+      description: 'Processing',
+      quantity: '300',
+      amountCents: 495000,
+      position: 0,
+    }),
+    line({
+      lineCode: 'B7',
+      description: 'Incentives',
+      quantity: '20',
+      amountCents: 6000,
+      position: 1,
+    }),
+    line({
+      lineCode: 'B8',
+      description: 'Event misc',
+      quantity: '1',
+      amountCents: 54000,
+      position: 2,
+    }),
+    line({
+      lineCode: 'B22.offset',
+      description: 'Less: mid-month',
+      quantity: '150',
+      amountCents: -247500,
+      position: 3,
+    }),
   ],
   495000 + 6000 + 54000 - 247500,
 );
@@ -89,14 +115,29 @@ describe('invoiceExportV1 — frozen contract shape (GP boundary)', () => {
     expect(e.version).toBe(1);
     expect(Object.keys(e)).toEqual(['schema', 'version', 'invoice', 'lines']);
     expect(Object.keys(e.invoice)).toEqual([
-      'id', 'site_id', 'kind', 'billing_month', 'window', 'version',
-      'supersedes_id', 'status', 'total_cents', 'generated_at', 'approved_at',
+      'id',
+      'site_id',
+      'kind',
+      'billing_month',
+      'window',
+      'version',
+      'supersedes_id',
+      'status',
+      'total_cents',
+      'generated_at',
+      'approved_at',
     ]);
     expect(e.invoice.billing_month).toBe('2026-06-01');
     expect(e.invoice.window).toEqual({ start: '2026-06-01', end: '2026-06-30' });
     expect(e.invoice.total_cents).toBe(495000 + 6000 + 54000 - 247500);
     expect(Object.keys(e.lines[0]!)).toEqual([
-      'line_code', 'description', 'quantity', 'amount_cents', 'rate_ref', 'source', 'position',
+      'line_code',
+      'description',
+      'quantity',
+      'amount_cents',
+      'rate_ref',
+      'source',
+      'position',
     ]);
   });
 });

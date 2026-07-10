@@ -159,3 +159,67 @@ non-null cents + customer/retracId) — billing uses ONLY the invoices copy via
 `event-leg.ts`; the events-side `listEventCostRows` seam is currently uncalled and
 is retained as the capture module's public read API. If the B8 term set ever
 changes, change `src/lib/invoices/types.ts` (the billed copy) first.
+
+### Addendum — 2026-07-09 (Mary's survey: explicit Trade discount + correction paths)
+
+Mary Scott's survey response (campaign `dr3-intel-2026-06`; 2026-07-09 rollup §1)
+amended two engine-half decisions. Built the same day (rollup §8.1 items 3–4):
+
+- **D5 amendment — the GP "Trade discount" is explicit data, not a rendering
+  artifact (§1.3).** The B22.offset line already carried the honest negative,
+  but the GP EOM invoice structure Mary types is three specific lines: gross
+  month total → **Trade discount** (the mid-month bill) → balance due. New
+  nullable columns `invoices.trade_discount_cents` +
+  `trade_discount_reference_invoice_id` (self-FK to the referenced mid-month
+  invoice) are populated on `ca_processing_eom` generation
+  (`resolveMidMonthOffset` now returns the reference id; null when the offset
+  was recomputed with no mid-month invoice on file). The stored offset line's
+  description now speaks GP ("Trade discount — mid-month processing already
+  invoiced"); the summary render frames CA-EOM as Gross month total →
+  Trade discount → **Balance due**. Line codes, stored leaves, and the
+  total==Σlines invariant are unchanged. The frozen `invoice_export` v1
+  contract is deliberately NOT touched — the GP adapter consumes the new
+  columns when it lands (still blocked on Mary's packet), as a reviewed
+  version bump.
+- **D1 amendment — TWO correction paths, not one (§1.4).** Under-billed →
+  void-and-reissue: the existing supersede chain, unchanged. Over-billed → a
+  **credit memo whose application REQUIRES MRC's acceptance** (unlike
+  ADR-0028/0029 bonus amendments, never admin-unilateral): new `credit_memos`
+  table + state machine `proposed → sent_to_mrc → accepted | rejected;
+accepted → applied; rejected → void_and_reissue_triggered` (the reissue step
+  generates the superseding draft via the supersede chain and records its id).
+  Transitions are typed-409-enforced + audited
+  (`src/lib/invoices/credit-memos.ts`; manager-surface routes under
+  `/api/manager/[site]/credit-memos`). Admin UI for memos is a follow-up —
+  the API + machine ship first so the correction ledger exists from day 1.
+- Migration `20260717_trade_discount_credit_memos_verify` (additive,
+  clean-replays on empty PG16 per ADR-0035; also carries the ADR-0039 note's
+  `users.can_view_billing_verify` and a BACKFILL copying each pre-existing
+  B22.offset line into the new columns so pre-migration invoices show the GP
+  three-line block too).
+- **Hardening from the same-day review pass:** the mid-month offset reference
+  now prefers an APPROVED mid-month invoice only (a draft's total was never
+  invoiced and voids on regenerate — persisting its id would freeze provenance
+  at a voided number; no approved invoice ⇒ the recompute fallback). A 0¢
+  offset with no reference stores NULL trade-discount fields (no phantom
+  "$0.00 Trade discount" for Mary to hunt in GP). `generateInvoiceDraft` gains
+  a write-time tripwire asserting `trade_discount_cents` mirrors the stored
+  offset line (ADR-0033 philosophy). Credit-memo transitions are an atomic
+  compare-and-swap (`updateMany` on `{id, status: from}`) so concurrent or
+  double-submitted requests get the typed 409 instead of double-running the
+  reissue; the reissue path claims first, then supersedes, and COMPENSATES the
+  claim back to `rejected` if draft generation fails (e.g. the invoice was
+  voided out-of-band). `createCreditMemo` bounds the amount to the invoice
+  total and refuses a second open memo per invoice.
+
+**§D review items (open, from the rollup + review pass):** (1) whether the GP
+adapter's export should carry the trade-discount fields as a v2 contract bump
+or a side-channel (the frozen v1 was deliberately left untouched — the adapter
+is still blocked on Mary's packet); (2) credit-memo admin UI shape (list +
+transition buttons on the invoice detail vs a standalone queue); (3) whether a
+credit memo should soft-link to the ADR-0039 finding that motivated it
+(provenance chain finding → memo → superseding invoice); (4) a memo
+cancel/withdrawn state — today a memo whose invoice was voided out-of-band can
+only bounce between `rejected` and a failing reissue; (5) resolver provenance
+telemetry for §8.2 (flag category tabs that only resolve via the name-fallback
+tier, so unconfirmed row-2 label rules fail loudly when real files land).

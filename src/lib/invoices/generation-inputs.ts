@@ -13,7 +13,12 @@ import { log } from '@/lib/observability/logger';
 import { resolveRateCents } from '@/lib/program-rules/resolver';
 import { resolveFreightCents } from '@/lib/billing-rates/freight-resolver';
 import { computeFuelSurchargeCents } from '@/lib/billing-rates/fuel';
-import { dayKeyUTCFromISO, pacificDayKeyUTC, pacificDayStartInstant, pacificDayStartInstantPlus } from '@/lib/time';
+import {
+  dayKeyUTCFromISO,
+  pacificDayKeyUTC,
+  pacificDayStartInstant,
+  pacificDayStartInstantPlus,
+} from '@/lib/time';
 import type {
   ProcessingGenerationInput,
   ProcessingKind,
@@ -65,7 +70,12 @@ export async function loadOrCountManualLines(
     resolveRateCents(siteId, 'satellite_collection_rate', monthKey),
   ]);
   log.debug(
-    { op: 'invoice.or_count_lines', site_id: siteId, billing_month: billingMonthISO, rows: rows.length },
+    {
+      op: 'invoice.or_count_lines',
+      site_id: siteId,
+      billing_month: billingMonthISO,
+      rows: rows.length,
+    },
     '[invoices] OR collection-site-count lines loaded from stored capture rows',
   );
   return rows.map((r) => ({
@@ -124,17 +134,29 @@ export async function resolveProcessingInputs(args: {
   const incentiveCentsTotal = incentive._sum.incentive_cents ?? 0;
   const incentiveUnits = incentive._sum.units ?? 0;
 
-  const eventLeg = kind === 'ca_processing_mid_month' ? { events: [], pending: false } : await loadEventLeg(siteId, windowStartISO, windowEndISO);
+  const eventLeg =
+    kind === 'ca_processing_mid_month'
+      ? { events: [], pending: false }
+      : await loadEventLeg(siteId, windowStartISO, windowEndISO);
 
   const base: ProcessingGenerationInput = {
     kind,
     processingRateCents: rate,
     processingRateRef: { rule_kind: 'processing_rate', as_of: windowStartISO, rate_cents: rate },
     strippedProgramUnits,
-    strippedSource: { table: 'processed_units_daily', window: [windowStartISO, windowEndISO], field: 'stripped_program' },
+    strippedSource: {
+      table: 'processed_units_daily',
+      window: [windowStartISO, windowEndISO],
+      field: 'stripped_program',
+    },
     incentiveCentsTotal,
     incentiveUnits,
-    incentiveSource: { table: 'consumer_dropoffs', kind: 'incentive', window: [windowStartISO, windowEndISO], basis: 'dropoff_date' },
+    incentiveSource: {
+      table: 'consumer_dropoffs',
+      kind: 'incentive',
+      window: [windowStartISO, windowEndISO],
+      basis: 'dropoff_date',
+    },
     events: eventLeg.events,
     eventsPending: eventLeg.pending,
   };
@@ -152,10 +174,27 @@ async function resolveMidMonthOffset(
   siteId: string,
   billingMonthISO: string,
   rateCents: number,
-): Promise<Pick<ProcessingGenerationInput, 'midMonthOffsetCents' | 'midMonthOffsetUnits' | 'midMonthOffsetSource'>> {
+): Promise<
+  Pick<
+    ProcessingGenerationInput,
+    | 'midMonthOffsetCents'
+    | 'midMonthOffsetUnits'
+    | 'midMonthOffsetSource'
+    | 'midMonthReferenceInvoiceId'
+  >
+> {
   const billingMonth = dayKeyUTCFromISO(billingMonthISO);
+  // APPROVED only: a draft's total was never actually invoiced, and drafts
+  // void on regenerate — persisting a draft's id/total into the new
+  // trade_discount_* columns would freeze provenance pointing at a voided
+  // number. No approved mid-month invoice ⇒ the recompute fallback below.
   const midInvoice = await prisma.invoice.findFirst({
-    where: { site_id: siteId, kind: 'ca_processing_mid_month', billing_month: billingMonth, status: { not: 'void' } },
+    where: {
+      site_id: siteId,
+      kind: 'ca_processing_mid_month',
+      billing_month: billingMonth,
+      status: 'approved',
+    },
     orderBy: [{ version: 'desc' }],
     include: { lines: true },
   });
@@ -164,13 +203,20 @@ async function resolveMidMonthOffset(
     return {
       midMonthOffsetCents: midInvoice.total_cents,
       midMonthOffsetUnits: b20?.quantity != null ? Number(b20.quantity) : null,
-      midMonthOffsetSource: { basis: 'mid_month_invoice', invoice_id: midInvoice.id, version: midInvoice.version },
+      midMonthOffsetSource: {
+        basis: 'mid_month_invoice',
+        invoice_id: midInvoice.id,
+        version: midInvoice.version,
+      },
+      midMonthReferenceInvoiceId: midInvoice.id,
     };
   }
 
   // No mid-month invoice on file — recompute the 1st–15th processing total.
   const first = new Date(Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 1));
-  const fifteenth = new Date(Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 15));
+  const fifteenth = new Date(
+    Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 15),
+  );
   const stripped = await prisma.processedUnitsDaily.aggregate({
     _sum: { stripped_program: true },
     where: { site_id: siteId, production_date: { gte: first, lte: fifteenth } },
@@ -180,6 +226,7 @@ async function resolveMidMonthOffset(
     midMonthOffsetCents: Math.round(units * rateCents),
     midMonthOffsetUnits: units,
     midMonthOffsetSource: { basis: 'recomputed_no_mid_month_invoice', window: ['1st', '15th'] },
+    midMonthReferenceInvoiceId: null,
   };
 }
 
@@ -207,7 +254,12 @@ export async function resolveTransportationInputs(args: {
       status: 'verified',
       arrived_at: { gte: instant.gte, lt: instant.lt },
     },
-    select: { id: true, source_id: true, arrived_at: true, source: { select: { canonical_mileage: true } } },
+    select: {
+      id: true,
+      source_id: true,
+      arrived_at: true,
+      source: { select: { canonical_mileage: true } },
+    },
     orderBy: { arrived_at: 'asc' },
   });
 
@@ -219,7 +271,11 @@ export async function resolveTransportationInputs(args: {
       throw new FreightInputError(load.id, 'missing source_id or arrived_at');
     }
     const priceDate = pacificDayKeyUTC(load.arrived_at);
-    const freight = await resolveFreightCents({ sourceId: load.source_id, date: priceDate, db: prisma });
+    const freight = await resolveFreightCents({
+      sourceId: load.source_id,
+      date: priceDate,
+      db: prisma,
+    });
     freightLoads.push({
       loadId: load.id,
       cents: freight.cents,
@@ -256,7 +312,10 @@ export async function resolveTransportationInputs(args: {
 /** A transport-charged load could not be priced (no source / no date). */
 export class FreightInputError extends Error {
   readonly status = 422 as const;
-  constructor(readonly loadId: string, reason: string) {
+  constructor(
+    readonly loadId: string,
+    reason: string,
+  ) {
     super(`transport-charged load ${loadId} cannot be priced: ${reason}`);
     this.name = 'FreightInputError';
   }
@@ -265,8 +324,12 @@ export class FreightInputError extends Error {
 /** Active container-rental rows in force for the billing month. */
 async function resolveRentals(siteId: string, billingMonthISO: string): Promise<RentalLeg[]> {
   const billingMonth = dayKeyUTCFromISO(billingMonthISO);
-  const monthStart = new Date(Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 1));
-  const monthEnd = new Date(Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth() + 1, 0));
+  const monthStart = new Date(
+    Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 1),
+  );
+  const monthEnd = new Date(
+    Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth() + 1, 0),
+  );
   const rows = await prisma.containerRentalSite.findMany({
     where: {
       site_id: siteId,
@@ -277,5 +340,9 @@ async function resolveRentals(siteId: string, billingMonthISO: string): Promise<
     select: { id: true, location_name: true, monthly_rate_cents: true },
     orderBy: { location_name: 'asc' },
   });
-  return rows.map((r) => ({ id: r.id, locationName: r.location_name, monthlyRateCents: r.monthly_rate_cents }));
+  return rows.map((r) => ({
+    id: r.id,
+    locationName: r.location_name,
+    monthlyRateCents: r.monthly_rate_cents,
+  }));
 }

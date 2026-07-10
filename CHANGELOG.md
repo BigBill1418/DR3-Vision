@@ -5,6 +5,79 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-09 (rollup §8.1 build queue — ships-without-files subset)
+
+The OPERATOR-ordered §8.1 build queue of the 2026-07-09 full rollup
+(`docs/handoffs/2026-07-09-full-rollup-mary-morena-july-terex-eugene-2026-07.md`,
+PR #91): everything buildable before the real workbook files land on titan
+(§8.2 promotion/fuzzing/close-balance wait on a §7 fetch method). Migration
+`20260717_trade_discount_credit_memos_verify` is purely additive and
+clean-replays on empty PG16.
+
+- **Row-2 section-label resolver (ADR-0049/0048, rollup §3.2).** July's workbook
+  dropped the month prefix from category tab names ("June26 Commodities" →
+  "Commodities"), killing sheet-name matching. New
+  `src/lib/audit/workbook/section-resolver.ts` classifies sheets into
+  `worksheet_semantic_type` by (1) DAY-name regex, (2) row-2 section label,
+  (3) header-row signature, (4) month-prefix-stripped name fallback — never
+  throws, returns `unknown`. June + July tab names resolve identically; the
+  full row-2 label set finalizes against real bytes in §8.2 (TODO markers
+  distinguish confirmed vs inferred labels).
+- **DAY-sheet cotton block encoded (rollup §3.1 / ADR-0037 note).**
+  `day-sheet-layout.ts`: every DAY sheet carries 8 outbound commodity blocks;
+  DAY6 carries a PERMANENT 9th COTTON block at cols 68–75 (confirmed in both
+  June and July — not an anomaly). Taxonomy already had `cotton`; this encodes
+  the structural expectation the §8.2 parser finalization asserts against.
+- **Explicit GP Trade discount (ADR-0041 addendum, rollup §1.3).**
+  `invoices.trade_discount_cents` + `trade_discount_reference_invoice_id`
+  populated on CA-EOM generation; offset-line description + summary render now
+  speak GP (gross month total → Trade discount → balance due). Totals, line
+  codes, and the frozen export-v1 contract unchanged.
+- **Credit-memo correction path (ADR-0041 addendum, rollup §1.4).**
+  `credit_memos` + typed state machine `proposed → sent_to_mrc → accepted |
+rejected → applied | void_and_reissue_triggered` (MRC acceptance REQUIRED
+  before apply; rejection composes with the existing supersede chain). Service
+  `src/lib/invoices/credit-memos.ts` + manager routes; admin UI is a follow-up.
+- **Billing verification view for Mary (rollup §1.2).** Read-only
+  `/admin/billing/verify`: latest non-void invoice per (kind, month) for the
+  current + previous PACIFIC billing months, each with its ADR-0039 window
+  posture (green = approved + clean / yellow = findings or still-a-draft /
+  red = gate-blocked) and the GP three-line structure on CA-EOM. New
+  `users.can_view_billing_verify` flag — MANAGER-ONLY with the exact
+  `can_manage_rates` coercion (hard rule #2; operators never; cleared on role
+  change), site reach per rule #2 (all_sites managers + admins see both
+  sites). Grant Mary manager + all-sites + this flag once her account exists.
+  The page reads one findings fetch per site feeding both the gate and the
+  rendered list (light and list can never disagree; constant 4 queries/site).
+- **Seeds.** `sources.csv` +3 Eugene paper-form sites from the rollup §4.3
+  sample (Thompsons Sanitary Service, Stayton Community Center, Deschutes —
+  names/addresses to confirm with Rick); `Glenwood TC 143/144` documented as
+  aliases of the seeded Glenwood station and `Illegal Drop`/`Sponsors` as
+  drop-off kinds, not sources. `seedWorkbookSync` + `WorkbookSource` docs now
+  state Eugene is DEFINITIVELY paper-only (rollup §4.2) — never add a source row.
+- **Fixture-based parser tests (rollup §5/§8.1-7).** The §5 real-byte samples
+  saved verbatim at `tests/fixtures/adr-0048/sample-rows.json`; 19 new vitest
+  cases round-trip them through exceljs and pin the known-good rows (Bass Hill
+  2026-06-19 · 52 units · $1,619.14 total; EIA fuel week 2026-03-02 @ 4.534).
+- **Review-pass hardening (same day, 8-angle review).** Credit-memo
+  transitions are atomic compare-and-swaps (typed 409 on a lost race; reissue
+  claims-then-supersedes with compensation on failure); memo amounts bounded
+  to the invoice total + one open memo per invoice; the mid-month offset
+  reference is APPROVED-invoices-only (a draft's total was never invoiced);
+  no phantom $0.00 Trade discount fields; a write-time tripwire asserts the
+  column mirrors the stored offset line; migration backfills the columns from
+  pre-existing B22.offset lines; the GP "Balance due" framing keys on the
+  STORED offset line (not the kind) across xlsx + manager detail + verify;
+  shared `KIND_LABEL` (types.ts) + `formatUsdCents` (format.ts) + workbook
+  `cells.ts` replace per-file copies; the section resolver runs
+  header-signatures before row-2 labels (a data row containing a label word
+  can't out-vote a sheet's own header fingerprint) and short-circuits DAY
+  sheets; historical B22.offset rows keep the old description — `line_code`
+  is the only stable join key.
+- **Docs.** Post-acceptance notes on ADR-0037 (cotton permanent), ADR-0039
+  (read-only findings surface), ADR-0041 (addendum above + §D review items),
+  ADR-0046 (outgoing stewardship AP stays out of scope — ADR-0051 candidate).
+
 ### Added — 2026-07-09 (dr3-intel-2026-06 survey export — campaign closure)
 
 - **Survey campaign `dr3-intel-2026-06` closure completed.** Mary Scott (final
@@ -179,6 +252,7 @@ release-discipline fixes, deployed together.
   (checked in at `public/brand/svdp-logo-white.png`), not the dead
   `svdp.us/wp-content` WordPress hotlink. No other live hotlinked logo exists (the
   bonus-PDF uses an embedded data URI; the audit digest has no logo).
+
 ### Added — 2026-07-07 (ADR-0048 — June operational backfill + Terex history import)
 
 - **Staging→operational promotion (`src/lib/audit/workbook-promotion.ts`).** The
@@ -226,7 +300,7 @@ release-discipline fixes, deployed together.
 
 ### Ops — 2026-07-06
 
-- **Restore drill PASSED (readiness P1-3 closed).** Latest restic/R2 snapshot restored into a throwaway postgres and verified against prod on five invariants (migration head, entry counts, paid-payroll cents exact). Two DR-procedure gotchas discovered and documented in `docs/operator/restore-drills.md` (R2_* env mapping; the postgres init-server race that yields a silent empty restore). Remaining D7 activation gate item: RESTIC_PASSWORD off-box confirmation (operator).
+- **Restore drill PASSED (readiness P1-3 closed).** Latest restic/R2 snapshot restored into a throwaway postgres and verified against prod on five invariants (migration head, entry counts, paid-payroll cents exact). Two DR-procedure gotchas discovered and documented in `docs/operator/restore-drills.md` (R2\_\* env mapping; the postgres init-server race that yields a silent empty restore). Remaining D7 activation gate item: RESTIC_PASSWORD off-box confirmation (operator).
 
 ### Added — 2026-07-06 (ADR-0046 — vendor-invoice approval via Graph mailbox ingestion)
 
@@ -328,6 +402,7 @@ release-discipline fixes, deployed together.
   launcher **Equipment** tile (manager+) and the site-dashboard tile.
 - **Docs:** operator guide `docs/operator/equipment.md`; ADR-0044 post-acceptance
   implementation notes.
+
 ### Added — 2026-07-05 (ADR-0045 — P5 ops ledger + Updates digest + contact routing)
 
 - **ADR-0045 (P5).** Three of Kelsey's residual functions become thin, audited
@@ -349,9 +424,9 @@ release-discipline fixes, deployed together.
   (site rows site-scoped; `site_id = NULL` rows org-wide, admin/all_sites only),
   the meeting → action-items motion (one note + N tasks in one transaction), audited
   status transitions, and `dueSummaryForSite` (overdue / due-today). Dashboard tile
-  + `/dashboard/[site]/ops` surface (notes list/editor, task queue with filters). The
-  ADR-0043 daily digest gains a second **Follow-ups due** section and now sends when
-  findings OR due tasks exist (a quiet day still sends nothing).
+  - `/dashboard/[site]/ops` surface (notes list/editor, task queue with filters). The
+    ADR-0043 daily digest gains a second **Follow-ups due** section and now sends when
+    findings OR due tasks exist (a quiet day still sends nothing).
 - **Updates digest + board pack (`src/lib/ops/update-digest.ts`, D2):** weekly draft
   on the Monday tick + board pack on the 2nd-Wednesday-and-preceding-Monday cadence
   (`digest-calendar.ts`, pure, TDD incl. month/year edges), composed from
@@ -503,6 +578,7 @@ release-discipline fixes, deployed together.
   daily-log ceiling 4805). **⚠ Operator action before go-live: align `next_value` to
   the real current counter** (runbook: `docs/operator/events-and-sequences.md`).
   Eugene gets no counter.
+
 ### Added — 2026-07-04 (ADR-0041 — invoice generation, engine half)
 
 - **Invoice engine (ADR-0041, P2; second of 0040/0041/0042).** Vision now generates
@@ -525,10 +601,10 @@ release-discipline fixes, deployed together.
   calendar), B22 = B15 − B20 rendered as an explicit NEGATIVE offset line (the
   "$118,239 trade discount" artifact becomes an honest subtraction). B16
   transportation = per-load `resolveFreightCents` (ADR-0040, per-load ref in source)
-  + event freight + fuel surcharge (`fuel.ts`, CA-only, missing-week = typed error)
-  + Σ active `container_rental_sites`. OR: EOM-only, transportation with NO fuel line
-  (structural guard, tested), collection-site count = manual lines (`source.manual`).
-  Zero-guard: a 0¢ processing charge on nonzero units → typed `InvoiceZeroError`.
+  - event freight + fuel surcharge (`fuel.ts`, CA-only, missing-week = typed error)
+  - Σ active `container_rental_sites`. OR: EOM-only, transportation with NO fuel line
+    (structural guard, tested), collection-site count = manual lines (`source.manual`).
+    Zero-guard: a 0¢ processing charge on nonzero units → typed `InvoiceZeroError`.
 - **Trust gate + lifecycle.** Approval enforces the ADR-0039 `gateForWindow`
   (refuse-with-finding-codes; super-admin override with audited justification),
   the `can_manage_rates`-is-NOT-sufficient approver rule (manager-of-site or admin),
@@ -537,11 +613,11 @@ release-discipline fixes, deployed together.
 - **Renders + surfaces.** xlsx Summary (exceljs, processing + transportation kinds;
   commodity blocks excluded per D5) + neutral `invoice_export` JSON (frozen v1
   contract) as the GP boundary. Routes `/api/manager/[site]/invoices` (list/generate)
-  + `/[id]` (detail w/ inline gate findings + prior-version diff) +
-  `/[id]/{approve,void,supersede,export}`. Manager UI at
-  `/dashboard/[site]/invoices` (list/generate + line drill-down to source rows,
-  approve-with-confirmation). D6 structured logging on every path; no PII in lines
-  or logs.
+  - `/[id]` (detail w/ inline gate findings + prior-version diff) +
+    `/[id]/{approve,void,supersede,export}`. Manager UI at
+    `/dashboard/[site]/invoices` (list/generate + line drill-down to source rows,
+    approve-with-confirmation). D6 structured logging on every path; no PII in lines
+    or logs.
 - **INTEGRATION-PENDING (wired at merge with the CAPTURE half):** the events (B8 /
   event-freight) leg — `event-leg.INTEGRATION-PENDING.ts` (ts-nocheck, excluded from
   tsc/eslint/vitest) maps `collection_events` → `EventCostRow`; until wired,
@@ -559,7 +635,7 @@ release-discipline fixes, deployed together.
   `account_haul_rates` (per-account freight override, FK→sources, effective-dated),
   `container_rental_sites` (monthly trailer rentals, FK→sites/sources, `active`,
   effective-dated), `fuel_prices` (`week_of @db.Date UNIQUE`, `usd_per_gal
-  Decimal(5,3)`, source `eia_api|manual`, `fetched_at`) — plus `users.can_manage_rates`
+Decimal(5,3)`, source `eia_api|manual`, `fetched_at`) — plus `users.can_manage_rates`
   (scoped rate-write flag). FK constraints are created at the DB level (migration) so
   the ADR-0040 schema block stays self-contained (no back-relation fields on the
   sibling-owned `Source`/`Site` models).
@@ -616,7 +692,7 @@ release-discipline fixes, deployed together.
   `non_program_unit_count`), `site_inventory_snapshots` extensions (`snapshot_kind`
   physical|computed, `reconciled_delta`, `source`), and `LoadSourceType` + `event`.
   `outbound_materials.commodity` is the **daily-log 9** (`trash, toppers, foam, metal,
-  wood, cardboard, plastic, shoddy, cotton`), with `sub_category`
+wood, cardboard, plastic, shoddy, cotton`), with `sub_category`
   (renovation|baled|shredded) + nullable `whole_units`/`program_units`/
   `non_program_units` on renovation rows. `processed_units_daily` carries
   `stripped_program`/`stripped_non_program`, `saved_units` (captured, EXCLUDED from
@@ -667,7 +743,7 @@ release-discipline fixes, deployed together.
   site-driven program-ness (`sources` flags + `source_aliases` + verify-gate
   default), the restructured daily close (stripped + saved + metadata; whole-sold +
   landfilled derived), the `End = Start + Inbound − Stripped − WholeUnitsSold −
-  Landfilled` balance, and the Addendum B5 rate seeds. Still open per B10: outbound→
+Landfilled` balance, and the Addendum B5 rate seeds. Still open per B10: outbound→
   invoice block mapping (B10-5), `saved_units` semantics (B10-2), DR3#/Material#
   sequences (B10-6), CA fuel COMPUTATION (P2). ADR-0037 "Post-acceptance revision —
   Addendum B" itemizes every change vs the accepted text. Operator guide:

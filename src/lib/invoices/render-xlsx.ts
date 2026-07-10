@@ -13,16 +13,7 @@
 import ExcelJS from 'exceljs';
 import type { InvoiceView } from './view';
 import type { InvoiceKind, InvoiceStatus } from './types';
-import { LINE_CODE } from './types';
-
-const KIND_LABEL: Record<InvoiceKind, string> = {
-  ca_processing_mid_month: 'CA Processing — Mid-Month',
-  ca_processing_eom: 'CA Processing — End of Month',
-  ca_transportation_eom: 'CA Transportation — End of Month',
-  or_processing_eom: 'OR Processing — End of Month',
-  or_transportation_eom: 'OR Transportation — End of Month',
-  or_collection_site_count: 'OR Collection-Site Count',
-};
+import { KIND_LABEL, LINE_CODE } from './types';
 
 export interface SummaryRow {
   code: string;
@@ -66,12 +57,35 @@ export function buildInvoiceSummaryModel(inv: InvoiceView): InvoiceSummaryModel 
       const b15 = inv.lines
         .filter((x) => x.lineCode !== LINE_CODE.eomOffset)
         .reduce((acc, x) => acc + x.amountCents, 0);
-      rows.push({ code: 'B15', label: 'Processing subtotal (B6 + B7 + B8)', quantity: null, amountCents: b15, kind: 'subtotal' });
+      rows.push({
+        code: 'B15',
+        label: 'Gross month total (B6 + B7 + B8)',
+        quantity: null,
+        amountCents: b15,
+        kind: 'subtotal',
+      });
     }
-    rows.push({ code: l.lineCode, label: l.description, quantity: l.quantity, amountCents: l.amountCents, kind: 'line' });
+    rows.push({
+      code: l.lineCode,
+      label: l.description,
+      quantity: l.quantity,
+      amountCents: l.amountCents,
+      kind: 'line',
+    });
   });
 
-  rows.push({ code: 'TOTAL', label: 'Invoice total', quantity: null, amountCents: inv.totalCents, kind: 'total' });
+  // rollup §1.3 — when the invoice stores a mid-month offset line, the summary
+  // reads exactly as Mary's GP entry: gross month total → Trade discount →
+  // balance due. Keyed on the STORED offset line (not the kind), so a CA EOM
+  // with nothing pre-billed keeps the plain label and every surface derives
+  // the framing from the same source of truth.
+  rows.push({
+    code: 'TOTAL',
+    label: offsetIdx >= 0 ? 'Balance due (gross less Trade discount)' : 'Invoice total',
+    quantity: null,
+    amountCents: inv.totalCents,
+    kind: 'total',
+  });
 
   return {
     title: 'DR3 — MRC Invoice (Summary)',
