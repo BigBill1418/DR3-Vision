@@ -182,27 +182,41 @@ export async function createCreditMemo(args: CreateCreditMemoArgs): Promise<Cred
     );
   }
 
-  const created = await prisma.$transaction(async (tx) => {
-    const memo = await tx.creditMemo.create({
-      data: {
-        invoice_id: args.invoiceId,
-        site_id: args.siteId,
-        amount_cents: args.amountCents,
-        reason: args.reason.trim(),
-        created_by: args.actorUserId,
-      },
+  let created;
+  try {
+    created = await prisma.$transaction(async (tx) => {
+      const memo = await tx.creditMemo.create({
+        data: {
+          invoice_id: args.invoiceId,
+          site_id: args.siteId,
+          amount_cents: args.amountCents,
+          reason: args.reason.trim(),
+          created_by: args.actorUserId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: args.actorUserId,
+          action: 'insert',
+          table_name: TABLE,
+          row_id: memo.id,
+          after: { invoice_id: args.invoiceId, amount_cents: args.amountCents, status: 'proposed' },
+        },
+      });
+      return memo;
     });
-    await tx.auditLog.create({
-      data: {
-        actor_user_id: args.actorUserId,
-        action: 'insert',
-        table_name: TABLE,
-        row_id: memo.id,
-        after: { invoice_id: args.invoiceId, amount_cents: args.amountCents, status: 'proposed' },
-      },
-    });
-    return memo;
-  });
+  } catch (e) {
+    // The partial unique index credit_memos_one_open_per_invoice_key is the
+    // atomic form of the open-memo pre-check above (findFirst-then-create
+    // races under concurrency; the index does not).
+    if (typeof e === 'object' && e !== null && (e as { code?: string }).code === 'P2002') {
+      throw new CreditMemoValidationError(
+        'open_memo_exists',
+        `invoice ${args.invoiceId} already has an open credit memo (concurrent create lost the race)`,
+      );
+    }
+    throw e;
+  }
 
   log.info(
     {

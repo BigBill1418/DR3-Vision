@@ -26,9 +26,7 @@ import { log } from '@/lib/observability/logger';
 export type FreightJurisdiction = 'CA' | 'OR';
 
 /** Which row priced a haul — persisted as freight provenance for the retro-audit. */
-export type FreightRateRef =
-  | { kind: 'override'; id: string }
-  | { kind: 'tier'; id: string };
+export type FreightRateRef = { kind: 'override'; id: string } | { kind: 'tier'; id: string };
 
 export interface ResolvedFreight {
   cents: number;
@@ -40,7 +38,8 @@ export type FreightUnresolvableReason =
   | 'source_not_found'
   | 'no_mileage' // source has no canonical_mileage and no override
   | 'no_tier_for_mileage' // mileage set but no band covers it (incl. OR-not-seeded)
-  ;
+  | 'ambiguous_override' // two in-force overrides share an effective_from — fix the data
+  | 'ambiguous_tier'; // two in-force tier windows tie — fix the data
 
 export class FreightUnresolvableError extends Error {
   readonly status = 422 as const;
@@ -85,14 +84,15 @@ interface SourceRow {
 
 export interface FreightResolverDb {
   accountHaulRate: {
-    findFirst(args: {
+    findMany(args: {
       where: {
         source_id: string;
         effective_from: { lte: Date };
         OR: Array<{ effective_to: null } | { effective_to: { gte: Date } }>;
       };
       orderBy: { effective_from: 'desc' };
-    }): Promise<AccountHaulRateRow | null>;
+      take: number;
+    }): Promise<AccountHaulRateRow[]>;
   };
   source: {
     findUnique(args: {
@@ -145,17 +145,40 @@ export async function resolveFreightCents(args: ResolveFreightArgs): Promise<Res
   const day = isoDay(args.date);
 
   // 1 — account override in force (latest effective_from ≤ date, not end-dated).
-  const override = await db.accountHaulRate.findFirst({
+  const overrides = await db.accountHaulRate.findMany({
     where: {
       source_id: sourceId,
       effective_from: { lte: on },
       OR: [{ effective_to: null }, { effective_to: { gte: on } }],
     },
     orderBy: { effective_from: 'desc' },
+    take: 2,
   });
+  // Tie detection (mirrors resolveProgramRule's AmbiguousProgramRuleError): two
+  // in-force overrides sharing an effective_from would otherwise coin-flip the
+  // billed rate. admin-rates now refuses to create the tie; this guards legacy
+  // rows and any path that bypassed the service.
+  if (
+    overrides.length === 2 &&
+    overrides[0]!.effective_from.getTime() === overrides[1]!.effective_from.getTime()
+  ) {
+    throw new FreightUnresolvableError('ambiguous_override', {
+      source_id: sourceId,
+      date: day,
+      mileage: null,
+      jurisdiction: null,
+    });
+  }
+  const override = overrides[0];
   if (override) {
     log.debug(
-      { source_id: sourceId, date: day, path: 'override', ref_id: override.id, cents: override.rate_cents },
+      {
+        source_id: sourceId,
+        date: day,
+        path: 'override',
+        ref_id: override.id,
+        cents: override.rate_cents,
+      },
       '[freight] resolved via account override',
     );
     return { cents: override.rate_cents, ref: { kind: 'override', id: override.id } };
@@ -201,6 +224,17 @@ export async function resolveFreightCents(args: ResolveFreightArgs): Promise<Res
     },
     orderBy: { effective_from: 'desc' },
   });
+  if (
+    tiers.length >= 2 &&
+    tiers[0]!.effective_from.getTime() === tiers[1]!.effective_from.getTime()
+  ) {
+    throw new FreightUnresolvableError('ambiguous_tier', {
+      source_id: sourceId,
+      date: day,
+      mileage,
+      jurisdiction,
+    });
+  }
   const tier = tiers[0];
   if (!tier) {
     // Covers the OR-not-seeded case: no tier band exists for this mileage in this
@@ -219,7 +253,15 @@ export async function resolveFreightCents(args: ResolveFreightArgs): Promise<Res
   }
 
   log.debug(
-    { source_id: sourceId, date: day, path: 'tier', jurisdiction, mileage, ref_id: tier.id, cents: tier.rate_cents },
+    {
+      source_id: sourceId,
+      date: day,
+      path: 'tier',
+      jurisdiction,
+      mileage,
+      ref_id: tier.id,
+      cents: tier.rate_cents,
+    },
     '[freight] resolved via tier band',
   );
   return { cents: tier.rate_cents, ref: { kind: 'tier', id: tier.id } };

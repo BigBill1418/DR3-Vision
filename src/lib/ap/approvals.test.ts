@@ -26,7 +26,13 @@ import {
 } from './approvals';
 
 const writeAudit = vi.fn();
-const sendSystemEmail = vi.fn(async () => ({ delivered: true, disabled: false, messageId: 'm', retries: 0, lastStatus: 202 }));
+const sendSystemEmail = vi.fn(async () => ({
+  delivered: true,
+  disabled: false,
+  messageId: 'm',
+  retries: 0,
+  lastStatus: 202,
+}));
 const publishNtfy = vi.fn(async () => ({ ok: true, outcome: 'sent' as const }));
 const notifyStaffSpy = vi.fn();
 
@@ -65,7 +71,9 @@ vi.mock('@/lib/notify/notify-staff', () => ({
 }));
 vi.mock('@/lib/notify/rollout', () => ({ NOTIFY_SURFACE: { AP_NOTIFY: 'ap_notify' } }));
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: () => publishNtfy() }));
-vi.mock('@/lib/observability/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@/lib/observability/logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 function pendingReq(over: Partial<FakeApRequest> = {}): FakeApRequest {
   return {
@@ -95,8 +103,22 @@ function pendingReq(over: Partial<FakeApRequest> = {}): FakeApRequest {
   };
 }
 const users: FakeUser[] = [
-  { id: 'u-morena', name: 'Morena', email: 'morena@svdp.us', role: 'manager', all_sites: true, is_active: true },
-  { id: 'u-janette', name: 'Janette', email: 'janette@svdp.us', role: 'manager', all_sites: false, is_active: true },
+  {
+    id: 'u-morena',
+    name: 'Morena',
+    email: 'morena@svdp.us',
+    role: 'manager',
+    all_sites: true,
+    is_active: true,
+  },
+  {
+    id: 'u-janette',
+    name: 'Janette',
+    email: 'janette@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
   { id: 'u-op', name: 'Op', email: null, role: 'operator', all_sites: false, is_active: true },
 ];
 const approvers: FakeApApprover[] = [
@@ -122,7 +144,12 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       users,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(res.decision).toBe('approved');
     expect(res.mail).toBe('sent');
     expect(db.requests[0]!.status).toBe('approved');
@@ -134,9 +161,19 @@ describe('decideRequest — first action wins + both attempts audited', () => {
   });
 
   it('the loser of a race gets ApAlreadyDecidedError; BOTH attempts are audited', async () => {
-    const db = newFakeDb({ requests: [pendingReq()], users, approvers, decisionRecipients: [{ email: 'mary@svdp.us', active: true }] });
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      approvers,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
     const prisma = fp(db);
-    await decideRequest({ prisma, requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    await decideRequest({
+      prisma,
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     writeAudit.mockClear();
     await expect(
       decideRequest({ prisma, requestId: 'req-1', decision: 'rejected', actorUserId: 'u-janette' }),
@@ -150,7 +187,11 @@ describe('decideRequest — first action wins + both attempts audited', () => {
   });
 
   it('carries the vendor/amount/note when supplied at decision (C9-D5 optional fields)', async () => {
-    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: [{ email: 'mary@svdp.us', active: true }] });
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
     await decideRequest({
       prisma: fp(db),
       requestId: 'req-1',
@@ -166,12 +207,31 @@ describe('decideRequest — first action wins + both attempts audited', () => {
   });
 
   it('sets ap_requests.site_id when a resolved siteId is supplied; leaves it null otherwise', async () => {
-    const db1 = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: [{ email: 'mary@svdp.us', active: true }] });
-    await decideRequest({ prisma: fp(db1), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena', siteId: 'site-eug' });
+    const db1 = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db1),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-eug',
+    });
     expect(db1.requests[0]!.site_id).toBe('site-eug');
 
-    const db2 = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: [{ email: 'mary@svdp.us', active: true }] });
-    await decideRequest({ prisma: fp(db2), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const db2 = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db2),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(db2.requests[0]!.site_id).toBeNull();
   });
 });
@@ -183,18 +243,41 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       users,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(res.mail).toBe('sent');
-    const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[]; cc?: string[]; attachments?: unknown[] };
+    const args = notifyStaffSpy.mock.calls[0]![0] as {
+      recipients: string[];
+      cc?: string[];
+      attachments?: unknown[];
+      htmlBody: string;
+    };
     expect(args.recipients).toEqual(['accounting@svdp.us']);
     expect(args.cc).toEqual(['mary@svdp.us']);
     // the stamped decision PDF rides along
     expect(args.attachments).toHaveLength(1);
+    // Defect fix — "Decided at" renders in Pacific wall-clock (+ ' PT'), NEVER raw
+    // UTC ISO (hard rule: never show Bill an unlabeled UTC timestamp).
+    expect(args.htmlBody).toMatch(/Decided at:[^<]*\bPT\b/);
+    expect(args.htmlBody).not.toMatch(/Decided at:[^<]*\d{4}-\d\d-\d\dT[\d:.]+Z/);
   });
 
   it('uses the forwarder even when the roster is EMPTY (no refuse)', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ sender_address: 'accounting@svdp.us' })], users, decisionRecipients: [] });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      decisionRecipients: [],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[]; cc?: string[] };
     expect(args.recipients).toEqual(['accounting@svdp.us']);
@@ -207,15 +290,29 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       users,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[] };
     expect(args.recipients).toEqual(['mary@svdp.us']);
   });
 
   it('REFUSES + pages when there is NO valid recipient (empty forwarder + empty roster)', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ sender_address: '' })], users, decisionRecipients: [] });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-morena' });
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: '' })],
+      users,
+      decisionRecipients: [],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
     expect(res.mail).toBe('refused_no_recipients');
     expect(sendSystemEmail).not.toHaveBeenCalled();
     expect(publishNtfy).toHaveBeenCalledTimes(1); // loud refusal
@@ -231,11 +328,23 @@ describe('approver set + pending count (roster data)', () => {
   it('apApproverEmails EXCLUDES an approver past active_until (deliverable 1 — all ACTIVE approvers)', async () => {
     const withExpired: FakeApApprover[] = [
       ...approvers,
-      { id: 'ap-kelsey', user_id: 'u-kelsey', active_until: new Date('2020-01-01T00:00:00Z'), created_by: null },
+      {
+        id: 'ap-kelsey',
+        user_id: 'u-kelsey',
+        active_until: new Date('2020-01-01T00:00:00Z'),
+        created_by: null,
+      },
     ];
     const usersPlusKelsey: FakeUser[] = [
       ...users,
-      { id: 'u-kelsey', name: 'Kelsey', email: 'kelsey@svdp.us', role: 'manager', all_sites: false, is_active: true },
+      {
+        id: 'u-kelsey',
+        name: 'Kelsey',
+        email: 'kelsey@svdp.us',
+        role: 'manager',
+        all_sites: false,
+        is_active: true,
+      },
     ];
     const db = newFakeDb({ users: usersPlusKelsey, approvers: withExpired });
     const emails = await apApproverEmails(fp(db));
@@ -244,7 +353,10 @@ describe('approver set + pending count (roster data)', () => {
   });
   it('pendingApCount counts only pending', async () => {
     const db = newFakeDb({
-      requests: [pendingReq({ id: 'a' }), pendingReq({ id: 'b', internet_message_id: '<b>', status: 'approved' })],
+      requests: [
+        pendingReq({ id: 'a' }),
+        pendingReq({ id: 'b', internet_message_id: '<b>', status: 'approved' }),
+      ],
     });
     expect(await pendingApCount(fp(db))).toBe(1);
   });
@@ -268,8 +380,18 @@ describe('holdRequest — place hold (pending → pending_review)', () => {
   const recips = [{ email: 'mary@svdp.us', active: true }];
 
   it('holds a pending request, sets the hold record, notifies the forwarder, audits', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ sender_address: 'morena@svdp.us' })], users, approvers, decisionRecipients: recips });
-    const res = await holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'waiting on PO match' });
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'morena@svdp.us' })],
+      users,
+      approvers,
+      decisionRecipients: recips,
+    });
+    const res = await holdRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      actorUserId: 'u-morena',
+      note: 'waiting on PO match',
+    });
     expect(res.status).toBe('pending_review');
     expect(res.mail).toBe('sent');
     const row = db.requests[0]!;
@@ -279,20 +401,41 @@ describe('holdRequest — place hold (pending → pending_review)', () => {
     expect(row.hold_note).toBe('waiting on PO match');
     // winning transition audited
     expect(writeAudit).toHaveBeenCalled();
-    const auditArgs = writeAudit.mock.calls.map((c) => c[0] as { after?: { attempted?: string; outcome?: string } });
-    expect(auditArgs.some((a) => a.after?.attempted === 'hold' && a.after?.outcome === 'won')).toBe(true);
+    const auditArgs = writeAudit.mock.calls.map(
+      (c) => c[0] as { after?: { attempted?: string; outcome?: string } },
+    );
+    expect(auditArgs.some((a) => a.after?.attempted === 'hold' && a.after?.outcome === 'won')).toBe(
+      true,
+    );
   });
 
   it('REQUIRES a hold note', async () => {
     const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
-    await expect(holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '  ' })).rejects.toBeInstanceOf(ApNoteRequiredError);
+    await expect(
+      holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '  ' }),
+    ).rejects.toBeInstanceOf(ApNoteRequiredError);
     expect(db.requests[0]!.status).toBe('pending'); // untouched
   });
 
   it('hold-notice content: routes to the forwarder via ap_notify, carries the note + holder', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ sender_address: 'accounting@svdp.us' })], users, approvers, decisionRecipients: recips });
-    await holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'need vendor W-9' });
-    const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[]; cc?: string[]; surfaceCode: string; htmlBody: string };
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      approvers,
+      decisionRecipients: recips,
+    });
+    await holdRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      actorUserId: 'u-morena',
+      note: 'need vendor W-9',
+    });
+    const args = notifyStaffSpy.mock.calls[0]![0] as {
+      recipients: string[];
+      cc?: string[];
+      surfaceCode: string;
+      htmlBody: string;
+    };
     expect(args.surfaceCode).toBe('ap_notify'); // pilot-routing: gated surface, never raw mail
     expect(args.recipients).toEqual(['accounting@svdp.us']);
     expect(args.cc).toEqual(['mary@svdp.us']);
@@ -302,17 +445,30 @@ describe('holdRequest — place hold (pending → pending_review)', () => {
   });
 
   it('concurrent holds — first action wins; the second gets ApAlreadyDecidedError', async () => {
-    const db = newFakeDb({ requests: [pendingReq()], users, approvers, decisionRecipients: recips });
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      approvers,
+      decisionRecipients: recips,
+    });
     const prisma = fp(db);
     await holdRequest({ prisma, requestId: 'req-1', actorUserId: 'u-morena', note: 'first' });
-    await expect(holdRequest({ prisma, requestId: 'req-1', actorUserId: 'u-janette', note: 'second' })).rejects.toBeInstanceOf(ApAlreadyDecidedError);
+    await expect(
+      holdRequest({ prisma, requestId: 'req-1', actorUserId: 'u-janette', note: 'second' }),
+    ).rejects.toBeInstanceOf(ApAlreadyDecidedError);
     expect(db.requests[0]!.held_by).toBe('u-morena'); // holder unchanged
     expect(db.requests[0]!.hold_note).toBe('first');
   });
 
   it('cannot hold a quarantined request', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ status: 'quarantined' })], users, decisionRecipients: recips });
-    await expect(holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' })).rejects.toBeInstanceOf(ApNotActionableError);
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'quarantined' })],
+      users,
+      decisionRecipients: recips,
+    });
+    await expect(
+      holdRequest({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' }),
+    ).rejects.toBeInstanceOf(ApNotActionableError);
   });
 });
 
@@ -320,35 +476,74 @@ describe('hold → resolve + update note', () => {
   const recips = [{ email: 'mary@svdp.us', active: true }];
 
   it('an on-hold request can be APPROVED by any approver (pending_review → approved)', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'hold' })], users, approvers, decisionRecipients: recips });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'approved', actorUserId: 'u-janette' });
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'hold' })],
+      users,
+      approvers,
+      decisionRecipients: recips,
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-janette',
+    });
     expect(res.decision).toBe('approved');
     expect(db.requests[0]!.status).toBe('approved');
-    const won = writeAudit.mock.calls.map((c) => c[0] as { after?: { outcome?: string; from_hold?: boolean } }).find((a) => a.after?.outcome === 'won');
+    const won = writeAudit.mock.calls
+      .map((c) => c[0] as { after?: { outcome?: string; from_hold?: boolean } })
+      .find((a) => a.after?.outcome === 'won');
     expect(won?.after?.from_hold).toBe(true);
   });
 
   it('an on-hold request can be REJECTED (pending_review → rejected)', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })], users, approvers, decisionRecipients: recips });
-    const res = await decideRequest({ prisma: fp(db), requestId: 'req-1', decision: 'rejected', actorUserId: 'u-morena', note: 'not ours' });
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })],
+      users,
+      approvers,
+      decisionRecipients: recips,
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: 'not ours',
+    });
     expect(res.decision).toBe('rejected');
     expect(db.requests[0]!.status).toBe('rejected');
   });
 
   it('updateHoldNote refines the note on an on-hold row; keeps the holder', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'old' })], users, approvers });
-    await updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-janette', note: 'new reason' });
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena', hold_note: 'old' })],
+      users,
+      approvers,
+    });
+    await updateHoldNote({
+      prisma: fp(db),
+      requestId: 'req-1',
+      actorUserId: 'u-janette',
+      note: 'new reason',
+    });
     expect(db.requests[0]!.hold_note).toBe('new reason');
     expect(db.requests[0]!.held_by).toBe('u-morena'); // holder unchanged
   });
 
   it('updateHoldNote refuses a non-on-hold request', async () => {
     const db = newFakeDb({ requests: [pendingReq({ status: 'pending' })], users });
-    await expect(updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' })).rejects.toBeInstanceOf(ApNotActionableError);
+    await expect(
+      updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: 'x' }),
+    ).rejects.toBeInstanceOf(ApNotActionableError);
   });
 
   it('updateHoldNote requires a non-empty note', async () => {
-    const db = newFakeDb({ requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })], users });
-    await expect(updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '' })).rejects.toBeInstanceOf(ApNoteRequiredError);
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'pending_review', held_by: 'u-morena' })],
+      users,
+    });
+    await expect(
+      updateHoldNote({ prisma: fp(db), requestId: 'req-1', actorUserId: 'u-morena', note: '' }),
+    ).rejects.toBeInstanceOf(ApNoteRequiredError);
   });
 });

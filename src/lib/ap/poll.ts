@@ -19,9 +19,10 @@ import {
   readGraphMailConfig,
   saveDeltaToken,
   selectTransport,
+  type MailMessage,
   type MailTransport,
 } from '@/lib/msgraph-mail';
-import { ingestMessage } from './ingest';
+import { alreadySeen, ingestMessage, quarantineMessage, type IngestOutcome } from './ingest';
 import { apApproverEmails } from './approvals';
 import { resolveSenderPolicy } from './senders';
 import { alertDeadman } from './notify';
@@ -96,8 +97,35 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     resynced = delta.resynced;
     if (resynced) log('info', `[ap-poll] ${tag} full resync (no/expired delta token)`);
 
+    const ingestCtx = { prisma, transport, policy, approverEmails, log };
     for (const msg of delta.messages) {
-      const outcome = await ingestMessage({ prisma, transport, policy, approverEmails, log }, msg);
+      let outcome: IngestOutcome;
+      try {
+        // The delta $select carries bodyPreview only (no `body`); hydrate the FULL
+        // HTML+text body via getMessage BEFORE ingest so body_html_sanitized is the
+        // real message, not the ~255-char preview. Skip already-seen messages so a
+        // re-listed duplicate costs a cheap DB check, not a Graph round-trip. A
+        // getMessage failure is a per-message failure — it falls through to the
+        // quarantine handler below (C3: visible, never a silent drop).
+        const full = await hydrateForIngest(msg);
+        outcome = await ingestMessage(ingestCtx, full);
+      } catch (e) {
+        // An auth failure is a RUN-fatal session error, not a per-message poison —
+        // rethrow it so the run fails closed as `auth_failed` and pages, rather than
+        // mass-quarantining every good invoice in the folder + masking the outage.
+        if (e instanceof AuthFailedError) throw e;
+        // Poison message: any OTHER unexpected throw (a malformed message from
+        // getMessage, a DB/parse error) must NOT abort the loop before the token
+        // save, or the next poll re-fails on the same message forever. Quarantine it
+        // (reason 'ingest_error') so the token can advance. If quarantining ITSELF
+        // fails, rethrow — the token stays unsaved and the message re-lists next
+        // poll rather than being silently lost.
+        log(
+          'error',
+          `[ap-poll] ${tag} ingest threw for ${msg.id} (${describe(e)}) — quarantining as ingest_error`,
+        );
+        outcome = await quarantineMessage(ingestCtx, msg, 'ingest_error');
+      }
       if (outcome.kind === 'created') requestsCreated += 1;
       else if (outcome.kind === 'followup') followupsCreated += 1;
       else if (outcome.kind === 'quarantined') quarantined += 1;
@@ -109,7 +137,10 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
         await transport.moveMessage(msg.id, processedFolder);
         moved += 1;
       } catch (e) {
-        log('warn', `[ap-poll] ${tag} move ${msg.id} → ${processedFolder} failed (non-fatal): ${describe(e)}`);
+        log(
+          'warn',
+          `[ap-poll] ${tag} move ${msg.id} → ${processedFolder} failed (non-fatal): ${describe(e)}`,
+        );
       }
     }
 
@@ -146,6 +177,14 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     runId,
   };
 
+  // Hydrate one delta-listed message to its full body, but ONLY when it is new —
+  // an already-ingested duplicate skips the Graph round-trip (it will short-circuit
+  // to a `duplicate` outcome in ingest on the cheap UNIQUE-key check).
+  async function hydrateForIngest(msg: MailMessage): Promise<MailMessage> {
+    if (msg.internetMessageId && (await alreadySeen(prisma, msg.internetMessageId))) return msg;
+    return transport.getMessage(msg.id);
+  }
+
   // Ledger row ALWAYS (C6). A ledger-write failure is logged with its error class,
   // never swallowed, and never fails the caller.
   async function finalizeLedger(): Promise<void> {
@@ -168,7 +207,10 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
         },
       });
     } catch (e) {
-      log('error', `[ap-poll] ${tag} LEDGER WRITE FAILED (${errorClass(e)}) status=${status} — ${describe(e)}`);
+      log(
+        'error',
+        `[ap-poll] ${tag} LEDGER WRITE FAILED (${errorClass(e)}) status=${status} — ${describe(e)}`,
+      );
     }
   }
 }
@@ -191,7 +233,11 @@ async function pageRunFailure(status: ApPollStatus, message: string): Promise<vo
  * pages once a baseline `ok` run exists (a mailbox that has never succeeded is a
  * config/first-run state, surfaced by the run-failure page instead).
  */
-export async function checkApDeadman(prisma: PrismaClient, thresholdMinutes: number, now: Date): Promise<void> {
+export async function checkApDeadman(
+  prisma: PrismaClient,
+  thresholdMinutes: number,
+  now: Date,
+): Promise<void> {
   const lastOk = await prisma.apPollRun.findFirst({
     where: { status: 'ok' },
     orderBy: { started_at: 'desc' },

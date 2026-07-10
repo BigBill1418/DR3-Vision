@@ -10,8 +10,18 @@
 //         `{MONTH_TITLE}` → title-case (June), `{YEAR}` → 4-digit year.
 
 const MONTHS_UPPER = [
-  'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
-  'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER',
+  'JANUARY',
+  'FEBRUARY',
+  'MARCH',
+  'APRIL',
+  'MAY',
+  'JUNE',
+  'JULY',
+  'AUGUST',
+  'SEPTEMBER',
+  'OCTOBER',
+  'NOVEMBER',
+  'DECEMBER',
 ];
 
 const PT_YM = new Intl.DateTimeFormat('en-US', {
@@ -55,11 +65,27 @@ function escapeRegex(s: string): string {
  * and derive its `YYYY-MM` key from the file name.
  */
 function patternRegex(pattern: string): RegExp {
-  const monthAlt = MONTHS_UPPER.map((m) => `${m}|${m.charAt(0)}${m.slice(1).toLowerCase()}`).join('|');
+  const monthAlt = MONTHS_UPPER.map((m) => `${m}|${m.charAt(0)}${m.slice(1).toLowerCase()}`).join(
+    '|',
+  );
+  // A named group may appear ONCE per regex — a pattern with two month tokens
+  // (or {MONTH} + {MONTH_TITLE}) would be a SyntaxError at archive time. The
+  // first month token captures; later ones match without capturing.
+  let monthSeen = false;
+  const monthGroup = (): string => {
+    const g = monthSeen ? `(?:${monthAlt})` : `(?<month>${monthAlt})`;
+    monthSeen = true;
+    return g;
+  };
+  let yearSeen = false;
+  const yearGroup = (): string => {
+    const g = yearSeen ? '(?:\\d{4})' : '(?<year>\\d{4})';
+    yearSeen = true;
+    return g;
+  };
   const src = escapeRegex(pattern)
-    .replace(/\\\{MONTH\\\}/g, `(?<month>${monthAlt})`)
-    .replace(/\\\{MONTH_TITLE\\\}/g, `(?<month>${monthAlt})`)
-    .replace(/\\\{YEAR\\\}/g, '(?<year>\\d{4})');
+    .replace(/\\\{MONTH\\\}|\\\{MONTH_TITLE\\\}/g, () => monthGroup())
+    .replace(/\\\{YEAR\\\}/g, () => yearGroup());
   return new RegExp(`^${src}$`, 'i');
 }
 

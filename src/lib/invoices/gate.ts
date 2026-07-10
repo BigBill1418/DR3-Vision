@@ -84,7 +84,13 @@ export async function evaluateWindowGate(
         window_start: { lte: end },
         window_end: { gte: start },
       },
-      select: { id: true, check_code: true, severity: true, status: true },
+      select: {
+        id: true,
+        check_code: true,
+        severity: true,
+        status: true,
+        first_detected_at: true,
+      },
     }),
     db.auditCheckConfig.findMany({ where: { OR: [{ site_id: null }, { site_id: siteId }] } }),
     db.auditLog.findFirst({
@@ -94,7 +100,7 @@ export async function evaluateWindowGate(
         row_id: overrideRowId(siteId, windowStartISO, windowEndISO),
       },
       orderBy: { created_at: 'desc' },
-      select: { id: true },
+      select: { id: true, created_at: true },
     }),
   ]);
 
@@ -107,7 +113,20 @@ export async function evaluateWindowGate(
 
   const configs = resolveCheckConfigs(siteId, configRows as unknown as CheckConfigRow[]);
   const result = gateForWindow(findings, configs);
-  const overridden = override != null;
+
+  // An override is NOT a permanent skeleton key for its window: it covers only
+  // the findings that existed when the super-admin recorded it. Any blocking
+  // finding FIRST DETECTED after the override re-blocks the window and demands
+  // a fresh audited justification (before 2026-07-10 one historical override
+  // silently unblocked every future finding on that exact window, forever).
+  const overrideAt = override?.created_at ?? null;
+  const blockingSince = new Map(findingRows.map((r) => [r.id, r.first_detected_at]));
+  const overridden =
+    overrideAt != null &&
+    result.blockingFindings.every((f) => {
+      const detected = blockingSince.get(f.id);
+      return detected != null && detected <= overrideAt;
+    });
 
   return {
     blocked: result.blocked && !overridden,

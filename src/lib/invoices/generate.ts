@@ -170,7 +170,7 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
     // Mary to look for in GP. The 0-amount offset LINE still renders (honest
     // subtraction, §3.1 parity).
     const hasRealDiscount = offset > 0 || input.midMonthReferenceInvoiceId != null;
-    return {
+    const composition = {
       ...finalize(lines),
       ...(hasRealDiscount
         ? {
@@ -179,6 +179,20 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
           }
         : {}),
     };
+    // A NEGATIVE net (mid-month exceeded the revised month total — e.g. the
+    // workbook-wins sync revised 1st–15th units DOWN after the mid-month
+    // invoice was approved) is not an invoice GP can take; per rollup §1.4 the
+    // over-billed correction is a CREDIT MEMO against the mid-month invoice.
+    // Refuse loud instead of composing a negative invoice someone could approve.
+    if (composition.totalCents < 0) {
+      throw new InvoiceStructuralError(
+        'negative_total_needs_credit_memo',
+        `CA EOM net is ${composition.totalCents}¢ (mid-month ${offset}¢ exceeds the month's ` +
+          `gross ${composition.totalCents + offset}¢) — a negative invoice cannot be issued; ` +
+          `raise a credit memo against the mid-month invoice instead (rollup §1.4)`,
+      );
+    }
+    return composition;
   }
 
   return finalize(lines);

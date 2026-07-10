@@ -38,33 +38,68 @@ function logTs(message) {
 // ── Pacific date helper (copied from scripts/bonus-daily-report.mjs; stays
 // plain JS so it runs without a TS compile step) ─────────────────────────
 
+// Read the Pacific wall clock off a UTC instant — same technique as
+// `src/lib/time.ts` and `scripts/bonus-period-close.mjs`, so "what time is it in
+// Pacific" is DST-correct without hardcoding the -7/-8 offset. Re-derived here
+// (not imported from `@/lib/time`) because this wrapper stays plain JS and runs
+// from the runner stage without a TS compile step.
+const PACIFIC_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: PACIFIC_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** The Pacific wall-clock parts (numbers) for a UTC instant. */
+function pacificParts(at) {
+  const parts = PACIFIC_PARTS_FMT.formatToParts(at);
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
+  };
+}
+
+/** Signed offset (ms) such that `utc = pacificWallClockAsUTC - offset`. */
+function pacificOffsetMs(at) {
+  const p = pacificParts(at);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUTC - at.getTime();
+}
+
 /**
  * Next UTC instant at which the Pacific wall clock reads `hour:minute:00`,
- * strictly at/after `from`. DST-correct: the Intl formatter does the zone math.
- * If today's hh:mm PT has already passed, it rolls to tomorrow's.
+ * strictly after `from`. DST-correct via the OFFSET-REPROBE technique ported from
+ * `scripts/bonus-period-close.mjs` (`msUntilNext0700Pacific`): resolve the target
+ * Pacific wall time on each candidate Pacific calendar day and convert to a true
+ * UTC instant using the offset in effect ON THAT DAY.
+ *
+ * This replaces the earlier "delta seconds-of-day added to `from`" version, which
+ * assumed every Pacific day is 86400s and so misfired across DST: it DOUBLE-FIRED
+ * on fall-back (the 25h day — it landed 1h early, then the loop recomputed and
+ * fired again at the real wall clock) and fired 1h LATE on spring-forward (the 23h
+ * day). Anchoring to the calendar day + that day's offset lands exactly on
+ * `hour:minute` PT every day of the year.
  */
 function nextFireInstantAt(from, hour, minute) {
-  const FMT = new Intl.DateTimeFormat('en-CA', {
-    timeZone: PACIFIC_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = Object.fromEntries(FMT.formatToParts(from).map((p) => [p.type, p.value]));
-  const currentSecondsOfDay =
-    Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  const fireSecondsOfDay = hour * 3600 + minute * 60;
-  let deltaSec;
-  if (currentSecondsOfDay < fireSecondsOfDay) {
-    deltaSec = fireSecondsOfDay - currentSecondsOfDay;
-  } else {
-    deltaSec = 86400 - currentSecondsOfDay + fireSecondsOfDay;
+  for (let addDays = 0; addDays <= 2; addDays++) {
+    const p = pacificParts(new Date(from.getTime() + addDays * 86_400_000));
+    const targetAsUTC = Date.UTC(p.year, p.month - 1, p.day, hour, minute, 0);
+    // Re-probe the offset AT the target instant so a DST jump on the target day is
+    // handled (that morning's offset may differ from `from`'s offset).
+    const approx = new Date(targetAsUTC - pacificOffsetMs(new Date(targetAsUTC)));
+    const fireUtc = new Date(targetAsUTC - pacificOffsetMs(approx));
+    if (fireUtc.getTime() - from.getTime() > 1_000) return fireUtc;
   }
-  return new Date(from.getTime() + deltaSec * 1000);
+  return new Date(from.getTime() + 24 * 60 * 60 * 1000); // defensive fallback (should never hit)
 }
 
 // ── POST the internal route ──────────────────────────────────────────

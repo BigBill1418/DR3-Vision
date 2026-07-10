@@ -10,3 +10,13 @@
  * boundary. Always > 0.
  */
 export function msUntilNext0700Pacific(from?: Date): number;
+
+/**
+ * POST the internal close-months route once. Throws on transport error, redirect
+ * (a login 307 is a FAILURE, never followed), or any non-200. Returns the
+ * (truncated) response body on 200.
+ */
+export function runCloseOnce(): Promise<string>;
+
+/** Truncate a response body for logging (default 300 chars). */
+export function truncateBody(text: string, max?: number): string;

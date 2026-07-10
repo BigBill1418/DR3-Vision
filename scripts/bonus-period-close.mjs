@@ -112,13 +112,25 @@ export function msUntilNext0700Pacific(from = new Date()) {
   return 24 * 60 * 60 * 1000;
 }
 
+/** Keep logged response bodies short — an unexpected HTML page (e.g. a login
+ * redirect target) must not dump kilobytes into the container log. */
+function truncateBody(text, max = 300) {
+  return text.length <= max ? text : `${text.slice(0, max)}… [truncated ${text.length} chars]`;
+}
+
 /**
  * Drive one close: POST the internal, loopback-guarded close route. The route
  * transitions every `draft` period whose `period_end == appToday() - 1 day`
  * (Pacific — the payroll day is the day after period_end) to
  * `pending_signatures` via the audited state machine and fires the
- * signature-request email per newly-closed period. Resolves on success;
- * throws on transport / non-2xx so the caller's try/catch logs it.
+ * signature-request email per newly-closed period. Resolves on success; throws
+ * on transport / redirect / non-200 so the caller's try/catch logs it.
+ *
+ * `redirect: 'manual'` is load-bearing (the 2026-07-03 survey-cron lesson): if
+ * the /api/internal/bonus/ public-paths exemption were ever missing, the auth
+ * middleware would 307 this POST to /login and fetch's default redirect-follow
+ * would turn the login page's 200 into a "successful" close that transitions
+ * nothing. A redirect is ALWAYS a failure here; only a direct 200 counts.
  */
 async function runCloseOnce() {
   const headers = { 'content-type': 'application/json' };
@@ -126,12 +138,73 @@ async function runCloseOnce() {
   const res = await fetch(`${BASE}/api/internal/bonus/close-months`, {
     method: 'POST',
     headers,
+    redirect: 'manual',
   });
   const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text}`);
+  if (res.status !== 200) {
+    const loc = res.headers.get('location');
+    throw new Error(`HTTP ${res.status}${loc ? ` (redirect → ${loc})` : ''}: ${truncateBody(text)}`);
   }
-  return text;
+  return truncateBody(text);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Bounded same-day retry (fixes: a single failed 07:00 tick permanently skipping
+// the close). The daily schedule matches ONLY `period_end == yesterday`, so if the
+// 07:00 POST fails and we simply "retry next tick", by tomorrow's 07:00 the just-
+// ended period no longer matches yesterday and its close is silently skipped for
+// good. Retrying WITHIN the same payroll day keeps the close keyed to the correct
+// `period_end`. 6 attempts × 30 min ≈ a 07:00→09:30 window — long enough to ride
+// out an app restart / brief DB blip, short enough to finish well before the next
+// day's 07:00 fire.
+const CLOSE_RETRY_DELAY_MS = 30 * 60 * 1000;
+const CLOSE_MAX_ATTEMPTS = 6;
+
+// WHY WE DO NOT WIDEN THE ROUTE MATCHER TO `period_end <= yesterday` (state-machine
+// closePayPeriodsDueForSignature): it is NOT safe. `bonus_pay_periods.state`
+// defaults to `draft` (prisma/schema.prisma) and `seedBonusPayPeriods`
+// (prisma/seed.mjs) seeds ALL 26 periods/site/year — past AND future — as `draft`;
+// only historical-CSV periods become `historical_imported` and only pre-cutover
+// no-data periods become `skipped`. So onboarding a new site mid-year (or any fresh
+// seed) legitimately leaves PAST periods `draft` with a past `period_end`. A
+// `<= yesterday` matcher would mass-close every such back-period on the next tick
+// AND fire a signature-request email per period — closing periods deliberately left
+// alone. The exact `period_end == yesterday` match plus this same-day retry closes
+// the actual gap (a transient 07:00 failure) without that blast radius. Residual
+// risk: a FULL-day outage (daemon/app down 07:00→09:30) still skips that day's
+// close; an operator must close it manually. Documented, not silently "fixed".
+
+/**
+ * Fire the 07:00 close, retrying on failure every 30 min up to CLOSE_MAX_ATTEMPTS
+ * within the same payroll day. Never rejects — logs and returns so the caller can
+ * re-arm for tomorrow's 07:00. Loud, explicit give-up on exhaustion.
+ */
+async function runCloseWithSameDayRetry() {
+  for (let attempt = 1; attempt <= CLOSE_MAX_ATTEMPTS; attempt++) {
+    if (stopping) return;
+    try {
+      const text = await runCloseOnce();
+      logTs(`close run complete (attempt ${attempt}/${CLOSE_MAX_ATTEMPTS}): ${text}`);
+      return;
+    } catch (err) {
+      if (attempt === CLOSE_MAX_ATTEMPTS) {
+        logTs(
+          `close run FAILED after ${CLOSE_MAX_ATTEMPTS} attempts — GIVING UP until tomorrow's ` +
+            `07:00 PT. The period whose period_end was yesterday may be left in 'draft'; an ` +
+            `operator must close it manually. Last error: ${err?.message ?? err}`,
+        );
+        return;
+      }
+      logTs(
+        `close run failed (attempt ${attempt}/${CLOSE_MAX_ATTEMPTS}, retrying in ` +
+          `${CLOSE_RETRY_DELAY_MS / 60000}min): ${err?.message ?? err}`,
+      );
+      await sleep(CLOSE_RETRY_DELAY_MS);
+    }
+  }
 }
 
 function scheduleNext() {
@@ -140,10 +213,7 @@ function scheduleNext() {
   const fireAt = new Date(Date.now() + delay).toISOString();
   logTs(`next close fire at ${fireAt} (in ${(delay / 1000 / 60).toFixed(1)}min) — 07:00 PT`);
   setTimeout(() => {
-    runCloseOnce()
-      .then((text) => logTs(`close run complete: ${text}`))
-      .catch((err) => logTs(`close run failed (non-fatal, retry next tick): ${err?.message ?? err}`))
-      .finally(scheduleNext);
+    runCloseWithSameDayRetry().finally(scheduleNext);
   }, delay); // NOT .unref() — this timer must keep the daemon alive
 }
 
@@ -157,6 +227,8 @@ function setupShutdown() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
+
+export { runCloseOnce, truncateBody };
 
 // Only start the daemon when run as the entrypoint — keeps the module
 // importable (for a smoke/helper test) without spawning timers.

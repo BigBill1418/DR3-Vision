@@ -19,6 +19,7 @@ import type { PrismaClient, WorkbookSource } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import { publishNtfy } from '@/lib/ntfy';
 import { getRolloutState } from '@/lib/notify/rollout';
+import { UnregisteredSurfaceError } from '@/lib/notify/errors';
 import { WORKBOOK_SYNC_SURFACE } from './surface';
 import { parseWorkbook } from '@/lib/audit/workbook/parser';
 import {
@@ -89,7 +90,10 @@ interface ResolvedCtx extends SyncContext {
   log: SyncLogger;
 }
 
-export async function syncOneSource(ctx: ResolvedCtx, source: WorkbookSource): Promise<SyncOneResult> {
+export async function syncOneSource(
+  ctx: ResolvedCtx,
+  source: WorkbookSource,
+): Promise<SyncOneResult> {
   const { prisma, transport, log } = ctx;
   const nowFn = ctx.now ?? ((): Date => new Date());
   const runId = randomUUID();
@@ -106,28 +110,59 @@ export async function syncOneSource(ctx: ResolvedCtx, source: WorkbookSource): P
   let rowsOverwritten = 0;
 
   try {
-    // Post-cutover (surface live) ⇒ sync is a no-op (D7). Unregistered surface ⇒
-    // treat as pilot (keep syncing) — the fail-safe direction for a sync surface.
+    // Post-cutover (surface live) ⇒ sync is a no-op (D7). The ERROR direction
+    // matters (2026-07-10 audit): if the rollout read FAILS we cannot know
+    // whether the site is cut over, and resuming the workbook-wins upsert on a
+    // cut-over site would overwrite live Vision-captured rows — the one
+    // irreversible outcome. So an unreadable state SKIPS this poll (no-op, run
+    // ledger says so); a transient DB blip costs one 10-minute cycle,
+    // pre-cutover or post. Only an explicit 'pilot'/unregistered read keeps
+    // syncing.
     let cutoverLive = false;
     try {
-      cutoverLive = (await getRolloutState({ db: prisma, kind: 'workbook_sync', surfaceCode: WORKBOOK_SYNC_SURFACE, siteId: source.site_id })) === 'live';
-    } catch {
-      cutoverLive = false;
+      cutoverLive =
+        (await getRolloutState({
+          db: prisma,
+          kind: 'workbook_sync',
+          surfaceCode: WORKBOOK_SYNC_SURFACE,
+          siteId: source.site_id,
+        })) === 'live';
+    } catch (e) {
+      if (e instanceof UnregisteredSurfaceError) {
+        // Deterministic answer, not a failure: an unregistered surface IS
+        // pilot (pre-cutover) — keep syncing.
+        cutoverLive = false;
+      } else {
+        cutoverLive = true; // fail SAFE: unknown cutover state ⇒ do not upsert
+        log(
+          'warn',
+          `[workbook-sync] run=${runId} site=${source.site_id} rollout-state read failed — skipping poll (fail-safe): ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
     if (cutoverLive) {
       cutoverNoop = true;
-      log('info', `[workbook-sync] run=${runId} site=${source.site_id} CUT OVER (surface live) — no-op`);
+      log(
+        'info',
+        `[workbook-sync] run=${runId} site=${source.site_id} CUT OVER (surface live) — no-op`,
+      );
     } else {
       fileName = resolveMonthlyFileName(source.naming_pattern, started);
       const file = await transport.getFile(source.drive_upn, source.folder_path, fileName);
 
       if (!file) {
         status = 'not_found';
-        log('info', `[workbook-sync] run=${runId} site=${source.site_id} file "${fileName}" not found (possibly-empty new month)`);
+        log(
+          'info',
+          `[workbook-sync] run=${runId} site=${source.site_id} file "${fileName}" not found (possibly-empty new month)`,
+        );
       } else if (file.id === source.last_file_id && file.ctag === source.last_file_ctag) {
         // Delta no-op (D2): unchanged cTag ⇒ NO re-download / re-parse.
         changesDetected = false;
-        log('info', `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" unchanged (ctag) — no re-download`);
+        log(
+          'info',
+          `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" unchanged (ctag) — no re-download`,
+        );
       } else {
         changesDetected = true;
         const bytes = await transport.downloadFile(source.drive_upn, file.id);
@@ -139,7 +174,12 @@ export async function syncOneSource(ctx: ResolvedCtx, source: WorkbookSource): P
         rowsSkippedMidedit = daily.midEditCount;
 
         const counts = await prisma.$transaction((tx) =>
-          upsertDailyProduction({ db: tx, siteId: source.site_id, syncRunId: runId, rows: daily.rows }),
+          upsertDailyProduction({
+            db: tx,
+            siteId: source.site_id,
+            syncRunId: runId,
+            rows: daily.rows,
+          }),
         );
         rowsUpserted = counts.upserted;
         rowsOverwritten = counts.overwritten;
@@ -163,7 +203,10 @@ export async function syncOneSource(ctx: ResolvedCtx, source: WorkbookSource): P
     if (err instanceof FilesForbiddenError) {
       status = 'forbidden';
       error = err.message;
-      log('error', `[workbook-sync] run=${runId} site=${source.site_id} FORBIDDEN (Files.Read.All missing) — ${error}`);
+      log(
+        'error',
+        `[workbook-sync] run=${runId} site=${source.site_id} FORBIDDEN (Files.Read.All missing) — ${error}`,
+      );
       await pageForbidden(source.site_id, error).catch(() => undefined);
     } else {
       status = 'error';
@@ -194,7 +237,10 @@ export async function syncOneSource(ctx: ResolvedCtx, source: WorkbookSource): P
       },
     });
   } catch (e) {
-    log('error', `[workbook-sync] run=${runId} site=${source.site_id} LEDGER WRITE FAILED — ${describe(e)}`);
+    log(
+      'error',
+      `[workbook-sync] run=${runId} site=${source.site_id} LEDGER WRITE FAILED — ${describe(e)}`,
+    );
   }
 
   return {

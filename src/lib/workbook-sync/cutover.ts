@@ -14,7 +14,10 @@ import { WORKBOOK_SYNC_SURFACE } from './surface';
 
 export class CutoverError extends Error {
   readonly status: number;
-  constructor(readonly reason: 'source_not_found' | 'surface_not_found' | 'parity_signoff_required', status: number) {
+  constructor(
+    readonly reason: 'source_not_found' | 'surface_not_found' | 'parity_signoff_required',
+    status: number,
+  ) {
     super(`cutover error: ${reason}`);
     this.name = 'CutoverError';
     this.status = status;
@@ -64,6 +67,15 @@ export async function cutoverWorkbookSync(args: CutoverArgs): Promise<CutoverRes
     if (e instanceof RolloutFlipError) throw new CutoverError('surface_not_found', e.status);
     throw e;
   }
+
+  // Belt: also stop the source itself. The engine's per-poll rollout check is
+  // the primary guard, but a cut-over site must not depend on a single runtime
+  // read — flipping is_syncing=false makes the stop durable state on the
+  // source row (the engine no-ops disabled sources before any rollout read).
+  await db.workbookSource.updateMany({
+    where: { site_id: args.siteId },
+    data: { is_syncing: false },
+  });
 
   return { siteId: args.siteId, paritySignoffPresent: parity, overrodeParity: !parity };
 }

@@ -41,24 +41,28 @@ const D = (iso: string) => new Date(`${iso}T00:00:00Z`);
 // Fake Prisma delegate surface — replicates the `where` filters the resolver sends.
 const db: FreightResolverDb = {
   accountHaulRate: {
-    findFirst: async ({ where }) => {
+    findMany: async ({ where, take }) => {
       const lte = where.effective_from.lte.getTime();
-      const matches = overrides
+      return overrides
         .filter(
           (o) =>
             o.source_id === where.source_id &&
             o.effective_from.getTime() <= lte &&
             (o.effective_to === null || o.effective_to.getTime() >= lte),
         )
-        .sort((a, b) => b.effective_from.getTime() - a.effective_from.getTime());
-      return matches[0] ?? null;
+        .sort((a, b) => b.effective_from.getTime() - a.effective_from.getTime())
+        .slice(0, take);
     },
   },
   source: {
     findUnique: async ({ where }) => {
       const s = sources.find((x) => x.id === where.id);
       return s
-        ? { id: s.id, canonical_mileage: s.canonical_mileage, site: { jurisdiction: s.jurisdiction } }
+        ? {
+            id: s.id,
+            canonical_mileage: s.canonical_mileage,
+            site: { jurisdiction: s.jurisdiction },
+          }
         : null;
     },
   },
@@ -106,8 +110,12 @@ describe('resolveFreightCents — tier path', () => {
       { id: 's25', canonical_mileage: 25, jurisdiction: 'california' },
       { id: 's26', canonical_mileage: 26, jurisdiction: 'california' },
     );
-    expect((await resolveFreightCents({ sourceId: 's25', date: D('2026-07-03'), db })).cents).toBe(42500);
-    expect((await resolveFreightCents({ sourceId: 's26', date: D('2026-07-03'), db })).cents).toBe(60000);
+    expect((await resolveFreightCents({ sourceId: 's25', date: D('2026-07-03'), db })).cents).toBe(
+      42500,
+    );
+    expect((await resolveFreightCents({ sourceId: 's26', date: D('2026-07-03'), db })).cents).toBe(
+      60000,
+    );
   });
 });
 

@@ -2312,6 +2312,10 @@ model Invoice {
   lines        InvoiceLine[]
   credit_memos CreditMemo[]
 
+  // One version number per (site, kind, month) chain — the DB backstop for the
+  // service's max+1 computation (two concurrent generates now conflict at the
+  // DB instead of minting duplicate versions / two live drafts).
+  @@unique([site_id, kind, billing_month, version])
   @@index([site_id, kind, billing_month])
   @@index([site_id, status])
   @@index([supersedes_id])

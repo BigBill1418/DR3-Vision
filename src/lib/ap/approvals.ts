@@ -76,7 +76,9 @@ function hasNote(note: string | undefined | null): note is string {
  */
 export function assertDecisionNote(decision: ApDecision, note: string | undefined | null): void {
   if (decision === 'rejected' && !hasNote(note)) {
-    throw new ApNoteRequiredError('A rejection must include a note explaining why the invoice was rejected.');
+    throw new ApNoteRequiredError(
+      'A rejection must include a note explaining why the invoice was rejected.',
+    );
   }
 }
 
@@ -88,7 +90,8 @@ export class ApAlreadyDecidedError extends Error {
     readonly decidedAt: Date | null,
   ) {
     super(
-      `already ${decision} by ${decidedByName}${decidedAt ? ` at ${decidedAt.toISOString()}` : ''}`,
+      // Pacific, never raw UTC — this message surfaces in the queue UI banner.
+      `already ${decision} by ${decidedByName}${decidedAt ? ` at ${formatPacificDateTime(decidedAt)} PT` : ''}`,
     );
     this.name = 'ApAlreadyDecidedError';
   }
@@ -200,10 +203,18 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       action: 'update',
       table_name: TABLE,
       row_id: args.requestId,
-      after: { attempted: args.decision, outcome: 'lost', winner_status: winner?.status ?? 'unknown' },
+      after: {
+        attempted: args.decision,
+        outcome: 'lost',
+        winner_status: winner?.status ?? 'unknown',
+      },
     });
     const name = await resolveName(prisma, winner?.decided_by ?? row.decided_by);
-    throw new ApAlreadyDecidedError(winner?.status ?? row.status, name, winner?.decided_at ?? row.decided_at);
+    throw new ApAlreadyDecidedError(
+      winner?.status ?? row.status,
+      name,
+      winner?.decided_at ?? row.decided_at,
+    );
   }
 
   // Won. Audit the winning transition (both-attempts-audited: this is the winner's row).
@@ -234,7 +245,11 @@ function baseUrl(): string {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /**
@@ -254,7 +269,9 @@ async function resolveForwarderRecipients(
   const forwarder = (senderAddress ?? '').trim();
   const forwarderInternal = !!forwarder && isInternal(forwarder, internalDomain());
   const recipients = forwarderInternal ? [forwarder] : roster;
-  const cc = forwarderInternal ? roster.filter((e) => e.toLowerCase() !== forwarder.toLowerCase()) : [];
+  const cc = forwarderInternal
+    ? roster.filter((e) => e.toLowerCase() !== forwarder.toLowerCase())
+    : [];
   return { recipients, cc };
 }
 
@@ -283,12 +300,21 @@ export interface HoldResult {
 export async function holdRequest(args: HoldArgs): Promise<HoldResult> {
   const prisma = args.prisma ?? defaultPrisma;
   if (!hasNote(args.note)) {
-    throw new ApNoteRequiredError('A hold must include a note explaining why the invoice is being held.');
+    throw new ApNoteRequiredError(
+      'A hold must include a note explaining why the invoice is being held.',
+    );
   }
   const note = args.note.trim();
   const row = await prisma.apRequest.findUnique({
     where: { id: args.requestId },
-    select: { id: true, status: true, decided_by: true, decided_at: true, held_by: true, held_at: true },
+    select: {
+      id: true,
+      status: true,
+      decided_by: true,
+      decided_at: true,
+      held_by: true,
+      held_at: true,
+    },
   });
   if (!row) throw new ApRequestNotFoundError(args.requestId);
   if (row.status === 'quarantined') throw new ApNotActionableError('quarantined');
@@ -315,8 +341,8 @@ export async function holdRequest(args: HoldArgs): Promise<HoldResult> {
     });
     // Attribute the conflicting state: a held row → its holder; a decided row → its decider.
     const heldNow = cur?.status === 'pending_review';
-    const whoId = heldNow ? cur?.held_by ?? row.held_by : cur?.decided_by ?? row.decided_by;
-    const whenAt = heldNow ? cur?.held_at ?? row.held_at : cur?.decided_at ?? row.decided_at;
+    const whoId = heldNow ? (cur?.held_by ?? row.held_by) : (cur?.decided_by ?? row.decided_by);
+    const whenAt = heldNow ? (cur?.held_at ?? row.held_at) : (cur?.decided_at ?? row.decided_at);
     const name = await resolveName(prisma, whoId ?? null);
     throw new ApAlreadyDecidedError(cur?.status ?? row.status, name, whenAt ?? null);
   }
@@ -359,7 +385,10 @@ export async function updateHoldNote(args: HoldArgs): Promise<void> {
     data: { hold_note: note },
   });
   if (res.count === 0) {
-    const cur = await prisma.apRequest.findUnique({ where: { id: args.requestId }, select: { status: true } });
+    const cur = await prisma.apRequest.findUnique({
+      where: { id: args.requestId },
+      select: { status: true },
+    });
     throw new ApNotActionableError(cur?.status ?? 'unknown');
   }
   await writeAudit({
@@ -381,16 +410,29 @@ export async function updateHoldNote(args: HoldArgs): Promise<void> {
  * non-terminal; a warn is logged) — the terminal decision mail still guards Mary's
  * roster loudly.
  */
-export async function sendHoldNotice(prisma: PrismaClient, requestId: string): Promise<ApMailOutcome> {
+export async function sendHoldNotice(
+  prisma: PrismaClient,
+  requestId: string,
+): Promise<ApMailOutcome> {
   const req = await prisma.apRequest.findUnique({
     where: { id: requestId },
-    select: { id: true, subject: true, sender_address: true, held_by: true, held_at: true, hold_note: true },
+    select: {
+      id: true,
+      subject: true,
+      sender_address: true,
+      held_by: true,
+      held_at: true,
+      hold_note: true,
+    },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
 
   const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
   if (recipients.length === 0) {
-    log.warn({ requestId }, '[ap-approvals] hold notice not sent — no valid recipient (forwarder + roster empty)');
+    log.warn(
+      { requestId },
+      '[ap-approvals] hold notice not sent — no valid recipient (forwarder + roster empty)',
+    );
     return 'refused_no_recipients';
   }
 
@@ -463,7 +505,10 @@ export async function sendDecisionEmail(
   const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
 
   if (recipients.length === 0) {
-    log.error({ requestId }, '[ap-approvals] no valid decision recipient (forwarder + roster empty) — refusing to send, paging operator');
+    log.error(
+      { requestId },
+      '[ap-approvals] no valid decision recipient (forwarder + roster empty) — refusing to send, paging operator',
+    );
     await publishNtfy({
       topic: 'dr3-vision-system',
       title: 'AP decision email NOT sent — no recipients configured',
@@ -480,7 +525,10 @@ export async function sendDecisionEmail(
   const approverName = await resolveName(prisma, req.decided_by);
   const subject = req.subject ?? '(no subject)';
   const decidedAt = req.decided_at ?? new Date();
-  const decidedISO = decidedAt.toISOString();
+  // Bill + both facilities read Pacific; the fleet host clock is UTC. Render the
+  // decision instant in Pacific wall-clock (+ ' PT') like every other AP surface
+  // (notify.ts new-request "Received", stamp.ts stamp line, the hold-notice email).
+  const decidedLabel = `${formatPacificDateTime(decidedAt)} PT`;
   const amountLine =
     typeof req.amount_cents === 'number'
       ? `<li>Amount: $${(req.amount_cents / 100).toFixed(2)}</li>`
@@ -493,7 +541,7 @@ export async function sendDecisionEmail(
       <li>Original subject: ${escapeHtml(subject)}</li>
       <li>Request id: ${escapeHtml(req.id)}</li>
       <li>Approver: ${escapeHtml(approverName)}</li>
-      <li>Decided at: ${escapeHtml(decidedISO)}</li>
+      <li>Decided at: ${escapeHtml(decidedLabel)}</li>
       ${vendorLine}
       ${amountLine}
       ${noteLine}
@@ -504,12 +552,20 @@ export async function sendDecisionEmail(
   // (re-)sanitized body; file/PDF attachments get a stamped COVER page (we can't
   // overlay existing PDF vector bytes without a PDF lib — documented deviation).
   // Fail-soft: a render failure must NOT block the decision mail to accounting.
-  const stamped = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch((e) => {
-    log.warn({ requestId, err: e instanceof Error ? e.message : String(e) }, '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)');
-    return null;
-  });
+  const stamped = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch(
+    (e) => {
+      log.warn(
+        { requestId, err: e instanceof Error ? e.message : String(e) },
+        '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)',
+      );
+      return null;
+    },
+  );
   if (stamped) {
-    await prisma.apRequest.update({ where: { id: requestId }, data: { decision_pdf_sha256: stamped.sha256 } });
+    await prisma.apRequest.update({
+      where: { id: requestId },
+      data: { decision_pdf_sha256: stamped.sha256 },
+    });
     await writeAudit({
       actor_user_id: req.decided_by,
       action: 'update',
@@ -531,7 +587,17 @@ export async function sendDecisionEmail(
     subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
-    ...(stamped ? { attachments: [{ filename: `ap-decision-${req.id}.pdf`, buffer: stamped.pdf, contentType: 'application/pdf' }] } : {}),
+    ...(stamped
+      ? {
+          attachments: [
+            {
+              filename: `ap-decision-${req.id}.pdf`,
+              buffer: stamped.pdf,
+              contentType: 'application/pdf',
+            },
+          ],
+        }
+      : {}),
     db: prisma,
   });
 
@@ -540,7 +606,10 @@ export async function sendDecisionEmail(
     log.warn({ requestId }, '[ap-approvals] decision email failed to all recipients');
     return 'failed';
   }
-  await prisma.apRequest.update({ where: { id: requestId }, data: { decision_mail_sent_at: new Date() } });
+  await prisma.apRequest.update({
+    where: { id: requestId },
+    data: { decision_mail_sent_at: new Date() },
+  });
   return 'sent';
 }
 
@@ -586,7 +655,11 @@ async function buildDecisionStamp(
     });
     const file = files.find((a: { kind: string }) => a.kind === 'file');
     input = file
-      ? { ...base, kind: 'attachment', originalFilename: (file as { filename: string | null }).filename }
+      ? {
+          ...base,
+          kind: 'attachment',
+          originalFilename: (file as { filename: string | null }).filename,
+        }
       : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
   }
   const { pdf, sha256 } = await stampApproval(input, renderer);

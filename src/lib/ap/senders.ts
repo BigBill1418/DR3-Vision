@@ -13,7 +13,15 @@ import type { PrismaClient } from '@prisma/client';
 
 export type SenderMode = 'tenant_wide' | 'explicit_list';
 
-export type QuarantineReason = 'external_sender' | 'not_in_explicit_list' | 'unprocessable' | 'attachment_parse_failure';
+export type QuarantineReason =
+  | 'external_sender'
+  | 'not_in_explicit_list'
+  | 'unprocessable'
+  | 'attachment_parse_failure'
+  // An unexpected per-message failure in the poll loop (ADR-0046 C3 — a poison
+  // message is quarantined so it stays VISIBLE and the delta token can advance,
+  // never a silent drop).
+  | 'ingest_error';
 
 export interface SenderPolicy {
   mode: SenderMode;
@@ -29,7 +37,12 @@ export interface SenderVerdict {
 /** The lowercased domain part of an address, or '' when malformed. */
 export function domainOf(address: string): string {
   const at = address.lastIndexOf('@');
-  return at === -1 ? '' : address.slice(at + 1).trim().toLowerCase();
+  return at === -1
+    ? ''
+    : address
+        .slice(at + 1)
+        .trim()
+        .toLowerCase();
 }
 
 export function isInternal(address: string, internalDomain: string): boolean {
@@ -43,9 +56,13 @@ export function isInternal(address: string, internalDomain: string): boolean {
 export function validateSender(address: string, policy: SenderPolicy): SenderVerdict {
   const addr = address.trim().toLowerCase();
   if (policy.mode === 'explicit_list') {
-    return policy.explicitAllow.has(addr) ? { valid: true } : { valid: false, reason: 'not_in_explicit_list' };
+    return policy.explicitAllow.has(addr)
+      ? { valid: true }
+      : { valid: false, reason: 'not_in_explicit_list' };
   }
-  return isInternal(addr, policy.internalDomain) ? { valid: true } : { valid: false, reason: 'external_sender' };
+  return isInternal(addr, policy.internalDomain)
+    ? { valid: true }
+    : { valid: false, reason: 'external_sender' };
 }
 
 /** The internal tenant domain (env override, default svdp.us). */

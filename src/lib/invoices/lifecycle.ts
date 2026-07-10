@@ -19,7 +19,13 @@ import { log } from '@/lib/observability/logger';
 import { recordGateOverride } from '@/lib/audit/billing-gate';
 import { generateInvoiceDraft, loadInvoiceRow } from './service';
 import { evaluateWindowGate, InvoiceGateBlockedError } from './gate';
-import { assertTotalMatchesLines, InvoiceImmutableError, InvoiceNotFoundError, toInvoiceView, type InvoiceView } from './view';
+import {
+  assertTotalMatchesLines,
+  InvoiceImmutableError,
+  InvoiceNotFoundError,
+  toInvoiceView,
+  type InvoiceView,
+} from './view';
 import type { ManualLine } from './types';
 
 const TABLE = 'invoices';
@@ -58,12 +64,17 @@ export class InvoiceTransitionError extends Error {
 export class InvoiceApprovalForbiddenError extends Error {
   readonly status = 403 as const;
   constructor() {
-    super('approver must be an admin or the manager of this site (can_manage_rates is not sufficient)');
+    super(
+      'approver must be an admin or the manager of this site (can_manage_rates is not sufficient)',
+    );
     this.name = 'InvoiceApprovalForbiddenError';
   }
 }
 
-function windowISO(row: { window_start: Date; window_end: Date }): { startISO: string; endISO: string } {
+function windowISO(row: { window_start: Date; window_end: Date }): {
+  startISO: string;
+  endISO: string;
+} {
   return {
     startISO: row.window_start.toISOString().slice(0, 10),
     endISO: row.window_end.toISOString().slice(0, 10),
@@ -88,12 +99,19 @@ export async function approveInvoice(args: ApproveArgs): Promise<InvoiceView> {
   if (!row) throw new InvoiceNotFoundError(args.invoiceId);
   if (row.status === 'approved') throw new InvoiceImmutableError(row.id);
   if (row.status !== 'draft') {
-    throw new InvoiceTransitionError('not_draft', `invoice ${row.id} is ${row.status}; only a draft can be approved`);
+    throw new InvoiceTransitionError(
+      'not_draft',
+      `invoice ${row.id} is ${row.status}; only a draft can be approved`,
+    );
   }
   if (!canApprove(args.approver)) throw new InvoiceApprovalForbiddenError();
 
   // ADR-0033 tripwire: the stored total MUST reconcile to its lines at the freeze.
-  assertTotalMatchesLines(row.id, row.total_cents, row.lines.map((l) => ({ amountCents: l.amount_cents })));
+  assertTotalMatchesLines(
+    row.id,
+    row.total_cents,
+    row.lines.map((l) => ({ amountCents: l.amount_cents })),
+  );
 
   const { startISO, endISO } = windowISO(row);
   const gate = await evaluateWindowGate(prisma, args.siteId, startISO, endISO);
@@ -110,30 +128,65 @@ export async function approveInvoice(args: ApproveArgs): Promise<InvoiceView> {
         actorUserId: args.approver.userId,
         justification,
       });
-      if (!rec.ok) throw new InvoiceGateBlockedError({ siteId: args.siteId, windowStartISO: startISO, windowEndISO: endISO, findingCodes: gate.findingCodes });
+      if (!rec.ok)
+        throw new InvoiceGateBlockedError({
+          siteId: args.siteId,
+          windowStartISO: startISO,
+          windowEndISO: endISO,
+          findingCodes: gate.findingCodes,
+        });
       overrideNote = justification;
       log.warn(
-        { op: 'invoice.approve.override', site_id: args.siteId, invoice_id: row.id, finding_codes: gate.findingCodes, actor_user_id: args.approver.userId },
+        {
+          op: 'invoice.approve.override',
+          site_id: args.siteId,
+          invoice_id: row.id,
+          finding_codes: gate.findingCodes,
+          actor_user_id: args.approver.userId,
+        },
         '[invoices] trust gate OVERRIDDEN by super-admin at approval',
       );
     } else {
       log.warn(
-        { op: 'invoice.approve.refused', site_id: args.siteId, invoice_id: row.id, finding_count: gate.blockingFindings.length, finding_codes: gate.findingCodes },
+        {
+          op: 'invoice.approve.refused',
+          site_id: args.siteId,
+          invoice_id: row.id,
+          finding_count: gate.blockingFindings.length,
+          finding_codes: gate.findingCodes,
+        },
         '[invoices] approval refused — trust gate blocked',
       );
-      throw new InvoiceGateBlockedError({ siteId: args.siteId, windowStartISO: startISO, windowEndISO: endISO, findingCodes: gate.findingCodes });
+      throw new InvoiceGateBlockedError({
+        siteId: args.siteId,
+        windowStartISO: startISO,
+        windowEndISO: endISO,
+        findingCodes: gate.findingCodes,
+      });
     }
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const u = await tx.invoice.update({
-      where: { id: row.id },
+    // Atomic CAS on the status (same shape as credit-memos): a concurrent
+    // void/approve that won the race makes this a 0-row update → typed 409,
+    // never an approve-over-void.
+    const claimed = await tx.invoice.updateMany({
+      where: { id: row.id, status: 'draft' },
       data: {
         status: 'approved',
         approved_by: args.approver.userId,
         approved_at: new Date(),
         ...(overrideNote ? { gate_override_note: overrideNote } : {}),
       },
+    });
+    if (claimed.count === 0) {
+      throw new InvoiceTransitionError(
+        'not_draft',
+        `invoice ${row.id} was transitioned concurrently; re-read before acting`,
+      );
+    }
+    const u = await tx.invoice.findUniqueOrThrow({
+      where: { id: row.id },
       include: { lines: true },
     });
     await tx.auditLog.create({
@@ -155,7 +208,13 @@ export async function approveInvoice(args: ApproveArgs): Promise<InvoiceView> {
   });
 
   log.info(
-    { op: 'invoice.approve', site_id: args.siteId, invoice_id: row.id, total_cents: updated.total_cents, gate_overridden: overrideNote != null },
+    {
+      op: 'invoice.approve',
+      site_id: args.siteId,
+      invoice_id: row.id,
+      total_cents: updated.total_cents,
+      gate_overridden: overrideNote != null,
+    },
     '[invoices] approved',
   );
   return toInvoiceView(updated);
@@ -181,14 +240,28 @@ export async function voidInvoice(args: VoidArgs): Promise<InvoiceView> {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const u = await tx.invoice.update({
-      where: { id: row.id },
+    // Atomic CAS on the status this call observed (a concurrent approve/void
+    // loses cleanly with a typed 409). The reason APPENDS to notes — the
+    // generation note is part of the audit trail, never overwritten.
+    const claimed = await tx.invoice.updateMany({
+      where: { id: row.id, status: row.status },
       data: {
         status: 'void',
         voided_by: args.actorUserId,
         voided_at: new Date(),
-        ...(args.reason ? { notes: args.reason } : {}),
+        ...(args.reason
+          ? { notes: row.notes ? `${row.notes}\n[void] ${args.reason}` : `[void] ${args.reason}` }
+          : {}),
       },
+    });
+    if (claimed.count === 0) {
+      throw new InvoiceTransitionError(
+        'already_void',
+        `invoice ${row.id} was transitioned concurrently; re-read before acting`,
+      );
+    }
+    const u = await tx.invoice.findUniqueOrThrow({
+      where: { id: row.id },
       include: { lines: true },
     });
     await tx.auditLog.create({
@@ -204,7 +277,10 @@ export async function voidInvoice(args: VoidArgs): Promise<InvoiceView> {
     return u;
   });
 
-  log.info({ op: 'invoice.void', site_id: args.siteId, invoice_id: row.id, prior_status: row.status }, '[invoices] voided');
+  log.info(
+    { op: 'invoice.void', site_id: args.siteId, invoice_id: row.id, prior_status: row.status },
+    '[invoices] voided',
+  );
   return toInvoiceView(updated);
 }
 
@@ -227,7 +303,10 @@ export async function supersedeInvoice(args: SupersedeArgs): Promise<InvoiceView
   const row = await loadInvoiceRow(args.siteId, args.invoiceId);
   if (!row) throw new InvoiceNotFoundError(args.invoiceId);
   if (row.status !== 'approved') {
-    throw new InvoiceTransitionError('not_approved', `invoice ${row.id} is ${row.status}; only an approved invoice can be superseded`);
+    throw new InvoiceTransitionError(
+      'not_approved',
+      `invoice ${row.id} is ${row.status}; only an approved invoice can be superseded`,
+    );
   }
 
   const draft = await generateInvoiceDraft({
@@ -241,7 +320,13 @@ export async function supersedeInvoice(args: SupersedeArgs): Promise<InvoiceView
   });
 
   log.info(
-    { op: 'invoice.supersede', site_id: args.siteId, superseded_id: row.id, new_invoice_id: draft.id, new_version: draft.version },
+    {
+      op: 'invoice.supersede',
+      site_id: args.siteId,
+      superseded_id: row.id,
+      new_invoice_id: draft.id,
+      new_version: draft.version,
+    },
     '[invoices] superseded — new draft version created',
   );
   return draft;

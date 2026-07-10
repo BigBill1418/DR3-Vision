@@ -153,15 +153,27 @@ export function makeFakePrisma(db: FakeDb) {
         const row = db.requests.find(
           (r) =>
             (w['id'] !== undefined && r.id === w['id']) ||
-            (w['internet_message_id'] !== undefined && r.internet_message_id === w['internet_message_id']),
+            (w['internet_message_id'] !== undefined &&
+              r.internet_message_id === w['internet_message_id']),
         );
         return row ? pick(row, args.select) : null;
       },
       async findFirst(args: { where: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord }) {
         const w = args.where;
+        // status may be scalar (`status: 'pending'`) or a set (`status: { in: [...] }`),
+        // e.g. the follow-up thread query matches both 'pending' and 'pending_review'.
+        const statusMatches = (s: FakeApRequest['status']): boolean => {
+          const cond = w['status'];
+          if (cond === undefined) return true;
+          if (cond && typeof cond === 'object' && Array.isArray((cond as { in?: unknown[] }).in)) {
+            return (cond as { in: string[] }).in.includes(s);
+          }
+          return s === cond;
+        };
         let rows = db.requests.filter((r) => {
-          if (w['status'] !== undefined && r.status !== w['status']) return false;
-          if (w['conversation_id'] !== undefined && r.conversation_id !== w['conversation_id']) return false;
+          if (!statusMatches(r.status)) return false;
+          if (w['conversation_id'] !== undefined && r.conversation_id !== w['conversation_id'])
+            return false;
           return true;
         });
         rows = rows.sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
@@ -207,7 +219,7 @@ export function makeFakePrisma(db: FakeDb) {
           const cond = w['status'];
           if (cond === undefined) return true;
           if (cond && typeof cond === 'object' && Array.isArray((cond as { in?: unknown[] }).in)) {
-            return ((cond as { in: string[] }).in).includes(s);
+            return (cond as { in: string[] }).in.includes(s);
           }
           return s === cond;
         };
@@ -223,12 +235,15 @@ export function makeFakePrisma(db: FakeDb) {
       },
       async count(args: { where?: AnyRecord }) {
         const w = args.where ?? {};
-        return db.requests.filter((r) => w['status'] === undefined || r.status === w['status']).length;
+        return db.requests.filter((r) => w['status'] === undefined || r.status === w['status'])
+          .length;
       },
     },
     apFollowup: {
       async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
-        const row = db.followups.find((f) => f.internet_message_id === args.where['internet_message_id']);
+        const row = db.followups.find(
+          (f) => f.internet_message_id === args.where['internet_message_id'],
+        );
         return row ? pick(row, args.select) : null;
       },
       async create(args: { data: AnyRecord }) {
@@ -267,7 +282,9 @@ export function makeFakePrisma(db: FakeDb) {
       },
       async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
-        const rows = db.attachments.filter((a) => w['request_id'] === undefined || a.request_id === w['request_id']);
+        const rows = db.attachments.filter(
+          (a) => w['request_id'] === undefined || a.request_id === w['request_id'],
+        );
         return rows.map((a) => (args.select ? pick(a, args.select) : { ...a }));
       },
     },
@@ -287,16 +304,28 @@ export function makeFakePrisma(db: FakeDb) {
       },
     },
     apDeltaToken: {
-      async findUnique(args: { where: { mailbox_folder: { mailbox: string; folder: string } }; select?: AnyRecord }) {
+      async findUnique(args: {
+        where: { mailbox_folder: { mailbox: string; folder: string } };
+        select?: AnyRecord;
+      }) {
         const { mailbox, folder } = args.where.mailbox_folder;
         const row = db.deltaTokens.find((t) => t.mailbox === mailbox && t.folder === folder);
         return row ? pick(row, args.select) : null;
       },
-      async upsert(args: { where: { mailbox_folder: { mailbox: string; folder: string } }; create: AnyRecord; update: AnyRecord }) {
+      async upsert(args: {
+        where: { mailbox_folder: { mailbox: string; folder: string } };
+        create: AnyRecord;
+        update: AnyRecord;
+      }) {
         const { mailbox, folder } = args.where.mailbox_folder;
         const row = db.deltaTokens.find((t) => t.mailbox === mailbox && t.folder === folder);
         if (row) row.delta_token = args.update['delta_token'] as string;
-        else db.deltaTokens.push({ mailbox, folder, delta_token: args.create['delta_token'] as string });
+        else
+          db.deltaTokens.push({
+            mailbox,
+            folder,
+            delta_token: args.create['delta_token'] as string,
+          });
         return {};
       },
     },
@@ -318,7 +347,9 @@ export function makeFakePrisma(db: FakeDb) {
         return { ...row };
       },
       async findFirst(args: { where: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord }) {
-        let rows = db.pollRuns.filter((r) => args.where['status'] === undefined || r.status === args.where['status']);
+        let rows = db.pollRuns.filter(
+          (r) => args.where['status'] === undefined || r.status === args.where['status'],
+        );
         rows = rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
         const row = rows[0];
         return row ? pick(row, args.select) : null;
@@ -337,7 +368,8 @@ export function makeFakePrisma(db: FakeDb) {
         const rows = db.users.filter((u) => {
           if (idIn && !idIn.includes(u.id)) return false;
           if (w['is_active'] !== undefined && u.is_active !== w['is_active']) return false;
-          if (w['email'] && (w['email'] as AnyRecord)['not'] === null && u.email === null) return false;
+          if (w['email'] && (w['email'] as AnyRecord)['not'] === null && u.email === null)
+            return false;
           if (w['role'] !== undefined && u.role !== w['role']) return false;
           if (w['all_sites'] !== undefined && u.all_sites !== w['all_sites']) return false;
           return true;
@@ -364,7 +396,9 @@ export function makeFakePrisma(db: FakeDb) {
         return db.approvers.filter((a) => matchApprover(a, w, now)).length;
       },
       async delete(args: { where: AnyRecord }) {
-        const idx = db.approvers.findIndex((a) => a.id === args.where['id'] || a.user_id === args.where['user_id']);
+        const idx = db.approvers.findIndex(
+          (a) => a.id === args.where['id'] || a.user_id === args.where['user_id'],
+        );
         if (idx === -1) throw new Error('not found');
         const [removed] = db.approvers.splice(idx, 1);
         return removed;
@@ -372,7 +406,9 @@ export function makeFakePrisma(db: FakeDb) {
     },
     site: {
       async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
-        const row = db.sites.find((s) => s.id === args.where['id'] || s.code === args.where['code']);
+        const row = db.sites.find(
+          (s) => s.id === args.where['id'] || s.code === args.where['code'],
+        );
         return row ? pick(row, args.select) : null;
       },
       async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
@@ -417,7 +453,8 @@ function matchApprover(a: FakeApApprover, w: Record<string, unknown>, now: Date)
   const or = w['OR'] as Array<Record<string, unknown>> | undefined;
   if (or) {
     const anyActiveClause = or.some((clause) => {
-      if ('active_until' in clause && clause['active_until'] === null) return a.active_until === null;
+      if ('active_until' in clause && clause['active_until'] === null)
+        return a.active_until === null;
       const au = clause['active_until'] as { gt?: Date } | undefined;
       if (au && au.gt) return a.active_until !== null && a.active_until.getTime() > au.gt.getTime();
       return false;

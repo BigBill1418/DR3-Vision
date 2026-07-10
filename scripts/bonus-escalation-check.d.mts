@@ -14,3 +14,13 @@ export type EscalationTier = 't1' | 't2' | 't3' | 't4';
  * `delay` is always > 0.
  */
 export function nextEscalationFire(from?: Date): { delay: number; tier: EscalationTier };
+
+/**
+ * POST the internal escalation-check route once for a tier. Throws on transport
+ * error, redirect (a login 307 is a FAILURE, never followed), or any non-200.
+ * Returns the (truncated) response body on 200.
+ */
+export function runTierOnce(tier: EscalationTier): Promise<string>;
+
+/** Truncate a response body for logging (default 300 chars). */
+export function truncateBody(text: string, max?: number): string;
