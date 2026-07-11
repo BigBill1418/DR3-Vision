@@ -102,7 +102,9 @@ function reset() {
 // 2026-07-11 — the on-save late-report hook is a fail-soft side effect; mock it
 // to a spy so route tests stay deterministic and we can assert it fires on a
 // successful save (the real behavior is unit-tested in daily-report-late.test.ts).
-const maybeSendLateDailyReport = vi.fn(async () => 'not_late');
+const maybeSendLateDailyReport = vi.fn<(...a: unknown[]) => Promise<string>>(
+  async () => 'not_late',
+);
 vi.mock('@/lib/bonus/daily-report-late', () => ({
   maybeSendLateDailyReport: (...a: unknown[]) => maybeSendLateDailyReport(...a),
 }));
