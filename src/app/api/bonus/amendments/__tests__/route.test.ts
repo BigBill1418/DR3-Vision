@@ -74,6 +74,13 @@ let amendmentRow: { submission_group_id: string | null; requested_by?: { email: 
   submission_group_id: null,
   requested_by: { email: 'janette@svdp.us' },
 };
+const maybeSendLateDailyReport = vi.fn<(...a: unknown[]) => Promise<string>>(
+  async () => 'not_late',
+);
+vi.mock('@/lib/bonus/daily-report-late', () => ({
+  maybeSendLateDailyReport: (...a: unknown[]) => maybeSendLateDailyReport(...a),
+}));
+
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     user: {

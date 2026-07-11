@@ -92,6 +92,7 @@ const SVDP_LOGO_URL = 'https://dr3-vision.svdp.us/brand/svdp-logo-white.png';
 export interface RenderOptions {
   includeBonusDollars: boolean;
   includeComparisons: boolean;
+  lateInfo?: LateSubmissionInfo | undefined;
 }
 
 export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string {
@@ -99,6 +100,18 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
   // leads the subject line ("DR3 Daily Production Report — …") and the footer
   // ("DR3-Vision"); the SVdP logo carries the parent-org brand on the masthead.
   const headerLine = `${report.siteName} Daily Production Report`;
+
+  // Late-submission banner (2026-07-11 Bill directive): when the data arrived
+  // after the scheduled send, the team still gets the report immediately — the
+  // banner says exactly when it was submitted, and whether this supersedes an
+  // earlier send for the same day.
+  const lateBanner = opts.lateInfo
+    ? `<tr><td style="padding:10px 14px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;font:600 13px/1.4 -apple-system,'Segoe UI',sans-serif;color:#92400E">` +
+      `Late submission — production data entered at ${escapeHtml(opts.lateInfo.enteredAtPT)} ` +
+      `(scheduled report time ${escapeHtml(opts.lateInfo.scheduledPT)}).` +
+      (opts.lateInfo.isResend ? ' This report supersedes the earlier send for this day.' : '') +
+      `</td></tr><tr><td style="height:10px"></td></tr>`
+    : '';
 
   const showBonus = opts.includeBonusDollars;
   const numTd = 'text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap';
@@ -166,6 +179,7 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
         </td></tr>
         <tr><td style="height:4px;background:${SVDP_GOLD};font-size:0;line-height:0">&nbsp;</td></tr>
         <tr><td style="padding:22px 24px 26px">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${lateBanner}</table>
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">
             <thead>${headerRow}</thead>
             <tbody>${rows}</tbody>
@@ -186,12 +200,25 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
 // Send
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * 2026-07-11 (Bill directive) — a report (re)sent by the on-save late path
+ * carries WHEN the data was submitted, front and center. `enteredAtPT` /
+ * `scheduledPT` are pre-formatted Pacific wall-clock strings; `isResend` marks
+ * a send that supersedes an earlier report for the same day.
+ */
+export interface LateSubmissionInfo {
+  enteredAtPT: string;
+  scheduledPT: string;
+  isResend: boolean;
+}
+
 export interface SendDailyReportArgs {
   report: DailyReport;
   recipients: readonly string[];
   subjectTemplate: string;
   includeBonusDollars: boolean;
   includeComparisons: boolean;
+  lateInfo?: LateSubmissionInfo;
 }
 
 export interface SendDailyReportResult {
@@ -202,10 +229,13 @@ export interface SendDailyReportResult {
 }
 
 export async function sendDailyReport(args: SendDailyReportArgs): Promise<SendDailyReportResult> {
-  const subject = renderSubject(args.report, args.subjectTemplate);
+  const subject =
+    renderSubject(args.report, args.subjectTemplate) +
+    (args.lateInfo ? (args.lateInfo.isResend ? ' — UPDATED (late entry)' : ' — LATE ENTRY') : '');
   const htmlBody = renderHtmlBody(args.report, {
     includeBonusDollars: args.includeBonusDollars,
     includeComparisons: args.includeComparisons,
+    lateInfo: args.lateInfo,
   });
 
   let delivered_count = 0;

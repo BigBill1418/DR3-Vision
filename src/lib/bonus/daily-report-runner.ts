@@ -59,7 +59,7 @@ const PACIFIC_WEEKDAY_FMT = new Intl.DateTimeFormat('en-US', {
 });
 
 /** Pacific seconds-of-day for an instant (0..86399), DST-correct. */
-function pacificSecondsOfDay(now: Date): number {
+export function pacificSecondsOfDay(now: Date): number {
   const parts = Object.fromEntries(
     PACIFIC_PARTS_FMT.formatToParts(now).map((p) => [p.type, p.value]),
   );
@@ -77,7 +77,7 @@ function isPacificWeekend(now: Date): boolean {
  * Date whose UTC hours/minutes ARE the configured wall-clock (no zone), so we
  * read it with getUTCHours/getUTCMinutes — same as the daemon's `hmFromTime`.
  */
-function sendTimeSecondsOfDay(sendTimePt: Date): number {
+export function sendTimeSecondsOfDay(sendTimePt: Date): number {
   return sendTimePt.getUTCHours() * 3600 + sendTimePt.getUTCMinutes() * 60;
 }
 
