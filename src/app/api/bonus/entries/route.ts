@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
+import { maybeSendLateDailyReport } from '@/lib/bonus/daily-report-late';
 import {
   upsertDailyEntries,
   isValidMattressCount,
@@ -133,6 +134,11 @@ export async function POST(req: Request) {
   }
 
   if (result.ok === true) {
+    // 2026-07-11 Bill directive: a save AFTER the scheduled report time still
+    // pushes the production report out immediately, flagged with the
+    // submission time. Awaited but fail-soft by contract (never throws, never
+    // fails the save); adds nothing on an on-time save.
+    await maybeSendLateDailyReport(ctx.siteId, date);
     return NextResponse.json({ monthId: result.monthId, entries: result.entries }, { status: 200 });
   }
 

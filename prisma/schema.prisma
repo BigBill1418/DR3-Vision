@@ -787,6 +787,14 @@ model BonusDailyReportLog {
   delivered_count   Int
   graph_message_id  String?
   last_status       Int?
+  // 2026-07-11 (Bill directive): a late entry save still pushes the report out
+  // immediately, flagged with when the data was submitted. `late_submission`
+  // marks a report (re)sent by the on-save path after the scheduled send time;
+  // `data_entered_at` is the save instant shown in the banner; `resend_count`
+  // counts on-save re-sends that superseded an earlier send for the same day.
+  late_submission   Boolean  @default(false)
+  data_entered_at   DateTime?
+  resend_count      Int      @default(0)
   created_at        DateTime @default(now())
 
   @@unique([site_id, report_date])

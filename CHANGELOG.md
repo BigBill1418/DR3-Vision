@@ -5,6 +5,31 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-11 (late bonus entry still sends the daily report, immediately)
+
+Operator directive (Bill, 2026-07-11, effective immediately): "even if a site
+does not get their bonus entered by the required time the report still goes
+out as soon as they hit save … the production data still has to get out to
+the team regardless of when it gets put in — there should just be a flag on
+there that says what time it was submitted."
+
+- **On-save late path** (`src/lib/bonus/daily-report-late.ts`): after every
+  successful daily-entry save — and after every approved amendment — if the
+  entry's day is past its site's scheduled Pacific send time (a prior day is
+  always past), the production report goes out RIGHT THEN, flagged with the
+  submission time (amber banner + " — LATE ENTRY" subject suffix; re-sends
+  say the report supersedes the earlier one). Weekend/holiday skips do not
+  apply to this path: data entered means work happened.
+- **Idempotent per content:** re-saving unchanged numbers never re-sends; a
+  save that CHANGES a day's totals after a report already went out re-sends
+  the corrected numbers (subject " — UPDATED (late entry)", `resend_count`
+  bumped) so the team always ends the day with the real figures.
+- **Fail-soft by contract:** the late send can never fail or delay the
+  manager's save (errors log loud; the save has already committed).
+- Migration `20260719_daily_report_late_flag` (additive): `late_submission`,
+  `data_entered_at`, `resend_count` on `bonus_daily_report_log`.
+- The scheduled ADR-0030 fire is unchanged and still owns the on-time case.
+
 ### Ops — 2026-07-10 (RAOP mail incident: daily reports 403 since the 7/9 policy)
 
 The 2026-07-09 ApplicationAccessPolicy (IT-permissions execution, PR #86)
