@@ -5,6 +5,16 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Ops — 2026-07-14 (RAOP mail incident CLOSED — proper sender restored)
+
+O-0 executed: `dr3-vision@svdp.us` added to the RAOP scoping group (Bill,
+Exchange device-code session; pwsh + ExchangeOnlineManagement now live on the
+workspace host at `~/.local/pwsh`). Post-propagation probe 201, the 2026-07-10
+temporary sender unwound (`M365_MAIL_FROM_ADDRESS` back to
+`dr3-vision@svdp.us`), app recreated, live test report delivered from the
+proper identity. Daily/late reports and payroll mail send as DR3-Vision again;
+AP decisions keep their approvals-dr3 identity by design.
+
 ### Added — 2026-07-11 (late bonus entry still sends the daily report, immediately)
 
 Operator directive (Bill, 2026-07-11, effective immediately): "even if a site
