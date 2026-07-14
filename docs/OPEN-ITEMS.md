@@ -18,7 +18,6 @@ are the only window her cross-checks are possible.
 
 | # | Item | Source | Notes / deadline |
 |---|------|--------|------------------|
-| O-0 | **URGENT — add `dr3-vision@svdp.us` to the RAOP scoping group, then restore `M365_MAIL_FROM_ADDRESS`** | 2026-07-10 incident (below) | The 7/9 ApplicationAccessPolicy scopes app `2da92424…` to the approvals scoping group only; `dr3-vision@svdp.us` fell outside it, so **every app-only send from it 403'd** — the 7/9 evening daily production reports failed at BOTH sites (`delivered_count 0`, `last_status 403`; the 7/8 reports, sent before the policy, delivered fine). P15 payroll mail (close 7/21) would have hit the same wall. **Mitigation applied 2026-07-10:** `M365_MAIL_FROM_ADDRESS` on CHAD (`~/.dr3-vision-secrets/m365.env`, original line commented + `.bak-20260710`) temporarily points at `approvals-dr3@svdp.us` (in-policy); verified delivered via the internal test-send (delivered 1). Proper fix: `Add-DistributionGroupMember` the dr3-vision mailbox into the scoping group (Exchange admin, one command — see `docs/handoffs/2026-07-09-az-pivoted-graph-permissions-setup-ps-7-6-compat.md`), then restore the env + recreate app. Note: the 7/9 reports themselves were never delivered; re-send via the test route if wanted (numbers are preserved in `bonus_daily_report_log`). |
 | O-1 | **Flip AP `ap_notify` surface to `live`** (~7/11) | ADR-0046/0047, PR #88/#93 | The go-live moment. Pilot currently reroutes all AP mail to admins. Rollback = flip back to pilot, one admin action. |
 | O-2 | **Pick a workbook file-fetch method (§7 A/B/C)** | rollup `docs/handoffs/2026-07-09-full-rollup-…` §7 | Blocks all of §8.2 (real-file parser finalization, ADR-0048 D4 promotion, June close-balance 4062 assertion). Recommended: A (rclone + Drive folder), ~5 min setup. **Kelsey window: before 8/1.** |
 | O-3 | **RESTIC_PASSWORD off-box confirmation (P1-4)** | go-live plan Stage 0 | Last gate in `assertLoadsInventoryActivated` — critical-path blocker for every manager ramp (Stage 1+). |
@@ -63,4 +62,11 @@ are the only window her cross-checks are possible.
 
 ## Done
 
-_(move closed items here with the closing date)_
+- **O-0 — DONE 2026-07-14.** Bill added `dr3-vision@svdp.us` to the
+  `dr3-vision-scoped@svdp.us` RAOP scoping group (Exchange device-code session
+  from the workspace host — pwsh 7.4 + ExchangeOnlineManagement now installed
+  at `~/.local/pwsh` for future admin one-offs). After propagation the probe
+  cleared (201), `M365_MAIL_FROM_ADDRESS` was restored to `dr3-vision@svdp.us`
+  on CHAD, app recreated, and a live test report delivered from the proper
+  sender (delivered 1). AP mail keeps sending from `approvals-dr3@svdp.us` as
+  designed. The 2026-07-10 mitigation is fully unwound.
