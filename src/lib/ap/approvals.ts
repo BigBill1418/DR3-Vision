@@ -122,10 +122,31 @@ export interface DecideArgs {
   note?: string;
   vendor?: string; // optional, keyed at decision (C9-D5)
   amountCents?: number; // optional
-  /** ADR-0046 §3 amendment — optional site tag (RESOLVED site id) set at decision. */
+  /** REQUIRED (operator directive 2026-07-15; was optional under the §3
+   * amendment) — the RESOLVED site id the decision files against. */
   siteId?: string;
   /** Test seam — inject a deterministic PDF renderer so unit tests never launch Chromium. */
   renderer?: PdfRenderer;
+}
+
+/** Operator directive 2026-07-15 — a decision without a site tag is refused. */
+export class ApSiteRequiredError extends Error {
+  readonly status = 400 as const;
+  constructor() {
+    super(
+      'Select the site (Woodland or Eugene) before deciding — accounting files every invoice against a site.',
+    );
+    this.name = 'ApSiteRequiredError';
+  }
+}
+
+/**
+ * Enforce the REQUIRED decision-time site tag (operator directive 2026-07-15;
+ * was optional under the §3 amendment). Mary always needs the site for GP —
+ * an untagged decision must never reach accounting.
+ */
+export function assertDecisionSite(siteId: string | null | undefined): asserts siteId is string {
+  if (!siteId || !siteId.trim()) throw new ApSiteRequiredError();
 }
 
 /** Thrown when a decide request carries a site id/code that does not exist. */
@@ -175,6 +196,9 @@ async function resolveName(prisma: PrismaClient, userId: string | null): Promise
  */
 export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   const prisma = args.prisma ?? defaultPrisma;
+  // Operator directive 2026-07-15: no decision without a site tag — validated
+  // BEFORE any read/state change (mirrors the reject-note boundary).
+  assertDecisionSite(args.siteId);
   const row = await prisma.apRequest.findUnique({
     where: { id: args.requestId },
     select: { id: true, status: true, subject: true, decided_by: true, decided_at: true },

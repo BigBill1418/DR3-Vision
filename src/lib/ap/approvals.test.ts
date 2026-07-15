@@ -17,6 +17,7 @@ import {
   ApAlreadyDecidedError,
   ApNoteRequiredError,
   ApNotActionableError,
+  ApSiteRequiredError,
   apApproverEmails,
   assertDecisionNote,
   decideRequest,
@@ -172,6 +173,7 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.decision).toBe('approved');
     expect(res.mail).toBe('sent');
@@ -196,10 +198,17 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     writeAudit.mockClear();
     await expect(
-      decideRequest({ prisma, requestId: 'req-1', decision: 'rejected', actorUserId: 'u-janette' }),
+      decideRequest({
+        prisma,
+        requestId: 'req-1',
+        decision: 'rejected',
+        actorUserId: 'u-janette',
+        siteId: 'site-w',
+      }),
     ).rejects.toBeInstanceOf(ApAlreadyDecidedError);
     // the losing attempt is audited (outcome=lost)
     expect(writeAudit).toHaveBeenCalledTimes(1);
@@ -220,6 +229,7 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
       vendor: 'Acme',
       amountCents: 44100,
       note: 'ok to pay',
@@ -229,7 +239,7 @@ describe('decideRequest — first action wins + both attempts audited', () => {
     expect(db.requests[0]!.decision_note).toBe('ok to pay');
   });
 
-  it('sets ap_requests.site_id when a resolved siteId is supplied; leaves it null otherwise', async () => {
+  it('sets ap_requests.site_id from the supplied (resolved) siteId', async () => {
     const db1 = newFakeDb({
       requests: [pendingReq()],
       users,
@@ -243,19 +253,29 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       siteId: 'site-eug',
     });
     expect(db1.requests[0]!.site_id).toBe('site-eug');
+  });
 
-    const db2 = newFakeDb({
+  it('2026-07-15 directive — REFUSES a decision without a site tag: no state change, no email, no audit', async () => {
+    const db = newFakeDb({
       requests: [pendingReq()],
       users,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
-    await decideRequest({
-      prisma: fp(db2),
-      requestId: 'req-1',
-      decision: 'approved',
-      actorUserId: 'u-morena',
-    });
-    expect(db2.requests[0]!.site_id).toBeNull();
+    for (const bad of [undefined, '', '   '] as const) {
+      await expect(
+        decideRequest({
+          prisma: fp(db),
+          requestId: 'req-1',
+          decision: 'approved',
+          actorUserId: 'u-morena',
+          ...(bad !== undefined ? { siteId: bad } : {}),
+        }),
+      ).rejects.toBeInstanceOf(ApSiteRequiredError);
+    }
+    expect(db.requests[0]!.status).toBe('pending');
+    expect(db.requests[0]!.site_id).toBeNull();
+    expect(notifyStaffSpy).not.toHaveBeenCalled();
+    expect(writeAudit).not.toHaveBeenCalled();
   });
 });
 
@@ -271,6 +291,7 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as {
@@ -324,6 +345,7 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     const args = notifyStaffSpy.mock.calls[0]![0] as { subject: string; htmlBody: string };
     // Body no longer repeats the matching keys.
@@ -348,6 +370,7 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[]; cc?: string[] };
@@ -366,6 +389,7 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as { recipients: string[] };
@@ -383,6 +407,7 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('refused_no_recipients');
     expect(sendSystemEmail).not.toHaveBeenCalled();
@@ -430,6 +455,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(2); // one overlay per file
@@ -465,6 +491,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     expect(stamp.stampImage).toHaveBeenCalledTimes(1);
@@ -485,6 +512,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'rejected',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
       note: 'duplicate of #4471',
     });
     expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(1);
@@ -506,6 +534,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent'); // fail-soft: mail is never blocked
     expect(stamp.stampOntoOriginalPdf).not.toHaveBeenCalled(); // no bytes → no overlay
@@ -540,6 +569,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     // The PDF original is overlaid — the body render is never produced.
@@ -583,6 +613,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     // Only the PDF is stamped; the tiny image is filtered out (never image-stamped).
@@ -614,6 +645,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     expect(stamp.stampImage).toHaveBeenCalledTimes(1); // kept via the all-dropped guard
@@ -645,6 +677,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: { filename: string }[] };
@@ -671,6 +704,7 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
     });
     expect(res.mail).toBe('sent');
     expect(stamp.stampApproval).toHaveBeenCalledTimes(1); // body render
@@ -853,6 +887,7 @@ describe('hold → resolve + update note', () => {
       requestId: 'req-1',
       decision: 'approved',
       actorUserId: 'u-janette',
+      siteId: 'site-w',
     });
     expect(res.decision).toBe('approved');
     expect(db.requests[0]!.status).toBe('approved');
@@ -874,6 +909,7 @@ describe('hold → resolve + update note', () => {
       requestId: 'req-1',
       decision: 'rejected',
       actorUserId: 'u-morena',
+      siteId: 'site-w',
       note: 'not ours',
     });
     expect(res.decision).toBe('rejected');
