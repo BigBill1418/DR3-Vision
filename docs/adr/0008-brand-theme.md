@@ -59,3 +59,11 @@ The placeholder page in T-001 (Sprint 1) is the first brand-correctness checkpoi
 
 - Charter §5.6 (Brand)
 - mattressrecycling.us (DR3 public site, source of truth for palette)
+
+## Post-acceptance note — 2026-07-15 (scope split with ADR-0051; floor green reconfirmed)
+
+ADR-0051 split the app's theming by audience: office/manager surfaces adopt the
+Vision deep-space theme, while this ADR remains the authority for the
+**warehouse floor (`/operator/*`) and the public brand**. The operator
+reconfirmed the floor side directly on 2026-07-15 ("keep the floor green") —
+the green floor standard is settled, with no repaint planned.
