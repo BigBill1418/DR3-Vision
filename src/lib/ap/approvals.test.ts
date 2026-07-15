@@ -289,6 +289,28 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
     expect(args.htmlBody).not.toMatch(/Decided at:[^<]*\d{4}-\d\d-\d\dT[\d:.]+Z/);
   });
 
+  it('2026-07-15 directive — the site tag rides the subject, body, and stamp', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      sites: [{ id: 'site-w', code: 'woodland', name: 'Woodland' }],
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+    });
+    expect(res.mail).toBe('sent');
+    const args = notifyStaffSpy.mock.calls[0]![0] as { subject: string; htmlBody: string };
+    // Unmissable in the subject (visible before the mail is opened)…
+    expect(args.subject).toContain('Woodland');
+    // …and leading the decision facts in the body.
+    expect(args.htmlBody).toContain('Site: <b>Woodland</b>');
+  });
+
   it('ADR-0046 Amendment 4 — GP keys (subject + request id) are STRIPPED from the body but ride the SUBJECT line', async () => {
     const db = newFakeDb({
       requests: [
