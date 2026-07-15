@@ -460,3 +460,14 @@ Great Plains. Now enforced at all three layers:
 `ap_requests.site_id` therefore becomes always-populated for rows decided
 after this ships; rows decided earlier may still carry NULL (historical, not
 backfilled). This closes O-9(a) in `docs/OPEN-ITEMS.md`.
+
+## Post-go-live amendment — 2026-07-15 (approver note displays on the returned invoice)
+
+Operator directive: the decision **note must display on the output invoice**
+accounting receives back. The note already rode the decision-email body and
+the Playwright-rendered stamps (body-only / image originals), but the pdf-lib
+overlay — the path every real PDF invoice takes — never drew it. Now the
+bottom stamp band grows to carry the note (wrapped, capped at 3 lines with an
+ellipsis; the full note always remains in the email body), on every page,
+both decisions. The queue's Note field is labeled "appears on the returned
+invoice" so approvers know the audience.

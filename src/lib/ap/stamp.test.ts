@@ -4,6 +4,7 @@
 // real-Chromium path is a single env-gated, skipped-by-default integration test).
 
 import { describe, expect, it, vi } from 'vitest';
+import { inflateSync } from 'node:zlib';
 import { PDFDocument } from 'pdf-lib';
 import {
   buildImageStampHtml,
@@ -16,6 +17,7 @@ import {
   stampText,
   type PdfRenderer,
   type StampInput,
+  wrapToWidth,
 } from './stamp';
 
 const DECIDED_AT = new Date('2026-07-09T20:00:00Z'); // 1:00 PM PDT
@@ -255,5 +257,91 @@ describe('site tag on the stamp (2026-07-15 directive)', () => {
       bodyHtmlSanitized: '<p>hi</p>',
     });
     expect(html).toContain('Site: <b>Eugene</b>');
+  });
+});
+
+// 2026-07-15 operator directive — the approver's note must display on the OUTPUT
+// invoice accounting receives back, i.e. drawn into the pdf-lib overlay band
+// (the HTML stamp paths already carried it).
+// Content streams are Flate-compressed, so inflate them before text assertions.
+function pdfVisibleText(pdf: Buffer): string {
+  const raw = pdf.toString('latin1');
+  let text = raw;
+  const re = /stream\r?\n([\s\S]*?)endstream/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw))) {
+    try {
+      text += inflateSync(Buffer.from(m[1]!, 'latin1')).toString('latin1');
+    } catch {
+      // not a Flate stream — raw bytes are already in `text`
+    }
+  }
+  // pdf-lib writes shown text as hex strings (<4E6F7465...> Tj) — decode those too.
+  return text.replace(/<([0-9A-Fa-f]+)>[\s]*Tj/g, (_, hex: string) =>
+    Buffer.from(hex, 'hex').toString('latin1'),
+  );
+}
+
+describe('note on the returned invoice (pdf-lib overlay)', () => {
+  async function makeOriginal(): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    doc.setCreationDate(new Date(0));
+    doc.setModificationDate(new Date(0));
+    doc.addPage([612, 792]).drawText('invoice', { x: 40, y: 700, size: 14 });
+    return doc.save();
+  }
+  const base = {
+    kind: 'attachment' as const,
+    requestId: 'req-42',
+    subject: 'Invoice #4471',
+    approverName: 'Morena',
+    decision: 'approved' as const,
+    decidedAt: new Date('2026-07-15T19:00:00Z'),
+  };
+
+  it('draws the note into the stamp band on the stamped PDF', async () => {
+    const original = await makeOriginal();
+    const { pdf } = await stampOntoOriginalPdf(original, {
+      ...base,
+      note: 'PO 8812 verified - ok to pay net 30',
+    });
+    expect(pdfVisibleText(pdf)).toContain('Note: PO 8812 verified - ok to pay net 30');
+  });
+
+  it('a note changes the tamper sha; no note leaves the band note-free', async () => {
+    const original = await makeOriginal();
+    const withNote = await stampOntoOriginalPdf(original, {
+      ...base,
+      note: 'hold the freight line',
+    });
+    const without = await stampOntoOriginalPdf(original, base);
+    expect(withNote.sha256).not.toBe(without.sha256);
+    expect(pdfVisibleText(without.pdf)).not.toContain('Note:');
+  });
+});
+
+describe('wrapToWidth — stamp-band note wrapping', () => {
+  const measure = (t: string) => t.length * 6; // fixed-width stand-in
+
+  it('wraps on word boundaries within the width', () => {
+    const lines = wrapToWidth('alpha beta gamma delta', measure, 12 * 6, 3);
+    expect(lines).toEqual(['alpha beta', 'gamma delta']);
+  });
+
+  it('caps at maxLines and ellipsizes when truncated', () => {
+    const lines = wrapToWidth(
+      'one two three four five six seven eight nine ten',
+      measure,
+      10 * 6,
+      2,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!.endsWith('\u2026')).toBe(true);
+  });
+
+  it('hard-cuts a single token wider than the line', () => {
+    const lines = wrapToWidth('Supercalifragilisticexpialidocious', measure, 10 * 6, 3);
+    expect(lines[0]!.length).toBeLessThanOrEqual(10);
+    expect(lines[lines.length - 1]!.endsWith('\u2026')).toBe(true);
   });
 });

@@ -196,6 +196,48 @@ export async function defaultPlaywrightRenderer(html: string): Promise<Buffer> {
 }
 
 /**
+ * Greedy word-wrap against a measured width, capped at maxLines; the last line
+ * gets an ellipsis when the text is truncated. A single word wider than the
+ * line is hard-cut so one unbroken token can never overflow the band.
+ */
+export function wrapToWidth(
+  text: string,
+  measure: (t: string) => number,
+  maxWidth: number,
+  maxLines: number,
+): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = '';
+  let truncated = false;
+  for (const raw of words) {
+    let word = raw;
+    while (measure(word) > maxWidth && word.length > 1) {
+      word = word.slice(0, -1);
+      truncated = true;
+    }
+    const candidate = cur ? `${cur} ${word}` : word;
+    if (measure(candidate) <= maxWidth) {
+      cur = candidate;
+      continue;
+    }
+    if (lines.length === maxLines - 1) {
+      truncated = true;
+      break;
+    }
+    lines.push(cur);
+    cur = word;
+  }
+  if (cur) lines.push(cur);
+  if (truncated && lines.length > 0) {
+    let last = `${lines[lines.length - 1]!}…`;
+    while (measure(last) > maxWidth && last.length > 2) last = `${last.slice(0, -2)}…`;
+    lines[lines.length - 1] = last;
+  }
+  return lines;
+}
+
+/**
  * ADR-0046 Amendment 4 — overlay a visible stamp onto EVERY page of the ORIGINAL
  * PDF using pdf-lib (a TRUE overlay, not a cover page): a bottom stamp band with
  * the exact stamp line + a diagonal APPROVED/REJECTED watermark across the page.
@@ -214,19 +256,44 @@ export async function stampOntoOriginalPdf(
   const line = stampText(input);
   const mark = input.decision.toUpperCase();
   const markColor = input.decision === 'approved' ? rgb(0, 0.32, 0.3) : rgb(0.72, 0.11, 0.11);
+  const note = input.note?.trim() ?? '';
 
   for (const page of doc.getPages()) {
     const { width, height } = page.getSize();
     // Bottom stamp band — white text on a dark-green fill, legible over any page.
+    // 2026-07-15 operator directive: the approver's NOTE must be visible on the
+    // returned invoice itself, so the band grows to carry it (wrapped, capped at
+    // 3 lines — the full note always rides the decision-email body regardless).
     const size = 9;
+    const noteSize = 8;
+    const noteLines = note
+      ? wrapToWidth(`Note: ${note}`, (t) => bold.widthOfTextAtSize(t, noteSize), width - 16, 3)
+      : [];
+    const bandHeight = 22 + (noteLines.length ? noteLines.length * 10 + 3 : 0);
     const lineWidth = bold.widthOfTextAtSize(line, size);
-    page.drawRectangle({ x: 0, y: 0, width, height: 22, color: rgb(0, 0.32, 0.3), opacity: 0.92 });
+    page.drawRectangle({
+      x: 0,
+      y: 0,
+      width,
+      height: bandHeight,
+      color: rgb(0, 0.32, 0.3),
+      opacity: 0.92,
+    });
     page.drawText(line, {
       x: Math.max(8, (width - lineWidth) / 2),
-      y: 7,
+      y: bandHeight - 15,
       size,
       font: bold,
       color: rgb(1, 1, 1),
+    });
+    noteLines.forEach((nl, i) => {
+      page.drawText(nl, {
+        x: 8,
+        y: bandHeight - 25 - i * 10,
+        size: noteSize,
+        font: bold,
+        color: rgb(1, 1, 1),
+      });
     });
     // Diagonal watermark sized to ~80% of page width, low opacity, rotated up-right.
     const w10 = bold.widthOfTextAtSize(mark, 10) || 1;

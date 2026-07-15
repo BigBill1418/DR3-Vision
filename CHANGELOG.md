@@ -5,6 +5,14 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-15 (approver note now displays on the returned invoice PDF)
+
+Operator directive: the decision note must be visible on the output invoice
+accounting receives. The pdf-lib overlay (real-PDF path) never drew it — only
+the email body and the Playwright stamp paths did. The stamp band now grows
+to carry the note (wrapped, 3-line cap + ellipsis; full note stays in the
+email body) on every page, both decisions. Note field labeled accordingly.
+
 ### Decided — 2026-07-15 (floor UI stays GREEN — O-9 fully closed)
 
 Operator decision: the warehouse-floor iPad surfaces (`/operator/*`) keep the
