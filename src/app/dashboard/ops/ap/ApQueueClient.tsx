@@ -491,7 +491,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
           </div>
           <label className="mt-2 block text-xs opacity-80">
             Note{' '}
-            <span className="opacity-70">(optional to approve · required to reject or hold)</span>
+            <span className="opacity-70">
+              (optional to approve · required to reject or hold · appears on the returned invoice)
+            </span>
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
