@@ -33,7 +33,11 @@ function apRequestUrl(requestId: string): string {
  * ONLY. Pages `dr3-vision-system` (Bill-only, hard rule #5) and — when
  * `AP_QUARANTINE_EMAIL` is configured — mails the same minimal content.
  */
-export async function alertQuarantine(args: { requestId: string; senderDomain: string; reason: string }): Promise<void> {
+export async function alertQuarantine(args: {
+  requestId: string;
+  senderDomain: string;
+  reason: string;
+}): Promise<void> {
   const body = `An AP message was quarantined (reason=${args.reason}). Review it in the admin AP queue. Request id: ${args.requestId} · sender domain: ${args.senderDomain}`;
   await publishNtfy({
     topic: SYSTEM_TOPIC,
@@ -66,7 +70,10 @@ export async function alertQuarantine(args: { requestId: string; senderDomain: s
     importance: 'high',
   }).catch(() => null);
   if (res && res.delivered === 0 && !res.disabled) {
-    log.warn({ requestId: args.requestId }, '[ap-notify] quarantine email not delivered (ntfy still fired)');
+    log.warn(
+      { requestId: args.requestId },
+      '[ap-notify] quarantine email not delivered (ntfy still fired)',
+    );
   }
 }
 
@@ -89,10 +96,11 @@ export async function alertDeadman(hoursSince: number, thresholdMinutes: number)
  * per poll from the expiry-aware ap_approvers roster; an expired `active_until`
  * excludes an approver). ONE email per new request (fired only on the `created`
  * terminal state — never per-poll, never for follow-ups/duplicates). Carries the
- * requester (internal forwarder), subject, received-at (Pacific), attachment count,
- * and a TIER-1 deep link to the specific queue item. Row id + subject + forwarder
- * address are all from an authenticated internal sender (safe for triage); never
- * attachment bytes/amounts (ADR-0045). Fail-soft. ADR-0046 Amendment 3 deliverable 1.
+ * requester (internal forwarder), received-at (Pacific), attachment count, and a
+ * TIER-1 deep link to the specific queue item. The subject rides the email SUBJECT
+ * line and the request id lives in the deep-link URL — both are STRIPPED from the
+ * body (ADR-0046 Amendment 4). Never attachment bytes/amounts (ADR-0045).
+ * Fail-soft. ADR-0046 Amendment 3 deliverable 1.
  */
 export async function notifyNewRequest(args: {
   requestId: string;
@@ -103,7 +111,10 @@ export async function notifyNewRequest(args: {
   approverEmails: readonly string[];
 }): Promise<void> {
   if (args.approverEmails.length === 0) {
-    log.warn({ requestId: args.requestId }, '[ap-notify] no active approver addresses — new-request email skipped');
+    log.warn(
+      { requestId: args.requestId },
+      '[ap-notify] no active approver addresses — new-request email skipped',
+    );
     return;
   }
   const subj = args.subject ?? '(no subject)';
@@ -113,13 +124,15 @@ export async function notifyNewRequest(args: {
     : '';
   const count = typeof args.attachmentCount === 'number' ? args.attachmentCount : 0;
   const attachLine = `<li>Attachments: ${count}</li>`;
+  // ADR-0046 Amendment 4 — the GP matching keys (original subject + request id)
+  // are stripped from the body. The subject already rides the email SUBJECT line
+  // (below); the request id lives (invisibly) in the deep-link URL. The body keeps
+  // only the triage facts an approver needs before opening the queue.
   const htmlBody = `<p>A new vendor-invoice approval request is waiting in the DR3-Vision AP queue.</p>
     <ul>
       <li>Requested by: ${escapeHtml(requester)}</li>
-      <li>Subject: ${escapeHtml(subj)}</li>
       ${receivedLine}
       ${attachLine}
-      <li>Request id: ${escapeHtml(args.requestId)}</li>
     </ul>
     <p><a href="${apRequestUrl(args.requestId)}">Open this request in the AP approval queue</a> to review and approve, reject, or place it on hold. First action wins.</p>`;
   // ADR-0047 — org-wide AP surface, born pilot. One gated send to ALL active
@@ -136,5 +149,9 @@ export async function notifyNewRequest(args: {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

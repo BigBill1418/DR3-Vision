@@ -3,25 +3,27 @@
 // tamper record is the sha256 of the GENERATED PDF (persisted to
 // ap_requests.decision_pdf_sha256 + an audit row).
 //
-// DELIBERATE DEVIATION (no-dependency constraint): the repo has NO PDF-
-// manipulation library (no pdf-lib / pdfkit) and one MUST NOT be added
-// (node_modules is symlinked to the main repo; an absent module is unresolvable
-// by tsc and forbidden by policy). The repo's ONLY PDF mechanism is
-// Playwright → Chromium print-to-PDF of an HTML page (see src/lib/bonus/pdf.ts).
-// Therefore we CANNOT overlay a stamp onto existing PDF vector bytes in place.
-// Instead:
+// ADR-0046 Amendment 4 (2026-07-15) — REVERSES the §C10 no-PDF-lib constraint.
+// pdf-lib (pure-JS, MIT) is now an approved dependency: Playwright can only
+// print HTML→PDF, it CANNOT composite a stamp onto existing PDF vector bytes, so
+// stamping the actual original invoice required a real PDF library. The three
+// render paths are now:
 //   - BODY-only originals: re-render the (re-)sanitized body HTML inside a
-//     branded shell with a visible stamp footer, then print to PDF.
-//   - PDF/file ATTACHMENT originals: render a stamped APPROVAL COVER PAGE
-//     carrying the same visible stamp + request/subject/approver/decision/
-//     timestamp + the original filename + (when the caller supplies the bytes)
-//     the sha256 of the ORIGINAL attachment. The decision email carries this
-//     stamped PDF; the original stays retrievable via the AP queue attachment
-//     route. (Inline re-download + re-attach of the R2 original is NOT wired in
-//     this build — documented deviation.)
+//     branded shell with a visible stamp footer, then print to PDF (Playwright).
+//   - PDF ATTACHMENT originals: overlay a visible stamp line + a diagonal
+//     APPROVED/REJECTED watermark onto EVERY page of the ORIGINAL PDF with
+//     pdf-lib (stampOntoOriginalPdf) — the true overlay. The decision email
+//     carries the stamped original; the raw original stays in R2.
+//   - IMAGE ATTACHMENT originals: embed the image in a branded HTML page with the
+//     stamp overlay and print to PDF (stampImage, Playwright) — a true overlay
+//     with no image-decode dependency.
+// The stamped-PDF sha256 stays the tamper record; the ORIGINAL bytes' sha256 is
+// recorded alongside it (ap_requests.original_attachment_sha256) as the dual-sha
+// tamper record. pdf-lib output is made reproducible by pinning the PDF metadata
+// dates/producer to the decision instant (see stampOntoOriginalPdf).
 //
 // The Playwright call is INJECTABLE so unit tests pass a deterministic renderer
-// and never launch real Chromium.
+// and never launch real Chromium; pdf-lib is pure-JS and runs directly in tests.
 
 import { createHash } from 'node:crypto';
 import { sanitizeEmailHtml } from './sanitize';
@@ -62,7 +64,11 @@ export type PdfRenderer = (html: string) => Promise<Buffer>;
 const STAMP_TEXT_PREFIX = 'Approved by';
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** sha256 (hex) of a buffer — used for the generated PDF and (optionally) originals. */
@@ -74,7 +80,9 @@ export function sha256Hex(buf: Buffer | Uint8Array): string {
  * The exact visible stamp line (handoff §1.6e). Note only APPROVED items are
  * "Approved by …"; a rejection reads "Rejected by …" but keeps the same shape.
  */
-export function stampText(input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt'>): string {
+export function stampText(
+  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt'>,
+): string {
   const verb = input.decision === 'approved' ? STAMP_TEXT_PREFIX : 'Rejected by';
   const when = formatPacificDateTime(input.decidedAt);
   return `${verb} ${input.approverName} on ${when} PT via DR3-Vision`;
@@ -174,4 +182,115 @@ export async function defaultPlaywrightRenderer(html: string): Promise<Buffer> {
   } finally {
     await browser.close();
   }
+}
+
+/**
+ * ADR-0046 Amendment 4 — overlay a visible stamp onto EVERY page of the ORIGINAL
+ * PDF using pdf-lib (a TRUE overlay, not a cover page): a bottom stamp band with
+ * the exact stamp line + a diagonal APPROVED/REJECTED watermark across the page.
+ * Returns the stamped PDF + its sha256 (the tamper record). Deterministic: the
+ * PDF metadata dates + producer are pinned to the decision instant so the sha is
+ * reproducible for a given (original bytes, decision, approver, decidedAt).
+ * pdf-lib is dynamically imported (edge-safe, lazy — mirrors the Playwright import).
+ */
+export async function stampOntoOriginalPdf(
+  pdfBytes: Uint8Array,
+  input: StampInput,
+): Promise<StampResult> {
+  const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
+  const doc = await PDFDocument.load(pdfBytes);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const line = stampText(input);
+  const mark = input.decision.toUpperCase();
+  const markColor = input.decision === 'approved' ? rgb(0, 0.32, 0.3) : rgb(0.72, 0.11, 0.11);
+
+  for (const page of doc.getPages()) {
+    const { width, height } = page.getSize();
+    // Bottom stamp band — white text on a dark-green fill, legible over any page.
+    const size = 9;
+    const lineWidth = bold.widthOfTextAtSize(line, size);
+    page.drawRectangle({ x: 0, y: 0, width, height: 22, color: rgb(0, 0.32, 0.3), opacity: 0.92 });
+    page.drawText(line, {
+      x: Math.max(8, (width - lineWidth) / 2),
+      y: 7,
+      size,
+      font: bold,
+      color: rgb(1, 1, 1),
+    });
+    // Diagonal watermark sized to ~80% of page width, low opacity, rotated up-right.
+    const w10 = bold.widthOfTextAtSize(mark, 10) || 1;
+    const markSize = Math.min(90, ((width * 0.8) / w10) * 10);
+    page.drawText(mark, {
+      x: width * 0.08,
+      y: height * 0.32,
+      size: markSize,
+      font: bold,
+      color: markColor,
+      opacity: 0.16,
+      rotate: degrees(30),
+    });
+  }
+
+  // Pin metadata so the tamper-record sha256 is reproducible (not clock-dependent).
+  doc.setProducer('DR3-Vision');
+  doc.setCreationDate(input.decidedAt);
+  doc.setModificationDate(input.decidedAt);
+  const out = Buffer.from(await doc.save());
+  return { pdf: out, sha256: sha256Hex(out) };
+}
+
+/**
+ * ADR-0046 Amendment 4 — the branded HTML page for an IMAGE original: the image
+ * embedded full-width with the same visible stamp footer + watermark, printed to
+ * PDF via Playwright (a true overlay with no image-decode dependency).
+ */
+export function buildImageStampHtml(input: StampInput, imageDataUri: string): string {
+  const stamp = escapeHtml(stampText(input));
+  const subject = escapeHtml(input.subject || '(no subject)');
+  const reqId = escapeHtml(input.requestId);
+  const decisionUpper = input.decision.toUpperCase();
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>
+  :root { --dr3-green-deep: #003d38; --dr3-green: #00524C; --dr3-ink: #111; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; color: var(--dr3-ink); margin: 0; padding: 0 40px 96px; }
+  header { border-bottom: 3px solid var(--dr3-green); padding: 24px 0 12px; margin-bottom: 16px; }
+  header .brand { color: var(--dr3-green-deep); font-weight: 800; font-size: 18px; letter-spacing: .04em; }
+  header .decision { font-size: 13px; color: #444; margin-top: 4px; }
+  .meta { font-size: 12px; color: #333; line-height: 1.6; }
+  .invoice-img { max-width: 100%; height: auto; display: block; margin: 12px auto; border: 1px solid #ddd; }
+  .stamp { position: fixed; bottom: 0; left: 0; right: 0; background: var(--dr3-green-deep); color: #fff; font-weight: 700; font-size: 12px; letter-spacing: .03em; padding: 12px 40px; text-align: center; }
+  .watermark { position: fixed; top: 44%; left: 0; right: 0; text-align: center; font-size: 40px; font-weight: 800; color: rgba(0,82,76,.12); transform: rotate(-18deg); letter-spacing: .12em; }
+</style></head>
+<body>
+  <header>
+    <div class="brand">DR3-Vision · Vendor Invoice Approval</div>
+    <div class="decision">Decision: <b>${decisionUpper}</b> · Request ${reqId}</div>
+  </header>
+  <div class="meta">
+    <div>Subject: <b>${subject}</b></div>
+    <div>Approver: ${escapeHtml(input.approverName)}</div>
+    <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
+    ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
+  </div>
+  <img class="invoice-img" src="${imageDataUri}" alt="original invoice image" />
+  <div class="watermark">${decisionUpper}</div>
+  <div class="stamp">${stamp}</div>
+</body></html>`;
+}
+
+/**
+ * ADR-0046 Amendment 4 — stamp an IMAGE original: embed the bytes as a data URI in
+ * {@link buildImageStampHtml} and print to PDF via the injected renderer. Returns
+ * the stamped PDF + its sha256.
+ */
+export async function stampImage(
+  input: StampInput,
+  imageBytes: Uint8Array,
+  contentType: string,
+  renderer: PdfRenderer = defaultPlaywrightRenderer,
+): Promise<StampResult> {
+  const dataUri = `data:${contentType};base64,${Buffer.from(imageBytes).toString('base64')}`;
+  const pdf = await renderer(buildImageStampHtml(input, dataUri));
+  return { pdf, sha256: sha256Hex(pdf) };
 }

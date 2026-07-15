@@ -36,14 +36,27 @@ const sendSystemEmail = vi.fn(async () => ({
 const publishNtfy = vi.fn(async () => ({ ok: true, outcome: 'sent' as const }));
 const notifyStaffSpy = vi.fn();
 
+// §1.6e / Amendment 4 — stamp module mocked so no real Chromium/pdf-lib runs;
+// each renderer returns a fixed PDF + sha256 so decision_pdf_sha256 persistence,
+// the pdf-vs-image branch, and multi-attachment passthrough can all be asserted.
+const stamp = vi.hoisted(() => ({
+  stampApproval: vi.fn(async () => ({ pdf: Buffer.from('%PDF-stub'), sha256: 'deadbeef' })),
+  stampOntoOriginalPdf: vi.fn(async () => ({ pdf: Buffer.from('%PDF-overlay'), sha256: 'pdfsha' })),
+  stampImage: vi.fn(async () => ({ pdf: Buffer.from('%PDF-image'), sha256: 'imgsha' })),
+}));
+// Amendment 4 — R2 originals download + decision-PDF archive. Default: no bytes
+// (R2 unconfigured) so the no-attachment tests never touch it; per-test overrides
+// feed bytes to exercise the overlay + archive paths.
+const r2 = vi.hoisted(() => ({
+  getApAttachmentBytes: vi.fn(async (): Promise<Uint8Array | null> => null),
+  putApDecisionPdf: vi.fn(async (): Promise<string | null> => 'ap/x/decision/y.pdf'),
+}));
+
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/audit', () => ({ writeAudit: (...a: unknown[]) => writeAudit(...a) }));
 vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: () => sendSystemEmail() }));
-// §1.6e — stamp module mocked so no real Chromium launches; returns a fixed PDF
-// + sha256 so decision_pdf_sha256 persistence + attachment passthrough assert.
-vi.mock('./stamp', () => ({
-  stampApproval: vi.fn(async () => ({ pdf: Buffer.from('%PDF-stub'), sha256: 'deadbeef' })),
-}));
+vi.mock('./stamp', () => stamp);
+vi.mock('@/lib/r2', () => r2);
 // ADR-0047 — the decision email routes through notifyStaff(); mock it as a
 // live-mode pass-through to the transport (one send per recipient), capturing
 // args so recipient/cc/attachment routing can be asserted.
@@ -96,6 +109,8 @@ function pendingReq(over: Partial<FakeApRequest> = {}): FakeApRequest {
     quarantine_reason: null,
     site_id: null,
     decision_pdf_sha256: null,
+    decision_pdf_r2_key: null,
+    original_attachment_sha256: null,
     held_by: null,
     held_at: null,
     hold_note: null,
@@ -131,6 +146,14 @@ beforeEach(() => {
   sendSystemEmail.mockClear();
   publishNtfy.mockClear();
   notifyStaffSpy.mockClear();
+  stamp.stampApproval.mockClear();
+  stamp.stampOntoOriginalPdf.mockClear();
+  stamp.stampImage.mockClear();
+  // Reset R2 mocks to their defaults (mockReset wipes once-values from prior tests).
+  r2.getApAttachmentBytes.mockReset();
+  r2.getApAttachmentBytes.mockResolvedValue(null);
+  r2.putApDecisionPdf.mockReset();
+  r2.putApDecisionPdf.mockResolvedValue('ap/x/decision/y.pdf');
 });
 
 function fp(db: FakeDb): PrismaClient {
@@ -266,6 +289,32 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
     expect(args.htmlBody).not.toMatch(/Decided at:[^<]*\d{4}-\d\d-\d\dT[\d:.]+Z/);
   });
 
+  it('ADR-0046 Amendment 4 — GP keys (subject + request id) are STRIPPED from the body but ride the SUBJECT line', async () => {
+    const db = newFakeDb({
+      requests: [
+        pendingReq({ id: 'req-1', subject: 'Invoice #4471', sender_address: 'accounting@svdp.us' }),
+      ],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    const args = notifyStaffSpy.mock.calls[0]![0] as { subject: string; htmlBody: string };
+    // Body no longer repeats the matching keys.
+    expect(args.htmlBody).not.toContain('Original subject:');
+    expect(args.htmlBody).not.toContain('Request id:');
+    expect(args.htmlBody).not.toContain('Great Plains matching keys');
+    // Both keys still survive: the subject line carries the original subject…
+    expect(args.subject).toContain('Invoice #4471');
+    // …and the human-facing decision facts remain in the body.
+    expect(args.htmlBody).toContain('Decision:');
+    expect(args.htmlBody).toContain('Approver:');
+  });
+
   it('uses the forwarder even when the roster is EMPTY (no refuse)', async () => {
     const db = newFakeDb({
       requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
@@ -317,6 +366,129 @@ describe('decision email — forwarder routing (§3 amendment)', () => {
     expect(sendSystemEmail).not.toHaveBeenCalled();
     expect(publishNtfy).toHaveBeenCalledTimes(1); // loud refusal
     expect(db.requests[0]!.status).toBe('approved'); // the decision itself stands
+  });
+});
+
+// ADR-0046 Amendment 4 — stamp the ORIGINAL, attach it (both decisions), archive
+// to R2, record the dual-sha tamper record. Multi-attachment loop + image path +
+// R2-unconfigured fail-soft.
+describe('stamped decision artifacts (Amendment 4)', () => {
+  const recips = [{ email: 'mary@svdp.us', active: true }];
+  function fileAtt(over: Partial<import('./__testutils__/fake-prisma').FakeApAttachment> = {}) {
+    return {
+      id: 'att-a',
+      request_id: 'req-1',
+      kind: 'file' as const,
+      filename: 'invoice.pdf',
+      content_type: 'application/pdf',
+      byte_size: 100,
+      storage_key: 'ap/req-1/att-a/invoice.pdf',
+      link_url: null,
+      nested_subject: null,
+      ...over,
+    };
+  }
+
+  it('overlays + attaches EACH file original, archives to R2, records the dual-sha', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    r2.putApDecisionPdf
+      .mockResolvedValueOnce('ap/req-1/decision/ap-decision-att-a.pdf')
+      .mockResolvedValueOnce('ap/req-1/decision/ap-decision-att-b.pdf');
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1', body_html_sanitized: null, body_text: null })],
+      users,
+      decisionRecipients: recips,
+      attachments: [
+        fileAtt({ id: 'att-a', filename: 'inv1.pdf', storage_key: 'ap/req-1/att-a/inv1.pdf' }),
+        fileAtt({ id: 'att-b', filename: 'inv2.pdf', storage_key: 'ap/req-1/att-b/inv2.pdf' }),
+      ],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(2); // one overlay per file
+    expect(r2.putApDecisionPdf).toHaveBeenCalledTimes(2); // each stamped PDF archived
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
+    expect(args.attachments).toHaveLength(2); // both stamped originals ride the mail
+    const row = db.requests[0]!;
+    expect(row.decision_pdf_sha256).toBe('pdfsha'); // primary stamped-PDF sha
+    expect(row.original_attachment_sha256).not.toBeNull(); // original bytes sha
+    expect(row.decision_pdf_r2_key).toBe('ap/req-1/decision/ap-decision-att-a.pdf');
+  });
+
+  it('an IMAGE original stamps via the image path, not the PDF overlay', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([9, 9, 9]));
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [
+        fileAtt({
+          id: 'att-img',
+          filename: 'scan.png',
+          content_type: 'image/png',
+          storage_key: 'ap/req-1/att-img/scan.png',
+        }),
+      ],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    expect(stamp.stampImage).toHaveBeenCalledTimes(1);
+    expect(stamp.stampOntoOriginalPdf).not.toHaveBeenCalled();
+    expect(db.requests[0]!.decision_pdf_sha256).toBe('imgsha');
+  });
+
+  it('a REJECTION also stamps + attaches the original', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([7]));
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [fileAtt()],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: 'duplicate of #4471',
+    });
+    expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(1);
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
+    expect(args.attachments).toHaveLength(1);
+    expect(db.requests[0]!.status).toBe('rejected');
+  });
+
+  it('R2 unavailable for the original: degrades to a stamped cover; the mail STILL sends', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(null); // R2 unconfigured / placeholder key
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [fileAtt()],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent'); // fail-soft: mail is never blocked
+    expect(stamp.stampOntoOriginalPdf).not.toHaveBeenCalled(); // no bytes → no overlay
+    expect(stamp.stampApproval).toHaveBeenCalled(); // cover page produced instead
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
+    expect(args.attachments).toHaveLength(1);
+    expect(db.requests[0]!.decision_pdf_sha256).toBe('deadbeef'); // cover sha
+    expect(db.requests[0]!.decision_pdf_r2_key).toBeNull(); // nothing archived
   });
 });
 
@@ -442,6 +614,10 @@ describe('holdRequest — place hold (pending → pending_review)', () => {
     expect(args.htmlBody).toContain('need vendor W-9');
     expect(args.htmlBody).toContain('Morena');
     expect(args.htmlBody).toContain('ON HOLD');
+    // Amendment 4 — GP keys stripped from the hold-notice body; subject rides the
+    // SUBJECT line.
+    expect(args.htmlBody).not.toContain('Original subject:');
+    expect(args.htmlBody).not.toContain('Request id:');
   });
 
   it('concurrent holds — first action wins; the second gets ApAlreadyDecidedError', async () => {

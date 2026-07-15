@@ -68,6 +68,41 @@ describe('VisionTile', () => {
     expect(html).toContain('<svg');
   });
 
+  it('ADR-0046 — a tile with a positive badgeCount renders a cyan count pill; condensed sizing (p-4/h-9)', () => {
+    const ap: DashboardTile = {
+      ...base,
+      key: 'ap-approvals',
+      label: 'AP Approvals',
+      icon: 'FileCheck',
+      route: '/dashboard/ops/ap',
+      scope: 'ap-approver',
+      badgeCount: 3,
+    };
+    const html = renderToStaticMarkup(<VisionTile tile={ap} />);
+    expect(html).toContain('href="/dashboard/ops/ap"');
+    expect(html).toContain('aria-label="3 pending"');
+    expect(html).toContain('>3<');
+    // FileCheck resolves from the allow-list (not the LayoutDashboard fallback).
+    expect(html).toContain('<svg');
+    // Condensed grid sizing (ADR-0046 tile pass): p-4 padding + h-9 icon chip.
+    expect(html).toContain('p-4');
+    expect(html).toContain('h-9');
+  });
+
+  it('a zero / absent badgeCount renders no count pill', () => {
+    const ap: DashboardTile = {
+      ...base,
+      key: 'ap-approvals',
+      label: 'AP Approvals',
+      icon: 'FileCheck',
+      route: '/dashboard/ops/ap',
+      scope: 'ap-approver',
+      badgeCount: 0,
+    };
+    const html = renderToStaticMarkup(<VisionTile tile={ap} />);
+    expect(html).not.toContain('aria-label=');
+  });
+
   it('coming-soon tile is non-interactive and exposes no href', () => {
     const soon: DashboardTile = {
       ...base,

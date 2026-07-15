@@ -21,9 +21,9 @@ let cachedClient: S3Client | null = null;
 function isConfigured(): boolean {
   return Boolean(
     process.env['R2_ACCOUNT_ID'] &&
-      process.env['R2_ACCESS_KEY_ID'] &&
-      process.env['R2_SECRET_ACCESS_KEY'] &&
-      process.env['R2_BUCKET'],
+    process.env['R2_ACCESS_KEY_ID'] &&
+    process.env['R2_SECRET_ACCESS_KEY'] &&
+    process.env['R2_BUCKET'],
   );
 }
 
@@ -141,7 +141,9 @@ export async function putApAttachment(args: {
 }): Promise<string | null> {
   if (!isConfigured()) return null;
   const bucket = process.env['R2_BUCKET']!;
-  const safeName = (args.filename ?? 'attachment.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'attachment.bin';
+  const safeName =
+    (args.filename ?? 'attachment.bin').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) ||
+    'attachment.bin';
   const storage_key = `ap/${args.requestId}/${args.attachmentId}/${safeName}`;
   await getClient().send(
     new PutObjectCommand({
@@ -185,14 +187,93 @@ export async function putWorkbookArchive(args: {
   return storage_key;
 }
 
+export interface SignApDownloadOptions {
+  expiresIn?: number;
+  /**
+   * ADR-0046 Amendment 4 — serve with `Content-Disposition: inline` (+ the
+   * attachment's Content-Type) so the approver's browser PREVIEWS the file in a
+   * frame/img instead of downloading it. The route only sets this for the
+   * allowlisted inline types (pdf / png / jpeg / webp); everything else keeps the
+   * plain download URL.
+   */
+  inline?: boolean;
+  contentType?: string | null;
+}
+
 /**
  * Mint a short-lived presigned GET for an AP attachment so an approver's browser
- * fetches the PDF directly from R2 (the app never proxies the bytes). Returns null
- * when R2 is unconfigured or the key is a non-fetchable `pending-r2-…` placeholder.
+ * fetches the PDF/image directly from R2 (the app never proxies the bytes). With
+ * `inline` the URL carries an inline Content-Disposition for in-panel preview.
+ * Returns null when R2 is unconfigured or the key is a non-fetchable `pending-r2-…`
+ * placeholder.
  */
-export async function signApAttachmentDownload(storageKey: string, expiresIn = 300): Promise<string | null> {
+export async function signApAttachmentDownload(
+  storageKey: string,
+  opts: SignApDownloadOptions = {},
+): Promise<string | null> {
   if (!isConfigured()) return null;
   if (storageKey.startsWith('pending-r2-')) return null;
   const bucket = process.env['R2_BUCKET']!;
-  return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: bucket, Key: storageKey }), { expiresIn });
+  const cmd = new GetObjectCommand({
+    Bucket: bucket,
+    Key: storageKey,
+    ...(opts.inline
+      ? {
+          ResponseContentDisposition: 'inline',
+          ...(opts.contentType ? { ResponseContentType: opts.contentType } : {}),
+        }
+      : {}),
+  });
+  return getSignedUrl(getClient(), cmd, { expiresIn: opts.expiresIn ?? 300 });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// AP decision artifacts (ADR-0046 Amendment 4)
+// ────────────────────────────────────────────────────────────────────────
+
+// The decision path (approvals.ts) downloads the ORIGINAL attachment bytes,
+// overlays a visible approval/rejection stamp with pdf-lib, attaches the stamped
+// original to the decision email, and archives that stamped PDF back to R2 under
+// `ap/{requestId}/decision/…`. Both helpers are FAIL-SOFT (return null when R2 is
+// unconfigured or the key is a placeholder) — a stamp/archive miss must NEVER
+// block the decision email to accounting (hard rule: mail/R2 paths fail soft).
+
+/**
+ * Server-side GET of an AP attachment's bytes (the decision path needs them to
+ * overlay a stamp). Returns null when R2 is unconfigured or the key is a
+ * non-fetchable `pending-r2-…` placeholder, so the caller degrades to the cover
+ * page instead of throwing.
+ */
+export async function getApAttachmentBytes(storageKey: string): Promise<Uint8Array | null> {
+  if (!isConfigured()) return null;
+  if (storageKey.startsWith('pending-r2-')) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const res = await getClient().send(new GetObjectCommand({ Bucket: bucket, Key: storageKey }));
+  const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+  if (!body?.transformToByteArray) return null;
+  return body.transformToByteArray();
+}
+
+/**
+ * Archive a stamped decision PDF to the private `ap/{requestId}/decision/` prefix.
+ * Fail-soft: returns null when R2 is unconfigured so the decision email still goes
+ * out (the archived copy is best-effort, not load-bearing for the decision).
+ */
+export async function putApDecisionPdf(args: {
+  requestId: string;
+  attachmentId: string;
+  bytes: Uint8Array;
+}): Promise<string | null> {
+  if (!isConfigured()) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const storage_key = `ap/${args.requestId}/decision/ap-decision-${args.attachmentId}.pdf`;
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: storage_key,
+      Body: args.bytes,
+      ContentType: 'application/pdf',
+    }),
+  );
+  return storage_key;
 }

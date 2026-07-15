@@ -32,8 +32,13 @@ export type TileStatus = 'active' | 'coming-soon';
  *                          Report). Gated on `session.user.is_super_admin`, a
  *                          flag distinct from the `admin` role — a plain admin
  *                          does NOT pass this scope.
+ *   - 'ap-approver'      → the AP approval queue (ADR-0046). Gated on the
+ *                          `isApApprover` flag (admin OR an active ap_approvers
+ *                          roster member — resolved via canActOnApRequest). This
+ *                          is roster membership, NOT the admin role or site reach:
+ *                          single-site roster managers (Rick/Janette) pass.
  */
-export type TileScope = 'manager+' | 'admin-only' | 'bonus' | 'super-admin-only';
+export type TileScope = 'manager+' | 'admin-only' | 'bonus' | 'super-admin-only' | 'ap-approver';
 
 export interface DashboardTile {
   /** Stable key (also used as the React list key + test selector). */
@@ -48,6 +53,12 @@ export interface DashboardTile {
   scope: TileScope;
   /** Featured tile gets the chartreuse treatment + a NEW pill. */
   featured?: boolean;
+  /**
+   * Optional live count rendered as a cyan pill on the tile (e.g. the AP
+   * pending-request count). Set per-render by the launcher, not in the static
+   * registry. Falsy / 0 → no pill.
+   */
+  badgeCount?: number;
 }
 
 // ── Registry, grouped by ADR-0020 origin ──────────────────────────────
@@ -144,7 +155,8 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     // to the caller's own site by the `/` launcher.
     key: 'loads-inventory',
     label: 'Loads & Inventory',
-    description: 'Drop-offs, outbound commodities (incl. renovation), landfilled units, and the running balance.',
+    description:
+      'Drop-offs, outbound commodities (incl. renovation), landfilled units, and the running balance.',
     icon: 'Boxes',
     route: '/dashboard/[site]/loads-inventory',
     status: 'active',
@@ -185,6 +197,18 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     route: '/dashboard/[site]/equipment',
     status: 'active',
     scope: 'manager+',
+  },
+  // ADR-0046 — vendor-invoice approval queue. Scoped to the ap_approvers roster
+  // (admin OR an active roster member), NOT site reach; the launcher sets a live
+  // pending-count badge. Route is org-level (no [site] placeholder).
+  {
+    key: 'ap-approvals',
+    label: 'AP Approvals',
+    description: 'Vendor-invoice approvals — review, approve, reject, or hold. First action wins.',
+    icon: 'FileCheck',
+    route: '/dashboard/ops/ap',
+    status: 'active',
+    scope: 'ap-approver',
   },
 ];
 
@@ -261,12 +285,17 @@ type SessionLike = Pick<Session, 'user'> | null | undefined;
  *                       `admin` role — a plain admin does NOT pass it. Defaults
  *                       to `false` so an absent/legacy session is never granted
  *                       a super-admin tile.
+ * @param isApApprover   whether the session may act on AP requests (admin OR an
+ *                       active ap_approvers roster member, per canActOnApRequest).
+ *                       Gates the 'ap-approver' scope (ADR-0046). Defaults to
+ *                       `false` so an absent flag never leaks the AP tile.
  */
 export function canSeeTile(
   session: SessionLike,
   tile: DashboardTile,
   woodlandSiteId: string | null = null,
   isSuperAdmin: boolean = false,
+  isApApprover: boolean = false,
 ): boolean {
   const user = session?.user;
   if (!user?.id) return false;
@@ -291,6 +320,11 @@ export function canSeeTile(
       // ADR-0030: Bill-only. Distinct from the `admin` role — a plain admin
       // does not pass. The base manager/admin gate above already ran.
       return isSuperAdmin === true;
+    case 'ap-approver':
+      // ADR-0046: the ap_approvers roster (admin OR active roster member). The
+      // flag is resolved by the launcher via canActOnApRequest; a single-site
+      // roster manager passes even without site reach (roster membership, not reach).
+      return isApApprover === true;
     default:
       return false;
   }
@@ -303,6 +337,9 @@ export function visibleTiles(
   session: SessionLike,
   woodlandSiteId: string | null = null,
   isSuperAdmin: boolean = false,
+  isApApprover: boolean = false,
 ): DashboardTile[] {
-  return DASHBOARD_TILES.filter((t) => canSeeTile(session, t, woodlandSiteId, isSuperAdmin));
+  return DASHBOARD_TILES.filter((t) =>
+    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover),
+  );
 }

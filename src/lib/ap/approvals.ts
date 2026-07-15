@@ -8,6 +8,7 @@
 // recipient list (ap_decision_recipients) — NEVER the inbound Reply-To (C3.3);
 // with zero active recipients the send REFUSES and pages (never silent).
 
+import { createHash } from 'node:crypto';
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
@@ -16,8 +17,16 @@ import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { publishNtfy } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
 import { formatPacificDateTime } from '@/lib/time';
+import { getApAttachmentBytes, putApDecisionPdf } from '@/lib/r2';
 import { isInternal, internalDomain } from './senders';
-import { stampApproval, type PdfRenderer, type StampInput } from './stamp';
+import {
+  stampApproval,
+  stampImage,
+  stampOntoOriginalPdf,
+  type PdfRenderer,
+  type StampInput,
+  type StampResult,
+} from './stamp';
 
 const TABLE = 'ap_requests';
 
@@ -440,10 +449,10 @@ export async function sendHoldNotice(
   const subject = req.subject ?? '(no subject)';
   const heldAt = req.held_at ?? new Date();
   const noteLine = req.hold_note ? `<li>Hold note: ${escapeHtml(req.hold_note)}</li>` : '';
+  // ADR-0046 Amendment 4 — GP matching keys (request id + original subject) are
+  // stripped from the body; the subject line already carries the original subject.
   const htmlBody = `<p>A vendor-invoice approval request is now <b>ON HOLD (pending review)</b> in DR3-Vision. It has not yet been approved or rejected — a final decision will follow.</p>
     <ul>
-      <li>Original subject: ${escapeHtml(subject)}</li>
-      <li>Request id: ${escapeHtml(req.id)}</li>
       <li>Held by: ${escapeHtml(holderName)}</li>
       <li>Held at: ${escapeHtml(formatPacificDateTime(heldAt))} PT</li>
       ${noteLine}
@@ -473,11 +482,12 @@ export async function sendHoldNotice(
  * amendment): the intake message's `sender_address` (already validated @svdp.us
  * at intake per D2 — we do NOT relax that gate). The fixed ap_decision_recipients
  * roster (Mary's GP filing) rides along as CC, and is the FALLBACK recipient when
- * `sender_address` is somehow empty/non-internal. Carries request id, original
- * subject, decision, approver, timestamp, optional note — sufficient for GP
- * matching under any input shape (C10.5) — plus a visible-stamped decision PDF
- * (§1.6e). With genuinely no valid recipient it REFUSES and pages (the decision
- * stands; configuring recipients + re-send is the documented operator action).
+ * `sender_address` is somehow empty/non-internal. The mail body carries the
+ * human-facing decision facts (decision, approver, timestamp, optional note); the
+ * GP matching keys (request id + original subject) ride the SUBJECT line and the
+ * stamped decision PDF, NOT the body (ADR-0046 Amendment 4). Plus the stamped
+ * original attachment (§1.6e). With genuinely no valid recipient it REFUSES and
+ * pages (the decision stands; configuring recipients + re-send is the operator action).
  */
 export async function sendDecisionEmail(
   prisma: PrismaClient,
@@ -535,24 +545,28 @@ export async function sendDecisionEmail(
       : '';
   const vendorLine = req.vendor ? `<li>Vendor: ${escapeHtml(req.vendor)}</li>` : '';
   const noteLine = req.decision_note ? `<li>Note: ${escapeHtml(req.decision_note)}</li>` : '';
+  // ADR-0046 Amendment 4 — the Great Plains matching keys (request id + original
+  // subject) are STRIPPED from the mail body. They already ride the SUBJECT line
+  // (below) and the stamped decision PDF, so repeating them inline was redundant
+  // clutter that made the body read like a machine record instead of a decision
+  // notice. The body now carries only the human-facing decision facts.
   const htmlBody = `<p>A vendor-invoice approval decision has been recorded in DR3-Vision.</p>
     <ul>
       <li>Decision: <b>${escapeHtml(req.status.toUpperCase())}</b></li>
-      <li>Original subject: ${escapeHtml(subject)}</li>
-      <li>Request id: ${escapeHtml(req.id)}</li>
       <li>Approver: ${escapeHtml(approverName)}</li>
       <li>Decided at: ${escapeHtml(decidedLabel)}</li>
       ${vendorLine}
       ${amountLine}
       ${noteLine}
-    </ul>
-    <p>Request id + original subject are the Great Plains matching keys.</p>`;
+    </ul>`;
 
-  // §1.6e — visible-stamped decision PDF. BODY-only originals re-render the
-  // (re-)sanitized body; file/PDF attachments get a stamped COVER page (we can't
-  // overlay existing PDF vector bytes without a PDF lib — documented deviation).
-  // Fail-soft: a render failure must NOT block the decision mail to accounting.
-  const stamped = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch(
+  // ADR-0046 Amendment 4 — stamp the ORIGINAL invoice (both decisions), attach the
+  // stamped original(s), and archive them to R2. BODY-only originals re-render the
+  // (re-)sanitized body; PDF/image attachments get a TRUE overlay (pdf-lib /
+  // Playwright); an R2-unconfigured window degrades to the stamped cover page.
+  // Fail-soft: a render/download/R2 failure must NEVER block the decision mail to
+  // accounting (the decision itself already stands). Preserve the .catch(→null).
+  const artifacts = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch(
     (e) => {
       log.warn(
         { requestId, err: e instanceof Error ? e.message : String(e) },
@@ -561,17 +575,44 @@ export async function sendDecisionEmail(
       return null;
     },
   );
-  if (stamped) {
+  if (artifacts && artifacts.length > 0) {
+    // Archive each stamped PDF to R2 (fail-soft; a PUT miss never blocks the mail).
+    // The single-value columns record the PRIMARY (first) artifact; the audit row
+    // carries the full count for the rare multi-attachment invoice.
+    let decisionPdfR2Key: string | null = null;
+    let originalSha: string | null = null;
+    for (const a of artifacts) {
+      if (a.originalSha256 && !originalSha) originalSha = a.originalSha256;
+      if (a.attachmentId) {
+        const key = await putApDecisionPdf({
+          requestId,
+          attachmentId: a.attachmentId,
+          bytes: a.pdf,
+        }).catch(() => null);
+        if (key && !decisionPdfR2Key) decisionPdfR2Key = key;
+      }
+    }
+    const primary = artifacts[0]!;
     await prisma.apRequest.update({
       where: { id: requestId },
-      data: { decision_pdf_sha256: stamped.sha256 },
+      data: {
+        decision_pdf_sha256: primary.sha256,
+        ...(originalSha ? { original_attachment_sha256: originalSha } : {}),
+        ...(decisionPdfR2Key ? { decision_pdf_r2_key: decisionPdfR2Key } : {}),
+      },
     });
     await writeAudit({
       actor_user_id: req.decided_by,
       action: 'update',
       table_name: TABLE,
       row_id: requestId,
-      after: { decision_pdf_sha256: stamped.sha256, stamped_kind: stamped.kind },
+      after: {
+        decision_pdf_sha256: primary.sha256,
+        stamped_kind: primary.kind,
+        stamped_count: artifacts.length,
+        original_attachment_sha256: originalSha,
+        decision_pdf_r2_key: decisionPdfR2Key,
+      },
     });
   }
 
@@ -587,15 +628,13 @@ export async function sendDecisionEmail(
     subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
-    ...(stamped
+    ...(artifacts && artifacts.length > 0
       ? {
-          attachments: [
-            {
-              filename: `ap-decision-${req.id}.pdf`,
-              buffer: stamped.pdf,
-              contentType: 'application/pdf',
-            },
-          ],
+          attachments: artifacts.map((a) => ({
+            filename: a.filename,
+            buffer: a.pdf,
+            contentType: 'application/pdf',
+          })),
         }
       : {}),
     db: prisma,
@@ -623,10 +662,103 @@ interface StampSourceRequest {
   decision_note: string | null;
 }
 
+/** One stamped decision artifact to attach + archive (ADR-0046 Amendment 4). */
+interface StampedArtifact {
+  /** Email attachment filename (always a .pdf). */
+  filename: string;
+  pdf: Buffer;
+  /** sha256 of the GENERATED stamped PDF — the tamper record. */
+  sha256: string;
+  /** sha256 of the ORIGINAL attachment bytes (file mode); null for body/cover. */
+  originalSha256: string | null;
+  /** Source ap_attachment id (drives the R2 archive key); null for body/cover. */
+  attachmentId: string | null;
+  kind: StampInput['kind'];
+}
+
+type StampBase = Pick<
+  StampInput,
+  'requestId' | 'subject' | 'approverName' | 'decision' | 'decidedAt' | 'note'
+>;
+
+interface FileAttachmentRow {
+  id: string;
+  kind: string;
+  filename: string | null;
+  content_type: string | null;
+  storage_key: string | null;
+}
+
+/** A stable, filesystem-safe stamped-attachment filename (always `.pdf`). */
+function stampedAttachmentName(
+  decision: ApDecision,
+  filename: string | null,
+  attId: string,
+): string {
+  const stem =
+    (filename ?? `attachment-${attId}`)
+      .replace(/\.[^./\\]+$/, '')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 80) || `attachment-${attId}`;
+  return `${decision}-${stem}.pdf`;
+}
+
 /**
- * Choose the stamp mode and render the decision PDF. Body present ⇒ 'body'
- * (re-render the sanitized body). No body but a file attachment ⇒ 'attachment'
- * (stamped cover page). No body and no file ⇒ 'body' with an empty original.
+ * Stamp ONE original file attachment. PDF → true pdf-lib overlay; image → HTML
+ * embed + Playwright; any other type → stamped cover naming it. Returns null when
+ * the ORIGINAL bytes are unavailable (R2 unconfigured / placeholder key), so the
+ * caller degrades to the cover page. On an overlay error the attachment still
+ * yields a stamped cover (naming it + its original sha) — one bad file never drops
+ * the others, and the mail is never blocked.
+ */
+async function stampOneOriginal(
+  base: StampBase,
+  att: FileAttachmentRow,
+  renderer?: PdfRenderer,
+): Promise<StampedArtifact | null> {
+  const bytes = await getApAttachmentBytes(att.storage_key!).catch(() => null);
+  if (!bytes) return null;
+  const originalSha256 = createHash('sha256').update(bytes).digest('hex');
+  const input: StampInput = {
+    ...base,
+    kind: 'attachment',
+    originalFilename: att.filename,
+    originalSha256,
+  };
+  const ct = (att.content_type ?? '').toLowerCase();
+  const name = stampedAttachmentName(base.decision, att.filename, att.id);
+  let result: StampResult;
+  try {
+    if (ct === 'application/pdf') {
+      result = await stampOntoOriginalPdf(bytes, input);
+    } else if (/^image\/(png|jpeg|jpg|webp)$/.test(ct)) {
+      result = await stampImage(input, bytes, ct, renderer);
+    } else {
+      result = await stampApproval(input, renderer); // odd type → cover naming it
+    }
+  } catch (e) {
+    log.warn(
+      { attId: att.id, err: e instanceof Error ? e.message : String(e) },
+      '[ap-approvals] original overlay failed — falling back to a stamped cover page',
+    );
+    result = await stampApproval(input, renderer);
+  }
+  return {
+    filename: name,
+    pdf: result.pdf,
+    sha256: result.sha256,
+    originalSha256,
+    attachmentId: att.id,
+    kind: 'attachment',
+  };
+}
+
+/**
+ * Choose the stamp mode and render the decision artifact(s) (ADR-0046 Amendment 4).
+ * Body present ⇒ re-render the sanitized body (one PDF). No body but file
+ * attachments ⇒ overlay the stamp onto EACH original (multi-attachment). No usable
+ * original bytes (R2 unconfigured) ⇒ a stamped cover page (documented deviation).
+ * No body and no file ⇒ a stamped 'body' cover with an empty original.
  */
 async function buildDecisionStamp(
   prisma: PrismaClient,
@@ -634,9 +766,9 @@ async function buildDecisionStamp(
   approverName: string,
   decidedAt: Date,
   renderer?: PdfRenderer,
-): Promise<{ pdf: Buffer; sha256: string; kind: StampInput['kind'] }> {
+): Promise<StampedArtifact[]> {
   const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
-  const base = {
+  const base: StampBase = {
     requestId: req.id,
     subject: req.subject ?? '(no subject)',
     approverName,
@@ -645,23 +777,55 @@ async function buildDecisionStamp(
     // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too.
     note: req.decision_note,
   };
-  let input: StampInput;
+
+  // Body precedence (unchanged): an inline invoice body renders the stamped body.
   if (req.body_html_sanitized && req.body_html_sanitized.trim()) {
-    input = { ...base, kind: 'body', bodyHtmlSanitized: req.body_html_sanitized };
-  } else {
-    const files = await prisma.apAttachment.findMany({
-      where: { request_id: req.id },
-      select: { kind: true, filename: true },
-    });
-    const file = files.find((a: { kind: string }) => a.kind === 'file');
-    input = file
-      ? {
-          ...base,
-          kind: 'attachment',
-          originalFilename: (file as { filename: string | null }).filename,
-        }
-      : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
+    const input: StampInput = { ...base, kind: 'body', bodyHtmlSanitized: req.body_html_sanitized };
+    const { pdf, sha256 } = await stampApproval(input, renderer);
+    return [
+      {
+        filename: `ap-decision-${req.id}.pdf`,
+        pdf,
+        sha256,
+        originalSha256: null,
+        attachmentId: null,
+        kind: 'body',
+      },
+    ];
   }
+
+  // No body: stamp EACH original file attachment (both decisions). Multi-attachment
+  // loop replaces the old single `.find`.
+  const files = (await prisma.apAttachment.findMany({
+    where: { request_id: req.id },
+    select: { id: true, kind: true, filename: true, content_type: true, storage_key: true },
+  })) as FileAttachmentRow[];
+  const fileAtts = files.filter((a) => a.kind === 'file' && a.storage_key);
+  if (fileAtts.length > 0) {
+    const artifacts: StampedArtifact[] = [];
+    for (const att of fileAtts) {
+      const artifact = await stampOneOriginal(base, att, renderer);
+      if (artifact) artifacts.push(artifact);
+    }
+    if (artifacts.length > 0) return artifacts;
+    // Every download failed (R2 unconfigured/placeholder) → fall through to a cover.
+  }
+
+  // No usable original bytes: keep the stamped cover page (documented deviation for
+  // the R2-unconfigured window). Name a file attachment if one exists, else empty.
+  const coverFile = files.find((a) => a.kind === 'file');
+  const input: StampInput = coverFile
+    ? { ...base, kind: 'attachment', originalFilename: coverFile.filename }
+    : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
   const { pdf, sha256 } = await stampApproval(input, renderer);
-  return { pdf, sha256, kind: input.kind };
+  return [
+    {
+      filename: `ap-decision-${req.id}.pdf`,
+      pdf,
+      sha256,
+      originalSha256: null,
+      attachmentId: null,
+      kind: input.kind,
+    },
+  ];
 }

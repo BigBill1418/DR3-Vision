@@ -35,27 +35,27 @@ Brand colors per ADR-0008 throughout. Inter typography. Cream `#FCFFD7` for acti
 
 #### Active tiles (Sprint 2 cutover state)
 
-| Tile | Icon (Tabler) | Route | Roles |
-|---|---|---|---|
-| Bonus Management | ti-coin | `/bonus` | admin, manager (Woodland or both-sites) |
-| Operations Dashboard | ti-dashboard | `/dashboard` | admin, manager |
-| Compliance | ti-shield-check | `/dashboard/[site]/compliance` | admin, manager |
-| Reconciliation | ti-arrows-exchange | `/dashboard/[site]/reconciliation` | admin, manager |
-| Exports & Reports | ti-file-export | `/dashboard/exports` | admin, manager |
-| Admin & Audit | ti-settings | `/admin` | admin only |
+| Tile                 | Icon (Tabler)      | Route                              | Roles                                   |
+| -------------------- | ------------------ | ---------------------------------- | --------------------------------------- |
+| Bonus Management     | ti-coin            | `/bonus`                           | admin, manager (Woodland or both-sites) |
+| Operations Dashboard | ti-dashboard       | `/dashboard`                       | admin, manager                          |
+| Compliance           | ti-shield-check    | `/dashboard/[site]/compliance`     | admin, manager                          |
+| Reconciliation       | ti-arrows-exchange | `/dashboard/[site]/reconciliation` | admin, manager                          |
+| Exports & Reports    | ti-file-export     | `/dashboard/exports`               | admin, manager                          |
+| Admin & Audit        | ti-settings        | `/admin`                           | admin only                              |
 
 The Bonus Management tile is **featured** on launch — chartreuse background, "NEW" pill in top-right, slight size emphasis. Featured treatment ages out one sprint after ship (T-118 in V2.1 backlog: "Remove NEW pill from Bonus Management tile").
 
 #### Coming Soon tiles (deactivated, visible for roadmap signaling)
 
-| Tile | Status | Target |
-|---|---|---|
-| Bulk Data Upload | V2.1 | Historical backfill, source onboarding |
-| Photo Annotation Canvas | V2.1 | Operator markup tools (descoped from T-007) |
-| Processor Form Workflow | V2.1 | Deconstruction-line tracking + bonus integration (ADR-0011) |
-| CIP Capture | V2.2 | Consumer drop-off, California program (ADR-0010) |
-| MRC API Integration | Backlog | Replaces Playwright scraping, pending MRC's Salesforce team |
-| Observability | V2.1 | GlitchTip + Loki + Tempo + Grafana surfacing (now Sprint 2 via ADR-0022 — tile flips active when T-122 ships) |
+| Tile                    | Status  | Target                                                                                                        |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| Bulk Data Upload        | V2.1    | Historical backfill, source onboarding                                                                        |
+| Photo Annotation Canvas | V2.1    | Operator markup tools (descoped from T-007)                                                                   |
+| Processor Form Workflow | V2.1    | Deconstruction-line tracking + bonus integration (ADR-0011)                                                   |
+| CIP Capture             | V2.2    | Consumer drop-off, California program (ADR-0010)                                                              |
+| MRC API Integration     | Backlog | Replaces Playwright scraping, pending MRC's Salesforce team                                                   |
+| Observability           | V2.1    | GlitchTip + Loki + Tempo + Grafana surfacing (now Sprint 2 via ADR-0022 — tile flips active when T-122 ships) |
 
 ### Role-aware visibility
 
@@ -116,3 +116,19 @@ Status polled every 30s from the dashboard. Tap opens an inline expandable panel
 - ADR-0016 (Entra ID SSO — provides session, role, name)
 - ADR-0017 (Admin Settings panel — example of role-gated route group)
 - `docs/SPRINT-2-PLAN.md` (T-115 through T-117 — tile landing tickets)
+
+## Note — 2026-07-15 (AP Approvals tile + condensed grid; AP overhaul pass)
+
+- **New tile `ap-approvals`** (route `/dashboard/ops/ap`, `FileCheck` icon) under a
+  new **`TileScope 'ap-approver'`**. The scope is gated on a new `isApApprover`
+  param threaded through `canSeeTile` / `visibleTiles` (defaults `false`, mirroring
+  the `isSuperAdmin` pattern). The launcher (`src/app/page.tsx`) resolves it via
+  `canActOnApRequest` (admin OR active `ap_approvers` roster member — roster
+  membership, **not** site reach: single-site roster managers Rick/Janette pass) and
+  sets a live pending-count **badge** (`pendingApCount`) as an optional
+  `DashboardTile.badgeCount` rendered as a cyan pill on the tile.
+- **Condensed grid.** Tiles tightened for tap-density on office iPads: `p-6`→`p-4`,
+  icon chip `h-11 w-11`→`h-9 w-9`, label `text-lg`→`text-base`, description
+  `text-sm`→`text-xs` + `line-clamp-2`, with a `min-h-[88px]` floor (iPad tap
+  target). The shell grid goes `sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4`,
+  `gap-5`→`gap-3`.

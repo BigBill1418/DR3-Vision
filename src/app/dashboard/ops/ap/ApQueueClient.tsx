@@ -152,8 +152,8 @@ export function ApQueueClient() {
             onClick={() => setFilter(t)}
             className={`rounded-full px-3 py-1 text-sm capitalize ${
               filter === t
-                ? 'bg-dr3-chartreuse text-dr3-ink'
-                : 'bg-white/10 text-white hover:bg-white/20'
+                ? 'bg-dr3-cyan text-dr3-space'
+                : 'bg-dr3-steel/30 text-dr3-mist hover:bg-dr3-steel/50'
             }`}
           >
             {STATUS_LABEL[t]}
@@ -176,7 +176,7 @@ export function ApQueueClient() {
                 onClick={() => setSelectedId(r.id)}
                 className={`w-full rounded-lg border px-3 py-2 text-left ${
                   selectedId === r.id
-                    ? 'border-dr3-chartreuse bg-white/10'
+                    ? 'border-dr3-cyan bg-white/10'
                     : 'border-white/10 bg-white/5 hover:bg-white/10'
                 }`}
               >
@@ -555,22 +555,73 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
   );
 }
 
+// ADR-0046 Amendment 4 — inline preview render rules (client mirror of the
+// server allowlist; the server is authoritative and signs the inline URL only
+// for these types). Anything past the cap opens in a new tab instead of framing.
+const PREVIEW_SIZE_CAP = 15 * 1024 * 1024; // 15 MB
+const isImagePreview = (ct: string | null): boolean =>
+  !!ct && /^image\/(png|jpeg|jpg|webp)$/i.test(ct);
+const isPdfPreview = (ct: string | null): boolean => (ct ?? '').toLowerCase() === 'application/pdf';
+
+interface Presigned {
+  url: string;
+  inline: boolean;
+  contentType: string | null;
+}
+
 function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentView }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [presigned, setPresigned] = useState<Presigned | null>(null);
+
+  // Fetch (once) + cache the short-lived presigned URL for this attachment.
+  const resolve = useCallback(async (): Promise<Presigned | null> => {
+    if (presigned) return presigned;
+    const res = await fetch(`/api/ops/ap/${requestId}/attachment/${att.id}`);
+    const body = await res.json().catch(() => ({}));
+    if (res.ok && body.url) {
+      const p: Presigned = {
+        url: body.url,
+        inline: !!body.inline,
+        contentType: body.contentType ?? att.contentType,
+      };
+      setPresigned(p);
+      return p;
+    }
+    setErr(body.error ?? `download failed (${res.status})`);
+    return null;
+  }, [presigned, requestId, att.id, att.contentType]);
 
   const open = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/ops/ap/${requestId}/attachment/${att.id}`);
-      const body = await res.json().catch(() => ({}));
-      if (res.ok && body.url) window.open(body.url, '_blank', 'noopener');
-      else setErr(body.error ?? `download failed (${res.status})`);
+      const p = await resolve();
+      if (p) window.open(p.url, '_blank', 'noopener');
     } finally {
       setBusy(false);
     }
-  }, [requestId, att.id]);
+  }, [resolve]);
+
+  // Collapse/expand the in-panel preview (so many attachments don't all render at
+  // once). On first expand, resolve the URL; if the server declined inline (or the
+  // file is over the cap), fall back to opening it in a new tab.
+  const togglePreview = useCallback(async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const p = await resolve();
+      if (p && p.inline) setExpanded(true);
+      else if (p) window.open(p.url, '_blank', 'noopener');
+    } finally {
+      setBusy(false);
+    }
+  }, [expanded, resolve]);
 
   if (att.kind === 'reference_link') {
     return (
@@ -599,13 +650,51 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
       </li>
     );
   }
+  const previewable = isImagePreview(att.contentType) || isPdfPreview(att.contentType);
+  const oversize = att.byteSize != null && att.byteSize > PREVIEW_SIZE_CAP;
   return (
     <li className="rounded border border-white/10 bg-white/5 px-2 py-1">
-      📄 {att.filename ?? 'attachment'} {att.byteSize ? `(${att.byteSize} bytes)` : ''}{' '}
-      <button onClick={open} disabled={busy} className="ml-1 underline disabled:opacity-50">
-        download
-      </button>
-      {err && <span className="ml-2 text-red-300">{err}</span>}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="truncate">
+          📄 {att.filename ?? 'attachment'} {att.byteSize ? `(${att.byteSize} bytes)` : ''}
+        </span>
+        {previewable && !oversize && (
+          <button onClick={togglePreview} disabled={busy} className="underline disabled:opacity-50">
+            {expanded ? 'Hide preview' : 'Preview'}
+          </button>
+        )}
+        {previewable && oversize && (
+          <button onClick={open} disabled={busy} className="underline disabled:opacity-50">
+            Preview large file →
+          </button>
+        )}
+        <button onClick={open} disabled={busy} className="underline disabled:opacity-50">
+          download
+        </button>
+        {err && <span className="text-red-300">{err}</span>}
+      </div>
+      {expanded && presigned?.inline && (
+        <div className="mt-2">
+          {isImagePreview(presigned.contentType) ? (
+            // Presigned R2 image preview; Next/Image can't sign/proxy R2 GETs.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={presigned.url}
+              alt={att.filename ?? 'attachment preview'}
+              className="max-h-[32rem] w-auto max-w-full rounded border border-white/10 bg-white"
+            />
+          ) : (
+            // No sandbox="" here: a full sandbox kills Chromium's built-in PDF
+            // viewer. The frame is cross-origin (R2) and cannot script our origin;
+            // CSP frame-src scopes it to the R2 host (ADR-0046 Amendment 4).
+            <iframe
+              src={presigned.url}
+              title={att.filename ?? 'attachment preview'}
+              className="h-[32rem] w-full rounded border border-white/10 bg-white"
+            />
+          )}
+        </div>
+      )}
     </li>
   );
 }

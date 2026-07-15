@@ -318,7 +318,70 @@ and books the AP payment for the stewardship fees." That is an OUTGOING payment
 booking — a different lane from this ADR's INCOMING vendor-invoice approval
 flow (email intake → approver decision → decision mail back to accounting).
 Decision: ADR-0046 deliberately stays in the incoming lane; a Mary-facing
-outgoing-AP-payment surface is flagged as **ADR-0051 (candidate, not drafted)**
+outgoing-AP-payment surface is flagged as **ADR-0052 (candidate, not drafted)**
+— renumbered from the original 0051 placeholder, since 0051 was accepted for the
+office dark-theme reconciliation (see `docs/adr/0051-office-dark-theme.md`) —
 rather than an expansion of this scope. Open question for Bill/Mary first:
 which direction the stewardship fee actually flows (DR3 → stewardship program,
 or invoiced through MRC) — the rollup marks it ambiguous.
+
+## Amendment 4 — inline preview, body-key strip, stamp-the-original (2026-07-15, operator-directed)
+
+**Status:** Accepted (2026-07-15, Bill — "let's do this now — functional and
+robust"). Ships behind AP pilot mode (ADR-0047). Items 2/3/5 of the AP overhaul
+pass (item 1 repaint = ADR-0051; item 6 tile = ADR-0020 note).
+
+### (a) Inline attachment preview — no download round-trip
+
+The AP queue previously presigned an R2 GET and `window.open`'d every attachment.
+Approvers now **preview PDFs and images in-panel**: the attachment route
+(`/api/ops/ap/[id]/attachment/[attId]`) decides inline eligibility **server-side**
+off the stored `content_type` (allowlist: `application/pdf`, `image/png|jpeg|jpg|
+webp`) and signs the URL with `Content-Disposition: inline`; everything else keeps
+the plain download URL. The client renders images in `<img>` and PDFs in a
+cross-origin `<iframe>` (deliberately **not** `sandbox=""` — a full sandbox kills
+Chromium's built-in PDF viewer; the frame is cross-origin R2 and cannot script our
+origin). Each attachment has a collapse/expand toggle so many attachments don't all
+render at once; files over a ~15 MB cap open in a new tab instead of framing.
+**CSP:** the base policy (`next.config.js`) gains
+`frame-src 'self' https://*.r2.cloudflarestorage.com` — scoped to the R2 host;
+`img-src` already allowed it.
+
+### (b) Great-Plains matching keys STRIPPED from email bodies
+
+The decision, hold-notice, and new-request emails no longer repeat the GP matching
+keys (request id + original subject) as body `<li>` lines. The keys survive where
+they belong: the **email SUBJECT line** carries the original subject, the **stamped
+decision PDF** carries request id + subject, and the request id rides (invisibly)
+the new-request deep-link URL. The bodies now read as human decision notices, not
+machine records. (Test coverage updated to assert the strip + the surviving keys.)
+
+### (c) Stamp the ORIGINAL invoice — REVERSES the §C10 no-PDF-lib constraint
+
+The §1.6e stamp originally produced only a Playwright **cover page** for file
+originals (the original was never overlaid or attached), because the repo had no
+PDF-manipulation library and one was forbidden (§C10). **That constraint is
+reversed here:** `pdf-lib` (pure-JS, MIT, pinned `1.17.1`) is now an approved
+dependency — Playwright can only print HTML→PDF, it cannot composite a stamp onto
+existing PDF vector bytes, so stamping the _actual_ original invoice required a real
+PDF library. The decision path now, for **both approve and reject**:
+
+- **PDF originals** → `stampOntoOriginalPdf` overlays a visible stamp band + a
+  diagonal APPROVED/REJECTED watermark onto **every page** of the original (a true
+  overlay). PDF metadata dates/producer are pinned to the decision instant so the
+  tamper-record sha256 is reproducible.
+- **Image originals** → embedded in a branded HTML page with the stamp overlay,
+  printed to PDF via Playwright (true overlay, no image-decode dependency).
+- **Multi-attachment** → each `file` attachment is stamped and attached (loop, not
+  a single `.find`).
+- The stamped original(s) are **attached to the decision email** and **archived to
+  R2** under `ap/{requestId}/decision/…`. The row records a **dual-sha tamper
+  record**: `decision_pdf_sha256` (generated stamped PDF) + `original_attachment_
+sha256` (original bytes), plus `decision_pdf_r2_key`. New nullable columns land in
+  migration `20260720_ap_decision_artifacts` (purely additive, ADR-0035 clean-replay).
+
+**Fail-soft preserved (non-negotiable):** a stamp/download/R2 failure must NEVER
+block the decision email to accounting. The `buildDecisionStamp(...).catch(→null)`
+guard stands; R2 archival is per-artifact `.catch(→null)`; an R2-unconfigured window
+degrades to the stamped cover page (the documented deviation) and the mail still
+sends. Recipients (`resolveForwarderRecipients`) are unchanged — confirmed correct.

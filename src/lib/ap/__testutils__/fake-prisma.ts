@@ -39,6 +39,9 @@ export interface FakeApRequest {
   // ADR-0046 §3 amendment (handoff §1.6c/e).
   site_id: string | null;
   decision_pdf_sha256: string | null;
+  // ADR-0046 Amendment 4 — stamped-decision artifacts.
+  decision_pdf_r2_key: string | null;
+  original_attachment_sha256: string | null;
   // ADR-0046 Amendment 3 — hold / "pending review".
   held_by: string | null;
   held_at: Date | null;
@@ -205,6 +208,8 @@ export function makeFakePrisma(db: FakeDb) {
           quarantine_reason: (d['quarantine_reason'] as string | null) ?? null,
           site_id: (d['site_id'] as string | null) ?? null,
           decision_pdf_sha256: (d['decision_pdf_sha256'] as string | null) ?? null,
+          decision_pdf_r2_key: (d['decision_pdf_r2_key'] as string | null) ?? null,
+          original_attachment_sha256: (d['original_attachment_sha256'] as string | null) ?? null,
           held_by: (d['held_by'] as string | null) ?? null,
           held_at: (d['held_at'] as Date | null) ?? null,
           hold_note: (d['hold_note'] as string | null) ?? null,
