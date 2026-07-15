@@ -711,6 +711,53 @@ interface FileAttachmentRow {
   filename: string | null;
   content_type: string | null;
   storage_key: string | null;
+  byte_size: number | null;
+}
+
+/**
+ * Inline-image heuristic (ADR-0046 post-amendment, 2026-07-15). Forwards drag in
+ * signature/logo images (`image/*`, a few KB) that must not be stamped and mailed
+ * as if they were the invoice. We have no exact inline signal yet — `normalizeFile`
+ * (msgraph-mail/normalize.ts) drops Graph's `isInline`/`contentId`, so `ap_attachments`
+ * carries no inline column. Ship-now proxy: exclude tiny images (`image/*` AND
+ * byte_size < 50 KB); a scanned/photographed invoice is virtually always >200 KB,
+ * logos/signatures <20 KB. PDFs and non-image files are ALWAYS kept regardless of size.
+ * Durable follow-up: capture `isInline`+`contentId` into a new `ap_attachments.is_inline`
+ * column and filter on that exactly (retiring this size heuristic) — see ADR-0046.
+ */
+const INLINE_IMAGE_MAX_BYTES = 50_000;
+function isLikelyInlineImage(a: FileAttachmentRow): boolean {
+  const ct = (a.content_type ?? '').toLowerCase();
+  return ct.startsWith('image/') && a.byte_size != null && a.byte_size < INLINE_IMAGE_MAX_BYTES;
+}
+
+/**
+ * The stampable document set: `kind='file'` rows with a `storage_key`, minus likely
+ * inline images. Guard: if the inline filter would drop EVERY attachment, keep the
+ * unfiltered files — a decision mail is never artifact-empty when real files exist.
+ */
+function selectStampableAttachments(files: FileAttachmentRow[]): FileAttachmentRow[] {
+  const fileRows = files.filter((a) => a.kind === 'file' && a.storage_key);
+  const kept = fileRows.filter((a) => !isLikelyInlineImage(a));
+  return kept.length > 0 ? kept : fileRows;
+}
+
+/**
+ * De-duplicate a stamped-attachment filename within one decision mail. Two source
+ * files sharing a name (`invoice.pdf`) would otherwise collapse to one `approved-invoice.pdf`
+ * MIME part and clobber each other; append `-<n>` before `.pdf` on collision.
+ */
+function dedupeFilename(name: string, used: Set<string>): string {
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  const stem = name.endsWith('.pdf') ? name.slice(0, -'.pdf'.length) : name;
+  let n = 2;
+  let candidate = `${stem}-${n}.pdf`;
+  while (used.has(candidate)) candidate = `${stem}-${++n}.pdf`;
+  used.add(candidate);
+  return candidate;
 }
 
 /** A stable, filesystem-safe stamped-attachment filename (always `.pdf`). */
@@ -778,11 +825,21 @@ async function stampOneOriginal(
 }
 
 /**
- * Choose the stamp mode and render the decision artifact(s) (ADR-0046 Amendment 4).
- * Body present ⇒ re-render the sanitized body (one PDF). No body but file
- * attachments ⇒ overlay the stamp onto EACH original (multi-attachment). No usable
- * original bytes (R2 unconfigured) ⇒ a stamped cover page (documented deviation).
- * No body and no file ⇒ a stamped 'body' cover with an empty original.
+ * Choose the stamp mode and render the decision artifact(s) (ADR-0046 Amendment 4,
+ * attachment-first precedence 2026-07-15). The operator's directive is that the
+ * decision mail returns the ACTUAL approved/rejected document — so REAL FILE
+ * ATTACHMENTS WIN: stamp the stamp onto EACH original (multi-attachment) and return
+ * those. Only when there is no usable file attachment does the sanitized body render
+ * (one PDF) stand in — the body-only-invoice fallback. No usable original bytes (R2
+ * unconfigured) ⇒ a stamped cover page (documented deviation). No body and no file ⇒
+ * a stamped 'body' cover with an empty original.
+ *
+ * Live defect this reversal closes (2026-07-15 operator test, request c38909b2): a
+ * forwarded invoice ALWAYS carries a body, so the old body-first order returned the
+ * stamped body render and the pdf-lib overlay path never ran — accounting got a body
+ * render instead of the actual Hertz invoice, and `original_attachment_sha256` stayed
+ * NULL. The caller already records the first artifact's dual-sha + attaches every
+ * artifact, so this reorder auto-populates the sha with zero caller changes.
  */
 async function buildDecisionStamp(
   prisma: PrismaClient,
@@ -799,13 +856,44 @@ async function buildDecisionStamp(
     approverName,
     decision,
     decidedAt,
-    // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too.
+    // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too. Because
+    // the note is stamped onto every attachment, dropping the body render (below)
+    // when attachments exist loses no approver-relevant context.
     note: req.decision_note,
     // 2026-07-15 directive — the site tag rides the per-page stamp line.
     siteName,
   };
 
-  // Body precedence (unchanged): an inline invoice body renders the stamped body.
+  // ATTACHMENT-FIRST (2026-07-15): stamp EACH real file attachment (both decisions)
+  // and return those — the actual documents, not the forward wrapper. Docs-only: the
+  // stamped body render does NOT ride along when attachments exist.
+  const files = (await prisma.apAttachment.findMany({
+    where: { request_id: req.id },
+    select: {
+      id: true,
+      kind: true,
+      filename: true,
+      content_type: true,
+      storage_key: true,
+      byte_size: true,
+    },
+  })) as FileAttachmentRow[];
+  const fileAtts = selectStampableAttachments(files);
+  if (fileAtts.length > 0) {
+    const artifacts: StampedArtifact[] = [];
+    const usedNames = new Set<string>();
+    for (const att of fileAtts) {
+      const artifact = await stampOneOriginal(base, att, renderer);
+      if (!artifact) continue;
+      artifact.filename = dedupeFilename(artifact.filename, usedNames);
+      artifacts.push(artifact);
+    }
+    if (artifacts.length > 0) return artifacts;
+    // Every download failed (R2 unconfigured/placeholder) → fall through: body render
+    // if this is a body-only invoice, else the stamped cover.
+  }
+
+  // No usable file attachment. Body-only invoice ⇒ re-render the sanitized body.
   if (req.body_html_sanitized && req.body_html_sanitized.trim()) {
     const input: StampInput = { ...base, kind: 'body', bodyHtmlSanitized: req.body_html_sanitized };
     const { pdf, sha256 } = await stampApproval(input, renderer);
@@ -821,25 +909,9 @@ async function buildDecisionStamp(
     ];
   }
 
-  // No body: stamp EACH original file attachment (both decisions). Multi-attachment
-  // loop replaces the old single `.find`.
-  const files = (await prisma.apAttachment.findMany({
-    where: { request_id: req.id },
-    select: { id: true, kind: true, filename: true, content_type: true, storage_key: true },
-  })) as FileAttachmentRow[];
-  const fileAtts = files.filter((a) => a.kind === 'file' && a.storage_key);
-  if (fileAtts.length > 0) {
-    const artifacts: StampedArtifact[] = [];
-    for (const att of fileAtts) {
-      const artifact = await stampOneOriginal(base, att, renderer);
-      if (artifact) artifacts.push(artifact);
-    }
-    if (artifacts.length > 0) return artifacts;
-    // Every download failed (R2 unconfigured/placeholder) → fall through to a cover.
-  }
-
-  // No usable original bytes: keep the stamped cover page (documented deviation for
-  // the R2-unconfigured window). Name a file attachment if one exists, else empty.
+  // No body and no usable original bytes: keep the stamped cover page (documented
+  // deviation for the R2-unconfigured window). Name a file attachment if one exists,
+  // else empty.
   const coverFile = files.find((a) => a.kind === 'file');
   const input: StampInput = coverFile
     ? { ...base, kind: 'attachment', originalFilename: coverFile.filename }

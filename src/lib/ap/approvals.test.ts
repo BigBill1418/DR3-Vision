@@ -453,6 +453,9 @@ describe('stamped decision artifacts (Amendment 4)', () => {
           id: 'att-img',
           filename: 'scan.png',
           content_type: 'image/png',
+          // A scanned invoice is a real document (>50 KB) — kept on merit, not via the
+          // inline-image fallback (a logo/signature would be filtered out; see below).
+          byte_size: 250_000,
           storage_key: 'ap/req-1/att-img/scan.png',
         }),
       ],
@@ -511,6 +514,171 @@ describe('stamped decision artifacts (Amendment 4)', () => {
     expect(args.attachments).toHaveLength(1);
     expect(db.requests[0]!.decision_pdf_sha256).toBe('deadbeef'); // cover sha
     expect(db.requests[0]!.decision_pdf_r2_key).toBeNull(); // nothing archived
+  });
+
+  // Attachment-first precedence (2026-07-15). The live defect (c38909b2): a forwarded
+  // invoice ALWAYS carries a body, so body-first returned the body render and the
+  // pdf-lib overlay never ran — accounting got a body render, not the Hertz invoice,
+  // and original_attachment_sha256 stayed NULL. Attachments must WIN over the body.
+  it('body + PDF coexist: the FILE original wins (overlay + dual-sha), the body render is NOT attached', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    const db = newFakeDb({
+      requests: [
+        pendingReq({
+          id: 'req-1',
+          // A real forward: a body AND a PDF attachment coexist.
+          body_html_sanitized: '<p>Please see attached Hertz invoice.</p>',
+          body_text: 'Please see attached Hertz invoice.',
+        }),
+      ],
+      users,
+      decisionRecipients: recips,
+      attachments: [fileAtt({ id: 'att-a', filename: 'Hertz Invoice 599597504.PDF' })],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    // The PDF original is overlaid — the body render is never produced.
+    expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(1);
+    expect(stamp.stampApproval).not.toHaveBeenCalled();
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: { filename: string }[] };
+    expect(args.attachments).toHaveLength(1);
+    // The stamped ORIGINAL rides (approved-<name>.pdf), NOT the body render (ap-decision-<id>.pdf).
+    expect(args.attachments![0]!.filename).toBe('approved-Hertz_Invoice_599597504.pdf');
+    expect(args.attachments!.some((a) => a.filename === 'ap-decision-req-1.pdf')).toBe(false);
+    // The original bytes' sha is now recorded — the whole point of the fix.
+    expect(db.requests[0]!.original_attachment_sha256).not.toBeNull();
+    expect(db.requests[0]!.decision_pdf_sha256).toBe('pdfsha');
+  });
+
+  it('inline-image filter: a tiny logo image is excluded; the real PDF is kept', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([4, 5, 6]));
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [
+        fileAtt({
+          id: 'att-pdf',
+          filename: 'invoice.pdf',
+          content_type: 'application/pdf',
+          byte_size: 120_000,
+        }),
+        // A forwarded signature/logo image, a few KB — noise, not a document.
+        fileAtt({
+          id: 'att-logo',
+          filename: 'logo.png',
+          content_type: 'image/png',
+          byte_size: 8_000,
+          storage_key: 'ap/req-1/att-logo/logo.png',
+        }),
+      ],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    // Only the PDF is stamped; the tiny image is filtered out (never image-stamped).
+    expect(stamp.stampOntoOriginalPdf).toHaveBeenCalledTimes(1);
+    expect(stamp.stampImage).not.toHaveBeenCalled();
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
+    expect(args.attachments).toHaveLength(1);
+  });
+
+  it('inline-image filter never empties the mail: an all-tiny-image request keeps its image', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([7, 7]));
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [
+        // The ONLY attachment is a small image — filter would drop it, guard keeps it.
+        fileAtt({
+          id: 'att-img',
+          filename: 'photo.png',
+          content_type: 'image/png',
+          byte_size: 9_000,
+          storage_key: 'ap/req-1/att-img/photo.png',
+        }),
+      ],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    expect(stamp.stampImage).toHaveBeenCalledTimes(1); // kept via the all-dropped guard
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
+    expect(args.attachments).toHaveLength(1);
+  });
+
+  it('duplicate filenames are de-duped so neither MIME part clobbers the other', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(new Uint8Array([1]));
+    const db = newFakeDb({
+      requests: [pendingReq({ id: 'req-1' })],
+      users,
+      decisionRecipients: recips,
+      attachments: [
+        fileAtt({
+          id: 'att-a',
+          filename: 'invoice.pdf',
+          storage_key: 'ap/req-1/att-a/invoice.pdf',
+        }),
+        fileAtt({
+          id: 'att-b',
+          filename: 'invoice.pdf',
+          storage_key: 'ap/req-1/att-b/invoice.pdf',
+        }),
+      ],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: { filename: string }[] };
+    const names = args.attachments!.map((a) => a.filename);
+    expect(names).toEqual(['approved-invoice.pdf', 'approved-invoice-2.pdf']);
+    expect(new Set(names).size).toBe(2); // distinct → no clobber
+  });
+
+  it('body-only invoice (no file attachments) still renders the stamped body', async () => {
+    const db = newFakeDb({
+      requests: [
+        pendingReq({
+          id: 'req-1',
+          body_html_sanitized: '<p>Invoice details inline.</p>',
+          body_text: 'Invoice details inline.',
+        }),
+      ],
+      users,
+      decisionRecipients: recips,
+      // No attachments at all — the body render is the correct fallback.
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+    });
+    expect(res.mail).toBe('sent');
+    expect(stamp.stampApproval).toHaveBeenCalledTimes(1); // body render
+    expect(stamp.stampOntoOriginalPdf).not.toHaveBeenCalled();
+    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: { filename: string }[] };
+    expect(args.attachments).toHaveLength(1);
+    expect(args.attachments![0]!.filename).toBe('ap-decision-req-1.pdf'); // body artifact
+    expect(db.requests[0]!.original_attachment_sha256).toBeNull(); // no original bytes
   });
 });
 
