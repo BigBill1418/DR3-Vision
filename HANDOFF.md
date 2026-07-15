@@ -1,5 +1,5 @@
-> **CURRENT STATE (2026-06-23):** Operational Intelligence survey (ADR-0034) is **LIVE** — all 10 invites sent, responses arriving; see `docs/handoffs/2026-06-23-survey-launch.md` (tracker query + how the send fires + 2 post-launch fixes). Paused, awaiting remaining responses before close/export.
-> Prior state — incident resolution, P0 hardening (ADR-0033), enterprise-readiness gameplan, buildout-readiness checklist: `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md`.
+> **CURRENT STATE (2026-07-15):** The **AP Approvals module (ADR-0046) is LIVE in production at BOTH sites** — mailbox intake, first-action-wins decisions with a REQUIRED site tag, decision mail returning the stamped ORIGINAL invoice (decision + approver + site + note + PT time on every page), R2 archival + dual-sha tamper record. Operator-validated 2026-07-15 ("working perfectly"); runbook `docs/operator/ap-approvals.md`. **The single live register of everything hanging is `docs/OPEN-ITEMS.md`** — read it first. Bonus system (bi-weekly, both sites), billing verification, board-pack digest, and observability all live earlier; see `CHANGELOG.md`.
+> Prior state — Operational Intelligence survey (ADR-0034, closed + exported 2026-07-09): `docs/handoffs/2026-07-09-planning-session-decisions-rollup-2026-07-08.md`. Incident resolution + P0 hardening (ADR-0033): `docs/handoffs/2026-06-23-current-state-and-buildout-readiness.md`.
 
 # HANDOFF.md — Claude Code bootstrapping runbook
 

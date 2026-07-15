@@ -192,8 +192,13 @@ pending invoices; first action wins.
   expired approvers with an audit row + a `dr3-vision-system` ntfy to Bill. To add
   or remove an approver by hand, insert/delete an `ap_approvers` row (by `user_id`).
 
-**Optional site tag:** at approve/reject time an approver may tag the request
-Eugene / Woodland / blank (a dropdown). Intake stays untagged.
+**Site tag — REQUIRED (operator directive 2026-07-15):** at approve/reject
+time the approver MUST tag the request Eugene or Woodland (a dropdown; the
+Approve/Reject buttons refuse until one is picked, and the server refuses an
+untagged decision even by direct API call). Accounting files each invoice
+against a site in Great Plains. Intake stays untagged; the tag is set at
+decision. Requests decided before 2026-07-15 may carry no site (historical,
+not backfilled).
 
 **Decision routing:** the decision email now goes to the **original internal SVdP
 forwarder** (the intake message's From, already validated `@svdp.us` at intake),
@@ -206,8 +211,9 @@ it reroutes to admins.
 **Note on the stamp (updated 2026-07-15, ADR-0046 Amendment 4 + notes):** the
 no-PDF-library constraint was REVERSED by operator directive — `pdf-lib` now
 overlays the stamp directly onto **every page of the ORIGINAL document**
-(decision + approver + site tag + Pacific time), for BOTH approved and
-rejected. **Attachment-first precedence:** real file attachments are the
+(decision + approver + site tag + Pacific time + the approver's note,
+wrapped to at most 3 lines on the stamp band — the full note is always in the
+email body), for BOTH approved and rejected. **Attachment-first precedence:** real file attachments are the
 artifacts (each one stamped; filenames de-duped; tiny inline logo/signature
 images under 50 KB filtered out); the rendered body is only the fallback for
 body-only invoices. Image attachments stamp via the Playwright overlay path.
@@ -235,8 +241,11 @@ email carries the requester, subject, received-at (Pacific), attachment count, a
 The decision panel has a **Note** field. A note is **optional to approve** but
 **required to reject** (a rejection must say why — the Reject button is disabled
 until a note is entered, and the server rejects a note-less rejection). The note
-appears in the decision email to accounting, on the **stamped decision PDF**, and in
-the audit trail.
+appears in the decision email to accounting, **on the stamped invoice itself**
+(drawn into the stamp band on every page of the returned PDF — since 2026-07-15;
+before that only the Playwright-rendered stamps carried it), and in the audit
+trail. Approvers: write the note for accounting's eyes — it is on the document
+they file.
 
 ### Hold — "pending review"
 
