@@ -5,6 +5,15 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-15 (AP decisions: site tag now REQUIRED)
+
+Operator directive: every AP decision must carry the Woodland/Eugene site tag
+(was optional; accounting files each invoice against a site in GP). Enforced
+service-side (`assertDecisionSite` → `ApSiteRequiredError` 400 before any
+state change), route-side (resolve + refuse pre-CAS), and in the queue UI
+(required select + client guard). Closes O-9(a); ADR-0046 post-go-live
+amendment note.
+
 ### Ops — 2026-07-15 (AP MODULE LIVE — production)
 
 Operator order following the same-day validation pass: all test requests

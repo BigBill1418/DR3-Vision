@@ -251,6 +251,12 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         setMsg('A rejection needs a note explaining why. Add a note, then Reject.');
         return;
       }
+      // Operator directive 2026-07-15 — every decision files against a site
+      // (the server re-validates).
+      if (!siteCode) {
+        setMsg('Select the site (Woodland or Eugene) before deciding.');
+        return;
+      }
       setBusy(true);
       setMsg(null);
       try {
@@ -263,7 +269,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             note: note.trim() || undefined,
             vendor: vendor.trim() || undefined,
             amountCents: Number.isFinite(amountCents) ? amountCents : undefined,
-            siteId: siteCode || undefined,
+            siteId: siteCode,
           }),
         });
         const body = await res.json().catch(() => ({}));
@@ -471,13 +477,13 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
               />
             </label>
             <label className="text-xs opacity-80">
-              Site (optional)
+              Site <span className="text-amber-300">(required)</span>
               <select
                 value={siteCode}
                 onChange={(e) => setSiteCode(e.target.value)}
                 className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
               >
-                <option value="">— none —</option>
+                <option value="">— select site —</option>
                 <option value="eugene">Eugene</option>
                 <option value="woodland">Woodland</option>
               </select>

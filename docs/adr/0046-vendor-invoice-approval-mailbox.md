@@ -428,7 +428,6 @@ capture `isInline`+`contentId` through `normalizeFile` → `persistFile` → a n
 `ap_attachments.is_inline` column and filter on that exact signal, retiring the size
 heuristic.
 
-
 ## Validation record — 2026-07-15 (operator live-test pass: "working perfectly")
 
 Bill ran full live test loops against the pilot-mode module on 2026-07-15 and
@@ -441,3 +440,23 @@ attachment preview → decision with site tag → decision email to the forwarde
 record. The three defects the test runs surfaced (Processed-folder move 400,
 body-first stamp precedence, invisible site tag) are all fixed and merged
 (PRs #98–#101). Remaining before the live flip: O-1 in `docs/OPEN-ITEMS.md`.
+
+## Post-go-live amendment — 2026-07-15 (site tag REQUIRED on decisions)
+
+Operator directive (same day as go-live): "make the site tag required on
+decisions." The §3-amendment site tag was optional; an untagged decision could
+reach accounting without the Woodland/Eugene marker Mary files against in
+Great Plains. Now enforced at all three layers:
+
+- **Service** — `assertDecisionSite()` throws `ApSiteRequiredError` (400) at
+  the top of `decideRequest`, before any read or state change (mirrors the
+  Amendment-3 rejection-note boundary).
+- **Route** — `/api/ops/ap/[id]/decide` resolves the id/code via
+  `resolveDecisionSiteId` and refuses (400, plain-English message) when
+  absent or unresolvable, before the CAS.
+- **UI** — the queue's site select is labeled _required_; Approve/Reject are
+  client-guarded with "Select the site (Woodland or Eugene) before deciding."
+
+`ap_requests.site_id` therefore becomes always-populated for rows decided
+after this ships; rows decided earlier may still carry NULL (historical, not
+backfilled). This closes O-9(a) in `docs/OPEN-ITEMS.md`.
