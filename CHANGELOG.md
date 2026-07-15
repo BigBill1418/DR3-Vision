@@ -5,6 +5,16 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-15 (site tag unmissable on AP decisions)
+
+Operator directive (Bill): when an approver tags a site (Woodland/Eugene) at
+decision time, accounting must see it without hunting. The site now rides the
+decision email SUBJECT (`DR3-Vision AP decision (approved — Woodland) — …`),
+leads the decision facts in the body (`Site: Woodland`), and is printed in the
+per-page stamp line of the returned document (`… via DR3-Vision — Site:
+Woodland`) plus the stamped page's meta block. Untagged decisions are
+unchanged (the tag stays optional).
+
 ### Added / Changed — 2026-07-15 (AP module overhaul — functional & robust, operator-directed)
 
 Bill: "let's do this now — functional and robust." Ships behind AP pilot mode

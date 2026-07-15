@@ -385,3 +385,10 @@ block the decision email to accounting. The `buildDecisionStamp(...).catch(→nu
 guard stands; R2 archival is per-artifact `.catch(→null)`; an R2-unconfigured window
 degrades to the stamped cover page (the documented deviation) and the mail still
 sends. Recipients (`resolveForwarderRecipients`) are unchanged — confirmed correct.
+
+## Post-amendment note — 2026-07-15 (site tag surfaces everywhere accounting looks)
+
+Operator directive: the Amendment-3 decision-time site tag was stored but
+never displayed downstream. It now rides the decision email subject line and
+body and the per-page stamp line + meta block of the stamped original.
+Untagged decisions render exactly as before — the tag remains optional.

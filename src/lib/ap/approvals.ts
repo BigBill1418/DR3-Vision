@@ -508,9 +508,18 @@ export async function sendDecisionEmail(
       sender_address: true,
       body_html_sanitized: true,
       body_text: true,
+      // Operator directive 2026-07-15: the site tag the approver selected must
+      // be unmissable on everything accounting receives. site_id is a bare
+      // column (AP block convention: DB-level FK, no Prisma relation) — the
+      // name resolves with an explicit lookup below.
+      site_id: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
+  const siteName = req.site_id
+    ? ((await prisma.site.findUnique({ where: { id: req.site_id }, select: { name: true } }))
+        ?.name ?? null)
+    : null;
 
   const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
 
@@ -550,9 +559,13 @@ export async function sendDecisionEmail(
   // (below) and the stamped decision PDF, so repeating them inline was redundant
   // clutter that made the body read like a machine record instead of a decision
   // notice. The body now carries only the human-facing decision facts.
+  // 2026-07-15 operator directive: when the approver tagged a site, it leads
+  // the decision facts — accounting must never guess which site's books.
+  const siteLine = siteName ? `<li>Site: <b>${escapeHtml(siteName)}</b></li>` : '';
   const htmlBody = `<p>A vendor-invoice approval decision has been recorded in DR3-Vision.</p>
     <ul>
       <li>Decision: <b>${escapeHtml(req.status.toUpperCase())}</b></li>
+      ${siteLine}
       <li>Approver: ${escapeHtml(approverName)}</li>
       <li>Decided at: ${escapeHtml(decidedLabel)}</li>
       ${vendorLine}
@@ -566,15 +579,20 @@ export async function sendDecisionEmail(
   // Playwright); an R2-unconfigured window degrades to the stamped cover page.
   // Fail-soft: a render/download/R2 failure must NEVER block the decision mail to
   // accounting (the decision itself already stands). Preserve the .catch(→null).
-  const artifacts = await buildDecisionStamp(prisma, req, approverName, decidedAt, renderer).catch(
-    (e) => {
-      log.warn(
-        { requestId, err: e instanceof Error ? e.message : String(e) },
-        '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)',
-      );
-      return null;
-    },
-  );
+  const artifacts = await buildDecisionStamp(
+    prisma,
+    req,
+    approverName,
+    decidedAt,
+    siteName,
+    renderer,
+  ).catch((e) => {
+    log.warn(
+      { requestId, err: e instanceof Error ? e.message : String(e) },
+      '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)',
+    );
+    return null;
+  });
   if (artifacts && artifacts.length > 0) {
     // Archive each stamped PDF to R2 (fail-soft; a PUT miss never blocks the mail).
     // The single-value columns record the PRIMARY (first) artifact; the audit row
@@ -625,7 +643,13 @@ export async function sendDecisionEmail(
     site: null,
     recipients,
     ...(cc.length > 0 ? { cc } : {}),
-    subject: `DR3-Vision AP decision (${req.status}) — ${subject}`.slice(0, 200),
+    // Site rides the SUBJECT line too (2026-07-15 directive) — visible before
+    // the mail is even opened, next to the GP matching key.
+    subject:
+      `DR3-Vision AP decision (${req.status}${siteName ? ` — ${siteName}` : ''}) — ${subject}`.slice(
+        0,
+        200,
+      ),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
     ...(artifacts && artifacts.length > 0
@@ -678,7 +702,7 @@ interface StampedArtifact {
 
 type StampBase = Pick<
   StampInput,
-  'requestId' | 'subject' | 'approverName' | 'decision' | 'decidedAt' | 'note'
+  'requestId' | 'subject' | 'approverName' | 'decision' | 'decidedAt' | 'note' | 'siteName'
 >;
 
 interface FileAttachmentRow {
@@ -765,6 +789,7 @@ async function buildDecisionStamp(
   req: StampSourceRequest,
   approverName: string,
   decidedAt: Date,
+  siteName: string | null,
   renderer?: PdfRenderer,
 ): Promise<StampedArtifact[]> {
   const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
@@ -776,6 +801,8 @@ async function buildDecisionStamp(
     decidedAt,
     // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too.
     note: req.decision_note,
+    // 2026-07-15 directive — the site tag rides the per-page stamp line.
+    siteName,
   };
 
   // Body precedence (unchanged): an inline invoice body renders the stamped body.

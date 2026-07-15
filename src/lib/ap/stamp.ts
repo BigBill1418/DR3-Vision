@@ -40,6 +40,13 @@ export interface StampInput {
   decidedAt: Date;
   /** ADR-0046 Amendment 3 — the approver's decision note, shown on the stamp. */
   note?: string | null;
+  /**
+   * Operator directive 2026-07-15: the site the approver tagged at decision
+   * (Woodland/Eugene) must be UNMISSABLE on everything accounting receives —
+   * it rides the per-page stamp line and the details block. Null when the
+   * approver tagged no site (the tag is optional).
+   */
+  siteName?: string | null;
   /** kind='body': the C10-sanitized message body HTML (re-sanitized before render). */
   bodyHtmlSanitized?: string | null;
   /** kind='attachment': the original attachment filename (display only). */
@@ -81,11 +88,14 @@ export function sha256Hex(buf: Buffer | Uint8Array): string {
  * "Approved by …"; a rejection reads "Rejected by …" but keeps the same shape.
  */
 export function stampText(
-  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt'>,
+  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt' | 'siteName'>,
 ): string {
   const verb = input.decision === 'approved' ? STAMP_TEXT_PREFIX : 'Rejected by';
   const when = formatPacificDateTime(input.decidedAt);
-  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision`;
+  // Site rides the stamp line itself (2026-07-15 operator directive) so every
+  // page of the returned document says which site's books this belongs to.
+  const site = input.siteName ? ` — Site: ${input.siteName}` : '';
+  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision${site}`;
 }
 
 /** The branded HTML shell + visible stamp footer/watermark that gets printed. */
@@ -139,6 +149,7 @@ export function buildStampHtml(input: StampInput): string {
   </header>
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
+    ${input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : ''}
     <div>Approver: ${escapeHtml(input.approverName)}</div>
     <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
@@ -269,6 +280,7 @@ export function buildImageStampHtml(input: StampInput, imageDataUri: string): st
   </header>
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
+    ${input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : ''}
     <div>Approver: ${escapeHtml(input.approverName)}</div>
     <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}

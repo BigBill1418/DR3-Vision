@@ -218,3 +218,42 @@ const RUN_REAL = process.env['AP_STAMP_REAL_CHROMIUM'] === '1';
   },
   60_000,
 );
+
+// 2026-07-15 operator directive — the decision-time site tag must be
+// unmissable on everything accounting receives.
+describe('site tag on the stamp (2026-07-15 directive)', () => {
+  it('stampText carries the site when tagged', () => {
+    const line = stampText({
+      decision: 'approved',
+      approverName: 'Rick Albritton',
+      decidedAt: new Date('2026-07-15T19:00:00Z'),
+      siteName: 'Woodland',
+    });
+    expect(line).toContain('— Site: Woodland');
+    expect(line).toContain('Rick Albritton');
+  });
+
+  it('stampText is unchanged when no site was tagged', () => {
+    const line = stampText({
+      decision: 'rejected',
+      approverName: 'Janette Tomas',
+      decidedAt: new Date('2026-07-15T19:00:00Z'),
+    });
+    expect(line).not.toContain('Site:');
+    expect(line).toContain('Rejected by Janette Tomas');
+  });
+
+  it('the stamped page meta block shows the site', () => {
+    const html = buildStampHtml({
+      kind: 'body',
+      requestId: 'req-1',
+      subject: 'Invoice 123',
+      approverName: 'Rick Albritton',
+      decision: 'approved',
+      decidedAt: new Date('2026-07-15T19:00:00Z'),
+      siteName: 'Eugene',
+      bodyHtmlSanitized: '<p>hi</p>',
+    });
+    expect(html).toContain('Site: <b>Eugene</b>');
+  });
+});
