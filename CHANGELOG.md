@@ -5,6 +5,13 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Validated — 2026-07-15 (AP module operator sign-off)
+
+Bill's live test runs passed end-to-end ("working perfectly"): ingest → tile →
+dark queue → inline preview → site-tagged decision → decision email carrying
+the actual stamped original, R2-archived. Validation record in ADR-0046; the
+go-live flip (both sites) is O-1 in docs/OPEN-ITEMS.md.
+
 ### Fixed — 2026-07-15 (AP decision mail returns the ACTUAL invoice, not a body render)
 
 Live defect caught by Bill in today's operator test (request `c38909b2`): an
