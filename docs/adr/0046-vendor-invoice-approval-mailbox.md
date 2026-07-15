@@ -392,3 +392,38 @@ Operator directive: the Amendment-3 decision-time site tag was stored but
 never displayed downstream. It now rides the decision email subject line and
 body and the per-page stamp line + meta block of the stamped original.
 Untagged decisions render exactly as before — the tag remains optional.
+
+## Post-amendment note — 2026-07-15 (attachment-first precedence — the body-first defect)
+
+Live-test defect (operator, request `c38909b2`): an approved invoice that carried
+a real PDF attachment (`Hertz Invoice 599597504.PDF`) **and** a forward body came
+back to accounting as a stamped **body render** — not the Hertz invoice — and
+`original_attachment_sha256` was NULL (the pdf-lib overlay never ran). Root cause:
+`buildDecisionStamp` gave the **body precedence** — it returned the body artifact
+before ever looking at file attachments, and a forwarded invoice **always** has a
+body, so the overlay path was permanently dead for the exact case Amendment 4 was
+built to serve.
+
+Fix — **attachment-first precedence**: real file attachments (`kind='file'` +
+`storage_key`, passing the inline filter below) now **win**. Each is stamped and
+returned; the body render is **only** the fallback for body-only invoices. When
+attachments exist the mail is **docs-only** — the body render does not ride along;
+the approver's decision note is already stamped onto every attachment, so no
+approver-relevant context is lost, and accounting files the actual document into
+Great Plains, not the forward wrapper. The caller already records the first
+artifact's dual-sha and attaches every artifact, so the reorder auto-populates
+`original_attachment_sha256` with **zero caller changes**. Multi-artifact mails get
+filename collision de-dup (`approved-invoice.pdf`, `approved-invoice-2.pdf`).
+
+**Inline-image filter (size heuristic, ship-now tier).** Forwards drag in
+signature/logo images that must not be stamped and mailed as if they were the
+invoice. There is no exact inline signal today: `normalizeFile`
+(`msgraph-mail/normalize.ts`) drops Graph's `isInline`/`contentId`, so
+`ap_attachments` has no inline column. Ship-now proxy: exclude `image/*` under
+50 KB (a scanned/photographed invoice is virtually always >200 KB; logos/signatures
+<20 KB). PDFs and non-image files are always kept regardless of size; if the filter
+would drop **every** attachment, the files are kept anyway (a decision mail is never
+artifact-empty when real files exist). **Durable follow-up (separate change):**
+capture `isInline`+`contentId` through `normalizeFile` → `persistFile` → a new
+`ap_attachments.is_inline` column and filter on that exact signal, retiring the size
+heuristic.

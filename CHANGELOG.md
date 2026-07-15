@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-15 (AP decision mail returns the ACTUAL invoice, not a body render)
+
+Live defect caught by Bill in today's operator test (request `c38909b2`): an
+approved invoice with a real PDF attachment **and** a forward body came back as a
+stamped **body render** instead of the Hertz invoice, and
+`original_attachment_sha256` was NULL — the pdf-lib overlay never ran.
+`buildDecisionStamp` gave the **body precedence**, and a forwarded invoice always
+has a body, so the overlay path was dead for the exact case it was built for.
+
+- **Attachment-first precedence.** Real file attachments now win: each is stamped
+  (true pdf-lib / Playwright overlay) and returned; the body render is the fallback
+  for body-only invoices. When attachments exist the mail is **docs-only** — the
+  approver's note is already stamped onto every attachment, so accounting files the
+  actual document into GP, not the forward wrapper. Zero caller changes;
+  `original_attachment_sha256` auto-populates.
+- **Inline-image filter (ship-now heuristic).** Forwarded signature/logo images
+  (`image/*` under 50 KB) are excluded so a stamped `logo.png` never rides the mail;
+  PDFs and non-image files are always kept, and the filter never empties a decision
+  mail that has real files. Durable follow-up (capture Graph `isInline` into a new
+  `ap_attachments.is_inline` column, retiring the size heuristic) noted in ADR-0046.
+- **Filename collision de-dup** for multi-attachment mails
+  (`approved-invoice.pdf`, `approved-invoice-2.pdf`) so neither MIME part clobbers
+  the other. See ADR-0046 post-amendment note (2026-07-15).
+
 ### Added — 2026-07-15 (site tag unmissable on AP decisions)
 
 Operator directive (Bill): when an approver tags a site (Woodland/Eugene) at
