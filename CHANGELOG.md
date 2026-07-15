@@ -5,6 +5,13 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Decided — 2026-07-15 (floor UI stays GREEN — O-9 fully closed)
+
+Operator decision: the warehouse-floor iPad surfaces (`/operator/*`) keep the
+ADR-0008 green theme; deep-space stays office/manager-only (ADR-0051
+post-acceptance note). With the site-tag requirement shipped the same day
+(PR #105), both halves of OPEN-ITEMS O-9 are closed. Docs-only change.
+
 ### Changed — 2026-07-15 (AP decisions: site tag now REQUIRED)
 
 Operator directive: every AP decision must carry the Woodland/Eugene site tag

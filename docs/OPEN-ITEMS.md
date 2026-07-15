@@ -25,7 +25,6 @@ are the only window her cross-checks are possible.
 | O-5 | **Eugene June backfill decision (A/B/C)** | rollup §4.4 | Default assumption is **C — skip** (clean forward-only ledger from Rick's 7/20 iPad go-live). Confirm or override. |
 | O-6 | **Schedule Kelsey walkthroughs (5 items)** | rollup §8.3 / PR #87 §3 | `saved_units` semantics, DAY6 formula-level `×5`, `%` column on Steel/Biomass/WTE, event units as inbound, MRC contact map. **Before 8/1.** |
 | O-7 | **Answer: does Mary's outgoing stewardship-fee AP booking warrant a Vision surface?** | rollup §1.6, ADR-0046 note | If yes → draft ADR-0052 (renumbered from 0051; the theme ADR took 0051). Also clarify which direction the fee flows. |
-| O-9 | **One Bill call left from the 7/15 AP pass:** flip the warehouse-floor iPad UI to dark-space too, or keep green for sunlight (ADR-0008)? _(The other half — require the site tag — Bill answered 2026-07-15: REQUIRED; shipped same day, see Done below.)_ | PR #99–#101 | Recommendation: keep floor green absent new glare evidence. |
 | O-8 | Remaining Stage-0 runbook rows (operator roster seed, MyMRC profile enable, DR3# counter alignment with Janette, Rick's rate tables, E0/E-Rick comms) | go-live plan Part 1, Stage 0 | See the plan's table for runbook links per row. |
 
 ## 2 — Blocked on stakeholders
@@ -64,6 +63,12 @@ are the only window her cross-checks are possible.
 3. Woodland June close-balance assertion (= 4,062).
 
 ## Done
+
+- **O-9(b) — DONE 2026-07-15 (floor stays GREEN).** Operator decision: "keep
+  the floor green." The warehouse-floor iPad surfaces (`/operator/*`) keep the
+  ADR-0008 green theme for sunlight/glare readability; the deep-space theme
+  remains office/manager-only per ADR-0051. O-9 is now fully closed — (a)
+  site tag required shipped same day (PR #105), (b) settled here.
 
 - **O-9(a) — DONE 2026-07-15 (site tag REQUIRED on decisions).** Operator
   directive: "make the site tag required on decisions." Enforced service-side

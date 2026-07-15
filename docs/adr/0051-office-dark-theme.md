@@ -1,6 +1,7 @@
 # ADR-0051 — Office/manager surfaces adopt the Vision dark-space theme; the floor stays green
 
-**Status:** Accepted (2026-07-15, operator-directed — Bill: "let's do this now")
+**Status:** Accepted (2026-07-15, operator-directed — Bill: "let's do this now");
+floor-stays-green CONFIRMED by operator 2026-07-15 ("keep the floor green")
 **Date:** 2026-07-15
 **Relates to:** ADR-0008 (brand theme — green & black, the floor standard), ADR-0020
 (Vision Dashboard — the logo-keyed dark-space theme this generalizes), ADR-0046
@@ -68,3 +69,14 @@ contradict ADR-0008?**
 - ADR-0014 (Canonical brand mark lock — the logo the deep-space theme is keyed to)
 - ADR-0020 (Vision Dashboard — origin of the deep-space theme)
 - ADR-0046 Amendment 4 (AP overhaul pass — repainted the first office surface)
+
+## Post-acceptance note — 2026-07-15 (operator confirmed: floor stays green)
+
+The one open theming question this ADR left implicit — whether the
+warehouse-floor iPad UI should eventually follow the office to deep-space —
+was put to the operator after the AP go-live and answered directly: **"keep
+the floor green."** The audience/environment split above is therefore the
+settled, operator-ratified state, not a provisional one: `/operator/*` stays
+on the ADR-0008 green theme indefinitely; no floor repaint is planned. This
+closed O-9(b) in `docs/OPEN-ITEMS.md`. (The office sweep of the remaining
+green `/dashboard/**` + `/admin/**` pages is still the C-16 follow-up.)
