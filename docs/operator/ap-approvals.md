@@ -1,20 +1,33 @@
 # AP vendor-invoice approvals (ADR-0046)
 
 Vision polls a dedicated shared mailbox, turns each valid accounting email into an
-approval request, lets Morena/Janette approve or reject inside Vision
+approval request, lets the approver roster approve or reject inside Vision
 (first-action-wins), and emails the decision back to accounting for Mary's Great
 Plains filing.
 
-**This build ships complete against a MOCK transport.** Until SVdP IT delivers
-the mailbox + Graph app, Vision processes fixtures and self-reports `mode=mock` in
-every poll-run ledger row. Flipping to live is **configuration only** — no code
-change.
+> **PRODUCTION STATUS — LIVE since 2026-07-15 at BOTH sites** (operator order
+> after the same-day validation pass; ADR-0046 validation record, PRs #98–#103).
+> Live transport (`mode=graph`, mailbox `approvals-dr3@svdp.us`), `ap_notify`
+> flipped live for Eugene + Woodland. Real routing: new-invoice alerts → the
+> active approver roster (Morena, Rick, Janette, Kelsey — Kelsey auto-expires
+> 8/1); decision mail → the original forwarder with Mary
+> (`mary.scott@svdp.us`) CC'd; the decision email carries the ACTUAL invoice
+> stamped on every page, archived to R2. Access: the **AP Approvals tile** on
+> `/` (admins + active roster; live pending-count badge) → `/dashboard/ops/ap`
+> (dark-space theme, inline PDF/image attachment previews).
+> **ROLLBACK:** flip `ap_notify` back to `pilot` for either/both sites on
+> `/admin/rollout` — all AP mail instantly reroutes to admins with the
+> `[PILOT]` banner. One audited action; no deploy.
 
 ---
 
-## 1. IT prerequisites checklist (C7 — the calendar-days risk, not code)
+## 1. IT prerequisites checklist (C7) — ALL DELIVERED (record)
 
-Bill raises these with SVdP IT (start Monday 2026-07-06):
+Completed 2026-07-09 (IT permissions execution, PR #86) + 2026-07-14 (the
+`dr3-vision@svdp.us` mailbox was added to the RAOP scoping group after the
+policy broke the report sender — see `docs/OPEN-ITEMS.md` Done/O-0). The
+`Processed` folder no longer needs manual creation — the transport resolves it
+by name and **creates it if absent** (PR #98). Kept for the record:
 
 - [ ] **Shared mailbox** `approvals-dr3@svdp.us` created. Accounting's one-time
       change is the To: address they compose to.
@@ -107,12 +120,15 @@ VALUES (gen_random_uuid()::text, 'morena@svdp.us', true, now(), now());
 
 ## 6. Enable the poll daemon
 
-The `ap-poll` compose service is **profile-gated** (`profiles: [ap]`) — it is NOT
-started by `docker compose up -d` or the deployer. Once IT delivers and the
-secrets + recipients are in place:
+The `ap-poll` compose service is **profile-gated** (`profiles: [ap]`). ENABLED
+in production since 2026-07-09, and made durable on 2026-07-10:
+**`COMPOSE_PROFILES=ap` is baked into CHAD's `~/DR3-Vision/.env`**, so every
+deployer `up -d` carries the profile — without that line, each deploy strands
+`ap-poll` on the previous image (the 2026-07-10 stale-image incident). Manual
+(re-)enable if ever needed:
 
 ```
-docker compose --profile ap up -d
+docker compose --env-file .env --profile ap up -d
 ```
 
 Then add `ap-poll` to the noc-master service-registry `containers[]` so NOC
@@ -187,11 +203,18 @@ PDF's sha256 is recorded on the request + in the audit log as a tamper record. T
 whole decision mail still routes through the `ap_notify` rollout surface — in pilot
 it reroutes to admins.
 
-**Note on the stamp:** because the repo has no PDF-editing library (and none may be
-added), the stamp is produced with the same Playwright→PDF mechanism as the bonus
-PDFs. A body-only invoice is rendered to a stamped PDF; a PDF attachment gets a
-stamped approval page carrying the original's filename + hash, sent alongside the
-original.
+**Note on the stamp (updated 2026-07-15, ADR-0046 Amendment 4 + notes):** the
+no-PDF-library constraint was REVERSED by operator directive — `pdf-lib` now
+overlays the stamp directly onto **every page of the ORIGINAL document**
+(decision + approver + site tag + Pacific time), for BOTH approved and
+rejected. **Attachment-first precedence:** real file attachments are the
+artifacts (each one stamped; filenames de-duped; tiny inline logo/signature
+images under 50 KB filtered out); the rendered body is only the fallback for
+body-only invoices. Image attachments stamp via the Playwright overlay path.
+Every stamped artifact is archived to R2 (`ap/<request>/decision/…`) with a
+dual sha256 tamper record (original + stamped) on the row and audit log. The
+decision email SUBJECT carries the decision, site tag, and original subject —
+Mary's GP matching keys — and the body carries only the human-facing facts.
 
 ## 2026-07-09 go-live features (ADR-0046 Amendment 3)
 
@@ -231,7 +254,7 @@ An approver who is not ready to decide can place a pending invoice **on hold** w
 There is no per-invoice "stale/aging" alert today; if one is added later it must
 exclude on-hold (`pending_review`) items, which are being actively worked.
 
-### Go-live flip runbook (~2026-07-11)
+### Go-live flip runbook — EXECUTED 2026-07-15 (kept as the rollback/reference procedure)
 
 1. **Secrets** — provision `~/.dr3-vision-secrets/msgraph-mail.env` on CHAD-HQ (§2)
    once SVdP IT delivers the mailbox + Graph app + consent + ApplicationAccessPolicy.

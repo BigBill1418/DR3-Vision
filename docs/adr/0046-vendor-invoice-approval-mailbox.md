@@ -1,6 +1,6 @@
 # ADR-0046 — Vendor-invoice approval via Graph mailbox ingestion (first inbound-email transport)
 
-**Status:** Accepted (2026-07-06, approved by Bill)
+**Status:** Accepted (2026-07-06, approved by Bill) — **LIVE in production 2026-07-15, both sites** (validation record + go-live at the bottom of this file)
 **Date:** 2026-07-06
 **Relates to:** mission record §2.1 hybrid (Morena AND Janette, first action wins — locked); **Addendum C** (`docs/handoffs/2026-07-06-adr-0036-addendum-c-…`) — C1–C8 architecture + C9 locked D-items + C10 heterogeneous-input/sanitization (non-negotiable); ADR-0028/0041 (atomic approval machinery), ADR-0038 (poll-ledger/loud-failure pattern), ADR-0045 (PII log discipline)
 **Series:** post-P5; fills the last locked mission function
