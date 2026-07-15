@@ -14,8 +14,18 @@
 // flip. NEVER a send method.
 
 import { ClientSecretCredential } from '@azure/identity';
-import { AuthFailedError, GraphContractDriftError, type GraphMailConfig, type MailTransport } from './transport';
-import { normalizeAttachments, normalizeMessage, type RawAttachment, type RawMessage } from './normalize';
+import {
+  AuthFailedError,
+  GraphContractDriftError,
+  type GraphMailConfig,
+  type MailTransport,
+} from './transport';
+import {
+  normalizeAttachments,
+  normalizeMessage,
+  type RawAttachment,
+  type RawMessage,
+} from './normalize';
 import type { DeltaResult, MailMessage, NormAttachment } from './types';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
@@ -107,7 +117,9 @@ export function graphTransport(
       }
       const value = body['value'];
       if (!Array.isArray(value)) {
-        throw new GraphContractDriftError(`delta response missing "value" array (folder ${folder})`);
+        throw new GraphContractDriftError(
+          `delta response missing "value" array (folder ${folder})`,
+        );
       }
       for (const raw of value) messages.push(normalizeMessage(raw as RawMessage));
       const next = body['@odata.nextLink'];
@@ -120,23 +132,35 @@ export function graphTransport(
         nextDelta = delta;
         break;
       }
-      throw new GraphContractDriftError(`delta response missing both @odata.nextLink and @odata.deltaLink (folder ${folder})`);
+      throw new GraphContractDriftError(
+        `delta response missing both @odata.nextLink and @odata.deltaLink (folder ${folder})`,
+      );
     }
-    if (nextDelta === null) throw new GraphContractDriftError(`delta paging did not terminate (folder ${folder})`);
+    if (nextDelta === null)
+      throw new GraphContractDriftError(`delta paging did not terminate (folder ${folder})`);
     // Delta feeds surface tombstones (@removed) as items lacking a body; the
     // pipeline only acts on messages with an internetMessageId, so filter here.
-    return { messages: messages.filter((m) => m.internetMessageId !== ''), deltaToken: nextDelta, resynced };
+    return {
+      messages: messages.filter((m) => m.internetMessageId !== ''),
+      deltaToken: nextDelta,
+      resynced,
+    };
   }
 
   async function getMessage(id: string): Promise<MailMessage> {
-    const html = await graphJson(`${mailboxPath}/messages/${encodeURIComponent(id)}?$select=${MESSAGE_SELECT},body`);
+    const html = await graphJson(
+      `${mailboxPath}/messages/${encodeURIComponent(id)}?$select=${MESSAGE_SELECT},body`,
+    );
     const msg = normalizeMessage(html as RawMessage);
     // Second fetch for the text/plain part (Prefer text) — best-effort; falls back
     // to the bodyPreview already captured by normalizeMessage.
     try {
-      const textRes = await graphFetch(`${mailboxPath}/messages/${encodeURIComponent(id)}?$select=body`, {
-        headers: { Prefer: 'outlook.body-content-type="text"' },
-      });
+      const textRes = await graphFetch(
+        `${mailboxPath}/messages/${encodeURIComponent(id)}?$select=body`,
+        {
+          headers: { Prefer: 'outlook.body-content-type="text"' },
+        },
+      );
       if (textRes.ok) {
         const textBody = (await textRes.json()) as { body?: { content?: string } };
         const t = textBody.body?.content;
@@ -154,18 +178,76 @@ export function graphTransport(
     );
     const value = body['value'];
     if (!Array.isArray(value)) {
-      throw new GraphContractDriftError(`attachments response missing "value" array (message ${id})`);
+      throw new GraphContractDriftError(
+        `attachments response missing "value" array (message ${id})`,
+      );
     }
     return normalizeAttachments(value as RawAttachment[]);
   }
 
-  async function moveMessage(id: string, destFolder: string): Promise<string> {
-    const dest = opts.processedFolder ?? destFolder;
-    const res = await graphFetch(`${mailboxPath}/messages/${encodeURIComponent(id)}/move`, {
-      method: 'POST',
-      body: JSON.stringify({ destinationId: dest }),
+  // Graph's /move takes a folder ID (or a well-known name like 'archive') as
+  // destinationId — a display name like 'Processed' is HTTP 400 every time
+  // (the 2026-07-15 first-test defect: no message ever moved; the delta token
+  // + internet_message_id UNIQUE guards carried the idempotency alone).
+  // Resolve the display name to an id once per transport (create the folder
+  // if it doesn't exist yet), cache it, and invalidate + retry once if the
+  // cached folder was deleted out from under us.
+  let processedFolderId: string | null = null;
+
+  async function resolveFolderId(displayName: string): Promise<string> {
+    if (processedFolderId) return processedFolderId;
+    const filter = encodeURIComponent(`displayName eq '${displayName.replace(/'/g, "''")}'`);
+    const res = await graphFetch(`${mailboxPath}/mailFolders?$filter=${filter}&$select=id`, {
+      method: 'GET',
     });
-    if (!res.ok) throw new GraphContractDriftError(`move message ${id} → ${dest} failed: HTTP ${res.status}`);
+    if (!res.ok) {
+      throw new GraphContractDriftError(
+        `resolve folder '${displayName}' failed: HTTP ${res.status}`,
+      );
+    }
+    const body = (await res.json()) as { value?: Array<{ id?: string }> };
+    const found = body.value?.[0]?.id;
+    if (typeof found === 'string') {
+      processedFolderId = found;
+      return found;
+    }
+    const created = await graphFetch(`${mailboxPath}/mailFolders`, {
+      method: 'POST',
+      body: JSON.stringify({ displayName }),
+    });
+    if (!created.ok) {
+      throw new GraphContractDriftError(
+        `create folder '${displayName}' failed: HTTP ${created.status}`,
+      );
+    }
+    const folder = (await created.json()) as { id?: string };
+    if (typeof folder.id !== 'string') {
+      throw new GraphContractDriftError(`create folder '${displayName}': no id in response`);
+    }
+    processedFolderId = folder.id;
+    return folder.id;
+  }
+
+  async function moveMessage(id: string, destFolder: string): Promise<string> {
+    const destName = opts.processedFolder ?? destFolder;
+    const attempt = async (): Promise<Response> => {
+      const destId = await resolveFolderId(destName);
+      return graphFetch(`${mailboxPath}/messages/${encodeURIComponent(id)}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ destinationId: destId }),
+      });
+    };
+    let res = await attempt();
+    if (res.status === 400 || res.status === 404) {
+      // Cached folder id may be stale (folder deleted/recreated) — re-resolve once.
+      processedFolderId = null;
+      res = await attempt();
+    }
+    if (!res.ok) {
+      throw new GraphContractDriftError(
+        `move message ${id} → ${destName} failed: HTTP ${res.status}`,
+      );
+    }
     const moved = (await res.json()) as { id?: string };
     return typeof moved.id === 'string' ? moved.id : id;
   }
