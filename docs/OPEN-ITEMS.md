@@ -18,7 +18,7 @@ are the only window her cross-checks are possible.
 
 | #   | Item                                                                                                                                                  | Source                                             | Notes / deadline                                                                                                                                                                                   |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| O-1 | **Flip AP `ap_notify` surface to `live`** — flip BOTH sites (org-wide surface stays pilot until every site row is live) | ADR-0046/0047 | **Operator test runs PASSED 2026-07-15 ("working perfectly"):** full loop validated live — ingest, dark queue via the new tile, inline attachment preview, site tag at decision, decision email carrying the ACTUAL stamped original (approved-*.pdf, per-page stamp, R2-archived, dual-sha). Pilot reroutes all AP mail to admins until the flip. Rollback = flip back to pilot, one admin action. |
+
 | O-2 | **Pick a workbook file-fetch method (§7 A/B/C)**                                                                                                      | rollup `docs/handoffs/2026-07-09-full-rollup-…` §7 | Blocks all of §8.2 (real-file parser finalization, ADR-0048 D4 promotion, June close-balance 4062 assertion). Recommended: A (rclone + Drive folder), ~5 min setup. **Kelsey window: before 8/1.** |
 | O-3 | **RESTIC_PASSWORD off-box confirmation (P1-4)**                                                                                                       | go-live plan Stage 0                               | Last gate in `assertLoadsInventoryActivated` — critical-path blocker for every manager ramp (Stage 1+).                                                                                            |
 | O-4 | **Create Mary Scott's account** when she's ready: role `manager` + `all_sites` + `can_view_billing_verify`                                            | rollup §1.2, PR #92/#93                            | Unlocks `/admin/billing/verify` (read-only pre-GP check).                                                                                                                                          |
@@ -65,6 +65,16 @@ are the only window her cross-checks are possible.
 3. Woodland June close-balance assertion (= 4,062).
 
 ## Done
+
+- **O-1 — DONE 2026-07-15 (AP IS LIVE).** Operator order same day as the
+  validation pass: test data purged (3 requests: DB rows, 7 R2 objects, 3
+  mailbox emails; audit rows kept) and `ap_notify` flipped to **live at BOTH
+  sites** (audited under Bill's admin user; criteria note cites the ADR-0046
+  validation record + PRs #98–#102). Mary (`mary.scott@svdp.us`) active in
+  `ap_decision_recipients`; approver roster: Morena, Rick, Janette, Kelsey
+  (auto-expires 8/1). From now on: new-invoice alerts go to the real roster,
+  decision mail to the forwarder + Mary CC — no [PILOT] banner. Rollback =
+  flip both rows back to pilot on /admin/rollout, one audited action each.
 
 - **O-0 — DONE 2026-07-14.** Bill added `dr3-vision@svdp.us` to the
   `dr3-vision-scoped@svdp.us` RAOP scoping group (Exchange device-code session

@@ -5,6 +5,15 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Ops — 2026-07-15 (AP MODULE LIVE — production)
+
+Operator order following the same-day validation pass: all test requests
+purged (DB + R2 + mailbox; audit retained) and `ap_notify` flipped to LIVE at
+both sites (audited, criteria note on the rows). Real routing now in effect:
+new-invoice alerts → the 4-approver roster; decision mail → the original
+forwarder with Mary CC'd; stamped originals attached and archived. Rollback
+is a pilot flip on /admin/rollout.
+
 ### Validated — 2026-07-15 (AP module operator sign-off)
 
 Bill's live test runs passed end-to-end ("working perfectly"): ingest → tile →
