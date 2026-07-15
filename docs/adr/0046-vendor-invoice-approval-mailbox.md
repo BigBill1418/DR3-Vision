@@ -427,3 +427,17 @@ artifact-empty when real files exist). **Durable follow-up (separate change):**
 capture `isInline`+`contentId` through `normalizeFile` → `persistFile` → a new
 `ap_attachments.is_inline` column and filter on that exact signal, retiring the size
 heuristic.
+
+
+## Validation record — 2026-07-15 (operator live-test pass: "working perfectly")
+
+Bill ran full live test loops against the pilot-mode module on 2026-07-15 and
+signed off verbatim: "ap module is working perfectly." Validated end-to-end on
+request `53dc5d3c` (approved, Woodland-tagged): Graph ingest with full-body
+hydration → dark-space queue reached via the new `ap-approvals` tile → inline
+attachment preview → decision with site tag → decision email to the forwarder
+(pilot-rerouted) carrying the ACTUAL original document stamped on every page
+(decision + approver + site + PT time), R2-archived with the dual-sha tamper
+record. The three defects the test runs surfaced (Processed-folder move 400,
+body-first stamp precedence, invisible site tag) are all fixed and merged
+(PRs #98–#101). Remaining before the live flip: O-1 in `docs/OPEN-ITEMS.md`.
