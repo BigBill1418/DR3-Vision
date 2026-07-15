@@ -5,6 +5,45 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added / Changed — 2026-07-15 (AP module overhaul — functional & robust, operator-directed)
+
+Bill: "let's do this now — functional and robust." Ships behind AP pilot mode
+(ADR-0047). ADR-0046 Amendment 4 (items 2/3/5) + ADR-0051 (item 1) + ADR-0020 note
+(item 6). `pdf-lib@1.17.1` added (pure-JS, MIT).
+
+- **AP queue repainted to the Vision deep-space theme** (ADR-0051). The AP page
+  shell + `ApQueueClient` tabs/selection accents move from `dr3-green-deep`/white to
+  `dr3-space`/`dr3-mist`/`dr3-cyan` (chartreuse → cyan), with the dashboard's nebula
+  atmosphere for continuity. The floor (`/operator/*`) stays green per ADR-0008; the
+  rest of the office is a follow-up sweep. Message-body iframe stays `bg-white`.
+- **Inline attachment preview** — approvers preview PDFs/images **in-panel** instead
+  of a download round-trip. The attachment route enforces an inline allowlist
+  server-side off `content_type` (`pdf`, `png/jpeg/jpg/webp`) and signs with
+  `Content-Disposition: inline`; PDFs render in a cross-origin `<iframe>` (no
+  `sandbox=""` — it kills Chromium's PDF viewer), images in `<img>`; per-attachment
+  collapse/expand; >15 MB opens in a new tab. **CSP** gains
+  `frame-src 'self' https://*.r2.cloudflarestorage.com` (`next.config.js`).
+- **GP matching keys stripped from email bodies** — the decision, hold-notice, and
+  new-request emails no longer repeat request id + original subject as body lines.
+  The keys survive on the **subject line** and the **stamped decision PDF** (and the
+  request id in the deep-link URL). Bodies now read as human decision notices.
+- **Stamp the ORIGINAL invoice, both decisions** — reverses the §C10 no-PDF-lib
+  constraint. `stampOntoOriginalPdf` overlays a visible stamp band + diagonal
+  APPROVED/REJECTED watermark onto **every page** of the original PDF (pdf-lib, true
+  overlay, reproducible sha via pinned metadata dates); image originals overlay via
+  Playwright; **each** file attachment is stamped (multi-attachment loop). The
+  stamped original(s) are attached to the decision email and archived to R2
+  (`ap/{requestId}/decision/…`). The row records a **dual-sha tamper record**
+  (`decision_pdf_sha256` + `original_attachment_sha256`) + `decision_pdf_r2_key`
+  (migration `20260720_ap_decision_artifacts`, purely additive). Fail-soft preserved:
+  a stamp/download/R2 failure never blocks the decision email; R2-unconfigured
+  degrades to the stamped cover page.
+- **AP Approvals dashboard tile + condensed grid** (ADR-0020 note) — new
+  `ap-approvals` tile under a new `ap-approver` scope (admin OR active roster member,
+  via `canActOnApRequest`), with a live pending-count cyan badge. Tiles condensed
+  (`p-4`, `h-9` icon chip, `line-clamp-2`, `min-h-[88px]`) and the grid widened to
+  `xl:grid-cols-4` for office-iPad tap density.
+
 ### Ops — 2026-07-14 (RAOP mail incident CLOSED — proper sender restored)
 
 O-0 executed: `dr3-vision@svdp.us` added to the RAOP scoping group (Bill,

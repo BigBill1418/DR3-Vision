@@ -2,7 +2,7 @@
 // Read ONCE at config-eval time — no runtime fs, edge-safe by construction.
 let dr3BuildInfo = { sha: 'dev', builtAt: 'unknown' };
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   dr3BuildInfo = JSON.parse(require('node:fs').readFileSync('.build-info.json', 'utf8'));
 } catch {
   /* dev / CI without the baked file */
@@ -75,6 +75,11 @@ const nextConfig = {
       "media-src 'self' blob:",
       "worker-src 'self' blob:",
       "manifest-src 'self'",
+      // ADR-0046 Amendment 4 — inline AP attachment preview. The approver's
+      // browser frames a presigned-GET PDF straight from R2 (Content-Disposition:
+      // inline) so PDFs/images render in-panel without a download round-trip.
+      // Scoped to the R2 host only; `img-src` already allows the same origin.
+      "frame-src 'self' https://*.r2.cloudflarestorage.com",
     ];
     // Security headers shared by every route (everything except the
     // per-route CSP and X-Frame-Options, which differ for /survey).

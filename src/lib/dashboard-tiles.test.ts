@@ -48,7 +48,15 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     const bill = makeSession('admin', EUGENE); // admin primary site is irrelevant
     // Registry order: loads-inventory (ADR-0037) → ops-ledger (ADR-0045, manager+)
     // → equipment (ADR-0044, manager+) → observability (admin-only, trails actives).
-    expect(activeKeys(bill)).toEqual(['bonus', 'exports', 'admin', 'loads-inventory', 'ops-ledger', 'equipment', 'observability']);
+    expect(activeKeys(bill)).toEqual([
+      'bonus',
+      'exports',
+      'admin',
+      'loads-inventory',
+      'ops-ledger',
+      'equipment',
+      'observability',
+    ]);
   });
 
   it('Janette (Woodland manager) sees Bonus + Exports + Ops-Ledger + Equipment active, no Admin', () => {
@@ -170,6 +178,39 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
     expect(canSeeTile(superManager, tileByKey('production-report'), WOODLAND, true)).toBe(true);
     const plainManager = makeSession('manager', WOODLAND, false);
     expect(canSeeTile(plainManager, tileByKey('production-report'), WOODLAND, false)).toBe(false);
+  });
+});
+
+describe('AP Approvals tile — ADR-0046 ap-approver scope', () => {
+  it('is registered as an active, ap-approver-scoped tile at the org-level route', () => {
+    const tile = tileByKey('ap-approvals');
+    expect(tile.status).toBe('active');
+    expect(tile.scope).toBe('ap-approver');
+    expect(tile.route).toBe('/dashboard/ops/ap');
+  });
+
+  it('is visible to admin and to a roster approver ONLY when isApApprover is true', () => {
+    const bill = makeSession('admin', EUGENE);
+    const janette = makeSession('manager', WOODLAND);
+    // 5th arg = isApApprover (resolved by the launcher via canActOnApRequest).
+    expect(canSeeTile(bill, tileByKey('ap-approvals'), WOODLAND, false, true)).toBe(true);
+    expect(canSeeTile(janette, tileByKey('ap-approvals'), WOODLAND, false, true)).toBe(true);
+  });
+
+  it('is HIDDEN from a manager who is not on the roster (isApApprover false)', () => {
+    const rick = makeSession('manager', EUGENE);
+    expect(canSeeTile(rick, tileByKey('ap-approvals'), WOODLAND, false, false)).toBe(false);
+    // …and appears in visibleTiles only when the flag is passed true.
+    expect(visibleTiles(rick, WOODLAND, false, false).map((t) => t.key)).not.toContain(
+      'ap-approvals',
+    );
+    expect(visibleTiles(rick, WOODLAND, false, true).map((t) => t.key)).toContain('ap-approvals');
+  });
+
+  it('defaults hidden when isApApprover is absent (no leak to legacy callers)', () => {
+    const bill = makeSession('admin', EUGENE);
+    expect(canSeeTile(bill, tileByKey('ap-approvals'), WOODLAND)).toBe(false);
+    expect(activeKeys(bill)).not.toContain('ap-approvals');
   });
 });
 

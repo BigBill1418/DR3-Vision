@@ -83,7 +83,7 @@ export function VisionShell({
             <span className="h-px w-6 bg-dr3-cyan/50" aria-hidden="true" />
             Active
           </h2>
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
             {activeSection}
           </div>
         </section>
@@ -94,7 +94,7 @@ export function VisionShell({
             <span className="h-px w-6 bg-dr3-mist-dim/40" aria-hidden="true" />
             Coming soon
           </h2>
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
             {comingSoonSection}
           </div>
         </section>

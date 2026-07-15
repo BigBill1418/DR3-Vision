@@ -1087,7 +1087,11 @@ describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)'
 
     triggerPayrollDelivery('wl-p12');
     // sendPayrollPdf is reached, but the period stays `signed` (no paid flip).
-    await vi.waitFor(() => expect(sendPayrollPdf).toHaveBeenCalled());
+    // Generous timeout: the fire-and-forget delivery chain can exceed
+    // vi.waitFor's 1s default under full-suite parallel load — this exact
+    // assertion flaked 4 pre-push runs (2026-07-10 → 07-15) while always
+    // passing in isolation.
+    await vi.waitFor(() => expect(sendPayrollPdf).toHaveBeenCalled(), { timeout: 10_000 });
     expect(periodById('wl-p12').state).toBe('signed');
 
     publishNtfy.mockClear();

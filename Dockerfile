@@ -42,7 +42,7 @@ RUN DATABASE_URL='postgresql://build:build@127.0.0.1:5432/build?schema=public' n
 # crosses Sprint-2 size (24k+ LOC). Raise the heap for the build stage only;
 # this ENV does not carry into the runner stage (separate FROM). Required for
 # both manual host builds and the fleet auto-deployer. (Codified 2026-06-06.)
-ENV NODE_OPTIONS=--max-old-space-size=6144
+ENV NODE_OPTIONS=--max-old-space-size=8192
 RUN npm run build
 # Compile the standalone MyMRC scrape worker (TS → CJS) for the cron
 # container. The Next.js standalone bundle does NOT include arbitrary

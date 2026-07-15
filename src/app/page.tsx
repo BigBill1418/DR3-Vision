@@ -24,6 +24,8 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { BONUS_SITE_CODE } from '@/lib/bonus/access';
+import { canActOnApRequest } from '@/lib/ap/approvers';
+import { pendingApCount } from '@/lib/ap/approvals';
 import { DASHBOARD_TILES, canSeeTile, type DashboardTile } from '@/lib/dashboard-tiles';
 import { VisionShell } from '@/app/_components/vision-shell';
 import { VisionTile } from '@/app/_components/vision-tile';
@@ -51,9 +53,20 @@ export default async function Page() {
 
   const isSuperAdmin = session.user.is_super_admin === true;
 
+  // ADR-0046 — the AP tile is scoped to the ap_approvers roster (admin OR active
+  // roster member). Resolve the flag once, then only query the pending count when
+  // the caller can actually see the tile (skip the round-trip for everyone else).
+  const isApApprover = await canActOnApRequest({
+    role: session.user.role,
+    userId: session.user.id,
+  });
+  const apPending = isApApprover ? await pendingApCount() : 0;
+
   const visible = DASHBOARD_TILES.filter((t) =>
-    canSeeTile(session, t, woodlandSiteId, isSuperAdmin),
-  ).map((t) => resolveRoute(t, ownSiteCode));
+    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover),
+  )
+    .map((t) => resolveRoute(t, ownSiteCode))
+    .map((t) => (t.key === 'ap-approvals' && apPending > 0 ? { ...t, badgeCount: apPending } : t));
 
   const active = visible.filter((t) => t.status === 'active');
   const comingSoon = visible.filter((t) => t.status === 'coming-soon');

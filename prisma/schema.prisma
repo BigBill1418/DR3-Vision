@@ -2847,6 +2847,12 @@ model ApRequest {
   // ADR-0046 §3 amendment (handoff §1.6e) — sha256 of the stamped decision PDF
   // attached to the decision mail (tamper record; visible-stamp only, no crypto).
   decision_pdf_sha256   String?
+  // ADR-0046 Amendment 4 — stamped-decision artifacts. decision_pdf_r2_key: the
+  // R2 key of the archived stamped decision PDF (private `ap/` prefix).
+  // original_attachment_sha256: sha256 of the ORIGINAL attachment bytes — the
+  // second half of the dual-sha tamper record (decision_pdf_sha256 is the first).
+  decision_pdf_r2_key        String?
+  original_attachment_sha256 String?
   created_at            DateTime        @default(now())
   updated_at            DateTime        @updatedAt
 
