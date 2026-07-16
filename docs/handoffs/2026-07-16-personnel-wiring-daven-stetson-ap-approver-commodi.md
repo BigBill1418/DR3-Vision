@@ -42,3 +42,21 @@ Add Daven to the **E0 all-staff roster** before E0 sends. Onboarding note (send 
 Account seeding + E0 roster: **now** (Stage-0 compatible). ADR-0049 draft → Bill review → build: after the incident-fix deploy confirms; it does NOT preempt Stage-1 go-live work. AP roster membership: data change now, traffic when 0046 ramps. Reconciliation view ramp: Bill flip after Daven validates it against his own records for one week (§8 discipline).
 
 **Numbering:** next free ADR = **0049**.
+
+
+
+---
+
+## 7. CORRECTION — reconciled against production state as of 2026-07-15 (supersedes conflicting statements above)
+
+§§1, 4–6 above were drafted against the early-July design state. Production has moved; the following supersedes:
+
+1. **The AP module is LIVE at both sites** (ap_notify live Woodland + Eugene, audited at `/admin/rollout`). It is NOT pilot and NOT gated on IT consent. Live flow: accounting sends to `approvals-dr3@svdp.us`; new-invoice alerts go to the approver roster; decisions email back to the original SVdP forwarder with Mary Scott CC'd, carrying the stamped original (visible per-page stamp: approver name + Pacific timestamp + optional site tag); Reject requires a note; Hold ("pending review") requires a note and notifies accounting.
+2. **Actual live roster Daven joins:** Morena, Rick, Janette, Bill (admin), Kelsey (auto-expires 8/1) — all see all pending, first-action-wins. Daven makes six until 8/1, five after. §1's "alongside Morena and Janette" understated the set.
+3. **Consequence for sequencing (§6 superseded):** adding Daven to the roster is **immediate live traffic** — he receives new-invoice alerts from his first day on the roster. Per §9.1 (PR #72), his onboarding note therefore pairs **same-day with the roster addition**, and the §5 draft's phrasing "when the accounting-approvals mailbox goes live" is corrected to present tense: it is live now, and requests will reach him immediately.
+4. **ADR numbering (§4/§6 superseded):** 0049–0051 are consumed (0051 = office dark-space theme sweep; 0052 = proposed stewardship-fee AP booking). The commodity-payment-reconciliation ADR takes the **next free number in sequence at draft time** — Claude Code verifies against `docs/adr/` before numbering; do not reuse 0049.
+5. **Adjacent open call:** O-9 (make the decision-time site tag REQUIRED so accounting always gets a site for GP filing) is pending. Daven's both-sites scope makes him a natural required-tag user — recommend resolving O-9 alongside his onboarding rather than after.
+
+Corrected onboarding note (replaces §5 draft):
+
+> Daven — you're set up in DR3 Vision as of today, and one thing starts immediately: vendor invoice approval requests from accounting now come to you along with Morena, Rick, Janette, and me — you'll get an email when a new one lands, first to act wins, and every decision is stamped and audited. Take a look at the queue when the first alert arrives; Reject and Hold both ask you for a note, and that note goes back to accounting. Second thing, coming shortly: commodity payment tracking — every outbound load you ship will carry a payment status you own, so nothing we sell goes unpaid without us seeing it age. That one turns on after you've had a chance to check it against your own records. Questions, grab me. — Bill
