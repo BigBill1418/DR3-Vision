@@ -23,6 +23,49 @@ can be assigned to a particular admin — create-form + per-row admin picker,
 server-validated (`assertAssignableAdmin`, 422 on a non-admin), audited
 reassignment (`reassignTask`), owner shown in the queue. Ledger tile was
 already live (manager+, alert_digest surface).
+### Fixed — 2026-07-16 (money-path & audit-integrity audit batch — 2026-07-16 full-stack audit)
+
+Remediated the money-path & audit-integrity findings from
+`docs/security/2026-07-16-full-stack-audit.md` (branch `fix/audit-money-integrity`):
+
+- **H1 (HIGH) — Amendment approve/reject had no CAS.** `applyApprovalInTx` /
+  `applyRejectionInTx` now flip `pending→approved/rejected` via a guarded
+  `updateMany({ where: { id, state: 'pending' } })` as the first mutation; the
+  loser gets a `count 0` → `request_not_pending` (409) and its daily-entry
+  mutation + audit never run. Closes the window where two reviewers could both
+  pass a check-then-act gate and leave an entry mutation standing under a
+  `rejected` state with a falsified `before: pending` audit. Group approve/reject
+  CAS each member via the shared helpers.
+- **M2 (MEDIUM) — AP decide flip + audit not atomic.** `writeAudit` gained an
+  optional `{ tx }` client (all existing callers unchanged); `decideRequest`'s
+  winning flip + its audit now commit in one `prisma.$transaction`, so a crash
+  between them can no longer strand a live, unaudited decision. Email/stamp/R2
+  work stays outside the tx (a committed decision never rolls back on a mail
+  failure).
+- **M1 (MEDIUM) — Late daily-report immediate-send not atomic.** Both the on-save
+  (`daily-report-late`) and scheduled (`daily-report-runner`) paths now
+  claim-before-send: they atomically create (or CAS-`updateMany`) the
+  `(site_id, report_date)` log row as the claim BEFORE the Graph send; a P2002 /
+  `count 0` bails without sending. Prevents duplicate production reports from a
+  double-click or an on-save/scheduled race. Delivery columns finalized after the
+  send; fail-soft preserved.
+- **M3 (MEDIUM) — Credit memos had no cumulative cap.** `createCreditMemo` now
+  enforces `Σ(applied + in-flight non-terminal memos) + amount ≤ invoice.total_cents`
+  (aggregate + pure `assertWithinCumulativeCap`, typed `cumulative_exceeds_invoice`
+  422). Per-memo and single-open guards retained.
+- **L2 (LOW) — Credit-memo tail write unaudited.** `transitionCreditMemo`'s
+  `superseding_invoice_id` write is folded into a `$transaction` with its audit
+  row — the last unaudited credit-memo mutation is now on the trail.
+- **M4 (MEDIUM) — AP client truncated comma currency.** `ApQueueClient` now
+  normalizes the amount via `parseUsdToCents` (strips US thousands separators,
+  rejects `$`-prefixed/ambiguous input with a message instead of silently coercing
+  `1,234.56`→`$1.00`); `inputMode="decimal"` retained.
+- **F7-AP (LOW) — AP free-text uncapped.** The decide route caps `note` (≤2000)
+  and `vendor` (≤200), returning 400 on overflow before any state change.
+
+Unit tests added/extended for each fix; `tsc` clean, full `vitest` suite green,
+lint clean on changed files. Survey/input/infra findings are owned by the
+parallel hardening pass and untouched here.
 
 ### Changed — 2026-07-16 (office dark-theme sweep executed — C-16 / ADR-0051)
 

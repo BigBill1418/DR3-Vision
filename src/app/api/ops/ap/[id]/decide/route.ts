@@ -22,6 +22,11 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// F7-AP — free-text length caps (storage-DoS boundary). Generous enough for a
+// real decision note / vendor name, bounded enough to refuse an abusive payload.
+const NOTE_MAX_LEN = 2000;
+const VENDOR_MAX_LEN = 200;
+
 interface DecideBody {
   decision?: string;
   note?: string;
@@ -42,6 +47,20 @@ export async function POST(
     if (body.decision !== 'approved' && body.decision !== 'rejected') {
       return NextResponse.json(
         { error: "decision must be 'approved' or 'rejected'" },
+        { status: 400 },
+      );
+    }
+    // F7-AP — cap stored free-text (storage-DoS boundary); 400 on overflow rather
+    // than silently truncating the note that rides the returned invoice.
+    if (typeof body.note === 'string' && body.note.length > NOTE_MAX_LEN) {
+      return NextResponse.json(
+        { error: `note must be ${NOTE_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
+    }
+    if (typeof body.vendor === 'string' && body.vendor.length > VENDOR_MAX_LEN) {
+      return NextResponse.json(
+        { error: `vendor must be ${VENDOR_MAX_LEN} characters or fewer` },
         { status: 400 },
       );
     }

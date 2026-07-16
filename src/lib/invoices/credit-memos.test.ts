@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_TRANSITIONS,
   CreditMemoTransitionError,
+  CreditMemoValidationError,
+  assertWithinCumulativeCap,
   type CreditMemoStatus,
 } from './credit-memos';
 
@@ -50,5 +52,43 @@ describe('credit-memo state machine (rollup §1.4)', () => {
     expect(e.status).toBe(409);
     expect(e.message).toContain('proposed → applied');
     expect(e.message).toContain('sent_to_mrc');
+  });
+});
+
+// M3 — the cumulative cap. The per-memo bound (≤ total) alone let a fresh memo up
+// to the full total be raised after an earlier one applied, so Σ credits could
+// exceed the invoice. `assertWithinCumulativeCap` is the money invariant, pure.
+describe('assertWithinCumulativeCap (M3 — Σ credits ≤ invoice total)', () => {
+  const base = { invoiceId: 'inv-1', invoiceTotalCents: 100_00 };
+
+  it('allows a memo that fits within the remaining budget', () => {
+    expect(() =>
+      assertWithinCumulativeCap({ ...base, priorConsumedCents: 40_00, amountCents: 60_00 }),
+    ).not.toThrow();
+  });
+
+  it('allows the exact remaining budget (boundary: prior + amount === total)', () => {
+    expect(() =>
+      assertWithinCumulativeCap({ ...base, priorConsumedCents: 70_00, amountCents: 30_00 }),
+    ).not.toThrow();
+  });
+
+  it('REJECTS a memo that pushes the running total past the invoice (the M3 gap)', () => {
+    // A prior $70 credit already applied; a new $40 would make $110 on a $100 invoice.
+    let thrown: unknown;
+    try {
+      assertWithinCumulativeCap({ ...base, priorConsumedCents: 70_00, amountCents: 40_00 });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(CreditMemoValidationError);
+    expect((thrown as CreditMemoValidationError).reason).toBe('cumulative_exceeds_invoice');
+    expect((thrown as CreditMemoValidationError).status).toBe(422);
+  });
+
+  it('rejects even a 1¢ overflow (integer-cents, no rounding slack)', () => {
+    expect(() =>
+      assertWithinCumulativeCap({ ...base, priorConsumedCents: 99_99, amountCents: 2 }),
+    ).toThrow(CreditMemoValidationError);
   });
 });

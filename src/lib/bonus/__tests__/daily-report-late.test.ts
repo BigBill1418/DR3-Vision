@@ -7,6 +7,7 @@ const findFirstConfig = vi.fn();
 const findUniqueLog = vi.fn();
 const createLog = vi.fn();
 const updateLog = vi.fn();
+const updateManyLog = vi.fn();
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -15,9 +16,21 @@ vi.mock('@/lib/prisma', () => ({
       findUnique: (...a: unknown[]) => findUniqueLog(...a),
       create: (...a: unknown[]) => createLog(...a),
       update: (...a: unknown[]) => updateLog(...a),
+      updateMany: (...a: unknown[]) => updateManyLog(...a),
     },
   },
 }));
+
+import { Prisma } from '@prisma/client';
+
+/** A real Prisma P2002 (unique-constraint) error — the claim-lost signal. */
+function p2002(): Error {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    code: 'P2002',
+    clientVersion: 'test',
+    meta: { target: ['site_id', 'report_date'] },
+  });
+}
 
 const buildDailyReport = vi.fn();
 vi.mock('@/lib/bonus/daily-report', () => ({
@@ -81,6 +94,9 @@ function makeReport(totalToday = 271) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  createLog.mockResolvedValue({ id: 'log-new' });
+  updateLog.mockResolvedValue({ id: 'log-new' });
+  updateManyLog.mockResolvedValue({ count: 1 }); // resend claim won by default
   sendDailyReport.mockResolvedValue({
     attempted: 1,
     delivered_count: 1,
@@ -138,7 +154,7 @@ describe('maybeSendLateDailyReport', () => {
     expect(created.data['resend_count']).toBeUndefined(); // default 0
   });
 
-  it('a save for YESTERDAY (amendment/backdate) sends the corrected report as a resend', async () => {
+  it('a save for YESTERDAY (amendment/backdate) CLAIMS then sends the corrected report as a resend', async () => {
     findFirstConfig.mockResolvedValue(makeConfig());
     findUniqueLog.mockResolvedValue({
       id: 'log-1',
@@ -151,13 +167,55 @@ describe('maybeSendLateDailyReport', () => {
     const out = await maybeSendLateDailyReport('site-w', YESTERDAY, BEFORE_SEND);
     expect(out).toBe('resent_late');
 
+    // The resend is CLAIMED via a CAS updateMany — guarded on the stored totals
+    // still differing — BEFORE the send. Content + resend increment land here.
+    const claim = updateManyLog.mock.calls[0]![0] as {
+      where: { id: string; NOT?: Record<string, unknown> };
+      data: Record<string, unknown>;
+    };
+    expect(claim.where.id).toBe('log-1');
+    expect(claim.where.NOT).toEqual({ total_today: 240, total_bonus_cents: 12400 });
+    expect(claim.data['resend_count']).toEqual({ increment: 1 });
+    expect(claim.data['late_submission']).toBe(true);
+    expect(claim.data['total_today']).toBe(240);
+
+    // The send fires once, flagged as a resend…
     const sendArgs = sendDailyReport.mock.calls[0]![0] as { lateInfo?: { isResend: boolean } };
     expect(sendArgs.lateInfo?.isResend).toBe(true);
+    // …and the finalize update records delivery on the claimed row.
+    const finalize = updateLog.mock.calls[0]![0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(finalize.where.id).toBe('log-1');
+    expect(finalize.data['delivered_count']).toBe(1);
+  });
 
-    const updated = updateLog.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(updated.data['resend_count']).toBe(1);
-    expect(updated.data['late_submission']).toBe(true);
-    expect(updated.data['total_today']).toBe(240);
+  it('claim lost on first send (P2002 from a concurrent save/scheduled fire) → no duplicate send', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue(null);
+    buildDailyReport.mockResolvedValue(makeReport());
+    createLog.mockRejectedValue(p2002()); // the atomic claim loses the race
+
+    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    expect(out).toBe('skipped_unchanged');
+    expect(sendDailyReport).not.toHaveBeenCalled(); // the point: never a duplicate report
+  });
+
+  it('resend claim lost (a concurrent resend already wrote these totals) → no duplicate send', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue({
+      id: 'log-1',
+      total_today: 200,
+      total_bonus_cents: 9000,
+      resend_count: 0,
+    });
+    buildDailyReport.mockResolvedValue(makeReport(240));
+    updateManyLog.mockResolvedValue({ count: 0 }); // CAS matched nothing — we lost
+
+    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    expect(out).toBe('skipped_unchanged');
+    expect(sendDailyReport).not.toHaveBeenCalled();
   });
 
   it('unchanged totals after a prior send are idempotent (no spam on re-save)', async () => {

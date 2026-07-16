@@ -84,6 +84,33 @@ function dollars(cents: number | null): string {
   return cents === null ? '' : `$${(cents / 100).toFixed(2)}`;
 }
 
+/**
+ * Parse an operator-typed USD amount to integer cents (M4). `parseFloat` stops at
+ * the first comma — `parseFloat('1,234.56')` is `1`, so a $1,234.56 invoice was
+ * filed to Great Plains as $1.00. Strip US thousands separators, accept a plain
+ * or grouped number with ≤2 decimals, and REJECT anything ambiguous (a `$`
+ * prefix, letters, odd grouping) with a message rather than silently coercing it.
+ * Returns cents on success, or `{ error }` for the caller to surface.
+ */
+export function parseUsdToCents(raw: string): number | { error: string } {
+  const s = raw.trim().replace(/\s+/g, '');
+  if (!s) return { error: 'Enter an amount, or clear the field to omit it.' };
+  if (/[^0-9.,]/.test(s)) {
+    return { error: 'Enter a plain dollar amount like 1234.56 — no $, letters, or symbols.' };
+  }
+  const grouped = /^\d{1,3}(,\d{3})+(\.\d{1,2})?$/; // 1,234 or 1,234.56
+  const plain = /^\d+(\.\d{1,2})?$/; // 1234 or 1234.56
+  let numeric: string;
+  if (grouped.test(s)) numeric = s.replace(/,/g, '');
+  else if (plain.test(s)) numeric = s;
+  else return { error: 'Enter a valid dollar amount like 1234.56 or 1,234.56.' };
+  const value = Number(numeric);
+  if (!Number.isFinite(value) || value < 0) {
+    return { error: 'Amount must be a positive number.' };
+  }
+  return Math.round(value * 100);
+}
+
 export function ApQueueClient() {
   const [filter, setFilter] = useState<Filter>('pending');
   const [rows, setRows] = useState<ListRow[]>([]);
@@ -257,10 +284,21 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         setMsg('Select the site (Woodland or Eugene) before deciding.');
         return;
       }
+      // M4 — normalize the currency input BEFORE trusting it (comma-truncation
+      // would file $1,234.56 as $1.00). Validate as an early-return guard, next
+      // to the note/site guards, so a bad amount never flips the request.
+      let amountCents: number | undefined;
+      if (amount.trim()) {
+        const parsed = parseUsdToCents(amount);
+        if (typeof parsed !== 'number') {
+          setMsg(parsed.error);
+          return;
+        }
+        amountCents = parsed;
+      }
       setBusy(true);
       setMsg(null);
       try {
-        const amountCents = amount.trim() ? Math.round(parseFloat(amount) * 100) : undefined;
         const res = await fetch(`/api/ops/ap/${detail.id}/decide`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -268,7 +306,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             decision,
             note: note.trim() || undefined,
             vendor: vendor.trim() || undefined,
-            amountCents: Number.isFinite(amountCents) ? amountCents : undefined,
+            ...(amountCents !== undefined ? { amountCents } : {}),
             siteId: siteCode,
           }),
         });

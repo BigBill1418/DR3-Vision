@@ -67,12 +67,51 @@ export class CreditMemoValidationError extends Error {
       | 'invoice_not_approved'
       | 'amount_not_positive'
       | 'amount_exceeds_invoice'
+      | 'cumulative_exceeds_invoice'
       | 'open_memo_exists'
       | 'reason_required',
     message: string,
   ) {
     super(message);
     this.name = 'CreditMemoValidationError';
+  }
+}
+
+/**
+ * Credit memos consuming this invoice's budget for the cumulative cap (M3): every
+ * memo that is either applied OR still in flight toward being applied. A memo that
+ * went `void_and_reissue_triggered` chose the supersede path instead of a credit,
+ * so it consumes no credit budget and is excluded.
+ */
+const CAP_CONSUMING_STATUSES: readonly CreditMemoStatus[] = [
+  'proposed',
+  'sent_to_mrc',
+  'accepted',
+  'rejected',
+  'applied',
+];
+
+/**
+ * The money invariant behind M3: a NEW credit memo may not push the running
+ * total of applied + in-flight credits past the invoice total. The per-memo
+ * bound (`≤ total_cents`) alone let a fresh memo up to the full total be raised
+ * AFTER an earlier one applied, so `Σ applied` could exceed what was invoiced.
+ * Pure so the arithmetic is unit-tested directly (the aggregate wiring is
+ * exercised at the route level). Throws when `prior + amount > total`.
+ */
+export function assertWithinCumulativeCap(args: {
+  invoiceId: string;
+  priorConsumedCents: number;
+  amountCents: number;
+  invoiceTotalCents: number;
+}): void {
+  if (args.priorConsumedCents + args.amountCents > args.invoiceTotalCents) {
+    throw new CreditMemoValidationError(
+      'cumulative_exceeds_invoice',
+      `credit memo amount (${args.amountCents}¢) plus existing applied/in-flight credits ` +
+        `(${args.priorConsumedCents}¢) would exceed the invoice total ` +
+        `(${args.invoiceTotalCents}¢) for invoice ${args.invoiceId}`,
+    );
   }
 }
 
@@ -167,6 +206,20 @@ export async function createCreditMemo(args: CreateCreditMemoArgs): Promise<Cred
       `credit memo amount (${args.amountCents}¢) exceeds the invoice total (${invoice.total_cents}¢)`,
     );
   }
+  // Cumulative cap (M3): the per-memo bound above is not enough — once a memo
+  // goes terminal, a fresh memo up to the full total could be raised, so Σ of
+  // applied + in-flight credits could exceed the invoice. Sum the budget-
+  // consuming memos and refuse a new one that would push the running total over.
+  const consumed = await prisma.creditMemo.aggregate({
+    where: { invoice_id: args.invoiceId, status: { in: [...CAP_CONSUMING_STATUSES] } },
+    _sum: { amount_cents: true },
+  });
+  assertWithinCumulativeCap({
+    invoiceId: args.invoiceId,
+    priorConsumedCents: consumed._sum.amount_cents ?? 0,
+    amountCents: args.amountCents,
+    invoiceTotalCents: invoice.total_cents,
+  });
   const openMemo = await prisma.creditMemo.findFirst({
     where: {
       invoice_id: args.invoiceId,
@@ -342,9 +395,25 @@ export async function transitionCreditMemo(
       });
       throw e;
     }
-    await prisma.creditMemo.update({
-      where: { id: row.id },
-      data: { superseding_invoice_id: supersedingInvoiceId },
+    // L2: the tail write recording the generated draft's id was previously a bare,
+    // UNAUDITED update — the one credit-memo mutation with no audit trail. Fold it
+    // and its audit row into one transaction so the link and its record commit
+    // together (append-only trail intact, CLAUDE.md hard rule #6).
+    await prisma.$transaction(async (tx) => {
+      await tx.creditMemo.update({
+        where: { id: row.id },
+        data: { superseding_invoice_id: supersedingInvoiceId },
+      });
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: args.actorUserId,
+          action: 'update',
+          table_name: TABLE,
+          row_id: row.id,
+          before: { superseding_invoice_id: null },
+          after: { superseding_invoice_id: supersedingInvoiceId },
+        },
+      });
     });
   }
 

@@ -5,6 +5,7 @@ const findManyConfigs = vi.fn();
 const findUniqueHoliday = vi.fn();
 const findUniqueLog = vi.fn();
 const createLog = vi.fn();
+const updateLog = vi.fn();
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -13,9 +14,21 @@ vi.mock('@/lib/prisma', () => ({
     bonusDailyReportLog: {
       findUnique: (...a: unknown[]) => findUniqueLog(...a),
       create: (...a: unknown[]) => createLog(...a),
+      update: (...a: unknown[]) => updateLog(...a),
     },
   },
 }));
+
+import { Prisma } from '@prisma/client';
+
+/** A real Prisma P2002 (unique-constraint) error — the claim-lost signal. */
+function p2002(): Error {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    code: 'P2002',
+    clientVersion: 'test',
+    meta: { target: ['site_id', 'report_date'] },
+  });
+}
 
 const buildDailyReport = vi.fn();
 vi.mock('@/lib/bonus/daily-report', () => ({
@@ -86,16 +99,15 @@ beforeEach(() => {
   findManyConfigs.mockReset();
   findUniqueHoliday.mockReset().mockResolvedValue(null);
   findUniqueLog.mockReset().mockResolvedValue(null);
-  createLog.mockReset().mockResolvedValue({});
+  createLog.mockReset().mockResolvedValue({ id: 'log-1' });
+  updateLog.mockReset().mockResolvedValue({ id: 'log-1' });
   buildDailyReport.mockReset().mockResolvedValue(makeReport());
-  sendDailyReport
-    .mockReset()
-    .mockResolvedValue({
-      attempted: 1,
-      delivered_count: 1,
-      graph_message_id: 'g1',
-      last_status: 202,
-    });
+  sendDailyReport.mockReset().mockResolvedValue({
+    attempted: 1,
+    delivered_count: 1,
+    graph_message_id: 'g1',
+    last_status: 202,
+  });
 });
 
 describe('runDailyReportFire', () => {
@@ -140,6 +152,7 @@ describe('runDailyReportFire', () => {
       includeBonusDollars: true,
       includeComparisons: true,
     });
+    // CLAIM-before-send: create writes the content with a placeholder delivery…
     expect(createLog).toHaveBeenCalledTimes(1);
     expect(createLog).toHaveBeenCalledWith({
       data: {
@@ -149,11 +162,31 @@ describe('runDailyReportFire', () => {
         total_today: 42,
         total_bonus_cents: 1275,
         mtd_total: 500,
+        delivered_count: 0,
+      },
+      select: { id: true },
+    });
+    // …then the finalize update records the real delivery outcome.
+    expect(updateLog).toHaveBeenCalledTimes(1);
+    expect(updateLog).toHaveBeenCalledWith({
+      where: { id: 'log-1' },
+      data: {
+        recipient_count: 1,
         delivered_count: 1,
         graph_message_id: 'g1',
         last_status: 202,
       },
     });
+  });
+
+  it('claim lost (P2002 from a concurrent fire/late-send) → skipped, NO duplicate send', async () => {
+    findManyConfigs.mockResolvedValue([makeConfig()]);
+    findUniqueLog.mockResolvedValue(null); // fast-path read finds nothing…
+    createLog.mockRejectedValue(p2002()); // …but the atomic claim loses the race
+    const { outcomes } = await runDailyReportFire(NOW);
+    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'skipped_already_logged' }]);
+    expect(sendDailyReport).not.toHaveBeenCalled(); // the whole point: no duplicate report
+    expect(updateLog).not.toHaveBeenCalled();
   });
 
   it('one site throwing does not stop the other (returns outcomes for both)', async () => {
