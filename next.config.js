@@ -62,27 +62,18 @@ const nextConfig = {
     ],
   },
   async headers() {
-    // The base CSP applied to every route. The survey route reuses this EXACT
-    // value and appends `frame-ancestors 'self'`, so an admin can preview the
-    // survey inside a same-origin <iframe> (ADR-0034 InvitePreview). One source
-    // array → the two CSPs can never drift.
-    const baseCsp = [
-      "default-src 'self'",
-      "img-src 'self' https://*.r2.cloudflarestorage.com data: blob:",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "connect-src 'self' https://*.r2.cloudflarestorage.com",
-      "media-src 'self' blob:",
-      "worker-src 'self' blob:",
-      "manifest-src 'self'",
-      // ADR-0046 Amendment 4 — inline AP attachment preview. The approver's
-      // browser frames a presigned-GET PDF straight from R2 (Content-Disposition:
-      // inline) so PDFs/images render in-panel without a download round-trip.
-      // Scoped to the R2 host only; `img-src` already allows the same origin.
-      "frame-src 'self' https://*.r2.cloudflarestorage.com",
-    ];
-    // Security headers shared by every route (everything except the
-    // per-route CSP and X-Frame-Options, which differ for /survey).
+    // NOTE (ADR-0053 D3): the Content-Security-Policy is NO LONGER set here — it
+    // moved to src/middleware.ts so it can carry a per-request nonce (dropping
+    // `script-src 'unsafe-inline'`). Setting it here too would double-set it and
+    // could not be nonced. next.config.js keeps only the NON-CSP security headers
+    // and the route-scoped X-Frame-Options distinction, which blanket EVERY
+    // response — including the static assets the CSP middleware matcher skips.
+    // The survey same-origin framing exception now lives in two agreeing places:
+    // X-Frame-Options: SAMEORIGIN here, and `frame-ancestors 'self'` in the
+    // middleware CSP (see @/lib/csp).
+    //
+    // Security headers shared by every route (everything except the per-route
+    // X-Frame-Options, which differs for /survey).
     const sharedSecurityHeaders = [
       {
         key: 'Strict-Transport-Security',
@@ -99,19 +90,12 @@ const nextConfig = {
     return [
       {
         // Survey route ONLY: allow SAME-ORIGIN framing so the admin invite
-        // preview iframe renders. `frame-ancestors 'self'` is appended to the
-        // identical base CSP, and X-Frame-Options is relaxed to SAMEORIGIN.
+        // preview iframe renders. X-Frame-Options is relaxed to SAMEORIGIN (and
+        // the middleware CSP appends `frame-ancestors 'self'` on the same paths).
         // (DENY forbids ALL framing — including same-origin — which is the bug
         // that broke "preview" in InvitePreview.tsx.)
         source: '/survey/:path*',
-        headers: [
-          ...sharedSecurityHeaders,
-          {
-            key: 'Content-Security-Policy',
-            value: [...baseCsp, "frame-ancestors 'self'"].join('; '),
-          },
-          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
-        ],
+        headers: [...sharedSecurityHeaders, { key: 'X-Frame-Options', value: 'SAMEORIGIN' }],
       },
       {
         // Every OTHER route keeps the hard `DENY`. The negative-lookahead
@@ -120,14 +104,7 @@ const nextConfig = {
         // header block for EVERY matching `source`, so the global matcher must
         // not also match /survey, or DENY would leak back onto it.
         source: '/((?!survey$|survey/).*)',
-        headers: [
-          ...sharedSecurityHeaders,
-          {
-            key: 'Content-Security-Policy',
-            value: baseCsp.join('; '),
-          },
-          { key: 'X-Frame-Options', value: 'DENY' },
-        ],
+        headers: [...sharedSecurityHeaders, { key: 'X-Frame-Options', value: 'DENY' }],
       },
       {
         // SW must NOT be cached at the edge — bumped versions need to

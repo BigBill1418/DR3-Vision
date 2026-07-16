@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import { headers } from 'next/headers';
 import { Suspense } from 'react';
 import { LocalePicker } from './locale-picker';
 import { LoginForm } from './login-form';
@@ -18,10 +19,15 @@ if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matc
 document.documentElement.classList.add('dr3-intro-playing');
 }catch(e){}})();`;
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  // ADR-0053 D3 — the CSP dropped `script-src 'unsafe-inline'`, so this inline
+  // FOUC guard must carry the per-request nonce the middleware minted (forwarded
+  // on the `x-nonce` request header). Without it the guard is CSP-blocked and the
+  // pre-paint intro can flash. next/headers() is async in Next 15.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6">
-      <script dangerouslySetInnerHTML={{ __html: INTRO_GUARD }} />
+      <script nonce={nonce} dangerouslySetInnerHTML={{ __html: INTRO_GUARD }} />
       <div className={`flex w-full max-w-md flex-col items-center gap-8 ${styles['shell']}`}>
         <Image
           src="/brand/dr3-vision-logo.jpg"

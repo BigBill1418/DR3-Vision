@@ -5,6 +5,21 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Security — 2026-07-16 (D3: nonce-based CSP — drop `script-src 'unsafe-inline'`)
+
+Operator-directed. Replaced `script-src 'unsafe-inline'` with a **per-request
+nonce** so CSP is a real XSS control on this finance app (ADR-0053 D3). The CSP
+moved out of `next.config.js` into `src/middleware.ts` (single source): the
+middleware mints a base64 nonce per request (Web Crypto, edge-safe), forwards it
+on the request headers so Next auto-stamps its own bootstrap scripts, and sets
+the response CSP. `script-src` is now `'self' 'nonce-…' 'strict-dynamic'` with no
+`'unsafe-inline'`; added `object-src 'none'`, `base-uri 'self'`, `form-action
+'self'`. `style-src 'unsafe-inline'` kept (Tailwind, no code-exec). The login
+FOUC guard now carries the nonce via `next/headers`. Per-route `frame-ancestors`
+survey exception + `X-Frame-Options` distinction preserved. New unit tests
+(`src/lib/csp.ts` builder + middleware wiring). tsc + full vitest + prod build
+green. ADR-0053 D3 → done. Auth/middleware logic unchanged.
+
 ### Security — 2026-07-16 (D4: AP sender-trust comments corrected; DMARC verified)
 
 Verified `svdp.us` DMARC is `p=reject` — external forgery of `@svdp.us` into
