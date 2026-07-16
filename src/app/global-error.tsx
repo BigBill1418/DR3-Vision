@@ -26,8 +26,8 @@ export default function GlobalError({
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: '#00524C',
-          color: '#FCFFD7',
+          backgroundColor: '#070C12',
+          color: '#DCEFEC',
           fontFamily: 'Inter, system-ui, sans-serif',
           textAlign: 'center',
           padding: '1.5rem',
@@ -35,8 +35,7 @@ export default function GlobalError({
       >
         <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Something went wrong</h1>
         <p style={{ marginTop: '0.5rem', opacity: 0.8 }}>
-          The error has been reported. Please refresh, or contact your administrator if it
-          persists.
+          The error has been reported. Please refresh, or contact your administrator if it persists.
         </p>
       </body>
     </html>

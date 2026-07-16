@@ -86,7 +86,7 @@ export function LoadsInventoryClient({
             onClick={() => setTab(t.id)}
             className={`rounded-t px-3 py-2 text-sm ${
               tab === t.id
-                ? 'bg-black/25 font-semibold text-dr3-chartreuse'
+                ? 'bg-black/25 font-semibold text-dr3-cyan'
                 : 'text-white/70 hover:text-white'
             }`}
           >
@@ -111,13 +111,12 @@ export function LoadsInventoryClient({
 // Shared bits -------------------------------------------------------------
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
 const labelCls = 'flex flex-col gap-1 text-sm';
-const btnCls =
-  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnCls = 'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 
 function Msg({ msg }: { msg: FieldMsg | null }) {
   if (!msg) return null;
   return (
-    <span className={msg.kind === 'ok' ? 'text-sm text-dr3-chartreuse' : 'text-sm text-red-300'}>
+    <span className={msg.kind === 'ok' ? 'text-sm text-dr3-cyan' : 'text-sm text-red-300'}>
       {msg.text}
     </span>
   );
@@ -155,8 +154,7 @@ function PhysicalCountPanel({
   const [msg, setMsg] = useState<FieldMsg | null>(null);
 
   // Live physical-count total = the jurisdiction unit fields + in-processing.
-  const physicalTotal =
-    liveNum(indoor) + liveNum(outdoor) + liveNum(total) + liveNum(processing);
+  const physicalTotal = liveNum(indoor) + liveNum(outdoor) + liveNum(total) + liveNum(processing);
   const bothPools = program.trim() !== '' && nonProgram.trim() !== '';
   const splitSum = liveNum(program) + liveNum(nonProgram);
   const mismatch = bothPools && splitSum !== physicalTotal;
@@ -205,9 +203,7 @@ function PhysicalCountPanel({
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-lg font-semibold text-dr3-chartreuse">
-          {t('physical_count.heading')}
-        </h2>
+        <h2 className="text-lg font-semibold text-dr3-cyan">{t('physical_count.heading')}</h2>
         <p className="mt-1 text-xs opacity-70">{t('physical_count.help')}</p>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -284,7 +280,11 @@ function PhysicalCountPanel({
         </label>
       </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <CountStat label={t('physical_count.count_total_label')} value={String(physicalTotal)} accent />
+        <CountStat
+          label={t('physical_count.count_total_label')}
+          value={String(physicalTotal)}
+          accent
+        />
         <CountStat
           label={t('physical_count.split_entered_label')}
           value={bothPools ? String(splitSum) : '—'}
@@ -296,7 +296,13 @@ function PhysicalCountPanel({
         />
         <CountStat
           label={t('physical_count.reconcile_delta_label')}
-          value={reconcileDelta != null ? (reconcileDelta > 0 ? `+${reconcileDelta}` : String(reconcileDelta)) : '—'}
+          value={
+            reconcileDelta != null
+              ? reconcileDelta > 0
+                ? `+${reconcileDelta}`
+                : String(reconcileDelta)
+              : '—'
+          }
         />
       </div>
       {mismatch && (
@@ -333,11 +339,7 @@ function CountStat({
   accent?: boolean;
   warn?: boolean;
 }) {
-  const border = warn
-    ? 'border-red-400/60'
-    : accent
-      ? 'border-dr3-chartreuse/50'
-      : 'border-white/15';
+  const border = warn ? 'border-red-400/60' : accent ? 'border-dr3-cyan/50' : 'border-white/15';
   return (
     <div className={`rounded-lg border ${border} bg-black/10 p-3`}>
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>

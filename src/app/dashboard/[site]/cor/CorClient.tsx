@@ -72,12 +72,19 @@ interface Detail {
   reconcile: Reconcile;
 }
 
-const btnPrimary = 'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
-const btnGhost = 'rounded border border-white/25 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40';
-const btnDanger = 'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
+const btnPrimary =
+  'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnGhost =
+  'rounded border border-white/25 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40';
+const btnDanger =
+  'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
 
 function monthLabel(iso: string): string {
-  return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(iso));
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(new Date(iso));
 }
 
 function currentMonthValue(): string {
@@ -147,7 +154,10 @@ export function CorClient({
       if (!res.ok) {
         setMsg({ kind: 'err', text: data.error ?? 'generate failed' });
       } else if (data.cert) {
-        setMsg({ kind: 'ok', text: `Draft v${data.cert.version} generated for ${monthLabel(data.cert.coverMonth)}.` });
+        setMsg({
+          kind: 'ok',
+          text: `Draft v${data.cert.version} generated for ${monthLabel(data.cert.coverMonth)}.`,
+        });
         await loadList();
         setSelectedId(data.cert.id);
       }
@@ -209,8 +219,15 @@ export function CorClient({
         // Ensure a fresh artifact exists (also runs the reconcile tripwire).
         const gen = await fetch(`/api/manager/${siteCode}/cor/${id}/pdf`, { method: 'POST' });
         if (!gen.ok) {
-          const d = (await gen.json()) as { error?: string; storedUnits?: number; recomputedUnits?: number };
-          const recon = typeof d.storedUnits === 'number' ? ` (stored ${d.storedUnits} vs recomputed ${d.recomputedUnits})` : '';
+          const d = (await gen.json()) as {
+            error?: string;
+            storedUnits?: number;
+            recomputedUnits?: number;
+          };
+          const recon =
+            typeof d.storedUnits === 'number'
+              ? ` (stored ${d.storedUnits} vs recomputed ${d.recomputedUnits})`
+              : '';
           setMsg({ kind: 'err', text: `PDF refused: ${d.error ?? 'failed'}${recon}` });
           return;
         }
@@ -253,13 +270,20 @@ export function CorClient({
               onChange={(e) => setMonth(e.target.value)}
             />
           </label>
-          <button type="button" className={`${btnPrimary} mt-3 w-full`} disabled={busy} onClick={() => void generate()}>
+          <button
+            type="button"
+            className={`${btnPrimary} mt-3 w-full`}
+            disabled={busy}
+            onClick={() => void generate()}
+          >
             Generate / regenerate draft
           </button>
         </div>
 
         <div className="rounded-lg border border-white/15 bg-black/20 p-2">
-          <h2 className="px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-70">Certificates</h2>
+          <h2 className="px-2 py-1 text-xs font-semibold uppercase tracking-wide opacity-70">
+            Certificates
+          </h2>
           <ul className="mt-1 flex flex-col">
             {rows.length === 0 && <li className="px-2 py-3 text-sm opacity-60">None yet.</li>}
             {rows.map((r) => (
@@ -276,7 +300,11 @@ export function CorClient({
                   </span>
                   <span
                     className={`text-xs ${
-                      r.status === 'finalized' ? 'text-dr3-chartreuse' : r.status === 'void' ? 'text-red-300/70' : 'opacity-70'
+                      r.status === 'finalized'
+                        ? 'text-dr3-cyan'
+                        : r.status === 'void'
+                          ? 'text-red-300/70'
+                          : 'opacity-70'
                     }`}
                   >
                     {r.status}
@@ -291,7 +319,9 @@ export function CorClient({
       {/* Right: detail / review */}
       <section>
         {msg && (
-          <p className={`mb-4 text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}>{msg.text}</p>
+          <p className={`mb-4 text-sm ${msg.kind === 'ok' ? 'text-dr3-cyan' : 'text-red-300'}`}>
+            {msg.text}
+          </p>
         )}
         {!cert ? (
           <p className="opacity-70">Select a certificate, or generate a draft for a month.</p>
@@ -299,7 +329,8 @@ export function CorClient({
           <div>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-2xl font-bold">
-                {monthLabel(cert.coverMonth)} <span className="text-base opacity-70">v{cert.version}</span>
+                {monthLabel(cert.coverMonth)}{' '}
+                <span className="text-base opacity-70">v{cert.version}</span>
               </h2>
               <span className="text-sm opacity-70">{cert.status}</span>
             </div>
@@ -323,8 +354,10 @@ export function CorClient({
                       : 'border border-white/15 bg-black/20 opacity-80'
                 }`}
               >
-                Storage capacity: {cert.inventoryUnits.toLocaleString()} / {capacityLimit.toLocaleString()} indoor units
-                {capacityWarn != null && ` (warn at ${capacityWarn.toLocaleString()})`}. Display-only context.
+                Storage capacity: {cert.inventoryUnits.toLocaleString()} /{' '}
+                {capacityLimit.toLocaleString()} indoor units
+                {capacityWarn != null && ` (warn at ${capacityWarn.toLocaleString()})`}.
+                Display-only context.
               </p>
             )}
 
@@ -332,8 +365,14 @@ export function CorClient({
             <section className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-white/15 bg-black/20 p-4">
                 <div className="text-xs uppercase tracking-wide opacity-70">Inventory at close</div>
-                <div className="mt-1 text-2xl font-bold text-dr3-chartreuse">{cert.inventoryUnits.toLocaleString()}</div>
-                <button type="button" className="mt-2 text-xs text-dr3-chartreuse underline" onClick={() => setShowInvSource((v) => !v)}>
+                <div className="mt-1 text-2xl font-bold text-dr3-cyan">
+                  {cert.inventoryUnits.toLocaleString()}
+                </div>
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-dr3-cyan underline"
+                  onClick={() => setShowInvSource((v) => !v)}
+                >
                   {showInvSource ? 'Hide balance detail' : 'Balance ledger + snapshot'}
                 </button>
               </div>
@@ -342,7 +381,11 @@ export function CorClient({
                 <div className="mt-1 text-2xl font-bold">
                   {cert.ftHeadcount ?? '—'} / {cert.ptHeadcount ?? '—'}
                 </div>
-                <button type="button" className="mt-2 text-xs text-dr3-chartreuse underline" onClick={() => setShowSeries((v) => !v)}>
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-dr3-cyan underline"
+                  onClick={() => setShowSeries((v) => !v)}
+                >
                   {showSeries ? 'Hide daily-close series' : 'Daily-close series'}
                 </button>
               </div>
@@ -356,12 +399,14 @@ export function CorClient({
             {showInvSource && (
               <div className="mt-3 rounded-lg border border-white/10 bg-black/25 p-3 text-xs">
                 <p className="opacity-80">
-                  Running balance as of {inv.asOf ? inv.asOf.slice(0, 10) : '—'} · program {inv.computedProgram ?? '—'} ·
-                  non-program {inv.computedNonProgram ?? '—'} · total {inv.computedTotal ?? '—'}.
+                  Running balance as of {inv.asOf ? inv.asOf.slice(0, 10) : '—'} · program{' '}
+                  {inv.computedProgram ?? '—'} · non-program {inv.computedNonProgram ?? '—'} · total{' '}
+                  {inv.computedTotal ?? '—'}.
                 </p>
                 <p className="mt-1 opacity-80">
-                  Anchor snapshot {inv.anchorSnapshotId ? inv.anchorSnapshotId.slice(0, 8) : 'none'} ·
-                  physical {inv.anchorPhysicalUnits ?? '—'} · reconcile delta {inv.anchorReconciledDelta ?? '—'}.
+                  Anchor snapshot {inv.anchorSnapshotId ? inv.anchorSnapshotId.slice(0, 8) : 'none'}{' '}
+                  · physical {inv.anchorPhysicalUnits ?? '—'} · reconcile delta{' '}
+                  {inv.anchorReconciledDelta ?? '—'}.
                 </p>
               </div>
             )}
@@ -369,8 +414,9 @@ export function CorClient({
             {showSeries && hc && (
               <div className="mt-3 rounded-lg border border-white/10 bg-black/25 p-3 text-xs">
                 <p className="opacity-80">
-                  Pre-fill from month-end close {hc.monthEndDate ?? '—'}: employees {hc.employeesCount ?? '—'}, processors{' '}
-                  {hc.processorsCount ?? '—'}. The FT/PT split is your judgment — the daily close captures totals only.
+                  Pre-fill from month-end close {hc.monthEndDate ?? '—'}: employees{' '}
+                  {hc.employeesCount ?? '—'}, processors {hc.processorsCount ?? '—'}. The FT/PT
+                  split is your judgment — the daily close captures totals only.
                 </p>
                 <table className="mt-2 w-full text-left">
                   <thead className="opacity-60">
@@ -384,7 +430,9 @@ export function CorClient({
                     {hc.series.map((s) => (
                       <tr key={s.id} className="border-t border-white/10">
                         <td className="py-1 pr-3">{s.productionDate}</td>
-                        <td className="py-1 pr-3 text-right tabular-nums">{s.employeesCount ?? '—'}</td>
+                        <td className="py-1 pr-3 text-right tabular-nums">
+                          {s.employeesCount ?? '—'}
+                        </td>
                         <td className="py-1 text-right tabular-nums">{s.processorsCount ?? '—'}</td>
                       </tr>
                     ))}
@@ -403,21 +451,27 @@ export function CorClient({
             {/* Version diff */}
             {detail!.priorVersion && (
               <section className="mt-5 rounded-lg border border-white/15 bg-black/20 p-4 text-sm">
-                <h3 className="text-xs font-semibold uppercase tracking-wide opacity-70">Diff vs v{detail!.priorVersion.version}</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wide opacity-70">
+                  Diff vs v{detail!.priorVersion.version}
+                </h3>
                 <ul className="mt-2 space-y-1">
                   <li>
                     Inventory: {detail!.priorVersion.inventoryUnits.toLocaleString()} →{' '}
                     {cert.inventoryUnits.toLocaleString()}{' '}
                     {cert.inventoryUnits !== detail!.priorVersion.inventoryUnits && (
-                      <span className="text-dr3-chartreuse">
+                      <span className="text-dr3-cyan">
                         ({cert.inventoryUnits - detail!.priorVersion.inventoryUnits > 0 ? '+' : ''}
-                        {(cert.inventoryUnits - detail!.priorVersion.inventoryUnits).toLocaleString()})
+                        {(
+                          cert.inventoryUnits - detail!.priorVersion.inventoryUnits
+                        ).toLocaleString()}
+                        )
                       </span>
                     )}
                   </li>
                   <li>
-                    FT/PT: {detail!.priorVersion.ftHeadcount ?? '—'}/{detail!.priorVersion.ptHeadcount ?? '—'} →{' '}
-                    {cert.ftHeadcount ?? '—'}/{cert.ptHeadcount ?? '—'}
+                    FT/PT: {detail!.priorVersion.ftHeadcount ?? '—'}/
+                    {detail!.priorVersion.ptHeadcount ?? '—'} → {cert.ftHeadcount ?? '—'}/
+                    {cert.ptHeadcount ?? '—'}
                   </li>
                 </ul>
               </section>
@@ -426,7 +480,9 @@ export function CorClient({
             {/* FT/PT entry + actions (draft only) */}
             {cert.status === 'draft' && (
               <section className="mt-6 rounded-lg border border-white/15 bg-black/20 p-4">
-                <h3 className="text-sm font-semibold">Enter the FT/PT split (required to finalize)</h3>
+                <h3 className="text-sm font-semibold">
+                  Enter the FT/PT split (required to finalize)
+                </h3>
                 <div className="mt-3 flex flex-wrap items-end gap-3">
                   <label className="flex flex-col gap-1 text-sm">
                     <span className="opacity-80">Full-time</span>
@@ -453,7 +509,12 @@ export function CorClient({
                     className={btnGhost}
                     disabled={busy || ft === '' || pt === ''}
                     onClick={() =>
-                      void act(`${cert.id}/headcount`, { ftHeadcount: Number(ft), ptHeadcount: Number(pt) }, null, 'FT/PT split saved.')
+                      void act(
+                        `${cert.id}/headcount`,
+                        { ftHeadcount: Number(ft), ptHeadcount: Number(pt) },
+                        null,
+                        'FT/PT split saved.',
+                      )
                     }
                   >
                     Save split
@@ -480,13 +541,22 @@ export function CorClient({
                     type="button"
                     className={btnDanger}
                     disabled={busy}
-                    onClick={() => void act(`${cert.id}/void`, {}, 'Void this draft? This discards it.', 'Draft voided.')}
+                    onClick={() =>
+                      void act(
+                        `${cert.id}/void`,
+                        {},
+                        'Void this draft? This discards it.',
+                        'Draft voided.',
+                      )
+                    }
                   >
                     Void draft
                   </button>
                 </div>
                 {(cert.ftHeadcount == null || cert.ptHeadcount == null) && (
-                  <p className="mt-2 text-xs opacity-70">Enter and save the FT/PT split before finalizing.</p>
+                  <p className="mt-2 text-xs opacity-70">
+                    Enter and save the FT/PT split before finalizing.
+                  </p>
                 )}
               </section>
             )}
@@ -494,7 +564,12 @@ export function CorClient({
             {/* Finalized actions */}
             {cert.status === 'finalized' && (
               <section className="mt-6 flex flex-wrap gap-3 rounded-lg border border-white/15 bg-black/20 p-4">
-                <button type="button" className={btnPrimary} disabled={busy} onClick={() => void downloadPdf(cert.id)}>
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadPdf(cert.id)}
+                >
                   Download PDF (print &amp; sign)
                 </button>
                 <button
@@ -516,7 +591,14 @@ export function CorClient({
                   type="button"
                   className={btnDanger}
                   disabled={busy}
-                  onClick={() => void act(`${cert.id}/void`, {}, 'Void this FINALIZED certificate? This cancels it.', 'Certificate voided.')}
+                  onClick={() =>
+                    void act(
+                      `${cert.id}/void`,
+                      {},
+                      'Void this FINALIZED certificate? This cancels it.',
+                      'Certificate voided.',
+                    )
+                  }
                 >
                   Void
                 </button>

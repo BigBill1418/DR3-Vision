@@ -44,7 +44,7 @@ export function LocalePicker() {
               lang={loc}
               className={`rounded-md border px-3 py-2 text-sm font-semibold transition-colors ${
                 active
-                  ? 'border-dr3-green bg-dr3-green/30 text-white'
+                  ? 'border-dr3-cyan bg-dr3-cyan/20 text-dr3-mist'
                   : 'border-white/20 bg-white/5 text-white/80 hover:bg-white/10'
               } disabled:cursor-not-allowed`}
             >

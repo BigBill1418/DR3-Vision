@@ -80,3 +80,60 @@ settled, operator-ratified state, not a provisional one: `/operator/*` stays
 on the ADR-0008 green theme indefinitely; no floor repaint is planned. This
 closed O-9(b) in `docs/OPEN-ITEMS.md`. (The office sweep of the remaining
 green `/dashboard/**` + `/admin/**` pages is still the C-16 follow-up.)
+
+## Post-acceptance note — 2026-07-16 (C-16 sweep executed — all office surfaces repainted)
+
+The follow-up sweep this ADR deferred is now done. Operator directive (Bill,
+2026-07-16): **"everything goes to the new look except the floor iPads."** Every
+remaining green office/manager surface was repainted to the deep-space theme as
+an **in-place token swap** matching the AP reference (green-era chartreuse →
+`dr3-cyan`; `dr3-green-deep` shells → `dr3-space` + `dr3-mist`; white/green
+panels → the AP's `black/30` / `white/5` fills; `accent-dr3-green` →
+`accent-dr3-cyan`). This was a class swap + contrast pass, **not** a redesign —
+no logic, layout, or spacing changed. The optional `office-shell` extraction
+from VisionShell that C-16 floated was **not** needed to reach the sweep goal
+and is deferred (no green office pages depend on it).
+
+**Surfaces repainted:**
+
+- `/dashboard/[site]/*` — `cor`, `equipment`, `invoices`, `invoices/[id]`,
+  `loads-inventory`, `ops`, `yard` (page shells + their `*Client` components).
+- `/dashboard/ops/digests` (page + `DigestsClient`).
+- `/admin/processed-units`, `/admin/production-report`.
+- `/bonus/amendments`.
+- `/login/locale-picker` (active-language accent).
+- **App-global chrome:** `layout.tsx` PWA `themeColor` (`#00524C` → `#070C12`),
+  `global-error.tsx` catastrophic fallback (green → deep-space), and the
+  `UpdatePrompt` banner's reload CTA (already-dark banner; green button → cyan).
+
+**Login & UpdatePrompt disposition (the two the sweep flagged for investigation):**
+
+- **`/login` goes dark.** It is exclusively the **office Entra SSO door**
+  (`login-form.tsx` is a single Microsoft Entra button; `login/page.tsx` was
+  already `bg-dr3-space` with the Vision logo + cinematic intro). The floor
+  iPad PIN path lives under `/operator`, **not** `/login`, so no floor flow
+  regresses. Only the locale picker's active-button green remained; it is now
+  cyan.
+- **`UpdatePrompt` is theme-neutral by construction.** The banner mounts in the
+  root shell over **every** surface (office + floor), and its container was
+  already a self-contained deep-space card (`bg-dr3-space-2/95`,
+  `border-dr3-cyan`). Only its reload button was still green; making it cyan
+  keeps it consistent on the dark banner regardless of the surface beneath — so
+  it reads correctly on both office and floor.
+- **`layout` themeColor** is a single global PWA/browser-chrome value. It now
+  matches the already-dark root `<body>`. The **floor iPads are unaffected**:
+  iOS standalone PWAs take their status-bar treatment from
+  `appleWebApp.statusBarStyle: 'black-translucent'`, not `themeColor`, which
+  primarily frames the office/desktop chrome.
+
+**Deliberately left green (per scope):** the floor tree (`/operator/*`, ADR-0008)
+and `src/app/internal/cor-pdf/[id]/page.tsx` (a printed COR deliverable, not
+office UI — PDF generation is out of scope). Semantic status colors
+(`health-pill.tsx` lime/amber/red traffic-light dots) are not brand-green and
+were left as-is.
+
+**Invariant guard:** `src/app/office-dark-theme-sweep.test.tsx` statically walks
+`src/app`, excludes `/operator` + `cor-pdf` + test files, and fails if any office
+source carries a legacy green brand class — so a new green office page (or a
+regression) breaks CI. It also asserts the floor tree still _has_ green, so the
+exclusion can't silently become a lie.

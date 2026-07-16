@@ -39,12 +39,11 @@ function currentMonth(): string {
 }
 
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
-const btnCls =
-  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnCls = 'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 
 const STATUS_STYLE: Record<string, string> = {
   draft: 'bg-white/15 text-white',
-  approved: 'bg-dr3-chartreuse/90 text-black',
+  approved: 'bg-dr3-cyan/90 text-black',
   void: 'bg-black/40 text-white/60 line-through',
 };
 
@@ -118,9 +117,7 @@ export function InvoicesClient({ siteCode }: { siteCode: string }) {
             {busy ? 'Generating…' : 'Generate draft'}
           </button>
           {msg && (
-            <span
-              className={`text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}
-            >
+            <span className={`text-sm ${msg.kind === 'ok' ? 'text-dr3-cyan' : 'text-red-300'}`}>
               {msg.text}
             </span>
           )}
@@ -166,7 +163,7 @@ export function InvoicesClient({ siteCode }: { siteCode: string }) {
                   <td className="py-2 text-right">
                     <Link
                       href={`/dashboard/${siteCode}/invoices/${r.id}`}
-                      className="text-dr3-chartreuse underline"
+                      className="text-dr3-cyan underline"
                     >
                       Open
                     </Link>

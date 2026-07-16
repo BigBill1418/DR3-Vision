@@ -31,7 +31,11 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#00524C',
+  // ADR-0051 — PWA/browser chrome color follows the Vision deep-space shell
+  // (the root <body> is bg-dr3-space). iOS PWA status bar is governed by
+  // appleWebApp.statusBarStyle: 'black-translucent', so the floor iPads are
+  // unaffected here; this frames the office/desktop chrome.
+  themeColor: '#070C12',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,

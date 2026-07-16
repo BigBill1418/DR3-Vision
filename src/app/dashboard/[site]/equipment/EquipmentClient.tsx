@@ -27,7 +27,7 @@ function centsToDollars(c: number | null): string {
 
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
 const labelCls = 'flex flex-col gap-1 text-sm';
-const btnCls = 'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnCls = 'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 
 interface FieldMsg {
   kind: 'ok' | 'err';
@@ -76,7 +76,9 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
 
 function Tile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={`rounded-lg border p-4 ${accent ? 'border-dr3-chartreuse/50 bg-black/20' : 'border-white/15 bg-black/10'}`}>
+    <div
+      className={`rounded-lg border p-4 ${accent ? 'border-dr3-cyan/50 bg-black/20' : 'border-white/15 bg-black/10'}`}
+    >
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
     </div>
@@ -84,7 +86,13 @@ function Tile({ label, value, accent }: { label: string; value: string; accent?:
 }
 
 // ── Trend chart (units/day bars + rolling mean + downtime bands + pocketcoil) ──
-function TrendPanel({ throughput, siteCode }: { throughput: EquipmentThroughput; siteCode: string }) {
+function TrendPanel({
+  throughput,
+  siteCode,
+}: {
+  throughput: EquipmentThroughput;
+  siteCode: string;
+}) {
   const daily = throughput.daily;
   const maxUnits = Math.max(1, ...daily.map((d) => d.unitsDay ?? 0));
   const maxPocket = Math.max(1, ...daily.map((d) => d.pocketcoilEstimate ?? 0));
@@ -110,7 +118,9 @@ function TrendPanel({ throughput, siteCode }: { throughput: EquipmentThroughput;
       .join(' ');
 
   const pocketPts = daily
-    .map((d, i) => (d.pocketcoilEstimate == null ? null : `${(i + 0.5) * colW},${yPocket(d.pocketcoilEstimate)}`))
+    .map((d, i) =>
+      d.pocketcoilEstimate == null ? null : `${(i + 0.5) * colW},${yPocket(d.pocketcoilEstimate)}`,
+    )
     .filter((p): p is string => p !== null)
     .join(' ');
 
@@ -126,16 +136,34 @@ function TrendPanel({ throughput, siteCode }: { throughput: EquipmentThroughput;
             {throughput.windowStartISO} → {throughput.windowEndISO}
           </span>
         </h2>
-        <a href={csvHref} download={csvName} className="rounded border border-white/25 px-3 py-1.5 text-sm hover:border-dr3-chartreuse/60">
+        <a
+          href={csvHref}
+          download={csvName}
+          className="rounded border border-white/25 px-3 py-1.5 text-sm hover:border-dr3-cyan/60"
+        >
           Export CSV
         </a>
       </div>
       <div className="mt-3 overflow-x-auto rounded-lg border border-white/15 bg-black/20 p-3">
-        <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label="Daily units per day with rolling mean and downtime overlay">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          width={W}
+          height={H}
+          role="img"
+          aria-label="Daily units per day with rolling mean and downtime overlay"
+        >
           {/* downtime red bands (kind=downtime days) */}
           {daily.map((d, i) =>
             d.hoursDown != null && d.hoursDown > 0 ? (
-              <rect key={`b${i}`} x={i * colW} y={PAD_T} width={colW} height={plotH} fill="#ef4444" opacity={0.18} />
+              <rect
+                key={`b${i}`}
+                x={i * colW}
+                y={PAD_T}
+                width={colW}
+                height={plotH}
+                fill="#ef4444"
+                opacity={0.18}
+              />
             ) : null,
           )}
           {/* units/day bars */}
@@ -156,12 +184,33 @@ function TrendPanel({ throughput, siteCode }: { throughput: EquipmentThroughput;
           )}
           {/* 7-day rolling mean */}
           {meanPts((d) => d.mean7) && (
-            <polyline points={meanPts((d) => d.mean7)} fill="none" stroke="#d7ff4f" strokeWidth={1.75} />
+            <polyline
+              points={meanPts((d) => d.mean7)}
+              fill="none"
+              stroke="#d7ff4f"
+              strokeWidth={1.75}
+            />
           )}
           {/* pocketcoil overlay (own scale — shape correlation, Juan Q4) */}
-          {pocketPts && <polyline points={pocketPts} fill="none" stroke="#fbbf24" strokeWidth={1.25} strokeDasharray="3 2" opacity={0.9} />}
+          {pocketPts && (
+            <polyline
+              points={pocketPts}
+              fill="none"
+              stroke="#fbbf24"
+              strokeWidth={1.25}
+              strokeDasharray="3 2"
+              opacity={0.9}
+            />
+          )}
           {/* baseline */}
-          <line x1={0} y1={PAD_T + plotH} x2={W} y2={PAD_T + plotH} stroke="#ffffff" strokeOpacity={0.2} />
+          <line
+            x1={0}
+            y1={PAD_T + plotH}
+            x2={W}
+            y2={PAD_T + plotH}
+            stroke="#ffffff"
+            strokeOpacity={0.2}
+          />
         </svg>
       </div>
       <Legend />
@@ -189,7 +238,8 @@ function Legend() {
       {chip('#ef4444', false, 'Downtime day')}
       {chip('#fbbf24', true, 'Pocket-coil estimate (own scale)')}
       <span className="opacity-60">
-        Units/run-hour uses an assumed {8}h working day (assumed_day_hours), reduced by that day&apos;s downtime.
+        Units/run-hour uses an assumed {8}h working day (assumed_day_hours), reduced by that
+        day&apos;s downtime.
       </span>
     </div>
   );
@@ -210,7 +260,7 @@ function CostPanel({ throughput }: { throughput: EquipmentThroughput }) {
             <div key={m.monthISO} className="flex flex-col items-center gap-1">
               <div className="text-xs opacity-70">{centsToDollars(m.costCents)}</div>
               <div
-                className="w-10 rounded-t bg-dr3-chartreuse/80"
+                className="w-10 rounded-t bg-dr3-cyan/80"
                 style={{ height: `${Math.round((m.costCents / max) * 96) + 4}px` }}
                 title={`${m.monthISO}: ${centsToDollars(m.costCents)}`}
               />
@@ -263,7 +313,10 @@ function EventEntry({ siteCode }: { siteCode: string }) {
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setMsg({ kind: 'err', text: err.error ? `Save failed: ${err.error}` : `Save failed (${res.status}).` });
+        setMsg({
+          kind: 'err',
+          text: err.error ? `Save failed: ${err.error}` : `Save failed (${res.status}).`,
+        });
         return;
       }
       setMsg({ kind: 'ok', text: 'Event recorded.' });
@@ -290,11 +343,20 @@ function EventEntry({ siteCode }: { siteCode: string }) {
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <label className={labelCls}>
           <span className="opacity-70">Date</span>
-          <input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+          <input
+            type="date"
+            className={inputCls}
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
         </label>
         <label className={labelCls}>
           <span className="opacity-70">Kind</span>
-          <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
+          <select
+            className={inputCls}
+            value={kind}
+            onChange={(e) => setKind(e.target.value as Kind)}
+          >
             {KINDS.map((k) => (
               <option key={k} value={k}>
                 {k}
@@ -317,7 +379,14 @@ function EventEntry({ siteCode }: { siteCode: string }) {
         </label>
         <label className={labelCls}>
           <span className="opacity-70">Cost ($)</span>
-          <input type="number" min="0" step="0.01" className={inputCls} value={cost} onChange={(e) => setCost(e.target.value)} />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={inputCls}
+            value={cost}
+            onChange={(e) => setCost(e.target.value)}
+          />
         </label>
         <label className={labelCls}>
           <span className="opacity-70">Vendor</span>
@@ -335,8 +404,9 @@ function EventEntry({ siteCode }: { siteCode: string }) {
         <Msg msg={msg} />
       </div>
       <p className="mt-2 text-xs opacity-70">
-        Hours-down applies to downtime, maintenance, and repair; only kind=downtime draws a red band on
-        the trend. Any kind may carry a cost. Removing an event soft-voids it (retained for the audit trail).
+        Hours-down applies to downtime, maintenance, and repair; only kind=downtime draws a red band
+        on the trend. Any kind may carry a cost. Removing an event soft-voids it (retained for the
+        audit trail).
       </p>
 
       <table className="mt-5 w-full text-left text-sm">
@@ -384,15 +454,35 @@ function EventEntry({ siteCode }: { siteCode: string }) {
 
 function Msg({ msg }: { msg: FieldMsg | null }) {
   if (!msg) return null;
-  return <span className={msg.kind === 'ok' ? 'text-sm text-dr3-chartreuse' : 'text-sm text-red-300'}>{msg.text}</span>;
+  return (
+    <span className={msg.kind === 'ok' ? 'text-sm text-dr3-cyan' : 'text-sm text-red-300'}>
+      {msg.text}
+    </span>
+  );
 }
 
 // ── CSV (client-side, from the derived daily series) ───────────────────────
 function buildCsv(daily: readonly DailyThroughputPoint[]): string {
-  const head = ['date', 'units_day', 'hours_down', 'units_per_run_hour', 'mean_7d', 'mean_30d', 'pocketcoil_estimate'];
+  const head = [
+    'date',
+    'units_day',
+    'hours_down',
+    'units_per_run_hour',
+    'mean_7d',
+    'mean_30d',
+    'pocketcoil_estimate',
+  ];
   const cell = (v: number | null) => (v == null ? '' : String(Math.round(v * 100) / 100));
   const lines = daily.map((d) =>
-    [d.dateISO, cell(d.unitsDay), cell(d.hoursDown), cell(d.unitsPerRunHour), cell(d.mean7), cell(d.mean30), cell(d.pocketcoilEstimate)].join(','),
+    [
+      d.dateISO,
+      cell(d.unitsDay),
+      cell(d.hoursDown),
+      cell(d.unitsPerRunHour),
+      cell(d.mean7),
+      cell(d.mean30),
+      cell(d.pocketcoilEstimate),
+    ].join(','),
   );
   const csv = [head.join(','), ...lines].join('\r\n');
   return `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;

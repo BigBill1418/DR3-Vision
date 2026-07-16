@@ -56,7 +56,7 @@ export function OpsClient({
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded px-4 py-2 text-sm font-medium ${tab === t ? 'bg-dr3-chartreuse text-black' : 'bg-black/20 text-white'}`}
+            className={`rounded px-4 py-2 text-sm font-medium ${tab === t ? 'bg-dr3-cyan text-black' : 'bg-black/20 text-white'}`}
           >
             {t === 'tasks' ? 'Task queue' : 'Meeting notes'}
           </button>
@@ -139,11 +139,18 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
         />
         {canWriteOrgWide && (
           <label className="flex items-center gap-1 text-xs opacity-80">
-            <input type="checkbox" checked={orgWide} onChange={(e) => setOrgWide(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={orgWide}
+              onChange={(e) => setOrgWide(e.target.checked)}
+            />
             Org-wide
           </label>
         )}
-        <button onClick={create} className="rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black">
+        <button
+          onClick={create}
+          className="rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black"
+        >
           Add task
         </button>
         {msg && <span className="text-xs opacity-80">{msg}</span>}
@@ -169,11 +176,18 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
       <ul className="space-y-2">
         {rows.length === 0 && <li className="text-sm opacity-60">No tasks match.</li>}
         {rows.map((t) => (
-          <li key={t.id} className="flex items-center justify-between rounded border border-white/10 bg-black/10 px-4 py-3">
+          <li
+            key={t.id}
+            className="flex items-center justify-between rounded border border-white/10 bg-black/10 px-4 py-3"
+          >
             <div>
               <div className="text-sm font-medium">
                 {t.title}
-                {t.site_id === null && <span className="ml-2 rounded bg-white/15 px-1.5 text-[10px] uppercase">org-wide</span>}
+                {t.site_id === null && (
+                  <span className="ml-2 rounded bg-white/15 px-1.5 text-[10px] uppercase">
+                    org-wide
+                  </span>
+                )}
               </div>
               <div className="text-xs opacity-60">
                 due {iso(t.due_date)} · {t.status} · {t.source}
@@ -181,17 +195,26 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
             </div>
             <div className="flex gap-2">
               {t.status !== 'done' && (
-                <button onClick={() => transition(t.id, 'done')} className="rounded bg-dr3-green px-3 py-1 text-xs font-semibold">
+                <button
+                  onClick={() => transition(t.id, 'done')}
+                  className="rounded bg-dr3-cyan px-3 py-1 text-xs font-semibold text-dr3-space"
+                >
                   Done
                 </button>
               )}
               {t.status === 'open' && (
-                <button onClick={() => transition(t.id, 'dropped')} className="rounded bg-black/30 px-3 py-1 text-xs">
+                <button
+                  onClick={() => transition(t.id, 'dropped')}
+                  className="rounded bg-black/30 px-3 py-1 text-xs"
+                >
                   Drop
                 </button>
               )}
               {t.status !== 'open' && (
-                <button onClick={() => transition(t.id, 'open')} className="rounded bg-black/30 px-3 py-1 text-xs">
+                <button
+                  onClick={() => transition(t.id, 'open')}
+                  className="rounded bg-black/30 px-3 py-1 text-xs"
+                >
                   Reopen
                 </button>
               )}
@@ -271,7 +294,11 @@ function NotesPanel({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteO
           />
           {canWriteOrgWide && (
             <label className="flex items-center gap-1 text-xs opacity-80">
-              <input type="checkbox" checked={orgWide} onChange={(e) => setOrgWide(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={orgWide}
+                onChange={(e) => setOrgWide(e.target.checked)}
+              />
               Org-wide
             </label>
           )}
@@ -284,7 +311,9 @@ function NotesPanel({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteO
           className="mt-3 w-full rounded bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/40"
         />
         <div className="mt-3">
-          <div className="mb-1 text-xs uppercase tracking-wide opacity-70">Action items → tasks</div>
+          <div className="mb-1 text-xs uppercase tracking-wide opacity-70">
+            Action items → tasks
+          </div>
           {items.map((it, i) => (
             <div key={i} className="mb-2 flex gap-2">
               <input
@@ -306,7 +335,10 @@ function NotesPanel({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteO
           </button>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <button onClick={create} className="rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black">
+          <button
+            onClick={create}
+            className="rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black"
+          >
             Save note
           </button>
           {msg && <span className="text-xs opacity-80">{msg}</span>}
@@ -320,7 +352,11 @@ function NotesPanel({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteO
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">
                 {n.title ?? 'Untitled note'}
-                {n.site_id === null && <span className="ml-2 rounded bg-white/15 px-1.5 text-[10px] uppercase">org-wide</span>}
+                {n.site_id === null && (
+                  <span className="ml-2 rounded bg-white/15 px-1.5 text-[10px] uppercase">
+                    org-wide
+                  </span>
+                )}
               </div>
               <div className="text-xs opacity-60">{iso(n.note_date)}</div>
             </div>

@@ -100,7 +100,9 @@ export function AmendmentQueue({ requests }: Props) {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(amendmentErrorMessage(body?.error, `Could not complete this action (${res.status}).`));
+        setError(
+          amendmentErrorMessage(body?.error, `Could not complete this action (${res.status}).`),
+        );
         setBusyKey(null);
         return;
       }
@@ -224,7 +226,7 @@ export function AmendmentQueue({ requests }: Props) {
                   type="button"
                   disabled={busy}
                   onClick={() => void act(g, 'approve')}
-                  className="rounded-md bg-dr3-green px-4 py-2 text-sm font-semibold text-dr3-cream hover:bg-dr3-green-deep disabled:opacity-50"
+                  className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
                   data-testid={`approve-${g.key}`}
                 >
                   {busy ? 'Working…' : approveLabel}
