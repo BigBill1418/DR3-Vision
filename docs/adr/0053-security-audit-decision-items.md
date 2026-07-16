@@ -1,6 +1,6 @@
 # ADR-0053 — Security audit decision items (2026-07-16 full-stack audit)
 
-**Status:** Proposed — a tracking record for the five findings the 2026-07-16
+**Status:** Proposed — D1+D5 DONE 2026-07-16 (operator-directed); D2/D3/D4 open. A tracking record for the five findings the 2026-07-16
 audit deliberately did NOT auto-fix. Each needs an operator decision and/or a
 deploy window; this ADR holds them until each is resolved (then flip its
 sub-item to Accepted/Done and mark the row in the audit register).
@@ -22,7 +22,7 @@ they don't slip.
 
 ## The five items
 
-### D1 — Next.js security bump (HIGH · auth-layer)
+### D1 — Next.js security bump (HIGH · auth-layer) — DONE 2026-07-16
 
 - **Finding (NEXT):** the pinned `next@15.5.15` sits on an advisory cluster
   including an App-Router **middleware/proxy bypass** and a WebSocket SSRF.
@@ -102,7 +102,7 @@ they don't slip.
 - **Decision needed:** confirm the tenant DMARC posture; then greenlight the
   comment/header-gate code change.
 
-### D5 — Moderate-CVE dependency clear (MEDIUM · low-risk)
+### D5 — Moderate-CVE dependency clear (MEDIUM · low-risk) — DONE 2026-07-16
 
 - **Finding (CVE):** 32 moderate CVEs in the prod tree (`postcss`,
   `protobufjs`, `ws`) clear with a **non-breaking** `npm audit fix`. The
@@ -140,3 +140,16 @@ revocation), **D4** independently (verify DMARC, then the small code change).
 - `docs/security/2026-07-16-full-stack-audit.md` (full register + verified-sound list)
 - PRs #116 (money/audit-integrity fixes), #117 (input/infra hardening) — the `[fix]` rows already shipped
 - ADR-0062 (noc-master) — the deploy saturation guard (relevant when scheduling D1's deploy window)
+
+## Resolution log
+
+- **D1 + D5 — DONE 2026-07-16 (operator-directed "do it now").** Bumped
+  `next` 15.5.15 → **15.5.20** (all `next` advisories are patched < 15.5.18;
+  non-breaking within `^15.5`) — clears the App-Router middleware-bypass + the
+  Server-Components DoS highs. A non-force `npm audit fix` cleared the in-range
+  prod highs (form-data, ws) and moderates without touching the framework
+  (react/next-auth/next unchanged). Residual high/critical are **dev-only**
+  vite/vitest (not in the runtime image) → `[watch]`; the uuid←exceljs chain
+  stays upstream-tracked. tsc + full vitest + prod build green; auth-middleware
+  behavior re-verified. Shipped as a patch bump, not the major-16 upgrade the
+  raw advisory range string implied.
