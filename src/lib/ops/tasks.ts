@@ -125,7 +125,7 @@ export async function createNoteWithTasks(
 export class OpsTaskError extends Error {
   constructor(
     public reason: string,
-    public status: 404 | 403 | 409,
+    public status: 404 | 403 | 409 | 422,
   ) {
     super(reason);
     this.name = 'OpsTaskError';
@@ -162,7 +162,59 @@ export async function transitionTask(
     table_name: 'ops_tasks',
     row_id: id,
     before: { status: before.status },
-    after: { status: task.status, completed_at: task.completed_at, completed_by: task.completed_by },
+    after: {
+      status: task.status,
+      completed_at: task.completed_at,
+      completed_by: task.completed_by,
+    },
+  });
+  return task;
+}
+
+/**
+ * Active admins who can own a task (the assignable roster; ADR-0045 amendment
+ * 2026-07-16 — "assign a task to a particular admin"). Kept to `role='admin'`
+ * to match the operator's intent.
+ */
+export function listAssignableAdmins() {
+  return prisma.user.findMany({
+    where: { role: 'admin', is_active: true, deleted_at: null },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: 'asc' },
+  });
+}
+
+/** Guard: the supplied assignee must be an active admin. Throws 422 otherwise. */
+export async function assertAssignableAdmin(assigneeUserId: string): Promise<void> {
+  const u = await prisma.user.findFirst({
+    where: { id: assigneeUserId, role: 'admin', is_active: true, deleted_at: null },
+    select: { id: true },
+  });
+  if (!u) throw new OpsTaskError('assignee_not_an_admin', 422);
+}
+
+/**
+ * Reassign a task to an admin (or clear with `null`), audited. Reach is checked
+ * by the caller against the task's own `site_id` (hard rule #2).
+ */
+export async function reassignTask(id: string, assigneeUserId: string | null, actorUserId: string) {
+  const before = await prisma.opsTask.findUnique({
+    where: { id },
+    select: { assignee_user_id: true },
+  });
+  if (!before) throw new OpsTaskError('not_found', 404);
+  if (assigneeUserId) await assertAssignableAdmin(assigneeUserId);
+  const task = await prisma.opsTask.update({
+    where: { id },
+    data: { assignee_user_id: assigneeUserId },
+  });
+  await writeAudit({
+    actor_user_id: actorUserId,
+    action: 'update',
+    table_name: 'ops_tasks',
+    row_id: id,
+    before: { assignee_user_id: before.assignee_user_id },
+    after: { assignee_user_id: task.assignee_user_id },
   });
   return task;
 }

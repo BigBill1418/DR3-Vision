@@ -15,6 +15,14 @@ admin/all-sites; both sites, aging, CSV) + launcher tile, and the
 `m3_commodity_payment_aging` audit check (30d ship→invoice / 45d
 invoice→paid, per-buyer rollup, bootstrap-gated on first payment entry,
 digest-routed). ADR-0052 → Accepted.
+### Added — 2026-07-16 (ops ledger: email link + assign-to-admin, ADR-0045 amendment)
+
+The daily digest now always carries an "Open the ops ledger" button (was
+tasks-only) so the team can reach the ledger from any digest email. Ops tasks
+can be assigned to a particular admin — create-form + per-row admin picker,
+server-validated (`assertAssignableAdmin`, 422 on a non-admin), audited
+reassignment (`reassignTask`), owner shown in the queue. Ledger tile was
+already live (manager+, alert_digest surface).
 
 ### Changed — 2026-07-16 (office dark-theme sweep executed — C-16 / ADR-0051)
 

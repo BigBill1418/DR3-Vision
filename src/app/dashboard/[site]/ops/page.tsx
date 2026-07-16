@@ -9,7 +9,7 @@ import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { currentOpsViewer } from '@/lib/ops/viewer';
 import { hasOrgReach } from '@/lib/ops/reach';
-import { dueSummaryForSite } from '@/lib/ops/tasks';
+import { dueSummaryForSite, listAssignableAdmins } from '@/lib/ops/tasks';
 import { appToday } from '@/lib/time';
 import { OpsClient } from './OpsClient';
 
@@ -34,7 +34,11 @@ export default async function OpsPage({ params }: Props) {
 
   const identity = await currentOpsViewer();
   const orgReach = identity ? hasOrgReach(identity.viewer) : false;
-  const due = await dueSummaryForSite(result.ctx.siteId, appToday(), orgReach);
+  const [due, admins] = await Promise.all([
+    dueSummaryForSite(result.ctx.siteId, appToday(), orgReach),
+    listAssignableAdmins(),
+  ]);
+  const assignees = admins.map((a) => ({ id: a.id, name: a.name ?? a.email ?? a.id }));
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
@@ -55,7 +59,7 @@ export default async function OpsPage({ params }: Props) {
           <DueTile label="Due today" value={due.dueToday.length} />
         </div>
 
-        <OpsClient siteCode={siteCode} canWriteOrgWide={orgReach} />
+        <OpsClient siteCode={siteCode} canWriteOrgWide={orgReach} assignees={assignees} />
       </div>
     </main>
   );

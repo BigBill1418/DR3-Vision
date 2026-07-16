@@ -49,7 +49,7 @@ Wednesday and the Monday preceding it (pure date function, TDD the calendar
 matrix), Vision generates a board-pack DRAFT: processed prev-month + MTD per
 site, YoY same-month comparison where history exists, big known cost bumps
 (equipment `cost` events over a threshold). Same draft/finalize/human-sends
-model — this is a P5 *generation* feature, not a send feature.
+model — this is a P5 _generation_ feature, not a send feature.
 
 ### D3 — Contact-form intake + routing
 
@@ -127,7 +127,7 @@ Deviations and decisions worth recording:
    (marked in the provider file).
 
 3. **Schema coordination.** One contiguous end-block `// ADR-0045 — ops ledger +
-   intake`. Sibling-owned FK columns (`site_id`, audit-actor columns) are bare
+intake`. Sibling-owned FK columns (`site_id`, audit-actor columns) are bare
    scalars with DB-level constraints created in the migration (ADR-0040/0041/0042
    precedent); only the two intra-block relations carry Prisma relations. This keeps
    the shared `Site`/`User` models untouched (no back-relation fields), so the
@@ -181,3 +181,22 @@ generator (the draft in `update_digests` is untouched).
   production report).
 - **First LIVE send target: 2026-08-10** — but it ships PILOT and is ramped only by
   Bill from `/admin/rollout`.
+
+## Amendment — 2026-07-16 (operator: ops ledger to live; email link; assign to an admin)
+
+Operator directive ("flip the ops ledger to live … a link for the team to
+access the ops ledger in the emails … the ability to assign a task to a
+particular admin — ready for live use"). The ledger tile was already `active`
+(manager+) and its reminders already ride the LIVE `alert_digest` surface, so
+"live" is confirmed, not a new flip. Two functional additions:
+
+- **Always-on ledger link in the digest.** Every daily digest now carries an
+  "Open the ops ledger" button in the footer (previously only rendered when
+  due tasks existed), so the team can reach the ledger from any digest email.
+- **Assign a task to a particular admin.** `ops_tasks.assignee_user_id`
+  already existed; now surfaced end-to-end: the create form and a per-row
+  control offer the active-admin roster (`listAssignableAdmins`), the POST/
+  PATCH routes validate the assignee is an active admin
+  (`assertAssignableAdmin` → 422) and audit reassignment (`reassignTask`),
+  and the queue shows the owner (`@Name`). Scope is `role='admin'` per the
+  request; a non-admin/unknown id is refused.
