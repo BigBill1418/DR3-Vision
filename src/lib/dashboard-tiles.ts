@@ -38,7 +38,14 @@ export type TileStatus = 'active' | 'coming-soon';
  *                          is roster membership, NOT the admin role or site reach:
  *                          single-site roster managers (Rick/Janette) pass.
  */
-export type TileScope = 'manager+' | 'admin-only' | 'bonus' | 'super-admin-only' | 'ap-approver';
+export type TileScope =
+  | 'manager+'
+  | 'admin-only'
+  | 'bonus'
+  | 'super-admin-only'
+  | 'ap-approver'
+  // ADR-0052 — admin OR all_sites manager (org reach; Daven's mechanism).
+  | 'org-reach';
 
 export interface DashboardTile {
   /** Stable key (also used as the React list key + test selector). */
@@ -210,6 +217,17 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'ap-approver',
   },
+  // ADR-0052 — commodity payment reconciliation (Daven). Org reach (admin OR
+  // all_sites), both sites in one view.
+  {
+    key: 'commodity-payments',
+    label: 'Commodity Payments',
+    description: 'Outbound loads by payment status — invoice refs, aging, and CSV export.',
+    icon: 'Banknote',
+    route: '/dashboard/ops/commodity-payments',
+    status: 'active',
+    scope: 'org-reach',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───
@@ -325,6 +343,11 @@ export function canSeeTile(
       // flag is resolved by the launcher via canActOnApRequest; a single-site
       // roster manager passes even without site reach (roster membership, not reach).
       return isApApprover === true;
+    case 'org-reach':
+      // ADR-0052: admin OR all_sites manager (site REACH, not admin powers —
+      // CLAUDE.md hard rule #2). Mirrors hasOrgReach without importing it
+      // (this module stays session-shaped, not viewer-shaped).
+      return role === 'admin' || user.all_sites === true;
     default:
       return false;
   }

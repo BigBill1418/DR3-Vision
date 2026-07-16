@@ -19,6 +19,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import {
   Activity,
+  Banknote,
   Boxes,
   CalendarCheck,
   ClipboardList,
@@ -41,6 +42,7 @@ import type { DashboardTile } from '@/lib/dashboard-tiles';
 
 const ICONS: Record<string, LucideIcon> = {
   Activity,
+  Banknote, // ADR-0052 — commodity payments tile
   Boxes,
   CalendarCheck,
   ClipboardList,

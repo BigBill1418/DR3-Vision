@@ -48,7 +48,9 @@ function matchWhere(row: Row, where: Row | undefined): boolean {
 
 function table(rows: Row[]) {
   return {
-    findMany: vi.fn(async (args?: { where?: Row }) => rows.filter((r) => matchWhere(r, args?.where))),
+    findMany: vi.fn(async (args?: { where?: Row }) =>
+      rows.filter((r) => matchWhere(r, args?.where)),
+    ),
     findFirst: vi.fn(async (args?: { where?: Row; orderBy?: Row }) => {
       let matched = rows.filter((r) => matchWhere(r, args?.where));
       const ob = args?.orderBy;
@@ -128,6 +130,10 @@ function fakeDb(seed: Seed): PrismaClient {
     processedUnitsDaily: table(seed.processed ?? []),
     mymrcProcessedMirror: table(seed.processedMirror ?? []),
     outboundMaterial: table(seed.outbound ?? []),
+    // ADR-0052 — M3 aging leg. Not seeded here: count 0 + no gate row keeps
+    // `commodity_payment` NOT live, so m3 is gated off and never pollutes the
+    // C1/C2/C3/C7 wiring assertions (m3's own suite covers it).
+    outboundMaterialPayment: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []) },
     mymrcOutboundMirror: table(seed.outboundMirror ?? []),
     landfilledUnit: table(seed.landfilled ?? []),
     consumerDropoff: table(seed.dropoffs ?? []),
@@ -174,7 +180,12 @@ const disableInvariants: Row[] = (
   params: {},
 }));
 
-const window: AuditWindow = { siteId: 'site-1', startISO: '2026-06-01', endISO: '2026-06-30', asOfISO: '2026-07-15' };
+const window: AuditWindow = {
+  siteId: 'site-1',
+  startISO: '2026-06-01',
+  endISO: '2026-06-30',
+  asOfISO: '2026-07-15',
+};
 
 function inboundRow(over: Row = {}): Row {
   return {
@@ -212,7 +223,11 @@ function haulMirrorRow(over: Row = {}): Row {
 
 describe('buildRunChecksForWindow — C1 inbound (logs ↔ MyMRC haul mirror)', () => {
   it('agreeing inbound + haul mirror → no C1 finding', async () => {
-    const db = fakeDb({ inbound: [inboundRow()], haulMirror: [haulMirrorRow()], configRows: disableInvariants });
+    const db = fakeDb({
+      inbound: [inboundRow()],
+      haulMirror: [haulMirrorRow()],
+      configRows: disableInvariants,
+    });
     const { findings } = await buildRunChecksForWindow(db)(window);
     expect(findings.filter((f) => f.checkCode === 'c1_inbound')).toHaveLength(0);
   });
@@ -255,10 +270,25 @@ describe('buildRunChecksForWindow — C2 processed (total-only; mirror has no sp
   it('agreeing totals → no finding even though the mirror lacks a program split', async () => {
     const db = fakeDb({
       processed: [
-        { id: 'p-1', site_id: 'site-1', production_date: D('2026-06-12'), stripped_program: 30, stripped_non_program: 5, source: 'manual', closed_at: D('2026-06-12') },
+        {
+          id: 'p-1',
+          site_id: 'site-1',
+          production_date: D('2026-06-12'),
+          stripped_program: 30,
+          stripped_non_program: 5,
+          source: 'manual',
+          closed_at: D('2026-06-12'),
+        },
       ],
       processedMirror: [
-        { id: 'sfm-1', site_id: 'site-1', external_materials_id: 'M-1', processed_date: D('2026-06-12'), units: 35, entry_date: D('2026-06-12') },
+        {
+          id: 'sfm-1',
+          site_id: 'site-1',
+          external_materials_id: 'M-1',
+          processed_date: D('2026-06-12'),
+          units: 35,
+          entry_date: D('2026-06-12'),
+        },
       ],
       configRows: disableInvariants,
     });
@@ -269,10 +299,25 @@ describe('buildRunChecksForWindow — C2 processed (total-only; mirror has no sp
   it('a processed-total mismatch → value_mismatch', async () => {
     const db = fakeDb({
       processed: [
-        { id: 'p-1', site_id: 'site-1', production_date: D('2026-06-12'), stripped_program: 30, stripped_non_program: 5, source: 'manual', closed_at: D('2026-06-12') },
+        {
+          id: 'p-1',
+          site_id: 'site-1',
+          production_date: D('2026-06-12'),
+          stripped_program: 30,
+          stripped_non_program: 5,
+          source: 'manual',
+          closed_at: D('2026-06-12'),
+        },
       ],
       processedMirror: [
-        { id: 'sfm-1', site_id: 'site-1', external_materials_id: 'M-1', processed_date: D('2026-06-12'), units: 40, entry_date: D('2026-06-12') },
+        {
+          id: 'sfm-1',
+          site_id: 'site-1',
+          external_materials_id: 'M-1',
+          processed_date: D('2026-06-12'),
+          units: 40,
+          entry_date: D('2026-06-12'),
+        },
       ],
       configRows: disableInvariants,
     });
@@ -312,7 +357,11 @@ describe('buildRunChecksForWindow — C3 outbound (Material # join = external_ma
   });
 
   it('agreeing weight + date → no finding', async () => {
-    const db = fakeDb({ outbound: [outboundRow()], outboundMirror: [outboundMirrorRow()], configRows: disableInvariants });
+    const db = fakeDb({
+      outbound: [outboundRow()],
+      outboundMirror: [outboundMirrorRow()],
+      configRows: disableInvariants,
+    });
     const { findings } = await buildRunChecksForWindow(db)(window);
     expect(findings.filter((f) => f.checkCode === 'c3_outbound')).toHaveLength(0);
   });
@@ -329,9 +378,15 @@ describe('buildRunChecksForWindow — C3 outbound (Material # join = external_ma
   });
 
   it('a Vision outbound with no mirror, past EOD grace → missing_counterpart', async () => {
-    const db = fakeDb({ outbound: [outboundRow()], outboundMirror: [], configRows: disableInvariants });
+    const db = fakeDb({
+      outbound: [outboundRow()],
+      outboundMirror: [],
+      configRows: disableInvariants,
+    });
     const { findings } = await buildRunChecksForWindow(db)(window);
-    const c3 = findings.filter((f) => f.checkCode === 'c3_outbound' && f.kind === 'missing_counterpart');
+    const c3 = findings.filter(
+      (f) => f.checkCode === 'c3_outbound' && f.kind === 'missing_counterpart',
+    );
     expect(c3.some((f) => f.legARef === 'ob-1')).toBe(true);
   });
 });
@@ -339,8 +394,21 @@ describe('buildRunChecksForWindow — C3 outbound (Material # join = external_ma
 describe('buildRunChecksForWindow — C7 clock derived from the mirror entry instant', () => {
   it('inbound entered late in MyMRC (mirror first_seen past the 3-business-day deadline) → late', async () => {
     const db = fakeDb({
-      inbound: [inboundRow({ arrived_at: D('2026-06-01'), external_mymrc_haul_id: 'H-9', retrac_id: 'RT-9' })],
-      haulMirror: [haulMirrorRow({ external_haul_id: 'H-9', retrac_id: 'RT-9', docking_appointment_at: D('2026-06-01'), first_seen_at: D('2026-06-20') })],
+      inbound: [
+        inboundRow({
+          arrived_at: D('2026-06-01'),
+          external_mymrc_haul_id: 'H-9',
+          retrac_id: 'RT-9',
+        }),
+      ],
+      haulMirror: [
+        haulMirrorRow({
+          external_haul_id: 'H-9',
+          retrac_id: 'RT-9',
+          docking_appointment_at: D('2026-06-01'),
+          first_seen_at: D('2026-06-20'),
+        }),
+      ],
       configRows: disableInvariants,
     });
     const { findings } = await buildRunChecksForWindow(db)(window);
@@ -351,8 +419,21 @@ describe('buildRunChecksForWindow — C7 clock derived from the mirror entry ins
 
   it('inbound entered on time → no C7 finding', async () => {
     const db = fakeDb({
-      inbound: [inboundRow({ arrived_at: D('2026-06-10'), external_mymrc_haul_id: 'H-9', retrac_id: 'RT-9' })],
-      haulMirror: [haulMirrorRow({ external_haul_id: 'H-9', retrac_id: 'RT-9', docking_appointment_at: D('2026-06-10'), first_seen_at: D('2026-06-11') })],
+      inbound: [
+        inboundRow({
+          arrived_at: D('2026-06-10'),
+          external_mymrc_haul_id: 'H-9',
+          retrac_id: 'RT-9',
+        }),
+      ],
+      haulMirror: [
+        haulMirrorRow({
+          external_haul_id: 'H-9',
+          retrac_id: 'RT-9',
+          docking_appointment_at: D('2026-06-10'),
+          first_seen_at: D('2026-06-11'),
+        }),
+      ],
       configRows: disableInvariants,
     });
     const { findings } = await buildRunChecksForWindow(db)(window);
@@ -364,8 +445,28 @@ describe('buildRunChecksForWindow — C7 clock derived from the mirror entry ins
 
 describe('rollInventoryDays — cross-check vs computeRunningBalance', () => {
   const flows = new Map([
-    ['2026-06-01', { inbound: { program: 30, nonProgram: 4 }, dropoffProgram: 5, stripped: { program: 10, nonProgram: 1 }, renovationSold: { program: 2, nonProgram: 0 }, landfilled: { program: 1, nonProgram: 0 }, physicalSnapshot: null }],
-    ['2026-06-02', { inbound: { program: 20, nonProgram: 2 }, dropoffProgram: 0, stripped: { program: 8, nonProgram: 0 }, renovationSold: { program: 0, nonProgram: 0 }, landfilled: { program: 0, nonProgram: 0 }, physicalSnapshot: null }],
+    [
+      '2026-06-01',
+      {
+        inbound: { program: 30, nonProgram: 4 },
+        dropoffProgram: 5,
+        stripped: { program: 10, nonProgram: 1 },
+        renovationSold: { program: 2, nonProgram: 0 },
+        landfilled: { program: 1, nonProgram: 0 },
+        physicalSnapshot: null,
+      },
+    ],
+    [
+      '2026-06-02',
+      {
+        inbound: { program: 20, nonProgram: 2 },
+        dropoffProgram: 0,
+        stripped: { program: 8, nonProgram: 0 },
+        renovationSold: { program: 0, nonProgram: 0 },
+        landfilled: { program: 0, nonProgram: 0 },
+        physicalSnapshot: null,
+      },
+    ],
   ]);
   const start = { program: 100, nonProgram: 10 };
 
@@ -391,7 +492,8 @@ describe('rollInventoryDays — cross-check vs computeRunningBalance', () => {
     expect(rows[1]!.recordedStart).toBe(rows[0]!.recordedEnd);
     expect(rows[1]!.npRecordedStart).toBe(rows[0]!.npRecordedEnd);
     for (const r of rows) {
-      const computedEnd = r.recordedStart! + r.inbound - r.stripped - r.wholeUnitsSold - r.landfilled;
+      const computedEnd =
+        r.recordedStart! + r.inbound - r.stripped - r.wholeUnitsSold - r.landfilled;
       expect(computedEnd).toBe(r.recordedEnd);
     }
   });
@@ -402,13 +504,27 @@ describe('rollConservationRows — cumulative pool availability (Rick Q11 shape)
     // Start floor 150 program; day-0 inbound 0; process 150 legal, 151 illegal.
     const legal = rollConservationRows(
       { program: 150, nonProgram: 50 },
-      new Map([['2026-06-01', { inbound: { program: 0, nonProgram: 0 }, dropoffProgram: 0, stripped: { program: 150, nonProgram: 25 }, renovationSold: { program: 0, nonProgram: 0 }, landfilled: { program: 0, nonProgram: 0 }, physicalSnapshot: null }]]) as never,
+      new Map([
+        [
+          '2026-06-01',
+          {
+            inbound: { program: 0, nonProgram: 0 },
+            dropoffProgram: 0,
+            stripped: { program: 150, nonProgram: 25 },
+            renovationSold: { program: 0, nonProgram: 0 },
+            landfilled: { program: 0, nonProgram: 0 },
+            physicalSnapshot: null,
+          },
+        ],
+      ]) as never,
     );
     expect(legal[0]!.inboundProgram).toBe(150);
     expect(legal[0]!.programProcessed).toBe(150);
     // available = 150 − 0 − 0 = 150; processing 150 is legal (not > available).
     expect(legal[0]!.programProcessed).toBeLessThanOrEqual(
-      legal[0]!.inboundProgram - legal[0]!.priorProcessedProgram - legal[0]!.programRenovationOutflow,
+      legal[0]!.inboundProgram -
+        legal[0]!.priorProcessedProgram -
+        legal[0]!.programRenovationOutflow,
     );
   });
 
@@ -416,8 +532,28 @@ describe('rollConservationRows — cumulative pool availability (Rick Q11 shape)
     const rows = rollConservationRows(
       { program: 100, nonProgram: 0 },
       new Map([
-        ['2026-06-01', { inbound: { program: 0, nonProgram: 0 }, dropoffProgram: 0, stripped: { program: 60, nonProgram: 0 }, renovationSold: { program: 0, nonProgram: 0 }, landfilled: { program: 0, nonProgram: 0 }, physicalSnapshot: null }],
-        ['2026-06-02', { inbound: { program: 0, nonProgram: 0 }, dropoffProgram: 0, stripped: { program: 30, nonProgram: 0 }, renovationSold: { program: 0, nonProgram: 0 }, landfilled: { program: 0, nonProgram: 0 }, physicalSnapshot: null }],
+        [
+          '2026-06-01',
+          {
+            inbound: { program: 0, nonProgram: 0 },
+            dropoffProgram: 0,
+            stripped: { program: 60, nonProgram: 0 },
+            renovationSold: { program: 0, nonProgram: 0 },
+            landfilled: { program: 0, nonProgram: 0 },
+            physicalSnapshot: null,
+          },
+        ],
+        [
+          '2026-06-02',
+          {
+            inbound: { program: 0, nonProgram: 0 },
+            dropoffProgram: 0,
+            stripped: { program: 30, nonProgram: 0 },
+            renovationSold: { program: 0, nonProgram: 0 },
+            landfilled: { program: 0, nonProgram: 0 },
+            physicalSnapshot: null,
+          },
+        ],
       ]) as never,
     );
     expect(rows[1]!.priorProcessedProgram).toBe(60);
@@ -429,29 +565,75 @@ describe('rollConservationRows — cumulative pool availability (Rick Q11 shape)
 // ── ADR-0043 (P3) — R/M check wiring + R↔M cross-annotation ───────────────
 
 describe('buildRunChecksForWindow — ADR-0043 rate + missing-record wiring', () => {
-  const rateWin: AuditWindow = { siteId: 'site-1', startISO: '2026-06-01', endISO: '2026-06-30', asOfISO: '2026-06-30' };
+  const rateWin: AuditWindow = {
+    siteId: 'site-1',
+    startISO: '2026-06-01',
+    endISO: '2026-06-30',
+    asOfISO: '2026-06-30',
+  };
 
   it('runs R1/R2/M1/M2 by default and links open M-findings into a breaching R-finding', async () => {
     // Mostly-trash outbound → recycling rate ~9% → R1 breaches (CA floor 75).
     const db = fakeDb({
       jurisdiction: 'california',
       outbound: [
-        { id: 'o1', site_id: 'site-1', ship_date: D('2026-06-10'), commodity: 'foam', sub_category: 'baled', weight_lbs: 100, whole_units: null, program_units: null, non_program_units: null, ticket_number: null, retrac_id: null, bale_count: null, buyer: null, source: 'manual', locked_at: null },
-        { id: 'o2', site_id: 'site-1', ship_date: D('2026-06-11'), commodity: 'trash', sub_category: 'baled', weight_lbs: 1000, whole_units: null, program_units: null, non_program_units: null, ticket_number: null, retrac_id: null, bale_count: null, buyer: null, source: 'manual', locked_at: null },
+        {
+          id: 'o1',
+          site_id: 'site-1',
+          ship_date: D('2026-06-10'),
+          commodity: 'foam',
+          sub_category: 'baled',
+          weight_lbs: 100,
+          whole_units: null,
+          program_units: null,
+          non_program_units: null,
+          ticket_number: null,
+          retrac_id: null,
+          bale_count: null,
+          buyer: null,
+          source: 'manual',
+          locked_at: null,
+        },
+        {
+          id: 'o2',
+          site_id: 'site-1',
+          ship_date: D('2026-06-11'),
+          commodity: 'trash',
+          sub_category: 'baled',
+          weight_lbs: 1000,
+          whole_units: null,
+          program_units: null,
+          non_program_units: null,
+          ticket_number: null,
+          retrac_id: null,
+          bale_count: null,
+          buyer: null,
+          source: 'manual',
+          locked_at: null,
+        },
       ],
       // A concurrent open M-finding the R-finding should reference.
-      openFindings: [{ id: 'm-open-1', site_id: 'site-1', check_code: 'm2_missing_snapshot', status: 'open' }],
+      openFindings: [
+        { id: 'm-open-1', site_id: 'site-1', check_code: 'm2_missing_snapshot', status: 'open' },
+      ],
     });
     const { checkCodes, findings } = await buildRunChecksForWindow(db)(rateWin);
 
-    expect(checkCodes).toEqual(expect.arrayContaining(['r1_recycling_rate', 'r2_recovery_rate', 'm1_missing_close', 'm2_missing_snapshot']));
+    expect(checkCodes).toEqual(
+      expect.arrayContaining([
+        'r1_recycling_rate',
+        'r2_recovery_rate',
+        'm1_missing_close',
+        'm2_missing_snapshot',
+      ]),
+    );
 
     const r1 = findings.filter((f) => f.checkCode === 'r1_recycling_rate');
     expect(r1).toHaveLength(1);
     expect(r1[0]!.fingerprint).toBe('r1_recycling_rate|value_mismatch|site-1');
-    expect((r1[0]!.detail as { linkedMissingFindings: { id: string }[] }).linkedMissingFindings).toEqual([
-      { id: 'm-open-1', checkCode: 'm2_missing_snapshot' },
-    ]);
+    expect(
+      (r1[0]!.detail as { linkedMissingFindings: { id: string }[] }).linkedMissingFindings,
+    ).toEqual([{ id: 'm-open-1', checkCode: 'm2_missing_snapshot' }]);
   });
 
   it('skips R checks when the site jurisdiction is unresolved (null)', async () => {

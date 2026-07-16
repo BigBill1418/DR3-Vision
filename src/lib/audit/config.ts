@@ -136,7 +136,13 @@ export const DEFAULT_CHECK_CONFIGS: readonly DefaultCheckConfig[] = [
     graceBusinessDays: 0,
     openWindowDays: null,
     blocksBilling: false,
-    params: { ca_floor_pct: 75, or_floor_pct: 70, warn_margin_pts: 3, high_margin_pts: 1, rate_window_days: 273 },
+    params: {
+      ca_floor_pct: 75,
+      or_floor_pct: 70,
+      warn_margin_pts: 3,
+      high_margin_pts: 1,
+      rate_window_days: 273,
+    },
   },
   {
     checkCode: 'r2_recovery_rate',
@@ -147,7 +153,13 @@ export const DEFAULT_CHECK_CONFIGS: readonly DefaultCheckConfig[] = [
     graceBusinessDays: 0,
     openWindowDays: null,
     blocksBilling: false,
-    params: { ca_floor_pct: 75, or_floor_pct: 70, warn_margin_pts: 3, high_margin_pts: 1, rate_window_days: 273 },
+    params: {
+      ca_floor_pct: 75,
+      or_floor_pct: 70,
+      warn_margin_pts: 3,
+      high_margin_pts: 1,
+      rate_window_days: 273,
+    },
   },
   // M1 — a business day with inbound activity but no processed_units_daily row
   // by EOD + grace (1 business day, site-calendar-aware via site_holidays).
@@ -174,6 +186,20 @@ export const DEFAULT_CHECK_CONFIGS: readonly DefaultCheckConfig[] = [
     openWindowDays: null,
     blocksBilling: false,
     params: { snapshot_cadence_days: 35 },
+  },
+  // M3 — ADR-0052 commodity payment aging (D1: 30d ship→invoice, 45d
+  // invoice→paid; both data, not code). D3: per-buyer rollup happens in the
+  // comparator; severity medium — money chase, not a compliance breach.
+  {
+    checkCode: 'm3_commodity_payment_aging',
+    enabled: true,
+    severity: 'medium',
+    unitTolerance: 0,
+    weightToleranceLbs: 0,
+    graceBusinessDays: 0,
+    openWindowDays: null,
+    blocksBilling: false,
+    params: { aging_ship_days: 30, aging_invoice_days: 45 },
   },
 ];
 
@@ -227,9 +253,8 @@ function rowToConfig(row: CheckConfigRow): CheckConfig {
     graceBusinessDays: row.grace_business_days,
     openWindowDays: row.open_window_days,
     blocksBilling: row.blocks_billing,
-    params: (row.params && typeof row.params === 'object'
-      ? (row.params as Record<string, JsonValue>)
-      : {}),
+    params:
+      row.params && typeof row.params === 'object' ? (row.params as Record<string, JsonValue>) : {},
   };
 }
 

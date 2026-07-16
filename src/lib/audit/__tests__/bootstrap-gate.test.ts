@@ -13,12 +13,15 @@ function fakeDb(opts: {
   invoices?: number;
   closes?: number;
   snapshots?: number;
+  payments?: number;
   gates?: Array<{ leg: string; go_live_date: Date | null }>;
 }): PrismaClient {
   return {
     invoice: { count: vi.fn(async () => opts.invoices ?? 0) },
     processedUnitsDaily: { count: vi.fn(async () => opts.closes ?? 0) },
     siteInventorySnapshot: { count: vi.fn(async () => opts.snapshots ?? 0) },
+    // ADR-0052 — the commodity_payment leg (m3 aging).
+    outboundMaterialPayment: { count: vi.fn(async () => opts.payments ?? 0) },
     auditBootstrapGate: { findMany: vi.fn(async () => opts.gates ?? []) },
   } as unknown as PrismaClient;
 }
@@ -31,6 +34,13 @@ describe('resolveLegLiveness', () => {
     expect(live.isLive('billing')).toBe(false);
     expect(live.isLive('close')).toBe(false);
     expect(live.isLive('snapshot')).toBe(false);
+    expect(live.isLive('commodity_payment')).toBe(false);
+  });
+
+  it('ADR-0052 — the first commodity payment record makes only that leg live', async () => {
+    const live = await resolveLegLiveness(fakeDb({ payments: 1 }), 'site-eugene', ASOF);
+    expect(live.isLive('commodity_payment')).toBe(true);
+    expect(live.isLive('billing')).toBe(false);
   });
 
   it('(b) first data row makes only that leg live (no code change)', async () => {
@@ -62,5 +72,6 @@ describe('resolveLegLiveness', () => {
     expect(BOOTSTRAP_GATED_CHECKS.c4_billing_basis).toBe('billing');
     expect(BOOTSTRAP_GATED_CHECKS.m1_missing_close).toBe('close');
     expect(BOOTSTRAP_GATED_CHECKS.m2_missing_snapshot).toBe('snapshot');
+    expect(BOOTSTRAP_GATED_CHECKS.m3_commodity_payment_aging).toBe('commodity_payment');
   });
 });

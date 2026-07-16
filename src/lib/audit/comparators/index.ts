@@ -15,3 +15,10 @@ export { r2RecoveryRate } from './r2-recovery';
 export { gradeRate, buildRateFindings, type RateThresholds, type RateGrade } from './rate-check';
 export { m1MissingClose, type M1Input, type M1DayRow } from './m1-missing-close';
 export { m2MissingSnapshot, type M2Input } from './m2-missing-snapshot';
+// ADR-0052 — commodity payment aging (per-buyer rollup).
+export {
+  m3CommodityPaymentAging,
+  UNKNOWN_BUYER,
+  type M3Input,
+  type M3PaymentRow,
+} from './m3-commodity-payment-aging';

@@ -1,7 +1,7 @@
 # ADR-0052 — Commodity Payment Reconciliation (v1, deliberately modest)
 
-**Status:** Proposed — awaiting Bill's D1–D3 calls (presented 2026-07-16); build
-starts on his answers
+**Status:** Accepted (2026-07-16) — Bill approved D1–D3 as proposed ("D1-D3
+approved as proposed - build it"); built same day
 **Date:** 2026-07-16
 **Directive:** `docs/handoffs/2026-07-16-personnel-wiring-daven-stetson-ap-approver-commodi.md`
 §4, as corrected by §7 (production-state reconciliation of 2026-07-15)
@@ -62,13 +62,13 @@ parsing, buyer portals, price-per-lb validation against contracts.
 change, handled with his onboarding) and the MRC invoice approval gate (Rick's
 billing trust gate is unchanged; Daven is not on it).
 
-## D-items for Bill (answers finalize this ADR → Accepted)
+## D-items — ANSWERED 2026-07-16 (approved as proposed)
 
-| # | Question | Proposed |
-|---|----------|----------|
-| D1 | Aging thresholds for the audit check | **30 days** since ship without invoice; **45 days** since invoice without payment (both config, not code) |
-| D2 | Is expected-amount required at `invoiced`? | **Optional** — don't block Daven's entry on a number he may not have; the check can flag `paid` rows with no amount later |
-| D3 | Aging check emits per-load findings or per-buyer rollup? | **Per-buyer rollup** — one finding per buyer per run listing its aging loads; less digest noise, matches how Daven will actually chase payment (by buyer, not by load) |
+| #   | Question                                                 | Proposed                                                                                                                                                               |
+| --- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Aging thresholds for the audit check                     | **30 days** since ship without invoice; **45 days** since invoice without payment (both config, not code)                                                              |
+| D2  | Is expected-amount required at `invoiced`?               | **Optional** — don't block Daven's entry on a number he may not have; the check can flag `paid` rows with no amount later                                              |
+| D3  | Aging check emits per-load findings or per-buyer rollup? | **Per-buyer rollup** — one finding per buyer per run listing its aging loads; less digest noise, matches how Daven will actually chase payment (by buyer, not by load) |
 
 ## Consequences
 
@@ -87,3 +87,22 @@ Account seeding + E0 roster + AP roster membership: immediate (AP is LIVE —
 roster addition = live traffic same day, onboarding note pairs same-day).
 This build: after Bill's D1–D3 answers; does not preempt staged go-live work.
 Ramp: Bill flip after Daven's one-week validation.
+
+## Build record — 2026-07-16 (v1 shipped)
+
+- Migration `20260721_commodity_payment_recon` — `outbound_material_payments`
+  (+ `CommodityPaymentStatus` enum), purely additive.
+- Service `src/lib/commodity-payments/payments.ts` — forward-only transitions
+  (self-edit allowed; `paid → disputed` reachable for after-the-fact disputes),
+  auto-stamped invoice/paid dates, Decimal-as-string money edges, audited
+  before/after with the transition named.
+- View `/dashboard/ops/commodity-payments` (+ `commodity-payments` launcher
+  tile, new `org-reach` tile scope) — both sites, status chips, aging columns
+  highlighted past D1 thresholds, inline update panel, CSV export. Born on the
+  deep-space theme.
+- Audit check `m3_commodity_payment_aging` — per-buyer rollup (D3), thresholds
+  in `audit_check_config.params` (D1: 30/45), gated on the new
+  `commodity_payment` bootstrap leg (silent until the first payment entry per
+  site, or an admin `go_live_date`); notification rides the ADR-0043 digest.
+- Access: `requireOrgReach` (admin OR all_sites manager) on the page and all
+  three API routes.
