@@ -66,6 +66,13 @@ const TILES = [
     description: "Import Janette's Terex spreadsheet into the equipment log (ADR-0048 D3).",
     testid: 'admin-tile-terex-import',
   },
+  {
+    href: '/admin/file-drop',
+    label: 'File Drop',
+    description:
+      'Dump any file (invoices, workbooks, images). Captured and listed for routing (O-2).',
+    testid: 'admin-tile-file-drop',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {

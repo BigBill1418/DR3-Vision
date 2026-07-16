@@ -19,6 +19,36 @@ FOUC guard now carries the nonce via `next/headers`. Per-route `frame-ancestors`
 survey exception + `X-Frame-Options` distinction preserved. New unit tests
 (`src/lib/csp.ts` builder + middleware wiring). tsc + full vitest + prod build
 green. ADR-0053 D3 → done. Auth/middleware logic unchanged.
+### Added — 2026-07-16 (O-2: admin file-drop inbox)
+
+Operator-directed (O-2): _"just allow me to upload [files] in the vision portal
+and then you can settle out what they are and where they belong… I can just dump
+the data there."_ New admin-only **File Drop** capture inbox at
+`/admin/file-drop`. Bill drops ANY file (any content-type, ≤100 MB); the system
+stores it in R2 under `file-drops/<id>/<sanitized-name>` and records one manifest
+row. Downstream classification/routing stays a human step (Claude Code reads the
+manifest + downloads objects) — this ships **only** the capture surface, no
+parsing/promotion.
+
+- **Schema:** additive `file_drops` table + `FileDropStatus` enum (migration
+  `20260724_admin_file_drops`, ADR-0035 clean-replay; sorts after `20260723`).
+  `uploaded_by` is a bare audit-actor id (no FK, like AP `held_by`/`decided_by`).
+- **Upload:** server-buffered multipart (matches the workbook/AP server-side R2
+  put path — admin uploads from a browser). New `putFileDrop` / `signFileDropDownload`
+  helpers in `src/lib/r2.ts`; R2 is fail-soft (unconfigured → `pending-r2-filedrop-…`
+  placeholder key so capture never fails).
+- **Classification:** `classifyFileDrop` pure fn (advisory `detected_kind` hint —
+  `.xlsm`/`.xlsx`→workbook, `.pdf`→pdf_document, `.csv`→csv, `image/*`→image,
+  else other). Never routes anything.
+- **Routes** (all admin-gated, audited): `POST/GET /api/admin/file-drops`,
+  `PATCH /api/admin/file-drops/[id]` (status/note), `GET …/[id]/download`
+  (presigned). Create + status/note changes write `audit_log` rows
+  (`table_name = file_drops`).
+- **Surface:** deep-space themed `/admin/file-drop` page + client (dropzone,
+  multi-file picker, manifest list with per-row download / status / note; no
+  `<form>` per hard rule #10). Discoverable via a new admin-only **File Drop**
+  dashboard tile (`Upload` icon) and an Admin-hub link.
+- **Docs:** `docs/operator/file-drop.md`.
 
 ### Security — 2026-07-16 (D4: AP sender-trust comments corrected; DMARC verified)
 
@@ -27,6 +57,7 @@ the AP mailbox is blocked upstream by DMARC + EOP. Corrected the misleading
 "authenticated envelope" comments in `ap/senders.ts` + `msgraph-mail/normalize.ts`
 to state that sender trust rests on the From header + the DMARC/EOP posture
 (a documented hard precondition), not a cryptographic envelope. ADR-0053 D4 → done.
+
 ### Security — 2026-07-16 (ADR-0053 D2: session revocation kill-switch)
 
 Operator-directed. Closes the audit's `JWT` high — a demoted / deactivated /

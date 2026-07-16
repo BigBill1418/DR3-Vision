@@ -851,6 +851,42 @@ model AuditLog {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Admin file-drop inbox (O-2, 2026-07-16)
+// ────────────────────────────────────────────────────────────────────────
+//
+// A raw capture inbox: an admin uploads ANY file through /admin/file-drop; the
+// bytes go to R2 (`file-drops/<id>/<sanitized-name>`) and one manifest row lands
+// here. Classification/routing is a DOWNSTREAM human step (Claude Code reads the
+// manifest + downloads the object) — this table only CAPTURES. `detected_kind` is
+// an advisory hint (best-effort, by extension/content-type), never load-bearing.
+// `uploaded_by` is a bare audit-actor user id with NO FK, matching the AP audit
+// columns (held_by / decided_by).
+
+enum FileDropStatus {
+  received
+  routed
+  discarded
+}
+
+model FileDrop {
+  id                String         @id @default(uuid())
+  original_filename String
+  content_type      String
+  byte_size         Int
+  r2_key            String
+  status            FileDropStatus @default(received)
+  detected_kind     String? // advisory classification hint (workbook/pdf_document/csv/image/other)
+  note              String? // operator annotation of what was done with the file
+  uploaded_by       String // bare audit-actor user id (no FK; mirrors AP held_by/decided_by)
+  created_at        DateTime       @default(now())
+  updated_at        DateTime       @updatedAt
+
+  @@index([status, created_at])
+  @@index([created_at])
+  @@map("file_drops")
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Form templates (V2.2+ extensibility hook; not used in MVP)
 // ────────────────────────────────────────────────────────────────────────
 

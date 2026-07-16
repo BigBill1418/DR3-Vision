@@ -228,6 +228,17 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'org-reach',
   },
+  // O-2 (2026-07-16) — admin file-drop inbox. Bill dumps ANY file; the system
+  // captures + lists it; routing is a downstream human step. Admin-only.
+  {
+    key: 'file-drop',
+    label: 'File Drop',
+    description: 'Dump any file — invoices, workbooks, images. Captured and listed for routing.',
+    icon: 'Upload',
+    route: '/admin/file-drop',
+    status: 'active',
+    scope: 'admin-only',
+  },
 ];
 
 // ── Coming-soon tiles (visible to everyone who passes the base gate) ───
