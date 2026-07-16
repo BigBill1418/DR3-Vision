@@ -5,6 +5,14 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Security — 2026-07-16 (D4: AP sender-trust comments corrected; DMARC verified)
+
+Verified `svdp.us` DMARC is `p=reject` — external forgery of `@svdp.us` into
+the AP mailbox is blocked upstream by DMARC + EOP. Corrected the misleading
+"authenticated envelope" comments in `ap/senders.ts` + `msgraph-mail/normalize.ts`
+to state that sender trust rests on the From header + the DMARC/EOP posture
+(a documented hard precondition), not a cryptographic envelope. ADR-0053 D4 → done.
+
 ### Security — 2026-07-16 (D1+D5: Next.js off the middleware-bypass advisory + CVE clear)
 
 Operator-directed. Bumped `next` 15.5.15 → 15.5.20 (patched < 15.5.18;
