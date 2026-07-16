@@ -198,5 +198,8 @@ particular admin — ready for live use"). The ledger tile was already `active`
   control offer the active-admin roster (`listAssignableAdmins`), the POST/
   PATCH routes validate the assignee is an active admin
   (`assertAssignableAdmin` → 422) and audit reassignment (`reassignTask`),
-  and the queue shows the owner (`@Name`). Scope is `role='admin'` per the
-  request; a non-admin/unknown id is refused.
+  and the queue shows the owner (`@Name`). Scope was initially `role='admin'`
+  per the literal request, then **widened the same day (operator call) to
+  admins + managers** (`listAssignableOwners` / `assertAssignableOwner`) so
+  site/all-sites managers (e.g. Daven) can own follow-ups; operators are never
+  assignable, and a non-assignable/unknown id is refused (422).

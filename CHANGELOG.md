@@ -5,6 +5,14 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-16 (ops-ledger task assignee widened to managers)
+
+Operator call: the ledger task-assignee picker (shipped same day scoped to
+admins only) now offers **admins + managers** (`listAssignableOwners` /
+`assertAssignableOwner`), so site/all-sites managers like Daven can own
+follow-ups. Operators remain non-assignable; the server still 422s a
+non-assignable id.
+
 ### Added — 2026-07-16 (ADR-0052 BUILT: commodity payment reconciliation v1)
 
 Bill approved D1–D3 as proposed and ordered the build. New
@@ -15,6 +23,7 @@ admin/all-sites; both sites, aging, CSV) + launcher tile, and the
 `m3_commodity_payment_aging` audit check (30d ship→invoice / 45d
 invoice→paid, per-buyer rollup, bootstrap-gated on first payment entry,
 digest-routed). ADR-0052 → Accepted.
+
 ### Added — 2026-07-16 (ops ledger: email link + assign-to-admin, ADR-0045 amendment)
 
 The daily digest now always carries an "Open the ops ledger" button (was
@@ -23,6 +32,7 @@ can be assigned to a particular admin — create-form + per-row admin picker,
 server-validated (`assertAssignableAdmin`, 422 on a non-admin), audited
 reassignment (`reassignTask`), owner shown in the queue. Ledger tile was
 already live (manager+, alert_digest surface).
+
 ### Fixed — 2026-07-16 (money-path & audit-integrity audit batch — 2026-07-16 full-stack audit)
 
 Remediated the money-path & audit-integrity findings from
@@ -66,6 +76,7 @@ Remediated the money-path & audit-integrity findings from
 Unit tests added/extended for each fix; `tsc` clean, full `vitest` suite green,
 lint clean on changed files. Survey/input/infra findings are owned by the
 parallel hardening pass and untouched here.
+
 ### Security — 2026-07-16 (input-validation + infra hardening — audit 2026-07-16)
 
 Remediated the input-validation / infra findings from

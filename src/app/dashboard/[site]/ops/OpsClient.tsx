@@ -180,7 +180,7 @@ function TaskQueue({
             value={assignee}
             onChange={(e) => setAssignee(e.target.value)}
             className="rounded bg-black/30 px-3 py-2 text-sm text-white"
-            aria-label="Assign to admin"
+            aria-label="Assign to"
           >
             <option value="">Unassigned</option>
             {assignees.map((a) => (
@@ -255,7 +255,7 @@ function TaskQueue({
                   value={t.assignee_user_id ?? ''}
                   onChange={(e) => reassign(t.id, e.target.value)}
                   className="rounded bg-black/30 px-2 py-1 text-xs text-white"
-                  aria-label="Reassign to admin"
+                  aria-label="Reassign to"
                 >
                   <option value="">Unassigned</option>
                   {assignees.map((a) => (

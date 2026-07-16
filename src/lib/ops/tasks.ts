@@ -172,29 +172,35 @@ export async function transitionTask(
 }
 
 /**
- * Active admins who can own a task (the assignable roster; ADR-0045 amendment
- * 2026-07-16 — "assign a task to a particular admin"). Kept to `role='admin'`
- * to match the operator's intent.
+ * Active staff who can own a task (the assignable roster; ADR-0045 amendment
+ * 2026-07-16). Widened from admins-only to admins + managers (operator call,
+ * 2026-07-16) so site managers / all-sites managers (e.g. Daven) can own
+ * follow-ups, not just admins. Operators are never assignable.
  */
-export function listAssignableAdmins() {
+export function listAssignableOwners() {
   return prisma.user.findMany({
-    where: { role: 'admin', is_active: true, deleted_at: null },
+    where: { role: { in: ['admin', 'manager'] }, is_active: true, deleted_at: null },
     select: { id: true, name: true, email: true },
     orderBy: { name: 'asc' },
   });
 }
 
-/** Guard: the supplied assignee must be an active admin. Throws 422 otherwise. */
-export async function assertAssignableAdmin(assigneeUserId: string): Promise<void> {
+/** Guard: the supplied assignee must be an active admin or manager. Throws 422 otherwise. */
+export async function assertAssignableOwner(assigneeUserId: string): Promise<void> {
   const u = await prisma.user.findFirst({
-    where: { id: assigneeUserId, role: 'admin', is_active: true, deleted_at: null },
+    where: {
+      id: assigneeUserId,
+      role: { in: ['admin', 'manager'] },
+      is_active: true,
+      deleted_at: null,
+    },
     select: { id: true },
   });
-  if (!u) throw new OpsTaskError('assignee_not_an_admin', 422);
+  if (!u) throw new OpsTaskError('assignee_not_assignable', 422);
 }
 
 /**
- * Reassign a task to an admin (or clear with `null`), audited. Reach is checked
+ * Reassign a task to an admin/manager (or clear with `null`), audited. Reach is checked
  * by the caller against the task's own `site_id` (hard rule #2).
  */
 export async function reassignTask(id: string, assigneeUserId: string | null, actorUserId: string) {
@@ -203,7 +209,7 @@ export async function reassignTask(id: string, assigneeUserId: string | null, ac
     select: { assignee_user_id: true },
   });
   if (!before) throw new OpsTaskError('not_found', 404);
-  if (assigneeUserId) await assertAssignableAdmin(assigneeUserId);
+  if (assigneeUserId) await assertAssignableOwner(assigneeUserId);
   const task = await prisma.opsTask.update({
     where: { id },
     data: { assignee_user_id: assigneeUserId },

@@ -7,7 +7,7 @@ import { requireManagerForSite } from '@/lib/auth-helpers';
 import { currentOpsViewer } from '@/lib/ops/viewer';
 import { canWriteRow } from '@/lib/ops/reach';
 import {
-  assertAssignableAdmin,
+  assertAssignableOwner,
   createTask,
   listTasks,
   OpsTaskError,
@@ -73,7 +73,7 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
     // 2026-07-16 — a task may be assigned to a particular admin; validate the
     // assignee is an active admin before it lands on the row.
     const assigneeUserId = body.assignee_user_id?.trim() || null;
-    if (assigneeUserId) await assertAssignableAdmin(assigneeUserId);
+    if (assigneeUserId) await assertAssignableOwner(assigneeUserId);
     const task = await createTask({
       siteId,
       title: body.title,
