@@ -5,6 +5,15 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Security — 2026-07-16 (D1+D5: Next.js off the middleware-bypass advisory + CVE clear)
+
+Operator-directed. Bumped `next` 15.5.15 → 15.5.20 (patched < 15.5.18;
+non-breaking within `^15.5`), clearing the App-Router middleware/proxy-bypass
+and Server-Components DoS **high** advisories on the auth-boundary framework.
+Non-force `npm audit fix` cleared the remaining in-range prod highs
+(form-data, ws) + moderates without any framework/breaking change. Residual
+high/critical are dev-only vite/vitest (not shipped). ADR-0053 D1/D5 → done.
+
 ### Changed — 2026-07-16 (ops-ledger task assignee widened to managers)
 
 Operator call: the ledger task-assignee picker (shipped same day scoped to
