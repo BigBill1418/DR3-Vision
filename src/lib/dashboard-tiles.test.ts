@@ -65,6 +65,7 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'ops-ledger',
       'equipment',
       'commodity-payments', // ADR-0052 (org-reach: admin passes)
+      'file-drop', // O-2 (admin-only)
       'observability',
     ]);
   });
@@ -162,6 +163,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'processed-units',
       'equipment', // ADR-0044 (manager+, active)
       'commodity-payments', // ADR-0052 (org-reach: admin passes)
+      'file-drop', // O-2 (admin-only)
       'observability',
     ]);
   });
@@ -245,6 +247,30 @@ describe('AP Approvals tile — ADR-0046 ap-approver scope', () => {
     const bill = makeSession('admin', EUGENE);
     expect(canSeeTile(bill, tileByKey('ap-approvals'), WOODLAND)).toBe(false);
     expect(activeKeys(bill)).not.toContain('ap-approvals');
+  });
+});
+
+describe('File Drop tile — O-2 admin-only', () => {
+  it('is registered active, admin-only, at /admin/file-drop with an allowlisted icon', () => {
+    const tile = tileByKey('file-drop');
+    expect(tile.status).toBe('active');
+    expect(tile.scope).toBe('admin-only');
+    expect(tile.route).toBe('/admin/file-drop');
+    expect(tile.icon).toBe('Upload');
+    expect(tile.featured).toBeUndefined();
+  });
+
+  it('is visible to admin and hidden from every manager', () => {
+    expect(canSeeTile(makeSession('admin', EUGENE), tileByKey('file-drop'), WOODLAND)).toBe(true);
+    expect(canSeeTile(makeSession('manager', WOODLAND), tileByKey('file-drop'), WOODLAND)).toBe(
+      false,
+    );
+    expect(canSeeTile(makeSession('manager', null, false, true), tileByKey('file-drop'))).toBe(
+      false,
+    ); // all_sites manager still not admin
+    expect(canSeeTile(makeSession('operator', WOODLAND), tileByKey('file-drop'), WOODLAND)).toBe(
+      false,
+    );
   });
 });
 

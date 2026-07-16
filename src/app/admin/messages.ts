@@ -162,6 +162,40 @@ export const adminMessages = {
     actionSoftDelete: 'Soft-delete',
     actionRestore: 'Restore',
   },
+
+  // File-drop inbox (O-2)
+  fileDrop: {
+    title: 'File Drop',
+    subtitle:
+      'Dump any file here. It is captured and listed — routing is handled downstream, per file.',
+    pickFiles: 'Choose files',
+    dropHint: 'Drag files here, or click to choose. Any type. Up to 100 MB each.',
+    upload: 'Upload',
+    uploading: 'Uploading…',
+    selectedNone: 'No files selected.',
+    uploadFailed: 'Upload failed',
+    columnFile: 'File',
+    columnKind: 'Detected kind',
+    columnSize: 'Size',
+    columnType: 'Content type',
+    columnStatus: 'Status',
+    columnUploadedBy: 'Uploaded by',
+    columnWhen: 'When',
+    columnNote: 'Note',
+    columnActions: 'Actions',
+    download: 'Download',
+    notStored: 'Not stored (R2 unconfigured)',
+    statusReceived: 'Received',
+    statusRouted: 'Routed',
+    statusDiscarded: 'Discarded',
+    markRouted: 'Mark routed',
+    markDiscarded: 'Discard',
+    markReceived: 'Reopen',
+    notePlaceholder: 'What did you do with this file?',
+    saveNote: 'Save note',
+    empty: 'Nothing dropped yet.',
+    refresh: 'Refresh',
+  },
 } as const;
 
 export type AdminMessages = typeof adminMessages;

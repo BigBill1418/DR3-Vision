@@ -277,3 +277,63 @@ export async function putApDecisionPdf(args: {
   );
   return storage_key;
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Admin file-drop inbox (O-2, 2026-07-16)
+// ────────────────────────────────────────────────────────────────────────
+
+// The admin uploads an arbitrary file through /admin/file-drop; the bytes already
+// live on the server (the multipart handler buffered them) so we PUT them straight
+// to R2 under the `file-drops/<id>/` prefix — mirrors putApAttachment. Fail-soft:
+// returns null when R2 is unconfigured so the route still records the manifest row
+// with a non-fetchable `pending-r2-filedrop-…` placeholder key (capture is the
+// priority; the object is best-effort until R2 is provisioned). Accepts ANY
+// content-type — this is a raw inbox by design.
+
+export async function putFileDrop(args: {
+  id: string;
+  filename: string;
+  contentType: string | null;
+  bytes: Uint8Array;
+}): Promise<string | null> {
+  if (!isConfigured()) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const safeName = args.filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.bin';
+  const storage_key = `file-drops/${args.id}/${safeName}`;
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: storage_key,
+      Body: args.bytes,
+      ContentType: args.contentType || 'application/octet-stream',
+    }),
+  );
+  return storage_key;
+}
+
+/**
+ * Mint a short-lived presigned GET for a file-drop object so the admin's browser
+ * fetches the bytes directly from R2 (the app never proxies them). Mirrors
+ * signApAttachmentDownload: returns null when R2 is unconfigured or the key is a
+ * non-fetchable `pending-r2-…` placeholder. Defaults to an attachment download;
+ * pass `inline` for in-browser preview of a previewable type.
+ */
+export async function signFileDropDownload(
+  storageKey: string,
+  opts: SignApDownloadOptions = {},
+): Promise<string | null> {
+  if (!isConfigured()) return null;
+  if (storageKey.startsWith('pending-r2-')) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const cmd = new GetObjectCommand({
+    Bucket: bucket,
+    Key: storageKey,
+    ...(opts.inline
+      ? {
+          ResponseContentDisposition: 'inline',
+          ...(opts.contentType ? { ResponseContentType: opts.contentType } : {}),
+        }
+      : {}),
+  });
+  return getSignedUrl(getClient(), cmd, { expiresIn: opts.expiresIn ?? 300 });
+}
