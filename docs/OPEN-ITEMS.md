@@ -19,10 +19,9 @@ are the only window her cross-checks are possible.
 | #   | Item | Source | Notes / deadline |
 | --- | ---- | ------ | ---------------- |
 
-| O-2 | **Pick a workbook file-fetch method (§7 A/B/C)** | rollup `docs/handoffs/2026-07-09-full-rollup-…` §7 | Blocks all of §8.2 (real-file parser finalization, ADR-0048 D4 promotion, June close-balance 4062 assertion). Recommended: A (rclone + Drive folder), ~5 min setup. **Kelsey window: before 8/1.** |
+| O-2 | **DECIDED 2026-07-16 — portal upload.** Bill uploads June/July workbook + Terex/Eugene files via the Vision portal; Claude Code builds a single "drop files here" admin surface + classifies/routes each (workbook staging / equipment import / etc.) and handles §8.2 promotion. **BUILD PENDING** (drop-surface + classification). Rejected rclone/R2. **Kelsey window: before 8/1.** | rollup §7 | Unblocks §8.2 (ADR-0048 parser + promotion). |
 | O-3 | **RESTIC_PASSWORD off-box confirmation (P1-4)** | go-live plan Stage 0 | Last gate in `assertLoadsInventoryActivated` — critical-path blocker for every manager ramp (Stage 1+). |
-| O-4 | **Create Mary Scott's account** when she's ready: role `manager` + `all_sites` + `can_view_billing_verify` | rollup §1.2, PR #92/#93 | Unlocks `/admin/billing/verify` (read-only pre-GP check). |
-| O-5 | **Eugene June backfill decision (A/B/C)** | rollup §4.4 | Default assumption is **C — skip** (clean forward-only ledger from Rick's 7/20 iPad go-live). Confirm or override. |
+| O-4 | **HELD 2026-07-16 (Bill): do NOT create Mary's account now** — no other accounting staff has billing-verify, so she won't either for now. Revisit if that changes. | rollup §1.2 | `/admin/billing/verify` stays admin/super-admin-reachable only. |
 | O-10 | **Five security-audit decision items** (2026-07-16 audit): D1 Next.js auth-layer bump (+D5 CVE clear), D2 session revocation strategy, D3 CSP nonce, D4 verify svdp.us DMARC + sender-header gate | ADR-0053, `docs/security/2026-07-16-full-stack-audit.md` | Each needs Bill's call/deploy window; recommendations + sequencing in ADR-0053. The `[fix]` findings already shipped (PRs #116/#117). |
 | O-6 | **Schedule Kelsey walkthroughs (5 items)** | rollup §8.3 / PR #87 §3 | `saved_units` semantics, DAY6 formula-level `×5`, `%` column on Steel/Biomass/WTE, event units as inbound, MRC contact map. **Before 8/1.** |
 | O-7 | **Answer: does Mary's outgoing stewardship-fee AP booking warrant a Vision surface?** | rollup §1.6, ADR-0046 note | If yes → draft an ADR (takes the NEXT FREE number at draft time — 0052 went to commodity payment reconciliation; numbers are never reserved). Also clarify which direction the fee flows. |
@@ -63,6 +62,8 @@ are the only window her cross-checks are possible.
 3. Woodland June close-balance assertion (= 4,062).
 
 ## Done
+
+- **O-5 — DONE 2026-07-16 (Bill: skip, Option C).** No Eugene June backfill; Rick's 7/20 iPad go-live starts a clean forward-only ledger (Eugene lacks Woodland's billing complexity, so the shadow-billing-parity rationale doesn't apply).
 
 - **C-16 — DONE 2026-07-16 (office dark-theme sweep executed).** Operator
   directive (Bill): "everything goes to the new look except the floor iPads."

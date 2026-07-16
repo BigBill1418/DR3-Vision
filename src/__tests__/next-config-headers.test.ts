@@ -1,18 +1,18 @@
-// ADR-0034 follow-up — survey-preview framing fix.
+// ADR-0034 follow-up + ADR-0053 D3 — survey-preview framing + CSP relocation.
 //
 // The admin invite preview (src/app/admin/operations/intel/[campaignId]/
 // InvitePreview.tsx) embeds the survey in a SAME-ORIGIN <iframe src="/survey/
 // {token}?preview=1">. A global `X-Frame-Options: DENY` in next.config.js
 // forbids ALL framing — including same-origin — so the survey would not render
 // ("vision won't connect"). The fix: a more-specific `/survey/:path*` header
-// block sets `X-Frame-Options: SAMEORIGIN` + appends `frame-ancestors 'self'`
-// to the CSP, while a negative-lookahead global block keeps `DENY` on every
-// other route.
+// block sets `X-Frame-Options: SAMEORIGIN` on those paths, while a
+// negative-lookahead global block keeps `DENY` on every other route.
 //
-// These tests assert the RESOLVED header semantics — not the intent — by
-// (a) requiring the regexes Next compiles from each `source` to match/not-match
-// the right paths, and (b) checking the header values per block. This is the
-// regression guard the live emitted-header proof complements.
+// ADR-0053 D3 moved the Content-Security-Policy OUT of next.config.js and into
+// src/middleware.ts so it can carry a per-request nonce (see csp.test.ts +
+// middleware-csp.test.ts). These tests now assert (a) the XFO distinction still
+// lives here and blankets every response, (b) the non-CSP security headers are
+// still emitted, and (c) next.config.js no longer sets any CSP (single source).
 
 import { describe, it, expect } from 'vitest';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- CommonJS config
@@ -45,7 +45,7 @@ function matches(source: string, path: string): boolean {
   return new RegExp(`^${body}/?$`).test(path);
 }
 
-describe('next.config.js header blocks (survey preview framing)', () => {
+describe('next.config.js header blocks (framing + CSP relocation)', () => {
   // withSentryConfig/withSerwist wrap the config; headers() survives the wrap.
   const config = nextConfig.default ?? nextConfig;
 
@@ -62,13 +62,10 @@ describe('next.config.js header blocks (survey preview framing)', () => {
     expect(surveyBlock, 'a /survey/:path* block must exist').toBeDefined();
     expect(globalBlock, 'a negative-lookahead global block must exist').toBeDefined();
 
-    // Survey route: relaxed framing + frame-ancestors.
+    // Survey route: relaxed framing.
     expect(header(surveyBlock, 'X-Frame-Options')).toBe('SAMEORIGIN');
-    expect(header(surveyBlock, 'Content-Security-Policy')).toContain("frame-ancestors 'self'");
-
-    // Every other route: hard DENY, and NO frame-ancestors leniency.
+    // Every other route: hard DENY.
     expect(header(globalBlock, 'X-Frame-Options')).toBe('DENY');
-    expect(header(globalBlock, 'Content-Security-Policy')).not.toContain('frame-ancestors');
   });
 
   it('the survey block matches survey paths; the global block excludes them', async () => {
@@ -89,18 +86,26 @@ describe('next.config.js header blocks (survey preview framing)', () => {
     expect(matches(surveyBlock.source, '/login')).toBe(false);
   });
 
-  it('the base CSP (sans frame-ancestors) and the survey CSP share identical directives', async () => {
+  it('keeps the shared non-CSP security headers on both blocks', async () => {
     const blocks: HeaderBlock[] = await config.headers();
-    const surveyCsp = header(
-      blocks.find((b) => b.source.startsWith('/survey/')),
-      'Content-Security-Policy',
-    )!;
-    const globalCsp = header(
-      blocks.find((b) => b.source.includes('?!survey')),
-      'Content-Security-Policy',
-    )!;
+    for (const b of [
+      blocks.find((x) => x.source.startsWith('/survey/'))!,
+      blocks.find((x) => x.source.includes('?!survey'))!,
+    ]) {
+      expect(header(b, 'Strict-Transport-Security')).toContain('max-age=');
+      expect(header(b, 'X-Content-Type-Options')).toBe('nosniff');
+      expect(header(b, 'Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+      expect(header(b, 'Permissions-Policy')).toContain('camera=(self)');
+    }
+  });
 
-    // The survey CSP must be the global CSP plus exactly one extra directive.
-    expect(surveyCsp).toBe(`${globalCsp}; frame-ancestors 'self'`);
+  it('no longer sets a Content-Security-Policy header here (moved to middleware, ADR-0053 D3)', async () => {
+    const blocks: HeaderBlock[] = await config.headers();
+    for (const b of blocks) {
+      expect(
+        header(b, 'Content-Security-Policy'),
+        `block ${b.source} must not set CSP — it is single-sourced in middleware`,
+      ).toBeUndefined();
+    }
   });
 });

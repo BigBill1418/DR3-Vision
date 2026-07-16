@@ -1,6 +1,6 @@
 # ADR-0053 — Security audit decision items (2026-07-16 full-stack audit)
 
-**Status:** Proposed — D1+D5+D2 DONE 2026-07-16 (operator-directed); D3/D4 open. A tracking record for the five findings the 2026-07-16
+**Status:** Proposed — D1+D2+D3+D4+D5 all DONE 2026-07-16 (operator-directed). A tracking record for the five findings the 2026-07-16
 audit deliberately did NOT auto-fix. Each needs an operator decision and/or a
 deploy window; this ADR holds them until each is resolved (then flip its
 sub-item to Accepted/Done and mark the row in the audit register).
@@ -65,7 +65,7 @@ they don't slip.
 - **Decision needed:** pick the mechanism (and the acceptable staleness window
   if option 1).
 
-### D3 — CSP `script-src 'unsafe-inline'` (MEDIUM · scheduled)
+### D3 — CSP `script-src 'unsafe-inline'` (MEDIUM · scheduled) — DONE 2026-07-16
 
 - **Finding (CSP):** `'unsafe-inline'` on `script-src` means CSP provides no
   mitigation against an injected inline script — it's the difference between "an
@@ -159,8 +159,38 @@ revocation), **D4** independently (verify DMARC, then the small code change).
   behavior re-verified. Shipped as a patch bump, not the major-16 upgrade the
   raw advisory range string implied.
 
+- **D3 — DONE 2026-07-16 (operator-directed "do it now", ordered after D1).**
+  Replaced `script-src 'unsafe-inline'` with a per-request **nonce** following
+  the official Next.js 15 "CSP with nonces" pattern. `src/middleware.ts` now
+  mints a base64 nonce per request (`btoa(crypto.randomUUID())` — Web Crypto,
+  edge-safe, no `node:crypto`), forwards it on the **request** headers as both
+  `x-nonce` (for our code) and `Content-Security-Policy` (so Next auto-stamps
+  the nonce onto its own bootstrap `<script>` tags), and sets the CSP on the
+  **response**. `script-src` is now `'self' 'nonce-<n>' 'strict-dynamic'` with
+  **no `'unsafe-inline'`**; added `object-src 'none'`, `base-uri 'self'`,
+  `form-action 'self'`. `style-src 'unsafe-inline'` is retained (Tailwind emits
+  inline `<style>` — no code execution, far lower risk) → tracked `[watch]`.
+  The policy is single-sourced in a new pure/edge-safe `src/lib/csp.ts`
+  (`buildCsp()`), so the CSP was **removed from `next.config.js`** to avoid a
+  conflicting double-set; `next.config.js` keeps the non-CSP security headers
+  (HSTS/nosniff/Referrer-Policy/Permissions-Policy) and the route-scoped
+  `X-Frame-Options` DENY-vs-SAMEORIGIN distinction, which still blanket every
+  response including the static assets the CSP middleware matcher skips. The
+  per-route **frame-ancestors distinction is preserved**: `/survey` responses
+  append `frame-ancestors 'self'` (ADR-0034 InvitePreview same-origin iframe);
+  all others omit it and rely on `X-Frame-Options: DENY`. **Login FOUC guard:**
+  chose the **nonce** path over a hash — the guard reads the nonce via
+  `next/headers` (`headers().get('x-nonce')`) and sets `nonce={nonce}` on the
+  inline `<script>` (LoginPage is now `async`). Nonce beats a `sha256-…` hash
+  here because the guard string can be edited without silently CSP-breaking on a
+  forgotten hash update; it also matches how Next's own scripts are authorized.
+  Router **prefetch** requests skip nonce/CSP generation (their cached RSC never
+  re-executes document scripts) but auth still runs on them — the matcher is
+  unchanged, so this is not a bypass. tsc clean; full vitest (2031 pass / 2 skip)
+  - new `csp.test.ts` / `middleware-csp.test.ts` green; prod `next build` green.
+
 - **D4 — DONE 2026-07-16.** Verified `svdp.us` DMARC = `p=reject; sp=reject;
-  pct=100` (strongest policy) — receivers/EOP reject unaligned mail forging
+pct=100` (strongest policy) — receivers/EOP reject unaligned mail forging
   `@svdp.us`, so the external-forgery risk into the AP queue is blocked at the
   mail layer. Operator chose comment-fix-only: the misleading "authenticated
   envelope" comments in `ap/senders.ts` + `msgraph-mail/normalize.ts` now state
