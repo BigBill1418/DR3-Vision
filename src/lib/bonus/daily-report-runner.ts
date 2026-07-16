@@ -18,11 +18,17 @@
 // Per-site work is wrapped in try/catch: one site throwing never stops the
 // others and never throws out of this function (the route stays 200).
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { buildDailyReport } from '@/lib/bonus/daily-report';
 import { sendDailyReport } from '@/lib/bonus/daily-report-notifications';
 import { appToday } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
+
+/** True for a Prisma P2002 unique-constraint violation (the claim-lost signal). */
+function isUniqueViolation(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
+}
 
 export interface FireOutcome {
   siteCode: string;
@@ -143,6 +149,35 @@ export async function runDailyReportFire(
         continue;
       }
 
+      // CLAIM-BEFORE-SEND (M1): the unique (site_id, report_date) makes this create
+      // the atomic gate. The findUnique above is only a cheap fast-path; without a
+      // claim, a concurrent scheduled fire OR an on-save late send (both share this
+      // log table) could each pass their read-check and BOTH send, mailing the team
+      // a duplicate production report. Claim first: a losing writer's create throws
+      // P2002 → bail without sending. Delivery columns are finalized after the send.
+      let logId: string;
+      try {
+        const claimed = await prisma.bonusDailyReportLog.create({
+          data: {
+            site_id: cfg.site_id,
+            report_date: dayKey,
+            recipient_count: recipients.length,
+            total_today: report.totalToday,
+            total_bonus_cents: report.totalBonusCents,
+            mtd_total: report.mtd.total ?? 0,
+            delivered_count: 0, // finalized post-send
+          },
+          select: { id: true },
+        });
+        logId = claimed.id;
+      } catch (e) {
+        if (isUniqueViolation(e)) {
+          outcomes.push({ siteCode, status: 'skipped_already_logged' });
+          continue;
+        }
+        throw e;
+      }
+
       const send = await sendDailyReport({
         report,
         recipients,
@@ -151,14 +186,11 @@ export async function runDailyReportFire(
         includeComparisons: cfg.include_comparisons,
       });
 
-      await prisma.bonusDailyReportLog.create({
+      // Finalize the claimed row with the delivery outcome.
+      await prisma.bonusDailyReportLog.update({
+        where: { id: logId },
         data: {
-          site_id: cfg.site_id,
-          report_date: dayKey,
           recipient_count: send.attempted,
-          total_today: report.totalToday,
-          total_bonus_cents: report.totalBonusCents,
-          mtd_total: report.mtd.total ?? 0,
           delivered_count: send.delivered_count,
           graph_message_id: send.graph_message_id ?? null,
           last_status: send.last_status ?? null,

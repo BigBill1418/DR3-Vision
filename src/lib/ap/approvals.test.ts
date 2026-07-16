@@ -185,6 +185,29 @@ describe('decideRequest — first action wins + both attempts audited', () => {
     expect(writeAudit).toHaveBeenCalled();
   });
 
+  it('M2 — the winning flip + its audit run in ONE transaction (audit enlisted via {tx}, no unaudited window)', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+    });
+    // The winning audit is written with a transaction client as its 2nd arg — proof
+    // it commits with the flip (a crash between flip and audit can't strand a live,
+    // unaudited decision).
+    const wonCall = writeAudit.mock.calls.find(
+      (c) => (c[0] as { after?: { outcome?: string } })?.after?.outcome === 'won',
+    );
+    expect(wonCall).toBeTruthy();
+    expect(wonCall![1]).toMatchObject({ tx: expect.anything() });
+  });
+
   it('the loser of a race gets ApAlreadyDecidedError; BOTH attempts are audited', async () => {
     const db = newFakeDb({
       requests: [pendingReq()],

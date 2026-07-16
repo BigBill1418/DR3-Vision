@@ -25,12 +25,18 @@
 //     never fail the manager's save. Failures log loud and the next save (or
 //     tomorrow's operator eyeball of the log table) retries naturally.
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appToday, formatPacificDateTime } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
 import { buildDailyReport } from './daily-report';
 import { sendDailyReport } from './daily-report-notifications';
 import { pacificSecondsOfDay, sendTimeSecondsOfDay } from './daily-report-runner';
+
+/** True for a Prisma P2002 unique-constraint violation (the claim-lost signal). */
+function isUniqueViolation(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
+}
 
 export type LateReportOutcome =
   | 'sent_late'
@@ -106,6 +112,50 @@ export async function maybeSendLateDailyReport(
     }
 
     const isResend = existing != null;
+    // CLAIM-BEFORE-SEND (M1): win the (site_id, report_date) send slot BEFORE the
+    // Graph send, so a double-click, a re-save, or a race with the scheduled fire
+    // (both paths share this log table) can never each send and duplicate the
+    // production report to the team.
+    //  - No prior row → `create` is the claim; a concurrent claim throws P2002.
+    //  - Prior row with CHANGED totals → a CAS `updateMany` guarded on the stored
+    //    totals still differing wins the resend exactly once; a duplicate resend of
+    //    the same new totals matches nothing (count 0).
+    // Either lost claim bails WITHOUT sending. The delivery columns are finalized
+    // after the send below.
+    const claimData = {
+      recipient_count: recipients.length,
+      total_today: report.totalToday,
+      total_bonus_cents: report.totalBonusCents,
+      mtd_total: report.mtd.total ?? 0,
+      delivered_count: 0, // finalized post-send
+      late_submission: true,
+      data_entered_at: now,
+      sent_at: now,
+    };
+    let logId: string;
+    if (existing) {
+      const claim = await prisma.bonusDailyReportLog.updateMany({
+        where: {
+          id: existing.id,
+          NOT: { total_today: report.totalToday, total_bonus_cents: report.totalBonusCents },
+        },
+        data: { ...claimData, resend_count: { increment: 1 } },
+      });
+      if (claim.count === 0) return 'skipped_unchanged'; // lost the resend race
+      logId = existing.id;
+    } else {
+      try {
+        const claimed = await prisma.bonusDailyReportLog.create({
+          data: { site_id: siteId, report_date: entryDay, ...claimData },
+          select: { id: true },
+        });
+        logId = claimed.id;
+      } catch (e) {
+        if (isUniqueViolation(e)) return 'skipped_unchanged'; // lost the first-send race
+        throw e;
+      }
+    }
+
     const send = await sendDailyReport({
       report,
       recipients,
@@ -119,28 +169,16 @@ export async function maybeSendLateDailyReport(
       },
     });
 
-    const data = {
-      recipient_count: send.attempted,
-      total_today: report.totalToday,
-      total_bonus_cents: report.totalBonusCents,
-      mtd_total: report.mtd.total ?? 0,
-      delivered_count: send.delivered_count,
-      graph_message_id: send.graph_message_id ?? null,
-      last_status: send.last_status ?? null,
-      late_submission: true,
-      data_entered_at: now,
-      sent_at: now,
-    };
-    if (existing) {
-      await prisma.bonusDailyReportLog.update({
-        where: { id: existing.id },
-        data: { ...data, resend_count: existing.resend_count + 1 },
-      });
-    } else {
-      await prisma.bonusDailyReportLog.create({
-        data: { site_id: siteId, report_date: entryDay, ...data },
-      });
-    }
+    // Finalize the claimed row with the delivery outcome.
+    await prisma.bonusDailyReportLog.update({
+      where: { id: logId },
+      data: {
+        recipient_count: send.attempted,
+        delivered_count: send.delivered_count,
+        graph_message_id: send.graph_message_id ?? null,
+        last_status: send.last_status ?? null,
+      },
+    });
 
     log.info(
       {

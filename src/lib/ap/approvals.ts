@@ -208,20 +208,51 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
 
   const priorStatus = row.status;
   const decidedAt = new Date();
-  // Atomic conditional transition — only flips a row still in an actionable state
-  // (pending OR on-hold pending_review). First action wins; a row already decided
-  // (or racing) matches nothing → count 0 → ApAlreadyDecidedError below.
-  const res = await prisma.apRequest.updateMany({
-    where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
-    data: {
-      status: args.decision,
-      decided_by: args.actorUserId,
-      decided_at: decidedAt,
-      ...(args.note ? { decision_note: args.note } : {}),
-      ...(args.vendor ? { vendor: args.vendor } : {}),
-      ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
-      ...(args.siteId ? { site_id: args.siteId } : {}),
-    },
+  // Atomic conditional transition + winning audit in ONE transaction (M2): the
+  // flip and its audit row commit together, so a crash/throw between them can
+  // never leave a live-but-UNAUDITED decision (the module's "both attempts
+  // audited" contract held only if the process survived the gap). Only flips a
+  // row still in an actionable state (pending OR on-hold pending_review). First
+  // action wins; a row already decided (or racing) matches nothing → count 0 →
+  // ApAlreadyDecidedError below. The loser path mutated nothing, so it needs no
+  // transaction.
+  const res = await prisma.$transaction(async (tx) => {
+    const r = await tx.apRequest.updateMany({
+      where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
+      data: {
+        status: args.decision,
+        decided_by: args.actorUserId,
+        decided_at: decidedAt,
+        ...(args.note ? { decision_note: args.note } : {}),
+        ...(args.vendor ? { vendor: args.vendor } : {}),
+        ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
+        ...(args.siteId ? { site_id: args.siteId } : {}),
+      },
+    });
+    if (r.count > 0) {
+      // Won — audit the winning transition in the SAME tx (both-attempts-audited).
+      await writeAudit(
+        {
+          actor_user_id: args.actorUserId,
+          action: 'update',
+          table_name: TABLE,
+          row_id: args.requestId,
+          before: { status: priorStatus },
+          after: {
+            attempted: args.decision,
+            outcome: 'won',
+            status: args.decision,
+            from_hold: priorStatus === 'pending_review',
+            has_note: !!args.note,
+            has_vendor: !!args.vendor,
+            has_amount: typeof args.amountCents === 'number',
+            has_site: !!args.siteId,
+          },
+        },
+        { tx },
+      );
+    }
+    return r;
   });
 
   if (res.count === 0) {
@@ -250,25 +281,10 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
     );
   }
 
-  // Won. Audit the winning transition (both-attempts-audited: this is the winner's row).
-  await writeAudit({
-    actor_user_id: args.actorUserId,
-    action: 'update',
-    table_name: TABLE,
-    row_id: args.requestId,
-    before: { status: priorStatus },
-    after: {
-      attempted: args.decision,
-      outcome: 'won',
-      status: args.decision,
-      from_hold: priorStatus === 'pending_review',
-      has_note: !!args.note,
-      has_vendor: !!args.vendor,
-      has_amount: typeof args.amountCents === 'number',
-      has_site: !!args.siteId,
-    },
-  });
-
+  // Won. The flip + its audit already committed atomically above. The decision
+  // email/stamp/R2 work stays OUTSIDE the tx — a committed decision must NEVER
+  // roll back because a later mail/render/R2 step failed (that is surfaced via
+  // `mail` + a page, never silently).
   const mail = await sendDecisionEmail(prisma, args.requestId, args.renderer);
   return { requestId: args.requestId, decision: args.decision, mail };
 }

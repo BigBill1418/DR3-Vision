@@ -20,8 +20,18 @@ type AuditArgs = {
   user_agent?: string | null;
 };
 
-export async function writeAudit(args: AuditArgs): Promise<void> {
-  await prisma.auditLog.create({
+/**
+ * Optional writer client. Pass `{ tx }` to enlist the audit row in an
+ * already-open interactive transaction so a state flip and its audit commit (or
+ * roll back) atomically — there is no "decision stands but the audit is missing"
+ * window (M2). Omit it and the global singleton is used, unchanged, so every
+ * existing caller keeps working with no edits.
+ */
+type AuditOpts = { tx?: Prisma.TransactionClient };
+
+export async function writeAudit(args: AuditArgs, opts?: AuditOpts): Promise<void> {
+  const client = opts?.tx ?? prisma;
+  await client.auditLog.create({
     data: {
       actor_user_id: args.actor_user_id ?? null,
       actor_label: args.actor_label ?? null,

@@ -448,6 +448,30 @@ async function applyApprovalInTx(
   },
 ): Promise<{ requestId: string; appliedEntryId: string; entryAuditId: string }> {
   const now = new Date();
+
+  // CAS claim (H1): flip pending→approved atomically as the FIRST mutation, so
+  // only the CAS winner goes on to mutate the daily entry. Previously this was a
+  // check-then-act (findUnique → `if state!=='pending' throw` → unconditional
+  // update): two reviewers who both passed the gate in overlapping tx windows
+  // (say one approve + one reject) could both proceed — the approve mutated the
+  // bonus entry while the reject overwrote the state to `rejected`, leaving a
+  // rejected amendment that had SILENTLY APPLIED, with a falsified `before:
+  // pending` audit and a payroll payout reflecting a rejected change. A guarded
+  // updateMany matching only a still-`pending` row makes the loser a `count 0`
+  // no-op that raises the already-decided 409 — the entry mutation + its audit
+  // never run for the loser.
+  const claim = await tx.bonusAmendmentRequest.updateMany({
+    where: { id: req.id, state: 'pending' },
+    data: {
+      state: 'approved',
+      reviewed_by_user_id: input.reviewerUserId,
+      reviewed_at: now,
+      decision_notes: input.decisionNotes ?? null,
+      updated_at: now,
+    },
+  });
+  if (claim.count === 0) throw new AmendmentRequestError('request_not_pending', 409);
+
   const newValue = req.new_value as { mattress_count: number; note: string | null };
 
   let appliedEntryId: string;
@@ -536,16 +560,11 @@ async function applyApprovalInTx(
     },
   });
 
+  // The state flip + reviewer/notes already landed via the CAS claim above; here
+  // we only link the entry-audit id onto the request row we already own.
   await tx.bonusAmendmentRequest.update({
     where: { id: req.id },
-    data: {
-      state: 'approved',
-      reviewed_by_user_id: input.reviewerUserId,
-      reviewed_at: now,
-      decision_notes: input.decisionNotes ?? null,
-      applied_audit_id: entryAudit.id,
-      updated_at: now,
-    },
+    data: { applied_audit_id: entryAudit.id },
   });
 
   await tx.auditLog.create({
@@ -554,6 +573,7 @@ async function applyApprovalInTx(
       action: 'update' satisfies AuditAction,
       table_name: 'bonus_amendment_requests',
       row_id: req.id,
+      // `before` reflects the TRUE prior state: the CAS matched a `pending` row.
       before: { state: 'pending' },
       after: {
         state: 'approved',
@@ -682,8 +702,12 @@ async function applyRejectionInTx(
   userAgent?: string | null,
 ) {
   const now = new Date();
-  const decided = await tx.bonusAmendmentRequest.update({
-    where: { id: reqId },
+  // CAS claim (H1): flip pending→rejected atomically so a concurrent approve/
+  // reject that already decided the row loses (count 0 → already-decided 409),
+  // never a check-then-act double-decide. See applyApprovalInTx for the full
+  // rationale (a lost race must leave state + entry untouched).
+  const claim = await tx.bonusAmendmentRequest.updateMany({
+    where: { id: reqId, state: 'pending' },
     data: {
       state: 'rejected',
       reviewed_by_user_id: reviewerUserId,
@@ -692,19 +716,22 @@ async function applyRejectionInTx(
       updated_at: now,
     },
   });
+  if (claim.count === 0) throw new AmendmentRequestError('request_not_pending', 409);
   await tx.auditLog.create({
     data: {
       actor_user_id: reviewerUserId,
       action: 'update' satisfies AuditAction,
       table_name: 'bonus_amendment_requests',
       row_id: reqId,
+      // `before` reflects the TRUE prior state: the CAS matched a `pending` row.
       before: { state: 'pending' },
       after: { state: 'rejected', decision_notes: decisionNotes },
       ip: ip ?? null,
       user_agent: userAgent ?? null,
     },
   });
-  return decided;
+  const decided = await tx.bonusAmendmentRequest.findUnique({ where: { id: reqId } });
+  return decided!;
 }
 
 export async function rejectAmendmentRequest(input: AmendmentDecisionInput) {

@@ -237,6 +237,24 @@ function makeStore(): Store {
       Object.assign(a, data);
       return { ...a };
     },
+    // H1 — the CAS flip: match only rows satisfying every scalar `where` key (e.g.
+    // `{ id, state: 'pending' }`); assign `data`; return the affected count.
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }) => {
+      const targets = s.amendments.filter((a) => {
+        for (const [k, v] of Object.entries(where)) {
+          if ((a as unknown as Record<string, unknown>)[k] !== v) return false;
+        }
+        return true;
+      });
+      for (const a of targets) Object.assign(a, data);
+      return { count: targets.length };
+    },
   };
   s.auditLog = {
     create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -749,6 +767,41 @@ describe('approveAmendmentRequest', () => {
         reviewerIsAdmin: false,
       }),
     ).rejects.toMatchObject({ reason: 'period_not_draft', status: 409 });
+  });
+
+  it('H1 — CAS loser leaves state + entry untouched (a concurrent decide committed after the read-check)', async () => {
+    const req = await pending(); // pending; entry seeded at 76
+    // A concurrent reject committed AFTER our read-check but BEFORE our CAS flip.
+    store.amendments[0]!.state = 'rejected';
+    store.amendments[0]!.reviewed_by_user_id = 'morena';
+    // Force our approve past the early pre-check with a STALE 'pending' snapshot, so
+    // the guarded CAS (not the cheap pre-check) is what must catch the raced row.
+    const realFindUnique = store.bonusAmendmentRequest['findUnique'] as (
+      a: unknown,
+    ) => Promise<AmendmentRow | null>;
+    store.bonusAmendmentRequest['findUnique'] = (async (a: unknown) => {
+      const row = await realFindUnique(a);
+      return row ? { ...row, state: 'pending' } : null;
+    }) as (...x: never[]) => unknown;
+
+    await expect(
+      approveAmendmentRequest({
+        requestId: req.id,
+        reviewerUserId: 'morena',
+        reviewerIsAdmin: false,
+      }),
+    ).rejects.toMatchObject({ reason: 'request_not_pending', status: 409 });
+
+    // The entry never moved off 76, and the state is still the concurrent decision.
+    expect(entryByKey(store, 'emp-amy', PRIOR_DAY)!.mattress_count.toNumber()).toBe(76);
+    expect(store.amendments[0]!.state).toBe('rejected');
+    // The loser wrote NO entry-mutation audit row — the whole point of the CAS.
+    expect(
+      store.audit.some(
+        (a) =>
+          a.table_name === 'bonus_daily_entries' && a.actor_label === 'system:amendment-approved',
+      ),
+    ).toBe(false);
   });
 });
 
