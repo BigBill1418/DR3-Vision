@@ -18,6 +18,8 @@ foundation.
 `[fix]` shipping this cycle (aegis) · `[decision]` needs Bill's call/deploy window ·
 `[ops]` host action · `[watch]` accepted-risk, documented · `[FIXED]` remediated (see below).
 
+**The five `[decision]`/ops-verify items are tracked in ADR-0053** (`docs/adr/0053-security-audit-decision-items.md`) with recommendations + sequencing.
+
 ## Remediation log — 2026-07-16 (money-path & audit-integrity batch)
 
 Branch `fix/audit-money-integrity`. Fixed the money-path & audit-integrity
