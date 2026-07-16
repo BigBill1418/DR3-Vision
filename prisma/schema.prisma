@@ -242,6 +242,19 @@ model User {
   updated_at    DateTime  @updatedAt
   deleted_at    DateTime?
 
+  // ADR-0053 D2 — session revocation kill-switch. Bumped to now() in the SAME
+  // mutation whenever an admin changes an auth-relevant, token-cached claim
+  // (role / all_sites / is_super_admin) or the activation state (deactivate /
+  // soft-delete). The Auth.js jwt callback (Node pass) reads this fresh on every
+  // request and forces re-auth when it is newer than the token's issued-at —
+  // turning off-boarding from "up to 12h idle / 30d absolute" into effectively
+  // instant. Defense-in-depth ON TOP OF the Entra signIn gate (ADR-0016), not a
+  // replacement. Timestamptz (the repo otherwise defaults to timestamp(3))
+  // because it is a bare instant compared against token.iat. No index: only ever
+  // read by the PK findUnique in the jwt callback, never filtered on. A manual
+  // is_super_admin demotion via raw SQL MUST also set this (see ADR-0053 D2).
+  sessions_invalidated_at DateTime? @db.Timestamptz
+
   // Relations
   loads_assigned                 InboundLoad[]       @relation("LoadAssignedOperator")
   loads_submitted                InboundLoad[]       @relation("LoadSubmittedBy")

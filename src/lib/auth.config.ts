@@ -39,6 +39,34 @@ function idleTimeoutFor(role: string | undefined): number {
   return role === 'operator' ? IDLE_TIMEOUT_OPERATOR_S : IDLE_TIMEOUT_MANAGER_S;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// ADR-0053 D2 — session revocation kill-switch (Node-only checker hook)
+// ─────────────────────────────────────────────────────────────────────
+//
+// This file is the EDGE-runtime-safe base config (the middleware imports it,
+// not `auth.ts`). A Prisma call cannot live here directly — it would pull the
+// client into the edge bundle and break the middleware build, which is the
+// whole reason this file is Prisma-free.
+//
+// So the revocation check is dependency-injected: `auth.ts` (Node runtime)
+// registers a checker via `setRevocationChecker` at module load. The jwt
+// callback below calls it on every non-initial pass. In the edge middleware the
+// hook is never registered (auth.ts is never imported there), so the callback
+// skips the DB read and relies on idle/absolute timeout only — and the
+// authoritative kill-switch check runs on every Node route/RSC pass, which is
+// the real authorization boundary (every sensitive surface re-enters Node via
+// `auth()` from auth.ts). Belt-and-suspenders on top of the Entra signIn gate.
+export type RevocationVerdict = 'ok' | 'revoke';
+type RevocationChecker = (userId: string, tokenIatSeconds: number) => Promise<RevocationVerdict>;
+
+let revocationChecker: RevocationChecker | null = null;
+
+/** Wire (or clear, with null) the Node-only revocation checker. Called by
+ * `auth.ts` at module load. No-op'd on edge because auth.ts never loads there. */
+export function setRevocationChecker(fn: RevocationChecker | null): void {
+  revocationChecker = fn;
+}
+
 export const authConfig = {
   session: { strategy: 'jwt', maxAge: ABSOLUTE_TIMEOUT_S },
   trustHost: true,
@@ -82,6 +110,17 @@ export const authConfig = {
       const idleS = idleTimeoutFor(token.role);
       if (token.last_seen_at && nowS - token.last_seen_at > idleS) {
         return {} as typeof token;
+      }
+      // ADR-0053 D2 — session revocation kill-switch. On the Node pass the
+      // checker is wired to a fresh, PK-indexed users lookup; on edge it is null
+      // and we skip (idle/absolute still apply, and the Node pass on every route
+      // enforces this). Returning {} mirrors the idle-timeout path: the emptied
+      // token carries no `sub`, so every downstream guard sees no `user.id` and
+      // 401s / redirects — forcing re-auth, which remints fresh claims (this is
+      // also how a demotion takes effect: the role change bumped the switch).
+      if (revocationChecker && token.sub && typeof token.iat === 'number') {
+        const verdict = await revocationChecker(token.sub, token.iat);
+        if (verdict === 'revoke') return {} as typeof token;
       }
       token.last_seen_at = nowS;
       return token;
