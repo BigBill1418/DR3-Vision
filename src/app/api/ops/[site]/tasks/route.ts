@@ -6,7 +6,13 @@ import type { OpsTaskStatus } from '@prisma/client';
 import { requireManagerForSite } from '@/lib/auth-helpers';
 import { currentOpsViewer } from '@/lib/ops/viewer';
 import { canWriteRow } from '@/lib/ops/reach';
-import { createTask, listTasks, type ListTasksFilter } from '@/lib/ops/tasks';
+import {
+  assertAssignableAdmin,
+  createTask,
+  listTasks,
+  OpsTaskError,
+  type ListTasksFilter,
+} from '@/lib/ops/tasks';
 import { appToday } from '@/lib/time';
 
 export const runtime = 'nodejs';
@@ -64,11 +70,15 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
     if (!canWriteRow(id!.viewer, siteId)) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // 2026-07-16 — a task may be assigned to a particular admin; validate the
+    // assignee is an active admin before it lands on the row.
+    const assigneeUserId = body.assignee_user_id?.trim() || null;
+    if (assigneeUserId) await assertAssignableAdmin(assigneeUserId);
     const task = await createTask({
       siteId,
       title: body.title,
       body: body.body ?? null,
-      assigneeUserId: body.assignee_user_id ?? null,
+      assigneeUserId,
       dueDate: body.due_date ? dayKeyFromISO(body.due_date) : null,
       source: 'manual',
       createdBy: id!.userId,
@@ -76,6 +86,8 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
     return NextResponse.json({ task }, { status: 201 });
   } catch (e) {
     if (e instanceof Response) return e;
+    if (e instanceof OpsTaskError)
+      return NextResponse.json({ error: e.reason }, { status: e.status });
     throw e;
   }
 }

@@ -7,7 +7,7 @@ import type { OpsTaskStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { currentOpsViewer } from '@/lib/ops/viewer';
 import { canWriteRow } from '@/lib/ops/reach';
-import { OpsTaskError, transitionTask } from '@/lib/ops/tasks';
+import { OpsTaskError, reassignTask, transitionTask } from '@/lib/ops/tasks';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,16 +26,28 @@ export async function PATCH(req: Request, ctx: Ctx): Promise<Response> {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
-  const body = (await req.json()) as { status?: string };
-  if (!body.status || !STATUSES.includes(body.status as OpsTaskStatus)) {
-    return NextResponse.json({ error: 'invalid_status' }, { status: 422 });
-  }
+  const body = (await req.json()) as { status?: string; assignee_user_id?: string | null };
 
   try {
-    const updated = await transitionTask(id, body.status as OpsTaskStatus, identity.userId);
+    // Reassignment (2026-07-16): `assignee_user_id` present (a string admin id
+    // or null to clear) reassigns; the server re-validates the assignee is an
+    // active admin. A status field transitions. Both may be sent together.
+    let updated;
+    if (Object.prototype.hasOwnProperty.call(body, 'assignee_user_id')) {
+      const assignee = body.assignee_user_id ? String(body.assignee_user_id) : null;
+      updated = await reassignTask(id, assignee, identity.userId);
+    }
+    if (body.status !== undefined) {
+      if (!STATUSES.includes(body.status as OpsTaskStatus)) {
+        return NextResponse.json({ error: 'invalid_status' }, { status: 422 });
+      }
+      updated = await transitionTask(id, body.status as OpsTaskStatus, identity.userId);
+    }
+    if (!updated) return NextResponse.json({ error: 'no_change' }, { status: 422 });
     return NextResponse.json({ task: updated });
   } catch (e) {
-    if (e instanceof OpsTaskError) return NextResponse.json({ error: e.reason }, { status: e.status });
+    if (e instanceof OpsTaskError)
+      return NextResponse.json({ error: e.reason }, { status: e.status });
     throw e;
   }
 }

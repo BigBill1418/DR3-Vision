@@ -87,7 +87,11 @@ const SEV_COLOR: Record<Severity, string> = {
 };
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 // ADR-0045 D1 — a due/overdue task line for the digest's second section.
@@ -150,8 +154,7 @@ export function renderDigestHtml(
     dueTasks.length === 0
       ? ''
       : `<h2 style="color:${SVDP_RED};font-size:15px;margin:${findings.length === 0 ? '0' : '24px'} 0 8px">Follow-ups due</h2>
-          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${taskRows}</table>
-          <p style="margin:14px 0 0"><a href="${opsUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the ops ledger</a></p>`;
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse">${taskRows}</table>`;
 
   const apBlock =
     pendingAp === 0
@@ -184,7 +187,11 @@ export function renderDigestHtml(
           ${findingsBlock}
           ${tasksBlock}
           ${apBlock}
-          <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:18px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
+          <p style="margin:18px 0 0;border-top:1px solid ${HAIRLINE};padding-top:16px">
+            <a href="${opsUrl}" style="display:inline-block;background:${SVDP_RED};color:#fff;text-decoration:none;font-size:13px;font-weight:600;padding:9px 16px;border-radius:6px">Open the ops ledger</a>
+          </p>
+          <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:12px 0 0">
+            Meeting notes &amp; task follow-ups live in the ops ledger — the button above opens it for this site.
             Early-warning from DR3-Vision — before MRC computes the official rate. A low rate that coincides with a missing-record finding is likely a data gap; open the finding for its linked cause.<br>
             St. Vincent de Paul Society of Lane County
           </p>
@@ -197,7 +204,9 @@ export function renderDigestHtml(
 
 // ── Fire ────────────────────────────────────────────────────────────────
 
-export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outcomes: DigestOutcome[] }> {
+export async function runAlertDigestFire(
+  now: Date = new Date(),
+): Promise<{ outcomes: DigestOutcome[] }> {
   const digestDate = appToday(now);
   const sites = await prisma.site.findMany({ select: { id: true, code: true, name: true } });
   const outcomes: DigestOutcome[] = [];
@@ -219,7 +228,13 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
       const findingRows = await prisma.auditFinding.findMany({
         where: { site_id: site.id, check_code: { in: R_M_CHECKS }, status: 'open' },
         orderBy: [{ severity: 'desc' }, { last_seen_at: 'desc' }],
-        select: { id: true, check_code: true, severity: true, window_start: true, window_end: true },
+        select: {
+          id: true,
+          check_code: true,
+          severity: true,
+          window_start: true,
+          window_end: true,
+        },
       });
 
       // ADR-0045 D1 — overdue / due-today ops tasks for this site (site-scoped
@@ -280,7 +295,10 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
 
       // M365 not configured → fail-open no-op: don't log, don't page (retry next tick).
       if (notified.disabled) {
-        log.warn({ siteCode: site.code }, '[alert-digest] M365 disabled — digest not sent (fail-open)');
+        log.warn(
+          { siteCode: site.code },
+          '[alert-digest] M365 disabled — digest not sent (fail-open)',
+        );
         outcomes.push({ siteCode: site.code, status: 'disabled', findingCount: findings.length });
         continue;
       }
@@ -293,8 +311,13 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
       }
 
       const delivered = notified.delivered;
-      const lastStatus = notified.sends.map((r) => r.lastStatus).filter((v): v is number => v !== undefined).pop() ?? null;
-      const messageId = (notified.sends.find((r) => r.delivered) ?? notified.sends[0])?.messageId ?? null;
+      const lastStatus =
+        notified.sends
+          .map((r) => r.lastStatus)
+          .filter((v): v is number => v !== undefined)
+          .pop() ?? null;
+      const messageId =
+        (notified.sends.find((r) => r.delivered) ?? notified.sends[0])?.messageId ?? null;
 
       await prisma.alertDigestLog.create({
         data: {
@@ -309,7 +332,13 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
       });
       const attempted = notified.actualRecipients.length;
       log.info(
-        { siteCode: site.code, findings: findings.length, mode: notified.mode, recipients: attempted, delivered },
+        {
+          siteCode: site.code,
+          findings: findings.length,
+          mode: notified.mode,
+          recipients: attempted,
+          delivered,
+        },
         '[alert-digest] digest processed',
       );
 
@@ -323,9 +352,21 @@ export async function runAlertDigestFire(now: Date = new Date()): Promise<{ outc
           fingerprint: `alert-digest-failed:${site.code}`,
           cooldownMs: DIGEST_FAIL_COOLDOWN_MS,
         });
-        outcomes.push({ siteCode: site.code, status: 'failed', findingCount: findings.length, delivered, attempted });
+        outcomes.push({
+          siteCode: site.code,
+          status: 'failed',
+          findingCount: findings.length,
+          delivered,
+          attempted,
+        });
       } else {
-        outcomes.push({ siteCode: site.code, status: 'sent', findingCount: findings.length, delivered, attempted });
+        outcomes.push({
+          siteCode: site.code,
+          status: 'sent',
+          findingCount: findings.length,
+          delivered,
+          attempted,
+        });
       }
     } catch (err) {
       log.error({ err, siteCode: site.code }, '[alert-digest] site fire failed (non-fatal)');

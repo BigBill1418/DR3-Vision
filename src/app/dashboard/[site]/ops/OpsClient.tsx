@@ -41,12 +41,19 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+export interface Assignee {
+  id: string;
+  name: string;
+}
+
 export function OpsClient({
   siteCode,
   canWriteOrgWide,
+  assignees = [],
 }: {
   siteCode: string;
   canWriteOrgWide: boolean;
+  assignees?: Assignee[];
 }) {
   const [tab, setTab] = useState<'tasks' | 'notes'>('tasks');
   return (
@@ -63,7 +70,7 @@ export function OpsClient({
         ))}
       </div>
       {tab === 'tasks' ? (
-        <TaskQueue siteCode={siteCode} canWriteOrgWide={canWriteOrgWide} />
+        <TaskQueue siteCode={siteCode} canWriteOrgWide={canWriteOrgWide} assignees={assignees} />
       ) : (
         <NotesPanel siteCode={siteCode} canWriteOrgWide={canWriteOrgWide} />
       )}
@@ -71,14 +78,29 @@ export function OpsClient({
   );
 }
 
-function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOrgWide: boolean }) {
+function TaskQueue({
+  siteCode,
+  canWriteOrgWide,
+  assignees,
+}: {
+  siteCode: string;
+  canWriteOrgWide: boolean;
+  assignees: Assignee[];
+}) {
   const [rows, setRows] = useState<TaskRow[]>([]);
   const [status, setStatus] = useState<'' | TaskStatus>('open');
   const [overdue, setOverdue] = useState(false);
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
+  const [assignee, setAssignee] = useState('');
   const [orgWide, setOrgWide] = useState(false);
   const [msg, setMsg] = useState('');
+
+  const assigneeName = useCallback(
+    (uid: string | null): string | null =>
+      uid ? (assignees.find((a) => a.id === uid)?.name ?? null) : null,
+    [assignees],
+  );
 
   const load = useCallback(async () => {
     const p = new URLSearchParams();
@@ -100,11 +122,17 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
     const res = await fetch(`/api/ops/${siteCode}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title, due_date: due || undefined, org_wide: orgWide }),
+      body: JSON.stringify({
+        title,
+        due_date: due || undefined,
+        org_wide: orgWide,
+        assignee_user_id: assignee || undefined,
+      }),
     });
     if (res.ok) {
       setTitle('');
       setDue('');
+      setAssignee('');
       setOrgWide(false);
       setMsg('Task added');
       await load();
@@ -122,6 +150,16 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
     if (res.ok) await load();
   };
 
+  const reassign = async (id: string, uid: string) => {
+    const res = await fetch(`/api/ops/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ assignee_user_id: uid || null }),
+    });
+    if (res.ok) await load();
+    else setMsg('Could not reassign');
+  };
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-white/15 bg-black/10 p-4">
@@ -137,6 +175,21 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
           onChange={(e) => setDue(e.target.value)}
           className="rounded bg-black/30 px-3 py-2 text-sm text-white"
         />
+        {assignees.length > 0 && (
+          <select
+            value={assignee}
+            onChange={(e) => setAssignee(e.target.value)}
+            className="rounded bg-black/30 px-3 py-2 text-sm text-white"
+            aria-label="Assign to admin"
+          >
+            <option value="">Unassigned</option>
+            {assignees.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        )}
         {canWriteOrgWide && (
           <label className="flex items-center gap-1 text-xs opacity-80">
             <input
@@ -191,9 +244,27 @@ function TaskQueue({ siteCode, canWriteOrgWide }: { siteCode: string; canWriteOr
               </div>
               <div className="text-xs opacity-60">
                 due {iso(t.due_date)} · {t.status} · {t.source}
+                {assigneeName(t.assignee_user_id) && (
+                  <span className="ml-1 text-dr3-cyan">· @{assigneeName(t.assignee_user_id)}</span>
+                )}
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {assignees.length > 0 && t.status === 'open' && (
+                <select
+                  value={t.assignee_user_id ?? ''}
+                  onChange={(e) => reassign(t.id, e.target.value)}
+                  className="rounded bg-black/30 px-2 py-1 text-xs text-white"
+                  aria-label="Reassign to admin"
+                >
+                  <option value="">Unassigned</option>
+                  {assignees.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               {t.status !== 'done' && (
                 <button
                   onClick={() => transition(t.id, 'done')}
