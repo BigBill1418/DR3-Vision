@@ -31,9 +31,18 @@ function makeSession(
   role: 'operator' | 'manager' | 'admin',
   primary_site_id: string | null,
   is_super_admin: boolean = false,
+  all_sites: boolean = false,
 ): Session {
   return {
-    user: { id: 'u1', email: 'u@example.com', name: 'U', role, primary_site_id, is_super_admin },
+    user: {
+      id: 'u1',
+      email: 'u@example.com',
+      name: 'U',
+      role,
+      primary_site_id,
+      is_super_admin,
+      all_sites,
+    },
     expires: '2099-01-01T00:00:00.000Z',
   } as Session;
 }
@@ -55,6 +64,7 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'loads-inventory',
       'ops-ledger',
       'equipment',
+      'commodity-payments', // ADR-0052 (org-reach: admin passes)
       'observability',
     ]);
   });
@@ -151,6 +161,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'ops-ledger', // ADR-0045
       'processed-units',
       'equipment', // ADR-0044 (manager+, active)
+      'commodity-payments', // ADR-0052 (org-reach: admin passes)
       'observability',
     ]);
   });
@@ -178,6 +189,29 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
     expect(canSeeTile(superManager, tileByKey('production-report'), WOODLAND, true)).toBe(true);
     const plainManager = makeSession('manager', WOODLAND, false);
     expect(canSeeTile(plainManager, tileByKey('production-report'), WOODLAND, false)).toBe(false);
+  });
+});
+
+describe('Commodity Payments tile — ADR-0052 org-reach scope', () => {
+  it('is registered active at the org-level route', () => {
+    const tile = tileByKey('commodity-payments');
+    expect(tile.status).toBe('active');
+    expect(tile.scope).toBe('org-reach');
+    expect(tile.route).toBe('/dashboard/ops/commodity-payments');
+  });
+
+  it('is visible to admin and to an all_sites manager (Daven mechanism)', () => {
+    const bill = makeSession('admin', EUGENE);
+    const daven = makeSession('manager', null, false, true); // all_sites
+    expect(canSeeTile(bill, tileByKey('commodity-payments'), WOODLAND)).toBe(true);
+    expect(canSeeTile(daven, tileByKey('commodity-payments'), WOODLAND)).toBe(true);
+    expect(activeKeys(daven)).toContain('commodity-payments');
+  });
+
+  it('is HIDDEN from a single-site manager (reach, not role)', () => {
+    const rick = makeSession('manager', EUGENE); // all_sites false
+    expect(canSeeTile(rick, tileByKey('commodity-payments'), WOODLAND)).toBe(false);
+    expect(activeKeys(rick)).not.toContain('commodity-payments');
   });
 });
 

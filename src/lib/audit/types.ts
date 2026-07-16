@@ -37,7 +37,9 @@ export type CheckCode =
   | 'r1_recycling_rate'
   | 'r2_recovery_rate'
   | 'm1_missing_close'
-  | 'm2_missing_snapshot';
+  | 'm2_missing_snapshot'
+  // ADR-0052 — commodity payment reconciliation aging.
+  | 'm3_commodity_payment_aging';
 
 export type FindingKind =
   | 'missing_counterpart'
@@ -79,13 +81,7 @@ export type Commodity =
 export type OutboundSubCategory = 'renovation' | 'baled' | 'shredded';
 
 // Minimal JSON value type for `expected`/`actual`/`detail` payloads.
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [k: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 
 // ────────────────────────────────────────────────────────────────────────
 // Window + config

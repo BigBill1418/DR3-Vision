@@ -15,7 +15,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { CheckCode } from './types';
 
-export type BootstrapLeg = 'billing' | 'close' | 'snapshot';
+export type BootstrapLeg = 'billing' | 'close' | 'snapshot' | 'commodity_payment';
 
 /**
  * Registry: each gated check → the leg whose first data (or admin go_live_date)
@@ -25,9 +25,17 @@ export const BOOTSTRAP_GATED_CHECKS: Partial<Record<CheckCode, BootstrapLeg>> = 
   c4_billing_basis: 'billing',
   m1_missing_close: 'close',
   m2_missing_snapshot: 'snapshot',
+  // ADR-0052 — the aging check turns on at Daven's FIRST payment entry for the
+  // site (or an admin go_live_date), so a fresh site can't spam stale findings.
+  m3_commodity_payment_aging: 'commodity_payment',
 };
 
-export const ALL_BOOTSTRAP_LEGS: readonly BootstrapLeg[] = ['billing', 'close', 'snapshot'];
+export const ALL_BOOTSTRAP_LEGS: readonly BootstrapLeg[] = [
+  'billing',
+  'close',
+  'snapshot',
+  'commodity_payment',
+];
 
 export interface LegLiveness {
   /** True ⇒ the leg has data (or its go-live has passed): evaluate normally. */
@@ -37,7 +45,11 @@ export interface LegLiveness {
 }
 
 /** Has this site EVER had a row in the leg's underlying table? (derived liveness) */
-async function legHasEverHadData(db: PrismaClient, siteId: string, leg: BootstrapLeg): Promise<boolean> {
+async function legHasEverHadData(
+  db: PrismaClient,
+  siteId: string,
+  leg: BootstrapLeg,
+): Promise<boolean> {
   switch (leg) {
     case 'billing':
       // The billing leg is P2 invoices (ADR-0041). No invoice ⇒ no billing basis yet.
@@ -48,7 +60,17 @@ async function legHasEverHadData(db: PrismaClient, siteId: string, leg: Bootstra
     case 'snapshot':
       // The snapshot leg is a PHYSICAL inventory count (m2's premise).
       return (
-        (await db.siteInventorySnapshot.count({ where: { site_id: siteId, snapshot_kind: 'physical' } })) > 0
+        (await db.siteInventorySnapshot.count({
+          where: { site_id: siteId, snapshot_kind: 'physical' },
+        })) > 0
+      );
+    case 'commodity_payment':
+      // ADR-0052 — live once the reconciliation owner has entered ANY payment
+      // record for one of the site's loads.
+      return (
+        (await db.outboundMaterialPayment.count({
+          where: { outbound_material: { site_id: siteId } },
+        })) > 0
       );
   }
 }

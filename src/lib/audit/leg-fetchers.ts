@@ -41,6 +41,7 @@ import {
   r2RecoveryRate,
   m1MissingClose,
   m2MissingSnapshot,
+  m3CommodityPaymentAging,
   type M1DayRow,
 } from './comparators';
 import { resolveCheckConfigs } from './config';
@@ -63,12 +64,14 @@ import type {
   ProcessedLegRow,
 } from './types';
 
-const toISO = (d: Date | null | undefined): string | null => (d ? d.toISOString().slice(0, 10) : null);
+const toISO = (d: Date | null | undefined): string | null =>
+  d ? d.toISOString().slice(0, 10) : null;
 const toInstantISO = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 const rangeDate = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 /** Coerce a Prisma.Decimal | number | string | null into a plain number. */
 const toNum = (v: unknown): number => (v == null ? 0 : typeof v === 'number' ? v : Number(v));
-const toNumOrNull = (v: unknown): number | null => (v == null ? null : typeof v === 'number' ? v : Number(v));
+const toNumOrNull = (v: unknown): number | null =>
+  v == null ? null : typeof v === 'number' ? v : Number(v);
 
 // Inbound statuses that have cleared the manager verify gate (mirrors ADR-0037
 // running-balance.VERIFIED_INBOUND_STATUSES; kept local to avoid the prisma
@@ -117,7 +120,10 @@ async function fetchInbound(db: PrismaClient, w: AuditWindow): Promise<InboundLe
 
 async function fetchHaulMirror(db: PrismaClient, w: AuditWindow): Promise<MirrorHaulRow[]> {
   const rows = await db.mymrcHaulsMirror.findMany({
-    where: { site_id: w.siteId, docking_appointment_at: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      docking_appointment_at: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: {
       id: true,
       external_haul_id: true,
@@ -145,7 +151,10 @@ async function fetchHaulMirror(db: PrismaClient, w: AuditWindow): Promise<Mirror
 
 async function fetchProcessed(db: PrismaClient, w: AuditWindow): Promise<ProcessedLegRow[]> {
   const rows = await db.processedUnitsDaily.findMany({
-    where: { site_id: w.siteId, production_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      production_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: {
       id: true,
       production_date: true,
@@ -171,9 +180,15 @@ async function fetchProcessed(db: PrismaClient, w: AuditWindow): Promise<Process
   });
 }
 
-async function fetchProcessedMirror(db: PrismaClient, w: AuditWindow): Promise<MirrorProcessedRow[]> {
+async function fetchProcessedMirror(
+  db: PrismaClient,
+  w: AuditWindow,
+): Promise<MirrorProcessedRow[]> {
   const rows = await db.mymrcProcessedMirror.findMany({
-    where: { site_id: w.siteId, processed_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      processed_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: {
       id: true,
       external_materials_id: true,
@@ -196,7 +211,10 @@ async function fetchProcessedMirror(db: PrismaClient, w: AuditWindow): Promise<M
 
 async function fetchOutbound(db: PrismaClient, w: AuditWindow): Promise<OutboundLegRow[]> {
   const rows = await db.outboundMaterial.findMany({
-    where: { site_id: w.siteId, ship_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      ship_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: {
       id: true,
       ship_date: true,
@@ -231,8 +249,18 @@ async function fetchOutbound(db: PrismaClient, w: AuditWindow): Promise<Outbound
 
 async function fetchLandfilled(db: PrismaClient, w: AuditWindow): Promise<LandfilledLegRow[]> {
   const rows = await db.landfilledUnit.findMany({
-    where: { site_id: w.siteId, disposal_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
-    select: { id: true, disposal_date: true, units: true, slip_number: true, reason: true, source: true },
+    where: {
+      site_id: w.siteId,
+      disposal_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
+    select: {
+      id: true,
+      disposal_date: true,
+      units: true,
+      slip_number: true,
+      reason: true,
+      source: true,
+    },
   });
   return rows.map((r) => ({
     id: r.id,
@@ -246,7 +274,10 @@ async function fetchLandfilled(db: PrismaClient, w: AuditWindow): Promise<Landfi
 
 async function fetchOutboundMirror(db: PrismaClient, w: AuditWindow): Promise<MirrorOutboundRow[]> {
   const rows = await db.mymrcOutboundMirror.findMany({
-    where: { site_id: w.siteId, shipment_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      shipment_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: {
       id: true,
       external_materials_id: true,
@@ -314,7 +345,12 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
   const [inbound, dropoffs, processed, renovation, landfilled, snapshots] = await Promise.all([
     db.inboundLoad.findMany({
       where: { site_id: w.siteId, status: { in: [...VERIFIED_STATUSES] }, arrived_at: range },
-      select: { arrived_at: true, total_units: true, program_unit_count: true, non_program_unit_count: true },
+      select: {
+        arrived_at: true,
+        total_units: true,
+        program_unit_count: true,
+        non_program_unit_count: true,
+      },
     }),
     db.consumerDropoff.findMany({
       where: { site_id: w.siteId, dropoff_date: range },
@@ -359,7 +395,10 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
     const f = at(toISO(r.arrived_at));
     const program = r.program_unit_count ?? r.total_units ?? 0;
     const nonProgram = r.non_program_unit_count ?? 0;
-    f.inbound = { program: toNum(f.inbound.program) + program, nonProgram: toNum(f.inbound.nonProgram) + nonProgram };
+    f.inbound = {
+      program: toNum(f.inbound.program) + program,
+      nonProgram: toNum(f.inbound.nonProgram) + nonProgram,
+    };
   }
   for (const r of dropoffs) {
     at(toISO(r.dropoff_date)).dropoffProgram += r.units ?? 0;
@@ -415,7 +454,10 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
     },
   });
   const anchorUnits = anchor
-    ? (anchor.units_indoor ?? 0) + (anchor.units_outdoor ?? 0) + (anchor.units_total ?? 0) + anchor.units_in_processing
+    ? (anchor.units_indoor ?? 0) +
+      (anchor.units_outdoor ?? 0) +
+      (anchor.units_total ?? 0) +
+      anchor.units_in_processing
     : 0;
   const since = anchor ? anchor.snapshot_at : new Date(0);
   const flowWindow = { gt: since, lt: before };
@@ -425,7 +467,10 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
       _sum: { program_unit_count: true, non_program_unit_count: true },
       where: { site_id: w.siteId, status: { in: [...VERIFIED_STATUSES] }, arrived_at: flowWindow },
     }),
-    db.consumerDropoff.aggregate({ _sum: { units: true }, where: { site_id: w.siteId, dropoff_date: flowWindow } }),
+    db.consumerDropoff.aggregate({
+      _sum: { units: true },
+      where: { site_id: w.siteId, dropoff_date: flowWindow },
+    }),
     db.processedUnitsDaily.aggregate({
       _sum: { stripped_program: true, stripped_non_program: true },
       where: { site_id: w.siteId, production_date: flowWindow },
@@ -447,9 +492,18 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
       nonProgram: toNum(inbound._sum.non_program_unit_count),
     },
     dropoffUnits: toNum(dropoffs._sum.units),
-    stripped: { program: toNum(stripped._sum.stripped_program), nonProgram: toNum(stripped._sum.stripped_non_program) },
-    wholeUnitsSold: { program: toNum(renovation._sum.program_units), nonProgram: toNum(renovation._sum.non_program_units) },
-    landfilled: { program: toNum(landfilled._sum.program_units), nonProgram: toNum(landfilled._sum.non_program_units) },
+    stripped: {
+      program: toNum(stripped._sum.stripped_program),
+      nonProgram: toNum(stripped._sum.stripped_non_program),
+    },
+    wholeUnitsSold: {
+      program: toNum(renovation._sum.program_units),
+      nonProgram: toNum(renovation._sum.non_program_units),
+    },
+    landfilled: {
+      program: toNum(landfilled._sum.program_units),
+      nonProgram: toNum(landfilled._sum.non_program_units),
+    },
   });
   return { program: bal.program, nonProgram: bal.nonProgram };
 }
@@ -462,7 +516,10 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
  * continuity-clean by construction (only physical reconcile can fire). Exported
  * for the cross-check test tying the daily roll to the shared computation.
  */
-export function rollInventoryDays(start: PoolPair, days: ReadonlyMap<string, DayFlows>): InventoryDayRow[] {
+export function rollInventoryDays(
+  start: PoolPair,
+  days: ReadonlyMap<string, DayFlows>,
+): InventoryDayRow[] {
   const out: InventoryDayRow[] = [];
   let prev = { program: toNum(start.program), nonProgram: toNum(start.nonProgram) };
   for (const dateISO of [...days.keys()].sort()) {
@@ -471,7 +528,10 @@ export function rollInventoryDays(start: PoolPair, days: ReadonlyMap<string, Day
     const inboundNonProgram = toNum(f.inbound.nonProgram);
     const end = computeRunningBalance({
       anchor: { program: prev.program, nonProgram: prev.nonProgram },
-      verifiedInbound: { program: toNum(f.inbound.program), nonProgram: toNum(f.inbound.nonProgram) },
+      verifiedInbound: {
+        program: toNum(f.inbound.program),
+        nonProgram: toNum(f.inbound.nonProgram),
+      },
       dropoffUnits: f.dropoffProgram,
       stripped: f.stripped,
       wholeUnitsSold: f.renovationSold,
@@ -499,7 +559,10 @@ export function rollInventoryDays(start: PoolPair, days: ReadonlyMap<string, Day
 }
 
 /** The pool-aware day-by-day inventory ledger for a window (reused by the Workbench). */
-export async function buildInventoryDays(db: PrismaClient, w: AuditWindow): Promise<InventoryDayRow[]> {
+export async function buildInventoryDays(
+  db: PrismaClient,
+  w: AuditWindow,
+): Promise<InventoryDayRow[]> {
   const [start, days] = await Promise.all([startBalance(db, w), fetchDayFlows(db, w)]);
   return rollInventoryDays(start, days);
 }
@@ -510,7 +573,10 @@ export async function buildInventoryDays(db: PrismaClient, w: AuditWindow): Prom
  * against existing inventory is legal; `prior processed` and `renovation
  * outflow` accumulate. Exported for direct testing.
  */
-export function rollConservationRows(start: PoolPair, days: ReadonlyMap<string, DayFlows>): ConservationRow[] {
+export function rollConservationRows(
+  start: PoolPair,
+  days: ReadonlyMap<string, DayFlows>,
+): ConservationRow[] {
   const out: ConservationRow[] = [];
   let cumInboundP = toNum(start.program);
   let cumInboundNP = toNum(start.nonProgram);
@@ -568,7 +634,10 @@ function enrichInboundSubmission(inbound: InboundLegRow[], mirror: readonly Mirr
   }
 }
 
-function enrichProcessedSubmission(processed: ProcessedLegRow[], mirror: readonly MirrorProcessedRow[]): void {
+function enrichProcessedSubmission(
+  processed: ProcessedLegRow[],
+  mirror: readonly MirrorProcessedRow[],
+): void {
   const byDay = new Map<string, MirrorProcessedRow>();
   for (const m of mirror) byDay.set(m.processedDateISO, m);
   for (const row of processed) {
@@ -577,7 +646,10 @@ function enrichProcessedSubmission(processed: ProcessedLegRow[], mirror: readonl
   }
 }
 
-function enrichOutboundSubmission(outbound: OutboundLegRow[], mirror: readonly MirrorOutboundRow[]): void {
+function enrichOutboundSubmission(
+  outbound: OutboundLegRow[],
+  mirror: readonly MirrorOutboundRow[],
+): void {
   const byTicket = new Map<string, MirrorOutboundRow>();
   for (const m of mirror) if (m.ticketNumber) byTicket.set(m.ticketNumber, m);
   for (const row of outbound) {
@@ -602,7 +674,10 @@ function shiftDaysISO(iso: string, deltaDays: number): string {
 /** Consumer-drop-off business days in a window (an inbound-activity signal for M1). */
 async function fetchDropoffDays(db: PrismaClient, w: AuditWindow): Promise<Set<string>> {
   const rows = await db.consumerDropoff.findMany({
-    where: { site_id: w.siteId, dropoff_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) } },
+    where: {
+      site_id: w.siteId,
+      dropoff_date: { gte: rangeDate(w.startISO), lt: rangeDate(w.endISO) },
+    },
     select: { dropoff_date: true },
   });
   const days = new Set<string>();
@@ -614,14 +689,48 @@ async function fetchDropoffDays(db: PrismaClient, w: AuditWindow): Promise<Set<s
 }
 
 /** The latest physical snapshot day as of the run (M2), or null. */
-async function fetchLastPhysicalSnapshotISO(db: PrismaClient, w: AuditWindow): Promise<string | null> {
+async function fetchLastPhysicalSnapshotISO(
+  db: PrismaClient,
+  w: AuditWindow,
+): Promise<string | null> {
   const asOfISO = w.asOfISO ?? w.endISO;
   const snap = await db.siteInventorySnapshot.findFirst({
-    where: { site_id: w.siteId, snapshot_kind: 'physical', snapshot_at: { lt: rangeDate(shiftDaysISO(asOfISO, 1)) } },
+    where: {
+      site_id: w.siteId,
+      snapshot_kind: 'physical',
+      snapshot_at: { lt: rangeDate(shiftDaysISO(asOfISO, 1)) },
+    },
     orderBy: { snapshot_at: 'desc' },
     select: { snapshot_at: true },
   });
   return snap ? toISO(snap.snapshot_at) : null;
+}
+
+/** ADR-0052 M3 — every non-paid outbound load with its (implicit) payment
+ * state. FULL history, not window-bounded: payment aging outlives any sweep
+ * window, and the open set stays small once the owner works it. */
+async function fetchM3PaymentRows(
+  db: PrismaClient,
+  w: AuditWindow,
+): Promise<import('./comparators').M3PaymentRow[]> {
+  const loads = await db.outboundMaterial.findMany({
+    where: { site_id: w.siteId, OR: [{ payment: null }, { payment: { status: { not: 'paid' } } }] },
+    select: {
+      id: true,
+      buyer: true,
+      ship_date: true,
+      ticket_number: true,
+      payment: { select: { status: true, invoiced_at: true } },
+    },
+  });
+  return loads.map((l) => ({
+    loadId: l.id,
+    buyer: l.buyer,
+    shipDateISO: toISO(l.ship_date) ?? l.ship_date.toISOString().slice(0, 10),
+    status: l.payment?.status ?? 'awaiting_invoice',
+    invoicedAtISO: l.payment?.invoiced_at ? toISO(l.payment.invoiced_at) : null,
+    ticketNumber: l.ticket_number,
+  }));
 }
 
 /** Build the M1 activity-day rows from inbound loads + drop-offs vs closes. */
@@ -635,7 +744,11 @@ function buildM1Days(
   const closes = new Set(processed.map((p) => p.productionDateISO));
   return [...activity]
     .sort()
-    .map((dateISO) => ({ dateISO, hadInboundActivity: true, hasProcessedRow: closes.has(dateISO) }));
+    .map((dateISO) => ({
+      dateISO,
+      hadInboundActivity: true,
+      hasProcessedRow: closes.has(dateISO),
+    }));
 }
 
 // ── Assemble the per-window comparator runner the sweep injects ──────────
@@ -643,17 +756,27 @@ function buildM1Days(
 export function buildRunChecksForWindow(db: PrismaClient) {
   return async (
     window: AuditWindow,
-  ): Promise<{ checkCodes: CheckCode[]; findings: Finding[]; suppressedBootstrap: Record<string, number> }> => {
+  ): Promise<{
+    checkCodes: CheckCode[];
+    findings: Finding[];
+    suppressedBootstrap: Record<string, number>;
+  }> => {
     const configRows = await db.auditCheckConfig.findMany({
       where: { OR: [{ site_id: null }, { site_id: window.siteId }] },
     });
     const configs = resolveCheckConfigs(window.siteId, configRows);
     const holidays = (
-      await db.siteHoliday.findMany({ where: { site_id: window.siteId }, select: { holiday_date: true } })
+      await db.siteHoliday.findMany({
+        where: { site_id: window.siteId },
+        select: { holiday_date: true },
+      })
     ).map((h) => h.holiday_date);
 
     // ADR-0043 — the site jurisdiction picks the R1/R2 floor; null → skip R checks.
-    const site = await db.site.findUnique({ where: { id: window.siteId }, select: { jurisdiction: true } });
+    const site = await db.site.findUnique({
+      where: { id: window.siteId },
+      select: { jurisdiction: true },
+    });
     const jurisdiction = site?.jurisdiction ?? null;
 
     // R1/R2 run over a rolling ~9-month rate window (per R1 config), NOT the
@@ -696,10 +819,11 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     ]);
 
     // ADR-0043 inputs (rate window + missing-record signals).
-    const [rateInputs, dropoffDays, lastPhysicalSnapshotISO] = await Promise.all([
+    const [rateInputs, dropoffDays, lastPhysicalSnapshotISO, m3PaymentRows] = await Promise.all([
       aggregateSiteRates(db, rateWindow.siteId, rateWindow.startISO, rateWindow.endISO),
       fetchDropoffDays(db, window),
       fetchLastPhysicalSnapshotISO(db, window),
+      fetchM3PaymentRows(db, window),
     ]);
     const m1Days = buildM1Days(inbound, dropoffDays, processed);
 
@@ -753,14 +877,24 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     };
 
     run('c1_inbound', () => c1Inbound(window, inbound, haulMirror, configs.get('c1_inbound')!));
-    run('c2_processed', () => c2Processed(window, processed, processedMirror, configs.get('c2_processed')!));
+    run('c2_processed', () =>
+      c2Processed(window, processed, processedMirror, configs.get('c2_processed')!),
+    );
     run('c3_outbound', () =>
-      c3Outbound(window, { outbound, landfilled }, outboundMirror, configs.get('c3_outbound')!, holidays),
+      c3Outbound(
+        window,
+        { outbound, landfilled },
+        outboundMirror,
+        configs.get('c3_outbound')!,
+        holidays,
+      ),
     );
     runGated('c4_billing_basis', 'billing', () =>
       c4BillingBasis(window, processed, billing, configs.get('c4_billing_basis')!),
     );
-    run('c5_conservation', () => c5Conservation(window, conservation, configs.get('c5_conservation')!));
+    run('c5_conservation', () =>
+      c5Conservation(window, conservation, configs.get('c5_conservation')!),
+    );
     run('c6_inventory_continuity', () =>
       c6InventoryContinuity(window, inventoryDays, configs.get('c6_inventory_continuity')!),
     );
@@ -795,6 +929,15 @@ export function buildRunChecksForWindow(db: PrismaClient) {
     runGated('m2_missing_snapshot', 'snapshot', () =>
       m2MissingSnapshot(window, { lastPhysicalSnapshotISO }, configs.get('m2_missing_snapshot')!),
     );
+    // ADR-0052 — commodity payment aging (per-buyer rollup, D3); gated on the
+    // commodity_payment leg so it stays silent until the first payment entry.
+    runGated('m3_commodity_payment_aging', 'commodity_payment', () =>
+      m3CommodityPaymentAging(
+        window,
+        { rows: m3PaymentRows },
+        configs.get('m3_commodity_payment_aging')!,
+      ),
+    );
 
     // Explain-don't-flag cross-annotation (ADR-0043 D2 / survey §B): a low rate
     // that coincides with an open missing-record finding is likely a data gap,
@@ -816,7 +959,8 @@ export function buildRunChecksForWindow(db: PrismaClient) {
       if (openMissing.length > 0) {
         const links = openMissing.map((m) => ({ id: m.id, checkCode: m.check_code }));
         for (const f of rFindings) {
-          const base = f.detail && typeof f.detail === 'object' && !Array.isArray(f.detail) ? f.detail : {};
+          const base =
+            f.detail && typeof f.detail === 'object' && !Array.isArray(f.detail) ? f.detail : {};
           f.detail = { ...base, linkedMissingFindings: links };
         }
       }

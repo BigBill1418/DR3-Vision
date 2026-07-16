@@ -1493,11 +1493,45 @@ model OutboundMaterial {
   created_at        DateTime            @default(now())
   updated_at        DateTime            @updatedAt
 
+  // ADR-0052 — optional payment-tracking companion (financial reconciliation
+  // stays out of the operational capture row).
+  payment OutboundMaterialPayment?
+
   @@index([site_id, ship_date])
   @@index([site_id, commodity, ship_date])
   @@index([site_id, sub_category, ship_date]) // renovation WholeUnitsSold query (running balance)
   @@index([retrac_id])
   @@map("outbound_materials")
+}
+
+// ADR-0052 — commodity payment reconciliation (v1). One row per tracked load;
+// a load with NO row is implicitly `awaiting_invoice`. Status changes are
+// forward transitions with provenance; history is append-only in audit_log.
+enum CommodityPaymentStatus {
+  awaiting_invoice
+  invoiced
+  paid
+  disputed
+}
+
+model OutboundMaterialPayment {
+  id                   String                 @id @default(uuid())
+  outbound_material_id String                 @unique
+  outbound_material    OutboundMaterial       @relation(fields: [outbound_material_id], references: [id])
+  status               CommodityPaymentStatus @default(awaiting_invoice)
+  buyer_invoice_ref    String?
+  // D2 — optional at `invoiced`; Decimal at every money edge (never float).
+  expected_amount      Decimal?               @db.Decimal(12, 2)
+  invoiced_at          DateTime?              @db.Date
+  paid_at              DateTime?              @db.Date
+  notes                String?
+  created_by           String?
+  updated_by           String?
+  created_at           DateTime               @default(now())
+  updated_at           DateTime               @updatedAt
+
+  @@index([status])
+  @@map("outbound_material_payments")
 }
 
 /// ADR-0037 D4 — whole-unit landfill disposal (workbook Landfilled Units
@@ -1720,6 +1754,8 @@ enum AuditCheckCode {
   r2_recovery_rate
   m1_missing_close
   m2_missing_snapshot
+  // ADR-0052 — commodity payment reconciliation aging (per-buyer rollup).
+  m3_commodity_payment_aging
 }
 
 enum AuditFindingKind {

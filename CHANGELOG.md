@@ -5,6 +5,17 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-16 (ADR-0052 BUILT: commodity payment reconciliation v1)
+
+Bill approved D1–D3 as proposed and ordered the build. New
+`outbound_material_payments` companion table (additive migration
+`20260721_commodity_payment_recon`), forward-only status transitions with
+audited provenance, `/dashboard/ops/commodity-payments` view (org reach —
+admin/all-sites; both sites, aging, CSV) + launcher tile, and the
+`m3_commodity_payment_aging` audit check (30d ship→invoice / 45d
+invoice→paid, per-buyer rollup, bootstrap-gated on first payment entry,
+digest-routed). ADR-0052 → Accepted.
+
 ### Changed — 2026-07-16 (office dark-theme sweep executed — C-16 / ADR-0051)
 
 Operator directive (Bill): "everything goes to the new look except the floor
