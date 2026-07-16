@@ -34,11 +34,11 @@ const writeAudit = vi.fn();
 vi.mock('@/lib/audit', () => ({ writeAudit: (...a: unknown[]) => writeAudit(...a) }));
 
 import {
-  assertAssignableAdmin,
+  assertAssignableOwner,
   createNoteWithTasks,
   createTask,
   dueSummaryForSite,
-  listAssignableAdmins,
+  listAssignableOwners,
   OpsTaskError,
   reassignTask,
   transitionTask,
@@ -163,23 +163,32 @@ describe('dueSummaryForSite', () => {
 });
 
 describe('assign a task to an admin (2026-07-16)', () => {
-  it('listAssignableAdmins queries active admins only', async () => {
-    userFindMany.mockResolvedValue([{ id: 'a1', name: 'Bill', email: 'bill@svdp.us' }]);
-    const admins = await listAssignableAdmins();
-    expect(admins).toHaveLength(1);
+  it('listAssignableOwners queries active admins + managers', async () => {
+    userFindMany.mockResolvedValue([
+      { id: 'a1', name: 'Bill', email: 'bill@svdp.us' },
+      { id: 'm1', name: 'Daven', email: 'daven.stetson@svdp.us' },
+    ]);
+    const owners = await listAssignableOwners();
+    expect(owners).toHaveLength(2);
     const where = (userFindMany.mock.calls[0]![0] as { where: Record<string, unknown> }).where;
-    expect(where).toMatchObject({ role: 'admin', is_active: true, deleted_at: null });
+    expect(where).toMatchObject({
+      role: { in: ['admin', 'manager'] },
+      is_active: true,
+      deleted_at: null,
+    });
   });
 
-  it('assertAssignableAdmin passes for an active admin', async () => {
-    userFindFirst.mockResolvedValue({ id: 'a1' });
-    await expect(assertAssignableAdmin('a1')).resolves.toBeUndefined();
+  it('assertAssignableOwner passes for an active admin or manager', async () => {
+    userFindFirst.mockResolvedValue({ id: 'm1' });
+    await expect(assertAssignableOwner('m1')).resolves.toBeUndefined();
+    const where = (userFindFirst.mock.calls[0]![0] as { where: Record<string, unknown> }).where;
+    expect(where).toMatchObject({ role: { in: ['admin', 'manager'] } });
   });
 
-  it('assertAssignableAdmin throws 422 for a non-admin / unknown id', async () => {
+  it('assertAssignableOwner throws 422 for an operator / unknown id', async () => {
     userFindFirst.mockResolvedValue(null);
-    await expect(assertAssignableAdmin('nope')).rejects.toMatchObject({
-      reason: 'assignee_not_an_admin',
+    await expect(assertAssignableOwner('nope')).rejects.toMatchObject({
+      reason: 'assignee_not_assignable',
       status: 422,
     });
   });

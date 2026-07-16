@@ -9,7 +9,7 @@ import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { currentOpsViewer } from '@/lib/ops/viewer';
 import { hasOrgReach } from '@/lib/ops/reach';
-import { dueSummaryForSite, listAssignableAdmins } from '@/lib/ops/tasks';
+import { dueSummaryForSite, listAssignableOwners } from '@/lib/ops/tasks';
 import { appToday } from '@/lib/time';
 import { OpsClient } from './OpsClient';
 
@@ -36,7 +36,7 @@ export default async function OpsPage({ params }: Props) {
   const orgReach = identity ? hasOrgReach(identity.viewer) : false;
   const [due, admins] = await Promise.all([
     dueSummaryForSite(result.ctx.siteId, appToday(), orgReach),
-    listAssignableAdmins(),
+    listAssignableOwners(),
   ]);
   const assignees = admins.map((a) => ({ id: a.id, name: a.name ?? a.email ?? a.id }));
 
