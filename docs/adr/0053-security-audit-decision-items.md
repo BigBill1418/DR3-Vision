@@ -82,7 +82,7 @@ they don't slip.
   `base-uri 'self'`, `form-action 'self'` while there.
 - **Decision needed:** schedule it (order it after D1).
 
-### D4 — Sender-spoof / DMARC posture (MEDIUM · ops-verify)
+### D4 — Sender-spoof / DMARC posture (MEDIUM · ops-verify) — DONE 2026-07-16
 
 - **Finding (SENDER):** the AP mailbox's `sender_validated` trusts the Graph
   `from` (the forgeable From header), not an authenticated envelope — the code
@@ -153,3 +153,12 @@ revocation), **D4** independently (verify DMARC, then the small code change).
   stays upstream-tracked. tsc + full vitest + prod build green; auth-middleware
   behavior re-verified. Shipped as a patch bump, not the major-16 upgrade the
   raw advisory range string implied.
+
+- **D4 — DONE 2026-07-16.** Verified `svdp.us` DMARC = `p=reject; sp=reject;
+  pct=100` (strongest policy) — receivers/EOP reject unaligned mail forging
+  `@svdp.us`, so the external-forgery risk into the AP queue is blocked at the
+  mail layer. Operator chose comment-fix-only: the misleading "authenticated
+  envelope" comments in `ap/senders.ts` + `msgraph-mail/normalize.ts` now state
+  the truth (From-header trust; forgery resistance = DMARC p=reject + EOP, a
+  hard precondition). The optional Authentication-Results header gate is noted
+  as deferred belt-and-suspenders (low value given p=reject).

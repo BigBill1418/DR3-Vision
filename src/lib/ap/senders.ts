@@ -1,12 +1,22 @@
-// ADR-0046 C3/C9-D2/C10.4 — sender validation on the AUTHENTICATED envelope sender.
+// ADR-0046 C3/C9-D2/C10.4 — sender validation on the message `From` address.
+//
+// IMPORTANT (audit 2026-07-16, D4): this validates the Graph `from` (the From
+// HEADER), NOT a cryptographically authenticated envelope. The From header is
+// forgeable in general — the forgery resistance here rests on the mail layer,
+// not this check: `svdp.us` publishes DMARC `p=reject` (verified 2026-07-16)
+// and M365/EOP anti-spoofing rejects unaligned mail claiming `@svdp.us` before
+// it can reach the AP mailbox. So a `tenant_wide` "@svdp.us is approvable" rule
+// is safe ONLY as long as that DMARC/EOP posture holds — treat `p=reject` as a
+// hard precondition of this module. (Belt-and-suspenders option, deferred: gate
+// on the Authentication-Results DMARC=pass header via internetMessageHeaders.)
 //
 // Two modes (data, admin-toggle — never a code change):
-//   tenant_wide  (default): any internal `@svdp.us` sender is approvable.
+//   tenant_wide  (default): any internal `@svdp.us` From is approvable.
 //   explicit_list         : only addresses in ap_sender_entries (active) are.
 // The quarantine ring therefore covers external senders + unprocessable messages.
 //
-// C10.4 nuance: for a FORWARD the auth subject is the internal forwarder (the
-// envelope `from`); the original vendor address inside the body is display
+// C10.4 nuance: for a FORWARD the subject is the internal forwarder (the
+// message `from`); the original vendor address inside the body is display
 // context only and is NEVER passed here.
 
 import type { PrismaClient } from '@prisma/client';

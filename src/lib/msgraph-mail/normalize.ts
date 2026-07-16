@@ -125,8 +125,10 @@ interface RawMessage {
 }
 
 /**
- * Normalize a raw Graph message into `MailMessage`. The authenticated sender is
- * `from` (falling back to `sender`), lowercased. `bodyHtml` / `bodyText` are set
+ * Normalize a raw Graph message into `MailMessage`. The sender address is the
+ * `from` HEADER (falling back to `sender`), lowercased — NOT a cryptographically
+ * authenticated envelope (audit 2026-07-16, D4); forgery resistance rests on
+ * `svdp.us` DMARC `p=reject` + EOP, not this field. See `ap/senders.ts`. `bodyHtml` / `bodyText` are set
  * from the body by its contentType; the caller may supplement `bodyText` with a
  * separate text-part fetch. Throws `GraphContractDriftError`-worthy conditions
  * are the caller's concern — this pure fn tolerates missing optional fields.
