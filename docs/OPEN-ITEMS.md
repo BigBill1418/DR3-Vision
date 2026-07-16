@@ -24,7 +24,7 @@ are the only window her cross-checks are possible.
 | O-4 | **Create Mary Scott's account** when she's ready: role `manager` + `all_sites` + `can_view_billing_verify` | rollup §1.2, PR #92/#93 | Unlocks `/admin/billing/verify` (read-only pre-GP check). |
 | O-5 | **Eugene June backfill decision (A/B/C)** | rollup §4.4 | Default assumption is **C — skip** (clean forward-only ledger from Rick's 7/20 iPad go-live). Confirm or override. |
 | O-6 | **Schedule Kelsey walkthroughs (5 items)** | rollup §8.3 / PR #87 §3 | `saved_units` semantics, DAY6 formula-level `×5`, `%` column on Steel/Biomass/WTE, event units as inbound, MRC contact map. **Before 8/1.** |
-| O-7 | **Answer: does Mary's outgoing stewardship-fee AP booking warrant a Vision surface?** | rollup §1.6, ADR-0046 note | If yes → draft ADR-0052 (renumbered from 0051; the theme ADR took 0051). Also clarify which direction the fee flows. |
+| O-7 | **Answer: does Mary's outgoing stewardship-fee AP booking warrant a Vision surface?** | rollup §1.6, ADR-0046 note | If yes → draft an ADR (takes the NEXT FREE number at draft time — 0052 went to commodity payment reconciliation; numbers are never reserved). Also clarify which direction the fee flows. |
 | O-8 | Remaining Stage-0 runbook rows (operator roster seed, MyMRC profile enable, DR3# counter alignment with Janette, Rick's rate tables, E0/E-Rick comms) | go-live plan Part 1, Stage 0 | See the plan's table for runbook links per row. |
 
 ## 2 — Blocked on stakeholders
@@ -32,7 +32,7 @@ are the only window her cross-checks are possible.
 | #   | Item                                                                                            | Blocked on                           | Notes                                                                        |
 | --- | ----------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------- |
 | S-1 | ADR-0050 dispatch-integration draft (3 email types + parser signals)                            | Morena's 2–3 example emails per type | She committed to forwarding them (rollup §2).                                |
-| S-2 | ADR-0052 "verbal capture" surface for phone/text swap requests                                  | Product go-ahead post-cutover        | Parked deliberately (rollup §2.2).                                           |
+| S-2 | "Verbal capture" surface for phone/text swap requests (ADR number assigned at draft time) | Product go-ahead post-cutover | Parked deliberately (rollup §2.2). |
 | S-3 | Eugene source names/addresses (Thompsons Sanitary Service, Stayton Community Center, Deschutes) | Rick                                 | Seeded 2026-07-10 with Address TBD; names to be confirmed against his forms. |
 
 ## 3 — Code follow-ups (accepted residuals, not bugs)
