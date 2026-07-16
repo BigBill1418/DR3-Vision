@@ -16,7 +16,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
   if (!result.ok) {
     if (result.status === 401) redirect(`/login?next=/dashboard/${siteCode}/invoices/${id}`);
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Access denied</h1>
         <Link href={`/dashboard/${siteCode}/invoices`} className="mt-6 text-sm underline">
           Back to invoices
@@ -26,7 +26,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
   }
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-10 text-white">
+    <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-4xl">
         <Link href={`/dashboard/${siteCode}/invoices`} className="text-sm underline opacity-90">
           &larr; Back to invoices

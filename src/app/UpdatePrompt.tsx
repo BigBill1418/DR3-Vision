@@ -88,7 +88,7 @@ export function UpdateBanner({
         <button
           type="button"
           onClick={onReload}
-          className="shrink-0 rounded-lg bg-dr3-green px-4 py-2 text-sm font-semibold text-dr3-ink hover:bg-dr3-green-dark hover:text-dr3-mist"
+          className="shrink-0 rounded-lg bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright"
         >
           {t('update_prompt.reload')}
         </button>

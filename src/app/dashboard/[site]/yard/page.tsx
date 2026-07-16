@@ -24,7 +24,7 @@ export default async function YardPage({ params }: Props) {
   if (!result.ok) {
     if (result.status === 401) redirect(`/login?next=/dashboard/${siteCode}/yard`);
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Access denied</h1>
         <p className="mt-2 opacity-80">This area is restricted to {siteCode} managers.</p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
@@ -38,7 +38,7 @@ export default async function YardPage({ params }: Props) {
   const yardLive = await isUiSurfaceLive(UI_SURFACE.YARD_LIST, result.ctx.siteId);
   if (!isAdmin && !yardLive) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Not yet activated</h1>
         <p className="mt-2 max-w-md opacity-80">
           The Yard view (handoff §1.8) is staged but not yet activated for managers at this site.
@@ -54,7 +54,7 @@ export default async function YardPage({ params }: Props) {
   const view = await getYardView(result.ctx.siteId);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-10 text-white">
+    <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-5xl">
         <Link href={`/dashboard/${siteCode}`} className="text-sm underline opacity-90">
           ← Back to {result.ctx.siteName} dashboard

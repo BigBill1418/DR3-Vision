@@ -5,6 +5,21 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-16 (office dark-theme sweep executed — C-16 / ADR-0051)
+
+Operator directive (Bill): "everything goes to the new look except the floor
+iPads." Repainted every remaining green office/manager surface to the Vision
+deep-space theme (`dr3-space`/`dr3-mist`/`dr3-cyan`/`dr3-steel`), following the
+AP reference (PR #99) as an in-place token swap: all `/dashboard/[site]/*`
+pages + clients (cor, equipment, invoices, invoices/[id], loads-inventory, ops,
+yard), `/dashboard/ops/digests`, `/admin/processed-units`,
+`/admin/production-report`, `/bonus/amendments`, the `/login` locale picker, and
+the app-global chrome (`layout` PWA themeColor, `global-error` fallback, the
+`UpdatePrompt` banner CTA). `/login` is the office Entra SSO door (the floor PIN
+path is under `/operator`), so it goes dark. The floor (`/operator/*`) and the
+COR PDF renderer keep the ADR-0008 green. New `office-dark-theme-sweep.test.tsx`
+statically guards the "no green office pages" invariant. Closes OPEN-ITEMS C-16.
+
 ### Added — 2026-07-16 (ADR-0052 drafted: commodity payment reconciliation, Proposed)
 
 Per the Daven Stetson personnel-wiring handoff (§4 as corrected by §7):

@@ -58,7 +58,7 @@ interface Detail {
 }
 
 const btnPrimary =
-  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+  'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 const btnDanger =
   'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
 const btnGhost =
@@ -177,7 +177,7 @@ export function InvoiceDetailClient({
             {gate.findingCodes.join(', ') || 'none'}).
           </p>
         ) : (
-          <p className="mt-2 text-sm text-dr3-chartreuse">
+          <p className="mt-2 text-sm text-dr3-cyan">
             Clean — no blocking findings for this window.
           </p>
         )}
@@ -226,7 +226,7 @@ export function InvoiceDetailClient({
                     <td className="py-2 text-right">
                       <button
                         type="button"
-                        className="text-xs text-dr3-chartreuse underline"
+                        className="text-xs text-dr3-cyan underline"
                         onClick={() =>
                           setExpanded((prev) => {
                             const next = new Set(prev);
@@ -248,7 +248,7 @@ export function InvoiceDetailClient({
                             <Link
                               key={lid}
                               href={`/dashboard/${siteCode}/load/${lid}`}
-                              className="text-dr3-chartreuse underline"
+                              className="text-dr3-cyan underline"
                             >
                               load {lid.slice(0, 8)}
                             </Link>
@@ -294,9 +294,7 @@ export function InvoiceDetailClient({
       {/* Actions */}
       <section className="mt-8 rounded-lg border border-white/15 bg-black/20 p-4">
         {msg && (
-          <p
-            className={`mb-3 text-sm ${msg.kind === 'ok' ? 'text-dr3-chartreuse' : 'text-red-300'}`}
-          >
+          <p className={`mb-3 text-sm ${msg.kind === 'ok' ? 'text-dr3-cyan' : 'text-red-300'}`}>
             {msg.text}
           </p>
         )}

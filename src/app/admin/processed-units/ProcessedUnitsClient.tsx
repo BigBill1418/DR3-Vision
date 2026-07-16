@@ -81,7 +81,10 @@ export function ProcessedUnitsClient({ sites }: Props) {
         const err = (await res.json().catch(() => ({}))) as { error?: string };
         setMessage({
           kind: 'err',
-          text: err.error === 'closed' ? 'That day is closed — use the amendment path.' : `Save failed (${res.status}).`,
+          text:
+            err.error === 'closed'
+              ? 'That day is closed — use the amendment path.'
+              : `Save failed (${res.status}).`,
         });
         return;
       }
@@ -120,7 +123,8 @@ export function ProcessedUnitsClient({ sites }: Props) {
   };
 
   const isBusy = busy !== null;
-  const canSave = siteCode !== '' && strippedProgram !== '' && Number.isFinite(Number(strippedProgram));
+  const canSave =
+    siteCode !== '' && strippedProgram !== '' && Number.isFinite(Number(strippedProgram));
 
   return (
     <div className="mt-8 flex flex-col gap-8">
@@ -129,7 +133,11 @@ export function ProcessedUnitsClient({ sites }: Props) {
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Site</span>
-            <select className={inputCls} value={siteCode} onChange={(e) => setSiteCode(e.target.value)}>
+            <select
+              className={inputCls}
+              value={siteCode}
+              onChange={(e) => setSiteCode(e.target.value)}
+            >
               {sites.map((s) => (
                 <option key={s.code} value={s.code}>
                   {s.name}
@@ -139,35 +147,83 @@ export function ProcessedUnitsClient({ sites }: Props) {
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Production date</span>
-            <input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+            <input
+              type="date"
+              className={inputCls}
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Stripped — program (billed)</span>
-            <input type="number" min="0" step="0.1" className={inputCls} value={strippedProgram} onChange={(e) => setStrippedProgram(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              className={inputCls}
+              value={strippedProgram}
+              onChange={(e) => setStrippedProgram(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Stripped — non-program</span>
-            <input type="number" min="0" step="0.1" className={inputCls} value={strippedNonProgram} onChange={(e) => setStrippedNonProgram(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              className={inputCls}
+              value={strippedNonProgram}
+              onChange={(e) => setStrippedNonProgram(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Saved units (excl. from balance)</span>
-            <input type="number" min="0" step="0.1" className={inputCls} value={savedUnits} onChange={(e) => setSavedUnits(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              className={inputCls}
+              value={savedUnits}
+              onChange={(e) => setSavedUnits(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Material ticket #</span>
-            <input className={inputCls} value={materialTicket} onChange={(e) => setMaterialTicket(e.target.value)} />
+            <input
+              className={inputCls}
+              value={materialTicket}
+              onChange={(e) => setMaterialTicket(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim"># employees</span>
-            <input type="number" min="0" className={inputCls} value={employees} onChange={(e) => setEmployees(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              className={inputCls}
+              value={employees}
+              onChange={(e) => setEmployees(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim"># processors</span>
-            <input type="number" min="0" className={inputCls} value={processors} onChange={(e) => setProcessors(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              className={inputCls}
+              value={processors}
+              onChange={(e) => setProcessors(e.target.value)}
+            />
           </label>
           <label className={labelCls}>
             <span className="text-dr3-mist-dim">Pocketcoil estimate</span>
-            <input type="number" min="0" className={inputCls} value={pocketcoil} onChange={(e) => setPocketcoil(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              className={inputCls}
+              value={pocketcoil}
+              onChange={(e) => setPocketcoil(e.target.value)}
+            />
           </label>
         </div>
         <div className="mt-4 flex items-center gap-4">
@@ -175,12 +231,14 @@ export function ProcessedUnitsClient({ sites }: Props) {
             type="button"
             disabled={!canSave || isBusy}
             onClick={save}
-            className="rounded bg-dr3-green px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
+            className="rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space disabled:opacity-40"
           >
             {busy === 'save' ? 'Saving…' : 'Save entry'}
           </button>
           {message && (
-            <span className={message.kind === 'ok' ? 'text-sm text-dr3-chartreuse' : 'text-sm text-red-400'}>
+            <span
+              className={message.kind === 'ok' ? 'text-sm text-dr3-cyan' : 'text-sm text-red-400'}
+            >
               {message.text}
             </span>
           )}
@@ -190,8 +248,8 @@ export function ProcessedUnitsClient({ sites }: Props) {
       <section>
         <h2 className="text-lg font-semibold">Recent days</h2>
         <p className="mt-1 text-xs text-dr3-mist-dim">
-          Whole units sold + landfilled are DERIVED from the day&apos;s renovation outbound + landfilled rows —
-          confirm them at close, they are never entered here.
+          Whole units sold + landfilled are DERIVED from the day&apos;s renovation outbound +
+          landfilled rows — confirm them at close, they are never entered here.
         </p>
         <table className="mt-3 w-full text-left text-sm">
           <thead className="text-dr3-mist-dim">

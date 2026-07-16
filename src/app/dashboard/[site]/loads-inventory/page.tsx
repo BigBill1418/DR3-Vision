@@ -27,7 +27,7 @@ export default async function LoadsInventoryPage({ params }: Props) {
   if (!result.ok) {
     if (result.status === 401) redirect(`/login?next=/dashboard/${siteCode}/loads-inventory`);
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Access denied</h1>
         <p className="mt-2 opacity-80">This area is restricted.</p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
@@ -40,11 +40,11 @@ export default async function LoadsInventoryPage({ params }: Props) {
   // D7 activation gate — admin-only until the ops gates close.
   if (result.ctx.role !== 'admin') {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Not yet activated</h1>
         <p className="mt-2 max-w-md opacity-80">
-          The loads &amp; inventory surfaces (ADR-0037) are staged but not yet activated. Admin access
-          only until the P1 ops gates (restore drill + off-box backup key) close.
+          The loads &amp; inventory surfaces (ADR-0037) are staged but not yet activated. Admin
+          access only until the P1 ops gates (restore drill + off-box backup key) close.
         </p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
           Back to dashboard
@@ -55,18 +55,23 @@ export default async function LoadsInventoryPage({ params }: Props) {
 
   // ADR-0047 UI gate — the events/OR-counts tabs ramp via `loads_events_or_tabs`
   // (admins always see them; this page is otherwise admin-only via the D7 gate).
-  const eventsOrTabsLive = await isUiSurfaceLive(UI_SURFACE.LOADS_EVENTS_OR_TABS, result.ctx.siteId);
+  const eventsOrTabsLive = await isUiSurfaceLive(
+    UI_SURFACE.LOADS_EVENTS_OR_TABS,
+    result.ctx.siteId,
+  );
   const showEventsOrTabs = result.ctx.role === 'admin' || eventsOrTabsLive;
 
   const balance = await onHand(result.ctx.siteId, new Date());
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-10 text-white">
+    <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-5xl">
         <Link href={`/dashboard/${siteCode}`} className="text-sm underline opacity-90">
           ← Back to {result.ctx.siteName} dashboard
         </Link>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">Loads &amp; inventory — {result.ctx.siteName}</h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight">
+          Loads &amp; inventory — {result.ctx.siteName}
+        </h1>
 
         <div className="mt-6 grid grid-cols-3 gap-4">
           <BalanceTile label="Program on hand" value={balance.program.toString()} accent />
@@ -74,9 +79,10 @@ export default async function LoadsInventoryPage({ params }: Props) {
           <BalanceTile label="Total on hand" value={balance.total.toString()} />
         </div>
         <p className="mt-2 text-xs opacity-70">
-          Running balance (D6): End = Start + Inbound − Stripped − Whole units sold − Landfilled. Anchored to
-          the latest physical count, plus verified inbound + drop-offs, minus stripped (processed), renovation
-          whole units sold, and landfilled units. Baled / shredded commodities never subtract units.
+          Running balance (D6): End = Start + Inbound − Stripped − Whole units sold − Landfilled.
+          Anchored to the latest physical count, plus verified inbound + drop-offs, minus stripped
+          (processed), renovation whole units sold, and landfilled units. Baled / shredded
+          commodities never subtract units.
         </p>
 
         <LoadsInventoryClient
@@ -91,7 +97,9 @@ export default async function LoadsInventoryPage({ params }: Props) {
 
 function BalanceTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={`rounded-lg border p-4 ${accent ? 'border-dr3-chartreuse/50 bg-black/20' : 'border-white/15 bg-black/10'}`}>
+    <div
+      className={`rounded-lg border p-4 ${accent ? 'border-dr3-cyan/50 bg-black/20' : 'border-white/15 bg-black/10'}`}
+    >
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
     </div>

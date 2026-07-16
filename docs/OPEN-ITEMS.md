@@ -32,7 +32,7 @@ are the only window her cross-checks are possible.
 | #   | Item                                                                                            | Blocked on                           | Notes                                                                        |
 | --- | ----------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------- |
 | S-1 | ADR-0050 dispatch-integration draft (3 email types + parser signals)                            | Morena's 2–3 example emails per type | She committed to forwarding them (rollup §2).                                |
-| S-2 | "Verbal capture" surface for phone/text swap requests (ADR number assigned at draft time) | Product go-ahead post-cutover | Parked deliberately (rollup §2.2). |
+| S-2 | "Verbal capture" surface for phone/text swap requests (ADR number assigned at draft time)       | Product go-ahead post-cutover        | Parked deliberately (rollup §2.2).                                           |
 | S-3 | Eugene source names/addresses (Thompsons Sanitary Service, Stayton Community Center, Deschutes) | Rick                                 | Seeded 2026-07-10 with Address TBD; names to be confirmed against his forms. |
 
 ## 3 — Code follow-ups (accepted residuals, not bugs)
@@ -54,7 +54,6 @@ are the only window her cross-checks are possible.
 | C-13 | Shared **ForbiddenPage** component — 4 inline copies across admin pages (billing-rates already extracted its own)                                                                                                                                                                              | 7/9 review pass                         | Consolidate on next admin-surface touch.                                                                                                        |
 | C-14 | `mymrc-cron` timer fix shipped but service stays **profile-disabled** (creds unprovisioned)                                                                                                                                                                                                    | cron audit F1                           | Re-enable steps in `docs/` + compose comment; safe to re-enable now.                                                                            |
 | C-15 | **`ap_attachments.is_inline` capture** — replace the 50 KB image size-heuristic with Graph's exact `isInline`/`contentId` signal (`normalizeFile` → `persistFile` → new column)                                                                                                                | ADR-0046 note 2026-07-15 (PR #101)      | The heuristic ships fine; this is the durable form.                                                                                             |
-| C-16 | **Office dark-theme sweep** — extract an `office-shell` from VisionShell and repaint the ~12 remaining `dr3-green-deep` office/manager pages                                                                                                                                                   | ADR-0051 (PR #99)                       | AP is done; "all modules really" finishes here. Floor (`/operator/*`) stays green per ADR-0008.                                                 |
 
 ## 4 — §8.2 (unblocks the moment O-2 lands)
 
@@ -63,6 +62,22 @@ are the only window her cross-checks are possible.
 3. Woodland June close-balance assertion (= 4,062).
 
 ## Done
+
+- **C-16 — DONE 2026-07-16 (office dark-theme sweep executed).** Operator
+  directive (Bill): "everything goes to the new look except the floor iPads."
+  Repainted every remaining green office/manager surface to the Vision
+  deep-space theme (`dr3-space`/`dr3-mist`/`dr3-cyan`/`dr3-steel`) following the
+  AP reference (PR #99), as an in-place token swap (the optional `office-shell`
+  extraction from VisionShell was not needed for the sweep goal and is deferred).
+  Surfaces: all `/dashboard/[site]/*` pages + clients (cor, equipment, invoices,
+  invoices/[id], loads-inventory, ops, yard), `/dashboard/ops/digests`,
+  `/admin/processed-units`, `/admin/production-report`, `/bonus/amendments`, the
+  `/login` locale picker, and the app-global chrome (`layout` themeColor,
+  `global-error` fallback, the `UpdatePrompt` banner CTA). `/login` was confirmed
+  office-only (Entra SSO door; the floor PIN path is under `/operator`), so it
+  goes dark. The floor (`/operator/*`) and the COR PDF renderer stay green per
+  ADR-0008. A static sweep test (`office-dark-theme-sweep.test.tsx`) now guards
+  the "no green office pages" invariant. See the ADR-0051 post-acceptance note.
 
 - **O-9(b) — DONE 2026-07-15 (floor stays GREEN).** Operator decision: "keep
   the floor green." The warehouse-floor iPad surfaces (`/operator/*`) keep the

@@ -27,7 +27,7 @@ export default async function EquipmentPage({ params }: Props) {
   if (!result.ok) {
     if (result.status === 401) redirect(`/login?next=/dashboard/${siteCode}/equipment`);
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Access denied</h1>
         <p className="mt-2 opacity-80">This area is restricted to {siteCode} managers.</p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
@@ -50,11 +50,11 @@ export default async function EquipmentPage({ params }: Props) {
 
   if (!showEntry && !showTrend) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-green-deep px-6 text-center text-white">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Not yet activated</h1>
         <p className="mt-2 max-w-md opacity-80">
-          The equipment surface (ADR-0044) is staged but not yet activated for managers at this site.
-          Admin access only until it is ramped from the rollout panel (ADR-0047).
+          The equipment surface (ADR-0044) is staged but not yet activated for managers at this
+          site. Admin access only until it is ramped from the rollout panel (ADR-0047).
         </p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
           Back to dashboard
@@ -66,12 +66,14 @@ export default async function EquipmentPage({ params }: Props) {
   const throughput = await computeEquipmentThroughput(result.ctx.siteId, { windowDays: 90 });
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-10 text-white">
+    <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-5xl">
         <Link href={`/dashboard/${siteCode}`} className="text-sm underline opacity-90">
           ← Back to {result.ctx.siteName} dashboard
         </Link>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">Equipment — {result.ctx.siteName}</h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight">
+          Equipment — {result.ctx.siteName}
+        </h1>
         <p className="mt-1 text-sm opacity-70">
           Terex throughput, downtime, and cost. Throughput is derived from the daily processed-units
           close — the same number billing bills from; nothing is entered twice.

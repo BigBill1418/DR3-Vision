@@ -104,9 +104,11 @@ export function DigestsClient() {
           <button
             key={r.id}
             onClick={() => open(r.id)}
-            className={`block w-full rounded border px-3 py-2 text-left text-sm ${selected?.id === r.id ? 'border-dr3-chartreuse bg-black/30' : 'border-white/15 bg-black/10'}`}
+            className={`block w-full rounded border px-3 py-2 text-left text-sm ${selected?.id === r.id ? 'border-dr3-cyan bg-black/30' : 'border-white/15 bg-black/10'}`}
           >
-            <div className="font-medium">{r.kind === 'weekly' ? 'Weekly Updates' : 'Board pack'}</div>
+            <div className="font-medium">
+              {r.kind === 'weekly' ? 'Weekly Updates' : 'Board pack'}
+            </div>
             <div className="text-xs opacity-60">
               {iso(r.period_start)} → {iso(r.period_end)} · {r.status}
             </div>
@@ -119,7 +121,9 @@ export function DigestsClient() {
         {selected && (
           <div>
             <div className="mb-3 flex items-center gap-3">
-              <span className="rounded bg-white/15 px-2 py-0.5 text-xs uppercase">{selected.status}</span>
+              <span className="rounded bg-white/15 px-2 py-0.5 text-xs uppercase">
+                {selected.status}
+              </span>
               {msg && <span className="text-xs opacity-80">{msg}</span>}
             </div>
             {selected.status === 'draft' ? (
@@ -141,12 +145,18 @@ export function DigestsClient() {
                   <button onClick={save} className="rounded bg-black/30 px-4 py-2 text-sm">
                     Save draft
                   </button>
-                  <button onClick={finalize} className="rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black">
+                  <button
+                    onClick={finalize}
+                    className="rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black"
+                  >
                     Finalize
                   </button>
                 </>
               )}
-              <button onClick={copyHtml} className="rounded bg-dr3-green px-4 py-2 text-sm font-semibold">
+              <button
+                onClick={copyHtml}
+                className="rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space"
+              >
                 Copy HTML to clipboard
               </button>
             </div>

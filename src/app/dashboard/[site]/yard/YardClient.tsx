@@ -14,11 +14,11 @@ const STATUSES: readonly YardTrailerStatus[] = ['on_yard', 'at_account', 'in_ser
 
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
 const labelCls = 'flex flex-col gap-1 text-sm';
-const btnCls =
-  'rounded bg-dr3-chartreuse px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
+const btnCls = 'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 const smallBtnCls =
-  'rounded bg-dr3-chartreuse px-3 py-1 text-xs font-semibold text-black disabled:opacity-40';
-const ghostBtnCls = 'rounded border border-white/25 px-3 py-1 text-xs text-white/80 hover:text-white';
+  'rounded bg-dr3-cyan px-3 py-1 text-xs font-semibold text-black disabled:opacity-40';
+const ghostBtnCls =
+  'rounded border border-white/25 px-3 py-1 text-xs text-white/80 hover:text-white';
 
 type Translate = ReturnType<typeof useT>;
 
@@ -80,7 +80,7 @@ export function YardClient({
 
       <p className="mt-6 text-sm">
         <span className="opacity-70">{t('yard.on_hand_label')}:</span>{' '}
-        <span className="font-semibold text-dr3-chartreuse">{view.onHand}</span>
+        <span className="font-semibold text-dr3-cyan">{view.onHand}</span>
       </p>
 
       {/* Rental containers (read-only context) */}
@@ -136,7 +136,13 @@ export function YardClient({
               </tr>
             )}
             {view.trailers.map((trailer) => (
-              <TrailerRow key={trailer.id} siteCode={siteCode} trailer={trailer} t={t} onSaved={reload} />
+              <TrailerRow
+                key={trailer.id}
+                siteCode={siteCode}
+                trailer={trailer}
+                t={t}
+                onSaved={reload}
+              />
             ))}
           </tbody>
         </table>
@@ -184,7 +190,7 @@ export function YardClient({
             {busy ? t('yard.saving') : t('yard.add_button')}
           </button>
           {msg && (
-            <span className={msg.kind === 'ok' ? 'text-sm text-dr3-chartreuse' : 'text-sm text-red-300'}>
+            <span className={msg.kind === 'ok' ? 'text-sm text-dr3-cyan' : 'text-sm text-red-300'}>
               {msg.text}
             </span>
           )}

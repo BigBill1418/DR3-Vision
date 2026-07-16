@@ -159,7 +159,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={enabled}
             disabled={isBusy}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Enabled
         </label>
@@ -244,7 +244,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={skipIfZero}
             disabled={isBusy}
             onChange={(e) => setSkipIfZero(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Skip if zero
         </label>
@@ -254,7 +254,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={skipWeekends}
             disabled={isBusy}
             onChange={(e) => setSkipWeekends(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Skip weekends
         </label>
@@ -264,7 +264,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={skipHolidays}
             disabled={isBusy}
             onChange={(e) => setSkipHolidays(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Skip holidays
         </label>
@@ -274,7 +274,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={includeBonusDollars}
             disabled={isBusy}
             onChange={(e) => setIncludeBonusDollars(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Include bonus dollars
         </label>
@@ -284,7 +284,7 @@ export function SiteConfigCard({ config }: Props) {
             checked={includeComparisons}
             disabled={isBusy}
             onChange={(e) => setIncludeComparisons(e.target.checked)}
-            className="h-4 w-4 accent-dr3-green"
+            className="h-4 w-4 accent-dr3-cyan"
           />
           Include comparisons
         </label>
@@ -295,7 +295,7 @@ export function SiteConfigCard({ config }: Props) {
           type="button"
           disabled={isBusy}
           onClick={() => void save()}
-          className="rounded-md bg-dr3-green px-4 py-2 text-sm font-semibold text-dr3-cream hover:bg-dr3-green-deep disabled:opacity-50"
+          className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:opacity-50"
         >
           {busy === 'save' ? 'Saving…' : 'Save'}
         </button>
