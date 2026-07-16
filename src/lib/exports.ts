@@ -61,15 +61,21 @@ const COMMODITY_DEFAULT = 'Whole Mattresses and Foundations';
 // --- CSV emit ---------------------------------------------------------
 
 /**
- * RFC 4180 field escape:
+ * RFC 4180 field escape + CSV formula-injection guard (audit 2026-07-16 · CSV):
  *  - null/undefined -> ''
- *  - field containing comma, quote, CR, or LF is wrapped in quotes
- *  - embedded quotes are doubled
+ *  - a field whose first char is one of `= + - @` (or a leading tab/CR) is
+ *    prefixed with a single quote FIRST — Excel/Sheets otherwise interpret the
+ *    cell as a formula (`=HYPERLINK(...)`, `@SUM(...)`, `-2+3`, …), so
+ *    operator/vendor/MyMRC free-text that reaches the CFO's spreadsheet cannot
+ *    execute. The `'` renders the value as literal text.
+ *  - THEN RFC-4180: a field containing comma, quote, CR, or LF is wrapped in
+ *    quotes; embedded quotes are doubled.
  */
 export function escapeCsvField(v: unknown): string {
   if (v === null || v === undefined) return '';
-  const s = typeof v === 'string' ? v : String(v);
+  let s = typeof v === 'string' ? v : String(v);
   if (s.length === 0) return '';
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   const needsQuotes = /[",\r\n]/.test(s);
   if (!needsQuotes) return s;
   return `"${s.replace(/"/g, '""')}"`;

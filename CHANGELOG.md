@@ -66,6 +66,45 @@ Remediated the money-path & audit-integrity findings from
 Unit tests added/extended for each fix; `tsc` clean, full `vitest` suite green,
 lint clean on changed files. Survey/input/infra findings are owned by the
 parallel hardening pass and untouched here.
+### Security — 2026-07-16 (input-validation + infra hardening — audit 2026-07-16)
+
+Remediated the input-validation / infra findings from
+`docs/security/2026-07-16-full-stack-audit.md` (branch `fix/input-infra-hardening`).
+Money/AP-integrity findings (H1/M1/M2/M3/M4) are a separate parallel batch.
+
+- **SSRF (HIGH)** — the body-only AP decision PDF re-render no longer fetches
+  attacker URLs server-side: remote `<img>` src is rewritten to `about:blank`
+  before render (`neutralizeRemoteImageSrcs`), the Playwright renderer intercepts
+  and aborts every non-`data:`/`about:` request, and `waitUntil` moved from
+  `networkidle` (30s) to `load` (15s bounded). Stamped-original pdf-lib path
+  unchanged. (`src/lib/ap/stamp.ts`)
+- **CSV formula injection (MED)** — `escapeCsvField` now prefixes a `'` to any
+  field starting with `= + - @` / tab / CR before RFC-4180 quoting; one fix covers
+  all finance exports. (`src/lib/exports.ts`)
+- **Photo upload MIME (MED)** — `content_type` constrained to an image allowlist
+  (`z.enum`) at the boundary, matching R2 `SAFE_EXT`. (`api/photos/upload-url`)
+- **Health authz (MED)** — `/api/health/subsystems` now role-gates to
+  manager/admin (403 otherwise). (`api/health/subsystems`)
+- **Internal cron routes (MED) + constant-time (LOW)** — new shared
+  `src/lib/internal-auth.ts`: `INTERNAL_CRON_TOKEN` is mandatory in production
+  (unset → 503; fail-open only in non-prod), and the bearer is compared with
+  `timingSafeEqual`. Applied across all 12 `/api/internal/**` routes; contact-intake
+  reuses the same `constantTimeEqual` helper.
+- **Unsandboxed iframes (LOW)** — `sandbox=""` added to the digest and invite
+  `srcDoc` preview iframes. (`DigestsClient.tsx`, `InvitePreview.tsx`)
+- **Free-text caps (LOW)** — survey draft `answer_text` capped at 10k;
+  `answer_json` replaced with a depth/size-bounded schema. (`survey/[token]/draft`)
+- **Committed secrets (MED)** — `legacy/` (dead predecessor PHP with a bcrypt admin
+  hash + MySQL creds) deleted from the tree.
+- **No `.dockerignore` (MED)** — added; excludes `.git/objects`+`.git/logs` (the
+  secret-bearing history) from the builder `COPY . .` layer while keeping
+  `.git/HEAD`/refs so the deploy-identity SHA bake still resolves.
+- **No container limits (MED)** — conservative `mem_limit` + `pids_limit` added to
+  the app (1500m/512) and the Chromium-invoking cron services (1024m/256) as a
+  blast-radius cap on the shared host. (`docker-compose.yml`)
+
+Tests added/extended for every code-level fix (stamp SSRF, CSV guard, upload
+allowlist, health authz, internal-auth guard, survey caps, both iframes).
 
 ### Changed — 2026-07-16 (office dark-theme sweep executed — C-16 / ADR-0051)
 

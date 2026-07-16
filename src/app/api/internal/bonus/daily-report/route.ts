@@ -13,6 +13,7 @@
 // `INTERNAL_CRON_TOKEN` adds a bearer check when set (defense in depth).
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { runDailyReportFire } from '@/lib/bonus/daily-report-runner';
 import { runAlertDigestFire, type DigestOutcome } from '@/lib/audit/alert-digest';
 import { runUpdateDigestFire, type UpdateDigestFireOutcome } from '@/lib/ops/update-digest';
@@ -23,16 +24,8 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request): Promise<Response> {
   // Public-tunnel requests are not allowed to drive the cron.
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   const now = new Date();
   const { outcomes } = await runDailyReportFire(now);

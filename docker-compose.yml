@@ -106,6 +106,12 @@ services:
       dockerfile: Dockerfile
     image: dr3-vision-app:local
     container_name: dr3-vision-app
+    # Resource ceilings (audit 2026-07-16 · RES) — a conservative blast-radius cap
+    # on the shared ~15-tenant host so an in-app Chromium PDF/stamp render can't
+    # OOM or fork-bomb co-tenants (init:true reaps zombies but does not cap).
+    # Sized generously above observed RSS; not tight tuning.
+    mem_limit: 1500m
+    pids_limit: 512
     # tini as PID 1 reaps exited Playwright/chromium children. Without it, node
     # (PID 1) never reaps them and every bonus-PDF render leaks a defunct chrome
     # process — a 76-PDF backfill left 150 zombies (2026-06-09). (init nit)
@@ -223,6 +229,10 @@ services:
     # the next hourly tick begins populating the queue.
     image: dr3-vision-app:local
     container_name: dr3-vision-mymrc-scrape
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
+    # cap on the shared host for a Chromium-invoking cron. Generous vs RSS.
+    mem_limit: 1024m
+    pids_limit: 256
     # Reap exited Playwright/chromium children (MyMRC scrape launches a browser).
     init: true
     restart: unless-stopped
@@ -282,6 +292,10 @@ services:
     # the same day (or a restart-triggered re-fire) never double-transitions.
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-period-close
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
+    # cap on the shared host for a Chromium-invoking cron. Generous vs RSS.
+    mem_limit: 1024m
+    pids_limit: 256
     # Reap exited Playwright/chromium children (period close renders the PDF).
     init: true
     restart: unless-stopped
@@ -346,6 +360,10 @@ services:
     # double-overridden.
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-escalation-check
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
+    # cap on the shared host for a Chromium-invoking cron. Generous vs RSS.
+    mem_limit: 1024m
+    pids_limit: 256
     # Consistent with the other app-image services — reap any child subprocess.
     init: true
     restart: unless-stopped
@@ -454,6 +472,10 @@ services:
     # double-sends.
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-daily-report
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
+    # cap on the shared host for a Chromium-invoking cron. Generous vs RSS.
+    mem_limit: 1024m
+    pids_limit: 256
     init: true
     restart: unless-stopped
     command: ['node', 'scripts/bonus-daily-report.mjs']
@@ -770,6 +792,10 @@ services:
     # the surface ships PILOT (admin-validation only) until Bill ramps it.
     image: dr3-vision-app:local
     container_name: dr3-vision-board-pack-digest
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
+    # cap on the shared host for a Chromium-invoking cron. Generous vs RSS.
+    mem_limit: 1024m
+    pids_limit: 256
     init: true
     restart: unless-stopped
     command: ['node', 'scripts/board-pack-digest-cron.mjs']

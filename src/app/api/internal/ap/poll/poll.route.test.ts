@@ -18,7 +18,9 @@ const runApPoll = vi.fn(async () => ({
 }));
 
 vi.mock('@/lib/ap/poll', () => ({ runApPoll: () => runApPoll() }));
-vi.mock('@/lib/observability/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@/lib/observability/logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 import { POST } from './route';
 
@@ -53,5 +55,20 @@ describe('POST /api/internal/ap/poll', () => {
     expect((await POST(req())).status).toBe(404);
     expect((await POST(req({ authorization: 'Bearer wrong' }))).status).toBe(404);
     expect((await POST(req({ authorization: 'Bearer sekret' }))).status).toBe(200);
+  });
+
+  // audit 2026-07-16 · CRON — the token is MANDATORY in production; an unset token
+  // must refuse (503), never fall through to running the poll.
+  it('503s (does not run) when INTERNAL_CRON_TOKEN is unset in production', async () => {
+    const orig = process.env.NODE_ENV;
+    (process.env as Record<string, string | undefined>)['NODE_ENV'] = 'production';
+    delete process.env['INTERNAL_CRON_TOKEN'];
+    try {
+      const res = await POST(req());
+      expect(res.status).toBe(503);
+      expect(runApPoll).not.toHaveBeenCalled();
+    } finally {
+      (process.env as Record<string, string | undefined>)['NODE_ENV'] = orig;
+    }
   });
 });

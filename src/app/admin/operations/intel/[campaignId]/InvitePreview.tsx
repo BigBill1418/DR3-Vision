@@ -170,7 +170,9 @@ export function InvitePreview({
             }}
           >
             Approved{invite.approved_by ? ` by ${invite.approved_by.name}` : ''}
-            {invite.approved_at ? ` at ${new Date(invite.approved_at).toISOString().slice(0, 16)} UTC` : ''}
+            {invite.approved_at
+              ? ` at ${new Date(invite.approved_at).toISOString().slice(0, 16)} UTC`
+              : ''}
           </div>
         )}
 
@@ -184,7 +186,8 @@ export function InvitePreview({
               <>
                 <div style={{ fontSize: 12, color: '#555', marginBottom: 8 }}>
                   <div>
-                    <strong>From:</strong> {preview.from_display_name} &lt;{preview.from_address}&gt;
+                    <strong>From:</strong> {preview.from_display_name} &lt;{preview.from_address}
+                    &gt;
                   </div>
                   <div>
                     <strong>Reply-To:</strong> {preview.reply_to}
@@ -199,7 +202,16 @@ export function InvitePreview({
                 <iframe
                   title="email-preview"
                   srcDoc={preview.html_body}
-                  style={{ width: '100%', height: 480, border: '1px solid #e8e2d4', borderRadius: 4 }}
+                  // Maximally restrictive sandbox (audit 2026-07-16 · IFRAME): no
+                  // scripts, no same-origin — the server-built email HTML renders
+                  // inert. Mirrors the AP queue iframe.
+                  sandbox=""
+                  style={{
+                    width: '100%',
+                    height: 480,
+                    border: '1px solid #e8e2d4',
+                    borderRadius: 4,
+                  }}
                 />
               </>
             ) : (

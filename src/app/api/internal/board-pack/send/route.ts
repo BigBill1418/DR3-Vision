@@ -11,6 +11,7 @@
 // board-pack day and whether this period was already sent (idempotent).
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { prisma } from '@/lib/prisma';
 import { sendBoardPackDigest } from '@/lib/board-pack/digest';
 import { log } from '@/lib/observability/logger';
@@ -19,16 +20,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request): Promise<Response> {
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   const sites = await prisma.site.findMany({ select: { id: true, code: true, name: true } });
   const result = await sendBoardPackDigest({ sites });

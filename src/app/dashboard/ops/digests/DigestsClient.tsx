@@ -166,6 +166,10 @@ export function DigestsClient() {
               <iframe
                 title="digest preview"
                 srcDoc={html}
+                // Maximally restrictive sandbox (audit 2026-07-16 · IFRAME): no
+                // scripts, no same-origin — server-built HTML renders inert, one
+                // edit away from stored XSS otherwise. Mirrors the AP queue iframe.
+                sandbox=""
                 className="h-[420px] w-full rounded border border-white/15 bg-white"
               />
             </div>

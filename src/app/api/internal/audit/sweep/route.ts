@@ -13,6 +13,7 @@
 // the ADR-0036 lesson applied on day 1.
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { prisma } from '@/lib/prisma';
 import { runAuditSweep } from '@/lib/audit/sweep';
 import { buildRunChecksForWindow } from '@/lib/audit/leg-fetchers';
@@ -22,16 +23,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request): Promise<Response> {
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   const summary = await runAuditSweep({ db: prisma, runChecks: buildRunChecksForWindow(prisma) });
   log.info(

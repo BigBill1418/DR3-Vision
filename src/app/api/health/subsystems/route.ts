@@ -1,6 +1,8 @@
 // Per-subsystem health for the Vision Dashboard footer pill (ADR-0020 / T-120).
 //
-// Behind the normal /api auth gate (managers/admins only). Lightweight by design:
+// Managers/admins only (audit 2026-07-16 · HEALTH). Middleware authenticates any
+// operator PIN session, so this route ALSO checks the role explicitly — otherwise
+// an operator could read the subsystem config-presence map. Lightweight by design:
 // the database is probed live; the rest are configuration-presence checks (a deep
 // live probe of every dependency on each 30s dashboard poll would be wasteful and
 // could itself cause load). Each subsystem reports green (healthy/configured),
@@ -8,6 +10,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,6 +43,11 @@ function worst(subs: Subsystem[]): Status {
 }
 
 export async function GET(): Promise<Response> {
+  const s = await auth();
+  if (s?.user?.role !== 'manager' && s?.user?.role !== 'admin') {
+    return new NextResponse('forbidden', { status: 403 });
+  }
+
   const r2 = present('R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET');
   const mymrc =
     present('MYMRC_WOODLAND_USERNAME', 'MYMRC_WOODLAND_PASSWORD') ||
