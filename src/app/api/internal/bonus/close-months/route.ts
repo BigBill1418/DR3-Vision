@@ -17,6 +17,7 @@
 // An optional `INTERNAL_CRON_TOKEN` adds a bearer check when set (defense in depth).
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { prisma } from '@/lib/prisma';
 import { closePayPeriodsDueForSignature } from '@/lib/bonus/state-machine';
 import { notifyPendingSigner } from '@/lib/bonus/signature-notifications';
@@ -28,16 +29,8 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request): Promise<Response> {
   // Public-tunnel requests are not allowed to drive the cron.
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   // The close fires at 07:00 PT on the payroll day AFTER period_end, so it
   // targets periods whose `period_end` was YESTERDAY (Pacific). `appToday()`

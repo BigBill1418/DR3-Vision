@@ -8,10 +8,22 @@ export const dynamic = 'force-dynamic';
 
 const PHOTO_KINDS = ['bol', 'weight_ticket', 'door_open', 'concern', 'rejection'] as const;
 
+// Constrain content_type to an image allowlist (audit 2026-07-16 · UPLOAD). The
+// value is set verbatim on the presigned R2 PUT (src/lib/r2.ts), so an arbitrary
+// string let a caller park HTML/SVG that R2 would then serve with an active
+// Content-Type on the public photos host. Mirrors r2.ts SAFE_EXT.
+const CONTENT_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+] as const;
+
 const schema = z.object({
   load_id: z.string().min(1),
   kind: z.enum(PHOTO_KINDS),
-  content_type: z.string().min(1).max(120),
+  content_type: z.enum(CONTENT_TYPES),
 });
 
 export async function POST(req: Request) {

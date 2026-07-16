@@ -95,7 +95,10 @@ describe('PUT /api/survey/:token/draft', () => {
   it('35. returns 409 after submit', async () => {
     getInviteByToken.mockResolvedValue({ id: 'inv-1' });
     (saveDraft as Mock).mockRejectedValueOnce(new SurveyCampaignError('already_submitted', 409));
-    const res = await PUT(putReq({ answers: [{ question_id: QID, answer_text: 'a' }] }), ctx(VALID_TOKEN));
+    const res = await PUT(
+      putReq({ answers: [{ question_id: QID, answer_text: 'a' }] }),
+      ctx(VALID_TOKEN),
+    );
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toBe('already_submitted');
@@ -113,12 +116,61 @@ describe('PUT /api/survey/:token/draft', () => {
     expect(res.status).toBe(404);
     expect(getInviteByToken).not.toHaveBeenCalled();
   });
+
+  // audit 2026-07-16 · CAPS — free-text / JSON length caps (storage-DoS boundary).
+  it('422 when answer_text exceeds the 10k cap (before any DB write)', async () => {
+    getInviteByToken.mockResolvedValue({ id: 'inv-1' });
+    const res = await PUT(
+      putReq({ answers: [{ question_id: QID, answer_text: 'x'.repeat(10_001) }] }),
+      ctx(VALID_TOKEN),
+    );
+    expect(res.status).toBe(422);
+    expect(saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('422 when answer_json exceeds the total byte ceiling (each element under the string cap)', async () => {
+    getInviteByToken.mockResolvedValue({ id: 'inv-1' });
+    // 500 short strings: each well under the 10k string cap and array within the
+    // 500-element cap, but the total serialized size blows the 20k byte ceiling.
+    const notes = Array.from({ length: 500 }, () => 'x'.repeat(60));
+    const res = await PUT(
+      putReq({ answers: [{ question_id: QID, answer_json: { notes } }] }),
+      ctx(VALID_TOKEN),
+    );
+    expect(res.status).toBe(422);
+    expect(saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('422 when answer_json is nested past the depth cap', async () => {
+    getInviteByToken.mockResolvedValue({ id: 'inv-1' });
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 10; i++) deep = { n: deep };
+    const res = await PUT(
+      putReq({ answers: [{ question_id: QID, answer_json: deep }] }),
+      ctx(VALID_TOKEN),
+    );
+    expect(res.status).toBe(422);
+    expect(saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('200 for a small, well-formed answer_json (bounded schema still accepts real answers)', async () => {
+    getInviteByToken.mockResolvedValue({ id: 'inv-1' });
+    (saveDraft as Mock).mockResolvedValueOnce(undefined);
+    const res = await PUT(
+      putReq({ answers: [{ question_id: QID, answer_json: { choices: ['a', 'b'] } }] }),
+      ctx(VALID_TOKEN),
+    );
+    expect(res.status).toBe(200);
+    expect(saveDraft).toHaveBeenCalledOnce();
+  });
 });
 
 describe('POST /api/survey/:token/submit', () => {
   it('36. is idempotent on already-submitted (returns 409 already_submitted)', async () => {
     getInviteByToken.mockResolvedValue({ id: 'inv-1' });
-    (submitResponse as Mock).mockRejectedValueOnce(new SurveyCampaignError('already_submitted', 409));
+    (submitResponse as Mock).mockRejectedValueOnce(
+      new SurveyCampaignError('already_submitted', 409),
+    );
     const res = await POST(
       new Request(`http://127.0.0.1/api/survey/${VALID_TOKEN}/submit`, { method: 'POST' }),
       ctx(VALID_TOKEN),
@@ -130,7 +182,9 @@ describe('POST /api/survey/:token/submit', () => {
 
   it('200 + submitted_at on success', async () => {
     getInviteByToken.mockResolvedValue({ id: 'inv-1' });
-    (submitResponse as Mock).mockResolvedValueOnce({ submitted_at: new Date('2026-06-25T00:00:00Z') });
+    (submitResponse as Mock).mockResolvedValueOnce({
+      submitted_at: new Date('2026-06-25T00:00:00Z'),
+    });
     const res = await POST(
       new Request(`http://127.0.0.1/api/survey/${VALID_TOKEN}/submit`, { method: 'POST' }),
       ctx(VALID_TOKEN),

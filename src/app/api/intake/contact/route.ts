@@ -13,21 +13,13 @@
 
 import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
-import { timingSafeEqual } from 'node:crypto';
 import { handleContactIntake } from '@/lib/intake/service';
 import { rateLimit } from '@/lib/intake/rate-limit';
+import { constantTimeEqual } from '@/lib/internal-auth';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function tokenOk(provided: string | null, expected: string): boolean {
-  if (!provided) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
 
 export async function POST(req: Request): Promise<Response> {
   const expected = process.env['INTAKE_TOKEN']?.trim();
@@ -38,11 +30,12 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const hdrs = await headers();
-  if (!tokenOk(hdrs.get('x-intake-token'), expected)) {
+  if (!constantTimeEqual(hdrs.get('x-intake-token'), expected)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const ip = hdrs.get('cf-connecting-ip') ?? hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  const ip =
+    hdrs.get('cf-connecting-ip') ?? hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
   const rl = rateLimit(ip);
   if (!rl.allowed) {
     return NextResponse.json(

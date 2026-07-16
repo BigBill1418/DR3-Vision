@@ -10,6 +10,7 @@ import {
   buildImageStampHtml,
   buildStampHtml,
   defaultPlaywrightRenderer,
+  neutralizeRemoteImageSrcs,
   sha256Hex,
   stampApproval,
   stampImage,
@@ -43,6 +44,45 @@ describe('stampText — exact visible format', () => {
   it('rejected: keeps the same shape with "Rejected by"', () => {
     const t = stampText({ decision: 'rejected', approverName: 'Rick', decidedAt: DECIDED_AT });
     expect(t).toMatch(/^Rejected by Rick on .+ PT via DR3-Vision$/);
+  });
+});
+
+describe('SSRF — remote images in a body-only render are neutralized (audit 2026-07-16)', () => {
+  it('neutralizeRemoteImageSrcs rewrites http/https <img> src to about:blank, keeps data:', () => {
+    const out = neutralizeRemoteImageSrcs(
+      '<img src="http://evil.example/probe.png"><img src="https://evil/x"><img src="data:image/png;base64,AAAA">',
+    );
+    expect(out).not.toContain('http://evil.example/probe.png');
+    expect(out).not.toContain('https://evil/x');
+    expect(out.match(/about:blank/g)?.length).toBe(2);
+    expect(out).toContain('data:image/png;base64,AAAA'); // legit inline image preserved
+  });
+
+  it('a remote <img> in the body is NOT present as a live src in the rendered HTML', () => {
+    const html = buildStampHtml(
+      bodyInput({
+        bodyHtmlSanitized: '<p>pay now</p><img src="http://169.254.169.254/latest/meta-data/">',
+      }),
+    );
+    // The HTML handed to the renderer carries no live remote reference — Chromium
+    // therefore never fetches the attacker/metadata URL server-side.
+    expect(html).not.toContain('169.254.169.254');
+    expect(html).not.toMatch(/<img[^>]+src\s*=\s*["']https?:/i);
+    expect(html).toContain('about:blank');
+  });
+
+  it('stampApproval hands the injected renderer HTML free of remote img src', async () => {
+    let captured = '';
+    const renderer: PdfRenderer = async (h) => {
+      captured = h;
+      return Buffer.from('%PDF-1.4 test');
+    };
+    await stampApproval(
+      bodyInput({ bodyHtmlSanitized: '<img src="http://attacker.test/pixel.gif">' }),
+      renderer,
+    );
+    expect(captured).not.toContain('attacker.test');
+    expect(captured).not.toMatch(/<img[^>]+src\s*=\s*["']https?:/i);
   });
 });
 

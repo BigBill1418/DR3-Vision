@@ -14,6 +14,7 @@
 // Body: { "siteCode": "woodland" | "eugene", "to": "name@svdp.us" }
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { appToday } from '@/lib/time';
@@ -36,16 +37,8 @@ const Body = z.object({
 });
 
 export async function POST(req: Request): Promise<Response> {
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const authz = req.headers.get('authorization');
-    if (authz !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

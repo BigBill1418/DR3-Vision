@@ -3,6 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const queryRaw = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => [{ ok: 1 }]);
 vi.mock('@/lib/prisma', () => ({ prisma: { $queryRaw: (...a: unknown[]) => queryRaw(...a) } }));
 
+// audit 2026-07-16 · HEALTH — the route now requires a manager/admin role. Mock
+// auth() so the config-presence assertions run as a manager by default; the
+// operator-403 case flips it.
+let sessionRole: string | null = 'manager';
+vi.mock('@/lib/auth', () => ({
+  auth: async () => (sessionRole ? { user: { role: sessionRole } } : null),
+}));
+
 import { GET } from './route';
 
 const ENV_KEYS = [
@@ -28,9 +36,29 @@ function get(subs: { key: string }[], key: string) {
 beforeEach(() => {
   queryRaw.mockClear();
   queryRaw.mockResolvedValue([{ ok: 1 }]);
+  sessionRole = 'manager';
   clearEnv();
 });
 afterEach(clearEnv);
+
+describe('GET /api/health/subsystems — authz', () => {
+  it('403s an operator session (config-presence map is manager/admin only)', async () => {
+    sessionRole = 'operator';
+    const res = await GET();
+    expect(res.status).toBe(403);
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('403s an unauthenticated caller', async () => {
+    sessionRole = null;
+    expect((await GET()).status).toBe(403);
+  });
+
+  it('allows an admin session (200)', async () => {
+    sessionRole = 'admin';
+    expect((await GET()).status).toBe(200);
+  });
+});
 
 describe('GET /api/health/subsystems', () => {
   it('db green + everything else amber when nothing is configured', async () => {

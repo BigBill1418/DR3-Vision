@@ -19,6 +19,7 @@
 // total + import attestation for historical_imported periods (ADR-0023 Q1/Q4).
 
 import { NextResponse } from 'next/server';
+import { guardInternalCron } from '@/lib/internal-auth';
 import { prisma } from '@/lib/prisma';
 import { generateBonusPdf } from '@/lib/bonus/pdf';
 import { log } from '@/lib/observability/logger';
@@ -31,16 +32,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   // Public-tunnel requests are not allowed to drive generation.
-  if (req.headers.get('cf-connecting-ip')) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-  const requiredToken = process.env['INTERNAL_CRON_TOKEN'];
-  if (requiredToken) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${requiredToken}`) {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-  }
+  const denied = guardInternalCron(req);
+  if (denied) return denied;
 
   const { id } = await params;
 

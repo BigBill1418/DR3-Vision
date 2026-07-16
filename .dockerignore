@@ -1,0 +1,54 @@
+# Build-context exclusions (audit 2026-07-16 · DOCKERIGN).
+#
+# The builder stage does `COPY . .`, so without this file the whole repo —
+# including the entire `.git` history (which carries the deleted legacy PHP
+# secrets for the life of the repo) and any stray local `.env*` — would be
+# baked into the builder layer. Keep those out. Do NOT exclude Dockerfile,
+# package.json/package-lock.json, prisma/, src/, public/, scripts/, or the
+# tsconfig/next config files — the Dockerfile needs them.
+
+# VCS history + metadata.
+# NOTE: we exclude the git OBJECT database + reflog — that is where all committed
+# blobs (current AND historical, incl. the deleted legacy PHP secrets) live, so
+# this keeps the secret-bearing history out of the builder `COPY . .` layer. We
+# deliberately KEEP `.git/HEAD`, `.git/refs`, and `.git/packed-refs` (tiny SHA
+# pointers, no blob content) because the Dockerfile builder reads them to bake the
+# deploy-identity SHA into `.build-info.json` (a blanket `.git` exclude would
+# regress every deploy's SHA to "unknown"). Net: history out, HEAD pointer in.
+.git/objects
+.git/logs
+.git/lfs
+.gitignore
+.github
+
+# Installed / generated artifacts (rebuilt inside the image)
+node_modules
+.next
+dist
+coverage
+.build-info.json
+
+# Dead predecessor (removed from the tree; belt-and-suspenders)
+legacy
+
+# Docs + local-only compose
+docs
+docker-compose.dev.yml
+.dockerignore
+
+# Secrets / local env — must never enter the build context
+.env
+.env.*
+*.env
+!.env.example
+
+# Tests + fixtures (not needed at build/runtime; smaller context)
+**/*.test.ts
+**/*.test.tsx
+**/__tests__
+
+# Editor / OS cruft
+.vscode
+.idea
+.DS_Store
+*.log

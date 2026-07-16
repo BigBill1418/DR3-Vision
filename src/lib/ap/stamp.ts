@@ -84,6 +84,25 @@ export function sha256Hex(buf: Buffer | Uint8Array): string {
 }
 
 /**
+ * BLIND-SSRF DEFENSE (audit 2026-07-16 · SSRF). The body-only render path prints
+ * attacker-authored email HTML to PDF with headless Chromium. The email sanitizer
+ * ALLOWS remote http/https `<img>`, so — left alone — Chromium would fetch those
+ * URLs SERVER-SIDE at decision time (cloud metadata, internal hosts, tracking
+ * pixels) and a hanging URL would stall the render. This rewrites every `<img>`
+ * `src` that is not a `data:` URI to `about:blank`, so the HTML handed to the
+ * renderer carries NO live remote reference. (The Playwright renderer additionally
+ * intercepts + aborts any non-`data:`/non-`about:` request as belt-and-suspenders.)
+ * Pure + deterministic; only touches `<img src=…>`, never other content.
+ */
+export function neutralizeRemoteImageSrcs(html: string): string {
+  return html.replace(
+    /(<img\b[^>]*?\bsrc\s*=\s*)(["'])([^"']*)\2/gi,
+    (match, pre: string, quote: string, url: string) =>
+      /^\s*data:/i.test(url) ? match : `${pre}${quote}about:blank${quote}`,
+  );
+}
+
+/**
  * The exact visible stamp line (handoff §1.6e). Note only APPROVED items are
  * "Approved by …"; a rejection reads "Rejected by …" but keeps the same shape.
  */
@@ -109,7 +128,9 @@ export function buildStampHtml(input: StampInput): string {
   if (input.kind === 'body') {
     // Re-sanitize defensively (C10) even though the stored body is already
     // allowlist-sanitized at ingest — never introduce script into the render.
-    const safeBody = sanitizeEmailHtml(input.bodyHtmlSanitized ?? '');
+    // Then neutralize any remote <img> (blind-SSRF defense): the renderer must
+    // never fetch an attacker URL server-side when printing this body to PDF.
+    const safeBody = neutralizeRemoteImageSrcs(sanitizeEmailHtml(input.bodyHtmlSanitized ?? ''));
     inner = `<section class="original"><h2>Original message</h2><div class="body">${safeBody || '<em>(no body)</em>'}</div></section>`;
   } else {
     const fname = escapeHtml(input.originalFilename ?? '(unnamed attachment)');
@@ -183,7 +204,19 @@ export async function defaultPlaywrightRenderer(html: string): Promise<Buffer> {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle', timeout: 30_000 });
+    // Blind-SSRF defense (audit 2026-07-16): abort every sub-resource request that
+    // is not a data:/about: scheme, so a remote <img>/asset that slipped past the
+    // HTML rewrite can never be fetched server-side. Belt-and-suspenders with
+    // neutralizeRemoteImageSrcs; the stamp shell itself references no external asset.
+    await page.route('**/*', async (route) => {
+      const url = route.request().url();
+      if (url.startsWith('data:') || url.startsWith('about:')) await route.continue();
+      else await route.abort();
+    });
+    // waitUntil:'load' (not 'networkidle') + a bounded timeout so a single hanging
+    // URL cannot stall the render for the full budget; with remote fetches blocked
+    // the load event fires immediately.
+    await page.setContent(html, { waitUntil: 'load', timeout: 15_000 });
     const pdf = await page.pdf({
       format: 'Letter',
       printBackground: true,
