@@ -430,6 +430,21 @@ export async function updateUser(
     }
   }
 
+  // ADR-0053 D2 — session revocation kill-switch. Bump in the SAME update (so it
+  // is covered by the same audit row) whenever this edit changes a token-cached
+  // auth claim the jwt callback never re-validates: `role` or `all_sites`. This
+  // forces the target's existing session to re-auth and pick up the new claims
+  // instead of trusting the ~12h/30d-stale token. NOT bumped on unrelated edits
+  // (name / email / site / processor_role / can_manage_rates /
+  // can_view_billing_verify — the last two are already re-read fresh by their
+  // own guards per the 2026-07-16 audit). `data.all_sites` is set above only
+  // when it actually differs; role is compared explicitly because `data.role` is
+  // assigned even for a no-op same-role PATCH.
+  const roleChanged = input.role !== undefined && input.role !== existing.role;
+  if (roleChanged || data.all_sites !== undefined) {
+    data.sessions_invalidated_at = new Date();
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
@@ -509,7 +524,10 @@ export async function deactivateUser(id: string, actor: ActorContext): Promise<D
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
-      data: { is_active: false, deleted_at: new Date() },
+      // ADR-0053 D2 — deactivation is the sharp edge (fired employee): bump the
+      // kill-switch in the same soft-delete mutation so the target's session is
+      // revoked on its next request instead of surviving the idle/absolute cap.
+      data: { is_active: false, deleted_at: new Date(), sessions_invalidated_at: new Date() },
       include: { primary_site: { select: { code: true } } },
     });
     await tx.auditLog.create({

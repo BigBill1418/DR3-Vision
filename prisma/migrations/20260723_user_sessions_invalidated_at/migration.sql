@@ -1,0 +1,17 @@
+-- ADR-0053 D2 — session revocation kill-switch.
+--
+-- Additive nullable column, bumped to now() in the SAME admin mutation that
+-- changes an auth-relevant, token-cached claim (role / all_sites /
+-- is_super_admin) or the activation state (deactivate / soft-delete). The
+-- Auth.js jwt callback (Node runtime pass) reads it fresh on every request and
+-- forces re-auth when it is newer than the token's issued-at, giving
+-- effectively instant off-boarding instead of waiting out the 12h idle / 30d
+-- absolute cap.
+--
+-- PURELY ADDITIVE (ADR-0035 clean-replay): nullable, no backfill, no default —
+-- existing tokens (iat in the past, NULL switch) are unaffected until the first
+-- bump. Timestamptz (the repo otherwise uses timestamp(3)) because it is a bare
+-- instant-in-time compared against token.iat; timezone-aware is the correct
+-- type for a revocation watermark. No index: the value is only ever read by the
+-- primary-key findUnique in the jwt callback, never used in a WHERE filter.
+ALTER TABLE "users" ADD COLUMN "sessions_invalidated_at" TIMESTAMPTZ;

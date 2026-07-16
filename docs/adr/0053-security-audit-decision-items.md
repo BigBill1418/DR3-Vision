@@ -1,6 +1,6 @@
 # ADR-0053 — Security audit decision items (2026-07-16 full-stack audit)
 
-**Status:** Proposed — D1+D5 DONE 2026-07-16 (operator-directed); D2/D3/D4 open. A tracking record for the five findings the 2026-07-16
+**Status:** Proposed — D1+D5+D2 DONE 2026-07-16 (operator-directed); D3/D4 open. A tracking record for the five findings the 2026-07-16
 audit deliberately did NOT auto-fix. Each needs an operator decision and/or a
 deploy window; this ADR holds them until each is resolved (then flip its
 sub-item to Accepted/Done and mark the row in the audit register).
@@ -38,7 +38,7 @@ they don't slip.
   clear) into the same lockfile change.
 - **Decision needed:** approve the bump + pick the window.
 
-### D2 — Stale session trust / no revocation (HIGH)
+### D2 — Stale session trust / no revocation (HIGH) — DONE 2026-07-16 (kill-switch)
 
 - **Finding (JWT):** the Auth.js jwt callback copies `role` / `all_sites` /
   `is_super_admin` / `is_active` into the token **only at sign-in** and never
@@ -125,9 +125,14 @@ revocation), **D4** independently (verify DMARC, then the small code change).
 
 ## Consequences
 
-- Until D2 lands, off-boarding a manager/admin MUST assume their session stays
-  privileged for up to the token lifetime — treat account deactivation as
-  necessary-but-not-instant, and rotate anything sensitive they held.
+- **D2 landed (2026-07-16).** Off-boarding is now effectively instant:
+  deactivating / soft-deleting a manager or admin revokes their live session on
+  its very next request (no waiting out the 12h idle / 30d absolute cap), and a
+  demotion (role / all_sites change) forces a re-auth that re-mints fresh
+  claims. One residual manual step remains: an `is_super_admin` demotion has no
+  application write path (it is a raw-SQL `UPDATE` by design), so that SQL MUST
+  also set `sessions_invalidated_at = now()` to revoke an existing super-admin
+  session — the app cannot bump it for you.
 - Until D1 lands, the middleware-bypass advisory is unmitigated at the
   framework level (partially mitigated by the app's own per-route guards).
 - Until D4 is verified, the AP approval queue's forgery resistance depends on an
@@ -162,3 +167,44 @@ revocation), **D4** independently (verify DMARC, then the small code change).
   the truth (From-header trust; forgery resistance = DMARC p=reject + EOP, a
   hard precondition). The optional Authentication-Results header gate is noted
   as deferred belt-and-suspenders (low value given p=reject).
+- **D2 — DONE 2026-07-16 (operator-directed: kill-switch, Option 2).** Chose the
+  `sessions_invalidated_at` kill-switch over periodic re-fetch (Option 1) /
+  DB-session strategy (Option 3) because the sharp edge is the fired-employee
+  case, which the kill-switch revokes **instantly** while keeping the JWT
+  strategy and adding minimal per-request cost.
+  - **Schema/migration:** additive nullable `users.sessions_invalidated_at`
+    (`@db.Timestamptz`; migration `20260723_user_sessions_invalidated_at`,
+    sorts after `20260722`; ADR-0035 clean-replay — no backfill, no default).
+    Deliberately timestamptz where the repo otherwise uses `timestamp(3)`: it is
+    a bare instant compared against `token.iat`.
+  - **Bump-on-change (write side, `src/lib/admin-users.ts`):** the switch is set
+    to `now()` in the **same** audited mutation whenever a token-cached claim the
+    jwt callback never re-validates changes — `updateUser` on a real `role` or
+    `all_sites` change, and `deactivateUser` (deactivate + soft-delete). NOT
+    bumped on name/email/site/processor_role or the already-fresh-read
+    `can_manage_rates`/`can_view_billing_verify`. Reactivation intentionally does
+    NOT reset the switch, so pre-deactivation tokens stay dead.
+  - **Enforce (read side, `src/lib/auth.config.ts` jwt callback):** on every
+    non-initial pass, `!is_active || deleted_at` → revoke even without a bump;
+    `sessions_invalidated_at.getTime() > token.iat * 1000` → revoke (force
+    re-auth, which re-mints fresh claims — this is how a demotion takes effect).
+    Revoke returns an empty token, mirroring the existing idle-timeout so every
+    downstream guard sees no `user.id`. The existing idle/absolute timeout is
+    preserved and still short-circuits first.
+  - **Edge-safety:** the DB read is a **Node-only injected checker**
+    (`setRevocationChecker`, wired by `auth.ts`); the edge middleware imports
+    only `auth.config.ts`, leaves the hook null, and stays Prisma-free — the
+    authoritative check runs on every Node route/RSC pass (the real
+    authorization boundary). Verified: prod build's Middleware bundle unchanged
+    (no Prisma pulled in).
+  - **Throttle:** none — a fresh PK-indexed `findUnique` per Node jwt pass, for
+    truly instant revocation. Acceptable at this app's internal scale (dozens of
+    manager/admin users; sub-ms indexed PK lookup). A `token.checked_at` throttle
+    (a few seconds) could be layered later if request volume ever warrants it.
+  - **Defense-in-depth:** additive ON TOP OF the Entra `signIn` gate (ADR-0016);
+    no existing guard weakened.
+  - **Residual:** `is_super_admin` has no application write path (raw-SQL only),
+    so a super-admin demotion must set `sessions_invalidated_at` in that SQL to
+    revoke a live super-admin session (see Consequences).
+  - tsc clean; full vitest green (205 files / 2039 passed, +19 new); lint clean;
+    prod build green.

@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { verifyPin } from '@/lib/pin-service';
-import { authConfig } from '@/lib/auth.config';
+import { authConfig, setRevocationChecker, type RevocationVerdict } from '@/lib/auth.config';
 import { LOCALE_COOKIE, isLocale } from '@/i18n/config';
 import { log } from '@/lib/observability/logger';
 
@@ -142,6 +142,47 @@ export async function evaluateEntraSignIn(profile: EntraGateProfile): Promise<En
   }
   return { ok: true, user };
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// ADR-0053 D2 — session revocation kill-switch (Node-runtime checker)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Registered into `auth.config.ts`'s jwt callback via `setRevocationChecker`.
+// Runs on every non-initial jwt pass in the Node runtime (the authorization
+// boundary: every sensitive route/RSC re-enters Node through `auth()`). One
+// narrow, PK-indexed lookup:
+//
+//   - user row gone / `!is_active` / `deleted_at` set → REVOKE. This fires even
+//     without a switch bump — belt-and-suspenders defense-in-depth on top of the
+//     Entra signIn gate (which only runs at sign-in).
+//   - `sessions_invalidated_at` set AND strictly newer than the token's
+//     issued-at → REVOKE (force re-auth). `iat` is seconds; the column is a
+//     millisecond-precision instant — compare in the same unit
+//     (`getTime() > iat * 1000`). A token issued AFTER the bump survives; one
+//     issued BEFORE is revoked. On re-auth the token is reminted with fresh
+//     claims, so a role change (which bumps the switch) also lands the demotion.
+//
+// `iat` tracks the last time Auth.js persisted the cookie. With the default
+// `updateAge` (24h — no override here) it stays ≈ sign-in time, so the compare
+// is robust; and it fails CLOSED (an extra re-auth) rather than open at the
+// second boundary. Exported for unit testing.
+export async function checkTokenRevocation(
+  userId: string,
+  tokenIatSeconds: number,
+): Promise<RevocationVerdict> {
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { is_active: true, deleted_at: true, sessions_invalidated_at: true },
+  });
+  if (!u) return 'revoke';
+  if (!u.is_active || u.deleted_at) return 'revoke';
+  if (u.sessions_invalidated_at && u.sessions_invalidated_at.getTime() > tokenIatSeconds * 1000) {
+    return 'revoke';
+  }
+  return 'ok';
+}
+
+setRevocationChecker(checkTokenRevocation);
 
 export const { auth, handlers, signIn, signOut } = NextAuth({
   ...authConfig,

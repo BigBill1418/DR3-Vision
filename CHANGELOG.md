@@ -12,6 +12,25 @@ the AP mailbox is blocked upstream by DMARC + EOP. Corrected the misleading
 "authenticated envelope" comments in `ap/senders.ts` + `msgraph-mail/normalize.ts`
 to state that sender trust rests on the From header + the DMARC/EOP posture
 (a documented hard precondition), not a cryptographic envelope. ADR-0053 D4 → done.
+### Security — 2026-07-16 (ADR-0053 D2: session revocation kill-switch)
+
+Operator-directed. Closes the audit's `JWT` high — a demoted / deactivated /
+fired manager kept full token-cached powers (approve amendments, void invoices,
+exports, `/admin/*`) until the 12h idle / 30d absolute cap. New additive
+`users.sessions_invalidated_at` column (migration
+`20260723_user_sessions_invalidated_at`, ADR-0035 clean-replay) is bumped in the
+same audited mutation whenever an admin changes a token-cached claim (`role` /
+`all_sites`) or deactivates / soft-deletes a user. The Auth.js jwt callback (Node
+pass) now re-reads `is_active` / `deleted_at` / `sessions_invalidated_at` fresh
+on every request and empties the token — forcing re-auth — when the user is
+inactive/deleted or the switch post-dates the token's `iat`. Off-boarding is
+effectively **instant**; a demotion re-mints fresh claims on the forced re-auth.
+The DB read is a Node-only injected checker, so the edge middleware stays
+Prisma-free (Middleware bundle unchanged). Defense-in-depth on top of the Entra
+`signIn` gate; idle/absolute timeout preserved. Residual: an `is_super_admin`
+demotion (raw-SQL only, no app path) must set `sessions_invalidated_at` in that
+SQL to revoke a live super-admin session. tsc + full vitest (+19 tests) + lint +
+prod build green. ADR-0053 D2 → done.
 
 ### Security — 2026-07-16 (D1+D5: Next.js off the middleware-bypass advisory + CVE clear)
 
