@@ -5,6 +5,16 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-16 (ADR-0052 drafted: commodity payment reconciliation, Proposed)
+
+Per the Daven Stetson personnel-wiring handoff (§4 as corrected by §7):
+payment-tracking companion table for `outbound_materials`, Daven-facing aging
+view (born pilot), one ADR-0039 audit check riding the 0043 digest. Status
+Proposed — D1 (aging thresholds), D2 (expected-amount optionality), D3
+(per-buyer rollup) presented to Bill; build starts on his answers. Numbering
+per §7.4: claimed 0052 at draft time; OPEN-ITEMS O-7/S-2 corrected to stop
+reserving numbers for undrafted ADRs.
+
 ### Fixed — 2026-07-15 (approver note now displays on the returned invoice PDF)
 
 Operator directive: the decision note must be visible on the output invoice
