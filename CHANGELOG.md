@@ -5,6 +5,54 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-17 (CRON incident: missed daily report + silent 503)
+
+Production-hardening follow-up to the 2026-07-16 cron outage. Root cause: the
+audit's new `guardInternalCron` fail-closed branch returns **503 for every
+internal cron when `INTERNAL_CRON_TOKEN` is unset in prod** — and the token had
+**never been provisioned**, so ALL internal crons 503'd. The daily production
+report was missed for both sites (2026-07-16) and the 503 was silent until a
+human spotted the gap. Token is now provisioned in `auth.env`; these two changes
+let us backfill the miss and prevent a silent recurrence.
+
+- **Date-parameterized daily-report BACKFILL.** `runDailyReportFire(now, opts)`
+  gained an optional `{ forDate?, siteCodes?, force? }`. With `forDate` (a Pacific
+  `@db.Date` key) it uses that day directly as the `dayKey` and **bypasses the
+  "not due yet" send-time gate** (a past day is always due) while keeping every
+  other guard — weekend (read on the TARGET day in UTC, not the run instant),
+  holiday, `skip_if_zero`, `(site, report_date)` idempotency, recipient
+  resolution, the REAL (non-`[TEST]`) subject, the roster send, and the
+  `bonus_daily_report_log` row write. `force` re-sends over an existing row
+  (reuses it — the unique constraint forbids a second — and re-finalizes
+  delivery). No `forDate` → behavior is byte-identical to the scheduled path.
+  Exposed on `POST /api/internal/bonus/daily-report` (behind `guardInternalCron`):
+  an optional JSON body `{ date?: "YYYY-MM-DD", siteCodes?: string[], force?: bool }`.
+  No body → the unchanged scheduled tick (daemon sends none). A body runs ONLY
+  the targeted backfill (the alert/update-digest riders are the scheduled tick's
+  concern, keyed to "now", and are not re-fired for a historical re-send).
+  Idempotent: a second call is `skipped_already_logged` unless `force`.
+  Files: `src/lib/bonus/daily-report-runner.ts`,
+  `src/app/api/internal/bonus/daily-report/route.ts`.
+  _This is the tool used to re-send the 2026-07-16 report to both sites after
+  deploy._
+
+- **Unset `INTERNAL_CRON_TOKEN` in prod is now LOUD.** `guardInternalCron`'s
+  503-unconfigured branch fires a fail-soft ntfy page (`dr3-vision-system`,
+  priority `high`, tags `cron,config,dr3-vision`, fingerprint
+  `dr3-vision-internal-cron-token-unset`, 30-min cooldown per ADR-0037) so a
+  missing token can't silently strangle every cron again. The 503 stays
+  (fail-closed is correct); the alert is non-blocking (fire-and-forget — the
+  guard stays synchronous across its 12 call sites) and never throws out of the
+  guard. File: `src/lib/internal-auth.ts`.
+
+- **Tests.** Backfill: past-day `forDate` sends+logs to the roster (real subject,
+  not-due bypassed), idempotency (second call skips unless `force`), `force`
+  reuse-over-existing (+ P2002 race), weekend/holiday/zero still skip on the
+  target day, `siteCodes` filter, route body wiring (forDate/siteCodes/force,
+  422 on bad date/site, no-body unchanged, digests not re-fired). Guard: unset-prod
+  path attempts the page (mocked) and still 503s, publish-throw still 503s,
+  token-set + non-prod never page.
+
 ### Security — 2026-07-16 (D3: nonce-based CSP — drop `script-src 'unsafe-inline'`)
 
 Operator-directed. Replaced `script-src 'unsafe-inline'` with a **per-request

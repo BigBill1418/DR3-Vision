@@ -79,6 +79,17 @@ function isPacificWeekend(now: Date): boolean {
 }
 
 /**
+ * True iff a @db.Date-shaped day key (UTC-midnight of a calendar day) is a
+ * weekend. The backfill weekend gate must target the REPORT day, not the run
+ * instant: a @db.Date carries no wall-clock, so its weekday is read in UTC —
+ * reinterpreting that instant in Pacific would land on the prior calendar day.
+ */
+function isDayKeyWeekend(dayKey: Date): boolean {
+  const wd = dayKey.getUTCDay(); // 0 = Sunday … 6 = Saturday
+  return wd === 0 || wd === 6;
+}
+
+/**
  * Seconds-of-day of a `@db.Time` value. Prisma round-trips a TIME column as a
  * Date whose UTC hours/minutes ARE the configured wall-clock (no zone), so we
  * read it with getUTCHours/getUTCMinutes — same as the daemon's `hmFromTime`.
@@ -87,20 +98,52 @@ export function sendTimeSecondsOfDay(sendTimePt: Date): number {
   return sendTimePt.getUTCHours() * 3600 + sendTimePt.getUTCMinutes() * 60;
 }
 
+export interface FireOptions {
+  /**
+   * Explicit Pacific target day as a @db.Date-shaped key (UTC-midnight of the
+   * calendar day). When set, this becomes the `dayKey` DIRECTLY (it is NOT run
+   * through `appToday`) and the "not due yet" send-time gate is BYPASSED — a
+   * past day is always due. Every other guard (weekend/holiday/skip_if_zero/
+   * idempotency/recipients) still applies. This is the BACKFILL path: a missed
+   * day re-sent to the real roster, with the REAL (non-`[TEST]`) subject and a
+   * `bonus_daily_report_log` row written. The scheduled path passes no `forDate`
+   * and behaves identically to before.
+   */
+  forDate?: Date | undefined;
+  /** Restrict the fire to these site codes (e.g. `['woodland','eugene']`). */
+  siteCodes?: string[] | undefined;
+  /**
+   * Re-send + re-finalize even when a `(site, report_date)` log row already
+   * exists (reuses the existing row — the unique constraint forbids a second).
+   * Without this, an already-logged day is `skipped_already_logged`.
+   */
+  force?: boolean | undefined;
+}
+
 export async function runDailyReportFire(
   now: Date = new Date(),
+  opts: FireOptions = {},
 ): Promise<{ outcomes: FireOutcome[] }> {
-  const dayKey = appToday(now);
+  const backfill = opts.forDate !== undefined;
+  const force = opts.force === true;
+  // A `forDate` is already a @db.Date-shaped key (UTC-midnight of the Pacific
+  // calendar day) — use it as the day key directly. Only the scheduled path
+  // derives the key from the run instant.
+  const dayKey = opts.forDate ?? appToday(now);
   const nowSecondsOfDay = pacificSecondsOfDay(now);
-  const weekend = isPacificWeekend(now);
+  // The weekend gate targets the REPORT day: for a backfill that is the day key
+  // (read in UTC); for the scheduled path it is the Pacific weekday of `now`.
+  const weekend = backfill ? isDayKeyWeekend(dayKey) : isPacificWeekend(now);
 
-  const configs = await prisma.bonusDailyReportConfig.findMany({
-    where: { enabled: true },
-    include: {
-      site: { select: { id: true, code: true, name: true } },
-      recipients: { select: { email: true } },
-    },
-  });
+  const configs = (
+    await prisma.bonusDailyReportConfig.findMany({
+      where: { enabled: true },
+      include: {
+        site: { select: { id: true, code: true, name: true } },
+        recipients: { select: { email: true } },
+      },
+    })
+  ).filter((cfg) => !opts.siteCodes || opts.siteCodes.includes(cfg.site.code));
 
   const outcomes: FireOutcome[] = [];
 
@@ -108,8 +151,9 @@ export async function runDailyReportFire(
     const siteCode = cfg.site.code;
     try {
       // DUE check: the daemon wakes for the soonest send time; fire only the
-      // sites whose Pacific send time has already passed.
-      if (nowSecondsOfDay < sendTimeSecondsOfDay(cfg.send_time_pt)) {
+      // sites whose Pacific send time has already passed. A backfill (`forDate`)
+      // targets a past day that is unconditionally due, so this gate is skipped.
+      if (!backfill && nowSecondsOfDay < sendTimeSecondsOfDay(cfg.send_time_pt)) {
         outcomes.push({ siteCode, status: 'skipped_not_due' });
         continue;
       }
@@ -132,7 +176,7 @@ export async function runDailyReportFire(
         where: { site_id_report_date: { site_id: cfg.site_id, report_date: dayKey } },
         select: { id: true },
       });
-      if (existing) {
+      if (existing && !force) {
         outcomes.push({ siteCode, status: 'skipped_already_logged' });
         continue;
       }
@@ -155,27 +199,50 @@ export async function runDailyReportFire(
       // log table) could each pass their read-check and BOTH send, mailing the team
       // a duplicate production report. Claim first: a losing writer's create throws
       // P2002 → bail without sending. Delivery columns are finalized after the send.
+      //
+      // FORCE (backfill re-send): a row already exists (the non-force branch above
+      // already returned). Reuse it — the unique constraint forbids a second row —
+      // and re-finalize its delivery columns after the send.
       let logId: string;
-      try {
-        const claimed = await prisma.bonusDailyReportLog.create({
-          data: {
-            site_id: cfg.site_id,
-            report_date: dayKey,
-            recipient_count: recipients.length,
-            total_today: report.totalToday,
-            total_bonus_cents: report.totalBonusCents,
-            mtd_total: report.mtd.total ?? 0,
-            delivered_count: 0, // finalized post-send
-          },
-          select: { id: true },
-        });
-        logId = claimed.id;
-      } catch (e) {
-        if (isUniqueViolation(e)) {
-          outcomes.push({ siteCode, status: 'skipped_already_logged' });
-          continue;
+      if (existing) {
+        logId = existing.id; // force === true here
+      } else {
+        try {
+          const claimed = await prisma.bonusDailyReportLog.create({
+            data: {
+              site_id: cfg.site_id,
+              report_date: dayKey,
+              recipient_count: recipients.length,
+              total_today: report.totalToday,
+              total_bonus_cents: report.totalBonusCents,
+              mtd_total: report.mtd.total ?? 0,
+              delivered_count: 0, // finalized post-send
+            },
+            select: { id: true },
+          });
+          logId = claimed.id;
+        } catch (e) {
+          if (isUniqueViolation(e)) {
+            // A concurrent writer claimed between our read and create. Under
+            // force, reuse that row and re-send; otherwise this is the M1
+            // duplicate-guard → bail without sending.
+            if (!force) {
+              outcomes.push({ siteCode, status: 'skipped_already_logged' });
+              continue;
+            }
+            const raced = await prisma.bonusDailyReportLog.findUnique({
+              where: { site_id_report_date: { site_id: cfg.site_id, report_date: dayKey } },
+              select: { id: true },
+            });
+            if (!raced) {
+              outcomes.push({ siteCode, status: 'skipped_already_logged' });
+              continue;
+            }
+            logId = raced.id;
+          } else {
+            throw e;
+          }
         }
-        throw e;
       }
 
       const send = await sendDailyReport({
