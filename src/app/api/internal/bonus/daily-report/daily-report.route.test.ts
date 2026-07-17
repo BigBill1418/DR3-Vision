@@ -84,3 +84,56 @@ describe('POST /api/internal/bonus/daily-report', () => {
     expect(runDailyReportFire).toHaveBeenCalledTimes(1); // only the valid call fired
   });
 });
+
+// ── Backfill body (operator re-send of a missed day) ────────────────────
+function jsonReq(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request('http://127.0.0.1:3000/api/internal/bonus/daily-report', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('POST /api/internal/bonus/daily-report — backfill body', () => {
+  it('a { date } body fires the runner with forDate and returns ONLY outcomes (no digests)', async () => {
+    const res = await POST(jsonReq({ date: '2026-07-16' }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.backfill).toBe(true);
+    expect(body.date).toBe('2026-07-16');
+    expect(body.outcomes).toHaveLength(2);
+    // Historical backfill must NOT re-fire the scheduled-tick digest riders.
+    expect(runAlertDigestFire).not.toHaveBeenCalled();
+    expect(runUpdateDigestFire).not.toHaveBeenCalled();
+    // forDate handed to the runner as the UTC-midnight @db.Date key.
+    const [, opts] = runDailyReportFire.mock.calls[0] as unknown as [Date, Record<string, unknown>];
+    expect(opts).toEqual({
+      forDate: new Date('2026-07-16T00:00:00.000Z'),
+      siteCodes: undefined,
+      force: undefined,
+    });
+  });
+
+  it('threads siteCodes + force through to the runner', async () => {
+    const res = await POST(jsonReq({ date: '2026-07-16', siteCodes: ['eugene'], force: true }));
+    expect(res.status).toBe(200);
+    const [, opts] = runDailyReportFire.mock.calls[0] as unknown as [Date, Record<string, unknown>];
+    expect(opts).toEqual({
+      forDate: new Date('2026-07-16T00:00:00.000Z'),
+      siteCodes: ['eugene'],
+      force: true,
+    });
+  });
+
+  it('an invalid body is 422 and fires nothing', async () => {
+    const res = await POST(jsonReq({ date: 'not-a-date' }));
+    expect(res.status).toBe(422);
+    expect(runDailyReportFire).not.toHaveBeenCalled();
+  });
+
+  it('an unknown site code in siteCodes is rejected 422', async () => {
+    const res = await POST(jsonReq({ date: '2026-07-16', siteCodes: ['atlantis'] }));
+    expect(res.status).toBe(422);
+    expect(runDailyReportFire).not.toHaveBeenCalled();
+  });
+});

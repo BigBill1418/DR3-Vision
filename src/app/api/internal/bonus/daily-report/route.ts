@@ -13,6 +13,7 @@
 // `INTERNAL_CRON_TOKEN` adds a bearer check when set (defense in depth).
 
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { guardInternalCron } from '@/lib/internal-auth';
 import { runDailyReportFire } from '@/lib/bonus/daily-report-runner';
 import { runAlertDigestFire, type DigestOutcome } from '@/lib/audit/alert-digest';
@@ -22,12 +23,64 @@ import { log } from '@/lib/observability/logger';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Optional BACKFILL body. The scheduled daemon POSTs NO body → the normal full
+// tick runs unchanged. An operator may POST `{ date?, siteCodes?, force? }` to
+// re-send a specific Pacific day (`YYYY-MM-DD`) to the REAL roster and write the
+// `bonus_daily_report_log` row — idempotent (a second call is
+// `skipped_already_logged` unless `force`).
+const BackfillBody = z.object({
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  siteCodes: z.array(z.enum(['woodland', 'eugene'])).nonempty().optional(),
+  force: z.boolean().optional(),
+});
+
 export async function POST(req: Request): Promise<Response> {
   // Public-tunnel requests are not allowed to drive the cron.
   const denied = guardInternalCron(req);
   if (denied) return denied;
 
   const now = new Date();
+
+  // A body present (and non-empty) marks an operator backfill; the daemon sends
+  // none, so `rawBody` is null and the full scheduled tick below runs unchanged.
+  const rawBody = await req.json().catch(() => null);
+  const hasBody =
+    rawBody !== null &&
+    typeof rawBody === 'object' &&
+    Object.keys(rawBody as Record<string, unknown>).length > 0;
+
+  if (hasBody) {
+    const parsed = BackfillBody.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'invalid_body', issues: parsed.error.issues },
+        { status: 422 },
+      );
+    }
+    // `date` is a Pacific calendar day → the @db.Date-shaped UTC-midnight key the
+    // runner uses directly (same encoding as the test route).
+    const forDate = parsed.data.date
+      ? new Date(`${parsed.data.date}T00:00:00.000Z`)
+      : undefined;
+    const { outcomes } = await runDailyReportFire(now, {
+      forDate,
+      siteCodes: parsed.data.siteCodes,
+      force: parsed.data.force,
+    });
+    const sent = outcomes.filter((o) => o.status === 'sent').length;
+    log.info(
+      { backfill: parsed.data.date ?? '(today)', force: parsed.data.force === true, sites: outcomes.length, sent },
+      '[daily-report] backfill run complete',
+    );
+    // Targeted backfill returns ONLY the per-site outcomes — the alert/update
+    // digest riders are the scheduled tick's concern (keyed to "now", not a past
+    // day) and must not be re-fired by a historical re-send.
+    return NextResponse.json({ backfill: true, date: parsed.data.date ?? null, outcomes });
+  }
+
   const { outcomes } = await runDailyReportFire(now);
 
   const sent = outcomes.filter((o) => o.status === 'sent').length;
