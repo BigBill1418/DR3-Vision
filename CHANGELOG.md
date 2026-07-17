@@ -5,6 +5,7 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Fixed — 2026-07-17 (CRON incident: missed daily report + silent 503)
 
 Production-hardening follow-up to the 2026-07-16 cron outage. Root cause: the
@@ -52,6 +53,28 @@ let us backfill the miss and prevent a silent recurrence.
   422 on bad date/site, no-body unchanged, digests not re-fired). Guard: unset-prod
   path attempts the page (mocked) and still 503s, publish-throw still 503s,
   token-set + non-prod never page.
+
+### Changed — 2026-07-17 (ADR-0048/0049 §8.2: source inbound from the DAY grid — close now reconciles)
+
+Billing-critical follow-up to the parser finalization below (operator-approved).
+The first pass sourced promotable `inbound_loads` from the category sheets
+(`inb_trans_charges`/`inb_no_trans_charge`/`nonprogram`) — only the **B2B/trans
+subset** (June 5220 units / 57 loads), so a flow-recompute of the close was
+wildly wrong (June −10209 vs authoritative 4062). Fixed: `inbound_loads` **and**
+`consumer_dropoffs` now come from the **DAY per-day INBOUND grid** (the complete
+all-channel inbound — B2B hauls + unpaid/incentive/illegal drop-offs), located
+below each DAY sheet's inbound header and bounded by the OUTBOUND single-list /
+OUTBOUNDS marker. The `commodity` column classifies each row's channel. The
+staged inbound-unit total now equals the workbook's own per-day INBOUND total
+**exactly** (June 19765, July 8822), and the flow-recomputed close **reconciles
+to the authoritative workbook close: June = 4062, July = 2577** (verified via
+`decodeStagingRows` → `computeRunningBalance` against the real oracles). The
+category sheets (+ `incentive_unpaid`) are the same rows re-categorized for
+billing — now staged as **evidence** (section `detail`), never promoted, so
+there is no double-count. Fixture gained a DAY inbound grid; new
+reconciliation + inbound-sourcing tests. Residual flags retained (processed date
+construction, drop-off `personName`, opening-inventory non-program begin).
+STAGING ONLY — no promotion write invoked. tsc + full vitest (2084) + build green.
 
 ### Changed — 2026-07-17 (ADR-0048/0049 §8.2: finalize the workbook parser against the REAL Woodland files)
 

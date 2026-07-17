@@ -138,89 +138,119 @@ function bump(counts: Record<string, number>, key: string, n = 1): void {
   counts[key] = (counts[key] ?? 0) + n;
 }
 
-// ── inbound (inb_trans_charges, inb_no_trans_charge, nonprogram) ───────────
+// ── inbound (DAY per-day INBOUND grid — the COMPLETE all-channel inbound) ───
+//
+// Each DAY sheet carries a per-day INBOUND grid near the top: a header row with
+// Date + Site + "inbound unit #", data rows below it, bounded above the OUTBOUND
+// single-list ("sub category" header) / the OUTBOUNDS multi-block marker. Every
+// inbound row lands here — B2B hauls AND consumer drop-offs — and the sum equals
+// the workbook's own computed per-day "INBOUND" total (verified: June 19765,
+// July 8822). The `commodity` column classifies the channel:
+//   "inbound units"            → inbound_loads
+//   "unpaid consumer drop off" → consumer_dropoffs (unpaid)
+//   "incentive drop off"       → consumer_dropoffs (incentive)
+//   "illegal drop off"         → consumer_dropoffs (illegal)
+// This is the AUTHORITATIVE inbound source (§8.2 inbound-sourcing fix). The
+// category sheets (inb_trans / inb_no_trans / nonprogram / incentive_unpaid) are
+// billing re-categorizations of the SAME rows — staged as evidence, never
+// promoted, to avoid double-counting.
 
-/** Find the header row (has Date + Site + inbound-unit columns) in rows 1..scan. */
-function findInboundHeader(
+function findDayInboundHeader(
   ws: ExcelJS.Worksheet,
-): { row: number; date: number; site: number; units: number; bol: number | null } | null {
+): { row: number; date: number; site: number; commodity: number; units: number } | null {
   const cols = widest(ws);
-  for (let r = 1; r <= Math.min(ws.rowCount, 6); r++) {
+  for (let r = 1; r <= Math.min(ws.rowCount, 10); r++) {
     const h = rowTexts(ws, r, cols);
     const date = findCol(h, /^date$/i);
     const site = findCol(h, /^site$/i);
     const units = findCol(h, /inbound\s*unit\s*#/i);
-    if (date && site && units) {
-      return { row: r, date, site, units, bol: findCol(h, /^bol/i) };
-    }
+    const commodity = findCol(h, /^commodity$/i);
+    if (date && site && units && commodity) return { row: r, date, site, commodity, units };
   }
   return null;
 }
 
-function extractInbound(
-  ws: ExcelJS.Worksheet,
-  type: WorksheetSemanticType,
-  res: ExtractionResult,
-): void {
-  const hdr = findInboundHeader(ws);
-  const sourceType =
-    type === 'inb_trans_charges'
-      ? 'trans_charge'
-      : type === 'inb_no_trans_charge'
-        ? 'no_trans_charge'
-        : 'non_program';
-  if (!hdr) {
-    res.flags.push(`[inbound] ${ws.name}: no Date/Site/"inbound unit #" header found — 0 rows`);
-    return;
+const DROPOFF_CHANNEL: readonly { re: RegExp; kind: 'unpaid' | 'incentive' | 'illegal' }[] = [
+  { re: /unpaid/i, kind: 'unpaid' },
+  { re: /incentive/i, kind: 'incentive' },
+  { re: /illegal/i, kind: 'illegal' },
+];
+
+function extractDayInbound(ws: ExcelJS.Worksheet, res: ExtractionResult): void {
+  const hdr = findDayInboundHeader(ws);
+  if (!hdr) return; // DAY0-style template rows without a populated inbound grid
+  // Lower bound: the OUTBOUND single-list ("sub category") header, else the
+  // OUTBOUNDS multi-block marker, else end of sheet.
+  const cols = widest(ws);
+  let boundary = ws.rowCount + 1;
+  for (let r = hdr.row + 1; r <= Math.min(ws.rowCount, 60); r++) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= cols; c++) {
+      const t = norm(cellText(row.getCell(c).value));
+      if (t === 'sub category' || t === 'outbounds') {
+        boundary = r;
+        break;
+      }
+    }
+    if (boundary !== ws.rowCount + 1) break;
   }
-  const nonProgram = type === 'nonprogram';
-  let n = 0;
-  for (let r = hdr.row + 1; r <= ws.rowCount; r++) {
+
+  let nLoad = 0;
+  let nDrop = 0;
+  for (let r = hdr.row + 1; r < boundary; r++) {
     const row = ws.getRow(r);
     const date = isoDay(row.getCell(hdr.date).value);
-    if (date === null) continue; // Total rows / blanks
-    const site = cellText(row.getCell(hdr.site).value);
+    if (date === null) continue;
     const units = cellNumber(row.getCell(hdr.units).value);
-    if (site === null || units === null) continue;
+    if (units === null) continue;
+    const site = cellText(row.getCell(hdr.site).value) ?? 'Unknown';
+    const channel = norm(cellText(row.getCell(hdr.commodity).value));
+    const dropoff = DROPOFF_CHANNEL.find((d) => d.re.test(channel));
     const unitsInt = Math.round(units);
-    const bol = hdr.bol ? cellText(row.getCell(hdr.bol).value) : null;
-    const prov: CellProvenance = { tab: ws.name, row: r, col: numberToColumnLetter(hdr.units) };
+    const colRef = numberToColumnLetter(hdr.units);
+    const prov: CellProvenance = { tab: ws.name, row: r, col: colRef };
 
-    res.inbound.push({ siteNameRaw: site, sourceType, units: unitsInt, provenance: prov });
-
-    const payload: Record<string, unknown> = {
-      date,
-      sourceNameRaw: site,
-      units: unitsInt,
-      loadSourceType: 'b2b_haul',
-    };
-    if (bol) payload['bolNumber'] = bol;
-    // Program sheets defer the split to the source-alias resolver (payload omits
-    // it). The NonProgram sheet is definitionally non-program, so pin the split.
-    if (nonProgram) {
-      payload['programUnits'] = 0;
-      payload['nonProgramUnits'] = unitsInt;
+    if (dropoff) {
+      res.stagingRows.push({
+        tabName: ws.name,
+        rowIndex: r,
+        colRef,
+        section: 'dropoff',
+        fieldKey: dropoff.kind,
+        rawValue: JSON.stringify({ date, kind: dropoff.kind, personName: site, units: unitsInt }),
+        numericValue: unitsInt,
+        siteNameRaw: site,
+        provenance: prov,
+      });
+      nDrop++;
+    } else {
+      res.inbound.push({
+        siteNameRaw: site,
+        sourceType: 'day_inbound',
+        units: unitsInt,
+        provenance: prov,
+      });
+      res.stagingRows.push({
+        tabName: ws.name,
+        rowIndex: r,
+        colRef,
+        section: 'inbound',
+        fieldKey: 'inbound_units',
+        rawValue: JSON.stringify({
+          date,
+          sourceNameRaw: site,
+          units: unitsInt,
+          loadSourceType: 'b2b_haul',
+        }),
+        numericValue: unitsInt,
+        siteNameRaw: site,
+        provenance: prov,
+      });
+      nLoad++;
     }
-    res.stagingRows.push({
-      tabName: ws.name,
-      rowIndex: r,
-      colRef: numberToColumnLetter(hdr.units),
-      section: 'inbound',
-      fieldKey: sourceType,
-      rawValue: JSON.stringify(payload),
-      numericValue: unitsInt,
-      siteNameRaw: site,
-      provenance: prov,
-    });
-    n++;
   }
-  bump(res.counts, `inbound:${sourceType}`, n);
-  bump(res.counts, 'inbound_total', n);
-  if (nonProgram && n > 0) {
-    res.flags.push(
-      `[inbound] ${ws.name}: ${n} NON-PROGRAM inbound loads mapped to inbound_loads (programUnits=0, nonProgramUnits=units). The §8.2 brief grouped "nonprogram" under outbound; the sheet is non-program INBOUND — mapped to inbound. CONFIRM.`,
-    );
-  }
+  bump(res.counts, 'inbound_day_loads', nLoad);
+  bump(res.counts, 'dropoff_day', nDrop);
 }
 
 // ── outbound (DAY sheets — authoritative per-shipment grid) ────────────────
@@ -379,78 +409,6 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
       `[processed] ${ws.name}: dates built from "Day N" + workbook month ${monthPrefix} (sheet has no ISO date column). Stripped program=col D, non-program=col E, ticket=col J. CONFIRM month + columns.`,
     );
   }
-}
-
-// ── incentive / unpaid drop-offs (consumer_dropoffs) ───────────────────────
-
-function extractDropoffs(ws: ExcelJS.Worksheet, res: ExtractionResult): void {
-  const cols = widest(ws);
-  // Header band is row 3; two blocks share it. Find every "Date"+"Site"+unit
-  // triple and classify each block by the label text above it (row 1/2).
-  const h = rowTexts(ws, 3, cols);
-  const label1 = rowTexts(ws, 1, cols)
-    .concat(rowTexts(ws, 2, cols))
-    .map(norm)
-    .join(' ');
-  const blocks: { dateCol: number; kind: 'incentive' | 'unpaid' }[] = [];
-  for (let c = 0; c < h.length; c++) {
-    if (norm(h[c]) === 'date') {
-      const site = h[c + 1] && /site/i.test(h[c + 1]!) ? c + 2 : null;
-      const unit = findColFrom(h, c, /inbound\s*unit\s*#/i);
-      if (site && unit) {
-        // Classify by nearest preceding label keyword.
-        const kind = /incentive/.test(label1) && c === 0 ? 'incentive' : 'unpaid';
-        blocks.push({ dateCol: c + 1, kind });
-      }
-    }
-  }
-  let n = 0;
-  for (const b of blocks) {
-    const hh = rowTexts(ws, 3, cols);
-    const siteCol = b.dateCol + 1;
-    const unitCol = findColFrom(hh, b.dateCol - 1, /inbound\s*unit\s*#/i) ?? b.dateCol + 3;
-    for (let r = 4; r <= ws.rowCount; r++) {
-      const row = ws.getRow(r);
-      const date = isoDay(row.getCell(b.dateCol).value);
-      if (date === null) continue;
-      const units = cellNumber(row.getCell(unitCol).value);
-      if (units === null) continue;
-      const site = cellText(row.getCell(siteCol).value) ?? 'Consumer Drop off';
-      const colRef = numberToColumnLetter(unitCol);
-      const prov: CellProvenance = { tab: ws.name, row: r, col: colRef };
-      const payload: Record<string, unknown> = {
-        date,
-        kind: b.kind,
-        personName: site, // sheet carries a site label, not a person — FLAG
-        units: Math.round(units),
-      };
-      res.stagingRows.push({
-        tabName: ws.name,
-        rowIndex: r,
-        colRef,
-        section: 'dropoff',
-        fieldKey: b.kind,
-        rawValue: JSON.stringify(payload),
-        numericValue: Math.round(units),
-        siteNameRaw: site,
-        provenance: prov,
-      });
-      n++;
-    }
-  }
-  bump(res.counts, 'dropoff_total', n);
-  if (n > 0) {
-    res.flags.push(
-      `[dropoff] ${ws.name}: ${n} consumer drop-offs; personName synthesized from the Site cell ("Unpaid Consumer Drop off" — not a real person). Incentive $/check not mapped. CONFIRM.`,
-    );
-  }
-}
-
-function findColFrom(headers: (string | null)[], startIdx: number, re: RegExp): number | null {
-  for (let i = startIdx; i < headers.length; i++) {
-    if (headers[i] != null && re.test(headers[i]!)) return i + 1;
-  }
-  return null;
 }
 
 // ── real billing Summary → best-effort figures (feed recomputeSummary) ─────
@@ -625,42 +583,52 @@ export function extractWorkbook(
   for (const ws of wb.worksheets) {
     const type = classification.get(ws.name) ?? 'unknown';
     switch (type) {
-      case 'inb_trans_charges':
-      case 'inb_no_trans_charge':
-      case 'nonprogram':
-        extractInbound(ws, type, res);
-        break;
       case 'processed':
         processedSheets.push(ws);
         break;
       case 'day':
         daySheets.push(ws);
         break;
-      case 'incentive_unpaid':
-        extractDropoffs(ws, res);
-        break;
       case 'summary':
         extractSummary(ws, res);
         break;
+      // Inbound + drop-off SOURCING moved to the DAY per-day INBOUND grid (the
+      // complete all-channel inbound). The category sheets are the SAME rows
+      // re-categorized for billing — staged as evidence, never promoted, to
+      // avoid double-counting (§8.2 inbound-sourcing fix).
+      case 'inb_trans_charges':
+      case 'inb_no_trans_charge':
+      case 'nonprogram':
+      case 'incentive_unpaid':
       default:
         deferred.push([ws, type]);
     }
   }
 
-  // Pass 2 — DAY outbound + processed (needs month prefix from inbound).
-  for (const ws of daySheets) extractDayOutbound(ws, res);
+  // Pass 2 — DAY inbound (complete) + outbound + processed (needs month prefix).
+  for (const ws of daySheets) {
+    extractDayInbound(ws, res);
+    extractDayOutbound(ws, res);
+  }
 
   // Authoritative inventory summary (close balance + per-day parity series).
   extractInventory(wb, classification, res);
   if (res.closeBalance) {
-    const catInbound = res.inbound.reduce((s, i) => s + i.units, 0);
+    const dayLoads = res.counts['inbound_day_loads'] ?? 0;
+    const dayDrops = res.counts['dropoff_day'] ?? 0;
+    const stagedInbound =
+      res.inbound.reduce((s, i) => s + i.units, 0) +
+      res.stagingRows
+        .filter((r) => r.section === 'dropoff')
+        .reduce((s, r) => s + (r.numericValue ?? 0), 0);
     const wbInbound = res.workbookInboundTotal;
     res.flags.push(
       `[close] AUTHORITATIVE month-close on-hand = ${res.closeBalance.value} whole units, read from the workbook's own "Ending inventory" cell on ${res.closeBalance.provenance.tab} (NOT recomputed from flows).`,
     );
     if (wbInbound !== null) {
+      const match = stagedInbound === wbInbound;
       res.flags.push(
-        `[inbound-completeness] Category-sheet inbound (inb_trans + inb_no_trans + nonprogram) = ${catInbound} units across ${res.inbound.length} loads — this is the B2B/trans SUBSET. The workbook's COMPLETE per-day INBOUND total = ${wbInbound} units (all channels: consumer/incentive/unpaid/other, captured in the DAY per-day INBOUND grid). A flow-based recompute of the close from category inbound alone will NOT reconcile to ${res.closeBalance.value}. To promote a reconciling inbound_loads set, source inbound from the DAY INBOUND grid, not the category sheets. KEY BILLING DECISION.`,
+        `[inbound-sourced-from-DAY-grid] inbound_loads (${dayLoads}) + consumer_dropoffs (${dayDrops}) now sourced from the DAY per-day INBOUND grid = the COMPLETE all-channel inbound. Staged inbound-unit total = ${stagedInbound}; workbook's own per-day INBOUND total = ${wbInbound} — ${match ? 'RECONCILES EXACTLY' : `GAP ${stagedInbound - wbInbound} (INVESTIGATE)`}. Category sheets (inb_trans/inb_no_trans/nonprogram/incentive_unpaid) are the same rows re-categorized for billing — staged as EVIDENCE, not promoted, to avoid double-counting.`,
       );
     }
   }

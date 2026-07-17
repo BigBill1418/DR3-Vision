@@ -213,23 +213,39 @@ export async function buildWoodlandDailyLogWorkbook(): Promise<ExcelJS.Buffer> {
     'Sold Units',
     'Landfilled',
   ]);
-  setRow(proc, 9, [null, 'Day 1', 100, 120, 5, 100, null, null, null, 'M-100001']);
-  setRow(proc, 10, [null, 'Day 2', 90, 110, 0, 90, null, null, null, 'M-100002']);
+  // Stripped totals chosen so the flow-recompute reconciles to DAY6's ending
+  // inventory (1523): opening 1500 + DAY inbound 145 - stripped 122 = 1523.
+  setRow(proc, 9, [null, 'Day 1', 100, 120, 0, 100, null, null, null, 'M-100001']);
+  setRow(proc, 10, [null, 'Day 2', 90, 2, 0, 90, null, null, null, 'M-100002']);
 
   // Summary (billing grid).
   const sum = wb.addWorksheet('Summary');
   setRow(sum, 3, [null, 'Woodland-  Summary MID-MONTH']);
   setRow(sum, 9, [null, 'Woodland Processed', 12345]);
 
-  // DAY1 outbound grid (marker row 50, labels 51, headers 52, data 53).
-  buildDayGrid(wb, 'DAY1', 50, false, '2026-06-01', 1490);
-  // DAY6 with the 9th cotton block + a later ending inventory (the close).
-  buildDayGrid(wb, 'DAY6', 50, true, '2026-06-06', 1523);
+  // DAY1: 2 inbound loads + outbound grid.
+  buildDayGrid(wb, 'DAY1', 50, false, '2026-06-01', 1490, [
+    { site: 'Costco', channel: 'inbound units', units: 50 },
+    { site: 'Yolo Landfill', channel: 'inbound units', units: 40 },
+  ]);
+  // DAY6: 2 inbound loads + 1 unpaid drop-off + the 9th cotton block + the
+  // highest-day ending inventory (= the month close).
+  buildDayGrid(wb, 'DAY6', 50, true, '2026-06-06', 1523, [
+    { site: 'NARS', channel: 'inbound units', units: 30 },
+    { site: 'Other', channel: 'inbound units', units: 20 },
+    { site: 'Unpaid Consumer Drop off', channel: 'unpaid consumer drop off', units: 5 },
+  ]);
 
   return wb.xlsx.writeBuffer();
 }
 
-/** Lay an OUTBOUNDS grid onto a DAY sheet (optionally with the cotton block). */
+interface DayInboundRow {
+  site: string;
+  channel: string;
+  units: number;
+}
+
+/** Lay the per-day INBOUND grid + OUTBOUNDS grid onto a DAY sheet. */
 function buildDayGrid(
   wb: ExcelJS.Workbook,
   name: string,
@@ -237,6 +253,7 @@ function buildDayGrid(
   withCotton: boolean,
   isoDate: string,
   endingInventory: number,
+  inbound: DayInboundRow[],
 ): void {
   const ws = wb.addWorksheet(name);
   // Summary box (Starting/Ending inventory) near the top.
@@ -253,6 +270,26 @@ function buildDayGrid(
     'Starting inventory',
     endingInventory - 20,
   ]);
+  // Per-day INBOUND grid: header row 4 (Date=3, Site=4, commodity=5,
+  // inbound unit #=6), data rows 5+.
+  setRow(ws, 4, [
+    null,
+    null,
+    'Date',
+    'Site',
+    'commodity',
+    'inbound unit #',
+    'Outbound Unit #',
+    'LBS.  (55 per Unit)',
+    'BOL # or Check #',
+    'DR3 #',
+  ]);
+  inbound.forEach((row, i) => {
+    setRow(ws, 5 + i, [null, null, D(isoDate), row.site, row.channel, row.units]);
+  });
+  // Summary-box INBOUND = this day's inbound-row sum (matches the real files,
+  // where the computed cell equals the grid total → the parser reconciles).
+  const inboundSum = inbound.reduce((s, r) => s + r.units, 0);
   setRow(ws, 38, [
     null,
     null,
@@ -262,7 +299,7 @@ function buildDayGrid(
     null,
     null,
     'INBOUND',
-    111,
+    inboundSum,
     null,
     null,
     'Processed',
