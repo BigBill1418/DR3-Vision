@@ -14,7 +14,7 @@ export function cellText(value: ExcelJS.CellValue): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') return value.trim() || null;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
   if (typeof value === 'object' && 'result' in value && value.result !== undefined) {
     return cellText(value.result as ExcelJS.CellValue);
   }

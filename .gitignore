@@ -71,3 +71,7 @@ next-env.d.ts
 # observability state
 /data
 .claude/
+
+.real-*
+_resolve-check.ts
+_parse-check.ts

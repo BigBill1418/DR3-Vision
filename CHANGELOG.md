@@ -53,6 +53,37 @@ let us backfill the miss and prevent a silent recurrence.
   path attempts the page (mocked) and still 503s, publish-throw still 503s,
   token-set + non-prod never page.
 
+### Changed — 2026-07-17 (ADR-0048/0049 §8.2: finalize the workbook parser against the REAL Woodland files)
+
+Billing-critical. `parseWorkbook` matched sheets by exact lowercase name
+(`summary`/`inbound`/`outbound`/`inventory`) — sheets the real Woodland daily-log
+workbooks do not have — so it returned **0 staging rows** and
+`templateGeneration='unknown'`. Rewired the parse path to address sheets by
+`classifyWorkbookSheets` **semantic type** (new `section-extractors.ts`), so the
+real June + July files now parse into promotion-consumable `StagingRow`s
+(June: 273 rows, July: 237) that `decodeStagingRows` accepts. Extractors:
+inbound (`inb_trans_charges`/`inb_no_trans_charge`/`nonprogram` → `inbound_loads`),
+outbound (DAY0–31 per-shipment grid → `outbound_materials`, incl. DAY6's 9th
+COTTON block), processed (`Day N` close → `processed_units_daily`), drop-offs
+(`incentive_unpaid` → `consumer_dropoffs`), opening inventory, and best-effort
+Summary figures (still feed `recomputeSummary`/`resolveInboundSites`).
+Rollup sheets (`commodities`/`renovation`/`all`) are staged as **evidence only**
+(section `detail`, promotion-skipped) — they are the DAY grid rolled up, so
+promoting them would double-count. The **authoritative month-close** is now read
+from the workbook's own "Ending inventory" cell (June = **4062**, July = **2577**;
+July's opening = June's close, cross-validated) rather than the stale hardcoded
+`4062`. Fixed a real crash: `cells.ts` `cellText` threw `RangeError` on invalid
+Date cells present in the real files. Reconciled `day-sheet-layout.ts` to the
+real grid (blocks anchor col **3** not 4; 7 standard fields not 8; DAY6 cotton at
+col 68 + `revenue`). Backward-compatible: the legacy ADR-0039 synthetic path is
+kept (branched on the `figure_key` Summary signature); all prior parser/resolver/
+day-sheet/summary-recompute tests stay green. New `parser-woodland.test.ts` +
+synthetic Woodland fixture. **STAGING ONLY** — no promotion write path was
+invoked or modified. Every ambiguous mapping (nonprogram=inbound-not-outbound,
+inbound-completeness gap, processed date construction, drop-off `personName`,
+DAY-outbound `subCategory` default) is surfaced in `ParsedWorkbook.flags` for
+operator review before promotion. tsc + full vitest (2082) + prod build green.
+
 ### Security — 2026-07-16 (D3: nonce-based CSP — drop `script-src 'unsafe-inline'`)
 
 Operator-directed. Replaced `script-src 'unsafe-inline'` with a **per-request
@@ -67,6 +98,7 @@ FOUC guard now carries the nonce via `next/headers`. Per-route `frame-ancestors`
 survey exception + `X-Frame-Options` distinction preserved. New unit tests
 (`src/lib/csp.ts` builder + middleware wiring). tsc + full vitest + prod build
 green. ADR-0053 D3 → done. Auth/middleware logic unchanged.
+
 ### Added — 2026-07-16 (O-2: admin file-drop inbox)
 
 Operator-directed (O-2): _"just allow me to upload [files] in the vision portal
