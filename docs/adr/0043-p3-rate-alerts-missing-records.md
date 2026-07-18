@@ -26,10 +26,11 @@ the CA reconciliation window; window per-check config):
 - **Recycling rate (weight):**
   `recycled_lbs ÷ (recycled_lbs + disposed_lbs)`.
   `recycled_lbs` = Σ `outbound_materials.weight_lbs` for non-`trash`
-  commodities (all sub-categories) — pending the B10-5 destination mapping,
-  `trash` is conservatively counted DISPOSED even where its vendor is WTE
-  (under-counts the rate → alerts early, never late; flips per-row when B10-5
-  lands, no schema change).
+  commodities (all sub-categories) — pending the B10-5 **destination** mapping
+  (trash→WTE; a COMPLIANCE concern, distinct from the billing aspect — see the
+  amendment note below), `trash` is conservatively counted DISPOSED even where its
+  vendor is WTE (under-counts the rate → alerts early, never late; flips per-row
+  when the destination mapping lands, no schema change).
   `disposed_lbs` = `trash` weights + `landfilled_units.units ×
   unit_weight_estimate` (55 lb, `estimate_only:true` — every figure derived
   from it carries an `estimated: true` marker into the finding detail).
@@ -162,3 +163,22 @@ digest becomes a registered `notification_surface` under ADR-0047, seeded
 **pilot** (the 2026-07-06 incident surface): output reroutes to admins with the
 would-have-sent header until Bill flips it live per §8 Stage-4 criteria
 (≥5 clean reviewed pilot digests + ≥1 true finding handled end-to-end).
+
+---
+
+## Amendment note — 2026-07-18 (B10-5 scope clarification)
+
+B10-5 covered two distinct mappings that this ADR and ADR-0041 each cited as
+"pending". They are now separated:
+
+- **Commodity → invoice-block mapping (BILLING).** CLOSED by ADR-0041 Amendment
+  2026-07-18 §A.1 — the invoice is **single-line** (`program_units_processed ×
+  rate + trade_discount`); there is no per-commodity billing breakdown, so no
+  commodity→invoice-block mapping is required for billing. Any wording implying
+  the billing mapping is "pending" is superseded.
+- **Commodity → destination mapping (COMPLIANCE, this ADR).** UNCHANGED. The
+  recycling-rate estimate above still needs the trash→WTE destination mapping to
+  stop conservatively counting WTE-bound `trash` as disposed. That is a separate
+  compliance/stewardship concern (tracked with the ADR-0055 recycling data), NOT
+  a billing dependency, and remains as designed (conservative-DISPOSED until it
+  lands — alerts early, never late).

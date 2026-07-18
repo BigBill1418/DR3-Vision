@@ -7,7 +7,7 @@
 // (ADR-0033 tripwire philosophy): a stored total that silently disagrees with
 // its lines is a defect, caught loud, never a rounding footnote.
 
-import type { InvoiceKind, InvoiceStatus, JsonValue } from './types';
+import type { InvoiceKind, InvoiceMode, InvoiceStatus, JsonValue } from './types';
 
 export interface InvoiceLineView {
   id: string;
@@ -30,7 +30,13 @@ export interface InvoiceView {
   version: number;
   supersedesId: string | null;
   status: InvoiceStatus;
+  /** ADR-0041 amendment §3.4 — pilot (default) never reaches MRC; production may. */
+  mode: InvoiceMode;
   totalCents: number;
+  /** §8.3 — billable basis (processing kinds only; == B6/B20 quantity). */
+  programUnitsProcessed: number | null;
+  /** §8.3 — tracked-but-off-invoice (processing kinds only). */
+  nonProgramUnitsProcessed: number | null;
   generatedBy: string | null;
   generatedAt: Date;
   approvedBy: string | null;
@@ -127,7 +133,10 @@ interface InvoiceRow {
   version: number;
   supersedes_id: string | null;
   status: string;
+  mode: string;
   total_cents: number;
+  program_units_processed: { toString(): string } | null;
+  non_program_units_processed: { toString(): string } | null;
   generated_by: string | null;
   generated_at: Date;
   approved_by: string | null;
@@ -152,7 +161,14 @@ export function toInvoiceView(row: InvoiceRow): InvoiceView {
     version: row.version,
     supersedesId: row.supersedes_id,
     status: row.status as InvoiceStatus,
+    mode: row.mode as InvoiceMode,
     totalCents: row.total_cents,
+    programUnitsProcessed:
+      row.program_units_processed != null ? Number(row.program_units_processed.toString()) : null,
+    nonProgramUnitsProcessed:
+      row.non_program_units_processed != null
+        ? Number(row.non_program_units_processed.toString())
+        : null,
     generatedBy: row.generated_by,
     generatedAt: row.generated_at,
     approvedBy: row.approved_by,

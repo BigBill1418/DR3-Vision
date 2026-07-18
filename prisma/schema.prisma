@@ -95,7 +95,6 @@ model Site {
   landfilled_units      LandfilledUnit[]
   processed_units_daily ProcessedUnitsDaily[]
 
-
   // 3-way audit engine (ADR-0039)
   audit_findings     AuditFinding[]
   audit_check_config AuditCheckConfig[]
@@ -105,6 +104,7 @@ model Site {
   // P3 rate alerts + missing-record detection (ADR-0043)
   alert_recipients  AlertRecipient[]
   alert_digest_logs AlertDigestLog[]
+
   @@map("sites")
 }
 
@@ -214,8 +214,8 @@ model User {
   // (like an admin) WITHOUT the admin role, so it confers no admin-only powers
   // (user management, bonus amendment/override, /admin). Always false for
   // operators and irrelevant for admins (who already see all sites).
-  all_sites Boolean @default(false)
-  can_manage_rates Boolean @default(false) // ADR-0040 — rate-table write access (D5)
+  all_sites               Boolean @default(false)
+  can_manage_rates        Boolean @default(false) // ADR-0040 — rate-table write access (D5)
   // 2026-07-09 rollup §1.2 (ADR-0041/0039 addendum) — READ-ONLY access to the
   // /admin/billing/verify page (invoices ready for GP entry + the ADR-0039
   // findings touching their windows). MANAGER-ONLY, exactly like
@@ -286,10 +286,10 @@ model User {
   survey_campaigns_created SurveyCampaign[] @relation("SurveyCampaignCreator")
   survey_invites_approved  SurveyInvite[]   @relation("SurveyInviteApprover")
 
-
   // 3-way audit engine (ADR-0039)
   audit_findings_resolved   AuditFinding[]   @relation("AuditFindingResolver")
   workbook_imports_uploaded WorkbookImport[] @relation("WorkbookImportUploader")
+
   @@map("users")
 }
 
@@ -312,15 +312,15 @@ enum SourceSiteType {
 }
 
 model Source {
-  id                String   @id @default(uuid())
+  id                String          @id @default(uuid())
   site_id           String
-  site              Site     @relation(fields: [site_id], references: [id])
+  site              Site            @relation(fields: [site_id], references: [id])
   name              String // verbatim from MyMRC for reconciliation match
   street            String?
   city              String?
   state             String?
   zip               String?
-  is_active         Boolean  @default(true)
+  is_active         Boolean         @default(true)
   notes             String?
   // ADR-0037 Addendum B7 — site-driven program-ness + trans-charge classifier.
   // Program-ness is a property of the collection SITE, not the commodity: a
@@ -328,8 +328,8 @@ model Source {
   // (manager can override). `is_trans_charge` splits the two Inbound tabs;
   // `canonical_mileage` feeds the (P2) freight tier table. Spelling drift in the
   // source workbook lists is resolved via `source_aliases`.
-  is_non_program    Boolean  @default(false)
-  is_trans_charge   Boolean  @default(false)
+  is_non_program    Boolean         @default(false)
+  is_trans_charge   Boolean         @default(false)
   canonical_mileage Int?
   // ADR-0037 amendment (rollup §3.2) — billing routing. `site_type` picks the invoice-line
   // set (see SourceSiteType); nullable (legacy seeds predate the taxonomy).
@@ -337,11 +337,11 @@ model Source {
   // inactive until they sign MRC). `bill_trans` / `bill_trailer` are per-source overrides
   // of the site_type default (Cottage Grove: both false, per-mattress still charged).
   site_type         SourceSiteType?
-  active_billing    Boolean  @default(true)
-  bill_trans        Boolean  @default(true)
-  bill_trailer      Boolean  @default(true)
-  created_at        DateTime @default(now())
-  updated_at        DateTime @updatedAt
+  active_billing    Boolean         @default(true)
+  bill_trans        Boolean         @default(true)
+  bill_trailer      Boolean         @default(true)
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
 
   inbound_loads  InboundLoad[]
   expected_loads ExpectedLoad[]
@@ -811,11 +811,11 @@ model BonusDailyReportRecipient {
 }
 
 model BonusDailyReportLog {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   site_id           String
-  site              Site     @relation(fields: [site_id], references: [id])
-  report_date       DateTime @db.Date
-  sent_at           DateTime @default(now())
+  site              Site      @relation(fields: [site_id], references: [id])
+  report_date       DateTime  @db.Date
+  sent_at           DateTime  @default(now())
   recipient_count   Int
   total_today       Int
   total_bonus_cents Int
@@ -828,10 +828,10 @@ model BonusDailyReportLog {
   // marks a report (re)sent by the on-save path after the scheduled send time;
   // `data_entered_at` is the save instant shown in the banner; `resend_count`
   // counts on-save re-sends that superseded an earlier send for the same day.
-  late_submission   Boolean  @default(false)
+  late_submission   Boolean   @default(false)
   data_entered_at   DateTime?
-  resend_count      Int      @default(0)
-  created_at        DateTime @default(now())
+  resend_count      Int       @default(0)
+  created_at        DateTime  @default(now())
 
   @@unique([site_id, report_date])
   @@index([sent_at(sort: Desc)])
@@ -1494,33 +1494,33 @@ model StateProgramRule {
 /// `incentive_cents` is computed via D1 (`units × collector_incentive`, capped
 /// at `daily_cap_units` per person per day — see dropoffs/incentive.ts).
 model ConsumerDropoff {
-  id              String              @id @default(uuid())
-  site_id         String
-  site            Site                @relation(fields: [site_id], references: [id])
-  dropoff_date    DateTime            @db.Date
+  id                     String              @id @default(uuid())
+  site_id                String
+  site                   Site                @relation(fields: [site_id], references: [id])
+  dropoff_date           DateTime            @db.Date
   // ADR-0037 Addendum B1 — drop-off kind drives incentive: only `incentive` rows
   // are ever paid; `unpaid`/`illegal` rows never carry an incentive_cents.
-  kind            ConsumerDropoffKind
-  person_name     String // CIP PII — Exhibit I / ADR-0010; never exported
+  kind                   ConsumerDropoffKind
+  person_name            String // CIP PII — Exhibit I / ADR-0010; never exported
   // ADR-0037 amendment (rollup §1.3, Kelsey Q4) — optional traceable consumer name on
   // UNPAID records. Distinct from the required incentive-payee `person_name`; also CIP PII.
-  consumer_name   String?
-  slip_number     String?
-  units           Int
-  incentive_cents Int? // computed via D1 (incentive kind only); capped per person per day
+  consumer_name          String?
+  slip_number            String?
+  units                  Int
+  incentive_cents        Int? // computed via D1 (incentive kind only); capped per person per day
   // ADR-0037 amendment (rollup §1.3) — explicit dollar/check amount for UNPAID Bye-Bye-
   // Mattress drop-offs (distinct from the rule-capped, incentive-kind-only `incentive_cents`).
   // Default at capture = `units × 300`¢ ($3/unit), overridable. Null when not captured.
   incentive_amount_cents Int?
-  check_number    String?
-  paid_at         DateTime?
-  retrac_id       String?
-  source          RecordSource        @default(manual)
-  import_id       String? // ADR-0048 — workbook_promotions.id when promoted from staging
-  locked_at       DateTime? // edit-before-any-lock guard (CRUD-lite)
-  created_by      String?
-  created_at      DateTime            @default(now())
-  updated_at      DateTime            @updatedAt
+  check_number           String?
+  paid_at                DateTime?
+  retrac_id              String?
+  source                 RecordSource        @default(manual)
+  import_id              String? // ADR-0048 — workbook_promotions.id when promoted from staging
+  locked_at              DateTime? // edit-before-any-lock guard (CRUD-lite)
+  created_by             String?
+  created_at             DateTime            @default(now())
+  updated_at             DateTime            @updatedAt
 
   @@index([site_id, dropoff_date])
   @@index([site_id, person_name, dropoff_date]) // daily-cap aggregation
@@ -2089,24 +2089,24 @@ model WorkbookImportRow {
 // deadman + summary surface; mirrors ADR-0038's mymrc_sync_runs). A green run
 // with no findings is normal; a thrown run is `error` and pages ntfy.
 model AuditRun {
-  id                String         @id @default(uuid())
-  site_id           String?
-  site              Site?          @relation(fields: [site_id], references: [id])
-  trigger           String // 'nightly_sweep' | 'on_demand' | 'retro_workbook'
-  window_start      DateTime       @db.Date
-  window_end        DateTime       @db.Date
-  status            AuditRunStatus @default(ok)
-  checks_run        String[]
-  findings_opened   Int            @default(0)
-  findings_updated  Int            @default(0)
-  findings_resolved Int            @default(0)
+  id                   String         @id @default(uuid())
+  site_id              String?
+  site                 Site?          @relation(fields: [site_id], references: [id])
+  trigger              String // 'nightly_sweep' | 'on_demand' | 'retro_workbook'
+  window_start         DateTime       @db.Date
+  window_end           DateTime       @db.Date
+  status               AuditRunStatus @default(ok)
+  checks_run           String[]
+  findings_opened      Int            @default(0)
+  findings_updated     Int            @default(0)
+  findings_resolved    Int            @default(0)
   // ADR-0039 Amendment 1 — per-check count of findings withheld this run because
   // the check's leg had not gone live (bootstrap gating). Shape: { checkCode: n }.
   // Null/absent = nothing suppressed. Surfaced in the admin audit page; never silent.
   suppressed_bootstrap Json?
-  error_text        String?
-  started_at        DateTime       @default(now())
-  finished_at       DateTime?
+  error_text           String?
+  started_at           DateTime       @default(now())
+  finished_at          DateTime?
 
   @@index([site_id, started_at])
   @@map("audit_runs")
@@ -2506,31 +2506,31 @@ enum InvoiceStatus {
 /// inclusive; EOM is the whole month). `billing_month` is the first-of-month
 /// @db.Date the invoice belongs to.
 model Invoice {
-  id            String        @id @default(uuid())
-  site_id       String // FK → sites.id (constraint in migration)
-  kind          InvoiceKind
-  billing_month DateTime      @db.Date // first-of-month @db.Date
-  window_start  DateTime      @db.Date
-  window_end    DateTime      @db.Date
-  version       Int
+  id                                  String        @id @default(uuid())
+  site_id                             String // FK → sites.id (constraint in migration)
+  kind                                InvoiceKind
+  billing_month                       DateTime      @db.Date // first-of-month @db.Date
+  window_start                        DateTime      @db.Date
+  window_end                          DateTime      @db.Date
+  version                             Int
   // Self-relation: a new version SUPERSEDES the approved row it corrects. The
   // chain is append-only; nothing in it is ever edited or deleted.
-  supersedes_id String?
-  supersedes    Invoice?      @relation("InvoiceSupersede", fields: [supersedes_id], references: [id])
-  superseded_by Invoice[]     @relation("InvoiceSupersede")
-  status        InvoiceStatus @default(draft)
+  supersedes_id                       String?
+  supersedes                          Invoice?      @relation("InvoiceSupersede", fields: [supersedes_id], references: [id])
+  superseded_by                       Invoice[]     @relation("InvoiceSupersede")
+  status                              InvoiceStatus @default(draft)
   // DERIVED = Σ lines.amount_cents. Stored for query efficiency; the service
   // layer asserts the invariant on every write and re-asserts at approval.
-  total_cents   Int
-  generated_by  String? // users.id (bare column — see block header)
-  generated_at  DateTime      @default(now())
-  approved_by   String?
-  approved_at   DateTime?
-  voided_by     String?
-  voided_at     DateTime?
+  total_cents                         Int
+  generated_by                        String? // users.id (bare column — see block header)
+  generated_at                        DateTime      @default(now())
+  approved_by                         String?
+  approved_at                         DateTime?
+  voided_by                           String?
+  voided_at                           DateTime?
   // Set on an approvable generation that proceeded past a BLOCKED trust gate via
   // a super-admin override (D4). Null for a clean-gate or draft-preview invoice.
-  gate_override_note String?
+  gate_override_note                  String?
   // 2026-07-09 rollup §1.3 (ADR-0041 addendum) — the GP "Trade discount" made
   // explicit. Populated ONLY on ca_processing_eom drafts: the mid-month amount
   // already invoiced (positive cents; the stored B22.offset line carries the
@@ -2541,11 +2541,27 @@ model Invoice {
   // recomputed with no mid-month invoice on file (reference only).
   trade_discount_cents                Int?
   trade_discount_reference_invoice_id String?
-  trade_discount_reference            Invoice?  @relation("InvoiceTradeDiscountRef", fields: [trade_discount_reference_invoice_id], references: [id])
-  trade_discount_referenced_by        Invoice[] @relation("InvoiceTradeDiscountRef")
-  notes         String?
-  created_at    DateTime      @default(now())
-  updated_at    DateTime      @updatedAt
+  trade_discount_reference            Invoice?      @relation("InvoiceTradeDiscountRef", fields: [trade_discount_reference_invoice_id], references: [id])
+  trade_discount_referenced_by        Invoice[]     @relation("InvoiceTradeDiscountRef")
+  // ADR-0041 amendment (2026-07-18, §3.4) — pilot/production launch safety net.
+  // DEFAULT pilot: a pilot invoice's delivery plan can NEVER resolve to MRC
+  // (`planInvoiceDelivery` in src/lib/invoices/delivery.ts is a total function on
+  // `mode` with no branch that yields MRC recipients / sendsToMrc for pilot).
+  // Pilot previews route to `invoice_pilot_recipients` (Bill + Rick) ONLY. Flip a
+  // (site, kind) to production via `invoice_mode_config`; every pre-existing row
+  // backfills to pilot in the migration, so nothing already on file can reach MRC
+  // until an admin explicitly flips it.
+  mode                                InvoiceMode   @default(pilot)
+  // ADR-0041 amendment (§8.3) — program vs non-program split on the invoice
+  // basis. `program_units_processed` is the BILLABLE basis (Σ stripped_program;
+  // it EQUALS the B6/B20 processing-line quantity — MRC pays on program units
+  // only). `non_program_units_processed` (Σ stripped_non_program) is tracked for
+  // reconciliation but NEVER billed. Both null on non-processing kinds.
+  program_units_processed             Decimal?      @db.Decimal(9, 1)
+  non_program_units_processed         Decimal?      @db.Decimal(9, 1)
+  notes                               String?
+  created_at                          DateTime      @default(now())
+  updated_at                          DateTime      @updatedAt
 
   lines        InvoiceLine[]
   credit_memos CreditMemo[]
@@ -2607,23 +2623,23 @@ enum CreditMemoStatus {
 /// no deletes; a wrong proposal is walked to rejected/void_and_reissue. Audit
 /// actor columns are bare user-id scalars (block-header convention).
 model CreditMemo {
-  id                      String           @id @default(uuid())
-  invoice_id              String
-  invoice                 Invoice          @relation(fields: [invoice_id], references: [id])
-  site_id                 String // FK → sites.id (constraint in migration; scoping reads)
-  amount_cents            Int
-  reason                  String
-  status                  CreditMemoStatus @default(proposed)
+  id                     String           @id @default(uuid())
+  invoice_id             String
+  invoice                Invoice          @relation(fields: [invoice_id], references: [id])
+  site_id                String // FK → sites.id (constraint in migration; scoping reads)
+  amount_cents           Int
+  reason                 String
+  status                 CreditMemoStatus @default(proposed)
   // Set when status = void_and_reissue_triggered: the superseding DRAFT that
   // replaces the over-billed invoice (ADR-0041 supersede chain).
-  superseding_invoice_id  String?
-  created_by              String? // users.id (bare audit-actor column)
-  sent_at                 DateTime?
-  decided_at              DateTime?
-  decided_note            String?
-  applied_at              DateTime?
-  created_at              DateTime         @default(now())
-  updated_at              DateTime         @updatedAt
+  superseding_invoice_id String?
+  created_by             String? // users.id (bare audit-actor column)
+  sent_at                DateTime?
+  decided_at             DateTime?
+  decided_note           String?
+  applied_at             DateTime?
+  created_at             DateTime         @default(now())
+  updated_at             DateTime         @updatedAt
 
   @@index([invoice_id])
   @@index([site_id, status])
@@ -2703,9 +2719,9 @@ model CorSiteConfig {
 /// pre-filled figures each carry a provenance JSON (D2); the FT/PT split is the
 /// single human judgment, null until entered at review and REQUIRED at finalize.
 model CorCertificate {
-  id            String    @id @default(uuid())
+  id            String           @id @default(uuid())
   site_id       String // FK → sites.id (constraint in migration)
-  cover_month   DateTime  @db.Date // first-of-month @db.Date
+  cover_month   DateTime         @db.Date // first-of-month @db.Date
   version       Int
   // Self-relation: a new version SUPERSEDES the finalized row it corrects. The
   // chain is append-only; nothing in it is ever edited or deleted.
@@ -3065,46 +3081,46 @@ enum ApTransportMode {
 /// `body_html_sanitized` holds the allowlist-sanitized HTML (rendered in a
 /// sandboxed container), `body_text` the text/plain part.
 model ApRequest {
-  id                    String          @id @default(uuid())
-  status                ApRequestStatus @default(pending)
-  internet_message_id   String          @unique
-  conversation_id       String?
-  received_at           DateTime
-  sender_address        String
-  sender_validated      Boolean
-  subject               String?
-  body_html_sanitized   String? // allowlist-sanitized at ingest; raw HTML never stored
-  body_text             String?
-  vendor                String? // optional, keyed at decision (C9-D5)
-  amount_cents          Int? // optional, keyed at decision (C9-D5)
-  decided_by            String? // bare audit-actor column (user id)
-  decided_at            DateTime?
-  decision_note         String?
-  decision_mail_sent_at DateTime?
-  quarantine_reason     String? // set iff status=quarantined (external sender / parse failure)
+  id                         String          @id @default(uuid())
+  status                     ApRequestStatus @default(pending)
+  internet_message_id        String          @unique
+  conversation_id            String?
+  received_at                DateTime
+  sender_address             String
+  sender_validated           Boolean
+  subject                    String?
+  body_html_sanitized        String? // allowlist-sanitized at ingest; raw HTML never stored
+  body_text                  String?
+  vendor                     String? // optional, keyed at decision (C9-D5)
+  amount_cents               Int? // optional, keyed at decision (C9-D5)
+  decided_by                 String? // bare audit-actor column (user id)
+  decided_at                 DateTime?
+  decision_note              String?
+  decision_mail_sent_at      DateTime?
+  quarantine_reason          String? // set iff status=quarantined (external sender / parse failure)
   // AP go-live features — 2026-07-09 (ADR-0046 Amendment 3) — hold / "pending review".
   // Set when an approver places the request on hold (status=pending_review). held_by
   // is a bare audit-actor column (user id), matching decided_by. hold_note is REQUIRED
   // at hold time (a hold must say why it is being held). Cleared conceptually once a
   // terminal decision is made (they remain as the historical hold record).
-  held_by               String?
-  held_at               DateTime?
-  hold_note             String?
+  held_by                    String?
+  held_at                    DateTime?
+  hold_note                  String?
   // ADR-0046 §3 amendment (handoff §1.6c) — OPTIONAL site tag set at approve/reject
   // time via a dropdown (Eugene/Woodland/blank). Intake stays untagged (incoming
   // email doesn't inherently know the site). Bare FK column; constraint in migration.
-  site_id               String?
+  site_id                    String?
   // ADR-0046 §3 amendment (handoff §1.6e) — sha256 of the stamped decision PDF
   // attached to the decision mail (tamper record; visible-stamp only, no crypto).
-  decision_pdf_sha256   String?
+  decision_pdf_sha256        String?
   // ADR-0046 Amendment 4 — stamped-decision artifacts. decision_pdf_r2_key: the
   // R2 key of the archived stamped decision PDF (private `ap/` prefix).
   // original_attachment_sha256: sha256 of the ORIGINAL attachment bytes — the
   // second half of the dual-sha tamper record (decision_pdf_sha256 is the first).
   decision_pdf_r2_key        String?
   original_attachment_sha256 String?
-  created_at            DateTime        @default(now())
-  updated_at            DateTime        @updatedAt
+  created_at                 DateTime        @default(now())
+  updated_at                 DateTime        @updatedAt
 
   attachments ApAttachment[]
   followups   ApFollowup[]
@@ -3281,17 +3297,17 @@ model ApApprover {
 /// promotion ran under; `counts` the per-table row counts (reconciled to the
 /// workbook's own totals per the acceptance criteria).
 model WorkbookPromotion {
-  id          String   @id @default(uuid())
-  import_id   String   @unique // FK → workbook_imports.id (constraint in migration)
-  scope       Json // { siteId, from, to, expectedCloseBalance }
-  sha256      String // SHA-256 over the canonical serialization of the staged content promoted
-  promoted_by String // users.id (bare column — constraint in migration)
-  promoted_at DateTime @default(now())
-  counts      Json // { processed_units_daily, inbound_loads, outbound_materials, landfilled_units, consumer_dropoffs, site_inventory_snapshots }
-  computed_close_program      Decimal? @db.Decimal(10, 1) // proven June-close program balance (D2 live assertion)
-  computed_close_total        Decimal? @db.Decimal(10, 1)
-  notes       String?
-  created_at  DateTime @default(now())
+  id                     String   @id @default(uuid())
+  import_id              String   @unique // FK → workbook_imports.id (constraint in migration)
+  scope                  Json // { siteId, from, to, expectedCloseBalance }
+  sha256                 String // SHA-256 over the canonical serialization of the staged content promoted
+  promoted_by            String // users.id (bare column — constraint in migration)
+  promoted_at            DateTime @default(now())
+  counts                 Json // { processed_units_daily, inbound_loads, outbound_materials, landfilled_units, consumer_dropoffs, site_inventory_snapshots }
+  computed_close_program Decimal? @db.Decimal(10, 1) // proven June-close program balance (D2 live assertion)
+  computed_close_total   Decimal? @db.Decimal(10, 1)
+  notes                  String?
+  created_at             DateTime @default(now())
 
   @@map("workbook_promotions")
 }
@@ -3303,19 +3319,19 @@ model WorkbookPromotion {
 /// flexible header-detection mapping until Janette's real file lands, at which
 /// point it is finalized against the real shape (the upload UI says so loudly).
 model EquipmentHistoryImport {
-  id                 String   @id @default(uuid())
-  site_id            String // FK → sites.id (constraint in migration)
-  original_filename  String
-  source_sha256      String   @unique
-  storage_key        String? // R2 evidence key (equipment-imports/ prefix), best-effort
-  imported_by        String // users.id (bare column — constraint in migration)
-  imported_at        DateTime @default(now())
-  events_created     Int      @default(0)
-  events_skipped     Int      @default(0)
-  rows_parsed        Int      @default(0)
-  header_mapping     Json? // the detected column → field mapping (forensic)
-  notes              String?
-  created_at         DateTime @default(now())
+  id                String   @id @default(uuid())
+  site_id           String // FK → sites.id (constraint in migration)
+  original_filename String
+  source_sha256     String   @unique
+  storage_key       String? // R2 evidence key (equipment-imports/ prefix), best-effort
+  imported_by       String // users.id (bare column — constraint in migration)
+  imported_at       DateTime @default(now())
+  events_created    Int      @default(0)
+  events_skipped    Int      @default(0)
+  rows_parsed       Int      @default(0)
+  header_mapping    Json? // the detected column → field mapping (forensic)
+  notes             String?
+  created_at        DateTime @default(now())
 
   @@index([site_id, imported_at])
   @@map("equipment_history_imports")
@@ -3480,4 +3496,111 @@ model WorkbookSyncRun {
   @@index([source_id, started_at])
   @@index([status, started_at])
   @@map("workbook_sync_runs")
+}
+
+// ADR-0041 amendment (2026-07-18) — SIMPLIFIED invoice generation
+//
+// Three additive surfaces for the launch of MRC billing (rollup §A.1/§A.7/§4.2):
+//   1. Pilot/production mode (§3.4) — the launch safety net. `InvoiceMode` +
+//      `invoice_mode_config` (per site+kind flip) + `invoice_pilot_recipients`
+//      (Bill + Rick). A pilot invoice is STRUCTURALLY incapable of reaching MRC
+//      (`planInvoiceDelivery`); production is the only mode whose delivery plan
+//      resolves to MRC.
+//   2. GP export identifiers (§4.2) — the Great-Plains boundary the v2 export
+//      carries. Company-wide statics (MRC Bill-To/Ship-To, Sales ID 34, Net 30)
+//      in a singleton `gp_billing_config`; per-site Customer ID + PO suffix in
+//      `gp_site_billing_config` (CA seeded; OR/Eugene left NULL — pending Mary,
+//      never invented).
+//
+// COORDINATION (mirrors the ADR-0040/0041/0042 block headers): self-contained
+// end-block. `site_id` columns carry DB-level FOREIGN KEY constraints created in
+// the migration `20260727_adr0041_pilot_mode_gp_export` rather than Prisma
+// relations, so there are NO back-relation fields on the sibling-owned `Site`
+// model. `mode`/`program_units_processed`/`non_program_units_processed` are the
+// one exception (scalar columns can't live in an end-block) and live on the
+// `Invoice` model above. `db pull` would see these FKs as drift, but ADR-0035
+// clean-replay `migrate deploy` passes and referential integrity is enforced at
+// the DB.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0041 amendment §3.4 — the launch safety net. DEFAULT `pilot`: a pilot
+/// invoice routes previews to the pilot recipients (Bill + Rick), never MRC. An
+/// admin flips a (site, kind) to `production` — the only mode whose delivery plan
+/// resolves to MRC — once Rick reconciles and signs off.
+enum InvoiceMode {
+  pilot
+  production
+}
+
+/// ADR-0041 amendment §3.4 — the pilot preview roster (Bill + Rick). While ANY
+/// invoice is in pilot mode, preview delivery goes to the ACTIVE rows here and
+/// NOWHERE else (mirrors `alert_recipients` / `ap_decision_recipients`). Seeded
+/// with Bill + Rick; admin-editable. A pilot with zero active recipients is a
+/// refuse-and-page condition for a future sender, never a fall-through to MRC.
+model InvoicePilotRecipient {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  name       String?
+  active     Boolean  @default(true)
+  created_by String? // bare audit-actor column
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([active])
+  @@map("invoice_pilot_recipients")
+}
+
+/// ADR-0041 amendment §3.4 — per (site, kind) mode flip. No row ⇒ pilot (the
+/// safe default; generation reads this and stamps `invoices.mode`). An admin
+/// upserts a row with `mode = production` to graduate one (site, kind) off the
+/// pilot. Keyed on (site_id, kind) so a site graduates each kind independently
+/// (covers both "per site" and "per kind" from the spec with one model).
+model InvoiceModeConfig {
+  id         String      @id @default(uuid())
+  site_id    String // FK → sites.id (constraint in migration)
+  kind       InvoiceKind
+  mode       InvoiceMode @default(pilot)
+  updated_by String? // bare audit-actor column
+  created_at DateTime    @default(now())
+  updated_at DateTime    @updatedAt
+
+  @@unique([site_id, kind])
+  @@map("invoice_mode_config")
+}
+
+/// ADR-0041 amendment §4.2 — company-wide GP statics (one row, id="singleton").
+/// The MRC Bill-To/Ship-To address (same entity for both), the static Sales ID
+/// (34) and Payment Terms (Net 30). Per-site identifiers (Customer ID, PO suffix)
+/// live in `gp_site_billing_config`. Denormalized onto the v2 export at read.
+model GpBillingConfig {
+  id               String   @id @default("singleton")
+  bill_to_name     String // "Mattress Recycling Council"
+  bill_to_attn     String? // "Ryan Trainer"
+  bill_to_street   String // "501 Wythe Street"
+  bill_to_locality String // "Alexandria VA 22314"
+  sales_id         String // "34"
+  payment_terms    String // "Net 30"
+  updated_by       String? // bare audit-actor column
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@map("gp_billing_config")
+}
+
+/// ADR-0041 amendment §4.2 — per-site GP identifiers. `customer_id` (CA MRC =
+/// MRCL001; OR MRC = NULL, pending Mary) and `po_site_suffix` (Woodland = DR3W;
+/// Eugene = NULL, pending Mary). NULLs are honest unknowns the v2 export renders
+/// as null — the identifier is NEVER invented. `pending_note` records why a NULL
+/// is a NULL so a future confirmation is a one-row edit, never a code change.
+model GpSiteBillingConfig {
+  id             String   @id @default(uuid())
+  site_id        String   @unique // FK → sites.id (constraint in migration)
+  customer_id    String? // CA=MRCL001; OR=null (pending Mary)
+  po_site_suffix String? // Woodland=DR3W; Eugene=null (pending Mary)
+  pending_note   String? // why a null is a null
+  updated_by     String? // bare audit-actor column
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@map("gp_site_billing_config")
 }

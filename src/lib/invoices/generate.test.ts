@@ -103,6 +103,53 @@ describe('composeProcessing — CA EOM (B15 = B6+B7+B8, B22 = B15 − B20 offset
   });
 });
 
+describe('composeProcessing — program/non-program split (§8.3)', () => {
+  it('attaches program (billable) + non-program (tracked) on every processing kind', () => {
+    // OR EOM
+    const orEom = composeProcessing(
+      baseProcessing({ strippedProgramUnits: 200, strippedNonProgramUnits: 15 }),
+    );
+    expect(orEom.programUnitsProcessed).toBe(200);
+    expect(orEom.nonProgramUnitsProcessed).toBe(15);
+    // The billable basis EQUALS the B6 line quantity — MRC pays on program only.
+    expect(orEom.programUnitsProcessed).toBe(orEom.lines.find((l) => l.lineCode === 'B6')?.quantity);
+    // total is program × rate — the non-program units add nothing to the bill.
+    expect(orEom.totalCents).toBe(200 * RATE_OR);
+
+    // Mid-month
+    const mid = composeProcessing(
+      baseProcessing({
+        kind: 'ca_processing_mid_month',
+        processingRateCents: RATE_CA,
+        strippedProgramUnits: 150,
+        strippedNonProgramUnits: 9,
+      }),
+    );
+    expect(mid.programUnitsProcessed).toBe(150);
+    expect(mid.nonProgramUnitsProcessed).toBe(9);
+
+    // CA EOM (with offset)
+    const caEom = composeProcessing(
+      baseProcessing({
+        kind: 'ca_processing_eom',
+        processingRateCents: RATE_CA,
+        strippedProgramUnits: 300,
+        strippedNonProgramUnits: 22,
+        midMonthOffsetCents: 150 * RATE_CA,
+        midMonthOffsetUnits: 150,
+        midMonthReferenceInvoiceId: 'mid-1',
+      }),
+    );
+    expect(caEom.programUnitsProcessed).toBe(300);
+    expect(caEom.nonProgramUnitsProcessed).toBe(22);
+  });
+
+  it('non-program defaults to 0 when the caller omits it', () => {
+    const c = composeProcessing(baseProcessing({ strippedProgramUnits: 50 }));
+    expect(c.nonProgramUnitsProcessed).toBe(0);
+  });
+});
+
 describe('composeProcessing — mid-month (B20 only, 1st–15th)', () => {
   it('single B20 line = mid-month units × rate', () => {
     const c = composeProcessing(

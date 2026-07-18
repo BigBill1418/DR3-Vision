@@ -25,6 +25,14 @@ export type InvoiceKind =
 
 export type InvoiceStatus = 'draft' | 'approved' | 'void';
 
+/**
+ * ADR-0041 amendment §3.4 — the launch safety net. `pilot` (the DEFAULT) routes
+ * invoice previews to the pilot recipients (Bill + Rick) and is STRUCTURALLY
+ * incapable of reaching MRC (see `planInvoiceDelivery` in `delivery.ts`);
+ * `production` is the only mode whose delivery plan resolves to MRC.
+ */
+export type InvoiceMode = 'pilot' | 'production';
+
 /** CA|OR — the freight/rate jurisdiction key (distinct from the site enum). */
 export type Jurisdiction = 'CA' | 'OR';
 
@@ -128,6 +136,16 @@ export interface InvoiceComposition {
    */
   tradeDiscountCents?: number;
   tradeDiscountReferenceInvoiceId?: string | null;
+  /**
+   * ADR-0041 amendment §8.3 — the program/non-program split persisted on the
+   * invoice row. `programUnitsProcessed` is the BILLABLE basis (it EQUALS the
+   * B6/B20 processing-line quantity — MRC pays on program units only);
+   * `nonProgramUnitsProcessed` is tracked for reconciliation but never billed.
+   * Set on processing kinds only; undefined (→ null) on transportation /
+   * collection-site-count.
+   */
+  programUnitsProcessed?: number;
+  nonProgramUnitsProcessed?: number;
 }
 
 // ────────────────────────────────────────────────────────────────────────

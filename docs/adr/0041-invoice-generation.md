@@ -41,7 +41,9 @@ records priced it) so the retro-audit can trace any number back to its inputs.
 All inputs are now data (ADR-0037 operational records + ADR-0040 rates +
 `state_program_rules`). The invoice engine computes; it never re-types a rate or a
 total. Mid-month cutoff, offset lines, and the commodity→billing-block mapping
-(B10-5, pending Kelsey/Janette) resolve here.
+(B10-5, pending Kelsey/Janette) resolve here. **[SUPERSEDED by Amendment
+2026-07-18 §A.1 — B10-5 commodity→invoice-block mapping is CLOSED / not required:
+the invoice is single-line (program units × rate + trade discount).]**
 
 ### D3 — Minimal capture: collection events, OR counts, DR3# sequences _(capture half)_
 
@@ -76,7 +78,9 @@ The generated July invoice must reproduce the parallel July workbook to the miss
 ## Out of scope
 
 COR generation (**ADR-0042**); the commodity→billing-block mapping remains pending
-Kelsey/Janette (B10-5) at acceptance; TONU handling parked on the open register.
+Kelsey/Janette (B10-5) at acceptance **[CLOSED by Amendment 2026-07-18 §A.1 — not
+required for billing; invoice math is single-line]**; TONU handling parked on the
+open register.
 
 ## Consequences
 
@@ -223,3 +227,117 @@ cancel/withdrawn state — today a memo whose invoice was voided out-of-band can
 only bounce between `rejected` and a failing reissue; (5) resolver provenance
 telemetry for §8.2 (flag category tabs that only resolve via the name-fallback
 tier, so unconfirmed row-2 label rules fail loudly when real files land).
+
+---
+
+## Amendment — 2026-07-18 (SIMPLIFIED invoice generation: pilot mode, program split, GP v2 export, B10-5 CLOSED)
+
+Rollup §A.1/§A.7/§4.2/§8.3 (Mary/Rick, July) simplify the invoice and prepare it
+for the real Great-Plains boundary and the launch pilot. Built additively on the
+accepted engine above (nothing rebuilt — the D1 immutable-version discipline, the
+D2 pure math, the D4 trust gate, and the credit-memo / void-and-reissue state
+machines are unchanged and verified to still integrate). Migration
+`20260727_adr0041_pilot_mode_gp_export` (purely additive, ADR-0035 clean-replay;
+sorts after `20260726_adr0040_rate_infrastructure`).
+
+### A.1 — B10-5 commodity→invoice-block mapping is CLOSED (not required for billing)
+
+The invoice math is **single-line**: `amount = program_units_processed × rate +
+trade_discount`. There is **no** commodity→invoice-block breakdown — the processing
+charge is ONE line (total program units × rate), never split per commodity. The
+B10-5 commodity→invoice-block mapping that D2 above listed as "pending
+Kelsey/Janette" is therefore **not needed for billing** and is closed. (The engine
+never actually built commodity-block invoice math — B6 was always a single
+units×rate line — so this closes an open question rather than removing code.)
+Compliance/stewardship commodity classification (CalRecycle recycling rate) is a
+SEPARATE concern, owned by ADR-0043/ADR-0055 recycling data, and is not part of
+the invoice generator.
+
+### §3.4 — Pilot / production mode (the launch safety net)
+
+`invoices.mode` enum `{ pilot, production }`, **DEFAULT `pilot`**. Until Rick
+reconciles and signs off, every invoice is `pilot`: its preview routes to the
+**pilot recipients (Bill + Rick)** and NOWHERE else. `production` is the only mode
+whose delivery plan resolves to MRC.
+
+- **Structural (not procedural) guarantee.** `planInvoiceDelivery(mode, pilot,
+  mrc)` (`src/lib/invoices/delivery.ts`) is a TOTAL function on `mode`: the `pilot`
+  branch has no path — none — that returns MRC recipients or `sendsToMrc: true`.
+  No configuration, argument, or roster state can make a pilot plan reach MRC. Any
+  future MRC sender obtains its recipients from this plan and calls
+  `assertProductionForMrc` before addressing an envelope — so a pilot invoice is
+  undeliverable to MRC even by a caller that skipped the plan.
+- **Config.** `invoice_pilot_recipients` (Bill + Rick, seeded) is the pilot roster.
+  `invoice_mode_config` (per site+kind; no row ⇒ pilot) is the admin flip —
+  `POST /api/manager/[site]/invoices/mode` (authorized like approval: admin or
+  manager-of-site; `can_manage_rates` never sufficient). Generation stamps
+  `invoices.mode` from this config; a superseding reissue re-reads it.
+- **No live MRC sender exists yet** — the boundary ships first so the sender is a
+  consumer of a proven-safe plan, not a refactor (mirrors how the frozen
+  `invoice_export` boundary shipped ahead of the GP adapter). The production
+  MRC roster is intentionally empty (OR's MRC identity is pending Mary; the pilot
+  policy forbids real MRC sends) — a future sender treats empty as refuse-and-page.
+
+### §8.3 — Program vs non-program split on the invoice basis
+
+`invoices.program_units_processed` (the BILLABLE basis, Σ `stripped_program`; it
+EQUALS the B6/B20 processing-line quantity — MRC pays on program units only) and
+`invoices.non_program_units_processed` (Σ `stripped_non_program`; tracked for
+reconciliation, NEVER billed). Both persisted on processing kinds; null on
+transportation / collection-site-count. The daily-close split already existed
+(`processed_units_daily.stripped_program` / `stripped_non_program`, ADR-0037 D5);
+this persists the window aggregates onto the invoice so the basis is explicit on
+the artifact and drives the v2 export's billable line.
+
+### §4.2 — Two-line GP export (v2 contract; v1 FROZEN)
+
+`invoiceExportV2` ships ALONGSIDE the frozen v1 (`export-json.ts`; v1's key set is
+unchanged — the GP adapter must not re-derive from line JSON, C-1). Exposed at
+`GET …/export?format=json&v=2` (v1 stays the default). v2 carries:
+
+- The GP header identifiers (Bill-To / Ship-To, Customer ID, Sales ID, PO number,
+  Payment Terms) from `gp_billing_config` (company statics) + `gp_site_billing_config`
+  (per-site), the `mode`, the program/non-program split, and the trade-discount
+  fields.
+- The GP presentation — the §4.2 processing shape: Line 1 header
+  ("total units processed M/DD/YY", Each 0 · Ext 0), Line 2 billable
+  ("MRC-Processed Units DR3 <SiteName>", UNITSMO, Each <rate> · Ext <units×rate>),
+  then Subtotal / Misc / Tax / Freight / Trade Discount / Total. `gp.totals.total_cents`
+  is asserted to reconcile to `invoice.total_cents` at build (ADR-0033 tripwire).
+- The v1 leaf `lines` (full provenance) are ALSO carried — `gp` is a presentation
+  over them, never a replacement. B7/B8 (if present) surface as `Misc` — never dropped.
+
+### §4.2 — GP identifiers: confirmed seeded, unknowns left NULL (pending Mary)
+
+Seeded (`gp_billing_config` / `gp_site_billing_config`):
+
+| Identifier | Value | Source |
+|---|---|---|
+| Bill-To / Ship-To | Mattress Recycling Council, Attn: Ryan Trainer, 501 Wythe Street, Alexandria VA 22314 | confirmed |
+| Sales ID | `34` | confirmed |
+| Payment Terms | `Net 30` | confirmed |
+| CA processing rate | `state_program_rules` $16.50/unit (reused, not re-seeded) | confirmed |
+| CA (Woodland) Customer ID | `MRCL001` | confirmed |
+| Woodland PO suffix | `DR3W` (PO = `M/DD/YY DR3W`) | confirmed |
+| **OR (Eugene) Customer ID** | **NULL — pending Mary** (never invented) | unknown |
+| **Eugene PO suffix** | **NULL — pending Mary** (likely DR3E/DR3O, not invented) | unknown |
+
+A NULL renders as null in the export; `buildPoNumber` returns null (not a partial
+`"7/31/26 "`) when the suffix is unknown. Confirmations are one-row edits.
+
+### Residual concerns (honest — for Rick/Mary)
+
+- **B7/B8 on the processing invoice.** The engine still composes B7 (collector
+  incentives) + B8 (event misc) as ancillary processing lines; v2 surfaces them as
+  GP `Misc`. §A.7's literal `amount = units × rate + trade_discount` is satisfied
+  for a CLEAN Woodland processing invoice (no incentives/events → Misc $0, matching
+  §4.2). **If Mary/Rick intend incentives + event-misc to be OFF the processing
+  invoice entirely, that is a one-line change to stop composing B7/B8 — but it
+  changes billed money and needs explicit sign-off. Not done unilaterally.**
+- **PO / header date.** The PO number + Line-1 header use the invoice window-end
+  (EOM, or the 15th mid-month). Confirm this matches the date Mary types into GP.
+- **UNITSMO / Location cell.** The exact GP unit-of-measure code (`UNITSMO`) and
+  the Line-1 "Location" cell semantics are modeled faithfully from §4.2 but should
+  be confirmed against Mary's actual GP template before the adapter consumes v2.
+- **`mrc_unit` rate source (ADR-0040 open).** Untouched here; unrelated to the
+  single-line CA processing invoice, still open for the OR composition.

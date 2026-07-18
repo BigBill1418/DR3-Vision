@@ -58,6 +58,25 @@ function isTransportationKind(kind: InvoiceKind): boolean {
   return TRANSPORTATION_KINDS.includes(kind);
 }
 
+/**
+ * ADR-0041 amendment §3.4 — resolve the mode a new invoice is stamped with.
+ * No `invoice_mode_config` row for the (site, kind) ⇒ `pilot` (the safe
+ * default): a (site, kind) is on the pilot until an admin explicitly flips it
+ * to `production`. This is the write-time half of the launch safety net; the
+ * delivery-time half (`planInvoiceDelivery`) makes pilot structurally unable to
+ * reach MRC regardless of how the row was produced.
+ */
+export async function resolveInvoiceMode(
+  siteId: string,
+  kind: InvoiceKind,
+): Promise<'pilot' | 'production'> {
+  const cfg = await prisma.invoiceModeConfig.findUnique({
+    where: { site_id_kind: { site_id: siteId, kind } },
+    select: { mode: true },
+  });
+  return cfg?.mode === 'production' ? 'production' : 'pilot';
+}
+
 async function assertKindMatchesSite(siteId: string, kind: InvoiceKind): Promise<void> {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -160,6 +179,13 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
   const windowStart = dayKeyUTCFromISO(window.startISO);
   const windowEnd = dayKeyUTCFromISO(window.endISO);
 
+  // §3.4 — stamp the mode the (site, kind) is configured for (pilot unless an
+  // admin flipped it to production). A superseding reissue re-reads this, so a
+  // (site, kind) graduated to production reissues in production and one still on
+  // the pilot reissues in pilot — the safety net follows the config, not the
+  // original draft.
+  const mode = await resolveInvoiceMode(args.siteId, args.kind);
+
   const created = await prisma.$transaction(async (tx) => {
     // Void any prior draft(s) in this chain — a regenerate replaces, never edits.
     await tx.invoice.updateMany({
@@ -188,7 +214,18 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
         version: nextVersion,
         supersedes_id: args.supersedesId ?? null,
         status: 'draft',
+        mode,
         total_cents: composition.totalCents,
+        // §8.3 — the program/non-program split (processing kinds only; undefined
+        // → null on transportation / collection-site-count by composition contract).
+        program_units_processed:
+          composition.programUnitsProcessed != null
+            ? new Prisma.Decimal(composition.programUnitsProcessed)
+            : null,
+        non_program_units_processed:
+          composition.nonProgramUnitsProcessed != null
+            ? new Prisma.Decimal(composition.nonProgramUnitsProcessed)
+            : null,
         // rollup §1.3 — the GP Trade discount as data (ca_processing_eom only;
         // undefined → null for every other kind by composition contract).
         trade_discount_cents: composition.tradeDiscountCents ?? null,
@@ -221,6 +258,7 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
           billing_month: billingMonthISO,
           version: nextVersion,
           status: 'draft',
+          mode,
           total_cents: composition.totalCents,
           line_count: composition.lines.length,
           ...(args.supersedesId ? { supersedes_id: args.supersedesId } : {}),
@@ -241,6 +279,7 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
       line_count: composition.lines.length,
       total_cents: composition.totalCents,
       status: 'draft',
+      mode,
     },
     '[invoices] draft generated',
   );

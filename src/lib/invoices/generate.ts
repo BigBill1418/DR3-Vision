@@ -59,6 +59,12 @@ export interface ProcessingGenerationInput {
   /** stripped_program units over the invoice window (mid-month = 1st–15th). */
   strippedProgramUnits: number;
   strippedSource: JsonValue;
+  /**
+   * ADR-0041 amendment §8.3 — Σ stripped_non_program over the SAME window. Tracked
+   * for reconciliation, never billed (persisted to `non_program_units_processed`).
+   * Defaults to 0 when the caller omits it.
+   */
+  strippedNonProgramUnits?: number;
   /** Σ incentive_cents of paid-in-window incentive drop-offs (B7). */
   incentiveCentsTotal: number;
   incentiveUnits: number;
@@ -89,6 +95,15 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
   const lines: InvoiceLineDraft[] = [];
   let position = 0;
 
+  // ADR-0041 amendment §8.3 — the program/non-program split, attached to EVERY
+  // processing return path (mid-month, CA EOM, OR EOM). `programUnitsProcessed`
+  // is the billable basis (== the B6/B20 line quantity); `nonProgramUnitsProcessed`
+  // is tracked-only. MRC never bills on the non-program figure.
+  const split = {
+    programUnitsProcessed: input.strippedProgramUnits,
+    nonProgramUnitsProcessed: input.strippedNonProgramUnits ?? 0,
+  };
+
   if (input.kind === 'ca_processing_mid_month') {
     // Mid-month invoice = the B20 processing total only (incentives + events
     // settle at EOM). One line.
@@ -103,7 +118,7 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
       position: position++,
     });
     guardProcessingCharge(input, amount);
-    return finalize(lines);
+    return { ...finalize(lines), ...split };
   }
 
   // EOM processing (CA or OR): B6 + B7 + B8, then (CA only) the B20 offset.
@@ -172,6 +187,7 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
     const hasRealDiscount = offset > 0 || input.midMonthReferenceInvoiceId != null;
     const composition = {
       ...finalize(lines),
+      ...split,
       ...(hasRealDiscount
         ? {
             tradeDiscountCents: offset,
@@ -195,7 +211,7 @@ export function composeProcessing(input: ProcessingGenerationInput): InvoiceComp
     return composition;
   }
 
-  return finalize(lines);
+  return { ...finalize(lines), ...split };
 }
 
 /** Zero-guard on the processing charge basis (see {@link composeProcessing}). */

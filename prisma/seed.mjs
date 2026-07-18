@@ -737,6 +737,99 @@ async function seedApApprovers() {
   console.log(`  ap_approvers: ${seeded} present (idempotent; Bill acts as admin without a row)`);
 }
 
+// ─── ADR-0041 amendment §4.2 — GP billing config + pilot recipients ───────
+// The Great-Plains identifier surface the v2 invoice export carries, plus the
+// pilot preview roster (§3.4). CONFIRMED values are seeded; UNKNOWNS are left
+// NULL with a pending_note — never invented (OR MRC Customer ID + Eugene PO
+// suffix await Mary). All idempotent upserts (re-seed never clobbers an admin
+// edit of the nullable identifiers — update only sets the confirmed columns).
+
+async function seedGpBillingConfig() {
+  // Company-wide statics (§4.2): the MRC Bill-To/Ship-To, static Sales ID (34),
+  // Payment Terms (Net 30). One row, id="singleton".
+  await prisma.gpBillingConfig.upsert({
+    where: { id: 'singleton' },
+    create: {
+      id: 'singleton',
+      bill_to_name: 'Mattress Recycling Council',
+      bill_to_attn: 'Ryan Trainer',
+      bill_to_street: '501 Wythe Street',
+      bill_to_locality: 'Alexandria VA 22314',
+      sales_id: '34',
+      payment_terms: 'Net 30',
+      updated_at: new Date(),
+    },
+    // Re-seed keeps the confirmed statics aligned (they are Vision-owned, not
+    // admin-edited); no nullable field to protect here.
+    update: {
+      bill_to_name: 'Mattress Recycling Council',
+      bill_to_attn: 'Ryan Trainer',
+      bill_to_street: '501 Wythe Street',
+      bill_to_locality: 'Alexandria VA 22314',
+      sales_id: '34',
+      payment_terms: 'Net 30',
+    },
+  });
+  console.log('  gp_billing_config: singleton present (MRC Bill-To, Sales ID 34, Net 30)');
+}
+
+async function seedGpSiteBillingConfig(siteIds) {
+  // CA (Woodland): Customer ID MRCL001, PO suffix DR3W — both CONFIRMED (§4.2).
+  // OR (Eugene): Customer ID + PO suffix UNKNOWN → NULL, pending Mary. Do NOT
+  // invent DR3E/DR3O. `create` seeds the honest nulls; `update` is EMPTY so a
+  // re-seed never overwrites a value Mary later confirms via admin.
+  const rows = [
+    {
+      code: 'woodland',
+      customer_id: 'MRCL001',
+      po_site_suffix: 'DR3W',
+      pending_note: null,
+    },
+    {
+      code: 'eugene',
+      customer_id: null,
+      po_site_suffix: null,
+      pending_note: 'OR MRC Customer ID + Eugene PO suffix pending Mary (§4.2)',
+    },
+  ];
+  for (const r of rows) {
+    const site_id = siteIds.get(r.code);
+    if (!site_id) throw new Error(`seedGpSiteBillingConfig: unknown site code='${r.code}'`);
+    await prisma.gpSiteBillingConfig.upsert({
+      where: { site_id },
+      create: {
+        site_id,
+        customer_id: r.customer_id,
+        po_site_suffix: r.po_site_suffix,
+        pending_note: r.pending_note,
+        updated_at: new Date(),
+      },
+      update: {}, // never clobber an admin's later confirmation of the nullables
+    });
+  }
+  console.log('  gp_site_billing_config: woodland=MRCL001/DR3W; eugene=null/null (pending Mary)');
+}
+
+async function seedInvoicePilotRecipients() {
+  // §3.4 pilot roster — Bill + Rick ONLY. During pilot, invoice previews go here
+  // and NOWHERE else. Bill's DR3 identity is bill.barnard@svdp.us (his SSO login;
+  // per seed/users.csv); Rick is rick.albritton@svdp.us. Idempotent on email;
+  // update is EMPTY so an admin's later `active=false` is never resurrected.
+  const roster = [
+    { email: 'bill.barnard@svdp.us', name: 'Bill Barnard' },
+    { email: 'rick.albritton@svdp.us', name: 'Rick Albritton' },
+  ];
+  for (const r of roster) {
+    const email = r.email.trim().toLowerCase();
+    await prisma.invoicePilotRecipient.upsert({
+      where: { email },
+      create: { email, name: r.name, updated_at: new Date() },
+      update: {},
+    });
+  }
+  console.log('  invoice_pilot_recipients: Bill + Rick present (pilot previews route here only)');
+}
+
 // ─── ADR-0045 §3 board-pack digest recipients (rollup §1.8) ──────────────
 // Bethany + Bill are the mandatory board-pack recipients. Bethany has no user row
 // yet, so her address is a documented PLACEHOLDER (docs/operator/board-pack-digest.md
@@ -1890,6 +1983,12 @@ async function main() {
   await seedStateProgramRules(siteIds);
   console.log('▶ seeding cor_site_config (ADR-0042 D2.3 — CA signer)');
   await seedCorSiteConfig(siteIds);
+  console.log('▶ seeding gp_billing_config (ADR-0041 amendment §4.2 — GP statics)');
+  await seedGpBillingConfig();
+  console.log('▶ seeding gp_site_billing_config (ADR-0041 amendment §4.2 — per-site GP ids)');
+  await seedGpSiteBillingConfig(siteIds);
+  console.log('▶ seeding invoice_pilot_recipients (ADR-0041 amendment §3.4 — Bill + Rick)');
+  await seedInvoicePilotRecipients();
   console.log('▶ seeding transport_rate_tiers (ADR-0040 D1)');
   await seedTransportRateTiers();
   console.log('▶ seeding document_sequences (ADR-0041 — DR3# counter)');

@@ -5,6 +5,46 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-18 (ADR-0041 amendment: SIMPLIFIED invoice generation — pilot mode, program split, GP v2 export; rollup §A.1/§A.7/§4.2/§8.3)
+
+Billing-critical, launch-facing. Extends the accepted ADR-0041 invoice engine (nothing
+rebuilt — the immutable-version discipline, pure math, trust gate, and credit-memo /
+void-and-reissue state machines are unchanged and verified to still integrate). Migration
+`20260727_adr0041_pilot_mode_gp_export` (purely additive, ADR-0035 clean-replay; sorts
+after `20260726_adr0040_rate_infrastructure`; `invoices.mode` defaults `pilot` so every
+pre-existing row backfills safely — nothing on file can reach MRC until an admin flips it).
+
+- **B10-5 CLOSED (§A.1).** The invoice math is single-line (`program_units_processed ×
+  rate + trade_discount`) — no commodity→invoice-block mapping is required for billing.
+  Compliance commodity classification (recycling rate) stays a separate concern
+  (ADR-0043/0055). Both ADR-0041 and ADR-0043 doc references updated.
+- **Pilot / production mode (§3.4) — the launch safety net.** `InvoiceMode` enum + the
+  `mode` column (default `pilot`). `src/lib/invoices/delivery.ts`: `planInvoiceDelivery`
+  is a TOTAL function on `mode` with NO branch that yields MRC recipients / `sendsToMrc`
+  for pilot — a pilot invoice is structurally undeliverable to MRC; `assertProductionForMrc`
+  is the tripwire a future sender calls. Pilot previews route to `invoice_pilot_recipients`
+  (Bill + Rick, seeded). `invoice_mode_config` (per site+kind; no row ⇒ pilot) is the admin
+  flip via `POST /api/manager/[site]/invoices/mode` (authorized like approval). No live MRC
+  sender exists yet — the boundary ships first (mirrors the frozen export contract).
+- **Program vs non-program split (§8.3).** `invoices.program_units_processed` (billable
+  basis, == B6/B20 line quantity) + `invoices.non_program_units_processed` (tracked,
+  off-invoice). Aggregated from `processed_units_daily.stripped_program` /
+  `stripped_non_program` and persisted on processing invoices.
+- **Two-line GP export v2 (§4.2), C-1 bump.** `invoiceExportV2` ships ALONGSIDE the FROZEN
+  v1 (`export-json.ts`); `GET …/export?format=json&v=2` (v1 stays default). Carries the
+  §4.2 two-line processing structure (header + "MRC-Processed Units DR3 <Site>" UNITSMO)
+  + Subtotal/Misc/Tax/Freight/Trade-Discount/Total, the GP header identifiers, the split,
+  and the trade-discount fields; the v1 leaf lines are also carried (nothing lost). GP
+  total reconciles to `invoice.total_cents` (ADR-0033 tripwire).
+- **GP identifiers (§4.2).** `gp_billing_config` (singleton: MRC Bill-To/Ship-To — Attn
+  Ryan Trainer, 501 Wythe Street, Alexandria VA 22314; Sales ID 34; Net 30) +
+  `gp_site_billing_config` (Woodland: Customer ID MRCL001, PO suffix DR3W). OR MRC Customer
+  ID + Eugene PO suffix left NULL — pending Mary, never invented. CA processing rate reuses
+  `state_program_rules` ($16.50/unit), not re-seeded.
+- **Tests:** delivery (pilot never reaches MRC, structural) · gp-identifiers (PO format,
+  null-unknown rule) · export-v2 (two-line shape, EOM subtracts mid-month, reconciliation,
+  v1 frozen, OR/Eugene null) · program/non-program split on the composer. Suite 2173 green.
+
 ### Added — 2026-07-18 (ADR-0040 amendment: MRC billing rate infrastructure; rollup §8.2 + §3.3/§3.5/§3.6/§3.7)
 
 Billing-critical. Extends the accepted ADR-0040 rate infrastructure with the MRC
