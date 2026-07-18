@@ -18,6 +18,8 @@ const Patch = z.object({
   retracId: z.string().max(120).nullable().optional(),
   baleCount: z.number().int().nonnegative().nullable().optional(),
   buyer: z.string().max(200).nullable().optional(),
+  // ADR-0055 — changing the recycler re-derives the stewardship split.
+  vendorId: z.string().uuid().nullable().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ site: string; id: string }> }) {

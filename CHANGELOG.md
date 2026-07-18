@@ -89,6 +89,44 @@ period)`; supersede stays in-period).
 - **Signer title** "Transportation Manager" (Richard Albritton) confirmed correct —
   no change.
 
+### Added — 2026-07-18 (ADR-0055: recycling-rate configuration + outbound stewardship derivation; rollup §A.4)
+
+Answers the workbook `B10-5` / `%` column. Recyclers count different fractions of a
+load as recycled vs landfilled (Green Zone metal 100%; Xtraction metal 81%/19%;
+Biomass wood 100%). These splits feed CalRecycle stewardship (O-7) — they are NOT
+billed (ADR-0041). Migration `20260726_adr0055_recycling_rates` (purely additive).
+
+- **`outbound_vendors`** — GLOBAL recycler master (mirrors `transporters`, not the
+  site-scoped `sources`). Formalizes the free-text `outbound_materials.buyer`.
+  `outbound_materials` gains a nullable `vendor_id` FK (legacy `buyer` retained for
+  backfill/reconciliation).
+- **`recycling_rates`** — effective-dated `recycling_percent` (`Decimal(5,4)`, DB
+  `CHECK [0,1]`) per `(vendor, commodity)`, commodity reusing the existing
+  `OutboundCommodity` enum (**steel → `metal`**; Biomass is a `wood` vendor — no
+  parallel enum). Resolver `src/lib/loads/recycling-rates.ts` mirrors the
+  `state_program_rules` pattern (latest covering `effective_from` wins). Overlap is
+  guarded three ways: partial-unique on open windows + a transactional
+  advisory-locked write guard (`createRecyclingRate`) + a resolver throw on any
+  double-cover.
+- **Outbound derived fields** — `recycled_lbs`, `landfilled_lbs`,
+  `recycling_percent_applied` (durable snapshot), `recycling_rate_id` (provenance),
+  computed at entry time from `(vendor_id, commodity, ship_date)` and re-derived on
+  edit. Rounding rule: `recycled = round_half_up(weight × pct)`, `landfilled =
+  weight − recycled` (**complement by subtraction → exact sum, no pound drift**).
+  Worked example: 5,541 lb @ 0.81 → **4,488 recycled / 1,053 landfilled** (see the
+  ADR's flagged 1-lb delta vs Kelsey's verbal 4,487/1,054 — an 80.98% split, not
+  the nominal 0.81; seeded rate stays 0.81 pending confirmation).
+- **No-rate policy** — when no rate covers `(vendor, commodity, date)`, derived
+  fields are left **null and flagged**, never assumed 100% (would over-report to
+  CalRecycle).
+- **Seeds** — the three confirmed rates only; other wood-recycler rates PENDING
+  Morena (not invented).
+- **iPad outbound entry** — recycler picker + live recycled/landfilled preview
+  (`GET …/outbound/{vendors,rate-preview}`) wired to the same resolver the save path
+  uses, plus two new table columns.
+- **O-7 seam** — CalRecycle stewardship reporting consumes these fields; the
+  reporting surface is a separate feature (not built here).
+
 ### Added — 2026-07-18 (ADR-0037 amendment: inventory + sources foundation; rollup §8.1)
 
 Billing-critical. The MRC billing tune-and-launch foundation. Migration

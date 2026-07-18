@@ -1565,6 +1565,25 @@ model OutboundMaterial {
   bale_count        Int?
   allocation_pct    Decimal?            @db.Decimal(5, 2) // placeholder; nothing computes from it
   buyer             String?
+  // ADR-0055 — first-class recycler (outbound vendor) this load shipped to.
+  // Nullable & additive: the free-text `buyer` above stays the legacy/reconciliation
+  // field; `vendor_id` is the structured reference the recycling-rate derivation
+  // resolves against. Backfilled separately (buyer string → vendor row).
+  vendor_id         String?
+  vendor            OutboundVendor?     @relation(fields: [vendor_id], references: [id])
+  // ADR-0055 — CalRecycle stewardship split, DERIVED at entry time from
+  // recycling_rates(vendor_id, commodity, ship_date). Reported SEPARATELY for
+  // stewardship (O-7); NOT part of the MRC invoice (ADR-0041). Both are null when
+  // no rate row covers (vendor, commodity, ship_date) — never silently assumed.
+  // Invariant: recycled_lbs + landfilled_lbs == weight_lbs (complement-by-subtraction).
+  recycled_lbs      Int?
+  landfilled_lbs    Int?
+  // Snapshot of the recycling_percent actually applied (Decimal(5,4), 0..1), plus a
+  // provenance FK to the exact rate row that resolved. The snapshot is the DURABLE
+  // audit value — it survives later edits/deletes of the rate row.
+  recycling_percent_applied Decimal?    @db.Decimal(5, 4)
+  recycling_rate_id String?
+  recycling_rate    RecyclingRate?      @relation(fields: [recycling_rate_id], references: [id], onDelete: SetNull)
   source            RecordSource        @default(manual)
   import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
   locked_at         DateTime?
@@ -1579,8 +1598,70 @@ model OutboundMaterial {
   @@index([site_id, ship_date])
   @@index([site_id, commodity, ship_date])
   @@index([site_id, sub_category, ship_date]) // renovation WholeUnitsSold query (running balance)
+  @@index([vendor_id]) // ADR-0055 — per-recycler stewardship rollups
   @@index([retrac_id])
   @@map("outbound_materials")
+}
+
+/// ADR-0055 — outbound recycler / commodity buyer master. GLOBAL (not site-scoped):
+/// a recycler's recovery rate is a property of the RECYCLER, org-wide, not of the
+/// collection site that shipped the load — so this mirrors the global `Transporter`
+/// master (unique name), NOT the site-scoped `Source` (inbound collection site).
+/// Formalizes the free-text `outbound_materials.buyer` (SA Recycling, Green Zone,
+/// Xtraction, Biomass, …) into a referenceable entity for rate configuration.
+model OutboundVendor {
+  id         String   @id @default(uuid())
+  name       String   @unique // verbatim recycler name (reconciliation match)
+  is_active  Boolean  @default(true)
+  notes      String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  recycling_rates   RecyclingRate[]
+  outbound_materials OutboundMaterial[]
+
+  @@index([is_active])
+  @@map("outbound_vendors")
+}
+
+/// ADR-0055 — effective-dated recycler recovery rate per (vendor, commodity).
+/// `recycling_percent` is the fraction of a load's weight the recycler counts as
+/// RECYCLED (steel→`metal` in the existing taxonomy; the balance is landfilled).
+/// Green Zone × metal = 1.0000; Xtraction × metal = 0.8100; Biomass × wood = 1.0000.
+///
+/// Resolution mirrors the `state_program_rules` / `processor_bonus_rules` pattern
+/// (a strict named resolver picks the row whose `effective_from <= onDate` and whose
+/// `effective_to` is null or `>= onDate`). Overlap is guarded THREE ways so a bad
+/// seed can't silently double-resolve a rate (see recycling-rates.ts):
+///   1. partial UNIQUE index on (vendor_id, commodity) WHERE effective_to IS NULL —
+///      at most ONE open-ended "current" rate per (vendor, commodity);
+///   2. a transactional overlap check at write time (advisory-locked) rejecting any
+///      proposed window that overlaps an existing one for the same (vendor, commodity);
+///   3. the resolver throws AmbiguousRecyclingRateError if >1 row ever covers a date.
+/// A GiST/`btree_gist` EXCLUDE constraint would be the textbook DB-level guard, but
+/// the fleet uses no Postgres extensions and it risks the ADR-0035 clean-replay
+/// invariant — rejected in the ADR's Alternatives.
+///
+/// `recycling_percent` is Decimal(5,4) — represents 0.8100 exactly, holds 1.0000,
+/// and a CHECK constraint (migration) fences it to [0, 1]. NOT part of the MRC
+/// invoice (ADR-0041); feeds CalRecycle stewardship reporting only (O-7 seam).
+model RecyclingRate {
+  id                String            @id @default(uuid())
+  vendor_id         String
+  vendor            OutboundVendor    @relation(fields: [vendor_id], references: [id])
+  commodity         OutboundCommodity
+  recycling_percent Decimal           @db.Decimal(5, 4) // [0,1]; 0.8100 = 81% recycled
+  effective_from    DateTime          @db.Date
+  effective_to      DateTime?         @db.Date
+  notes             String?
+  created_by        String?
+  created_at        DateTime          @default(now())
+  updated_at        DateTime          @updatedAt
+
+  derived_outbounds OutboundMaterial[]
+
+  @@index([vendor_id, commodity, effective_from])
+  @@map("recycling_rates")
 }
 
 // ADR-0052 — commodity payment reconciliation (v1). One row per tracked load;
