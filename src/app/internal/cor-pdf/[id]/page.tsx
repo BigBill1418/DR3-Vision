@@ -48,7 +48,11 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function fmtMonth(d: Date): string {
-  return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(d);
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(d);
 }
 
 function fmtTimestamp(d: Date): string {
@@ -81,15 +85,28 @@ export default async function CorPdfSourcePage({ params }: { params: Promise<{ i
     include: { supersedes: { select: { version: true } } },
   });
   if (!cert) notFound();
-  const site = await prisma.site.findUnique({ where: { id: cert.site_id }, select: { name: true } });
+  const site = await prisma.site.findUnique({
+    where: { id: cert.site_id },
+    select: { name: true },
+  });
   if (!site) notFound();
+
+  // ADR-0042 amendment — a mid-month filing prints inventory + FT/PT BLANK
+  // (literally empty, matching Rick's hand-filed form): no value, no em-dash, no
+  // "0"/"N/A". The end-of-month certificate renders exactly as before.
+  const isMidMonth = cert.period === 'mid_month';
 
   const inv = (cert.inventory_source ?? {}) as InventorySourceShape;
   const ft = cert.ft_headcount;
   const pt = cert.pt_headcount;
   const totalHeadcount = ft != null && pt != null ? ft + pt : null;
   const generatedAt = new Date();
-  const asOfLabel = inv.asOf ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(inv.asOf)) : null;
+  const asOfLabel =
+    !isMidMonth && inv.asOf
+      ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' }).format(
+          new Date(inv.asOf),
+        )
+      : null;
 
   return (
     <html lang="en">
@@ -112,9 +129,12 @@ export default async function CorPdfSourcePage({ params }: { params: Promise<{ i
               <h1>Certificate of Recycling, Employment and Inventory</h1>
               <p className="exhibit">Exhibit 5</p>
               <p className="subtitle">
-                {site.name} &middot; {fmtMonth(cert.cover_month)}
+                {site.name} &middot; {fmtMonth(cert.cover_month)} &middot;{' '}
+                {isMidMonth ? 'Mid-month filing' : 'End-of-month close'}
               </p>
-              {cert.status !== 'finalized' && <p className="draft-marker">DRAFT — NOT FOR SUBMISSION</p>}
+              {cert.status !== 'finalized' && (
+                <p className="draft-marker">DRAFT — NOT FOR SUBMISSION</p>
+              )}
             </div>
           </header>
 
@@ -129,23 +149,43 @@ export default async function CorPdfSourcePage({ params }: { params: Promise<{ i
           <section className="figures">
             <div className="figure-row">
               <div className="figure-label">Unprocessed inventory at month close</div>
-              <div className="figure-value">{cert.inventory_units.toLocaleString('en-US')} units</div>
+              <div className="figure-value">
+                {isMidMonth || cert.inventory_units == null
+                  ? ''
+                  : `${cert.inventory_units.toLocaleString('en-US')} units`}
+              </div>
             </div>
             {asOfLabel && <p className="figure-note">Running balance as of {asOfLabel}.</p>}
 
             <div className="figure-row">
               <div className="figure-label">Full-time employees</div>
-              <div className="figure-value">{ft != null ? ft.toLocaleString('en-US') : '—'}</div>
+              <div className="figure-value">
+                {isMidMonth ? '' : ft != null ? ft.toLocaleString('en-US') : '—'}
+              </div>
             </div>
             <div className="figure-row">
               <div className="figure-label">Part-time employees</div>
-              <div className="figure-value">{pt != null ? pt.toLocaleString('en-US') : '—'}</div>
+              <div className="figure-value">
+                {isMidMonth ? '' : pt != null ? pt.toLocaleString('en-US') : '—'}
+              </div>
             </div>
             <div className="figure-row figure-total">
               <div className="figure-label">Total employees</div>
-              <div className="figure-value">{totalHeadcount != null ? totalHeadcount.toLocaleString('en-US') : '—'}</div>
+              <div className="figure-value">
+                {isMidMonth
+                  ? ''
+                  : totalHeadcount != null
+                    ? totalHeadcount.toLocaleString('en-US')
+                    : '—'}
+              </div>
             </div>
           </section>
+          {isMidMonth && (
+            <p className="figure-note">
+              Mid-month filing — inventory and employment figures are reported on the end-of-month
+              certificate. These fields are intentionally left blank.
+            </p>
+          )}
 
           {/* D3 — EMPTY signature block. Vision renders NO signature/e-signed mark. */}
           <section className="signature">
@@ -158,7 +198,9 @@ export default async function CorPdfSourcePage({ params }: { params: Promise<{ i
               <span className="sig-date-blank" />
               <span className="sig-date-label">Date</span>
             </div>
-            <p className="sig-note">Signature and date are completed by hand on the printed copy.</p>
+            <p className="sig-note">
+              Signature and date are completed by hand on the printed copy.
+            </p>
           </section>
 
           <footer className="cor-foot">

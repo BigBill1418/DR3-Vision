@@ -45,7 +45,7 @@ lifecycle code pattern).
    aspiration.
 2. **FT/PT headcount** — pre-filled from the month's daily-close
    `employees_count`/`processors_count` fields (B4). ⚠ Honest gap: the daily
-   close captures *totals*, not an FT/PT split. Pre-fill strategy: month-end
+   close captures _totals_, not an FT/PT split. Pre-fill strategy: month-end
    close's counts shown with the full month's series in the review UI; the
    **preparer enters the FT/PT split at review** (they know the roster), and the
    entry is audited with the pre-fill values retained in `headcount_source`.
@@ -155,3 +155,70 @@ Rick Albritton / "Transportation Manager"; the title is **flagged TBC with MRC**
 **Reconcile placement:** the ADR-0033-style tripwire runs in BOTH `finalizeCor`
 (never freeze a stale draft) and `generateCorPdf` (never render/store a figure
 that disagrees with the ledger) — refusing with both numbers on either path.
+
+## Amendment — 2026-07-18 (mid-month COR; rollup §4.1 + §8.4 + §9.2)
+
+The COR form (Exhibit 5, `Scan_084.pdf`) is filed for BOTH the end-of-month close
+AND a mid-month period. Rick files the mid-month version with the **Inventory, FT
+worker count, and PT worker count fields BLANK** (Signature + Date populated by
+hand). This amendment teaches the generator that second shape without weakening the
+end-of-month path. Ships with migration `20260726_adr0042_midmonth_cor` (purely
+additive: one new enum + one defaulted column + one NOT-NULL widening — safe on the
+populated prod table, replays clean on empty PG16).
+
+### A1 — `period` discriminator + nullable inventory
+
+- New enum `CorPeriod { end_of_month, mid_month }` and column
+  `cor_certificates.period CorPeriod NOT NULL DEFAULT 'end_of_month'`. The DEFAULT
+  backfills every existing row and every existing caller to `end_of_month`, so all
+  current behavior (tripwire + capacity banner + required FT/PT) is byte-for-byte
+  preserved.
+- `inventory_units` is WIDENED to nullable (`Int?`). A mid-month certificate has NO
+  inventory figure — it stores `NULL`, never a placeholder `0`. `inventory_source`
+  stays `NOT NULL` and carries a typed marker (`mid_month_blank_adr0042_amendment`)
+  so provenance is honest ("filed blank; reported at month end"), not fabricated.
+
+### A2 — the mid-month fork (EOM path untouched)
+
+- **Prefill (`prefill.ts`)** short-circuits BEFORE any balance/close query for
+  `mid_month`: inventory `null`, FT/PT `null`, both provenance blobs a marker, and
+  only the signer resolves (the mid-month form is still signed by hand).
+- **Reconcile (`assertCorInventoryReconciles`)** is **end-of-month only** — a
+  mid-month cert has nothing to reconcile, so it returns a passing `skipped` result
+  and never queries the ledger or throws. The EOM tripwire is hard-enforced exactly
+  as before (in BOTH `finalizeCor` and `generateCorPdf`).
+- **Finalize (`finalizeCor`)** requires the FT/PT split ONLY for `end_of_month`; a
+  mid-month cert finalizes with FT/PT blank by design. The EOM headcount gate is
+  unchanged.
+- **Render (`/internal/cor-pdf/[id]`)** prints the inventory, FT, PT, and total
+  fields **literally blank** for `mid_month` (no value, no em-dash, no `0`/`N/A` —
+  matching Rick's hand-filed form), suppresses the running-balance note, and labels
+  the certificate "Mid-month filing". The EOM render is unchanged.
+- **Capacity banner (D4)** is **end-of-month only** — a mid-month cert has no
+  inventory to grade, so the banner does not render.
+
+### A3 — period-scoped version chain
+
+The immutable-version chain (D1) is scoped BY period: a mid-month and an
+end-of-month certificate for the **same** `cover_month` are independent chains and
+never void one another or share a version counter. `generateCorDraft`'s
+void-prior-draft + next-version queries and `getCorDetail`'s prior-version lookup
+all filter on `(site_id, cover_month, period)`. Supersede stays in the same period
+chain as the certificate it corrects.
+
+### A4 — the 3,977 fixtures (§9.2)
+
+The ADR-0042 COR fixtures asserted the **stale 4,062**. ADR-0037's amendment
+corrected the June close to **3,977 (3,748 program + 229 non-program)** (the raw
+DAY grid double-counted DAY23's `NP` row). All COR fixtures are updated to 3,977;
+the pre-fill fixture (`prefill.test.ts`) now reproduces it through the D6 running
+balance using the SAME authoritative Processed-ledger totals as the §2.3 close
+(open 1,423 + inbound 19,451 program / 229 non-program − stripped 17,126), so the
+COR acceptance fixture cross-validates `onHand` against `computeInventoryClose`.
+The mid-month path has no inventory and therefore no such fixture.
+
+### A5 — signer title confirmed unchanged
+
+The seeded signer title "Transportation Manager" (Richard Albritton) is confirmed
+correct and unchanged by this amendment (still flagged TBC with MRC per Q-5; a
+confirmation remains a one-row `cor_site_config` edit).

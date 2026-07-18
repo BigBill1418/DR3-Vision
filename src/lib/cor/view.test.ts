@@ -16,8 +16,9 @@ function row(over: Record<string, unknown> = {}) {
     version: 1,
     supersedes_id: null,
     status: 'draft',
-    inventory_units: 4062,
-    inventory_source: { computedTotal: '4062' },
+    period: 'end_of_month',
+    inventory_units: 3977,
+    inventory_source: { computedTotal: '3977' },
     ft_headcount: null,
     pt_headcount: null,
     headcount_source: { series: [] },
@@ -39,30 +40,54 @@ describe('toCorView', () => {
     expect(v.id).toBe('cor1');
     expect(v.siteId).toBe('site-w');
     expect(v.status).toBe('draft');
-    expect(v.inventoryUnits).toBe(4062);
+    expect(v.period).toBe('end_of_month');
+    expect(v.inventoryUnits).toBe(3977);
     expect(v.ftHeadcount).toBeNull();
     expect(v.signerTitle).toBe('Transportation Manager');
   });
 
   it('carries the finalized fields + provenance blobs through', () => {
     const v = toCorView(
-      row({ status: 'finalized', ft_headcount: 15, pt_headcount: 3, finalized_by: 'mgr', finalized_at: new Date('2026-07-02T00:00:00Z'), pdf_storage_key: 'cor/woodland/2026-06/ab.pdf' }),
+      row({
+        status: 'finalized',
+        ft_headcount: 15,
+        pt_headcount: 3,
+        finalized_by: 'mgr',
+        finalized_at: new Date('2026-07-02T00:00:00Z'),
+        pdf_storage_key: 'cor/woodland/2026-06/ab.pdf',
+      }),
     );
     expect(v.status).toBe('finalized');
     expect(v.ftHeadcount).toBe(15);
     expect(v.ptHeadcount).toBe(3);
     expect(v.finalizedBy).toBe('mgr');
     expect(v.pdfStorageKey).toBe('cor/woodland/2026-06/ab.pdf');
-    expect(v.inventorySource).toEqual({ computedTotal: '4062' });
+    expect(v.inventorySource).toEqual({ computedTotal: '3977' });
+  });
+
+  it('maps a mid-month row: period mid_month, inventoryUnits null (filed blank)', () => {
+    const v = toCorView(
+      row({
+        period: 'mid_month',
+        inventory_units: null,
+        inventory_source: { method: 'mid_month_blank_adr0042_amendment' },
+      }),
+    );
+    expect(v.period).toBe('mid_month');
+    expect(v.inventoryUnits).toBeNull();
   });
 });
 
 describe('typed error taxonomy (D5 — errors carry numbers/status)', () => {
   it('CorReconcileMismatchError carries both numbers + a 409 status', () => {
-    const e = new CorReconcileMismatchError({ certId: 'cor1', storedUnits: 4062, recomputedUnits: 4100 });
+    const e = new CorReconcileMismatchError({
+      certId: 'cor1',
+      storedUnits: 3977,
+      recomputedUnits: 4100,
+    });
     expect(e.status).toBe(409);
-    expect(e.context).toEqual({ certId: 'cor1', storedUnits: 4062, recomputedUnits: 4100 });
-    expect(e.message).toContain('4062');
+    expect(e.context).toEqual({ certId: 'cor1', storedUnits: 3977, recomputedUnits: 4100 });
+    expect(e.message).toContain('3977');
     expect(e.message).toContain('4100');
   });
 

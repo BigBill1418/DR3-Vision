@@ -10,6 +10,14 @@
 /** D1 — draft regenerates freely; finalized is immutable; void discards. */
 export type CorStatus = 'draft' | 'finalized' | 'void';
 
+/**
+ * ADR-0042 amendment (2026-07-18) — the filing period. `end_of_month` is the full
+ * reconciled close (inventory + FT/PT required, D3 tripwire + capacity banner);
+ * `mid_month` is Rick's blank-figures filing (inventory/FT/PT left blank). Mirrors
+ * the Prisma `CorPeriod` enum as a Prisma-free string union.
+ */
+export type CorPeriod = 'end_of_month' | 'mid_month';
+
 /** JSON value type for the provenance blobs (no `any`). */
 export type JsonValue =
   | string
@@ -26,7 +34,10 @@ export interface CorView {
   version: number;
   supersedesId: string | null;
   status: CorStatus;
-  inventoryUnits: number;
+  /** ADR-0042 amendment — end-of-month vs mid-month filing. */
+  period: CorPeriod;
+  /** Null on a `mid_month` certificate (inventory is filed blank). */
+  inventoryUnits: number | null;
   inventorySource: JsonValue;
   ftHeadcount: number | null;
   ptHeadcount: number | null;
@@ -47,7 +58,8 @@ export interface CorListItem {
   coverMonth: Date;
   version: number;
   status: CorStatus;
-  inventoryUnits: number;
+  period: CorPeriod;
+  inventoryUnits: number | null;
   ftHeadcount: number | null;
   ptHeadcount: number | null;
   supersedesId: string | null;
@@ -60,7 +72,10 @@ export interface CorListItem {
 /** No Exhibit 5 exists in Oregon — a COR is a CA-jurisdiction-only artifact. */
 export class CorJurisdictionError extends Error {
   readonly status = 422 as const;
-  constructor(readonly siteId: string, readonly jurisdiction: string) {
+  constructor(
+    readonly siteId: string,
+    readonly jurisdiction: string,
+  ) {
     super(
       `COR (Exhibit 5) is a California-only certificate — site ${siteId} is ${jurisdiction}; no Oregon equivalent exists (ADR-0042 D1)`,
     );
@@ -80,7 +95,9 @@ export class CorNotFoundError extends Error {
 export class CorImmutableError extends Error {
   readonly status = 409 as const;
   constructor(readonly certId: string) {
-    super(`cor certificate ${certId} is finalized and immutable — correct it with a superseding new version`);
+    super(
+      `cor certificate ${certId} is finalized and immutable — correct it with a superseding new version`,
+    );
     this.name = 'CorImmutableError';
   }
 }
@@ -125,7 +142,9 @@ export class CorFinalizeForbiddenError extends Error {
  */
 export class CorReconcileMismatchError extends Error {
   readonly status = 409 as const;
-  constructor(readonly context: { certId: string; storedUnits: number; recomputedUnits: number }) {
+  constructor(
+    readonly context: { certId: string; storedUnits: number | null; recomputedUnits: number },
+  ) {
     super(
       `cor certificate ${context.certId} inventory reconcile FAILED: stored ${context.storedUnits} units != recomputed ${context.recomputedUnits} units — ` +
         `the running balance moved since the draft was generated; regenerate the draft before finalizing (ADR-0042 D2.1/D3)`,
@@ -143,7 +162,8 @@ interface CorRow {
   version: number;
   supersedes_id: string | null;
   status: string;
-  inventory_units: number;
+  period: string;
+  inventory_units: number | null;
   inventory_source: unknown;
   ft_headcount: number | null;
   pt_headcount: number | null;
@@ -166,6 +186,7 @@ export function toCorView(row: CorRow): CorView {
     version: row.version,
     supersedesId: row.supersedes_id,
     status: row.status as CorStatus,
+    period: row.period as CorPeriod,
     inventoryUnits: row.inventory_units,
     inventorySource: (row.inventory_source ?? null) as JsonValue,
     ftHeadcount: row.ft_headcount,
