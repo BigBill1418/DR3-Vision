@@ -121,10 +121,13 @@ export async function resolveProcessingInputs(args: {
   const rate = await resolveRateCents(siteId, 'processing_rate', asOf);
 
   const stripped = await prisma.processedUnitsDaily.aggregate({
-    _sum: { stripped_program: true },
+    _sum: { stripped_program: true, stripped_non_program: true },
     where: { site_id: siteId, production_date: dateBounds },
   });
   const strippedProgramUnits = decToNumber(stripped._sum.stripped_program);
+  // §8.3 — the tracked-but-off-invoice basis (never billed; persisted for
+  // reconciliation). Same window as the billable program units.
+  const strippedNonProgramUnits = decToNumber(stripped._sum.stripped_non_program);
 
   // B7 incentives — key on the drop-off Date (the workbook Paid-Unpaid Date
   // column; incentives are paid at drop-off), kind=incentive only.
@@ -145,6 +148,7 @@ export async function resolveProcessingInputs(args: {
     processingRateCents: rate,
     processingRateRef: { rule_kind: 'processing_rate', as_of: windowStartISO, rate_cents: rate },
     strippedProgramUnits,
+    strippedNonProgramUnits,
     strippedSource: {
       table: 'processed_units_daily',
       window: [windowStartISO, windowEndISO],
