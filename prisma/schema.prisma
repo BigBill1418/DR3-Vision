@@ -297,6 +297,20 @@ model User {
 // Sources (where mattresses come from)
 // ────────────────────────────────────────────────────────────────────────
 
+/// ADR-0037 amendment (rollup §3.2, Rick Albritton 2026-07-17) — the billing TYPE of a
+/// collection site, which drives which invoice lines a source produces:
+/// - `mrc_inbound`         : trans + trailer + MRC unit rate (Glenwood, all CA MRC sites)
+/// - `cvp_retailer`        : trans + trailer only, no MRC unit rate (Rifes)
+/// - `collection_site`     : trans + trailer + per-mattress ($2.25) + MRC unit rate (SVDP)
+/// - `third_party_inbound` : MRC unit rate only; MRC-contracted haulers deliver, DR3
+///                           only processes (Thompsons, Stayton, Deschutes, Sponsors)
+enum SourceSiteType {
+  mrc_inbound
+  cvp_retailer
+  collection_site
+  third_party_inbound
+}
+
 model Source {
   id                String   @id @default(uuid())
   site_id           String
@@ -317,6 +331,15 @@ model Source {
   is_non_program    Boolean  @default(false)
   is_trans_charge   Boolean  @default(false)
   canonical_mileage Int?
+  // ADR-0037 amendment (rollup §3.2) — billing routing. `site_type` picks the invoice-line
+  // set (see SourceSiteType); nullable (legacy seeds predate the taxonomy).
+  // `active_billing=false` suppresses ALL invoice lines (Roseburg: non-program, seed
+  // inactive until they sign MRC). `bill_trans` / `bill_trailer` are per-source overrides
+  // of the site_type default (Cottage Grove: both false, per-mattress still charged).
+  site_type         SourceSiteType?
+  active_billing    Boolean  @default(true)
+  bill_trans        Boolean  @default(true)
+  bill_trailer      Boolean  @default(true)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
@@ -1479,9 +1502,16 @@ model ConsumerDropoff {
   // are ever paid; `unpaid`/`illegal` rows never carry an incentive_cents.
   kind            ConsumerDropoffKind
   person_name     String // CIP PII — Exhibit I / ADR-0010; never exported
+  // ADR-0037 amendment (rollup §1.3, Kelsey Q4) — optional traceable consumer name on
+  // UNPAID records. Distinct from the required incentive-payee `person_name`; also CIP PII.
+  consumer_name   String?
   slip_number     String?
   units           Int
   incentive_cents Int? // computed via D1 (incentive kind only); capped per person per day
+  // ADR-0037 amendment (rollup §1.3) — explicit dollar/check amount for UNPAID Bye-Bye-
+  // Mattress drop-offs (distinct from the rule-capped, incentive-kind-only `incentive_cents`).
+  // Default at capture = `units × 300`¢ ($3/unit), overridable. Null when not captured.
+  incentive_amount_cents Int?
   check_number    String?
   paid_at         DateTime?
   retrac_id       String?
@@ -1630,10 +1660,11 @@ model ProcessedUnitsDaily {
   stripped_program     Decimal @db.Decimal(7, 1)
   stripped_non_program Decimal @default(0) @db.Decimal(7, 1)
 
-  // ADR-0037 Addendum B4 — captured at close but EXCLUDED from ALL inventory math:
-  // the `Saved` (workbook I42) semantics are still unknown (Addendum B10-2, routed
-  // to Kelsey/Janette). It is recorded so the number is not lost, and deliberately
-  // NOT read by the running balance until its meaning is confirmed.
+  // ADR-0037 Addendum B4 + amendment (rollup §A.2, Kelsey 2026-07-17) — the `Saved`
+  // (workbook I42) mattresses set aside, not processed. Kelsey confirmed: SUBTRACTED from
+  // inventory, NOT counted as processed, drawn from the NON-PROGRAM pool. Now wired into
+  // the running balance (inventory/running-balance.ts). Defensible default until Rick
+  // confirms OR practice (Woodland saves very few).
   saved_units Decimal? @db.Decimal(7, 1)
 
   // ADR-0037 Addendum B4 — daily-close metadata (workbook fields). Display-only in

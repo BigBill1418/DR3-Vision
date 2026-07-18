@@ -24,7 +24,8 @@
 import ExcelJS from 'exceljs';
 import { cellText, cellNumber } from './cells';
 import { classifyWorkbookSheets, type WorksheetSemanticType } from './section-resolver';
-import { extractWorkbook } from './section-extractors';
+import { extractWorkbook, type WorkbookInventoryLedger } from './section-extractors';
+import type { InventoryClose } from '@/lib/inventory/inventory-close';
 
 export type TemplateGeneration =
   | 'no_calc'
@@ -106,6 +107,15 @@ export interface ParsedWorkbook {
    * the re-derived close figure — NOT a flow recompute.
    */
   closeBalance: { value: number; provenance: CellProvenance } | null;
+  /**
+   * ADR-0037 amendment (§2.3): the BILLING-AUTHORITATIVE pool-level inventory ledger
+   * read from the workbook's own Processed sheet (per-day F/G/D/E/H/I + opening + saved),
+   * and the §2.3 correct-arithmetic close computed from it. For June: programInbound
+   * 19451 + nonProgramInbound 229 − programStripped 17126 → close 3977 (3748 + 229). Null
+   * for legacy synthetic workbooks that carry no Processed sheet.
+   */
+  inventoryLedger: WorkbookInventoryLedger | null;
+  inventoryClose: InventoryClose | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -189,6 +199,8 @@ export async function parseWorkbook(
       sectionCounts: ex.counts,
       flags: ex.flags,
       closeBalance: ex.closeBalance,
+      inventoryLedger: ex.inventoryLedger,
+      inventoryClose: ex.inventoryClose,
     };
   }
 
@@ -333,5 +345,7 @@ export async function parseWorkbook(
     sectionCounts: {},
     flags: [],
     closeBalance: null,
+    inventoryLedger: null,
+    inventoryClose: null,
   };
 }

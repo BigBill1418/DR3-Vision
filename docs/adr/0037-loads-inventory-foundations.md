@@ -396,3 +396,80 @@ The parser layout expectation is encoded in
 `src/lib/audit/workbook/day-sheet-layout.ts` (`commodityBlocksForDaySheet` —
 DAY6 → 9 blocks, cotton last at col 68; every other DAY → 8). The formula-level
 `×5` reading still needs Kelsey's walkthrough (open capture item).
+
+## Amendment — 2026-07-18 (inventory + sources foundation; rollup 2026-07-17 §8.1)
+
+Tune-and-launch amendment locking the corrected-June numbers and the site-billing
+taxonomy. Ships with migration `20260725_adr0037_inventory_foundation`.
+
+### Correct-arithmetic inventory close (§2.3, §1.1, §A.2)
+
+The corrected June workbook (SHA `1eeeccb…`) closes to **3,977 (3,748 program + 229
+non-program)**. Vision computes this in code (`src/lib/inventory/inventory-close.ts`
+`computeInventoryClose`) via the CORRECT arithmetic — never the workbook's latently
+buggy `D45`/`D48` formulas:
+
+```
+program_close     = program_open + program_inbound − program_stripped
+non_program_close = non_program_open + non_program_inbound − non_program_stripped − saved_units
+total_close       = program_close + non_program_close − sold − landfilled
+```
+
+The authoritative pool-level aggregates come from the workbook's own **Processed
+sheet** (per-day F/G/D/E/H/I + opening D5/F5 + the `Saved` DAY box), NOT from
+re-summing the DAY per-shipment grid. Re-summing the grid over-counts inbound by 85
+units (isolated to DAY23's `NP`-marked Recology Healdsburg row, which the workbook's
+`F = I38 − L39` accounting nets out); the Processed ledger is billing-truth. The parser
+exposes `inventoryLedger` + `inventoryClose` on `ParsedWorkbook`, stages the ledger as
+an `inventory_ledger` staging row, and the promotion close (D2) reads it so the ADR-0048
+close assertion is the §2.3 close (`expectedCloseTotal` for June Woodland = 3977, was
+4062). See `docs/parsers/woodland-daily-log-schema.md`.
+
+- **§1.1 sequential depletion** (`sequentialDepletion` / `depleteSeries`): program units
+  are stripped first; non-program is drawn only once the program pool is exhausted. June
+  strips only program (E40 = 0), so this is a no-op for June but is the correct general rule.
+- **§A.2 `saved_units`**: the DAY `Saved` box subtracts from the NON-PROGRAM pool
+  (Kelsey's confirmed default). Now wired into the shared `computeRunningBalance` (was
+  previously excluded from all inventory math).
+
+### Sources — site-billing taxonomy (§3.2)
+
+- `Source.site_type` (`SourceSiteType`: `mrc_inbound | cvp_retailer | collection_site |
+third_party_inbound`) — picks the invoice-line set per site. Nullable (legacy seeds).
+- `Source.active_billing` (default true) — false suppresses ALL invoice lines (Roseburg:
+  non-program, seed inactive until they sign MRC).
+- `Source.bill_trans` / `Source.bill_trailer` (default true) — per-source overrides of the
+  site_type default (Cottage Grove: both false, per-mattress still charged).
+
+### Pool routing (§3.2, §A.5)
+
+`src/lib/inventory/pool-routing.ts` — the single map from an inbound channel to its
+inventory pool. `mrc_program + collection + all drop-offs (incentive/unpaid/illegal) +
+event` → PROGRAM pool; `non_program` → NON-PROGRAM pool. Rick: illegals are treated the
+same as unpaid. Kelsey (§A.5): event units feed the program pool for inventory (event
+BILLING is a separate structure). There is **no** new `illegal_dropoff` enum value —
+`ConsumerDropoffKind.illegal` already carries that concept; the routing maps onto it
+rather than duplicating it.
+
+### Consumer drop-off traceability (§1.3)
+
+`ConsumerDropoff.consumer_name` (nullable CIP PII, distinct from the required
+incentive-payee `person_name`) and `ConsumerDropoff.incentive_amount_cents` (the explicit
+unpaid/illegal Bye-Bye-Mattress check amount, default `units × 300`¢ = $3/unit at capture,
+overridable; distinct from the rule-capped, incentive-kind-only `incentive_cents`). Wired
+through the dropoffs service + manager API.
+
+### Surfaces (§10.4) — status
+
+- iPad daily-close `saved_units` field: already present (`ProcessedUnitsClient`); comment
+  corrected (saved now subtracts from non-program, no longer "excluded from math").
+- Write-in one-off non-program tag (free-text source at iPad inbound entry) and the
+  `/admin/sources` `is_non_program` toggle: **no existing `Source`-model entry/admin
+  surface** — deferred as follow-ups (the schema now supports them: `is_non_program`
+  exists; `site_type`/`active_billing`/`bill_trans`/`bill_trailer` added here).
+
+### §A.6 — Kelsey's Summary tabs are stale
+
+`Summary!` / `Trans Summary!` are advisory parity only and NEVER feed billing aggregation
+(the close reads the Processed ledger). Surfaced at parse time via the `[summary-stale]`
+flag; `Trans Summary!` is routed to evidence-only.

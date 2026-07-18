@@ -213,10 +213,16 @@ export async function buildWoodlandDailyLogWorkbook(): Promise<ExcelJS.Buffer> {
     'Sold Units',
     'Landfilled',
   ]);
-  // Stripped totals chosen so the flow-recompute reconciles to DAY6's ending
-  // inventory (1523): opening 1500 + DAY inbound 145 - stripped 122 = 1523.
-  setRow(proc, 9, [null, 'Day 1', 100, 120, 0, 100, null, null, null, 'M-100001']);
-  setRow(proc, 10, [null, 'Day 2', 90, 2, 0, 90, null, null, null, 'M-100002']);
+  // ADR-0037 amendment (§2.3) — the Processed sheet is the AUTHORITATIVE billing ledger.
+  // Cols: C=daily total, D=program stripped, E=non-program stripped, F=program inbound,
+  // G=non-program inbound, J(idx9)=ticket. Values chosen so the §2.3 CORRECT-arithmetic
+  // close reconciles to DAY6's ending inventory (1523) WITH a non-program component:
+  //   program close     = 1500 + (100+35) − (120+2) = 1513
+  //   non-program close = 0    + (0+10)    − 0       = 10
+  //   total             = 1513 + 10                  = 1523  (= DAY6 ending inventory)
+  // Inbound F+G = 145 == the DAY per-shipment grid total, so no reconciliation gap.
+  setRow(proc, 9, [null, 'Day 1', 100, 120, 0, 100, 0, null, null, 'M-100001']);
+  setRow(proc, 10, [null, 'Day 2', 45, 2, 0, 35, 10, null, null, 'M-100002']);
 
   // Summary (billing grid).
   const sum = wb.addWorksheet('Summary');

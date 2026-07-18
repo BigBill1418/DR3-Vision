@@ -34,6 +34,11 @@ import { cellText, cellNumber } from './cells';
 import type { WorksheetSemanticType } from './section-resolver';
 import { OUTBOUND_BLOCK_LABELS } from './day-sheet-layout';
 import type { Commodity } from '../types';
+import {
+  computeInventoryClose,
+  type InventoryClose,
+  type InventoryClosePools,
+} from '@/lib/inventory/inventory-close';
 import type {
   CellProvenance,
   InboundStage,
@@ -93,6 +98,21 @@ export interface DayInventory {
   end: number | null;
   inbound: number | null;
   processed: number | null;
+  saved: number | null;
+}
+
+/**
+ * ADR-0037 amendment (rollup §2.3, §2.4) — the authoritative pool-level inventory
+ * aggregates read from the workbook's OWN "Processed" sheet: per-day program/non-program
+ * inbound (F/G), stripped (D/E), sold (H), landfilled (I), summed over the month; opening
+ * program/non-program (D5/F5); and `Saved` (DAY sheets). These are the workbook's billing
+ * ledger — the numbers MRC bills on. `computeInventoryClose` turns them into the close via
+ * §2.3 correct arithmetic (never the buggy D45/D48 literals). For June (corrected file):
+ * programInbound=19451, nonProgramInbound=229, programStripped=17126 → close 3977.
+ */
+export interface WorkbookInventoryLedger extends InventoryClosePools {
+  /** Provenance for the SUM row cross-check + operator report. */
+  provenance: { tab: string };
 }
 
 export interface ExtractionResult {
@@ -102,11 +122,25 @@ export interface ExtractionResult {
   summaryFigures: SummaryFigure[];
   /** Opening physical inventory (program begin balance), if found. */
   opening: { unitsTotal: number; provenance: CellProvenance } | null;
+  /** ADR-0037 amendment (§2.1) — non-program opening balance (Processed!F5; 0 for June). */
+  openingNonProgram: number | null;
   /**
-   * The AUTHORITATIVE month-close on-hand whole-unit balance, read from the
-   * workbook's OWN computed "Ending inventory" cell on the last DAY sheet — NOT
-   * recomputed from flows. This is the figure the operator compares (June's
-   * real value re-derives to 4062; July to 2577).
+   * ADR-0037 amendment (§2.3) — authoritative pool-level inventory ledger from the
+   * Processed sheet, and the §2.3 correct-arithmetic close computed from it. This is the
+   * BILLING-AUTHORITATIVE month-close (program/non-program/total). Distinct from the
+   * DAY-grid flow recompute (`computeCloseFromCandidates`) and cross-checked against
+   * `closeBalance` (the workbook's own carried-forward Ending-inventory cell).
+   */
+  inventoryLedger: WorkbookInventoryLedger | null;
+  inventoryClose: InventoryClose | null;
+  /** `Saved` units summed across DAY sheets (§A.2). Subtracts from non-program. 0 for June. */
+  savedTotal: number;
+  /**
+   * The workbook's OWN carried-forward "Ending inventory" cell on the last DAY sheet —
+   * read, NOT recomputed. Cross-checked against the §2.3 authoritative close
+   * (`inventoryClose`). For the CORRECTED June file this cell = 3977 (matches §2.3
+   * exactly). The stale July file's cell (2577) is program-only and pre-dates the
+   * non-program correction, so it mismatches §2.3 until Bill re-drops July (§9.4).
    */
   closeBalance: { value: number; provenance: CellProvenance } | null;
   /** Per-day inventory/inbound/processed parity series (from the DAY summary boxes). */
@@ -126,6 +160,10 @@ function emptyResult(): ExtractionResult {
     outbound: [],
     summaryFigures: [],
     opening: null,
+    openingNonProgram: null,
+    inventoryLedger: null,
+    inventoryClose: null,
+    savedTotal: 0,
     closeBalance: null,
     inventorySeries: [],
     workbookInboundTotal: null,
@@ -411,6 +449,152 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
   }
 }
 
+// ── authoritative inventory ledger (Processed sheet F/G/D/E/H/I + opening) ──
+//
+// The Processed sheet IS the workbook's own billing inventory ledger. Per rollup §2.2,
+// each column is INDIRECT-sourced from the DAY sheets' summary cells:
+//   C (daily total)      = DAY!I38          (= F + G)
+//   D (program stripped) = DAY!I39
+//   E (non-prog stripped)= DAY equivalent (0 in June)
+//   F (program inbound)  = DAY!I38 − G
+//   G (non-prog inbound) = DAY!L39
+//   H (sold)             = DAY!I40
+//   I (landfilled)       = DAY!I41
+// The month totals live in the SUM row (June row 40): C40 19680, D40 17126, F40 19451,
+// G40 229, E/H/I 0. We sum the per-day rows (layout-independent) AND read the SUM row as a
+// cross-check. This is the AUTHORITATIVE inbound split — it reconciles to the workbook's
+// billing totals EXACTLY, where re-summing the raw DAY per-shipment grid does not (the
+// grid over-sums by 85 on DAY23, whose non-program "NP" row the workbook's F=I38−L39
+// accounting nets out; see the [inbound-reconciliation] flag).
+
+const PROC_PROGRAM_INBOUND = 6; // F
+const PROC_NONPROG_INBOUND = 7; // G
+const PROC_PROGRAM_STRIPPED = 4; // D
+const PROC_NONPROG_STRIPPED = 5; // E
+const PROC_SOLD = 8; // H
+const PROC_LANDFILLED = 9; // I
+
+/** Read the number immediately LEFT of the first label matching `re` in rows `[lo,hi]`. */
+function openingBesideLabel(
+  ws: ExcelJS.Worksheet,
+  cols: number,
+  re: RegExp,
+  lo: number,
+  hi: number,
+): number | null {
+  for (let r = lo; r <= hi; r++) {
+    const h = rowTexts(ws, r, cols);
+    const col = findCol(h, re);
+    if (col && col >= 2) {
+      const v = cellNumber(ws.getRow(r).getCell(col - 1).value);
+      if (v !== null) return v;
+    }
+  }
+  return null;
+}
+
+function extractInventoryLedger(ws: ExcelJS.Worksheet, res: ExtractionResult): void {
+  const cols = widest(ws);
+  // Opening balances (Begining Balances band, rows 3–7): program left of "Program",
+  // non-program left of the "NON"/"non-program" label.
+  const programOpen = res.opening?.unitsTotal ?? openingBesideLabel(ws, cols, /^program$/i, 3, 7);
+  const nonProgramOpen = openingBesideLabel(ws, cols, /^non(\s|-)?(program|mrc)?$/i, 3, 7) ?? 0;
+  res.openingNonProgram = nonProgramOpen;
+
+  // Sum the per-day rows (every "Day N" row, INCLUDING inbound-only days with no
+  // stripping — those still carry an F inbound total, e.g. June Day 27).
+  const agg = {
+    programInbound: 0,
+    nonProgramInbound: 0,
+    programStripped: 0,
+    nonProgramStripped: 0,
+    sold: 0,
+    landfilled: 0,
+  };
+  let lastDayRow = 0;
+  for (let r = 1; r <= ws.rowCount; r++) {
+    const dayText = cellText(ws.getRow(r).getCell(2).value);
+    const dm = dayText ? /^day\s*(\d{1,2})$/i.exec(dayText.trim()) : null;
+    if (!dm) continue;
+    const day = parseInt(dm[1]!, 10);
+    if (day < 1 || day > 31) continue;
+    lastDayRow = r;
+    const row = ws.getRow(r);
+    agg.programInbound += cellNumber(row.getCell(PROC_PROGRAM_INBOUND).value) ?? 0;
+    agg.nonProgramInbound += cellNumber(row.getCell(PROC_NONPROG_INBOUND).value) ?? 0;
+    agg.programStripped += cellNumber(row.getCell(PROC_PROGRAM_STRIPPED).value) ?? 0;
+    agg.nonProgramStripped += cellNumber(row.getCell(PROC_NONPROG_STRIPPED).value) ?? 0;
+    agg.sold += cellNumber(row.getCell(PROC_SOLD).value) ?? 0;
+    agg.landfilled += cellNumber(row.getCell(PROC_LANDFILLED).value) ?? 0;
+  }
+  if (lastDayRow === 0) return; // not a Processed layout we recognize
+
+  // Cross-check against the SUM row (first numeric-C row just below the last day row).
+  for (let r = lastDayRow + 1; r <= Math.min(lastDayRow + 6, ws.rowCount); r++) {
+    const row = ws.getRow(r);
+    if (cellText(row.getCell(2).value)) continue; // a labeled row (e.g. "May Total:")
+    const sumF = cellNumber(row.getCell(PROC_PROGRAM_INBOUND).value);
+    const sumG = cellNumber(row.getCell(PROC_NONPROG_INBOUND).value);
+    const sumD = cellNumber(row.getCell(PROC_PROGRAM_STRIPPED).value);
+    if (sumF === null && sumG === null && sumD === null) continue;
+    const mism: string[] = [];
+    if (sumF !== null && sumF !== agg.programInbound)
+      mism.push(`F(program inbound) row=${sumF} vs perday=${agg.programInbound}`);
+    if (sumG !== null && sumG !== agg.nonProgramInbound)
+      mism.push(`G(non-program inbound) row=${sumG} vs perday=${agg.nonProgramInbound}`);
+    if (sumD !== null && sumD !== agg.programStripped)
+      mism.push(`D(program stripped) row=${sumD} vs perday=${agg.programStripped}`);
+    if (mism.length > 0) {
+      res.flags.push(
+        `[inventory-ledger] ${ws.name}!row${r}: SUM row disagrees with per-day sums — ${mism.join('; ')}. Using per-day sums (authoritative). INVESTIGATE.`,
+      );
+    }
+    break;
+  }
+
+  const ledger: WorkbookInventoryLedger = {
+    programOpen: programOpen ?? 0,
+    nonProgramOpen,
+    programInbound: agg.programInbound,
+    nonProgramInbound: agg.nonProgramInbound,
+    programStripped: agg.programStripped,
+    nonProgramStripped: agg.nonProgramStripped,
+    savedUnits: res.savedTotal,
+    sold: agg.sold,
+    landfilled: agg.landfilled,
+    provenance: { tab: ws.name },
+  };
+  res.inventoryLedger = ledger;
+  res.inventoryClose = computeInventoryClose(ledger);
+
+  // Stage the authoritative ledger so the promotion's close (D2) reads it — computing
+  // the §2.3 close from the workbook's own billing totals, NOT the over-summing DAY grid.
+  const ledgerPayload = {
+    programOpen: Number(ledger.programOpen),
+    nonProgramOpen: Number(ledger.nonProgramOpen),
+    programInbound: Number(ledger.programInbound),
+    nonProgramInbound: Number(ledger.nonProgramInbound),
+    programStripped: Number(ledger.programStripped),
+    nonProgramStripped: Number(ledger.nonProgramStripped),
+    savedUnits: Number(ledger.savedUnits),
+    sold: Number(ledger.sold),
+    landfilled: Number(ledger.landfilled),
+  };
+  const prov: CellProvenance = { tab: ws.name, row: 40, col: 'C' };
+  res.stagingRows.push({
+    tabName: ws.name,
+    rowIndex: 40,
+    colRef: 'C',
+    section: 'inventory_ledger',
+    fieldKey: 'processed_ledger',
+    rawValue: JSON.stringify(ledgerPayload),
+    numericValue: Number(res.inventoryClose.total),
+    siteNameRaw: null,
+    provenance: prov,
+  });
+  bump(res.counts, 'inventory_ledger', 1);
+}
+
 // ── real billing Summary → best-effort figures (feed recomputeSummary) ─────
 
 function extractSummary(ws: ExcelJS.Worksheet, res: ExtractionResult): void {
@@ -449,6 +633,16 @@ function extractSummary(ws: ExcelJS.Worksheet, res: ExtractionResult): void {
     }
   }
   bump(res.counts, 'summary_figures', n);
+  if (n > 0) {
+    // ADR-0037 amendment (§A.6) — Kelsey's Summary! / Trans Summary! tabs are STALE
+    // ("I haven't checked mine for June and July since we're not using them"). These
+    // figures are ADVISORY parity only — the AUTHORITATIVE billing aggregation is the
+    // Processed ledger (inventoryLedger / §2.3 close). Never trust summary figures for
+    // billing. (Trans Summary! is already routed to evidence-only, not here.)
+    res.flags.push(
+      `[summary-stale] ${ws.name}: ${n} summary figures staged for parity ONLY — Kelsey flagged her Summary/Trans-Summary tabs as stale (§A.6). The authoritative aggregation is the Processed ledger; do NOT use summary figures for billing.`,
+    );
+  }
 }
 
 // ── evidence-only sheets (staged, promotion-skipped, counted for the report) ─
@@ -513,7 +707,14 @@ function extractInventory(
     if (!m) continue;
     const day = parseInt(m[1]!, 10);
     const cols = widest(ws);
-    const inv: DayInventory = { day, start: null, end: null, inbound: null, processed: null };
+    const inv: DayInventory = {
+      day,
+      start: null,
+      end: null,
+      inbound: null,
+      processed: null,
+      saved: null,
+    };
     // Labels sit within the top ~50 rows; scan for them.
     for (let r = 1; r <= Math.min(ws.rowCount, 50); r++) {
       const h = ws.getRow(r);
@@ -523,12 +724,15 @@ function extractInventory(
         else if (t === 'ending inventory') inv.end ??= labelValue(ws, r, c);
         else if (t === 'inbound' || t === 'inbound all') inv.inbound ??= labelValue(ws, r, c);
         else if (t === 'processed') inv.processed ??= labelValue(ws, r, c);
+        else if (t === 'saved') inv.saved ??= labelValue(ws, r, c);
       }
     }
     if (inv.inbound !== null) {
       inboundTotal += inv.inbound;
       sawInbound = true;
     }
+    // ADR-0037 amendment (§A.2) — `Saved` units set aside (0 for June).
+    if (inv.saved !== null) res.savedTotal += inv.saved;
     series.push(inv);
   }
   series.sort((a, b) => a.day - b.day);
@@ -628,7 +832,7 @@ export function extractWorkbook(
     if (wbInbound !== null) {
       const match = stagedInbound === wbInbound;
       res.flags.push(
-        `[inbound-sourced-from-DAY-grid] inbound_loads (${dayLoads}) + consumer_dropoffs (${dayDrops}) now sourced from the DAY per-day INBOUND grid = the COMPLETE all-channel inbound. Staged inbound-unit total = ${stagedInbound}; workbook's own per-day INBOUND total = ${wbInbound} — ${match ? 'RECONCILES EXACTLY' : `GAP ${stagedInbound - wbInbound} (INVESTIGATE)`}. Category sheets (inb_trans/inb_no_trans/nonprogram/incentive_unpaid) are the same rows re-categorized for billing — staged as EVIDENCE, not promoted, to avoid double-counting.`,
+        `[inbound-sourced-from-DAY-grid] inbound_loads (${dayLoads}) + consumer_dropoffs (${dayDrops}) staged from the DAY per-day per-shipment grid. Staged inbound-unit total = ${stagedInbound}; DAY summary-box INBOUND total = ${wbInbound} — ${match ? 'RECONCILES EXACTLY' : `differ by ${stagedInbound - wbInbound}; the workbook's authoritative Processed ledger is billing-truth and drives the close (see [inbound-reconciliation])`}. Category sheets (inb_trans/inb_no_trans/nonprogram/incentive_unpaid) are the same rows re-categorized for billing — staged as EVIDENCE, not promoted, to avoid double-counting.`,
       );
     }
   }
@@ -641,6 +845,38 @@ export function extractWorkbook(
       );
     } else {
       for (const ws of processedSheets) extractProcessed(ws, monthPrefix, res);
+    }
+    // Authoritative inventory ledger (Processed F/G/D/E/H/I + opening + saved) → §2.3
+    // correct-arithmetic close. Independent of monthPrefix (reads by column, not date).
+    for (const ws of processedSheets) {
+      if (res.inventoryLedger === null) extractInventoryLedger(ws, res);
+    }
+  }
+
+  // ADR-0037 amendment (§2.3) — reconcile the authoritative close two independent ways.
+  if (res.inventoryClose && res.inventoryLedger) {
+    const c = res.inventoryClose;
+    const g = res.inventoryLedger;
+    res.flags.push(
+      `[inventory-close] AUTHORITATIVE §2.3 close = ${c.total.toString()} (program ${c.program.toString()} + non-program ${c.nonProgram.toString()}), computed via CORRECT arithmetic from the Processed ledger: programOpen ${String(g.programOpen)} + programInbound ${String(g.programInbound)} − programStripped ${String(g.programStripped)}; nonProgramOpen ${String(g.nonProgramOpen)} + nonProgramInbound ${String(g.nonProgramInbound)} − nonProgramStripped ${String(g.nonProgramStripped)} − saved ${String(g.savedUnits)}; − sold ${String(g.sold)} − landfilled ${String(g.landfilled)}. NOT the workbook's buggy D45/D48 literals.`,
+    );
+    if (res.closeBalance) {
+      const matches = c.total.equals(res.closeBalance.value);
+      res.flags.push(
+        `[inventory-close] cross-check: §2.3 close (${c.total.toString()}) vs the workbook's OWN carried-forward Ending-inventory cell on ${res.closeBalance.provenance.tab} (${res.closeBalance.value}) — ${matches ? 'RECONCILES EXACTLY' : `MISMATCH (INVESTIGATE)`}.`,
+      );
+    }
+    // Reconcile the raw DAY-grid per-shipment sum against the authoritative inbound.
+    const gridInbound =
+      res.inbound.reduce((s, i) => s + i.units, 0) +
+      res.stagingRows
+        .filter((r) => r.section === 'dropoff')
+        .reduce((s, r) => s + (r.numericValue ?? 0), 0);
+    const authInbound = Number(g.programInbound) + Number(g.nonProgramInbound);
+    if (gridInbound !== authInbound) {
+      res.flags.push(
+        `[inbound-reconciliation] raw DAY per-shipment grid sums to ${gridInbound} inbound units, but the workbook's AUTHORITATIVE Processed ledger = ${authInbound} (program ${String(g.programInbound)} + non-program ${String(g.nonProgramInbound)}). The ${gridInbound - authInbound}-unit difference is the workbook's own F=I38−L39 accounting netting out a non-program grid row (June: DAY23 Recology Healdsburg, 85 units, marked "NP"). The Processed ledger is BILLING-TRUTH and is used for the close; the per-shipment grid rows are staged as promotion/evidence detail. Do NOT use the raw grid sum for the close.`,
+      );
     }
   }
 

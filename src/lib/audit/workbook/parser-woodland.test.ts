@@ -116,6 +116,48 @@ describe('parseWorkbook — real Woodland semantic path (§8.2)', () => {
     expect(parsed.closeBalance?.value).toBe(1523);
   });
 
+  it('computes the §2.3 correct-arithmetic close from the authoritative Processed ledger', async () => {
+    const parsed = await parseWorkbook(await buildWoodlandDailyLogWorkbook());
+    // Ledger from Processed F/G/D/E: programInbound 135, nonProgramInbound 10,
+    // programStripped 122; opening program 1500, non-program 0.
+    const led = parsed.inventoryLedger;
+    expect(led).not.toBeNull();
+    expect(Number(led!.programInbound)).toBe(135);
+    expect(Number(led!.nonProgramInbound)).toBe(10);
+    expect(Number(led!.programStripped)).toBe(122);
+    expect(Number(led!.programOpen)).toBe(1500);
+    // §2.3: program 1500+135−122=1513; non-program 0+10=10; total 1523.
+    const close = parsed.inventoryClose!;
+    expect(close.program.toString()).toBe('1513');
+    expect(close.nonProgram.toString()).toBe('10');
+    expect(close.total.toString()).toBe('1523');
+    // Reconciles to the workbook's own carried-forward Ending-inventory cell.
+    expect(close.total.equals(parsed.closeBalance!.value)).toBe(true);
+  });
+
+  it('the promotion decode reads the ledger and closes via §2.3 (not the grid over-sum)', async () => {
+    const parsed = await parseWorkbook(await buildWoodlandDailyLogWorkbook());
+    const rows: StagingRowInput[] = parsed.stagingRows.map((r) => ({
+      section: r.section,
+      raw_value: r.rawValue,
+      numeric_value: r.numericValue,
+      site_name_raw: r.siteNameRaw,
+      provenance: r.provenance,
+    }));
+    const scope = {
+      siteId: 'woodland',
+      from: '2026-06-01',
+      to: '2026-06-30',
+      expectedCloseTotal: 1523,
+    };
+    const cand = decodeStagingRows(rows, scope, resolver);
+    expect(cand.inventoryLedger).not.toBeNull();
+    const close = computeCloseFromCandidates(cand);
+    expect(close.program.toString()).toBe('1513');
+    expect(close.nonProgram.toString()).toBe('10');
+    expect(close.total.toString()).toBe('1523');
+  });
+
   it('surfaces the billing-affecting flags for operator review', async () => {
     const parsed = await parseWorkbook(await buildWoodlandDailyLogWorkbook());
     const joined = parsed.flags.join('\n');

@@ -18,10 +18,26 @@ export interface BackfillScopeConfig {
 /** Keyed by `Site.code`. */
 export const BACKFILL_SCOPES: Record<string, BackfillScopeConfig[]> = {
   woodland: [
-    { key: '2026-06', label: 'June 2026 (Jun 1–30)', from: '2026-06-01', to: '2026-06-30', expectedCloseTotal: 4062 },
+    // ADR-0037 amendment (rollup §9.1) — corrected June close is 3977 (3748 program +
+    // 229 non-program), computed via §2.3 correct arithmetic from the corrected workbook's
+    // own Processed ledger (F40 19451 − D40 17126 + opening 1423 = 3748; G40 229 = 229).
+    // Was 4062 (the raw DAY-grid over-sum, +85 from DAY23's netted non-program row).
+    {
+      key: '2026-06',
+      label: 'June 2026 (Jun 1–30)',
+      from: '2026-06-01',
+      to: '2026-06-30',
+      expectedCloseTotal: 3977,
+    },
   ],
   eugene: [
-    { key: '2026-06', label: 'June 2026 (Jun 24–30)', from: '2026-06-24', to: '2026-06-30', expectedCloseTotal: null },
+    {
+      key: '2026-06',
+      label: 'June 2026 (Jun 24–30)',
+      from: '2026-06-24',
+      to: '2026-06-30',
+      expectedCloseTotal: null,
+    },
   ],
 };
 

@@ -7,9 +7,10 @@
 // <form>; all handlers are onClick/onChange.
 //
 // The STRIPPED program split IS the billing basis: billing (P2) reads stripped
-// program units only. `saved` is captured but excluded from inventory math. Whole
-// units sold + landfilled for the day are DERIVED (from renovation outbound +
-// landfilled rows) and shown for CONFIRMATION at close — never entered twice.
+// program units only. `saved` (default 0) is set aside, not processed, and SUBTRACTS
+// from the non-program inventory pool (ADR-0037 amendment §A.2). Whole units sold +
+// landfilled for the day are DERIVED (from renovation outbound + landfilled rows) and
+// shown for CONFIRMATION at close — never entered twice.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ProcessedUnitsView } from '@/lib/loads/processed-units';
