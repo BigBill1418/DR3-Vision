@@ -643,3 +643,172 @@ Suggested titan path: `~/DR3-Vision/tests/fixtures/adr-0048/` for workbooks, `~/
 ## §13 — Session close
 
 Rich session. All materials from 2026-07-17 captured. Handoff is comprehensive — parser + rate + invoice + COR + source seeds + pilot mode all ready to build. When Bill flips O-2, everything downstream unblocks in one cascade.
+
+
+
+
+---
+
+## Addendum A — Kelsey's walkthrough Q&A (2026-07-17, post-original commit)
+
+Kelsey responded to Bill's walkthrough email with substantive answers on all 5 items. Findings reshape §8.3 (ADR-0041) meaningfully and add a new outbound schema surface.
+
+### §A.1 — Q1: Commodity → invoice-block mapping is NOT a billing input
+
+**Kelsey:** "Outbound commodities don't really affect invoicing, I'm honestly not sure why we send this info with the billing — MRC already has this information."
+
+**Impact:** kills my working assumption that commodity mapping gates ADR-0041 §3.1 outbound math. **It doesn't.** The MRC EOM invoice math is:
+
+```
+invoice_amount = program_units_processed × unit_rate + trade_discount
+```
+
+Full stop. No per-commodity billing lines. No outbound-to-invoice mapping table. Outbound commodity blocks feed Vision's inventory ledger for CalRecycle / Re-TRAC compliance reporting — NOT the invoice generator.
+
+**ADR-0041 §3.1 rework:**
+- REMOVE the commodity mapping table from the invoice generator spec
+- Invoice math is single-line: `units_processed × rate` with `trade_discount` on EOM
+- Outbound commodity data still flows into `outbound_commodities` table (used by compliance surface, not billing)
+
+**Compliance vs billing split** becomes an explicit architectural boundary. Compliance surface = Re-TRAC filing + CalRecycle stewardship, ties to O-7. Billing surface = ADR-0041 invoice generator. They share the inbound + processed data, diverge on outbound.
+
+**Parked question for Rick:** Do you send outbound commodity data alongside the MRC invoice as an attached report even though it's not a billing input? Kelsey says MRC already has it via Re-TRAC; there may be a contractual attachment requirement Rick knows about that she doesn't.
+
+### §A.2 — Q2: saved_units confirmed + partial answer
+
+**Kelsey:** "Janette would simply add a number next to 'saved' on the daily log, and it would get subtracted from inventory (and obviously not counted as processed either). I think this could come out of non-program inventory, that would make the most sense to me. We honestly have so few saved mattresses in Woodland that I didn't worry too much about this. Oregon saves more mattresses, you could double check with Rick to see if he removes them from non-program inventory."
+
+**Build model:**
+- Add `saved_units` field on daily close entries (feeds daily inventory ledger)
+- Subtracts from inventory pool, NOT counted as processed
+- Kelsey's model: pull from non-program pool first
+- Confirm with Rick for OR practice (specifically whether he draws saved_units from non-program or somewhere else)
+- iPad daily close form: "Saved" number field, defaults to 0
+
+**Schema:**
+- Add `daily_closes.saved_units` (nullable int, default 0)
+- Inventory ledger update: `non_program_close = non_program_open + non_program_inbound - non_program_stripped - saved_units` (per Kelsey's assumed pool routing; verify with Rick)
+
+**Parked question for Rick:** Do you draw saved_units from non-program inventory (Kelsey's assumption), or from a different pool in OR practice?
+
+### §A.3 — Q3: DAY6 ×5 is a false lead — B10-3 CLOSED
+
+**Kelsey:** "Sorry, I don't understand this question- x5 formula multiplier? Say what?"
+
+**She doesn't recognize the concept.** The "×5" note in the original survey capture was a garbled artifact, never a real formula. The DAY6 structural quirk (cotton block, 9th commodity) was already resolved in PR #87 §3.2 from the workbook data alone.
+
+**B10-3 permanently closed.** No mystery multiplier. Remove `x5_formula_investigation` from Kelsey capture register.
+
+### §A.4 — Q4: % column = per-vendor recycling rates (new schema)
+
+**Kelsey:** "Different steel recyclers give us different recycling rates on our outbound steel. Green zone gives us 100% recycling rate so we can count the whole load as 100% steel. Xtraction gives us 81% steel and 19% landfill. A load to Xtraction that weighs 5541 lbs will be 1054 lbs of trash and 4487 lbs of steel. Same with wood recycling. Different wood recyclers give us different recycling percentages because there is a certain level of trash and metal in the wood. Biomass gives us 100% wood recycling rate. I'm not sure about the rates for other vendors because we've mostly used Biomass since I started. You would have to check with Morena on that."
+
+**Build implication (new schema):**
+
+**New config table: `recycling_rates`**
+```
+vendor_id            FK to sources or vendor master
+commodity            enum (steel, wood, biomass, wte, ...)
+recycling_percent    decimal (0.00-1.00)
+effective_from       date
+effective_to         date (nullable)
+notes                text
+```
+
+**Seeded rates (confirmed):**
+- Green Zone × steel = 1.00
+- Xtraction × steel = 0.81
+- Biomass × wood = 1.00
+
+**Pending Morena confirmation:** other wood vendor rates.
+
+**Outbound record derived fields:**
+- `outbound_records.recycled_lbs = load_lbs × recycling_percent`
+- `outbound_records.landfilled_lbs = load_lbs × (1 - recycling_percent)`
+
+Both computed at outbound entry time based on load's `vendor_id + commodity` lookup against `recycling_rates`. Recycled + landfilled reported separately for CalRecycle stewardship.
+
+**iPad outbound entry:** show recycling rate preview based on selected vendor + commodity so operator sees the split before saving.
+
+### §A.5 — Q5: Event units in inventory, billing separate
+
+**Kelsey:** "The event units get added to the running inventory the same way as standard inbounds, they just don't get billed the same way. Ask Rick for more details on this."
+
+**Confirms:**
+- Event units → contribute to `program_inbound` (feed program pool for inventory)
+- Event billing structure is different — likely uses the Event Mile Rate tier (§3.7 from Rick) plus Driver Hours × wages + Labor Hours × wages + Mileage Reimb + Per Diem lines from the Events tab
+
+**Parked question for Rick:** Full event billing mechanics — how does the Events tab convert to invoice lines? Mile rate tier + labor + mileage reimbursement + per diem, presumably, but the exact structure isn't in scope yet.
+
+### §A.6 — Important tail note: Kelsey's Summary tabs are stale
+
+**Kelsey:** "As far as the billing summaries (Summary!, Trans Summary!), I would copy Rick's spreadsheets over mine - I haven't checked mine for June and July since we're not using them, so I wouldn't guarantee that everything is accurate."
+
+**Parser rule (updates §5.1):**
+- SKIP `Summary!` and `Trans Summary!` tabs in Kelsey's Woodland workbook
+- Use Rick's CA + OR rate template workbooks for aggregation logic
+- Kelsey's daily / inbound / processed / commodities tabs remain sources of truth for actuals; her aggregation tabs may lie
+
+### §A.7 — Deltas to §8 amendments
+
+**§8.1 (ADR-0037):** no changes — Q2 saved_units adds one field but ADR-0037 already accommodates.
+
+**§8.3 (ADR-0041):** MAJOR SIMPLIFICATION.
+- Remove the commodity → invoice-block mapping entirely from §3.1 (Q1 confirmed not needed)
+- Invoice math is single-line: `units_processed × rate + trade_discount(if EOM)`
+- Compliance surface (Re-TRAC / CalRecycle stewardship) becomes an explicit separate feature, NOT part of the invoice generator
+- Ties to O-7 (stewardship AP surface) architecturally
+
+**New ADR needed:** ADR-XXXX (next-free number) Recycling Rate Configuration + Outbound Derivation
+- Schema: `recycling_rates` config table
+- Derivation: `outbound_records.recycled_lbs` + `outbound_records.landfilled_lbs`
+- iPad outbound entry: rate preview + save
+- Seeded values from §A.4
+- Compliance surface consumes these for CalRecycle reporting
+
+**§8.5 (Addendum B):** Kelsey capture register update — REMOVE B10-3 (×5 formula) as false lead.
+
+### §A.8 — Deltas to §10 (Actions for Claude Code)
+
+**§10.1 build queue updates:**
+- ADR-0041 amendment scope shrinks: pilot mode + trade discount + two-line export + GP identifiers stay; commodity mapping removed
+- Add new ADR for recycling rates + outbound derivation (name it explicitly when drafting, likely ADR-0054)
+- Add `daily_closes.saved_units` field + inventory ledger adjustment (pending Rick OR-side confirmation, but Kelsey's assumption is defensible default)
+
+**§10.4 updates:**
+- Confirm iPad outbound entry shows recycling rate preview
+- Confirm iPad daily close shows `saved_units` field
+
+### §A.9 — Deltas to §11 (Actions for Bill)
+
+**§11.2 stakeholder inputs:**
+- Rick follow-up needed: 
+  - Do you send outbound commodity data alongside MRC invoice (Q1 follow-through)
+  - Do you draw saved_units from non-program in OR practice (Q2 follow-through)
+  - Full event billing mechanics (Q5 follow-through)
+- Morena follow-up needed: other wood vendor recycling rates (Q4 follow-through)
+- Kelsey: fully cleared. No further asks; standing by for her final walkthrough on MRC contact map + Re-TRAC filing (post-8/1 knowledge transfer).
+
+### §A.10 — Blocker list delta (§12)
+
+**Softer blocker list:**
+- Rick's Eugene canonical names + addresses (unchanged)
+- Rick follow-ups on 3 items above (new)
+- Morena wood vendor rates (new, non-blocking for launch — can seed Biomass 100% and defer other vendors)
+- Mary's items (unchanged)
+- File transfer (unchanged, still hard blocker)
+
+**No change to hard-blocker count.** Everything Kelsey answered either simplified a build item or added a small feature — nothing added to the critical path.
+
+### §A.11 — Session end-state on Kelsey
+
+Kelsey capture register final state:
+- B10-1 (VBA modules): CLOSED (PR #87)
+- B10-2 (saved_units): PARTIALLY ANSWERED (Kelsey confirmed model; Rick confirmation pending for OR practice)
+- B10-3 (DAY6 ×5): CLOSED as false lead (§A.3)
+- B10-4 (event units as inbound): ANSWERED (§A.5)
+- B10-5 (commodity → invoice mapping): CLOSED — NOT REQUIRED for billing (§A.1)
+- % column semantic: ANSWERED — per-vendor recycling rates (§A.4)
+- MRC contact map + Re-TRAC filing: PENDING (post-8/1 knowledge transfer, non-blocking)
+
+**Kelsey walkthrough register effectively closed** except the MRC contact / Re-TRAC handoff which is on her post-8/1 side of the fence.
