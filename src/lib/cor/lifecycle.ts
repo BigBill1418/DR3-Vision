@@ -60,15 +60,22 @@ export async function finalizeCor(args: FinalizeArgs): Promise<CorView> {
   if (!row) throw new CorNotFoundError(args.certId);
   if (row.status === 'finalized') throw new CorImmutableError(row.id);
   if (row.status !== 'draft') {
-    throw new CorTransitionError('not_draft', `cor certificate ${row.id} is ${row.status}; only a draft can be finalized`);
+    throw new CorTransitionError(
+      'not_draft',
+      `cor certificate ${row.id} is ${row.status}; only a draft can be finalized`,
+    );
   }
   if (!canFinalize(args.finalizer)) throw new CorFinalizeForbiddenError();
-  if (row.ft_headcount == null || row.pt_headcount == null) {
+  // ADR-0042 amendment — the FT/PT split is REQUIRED at finalize for an
+  // end-of-month close, but a mid-month filing files FT/PT blank by design, so the
+  // requirement is skipped for `mid_month`. The end-of-month gate is unchanged.
+  if (row.period === 'end_of_month' && (row.ft_headcount == null || row.pt_headcount == null)) {
     throw new CorHeadcountRequiredError(row.id);
   }
 
   // D2.1/D3 tripwire: the stored inventory figure MUST still reconcile to the
   // ledger at the freeze — throws CorReconcileMismatchError with both numbers.
+  // A mid-month filing has no inventory figure, so this short-circuits (skipped).
   await assertCorInventoryReconciles(row.id);
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -111,7 +118,11 @@ export async function finalizeCor(args: FinalizeArgs): Promise<CorView> {
   // Fire-and-forget PDF render (background-safe): never blocks the freeze.
   void generateCorPdf(row.id).catch((err: unknown) => {
     log.error(
-      { op: 'cor.finalize.pdf', cert_id: row.id, err: err instanceof Error ? err.message : String(err) },
+      {
+        op: 'cor.finalize.pdf',
+        cert_id: row.id,
+        err: err instanceof Error ? err.message : String(err),
+      },
       '[cor] background PDF render failed after finalize (operator may re-trigger)',
     );
   });
@@ -137,19 +148,31 @@ export async function supersedeCor(args: SupersedeArgs): Promise<CorView> {
   const row = await loadCorRow(args.siteId, args.certId);
   if (!row) throw new CorNotFoundError(args.certId);
   if (row.status !== 'finalized') {
-    throw new CorTransitionError('not_finalized', `cor certificate ${row.id} is ${row.status}; only a finalized certificate can be superseded`);
+    throw new CorTransitionError(
+      'not_finalized',
+      `cor certificate ${row.id} is ${row.status}; only a finalized certificate can be superseded`,
+    );
   }
 
   const draft = await generateCorDraft({
     siteId: args.siteId,
     coverMonthISO: row.cover_month.toISOString().slice(0, 10),
     actorUserId: args.actorUserId,
+    // A correction stays in the SAME period chain as the certificate it supersedes.
+    period: row.period,
     supersedesId: row.id,
     ...(args.notes ? { notes: args.notes } : {}),
   });
 
   log.info(
-    { op: 'cor.supersede', cert_id: row.id, site_id: args.siteId, new_cert_id: draft.id, new_version: draft.version, actor_user_id: args.actorUserId },
+    {
+      op: 'cor.supersede',
+      cert_id: row.id,
+      site_id: args.siteId,
+      new_cert_id: draft.id,
+      new_version: draft.version,
+      actor_user_id: args.actorUserId,
+    },
     '[cor] superseded — new draft version created',
   );
   return draft;
@@ -193,7 +216,13 @@ export async function voidCor(args: VoidArgs): Promise<CorView> {
   });
 
   log.info(
-    { op: 'cor.void', cert_id: row.id, site_id: args.siteId, prior_status: row.status, actor_user_id: args.actorUserId },
+    {
+      op: 'cor.void',
+      cert_id: row.id,
+      site_id: args.siteId,
+      prior_status: row.status,
+      actor_user_id: args.actorUserId,
+    },
     '[cor] voided',
   );
   return toCorView(updated);

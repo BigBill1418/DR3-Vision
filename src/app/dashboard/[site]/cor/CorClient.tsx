@@ -9,12 +9,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+type CorPeriod = 'end_of_month' | 'mid_month';
+
 interface CorListItem {
   id: string;
   coverMonth: string;
   version: number;
   status: 'draft' | 'finalized' | 'void';
-  inventoryUnits: number;
+  period: CorPeriod;
+  inventoryUnits: number | null;
   ftHeadcount: number | null;
   ptHeadcount: number | null;
   supersedesId: string | null;
@@ -52,7 +55,8 @@ interface CorView {
   version: number;
   supersedesId: string | null;
   status: 'draft' | 'finalized' | 'void';
-  inventoryUnits: number;
+  period: CorPeriod;
+  inventoryUnits: number | null;
   inventorySource: InventorySource;
   ftHeadcount: number | null;
   ptHeadcount: number | null;
@@ -79,6 +83,11 @@ const btnGhost =
 const btnDanger =
   'rounded border border-red-400/60 px-4 py-2 text-sm font-semibold text-red-200 disabled:opacity-40';
 
+/** Null-safe unit formatter — a mid-month figure is filed blank. */
+function fmtUnits(n: number | null): string {
+  return n != null ? n.toLocaleString() : 'blank';
+}
+
 function monthLabel(iso: string): string {
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
@@ -103,6 +112,7 @@ export function CorClient({
 }) {
   const [rows, setRows] = useState<CorListItem[]>([]);
   const [month, setMonth] = useState<string>(currentMonthValue());
+  const [period, setPeriod] = useState<CorPeriod>('end_of_month');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [ft, setFt] = useState<string>('');
@@ -148,7 +158,7 @@ export function CorClient({
       const res = await fetch(`/api/manager/${siteCode}/cor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coverMonth: month }),
+        body: JSON.stringify({ coverMonth: month, period }),
       });
       const data = (await res.json()) as { error?: string; cert?: CorView };
       if (!res.ok) {
@@ -164,7 +174,7 @@ export function CorClient({
     } finally {
       setBusy(false);
     }
-  }, [siteCode, month, loadList]);
+  }, [siteCode, month, period, loadList]);
 
   const act = useCallback(
     async (
@@ -245,10 +255,12 @@ export function CorClient({
   const cert = detail?.cert ?? null;
   const inv = cert?.inventorySource ?? {};
   const hc = cert?.headcountSource ?? null;
+  const isMid = cert?.period === 'mid_month';
 
-  // Capacity banner state (display-only).
+  // Capacity banner state (display-only). ADR-0042 amendment — end-of-month only:
+  // a mid-month filing has no inventory figure, so no capacity context applies.
   const capacityState =
-    cert && capacityLimit != null
+    cert && cert.period === 'end_of_month' && cert.inventoryUnits != null && capacityLimit != null
       ? cert.inventoryUnits >= capacityLimit
         ? 'over'
         : capacityWarn != null && cert.inventoryUnits >= capacityWarn
@@ -270,6 +282,23 @@ export function CorClient({
               onChange={(e) => setMonth(e.target.value)}
             />
           </label>
+          <label className="mt-3 flex flex-col gap-1 text-sm">
+            <span className="opacity-80">Filing period</span>
+            <select
+              className="rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as CorPeriod)}
+            >
+              <option value="end_of_month">End-of-month close</option>
+              <option value="mid_month">Mid-month (inventory + FT/PT blank)</option>
+            </select>
+          </label>
+          {period === 'mid_month' && (
+            <p className="mt-2 text-xs opacity-70">
+              A mid-month certificate leaves inventory and the FT/PT split blank — a human signs and
+              dates the printed copy. No reconcile or capacity check applies.
+            </p>
+          )}
           <button
             type="button"
             className={`${btnPrimary} mt-3 w-full`}
@@ -297,6 +326,11 @@ export function CorClient({
                 >
                   <span>
                     {monthLabel(r.coverMonth)} <span className="opacity-60">v{r.version}</span>
+                    {r.period === 'mid_month' && (
+                      <span className="ml-1 rounded bg-white/10 px-1 py-0.5 text-[10px] uppercase tracking-wide opacity-80">
+                        mid
+                      </span>
+                    )}
                   </span>
                   <span
                     className={`text-xs ${
@@ -343,51 +377,61 @@ export function CorClient({
               </p>
             )}
 
-            {/* Capacity banner (display-only) */}
-            {capacityLimit != null && (
-              <p
-                className={`mt-3 rounded p-2 text-sm ${
-                  capacityState === 'over'
-                    ? 'border border-red-400/50 bg-red-500/10 text-red-200'
-                    : capacityState === 'warn'
-                      ? 'border border-amber-400/50 bg-amber-500/10 text-amber-200'
-                      : 'border border-white/15 bg-black/20 opacity-80'
-                }`}
-              >
-                Storage capacity: {cert.inventoryUnits.toLocaleString()} /{' '}
-                {capacityLimit.toLocaleString()} indoor units
-                {capacityWarn != null && ` (warn at ${capacityWarn.toLocaleString()})`}.
-                Display-only context.
-              </p>
-            )}
+            {/* Capacity banner (display-only) — end-of-month only (amendment). */}
+            {cert.period === 'end_of_month' &&
+              capacityLimit != null &&
+              cert.inventoryUnits != null && (
+                <p
+                  className={`mt-3 rounded p-2 text-sm ${
+                    capacityState === 'over'
+                      ? 'border border-red-400/50 bg-red-500/10 text-red-200'
+                      : capacityState === 'warn'
+                        ? 'border border-amber-400/50 bg-amber-500/10 text-amber-200'
+                        : 'border border-white/15 bg-black/20 opacity-80'
+                  }`}
+                >
+                  Storage capacity: {cert.inventoryUnits.toLocaleString()} /{' '}
+                  {capacityLimit.toLocaleString()} indoor units
+                  {capacityWarn != null && ` (warn at ${capacityWarn.toLocaleString()})`}.
+                  Display-only context.
+                </p>
+              )}
 
             {/* Three numbers */}
             <section className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-white/15 bg-black/20 p-4">
                 <div className="text-xs uppercase tracking-wide opacity-70">Inventory at close</div>
                 <div className="mt-1 text-2xl font-bold text-dr3-cyan">
-                  {cert.inventoryUnits.toLocaleString()}
+                  {cert.inventoryUnits != null ? cert.inventoryUnits.toLocaleString() : 'blank'}
                 </div>
-                <button
-                  type="button"
-                  className="mt-2 text-xs text-dr3-cyan underline"
-                  onClick={() => setShowInvSource((v) => !v)}
-                >
-                  {showInvSource ? 'Hide balance detail' : 'Balance ledger + snapshot'}
-                </button>
+                {isMid ? (
+                  <div className="mt-2 text-xs opacity-70">Mid-month — reported at month end</div>
+                ) : (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-dr3-cyan underline"
+                    onClick={() => setShowInvSource((v) => !v)}
+                  >
+                    {showInvSource ? 'Hide balance detail' : 'Balance ledger + snapshot'}
+                  </button>
+                )}
               </div>
               <div className="rounded-lg border border-white/15 bg-black/20 p-4">
                 <div className="text-xs uppercase tracking-wide opacity-70">FT / PT split</div>
                 <div className="mt-1 text-2xl font-bold">
-                  {cert.ftHeadcount ?? '—'} / {cert.ptHeadcount ?? '—'}
+                  {isMid ? 'blank' : `${cert.ftHeadcount ?? '—'} / ${cert.ptHeadcount ?? '—'}`}
                 </div>
-                <button
-                  type="button"
-                  className="mt-2 text-xs text-dr3-cyan underline"
-                  onClick={() => setShowSeries((v) => !v)}
-                >
-                  {showSeries ? 'Hide daily-close series' : 'Daily-close series'}
-                </button>
+                {isMid ? (
+                  <div className="mt-2 text-xs opacity-70">Mid-month — reported at month end</div>
+                ) : (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-dr3-cyan underline"
+                    onClick={() => setShowSeries((v) => !v)}
+                  >
+                    {showSeries ? 'Hide daily-close series' : 'Daily-close series'}
+                  </button>
+                )}
               </div>
               <div className="rounded-lg border border-white/15 bg-black/20 p-4">
                 <div className="text-xs uppercase tracking-wide opacity-70">Signer</div>
@@ -456,17 +500,20 @@ export function CorClient({
                 </h3>
                 <ul className="mt-2 space-y-1">
                   <li>
-                    Inventory: {detail!.priorVersion.inventoryUnits.toLocaleString()} →{' '}
-                    {cert.inventoryUnits.toLocaleString()}{' '}
-                    {cert.inventoryUnits !== detail!.priorVersion.inventoryUnits && (
-                      <span className="text-dr3-cyan">
-                        ({cert.inventoryUnits - detail!.priorVersion.inventoryUnits > 0 ? '+' : ''}
-                        {(
-                          cert.inventoryUnits - detail!.priorVersion.inventoryUnits
-                        ).toLocaleString()}
-                        )
-                      </span>
-                    )}
+                    Inventory: {fmtUnits(detail!.priorVersion.inventoryUnits)} →{' '}
+                    {fmtUnits(cert.inventoryUnits)}{' '}
+                    {cert.inventoryUnits != null &&
+                      detail!.priorVersion.inventoryUnits != null &&
+                      cert.inventoryUnits !== detail!.priorVersion.inventoryUnits && (
+                        <span className="text-dr3-cyan">
+                          (
+                          {cert.inventoryUnits - detail!.priorVersion.inventoryUnits > 0 ? '+' : ''}
+                          {(
+                            cert.inventoryUnits - detail!.priorVersion.inventoryUnits
+                          ).toLocaleString()}
+                          )
+                        </span>
+                      )}
                   </li>
                   <li>
                     FT/PT: {detail!.priorVersion.ftHeadcount ?? '—'}/
@@ -480,52 +527,63 @@ export function CorClient({
             {/* FT/PT entry + actions (draft only) */}
             {cert.status === 'draft' && (
               <section className="mt-6 rounded-lg border border-white/15 bg-black/20 p-4">
-                <h3 className="text-sm font-semibold">
-                  Enter the FT/PT split (required to finalize)
-                </h3>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span className="opacity-80">Full-time</span>
-                    <input
-                      type="number"
-                      min={0}
-                      className="w-28 rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
-                      value={ft}
-                      onChange={(e) => setFt(e.target.value)}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span className="opacity-80">Part-time</span>
-                    <input
-                      type="number"
-                      min={0}
-                      className="w-28 rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
-                      value={pt}
-                      onChange={(e) => setPt(e.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className={btnGhost}
-                    disabled={busy || ft === '' || pt === ''}
-                    onClick={() =>
-                      void act(
-                        `${cert.id}/headcount`,
-                        { ftHeadcount: Number(ft), ptHeadcount: Number(pt) },
-                        null,
-                        'FT/PT split saved.',
-                      )
-                    }
-                  >
-                    Save split
-                  </button>
-                </div>
+                {isMid ? (
+                  <p className="text-sm opacity-80">
+                    Mid-month filing — inventory and the FT/PT split are left blank and reported on
+                    the end-of-month certificate. Finalize, then print and sign the dated copy.
+                  </p>
+                ) : (
+                  <>
+                    <h3 className="text-sm font-semibold">
+                      Enter the FT/PT split (required to finalize)
+                    </h3>
+                    <div className="mt-3 flex flex-wrap items-end gap-3">
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="opacity-80">Full-time</span>
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-28 rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
+                          value={ft}
+                          onChange={(e) => setFt(e.target.value)}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="opacity-80">Part-time</span>
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-28 rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white"
+                          value={pt}
+                          onChange={(e) => setPt(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className={btnGhost}
+                        disabled={busy || ft === '' || pt === ''}
+                        onClick={() =>
+                          void act(
+                            `${cert.id}/headcount`,
+                            { ftHeadcount: Number(ft), ptHeadcount: Number(pt) },
+                            null,
+                            'FT/PT split saved.',
+                          )
+                        }
+                      >
+                        Save split
+                      </button>
+                    </div>
+                  </>
+                )}
 
                 <div className="mt-5 flex flex-wrap gap-3">
                   <button
                     type="button"
                     className={btnPrimary}
-                    disabled={busy || cert.ftHeadcount == null || cert.ptHeadcount == null}
+                    disabled={
+                      busy || (!isMid && (cert.ftHeadcount == null || cert.ptHeadcount == null))
+                    }
                     onClick={() =>
                       void act(
                         `${cert.id}/finalize`,
@@ -553,7 +611,7 @@ export function CorClient({
                     Void draft
                   </button>
                 </div>
-                {(cert.ftHeadcount == null || cert.ptHeadcount == null) && (
+                {!isMid && (cert.ftHeadcount == null || cert.ptHeadcount == null) && (
                   <p className="mt-2 text-xs opacity-70">
                     Enter and save the FT/PT split before finalizing.
                   </p>

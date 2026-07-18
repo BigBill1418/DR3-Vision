@@ -50,6 +50,45 @@ ONE enum + ONE table only; the rest is resolver code over EXISTING rate tables.
   fuel-surcharge lookup before any price is read) and covered by an existing test; the
   transportation composer also refuses `or_transportation_no_fuel`.
 
+### Added — 2026-07-18 (ADR-0042 amendment: mid-month COR; rollup §4.1 + §8.4 + §9.2)
+
+Billing/compliance. The COR (Exhibit 5) form is filed for BOTH the end-of-month
+close and a mid-month period; Rick files the mid-month version with Inventory + FT +
+PT **blank** (Signature + Date only). Migration `20260726_adr0042_midmonth_cor`
+(purely additive, ADR-0035 clean-replay: one enum + one defaulted column + one
+NOT-NULL widening). See `docs/adr/0042-cor-generator.md` "Amendment — 2026-07-18".
+
+- **`period` discriminator.** New enum `CorPeriod { end_of_month, mid_month }` +
+  column `cor_certificates.period NOT NULL DEFAULT 'end_of_month'`. The default
+  backfills every existing row and caller — all current behavior is preserved.
+- **Nullable inventory.** `cor_certificates.inventory_units` widened to `Int?`: a
+  mid-month cert stores `NULL` (never a placeholder `0`). `inventory_source` stays
+  `NOT NULL` with a typed `mid_month_blank_adr0042_amendment` marker (honest
+  provenance, no fabricated figure).
+- **Mid-month fork (EOM path untouched).** `computeCorPrefill` short-circuits before
+  any ledger query for mid-month (inventory/FT/PT blank, signer only). The D2.1/D3
+  reconcile tripwire (`assertCorInventoryReconciles`, in BOTH `finalizeCor` and
+  `generateCorPdf`) is **end-of-month only** — mid-month returns a passing `skipped`
+  result. `finalizeCor` requires the FT/PT split ONLY for end-of-month. The internal
+  print page renders inventory/FT/PT/total **literally blank** for mid-month (no
+  em-dash, no `0`), suppresses the balance note, and labels "Mid-month filing". The
+  display-only **capacity banner is end-of-month only**.
+- **Period-scoped version chain.** A mid-month and an end-of-month certificate for
+  the same `cover_month` are independent immutable-version chains and never void one
+  another (`generateCorDraft` + `getCorDetail` filter on `(site, cover_month,
+period)`; supersede stays in-period).
+- **UI + API.** `POST /api/manager/[site]/cor` accepts `period`; the manager COR
+  surface adds a filing-period selector and renders mid-month certs with blank
+  figures + a "mid" chain tag.
+- **Fixtures → 3,977.** All COR fixtures updated from the stale **4,062** to the
+  ADR-0037-corrected **3,977 (3,748 program + 229 non-program)**; `prefill.test.ts`
+  now reproduces it through the D6 running balance using the same Processed-ledger
+  totals as the §2.3 close (cross-validating `onHand` vs `computeInventoryClose`).
+  New mid-month tests: prefill blanks + signer, reconcile skip, finalize without
+  headcount, and the end-of-month gates still firing.
+- **Signer title** "Transportation Manager" (Richard Albritton) confirmed correct —
+  no change.
+
 ### Added — 2026-07-18 (ADR-0037 amendment: inventory + sources foundation; rollup §8.1)
 
 Billing-critical. The MRC billing tune-and-launch foundation. Migration

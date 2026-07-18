@@ -12,6 +12,8 @@ export const dynamic = 'force-dynamic';
 
 const Generate = z.object({
   coverMonth: z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/),
+  // ADR-0042 amendment — end-of-month (default) vs mid-month filing.
+  period: z.enum(['end_of_month', 'mid_month']).optional(),
   notes: z.string().max(1000).optional(),
 });
 
@@ -22,7 +24,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
     const rows = await listCor(ctx.siteId);
     return NextResponse.json({ rows });
   } catch (e) {
-    return corErrorResponse(e, { site, op: 'cor.list', requestId: req.headers.get('x-request-id') });
+    return corErrorResponse(e, {
+      site,
+      op: 'cor.list',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }
 
@@ -36,10 +42,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       siteId: ctx.siteId,
       coverMonthISO: parsed.data.coverMonth,
       actorUserId: ctx.userId,
+      ...(parsed.data.period ? { period: parsed.data.period } : {}),
       ...(parsed.data.notes ? { notes: parsed.data.notes } : {}),
     });
     return NextResponse.json({ cert }, { status: 201 });
   } catch (e) {
-    return corErrorResponse(e, { site, op: 'cor.generate', requestId: req.headers.get('x-request-id') });
+    return corErrorResponse(e, {
+      site,
+      op: 'cor.generate',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }

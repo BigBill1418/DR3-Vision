@@ -2589,6 +2589,17 @@ enum CorStatus {
   void
 }
 
+/// ADR-0042 amendment (2026-07-18) — the COR form (Exhibit 5) serves BOTH the
+/// end-of-month close AND a mid-month filing. `end_of_month` is the full,
+/// reconciled certificate (inventory + FT/PT required, D3 tripwire + capacity
+/// banner). `mid_month` is Rick's blank-figures filing: inventory, FT, and PT are
+/// left BLANK (signature + date only), so the reconcile tripwire and capacity
+/// banner do NOT apply. Default `end_of_month` preserves every pre-amendment row.
+enum CorPeriod {
+  end_of_month
+  mid_month
+}
+
 /// ADR-0042 D2.3 — site-scoped signer config for the COR. Standardized, NOT typed
 /// per certificate: Rick Albritton, title seeded "Transportation Manager" (what
 /// the June COR read) — flagged TBC with MRC. A confirmed title is ONE row edit,
@@ -2622,11 +2633,20 @@ model CorCertificate {
   superseded_by CorCertificate[] @relation("CorSupersede")
   status        CorStatus        @default(draft)
 
+  // ADR-0042 amendment (2026-07-18) — end-of-month vs mid-month filing. The chain
+  // (site, cover_month) is scoped BY period: a mid-month and an end-of-month
+  // certificate for the same month are independent version chains and never void
+  // one another. Default `end_of_month` preserves every existing row and caller.
+  period        CorPeriod        @default(end_of_month)
+
   // D2.1 — unprocessed inventory at month close = the pool-aware running balance
   // (ADR-0037 D6) as of the month's last day, cross-referenced to the nearest
   // physical snapshot. `inventory_source` records the anchor snapshot id, the
   // computed figure, and any reconcile delta in between (drill-down provenance).
-  inventory_units  Int
+  // NULLABLE (amendment): a `mid_month` certificate files inventory BLANK — the
+  // figure genuinely does not exist yet, so no placeholder zero is ever stored.
+  // `inventory_source` still carries a typed marker so provenance stays honest.
+  inventory_units  Int?
   inventory_source Json
 
   // D2.2 — FT/PT headcount. The daily close captures TOTALS, not an FT/PT split;

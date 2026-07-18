@@ -23,6 +23,7 @@ import {
   CorReconcileMismatchError,
   toCorView,
   type CorListItem,
+  type CorPeriod,
   type CorView,
 } from './view';
 
@@ -37,7 +38,10 @@ export function coverMonthStartISO(input: string): string {
 
 /** Throw {@link CorJurisdictionError} unless the site is a California facility (D1). */
 export async function assertSiteIsCalifornia(siteId: string): Promise<void> {
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { jurisdiction: true } });
+  const site = await prisma.site.findUnique({
+    where: { id: siteId },
+    select: { jurisdiction: true },
+  });
   if (!site) throw new CorJurisdictionError(siteId, 'unknown');
   if (site.jurisdiction !== 'california') throw new CorJurisdictionError(siteId, site.jurisdiction);
 }
@@ -47,6 +51,12 @@ export interface GenerateCorDraftArgs {
   /** Any day in the target month; normalized to first-of-month. */
   coverMonthISO: string;
   actorUserId: string;
+  /**
+   * ADR-0042 amendment — end-of-month (default) vs mid-month filing. The chain is
+   * scoped by period: a mid-month and an end-of-month certificate for the same
+   * cover_month are independent version chains and never void one another.
+   */
+  period?: CorPeriod;
   /** Set when this draft supersedes a finalized certificate (new version chain). */
   supersedesId?: string;
   notes?: string;
@@ -59,20 +69,23 @@ export interface GenerateCorDraftArgs {
  */
 export async function generateCorDraft(args: GenerateCorDraftArgs): Promise<CorView> {
   await assertSiteIsCalifornia(args.siteId);
+  const period: CorPeriod = args.period ?? 'end_of_month';
   const coverMonthISO = coverMonthStartISO(args.coverMonthISO);
-  const prefill = await computeCorPrefill(args.siteId, coverMonthISO);
+  const prefill = await computeCorPrefill(args.siteId, coverMonthISO, period);
   const coverMonth = dayKeyUTCFromISO(coverMonthISO);
 
   const created = await prisma.$transaction(async (tx) => {
-    // Void any prior draft(s) in this chain — a regenerate replaces, never edits.
+    // Void any prior draft(s) in THIS (site, cover_month, period) chain — a
+    // regenerate replaces, never edits. Scoped by period so a mid-month regenerate
+    // never touches the end-of-month chain (or vice versa) for the same month.
     await tx.corCertificate.updateMany({
-      where: { site_id: args.siteId, cover_month: coverMonth, status: 'draft' },
+      where: { site_id: args.siteId, cover_month: coverMonth, period, status: 'draft' },
       data: { status: 'void' },
     });
 
     const max = await tx.corCertificate.aggregate({
       _max: { version: true },
-      where: { site_id: args.siteId, cover_month: coverMonth },
+      where: { site_id: args.siteId, cover_month: coverMonth, period },
     });
     const nextVersion = (max._max.version ?? 0) + 1;
 
@@ -81,6 +94,7 @@ export async function generateCorDraft(args: GenerateCorDraftArgs): Promise<CorV
         site_id: args.siteId,
         cover_month: coverMonth,
         version: nextVersion,
+        period,
         supersedes_id: args.supersedesId ?? null,
         status: 'draft',
         inventory_units: prefill.inventoryUnits,
@@ -104,6 +118,7 @@ export async function generateCorDraft(args: GenerateCorDraftArgs): Promise<CorV
         after: {
           cover_month: coverMonthISO,
           version: nextVersion,
+          period,
           status: 'draft',
           inventory_units: prefill.inventoryUnits,
           ...(args.supersedesId ? { supersedes_id: args.supersedesId } : {}),
@@ -120,6 +135,7 @@ export async function generateCorDraft(args: GenerateCorDraftArgs): Promise<CorV
       site_id: args.siteId,
       cover_month: coverMonthISO,
       version: created.version,
+      period,
       inventory_units: prefill.inventoryUnits,
       actor_user_id: args.actorUserId,
       status: 'draft',
@@ -188,8 +204,11 @@ export async function setCorHeadcountSplit(args: SetHeadcountSplitArgs): Promise
 
 export interface CorReconcileResult {
   pass: boolean;
-  storedUnits: number;
-  recomputedUnits: number;
+  /** Null on a `mid_month` certificate (no inventory figure to reconcile). */
+  storedUnits: number | null;
+  recomputedUnits: number | null;
+  /** ADR-0042 amendment — true when the reconcile was skipped (mid-month filing). */
+  skipped?: boolean;
 }
 
 /**
@@ -198,13 +217,22 @@ export interface CorReconcileResult {
  * and compare it to the stored `inventory_units`. On mismatch, log and throw
  * {@link CorReconcileMismatchError} carrying both numbers — nothing renders or
  * finalizes on a stored figure that no longer matches the ledger.
+ *
+ * ADR-0042 amendment — a `mid_month` certificate has NO inventory figure (filed
+ * blank), so there is nothing to reconcile: it short-circuits to a passing,
+ * `skipped` result and never queries the balance or throws. The end-of-month path
+ * is hard-enforced exactly as before.
  */
 export async function assertCorInventoryReconciles(certId: string): Promise<CorReconcileResult> {
   const row = await prisma.corCertificate.findUnique({
     where: { id: certId },
-    select: { id: true, site_id: true, cover_month: true, inventory_units: true },
+    select: { id: true, site_id: true, cover_month: true, period: true, inventory_units: true },
   });
   if (!row) throw new CorNotFoundError(certId);
+
+  if (row.period === 'mid_month') {
+    return { pass: true, storedUnits: null, recomputedUnits: null, skipped: true };
+  }
 
   const { monthEndAsOf } = coverMonthBounds(row.cover_month.toISOString().slice(0, 10));
   const balance = await onHand(row.site_id, monthEndAsOf);
@@ -245,6 +273,7 @@ export async function listCor(siteId: string, limit = 100): Promise<CorListItem[
       cover_month: true,
       version: true,
       status: true,
+      period: true,
       inventory_units: true,
       ft_headcount: true,
       pt_headcount: true,
@@ -258,6 +287,7 @@ export async function listCor(siteId: string, limit = 100): Promise<CorListItem[
     coverMonth: r.cover_month,
     version: r.version,
     status: r.status as CorListItem['status'],
+    period: r.period as CorListItem['period'],
     inventoryUnits: r.inventory_units,
     ftHeadcount: r.ft_headcount,
     ptHeadcount: r.pt_headcount,
@@ -280,23 +310,36 @@ export async function getCorDetail(siteId: string, id: string): Promise<CorDetai
   if (!row) return null;
   const cert = toCorView(row);
 
+  // Prior version is scoped to the SAME period chain (mid-month and end-of-month
+  // are independent chains for the same cover_month).
   const priorRow =
     cert.version > 1
       ? await prisma.corCertificate.findFirst({
-          where: { site_id: siteId, cover_month: row.cover_month, version: cert.version - 1 },
+          where: {
+            site_id: siteId,
+            cover_month: row.cover_month,
+            period: row.period,
+            version: cert.version - 1,
+          },
         })
       : null;
 
   // Live reconcile verdict (non-throwing) so the surface can show drift inline
-  // without a 409; the throwing assertion gates finalize + render.
-  const { monthEndAsOf } = coverMonthBounds(row.cover_month.toISOString().slice(0, 10));
-  const balance = await onHand(siteId, monthEndAsOf);
-  const recomputedUnits = balance.total.toNearest(1).toNumber();
-  const reconcile: CorReconcileResult = {
-    pass: recomputedUnits === row.inventory_units,
-    storedUnits: row.inventory_units,
-    recomputedUnits,
-  };
+  // without a 409; the throwing assertion gates finalize + render. A mid-month
+  // filing has no inventory figure — the verdict is `skipped` (no balance query).
+  let reconcile: CorReconcileResult;
+  if (row.period === 'mid_month') {
+    reconcile = { pass: true, storedUnits: null, recomputedUnits: null, skipped: true };
+  } else {
+    const { monthEndAsOf } = coverMonthBounds(row.cover_month.toISOString().slice(0, 10));
+    const balance = await onHand(siteId, monthEndAsOf);
+    const recomputedUnits = balance.total.toNearest(1).toNumber();
+    reconcile = {
+      pass: recomputedUnits === row.inventory_units,
+      storedUnits: row.inventory_units,
+      recomputedUnits,
+    };
+  }
 
   return { cert, priorVersion: priorRow ? toCorView(priorRow) : null, reconcile };
 }

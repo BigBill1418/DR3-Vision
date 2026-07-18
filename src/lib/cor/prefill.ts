@@ -21,6 +21,7 @@ import { onHand, snapshotTotalUnits } from '@/lib/inventory/running-balance';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import { resolveCorSigner } from './signer';
 import { prisma } from '@/lib/prisma';
+import type { CorPeriod } from './view';
 
 /** Provenance for the inventory figure (D2.1). Serialized into `inventory_source`. */
 export interface InventorySource {
@@ -64,11 +65,24 @@ export interface HeadcountSource {
   series: HeadcountSeriesEntry[];
 }
 
+/**
+ * ADR-0042 amendment — provenance marker for a mid-month filing. A mid-month COR
+ * files inventory + FT/PT BLANK; there is nothing to prove, so `inventory_source`
+ * and `headcount_source` carry an honest marker (never a fabricated figure).
+ */
+export interface BlankFilingSource {
+  method: 'mid_month_blank_adr0042_amendment';
+  note: string;
+}
+
 export interface CorPrefill {
   coverMonthISO: string;
-  inventoryUnits: number;
-  inventorySource: InventorySource;
-  headcountSource: HeadcountSource;
+  /** ADR-0042 amendment — the filing period this pre-fill was computed for. */
+  period: CorPeriod;
+  /** Null on a `mid_month` filing (inventory left blank). */
+  inventoryUnits: number | null;
+  inventorySource: InventorySource | BlankFilingSource;
+  headcountSource: HeadcountSource | BlankFilingSource;
   signerName: string;
   signerTitle: string;
 }
@@ -100,7 +114,33 @@ function isoDay(d: Date): string {
  * jurisdiction-agnostic. Returns the inventory figure + both provenance blobs +
  * the resolved signer.
  */
-export async function computeCorPrefill(siteId: string, coverMonthISO: string): Promise<CorPrefill> {
+export async function computeCorPrefill(
+  siteId: string,
+  coverMonthISO: string,
+  period: CorPeriod = 'end_of_month',
+): Promise<CorPrefill> {
+  // ADR-0042 amendment — a mid-month filing files inventory + FT/PT BLANK. There is
+  // no inventory figure and no headcount to pre-fill; only the signer resolves. We
+  // short-circuit BEFORE any balance/close query (nothing to compute or reconcile).
+  if (period === 'mid_month') {
+    const signer = await resolveCorSigner(siteId);
+    return {
+      coverMonthISO,
+      period,
+      inventoryUnits: null,
+      inventorySource: {
+        method: 'mid_month_blank_adr0042_amendment',
+        note: 'Mid-month COR — inventory is filed blank; the reconciled figure is reported at month end.',
+      },
+      headcountSource: {
+        method: 'mid_month_blank_adr0042_amendment',
+        note: 'Mid-month COR — FT/PT headcount is filed blank; the split is reported at month end.',
+      },
+      signerName: signer.name,
+      signerTitle: signer.title,
+    };
+  }
+
   const { monthStart, monthEndDate, monthEndAsOf } = coverMonthBounds(coverMonthISO);
 
   // ── Inventory (D2.1): the ONE balance function + the anchor it used ──────
@@ -161,6 +201,7 @@ export async function computeCorPrefill(siteId: string, coverMonthISO: string): 
 
   return {
     coverMonthISO,
+    period,
     inventoryUnits: storedUnits,
     inventorySource,
     headcountSource,
