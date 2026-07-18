@@ -17,6 +17,7 @@
 import { Prisma, type OutboundCommodity, type OutboundSubCategory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
+import { deriveOutboundRecycling, type OutboundRecyclingResult } from '@/lib/loads/recycling-rates';
 
 const TABLE = 'outbound_materials';
 
@@ -104,6 +105,15 @@ export interface OutboundView {
   baleCount: number | null;
   allocationPct: string | null;
   buyer: string | null;
+  // ADR-0055 — structured recycler + DERIVED CalRecycle stewardship split (O-7).
+  // `recycledLbs`/`landfilledLbs` are null when no rate covered (vendor, commodity,
+  // ship_date) — the no-rate flag the UI surfaces. Invariant when present:
+  // recycledLbs + landfilledLbs === weightLbs.
+  vendorId: string | null;
+  recycledLbs: number | null;
+  landfilledLbs: number | null;
+  /** Decimal(5,4) snapshot of the fraction applied, e.g. "0.8100"; null when not derived. */
+  recyclingPercentApplied: string | null;
   /** Derived: weight_lbs / bale_count, or null when no bales. Never stored. */
   avgLbsPerBale: string | null;
   source: string;
@@ -125,6 +135,10 @@ function toView(r: {
   bale_count: number | null;
   allocation_pct: Prisma.Decimal | null;
   buyer: string | null;
+  vendor_id: string | null;
+  recycled_lbs: number | null;
+  landfilled_lbs: number | null;
+  recycling_percent_applied: Prisma.Decimal | null;
   source: string;
   locked_at: Date | null;
 }): OutboundView {
@@ -147,9 +161,40 @@ function toView(r: {
     baleCount: r.bale_count,
     allocationPct: r.allocation_pct?.toString() ?? null,
     buyer: r.buyer,
+    vendorId: r.vendor_id,
+    recycledLbs: r.recycled_lbs,
+    landfilledLbs: r.landfilled_lbs,
+    recyclingPercentApplied: r.recycling_percent_applied?.toFixed(4) ?? null,
     avgLbsPerBale: avg,
     source: r.source,
     lockedAt: r.locked_at,
+  };
+}
+
+/**
+ * Map an {@link OutboundRecyclingResult} to the persistable derived-field columns.
+ * `no_vendor` / `no_rate` both clear the fields to null — a missing rate is never
+ * silently assumed to be 100% recycled (ADR-0055 no-rate policy).
+ */
+function derivedColumns(d: OutboundRecyclingResult): {
+  recycled_lbs: number | null;
+  landfilled_lbs: number | null;
+  recycling_percent_applied: string | null;
+  recycling_rate_id: string | null;
+} {
+  if (d.status === 'derived') {
+    return {
+      recycled_lbs: d.recycledLbs,
+      landfilled_lbs: d.landfilledLbs,
+      recycling_percent_applied: d.recyclingPercent,
+      recycling_rate_id: d.rateId,
+    };
+  }
+  return {
+    recycled_lbs: null,
+    landfilled_lbs: null,
+    recycling_percent_applied: null,
+    recycling_rate_id: null,
   };
 }
 
@@ -166,6 +211,7 @@ export async function createOutbound(args: {
   retracId?: string | null;
   baleCount?: number | null;
   buyer?: string | null;
+  vendorId?: string | null;
   actorUserId: string;
 }): Promise<OutboundView> {
   assertWeight(args.weightLbs);
@@ -174,6 +220,13 @@ export async function createOutbound(args: {
   }
   const shape = assertOutboundShape(args.subCategory, args.wholeUnits, args.programUnits, args.nonProgramUnits);
   const day = shipDateUTC(args.shipDate);
+  // ADR-0055 — derive the CalRecycle stewardship split at ENTRY TIME from
+  // (vendor_id, commodity, ship_date). Resolved (a read) before the write tx; the
+  // percent is snapshotted so the row is reproducible even if the rate later changes.
+  const vendorId = args.vendorId ?? null;
+  const derived = derivedColumns(
+    await deriveOutboundRecycling({ vendorId, commodity: args.commodity, shipDate: day, weightLbs: args.weightLbs }),
+  );
   const row = await prisma.$transaction(async (tx) => {
     const created = await tx.outboundMaterial.create({
       data: {
@@ -189,6 +242,11 @@ export async function createOutbound(args: {
         retrac_id: args.retracId ?? null,
         bale_count: args.baleCount ?? null,
         buyer: args.buyer ?? null,
+        vendor_id: vendorId,
+        recycled_lbs: derived.recycled_lbs,
+        landfilled_lbs: derived.landfilled_lbs,
+        recycling_percent_applied: derived.recycling_percent_applied,
+        recycling_rate_id: derived.recycling_rate_id,
         source: 'manual',
         created_by: args.actorUserId,
       },
@@ -226,6 +284,7 @@ export async function updateOutbound(args: {
   retracId?: string | null | undefined;
   baleCount?: number | null | undefined;
   buyer?: string | null | undefined;
+  vendorId?: string | null | undefined;
   actorUserId: string;
 }): Promise<OutboundView> {
   const existing = await prisma.outboundMaterial.findUnique({ where: { id: args.id } });
@@ -238,6 +297,20 @@ export async function updateOutbound(args: {
   const programUnits = args.programUnits !== undefined ? args.programUnits : existing.program_units;
   const nonProgramUnits = args.nonProgramUnits !== undefined ? args.nonProgramUnits : existing.non_program_units;
   const shape = assertOutboundShape(subCategory, wholeUnits, programUnits, nonProgramUnits);
+
+  // ADR-0055 — re-derive the stewardship split whenever the vendor or weight changes
+  // (commodity + ship_date are immutable post-create). Always overwrites the derived
+  // columns from the CURRENT effective values so they never drift from the row.
+  const vendorId = args.vendorId !== undefined ? args.vendorId : existing.vendor_id;
+  const weightLbs = args.weightLbs !== undefined ? args.weightLbs : existing.weight_lbs;
+  const derived = derivedColumns(
+    await deriveOutboundRecycling({
+      vendorId,
+      commodity: existing.commodity,
+      shipDate: existing.ship_date,
+      weightLbs,
+    }),
+  );
 
   const row = await prisma.$transaction(async (tx) => {
     const updated = await tx.outboundMaterial.update({
@@ -252,6 +325,11 @@ export async function updateOutbound(args: {
         ...(args.retracId !== undefined ? { retrac_id: args.retracId } : {}),
         ...(args.baleCount !== undefined ? { bale_count: args.baleCount } : {}),
         ...(args.buyer !== undefined ? { buyer: args.buyer } : {}),
+        vendor_id: vendorId,
+        recycled_lbs: derived.recycled_lbs,
+        landfilled_lbs: derived.landfilled_lbs,
+        recycling_percent_applied: derived.recycling_percent_applied,
+        recycling_rate_id: derived.recycling_rate_id,
       },
     });
     await tx.auditLog.create({

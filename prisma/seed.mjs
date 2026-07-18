@@ -179,6 +179,49 @@ async function seedTransporters() {
   }
 }
 
+// ADR-0055 — outbound recyclers + their confirmed recycling rates. GLOBAL master
+// (like transporters). Only THREE rates are confirmed (rollup §A.4, Kelsey): Green
+// Zone metal = 100%, Xtraction metal = 81% (steel→`metal` in the taxonomy), Biomass
+// wood = 100%. Other wood-recycler rates are PENDING Morena — deliberately NOT
+// seeded (never invent a rate). Idempotent: keyed on (vendor, commodity,
+// effective_from); the far-past effective_from + null effective_to make each rate
+// cover every existing/future ship_date. NOT asserted in assertCounts (rates are
+// admin-editable and will grow as Morena confirms the rest).
+const RECYCLING_BASELINE_FROM = new Date(Date.UTC(2020, 0, 1)); // 2020-01-01
+async function seedOutboundVendorsAndRecyclingRates() {
+  const rates = [
+    { vendor: 'Green Zone', commodity: 'metal', percent: '1.0000', note: 'Green Zone counts the full load as steel (100% recycled). Rollup §A.4 (Kelsey).' },
+    { vendor: 'Xtraction', commodity: 'metal', percent: '0.8100', note: 'Xtraction: 81% steel / 19% landfill. Rollup §A.4 (Kelsey). Verbal example 5,541 lb → ~4,488 steel / ~1,053 landfill at 0.81.' },
+    { vendor: 'Biomass', commodity: 'wood', percent: '1.0000', note: 'Biomass counts the full load as wood (100% recycled). Rollup §A.4 (Kelsey).' },
+  ];
+  let rateCount = 0;
+  for (const r of rates) {
+    const vendor = await prisma.outboundVendor.upsert({
+      where: { name: r.vendor },
+      create: { name: r.vendor, is_active: true },
+      update: {},
+    });
+    const data = {
+      vendor_id: vendor.id,
+      commodity: r.commodity,
+      recycling_percent: new Prisma.Decimal(r.percent),
+      effective_from: RECYCLING_BASELINE_FROM,
+      effective_to: null,
+      notes: r.note,
+    };
+    const existing = await prisma.recyclingRate.findFirst({
+      where: { vendor_id: vendor.id, commodity: r.commodity, effective_from: RECYCLING_BASELINE_FROM },
+    });
+    if (existing) {
+      await prisma.recyclingRate.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.recyclingRate.create({ data });
+    }
+    rateCount += 1;
+  }
+  console.log(`  ✔ recycling rates seeded: ${rateCount} (Green Zone, Xtraction, Biomass — others pending Morena)`);
+}
+
 async function getSiteIdsByCode() {
   const sites = await prisma.site.findMany({ select: { id: true, code: true } });
   return new Map(sites.map((s) => [s.code, s.id]));
@@ -1822,6 +1865,8 @@ async function main() {
   await seedSites();
   console.log('▶ seeding transporters');
   await seedTransporters();
+  console.log('▶ seeding outbound recyclers + recycling rates (ADR-0055)');
+  await seedOutboundVendorsAndRecyclingRates();
   const siteIds = await getSiteIdsByCode();
   console.log('▶ seeding users');
   await seedUsers(siteIds);

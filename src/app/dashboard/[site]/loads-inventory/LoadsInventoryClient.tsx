@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { DropoffView } from '@/lib/dropoffs/service';
 import type { OutboundView } from '@/lib/loads/outbound';
+import type { OutboundVendorOption, OutboundRecyclingResult } from '@/lib/loads/recycling-rates';
 import type { LandfilledView } from '@/lib/loads/landfilled';
 import type { EventView } from '@/lib/events/service';
 import type { OrCountView } from '@/lib/events/or-counts';
@@ -486,6 +487,11 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
   const [nonProgram, setNonProgram] = useState('');
   const [ticket, setTicket] = useState('');
   const [bales, setBales] = useState('');
+  const [vendorId, setVendorId] = useState('');
+  const [vendors, setVendors] = useState<OutboundVendorOption[]>([]);
+  // ADR-0055 — live recycling-rate split preview (recycled vs landfilled) shown
+  // before saving. Null until vendor + commodity + a valid weight are all set.
+  const [preview, setPreview] = useState<OutboundRecyclingResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<FieldMsg | null>(null);
 
@@ -495,6 +501,50 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
     setRows(await getRows<OutboundView>(`/api/manager/${siteCode}/outbound`));
   }, [siteCode]);
   useEffect(() => void load(), [load]);
+
+  // Load the recycler picker options once.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const res = await fetch(`/api/manager/${siteCode}/outbound/vendors`);
+      if (!res.ok || !live) return;
+      const data = (await res.json()) as { vendors: OutboundVendorOption[] };
+      if (live) setVendors(data.vendors);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [siteCode]);
+
+  // ADR-0055 — debounced rate-split preview. Wires the SAME resolver the save path
+  // uses, so the previewed split and the persisted split can never disagree.
+  const weightNum = Number(weight);
+  const weightValid = weight !== '' && Number.isInteger(weightNum) && weightNum >= 0;
+  useEffect(() => {
+    if (!vendorId || !weightValid) {
+      setPreview(null);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      void (async () => {
+        const qs = new URLSearchParams({
+          vendorId,
+          commodity,
+          weightLbs: String(weightNum),
+          shipDate: date,
+        });
+        const res = await fetch(`/api/manager/${siteCode}/outbound/rate-preview?${qs.toString()}`);
+        if (!res.ok || !live) return;
+        const data = (await res.json()) as { preview: OutboundRecyclingResult };
+        if (live) setPreview(data.preview);
+      })();
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [siteCode, vendorId, commodity, weightNum, weightValid, date]);
 
   const add = async () => {
     setBusy(true);
@@ -513,6 +563,7 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
           nonProgramUnits: isRenovation && whole ? Number(nonProgram || '0') : undefined,
           ticketNumber: ticket || undefined,
           baleCount: bales ? Number(bales) : undefined,
+          vendorId: vendorId || undefined,
         }),
       });
       if (!res.ok) {
@@ -559,6 +610,17 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
             {COMMODITIES.map((c) => (
               <option key={c} value={c}>
                 {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Recycler</span>
+          <select className={inputCls} value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+            <option value="">— none —</option>
+            {vendors.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
               </option>
             ))}
           </select>
@@ -636,6 +698,7 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
           </label>
         </div>
       )}
+      {preview && <RecyclingPreview preview={preview} weightLbs={weightNum} />}
       <div className="flex items-center gap-4">
         <button type="button" disabled={!canSave || busy} onClick={add} className={btnCls}>
           {busy ? 'Saving…' : 'Add outbound'}
@@ -645,10 +708,11 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
       <p className="text-xs opacity-70">
         Renovation = whole-unit sale (program + non-program must equal whole units; counts toward
         the running balance). Baled / shredded = weight-based commodity sales (never subtract
-        units).
+        units). Recycler split (recycled vs landfilled) is derived for CalRecycle stewardship
+        only — it never affects the MRC invoice.
       </p>
       <RecordTable
-        head={['Date', 'Commodity', 'Sub-cat', 'Lbs', 'Whole', 'Avg/bale']}
+        head={['Date', 'Commodity', 'Sub-cat', 'Lbs', 'Whole', 'Avg/bale', 'Recycled', 'Landfilled']}
         rows={rows.map((r) => [
           isoDate(r.shipDate),
           r.commodity,
@@ -656,9 +720,42 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
           String(r.weightLbs),
           r.wholeUnits == null ? '—' : String(r.wholeUnits),
           r.avgLbsPerBale ?? '—',
+          r.recycledLbs == null ? '—' : String(r.recycledLbs),
+          r.landfilledLbs == null ? '—' : String(r.landfilledLbs),
         ])}
       />
     </div>
+  );
+}
+
+// ADR-0055 — the recycled/landfilled split preview shown before saving an outbound
+// load. `no_vendor` renders nothing (the caller only mounts this when a vendor is
+// picked); `no_rate` warns that the split will NOT be recorded (never silently 100%).
+function RecyclingPreview({
+  preview,
+  weightLbs,
+}: {
+  preview: OutboundRecyclingResult;
+  weightLbs: number;
+}) {
+  if (preview.status === 'no_vendor') return null;
+  if (preview.status === 'no_rate') {
+    return (
+      <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+        No recycling rate is configured for this recycler + commodity on this date. The
+        recycled/landfilled split will be left blank (not assumed 100%). Configure a rate to record
+        the stewardship split.
+      </p>
+    );
+  }
+  const pct = (Number(preview.recyclingPercent) * 100).toFixed(2).replace(/\.00$/, '');
+  return (
+    <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs">
+      At {pct}% recovery, {weightLbs.toLocaleString()} lb splits into{' '}
+      <strong>{preview.recycledLbs.toLocaleString()} lb recycled</strong> +{' '}
+      <strong>{preview.landfilledLbs.toLocaleString()} lb landfilled</strong> (CalRecycle
+      stewardship only; not billed).
+    </p>
   );
 }
 

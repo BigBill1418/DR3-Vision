@@ -25,6 +25,8 @@ const Create = z.object({
   retracId: z.string().max(120).optional(),
   baleCount: z.number().int().nonnegative().optional(),
   buyer: z.string().max(200).optional(),
+  // ADR-0055 — structured recycler; drives the stewardship-split derivation.
+  vendorId: z.string().uuid().nullable().optional(),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
@@ -58,6 +60,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       retracId: d.retracId ?? null,
       baleCount: d.baleCount ?? null,
       buyer: d.buyer ?? null,
+      vendorId: d.vendorId ?? null,
       actorUserId: ctx.userId,
     });
     return NextResponse.json({ row }, { status: 201 });
