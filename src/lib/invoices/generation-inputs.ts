@@ -13,6 +13,7 @@ import { log } from '@/lib/observability/logger';
 import { resolveRateCents } from '@/lib/program-rules/resolver';
 import { resolveFreightCents } from '@/lib/billing-rates/freight-resolver';
 import { computeFuelSurchargeCents } from '@/lib/billing-rates/fuel';
+import { monthWindowUTC, billedRentalCents } from '@/lib/billing-rates/rental-billing';
 import {
   dayKeyUTCFromISO,
   pacificDayKeyUTC,
@@ -333,15 +334,15 @@ export class FreightInputError extends Error {
   }
 }
 
-/** Active container-rental rows in force for the billing month. */
+/**
+ * Active container-rental rows in force for the billing month. The `where` mirrors the
+ * pure `rentalOverlapsMonth` selection (rental-billing.ts) and each selected row bills
+ * its FULL monthly rate via `billedRentalCents` — NEVER prorated by day (ADR-0040 §3.6,
+ * C-10). A rental that starts on the 28th and spans into the next month is selected — and
+ * billed in full — in BOTH months.
+ */
 async function resolveRentals(siteId: string, billingMonthISO: string): Promise<RentalLeg[]> {
-  const billingMonth = dayKeyUTCFromISO(billingMonthISO);
-  const monthStart = new Date(
-    Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth(), 1),
-  );
-  const monthEnd = new Date(
-    Date.UTC(billingMonth.getUTCFullYear(), billingMonth.getUTCMonth() + 1, 0),
-  );
+  const { monthStart, monthEnd } = monthWindowUTC(dayKeyUTCFromISO(billingMonthISO));
   const rows = await prisma.containerRentalSite.findMany({
     where: {
       site_id: siteId,
@@ -355,6 +356,6 @@ async function resolveRentals(siteId: string, billingMonthISO: string): Promise<
   return rows.map((r) => ({
     id: r.id,
     locationName: r.location_name,
-    monthlyRateCents: r.monthly_rate_cents,
+    monthlyRateCents: billedRentalCents(r),
   }));
 }

@@ -5,6 +5,51 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-18 (ADR-0040 amendment: MRC billing rate infrastructure; rollup §8.2 + §3.3/§3.5/§3.6/§3.7)
+
+Billing-critical. Extends the accepted ADR-0040 rate infrastructure with the MRC
+billing-composition + transitional-freight rules. Migration
+`20260726_adr0040_rate_infrastructure` (purely additive, ADR-0035 clean-replay) —
+ONE enum + ONE table only; the rest is resolver code over EXISTING rate tables.
+
+- **Per-source OR service rates (§3.3).** New `source_service_rates` table +
+  `SourceServiceRateKind` enum (`trans`/`trailer`/`per_mattress`/`mrc_unit`) — per-source,
+  effective-dated rates for the OR billing components, mirroring the existing
+  `account_haul_rates` shape. Resolver `src/lib/billing-rates/service-rates.ts`
+  (`resolveSourceServiceRateCents`) picks the in-force row, detects same-`effective_from`
+  ties, and throws `ServiceRateUnresolvableError` when none is in force (never a silent $0).
+  **No rows seeded here** — the §7 seed PR loads the OR sources (The Dalles effective
+  2026-06-01; the rest 2026-01-01) after this merges.
+- **Per-site-type billing composition (§3.2/§8.2).** `src/lib/billing-rates/site-type-billing.ts`
+  (`resolveSiteTypeBilling`) maps a source's `site_type` → the component set
+  (mrc_inbound = trans+trailer+MRC unit; cvp_retailer = trans+trailer; collection_site =
+  trans+trailer+per-mattress+MRC unit; third_party_inbound = MRC unit only), then applies the
+  ADR-0037 `bill_trans`/`bill_trailer` overrides with **suppress-only** semantics (a flag can
+  turn a defaulted component OFF, never ON — Cottage Grove pattern). `active_billing=false`
+  suppresses all; an active source with no `site_type` throws `SiteTypeUnclassifiedError`.
+- **Transitional Woodland freight (§3.5).** `src/lib/billing-rates/woodland-freight.ts`
+  (`resolveWoodlandFreightCents`) — for any Woodland (CA) load, freight is ALWAYS priced off
+  the source's Primary rate + Primary mileage regardless of site Assignment. Delegates to the
+  audited `resolveFreightCents` (one money path): override = Primary rate; tier = Event Mile
+  Rate fallback; else `FreightUnresolvableError`. Rejects a non-CA source with
+  `WoodlandJurisdictionError`. The CA non-Woodland / normal-Assignment path is unchanged.
+- **Event Mile Rate resolver (§3.7).** `src/lib/billing-rates/event-mile-rate.ts`
+  (`resolveEventMileRateCents`) — the named, fail-loud mileage→flat-rate lookup used by the
+  Woodland fallback. **No new table:** the Event Mile Rate tier IS the already-seeded CA
+  `transport_rate_tiers` set (identical 7 bands, Variables!D6:F13), so this reuses those rows
+  rather than forking a second source of truth for the same numbers. Out-of-range throws
+  `EventMileRateOutOfRangeError`.
+- **Container rentals never prorated (§3.6, closes C-10).** `src/lib/billing-rates/rental-billing.ts`
+  encodes the policy explicitly (`monthWindowUTC`, `rentalOverlapsMonth`, `billedRentalCents`):
+  any month-overlap bills the FULL monthly rate — a rental starting on the 28th and spanning
+  into the next month bills full in BOTH months. `resolveRentals` (generation-inputs.ts)
+  refactored to share the pure helpers so the DB query and the policy can't drift. This
+  confirmed + locked the existing behavior (it already never prorated).
+- **OR fuel surcharge skip (§6.5) — confirmed, no change.** The CA-only gate was already
+  enforced by `resolveProgramRule` (throws `RuleStructurallyDisallowedError` for an OR
+  fuel-surcharge lookup before any price is read) and covered by an existing test; the
+  transportation composer also refuses `or_transportation_no_fuel`.
+
 ### Added — 2026-07-18 (ADR-0037 amendment: inventory + sources foundation; rollup §8.1)
 
 Billing-critical. The MRC billing tune-and-launch foundation. Migration

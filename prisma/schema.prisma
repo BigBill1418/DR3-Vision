@@ -2250,6 +2250,39 @@ model FuelPrice {
   @@map("fuel_prices")
 }
 
+/// ADR-0040 amendment (2026-07-18, rollup §3.3) — per-source, effective-dated service
+/// rates for the OR program billing components (trans / trailer / per-mattress / MRC
+/// unit). Parallels `account_haul_rates` (the existing per-source effective-dated rate
+/// pattern): ONE row per (source, rate_kind, effective window). Seeded EMPTY here — the
+/// §7 seed PR loads the OR source rows AFTER this schema merges (The Dalles effective
+/// 2026-06-01; the rest 2026-01-01). The resolver (`service-rates.ts`) picks the row
+/// whose `effective_from <= date` and `effective_to` is null or `>= date`, and fails
+/// LOUD (typed error) when none is in force — an OR billing component MUST NOT silently
+/// bill $0 (ADR-0040 D7). `mrc_unit` is included so the per-site-type composer
+/// (`site-type-billing.ts`) has a single per-source home for the MRC unit rate.
+enum SourceServiceRateKind {
+  trans
+  trailer
+  per_mattress
+  mrc_unit
+}
+
+model SourceServiceRate {
+  id             String                @id @default(uuid())
+  source_id      String // FK → sources.id (constraint in migration; bare column per block header)
+  rate_kind      SourceServiceRateKind
+  rate_cents     Int
+  effective_from DateTime              @db.Date
+  effective_to   DateTime?             @db.Date
+  note           String?
+  created_by     String?
+  created_at     DateTime              @default(now())
+  updated_at     DateTime              @updatedAt
+
+  @@index([source_id, rate_kind, effective_from])
+  @@map("source_service_rates")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // ADR-0041 — events capture + sequences (CAPTURE HALF; the sibling half owns
 // invoices/invoice_lines and the generation/approval/render pipeline). Every
