@@ -16,10 +16,14 @@ const Create = z.object({
   dropoffDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   kind: z.enum(KINDS),
   personName: z.string().min(1).max(200),
+  // §1.3 — optional traceable consumer name for unpaid records (CIP PII).
+  consumerName: z.string().max(200).optional(),
   units: z.number().int().positive(),
   slipNumber: z.string().max(120).optional(),
   checkNumber: z.string().max(120).optional(),
   retracId: z.string().max(120).optional(),
+  // §1.3 — explicit unpaid/illegal check amount (¢); omitted → units × 300 default.
+  incentiveAmountCents: z.number().int().nonnegative().max(100_000_000).optional(),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
@@ -29,7 +33,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
     const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 100);
     return NextResponse.json({ rows: await listDropoffs(ctx.siteId, limit) });
   } catch (e) {
-    return loadsErrorResponse(e, { site, op: 'dropoffs.list', requestId: req.headers.get('x-request-id') });
+    return loadsErrorResponse(e, {
+      site,
+      op: 'dropoffs.list',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }
 
@@ -45,14 +53,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       dropoffDate: new Date(`${d.dropoffDate}T00:00:00Z`),
       kind: d.kind,
       personName: d.personName,
+      consumerName: d.consumerName ?? null,
       units: d.units,
       slipNumber: d.slipNumber ?? null,
       checkNumber: d.checkNumber ?? null,
       retracId: d.retracId ?? null,
+      incentiveAmountCents: d.incentiveAmountCents ?? null,
       actorUserId: ctx.userId,
     });
     return NextResponse.json({ row }, { status: 201 });
   } catch (e) {
-    return loadsErrorResponse(e, { site, op: 'dropoffs.create', requestId: req.headers.get('x-request-id') });
+    return loadsErrorResponse(e, {
+      site,
+      op: 'dropoffs.create',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }

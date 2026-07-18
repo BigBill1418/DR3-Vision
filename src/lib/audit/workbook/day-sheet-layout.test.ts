@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Commodity } from '../types';
 import {
   BLOCK_HEADER_FIELDS,
+  BLOCK_HEADER_FIELDS_COTTON,
   COTTON_START_COL,
   commodityBlocksForDaySheet,
   isDaySheet,
@@ -43,10 +44,13 @@ describe('commodityBlocksForDaySheet — DAY6 9th (cotton) block', () => {
     ]);
   });
 
-  it('places the 8 standard blocks on the confirmed 8-col stride anchored to cotton', () => {
+  it('places the 8 standard blocks on the confirmed col-3 8-col stride, cotton at 68', () => {
     const blocks = commodityBlocksForDaySheet('DAY6');
-    // stride 8 starting at col 4 → block 9 (cotton) lands on 68.
-    expect(blocks.map((b) => b.startCol)).toEqual([4, 12, 20, 28, 36, 44, 52, 60, 68]);
+    // §8.2 real-file correction: standard blocks anchor at col 3 (TRASH) on an
+    // 8-col stride → 3,11,19,27,35,43,51,59. Cotton breaks the stride at the
+    // CONFIRMED col 68 (the stride-9 position would be 67). Earlier ADR-0048
+    // used a col-4 inference; corrected against the real June + July DAY grids.
+    expect(blocks.map((b) => b.startCol)).toEqual([3, 11, 19, 27, 35, 43, 51, 59, 68]);
   });
 });
 
@@ -66,20 +70,26 @@ describe('commodityBlocksForDaySheet — non-DAY6 DAY sheets', () => {
 });
 
 describe('commodityBlocksForDaySheet — header fields + taxonomy', () => {
-  it('every block carries the 8-field header sequence', () => {
-    for (const block of commodityBlocksForDaySheet('DAY6')) {
+  it('standard blocks carry the 7-field header; DAY6 cotton adds an 8th "revenue" col', () => {
+    // §8.2 real-file correction: standard commodity blocks are 7 fields (no
+    // "revenue"); only DAY6's cotton block appends "revenue" (col 75).
+    const blocks = commodityBlocksForDaySheet('DAY6');
+    const standard = blocks.slice(0, 8);
+    const cotton = blocks[8]!;
+    for (const block of standard) {
       expect(block.headerFields).toEqual([
         'Date',
         'Site',
         'Commodity',
         'Weight',
-        'BOL# or Check #',
+        'BOL#',
         'DR3#',
         'Haul#',
-        'revenue',
       ]);
     }
-    expect(BLOCK_HEADER_FIELDS).toHaveLength(8);
+    expect(cotton.headerFields).toEqual(BLOCK_HEADER_FIELDS_COTTON);
+    expect(BLOCK_HEADER_FIELDS).toHaveLength(7);
+    expect(BLOCK_HEADER_FIELDS_COTTON).toHaveLength(8);
   });
 
   it('every block commodity is a valid daily-log-9 value', () => {

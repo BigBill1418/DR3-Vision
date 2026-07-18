@@ -18,8 +18,9 @@
 //
 // Weight-based `outbound_materials` (sub_category `baled`/`shredded`) NEVER
 // subtract units — they are post-deconstruction commodities, and deconstruction is
-// what `stripped` already counts. `processed_units_daily.saved_units` is captured
-// but EXCLUDED from this equation (semantics open, Addendum B10-2).
+// what `stripped` already counts. `processed_units_daily.saved_units` SUBTRACTS from
+// the NON-PROGRAM pool (ADR-0037 amendment, rollup §A.2 — Kelsey confirmed 2026-07-17:
+// saved mattresses are set aside, not processed, and drawn from non-program inventory).
 //
 // POOL AWARENESS (Addendum B4 + survey amendment, Rick Albritton, both states):
 // inventory is two ledgers — program / non-program — because MRC is billed on
@@ -57,6 +58,12 @@ export interface BalanceComponents {
   wholeUnitsSold: PoolPair;
   /** landfilled_units program/non-program units since the anchor. */
   landfilled: PoolPair;
+  /**
+   * ADR-0037 amendment (rollup §A.2) — `Saved` units set aside since the anchor. Drawn
+   * from the NON-PROGRAM pool (Kelsey's confirmed default). Optional/absent → 0, so
+   * pre-amendment callers are unaffected (saved was previously excluded entirely).
+   */
+  savedUnits?: DecimalLike;
 }
 
 /** The single pool-aware running balance. `program.plus(nonProgram)` equals `total`. */
@@ -83,7 +90,10 @@ export interface RunningBalance {
  */
 export class PoolSplitMismatchError extends Error {
   readonly status = 422 as const;
-  constructor(readonly reason: string, message: string) {
+  constructor(
+    readonly reason: string,
+    message: string,
+  ) {
     super(message);
     this.name = 'PoolSplitMismatchError';
   }
@@ -106,7 +116,8 @@ export function computeRunningBalance(c: BalanceComponents): RunningBalance {
     .plus(c.verifiedInbound.nonProgram)
     .minus(c.stripped.nonProgram)
     .minus(c.wholeUnitsSold.nonProgram)
-    .minus(c.landfilled.nonProgram);
+    .minus(c.landfilled.nonProgram)
+    .minus(c.savedUnits ?? 0);
 
   return { program, nonProgram, total: program.plus(nonProgram) };
 }
@@ -129,7 +140,9 @@ export function snapshotTotalUnits(s: {
   units_total: number | null;
   units_in_processing: number;
 }): number {
-  return (s.units_indoor ?? 0) + (s.units_outdoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing;
+  return (
+    (s.units_indoor ?? 0) + (s.units_outdoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing
+  );
 }
 
 /**
@@ -169,7 +182,10 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     anchor.program_units != null &&
     anchor.non_program_units != null;
   const anchorPair: PoolPair = measuredAnchor
-    ? { program: anchor.program_units as Prisma.Decimal, nonProgram: anchor.non_program_units as Prisma.Decimal }
+    ? {
+        program: anchor.program_units as Prisma.Decimal,
+        nonProgram: anchor.non_program_units as Prisma.Decimal,
+      }
     : { program: anchorUnits, nonProgram: 0 };
   const anchorPool: 'measured' | 'legacy' = measuredAnchor ? 'measured' : 'legacy';
   // No physical anchor yet → count everything from the epoch up to asOf.
@@ -179,14 +195,18 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
   const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled] = await Promise.all([
     prisma.inboundLoad.aggregate({
       _sum: { program_unit_count: true, non_program_unit_count: true },
-      where: { site_id: siteId, status: { in: [...VERIFIED_INBOUND_STATUSES] }, arrived_at: dateWindow },
+      where: {
+        site_id: siteId,
+        status: { in: [...VERIFIED_INBOUND_STATUSES] },
+        arrived_at: dateWindow,
+      },
     }),
     prisma.consumerDropoff.aggregate({
       _sum: { units: true },
       where: { site_id: siteId, dropoff_date: dateWindow },
     }),
     prisma.processedUnitsDaily.aggregate({
-      _sum: { stripped_program: true, stripped_non_program: true },
+      _sum: { stripped_program: true, stripped_non_program: true, saved_units: true },
       where: { site_id: siteId, production_date: dateWindow },
     }),
     // WholeUnitsSold = renovation-sub-category outbound rows (the folded-in renovator
@@ -220,6 +240,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       program: landfilled._sum.program_units ?? 0,
       nonProgram: landfilled._sum.non_program_units ?? 0,
     },
+    savedUnits: stripped._sum.saved_units ?? 0,
   });
   return { ...balance, anchorPool };
 }

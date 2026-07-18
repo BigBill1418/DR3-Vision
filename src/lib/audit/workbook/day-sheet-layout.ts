@@ -25,34 +25,48 @@ export interface CommodityBlock {
   headerFields: readonly string[];
 }
 
-/** The row where every DAY sheet's outbound-by-commodity grid begins (PR#87 §1.2). */
+// The block-label row ("TRASH", "METAL", …) on a TYPICAL DAY sheet — the row
+// where `commodityBlocksForDaySheet` anchors columns. NOTE (§8.2, real files):
+// the grid is NOT at a fixed row across every DAY sheet. The "OUTBOUNDS" marker
+// (and the block-label row below it) shifts down on sheets that carry extra
+// preamble (e.g. DAY0's marker is on row 55, labels row 56). The finalized
+// parser therefore LOCATES the grid dynamically off the "OUTBOUNDS" marker
+// (section-extractors.ts) rather than trusting this constant; the constant is
+// retained for the common-case documentation + the layout unit tests.
 export const OUTBOUND_GRID_ROW = 51;
 
-/** Each block is 8 columns wide (PR#87 §3.2). */
+/** Each block occupies an 8-column stride (7 field columns + 1 spacer). */
 export const BLOCK_WIDTH = 8;
 
 /** The DAY sheet that uniquely carries the 9th (cotton) block. */
 export const COTTON_DAY_SHEET = 'DAY6';
 
-/** Cotton block's first column — CONFIRMED from real-file analysis (rollup §3.1 / PR#87 §3.2). */
+/** Cotton block's first column on DAY6 — CONFIRMED from the real June + July files. */
 export const COTTON_START_COL = 68;
 
 /**
- * Header fields for every commodity block, left→right (PR#87 §3.2). Identical
- * across all blocks and all DAY sheets.
+ * Header fields for a STANDARD commodity block, left→right — CONFIRMED from the
+ * real files (§8.2). Seven fields; the 7th column is labelled "Haul#" on some
+ * DAY sheets and "Material#" on others but always holds the material/ticket id.
+ * DAY6's cotton block appends an 8th "revenue" column (see `BLOCK_HEADER_FIELDS_COTTON`).
  */
 export const BLOCK_HEADER_FIELDS: readonly string[] = [
   'Date',
   'Site',
   'Commodity',
   'Weight',
-  'BOL# or Check #',
+  'BOL#',
   'DR3#',
   'Haul#',
+] as const;
+
+/** DAY6's cotton block carries an extra trailing "revenue" column (§8.2). */
+export const BLOCK_HEADER_FIELDS_COTTON: readonly string[] = [
+  ...BLOCK_HEADER_FIELDS,
   'revenue',
 ] as const;
 
-// Workbook order of the 8 standard blocks (PR#87 §1.2 / §3.2 row-51 sequence).
+// Workbook order of the 8 standard blocks (left→right in the block-label row).
 // Values are the repo `Commodity` (lowercase daily-log-9) taxonomy.
 const STANDARD_BLOCK_COMMODITIES: readonly Commodity[] = [
   'trash',
@@ -68,19 +82,23 @@ const STANDARD_BLOCK_COMMODITIES: readonly Commodity[] = [
 // The 9th block, present only on DAY6 (permanent template feature — rollup §3.1).
 const COTTON_COMMODITY: Commodity = 'cotton';
 
-// Column derivation:
-//   COTTON is CONFIRMED at col 68. The block-i start column follows
-//   4 + 8*(i-1) (i is 1-based), which places block 9 (cotton) at 4 + 8*8 = 68 —
-//   consistent with the confirmed cotton anchor. The 8 standard blocks' start
-//   columns are therefore INFERRED from that same stride.
-// TODO(§8.2, real-file finalization): confirm the 8 standard blocks' start
-//   columns against the real DAY-sheet grid when the workbooks land. Cotton's
-//   anchor (68) is proven; the stride below is inferred and cross-checks to it.
-const FIRST_BLOCK_START_COL = 4;
+// Column derivation — CONFIRMED from the real files (§8.2):
+//   The 8 standard blocks anchor at col 3 (TRASH) on an 8-column stride:
+//   3, 11, 19, 27, 35, 43, 51, 59. DAY6's cotton block does NOT continue that
+//   stride (which would land on 67); it is shifted to the CONFIRMED col 68.
+//   (Earlier ADR-0048 inference used a col-4 anchor — corrected here against the
+//   real June + July DAY grids.)
+const FIRST_BLOCK_START_COL = 3;
 
 function startColForBlock(blockIndex1Based: number): number {
   return FIRST_BLOCK_START_COL + BLOCK_WIDTH * (blockIndex1Based - 1);
 }
+
+/** Block-label text ("TRASH", …) → commodity, in workbook order (+ cotton). */
+export const OUTBOUND_BLOCK_LABELS: readonly { label: string; commodity: Commodity }[] = [
+  ...STANDARD_BLOCK_COMMODITIES.map((commodity) => ({ label: commodity, commodity })),
+  { label: COTTON_COMMODITY, commodity: COTTON_COMMODITY },
+];
 
 /** True for a canonical DAY sheet name (`DAY0`..`DAY31`, case-insensitive). */
 export function isDaySheet(sheetName: string): boolean {
@@ -105,11 +123,10 @@ export function commodityBlocksForDaySheet(sheetName: string): CommodityBlock[] 
   if (sheetName.trim().toUpperCase() === COTTON_DAY_SHEET) {
     blocks.push({
       commodity: COTTON_COMMODITY,
-      // Derived from the SAME stride as blocks 1–8 so a §8.2 grid correction
-      // moves every block together; the CONFIRMED col-68 anchor is pinned as a
-      // test invariant against COTTON_START_COL (day-sheet-layout.test.ts).
-      startCol: startColForBlock(9),
-      headerFields: BLOCK_HEADER_FIELDS,
+      // Cotton breaks the stride: CONFIRMED at col 68 on DAY6 (the stride-9
+      // position would be 67). It also carries the extra trailing "revenue" col.
+      startCol: COTTON_START_COL,
+      headerFields: BLOCK_HEADER_FIELDS_COTTON,
     });
   }
 

@@ -41,6 +41,7 @@ import {
   snapshotTotalUnits,
   type RunningBalance,
 } from '@/lib/inventory/running-balance';
+import { computeInventoryClose, type InventoryClosePools } from '@/lib/inventory/inventory-close';
 import type { SiteAliasResolver } from './types';
 
 const D = Prisma.Decimal;
@@ -283,6 +284,15 @@ export interface PromotionCandidates {
   outbound: OutboundCandidate[];
   landfilled: LandfilledCandidate[];
   dropoffs: DropoffCandidate[];
+  /**
+   * ADR-0037 amendment (rollup §2.3) — the workbook's OWN authoritative pool-level
+   * inventory ledger (Processed sheet F/G/D/E/H/I + opening + saved). When present, the
+   * close (D2 assertion) is computed from it via §2.3 CORRECT arithmetic — reconciling to
+   * the workbook's billing totals EXACTLY (June F40 19451 / G40 229 → 3977). When absent
+   * (legacy/synthetic imports without a Processed sheet), the close falls back to the
+   * per-record flow recompute. NOT a promotable table — pure close metadata.
+   */
+  inventoryLedger: InventoryClosePools | null;
   clippedRowCount: number;
 }
 
@@ -415,6 +425,7 @@ export function decodeStagingRows(
     outbound: [],
     landfilled: [],
     dropoffs: [],
+    inventoryLedger: null,
     clippedRowCount: 0,
   };
   const unresolved = new Set<string>();
@@ -422,6 +433,26 @@ export function decodeStagingRows(
 
   for (const row of rows) {
     const section = row.section;
+    // ADR-0037 amendment — the authoritative inventory ledger (close metadata, not a
+    // promotable table). Decoded into candidates.inventoryLedger; the close reads it.
+    if (section === 'inventory_ledger') {
+      const where = `inventory_ledger@${provLabel(row.provenance)}`;
+      const p = decodePayload(row.raw_value, where);
+      if (out.inventoryLedger)
+        throw new PromotionParseError(`${where}: more than one inventory_ledger row in the import`);
+      out.inventoryLedger = {
+        programOpen: reqNum(p, 'programOpen', where),
+        nonProgramOpen: reqNum(p, 'nonProgramOpen', where),
+        programInbound: reqNum(p, 'programInbound', where),
+        nonProgramInbound: reqNum(p, 'nonProgramInbound', where),
+        programStripped: reqNum(p, 'programStripped', where),
+        nonProgramStripped: reqNum(p, 'nonProgramStripped', where),
+        savedUnits: reqNum(p, 'savedUnits', where),
+        sold: reqNum(p, 'sold', where),
+        landfilled: reqNum(p, 'landfilled', where),
+      };
+      continue;
+    }
     if (section === null || !PROMOTION_SECTIONS.includes(section as PromotionSection)) {
       // Non-promotable staging rows (summary/detail evidence) are ignored, not errors.
       if (section && ['summary', 'detail'].includes(section)) continue;
@@ -598,12 +629,23 @@ function countCandidates(c: PromotionCandidates): PromotionCounts {
 }
 
 /**
- * Recompute the scope-close on-hand balance from the promoted candidate set via
- * the shared `computeRunningBalance` (D2). The candidate set maps 1:1 onto the
- * rows the transaction inserts, so this proves the promoted numbers close to the
- * known figure. Anchor pool follows `onHand`'s default (all program).
+ * Recompute the scope-close on-hand balance from the promoted candidate set (D2).
+ *
+ * ADR-0037 amendment: when the workbook carried its OWN authoritative inventory ledger
+ * (the Processed sheet's pool-level F/G/D/E/H/I + opening + saved), the close is computed
+ * from THAT via §2.3 correct arithmetic — the billing-authoritative path that reconciles
+ * to the workbook's totals EXACTLY (June → 3977). The raw per-shipment DAY grid over-sums
+ * inbound (e.g. by 85 on June DAY23, whose non-program row the workbook nets out), so it
+ * is NOT the close basis. When no ledger is present (legacy/synthetic imports), the close
+ * falls back to the per-record flow recompute via the shared `computeRunningBalance`,
+ * where the candidate set maps 1:1 onto the inserted rows. Anchor pool follows `onHand`'s
+ * default (all program).
  */
 export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalance {
+  if (c.inventoryLedger) {
+    const close = computeInventoryClose(c.inventoryLedger);
+    return { program: close.program, nonProgram: close.nonProgram, total: close.total };
+  }
   const anchorUnits = c.opening
     ? snapshotTotalUnits({
         units_indoor: c.opening.unitsIndoor,
@@ -641,6 +683,8 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
     );
   const landfilled = sum(c.landfilled);
   const dropoffs = c.dropoffs.reduce((a, r) => a + r.units, 0);
+  // ADR-0037 amendment (§A.2) — saved units subtract from the non-program pool.
+  const savedUnits = c.dailyCloses.reduce((a, r) => a.plus(r.savedUnits ?? 0), new D(0));
 
   return computeRunningBalance({
     anchor: { program: anchorUnits, nonProgram: 0 },
@@ -649,6 +693,7 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
     stripped: { program: stripped.program, nonProgram: stripped.nonProgram },
     wholeUnitsSold: { program: reno.program, nonProgram: reno.nonProgram },
     landfilled: { program: landfilled.program, nonProgram: landfilled.nonProgram },
+    savedUnits,
   });
 }
 

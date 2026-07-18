@@ -5,6 +5,51 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-18 (ADR-0037 amendment: inventory + sources foundation; rollup §8.1)
+
+Billing-critical. The MRC billing tune-and-launch foundation. Migration
+`20260725_adr0037_inventory_foundation` (purely additive, ADR-0035 clean-replay).
+
+- **Correct-arithmetic inventory close (§2.3).** New `src/lib/inventory/inventory-close.ts`
+  (`computeInventoryClose`) computes the month close via the CORRECT arithmetic —
+  `program_close = program_open + program_inbound − program_stripped`;
+  `non_program_close = non_program_open + non_program_inbound − non_program_stripped −
+saved_units`; `total = program_close + non_program_close − sold − landfilled` — NEVER
+  the workbook's latently-buggy `D45`/`D48` formulas. The authoritative pool aggregates are
+  read from the workbook's own **Processed sheet** (per-day F/G/D/E/H/I + opening D5/F5 +
+  the DAY `Saved` box), exposed on `ParsedWorkbook` as `inventoryLedger` + `inventoryClose`.
+  **The corrected June workbook (SHA `1eeeccb…`) closes to 3,977 (3,748 program + 229
+  non-program)**, verified against the real oracle: programInbound 19,451, nonProgramInbound
+  229, programStripped 17,126; cross-checked against the DAY31 Ending-inventory cell (3,977).
+  This SUPERSEDES the prior 4,062 figure — that was the raw DAY per-shipment grid over-sum
+  (+85 from DAY23's `NP`-marked Recology Healdsburg row, which the workbook's `F = I38 − L39`
+  accounting nets out). The parser stages an `inventory_ledger` staging row and the ADR-0048
+  promotion close (D2) reads it, so `expectedCloseTotal` for June Woodland is now 3977.
+- **§1.1 sequential depletion** (`sequentialDepletion` / `depleteSeries`): program-first —
+  non-program is stripped only once the program pool is exhausted (no-op for June, E40 = 0).
+- **§A.2 `saved_units`** wired into the shared `computeRunningBalance` — subtracts from the
+  non-program pool (was previously excluded from all inventory math). `onHand` + the
+  promotion close pick it up (0 for June).
+- **Sources site-billing taxonomy (§3.2):** `Source.site_type` (`SourceSiteType`:
+  mrc_inbound/cvp_retailer/collection_site/third_party_inbound), `Source.active_billing`
+  (Roseburg pattern), `Source.bill_trans` + `Source.bill_trailer` (Cottage Grove overrides).
+- **Pool routing (§3.2, §A.5):** `src/lib/inventory/pool-routing.ts` — the single
+  inbound-channel → pool map. Illegals + unpaid + collection + events → program pool;
+  non_program → non-program pool. No new `illegal_dropoff` enum — `ConsumerDropoffKind.illegal`
+  already carries it.
+- **Consumer drop-off traceability (§1.3):** `ConsumerDropoff.consumer_name` (optional CIP
+  PII) + `incentive_amount_cents` (explicit unpaid check amount, default `units × 300`¢,
+  overridable). Wired through the dropoffs service + manager API.
+- **§A.6:** the stale `Summary!` / `Trans Summary!` tabs are advisory only and never feed
+  billing aggregation — surfaced via the `[summary-stale]` parse flag.
+- **Docs:** new `docs/parsers/woodland-daily-log-schema.md` (§2.2 cell-reference table + the
+  F9/D45/D48 workbook-bug notes); ADR-0037 amendment section.
+- **Tests:** `inventory-close.test.ts` (incl. the explicit June 3748/229/3977 assertion +
+  the D45-bug guard), `pool-routing.test.ts`, and new woodland reconciliation assertions.
+- **STAGING ONLY** — no promotion WRITE path was run or modified (operational-table inserts
+  are unchanged; only the close-VERIFICATION math is now authoritative). tsc + full vitest +
+  prod build green.
+
 ### Fixed — 2026-07-17 (CRON incident: missed daily report + silent 503)
 
 Production-hardening follow-up to the 2026-07-16 cron outage. Root cause: the
@@ -53,6 +98,59 @@ let us backfill the miss and prevent a silent recurrence.
   path attempts the page (mocked) and still 503s, publish-throw still 503s,
   token-set + non-prod never page.
 
+### Changed — 2026-07-17 (ADR-0048/0049 §8.2: source inbound from the DAY grid — close now reconciles)
+
+Billing-critical follow-up to the parser finalization below (operator-approved).
+The first pass sourced promotable `inbound_loads` from the category sheets
+(`inb_trans_charges`/`inb_no_trans_charge`/`nonprogram`) — only the **B2B/trans
+subset** (June 5220 units / 57 loads), so a flow-recompute of the close was
+wildly wrong (June −10209 vs authoritative 4062). Fixed: `inbound_loads` **and**
+`consumer_dropoffs` now come from the **DAY per-day INBOUND grid** (the complete
+all-channel inbound — B2B hauls + unpaid/incentive/illegal drop-offs), located
+below each DAY sheet's inbound header and bounded by the OUTBOUND single-list /
+OUTBOUNDS marker. The `commodity` column classifies each row's channel. The
+staged inbound-unit total now equals the workbook's own per-day INBOUND total
+**exactly** (June 19765, July 8822), and the flow-recomputed close **reconciles
+to the authoritative workbook close: June = 4062, July = 2577** (verified via
+`decodeStagingRows` → `computeRunningBalance` against the real oracles). The
+category sheets (+ `incentive_unpaid`) are the same rows re-categorized for
+billing — now staged as **evidence** (section `detail`), never promoted, so
+there is no double-count. Fixture gained a DAY inbound grid; new
+reconciliation + inbound-sourcing tests. Residual flags retained (processed date
+construction, drop-off `personName`, opening-inventory non-program begin).
+STAGING ONLY — no promotion write invoked. tsc + full vitest (2084) + build green.
+
+### Changed — 2026-07-17 (ADR-0048/0049 §8.2: finalize the workbook parser against the REAL Woodland files)
+
+Billing-critical. `parseWorkbook` matched sheets by exact lowercase name
+(`summary`/`inbound`/`outbound`/`inventory`) — sheets the real Woodland daily-log
+workbooks do not have — so it returned **0 staging rows** and
+`templateGeneration='unknown'`. Rewired the parse path to address sheets by
+`classifyWorkbookSheets` **semantic type** (new `section-extractors.ts`), so the
+real June + July files now parse into promotion-consumable `StagingRow`s
+(June: 273 rows, July: 237) that `decodeStagingRows` accepts. Extractors:
+inbound (`inb_trans_charges`/`inb_no_trans_charge`/`nonprogram` → `inbound_loads`),
+outbound (DAY0–31 per-shipment grid → `outbound_materials`, incl. DAY6's 9th
+COTTON block), processed (`Day N` close → `processed_units_daily`), drop-offs
+(`incentive_unpaid` → `consumer_dropoffs`), opening inventory, and best-effort
+Summary figures (still feed `recomputeSummary`/`resolveInboundSites`).
+Rollup sheets (`commodities`/`renovation`/`all`) are staged as **evidence only**
+(section `detail`, promotion-skipped) — they are the DAY grid rolled up, so
+promoting them would double-count. The **authoritative month-close** is now read
+from the workbook's own "Ending inventory" cell (June = **4062**, July = **2577**;
+July's opening = June's close, cross-validated) rather than the stale hardcoded
+`4062`. Fixed a real crash: `cells.ts` `cellText` threw `RangeError` on invalid
+Date cells present in the real files. Reconciled `day-sheet-layout.ts` to the
+real grid (blocks anchor col **3** not 4; 7 standard fields not 8; DAY6 cotton at
+col 68 + `revenue`). Backward-compatible: the legacy ADR-0039 synthetic path is
+kept (branched on the `figure_key` Summary signature); all prior parser/resolver/
+day-sheet/summary-recompute tests stay green. New `parser-woodland.test.ts` +
+synthetic Woodland fixture. **STAGING ONLY** — no promotion write path was
+invoked or modified. Every ambiguous mapping (nonprogram=inbound-not-outbound,
+inbound-completeness gap, processed date construction, drop-off `personName`,
+DAY-outbound `subCategory` default) is surfaced in `ParsedWorkbook.flags` for
+operator review before promotion. tsc + full vitest (2082) + prod build green.
+
 ### Security — 2026-07-16 (D3: nonce-based CSP — drop `script-src 'unsafe-inline'`)
 
 Operator-directed. Replaced `script-src 'unsafe-inline'` with a **per-request
@@ -67,6 +165,7 @@ FOUC guard now carries the nonce via `next/headers`. Per-route `frame-ancestors`
 survey exception + `X-Frame-Options` distinction preserved. New unit tests
 (`src/lib/csp.ts` builder + middleware wiring). tsc + full vitest + prod build
 green. ADR-0053 D3 → done. Auth/middleware logic unchanged.
+
 ### Added — 2026-07-16 (O-2: admin file-drop inbox)
 
 Operator-directed (O-2): _"just allow me to upload [files] in the vision portal

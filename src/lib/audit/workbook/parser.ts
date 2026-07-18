@@ -23,8 +23,16 @@
 
 import ExcelJS from 'exceljs';
 import { cellText, cellNumber } from './cells';
+import { classifyWorkbookSheets, type WorksheetSemanticType } from './section-resolver';
+import { extractWorkbook, type WorkbookInventoryLedger } from './section-extractors';
+import type { InventoryClose } from '@/lib/inventory/inventory-close';
 
-export type TemplateGeneration = 'no_calc' | 'calc' | 'eod_carryover' | 'unknown';
+export type TemplateGeneration =
+  | 'no_calc'
+  | 'calc'
+  | 'eod_carryover'
+  | 'woodland_daily'
+  | 'unknown';
 
 export interface CellProvenance {
   tab: string;
@@ -87,6 +95,27 @@ export interface ParsedWorkbook {
   detailAmountsByFigure: Map<string, DetailAmount[]>;
   inbound: InboundStage[];
   outbound: OutboundStage[];
+  /** §8.2: semantic type per sheet name (empty for legacy synthetic workbooks). */
+  sheetTypes: Map<string, WorksheetSemanticType>;
+  /** §8.2: per-section staged-row counts for the operator report. */
+  sectionCounts: Record<string, number>;
+  /** §8.2: billing-affecting / ambiguity flags for operator review. */
+  flags: string[];
+  /**
+   * §8.2: the authoritative month-close on-hand balance read from the workbook's
+   * OWN "Ending inventory" cell (null for legacy synthetic workbooks). This is
+   * the re-derived close figure — NOT a flow recompute.
+   */
+  closeBalance: { value: number; provenance: CellProvenance } | null;
+  /**
+   * ADR-0037 amendment (§2.3): the BILLING-AUTHORITATIVE pool-level inventory ledger
+   * read from the workbook's own Processed sheet (per-day F/G/D/E/H/I + opening + saved),
+   * and the §2.3 correct-arithmetic close computed from it. For June: programInbound
+   * 19451 + nonProgramInbound 229 − programStripped 17126 → close 3977 (3748 + 229). Null
+   * for legacy synthetic workbooks that carry no Processed sheet.
+   */
+  inventoryLedger: WorkbookInventoryLedger | null;
+  inventoryClose: InventoryClose | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -121,7 +150,61 @@ export async function parseWorkbook(
   const sheetNames = wb.worksheets.map((w) => w.name);
   const hasInventory = sheetNames.some((n) => n.toLowerCase() === 'inventory');
 
-  const summarySheet = wb.worksheets.find((w) => w.name.toLowerCase() === 'summary');
+  // ── Path select ─────────────────────────────────────────────────────────
+  // The ADR-0039 synthetic fixtures carry a "Summary" sheet whose row-1/col-1 is
+  // the literal header "figure_key" (the figure_key|stored_value|detail_sheet…
+  // table). The REAL Woodland workbooks have no such sheet. We branch on that
+  // signature so the legacy exact-name path stays byte-identical for the old
+  // fixtures while real files route through the semantic §8.2 extractor.
+  const legacySummary = wb.worksheets.find((w) => w.name.toLowerCase() === 'summary');
+  const isLegacy =
+    !!legacySummary &&
+    (cellText(legacySummary.getRow(1).getCell(1).value) ?? '').toLowerCase() === 'figure_key';
+
+  if (!isLegacy) {
+    // ── Real Woodland workbook: semantic-type-driven extraction (§8.2). ──────
+    const classification = classifyWorkbookSheets(wb);
+    const ex = extractWorkbook(wb, classification);
+    stagingRows.push(...ex.stagingRows);
+    summaryFigures.push(...ex.summaryFigures);
+    inbound.push(...ex.inbound);
+    outbound.push(...ex.outbound);
+
+    // 'woodland_daily' only when an actual Woodland operational section resolved
+    // (a workbook of purely-unknown sheets — e.g. the Terex equipment log — must
+    // NOT masquerade as a daily log just because evidence rows were staged).
+    const WOODLAND_SECTIONS = new Set([
+      'inbound',
+      'outbound',
+      'daily_close',
+      'dropoff',
+      'opening_inventory',
+      'summary',
+    ]);
+    const hasWoodlandSection = stagingRows.some(
+      (r) => r.section !== null && WOODLAND_SECTIONS.has(r.section),
+    );
+    const templateGeneration: TemplateGeneration = hasWoodlandSection
+      ? 'woodland_daily'
+      : 'unknown';
+    return {
+      templateGeneration,
+      sheetCount: wb.worksheets.length,
+      stagingRows,
+      summaryFigures,
+      detailAmountsByFigure,
+      inbound,
+      outbound,
+      sheetTypes: classification,
+      sectionCounts: ex.counts,
+      flags: ex.flags,
+      closeBalance: ex.closeBalance,
+      inventoryLedger: ex.inventoryLedger,
+      inventoryClose: ex.inventoryClose,
+    };
+  }
+
+  const summarySheet = legacySummary;
   if (summarySheet) {
     summarySheet.eachRow((row, rowIndex) => {
       if (rowIndex === 1) return; // header
@@ -258,5 +341,11 @@ export async function parseWorkbook(
     detailAmountsByFigure,
     inbound,
     outbound,
+    sheetTypes: new Map(),
+    sectionCounts: {},
+    flags: [],
+    closeBalance: null,
+    inventoryLedger: null,
+    inventoryClose: null,
   };
 }
