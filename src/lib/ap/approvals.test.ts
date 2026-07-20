@@ -15,6 +15,7 @@ import {
 } from './__testutils__/fake-prisma';
 import {
   ApAlreadyDecidedError,
+  ApLocationConflictError,
   ApNoteRequiredError,
   ApNotActionableError,
   ApSiteRequiredError,
@@ -41,9 +42,18 @@ const notifyStaffSpy = vi.fn();
 // each renderer returns a fixed PDF + sha256 so decision_pdf_sha256 persistence,
 // the pdf-vs-image branch, and multi-attachment passthrough can all be asserted.
 const stamp = vi.hoisted(() => ({
-  stampApproval: vi.fn(async () => ({ pdf: Buffer.from('%PDF-stub'), sha256: 'deadbeef' })),
-  stampOntoOriginalPdf: vi.fn(async () => ({ pdf: Buffer.from('%PDF-overlay'), sha256: 'pdfsha' })),
-  stampImage: vi.fn(async () => ({ pdf: Buffer.from('%PDF-image'), sha256: 'imgsha' })),
+  stampApproval: vi.fn(async (_input: unknown) => ({
+    pdf: Buffer.from('%PDF-stub'),
+    sha256: 'deadbeef',
+  })),
+  stampOntoOriginalPdf: vi.fn(async (_bytes: unknown, _input: unknown) => ({
+    pdf: Buffer.from('%PDF-overlay'),
+    sha256: 'pdfsha',
+  })),
+  stampImage: vi.fn(async (_input: unknown, _bytes: unknown, _ct: unknown) => ({
+    pdf: Buffer.from('%PDF-image'),
+    sha256: 'imgsha',
+  })),
 }));
 // Amendment 4 — R2 originals download + decision-PDF archive. Default: no bytes
 // (R2 unconfigured) so the no-attachment tests never touch it; per-test overrides
@@ -109,6 +119,7 @@ function pendingReq(over: Partial<FakeApRequest> = {}): FakeApRequest {
     decision_mail_sent_at: null,
     quarantine_reason: null,
     site_id: null,
+    filed_not_dr3: false,
     decision_pdf_sha256: null,
     decision_pdf_r2_key: null,
     original_attachment_sha256: null,
@@ -299,6 +310,133 @@ describe('decideRequest — first action wins + both attempts audited', () => {
     expect(db.requests[0]!.site_id).toBeNull();
     expect(notifyStaffSpy).not.toHaveBeenCalled();
     expect(writeAudit).not.toHaveBeenCalled();
+  });
+});
+
+// ADR-0046 amendment (2026-07-20) — third location disposition "NOT DR3 — See
+// Reason". A decision is EITHER a real DR3 site OR filed_not_dr3=true (site_id
+// NULL, reason required) — never both, never neither.
+describe('decideRequest — NOT DR3 disposition', () => {
+  const recips = [{ email: 'mary@svdp.us', active: true }];
+
+  it('persists filed_not_dr3=true + site_id NULL, requires the reason, records no site', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      decisionRecipients: recips,
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      note: 'mis-addressed — this is a parent-org bill, not a DR3 location',
+      filedNotDr3: true,
+    });
+    expect(res.decision).toBe('approved');
+    const row = db.requests[0]!;
+    expect(row.status).toBe('approved');
+    expect(row.filed_not_dr3).toBe(true);
+    expect(row.site_id).toBeNull(); // never filed against a real site
+    expect(row.decision_note).toContain('parent-org bill');
+    // The winning audit records the disposition.
+    const won = writeAudit.mock.calls
+      .map((c) => c[0] as { after?: { outcome?: string; filed_not_dr3?: boolean; has_site?: boolean } })
+      .find((a) => a.after?.outcome === 'won');
+    expect(won?.after?.filed_not_dr3).toBe(true);
+    expect(won?.after?.has_site).toBe(false);
+  });
+
+  it('REFUSES a NOT DR3 decision with no / blank reason — no state change (approve AND reject)', async () => {
+    for (const decision of ['approved', 'rejected'] as const) {
+      const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+      for (const bad of [undefined, '', '   '] as const) {
+        await expect(
+          decideRequest({
+            prisma: fp(db),
+            requestId: 'req-1',
+            decision,
+            actorUserId: 'u-morena',
+            filedNotDr3: true,
+            ...(bad !== undefined ? { note: bad } : {}),
+          }),
+        ).rejects.toBeInstanceOf(ApNoteRequiredError);
+      }
+      expect(db.requests[0]!.status).toBe('pending'); // untouched
+      expect(db.requests[0]!.filed_not_dr3).toBe(false);
+      expect(notifyStaffSpy).not.toHaveBeenCalled();
+      expect(writeAudit).not.toHaveBeenCalled();
+      writeAudit.mockClear();
+      notifyStaffSpy.mockClear();
+    }
+  });
+
+  it('REFUSES when BOTH a site AND NOT DR3 are supplied (mutual exclusion) — no state change', async () => {
+    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+    await expect(
+      decideRequest({
+        prisma: fp(db),
+        requestId: 'req-1',
+        decision: 'approved',
+        actorUserId: 'u-morena',
+        note: 'reason',
+        siteId: 'site-w',
+        filedNotDr3: true,
+      }),
+    ).rejects.toBeInstanceOf(ApLocationConflictError);
+    expect(db.requests[0]!.status).toBe('pending');
+    expect(db.requests[0]!.filed_not_dr3).toBe(false);
+    expect(db.requests[0]!.site_id).toBeNull();
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it('a NOT DR3 REJECTION is filed the same way (marker set, site NULL)', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      decisionRecipients: recips,
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: 'wrong entity — bill belongs to another company',
+      filedNotDr3: true,
+    });
+    expect(res.decision).toBe('rejected');
+    expect(db.requests[0]!.status).toBe('rejected');
+    expect(db.requests[0]!.filed_not_dr3).toBe(true);
+    expect(db.requests[0]!.site_id).toBeNull();
+  });
+
+  it('the decision mail renders "NOT DR3 — see reason: <reason>" (body + subject) instead of a site', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      // A real site row exists, but NOT DR3 must never resolve/show it.
+      sites: [{ id: 'site-w', code: 'woodland', name: 'Woodland' }],
+      decisionRecipients: recips,
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      note: 'mis-addressed to DR3 — actually a parent-org bill',
+      filedNotDr3: true,
+    });
+    expect(res.mail).toBe('sent');
+    const args = notifyStaffSpy.mock.calls[0]![0] as { subject: string; htmlBody: string };
+    // Unmissable in the subject and leading the body facts, in the site slot.
+    expect(args.subject).toContain('NOT DR3');
+    expect(args.subject).not.toContain('Woodland');
+    expect(args.htmlBody).toContain('NOT DR3 — see reason:');
+    expect(args.htmlBody).toContain('mis-addressed to DR3 — actually a parent-org bill');
+    expect(args.htmlBody).not.toContain('Site: <b>');
+    // The stamp/PDF path is told it is NOT DR3 (body-only invoice ⇒ stampApproval).
+    const stampArg = stamp.stampApproval.mock.calls[0]![0] as { notDr3?: boolean };
+    expect(stampArg.notDr3).toBe(true);
   });
 });
 

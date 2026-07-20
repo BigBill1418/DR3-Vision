@@ -300,6 +300,71 @@ describe('site tag on the stamp (2026-07-15 directive)', () => {
   });
 });
 
+// ADR-0046 amendment (2026-07-20) — the NOT-DR3 disposition must render "NOT DR3 —
+// see reason" in the location slot (where the site name would be), not a site.
+describe('NOT DR3 disposition on the stamp (2026-07-20 amendment)', () => {
+  const at = new Date('2026-07-20T19:00:00Z');
+
+  it('stampText replaces the site slot with the NOT DR3 marker', () => {
+    const line = stampText({
+      decision: 'approved',
+      approverName: 'Rick Albritton',
+      decidedAt: at,
+      notDr3: true,
+    });
+    expect(line).toContain('— NOT DR3 (see reason)');
+    expect(line).not.toContain('Site:');
+  });
+
+  it('NOT DR3 wins over any site name on the stamp line', () => {
+    const line = stampText({
+      decision: 'approved',
+      approverName: 'Rick',
+      decidedAt: at,
+      notDr3: true,
+      siteName: 'Woodland',
+    });
+    expect(line).toContain('NOT DR3');
+    expect(line).not.toContain('Woodland');
+  });
+
+  it('the meta block shows NOT DR3 + the reason inline, never a Site line', () => {
+    const html = buildStampHtml({
+      kind: 'body',
+      requestId: 'req-1',
+      subject: 'Invoice 123',
+      approverName: 'Rick',
+      decision: 'approved',
+      decidedAt: at,
+      notDr3: true,
+      note: 'parent-org bill, not a DR3 location',
+      bodyHtmlSanitized: '<p>hi</p>',
+    });
+    expect(html).toContain('NOT DR3 — see reason');
+    expect(html).toContain('parent-org bill, not a DR3 location');
+    expect(html).not.toContain('Site: <b>');
+  });
+
+  it('the pdf-lib overlay draws the NOT DR3 marker on the page', async () => {
+    const doc = await PDFDocument.create();
+    doc.setCreationDate(new Date(0));
+    doc.setModificationDate(new Date(0));
+    doc.addPage([612, 792]).drawText('invoice', { x: 40, y: 700, size: 14 });
+    const original = await doc.save();
+    const { pdf } = await stampOntoOriginalPdf(original, {
+      kind: 'attachment',
+      requestId: 'req-1',
+      subject: 'Invoice 123',
+      approverName: 'Rick',
+      decision: 'approved',
+      decidedAt: at,
+      notDr3: true,
+      note: 'wrong entity',
+    });
+    expect(pdfVisibleText(pdf)).toContain('NOT DR3');
+  });
+});
+
 // 2026-07-15 operator directive — the approver's note must display on the OUTPUT
 // invoice accounting receives back, i.e. drawn into the pdf-lib overlay band
 // (the HTML stamp paths already carried it).

@@ -471,3 +471,65 @@ bottom stamp band grows to carry the note (wrapped, capped at 3 lines with an
 ellipsis; the full note always remains in the email body), on every page,
 both decisions. The queue's Note field is labeled "appears on the returned
 invoice" so approvers know the audience.
+
+## Amendment — 2026-07-20 (third location disposition: "NOT DR3 — See Reason")
+
+Operator directive (Bill): _"on the ap approval portal add a third option for
+location 'NOT DR3 - See Reason'."_
+
+**Problem.** Since the 2026-07-15 site-required amendment, every AP decision must
+tag a real DR3 site (Woodland/Eugene). But not every invoice that lands in the AP
+mailbox is _for_ a DR3 location — some are mis-addressed, sent to the wrong entity,
+or are a parent-org bill. Forcing such an invoice onto a real site's books would
+mis-file a real vendor bill. Approvers had no honest way to record "this is not a
+DR3 invoice."
+
+**Decision.** Add a third **location** option, `NOT DR3 – See Reason`. When chosen,
+the approver must supply a **reason** (the decision note), and the decision is
+recorded WITHOUT filing against a real site: `site_id` stays NULL and a new marker
+column `ap_requests.filed_not_dr3` is set true.
+
+**Location invariant.** A decided row is now EXACTLY ONE of:
+- **site-filed** — `site_id` NOT NULL, `filed_not_dr3 = false` (Woodland/Eugene), or
+- **NOT DR3** — `filed_not_dr3 = true`, `site_id` NULL (reason required).
+
+Never both; never neither (for rows decided after this ships). Enforced in depth:
+
+- **Schema/DB** — `filed_not_dr3 BOOLEAN NOT NULL DEFAULT false` (migration
+  `20260728_ap_not_dr3_location`, purely additive, sorts after
+  `20260727_adr0041_pilot_mode_gp_export`; default false backfills every existing
+  row as a normal site-filed decision). A **partial CHECK** enforces the "never
+  both" half (`NOT (filed_not_dr3 = true AND site_id IS NOT NULL)`); it is
+  deliberately partial so historical NULL-site rows decided before the site-required
+  directive remain valid.
+- **Service** (`decideRequest`) — the location guard runs BEFORE any read/state
+  change (mirrors the reject-note + site boundaries): `filedNotDr3` requires a
+  non-empty note (else `ApNoteRequiredError`, 400) and forbids a `siteId` (else
+  `ApLocationConflictError`, 400); otherwise `assertDecisionSite` still requires a
+  site exactly as before. Persistence writes `filed_not_dr3 = true, site_id = NULL`
+  for NOT-DR3; the winning audit row records `filed_not_dr3`.
+- **Route** (`/api/ops/ap/[id]/decide`) — accepts `notDr3?: boolean`. `notDr3 &&
+  siteId` → 400 (mutual exclusion, never silently pick one); `notDr3` without a
+  non-empty note → 400; NOT-DR3 calls `decideRequest({ filedNotDr3: true })` and
+  does NOT resolve/assert a site. The existing site path is unchanged.
+- **UI** — the location select gains `NOT DR3 – See Reason`; selecting it shows an
+  inline "add the reason in the note (required)" hint, disables Approve until a note
+  is present (Reject/Hold already require one), and posts `notDr3: true` instead of a
+  `siteId`. The field is relabeled **Location** (Woodland / Eugene / NOT DR3).
+
+**Accounting semantics.** So Mary never mistakes a NOT-DR3 decision for a DR3-site
+invoice, the disposition is unmissable everywhere accounting looks — in the same
+slot the site name occupies today:
+- **Decision email** — subject reads `(approved — NOT DR3)`; the body leads with
+  `NOT DR3 — see reason: <reason>` in place of the `Site:` line.
+- **Stamped PDF / cover / image render** — the per-page stamp line reads
+  `… via DR3-Vision — NOT DR3 (see reason)`, and the meta block shows
+  `Location: NOT DR3 — see reason: <reason>` instead of a `Site:` line.
+
+**Disposition semantics (design note).** NOT-DR3 is a **location tag orthogonal to
+the approve/reject decision**, not a distinct decision type. An approver still
+Approves or Rejects the invoice AND tags the location; when the location is NOT DR3
+a reason is required either way. This keeps the existing approve/reject state machine
+and audit trail intact. (If the operator later wants NOT-DR3 to be its own terminal
+disposition — e.g. "returned to sender, not actioned" — that would be a follow-up
+status, not covered here.)

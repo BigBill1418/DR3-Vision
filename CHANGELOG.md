@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-20 (ADR-0046 amendment: third AP location disposition "NOT DR3 — See Reason")
+
+Accounting-critical. The AP approval portal's location dropdown (Woodland / Eugene)
+gains a third option, **NOT DR3 – See Reason**, for an invoice that is not for a DR3
+location at all (mis-addressed, wrong entity, a parent-org bill). Choosing it requires
+a reason and records the decision WITHOUT filing it against a real site's books.
+Migration `20260728_ap_not_dr3_location` (purely additive, ADR-0035 clean-replay;
+sorts after `20260727_adr0041_pilot_mode_gp_export`; default false backfills every
+existing row as a normal site-filed decision).
+
+- **Schema.** `ap_requests.filed_not_dr3 Boolean @default(false)` + a partial DB CHECK
+  (`NOT (filed_not_dr3 = true AND site_id IS NOT NULL)`) enforcing the "never both"
+  half of the location invariant (deliberately partial so historical NULL-site rows
+  stay valid).
+- **Location invariant (app-enforced in `decideRequest`).** A decided row is EXACTLY
+  ONE of: site-filed (`site_id` NOT NULL, `filed_not_dr3 = false`) OR NOT-DR3
+  (`filed_not_dr3 = true`, `site_id` NULL, reason required) — never both, never
+  neither. New `ApLocationConflictError` (400) guards "both"; the reason requirement
+  reuses `ApNoteRequiredError` (400). The existing site-required path is unchanged.
+- **Route** `POST /api/ops/ap/[id]/decide` accepts `notDr3?: boolean`: rejects
+  `notDr3 + siteId` (mutual exclusion, 400), rejects `notDr3` without a non-empty note
+  (400), and files NOT-DR3 without resolving/asserting a site.
+- **UI.** The `NOT DR3 – See Reason` option (field relabeled **Location**) shows an
+  inline "reason required" hint, disables Approve until a reason is entered, and posts
+  `notDr3: true` instead of a `siteId`.
+- **Accounting surfaces.** So Mary never mistakes it for a DR3-site invoice, the
+  decision email (subject `— NOT DR3`; body `NOT DR3 — see reason: <reason>` leading
+  the facts) and the stamped PDF/cover/image (per-page stamp line `— NOT DR3 (see
+  reason)`; meta block `Location: NOT DR3 — see reason: <reason>`) render the
+  disposition in the same slot the site name occupies today.
+- **Tests.** NOT-DR3 persistence (filed_not_dr3=true + site_id NULL), reason-required
+  (rejects empty note, approve AND reject), mutual-exclusion rejection, mail/PDF NOT-DR3
+  rendering, and a regression that the Woodland/Eugene path still requires a real site.
+  Full suite green: 2214 passed, 2 skipped.
+
 ### Added — 2026-07-18 (ADR-0041 amendment: SIMPLIFIED invoice generation — pilot mode, program split, GP v2 export; rollup §A.1/§A.7/§4.2/§8.3)
 
 Billing-critical, launch-facing. Extends the accepted ADR-0041 invoice engine (nothing
