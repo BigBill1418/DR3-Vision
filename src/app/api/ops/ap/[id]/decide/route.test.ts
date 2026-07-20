@@ -7,12 +7,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const { requireApApprover, decideRequest, resolveDecisionSiteId } = vi.hoisted(() => ({
   requireApApprover: vi.fn(async () => ({ userId: 'u-morena' })),
-  decideRequest: vi.fn(async (_args: unknown) => ({
+  decideRequest: vi.fn(async () => ({
     requestId: 'req-1',
     decision: 'approved',
     mail: 'sent',
   })),
-  resolveDecisionSiteId: vi.fn(async (_prisma: unknown, _input: unknown) => 'site-w'),
+  resolveDecisionSiteId: vi.fn(async () => 'site-w'),
 }));
 
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
@@ -84,7 +84,11 @@ describe('POST /api/ops/ap/[id]/decide — NOT DR3 disposition', () => {
     expect(res.status).toBe(200);
     expect(resolveDecisionSiteId).not.toHaveBeenCalled();
     expect(decideRequest).toHaveBeenCalledTimes(1);
-    const arg = decideRequest.mock.calls[0]![0] as { filedNotDr3?: boolean; siteId?: string; note?: string };
+    const arg = (decideRequest.mock.calls[0]! as unknown[])[0] as {
+      filedNotDr3?: boolean;
+      siteId?: string;
+      note?: string;
+    };
     expect(arg.filedNotDr3).toBe(true);
     expect(arg.siteId).toBeUndefined();
     expect(arg.note).toBe('parent-org bill');
@@ -121,7 +125,7 @@ describe('POST /api/ops/ap/[id]/decide — NOT DR3 disposition', () => {
     const res = await call({ decision: 'approved', siteId: 'woodland' });
     expect(res.status).toBe(200);
     expect(resolveDecisionSiteId).toHaveBeenCalledTimes(1);
-    const arg = decideRequest.mock.calls[0]![0] as { filedNotDr3?: boolean; siteId?: string };
+    const arg = (decideRequest.mock.calls[0]! as unknown[])[0] as { filedNotDr3?: boolean; siteId?: string };
     expect(arg.filedNotDr3).toBeUndefined();
     expect(arg.siteId).toBe('site-w');
   });

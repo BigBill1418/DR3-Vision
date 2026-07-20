@@ -42,15 +42,15 @@ const notifyStaffSpy = vi.fn();
 // each renderer returns a fixed PDF + sha256 so decision_pdf_sha256 persistence,
 // the pdf-vs-image branch, and multi-attachment passthrough can all be asserted.
 const stamp = vi.hoisted(() => ({
-  stampApproval: vi.fn(async (_input: unknown) => ({
+  stampApproval: vi.fn(async () => ({
     pdf: Buffer.from('%PDF-stub'),
     sha256: 'deadbeef',
   })),
-  stampOntoOriginalPdf: vi.fn(async (_bytes: unknown, _input: unknown) => ({
+  stampOntoOriginalPdf: vi.fn(async () => ({
     pdf: Buffer.from('%PDF-overlay'),
     sha256: 'pdfsha',
   })),
-  stampImage: vi.fn(async (_input: unknown, _bytes: unknown, _ct: unknown) => ({
+  stampImage: vi.fn(async () => ({
     pdf: Buffer.from('%PDF-image'),
     sha256: 'imgsha',
   })),
@@ -435,7 +435,7 @@ describe('decideRequest — NOT DR3 disposition', () => {
     expect(args.htmlBody).toContain('mis-addressed to DR3 — actually a parent-org bill');
     expect(args.htmlBody).not.toContain('Site: <b>');
     // The stamp/PDF path is told it is NOT DR3 (body-only invoice ⇒ stampApproval).
-    const stampArg = stamp.stampApproval.mock.calls[0]![0] as { notDr3?: boolean };
+    const stampArg = (stamp.stampApproval.mock.calls[0]! as unknown[])[0] as { notDr3?: boolean };
     expect(stampArg.notDr3).toBe(true);
   });
 });
