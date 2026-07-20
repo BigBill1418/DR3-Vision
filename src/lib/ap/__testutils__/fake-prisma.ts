@@ -38,6 +38,8 @@ export interface FakeApRequest {
   quarantine_reason: string | null;
   // ADR-0046 §3 amendment (handoff §1.6c/e).
   site_id: string | null;
+  // ADR-0046 amendment (2026-07-20) — NOT-DR3 disposition marker.
+  filed_not_dr3: boolean;
   decision_pdf_sha256: string | null;
   // ADR-0046 Amendment 4 — stamped-decision artifacts.
   decision_pdf_r2_key: string | null;
@@ -207,6 +209,7 @@ export function makeFakePrisma(db: FakeDb) {
           decision_mail_sent_at: null,
           quarantine_reason: (d['quarantine_reason'] as string | null) ?? null,
           site_id: (d['site_id'] as string | null) ?? null,
+          filed_not_dr3: (d['filed_not_dr3'] as boolean | undefined) ?? false,
           decision_pdf_sha256: (d['decision_pdf_sha256'] as string | null) ?? null,
           decision_pdf_r2_key: (d['decision_pdf_r2_key'] as string | null) ?? null,
           original_attachment_sha256: (d['original_attachment_sha256'] as string | null) ?? null,

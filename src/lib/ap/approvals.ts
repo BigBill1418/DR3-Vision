@@ -122,9 +122,16 @@ export interface DecideArgs {
   note?: string;
   vendor?: string; // optional, keyed at decision (C9-D5)
   amountCents?: number; // optional
-  /** REQUIRED (operator directive 2026-07-15; was optional under the §3
-   * amendment) — the RESOLVED site id the decision files against. */
+  /** REQUIRED for a DR3-site decision (operator directive 2026-07-15; was optional
+   * under the §3 amendment) — the RESOLVED site id the decision files against.
+   * Mutually exclusive with `filedNotDr3` (a decision is EITHER a real site OR
+   * NOT-DR3, never both). */
   siteId?: string;
+  /** ADR-0046 amendment (2026-07-20) — the "NOT DR3 — See Reason" disposition: the
+   * invoice is NOT for a DR3 location at all. When true, `note` (the reason) is
+   * REQUIRED, `siteId` MUST be absent, and the row is persisted with site_id NULL +
+   * filed_not_dr3 true — never filed against a real site's books. */
+  filedNotDr3?: boolean;
   /** Test seam — inject a deterministic PDF renderer so unit tests never launch Chromium. */
   renderer?: PdfRenderer;
 }
@@ -155,6 +162,22 @@ export class ApInvalidSiteError extends Error {
   constructor(readonly given: string) {
     super(`unknown site '${given}'`);
     this.name = 'ApInvalidSiteError';
+  }
+}
+
+/**
+ * ADR-0046 amendment (2026-07-20) — a decision may tag a real DR3 site OR be marked
+ * NOT DR3, but NEVER both. Thrown when a request carries both a site tag and
+ * filed_not_dr3=true (the location invariant's "never both" half; the "never
+ * neither" half is enforced by assertDecisionSite / the NOT-DR3 reason guard).
+ */
+export class ApLocationConflictError extends Error {
+  readonly status = 400 as const;
+  constructor() {
+    super(
+      'A decision is filed against a DR3 site OR marked NOT DR3 — never both. Pick one location.',
+    );
+    this.name = 'ApLocationConflictError';
   }
 }
 
@@ -196,9 +219,20 @@ async function resolveName(prisma: PrismaClient, userId: string | null): Promise
  */
 export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   const prisma = args.prisma ?? defaultPrisma;
-  // Operator directive 2026-07-15: no decision without a site tag — validated
-  // BEFORE any read/state change (mirrors the reject-note boundary).
-  assertDecisionSite(args.siteId);
+  // Location invariant — EXACTLY ONE of a real DR3 site tag OR the NOT-DR3
+  // disposition, validated BEFORE any read/state change (mirrors the reject-note +
+  // site boundaries). NOT-DR3 (2026-07-20) requires a reason (`note`) and forbids a
+  // site; otherwise a site tag is required (operator directive 2026-07-15).
+  if (args.filedNotDr3) {
+    if (args.siteId && args.siteId.trim()) throw new ApLocationConflictError();
+    if (!hasNote(args.note)) {
+      throw new ApNoteRequiredError(
+        'A NOT DR3 decision must include a reason explaining why this invoice is not for a DR3 site.',
+      );
+    }
+  } else {
+    assertDecisionSite(args.siteId);
+  }
   const row = await prisma.apRequest.findUnique({
     where: { id: args.requestId },
     select: { id: true, status: true, subject: true, decided_by: true, decided_at: true },
@@ -226,7 +260,14 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
         ...(args.note ? { decision_note: args.note } : {}),
         ...(args.vendor ? { vendor: args.vendor } : {}),
         ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
-        ...(args.siteId ? { site_id: args.siteId } : {}),
+        // Location: NOT-DR3 clears site_id and sets the marker (never both); a
+        // normal decision files the resolved site (guaranteed present by
+        // assertDecisionSite above — the conditional keeps exactOptional happy).
+        ...(args.filedNotDr3
+          ? { filed_not_dr3: true, site_id: null }
+          : args.siteId
+            ? { site_id: args.siteId }
+            : {}),
       },
     });
     if (r.count > 0) {
@@ -247,6 +288,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
             has_vendor: !!args.vendor,
             has_amount: typeof args.amountCents === 'number',
             has_site: !!args.siteId,
+            filed_not_dr3: !!args.filedNotDr3,
           },
         },
         { tx },
@@ -553,13 +595,19 @@ export async function sendDecisionEmail(
       // column (AP block convention: DB-level FK, no Prisma relation) — the
       // name resolves with an explicit lookup below.
       site_id: true,
+      // ADR-0046 amendment (2026-07-20): NOT-DR3 disposition — when true the mail +
+      // stamp render "NOT DR3 — see reason" in the location slot instead of a site.
+      filed_not_dr3: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
-  const siteName = req.site_id
-    ? ((await prisma.site.findUnique({ where: { id: req.site_id }, select: { name: true } }))
-        ?.name ?? null)
-    : null;
+  const filedNotDr3 = req.filed_not_dr3 === true;
+  // A NOT-DR3 decision is never filed against a site, so no name is resolved.
+  const siteName =
+    !filedNotDr3 && req.site_id
+      ? ((await prisma.site.findUnique({ where: { id: req.site_id }, select: { name: true } }))
+          ?.name ?? null)
+      : null;
 
   const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
 
@@ -601,11 +649,18 @@ export async function sendDecisionEmail(
   // notice. The body now carries only the human-facing decision facts.
   // 2026-07-15 operator directive: when the approver tagged a site, it leads
   // the decision facts — accounting must never guess which site's books.
-  const siteLine = siteName ? `<li>Site: <b>${escapeHtml(siteName)}</b></li>` : '';
+  // 2026-07-20 amendment: a NOT-DR3 decision leads with an unmissable marker + the
+  // reason (in the same slot) so Mary never mistakes it for a DR3-site invoice.
+  const reason = req.decision_note?.trim() ?? '';
+  const locationLine = filedNotDr3
+    ? `<li><b>NOT DR3 — see reason:</b> ${escapeHtml(reason || '(no reason provided)')}</li>`
+    : siteName
+      ? `<li>Site: <b>${escapeHtml(siteName)}</b></li>`
+      : '';
   const htmlBody = `<p>A vendor-invoice approval decision has been recorded in DR3-Vision.</p>
     <ul>
       <li>Decision: <b>${escapeHtml(req.status.toUpperCase())}</b></li>
-      ${siteLine}
+      ${locationLine}
       <li>Approver: ${escapeHtml(approverName)}</li>
       <li>Decided at: ${escapeHtml(decidedLabel)}</li>
       ${vendorLine}
@@ -625,6 +680,7 @@ export async function sendDecisionEmail(
     approverName,
     decidedAt,
     siteName,
+    filedNotDr3,
     renderer,
   ).catch((e) => {
     log.warn(
@@ -683,13 +739,13 @@ export async function sendDecisionEmail(
     site: null,
     recipients,
     ...(cc.length > 0 ? { cc } : {}),
-    // Site rides the SUBJECT line too (2026-07-15 directive) — visible before
-    // the mail is even opened, next to the GP matching key.
+    // Location rides the SUBJECT line too (2026-07-15 directive) — visible before
+    // the mail is even opened, next to the GP matching key. NOT-DR3 (2026-07-20)
+    // shows "NOT DR3" here so accounting sees it in the inbox list.
     subject:
-      `DR3-Vision AP decision (${req.status}${siteName ? ` — ${siteName}` : ''}) — ${subject}`.slice(
-        0,
-        200,
-      ),
+      `DR3-Vision AP decision (${req.status}${
+        filedNotDr3 ? ' — NOT DR3' : siteName ? ` — ${siteName}` : ''
+      }) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
     ...(artifacts && artifacts.length > 0
@@ -742,7 +798,14 @@ interface StampedArtifact {
 
 type StampBase = Pick<
   StampInput,
-  'requestId' | 'subject' | 'approverName' | 'decision' | 'decidedAt' | 'note' | 'siteName'
+  | 'requestId'
+  | 'subject'
+  | 'approverName'
+  | 'decision'
+  | 'decidedAt'
+  | 'note'
+  | 'siteName'
+  | 'notDr3'
 >;
 
 interface FileAttachmentRow {
@@ -887,6 +950,7 @@ async function buildDecisionStamp(
   approverName: string,
   decidedAt: Date,
   siteName: string | null,
+  filedNotDr3: boolean,
   renderer?: PdfRenderer,
 ): Promise<StampedArtifact[]> {
   const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
@@ -902,6 +966,9 @@ async function buildDecisionStamp(
     note: req.decision_note,
     // 2026-07-15 directive — the site tag rides the per-page stamp line.
     siteName,
+    // 2026-07-20 amendment — NOT-DR3 replaces the site slot with an explicit marker
+    // on every stamped page (the reason rides the note band).
+    notDr3: filedNotDr3,
   };
 
   // ATTACHMENT-FIRST (2026-07-15): stamp EACH real file attachment (both decisions)

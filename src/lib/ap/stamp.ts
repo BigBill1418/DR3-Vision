@@ -47,6 +47,14 @@ export interface StampInput {
    * approver tagged no site (the tag is optional).
    */
   siteName?: string | null;
+  /**
+   * ADR-0046 amendment (2026-07-20): the "NOT DR3 — See Reason" disposition. When
+   * true, the invoice is NOT for a DR3 location — the stamp/PDF renders "NOT DR3 —
+   * see reason" in the location slot (where the site name otherwise goes) so
+   * accounting never mistakes it for a DR3-site invoice. The reason rides `note`.
+   * Mutually exclusive with `siteName` (an approver picks a site OR marks NOT DR3).
+   */
+  notDr3?: boolean;
   /** kind='body': the C10-sanitized message body HTML (re-sanitized before render). */
   bodyHtmlSanitized?: string | null;
   /** kind='attachment': the original attachment filename (display only). */
@@ -107,14 +115,33 @@ export function neutralizeRemoteImageSrcs(html: string): string {
  * "Approved by …"; a rejection reads "Rejected by …" but keeps the same shape.
  */
 export function stampText(
-  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt' | 'siteName'>,
+  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt' | 'siteName' | 'notDr3'>,
 ): string {
   const verb = input.decision === 'approved' ? STAMP_TEXT_PREFIX : 'Rejected by';
   const when = formatPacificDateTime(input.decidedAt);
-  // Site rides the stamp line itself (2026-07-15 operator directive) so every
-  // page of the returned document says which site's books this belongs to.
-  const site = input.siteName ? ` — Site: ${input.siteName}` : '';
-  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision${site}`;
+  // Location rides the stamp line itself so every page of the returned document
+  // says where this belongs. NOT-DR3 (2026-07-20) takes the slot with an explicit
+  // marker (the full reason rides the note band + email body); otherwise the tagged
+  // site name rides here (2026-07-15 operator directive).
+  const location = input.notDr3
+    ? ' — NOT DR3 (see reason)'
+    : input.siteName
+      ? ` — Site: ${input.siteName}`
+      : '';
+  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision${location}`;
+}
+
+/**
+ * The location line in a stamped page's meta block (2026-07-20). NOT-DR3 shows the
+ * marker + the reason inline (so accounting sees it where the site name would be);
+ * otherwise the tagged site name, or nothing when neither is present.
+ */
+function locationMetaHtml(input: StampInput): string {
+  if (input.notDr3) {
+    const reason = input.note?.trim();
+    return `<div>Location: <b>NOT DR3 — see reason</b>${reason ? `: ${escapeHtml(reason)}` : ''}</div>`;
+  }
+  return input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : '';
 }
 
 /** The branded HTML shell + visible stamp footer/watermark that gets printed. */
@@ -170,7 +197,7 @@ export function buildStampHtml(input: StampInput): string {
   </header>
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
-    ${input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : ''}
+    ${locationMetaHtml(input)}
     <div>Approver: ${escapeHtml(input.approverName)}</div>
     <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
@@ -380,7 +407,7 @@ export function buildImageStampHtml(input: StampInput, imageDataUri: string): st
   </header>
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
-    ${input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : ''}
+    ${locationMetaHtml(input)}
     <div>Approver: ${escapeHtml(input.approverName)}</div>
     <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}

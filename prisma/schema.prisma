@@ -3109,7 +3109,19 @@ model ApRequest {
   // ADR-0046 §3 amendment (handoff §1.6c) — OPTIONAL site tag set at approve/reject
   // time via a dropdown (Eugene/Woodland/blank). Intake stays untagged (incoming
   // email doesn't inherently know the site). Bare FK column; constraint in migration.
+  // Post-go-live (2026-07-15) the site tag became REQUIRED for a DR3-site decision;
+  // now (2026-07-20 amendment) a decision is EITHER a real site OR filed_not_dr3.
   site_id                    String?
+  // ADR-0046 amendment (2026-07-20, operator-directed) — the third location
+  // disposition: "NOT DR3 — See Reason". True when the approver marks the invoice
+  // as NOT for a DR3 location at all (mis-addressed, wrong entity, a parent-org
+  // bill, etc.); a reason (decision_note) is REQUIRED and site_id stays NULL so it
+  // is never filed against a real site's books. INVARIANT (app-enforced in
+  // decideRequest; the migration adds a partial CHECK for the "never both" half):
+  // a decided row is EITHER site-filed (site_id NOT NULL, filed_not_dr3 = false)
+  // OR NOT-DR3 (filed_not_dr3 = true, site_id NULL) — never both. Default false so
+  // every pre-existing row backfills as a normal site-filed decision.
+  filed_not_dr3              Boolean         @default(false)
   // ADR-0046 §3 amendment (handoff §1.6e) — sha256 of the stamped decision PDF
   // attached to the decision mail (tamper record; visible-stamp only, no crypto).
   decision_pdf_sha256        String?

@@ -278,10 +278,17 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
         setMsg('A rejection needs a note explaining why. Add a note, then Reject.');
         return;
       }
-      // Operator directive 2026-07-15 — every decision files against a site
-      // (the server re-validates).
+      // Operator directive 2026-07-15 — every decision files against a location
+      // (the server re-validates). Woodland/Eugene, or the NOT-DR3 disposition.
       if (!siteCode) {
-        setMsg('Select the site (Woodland or Eugene) before deciding.');
+        setMsg('Select the location (Woodland, Eugene, or NOT DR3) before deciding.');
+        return;
+      }
+      // ADR-0046 amendment 2026-07-20 — NOT DR3 needs a reason in the note (the
+      // server re-validates). Reject/Hold already require a note; this also covers
+      // the Approve + NOT-DR3 path, which is otherwise note-optional.
+      if (siteCode === 'not_dr3' && !note.trim()) {
+        setMsg('NOT DR3 requires a reason — add it in the note, then decide.');
         return;
       }
       // M4 — normalize the currency input BEFORE trusting it (comma-truncation
@@ -307,7 +314,9 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             note: note.trim() || undefined,
             vendor: vendor.trim() || undefined,
             ...(amountCents !== undefined ? { amountCents } : {}),
-            siteId: siteCode,
+            // NOT DR3 sends the disposition flag instead of a siteId (it is not a
+            // real site); Woodland/Eugene send the site code exactly as before.
+            ...(siteCode === 'not_dr3' ? { notDr3: true } : { siteId: siteCode }),
           }),
         });
         const body = await res.json().catch(() => ({}));
@@ -515,7 +524,7 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
               />
             </label>
             <label className="text-xs opacity-80">
-              Site <span className="text-amber-300">(required)</span>
+              Location <span className="text-amber-300">(required)</span>
               <select
                 value={siteCode}
                 onChange={(e) => setSiteCode(e.target.value)}
@@ -524,7 +533,14 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
                 <option value="">— select site —</option>
                 <option value="eugene">Eugene</option>
                 <option value="woodland">Woodland</option>
+                <option value="not_dr3">NOT DR3 – See Reason</option>
               </select>
+              {siteCode === 'not_dr3' && (
+                <span className="mt-1 block text-amber-300">
+                  NOT DR3 — add the reason in the note below (required). This will NOT be filed
+                  against a DR3 site.
+                </span>
+              )}
             </label>
           </div>
           <label className="mt-2 block text-xs opacity-80">
@@ -547,7 +563,12 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => decide('approved')}
-              disabled={busy}
+              disabled={busy || (siteCode === 'not_dr3' && !note.trim())}
+              title={
+                siteCode === 'not_dr3' && !note.trim()
+                  ? 'NOT DR3 requires a reason in the note'
+                  : undefined
+              }
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
               Approve
