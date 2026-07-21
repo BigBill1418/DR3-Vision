@@ -66,6 +66,59 @@ MACHINE MAINTENANCE LOG`). The real file is a 41-sheet `.xlsx`; the importer now
   resolution against `sources.csv`, and migration parity. `docs/OPEN-ITEMS.md` S-10
   records the 15 still-unresolved June Woodland names (Rick), which block the June
   Woodland promotion (import `ba3beeeb-442d-46ed-ad30-b1a7975906f9`).
+### Fixed — 2026-07-21 (Full-stack security/reliability audit — wave 1)
+
+Adversarially-confirmed audit findings, fixed on `fix/audit-wave1`. No money
+moved, no rates/IDs/classifications invented, pilot mode untouched.
+
+- **P1-1 — Transportation invoice under-billing (`src/lib/invoices/generation-inputs.ts`)** —
+  `resolveTransportationInputs` filtered inbound loads on `status: 'verified'` exactly,
+  while the MRC Monthly Invoice export treats four statuses as billing-ready. Any load
+  advanced to `submitted`/`submitted_to_mymrc`/`processed` silently dropped its freight
+  + CA fuel surcharge from invoice generation. Now reuses the canonical
+  `INVOICE_STATUSES` set verbatim (`src/lib/exports.ts`) so generation and the MRC
+  export are structurally incapable of drifting. Inventory's `VERIFIED_INBOUND_STATUSES`
+  is deliberately left distinct (billing vs verified-on-hand are different contracts).
+  DB-idiom test seeds a load in every `LoadStatus` and asserts exactly the billing-ready
+  set reaches both the freight and CA-fuel legs.
+- **P1-4 — Payroll escalation cron could silently fail on payroll morning
+  (`scripts/bonus-escalation-check.mjs`, `src/lib/bonus/escalation.ts`)** — a failed
+  tier fire was logged "retry next tick" and dropped; the t4 backstop paged *through the
+  app* (the thing that's down when fires fail); and a period whose whole window was
+  missed was keyed to `period_end == yesterday` and stranded forever unpaged. Fixes:
+  bounded in-window retry (3 attempts / 15-min spacing, off the daemon's own timers);
+  an app-independent direct-to-ntfy backstop page (primary→fallback, fingerprinted, no-op
+  when publisher token unset); and t4 broadened to `period_end <= yesterday` so a stranded
+  live-deadline period pages every 09:00 run until an operator resolves it (t3 keeps its
+  tight `== yesterday` scoping — no late auto-sign). Does not auto-sign late; operator
+  intervention is the policy-correct action.
+- **P2 — Uncosted collection event silently zeroed its invoice line
+  (`src/lib/invoices/event-leg.ts`)** — `fetchEventCostRows` coalesced null `*_cents` → $0,
+  zeroing the EVENTO/B8 line and event-freight for an uncosted-but-real event. New pure
+  guard `assertEventCosted` (`src/lib/invoices/event-leg-guard.ts`) refuses a component
+  only when its billable quantity is present but the paired stored cost is null (per-diem
+  only when `overnight`); a stored `0` remains a valid $0 line and zero-activity events
+  pass unchanged. Throws typed `EventUncostedError` (status 422) naming the event +
+  uncosted components, before the null→0 map. Full `computeEventBilling` wiring stays
+  out of scope (seam C-18).
+- **P2 — OpenTelemetry W3C Baggage DoS + unbounded Chromium render concurrency
+  (`package.json`, `src/lib/chromium-semaphore.ts`)** — bumped `@opentelemetry/*` to the
+  fixed, peer-clean paired set (core 2.9.0 line) clearing GHSA-8988-4f7v-96qf and its 26
+  cascade advisories (`npm audit --omit=dev` 38 → 12). Added a process-wide single-slot
+  FIFO Chromium render semaphore (`withChromium`, typed `ChromiumBusyError` 503 on
+  max-wait timeout, permit always released) wrapping all three Playwright launch sites
+  (COR PDF, payroll PDF, AP stamp) so concurrent PDF renders can no longer exhaust host
+  memory.
+- **P2 — Cron containers over-scoped on secrets (`docker-compose.yml`)** — the 10
+  internal-cron daemons mounted the app's full `auth.env` (incl. `NEXTAUTH_SECRET` and
+  Entra client secret) though they consume only `INTERNAL_CRON_TOKEN`. Split to a new
+  single-secret `cron.env` (required, so a missing file fails `docker compose config`
+  loudly and non-destructively rather than reproducing the 2026-07-16 silent cron
+  blackout as runtime 404s); the app additionally mounts it after `auth.env`. Removed the
+  unconsumed `msgraph-*.env` "parity" mounts from ap-poll/workbook-sync. Operator
+  follow-ups (create `cron.env`, strip the line from `auth.env`, rotate `NEXTAUTH_SECRET`)
+  documented in the ADR-0053 addendum and OPEN-ITEMS O-11 — the secret is contained by
+  this change but not un-exposed until rotated.
 
 ### Fixed — 2026-07-21 (Addendum-B rollup — review close-out, minor findings)
 
