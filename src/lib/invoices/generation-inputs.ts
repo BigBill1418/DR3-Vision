@@ -254,13 +254,18 @@ export async function resolveTransportationInputs(args: {
   // Transport-charged, billing-ready inbound loads in the window. The two
   // Inbound-tab split is `transport_charged`; billing-readiness is the canonical
   // `INVOICE_STATUSES` set (submitted+verified+submitted_to_mymrc+processed),
-  // shared verbatim with the MRC Monthly Invoice export (`exports/mrc`) so the
-  // freight+fuel billed here reconciles 1:1 against that export — one source of
-  // truth, no drift. `submitted` IS billing-ready per that contract; this is the
-  // BILLING set and deliberately differs from inventory's
-  // `VERIFIED_INBOUND_STATUSES` (running-balance), which excludes `submitted`
-  // because an operator-submitted load is not yet a manager-verified physical
-  // on-hand count.
+  // shared verbatim with the MRC Monthly Invoice export (`exports/mrc`) — same
+  // status contract, one source of truth, so a load that bills here is never
+  // silently dropped there. NOTE: only the STATUS set is shared, not the time
+  // window — generation bounds loads by Pacific-day instants (`instantBounds`)
+  // while `exports/mrc` uses a UTC calendar month, so a load arriving in the
+  // ~07:00–08:00 UTC dead-zone on the 1st can land in different months on the
+  // two surfaces. That month-edge boundary is pre-existing; do not read this as
+  // a load-for-load 1:1 guarantee when debugging an edge discrepancy.
+  // `submitted` IS billing-ready per that contract; this is the BILLING set and
+  // deliberately differs from inventory's `VERIFIED_INBOUND_STATUSES`
+  // (running-balance), which excludes `submitted` because an operator-submitted
+  // load is not yet a manager-verified physical on-hand count.
   const loads = await prisma.inboundLoad.findMany({
     where: {
       site_id: siteId,
