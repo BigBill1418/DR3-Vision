@@ -838,22 +838,27 @@ async function seedGpBillingConfig() {
 }
 
 async function seedGpSiteBillingConfig(siteIds) {
-  // CA (Woodland): Customer ID MRCL001, PO suffix DR3W — both CONFIRMED (§4.2).
-  // OR (Eugene): Customer ID + PO suffix UNKNOWN → NULL, pending Mary. Do NOT
-  // invent DR3E/DR3O. `create` seeds the honest nulls; `update` is EMPTY so a
-  // re-seed never overwrites a value Mary later confirms via admin.
+  // ALL identifiers now CONFIRMED (rollup §8/§13 — Mary answered):
+  //   Woodland: Customer ID MRCL001, PO suffix "DR3 W"      (WITH SPACE — §13)
+  //   Eugene:   Customer ID MRCL001 (same as CA — §8 Q1), PO suffix "DR3 OREGON"
+  //             (spelled out, spaces — §8 Q4; NOT DR3E/DR3O).
+  // The PO suffix carries the PROCESSING PO tail ("M/DD/YY DR3 W" / "…DR3 OREGON");
+  // the TRANS / OR COLLECTIONS suffixes are kind-derived constants in
+  // buildPoNumberForKind (not stored here). No pending unknowns remain, so these
+  // are Vision-owned like the singleton statics: `update` RE-APPLIES them so an
+  // idempotent re-seed corrects a row previously seeded with the old "DR3W"/nulls.
   const rows = [
     {
       code: 'woodland',
       customer_id: 'MRCL001',
-      po_site_suffix: 'DR3W',
+      po_site_suffix: 'DR3 W',
       pending_note: null,
     },
     {
       code: 'eugene',
-      customer_id: null,
-      po_site_suffix: null,
-      pending_note: 'OR MRC Customer ID + Eugene PO suffix pending Mary (§4.2)',
+      customer_id: 'MRCL001',
+      po_site_suffix: 'DR3 OREGON',
+      pending_note: null,
     },
   ];
   for (const r of rows) {
@@ -868,10 +873,14 @@ async function seedGpSiteBillingConfig(siteIds) {
         pending_note: r.pending_note,
         updated_at: new Date(),
       },
-      update: {}, // never clobber an admin's later confirmation of the nullables
+      update: {
+        customer_id: r.customer_id,
+        po_site_suffix: r.po_site_suffix,
+        pending_note: r.pending_note,
+      },
     });
   }
-  console.log('  gp_site_billing_config: woodland=MRCL001/DR3W; eugene=null/null (pending Mary)');
+  console.log('  gp_site_billing_config: woodland=MRCL001/"DR3 W"; eugene=MRCL001/"DR3 OREGON" (§8/§13)');
 }
 
 async function seedInvoicePilotRecipients() {

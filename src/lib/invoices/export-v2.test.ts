@@ -108,11 +108,12 @@ describe('invoiceExportV2 — §4.2 two-line processing structure', () => {
     const header = out.gp.lines[0]!;
     const billable = out.gp.lines[1]!;
     expect(header.description).toBe('total units processed 7/31/26');
+    expect(header.item).toBe('LOCATION'); // rollup §9 — item code, not empty
     expect(header.extended_cents).toBe(0);
     expect(header.unit_price_cents).toBe(0);
 
     expect(billable.description).toBe('MRC-Processed Units DR3 Woodland');
-    expect(billable.unit_of_measure).toBe('UNITSMO');
+    expect(billable.item).toBe('UNITSMO'); // rollup §9 — UNITSMO is the item code
     expect(billable.quantity).toBe('3977');
     expect(billable.unit_price_cents).toBe(RATE_CA);
     expect(billable.extended_cents).toBe(3977 * RATE_CA);
@@ -188,7 +189,7 @@ describe('invoiceExportV2 — EOM subtracts the mid-month (Trade discount)', () 
     expect(out.invoice.trade_discount_reference_invoice_id).toBe('mid-1');
   });
 
-  it('B7 incentives + B8 event misc surface as Misc (never dropped)', () => {
+  it('B7 incentives (REIMBO) + B8 event misc (EVENTO) surface as subtotal lines (§9/§10)', () => {
     const units = 100;
     const b6 = units * RATE_CA;
     const b7 = 6000;
@@ -200,13 +201,18 @@ describe('invoiceExportV2 — EOM subtracts the mid-month (Trade discount)', () 
       nonProgramUnitsProcessed: 0,
       lines: [
         line({ lineCode: 'B6', quantity: String(units), rateRef: { rate_cents: RATE_CA }, amountCents: b6, position: 0 }),
-        line({ lineCode: 'B7', amountCents: b7, position: 1 }),
-        line({ lineCode: 'B8', amountCents: b8, position: 2 }),
+        line({ lineCode: 'B7', description: 'MRC- $3.00 Incentive Program', amountCents: b7, position: 1 }),
+        line({ lineCode: 'B8', description: 'MRC- Event Labor', amountCents: b8, position: 2 }),
       ],
     });
     const out = invoiceExportV2(inv, CTX);
-    expect(out.gp.totals.subtotal_cents).toBe(b6);
-    expect(out.gp.totals.misc_cents).toBe(b7 + b8);
+    // rollup §10 — B7/B8 are now REIMBO/EVENTO subtotal lines (not "misc").
+    const reimbo = out.gp.lines.find((l) => l.item === 'REIMBO');
+    const evento = out.gp.lines.find((l) => l.item === 'EVENTO');
+    expect(reimbo?.extended_cents).toBe(b7);
+    expect(evento?.extended_cents).toBe(b8);
+    expect(out.gp.totals.subtotal_cents).toBe(b6 + b7 + b8);
+    expect(out.gp.totals.misc_cents).toBe(0);
     expect(out.gp.totals.total_cents).toBe(inv.totalCents);
   });
 });
@@ -234,7 +240,7 @@ describe('invoiceExportV2 — mid-month, other kinds, reconciliation', () => {
     expect(out.gp.totals.total_cents).toBe(inv.totalCents);
   });
 
-  it('transportation: one gp_line per B16 leaf, reconciles', () => {
+  it('transportation: freight + rental collapse into ONE MILES 0 line (§9), reconciles', () => {
     const inv = invoice({
       kind: 'ca_transportation_eom',
       totalCents: 97000 + 150000,
@@ -245,7 +251,10 @@ describe('invoiceExportV2 — mid-month, other kinds, reconciliation', () => {
     });
     const out = invoiceExportV2(inv, CTX);
     expect(out.gp.presentation).toBe('transportation');
-    expect(out.gp.lines).toHaveLength(2);
+    // §9 aggregation: freight + rental → ONE MILES 0 line (no fuel here).
+    expect(out.gp.lines).toHaveLength(1);
+    expect(out.gp.lines[0]!.item).toBe('MILES 0');
+    expect(out.gp.lines[0]!.extended_cents).toBe(97000 + 150000);
     expect(out.gp.totals.total_cents).toBe(inv.totalCents);
   });
 

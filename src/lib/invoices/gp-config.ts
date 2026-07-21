@@ -57,6 +57,9 @@ export async function resolveGpExportContext(invoice: InvoiceView): Promise<GpEx
     // §4.2 — the invoice date used for the PO + header line is the window end
     // (EOM, or the 15th for mid-month). Flagged for Mary to confirm.
     invoiceDate: invoice.windowEnd,
+    // rollup §6 — the PO suffix + date format depend on the invoice kind
+    // (processing → per-site suffix; TRANS / TRANS OR / OR COLLECTIONS otherwise).
+    kind: invoice.kind,
   });
 
   return { siteName: siteRow?.name ?? invoice.siteId, gp };

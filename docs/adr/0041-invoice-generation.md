@@ -341,3 +341,108 @@ A NULL renders as null in the export; `buildPoNumber` returns null (not a partia
   be confirmed against Mary's actual GP template before the adapter consumes v2.
 - **`mrc_unit` rate source (ADR-0040 open).** Untouched here; unrelated to the
   single-line CA processing invoice, still open for the OR composition.
+
+---
+
+## Amendment (2026-07-21) — Rick/Mary/Kelsey rollup (rollup §5.1/§6/§9/§13/§14)
+
+The real June-2026 invoice PDFs (§10) and Mary's answers (§8) LOCK the GP
+presentation that the §4.2 amendment had modeled provisionally. This amendment
+corrects the v2 export to the real PDFs and adds the combinations validator + the
+commodity-breakdown attachment. **v1 stays frozen; every change here is v2-side or
+new modules.**
+
+### PO format templates WITH SPACES, kind-aware (§6/§9/§13)
+
+The PR-#128 `DR3W` (no space) is corrected. PO format depends on invoice KIND:
+
+| Kind | PO format |
+|---|---|
+| `ca_processing_mid_month`, `ca_processing_eom` | `M/DD/YY DR3 W` |
+| `or_processing_eom` | `M/DD/YY DR3 OREGON` (spelled out, not DR3E/DR3O) |
+| `ca_transportation_eom` | `M/DD/YY TRANS` |
+| `or_transportation_eom` | `M/DD/YY TRANS OR` |
+| `or_collection_site_count` | `M/YY OR COLLECTIONS` (no day — 2-digit year) |
+
+New `buildPoNumberForKind` + `formatMYY` in `gp-identifiers.ts`; `buildGpContext`
+gained an optional `kind` (threaded from `gp-config.ts`). Processing POs use the
+confirmed per-site `po_site_suffix` (`DR3 W` / `DR3 OREGON`); TRANS / OR
+COLLECTIONS suffixes are kind-fixed constants confirmed in §6. Seed corrected:
+Woodland `DR3W`→`DR3 W`, Eugene null→`DR3 OREGON` + Customer ID `MRCL001` (§8 Q1).
+
+### 7 LOCKED GP item codes (§9) — supersedes the empty-`item` assumption
+
+Verbatim from the real PDFs (spaces significant): `LOCATION`, `UNITSMO`,
+`REIMBO`, `EVENTO`, `MILES 0`, `FUEL`, `OREGON MATTRESS`. New
+`src/lib/invoices/item-codes.ts` is the source of truth; v2 `gp.lines[].item`
+now carries the real code (was `''` per the PR-#128 guess).
+
+### v2 GP presentation corrected to the real invoice PDFs (§10)
+
+- **Processing** now emits the §10 structure: `LOCATION` header + `UNITSMO`
+  charge, then (when present) `LOCATION` spacer + `REIMBO` (B7 incentives) and
+  `LOCATION` spacer + `EVENTO` (B8 event misc). **B7/B8 are FIRST-CLASS subtotal
+  lines now**, not a summary `misc` bucket — that is how MRC's real invoice reads
+  (§10 Woodland processing subtotal $286,829.35 includes the $15 REIMBO + $4,235.35
+  EVENTO). This retires the prior "B7/B8 → GP Misc" residual concern in favor of
+  the production-PDF structure. `misc_cents`/`freight_cents` are now always 0
+  (their money lives in `gp.lines`); the reconciliation invariant
+  (`gp.totals.total_cents === invoice.total_cents`) is unchanged and still guards.
+- **Transportation** applies the **`MILES 0` aggregation** (freight + event
+  transport + rental → one line) + `FUEL` (CA only). The three `B16.*` member
+  leaves stay stored separately (provenance); the rollup is presentation-only.
+- **Collections** emits one `OREGON MATTRESS` line per site (real count × $2.25).
+
+All four June invoices reconcile in `export-v2-item-codes.test.ts` against the §10
+numbers: Woodland processing $148,130.35, Woodland trans $72,480.51, Eugene trans
+$13,800.00, Eugene collections $1,714.50.
+
+### Invoice combinations validator (§6)
+
+New `src/lib/invoices/combinations.ts` — `assertValidInvoiceCombination` REJECTS
+(422, `InvoiceCombinationError`) the two structurally invalid combos:
+1. **Eugene (OR) mid-month** — OR bills EOM only.
+2. **Any mid-month invoice carrying a Trade discount** — the discount is the EOM
+   subtraction of an already-billed mid-month; a mid-month can't carry one.
+Wired into `service.generateInvoiceDraft` (after composition, before persist).
+
+### `attachments[]` on EOM processing invoices ONLY (§5.1/§6)
+
+New `src/lib/invoices/attachments.ts` — `invoiceAttachments(kind)` returns the
+monthly commodity breakdown for `ca_processing_eom` / `or_processing_eom` and `[]`
+for mid-month + every other kind. **Modeled as a COMPUTED descriptor, NOT a stored
+column** (the `invoices` table has no attachments column and needs none — the
+breakdown is fully derived from the window). Surfaced on `InvoiceExportV2.attachments`.
+
+### Commodity-breakdown attachment renderer (§11) — landscape PDF
+
+New `src/lib/commodity/` module:
+- `breakdown.ts` — PURE model builder (`buildCommodityBreakdown`): per-transaction
+  rows bucketed by commodity, per-block totals, facility header per block.
+- `pdf.ts` — `renderCommodityBreakdownPdf`: multi-page **Letter LANDSCAPE** PDF
+  via **pdf-lib** (deterministic, no headless Chromium → unit-testable, and no new
+  internal print route / middleware allowlist). Rendering choice documented in-file.
+- `fetch.ts` — reads `outbound_materials` + `unit_status_movements (to_status=landfilled)`
+  for the invoice window and maps onto the pure model.
+
+**Documented schema-reality divergences from §11's idealized 11-block taxonomy:**
+1. The real `OutboundCommodity` enum is the **daily-log-9** (`metal`, not
+   steel/xtraction_landfill/wte). The metal→**Steel / Xtraction Landfill / Covanta
+   WTE** split is a vendor/destination split that is **OPEN pending Rick** (Covanta
+   WTE %, Xtraction-Landfill classification — email 2026-07-20, §11/§17 soft
+   blocker) and **Kelsey/Janette** (daily-log-9 → workbook-11 destination mapping).
+   The renderer is **taxonomy-driven** (`BLOCK_TAXONOMY`) so that split lands as a
+   data change, not a renderer rewrite. Recovery-% + recycled-lbs already render on
+   the `metal`/`wood` blocks from ADR-0055's `recycling_percent_applied`/`recycled_lbs`.
+2. `outbound_materials` has no `slip_number` (only `unit_status_movements` does), so
+   §11's Landfill "Slip #" column renders from available fields (ticket/retrac).
+3. The 11th block (Landfilled Units, whole-unit) reads `unit_status_movements`
+   `landfilled_reason`; `water_logged` → "Wet" per §11.
+
+### Deferred / integration wiring (for the integrator)
+
+- The commodity-breakdown PDF is produced on demand by
+  `buildInvoiceCommodityBreakdownPdf` (`commodity/fetch.ts`); a **download/delivery
+  route** that serves it alongside the EOM invoice is NOT added here (would touch
+  shared routing/middleware) — the renderer + descriptor are the buildable half.
+- Pilot mode stays DEFAULT `pilot`; no live rate seeding, no mode flip (rollup DO-NOTs).
