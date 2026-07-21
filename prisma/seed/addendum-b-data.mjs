@@ -75,6 +75,48 @@ export const SOURCE_ALIASES = [
   ['The Dalles', 'St Vincent De Paul Of Lane County - The Dalles Thrift Store'],
 ];
 
+/// 2026-07-21 — Woodland (CA) source aliases. 30 evidence-confirmed nicknames from
+/// the Woodland workbook, inserted directly into prod source_aliases tonight; this
+/// backfills them into the repo seed so a rebuilt DB does not lose them. Distinct
+/// provenance from the OR §1/§12 SOURCE_ALIASES above (that set is eugene-scoped and
+/// resolves to CANONICAL_OR_NAMES). Each [alias, canonical] pair resolves to the
+/// verbatim WOODLAND `sources.name` from sources.csv. Alias is globally UNIQUE
+/// (source_aliases.alias); idempotent seed/upsert (ON CONFLICT DO NOTHING vs prod,
+/// where these already exist). Seeded by seedSourceAliases (dev/CI) AND mirrored by
+/// the 20260731_woodland_source_aliases migration (prod path). Change both together.
+export const WOODLAND_SOURCE_ALIASES = [
+  ['1800 Got Junk Concord', '1-800-Got-Junk? - Concord'],
+  ['Anderson', 'Anderson Landfill'],
+  ['Bass Hill Landfill - LRSWMA', 'Bass Hill Landfill'],
+  ['C &S Waste Ukiah', 'C&S Waste Solutions'],
+  ['Clover Flats', 'Clover Flat Resource Recovery Park - Clover Flat Landfill, Inc.'],
+  ['Costco Benicia', 'Costco-Innovel- Benicia'],
+  ['Costco Sacramento', 'Costco-Innovel -Sacramento'],
+  ['Living Spaces', 'Living Spaces - West Sacramento'],
+  ['Mc Courtney', 'McCourtney Road Transfer Station'],
+  ['NARS', 'North Area Recovery Station (NARS)'],
+  ['Neal Road', 'Neal Road Recycling and Waste Facility'],
+  ['North Valley Chico', 'North Valley Disposal Transfer Station'],
+  ['Oroville', 'Oroville Transfer Station'],
+  ['Placer County Eastern Regional Sanitary Landfill, Inc.', 'Placer County Eastern Regional Sanitary Landfill'],
+  ['Quincy Mountain Mattress, LLC', 'Quincy Mountain Mattress'],
+  ['Recology Auburn', 'Recology Auburn Placer'],
+  ['Recology Butte-Colusa - Maxwell Transfer Station', 'Maxwell Transfer Station'],
+  ['Recology Yuba', 'Recology Yuba Sutter'],
+  ['Recology of the Coast - Pacifica', 'Recology of the Coast'],
+  ['Redding Transfer', 'Redding Transfer Station'],
+  ['Sacramento Recycling', 'Sacramento Recycling & Transfer Station'],
+  ['Speedy Delivery Union City', 'Speedy Delivery LLC - Union City'],
+  ['Tehama County / Red Bluff Landfill - Waste Connections of California, Inc.', 'Tehama County / Red Bluff Landfill'],
+  ['West Central IGO', 'West Central Landfill'],
+  ['Wilkerson Co.', 'Wilkerson Company - Evert Wilkerson'],
+  ['ord rd transfer station', 'Ord Ranch Road Transfer Station'],
+  ['Recycling Industries', 'Recycling Industries Transfer Station'],
+  ['Recycling Industries Yuba', 'Recycling Industries Transfer Station'],
+  ['Solano', 'Recology Vacaville Solano'],
+  ['Vacaville', 'Recology Vacaville Solano'],
+];
+
 /// §2 — [name, notes] provenance agencies (origin of delivered mattresses; never billed).
 export const PROVENANCE_AGENCIES = [
   ['Sponsors', 'Halfway house on Hwy 99 next to Lindholm. Reclassified from a drop-off kind to a provenance agency (rollup §2, Rick 2026-07-19). No billing.'],

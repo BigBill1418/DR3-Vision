@@ -46,6 +46,7 @@ import {
   SVDP_INTERNAL_STORE_CLASSIFICATION,
   GP_SITE_BILLING_IDENTIFIERS,
   SOURCE_ALIASES,
+  WOODLAND_SOURCE_ALIASES,
   PROVENANCE_AGENCIES,
 } from './seed/addendum-b-data.mjs';
 
@@ -547,18 +548,19 @@ async function seedSourceBillingClassification(siteIds) {
   console.log(`  source classification: ${stores.count} svdp_internal_store, ${roseburg.count} Roseburg parked`);
 }
 
-// ─── Source aliases (rollup §1/§12 — mirrors 20260730b migration) ────────────
-// Old verbatim seed names + month-to-month customer-name variants resolve to the
-// canonical MyMRC source. Unmatched names are never dropped at intake (the parser
-// emits an `unresolved_site` finding); these known aliases avoid operator review.
-// Keyed to the eugene-scoped canonical `name`; idempotent upsert on the unique alias.
-async function seedSourceAliases(siteIds) {
-  const eugene = siteIds.get('eugene');
-  if (!eugene) return;
+// ─── Source aliases ──────────────────────────────────────────────────────────
+// Two provenance groups, both idempotent upserts on the globally-unique alias:
+//  - eugene (rollup §1/§12 — mirrors the 20260730b migration): old verbatim seed
+//    names + month-to-month customer-name variants → canonical MyMRC source.
+//  - woodland (2026-07-21 prod backfill — mirrors the 20260731 migration): 30
+//    evidence-confirmed Woodland-workbook nicknames → verbatim woodland source names.
+// Unmatched names are never dropped at intake (the parser emits an `unresolved_site`
+// finding); these known aliases avoid operator review.
+async function seedAliasesForSite(siteId, pairs) {
   let seeded = 0;
-  for (const [alias, canonical] of SOURCE_ALIASES) {
+  for (const [alias, canonical] of pairs) {
     const src = await prisma.source.findUnique({
-      where: { site_id_name: { site_id: eugene, name: canonical } },
+      where: { site_id_name: { site_id: siteId, name: canonical } },
       select: { id: true },
     });
     if (!src) continue; // canonical source not present (partial seed) — skip, re-runnable
@@ -569,7 +571,15 @@ async function seedSourceAliases(siteIds) {
     });
     seeded += 1;
   }
-  console.log(`  source_aliases: ${seeded} present (idempotent)`);
+  return seeded;
+}
+
+async function seedSourceAliases(siteIds) {
+  const eugene = siteIds.get('eugene');
+  const woodland = siteIds.get('woodland');
+  const eugeneCount = eugene ? await seedAliasesForSite(eugene, SOURCE_ALIASES) : 0;
+  const woodlandCount = woodland ? await seedAliasesForSite(woodland, WOODLAND_SOURCE_ALIASES) : 0;
+  console.log(`  source_aliases: ${eugeneCount} eugene + ${woodlandCount} woodland present (idempotent)`);
 }
 
 // ─── Provenance agencies (rollup §2 — mirrors 20260730b migration) ───────────

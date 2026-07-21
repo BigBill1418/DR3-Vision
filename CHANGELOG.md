@@ -29,6 +29,43 @@ dr3-vision-backup` the script intended is **not reachable** from the CHAD host t
   `dr3-vision-backup` only if the dr3-vision-publisher token is placed on the host.
 - Verified against the live repo: full run pushed snapshot `c7cd38a2`, prune +
   deadman + OK page all succeeded.
+### Changed — 2026-07-21 (Terex importer finalized + Woodland source-alias backfill)
+
+Two ADR-0048 D3 / source-alias items. No money moved; no rates/IDs/classifications
+invented; pilot mode untouched.
+
+- **Terex equipment-history importer finalized against Janette's real file**
+  (`src/lib/equipment/import.ts`, ADR-0048 D3). The pre-receipt flexible header
+  detector failed on the real workbook (`could not find a date column ... TEREX
+MACHINE MAINTENANCE LOG`). The real file is a 41-sheet `.xlsx`; the importer now
+  targets its `"Maintenance Log <year>"` sheets (recognized by name), skips
+  unrelated sheets (prices / diesel / monthly tabs), and fails loud (typed 422,
+  listing the sheets it saw) ONLY when zero maintenance-log sheets are present. It
+  handles the real layout — banner row, asterisk headers with an unlabeled col A,
+  the literal `example` row, month-separator / year-marker / subtotal / bare-date
+  noise rows (skipped, not thrown) — and maps `Actual Repair Cost` → `cost_cents`
+  (kind=repair), cost-less entries → kind=maintenance, with `Amount Credited`
+  preserved in the note (the model has one money column; a credit is never a
+  negative cost). Contracts unchanged: `source=import`, `import_id`, `source_sha256`
+  re-upload no-op, `(site, event_date, kind, note-hash)` idempotency, admin-only
+  route, one audit row per batch. The generic CSV path is unchanged. Sanitized
+  exceljs fixture (`src/lib/equipment/__fixtures__/build-terex-log.ts`) + tests pin
+  per-sheet counts, noise exclusion, skip-sheets, zero-log fail-loud, money/cost_cents
+  parsing, and sha idempotency. Real-file dev-loop parse (not committed): Maintenance
+  Log 2025 → 55 events, Maintenance Log2026 → 68 events (7 with cost each), 123 total.
+  Post-acceptance note added to `docs/adr/0048-june-operational-backfill.md`.
+
+- **Woodland (CA) source aliases backfilled into the repo seed** so a rebuilt DB
+  keeps them. 30 evidence-confirmed Woodland-workbook nicknames were inserted
+  directly into prod `source_aliases` on 2026-07-21; they now live in
+  `WOODLAND_SOURCE_ALIASES` (`prisma/seed/addendum-b-data.mjs`, seeded by
+  `seedSourceAliases`) AND a prod-path migration `20260731_woodland_source_aliases`
+  (`ON CONFLICT DO NOTHING`, woodland-scoped) — mirroring how the eugene/OR aliases
+  were done. Each resolves to a verbatim woodland `sources.name`; a data-invariant
+  test guards the 30-count, global-uniqueness (no OR-alias collision), canonical
+  resolution against `sources.csv`, and migration parity. `docs/OPEN-ITEMS.md` S-10
+  records the 15 still-unresolved June Woodland names (Rick), which block the June
+  Woodland promotion (import `ba3beeeb-442d-46ed-ad30-b1a7975906f9`).
 
 ### Fixed — 2026-07-21 (Addendum-B rollup — review close-out, minor findings)
 
