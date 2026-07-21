@@ -8,6 +8,8 @@
 //   - cvp_retailer       : trans + trailer                            (no MRC unit, no per-mattress)
 //   - collection_site    : trans + trailer + per-mattress + MRC unit
 //   - third_party_inbound: MRC unit only                             (no trans/trailer/per-mattress)
+//   - svdp_internal_store: NONE — SVDP-run retail/warehouse, never an MRC billing entity
+//                          (rollup §4; seeded active_billing=false so this is belt-and-suspenders)
 //
 // OVERRIDE SEMANTICS (a money-safe judgment call, documented for Rick/Mary review):
 // `bill_trans`/`bill_trailer` can only SUPPRESS a component the site_type would otherwise
@@ -68,6 +70,11 @@ const SITE_TYPE_DEFAULTS: Record<SourceSiteType, SiteTypeBilling> = {
   cvp_retailer: { bill_trans: true, bill_trailer: true, bill_per_mattress: false, bill_mrc_unit: false },
   collection_site: { bill_trans: true, bill_trailer: true, bill_per_mattress: true, bill_mrc_unit: true },
   third_party_inbound: { bill_trans: false, bill_trailer: false, bill_per_mattress: false, bill_mrc_unit: true },
+  // rollup §4 — SVDP internal stores bring mattresses but are NOT MRC billing entities:
+  // no trans, no trailer, no per-mattress, no MRC unit. Seeded active_billing=false (so
+  // resolveSiteTypeBilling short-circuits to NO_BILLING before this map is read); this
+  // all-false default keeps it correct even if a source is ever set active_billing=true.
+  svdp_internal_store: { bill_trans: false, bill_trailer: false, bill_per_mattress: false, bill_mrc_unit: false },
 };
 
 const NO_BILLING: SiteTypeBilling = {

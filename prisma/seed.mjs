@@ -41,6 +41,11 @@ import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  SVDP_INTERNAL_STORES,
+  SOURCE_ALIASES,
+  PROVENANCE_AGENCIES,
+} from './seed/addendum-b-data.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -519,6 +524,64 @@ async function seedSources(siteIds) {
   }
 }
 
+// ─── Source billing classification (rollup §4/§1 — mirrors 20260730b migration) ──
+// The 11 SVDP internal-store rows are seeded from sources.csv with base columns only;
+// this pass stamps their billing routing (site_type=svdp_internal_store, active_billing
+// =false → zero invoice lines). Roseburg is parked non-program/inactive until MRC
+// signature. Idempotent updateMany, keyed on canonical (site_id, name).
+async function seedSourceBillingClassification(siteIds) {
+  const eugene = siteIds.get('eugene');
+  if (!eugene) return;
+  const stores = await prisma.source.updateMany({
+    where: { site_id: eugene, name: { in: SVDP_INTERNAL_STORES } },
+    data: { site_type: 'svdp_internal_store', active_billing: false },
+  });
+  const roseburg = await prisma.source.updateMany({
+    where: { site_id: eugene, name: 'Roseburg Transfer Station' },
+    data: { is_non_program: true, active_billing: false, is_active: false },
+  });
+  console.log(`  source classification: ${stores.count} svdp_internal_store, ${roseburg.count} Roseburg parked`);
+}
+
+// ─── Source aliases (rollup §1/§12 — mirrors 20260730b migration) ────────────
+// Old verbatim seed names + month-to-month customer-name variants resolve to the
+// canonical MyMRC source. Unmatched names are never dropped at intake (the parser
+// emits an `unresolved_site` finding); these known aliases avoid operator review.
+// Keyed to the eugene-scoped canonical `name`; idempotent upsert on the unique alias.
+async function seedSourceAliases(siteIds) {
+  const eugene = siteIds.get('eugene');
+  if (!eugene) return;
+  let seeded = 0;
+  for (const [alias, canonical] of SOURCE_ALIASES) {
+    const src = await prisma.source.findUnique({
+      where: { site_id_name: { site_id: eugene, name: canonical } },
+      select: { id: true },
+    });
+    if (!src) continue; // canonical source not present (partial seed) — skip, re-runnable
+    await prisma.sourceAlias.upsert({
+      where: { alias },
+      create: { alias, source_id: src.id },
+      update: { source_id: src.id },
+    });
+    seeded += 1;
+  }
+  console.log(`  source_aliases: ${seeded} present (idempotent)`);
+}
+
+// ─── Provenance agencies (rollup §2 — mirrors 20260730b migration) ───────────
+// Sponsors reclassified from a drop-off kind to a provenance agency; Eugene Mattress
+// Company and U-Haul are peers. A provenance agency never produces a billing line.
+async function seedProvenanceAgencies() {
+  for (const [name, notes] of PROVENANCE_AGENCIES) {
+    await prisma.provenanceAgency.upsert({
+      where: { name },
+      create: { name, notes, active: true, updated_at: new Date() },
+      update: { notes, active: true },
+    });
+  }
+  console.log(`  provenance_agencies: ${PROVENANCE_AGENCIES.length} present (idempotent)`);
+}
+
 // ─── Bonus bi-weekly pay periods (ADR-0019.1 / T-201) ────────────────────
 // 26 periods × 2 sites = 52 rows. Idempotent upsert keyed on the canonical
 // (site_id, period_year, period_number). The unique index backing that key is
@@ -706,17 +769,18 @@ async function seedAlertRecipients(siteIds) {
 }
 
 // ─── ADR-0046 §3 AP approver roster (planning rollup 2026-07-08 §1.6) ─────
-// The explicit AP-approver roster: Morena, Rick, Janette, Kelsey (until 8/1) as
+// The explicit AP-approver roster: Morena, Rick, Janette, Kelsey (until 8/8) as
 // non-admin approvers. Bill is admin and can always act, so he needs no row.
 // Idempotent: resolves each approver's user by email and upserts a row ONLY when
 // the user exists (Bill's real SSO row and any not-yet-created user are skipped
-// without error). Kelsey's row carries active_until = 2026-08-01 00:00 America/
-// Los_Angeles (PDT, UTC-7) → 2026-08-01T07:00:00Z; the daily expiry job removes it.
+// without error). Kelsey's row carries active_until = 2026-08-08 00:00 America/
+// Los_Angeles (PDT, UTC-7) → 2026-08-08T07:00:00Z; the daily expiry job removes it.
+// Date extended one week from 8/1 per rollup §7 (Kelsey vacation → transfer moved).
 const AP_APPROVERS = [
   { email: 'morena.gomez@svdp.us', activeUntil: null },
   { email: 'rick.albritton@svdp.us', activeUntil: null },
   { email: 'janette.tomas@svdp.us', activeUntil: null },
-  { email: 'kelsey.ruhland@svdp.us', activeUntil: new Date('2026-08-01T07:00:00.000Z') },
+  { email: 'kelsey.ruhland@svdp.us', activeUntil: new Date('2026-08-08T07:00:00.000Z') },
 ];
 async function seedApApprovers() {
   let seeded = 0;
@@ -1996,6 +2060,12 @@ async function main() {
   await seedDocumentSequences(siteIds);
   console.log('▶ seeding sources');
   await seedSources(siteIds);
+  console.log('▶ classifying source billing (rollup §4 svdp_internal_store + Roseburg parked)');
+  await seedSourceBillingClassification(siteIds);
+  console.log('▶ seeding source aliases (rollup §1/§12)');
+  await seedSourceAliases(siteIds);
+  console.log('▶ seeding provenance agencies (rollup §2)');
+  await seedProvenanceAgencies();
   console.log('▶ seeding bonus pay periods');
   await seedBonusPayPeriods(siteIds);
   console.log('▶ seeding bonus signature chains');

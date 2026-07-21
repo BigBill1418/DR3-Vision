@@ -2,7 +2,7 @@
 //
 // Supersedes the original C5 "approver set = org reach (admin OR all_sites)".
 // The approvers are now an explicit, expiry-aware roster: the `ap_approvers`
-// table (Morena/Rick/Janette permanent; Kelsey until 2026-08-01). Bill is admin
+// table (Morena/Rick/Janette permanent; Kelsey until 2026-08-08). Bill is admin
 // and therefore always permitted without a roster row. A single-site MANAGER who
 // is on the roster (Rick/Janette) is a valid approver even though they lack
 // `all_sites` — permission here is roster membership, not site reach.

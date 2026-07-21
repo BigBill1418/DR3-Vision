@@ -309,6 +309,11 @@ enum SourceSiteType {
   cvp_retailer
   collection_site
   third_party_inbound
+  // ADR-0037 amendment (rollup §4/§14, Rick 2026-07-19) — SVDP-run retail/warehouse
+  // locations that BRING mattresses but are NOT MRC-approved collection sites:
+  // no $2.25/unit collection billing, no trans, no trailer rental. Seeded with
+  // `active_billing=false` (produce zero invoice lines). 11 stores seeded in §4.
+  svdp_internal_store
 }
 
 model Source {
@@ -539,6 +544,14 @@ model InboundLoad {
   // end-block" convention (a scalar column can't live in an end-block).
   dr3_number String?
 
+  // ADR-0037 amendment (rollup §2/§14, Rick 2026-07-19) — "source of origin" provenance
+  // AGENCY that brought the mattresses (Sponsors halfway house, Eugene Mattress Company,
+  // U-Haul, …). ORTHOGONAL to `source` (the collection site / MyMRC-billing source): a
+  // provenance agency never produces a billing line. Bare scalar FK → provenance_agencies.id
+  // (constraint in migration), no Prisma relation — a scalar column can't live in a
+  // self-contained end-block, the same documented exception as `dr3_number` above.
+  provenance_agency_id String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -551,6 +564,7 @@ model InboundLoad {
   @@index([assigned_operator_id, status])
   @@index([retrac_id]) // ADR-0037 D2 — external join key for workbook parity
   @@index([site_id, transport_charged]) // ADR-0037 — Inbound-tab split queries
+  @@index([provenance_agency_id]) // ADR-0037 amendment — provenance-agency lookups
   @@map("inbound_loads")
 }
 
@@ -1409,6 +1423,13 @@ enum StateProgramRuleKind {
   general_labor_hourly
   per_diem_nightly
   unit_weight_estimate
+  // ADR-0056 (rollup §5.3/§14) — event-billing IRS mileage rate (per-vehicle,
+  // facility→event→facility, IRS-guideline NOT SVDP rate). The labor / driver /
+  // per-diem event constants REUSE the existing `general_labor_hourly`,
+  // `driver_hourly`, `per_diem_nightly` kinds (no duplicate kinds). NO rate rows
+  // are seeded — the current-year IRS figure is not in the handoff; the resolver
+  // fails loud until Rick/Bill provide it (never invent a monetary value).
+  irs_mileage_rate
 }
 
 /// ADR-0037 D4 (Addendum B1) — outbound commodity taxonomy: the daily-log 9,
@@ -2400,6 +2421,15 @@ model CollectionEvent {
   mileage_cents      Int? // billed mileage dollars — the value that feeds B8
   per_diem_cents     Int?
   misc_cents         Int?
+  // ADR-0056 (rollup §5.3, Rick 2026-07-19) — event-billing component captures.
+  // `driver_onsite_hours` = ON-SITE time only (drive time already lives in
+  // `labor_hours`; driver wages bill only on-site — §5.3 item 4). `per_diem_days`
+  // counts overnight days (§5.3 item 5, rare — Happy Camp); `overnight` flags the
+  // rare stay. Per-leg tier pricing lives in `event_legs`; per-vehicle IRS mileage
+  // in `event_vehicles`. Amounts stored-as-entered; the generator derives cents.
+  driver_onsite_hours Decimal?    @db.Decimal(5, 2)
+  per_diem_days       Int?
+  overnight           Boolean      @default(false)
   retrac_id          String?
   notes              String?
   source             RecordSource @default(manual)
@@ -3264,7 +3294,8 @@ model ApPollRun {
 /// ALL invoices without granting them all_sites. Approver resolution = active users
 /// with a row whose `active_until` is null OR in the future. Admins can ALWAYS act
 /// (checked separately), so Bill needs no row. Kelsey's row carries
-/// active_until = 2026-08-01 00:00 PT and is auto-removed by the daily expiry job
+/// active_until = 2026-08-08 00:00 PT (extended one week from 8/1, rollup §7) and is
+/// auto-removed by the daily expiry job
 /// (audit + ntfy). `user_id` UNIQUE (one row per user). Bare FK column; constraint
 /// in migration 20260715b_rollup_ap_boardpack_yard.
 model ApApprover {
@@ -3615,4 +3646,169 @@ model GpSiteBillingConfig {
   updated_at     DateTime @updatedAt
 
   @@map("gp_site_billing_config")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0037 amendment (rollup §2/§5.2/§14) — provenance agencies + unit-status ledger
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0037 amendment (rollup §2, Rick 2026-07-19) — the AGENCY of origin that
+/// delivered mattresses to the shop (e.g. "Sponsors", a halfway house on Hwy 99
+/// next to Lindholm; Eugene Mattress Company; U-Haul). Rick: *"they are treated
+/// the same as Eugene Mattress Company or U-Haul … no billing on our side."*
+/// ORTHOGONAL to `sources` (collection sites / MyMRC billing entities): a
+/// provenance agency NEVER produces a billing line. `inbound_loads.provenance_agency_id`
+/// (bare scalar FK) references this table. `Sponsors` moved here FROM the old
+/// drop-off classification — it is no longer a source or a drop-off kind.
+model ProvenanceAgency {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  notes      String?
+  active     Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("provenance_agencies")
+}
+
+/// ADR-0037 amendment (rollup §5.2/§14, Rick 2026-07-19) — status-bucketed unit
+/// ledger. Rick's model REPLACES Kelsey's Addendum-A §A.2 "immediate subtraction":
+/// *"Saved units are not removed from inventory until they are sent to a store."*
+///
+/// The ADR-0037 inventory is an AGGREGATE-LEDGER architecture (there is NO per-unit
+/// `unit_records` table — the spec's `unit_records.*` is idealized). The faithful
+/// shape here is an aggregate MOVEMENT ledger: each row records a count of units
+/// crossing between status buckets (on_floor → saved, saved → sold, on_floor →
+/// processed / landfilled, …). A live per-status floor count is the signed sum of
+/// movements into vs out of each bucket. Intake rows carry `from_status = null`.
+///
+/// Divergence documented in docs/adr/0037-*.md amendment:
+///   • `to_status = saved` does NOT decrement the live floor pool (units stay on the
+///     floor per Rick) — this SUPERSEDES the `processed_units_daily.saved_units`
+///     LIVE-subtraction semantics (running-balance.ts). The `saved_units` COLUMN is
+///     retained: it is the workbook daily-log capture field and the HISTORICAL
+///     closed-month audit reconciliation (inventory-close.ts / June 3,977 oracle)
+///     depends on the workbook's own subtraction — that historical parity is
+///     unchanged. The running-balance rewire (consume this ledger; stop subtracting
+///     saved_units in onHand) is flagged for the inventory feature agent.
+///   • `landfilled_reason` REUSES the existing `LandfilledReason` enum; the handoff's
+///     "wet" maps to `water_logged` (no duplicate enum introduced).
+/// Bare scalar FKs (site_id → sites.id, store_destination_id → sources.id),
+/// constraints in migration — matches the self-contained collection_events pattern.
+model UnitStatusMovement {
+  id                String            @id @default(uuid())
+  site_id           String // FK → sites.id (constraint in migration)
+  movement_date     DateTime          @db.Date
+  units             Int
+  from_status       UnitStatus? // null = intake into a bucket
+  to_status         UnitStatus
+  status_changed_at DateTime          @default(now())
+  // Set ONLY when to_status = landfilled (whole-unit disposal reason, §11).
+  landfilled_reason LandfilledReason?
+  // Set ONLY on a saved → sold store transfer: the destination svdp_internal_store
+  // source. Bare scalar FK → sources.id (constraint in migration).
+  store_destination_id String?
+  retrac_id         String?
+  slip_number       String?
+  source            RecordSource      @default(manual)
+  import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
+  locked_at         DateTime? // edit-before-any-lock guard (CRUD-lite)
+  note              String?
+  created_by        String?
+  created_at        DateTime          @default(now())
+  updated_at        DateTime          @updatedAt
+
+  @@index([site_id, movement_date])
+  @@index([site_id, to_status])
+  @@index([store_destination_id])
+  @@map("unit_status_movements")
+}
+
+/// ADR-0037 amendment (rollup §5.2/§14) — unit lifecycle status buckets. `saved`
+/// stays ON the floor (Rick's model) until a `saved → sold` store transfer.
+enum UnitStatus {
+  on_floor
+  saved
+  processed
+  sold
+  landfilled
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0056 — Event Billing + TONU line handling (rollup §5.3)
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0056 (rollup §5.3, Rick 2026-07-19) — per-leg event freight. A drop +
+/// next-day pickup is TWO legs, each Event-Mile-Rate-tier priced separately
+/// (`tier_lookup_miles` resolves against the CA transport_rate_tiers set — the
+/// same table ADR-0040 already uses; NO second table). A same-day loaded event is
+/// one `same_day` leg on the standard mileage rate. `rate_cents` is the resolved
+/// per-leg amount (null until the generator resolves it). Bare scalar FK
+/// event_id → collection_events.id (constraint in migration; ON DELETE CASCADE).
+model EventLeg {
+  id                String      @id @default(uuid())
+  event_id          String // FK → collection_events.id (constraint in migration, CASCADE)
+  leg_type          EventLegType
+  tier_lookup_miles Int?
+  rate_cents        Int?
+  note              String?
+  created_at        DateTime    @default(now())
+  updated_at        DateTime    @updatedAt
+
+  @@index([event_id])
+  @@map("event_legs")
+}
+
+/// ADR-0056 (rollup §5.3) — event freight leg kind. `drop` and `pickup` are the
+/// two legs of a drop + next-day-pickup event (each tier-priced); `same_day` is a
+/// same-day loaded event (standard mileage rate).
+enum EventLegType {
+  drop
+  pickup
+  same_day
+}
+
+/// ADR-0056 (rollup §5.3 item 6) — per-vehicle IRS mileage for an event
+/// (facility→event→facility, IRS-guideline rate NOT the SVDP rate). There is no
+/// vehicles master table; `vehicle_label` is a free-text identifier (document).
+/// Bare scalar FK event_id → collection_events.id (constraint in migration, CASCADE).
+model EventVehicle {
+  id            String   @id @default(uuid())
+  event_id      String // FK → collection_events.id (constraint in migration, CASCADE)
+  vehicle_label String? // free-text vehicle identifier (no vehicles master)
+  miles_driven  Int?
+  note          String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@index([event_id])
+  @@map("event_vehicles")
+}
+
+/// ADR-0056 (rollup §5.3, Rick 2026-07-19) — TONU (Trailer Order Not Used). Driver
+/// dispatched but could not drop the trailer. Rick: cancelled BEFORE dispatch → NO
+/// bill (no row); cancelled AFTER dispatch OR diverted → billed at the haul rate
+/// (Woodland Primary rate per PR #128 §3.5). `haul_rate_cents` and `billed_cents`
+/// are stored as resolved/entered (never invented). Bare scalar FK event_id →
+/// collection_events.id (constraint in migration; a TONU may reference the event
+/// it was dispatched for).
+model TonuBilling {
+  id              String    @id @default(uuid())
+  event_id        String? // FK → collection_events.id (constraint in migration)
+  site_id         String // FK → sites.id (constraint in migration)
+  dispatched_at   DateTime?
+  cancelled_at    DateTime?
+  diverted        Boolean   @default(false)
+  haul_rate_cents Int? // Woodland Primary haul rate applied (null until resolved)
+  billed_cents    Int? // final billed amount (null until resolved)
+  note            String?
+  source          RecordSource @default(manual)
+  locked_at       DateTime?
+  created_by      String?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@index([event_id])
+  @@index([site_id])
+  @@map("tonu_billing")
 }

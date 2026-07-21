@@ -1,7 +1,7 @@
 // ADR-0046 §3 amendment (handoff §1.6f) — daily AP-approver expiry reaper.
 //
 // Removes ap_approvers whose `active_until <= now()` (e.g. Kelsey after
-// 2026-08-01). The roster resolution (approvers.ts) already excludes expired
+// 2026-08-08). The roster resolution (approvers.ts) already excludes expired
 // rows, so a DELETE is the clean, idempotent reap — a no-op once the row is
 // gone. Each removal is DELETEd inside a $transaction alongside an APPEND-ONLY
 // auditLog row (hard rule #6 — audit is written in the same transaction, never

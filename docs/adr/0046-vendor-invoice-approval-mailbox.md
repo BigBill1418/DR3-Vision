@@ -214,8 +214,8 @@ these amend §C1/§C5/§C10.
   act** (checked separately), so Bill needs no row. Approver resolution excludes
   rows whose `active_until <= now()`. The AP queue/decide/attachment/resend routes
   move from `requireOrgReach` to `requireApApprover` (admin OR active approver).
-- **§C5 Kelsey auto-removal 8/1.** Kelsey's `ap_approvers` row carries
-  `active_until = 2026-08-01 00:00 PT`. A daily `ap-approver-expiry` cron
+- **§C5 Kelsey auto-removal 8/8.** Kelsey's `ap_approvers` row carries
+  `active_until = 2026-08-08 00:00 PT`. A daily `ap-approver-expiry` cron
   (00:05 PT → `/api/internal/ap/expiry` → `runApApproverExpiry`) removes expired
   approvers with an append-only audit row + a `dr3-vision-system` ntfy to Bill (a
   system event, Bill-only, allowed).

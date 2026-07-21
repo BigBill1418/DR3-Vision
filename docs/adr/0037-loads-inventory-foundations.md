@@ -490,3 +490,35 @@ through the dropoffs service + manager API.
 `Summary!` / `Trans Summary!` are advisory parity only and NEVER feed billing aggregation
 (the close reads the Processed ledger). Surfaced at parse time via the `[summary-stale]`
 flag; `Trans Summary!` is routed to evidence-only.
+
+## Amendment — 2026-07-21 (Addendum B rollup §2/§4/§5.2/§14 — Rick's provenance + unit-status model)
+
+Rick/Bill's 2026-07-19/20 rollup (`docs/handoffs/2026-07-21-mrc-billing-addendum-rick-mary-kelsey-rollup-2026.md`) corrects and extends the P1 foundation. Schema shipped in migrations `20260730_adr0037b_addendum_b_schema` (DDL) + `20260730b_addendum_b_seeds` (DML). Event billing + TONU is split into its own **ADR-0056**.
+
+### `site_type = svdp_internal_store` (§4)
+
+Fifth `SourceSiteType` value for the 11 SVDP-run retail/warehouse locations (Division, Seneca, West Eugene, Chad Drive, Q Street, Main Street, Junction City, Oakridge, Garfield, CARS, Cleveland WH). They bring mattresses but are **not** MRC-approved collection sites: no per-mattress, no trans, no trailer, no MRC unit. Seeded `active_billing = false` (zero invoice lines); the `site-type-billing.ts` default set for this type is all-false (belt-and-suspenders).
+
+### `provenance_agencies` table + `inbound_loads.provenance_agency_id` (§2)
+
+Sponsors (a halfway house on Hwy 99 next to Lindholm) is **not** a source or a drop-off kind — it is the *agency of origin* that delivered the mattresses, peer to Eugene Mattress Company and U-Haul. New `provenance_agencies` table (`id, name UNIQUE, notes, active`) + a nullable bare-scalar FK `inbound_loads.provenance_agency_id`. Provenance is orthogonal to billing: an agency never produces an invoice line. Seeds: Sponsors, Eugene Mattress Company, U-Haul.
+
+### Unit-status ledger — Rick's model REPLACES Kelsey's §A.2 saved-units subtraction (§5.2)
+
+Rick: *"Saved units are not removed from inventory until they are sent to a store."* Kelsey's Addendum-A §A.2 immediate-subtraction model was operationally wrong.
+
+**Repo-reality divergence (documented):** the ADR-0037 inventory is an **aggregate-ledger** architecture — there is **no** per-unit `unit_records` table (the handoff's `unit_records.*` is idealized spec language). The faithful shape is a **status-bucketed movement ledger**, `unit_status_movements`:
+
+- `UnitStatus` enum `on_floor | saved | processed | sold | landfilled`; each row is a count of `units` crossing `from_status → to_status` at `status_changed_at`. A live per-status floor count is the signed sum of movements into vs out of each bucket. Intake rows carry `from_status = null`.
+- `to_status = saved` does **not** decrement the live floor (units stay on the floor per Rick). Store transfer = a `saved → sold` movement carrying `store_destination_id` → the `svdp_internal_store` source. Two iPad ops: "Mark N as saved" and "Send N saved units to [store]".
+- `landfilled_reason` **reuses** the existing `LandfilledReason` enum; the handoff's "wet" maps to `water_logged` (no duplicate enum). §11's Landfilled-Units commodity block (Bed Bug / Soiled / Wet) renders from this + `landfilled_units`.
+
+**`processed_units_daily.saved_units` retraction — scope-bounded (money-safe):** the *live-floor subtraction* semantics (Kelsey §A.2, `running-balance.ts` `onHand`) are retracted per Rick. The **column is retained**: it is the workbook daily-log capture field, and the **historical closed-month audit reconciliation** (`inventory-close.ts`; the June **3,977** oracle) depends on the workbook's own subtraction — that historical parity is unchanged. **Flagged for the inventory feature agent:** rewire `onHand` to consume `unit_status_movements` and stop subtracting `saved_units` on the live path (the live floor tile, rollup §3, depends on this). This ADR provides the schema + contract only; the running-balance behavior change is a separate, tested change.
+
+### Source canonical MyMRC names + aliases (§1/§12)
+
+Five OR collection sources renamed **id-preserving** (UPDATE, not re-insert — every `inbound_loads.source_id` FK survives) to Rick's canonical MyMRC portal spellings (incl. MRC's verbatim typo **"Glenwood Central Recieving Station"**). The retired verbatim seed names + month-to-month customer-name variants (§12) become `source_aliases` rows (the existing ADR-0037 B7 alias table — reused, not a new table), so historical workbook/MyMRC data still resolves. New OR rows: The Dalles (new MRC site), Rifes, Roseburg (non-program, `active_billing=false`, `is_active=false`, parked until MRC signature — activate = flip both true). The 4 OR sites Rick's §1 did not name (Short Mountain Landfill, Thompsons Sanitary Service, Stayton Community Center, Deschutes) are left at their current names pending his confirmation.
+
+### Kelsey AP-approver auto-remove date (§7)
+
+`ap_approvers` Kelsey row `active_until` moved 2026-08-01 → **2026-08-08** (vacation → transfer extended one week). Migration UPDATE guarded by the old value (idempotent; clean no-op on a fresh CI DB); seed.mjs mirrors it.
