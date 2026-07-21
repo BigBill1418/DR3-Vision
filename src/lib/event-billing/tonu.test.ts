@@ -30,7 +30,11 @@ describe('assessTonu — Rick’s billability rules (§5.3)', () => {
     const a = assessTonu(
       tonu({ dispatchedAt: t('2026-06-10T08:00:00Z'), cancelledAt: t('2026-06-10T12:00:00Z') }),
     );
-    expect(a).toEqual({ billable: true, reason: 'cancelled_after_dispatch', billedCents: HAUL_CENTS });
+    expect(a).toEqual({
+      billable: true,
+      reason: 'cancelled_after_dispatch',
+      billedCents: HAUL_CENTS,
+    });
   });
 
   it('diverted → billed at haul rate (independent trigger, wins over cancel timing)', () => {
@@ -48,8 +52,30 @@ describe('assessTonu — Rick’s billability rules (§5.3)', () => {
     expect(assessTonu(tonu())).toEqual({ billable: false, reason: 'not_dispatched' });
   });
 
-  it('dispatched, not cancelled, not diverted → nothing to bill', () => {
+  it('dispatched, not cancelled, not diverted → nothing to bill (dispatched_no_bill, NOT not_dispatched)', () => {
     expect(assessTonu(tonu({ dispatchedAt: t('2026-06-10T08:00:00Z') }))).toEqual({
+      billable: false,
+      reason: 'dispatched_no_bill',
+    });
+  });
+});
+
+describe('assessTonu — dispatch is the precondition (no bill on a never-dispatched order)', () => {
+  it('diverted but NEVER dispatched → NO bill (capture slip does not bill the haul rate)', () => {
+    expect(assessTonu(tonu({ diverted: true, dispatchedAt: null }))).toEqual({
+      billable: false,
+      reason: 'not_dispatched',
+    });
+  });
+
+  it('cancelled but NEVER dispatched → NO bill', () => {
+    expect(
+      assessTonu(tonu({ dispatchedAt: null, cancelledAt: t('2026-06-10T09:00:00Z') })),
+    ).toEqual({ billable: false, reason: 'not_dispatched' });
+  });
+
+  it('a null haul rate on a never-dispatched diverted order does NOT throw — it never reaches the rate check', () => {
+    expect(assessTonu(tonu({ diverted: true, dispatchedAt: null, haulRateCents: null }))).toEqual({
       billable: false,
       reason: 'not_dispatched',
     });
@@ -69,9 +95,11 @@ describe('assessTonu — fail loud when billable but haul rate unseeded', () => 
     ).toThrow(TonuHaulRateUnavailableError);
   });
 
-  it('refuses a diverted TONU with a null haul rate', () => {
-    expect(() => assessTonu(tonu({ diverted: true, haulRateCents: null }))).toThrow(
-      TonuHaulRateUnavailableError,
-    );
+  it('refuses a diverted (dispatched) TONU with a null haul rate', () => {
+    expect(() =>
+      assessTonu(
+        tonu({ diverted: true, dispatchedAt: t('2026-06-10T08:00:00Z'), haulRateCents: null }),
+      ),
+    ).toThrow(TonuHaulRateUnavailableError);
   });
 });

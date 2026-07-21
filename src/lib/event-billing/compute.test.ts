@@ -54,7 +54,10 @@ function rates(over: Partial<EventRateConstants> = {}): EventRateConstants {
 
 describe('component 1–2 — per-leg freight, each tier-priced separately', () => {
   it('prices a single same-day loaded leg at its mileage band', () => {
-    const b = computeEventBilling(event({ legs: [{ legType: 'same_day', tierLookupMiles: 40 }] }), rates());
+    const b = computeEventBilling(
+      event({ legs: [{ legType: 'same_day', tierLookupMiles: 40 }] }),
+      rates(),
+    );
     expect(b.eventTransportationCents).toBe(60000);
     expect(b.legs).toEqual([{ legType: 'same_day', tierLookupMiles: 40, rateCents: 60000 }]);
   });
@@ -74,9 +77,9 @@ describe('component 1–2 — per-leg freight, each tier-priced separately', () 
   });
 
   it('fails loud on an out-of-range leg mileage (never a silent $0 freight)', () => {
-    expect(() => priceEventLegs([{ legType: 'drop', tierLookupMiles: 999 }], CA_EVENT_MILE_TIERS)).toThrow(
-      EventMileRateOutOfRangeError,
-    );
+    expect(() =>
+      priceEventLegs([{ legType: 'drop', tierLookupMiles: 999 }], CA_EVENT_MILE_TIERS),
+    ).toThrow(EventMileRateOutOfRangeError);
   });
 });
 
@@ -136,9 +139,9 @@ describe('component 6 — IRS mileage (per vehicle, IRS rate)', () => {
 
 describe('fail-loud — unseeded-but-billable rate refuses (never a guessed rate)', () => {
   it('refuses labor when laborHours > 0 but laborHourlyCents is null', () => {
-    expect(() => computeEventBilling(event({ laborHours: 4 }), rates({ laborHourlyCents: null }))).toThrow(
-      EventRateUnavailableError,
-    );
+    expect(() =>
+      computeEventBilling(event({ laborHours: 4 }), rates({ laborHourlyCents: null })),
+    ).toThrow(EventRateUnavailableError);
   });
 
   it('refuses driver when on-site hours > 0 but driverHourlyCents is null', () => {
@@ -149,18 +152,76 @@ describe('fail-loud — unseeded-but-billable rate refuses (never a guessed rate
 
   it('refuses per diem when overnight days > 0 but perDiemNightlyCents is null', () => {
     expect(() =>
-      computeEventBilling(event({ overnight: true, perDiemDays: 1 }), rates({ perDiemNightlyCents: null })),
+      computeEventBilling(
+        event({ overnight: true, perDiemDays: 1 }),
+        rates({ perDiemNightlyCents: null }),
+      ),
     ).toThrow(EventRateUnavailableError);
   });
 
   it('refuses IRS mileage when miles > 0 but irsMileageCentsPerMile is null', () => {
     try {
-      computeEventBilling(event({ vehicles: [{ vehicleLabel: 'T1', milesDriven: 10 }] }), rates({ irsMileageCentsPerMile: null }));
+      computeEventBilling(
+        event({ vehicles: [{ vehicleLabel: 'T1', milesDriven: 10 }] }),
+        rates({ irsMileageCentsPerMile: null }),
+      );
       expect.unreachable('should have thrown');
     } catch (e) {
       expect(e).toBeInstanceOf(EventRateUnavailableError);
       expect((e as EventRateUnavailableError).component).toBe('irs_mileage');
     }
+  });
+});
+
+describe('input validation — negative/NaN quantities fail loud (never negative/NaN cents)', () => {
+  it('rejects negative laborHours', () => {
+    expect(() => computeEventBilling(event({ laborHours: -2 }), rates())).toThrow(RangeError);
+  });
+
+  it('rejects NaN laborHours', () => {
+    expect(() => computeEventBilling(event({ laborHours: Number.NaN }), rates())).toThrow(
+      RangeError,
+    );
+  });
+
+  it('rejects negative driverOnsiteHours', () => {
+    expect(() => computeEventBilling(event({ driverOnsiteHours: -1 }), rates())).toThrow(
+      RangeError,
+    );
+  });
+
+  it('rejects Infinity driverOnsiteHours', () => {
+    expect(() =>
+      computeEventBilling(event({ driverOnsiteHours: Number.POSITIVE_INFINITY }), rates()),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects negative per-diem days on an overnight event', () => {
+    expect(() => computeEventBilling(event({ overnight: true, perDiemDays: -3 }), rates())).toThrow(
+      RangeError,
+    );
+  });
+
+  it('rejects NaN per-diem days on an overnight event', () => {
+    expect(() =>
+      computeEventBilling(event({ overnight: true, perDiemDays: Number.NaN }), rates()),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects a fractional per-diem day count (per_diem_days is an INTEGER column)', () => {
+    expect(() =>
+      computeEventBilling(event({ overnight: true, perDiemDays: 1.5 }), rates()),
+    ).toThrow(RangeError);
+  });
+
+  it('still accepts a fractional labor-hour count (hours are Decimal(5,2))', () => {
+    const b = computeEventBilling(event({ laborHours: 2.25 }), rates());
+    expect(b.laborWagesCents).toBe(roundCents(2.25, 2500)); // 5625
+  });
+
+  it('does NOT validate a leaked NaN per-diem day count on a NON-overnight event (forced to 0)', () => {
+    const b = computeEventBilling(event({ overnight: false, perDiemDays: Number.NaN }), rates());
+    expect(b.perDiemCents).toBe(0);
   });
 });
 

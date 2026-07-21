@@ -20,7 +20,12 @@
 import type { InvoiceView } from './view';
 import type { InvoiceKind, InvoiceMode, InvoiceStatus, JsonValue } from './types';
 import { LINE_CODE } from './types';
-import { GP_ITEM_CODE, MILES_0_MEMBER_CODES, type GpItemCode } from './item-codes';
+import {
+  GP_ITEM_CODE,
+  MILES_0_MEMBER_CODES,
+  itemCodeForLineCode,
+  type GpItemCode,
+} from './item-codes';
 import { invoiceAttachments, type InvoiceAttachmentDescriptor } from './attachments';
 import type { GpContext } from './gp-identifiers';
 import { formatMDDYY } from './gp-identifiers';
@@ -120,8 +125,11 @@ export interface GpExportLineV2 {
    * GP "Item" code — one of the 7 LOCKED codes (rollup §9): LOCATION / UNITSMO /
    * REIMBO / EVENTO / MILES 0 / FUEL / OREGON MATTRESS. Verbatim from the real
    * June-2026 invoice PDFs (§10); supersedes the PR-#128 empty-string assumption.
+   * `null` for a leaf that maps to no standalone GP item code (e.g. a `manual`
+   * adjustment line — see {@link itemCodeForLineCode}); GP renders it with no item,
+   * never borrowing a per-mattress/aggregate code that would misstate the charge.
    */
-  item: GpItemCode;
+  item: GpItemCode | null;
   description: string;
   /** GP unit of measure — currently unused by the locked taxonomy (always null). */
   unit_of_measure: string | null;
@@ -243,7 +251,11 @@ function locationSpacer(description: string, location: string | null = null): Gp
  * A single-quantity AGGREGATE GP line (REIMBO / EVENTO / MILES 0 / FUEL): GP
  * renders these as `1 <CODE> … $extended`, so quantity is "1" and Each == Ext.
  */
-function aggregateLine(item: GpItemCode, description: string, extendedCents: number): GpExportLineV2 {
+function aggregateLine(
+  item: GpItemCode,
+  description: string,
+  extendedCents: number,
+): GpExportLineV2 {
   return {
     location: null,
     item,
@@ -338,14 +350,20 @@ function transportationGpLines(inv: InvoiceView, ctx: GpExportContext): GpExport
 
 /**
  * Build the OR collection-site-count presentation: one `OREGON MATTRESS` line per
- * satellite site, carrying the site's real mattress count × $2.25 (§9/§10).
+ * satellite site, carrying the site's real mattress count × $2.25 (§9/§10). A `manual`
+ * adjustment line (credit/fee an operator adds to an `or_collection_site_count`
+ * invoice) is carried through so the total still reconciles, but its item code comes
+ * from the canonical {@link itemCodeForLineCode} map — which returns `null` for
+ * `manual`, so it is NOT stamped with the per-mattress `OREGON MATTRESS` code (§9 locks
+ * that code to "collection-site per-mattress, units × $2.25"). Presentation-only; the
+ * reconciliation invariant in {@link invoiceExportV2} still guards the grand total.
  */
 function collectionGpLines(inv: InvoiceView): GpExportLineV2[] {
   return inv.lines
     .filter((l) => l.lineCode === LINE_CODE.satellite || l.lineCode === LINE_CODE.manual)
     .map((l) => ({
       location: null,
-      item: GP_ITEM_CODE.oregonMattress,
+      item: itemCodeForLineCode(l.lineCode),
       description: l.description,
       unit_of_measure: null,
       quantity: l.quantity,

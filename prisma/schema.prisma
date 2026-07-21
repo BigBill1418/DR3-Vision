@@ -303,7 +303,9 @@ model User {
 /// - `cvp_retailer`        : trans + trailer only, no MRC unit rate (Rifes)
 /// - `collection_site`     : trans + trailer + per-mattress ($2.25) + MRC unit rate (SVDP)
 /// - `third_party_inbound` : MRC unit rate only; MRC-contracted haulers deliver, DR3
-///                           only processes (Thompsons, Stayton, Deschutes, Sponsors)
+///                           only processes (Thompsons, Stayton, Deschutes). NB:
+///                           `Sponsors` is NOT here — §2 reclassified it as a
+///                           provenance agency (see ProvenanceAgency), not a source.
 enum SourceSiteType {
   mrc_inbound
   cvp_retailer

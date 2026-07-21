@@ -54,8 +54,18 @@ function ctx(siteName: string): GpExportContext {
   return {
     siteName,
     gp: {
-      billTo: { name: 'Mattress Recycling Council', attn: 'Ryan Trainer', street: '501 Wythe Street', locality: 'Alexandria VA 22314' },
-      shipTo: { name: 'Mattress Recycling Council', attn: 'Ryan Trainer', street: '501 Wythe Street', locality: 'Alexandria VA 22314' },
+      billTo: {
+        name: 'Mattress Recycling Council',
+        attn: 'Ryan Trainer',
+        street: '501 Wythe Street',
+        locality: 'Alexandria VA 22314',
+      },
+      shipTo: {
+        name: 'Mattress Recycling Council',
+        attn: 'Ryan Trainer',
+        street: '501 Wythe Street',
+        locality: 'Alexandria VA 22314',
+      },
       customerId: 'MRCL001',
       salesId: '34',
       poNumber: '6/30/26 DR3 W',
@@ -79,10 +89,26 @@ describe('Woodland Processing EOM IVC072778 (§10) — LOCATION/UNITSMO/REIMBO/E
     tradeDiscountCents: discount,
     tradeDiscountReferenceInvoiceId: 'mid-june',
     lines: [
-      line({ lineCode: 'B6', quantity: '17126', rateRef: { rate_cents: 1650 }, amountCents: b6, position: 0 }),
-      line({ lineCode: 'B7', description: 'MRC- $3.00 Incentive Program', amountCents: b7, position: 1 }),
+      line({
+        lineCode: 'B6',
+        quantity: '17126',
+        rateRef: { rate_cents: 1650 },
+        amountCents: b6,
+        position: 0,
+      }),
+      line({
+        lineCode: 'B7',
+        description: 'MRC- $3.00 Incentive Program',
+        amountCents: b7,
+        position: 1,
+      }),
       line({ lineCode: 'B8', description: 'MRC- Event Labor', amountCents: b8, position: 2 }),
-      line({ lineCode: 'B22.offset', description: 'Trade discount', amountCents: -discount, position: 3 }),
+      line({
+        lineCode: 'B22.offset',
+        description: 'Trade discount',
+        amountCents: -discount,
+        position: 3,
+      }),
     ],
   });
 
@@ -110,8 +136,18 @@ describe('Woodland Transportation EOM IVC072775 (§10) — MILES 0 + FUEL', () =
     totalCents: 6737500 + 510551,
     lines: [
       line({ lineCode: 'B16.freight', description: 'Freight', amountCents: 5565000, position: 0 }),
-      line({ lineCode: 'B16.event_freight', description: 'Event freight', amountCents: 92500, position: 1 }),
-      line({ lineCode: 'B16.fuel', description: 'surcharge - June', amountCents: 510551, position: 2 }),
+      line({
+        lineCode: 'B16.event_freight',
+        description: 'Event freight',
+        amountCents: 92500,
+        position: 1,
+      }),
+      line({
+        lineCode: 'B16.fuel',
+        description: 'surcharge - June',
+        amountCents: 510551,
+        position: 2,
+      }),
       line({ lineCode: 'B16.rentals', description: 'Rentals', amountCents: 1080000, position: 3 }),
     ],
   });
@@ -157,11 +193,46 @@ describe('Eugene Collections EOM IVC072779 (§10) — OREGON MATTRESS per site',
     kind: 'or_collection_site_count',
     totalCents: 171450,
     lines: [
-      line({ lineCode: 'satellite', description: 'Cottage Grove', quantity: '67', rateRef: { rate_cents: 225 }, amountCents: 15075, position: 0 }),
-      line({ lineCode: 'satellite', description: 'Salem', quantity: '203', rateRef: { rate_cents: 225 }, amountCents: 45675, position: 1 }),
-      line({ lineCode: 'satellite', description: 'Albany', quantity: '379', rateRef: { rate_cents: 225 }, amountCents: 85275, position: 2 }),
-      line({ lineCode: 'satellite', description: 'Florence', quantity: '59', rateRef: { rate_cents: 225 }, amountCents: 13275, position: 3 }),
-      line({ lineCode: 'satellite', description: 'The Dalles', quantity: '54', rateRef: { rate_cents: 225 }, amountCents: 12150, position: 4 }),
+      line({
+        lineCode: 'satellite',
+        description: 'Cottage Grove',
+        quantity: '67',
+        rateRef: { rate_cents: 225 },
+        amountCents: 15075,
+        position: 0,
+      }),
+      line({
+        lineCode: 'satellite',
+        description: 'Salem',
+        quantity: '203',
+        rateRef: { rate_cents: 225 },
+        amountCents: 45675,
+        position: 1,
+      }),
+      line({
+        lineCode: 'satellite',
+        description: 'Albany',
+        quantity: '379',
+        rateRef: { rate_cents: 225 },
+        amountCents: 85275,
+        position: 2,
+      }),
+      line({
+        lineCode: 'satellite',
+        description: 'Florence',
+        quantity: '59',
+        rateRef: { rate_cents: 225 },
+        amountCents: 13275,
+        position: 3,
+      }),
+      line({
+        lineCode: 'satellite',
+        description: 'The Dalles',
+        quantity: '54',
+        rateRef: { rate_cents: 225 },
+        amountCents: 12150,
+        position: 4,
+      }),
     ],
   });
 
@@ -171,5 +242,72 @@ describe('Eugene Collections EOM IVC072779 (§10) — OREGON MATTRESS per site',
     expect(out.gp.lines.every((l) => l.item === 'OREGON MATTRESS')).toBe(true);
     expect(out.gp.lines[0]!.unit_price_cents).toBe(225);
     expect(out.gp.totals.total_cents).toBe(171450);
+  });
+
+  it('a manual adjustment line is carried but NOT stamped OREGON MATTRESS (item = null)', () => {
+    // Rollup §9 locks OREGON MATTRESS to "collection-site per-mattress ($2.25)"; a
+    // manual credit/fee must not borrow that code (mislabels the charge to Mary/GP).
+    const withManual = invoice({
+      kind: 'or_collection_site_count',
+      totalCents: 171450 - 5000, // one $50.00 credit
+      lines: [
+        line({
+          lineCode: 'satellite',
+          description: 'Cottage Grove',
+          quantity: '67',
+          rateRef: { rate_cents: 225 },
+          amountCents: 15075,
+          position: 0,
+        }),
+        line({
+          lineCode: 'satellite',
+          description: 'Salem',
+          quantity: '203',
+          rateRef: { rate_cents: 225 },
+          amountCents: 45675,
+          position: 1,
+        }),
+        line({
+          lineCode: 'satellite',
+          description: 'Albany',
+          quantity: '379',
+          rateRef: { rate_cents: 225 },
+          amountCents: 85275,
+          position: 2,
+        }),
+        line({
+          lineCode: 'satellite',
+          description: 'Florence',
+          quantity: '59',
+          rateRef: { rate_cents: 225 },
+          amountCents: 13275,
+          position: 3,
+        }),
+        line({
+          lineCode: 'satellite',
+          description: 'The Dalles',
+          quantity: '54',
+          rateRef: { rate_cents: 225 },
+          amountCents: 12150,
+          position: 4,
+        }),
+        line({
+          lineCode: 'manual',
+          description: 'Goodwill credit',
+          quantity: null,
+          rateRef: null,
+          amountCents: -5000,
+          position: 5,
+        }),
+      ],
+    });
+    const out = invoiceExportV2(withManual, ctx('Eugene'));
+    expect(out.gp.lines).toHaveLength(6);
+    const manual = out.gp.lines.find((l) => l.description === 'Goodwill credit')!;
+    expect(manual.item).toBeNull();
+    // The five real collection lines still carry the per-mattress code.
+    expect(out.gp.lines.filter((l) => l.item === 'OREGON MATTRESS')).toHaveLength(5);
+    // The invariant still holds — the manual line's amount is in the reconciled total.
+    expect(out.gp.totals.total_cents).toBe(166450);
   });
 });

@@ -148,6 +148,20 @@ function assertNonNegInt(value: number, label: string): void {
 }
 
 /**
+ * Guard a fractional quantity (Decimal(5,2) hours) before it multiplies a rate:
+ * reject NaN/Infinity and negatives so a bad capture fails loud instead of producing
+ * NaN/negative cents. Fractions are legal (hours are Decimal(5,2)), so this does NOT
+ * require an integer — cf. {@link assertNonNegInt} for whole-unit fields.
+ */
+function assertNonNegFinite(value: number, label: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(
+      `event-billing: ${label} must be a finite non-negative number (got ${value})`,
+    );
+  }
+}
+
+/**
  * Price every freight leg against the CA Event Mile Rate tier set (§5.3 items 1–2).
  * Each leg resolves independently via {@link resolveEventMileRateCents}, which throws
  * {@link import('../billing-rates/event-mile-rate').EventMileRateOutOfRangeError} for
@@ -196,6 +210,7 @@ export function computeEventBilling(
   const eventTransportationCents = legs.reduce((acc, l) => acc + l.rateCents, 0);
 
   const laborHours = input.laborHours ?? 0;
+  assertNonNegFinite(laborHours, 'laborHours');
   const laborWagesCents =
     laborHours === 0
       ? 0
@@ -204,6 +219,7 @@ export function computeEventBilling(
         : roundCents(laborHours, rates.laborHourlyCents);
 
   const onsiteHours = input.driverOnsiteHours ?? 0;
+  assertNonNegFinite(onsiteHours, 'driverOnsiteHours');
   const driverWagesCents =
     onsiteHours === 0
       ? 0
@@ -212,8 +228,10 @@ export function computeEventBilling(
         : roundCents(onsiteHours, rates.driverHourlyCents);
 
   // Per diem bills overnight days ONLY (§5.3 item 5). A non-overnight event never
-  // bills per diem even if a day count leaked into the capture.
+  // bills per diem even if a day count leaked into the capture. `per_diem_days` is an
+  // INTEGER column, so the effective value must be a non-negative whole number.
   const perDiemDays = input.overnight ? (input.perDiemDays ?? 0) : 0;
+  assertNonNegInt(perDiemDays, 'perDiemDays');
   const perDiemCents =
     perDiemDays === 0
       ? 0
@@ -231,7 +249,11 @@ export function computeEventBilling(
     perDiemCents,
     irsMileageCents,
     totalCents:
-      eventTransportationCents + laborWagesCents + driverWagesCents + perDiemCents + irsMileageCents,
+      eventTransportationCents +
+      laborWagesCents +
+      driverWagesCents +
+      perDiemCents +
+      irsMileageCents,
   };
 }
 

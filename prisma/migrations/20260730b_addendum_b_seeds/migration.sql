@@ -142,8 +142,18 @@ ON CONFLICT ("site_id") DO UPDATE
         "updated_at" = CURRENT_TIMESTAMP;
 
 -- ── §7 — Kelsey AP-approver auto-remove date 2026-08-01 → 2026-08-08 (vacation extension) ──
--- Guarded by the old value so this never clobbers a manual change and is a clean no-op
--- on re-run / on a clean CI DB (no users → subquery NULL → 0 rows).
+-- Guarded by the old DATE (not the exact timestamp) so this bumps Kelsey's row whatever
+-- the time component of the prod 8/1 value is (a seed run, a manual SQL insert, or a
+-- different ms all still land on the 2026-08-01 calendar day), while STILL refusing to
+-- clobber a manual change to any other day. `active_until` is TIMESTAMP(3) (no time
+-- zone), so `::date` truncation is deterministic and session-TZ-independent. Idempotent:
+-- after the bump the row's date is 2026-08-08, so a re-run matches 0 rows. Clean-CI
+-- no-op: no users → subquery NULL → 0 rows. Without this the daily expiry reaper
+-- (src/lib/ap/expiry.ts) would delete Kelsey on 8/1 — a week before her extended 8/8
+-- window (§7, the deadline OPEN-ITEMS anchors on) — with no error anywhere.
+-- POST-DEPLOY CHECK (deploy notes): confirm the bump landed —
+--   SELECT active_until FROM ap_approvers a JOIN users u ON u.id = a.user_id
+--   WHERE u.email = 'kelsey.ruhland@svdp.us';  -- expect 2026-08-08 07:00:00
 UPDATE "ap_approvers" SET "active_until" = '2026-08-08T07:00:00.000Z', "updated_at" = CURRENT_TIMESTAMP
-WHERE "active_until" = '2026-08-01T07:00:00.000Z'
+WHERE "active_until"::date = DATE '2026-08-01'
     AND "user_id" = (SELECT "id" FROM "users" WHERE "email" = 'kelsey.ruhland@svdp.us');
