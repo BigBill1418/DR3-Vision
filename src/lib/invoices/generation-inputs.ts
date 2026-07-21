@@ -9,6 +9,7 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { INVOICE_STATUSES } from '@/lib/exports';
 import { log } from '@/lib/observability/logger';
 import { resolveRateCents } from '@/lib/program-rules/resolver';
 import { resolveFreightCents } from '@/lib/billing-rates/freight-resolver';
@@ -250,13 +251,21 @@ export async function resolveTransportationInputs(args: {
   const jurisdiction = kind === 'or_transportation_eom' ? 'OR' : 'CA';
   const instant = instantBounds(windowStartISO, windowEndISO);
 
-  // Transport-charged, verified inbound loads in the window (the two Inbound-tab
-  // split is `transport_charged`; approvable billing uses verified loads).
+  // Transport-charged, billing-ready inbound loads in the window. The two
+  // Inbound-tab split is `transport_charged`; billing-readiness is the canonical
+  // `INVOICE_STATUSES` set (submitted+verified+submitted_to_mymrc+processed),
+  // shared verbatim with the MRC Monthly Invoice export (`exports/mrc`) so the
+  // freight+fuel billed here reconciles 1:1 against that export — one source of
+  // truth, no drift. `submitted` IS billing-ready per that contract; this is the
+  // BILLING set and deliberately differs from inventory's
+  // `VERIFIED_INBOUND_STATUSES` (running-balance), which excludes `submitted`
+  // because an operator-submitted load is not yet a manager-verified physical
+  // on-hand count.
   const loads = await prisma.inboundLoad.findMany({
     where: {
       site_id: siteId,
       transport_charged: true,
-      status: 'verified',
+      status: { in: [...INVOICE_STATUSES] },
       arrived_at: { gte: instant.gte, lt: instant.lt },
     },
     select: {
