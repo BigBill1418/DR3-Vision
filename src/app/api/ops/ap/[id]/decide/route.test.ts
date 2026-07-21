@@ -5,15 +5,23 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const { requireApApprover, decideRequest, resolveDecisionSiteId } = vi.hoisted(() => ({
-  requireApApprover: vi.fn(async () => ({ userId: 'u-morena' })),
-  decideRequest: vi.fn(async () => ({
-    requestId: 'req-1',
-    decision: 'approved',
-    mail: 'sent',
-  })),
-  resolveDecisionSiteId: vi.fn(async () => 'site-w'),
-}));
+const { requireApApprover, decideRequest, resolveDecisionSiteId, assertDecisionNote, ApNoteRequiredError } =
+  vi.hoisted(() => {
+    class ApNoteRequiredError extends Error {}
+    return {
+      requireApApprover: vi.fn(async () => ({ userId: 'u-morena' })),
+      decideRequest: vi.fn(async () => ({
+        requestId: 'req-1',
+        decision: 'approved',
+        mail: 'sent',
+      })),
+      resolveDecisionSiteId: vi.fn(async () => 'site-w'),
+      // A controllable spy (default no-op) so a test can make the real note guard
+      // throw and prove the route 400s BEFORE any state change.
+      assertDecisionNote: vi.fn((): void => undefined),
+      ApNoteRequiredError,
+    };
+  });
 
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 vi.mock('@/lib/ap/approvers', () => ({ requireApApprover }));
@@ -21,11 +29,11 @@ vi.mock('@/lib/ap/approvals', () => ({
   ApAlreadyDecidedError: class extends Error {},
   ApInvalidSiteError: class extends Error {},
   ApLocationConflictError: class extends Error {},
-  ApNoteRequiredError: class extends Error {},
+  ApNoteRequiredError,
   ApNotActionableError: class extends Error {},
   ApRequestNotFoundError: class extends Error {},
   ApSiteRequiredError: class extends Error {},
-  assertDecisionNote: () => undefined,
+  assertDecisionNote,
   assertDecisionSite: () => undefined,
   decideRequest,
   resolveDecisionSiteId,
@@ -47,6 +55,8 @@ function call(body: unknown, id = 'req-1'): Promise<Response> {
 beforeEach(() => {
   decideRequest.mockClear();
   resolveDecisionSiteId.mockClear();
+  assertDecisionNote.mockReset();
+  assertDecisionNote.mockImplementation((): void => undefined);
 });
 
 describe('POST /api/ops/ap/[id]/decide — free-text caps (F7-AP)', () => {
@@ -128,5 +138,30 @@ describe('POST /api/ops/ap/[id]/decide — NOT DR3 disposition', () => {
     const arg = (decideRequest.mock.calls[0]! as unknown[])[0] as { filedNotDr3?: boolean; siteId?: string };
     expect(arg.filedNotDr3).toBeUndefined();
     expect(arg.siteId).toBe('site-w');
+  });
+});
+
+// 2026-07-21 amendment — an APPROVAL now requires a note (ADR-0046). The route
+// validates via assertDecisionNote BEFORE resolving a site or flipping the row; a
+// throw maps to 400 (ApNoteRequiredError) and never reaches decideRequest.
+describe('POST /api/ops/ap/[id]/decide — approval requires a note', () => {
+  it('validates the note BEFORE any state change (assertDecisionNote called with decision+note)', async () => {
+    const res = await call({ decision: 'approved', note: 'fuel — Woodland box truck', siteId: 'woodland' });
+    expect(res.status).toBe(200);
+    expect(assertDecisionNote).toHaveBeenCalledWith('approved', 'fuel — Woodland box truck');
+    expect(decideRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('400s an approval with no note WITHOUT resolving a site or deciding', async () => {
+    assertDecisionNote.mockImplementation((): void => {
+      throw new ApNoteRequiredError(
+        'An approval must include a note describing what this transaction was for and any additional context.',
+      );
+    });
+    const res = await call({ decision: 'approved', siteId: 'woodland' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/approval must include a note/i);
+    expect(decideRequest).not.toHaveBeenCalled(); // no state change
+    expect(resolveDecisionSiteId).not.toHaveBeenCalled();
   });
 });

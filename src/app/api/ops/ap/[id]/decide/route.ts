@@ -70,8 +70,9 @@ export async function POST(
         { status: 400 },
       );
     }
-    // Amendment 3 — a rejection MUST carry a note explaining why (approvals stay
-    // note-optional). Validate BEFORE any state change.
+    // Amendment 3 + 2026-07-21 amendment — EVERY decision MUST carry a note: an
+    // approval describes what the transaction was for + context; a rejection says
+    // why. Validate BEFORE any state change (throws ApNoteRequiredError → 400).
     assertDecisionNote(body.decision as ApDecision, body.note);
     const amountCents =
       typeof body.amountCents === 'number' &&

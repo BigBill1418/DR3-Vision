@@ -61,10 +61,12 @@ export class ApNotActionableError extends Error {
 }
 
 /**
- * ADR-0046 Amendment 3 — a rejection MUST carry a note explaining why (plain-English
- * validation, enforced at the API boundary; approvals stay note-optional). Also
- * thrown for a hold / hold-note-update with no note. Kept out of `decideRequest`
- * itself so the pure lib race-tests can reject without a note.
+ * ADR-0046 Amendment 3 — a rejection MUST carry a note explaining why. Extended by
+ * the 2026-07-21 amendment: an APPROVAL must also carry a note describing what the
+ * transaction was for + any additional context (audit trail of transaction purpose).
+ * Plain-English validation, enforced at the API boundary. Also thrown for a hold /
+ * hold-note-update with no note, and for a NOT-DR3 decision with no reason. Kept out
+ * of `decideRequest` itself so the pure lib race-tests can decide without a note.
  */
 export class ApNoteRequiredError extends Error {
   readonly status = 400 as const;
@@ -80,15 +82,19 @@ function hasNote(note: string | undefined | null): note is string {
 }
 
 /**
- * Enforce "a rejection must say why" at the decision boundary. Approvals are
- * note-optional. Throws {@link ApNoteRequiredError} for a rejection with no note.
+ * Enforce "every decision must carry a note" at the decision boundary (2026-07-21
+ * amendment; previously approvals were note-optional). BOTH paths require a non-empty
+ * (trimmed) note — same minimum — with a purpose-specific message: an approval must
+ * describe what the transaction was for + context (audit trail of transaction
+ * purpose); a rejection must say why. Throws {@link ApNoteRequiredError} when absent.
  */
 export function assertDecisionNote(decision: ApDecision, note: string | undefined | null): void {
-  if (decision === 'rejected' && !hasNote(note)) {
-    throw new ApNoteRequiredError(
-      'A rejection must include a note explaining why the invoice was rejected.',
-    );
-  }
+  if (hasNote(note)) return;
+  throw new ApNoteRequiredError(
+    decision === 'approved'
+      ? 'An approval must include a note describing what this transaction was for and any additional context.'
+      : 'A rejection must include a note explaining why the invoice was rejected.',
+  );
 }
 
 export class ApAlreadyDecidedError extends Error {

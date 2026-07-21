@@ -533,3 +533,47 @@ a reason is required either way. This keeps the existing approve/reject state ma
 and audit trail intact. (If the operator later wants NOT-DR3 to be its own terminal
 disposition — e.g. "returned to sender, not actioned" — that would be a follow-up
 status, not covered here.)
+
+## Amendment — 2026-07-21 (approvals now REQUIRE an explanatory note)
+
+Operator directive (Bill): _"on the AP module let's not allow approval without a
+note — the user needs to enter data about what the transaction was for and explain
+additional context before being able to approve the invoice."_
+
+**Problem.** Amendment 3 required a note only for **rejections** ("say why"), and the
+2026-07-20 amendment required a **reason** only for the NOT-DR3 disposition. A plain
+approval (Woodland/Eugene) stayed note-optional, so an approved invoice could reach
+accounting with **no recorded transaction purpose** — an audit-trail gap. Accounting
+(and any later reviewer) had no captured statement of what a paid invoice was for.
+
+**Decision.** Extend the note requirement to **every** decision: an **approval** must
+carry a non-empty note describing what the transaction was for + any additional
+context, using the **same minimum** as the rejection path (non-empty after trim — no
+min-word count). The rejection and NOT-DR3-reason rules are unchanged; a NOT-DR3
+approval's required reason simply satisfies this same note.
+
+**Rationale.** The note is the durable audit record of transaction purpose/context —
+it already rides the decision email and the stamped decision PDF back to accounting.
+Requiring it on approvals closes the gap where the most common decision (approve)
+carried the least context.
+
+**Enforced in depth:**
+
+- **Service** (`assertDecisionNote`, `src/lib/ap/approvals.ts`) — now throws
+  `ApNoteRequiredError` (400) for an **approval** with no/blank note as well as a
+  rejection, each with a purpose-specific message. Still called at the API boundary
+  BEFORE any read/state change (kept out of `decideRequest` so the pure lib
+  race-tests can decide without a note). The NOT-DR3 reason guard inside
+  `decideRequest` is unchanged and still fires for the NOT-DR3 path.
+- **Route** (`/api/ops/ap/[id]/decide`) — unchanged flow: `assertDecisionNote` runs
+  before the site is resolved or the row flipped, so an approval without a note 400s
+  with no DB write. Mutual-exclusion (`notDr3 && siteId`) and the NOT-DR3 reason
+  branch continue to work; the note guard now fires first when both are violated,
+  still a 400 before any state change (no double-error, no bypass).
+- **UI** — the approver panel disables **Approve** until a non-empty note is present
+  (mirroring the existing Reject/Hold gates); the Note field is relabeled
+  **(required)** and prompts for "what this transaction was for + any additional
+  context". The server re-validates.
+
+No schema change (the note already persists to `ap_requests.decision_note`). No
+migration.
