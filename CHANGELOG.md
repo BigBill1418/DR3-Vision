@@ -5,6 +5,31 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-21 (full-stack audit — P1-3 backup-failure alerting)
+
+Confirmed audit finding P1-3: the DR3 restic backup lane's failure alerting had
+been dead for a month. `scripts/dr3-pg-backup.sh` (run by the `dr3-vision-pg-backup`
+user-systemd timer daily) called `ntfy-publish.sh` with **positional args** against
+a **flags-only** helper — every call exited 2 and was swallowed by `|| true`, so a
+silent backup stoppage (R2 cred rotation, lost restic env) would have left the timer
+green while data-loss exposure grew unbounded. Additionally the `--topic
+dr3-vision-backup` the script intended is **not reachable** from the CHAD host token
+(chad-hq-publisher scope) — it 403s.
+
+- **ntfy contract fixed** — all publishes now use the ADR-0036 flag syntax
+  (`--topic/--title/--priority`); verified delivering (exit 0) end-to-end on CHAD.
+- **Fail-loud** — a missing/incomplete restic env now PAGES `high` and exits 1
+  (was: log + `exit 0`, timer stayed green). Injected-failure tested: missing env
+  and incomplete env both page + exit 1.
+- **Snapshot-age deadman** — after the push, the script asserts the newest
+  `dr3-vision` snapshot is < 26h old; any silent-skip path (env drift, wrong repo)
+  now fails the run loudly.
+- **Topic** — defaults to host-scoped `chad-hq-backup` (token-reachable; same topic
+  the sibling host backup driver uses). Override `NTFY_TOPIC` to the per-service
+  `dr3-vision-backup` only if the dr3-vision-publisher token is placed on the host.
+- Verified against the live repo: full run pushed snapshot `c7cd38a2`, prune +
+  deadman + OK page all succeeded.
+
 ### Fixed — 2026-07-21 (Addendum-B rollup — review close-out, minor findings)
 
 Close-out pass on the Addendum-B rollup branch before PR. No money moved, no
