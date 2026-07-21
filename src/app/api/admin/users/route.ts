@@ -27,19 +27,24 @@ const ROLES = ['operator', 'manager', 'admin'] as const;
 
 // Allow either omitted, null, or empty-string for optional fields;
 // the model layer normalizes empty-string -> null where appropriate.
+// `.nullish()` (nullable + optional) is required, NOT `.optional()`: the create
+// form always sends an explicit `null` for a field that doesn't apply to the
+// chosen role (an operator's email, a non-Eugene operator's processor_role, a
+// manager/admin's pin). `.optional()` accepts only `undefined`, so those nulls
+// were rejected as "Invalid request payload" — the bug this fixes.
 const optionalEmail = z
   .union([z.string().email(), z.literal('')])
-  .optional()
+  .nullish()
   .transform((v) => (v && v.length > 0 ? v : null));
 
 const optionalProcessorRole = z
   .union([z.enum(PROCESSOR_ROLES), z.literal('')])
-  .optional()
+  .nullish()
   .transform((v) => (v && v.length > 0 ? v : null));
 
 const optionalPin = z
   .union([z.string().regex(/^\d{4}$/), z.literal('')])
-  .optional()
+  .nullish()
   .transform((v) => (v && v.length === 4 ? v : null));
 
 const createSchema = z.object({
