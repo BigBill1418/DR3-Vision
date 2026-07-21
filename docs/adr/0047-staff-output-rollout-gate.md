@@ -126,4 +126,16 @@ Bill's dispositions on the three §4.4-sweep grandfathering questions:
   surface. Already routed through `notifyStaff('ap_notify')` (born pilot).
 
 New surfaces registered since acceptance (all born pilot): `board_pack_digest`
-(notification, org-wide — ADR-0045 §3 addendum) and `yard_list` (UI — rollup §1.8).
+(notification, org-wide — ADR-0045 §3 addendum), `yard_list` (UI — rollup §1.8),
+and `loads_inventory` (UI, per-site — 2026-07-21). The last one converts the
+ADR-0037 **D7 activation gate** from a hardcoded admin-only switch in
+`assertLoadsInventoryActivated` into this data-driven surface, so the whole
+loads/inventory + floor-operator iPad flow flips ON/OFF per-site from
+`/admin/rollout` with no redeploy. Semantics follow the standard UI mapping:
+`pilot` (the seeded default) = admin-only = the historical behavior; `live` =
+operators/managers activated for that site. Admins always pass. Default/unset/
+unregistered ⇒ admin-only (fail-closed via `isUiSurfaceLive`), so a fresh deploy
+changes nothing until an admin flips it. The flip is admin-only + audited by this
+ADR's existing endpoint — no parallel path. Registered via migration
+`20260729_adr0037_loads_inventory_rollout_surface` (additive, idempotent) plus
+`prisma/seed.mjs` for first-deploy/dev parity.

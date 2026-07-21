@@ -875,6 +875,7 @@ async function seedRolloutSurfaces(siteIds) {
     'equipment_entry',
     'equipment_trend',
     'yard_list', // rollup §1.8 — manager Yard view, born pilot (admin-only until flipped)
+    'loads_inventory', // ADR-0037 D7 — master loads/inventory + floor-operator gate, born pilot
   ];
 
   const rows = [];

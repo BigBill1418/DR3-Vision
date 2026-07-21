@@ -1,8 +1,9 @@
 // ADR-0037 — shared route helpers for the manager loads/inventory surfaces.
 //
-// `requireActivatedManager` layers the D7 activation gate (admin-only for now)
-// on top of the canonical site/role guard. `loadsErrorResponse` maps the typed
-// service errors to their HTTP status so every route reports uniformly.
+// `requireActivatedManager` layers the D7 activation gate (data-driven via the
+// ADR-0047 `loads_inventory` rollout surface) on top of the canonical site/role
+// guard. `loadsErrorResponse` maps the typed service errors to their HTTP status
+// so every route reports uniformly.
 
 import { NextResponse } from 'next/server';
 import { requireManagerForSite, type ManagerSiteContext } from '@/lib/auth-helpers';
@@ -17,7 +18,7 @@ import { log } from '@/lib/observability/logger';
 export async function requireActivatedManager(siteCode: string): Promise<ManagerSiteContext> {
   const ctx = await requireManagerForSite(siteCode);
   try {
-    assertLoadsInventoryActivated(ctx.role);
+    await assertLoadsInventoryActivated(ctx.role, ctx.siteId);
   } catch (e) {
     if (e instanceof LoadsInventoryNotActivatedError) throw new Response('not_activated', { status: e.status });
     throw e;

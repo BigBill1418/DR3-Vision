@@ -84,6 +84,27 @@ describe('flipRolloutSurface', () => {
     ).rejects.toBeInstanceOf(RolloutFlipError);
   });
 
+  it('flips the loads_inventory activation surface pilot→live, audited (ADR-0037 D7)', async () => {
+    surfaceFindUnique.mockResolvedValue({
+      id: 'li-eugene',
+      surface_code: 'loads_inventory',
+      site_id: 'site-eugene',
+      rollout_state: 'pilot',
+    });
+    const updated = await flipRolloutSurface({
+      surfaceId: 'li-eugene',
+      toState: 'live',
+      criteriaNote: 'restore drill recorded + RESTIC_PASSWORD off-box — activating Eugene iPad flow',
+      actorUserId: 'u-admin',
+      db: db(),
+    });
+    expect(updated.rollout_state).toBe('live');
+    expect(writeAudit).toHaveBeenCalledTimes(1);
+    const auditArg = callArg<{ table_name: string; before?: { surface_code?: string } }>(writeAudit, 0, 0);
+    expect(auditArg.table_name).toBe('rollout_surfaces');
+    expect(auditArg.before?.surface_code).toBe('loads_inventory');
+  });
+
   it('rollback: live→pilot is the same audited, immediate operation', async () => {
     surfaceFindUnique.mockResolvedValue({
       id: 's1',
