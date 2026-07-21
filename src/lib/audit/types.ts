@@ -151,9 +151,19 @@ export interface Finding {
  * Wired to ADR-0037's `source_aliases` post-merge; the parser tests use an
  * in-memory implementation. An unresolvable name is never dropped — it emits an
  * `unresolved_site` finding.
+ *
+ * ADR-0037 amendment (rollup §12) — `sourceId` carries the resolved `sources.id`
+ * so intake can LINK the record (e.g. promoted `inbound_loads.source_id`), not
+ * just classify it. The DB-backed resolver always populates it; in-memory test
+ * doubles may leave it null.
  */
 export interface SiteAliasResolver {
-  resolve(rawName: string): { siteId: string; canonicalName: string; isNonProgram: boolean } | null;
+  resolve(rawName: string): {
+    sourceId: string | null;
+    siteId: string;
+    canonicalName: string;
+    isNonProgram: boolean;
+  } | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────

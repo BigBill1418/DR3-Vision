@@ -14,7 +14,7 @@ import type { SiteAliasResolver } from '../types';
 import { buildWoodlandDailyLogWorkbook } from './__fixtures__/build-woodland-workbook';
 
 const resolver: SiteAliasResolver = {
-  resolve: (name) => ({ siteId: 'woodland', canonicalName: name, isNonProgram: false }),
+  resolve: (name) => ({ sourceId: null, siteId: 'woodland', canonicalName: name, isNonProgram: false }),
 };
 
 function sections(rows: { section: string | null }[]): Record<string, number> {

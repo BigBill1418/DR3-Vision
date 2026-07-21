@@ -138,6 +138,7 @@ describe('upsertScrapedHauls — preconditions', () => {
       unmatched_transporter_count: 0,
       unmatched_source_names: [],
       unmatched_transporter_names: [],
+      alias_resolved_source_names: [],
     });
     expect(prisma._spies.expectedCreate).not.toHaveBeenCalled();
     expect(prisma._spies.auditCreate).not.toHaveBeenCalled();

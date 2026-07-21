@@ -19,6 +19,7 @@ describe('sourceAliasResolver', () => {
       db([{ id: 's1', site_id: 'site-eugene', name: 'Vacaville', is_non_program: false, aliases: [] }]),
     );
     expect(resolver.resolve('  vacaville ')).toEqual({
+      sourceId: 's1',
       siteId: 'site-eugene',
       canonicalName: 'Vacaville',
       isNonProgram: false,
@@ -38,6 +39,7 @@ describe('sourceAliasResolver', () => {
       ]),
     );
     expect(resolver.resolve('Chester Tranfer')?.canonicalName).toBe('Chester Transfer');
+    expect(resolver.resolve('Chester Tranfer')?.sourceId).toBe('s1');
     expect(resolver.resolve('CHESTER XFER')?.isNonProgram).toBe(true);
   });
 

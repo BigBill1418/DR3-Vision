@@ -11,8 +11,14 @@
 //
 // Source / transporter resolution:
 //   - source_name resolved against `sources(name)` scoped by site_id;
-//     unmatched names persist `source_id = null` + `source_name_at_sync`
-//     so a future seed-update can backfill the FK without losing data.
+//     a name that misses the verbatim map gets a second chance against the
+//     site's `source_aliases` + canonical names, normalized (trim/lowercase/
+//     collapse-whitespace) — ADR-0037 amendment (rollup §12): MyMRC/workbook
+//     customer names drift month-to-month ('SVDP Albany', 'SvdP Albany',
+//     'Albany'...), and the OR sources were renamed to canonical MyMRC names
+//     with the old live names kept as aliases. Unmatched names persist
+//     `source_id = null` + `source_name_at_sync` so a future seed/alias
+//     update can backfill the FK without losing data. NEVER guessed.
 //   - transporter_name resolved against `transporters(name)` (global,
 //     per the schema's `@unique` on name); unmatched persists null.
 //
@@ -58,6 +64,12 @@ export interface UpsertSummary {
   unmatched_source_names: string[];
   /** DEDUPED list of the unmatched transporter names. */
   unmatched_transporter_names: string[];
+  /**
+   * DEDUPED raw names that resolved via `source_aliases` (normalized match)
+   * rather than the verbatim `sources.name` map — visibility into name drift
+   * (rollup §12). These ARE matched (source_id set); not an error signal.
+   */
+  alias_resolved_source_names: string[];
 }
 
 export interface UpsertContext {
@@ -116,6 +128,26 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   const sourceByName = new Map(sourceRows.map((r) => [r.name, r.id]));
   const transporterByName = new Map(transporterRows.map((r) => [r.name, r.id]));
 
+  // Alias fallback (rollup §12) — built ONLY when at least one scraped name
+  // missed the verbatim map. One extra site-scoped query: every source + its
+  // source_aliases rows, indexed by normalized name. Aliases first, canonical
+  // names overlaid, so a canonical name wins a normalized-key collision
+  // (mirrors src/lib/audit/workbook/site-alias.ts, which this module cannot
+  // import — tsconfig.mymrc.json compiles src/lib/mymrc standalone).
+  let sourceByNormalized: Map<string, string> | null = null;
+  if (sourceNames.some((n) => !sourceByName.has(n))) {
+    const allSiteSources = await ctx.prisma.source.findMany({
+      where: { site_id: siteId },
+      select: { id: true, name: true, aliases: { select: { alias: true } } },
+    });
+    const idx = new Map<string, string>();
+    for (const s of allSiteSources) {
+      for (const a of s.aliases ?? []) idx.set(normalizeSourceName(a.alias), s.id);
+    }
+    for (const s of allSiteSources) idx.set(normalizeSourceName(s.name), s.id);
+    sourceByNormalized = idx;
+  }
+
   // Batch-load every existing expected_loads row for the scraped haul ids in ONE
   // query (kills the per-haul findUnique N+1). Keyed by external_mymrc_haul_id;
   // the map is kept live below (re-insert after a create) so a duplicated id in a
@@ -150,9 +182,17 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   let unmatchedTransporters = 0;
   const unmatchedSourceNames = new Set<string>();
   const unmatchedTransporterNames = new Set<string>();
+  const aliasResolvedSourceNames = new Set<string>();
 
   for (const haul of ctx.hauls) {
-    const sourceId = sourceByName.get(haul.source_name) ?? null;
+    let sourceId = sourceByName.get(haul.source_name) ?? null;
+    if (sourceId === null && sourceByNormalized !== null) {
+      const viaAlias = sourceByNormalized.get(normalizeSourceName(haul.source_name)) ?? null;
+      if (viaAlias !== null) {
+        sourceId = viaAlias;
+        aliasResolvedSourceNames.add(haul.source_name);
+      }
+    }
     if (sourceId === null) {
       unmatchedSources += 1;
       unmatchedSourceNames.add(haul.source_name);
@@ -279,6 +319,13 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   // name; the names are the actionable signal.
   const sourceNamesList = [...unmatchedSourceNames];
   const transporterNamesList = [...unmatchedTransporterNames];
+  const aliasResolvedList = [...aliasResolvedSourceNames];
+  if (ctx.log && aliasResolvedList.length > 0) {
+    ctx.log(
+      'info',
+      `mymrc-upsert: ${ctx.site} — ${aliasResolvedList.length} source name(s) resolved via source_aliases (name drift, FK set): ${aliasResolvedList.join(', ')}`,
+    );
+  }
   if (ctx.log && sourceNamesList.length > 0) {
     ctx.log(
       'warn',
@@ -300,7 +347,18 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
     unmatched_transporter_count: unmatchedTransporters,
     unmatched_source_names: sourceNamesList,
     unmatched_transporter_names: transporterNamesList,
+    alias_resolved_source_names: aliasResolvedList,
   };
+}
+
+/**
+ * Normalization for the alias fallback — trim, lowercase, collapse internal
+ * whitespace. MUST stay in lock-step with `normalizeName` in
+ * `src/lib/audit/workbook/site-alias.ts` (not importable here; see the
+ * tsconfig.mymrc.json standalone-compilation note above `writeAudit`).
+ */
+function normalizeSourceName(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 interface ExistingRow {

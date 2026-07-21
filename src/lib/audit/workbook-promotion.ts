@@ -237,6 +237,13 @@ export interface DailyCloseCandidate {
 export interface InboundCandidate {
   date: string;
   sourceNameRaw: string;
+  /**
+   * ADR-0037 amendment (rollup §12) — the resolved `sources.id` the raw name
+   * matched (canonical name or `source_aliases`, case/whitespace-insensitive),
+   * written to the promoted `inbound_loads.source_id`. Null only when the test
+   * double resolver carries no id.
+   */
+  sourceId: string | null;
   slipNumber: string | null;
   units: number;
   programUnits: number;
@@ -375,14 +382,17 @@ function reqStr(p: Payload, key: string, where: string): string {
   return v;
 }
 
-/** Resolve an inbound row's program/non-program split (payload wins; else source pool). */
+/**
+ * Resolve an inbound row's program/non-program split (payload wins; else source
+ * pool). `resolved` is null when the source name did not resolve — the caller
+ * has already recorded it as unresolved and will refuse the promotion; the
+ * placeholder zeros are never used.
+ */
 function resolveInboundSplit(
   p: Payload,
   units: number,
   where: string,
-  sourceNameRaw: string,
-  resolver: SiteAliasResolver,
-  unresolved: Set<string>,
+  resolved: { isNonProgram: boolean } | null,
 ): { programUnits: number; nonProgramUnits: number } {
   const program = optInt(p, 'programUnits', where);
   const nonProgram = optInt(p, 'nonProgramUnits', where);
@@ -397,11 +407,7 @@ function resolveInboundSplit(
     if (pr < 0 || np < 0) throw new PromotionParseError(`${where}: unit split cannot be negative`);
     return { programUnits: pr, nonProgramUnits: np };
   }
-  const resolved = resolver.resolve(sourceNameRaw);
-  if (!resolved) {
-    unresolved.add(sourceNameRaw.trim());
-    return { programUnits: 0, nonProgramUnits: 0 }; // placeholder; caller throws before use
-  }
+  if (!resolved) return { programUnits: 0, nonProgramUnits: 0 }; // placeholder; caller throws before use
   return resolved.isNonProgram
     ? { programUnits: 0, nonProgramUnits: units }
     : { programUnits: units, nonProgramUnits: 0 };
@@ -509,7 +515,18 @@ export function decodeStagingRows(
       case 'inbound': {
         const units = reqInt(p, 'units', where);
         const sourceNameRaw = row.site_name_raw?.trim() || reqStr(p, 'sourceNameRaw', where);
-        const split = resolveInboundSplit(p, units, where, sourceNameRaw, resolver, unresolved);
+        // ADR-0037 amendment (rollup §12) — EVERY inbound name is resolved via the
+        // canonical-name + source_aliases resolver (case/whitespace-insensitive),
+        // even when the payload carries an explicit program split: the resolution
+        // also links the promoted row to its Source (`inbound_loads.source_id`).
+        // A resolution landing on another site's source is NOT a match (hard rule
+        // #2 site scoping). Unresolved names are collected and refused below —
+        // never guessed (PromotionUnresolvedSourceError lists them for the
+        // operator to seed an alias and re-run).
+        const hit = resolver.resolve(sourceNameRaw);
+        const resolved = hit && hit.siteId === scope.siteId ? hit : null;
+        if (!resolved) unresolved.add(sourceNameRaw.trim());
+        const split = resolveInboundSplit(p, units, where, resolved);
         const lst = optStr(p, 'loadSourceType');
         if (lst !== null && !LOAD_SOURCE_TYPES.has(lst as LoadSourceType)) {
           throw new PromotionParseError(`${where}: invalid loadSourceType "${lst}"`);
@@ -517,6 +534,7 @@ export function decodeStagingRows(
         out.inbound.push({
           date,
           sourceNameRaw,
+          sourceId: resolved?.sourceId ?? null,
           slipNumber: optStr(p, 'slipNumber'),
           units,
           programUnits: split.programUnits,
@@ -1065,6 +1083,9 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
       await tx.inboundLoad.createMany({
         data: candidates.inbound.map((i) => ({
           site_id: scope.siteId,
+          // ADR-0037 amendment (rollup §12) — link the resolved Source so the
+          // MyMRC reconciliation join works on promoted June/July loads too.
+          source_id: i.sourceId,
           load_source_type: i.loadSourceType,
           status: 'verified' as const,
           // INSTANT column: Pacific midnight of the workbook day, NOT the

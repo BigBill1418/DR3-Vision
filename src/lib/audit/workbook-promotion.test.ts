@@ -239,8 +239,18 @@ describe('promoteWorkbookImport — unresolved source', () => {
     ).rejects.toMatchObject({ name: 'PromotionUnresolvedSourceError', names: ['Mystery Yard'] });
   });
 
-  it('an explicit program split bypasses source resolution', () => {
+  // ADR-0037 amendment (rollup §12): an explicit split no longer bypasses source
+  // resolution — every inbound name must resolve (source_id linkage), so an
+  // unknown name is refused even when the payload carries its own split.
+  it('an explicit program split does NOT bypass source resolution (unknown name refused)', () => {
     const rows = [row('inbound', { date: '2026-06-03', units: 40, programUnits: 30, nonProgramUnits: 10 }, 'Mystery Yard')];
+    expect(() => decodeStagingRows(rows, SCOPE, RESOLVER)).toThrowError(
+      expect.objectContaining({ name: 'PromotionUnresolvedSourceError', names: ['Mystery Yard'] }),
+    );
+  });
+
+  it('an explicit program split on a RESOLVED name wins over the pool default', () => {
+    const rows = [row('inbound', { date: '2026-06-03', units: 40, programUnits: 30, nonProgramUnits: 10 }, 'Depot Alpha')];
     const c = decodeStagingRows(rows, SCOPE, RESOLVER);
     expect(c.inbound[0]?.programUnits).toBe(30);
     expect(c.inbound[0]?.nonProgramUnits).toBe(10);
