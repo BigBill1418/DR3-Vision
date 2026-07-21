@@ -8,12 +8,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import Papa from 'papaparse';
 import {
   SVDP_INTERNAL_STORES,
   SVDP_INTERNAL_STORE_CLASSIFICATION,
   GP_SITE_BILLING_IDENTIFIERS,
   CANONICAL_OR_NAMES,
   SOURCE_ALIASES,
+  WOODLAND_SOURCE_ALIASES,
   PROVENANCE_AGENCIES,
 } from '../../../prisma/seed/addendum-b-data.mjs';
 import { defaultProgramSplit } from '../loads/verify-gate';
@@ -21,6 +23,10 @@ import { defaultProgramSplit } from '../loads/verify-gate';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const seedsMigrationSql = readFileSync(
   join(REPO_ROOT, 'prisma/migrations/20260730b_addendum_b_seeds/migration.sql'),
+  'utf8',
+);
+const woodlandAliasMigrationSql = readFileSync(
+  join(REPO_ROOT, 'prisma/migrations/20260731_woodland_source_aliases/migration.sql'),
   'utf8',
 );
 
@@ -121,5 +127,54 @@ describe('Addendum-B seed data invariants', () => {
     // No provenance-agency name collides with a source alias (distinct namespaces).
     const aliasSet = new Set(SOURCE_ALIASES.map(([a]) => a));
     for (const n of names) expect(aliasSet.has(n)).toBe(false);
+  });
+});
+
+describe('Woodland (CA) source-alias backfill invariants (2026-07-21 prod backfill)', () => {
+  const woodlandSourceNames = new Set(
+    (
+      Papa.parse(readFileSync(join(REPO_ROOT, 'prisma/seed/sources.csv'), 'utf8'), {
+        header: true,
+        skipEmptyLines: true,
+      }).data as { site_code?: string; name?: string }[]
+    )
+      .filter((r) => r.site_code === 'woodland' && r.name)
+      .map((r) => r.name as string),
+  );
+
+  it('carries exactly the 30 confirmed Woodland aliases, globally unique', () => {
+    expect(WOODLAND_SOURCE_ALIASES).toHaveLength(30);
+    const aliases = WOODLAND_SOURCE_ALIASES.map(([a]) => a);
+    expect(new Set(aliases).size).toBe(aliases.length);
+  });
+
+  it('never collides with an eugene (OR) alias — source_aliases.alias is globally UNIQUE', () => {
+    const or = new Set(SOURCE_ALIASES.map(([a]) => a));
+    for (const [alias] of WOODLAND_SOURCE_ALIASES) {
+      expect(or.has(alias), `Woodland alias "${alias}" collides with an OR alias`).toBe(false);
+    }
+  });
+
+  it('resolves every alias to a verbatim woodland source name (else the alias is lost on rebuild)', () => {
+    for (const [alias, canonical] of WOODLAND_SOURCE_ALIASES) {
+      expect(
+        woodlandSourceNames,
+        `alias "${alias}" → unknown woodland source "${canonical}"`,
+      ).toContain(canonical);
+    }
+  });
+
+  it('ships on the PROD path — a woodland-scoped, ON CONFLICT DO NOTHING migration carrying all 30 pairs', () => {
+    expect(woodlandAliasMigrationSql).toMatch(/INSERT INTO "source_aliases"/);
+    expect(woodlandAliasMigrationSql).toMatch(/ON CONFLICT \("alias"\) DO NOTHING/);
+    expect(woodlandAliasMigrationSql).toMatch(/"code" = 'woodland'/);
+    for (const [alias, canonical] of WOODLAND_SOURCE_ALIASES) {
+      expect(woodlandAliasMigrationSql, `migration missing alias "${alias}"`).toContain(
+        `('${alias}'`,
+      );
+      expect(woodlandAliasMigrationSql, `migration missing canonical "${canonical}"`).toContain(
+        `'${canonical}')`,
+      );
+    }
   });
 });
