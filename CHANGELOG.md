@@ -44,6 +44,29 @@ corrected file will recover the ~18 dropped January events but will NOT remove t
 `2026-01-15` row keys on a different date, so it won't dedup against the 1900 row).
 Soft-void the single garbage event (`event_date=1900-01-14`, `import_id=42d0ebdd`)
 BEFORE re-importing. Do not delete-and-reimport the whole batch.
+### Changed — 2026-07-21 (AP approvals now require an explanatory note — ADR-0046 amendment)
+
+Approving an AP invoice now REQUIRES a non-empty note describing what the transaction
+was for and any additional context — matching the existing reject-requires-note and
+NOT-DR3-requires-reason gates. Previously approvals were note-optional, leaving no
+recorded transaction purpose on plain approvals (audit-trail gap). Operator directive:
+_"on the AP module let's not allow approval without a note — the user needs to enter
+data about what the transaction was for and explain additional context before being
+able to approve the invoice."_
+
+- **Service** — `assertDecisionNote` (`src/lib/ap/approvals.ts`) now throws
+  `ApNoteRequiredError` (400) for an approval with no/blank note, same trimmed
+  minimum as rejection, with an approval-specific message. NOT-DR3's own
+  reason-required guard is unchanged and still enforced.
+- **Route** — `/api/ops/ap/[id]/decide` continues to validate the note BEFORE any
+  state change; the extended rule maps to a typed 400 with no DB write.
+- **UI** — the approver panel disables **Approve** until a non-empty note is present
+  (mirroring Reject/Hold); the Note field is relabeled **(required)** and prompts for
+  "what this transaction was for + any additional context".
+- Tests: `assertDecisionNote` unit tests + a decide-route test (approve-without-note
+  → 400, no decide) + a new `DetailPanel` interaction test (Approve disabled without
+  a note). No e2e/Playwright harness exists for the AP page — behavior is covered by
+  the interaction test instead.
 
 ### Fixed — 2026-07-21 (full-stack audit — P1-3 backup-failure alerting)
 

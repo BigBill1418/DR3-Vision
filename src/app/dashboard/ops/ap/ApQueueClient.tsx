@@ -260,7 +260,7 @@ function StatusBadge({ status }: { status: Status }) {
   );
 }
 
-function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
+export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
   const [note, setNote] = useState('');
   const [vendor, setVendor] = useState(detail.vendor ?? '');
   const [amount, setAmount] = useState(
@@ -272,10 +272,15 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
 
   const decide = useCallback(
     async (decision: 'approved' | 'rejected') => {
-      // Amendment 3 — a rejection must say why (plain-English client guard; the
-      // server re-validates). Approvals stay note-optional.
-      if (decision === 'rejected' && !note.trim()) {
-        setMsg('A rejection needs a note explaining why. Add a note, then Reject.');
+      // Amendment 3 + 2026-07-21 amendment — EVERY decision needs a note (plain-
+      // English client guard; the server re-validates). An approval records what the
+      // transaction was for + context; a rejection says why.
+      if (!note.trim()) {
+        setMsg(
+          decision === 'approved'
+            ? 'An approval needs a note describing what this transaction was for and any additional context. Add a note, then Approve.'
+            : 'A rejection needs a note explaining why. Add a note, then Reject.',
+        );
         return;
       }
       // Operator directive 2026-07-15 — every decision files against a location
@@ -544,9 +549,10 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
             </label>
           </div>
           <label className="mt-2 block text-xs opacity-80">
-            Note{' '}
+            Note <span className="text-amber-300">(required)</span>{' '}
             <span className="opacity-70">
-              (optional to approve · required to reject or hold · appears on the returned invoice)
+              (what this transaction was for + any additional context · required to approve, reject,
+              or hold · appears on the returned invoice)
             </span>
             <textarea
               value={note}
@@ -554,8 +560,8 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
               rows={2}
               placeholder={
                 detail.status === 'pending_review'
-                  ? 'Update the hold note, or add a reason to approve/reject'
-                  : 'Reason (required to reject or hold)'
+                  ? 'What this transaction was for + any additional context (required to approve/reject; or update the hold note)'
+                  : 'What this transaction was for + any additional context (required)'
               }
               className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
             />
@@ -563,11 +569,11 @@ function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => v
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => decide('approved')}
-              disabled={busy || (siteCode === 'not_dr3' && !note.trim())}
+              disabled={busy || !note.trim()}
               title={
-                siteCode === 'not_dr3' && !note.trim()
-                  ? 'NOT DR3 requires a reason in the note'
-                  : undefined
+                note.trim()
+                  ? undefined
+                  : 'An approval requires a note describing what this transaction was for and any additional context'
               }
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >

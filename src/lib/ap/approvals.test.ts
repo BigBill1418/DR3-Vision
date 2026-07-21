@@ -919,16 +919,29 @@ describe('approver set + pending count (roster data)', () => {
   });
 });
 
-// ADR-0046 Amendment 3 — reject-requires-note (deliverable 2).
-describe('assertDecisionNote — a rejection must say why', () => {
+// ADR-0046 Amendment 3 (reject) + 2026-07-21 amendment (approve) — EVERY decision
+// must carry a note. Same minimum for both (non-empty after trim); an approval
+// records what the transaction was for + context, a rejection says why.
+describe('assertDecisionNote — every decision must carry a note', () => {
   it('throws ApNoteRequiredError for a rejection with no / blank note', () => {
     expect(() => assertDecisionNote('rejected', undefined)).toThrow(ApNoteRequiredError);
     expect(() => assertDecisionNote('rejected', '   ')).toThrow(ApNoteRequiredError);
   });
-  it('allows a rejection WITH a note, and an approval with or without a note', () => {
+  it('throws ApNoteRequiredError for an APPROVAL with no / blank note (2026-07-21)', () => {
+    expect(() => assertDecisionNote('approved', undefined)).toThrow(ApNoteRequiredError);
+    expect(() => assertDecisionNote('approved', '')).toThrow(ApNoteRequiredError);
+    expect(() => assertDecisionNote('approved', '   ')).toThrow(ApNoteRequiredError);
+  });
+  it('the approval message names the transaction-purpose + context requirement', () => {
+    expect(() => assertDecisionNote('approved', undefined)).toThrow(
+      /what this transaction was for/i,
+    );
+  });
+  it('allows either decision WITH a non-empty note (same trimmed minimum)', () => {
     expect(() => assertDecisionNote('rejected', 'duplicate of #4471')).not.toThrow();
-    expect(() => assertDecisionNote('approved', undefined)).not.toThrow();
-    expect(() => assertDecisionNote('approved', 'ok')).not.toThrow();
+    expect(() =>
+      assertDecisionNote('approved', 'fuel for the Woodland box truck, June'),
+    ).not.toThrow();
   });
 });
 
