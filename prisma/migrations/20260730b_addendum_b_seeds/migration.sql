@@ -38,8 +38,13 @@ UPDATE "sources" SET "name" = 'Glenwood Central Recieving Station',
     WHERE "site_id" = (SELECT "id" FROM "sites" WHERE "code" = 'eugene') AND "name" = 'Glenwood Transfer & Recycling Station';
 
 -- ── §4 — 11 SVDP internal-store rows (site_type=svdp_internal_store, active_billing=false) ──
-INSERT INTO "sources" ("id","site_id","name","street","city","state","zip","is_active","notes","site_type","active_billing","created_at","updated_at")
-SELECT gen_random_uuid()::text, e."id", v.name, v.street, v.city, 'OR', v.zip, true, v.notes, 'svdp_internal_store'::"SourceSiteType", false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+-- is_non_program=true: Rick §4 — these stores "are not Collection sites in conjunction
+-- With the MRC", so the mattresses they bring are OUTSIDE the MRC program. The verify-gate
+-- / promotion DEFAULT split routes their inbound units to the NON-program (non-billable)
+-- pool, not the program pool billed at UNITSMO (money-safe; a manager may override at
+-- verify). Mirrors SVDP_INTERNAL_STORE_CLASSIFICATION in prisma/seed/addendum-b-data.mjs.
+INSERT INTO "sources" ("id","site_id","name","street","city","state","zip","is_active","notes","site_type","active_billing","is_non_program","created_at","updated_at")
+SELECT gen_random_uuid()::text, e."id", v.name, v.street, v.city, 'OR', v.zip, true, v.notes, 'svdp_internal_store'::"SourceSiteType", false, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 FROM (SELECT "id" FROM "sites" WHERE "code" = 'eugene') e
 CROSS JOIN (VALUES
     ('Division', '201 Division Ave', 'Eugene', NULL, 'SVDP internal store (rollup §4). Retail. Not an MRC collection site — no per-mattress/trans/trailer billing.'),
@@ -110,6 +115,31 @@ FROM (VALUES
     ('U-Haul', 'Provenance agency — origin of delivered mattresses (rollup §2). No billing.')
 ) AS v(name, notes)
 ON CONFLICT ("name") DO NOTHING;
+
+-- ── §8/§13 — GP per-site billing identifiers (Mary-confirmed; corrects PR #128) ──
+-- PROD path for the gp_site_billing_config corrections that prisma/seed.mjs
+-- (seedGpSiteBillingConfig) mirrors for dev/CI — WITHOUT this the corrections shipped
+-- ONLY in seed.mjs, which prod never re-runs, so prod would keep the stale
+-- "DR3W"/null identifiers and pilot v2 exports would render PO "M/DD/YY DR3W" for
+-- Woodland and null customerId/PO for Eugene — exactly the defect §13 corrects.
+-- Woodland: Customer ID MRCL001, PO suffix "DR3 W" (WITH space — §13). Eugene:
+-- Customer ID MRCL001 (same as CA — §8 Q1), PO suffix "DR3 OREGON" (spelled out —
+-- §8 Q4). Clears the stale "pending Mary" note. Upsert keyed on the unique site_id:
+-- corrects a row previously seeded with "DR3W"/nulls, or inserts if absent. On a
+-- clean CI replay the `sites` table is empty here (seeded later by seed.mjs), so the
+-- JOIN yields zero rows and this is a safe no-op — dev/CI parity comes from seed.mjs.
+INSERT INTO "gp_site_billing_config" ("id","site_id","customer_id","po_site_suffix","pending_note","updated_at")
+SELECT gen_random_uuid()::text, s."id", v.customer_id, v.po_site_suffix, NULL, CURRENT_TIMESTAMP
+FROM (VALUES
+    ('woodland', 'MRCL001', 'DR3 W'),
+    ('eugene', 'MRCL001', 'DR3 OREGON')
+) AS v(code, customer_id, po_site_suffix)
+JOIN "sites" s ON s."code" = v.code
+ON CONFLICT ("site_id") DO UPDATE
+    SET "customer_id" = EXCLUDED."customer_id",
+        "po_site_suffix" = EXCLUDED."po_site_suffix",
+        "pending_note" = NULL,
+        "updated_at" = CURRENT_TIMESTAMP;
 
 -- ── §7 — Kelsey AP-approver auto-remove date 2026-08-01 → 2026-08-08 (vacation extension) ──
 -- Guarded by the old value so this never clobbers a manual change and is a clean no-op

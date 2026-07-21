@@ -210,6 +210,22 @@ describe('onHand — DB adapter', () => {
     expect(r.total.toString()).toBe('4165');
   });
 
+  it('does NOT subtract saved_units — live floor keeps saved units on it (rollup §5.2)', async () => {
+    // Rick 2026-07-19: saved units are NOT removed from inventory until a store
+    // transfer. A large `saved_units` in the daily closes must leave the live on-hand
+    // balance identical to the baseline (which had no saved units) — the pre-Rick
+    // model subtracted it from the non-program pool (would give nonProgram 6 − 40 = −34).
+    store.stripped = {
+      stripped_program: D('60.0'),
+      stripped_non_program: D('5.0'),
+      saved_units: D('40.0'),
+    };
+    const r = await onHand('site-woodland', new Date('2026-07-03T00:00:00Z'));
+    expect(r.program.toString()).toBe('4159'); // unchanged
+    expect(r.nonProgram.toString()).toBe('6'); // saved NOT subtracted (would be −34)
+    expect(r.total.toString()).toBe('4165');
+  });
+
   it('coalesces null aggregate sums to zero (no rows since anchor)', async () => {
     store.inbound = { program_unit_count: null, non_program_unit_count: null };
     store.dropoffs = { units: null };
@@ -297,7 +313,9 @@ describe('reconcilePhysicalCount — measured pool split validation', () => {
     expect(snap.non_program_units).toBe(40);
     expect(snap.pool_attribution).toBe('measured');
     // Pool fields land in the append-only audit `after` payload too.
-    const audit = store.auditRows[0] as { after: { program_units: number | null; pool_attribution: string } };
+    const audit = store.auditRows[0] as {
+      after: { program_units: number | null; pool_attribution: string };
+    };
     expect(audit.after.program_units).toBe(60);
     expect(audit.after.pool_attribution).toBe('measured');
   });

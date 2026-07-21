@@ -9,8 +9,11 @@
 // (ADR-0037 D6, `onHand`) — it never re-derives pool math of its own, so the
 // numbers a manager sees are exactly the sequential-depletion-aware ledger
 // (Kelsey Q1: processing 237 with 137 program on floor reports 137 program +
-// 100 non-program processed; those splits land in `processed_units_daily` and
-// `onHand` subtracts them per pool). Site-scoped (CLAUDE.md hard rule #2).
+// 100 non-program PROCESSED; those stripped splits land in `processed_units_daily`
+// and `onHand` subtracts them per pool). SAVED units are a separate case: per
+// rollup §5.2 (Rick) they STAY on the floor until a store transfer, so `onHand`
+// does NOT subtract them — the "currently on the floor" count includes saved units.
+// Site-scoped (CLAUDE.md hard rule #2).
 //
 // Optional projection (§3 "days of program pool remaining"): under sequential
 // depletion the PROGRAM pool is consumed FIRST by every processed unit, so its

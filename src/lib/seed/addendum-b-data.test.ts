@@ -4,13 +4,25 @@
 // the end-to-end DB seed is validated separately. This pure test protects the data's
 // internal consistency so a bad edit fails fast in CI (no DB required).
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   SVDP_INTERNAL_STORES,
+  SVDP_INTERNAL_STORE_CLASSIFICATION,
+  GP_SITE_BILLING_IDENTIFIERS,
   CANONICAL_OR_NAMES,
   SOURCE_ALIASES,
   PROVENANCE_AGENCIES,
 } from '../../../prisma/seed/addendum-b-data.mjs';
+import { defaultProgramSplit } from '../loads/verify-gate';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
+const seedsMigrationSql = readFileSync(
+  join(REPO_ROOT, 'prisma/migrations/20260730b_addendum_b_seeds/migration.sql'),
+  'utf8',
+);
 
 describe('Addendum-B seed data invariants', () => {
   it('lists exactly the 11 SVDP internal stores from rollup §4', () => {
@@ -19,6 +31,26 @@ describe('Addendum-B seed data invariants', () => {
     for (const s of ['Division', 'CARS', 'Cleveland WH', 'Chad Drive']) {
       expect(SVDP_INTERNAL_STORES).toContain(s);
     }
+  });
+
+  it('classifies internal stores as non-program + non-billing (money-safe default, §4)', () => {
+    // Rick §4: SVDP stores "are not Collection sites in conjunction With the MRC" —
+    // their inbound mattresses are outside the MRC program. is_non_program MUST be true
+    // so the verify-gate/promotion default split routes store units to the NON-program
+    // (non-billable) pool, not the program pool billed at UNITSMO. active_billing=false
+    // suppresses invoice lines FROM the store. The migration store INSERT and
+    // seedSourceBillingClassification both consume this exact constant (lock-step).
+    expect(SVDP_INTERNAL_STORE_CLASSIFICATION).toEqual({
+      site_type: 'svdp_internal_store',
+      active_billing: false,
+      is_non_program: true,
+    });
+  });
+
+  it('a store source defaults all inbound units to the non-program pool', () => {
+    // The money consequence of is_non_program=true, at the verify gate.
+    const split = defaultProgramSplit(237, SVDP_INTERNAL_STORE_CLASSIFICATION.is_non_program);
+    expect(split).toEqual({ programUnits: 0, nonProgramUnits: 237 });
   });
 
   it('every source alias is globally unique (source_aliases.alias is UNIQUE)', () => {
@@ -48,6 +80,38 @@ describe('Addendum-B seed data invariants', () => {
 
   it('keeps the verbatim MRC "Recieving" typo in the Glenwood canonical name', () => {
     expect(CANONICAL_OR_NAMES).toContain('Glenwood Central Recieving Station');
+  });
+
+  it('carries the Mary-confirmed GP identifiers (§8/§13): MRCL001 + spaced PO suffixes', () => {
+    expect(GP_SITE_BILLING_IDENTIFIERS).toEqual([
+      { code: 'woodland', customer_id: 'MRCL001', po_site_suffix: 'DR3 W' },
+      { code: 'eugene', customer_id: 'MRCL001', po_site_suffix: 'DR3 OREGON' },
+    ]);
+  });
+
+  it('ships the GP identifier correction on the PROD path — a gp_site_billing_config upsert in the migration', () => {
+    // Guards the exact defect the review caught: the §13 corrections shipped ONLY in
+    // seed.mjs (which prod never re-runs), leaving prod on stale "DR3W"/null identifiers.
+    // The migration is the prod path; it MUST realize the same identifiers.
+    expect(seedsMigrationSql).toMatch(/INSERT INTO "gp_site_billing_config"/);
+    expect(seedsMigrationSql).toMatch(/ON CONFLICT \("site_id"\) DO UPDATE/);
+    for (const { code, customer_id, po_site_suffix } of GP_SITE_BILLING_IDENTIFIERS) {
+      expect(seedsMigrationSql, `migration must set ${code} customer_id`).toContain(
+        `'${customer_id}'`,
+      );
+      expect(seedsMigrationSql, `migration must set ${code} PO suffix`).toContain(
+        `'${po_site_suffix}'`,
+      );
+    }
+  });
+
+  it('marks the 11 SVDP internal stores non-program on the PROD path (migration INSERT)', () => {
+    // is_non_program must be in the store INSERT column list AND set true, or prod
+    // stores default to the program (billable) pool (schema default false).
+    const storeInsert = seedsMigrationSql.slice(
+      seedsMigrationSql.indexOf('§4 — 11 SVDP internal-store rows'),
+    );
+    expect(storeInsert).toMatch(/INSERT INTO "sources" \([^)]*"is_non_program"[^)]*\)/);
   });
 
   it('reclassifies Sponsors as a provenance agency (never a source or drop-off kind)', () => {

@@ -59,9 +59,12 @@ export interface BalanceComponents {
   /** landfilled_units program/non-program units since the anchor. */
   landfilled: PoolPair;
   /**
-   * ADR-0037 amendment (rollup §A.2) — `Saved` units set aside since the anchor. Drawn
-   * from the NON-PROGRAM pool (Kelsey's confirmed default). Optional/absent → 0, so
-   * pre-amendment callers are unaffected (saved was previously excluded entirely).
+   * `Saved` units set aside since the anchor, subtracted from the NON-PROGRAM pool.
+   * HISTORICAL-RECONCILIATION USE ONLY: the closed-month audit path
+   * (workbook-promotion / inventory-close) supplies this to reproduce the workbook's
+   * own recorded subtraction (the June 3,977 oracle). The LIVE path (`onHand`) does
+   * NOT supply it — per rollup §5.2 (Rick) saved units stay in inventory until a store
+   * transfer, so they must not decrement the live floor. Optional/absent → 0.
    */
   savedUnits?: DecimalLike;
 }
@@ -206,7 +209,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       where: { site_id: siteId, dropoff_date: dateWindow },
     }),
     prisma.processedUnitsDaily.aggregate({
-      _sum: { stripped_program: true, stripped_non_program: true, saved_units: true },
+      _sum: { stripped_program: true, stripped_non_program: true },
       where: { site_id: siteId, production_date: dateWindow },
     }),
     // WholeUnitsSold = renovation-sub-category outbound rows (the folded-in renovator
@@ -240,7 +243,13 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       program: landfilled._sum.program_units ?? 0,
       nonProgram: landfilled._sum.non_program_units ?? 0,
     },
-    savedUnits: stripped._sum.saved_units ?? 0,
+    // rollup §5.2 (Rick, 2026-07-19): saved units are NOT removed from inventory until
+    // physically transferred to a store, so the LIVE on-hand balance (and the §3 floor
+    // tile that reads it) must NOT subtract them — `savedUnits` is deliberately omitted
+    // here (defaults to 0). Kelsey's Addendum-A §A.2 immediate-subtraction model was
+    // operationally wrong and is retracted on the live path. The historical closed-month
+    // audit reconciliation (workbook-promotion / inventory-close, the June 3,977 oracle)
+    // still applies the workbook's own recorded subtraction — that parity is unchanged.
   });
   return { ...balance, anchorPool };
 }

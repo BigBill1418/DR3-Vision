@@ -261,7 +261,7 @@ reconciles and signs off, every invoice is `pilot`: its preview routes to the
 whose delivery plan resolves to MRC.
 
 - **Structural (not procedural) guarantee.** `planInvoiceDelivery(mode, pilot,
-  mrc)` (`src/lib/invoices/delivery.ts`) is a TOTAL function on `mode`: the `pilot`
+mrc)` (`src/lib/invoices/delivery.ts`) is a TOTAL function on `mode`: the `pilot`
   branch has no path — none — that returns MRC recipients or `sendsToMrc: true`.
   No configuration, argument, or roster state can make a pilot plan reach MRC. Any
   future MRC sender obtains its recipients from this plan and calls
@@ -311,16 +311,16 @@ unchanged — the GP adapter must not re-derive from line JSON, C-1). Exposed at
 
 Seeded (`gp_billing_config` / `gp_site_billing_config`):
 
-| Identifier | Value | Source |
-|---|---|---|
-| Bill-To / Ship-To | Mattress Recycling Council, Attn: Ryan Trainer, 501 Wythe Street, Alexandria VA 22314 | confirmed |
-| Sales ID | `34` | confirmed |
-| Payment Terms | `Net 30` | confirmed |
-| CA processing rate | `state_program_rules` $16.50/unit (reused, not re-seeded) | confirmed |
-| CA (Woodland) Customer ID | `MRCL001` | confirmed |
-| Woodland PO suffix | `DR3W` (PO = `M/DD/YY DR3W`) | confirmed |
-| **OR (Eugene) Customer ID** | **NULL — pending Mary** (never invented) | unknown |
-| **Eugene PO suffix** | **NULL — pending Mary** (likely DR3E/DR3O, not invented) | unknown |
+| Identifier                  | Value                                                                                 | Source    |
+| --------------------------- | ------------------------------------------------------------------------------------- | --------- |
+| Bill-To / Ship-To           | Mattress Recycling Council, Attn: Ryan Trainer, 501 Wythe Street, Alexandria VA 22314 | confirmed |
+| Sales ID                    | `34`                                                                                  | confirmed |
+| Payment Terms               | `Net 30`                                                                              | confirmed |
+| CA processing rate          | `state_program_rules` $16.50/unit (reused, not re-seeded)                             | confirmed |
+| CA (Woodland) Customer ID   | `MRCL001`                                                                             | confirmed |
+| Woodland PO suffix          | `DR3W` (PO = `M/DD/YY DR3W`)                                                          | confirmed |
+| **OR (Eugene) Customer ID** | **NULL — pending Mary** (never invented)                                              | unknown   |
+| **Eugene PO suffix**        | **NULL — pending Mary** (likely DR3E/DR3O, not invented)                              | unknown   |
 
 A NULL renders as null in the export; `buildPoNumber` returns null (not a partial
 `"7/31/26 "`) when the suffix is unknown. Confirmations are one-row edits.
@@ -356,19 +356,27 @@ new modules.**
 
 The PR-#128 `DR3W` (no space) is corrected. PO format depends on invoice KIND:
 
-| Kind | PO format |
-|---|---|
-| `ca_processing_mid_month`, `ca_processing_eom` | `M/DD/YY DR3 W` |
-| `or_processing_eom` | `M/DD/YY DR3 OREGON` (spelled out, not DR3E/DR3O) |
-| `ca_transportation_eom` | `M/DD/YY TRANS` |
-| `or_transportation_eom` | `M/DD/YY TRANS OR` |
-| `or_collection_site_count` | `M/YY OR COLLECTIONS` (no day — 2-digit year) |
+| Kind                                           | PO format                                         |
+| ---------------------------------------------- | ------------------------------------------------- |
+| `ca_processing_mid_month`, `ca_processing_eom` | `M/DD/YY DR3 W`                                   |
+| `or_processing_eom`                            | `M/DD/YY DR3 OREGON` (spelled out, not DR3E/DR3O) |
+| `ca_transportation_eom`                        | `M/DD/YY TRANS`                                   |
+| `or_transportation_eom`                        | `M/DD/YY TRANS OR`                                |
+| `or_collection_site_count`                     | `M/YY OR COLLECTIONS` (no day — 2-digit year)     |
 
 New `buildPoNumberForKind` + `formatMYY` in `gp-identifiers.ts`; `buildGpContext`
 gained an optional `kind` (threaded from `gp-config.ts`). Processing POs use the
 confirmed per-site `po_site_suffix` (`DR3 W` / `DR3 OREGON`); TRANS / OR
-COLLECTIONS suffixes are kind-fixed constants confirmed in §6. Seed corrected:
-Woodland `DR3W`→`DR3 W`, Eugene null→`DR3 OREGON` + Customer ID `MRCL001` (§8 Q1).
+COLLECTIONS suffixes are kind-fixed constants confirmed in §6. Corrected in BOTH
+paths — `seedGpSiteBillingConfig` (dev/CI) **and** a guarded upsert in the
+`20260730b_addendum_b_seeds` migration (prod path; prod does not re-run seed.mjs):
+Woodland `DR3W`→`DR3 W`, Eugene null→`DR3 OREGON` + Customer ID `MRCL001` (§8 Q1),
+`pending_note` cleared. The migration upsert is keyed on the unique `site_id` (corrects
+an existing prod row or inserts if absent) and is a clean no-op on a fresh CI DB (the
+`sites` table is empty at that migration point). Without the migration the correction
+shipped seed-only and prod would have kept the stale `DR3W`/null identifiers, rendering
+PO `M/DD/YY DR3W` (no space) for Woodland and null customerId/PO for Eugene on pilot v2
+exports — the very defect §13 corrects.
 
 ### 7 LOCKED GP item codes (§9) — supersedes the empty-`item` assumption
 
@@ -401,10 +409,11 @@ $13,800.00, Eugene collections $1,714.50.
 
 New `src/lib/invoices/combinations.ts` — `assertValidInvoiceCombination` REJECTS
 (422, `InvoiceCombinationError`) the two structurally invalid combos:
+
 1. **Eugene (OR) mid-month** — OR bills EOM only.
 2. **Any mid-month invoice carrying a Trade discount** — the discount is the EOM
    subtraction of an already-billed mid-month; a mid-month can't carry one.
-Wired into `service.generateInvoiceDraft` (after composition, before persist).
+   Wired into `service.generateInvoiceDraft` (after composition, before persist).
 
 ### `attachments[]` on EOM processing invoices ONLY (§5.1/§6)
 
@@ -417,6 +426,7 @@ breakdown is fully derived from the window). Surfaced on `InvoiceExportV2.attach
 ### Commodity-breakdown attachment renderer (§11) — landscape PDF
 
 New `src/lib/commodity/` module:
+
 - `breakdown.ts` — PURE model builder (`buildCommodityBreakdown`): per-transaction
   rows bucketed by commodity, per-block totals, facility header per block.
 - `pdf.ts` — `renderCommodityBreakdownPdf`: multi-page **Letter LANDSCAPE** PDF
@@ -426,6 +436,7 @@ New `src/lib/commodity/` module:
   for the invoice window and maps onto the pure model.
 
 **Documented schema-reality divergences from §11's idealized 11-block taxonomy:**
+
 1. The real `OutboundCommodity` enum is the **daily-log-9** (`metal`, not
    steel/xtraction_landfill/wte). The metal→**Steel / Xtraction Landfill / Covanta
    WTE** split is a vendor/destination split that is **OPEN pending Rick** (Covanta

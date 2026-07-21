@@ -12,6 +12,31 @@ export const SVDP_INTERNAL_STORES = [
   'Junction City', 'Oakridge', 'Garfield', 'CARS', 'Cleveland WH',
 ];
 
+/// §4 — billing classification stamped on every SVDP internal store. Applied by
+/// seedSourceBillingClassification AND the 20260730b store INSERT (kept in lock-step).
+/// - `is_non_program = true`: Rick §4 — these stores "are not Collection sites in
+///   conjunction With the MRC", so mattresses they bring are OUTSIDE the MRC program.
+///   The verify-gate/promotion DEFAULT split therefore routes their inbound units to
+///   the NON-program (non-billable) pool, not the program pool billed at UNITSMO. This
+///   is the money-safe default for a non-MRC site (a manager can still override at
+///   verify). `is_non_program = false` would silently over-attribute billable units.
+/// - `active_billing = false`: zero invoice lines from the store as a source.
+export const SVDP_INTERNAL_STORE_CLASSIFICATION = {
+  site_type: 'svdp_internal_store',
+  active_billing: false,
+  is_non_program: true,
+};
+
+/// §8/§13 — Mary-confirmed GP per-site billing identifiers (corrects PR #128). Woodland
+/// PO suffix "DR3 W" (WITH space, §13); Eugene "DR3 OREGON" (spelled out, §8 Q4); both
+/// Customer ID MRCL001 (§8 Q1). Consumed by seedGpSiteBillingConfig (dev/CI) AND
+/// mirrored EXACTLY by the gp_site_billing_config upsert in the 20260730b migration
+/// (prod path — prod does not re-run seed.mjs). Change both together.
+export const GP_SITE_BILLING_IDENTIFIERS = [
+  { code: 'woodland', customer_id: 'MRCL001', po_site_suffix: 'DR3 W' },
+  { code: 'eugene', customer_id: 'MRCL001', po_site_suffix: 'DR3 OREGON' },
+];
+
 /// §1 — canonical MyMRC source names the aliases resolve to (Rick 2026-07-19,
 /// incl. MRC's verbatim "Recieving" typo). All are eugene-scoped.
 export const CANONICAL_OR_NAMES = [

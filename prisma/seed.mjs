@@ -43,6 +43,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SVDP_INTERNAL_STORES,
+  SVDP_INTERNAL_STORE_CLASSIFICATION,
+  GP_SITE_BILLING_IDENTIFIERS,
   SOURCE_ALIASES,
   PROVENANCE_AGENCIES,
 } from './seed/addendum-b-data.mjs';
@@ -534,7 +536,9 @@ async function seedSourceBillingClassification(siteIds) {
   if (!eugene) return;
   const stores = await prisma.source.updateMany({
     where: { site_id: eugene, name: { in: SVDP_INTERNAL_STORES } },
-    data: { site_type: 'svdp_internal_store', active_billing: false },
+    // is_non_program=true: non-MRC stores → inbound units default to the non-program
+    // (non-billable) pool (Rick §4). Mirrors the 20260730b store INSERT exactly.
+    data: { ...SVDP_INTERNAL_STORE_CLASSIFICATION },
   });
   const roseburg = await prisma.source.updateMany({
     where: { site_id: eugene, name: 'Roseburg Transfer Station' },
@@ -847,20 +851,9 @@ async function seedGpSiteBillingConfig(siteIds) {
   // buildPoNumberForKind (not stored here). No pending unknowns remain, so these
   // are Vision-owned like the singleton statics: `update` RE-APPLIES them so an
   // idempotent re-seed corrects a row previously seeded with the old "DR3W"/nulls.
-  const rows = [
-    {
-      code: 'woodland',
-      customer_id: 'MRCL001',
-      po_site_suffix: 'DR3 W',
-      pending_note: null,
-    },
-    {
-      code: 'eugene',
-      customer_id: 'MRCL001',
-      po_site_suffix: 'DR3 OREGON',
-      pending_note: null,
-    },
-  ];
+  // Values from the shared GP_SITE_BILLING_IDENTIFIERS constant — mirrored EXACTLY by
+  // the gp_site_billing_config upsert in the 20260730b migration (the prod path).
+  const rows = GP_SITE_BILLING_IDENTIFIERS.map((r) => ({ ...r, pending_note: null }));
   for (const r of rows) {
     const site_id = siteIds.get(r.code);
     if (!site_id) throw new Error(`seedGpSiteBillingConfig: unknown site code='${r.code}'`);
