@@ -55,6 +55,17 @@ describe('parseFlexibleDate', () => {
     expect(parseFlexibleDate('not a date')).toBeNull();
     expect(parseFlexibleDate(null)).toBeNull();
   });
+  it('rejects implausible dates outside [2000, 2100] (Excel-epoch 1900 artifacts, far-future strays)', () => {
+    // The prod bug: a stray number in a date-FORMATTED cell surfaces as an
+    // Excel-epoch Date. A real event date is never before 2000.
+    expect(parseFlexibleDate(new Date(Date.UTC(1900, 0, 14)))).toBeNull();
+    expect(parseFlexibleDate('1900-01-14')).toBeNull();
+    expect(parseFlexibleDate('1/14/1900')).toBeNull();
+    expect(parseFlexibleDate(new Date(Date.UTC(2200, 0, 1)))).toBeNull();
+    // The plausible window boundaries still parse.
+    expect(parseFlexibleDate('2000-01-01')?.getTime()).toBe(Date.UTC(2000, 0, 1));
+    expect(parseFlexibleDate(new Date(Date.UTC(2026, 0, 15)))?.getTime()).toBe(Date.UTC(2026, 0, 15));
+  });
 });
 
 const MAP: TerexHeaderMapping = {
@@ -93,6 +104,14 @@ describe('rowsToEvents', () => {
     expect(evs).toHaveLength(0);
     expect(() =>
       rowsToEvents([{ Date: 'garbage', Notes: 'has content', Hours: null, Downtime: null }], MAP),
+    ).toThrow(TerexParseError);
+  });
+  it('stays STRICT: a content row with an Excel-epoch (1900) date is a hard error, not a stored 1900 event', () => {
+    expect(() =>
+      rowsToEvents(
+        [{ Date: new Date(Date.UTC(1900, 0, 14)), Notes: 'has content', Hours: null, Downtime: null }],
+        MAP,
+      ),
     ).toThrow(TerexParseError);
   });
 });
@@ -274,9 +293,10 @@ describe('parseMaintenanceLogSheet', () => {
       [null, null, null, null, null, null, null, null, 9999, 250], // subtotal (money, no date) → skip
       [null, D(2025, 1, 20)], // bare date, no content → skip
     ];
-    const evs = parseMaintenanceLogSheet(grid, 'Maintenance Log 2025');
+    const { candidates: evs, warnings } = parseMaintenanceLogSheet(grid, 'Maintenance Log 2025');
 
     expect(evs).toHaveLength(4);
+    expect(warnings).toHaveLength(0);
     expect(evs.map((e) => e.kind)).toEqual(['maintenance', 'repair', 'repair', 'maintenance']);
     expect(evs.map((e) => e.costCents)).toEqual([null, 485000, 158466, null]);
     expect(evs.every((e) => e.hoursDown === null && e.vendor === null)).toBe(true);
@@ -284,6 +304,28 @@ describe('parseMaintenanceLogSheet', () => {
     expect(evs[3]?.notes).toBe('Amount credited: $1200.00'); // credit preserved in the note
     // day keys are UTC-midnight
     expect(evs[1]?.eventDate.getTime()).toBe(Date.UTC(2024, 10, 21));
+  });
+
+  it('collects a content row with an Excel-epoch (1900) Date into warnings, not events', () => {
+    const grid = [
+      [null, 'TEREX MACHINE MAINTENANCE LOG'],
+      HEADER,
+      [null, D(2026, 2, 3), null, 'good row', 'fixed'], // real event
+      // Date cell is an Excel-epoch artifact; real date is inside the issue text.
+      [null, D(1900, 1, 14), null, 'hose shooting oil real date 01-15-2026', 'called vendor'],
+      [null, 'March'], // bare separator (no content) → NOT warned
+    ];
+    const { candidates: evs, warnings } = parseMaintenanceLogSheet(grid, 'Maintenance Log 2026');
+
+    expect(evs).toHaveLength(1); // only the good row becomes an event
+    expect(evs[0]?.eventDate.getTime()).toBe(Date.UTC(2026, 1, 3));
+    expect(warnings).toHaveLength(1); // the epoch-dated content row is surfaced, not stored
+    expect(warnings[0]?.sheet).toBe('Maintenance Log 2026');
+    expect(warnings[0]?.rowNumber).toBe(4); // 1-based
+    expect(warnings[0]?.rawDate).toContain('1900');
+    expect(warnings[0]?.preview).toContain('hose shooting oil');
+    // No 1900 event was ever produced.
+    expect(evs.some((e) => e.eventDate.getUTCFullYear() < 2000)).toBe(false);
   });
 
   it('throws a typed error on a maintenance-log sheet with no Date header', () => {
@@ -320,11 +362,20 @@ describe('importTerexHistory — real-shape xlsx fixture', () => {
     expect(res.imported).toBe(true);
     expect(res.created).toBe(FIXTURE_LOG_2025_COUNT + FIXTURE_LOG_2026_COUNT); // 5 + 3
     expect(res.skipped).toBe(0);
+    // The Excel-epoch (1900) content row in the 2026 sheet is surfaced as a
+    // warning, NOT imported as a garbage 1900 event.
+    expect(res.rowsWarned).toBe(1);
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]?.sheet).toBe('Maintenance Log 2026');
+    expect(res.warnings[0]?.rawDate).toContain('1900');
+    expect(res.warnings[0]?.preview).toContain('hose shooting oil');
     expect(res.sheets).toEqual([
       { sheet: 'Maintenance Log 2025', imported: FIXTURE_LOG_2025_COUNT },
       { sheet: 'Maintenance Log 2026', imported: FIXTURE_LOG_2026_COUNT },
     ]);
     expect(events).toHaveLength(8);
+    // Not one stored event carries a sub-2000 (epoch-artifact) date.
+    expect(events.every((e) => (e['event_date'] as Date).getUTCFullYear() >= 2000)).toBe(true);
     expect(events.every((e) => e['source'] === 'import' && e['import_id'] === res.batchId)).toBe(
       true,
     );

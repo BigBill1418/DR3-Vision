@@ -5,6 +5,46 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-21 (ADR-0048 D3 — Terex importer date plausibility + silent-drop surfacing)
+
+Confirmed prod bug: the Terex maintenance-log importer stored a garbage
+`equipment_events` row with `event_date = 1900-01-14`. When an operator leaves a
+stray number in a date-FORMATTED Date cell (typing the real date into the note
+instead), exceljs surfaces it as an Excel-epoch `Date` and `parseFlexibleDate`
+happily returned `1900-01-14`. Verified against Janette's real workbook: 1 of the
+68 imported events carried the 1900 date (its note held the real `01-15-2026`).
+
+- **Plausibility floor/ceiling on `parseFlexibleDate`** (`src/lib/equipment/import.ts`):
+  a parsed date outside `[2000, 2100]` is treated as NOT a valid date (returns
+  `null`). Applied consistently, so the strict CSV path (`rowsToEvents`) now fails
+  loud on an Excel-epoch date instead of storing a 1900 event, and the
+  maintenance-log path stops producing the garbage row.
+- **Never silently drop a real event.** A maintenance-log row that carries
+  descriptive TEXT (issue/measures/notes) but no plausible date is no longer
+  discarded: it is collected into a new `warnings` array (sheet, 1-based row,
+  raw Date cell, content preview) and returned through `TerexImportResult` → the
+  admin import API response. Money-only, dateless rows (SUM/subtotals) still skip
+  silently. This surfaced a SECOND, larger data-loss pattern in the real file:
+  the entire January 2026 block was entered with dates in the Issue column (or
+  human formats like `Jan.6,2026`), and the old importer silently dropped all
+  ~18 of those real events. They now appear as warnings for source correction.
+- **Persisted `equipment_history_imports.rows_warned`** (additive migration
+  `20260801_adr0048_terex_rows_warned`) + the count in the batch audit row.
+- **Hardened `worksheetToGrid` cell unwrap**: exceljs formula/richText/hyperlink/
+  error cells were previously leaked downstream as `[object Object]` for any shape
+  other than `{result}`; all object shapes are now unwrapped (uncached formula /
+  error → `null`), preventing silent note/cost corruption.
+- Tests: fixture gains an Excel-epoch content row asserted into `warnings` (not
+  events); plausibility-window, strict-CSV-epoch, and subtotal-not-warned cases.
+
+Re-import hazard (operator action required): the existing prod batch
+(`import_id 42d0ebdd`) already contains the 1900 garbage event. Re-uploading a
+corrected file will recover the ~18 dropped January events but will NOT remove the
+1900 orphan, and will create a duplicate for that incident (the corrected
+`2026-01-15` row keys on a different date, so it won't dedup against the 1900 row).
+Soft-void the single garbage event (`event_date=1900-01-14`, `import_id=42d0ebdd`)
+BEFORE re-importing. Do not delete-and-reimport the whole batch.
+
 ### Fixed — 2026-07-21 (full-stack audit — P1-3 backup-failure alerting)
 
 Confirmed audit finding P1-3: the DR3 restic backup lane's failure alerting had

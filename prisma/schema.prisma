@@ -3374,6 +3374,10 @@ model EquipmentHistoryImport {
   events_created    Int      @default(0)
   events_skipped    Int      @default(0)
   rows_parsed       Int      @default(0)
+  // ADR-0048 D3 — content rows skipped for an implausible/unparseable Date cell
+  // (e.g. an Excel-epoch 1900 artifact from a mis-entered Date column). Surfaced to
+  // the operator to fix at the source; never stored as a garbage event.
+  rows_warned       Int      @default(0)
   header_mapping    Json? // the detected column → field mapping (forensic)
   notes             String?
   created_at        DateTime @default(now())

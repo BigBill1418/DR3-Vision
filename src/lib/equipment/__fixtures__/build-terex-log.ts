@@ -11,6 +11,8 @@
 //   - real entries with a true Date cell + Issue/Measures/Notes text,
 //   - `Actual Repair Cost` / `Amount Credited` money columns,
 //   - subtotal (money, no date) and bare-date (date, no content) noise rows,
+//   - an Excel-epoch (1900) Date cell with real content — the prod-bug repro that
+//     must land in `warnings`, not `events` (ADR-0048 D3),
 //   - unrelated sheets ("Maintenance Prices", "diesel", monthly tabs) to skip.
 
 import ExcelJS from 'exceljs';
@@ -135,6 +137,17 @@ export async function buildTerexWorkbook(): Promise<ExcelJS.Buffer> {
     null,
     'ran fine after',
   ]); // maintenance
+  // Repro of the prod bug (ADR-0048 D3): the operator left a stray number in the
+  // Date cell (exceljs surfaces it as an Excel-epoch 1900 date) and typed the REAL
+  // date into the note. This row HAS content but no plausible date → it must land
+  // in `warnings`, NOT `events` (and never be stored as a garbage 1900 event).
+  setRow(s26, 8, [
+    null,
+    utc(1900, 1, 14), // Excel-epoch artifact from a mis-entered Date column
+    null,
+    'Terex was LOTO @ 8:50am. High pressure hose shooting oil 01-15-2026',
+    'Messaged the vendor; tech replaced the hose and serviced the engine',
+  ]);
 
   // Unrelated sheets that must be skipped (not maintenance LOGS):
   addSkippableSheets(wb);
