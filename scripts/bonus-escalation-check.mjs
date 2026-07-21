@@ -232,26 +232,35 @@ async function publishFireFailure(tier, now = new Date()) {
     `${MAX_TIER_ATTEMPTS} attempts (${isoDate} PT). ${detail}`;
   const fingerprint = `bonus-escalation-fire-failed:${tier}:${isoDate}`;
 
-  const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
-  if (!token) {
-    logTs(`NTFY_PUBLISHER_TOKEN unset — cannot publish tier ${tier} fire-failure page (no-op)`);
-    return false;
-  }
-
   const baseHeaders = {
     Priority: priority,
     Click: NTFY_CLICK_URL,
     Tags: 'rotating_light,bonus,escalation',
     'X-Dedup-Id': fingerprint,
   };
-  const ok = await postWithTimeout(`${NTFY_PRIMARY_BASE}/${NTFY_TOPIC}`, body, {
-    ...baseHeaders,
-    'X-Title': title,
-    Authorization: `Bearer ${token}`,
-  });
-  if (ok) {
-    logTs(`published tier ${tier} fire-failure page to ${NTFY_TOPIC} (${fingerprint})`);
-    return true;
+
+  // This is a safety-critical, app-INDEPENDENT payroll page (P1-4). The primary
+  // ntfy.barnardhq.com publish needs the bearer, so when the token is unset we
+  // must NOT post unauthenticated to the primary — but we still fall through to
+  // the tokenless, anonymous-publish ntfy.sh fallback topic rather than going
+  // silent (a stronger contract than bonus-eod-check's no-op, deliberately, since
+  // this alert flags a missed payroll deadline).
+  const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
+  if (token) {
+    const ok = await postWithTimeout(`${NTFY_PRIMARY_BASE}/${NTFY_TOPIC}`, body, {
+      ...baseHeaders,
+      'X-Title': title,
+      Authorization: `Bearer ${token}`,
+    });
+    if (ok) {
+      logTs(`published tier ${tier} fire-failure page to ${NTFY_TOPIC} (${fingerprint})`);
+      return true;
+    }
+    logTs(`primary ntfy publish failed for tier ${tier} — trying ntfy.sh fallback (${fingerprint})`);
+  } else {
+    logTs(
+      `NTFY_PUBLISHER_TOKEN unset — skipping primary, attempting tokenless ntfy.sh fallback for tier ${tier} (${fingerprint})`,
+    );
   }
   const fbOk = await postWithTimeout(`${NTFY_FALLBACK_BASE}/${NTFY_FALLBACK_TOPIC}`, body, {
     ...baseHeaders,

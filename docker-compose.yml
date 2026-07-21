@@ -388,6 +388,14 @@ services:
       # NOT auth.env (ADR-0053 addendum 2026-07-21 cron secret split; required
       # so a missing file fails compose-config, not runtime — see bonus-period-close).
       - /home/bbarnard065/.dr3-vision-secrets/cron.env
+      # NTFY_PUBLISHER_TOKEN (ADR-0036) for the app-INDEPENDENT fire-failure
+      # backstop (audit P1-4, scripts/bonus-escalation-check.mjs:publishFireFailure).
+      # The tier fires POST through the app; if the app is down on payroll morning
+      # every tier fails and the daemon must page ntfy directly — which needs this
+      # token. Optional, same fail-soft contract as bonus-eod-check: when the file
+      # is absent the daemon still attempts the tokenless ntfy.sh fallback topic.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
+        required: false
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
