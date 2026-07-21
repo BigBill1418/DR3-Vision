@@ -22,11 +22,13 @@ import { dayKeyUTCFromISO } from '@/lib/time';
 import {
   type InvoiceComposition,
   type InvoiceKind,
+  type Jurisdiction,
   type ManualLine,
   PROCESSING_KINDS,
   TRANSPORTATION_KINDS,
   jurisdictionOfKind,
 } from './types';
+import { assertValidInvoiceCombination, compositionHasTradeDiscount } from './combinations';
 import {
   assertTotalMatchesLines,
   toInvoiceView,
@@ -77,16 +79,22 @@ export async function resolveInvoiceMode(
   return cfg?.mode === 'production' ? 'production' : 'pilot';
 }
 
-async function assertKindMatchesSite(siteId: string, kind: InvoiceKind): Promise<void> {
+/**
+ * Assert the kind's jurisdiction matches the site and return that jurisdiction
+ * (CA|OR) — the combination validator (§6) needs it. Throws
+ * {@link InvoiceKindSiteMismatchError} on a jurisdiction mismatch.
+ */
+async function assertKindMatchesSite(siteId: string, kind: InvoiceKind): Promise<Jurisdiction> {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     select: { jurisdiction: true },
   });
   if (!site) throw new InvoiceKindSiteMismatchError(kind, 'unknown');
-  const siteJur = site.jurisdiction === 'california' ? 'CA' : 'OR';
+  const siteJur: Jurisdiction = site.jurisdiction === 'california' ? 'CA' : 'OR';
   if (jurisdictionOfKind(kind) !== siteJur) {
     throw new InvoiceKindSiteMismatchError(kind, site.jurisdiction);
   }
+  return siteJur;
 }
 
 /** Compose the line set for a kind over its window (pure math + resolved inputs). */
@@ -145,7 +153,7 @@ export interface GenerateDraftArgs {
  */
 export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<InvoiceView> {
   const billingMonthISO = billingMonthStartISO(args.billingMonthISO);
-  await assertKindMatchesSite(args.siteId, args.kind);
+  const siteJurisdiction = await assertKindMatchesSite(args.siteId, args.kind);
 
   const window = windowForKind(args.kind, billingMonthISO);
   const composition = await composeForKind({
@@ -155,6 +163,14 @@ export async function generateInvoiceDraft(args: GenerateDraftArgs): Promise<Inv
     windowStartISO: window.startISO,
     windowEndISO: window.endISO,
     manualLines: args.manualLines ?? [],
+  });
+
+  // §6 — reject the structurally invalid combinations (Eugene mid-month; any
+  // mid-month carrying a Trade discount) BEFORE persisting anything.
+  assertValidInvoiceCombination({
+    kind: args.kind,
+    siteJurisdiction,
+    hasTradeDiscount: compositionHasTradeDiscount(composition),
   });
 
   // Belt invariant: the total we are about to store MUST equal Σ lines (it does

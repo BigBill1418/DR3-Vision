@@ -15,18 +15,25 @@ function normalizeName(s: string): string {
 }
 
 export interface AliasEntry {
+  /** The resolved `sources.id` (null only in test doubles that don't care about linkage). */
+  sourceId: string | null;
   siteId: string;
   canonicalName: string;
   isNonProgram: boolean;
 }
 
+/** Test-double input — `sourceId` optional so existing fixtures stay terse. */
+export type AliasEntryInput = Omit<AliasEntry, 'sourceId'> & { sourceId?: string };
+
 /**
  * In-memory alias resolver (test double + the shape the DB-backed resolver
  * satisfies post-merge). Keys are matched case/whitespace-insensitively.
  */
-export function inMemoryAliasResolver(entries: Record<string, AliasEntry>): SiteAliasResolver {
+export function inMemoryAliasResolver(entries: Record<string, AliasEntryInput>): SiteAliasResolver {
   const index = new Map<string, AliasEntry>();
-  for (const [name, entry] of Object.entries(entries)) index.set(normalizeName(name), entry);
+  for (const [name, entry] of Object.entries(entries)) {
+    index.set(normalizeName(name), { ...entry, sourceId: entry.sourceId ?? null });
+  }
   return {
     resolve(rawName: string) {
       return index.get(normalizeName(rawName)) ?? null;
@@ -63,7 +70,12 @@ export async function sourceAliasResolver(db: PrismaClient): Promise<SiteAliasRe
   // Aliases first (globally unique), then canonical names overlaid on top so a
   // canonical name always wins a normalized-key collision with an alias.
   for (const s of sources) {
-    const entry: AliasEntry = { siteId: s.site_id, canonicalName: s.name, isNonProgram: s.is_non_program };
+    const entry: AliasEntry = {
+      sourceId: s.id,
+      siteId: s.site_id,
+      canonicalName: s.name,
+      isNonProgram: s.is_non_program,
+    };
     for (const a of s.aliases) index.set(normalizeName(a.alias), entry);
   }
   const canonicalSeen = new Set<string>();
@@ -71,7 +83,12 @@ export async function sourceAliasResolver(db: PrismaClient): Promise<SiteAliasRe
     const key = normalizeName(s.name);
     if (canonicalSeen.has(key)) continue; // first canonical wins on a cross-site name repeat
     canonicalSeen.add(key);
-    index.set(key, { siteId: s.site_id, canonicalName: s.name, isNonProgram: s.is_non_program });
+    index.set(key, {
+      sourceId: s.id,
+      siteId: s.site_id,
+      canonicalName: s.name,
+      isNonProgram: s.is_non_program,
+    });
   }
 
   return {

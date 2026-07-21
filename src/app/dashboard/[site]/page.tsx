@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { DockPoller } from './dock-poller';
 import { DockTile } from './dock-tile';
 import { RateTiles } from './rate-tiles';
+import { FloorInventoryTile } from './floor-inventory-tile';
 import { computeSiteRateTiles } from '@/lib/dashboard/rate-tiles';
+import { computeFloorInventoryTile } from '@/lib/dashboard/floor-inventory-tile'; // rollup §3
 import { computeEquipmentTile } from '@/lib/equipment/tile'; // ADR-0044
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
@@ -78,6 +80,12 @@ export default async function SiteDashboardPage({ params }: Props) {
   // ADR-0043 — contract rate tiles (site-scoped). Never throw the whole page on
   // a rate-computation hiccup; degrade to no tiles.
   const rateTiles = await computeSiteRateTiles(site.id, site.jurisdiction).catch(() => null);
+
+  // Rollup §3 (2026-07-21) — live floor inventory tile: program / non-program /
+  // total on the floor via the ADR-0037 running balance. Same degrade rule.
+  // (The page is force-dynamic and DockPoller refreshes the route every 5s,
+  // so the tile stays live without its own poller.)
+  const floorInventory = await computeFloorInventoryTile(site.id).catch(() => null);
 
   // ADR-0044 — small equipment tile (last event + 7-day units/day). Never throw
   // the page on an equipment-read hiccup; degrade to no tile.
@@ -161,6 +169,9 @@ export default async function SiteDashboardPage({ params }: Props) {
         </header>
 
         {rateTiles && <RateTiles tiles={rateTiles} siteCode={site.code} />}
+
+        {/* Rollup §3 — live floor inventory (Rick's "currently on the floor" ask). */}
+        {floorInventory && <FloorInventoryTile tile={floorInventory} siteCode={site.code} />}
 
         {/* ADR-0044 — equipment tile: last event + 7-day units/day. */}
         {equipmentTile && (

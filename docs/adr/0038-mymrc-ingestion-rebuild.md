@@ -240,3 +240,26 @@ the transport boundary (`portal-client.ts`) is unchanged either way.
 - **Shared, symlinked `node_modules`** in the build worktree means `prisma generate`
   writes the client into the main repo's tree; regenerate before typecheck. The
   generated client is a derived artifact (main repo regenerates its own on build).
+
+## Amendment — source_aliases fallback at upsert (2026-07-21, ADR-0037 rollup §12)
+
+Customer/collection-site names drift month-to-month in MRC-side data ("SVDP
+Albany", "SvdP Albany", "Albany"...), and the Addendum-B rollup renamed the OR
+sources to their canonical MyMRC portal names (old live names retained as
+`source_aliases` rows). `upsertScrapedHauls` (`src/lib/mymrc/upsert.ts`) now
+resolves source names in two steps:
+
+1. **Exact verbatim `sources.name` match** (unchanged — primary, the
+   reconciliation join key).
+2. **Alias fallback** — only when at least one name missed step 1: one extra
+   site-scoped query over the site's sources + `source_aliases`, matched
+   normalized (trim/lowercase/collapse-whitespace, canonical name wins over an
+   alias on collision — same rules as `src/lib/audit/workbook/site-alias.ts`,
+   duplicated in lock-step because this module compiles standalone under
+   `tsconfig.mymrc.json`).
+
+Alias-resolved names set the FK and are reported in the new
+`UpsertSummary.alias_resolved_source_names` (+ once-per-run info log). A name
+missing BOTH steps keeps the existing never-guess behavior: `source_id = null`,
+verbatim `source_name_at_sync` retained, deduped once-per-run warn naming it
+for the operator to seed. Tests: `src/lib/mymrc/upsert-alias-fallback.test.ts`.

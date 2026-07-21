@@ -10,7 +10,7 @@ Plains filing.
 > Live transport (`mode=graph`, mailbox `approvals-dr3@svdp.us`), `ap_notify`
 > flipped live for Eugene + Woodland. Real routing: new-invoice alerts → the
 > active approver roster (Morena, Rick, Janette, Kelsey — Kelsey auto-expires
-> 8/1); decision mail → the original forwarder with Mary
+> 8/8); decision mail → the original forwarder with Mary
 > (`mary.scott@svdp.us`) CC'd; the decision email carries the ACTUAL invoice
 > stamped on every page, archived to R2. Access: the **AP Approvals tile** on
 > `/` (admins + active roster; live pending-count badge) → `/dashboard/ops/ap`
@@ -179,7 +179,7 @@ them re-send.
 **Scope:** the mailbox now covers ALL Woodland + Eugene invoices (both sites), not
 just DR3 vendor invoices.
 
-**Approver roster (5, explicit):** Morena, Rick, Janette, Bill, Kelsey (until 8/1).
+**Approver roster (5, explicit):** Morena, Rick, Janette, Bill, Kelsey (until 8/8).
 Approvers live in the `ap_approvers` table (seeded for Morena/Rick/Janette/Kelsey).
 Bill is an admin and can always act, so he needs no row. All approvers see all
 pending invoices; first action wins.
@@ -187,8 +187,8 @@ pending invoices; first action wins.
 - **Rick and Janette are single-site managers** but are full AP approvers here —
   the AP queue/decide permission is now "admin OR active `ap_approvers` member",
   not `all_sites`.
-- **Kelsey auto-removes 8/1.** Her `ap_approvers` row carries
-  `active_until = 2026-08-01 00:00 PT`. A daily `ap-approver-expiry` cron removes
+- **Kelsey auto-removes 8/8.** Her `ap_approvers` row carries
+  `active_until = 2026-08-08 00:00 PT`. A daily `ap-approver-expiry` cron removes
   expired approvers with an audit row + a `dr3-vision-system` ntfy to Bill. To add
   or remove an approver by hand, insert/delete an `ap_approvers` row (by `user_id`).
 

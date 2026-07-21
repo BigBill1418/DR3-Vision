@@ -17,8 +17,8 @@ vi.mock('@/lib/observability/logger', () => ({ log: { info: vi.fn(), warn: vi.fn
 
 import { runApApproverExpiry } from './expiry';
 
-const NOW = new Date('2026-08-02T00:05:00Z');
-const PAST = new Date('2026-08-01T07:00:00Z'); // Kelsey's expiry (already passed at NOW)
+const NOW = new Date('2026-08-09T00:05:00Z');
+const PAST = new Date('2026-08-08T07:00:00Z'); // Kelsey's expiry, extended to 8/8 per rollup §7 (already passed at NOW)
 const FUTURE = new Date('2026-12-01T00:00:00Z');
 
 function fp(db: FakeDb): PrismaClient {

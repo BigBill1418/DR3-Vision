@@ -104,12 +104,26 @@ woodland,Wilkerson Company - Evert Wilkerson,1064 Horizon Dr Ste 10,Fairfield,CA
 woodland,Willits Transfer Station,351 Franklin Ave.,Willits,CA,95490,26,2026-04-21,true,
 woodland,Yolo County Central Landfill,44090 Co. Rd. 28H,Woodland,CA,95776,256,2026-05-01,true,
 woodland,Zaengles Furniture and Floor Covering Inc,2800 Main St,Susanville,CA,96130,15,2026-04-16,true,
-eugene,Salem-Keizer Recycling Center,,Salem,OR,,0,,true,Oregon Collection Site (per MRC OR contract Exhibit). Address TBD.
-eugene,Albany-Linn County Transfer Station,,Albany,OR,,0,,true,Oregon Collection Site (per MRC OR contract Exhibit). Address TBD.
-eugene,Cottage Grove Transfer Station,,Cottage Grove,OR,,0,,true,Oregon Collection Site (per MRC OR contract Exhibit). Address TBD.
-eugene,Florence Transfer Station,,Florence,OR,,0,,true,Oregon Collection Site (per MRC OR contract Exhibit). Address TBD.
+eugene,St Vincent De Paul Of Lane County - Salem Thrift Store,445 Lancaster Dr NE,Salem,OR,,0,,true,"OR MRC collection site. Canonical MyMRC name (rollup §1, Rick 2026-07-19). Prior seed name kept as source_alias."
+eugene,ST Vincent De Paul OF Lane County-Albany Thrift Store,2220 Pacific Blvd,Albany,OR,,0,,true,"OR MRC collection site. Canonical MyMRC name (rollup §1, Rick 2026-07-19). Prior seed name kept as source_alias."
+eugene,St Vincent De Paul Of Lane County - Cottage Grove Store,910 Row River Rd,Cottage Grove,OR,,0,,true,"OR MRC collection site. Canonical MyMRC name (rollup §1, Rick 2026-07-19). Prior seed name kept as source_alias."
+eugene,St Vincent De Paul Of Lane County - Florence Thrift Store,2315 HWY 101,Florence,OR,,0,,true,"OR MRC collection site. Canonical MyMRC name (rollup §1, Rick 2026-07-19). Prior seed name kept as source_alias."
 eugene,Short Mountain Landfill,,Eugene,OR,,0,,true,Lane County waste facility. Backfill from OR MyMRC export.
-eugene,Glenwood Transfer & Recycling Station,,Glenwood,OR,,0,,true,Lane County waste facility. Backfill from OR MyMRC export.
+eugene,Glenwood Central Recieving Station,3100 E 17th Ave,Eugene,OR,,0,,true,"OR MRC collection site. Canonical MyMRC name (rollup §1 — MRC's verbatim typo of 'Receiving'). Prior seed name kept as source_alias."
 eugene,Thompsons Sanitary Service,,,OR,,0,,true,Eugene paper daily-log site (2026-07-09 rollup §4.3 sample). Address TBD.
 eugene,Stayton Community Center,,Stayton,OR,,0,,true,"Eugene paper daily-log site (2026-07-09 rollup §4.3 sample, written 'Stayton Comm Center'). Address TBD."
 eugene,Deschutes,,,OR,,0,,true,"Eugene paper daily-log site (2026-07-09 rollup §4.3 sample; likely Deschutes County transfer — confirm full name with Rick). Address TBD."
+eugene,St Vincent De Paul Of Lane County - The Dalles Thrift Store,505 W 9th St,The Dalles,OR,,0,,true,"OR MRC collection site (rollup §1, new — container rental added June, +$100). Canonical MyMRC name."
+eugene,Rifes,,Eugene,OR,,0,,true,"OR MRC collection site (rollup §1). Canonical MyMRC name; no address in MyMRC portal."
+eugene,Roseburg Transfer Station,,Roseburg,OR,,0,,false,"OR non-program, PARKED pending MRC signature (rollup §1). Rates pre-negotiated. ACTIVATE ON SIGNATURE: is_active=true + active_billing=true (set by classification pass)."
+eugene,Division,201 Division Ave,Eugene,OR,,0,,true,SVDP internal store (rollup §4). Retail. Not an MRC collection site.
+eugene,Seneca,705 Seneca Rd,Eugene,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,West Eugene,2167 W 11th Ave,Eugene,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,Chad Drive,2890 Chad Dr,Eugene,OR,,0,,true,SVDP internal store (rollup §4). Retail (SVdP HQ).
+eugene,Q Street,199 Q St,Springfield,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,Main Street,4555 Main St,Springfield,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,Junction City,333 Ivy St/HWY 99,Junction City,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,Oakridge,47663 Hwy 58,Oakridge,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,Garfield,888 Garfield St,Eugene,OR,,0,,true,SVDP internal store (rollup §4). Retail.
+eugene,CARS,1175 State Hwy 99N,Eugene,OR,,0,,true,"SVDP internal store (rollup §4). Used car lot, no mattresses yet (renamed from Affordable Vehicles 2026-07-19)."
+eugene,Cleveland WH,135 N Cleveland St,Eugene,OR,97402,0,,true,"SVDP internal store (rollup §4). Warehouse, closed to public (added 2026-07-19)."

@@ -20,6 +20,13 @@
 import type { InvoiceView } from './view';
 import type { InvoiceKind, InvoiceMode, InvoiceStatus, JsonValue } from './types';
 import { LINE_CODE } from './types';
+import {
+  GP_ITEM_CODE,
+  MILES_0_MEMBER_CODES,
+  itemCodeForLineCode,
+  type GpItemCode,
+} from './item-codes';
+import { invoiceAttachments, type InvoiceAttachmentDescriptor } from './attachments';
 import type { GpContext } from './gp-identifiers';
 import { formatMDDYY } from './gp-identifiers';
 import { InvoiceInvariantError } from './view';
@@ -114,12 +121,19 @@ export function invoiceExportV1(inv: InvoiceView): InvoiceExportV1 {
 export interface GpExportLineV2 {
   /** GP "Location" cell (shown on the header line; null elsewhere). */
   location: string | null;
-  /** GP "Item" code — empty per §4.2. */
-  item: string;
+  /**
+   * GP "Item" code — one of the 7 LOCKED codes (rollup §9): LOCATION / UNITSMO /
+   * REIMBO / EVENTO / MILES 0 / FUEL / OREGON MATTRESS. Verbatim from the real
+   * June-2026 invoice PDFs (§10); supersedes the PR-#128 empty-string assumption.
+   * `null` for a leaf that maps to no standalone GP item code (e.g. a `manual`
+   * adjustment line — see {@link itemCodeForLineCode}); GP renders it with no item,
+   * never borrowing a per-mattress/aggregate code that would misstate the charge.
+   */
+  item: GpItemCode | null;
   description: string;
-  /** GP unit of measure — 'UNITSMO' on the billable processing line. */
+  /** GP unit of measure — currently unused by the locked taxonomy (always null). */
   unit_of_measure: string | null;
-  /** Decimal string (never a float); null on a header line. */
+  /** Decimal string (never a float); null on a LOCATION header/spacer line. */
   quantity: string | null;
   /** GP "Each". */
   unit_price_cents: number;
@@ -178,6 +192,12 @@ export interface InvoiceExportV2 {
     lines: GpExportLineV2[];
     totals: GpExportTotalsV2;
   };
+  /**
+   * rollup §5.1/§6 — the companion documents that ride this invoice. EOM
+   * processing invoices carry the monthly commodity breakdown; mid-month and
+   * every other kind carry `[]`. Descriptors only (rendered on demand).
+   */
+  attachments: InvoiceAttachmentDescriptor[];
   /** The v1 leaf provenance lines, carried unchanged (never lost). */
   lines: InvoiceExportLineV1[];
 }
@@ -214,7 +234,47 @@ function decStr(n: number | null): string | null {
   return n == null ? null : String(n);
 }
 
-/** Build the §4.2 two-line processing presentation. */
+/** A $0 GP LOCATION section header/spacer (rollup §9/§10). */
+function locationSpacer(description: string, location: string | null = null): GpExportLineV2 {
+  return {
+    location,
+    item: GP_ITEM_CODE.location,
+    description,
+    unit_of_measure: null,
+    quantity: null,
+    unit_price_cents: 0,
+    extended_cents: 0,
+  };
+}
+
+/**
+ * A single-quantity AGGREGATE GP line (REIMBO / EVENTO / MILES 0 / FUEL): GP
+ * renders these as `1 <CODE> … $extended`, so quantity is "1" and Each == Ext.
+ */
+function aggregateLine(
+  item: GpItemCode,
+  description: string,
+  extendedCents: number,
+): GpExportLineV2 {
+  return {
+    location: null,
+    item,
+    description,
+    unit_of_measure: null,
+    quantity: '1',
+    unit_price_cents: extendedCents,
+    extended_cents: extendedCents,
+  };
+}
+
+/**
+ * Build the processing presentation, matching the real June-2026 invoice PDFs
+ * (§10): a LOCATION header + the UNITSMO charge, then (when present) a LOCATION
+ * spacer + REIMBO incentive line and a LOCATION spacer + EVENTO event-labor line.
+ * The B7/B8 amounts are FIRST-CLASS subtotal lines here (not "misc") — that is
+ * how MRC's real invoice reads. The trade-discount offset (B22) is NOT a line;
+ * it becomes the GP Trade-discount TOTAL field (see invoiceExportV2 totals).
+ */
 function processingGpLines(inv: InvoiceView, ctx: GpExportContext): GpExportLineV2[] {
   const chargeLine = inv.lines.find(
     (l) => l.lineCode === LINE_CODE.processing || l.lineCode === LINE_CODE.midMonthProcessing,
@@ -227,35 +287,83 @@ function processingGpLines(inv: InvoiceView, ctx: GpExportContext): GpExportLine
   const rate =
     (chargeLine ? rateCentsOf(chargeLine.rateRef) : null) ??
     (programUnits && programUnits !== 0 ? Math.round(extended / programUnits) : 0);
-  return [
-    {
-      location: ctx.siteName,
-      item: '',
-      description: `total units processed ${formatMDDYY(inv.windowEnd)}`,
-      unit_of_measure: null,
-      quantity: null,
-      unit_price_cents: 0,
-      extended_cents: 0,
-    },
+
+  const lines: GpExportLineV2[] = [
+    locationSpacer(`total units processed ${formatMDDYY(inv.windowEnd)}`, ctx.siteName),
     {
       location: null,
-      item: '',
+      item: GP_ITEM_CODE.unitsMo,
       description: `MRC-Processed Units DR3 ${ctx.siteName}`,
-      unit_of_measure: 'UNITSMO',
+      unit_of_measure: null,
       quantity: decStr(programUnits),
       unit_price_cents: rate,
       extended_cents: extended,
     },
   ];
+
+  const incentive = inv.lines.find((l) => l.lineCode === LINE_CODE.incentives);
+  if (incentive) {
+    lines.push(locationSpacer('Incentive program'));
+    lines.push(aggregateLine(GP_ITEM_CODE.reimbo, incentive.description, incentive.amountCents));
+  }
+
+  // B8 event misc renders (0¢, source.pending) until the events feed is wired —
+  // so the EVENTO section is never silently absent (matches the composer's D3 rule).
+  const eventMisc = inv.lines.find((l) => l.lineCode === LINE_CODE.eventMisc);
+  if (eventMisc) {
+    lines.push(locationSpacer('Misc Events'));
+    lines.push(aggregateLine(GP_ITEM_CODE.evento, eventMisc.description, eventMisc.amountCents));
+  }
+
+  return lines;
 }
 
-/** One gp_line per billable leaf (transportation / collection-site-count). */
-function leafGpLines(inv: InvoiceView, codes: readonly string[]): GpExportLineV2[] {
+/**
+ * Build the transportation presentation with the §9 MILES 0 aggregation: regular
+ * freight + event transportation + container rental collapse into ONE `MILES 0`
+ * line; fuel keeps its own `FUEL` line. The three MILES-0 member leaves are still
+ * stored separately on the invoice (full provenance in `lines`); this is the
+ * GP-presentation rollup only. OR carries no fuel leaf by construction, so no
+ * FUEL line is emitted there.
+ */
+function transportationGpLines(inv: InvoiceView, ctx: GpExportContext): GpExportLineV2[] {
+  const lines: GpExportLineV2[] = [];
+  const miles0Cents = inv.lines
+    .filter((l) => MILES_0_MEMBER_CODES.includes(l.lineCode))
+    .reduce((acc, l) => acc + l.amountCents, 0);
+  // Always emit the MILES 0 line for a transportation invoice — freight/rental is
+  // the invoice's reason for being; a 0¢ MILES 0 is honest, never absent.
+  lines.push(
+    aggregateLine(
+      GP_ITEM_CODE.miles0,
+      `MRC Freight & Rental — ${ctx.siteName} ${formatMDDYY(inv.windowEnd)}`,
+      miles0Cents,
+    ),
+  );
+
+  const fuel = inv.lines.find((l) => l.lineCode === LINE_CODE.fuel);
+  if (fuel) {
+    lines.push(aggregateLine(GP_ITEM_CODE.fuel, fuel.description, fuel.amountCents));
+  }
+  return lines;
+}
+
+/**
+ * Build the OR collection-site-count presentation: one `OREGON MATTRESS` line per
+ * satellite site, carrying the site's real mattress count × $2.25 (§9/§10). A `manual`
+ * adjustment line (credit/fee an operator adds to an `or_collection_site_count`
+ * invoice) is carried through so the total still reconciles, but its item code comes
+ * from the canonical {@link itemCodeForLineCode} map — which returns `null` for
+ * `manual`, so it is NOT stamped with the per-mattress `OREGON MATTRESS` code (§9 locks
+ * that code to "collection-site per-mattress, units × $2.25"). Presentation-only; the
+ * reconciliation invariant in {@link invoiceExportV2} still guards the grand total.
+ */
+function collectionGpLines(inv: InvoiceView): GpExportLineV2[] {
   return inv.lines
-    .filter((l) => codes.includes(l.lineCode))
+    .filter((l) => l.lineCode === LINE_CODE.satellite || l.lineCode === LINE_CODE.manual)
     .map((l) => ({
       location: null,
-      item: '',
+      item: itemCodeForLineCode(l.lineCode),
       description: l.description,
       unit_of_measure: null,
       quantity: l.quantity,
@@ -263,13 +371,6 @@ function leafGpLines(inv: InvoiceView, codes: readonly string[]): GpExportLineV2
       extended_cents: l.amountCents,
     }));
 }
-
-const TRANSPORT_CODES = [
-  LINE_CODE.freight,
-  LINE_CODE.eventFreight,
-  LINE_CODE.fuel,
-  LINE_CODE.rentals,
-] as const;
 
 /**
  * Serialize an invoice into the v2 GP export. Reconciles
@@ -281,29 +382,31 @@ export function invoiceExportV2(inv: InvoiceView, ctx: GpExportContext): Invoice
   const presentation = presentationForKind(inv.kind);
 
   let gpLines: GpExportLineV2[];
-  let miscCents = 0;
   let tradeDiscountCents = 0;
   if (presentation === 'processing') {
     gpLines = processingGpLines(inv, ctx);
-    miscCents = sumCodes(inv, [LINE_CODE.incentives, LINE_CODE.eventMisc]);
     // offset is stored negative → positive trade discount. `|| 0` normalizes the
     // `-0` that negating a zero offset sum would otherwise produce (a `-0` in a
     // money field is a defect, not a value).
     tradeDiscountCents = -sumCodes(inv, [LINE_CODE.eomOffset]) || 0;
   } else if (presentation === 'transportation') {
-    gpLines = leafGpLines(inv, TRANSPORT_CODES);
+    gpLines = transportationGpLines(inv, ctx);
   } else {
-    gpLines = leafGpLines(inv, [LINE_CODE.satellite, LINE_CODE.manual]);
+    gpLines = collectionGpLines(inv);
   }
 
+  // rollup §9/§10 — REIMBO/EVENTO (processing) and MILES 0/FUEL (transportation)
+  // are FIRST-CLASS subtotal lines now, matching the real invoice PDFs, so `misc`
+  // and `freight` are always 0 (their amounts live in gp_lines, not a summary
+  // bucket). The reconciliation invariant below still guards the grand total.
   const subtotalCents = gpLines.reduce((acc, l) => acc + l.extended_cents, 0);
   const totals: GpExportTotalsV2 = {
     subtotal_cents: subtotalCents,
-    misc_cents: miscCents,
+    misc_cents: 0,
     tax_cents: 0,
     freight_cents: 0,
     trade_discount_cents: tradeDiscountCents,
-    total_cents: subtotalCents + miscCents - tradeDiscountCents,
+    total_cents: subtotalCents - tradeDiscountCents,
   };
 
   // ADR-0033 tripwire: the GP total MUST equal the stored invoice total.
@@ -350,6 +453,7 @@ export function invoiceExportV2(inv: InvoiceView, ctx: GpExportContext): Invoice
       lines: gpLines,
       totals,
     },
+    attachments: invoiceAttachments(inv.kind),
     lines: inv.lines.map((l) => ({
       line_code: l.lineCode,
       description: l.description,

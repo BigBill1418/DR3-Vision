@@ -5,6 +5,109 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-21 (Addendum-B rollup — review close-out, minor findings)
+
+Close-out pass on the Addendum-B rollup branch before PR. No money moved, no
+rates/IDs/classifications invented, pilot mode untouched.
+
+- **TONU state logic (`src/lib/event-billing/tonu.ts`)** — the no-dispatch guard now
+  runs FIRST, so a stray `diverted`/`cancelledAt` flag on a never-dispatched order no
+  longer bills the haul rate (Rick §5.3: TONU requires a dispatch). The
+  dispatched-but-not-cancelled/not-diverted verdict now returns a distinct
+  `dispatched_no_bill` reason instead of mislabeling a real dispatch as
+  `not_dispatched`. Tests added for both.
+- **Event-billing input validation (`src/lib/event-billing/compute.ts`)** —
+  `computeEventBilling` now rejects negative/NaN/Infinity `laborHours` and
+  `driverOnsiteHours` (finite ≥ 0) and non-integer/negative/NaN `perDiemDays` (Int
+  column) with `RangeError`, matching the module's fail-loud money discipline.
+  Fractional hours (Decimal(5,2)) still accepted. Tests added.
+- **OR collections GP export (`src/lib/invoices/export-json.ts`)** — a `manual`
+  adjustment line on an `or_collection_site_count` invoice is no longer stamped with
+  the `OREGON MATTRESS` per-mattress item code; it now uses the canonical
+  `itemCodeForLineCode` map (→ `null` for `manual`). `GpExportLineV2.item` widened to
+  `GpItemCode | null`. Total still reconciles (ADR-0033 tripwire). Test added.
+- **Kelsey AP-approver migration guard (`20260730b_addendum_b_seeds/migration.sql`)** —
+  the 8/1 → 8/8 `active_until` bump now guards on `active_until::date = '2026-08-01'`
+  (day match, TZ-independent on the TIMESTAMP(3) column) instead of exact-timestamp
+  equality, so a differing time component no longer silently no-ops (which would let
+  the expiry reaper delete Kelsey on 8/1). Still refuses to clobber a manual change to
+  another day; idempotent; clean-CI no-op. Post-deploy verification query added to the
+  migration comment.
+- **Docs** — `SourceSiteType` doc comment no longer lists `Sponsors` as a
+  `third_party_inbound` example (§2 reclassified it as a provenance agency).
+  `docs/OPEN-ITEMS.md`: S-4 corrected to state OR billing-source `site_type`
+  classification is NOT done (folded into the C-16 wiring gate); new **S-9**
+  (per-location container-rental roster from Rick — CA $10,800/44, OR $900/6 incl. The
+  Dalles $100) and **C-20** (rewire `onHand()` to the `unit_status_movements` ledger).
+
+### Added / Changed — 2026-07-21 (MRC billing Addendum-B rollup — Rick/Mary/Kelsey answers)
+
+Integrates the four Addendum-B workstreams from the 2026-07-21 rollup handoff
+(`docs/handoffs/2026-07-21-mrc-billing-addendum-rick-mary-kelsey-rollup-2026.md`).
+Pilot mode is untouched; **no live customer rates seeded** and **no mode flipped**.
+No monetary values, rates, or IDs were invented — anything unstated is seeded
+null/unset and tracked in `docs/OPEN-ITEMS.md`.
+
+**Schema foundation (ADR-0037 amendment + ADR-0056; migrations
+`20260730_adr0037b_addendum_b_schema` + `20260730b_addendum_b_seeds`):**
+
+- **Loads/inventory ledger surface** — new `unit_status_movements` (aggregate,
+  status-bucketed movement ledger; `UnitStatus` enum `on_floor | saved |
+processed | sold | landfilled`, reusing existing `LandfilledReason` where "wet"
+  ⇒ `water_logged`), `provenance_agencies` + `inbound_loads.provenance_agency_id`,
+  and the 5th `SourceSiteType.svdp_internal_store`. Bare-scalar-FK convention (no
+  Prisma relations; constraints in migration SQL), matching existing tables.
+- **Event-billing schema** — `event_legs` (+ `EventLegType` enum), `event_vehicles`,
+  `collection_events.{driver_onsite_hours, per_diem_days, overnight}`, and
+  `tonu_billing`. Added `StateProgramRuleKind.irs_mileage_rate` (no rate rows
+  seeded — figures not in the handoff).
+- **Seeds** — 5 OR sources renamed id-preservingly to verbatim MyMRC names (incl.
+  the verbatim typo "Glenwood Central Recieving Station"); 14 new eugene rows
+  (11 `svdp_internal_store` billing-off + The Dalles/Rifes/Roseburg parked);
+  22 `source_aliases` rows (retired names + §12 month-to-month variants →
+  canonical); 3 provenance agencies (incl. Sponsors, reclassified from a source);
+  Kelsey AP approver `active_until` 8/1 → **8/8**.
+
+**Event billing + TONU (ADR-0056 — pure compute layer, `src/lib/event-billing/`):**
+
+- `computeEventBilling` prices the six §5.3 components (per-leg tier transport,
+  labor wages, driver wages, per-diem, IRS mileage) and `assessTonu` the TONU
+  verdict. Fail-loud on billable-but-unseeded rate (`EventRateUnavailableError` 409) — never silent $0; a zero-activity event totals $0 with all rates null.
+  Driver-vs-labor no-double-count is structural. Not yet wired into the invoice
+  generator (EVENTO/MILES-0 membership deferred — see OPEN-ITEMS C-18).
+
+**Invoice generation + commodity attachment (ADR-0040/0041 amendments):**
+
+- v2 GP presentation rewritten to the real §10 PDFs: 7 LOCKED GP item codes
+  (`LOCATION`/`UNITSMO`/`REIMBO`/`EVENTO`/`MILES 0`/`FUEL`/`OREGON MATTRESS`,
+  spaces significant), MILES-0 transportation aggregation + FUEL, and
+  REIMBO/EVENTO subtotal lines. Reconciles all four real June invoices.
+- Kind-aware PO builder `buildPoNumberForKind` (`M/DD/YY DR3 W` / `DR3 OREGON` /
+  `TRANS` / `TRANS OR`, `M/YY OR COLLECTIONS`) and `seedGpSiteBillingConfig`
+  corrected to the confirmed identifiers (Woodland `DR3W`→`DR3 W`; Eugene
+  null→`MRCL001`/`DR3 OREGON`), `update` branch now re-applies them.
+- Invoice-combination guard (`assertValidInvoiceCombination`) rejects illegal
+  mid-month/discount pairings; EOM-processing commodity breakdown rendered as a
+  computed attachment (`src/lib/commodity/`, pdf-lib, Letter-landscape). Metal→
+  Steel/Xtraction-Landfill/Covanta-WTE split awaits Rick (OPEN-ITEMS S-8).
+
+**Floor-inventory dashboard tile (ADR-0037 §3):**
+
+- New per-site floor tile (`src/lib/dashboard/floor-inventory-tile.ts`,
+  `src/app/dashboard/[site]/floor-inventory-tile.tsx`) consuming the single
+  ADR-0037 `onHand()` pool computation + trailing-7-day closes; program/
+  non-program/total on-floor + optional days-remaining projection; refreshes via
+  the existing DockPoller. Degrade-never-throw.
+
+**Intake alias normalization (ADR-0037/0038 amendments):**
+
+- `sourceAliasResolver` extended to return `sourceId`, so intake LINKS records.
+  Workbook promotion now resolves every inbound `site_name_raw` (writing
+  `inbound_loads.source_id`) and REFUSES promotion on any unresolved name
+  (`PromotionUnresolvedSourceError` 422, deduped list) — closing a silent-drift
+  gap where explicit program splits bypassed resolution. MyMRC upsert gains a
+  normalized alias fallback (verbatim `source_name_at_sync` retained on miss).
+
 ### Changed — 2026-07-21 (ADR-0037 D7 activation gate → admin-flippable rollout surface)
 
 The loads/inventory + floor-operator activation gate becomes admin-controllable
@@ -67,7 +170,7 @@ existing row as a normal site-filed decision).
 - **Accounting surfaces.** So Mary never mistakes it for a DR3-site invoice, the
   decision email (subject `— NOT DR3`; body `NOT DR3 — see reason: <reason>` leading
   the facts) and the stamped PDF/cover/image (per-page stamp line `— NOT DR3 (see
-  reason)`; meta block `Location: NOT DR3 — see reason: <reason>`) render the
+reason)`; meta block `Location: NOT DR3 — see reason: <reason>`) render the
   disposition in the same slot the site name occupies today.
 - **Tests.** NOT-DR3 persistence (filed_not_dr3=true + site_id NULL), reason-required
   (rejects empty note, approve AND reject), mutual-exclusion rejection, mail/PDF NOT-DR3
@@ -84,7 +187,7 @@ after `20260726_adr0040_rate_infrastructure`; `invoices.mode` defaults `pilot` s
 pre-existing row backfills safely — nothing on file can reach MRC until an admin flips it).
 
 - **B10-5 CLOSED (§A.1).** The invoice math is single-line (`program_units_processed ×
-  rate + trade_discount`) — no commodity→invoice-block mapping is required for billing.
+rate + trade_discount`) — no commodity→invoice-block mapping is required for billing.
   Compliance commodity classification (recycling rate) stays a separate concern
   (ADR-0043/0055). Both ADR-0041 and ADR-0043 doc references updated.
 - **Pilot / production mode (§3.4) — the launch safety net.** `InvoiceMode` enum + the
@@ -102,9 +205,9 @@ pre-existing row backfills safely — nothing on file can reach MRC until an adm
 - **Two-line GP export v2 (§4.2), C-1 bump.** `invoiceExportV2` ships ALONGSIDE the FROZEN
   v1 (`export-json.ts`); `GET …/export?format=json&v=2` (v1 stays default). Carries the
   §4.2 two-line processing structure (header + "MRC-Processed Units DR3 <Site>" UNITSMO)
-  + Subtotal/Misc/Tax/Freight/Trade-Discount/Total, the GP header identifiers, the split,
-  and the trade-discount fields; the v1 leaf lines are also carried (nothing lost). GP
-  total reconciles to `invoice.total_cents` (ADR-0033 tripwire).
+  - Subtotal/Misc/Tax/Freight/Trade-Discount/Total, the GP header identifiers, the split,
+    and the trade-discount fields; the v1 leaf lines are also carried (nothing lost). GP
+    total reconciles to `invoice.total_cents` (ADR-0033 tripwire).
 - **GP identifiers (§4.2).** `gp_billing_config` (singleton: MRC Bill-To/Ship-To — Attn
   Ryan Trainer, 501 Wythe Street, Alexandria VA 22314; Sales ID 34; Net 30) +
   `gp_site_billing_config` (Woodland: Customer ID MRCL001, PO suffix DR3W). OR MRC Customer
@@ -221,7 +324,7 @@ billed (ADR-0041). Migration `20260726_adr0055_recycling_rates` (purely additive
   `recycling_percent_applied` (durable snapshot), `recycling_rate_id` (provenance),
   computed at entry time from `(vendor_id, commodity, ship_date)` and re-derived on
   edit. Rounding rule: `recycled = round_half_up(weight × pct)`, `landfilled =
-  weight − recycled` (**complement by subtraction → exact sum, no pound drift**).
+weight − recycled` (**complement by subtraction → exact sum, no pound drift**).
   Worked example: 5,541 lb @ 0.81 → **4,488 recycled / 1,053 landfilled** (see the
   ADR's flagged 1-lb delta vs Kelsey's verbal 4,487/1,054 — an 80.98% split, not
   the nominal 0.81; seeded rate stays 0.81 pending confirmation).

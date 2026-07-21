@@ -148,7 +148,7 @@ The gate is `async` and the single chokepoint `requireActivatedManager` awaits i
 with the site context (all 14 manager loads routes thread through that one call —
 no route signature changed); the loads-inventory dashboard page consults the same
 surface. This does **not** relax the ops preconditions above — the restore drill +
-off-box `RESTIC_PASSWORD` remain Bill's go/no-go for *approving* the flip; the
+off-box `RESTIC_PASSWORD` remain Bill's go/no-go for _approving_ the flip; the
 change only moves the switch from a code deploy to an audited admin action at
 `/admin/rollout` (flip `loads_inventory` → `live` per site, with a criteria note).
 Registered by migration `20260729_adr0037_loads_inventory_rollout_surface`
@@ -490,3 +490,49 @@ through the dropoffs service + manager API.
 `Summary!` / `Trans Summary!` are advisory parity only and NEVER feed billing aggregation
 (the close reads the Processed ledger). Surfaced at parse time via the `[summary-stale]`
 flag; `Trans Summary!` is routed to evidence-only.
+
+## Amendment — 2026-07-21 (Addendum B rollup §2/§4/§5.2/§14 — Rick's provenance + unit-status model)
+
+Rick/Bill's 2026-07-19/20 rollup (`docs/handoffs/2026-07-21-mrc-billing-addendum-rick-mary-kelsey-rollup-2026.md`) corrects and extends the P1 foundation. Schema shipped in migrations `20260730_adr0037b_addendum_b_schema` (DDL) + `20260730b_addendum_b_seeds` (DML). Event billing + TONU is split into its own **ADR-0056**.
+
+### `site_type = svdp_internal_store` (§4)
+
+Fifth `SourceSiteType` value for the 11 SVDP-run retail/warehouse locations (Division, Seneca, West Eugene, Chad Drive, Q Street, Main Street, Junction City, Oakridge, Garfield, CARS, Cleveland WH). They bring mattresses but are **not** MRC-approved collection sites: no per-mattress, no trans, no trailer, no MRC unit. Seeded `active_billing = false` (zero invoice lines); the `site-type-billing.ts` default set for this type is all-false (belt-and-suspenders). Also seeded **`is_non_program = true`** (money-safe default): Rick §4 — these stores "are not Collection sites in conjunction With the MRC", so their inbound mattresses are outside the MRC program and the verify-gate / promotion DEFAULT split routes their units to the NON-program (non-billable) pool rather than the program pool billed at UNITSMO (a manager can still override at verify). The flag lives in the shared `SVDP_INTERNAL_STORE_CLASSIFICATION` constant (`prisma/seed/addendum-b-data.mjs`), applied identically by the `20260730b` store INSERT and `seedSourceBillingClassification`, and pinned by `src/lib/seed/addendum-b-data.test.ts`.
+
+### `provenance_agencies` table + `inbound_loads.provenance_agency_id` (§2)
+
+Sponsors (a halfway house on Hwy 99 next to Lindholm) is **not** a source or a drop-off kind — it is the _agency of origin_ that delivered the mattresses, peer to Eugene Mattress Company and U-Haul. New `provenance_agencies` table (`id, name UNIQUE, notes, active`) + a nullable bare-scalar FK `inbound_loads.provenance_agency_id`. Provenance is orthogonal to billing: an agency never produces an invoice line. Seeds: Sponsors, Eugene Mattress Company, U-Haul.
+
+### Unit-status ledger — Rick's model REPLACES Kelsey's §A.2 saved-units subtraction (§5.2)
+
+Rick: _"Saved units are not removed from inventory until they are sent to a store."_ Kelsey's Addendum-A §A.2 immediate-subtraction model was operationally wrong.
+
+**Repo-reality divergence (documented):** the ADR-0037 inventory is an **aggregate-ledger** architecture — there is **no** per-unit `unit_records` table (the handoff's `unit_records.*` is idealized spec language). The faithful shape is a **status-bucketed movement ledger**, `unit_status_movements`:
+
+- `UnitStatus` enum `on_floor | saved | processed | sold | landfilled`; each row is a count of `units` crossing `from_status → to_status` at `status_changed_at`. A live per-status floor count is the signed sum of movements into vs out of each bucket. Intake rows carry `from_status = null`.
+- `to_status = saved` does **not** decrement the live floor (units stay on the floor per Rick). Store transfer = a `saved → sold` movement carrying `store_destination_id` → the `svdp_internal_store` source. Two iPad ops: "Mark N as saved" and "Send N saved units to [store]".
+- `landfilled_reason` **reuses** the existing `LandfilledReason` enum; the handoff's "wet" maps to `water_logged` (no duplicate enum). §11's Landfilled-Units commodity block (Bed Bug / Soiled / Wet) renders from this + `landfilled_units`.
+
+**`processed_units_daily.saved_units` retraction — scope-bounded (money-safe):** the _live-floor subtraction_ semantics (Kelsey §A.2, `running-balance.ts` `onHand`) are retracted per Rick. The **column is retained**: it is the workbook daily-log capture field, and the **historical closed-month audit reconciliation** (`inventory-close.ts` + `workbook-promotion.ts`; the June **3,977** oracle) depends on the workbook's own subtraction — that historical parity is unchanged.
+
+**APPLIED (2026-07-21, this rollup):** `onHand` no longer supplies `savedUnits` to `computeRunningBalance` — the LIVE running balance (and the §3 floor tile that reads it) now counts saved units as still on the floor per Rick §5.2. The `computeRunningBalance` `savedUnits?` parameter is retained (defaults to 0) and is fed ONLY by the historical audit path, whose behavior is unchanged. Pinned by `running-balance.test.ts` ("onHand does not subtract saved_units — live floor keeps saved units, §5.2") and the floor-tile test. The change is confined to `onHand`; `inventory-close.ts` and `workbook-promotion.ts` are deliberately untouched (the 3,977 oracle relies on the workbook's recorded subtraction).
+
+**STILL DEFERRED (tracked for the inventory feature agent):** the `unit_status_movements` ledger has NO writer yet — the §15-2 iPad operations ("Mark N as saved", "Send N saved units to [store]" i.e. a `saved → sold` movement carrying `store_destination_id`) do not exist, so the ledger is currently empty and `onHand`'s live floor still derives saved-vs-on_floor from the aggregate close columns rather than the movement ledger. Rewiring `onHand` to consume `unit_status_movements` is a later, separate change; this ADR ships the schema + contract only. (Recorded here because the integrator owns `docs/OPEN-ITEMS.md`; fold into an OPEN-ITEMS entry at integration.)
+
+### Source canonical MyMRC names + aliases (§1/§12)
+
+Five OR collection sources renamed **id-preserving** (UPDATE, not re-insert — every `inbound_loads.source_id` FK survives) to Rick's canonical MyMRC portal spellings (incl. MRC's verbatim typo **"Glenwood Central Recieving Station"**). The retired verbatim seed names + month-to-month customer-name variants (§12) become `source_aliases` rows (the existing ADR-0037 B7 alias table — reused, not a new table), so historical workbook/MyMRC data still resolves. New OR rows: The Dalles (new MRC site), Rifes, Roseburg (non-program, `active_billing=false`, `is_active=false`, parked until MRC signature — activate = flip both true). The 4 OR sites Rick's §1 did not name (Short Mountain Landfill, Thompsons Sanitary Service, Stayton Community Center, Deschutes) are left at their current names pending his confirmation.
+
+**Intake wiring (§12 parser requirement, §15 item 7).** All alias matching is case- and whitespace-insensitive (trim/lowercase/collapse-ws); canonical `sources.name` always beats an alias on a normalized-key collision; an unmatched name is NEVER guessed:
+
+- **Resolver contract** (`src/lib/audit/types.ts` `SiteAliasResolver`, DB impl `src/lib/audit/workbook/site-alias.ts` `sourceAliasResolver`) now also returns the resolved **`sourceId`** so intake can _link_ the record, not just classify it.
+- **Workbook ingest (ADR-0039)** — already wired via `api/admin/audit/workbook/route.ts` → `ingestWorkbook` → `resolveInboundSites`: an unknown name opens ONE deduped `unresolved_site` finding per distinct name (the operator-review queue); parsing continues, the row is staged, nothing is dropped.
+- **Workbook promotion (ADR-0048)** — `decodeStagingRows` now resolves **every** inbound `site_name_raw` (previously an explicit program split bypassed resolution entirely, so promoted loads carried no source link and drifted names were silently accepted). The resolved `sources.id` is written to the promoted **`inbound_loads.source_id`** (restores the MyMRC reconciliation join for June/July promoted months). Any unresolved name — including one resolving to another site's source (hard rule #2) — refuses the whole promotion with `PromotionUnresolvedSourceError`, listing every offender once; the operator seeds the missing alias and re-runs.
+- **MyMRC scraper upsert (ADR-0038)** — `src/lib/mymrc/upsert.ts` keeps the exact-verbatim `sources.name` match primary, then falls back to a site-scoped normalized lookup over canonical names + `source_aliases` (built only when a name misses; the module cannot import the audit resolver — `tsconfig.mymrc.json` compiles it standalone — so normalization is duplicated in lock-step). Alias-resolved names are surfaced in `UpsertSummary.alias_resolved_source_names` + a once-per-run info log; unmatched names keep the existing `source_id=null` + `source_name_at_sync` + warn behavior.
+- **Live workbook-sync bridge (ADR-0049)** is untouched: it upserts site-level `processed_units_daily` rows and carries no customer names.
+
+Alias coverage is locked by `src/lib/audit/workbook/addendum-b-alias-resolution.test.ts`, which resolves the seeded `SOURCE_ALIASES` pairs (from `prisma/seed/addendum-b-data.mjs`) end-to-end through the DB-backed resolver. Rifes and Roseburg have no §12-observed variants; their canonical names resolve directly (no alias rows needed).
+
+### Kelsey AP-approver auto-remove date (§7)
+
+`ap_approvers` Kelsey row `active_until` moved 2026-08-01 → **2026-08-08** (vacation → transfer extended one week). Migration UPDATE guarded by the old value (idempotent; clean no-op on a fresh CI DB); seed.mjs mirrors it.

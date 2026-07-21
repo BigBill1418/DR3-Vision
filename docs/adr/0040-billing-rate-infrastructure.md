@@ -320,3 +320,45 @@ selection, The Dalles 2026-06-01 effective boundary, latest-window-wins, tie, no
   `source_service_rates` on the assumption the MRC unit rate is per-source; if it is instead
   MRC-contract-wide it may belong in `state_program_rules` — confirm with Rick at §7 seed
   time. The resolver and enum accommodate either without a schema change to the other kinds.
+
+---
+
+## Amendment (2026-07-21) — Rick/Mary/Kelsey rollup (rollup §14)
+
+Confirmations from the 2026-07-20 rollup that touch the rate/GP-config surface.
+Most items were ALREADY seeded correctly at ship time; this records the
+confirmation and the one delta.
+
+### Rates — all confirmed, none re-seeded
+
+- **OR processing rate = $17.00/unit** (1700¢). Already live in
+  `state_program_rules` (`processing_rate`, eugene, `effective_from` 2026, no
+  `effective_to`) — the invoice generator resolves it for `or_processing_eom` via
+  the existing `resolveRateCents` path. **Not re-seeded** (rollup DO-NOT: never
+  duplicate a live rate). CA stays $16.50/unit (2026), $17.00 (2027).
+- **Collection sites $2.25/mattress**, **unpaid drop-off reimbursement (CA)
+  $3.00/unit** — unchanged, already seeded.
+- **Container rentals** June actuals (CA $10,800/44 · OR $900/6, incl. The Dalles)
+  are DATA in the rentals tables, not rate constants — no ADR-0040 change.
+
+### `MILES 0` aggregation rule (rollup §9)
+
+The GP Transportation invoice collapses **regular freight + event transportation
++ container rental into ONE `MILES 0` line**; only fuel keeps its own `FUEL`
+line. This is realized as a **presentation-time rollup** in the ADR-0041 v2 export
+(`src/lib/invoices/item-codes.ts` `MILES_0_MEMBER_CODES`,
+`export-json.ts` `transportationGpLines`) — the composer still stores the three
+`B16.*` leaves separately (full provenance). No rate-infrastructure change; noted
+here because §14 filed the aggregation rule under ADR-0040.
+
+### MRC billing address / Sales ID / Customer ID (GP config)
+
+- **Bill-To (already seeded):** Mattress Recycling Council, Attn: Ryan Trainer,
+  501 Wythe Street, Alexandria VA 22314 · **Sales ID `34`** (static) · Net 30.
+  Verified present in `gp_billing_config` (singleton); no change needed.
+- **DELTA — OR Customer ID (§8 Q1 / §13):** Eugene Customer ID is **`MRCL001`
+  (same as CA)**, no longer null-pending-Mary. `gp_site_billing_config` seed
+  updated (eugene `customer_id` null → `MRCL001`), and the `update` branch now
+  re-applies the confirmed identifier columns so an idempotent re-seed corrects a
+  row previously seeded with the null. (PO-suffix spacing correction is recorded
+  in the ADR-0041 amendment.)
