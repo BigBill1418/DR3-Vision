@@ -401,6 +401,60 @@ describe('POST /api/admin/users — create operator', () => {
     expect(afterJson).not.toContain('password_hash');
   });
 
+  it('creates an operator when optional fields are explicit null (the exact payload UserCreateForm sends)', async () => {
+    // Regression: the create form sends `email: null` and `processor_role: null`
+    // for a non-Eugene operator (and `pin: null` for managers). `.optional()`
+    // rejected explicit null → "Invalid request payload"; `.nullish()` accepts it.
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Operator Null-Fields',
+          role: 'operator',
+          email: null,
+          primary_site_id: 'site-eugene',
+          processor_role: null,
+          all_sites: false,
+          can_manage_rates: false,
+          can_view_billing_verify: false,
+          pin: '4417',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.role).toBe('operator');
+    expect(body.user.has_pin).toBe(true);
+    expect(body.user.email).toBeNull();
+  });
+
+  it('creates a manager when pin + processor_role are explicit null (as the form sends)', async () => {
+    const { POST } = await import('./route');
+    const res = await POST(
+      makeReq('http://x/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Manager Null-Fields',
+          role: 'manager',
+          email: 'mgr.nullfields@svdp.us',
+          primary_site_id: 'site-eugene',
+          processor_role: null,
+          all_sites: false,
+          can_manage_rates: false,
+          can_view_billing_verify: false,
+          pin: null,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { user: UserResponseShape };
+    expect(body.user.role).toBe('manager');
+    expect(body.user.has_pin).toBe(false);
+  });
+
   it('rejects an operator created with no PIN', async () => {
     const { POST } = await import('./route');
     const res = await POST(

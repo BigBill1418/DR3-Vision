@@ -5,6 +5,20 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-21 (admin user creation rejected valid operator/manager payloads — ADR-0017)
+
+`POST /api/admin/users` returned **"Invalid request payload"** (422) when creating an
+operator (and managers were affected too). Root cause: the `optionalEmail` /
+`optionalProcessorRole` / `optionalPin` Zod schemas used `.optional()`, which accepts
+only `undefined` — but `UserCreateForm` sends an explicit **`null`** for any field that
+doesn't apply to the chosen role (an operator's email + processor_role, a manager's pin).
+The schema's own comment already documented that null must be allowed; the implementation
+didn't. Fixed by switching the three optional fields to `.nullish()` (nullable + optional).
+The existing operator test used `email: ''` (empty string, which the old schema *did*
+accept), so it never caught the real form's `null` — added regression tests using the
+exact null-field payloads the form sends (operator and manager). Reproduced against prod
+(422 with `fieldErrors: email, processor_role`) before the fix; no schema/DB change.
+
 ### Fixed — 2026-07-21 (ADR-0048 D3 — Terex importer date plausibility + silent-drop surfacing)
 
 Confirmed prod bug: the Terex maintenance-log importer stored a garbage
