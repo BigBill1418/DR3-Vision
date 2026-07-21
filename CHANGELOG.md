@@ -5,6 +5,75 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added / Changed — 2026-07-21 (MRC billing Addendum-B rollup — Rick/Mary/Kelsey answers)
+
+Integrates the four Addendum-B workstreams from the 2026-07-21 rollup handoff
+(`docs/handoffs/2026-07-21-mrc-billing-addendum-rick-mary-kelsey-rollup-2026.md`).
+Pilot mode is untouched; **no live customer rates seeded** and **no mode flipped**.
+No monetary values, rates, or IDs were invented — anything unstated is seeded
+null/unset and tracked in `docs/OPEN-ITEMS.md`.
+
+**Schema foundation (ADR-0037 amendment + ADR-0056; migrations
+`20260730_adr0037b_addendum_b_schema` + `20260730b_addendum_b_seeds`):**
+
+- **Loads/inventory ledger surface** — new `unit_status_movements` (aggregate,
+  status-bucketed movement ledger; `UnitStatus` enum `on_floor | saved |
+  processed | sold | landfilled`, reusing existing `LandfilledReason` where "wet"
+  ⇒ `water_logged`), `provenance_agencies` + `inbound_loads.provenance_agency_id`,
+  and the 5th `SourceSiteType.svdp_internal_store`. Bare-scalar-FK convention (no
+  Prisma relations; constraints in migration SQL), matching existing tables.
+- **Event-billing schema** — `event_legs` (+ `EventLegType` enum), `event_vehicles`,
+  `collection_events.{driver_onsite_hours, per_diem_days, overnight}`, and
+  `tonu_billing`. Added `StateProgramRuleKind.irs_mileage_rate` (no rate rows
+  seeded — figures not in the handoff).
+- **Seeds** — 5 OR sources renamed id-preservingly to verbatim MyMRC names (incl.
+  the verbatim typo "Glenwood Central Recieving Station"); 14 new eugene rows
+  (11 `svdp_internal_store` billing-off + The Dalles/Rifes/Roseburg parked);
+  22 `source_aliases` rows (retired names + §12 month-to-month variants →
+  canonical); 3 provenance agencies (incl. Sponsors, reclassified from a source);
+  Kelsey AP approver `active_until` 8/1 → **8/8**.
+
+**Event billing + TONU (ADR-0056 — pure compute layer, `src/lib/event-billing/`):**
+
+- `computeEventBilling` prices the six §5.3 components (per-leg tier transport,
+  labor wages, driver wages, per-diem, IRS mileage) and `assessTonu` the TONU
+  verdict. Fail-loud on billable-but-unseeded rate (`EventRateUnavailableError`
+  409) — never silent $0; a zero-activity event totals $0 with all rates null.
+  Driver-vs-labor no-double-count is structural. Not yet wired into the invoice
+  generator (EVENTO/MILES-0 membership deferred — see OPEN-ITEMS C-18).
+
+**Invoice generation + commodity attachment (ADR-0040/0041 amendments):**
+
+- v2 GP presentation rewritten to the real §10 PDFs: 7 LOCKED GP item codes
+  (`LOCATION`/`UNITSMO`/`REIMBO`/`EVENTO`/`MILES 0`/`FUEL`/`OREGON MATTRESS`,
+  spaces significant), MILES-0 transportation aggregation + FUEL, and
+  REIMBO/EVENTO subtotal lines. Reconciles all four real June invoices.
+- Kind-aware PO builder `buildPoNumberForKind` (`M/DD/YY DR3 W` / `DR3 OREGON` /
+  `TRANS` / `TRANS OR`, `M/YY OR COLLECTIONS`) and `seedGpSiteBillingConfig`
+  corrected to the confirmed identifiers (Woodland `DR3W`→`DR3 W`; Eugene
+  null→`MRCL001`/`DR3 OREGON`), `update` branch now re-applies them.
+- Invoice-combination guard (`assertValidInvoiceCombination`) rejects illegal
+  mid-month/discount pairings; EOM-processing commodity breakdown rendered as a
+  computed attachment (`src/lib/commodity/`, pdf-lib, Letter-landscape). Metal→
+  Steel/Xtraction-Landfill/Covanta-WTE split awaits Rick (OPEN-ITEMS S-8).
+
+**Floor-inventory dashboard tile (ADR-0037 §3):**
+
+- New per-site floor tile (`src/lib/dashboard/floor-inventory-tile.ts`,
+  `src/app/dashboard/[site]/floor-inventory-tile.tsx`) consuming the single
+  ADR-0037 `onHand()` pool computation + trailing-7-day closes; program/
+  non-program/total on-floor + optional days-remaining projection; refreshes via
+  the existing DockPoller. Degrade-never-throw.
+
+**Intake alias normalization (ADR-0037/0038 amendments):**
+
+- `sourceAliasResolver` extended to return `sourceId`, so intake LINKS records.
+  Workbook promotion now resolves every inbound `site_name_raw` (writing
+  `inbound_loads.source_id`) and REFUSES promotion on any unresolved name
+  (`PromotionUnresolvedSourceError` 422, deduped list) — closing a silent-drift
+  gap where explicit program splits bypassed resolution. MyMRC upsert gains a
+  normalized alias fallback (verbatim `source_name_at_sync` retained on miss).
+
 ### Changed — 2026-07-21 (ADR-0037 D7 activation gate → admin-flippable rollout surface)
 
 The loads/inventory + floor-operator activation gate becomes admin-controllable

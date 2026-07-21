@@ -8,9 +8,11 @@ marks it **DONE (date)** and moves it to the bottom section. Sibling docs:
 `docs/QUESTIONS.md` (design questions), `docs/handoffs/` (session context),
 `CHANGELOG.md` (what shipped).
 
-**Deadline that anchors everything: Kelsey's availability ends 8/1** — Stages
-1–3 of the go-live plan (`docs/plans/2026-07-06-staged-golive-activation-and-comms.md`)
-are the only window her cross-checks are possible.
+**Deadline that anchors everything: Kelsey's availability ends 8/8** —
+extended one week from 8/1 by Bill's renegotiated transfer (2026-07-19, rollup
+§ preamble). Stages 1–3 of the go-live plan
+(`docs/plans/2026-07-06-staged-golive-activation-and-comms.md`) are the only
+window her cross-checks are possible.
 
 ---
 
@@ -34,10 +36,10 @@ are the only window her cross-checks are possible.
 | S-1 | ADR-0050 dispatch-integration draft (3 email types + parser signals)                            | Morena's 2–3 example emails per type | She committed to forwarding them (rollup §2).                                |
 | S-2 | "Verbal capture" surface for phone/text swap requests (ADR number assigned at draft time)       | Product go-ahead post-cutover        | Parked deliberately (rollup §2.2).                                           |
 | S-3 | Eugene source names/addresses (Thompsons Sanitary Service, Stayton Community Center, Deschutes) | Rick                                 | Seeded 2026-07-10 with Address TBD; names to be confirmed against his forms. |
-| S-4 | **§7 OR source seeds — PARKED pending Rick (Bill's call 2026-07-18).** The MRC-billing-rollup §7.2 seed table is NOT reconcilable with the live system (verified in `prisma/seed/sources.csv` + prod DB during the 2026-07-18 ADR ship): (a) its names (`Salem SVDP`, `Glenwood Transfer Station`, `Rifes`, `Roseburg`, `The Dalles SVDP`, `Sponsors`) are NOT the verbatim MyMRC names the live sources use (`Salem-Keizer Recycling Center`, `Glenwood Transfer & Recycling Station`, …) — `schema.prisma`/`seed/README.md` HARD-require verbatim names or the MyMRC reconciliation join breaks; (b) the "Glenwood TC 143/144 split rows to merge/delete" do NOT exist in the seed or prod — one Glenwood source; (c) `Sponsors` is a committed `consumer_dropoffs.kind`, not a source; (d) per_mattress ($2.25) + OR mrc_unit ($17) already live in `state_program_rules` where the generator reads them — `source_service_rates` (ADR-0040) has NO generator consumer yet, so seeding it is inert+duplicative. | Rick (canonical name→entity mapping) + Bill (rate-model + Sponsors decision) | UNBLOCK = Rick's verbatim names + old→new mapping; then decide: keep OR rates in `state_program_rules` (current, wired) vs migrate to per-source `source_service_rates` (needs generator rewire). §10.5 also gates live-rate seeding on Bill's go-ahead. Safe interim subset available: classify the existing 8 OR sources by `site_type` only (no rename/rate) once the SVDP↔municipal identity is confirmed. |
+| S-4 | **§7 OR source seeds — CANONICAL NAMES LANDED 2026-07-21 (rollup §1/§12, ADR-0037b); rate-model wiring (C-16) still deferred.** Rick's canonical MyMRC name→entity mapping arrived in the 2026-07-21 rollup §1/§12, so the schema agent applied it: 5 OR sources renamed id-preservingly to the verbatim MyMRC names (incl. the verbatim typo "Glenwood Central Recieving Station"), 14 new eugene rows seeded (11 `svdp_internal_store` billing-off, + The Dalles/Rifes/Roseburg parked), 22 `source_aliases` rows seeded so the old/variant names resolve at intake (parser + promotion + MyMRC upsert all wired). `Sponsors` clarified as a provenance agency (`provenance_agencies`), not a source. The original §7.2 objections (a)-(c) are thereby resolved. **STILL OPEN — objection (d):** OR rates remain in `state_program_rules` (where the generator reads them); `source_service_rates` (ADR-0040) still has no generator consumer — the migrate-vs-keep decision is **C-16** and gated on Bill's rate-model call. 4 unnamed-by-Rick OR sites (Short Mountain, Thompsons, Stayton, Deschutes — see S-3) left as-is. | Bill (rate-model decision — see C-16) | Names/aliases/classification DONE. Remaining = the C-16 rate-model fork (keep `state_program_rules` current-wired vs migrate to per-source `source_service_rates` + generator rewire); §10.5 still gates live-rate seeding on Bill. |
 | S-5 | **MRC invoice: incentives (B7) + event-misc (B8) on the processing invoice?** ADR-0041 still composes B7/B8 as ancillary lines → GP `Misc`. §A.7 single-line math (`units×rate + trade_discount`) is EXACT for a clean Woodland processing invoice (no incentives/events → Misc $0). If they should be OFF the processing invoice, it's a one-line change that CHANGES BILLED MONEY. | Mary/Rick | Needs explicit sign-off; not done unilaterally (ADR-0041 amendment §residual-1). |
-| S-6 | **GP identifiers still unknown** — OR MRC Customer ID + Eugene PO suffix (`DR3E`/`DR3O`?). Seeded null (never invented); `buildPoNumber` returns null until set. | Mary | Woodland (MRCL001 / DR3W), Sales ID 34, Net 30, 501 Wythe St ARE seeded (ADR-0041). |
-| S-7 | **Recycling rate: Xtraction steel 0.81 vs 0.8098?** Kelsey's verbal example (1,054 trash + 4,487 steel on 5,541 lb) implies 80.98%, not the 0.81 she stated. Seeded the confirmed **0.81** (derives 4,488/1,053). Other wood-recycler rates unknown. | Kelsey/Morena | ADR-0055; system uses 0.81 correctly — confirm the exact rate + the remaining wood vendors. |
+| S-7 | **Recycling rate: Xtraction steel 0.81 vs 0.8098?** Kelsey's verbal example (1,054 trash + 4,487 steel on 5,541 lb) implies 80.98%, not the 0.81 she stated. Seeded the confirmed **0.81** (derives 4,488/1,053). Other wood-recycler rates unknown. **UPDATE 2026-07-21 (rollup §11):** Steel × Xtraction @ **81%** now CONFIRMED against real production data (matches Kelsey Q4) — the 0.81 seed is validated. Residual = the remaining wood-recycler rates. | Kelsey/Morena | 81% confirmed; ADR-0055 seed stands. Still confirm the remaining wood vendors. |
+| S-8 | **Covanta WTE % + Xtraction-Landfill classification pending Rick (rollup §11, soft blocker).** The EOM commodity attachment (ADR-0055) renders recovery-% + recycled-lbs today, but the metal→Steel/Xtraction-Landfill/Covanta-WTE taxonomy split is **taxonomy-driven** and awaits (1) Covanta's WTE recycling %, (2) whether MRC wants Xtraction Landfill as a separate reporting block vs Rick's rendering choice. Rick email sent 2026-07-20, awaiting reply. NOT launch-critical for pilot — the split slots in as a data change when the answers land (invoice-gen agent built the render seam; `OutboundCommodity` currently carries the daily-log-9 taxonomy where `metal` is one bucket). | Rick | Soft blocker; pilot launches without it. When answered: extend the commodity taxonomy + the attachment block, no code-path change. |
 
 ## 3 — Code follow-ups (accepted residuals, not bugs)
 
@@ -59,14 +61,26 @@ are the only window her cross-checks are possible.
 | C-14 | `mymrc-cron` timer fix shipped but service stays **profile-disabled** (creds unprovisioned)                                                                                                                                                                                                    | cron audit F1                           | Re-enable steps in `docs/` + compose comment; safe to re-enable now.                                                                            |
 | C-15 | **`ap_attachments.is_inline` capture** — replace the 50 KB image size-heuristic with Graph's exact `isInline`/`contentId` signal (`normalizeFile` → `persistFile` → new column)                                                                                                                | ADR-0046 note 2026-07-15 (PR #101)      | The heuristic ships fine; this is the durable form.                                                                                             |
 | C-16 | **ADR-0040 rate resolvers built but NOT wired into the generator.** `resolveSiteTypeBilling` / `resolveSourceServiceRateCents` / `resolveWoodlandFreightCents` (`src/lib/billing-rates/`, PR #132) have no caller in `src/lib/invoices/generation-inputs.ts` — the live generator still prices OR via `resolveFreightCents` (`account_haul_rates`+`transport_rate_tiers`) and reads per_mattress/processing rates from `state_program_rules`. The new resolvers + `source_service_rates` are forward-infra. | PR #132 / 2026-07-18 §7-seed audit | Deliberate for now (pilot mode = no live MRC send). Wiring is coupled to the S-4 rate-model decision — do BOTH together or the two paths drift. |
+| C-18 | **Event-billing + TONU compute layer built (ADR-0056) but NO rate rows seeded and NOT wired into the invoice generator.** `src/lib/event-billing/` prices the six §5.3 components (leg transport, labor wages, driver wages, per-diem, IRS mileage) + TONU, but the rate constants (`irs_mileage_rate` `StateProgramRuleKind`, plus the reused labor/driver/per-diem hourly/nightly kinds) have **NO seeded values** — the figures are not in the handoff, and the module fails-loud (`EventRateUnavailableError` 409) rather than guessing $0. Zero-activity events correctly total $0 with all rates null (the OR-June case). No `collection_events`→invoice generator wiring yet; the exact `EVENTO` vs `MILES 0` line membership is an invoice-agent call against the §10 reconciliation. | ADR-0056 / rollup §5.3 | Seed the rate constants when Rick/Mary supply the figures; then wire `computeEventBilling` into the invoice generator's EVENTO/MILES-0 path. Both gated on real numbers — never invent. |
+| C-19 | **Commodity-breakdown PDF has no download/delivery route.** `buildInvoiceCommodityBreakdownPdf` (`src/lib/commodity/fetch.ts`) is the ready entry point but no route serves the EOM attachment alongside the invoice (would touch shared routing/middleware — deferred out of the feature agents' scope). | ADR-0041 amendment / rollup §10 | Add a download route (or fold the attachment into the invoice-detail surface) when the EOM commodity attachment goes live. |
 
 ## 4 — §8.2 (unblocks the moment O-2 lands)
 
 1. ADR-0048 D4 promotion of June + July + Terex against real bytes (checksums in rollup §7.4).
 2. Full-file parser fuzzing; reconcile the resolver's inferred row-2 label rules (only `inb_trans_charges` is confirmed) + DAY-grid stride (cotton col-68 anchor is proven; blocks 1–8 inferred).
-3. Woodland June close-balance assertion (= 4,062).
+3. Woodland June close-balance assertion (= **3,977** — corrected from the buggy
+   4,062; the workbook grid double-counted the DAY23 non-program row, ADR-0037).
 
 ## Done
+
+- **S-6 — DONE 2026-07-21 (Mary answered, rollup §8/§13).** All GP identifiers
+  now confirmed: OR customer ID = **`MRCL001`** (same as CA — §8 Q1); Woodland PO
+  suffix **`DR3 W`** (with space); Eugene PO suffix **`DR3 OREGON`** (spelled out,
+  spaces — NOT `DR3E`/`DR3O`). Transportation/collection POs are kind-derived
+  (`M/DD/YY TRANS` / `M/DD/YY TRANS OR` / `M/YY OR COLLECTIONS`). Seeded in
+  `seedGpSiteBillingConfig` (the `update` branch now re-applies them, correcting
+  rows previously seeded `DR3W`/null); `buildPoNumberForKind` builds them per §6.
+  See ADR-0041 amendment + `src/lib/invoices/gp-identifiers.ts`.
 
 - **O-5 — DONE 2026-07-16 (Bill: skip, Option C).** No Eugene June backfill; Rick's 7/20 iPad go-live starts a clean forward-only ledger (Eugene lacks Woodland's billing complexity, so the shadow-billing-parity rationale doesn't apply).
 
@@ -108,7 +122,8 @@ are the only window her cross-checks are possible.
   sites** (audited under Bill's admin user; criteria note cites the ADR-0046
   validation record + PRs #98–#102). Mary (`mary.scott@svdp.us`) active in
   `ap_decision_recipients`; approver roster: Morena, Rick, Janette, Kelsey
-  (auto-expires 8/1). From now on: new-invoice alerts go to the real roster,
+  (auto-expires 8/8 — extended one week from 8/1 on 2026-07-19, seeded in
+  `AP_APPROVERS`). From now on: new-invoice alerts go to the real roster,
   decision mail to the forwarder + Mary CC — no [PILOT] banner. Rollback =
   flip both rows back to pilot on /admin/rollout, one audited action each.
 
