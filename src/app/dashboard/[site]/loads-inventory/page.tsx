@@ -37,14 +37,21 @@ export default async function LoadsInventoryPage({ params }: Props) {
     );
   }
 
-  // D7 activation gate — admin-only until the ops gates close.
-  if (result.ctx.role !== 'admin') {
+  // D7 activation gate (data-driven, ADR-0047) — admins always pass; operators/
+  // managers pass only when the per-site `loads_inventory` surface is flipped
+  // `live`. Default/pilot/unregistered ⇒ admin-only (unchanged historical behavior).
+  const loadsInventoryLive = await isUiSurfaceLive(
+    UI_SURFACE.LOADS_INVENTORY,
+    result.ctx.siteId,
+  );
+  if (result.ctx.role !== 'admin' && !loadsInventoryLive) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Not yet activated</h1>
         <p className="mt-2 max-w-md opacity-80">
-          The loads &amp; inventory surfaces (ADR-0037) are staged but not yet activated. Admin
-          access only until the P1 ops gates (restore drill + off-box backup key) close.
+          The loads &amp; inventory surfaces (ADR-0037) are staged but not yet activated for this
+          site. Admin access only until an admin flips the <code>loads_inventory</code> rollout
+          surface live.
         </p>
         <Link href={`/dashboard/${siteCode}`} className="mt-6 text-sm underline">
           Back to dashboard
@@ -54,7 +61,7 @@ export default async function LoadsInventoryPage({ params }: Props) {
   }
 
   // ADR-0047 UI gate — the events/OR-counts tabs ramp via `loads_events_or_tabs`
-  // (admins always see them; this page is otherwise admin-only via the D7 gate).
+  // (admins always see them; this page is otherwise gated by the D7 surface above).
   const eventsOrTabsLive = await isUiSurfaceLive(
     UI_SURFACE.LOADS_EVENTS_OR_TABS,
     result.ctx.siteId,

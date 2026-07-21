@@ -43,6 +43,12 @@ export const UI_SURFACE = {
   EQUIPMENT_TREND: 'equipment_trend',
   // handoff §1.8 — manager-facing Yard view, born pilot (admin-only until flipped).
   YARD_LIST: 'yard_list',
+  // ADR-0037 D7 (data-driven) — the master loads/inventory + floor-operator
+  // activation gate. Born `pilot` (admin-only, today's behavior); an admin flips
+  // it `live` per-site from /admin/rollout to activate the operator iPad flow.
+  // Consulted by `assertLoadsInventoryActivated` (record-guards) and the
+  // loads-inventory page gate. Default/unregistered ⇒ admin-only (fail-safe).
+  LOADS_INVENTORY: 'loads_inventory',
 } as const;
 
 export type NotifySurfaceCode = (typeof NOTIFY_SURFACE)[keyof typeof NOTIFY_SURFACE];

@@ -137,6 +137,23 @@ in ADR-0038, gates the FEEDS) · **one recorded restore drill (P1-3)** and
 **RESTIC_PASSWORD confirmed off-box (P1-4)** — both still open, owner Bill, tracked
 here as blocking ops actions for activation (not for merging schema).
 
+**Amendment (2026-07-21) — the D7 switch is now data-driven, not hardcoded.**
+The activation gate `assertLoadsInventoryActivated` no longer hardcodes
+admin-only. It reads the per-site **`loads_inventory` ADR-0047 rollout surface**:
+`pilot` (the seeded default) ⇒ admin-only (identical to the historical behavior);
+`live` ⇒ operators/managers activated for that site. Admins always pass (no DB
+read). Default/unset/unregistered/read-error ⇒ admin-only (fail-closed via
+`isUiSurfaceLive`), so a fresh deploy exposes nothing until an admin flips it.
+The gate is `async` and the single chokepoint `requireActivatedManager` awaits it
+with the site context (all 14 manager loads routes thread through that one call —
+no route signature changed); the loads-inventory dashboard page consults the same
+surface. This does **not** relax the ops preconditions above — the restore drill +
+off-box `RESTIC_PASSWORD` remain Bill's go/no-go for *approving* the flip; the
+change only moves the switch from a code deploy to an audited admin action at
+`/admin/rollout` (flip `loads_inventory` → `live` per site, with a criteria note).
+Registered by migration `20260729_adr0037_loads_inventory_rollout_surface`
+(additive) + `prisma/seed.mjs`.
+
 ### D8 — Retro-audit compatibility (design constraint from mission §2.2 #4)
 
 Every table above carries a business date + `source` provenance and no

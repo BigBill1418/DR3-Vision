@@ -5,6 +5,40 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-21 (ADR-0037 D7 activation gate → admin-flippable rollout surface)
+
+The loads/inventory + floor-operator activation gate becomes admin-controllable
+without a redeploy, reusing the ADR-0047 rollout-surface mechanism. The operator
+flips it from the same `/admin/rollout` surface they already use.
+
+- **New rollout surface** `loads_inventory` (UI, per-site) registered in the
+  ADR-0047 registry (`src/lib/notify/rollout.ts` `UI_SURFACE`), seeded **born
+  `pilot`** (admin-only — today's behavior). State→behavior: `pilot` = admin-only;
+  `live` = operators/managers activated for that site.
+- **`assertLoadsInventoryActivated` rewired** (`src/lib/loads/record-guards.ts`)
+  from hardcoded admin-only to reading the persisted surface via `isUiSurfaceLive`.
+  Admin ALWAYS passes (no DB read); operator/manager pass only when the surface is
+  `live`; otherwise throws `LoadsInventoryNotActivatedError` (403) exactly as
+  before. **Signature change:** now `async` and takes `(role, siteId, db?)`. The
+  sole caller — the chokepoint `requireActivatedManager` — awaits it with
+  `ctx.siteId`; **no manager route signature changed** (all 14 thread through that
+  one call). The loads-inventory dashboard page gate consults the same surface.
+- **Default-safe guarantee:** default/unset/unregistered/read-error ⇒ admin-only
+  (fail-closed) — a fresh deploy changes nothing until an admin flips it.
+- **Migration** `20260729_adr0037_loads_inventory_rollout_surface` — purely
+  additive (ADR-0035 clean-replay; sorts after `20260728_ap_not_dr3_location`),
+  idempotent (`ON CONFLICT DO NOTHING`), inserts the two per-site rows born `pilot`
+  so the surface appears on `/admin/rollout` without a manual re-seed. `seed.mjs`
+  also lists it for first-deploy/dev parity.
+- **How to activate:** at `/admin/rollout`, flip `loads_inventory` (per site) from
+  `pilot` → `live` with a criteria note (admin-only + audited); revert is the
+  inverse flip. No code deploy.
+- **Docs:** ADR-0037 D7 amended; ADR-0047 records `loads_inventory` as a surface.
+- **Tests:** `src/lib/loads/record-guards.test.ts` (admin-always-passes/no-DB-read,
+  operator+manager blocked at pilot/unregistered/read-error [default-safe],
+  allowed at `live`, 403 shape, registry sync) + a `loads_inventory` flip case in
+  `src/lib/notify/__tests__/flip.test.ts` (pilot→live, audited).
+
 ### Added — 2026-07-20 (ADR-0046 amendment: third AP location disposition "NOT DR3 — See Reason")
 
 Accounting-critical. The AP approval portal's location dropdown (Woodland / Eugene)
