@@ -238,3 +238,55 @@ pct=100` (strongest policy) — receivers/EOP reject unaligned mail forging
     revoke a live super-admin session (see Consequences).
   - tsc clean; full vitest green (205 files / 2039 passed, +19 new); lint clean;
     prod build green.
+
+## Addendum 2026-07-21 — cron secret split (P2 containment, 2026-07-21 audit)
+
+**Finding (2026-07-21 full-stack audit, security-surface P2):** `auth.env`
+(NEXTAUTH_SECRET + the Entra client secret) was `env_file`-mounted into every
+cron container, although the cron daemons are thin POSTers that consume only
+`INTERNAL_CRON_TOKEN` (+ `DATABASE_URL` from `db.env` where noted) — verified
+by grepping every `scripts/*-cron.mjs` / daemon entrypoint for `process.env`
+reads. Several of those containers run Chromium on semi-external content
+(MyMRC pages, PDF renders), so compromising ANY one of them yielded offline
+admin-JWT minting against a system that invoices real money.
+
+**Containment shipped (docker-compose.yml only — no secret value changed):**
+
+- New host secret file `~/.dr3-vision-secrets/cron.env` (mode 600) holding
+  ONLY `INTERNAL_CRON_TOKEN`.
+- All 10 cron services that previously mounted `auth.env` now mount `cron.env`
+  instead: `bonus-period-close`, `bonus-escalation-check`,
+  `bonus-daily-report`, `survey-reminder`, `audit-sweep`, `fuel-price-fetch`,
+  `ap-poll`, `ap-approver-expiry`, `board-pack-digest`, `workbook-sync`.
+  (`bonus-eod-check`, `mymrc-scrape`, `migrate` never mounted it — unchanged.)
+- `cron.env` is REQUIRED (plain `env_file` entry, not `required: false`): the
+  app fail-closes `/api/internal/**` in prod (ADR-0054), so a missing file
+  must fail `docker compose config` loudly at deploy time — before any
+  container is recreated — rather than 404 every cron fire at runtime (the
+  exact 2026-07-16 blackout shape).
+- The `app` service additionally mounts `cron.env` (after `auth.env`; later
+  env_file wins), so the app keeps reading the token wherever it lives and the
+  `INTERNAL_CRON_TOKEN=` line can be removed from `auth.env` afterwards.
+- Same least-privilege pass: the `msgraph-mail.env` / `msgraph-files.env`
+  "parity" mounts on `ap-poll` and `workbook-sync` were removed — the Graph
+  transports run inside the `app` process and neither daemon reads any
+  `MSGRAPH_*` var.
+- `docker-compose.dev.yml` mounts no auth/secrets env files — no change.
+
+**Operator steps (Bill):**
+
+1. **BEFORE this change deploys** (safe to do immediately; the extra file is
+   inert under the current compose), on CHAD-HQ:
+   `umask 077 && grep '^INTERNAL_CRON_TOKEN=' ~/.dr3-vision-secrets/auth.env > ~/.dr3-vision-secrets/cron.env`
+   If the file is missing at deploy time the deploy fails at compose-config
+   (old stack keeps running) — that is by design.
+2. **After the deploy is verified green:** delete the `INTERNAL_CRON_TOKEN=`
+   line from `auth.env` (the app now gets it from `cron.env`), so the token
+   has a single source of truth.
+3. **PENDING ROTATION (required follow-up, off-shift):** `NEXTAUTH_SECRET`
+   (and ideally the Entra client secret) were distributed to the cron
+   containers for months and must be treated as potentially exposed.
+   Deliberately NOT rotated in this change — rotation invalidates live
+   sessions, so it is an operator action for an off-shift window (the D2
+   kill-switch machinery makes forced re-login routine). This addendum stays
+   open until the rotation is logged here.

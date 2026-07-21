@@ -26,6 +26,7 @@
 // and never launch real Chromium; pdf-lib is pure-JS and runs directly in tests.
 
 import { createHash } from 'node:crypto';
+import { withChromium } from '@/lib/chromium-semaphore';
 import { sanitizeEmailHtml } from './sanitize';
 import { formatPacificDateTime } from '@/lib/time';
 
@@ -227,32 +228,36 @@ export async function stampApproval(
  * than navigating to a URL). Always closes the browser, even on failure.
  */
 export async function defaultPlaywrightRenderer(html: string): Promise<Buffer> {
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    // Blind-SSRF defense (audit 2026-07-16): abort every sub-resource request that
-    // is not a data:/about: scheme, so a remote <img>/asset that slipped past the
-    // HTML rewrite can never be fetched server-side. Belt-and-suspenders with
-    // neutralizeRemoteImageSrcs; the stamp shell itself references no external asset.
-    await page.route('**/*', async (route) => {
-      const url = route.request().url();
-      if (url.startsWith('data:') || url.startsWith('about:')) await route.continue();
-      else await route.abort();
-    });
-    // waitUntil:'load' (not 'networkidle') + a bounded timeout so a single hanging
-    // URL cannot stall the render for the full budget; with remote fetches blocked
-    // the load event fires immediately.
-    await page.setContent(html, { waitUntil: 'load', timeout: 15_000 });
-    const pdf = await page.pdf({
-      format: 'Letter',
-      printBackground: true,
-      margin: { top: '0.4in', bottom: '0.4in', left: '0.4in', right: '0.4in' },
-    });
-    return Buffer.from(pdf);
-  } finally {
-    await browser.close();
-  }
+  // Serialize against every other Chromium render in this process so overlapping
+  // PDF jobs can't OOM the serving container (audit 2026-07-16 RES).
+  return withChromium(async () => {
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      // Blind-SSRF defense (audit 2026-07-16): abort every sub-resource request that
+      // is not a data:/about: scheme, so a remote <img>/asset that slipped past the
+      // HTML rewrite can never be fetched server-side. Belt-and-suspenders with
+      // neutralizeRemoteImageSrcs; the stamp shell itself references no external asset.
+      await page.route('**/*', async (route) => {
+        const url = route.request().url();
+        if (url.startsWith('data:') || url.startsWith('about:')) await route.continue();
+        else await route.abort();
+      });
+      // waitUntil:'load' (not 'networkidle') + a bounded timeout so a single hanging
+      // URL cannot stall the render for the full budget; with remote fetches blocked
+      // the load event fires immediately.
+      await page.setContent(html, { waitUntil: 'load', timeout: 15_000 });
+      const pdf = await page.pdf({
+        format: 'Letter',
+        printBackground: true,
+        margin: { top: '0.4in', bottom: '0.4in', left: '0.4in', right: '0.4in' },
+      });
+      return Buffer.from(pdf);
+    } finally {
+      await browser.close();
+    }
+  });
 }
 
 /**

@@ -69,6 +69,8 @@ export interface EscalationPeriodRow {
   site_id: string;
   period_number: number;
   period_year: number;
+  /** @db.Date-shaped period-end key — used by t4 to tell a stranded (older) period from today's deadline. */
+  period_end: Date;
   state: string;
   facility_signed_by_user_id: string | null;
   ops_signed_by_user_id: string | null;
@@ -103,6 +105,8 @@ export interface RunEscalationResult {
   autoSigned: number;
   /** Count of periods that fired the t4 deadline-missed alert. */
   deadlineMissed: number;
+  /** Count of periods that fired the t4 STRANDED alert (missed their window on an earlier day). */
+  stranded: number;
   /** Count of sites where the configured auto-override actor was unavailable. */
   actorUnavailable: number;
 }
@@ -130,6 +134,16 @@ export function yesterdayKey(now: Date): Date {
   );
 }
 
+/** `YYYY-MM-DD` of a @db.Date-shaped key (UTC-midnight; no DST seam). */
+function isoDate(day: Date): string {
+  return day.toISOString().slice(0, 10);
+}
+
+/** Whole @db.Date days between two UTC-midnight keys (>= 0). */
+function daysBetween(earlier: Date, later: Date): number {
+  return Math.round((later.getTime() - earlier.getTime()) / 86_400_000);
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Entry point
 // ────────────────────────────────────────────────────────────────────
@@ -144,6 +158,7 @@ export async function runEscalationTier(opts: RunEscalationOpts): Promise<RunEsc
     ntfyPublished: 0,
     autoSigned: 0,
     deadlineMissed: 0,
+    stranded: 0,
     actorUnavailable: 0,
   };
 
@@ -378,24 +393,76 @@ async function runDeadlineMissed(
   periodEnd: Date,
   result: RunEscalationResult,
 ): Promise<void> {
-  // A yesterday's-period still in the live lifecycle (not yet `paid`) at 09:00 PT
-  // — the PDF did not ship (M365/R2 outage after auto-override, or never signed).
-  // Bill manually intervenes. Archival/terminal states are excluded (see
-  // T4_LIVE_DEADLINE_STATES) so historical imports never false-page.
-  const stuck = await db.bonusPayPeriod.findMany({
-    where: { period_end: periodEnd, state: { in: [...T4_LIVE_DEADLINE_STATES] } },
+  // Periods still in the live lifecycle (not yet `paid`) whose payroll deadline
+  // has arrived or PASSED. Two cases, distinguished by `period_end`:
+  //
+  //   period_end == yesterday  → TODAY's 09:00 PT deadline missed: the PDF did
+  //                              not ship (M365/R2 outage after auto-override, or
+  //                              never signed). Bill intervenes for today's run.
+  //   period_end <  yesterday  → STRANDED: the period missed its ENTIRE escalation
+  //                              window on an earlier day (the daemon or app was
+  //                              down that morning, so t1–t4 never processed it)
+  //                              and it is still not `paid`.
+  //
+  // BUGFIX (audit P1-4, 2026-07-21): this query used `period_end == yesterday`
+  // ONLY, so a period whose window was missed was never re-examined and stranded
+  // FOREVER unpaged. We now look back with `lte` so a stranded period is
+  // re-detected and PAGES every 09:00 PT run until an operator resolves it.
+  // We deliberately do NOT auto-sign a stranded period late: ADR-0019.1's
+  // auto-override is bound to the tight Tue 08:30/09:00 PT window (t3 keeps its
+  // `period_end == yesterday` scoping), and signing days after the payroll
+  // deadline is out of policy — the correct action is an operator intervention,
+  // which this urgent page requests.
+  //
+  // Archival/terminal states are excluded (see T4_LIVE_DEADLINE_STATES) so
+  // historical imports / skipped / amended periods never false-page, no matter
+  // how far back the `lte` reaches.
+  const live = await db.bonusPayPeriod.findMany({
+    where: { period_end: { lte: periodEnd }, state: { in: [...T4_LIVE_DEADLINE_STATES] } },
     select: PERIOD_SELECT,
   });
-  result.periodsExamined = stuck.length;
+  result.periodsExamined = live.length;
 
-  for (const period of stuck) {
+  const yesterdayMs = periodEnd.getTime();
+  for (const period of live) {
+    const periodLabel = `Period ${period.period_number} (${period.period_year})`;
+
+    if (period.period_end.getTime() < yesterdayMs) {
+      const daysLate = daysBetween(period.period_end, periodEnd);
+      const res = await publishNtfy({
+        topic: 'dr3-vision-system',
+        title: `URGENT: bonus period STRANDED — ${period.site.name} Period ${period.period_number}`,
+        body:
+          `${period.site.name} ${periodLabel} is still in state '${period.state}' and MISSED its ` +
+          `payroll window ${daysLate} day${daysLate === 1 ? '' : 's'} ago (period ended ` +
+          `${isoDate(period.period_end)}). It was never paid and the escalation window is long ` +
+          `past — the system does NOT auto-sign a period this late. Resolve it manually in /bonus.`,
+        priority: 'urgent',
+        tags: ['rotating_light', 'bonus', 'stranded'],
+        // Per-period fingerprint; distinct from the deadline-missed one so a
+        // period that paged "deadline missed" on its own day still re-pages as
+        // "stranded" on later days. A 6h cooldown < the 24h between t4 runs, so
+        // it re-fires daily until resolved (never silently strands again).
+        fingerprint: `bonus-period-stranded:${period.site.code}:${period.id}`,
+        cooldownMs: 6 * 60 * 60 * 1000,
+      });
+      result.ntfyPublished += 1;
+      result.stranded += 1;
+      if (res.outcome === 'dropped') {
+        log.warn(
+          { periodId: period.id, periodEnd: isoDate(period.period_end) },
+          '[escalation] stranded ntfy dropped (primary+fallback failed)',
+        );
+      }
+      continue;
+    }
+
     const res = await publishNtfy({
       topic: 'dr3-vision-system',
       title: `URGENT: payroll deadline MISSED — ${period.site.name} Period ${period.period_number}`,
       body:
-        `${period.site.name} Period ${period.period_number} (${period.period_year}) is in ` +
-        `state '${period.state}' at the 09:00 AM PT payroll deadline — the signed PDF was ` +
-        `NOT delivered to payroll. Intervene manually.`,
+        `${period.site.name} ${periodLabel} is in state '${period.state}' at the 09:00 AM PT ` +
+        `payroll deadline — the signed PDF was NOT delivered to payroll. Intervene manually.`,
       priority: 'urgent',
       tags: ['rotating_light', 'bonus', 'deadline'],
       // Per-period fingerprint (spec): bonus-payroll-deadline-missed:<site>:<id>.
@@ -423,6 +490,7 @@ const PERIOD_SELECT = {
   site_id: true,
   period_number: true,
   period_year: true,
+  period_end: true,
   state: true,
   facility_signed_by_user_id: true,
   ops_signed_by_user_id: true,

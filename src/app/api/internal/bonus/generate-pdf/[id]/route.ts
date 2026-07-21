@@ -64,13 +64,20 @@ export async function POST(
     log.info({ id, storageKey }, '[generate-pdf] historical period pdf generated');
     return NextResponse.json({ id, skipped: false, storageKey });
   } catch (err) {
+    // A busy render slot is transient (ChromiumBusyError carries status 503):
+    // surface it as such so the caller/retry sees "try again", not a hard 500.
+    const status =
+      typeof err === 'object' && err !== null && 'status' in err &&
+      typeof (err as { status: unknown }).status === 'number'
+        ? (err as { status: number }).status
+        : 500;
     log.error(
-      { id, err: err instanceof Error ? err.message : String(err) },
+      { id, status, err: err instanceof Error ? err.message : String(err) },
       '[generate-pdf] historical period pdf generation failed',
     );
     return NextResponse.json(
       { id, error: err instanceof Error ? err.message : String(err) },
-      { status: 500 },
+      { status },
     );
   }
 }

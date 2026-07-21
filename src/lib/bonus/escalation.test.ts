@@ -75,6 +75,7 @@ interface PeriodFixture {
   site_id: string;
   period_number: number;
   period_year: number;
+  period_end: Date;
   state: string;
   facility_signed_by_user_id: string | null;
   ops_signed_by_user_id: string | null;
@@ -90,6 +91,7 @@ function pendingPeriod(over: Partial<PeriodFixture> = {}): PeriodFixture {
     site_id: WOODLAND,
     period_number: 13,
     period_year: 2026,
+    period_end: PERIOD_END,
     state: 'pending_signatures',
     facility_signed_by_user_id: null,
     ops_signed_by_user_id: null,
@@ -103,12 +105,22 @@ function makeDb(): EscalationDb {
   const db = {
     bonusPayPeriod: {
       findMany: async (args: {
-        where: { period_end: Date; state: { in?: string[]; not?: string } };
+        where: {
+          // t1–t3 pass an equality Date; t4 (runDeadlineMissed) passes a range.
+          period_end: Date | { lte?: Date; lt?: Date };
+          state: { in?: string[]; not?: string };
+        };
       }) => {
-        const want = args.where.period_end.getTime();
-        if (PERIOD_END.getTime() !== want) return [];
+        const pe = args.where.period_end;
+        const matchesEnd = (rowEnd: Date): boolean => {
+          if (pe instanceof Date) return rowEnd.getTime() === pe.getTime();
+          if (pe.lte) return rowEnd.getTime() <= pe.lte.getTime();
+          if (pe.lt) return rowEnd.getTime() < pe.lt.getTime();
+          return true;
+        };
         return periods
           .filter((p) => {
+            if (!matchesEnd(p.period_end)) return false;
             const s = args.where.state;
             if (s.in) return s.in.includes(p.state);
             if (s.not) return p.state !== s.not;

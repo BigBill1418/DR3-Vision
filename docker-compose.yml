@@ -120,6 +120,14 @@ services:
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
       - /home/bbarnard065/.dr3-vision-secrets/auth.env
+      # ADR-0053 addendum 2026-07-21 (P2 cron secret split): cron.env holds ONLY
+      # INTERNAL_CRON_TOKEN, the single secret the cron daemons share with the
+      # app. The app reads the token from here (env_file order: later files win,
+      # so this stays correct whether or not auth.env still carries a copy);
+      # the cron services mount cron.env INSTEAD of auth.env so a compromised
+      # cron (several run Chromium on semi-external content) can no longer mint
+      # admin JWTs offline with NEXTAUTH_SECRET / the Entra client secret.
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
       # T-007 R2 photo upload. File is optional — when absent, the
       # photo flow falls back to the placeholder `pending-r2-…` keys
       # so the workflow keeps working before R2 creds land.
@@ -306,11 +314,14 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal close route). Optional: when absent both sides skip the bearer
-      # check and the loopback/cf-connecting-ip guard remains the boundary.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer for the internal close route — from cron.env,
+      # NOT auth.env (ADR-0053 addendum 2026-07-21, P2 cron secret split: no
+      # cron script consumes NEXTAUTH_SECRET / the Entra client secret, so
+      # auth.env no longer reaches any cron container). REQUIRED, not optional:
+      # the app fail-closes /api/internal/** in prod (ADR-0054), so a missing
+      # file must fail the deploy loudly at compose-config time — before any
+      # container is recreated — rather than 404 every cron fire at runtime.
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
@@ -373,10 +384,17 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal escalation route). Optional: when absent both sides skip the
-      # bearer check and the loopback/cf-connecting-ip guard remains the boundary.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
+      # INTERNAL_CRON_TOKEN bearer for the internal escalation route — cron.env,
+      # NOT auth.env (ADR-0053 addendum 2026-07-21 cron secret split; required
+      # so a missing file fails compose-config, not runtime — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+      # NTFY_PUBLISHER_TOKEN (ADR-0036) for the app-INDEPENDENT fire-failure
+      # backstop (audit P1-4, scripts/bonus-escalation-check.mjs:publishFireFailure).
+      # The tier fires POST through the app; if the app is down on payroll morning
+      # every tier fails and the daemon must page ntfy directly — which needs this
+      # token. Optional, same fail-soft contract as bonus-eod-check: when the file
+      # is absent the daemon still attempts the tokenless ntfy.sh fallback topic.
+      - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
         required: false
     environment:
       NODE_ENV: production
@@ -460,12 +478,12 @@ services:
     # (BUILD-CONTRACT divergence #1).
     #
     # Needs BOTH: DATABASE_URL (db.env) — it reads the enabled configs directly
-    # to compute send times — AND the app's INTERNAL_CRON_TOKEN (auth.env, the
-    # defense-in-depth bearer for the internal route; optional, both sides skip
-    # the check when absent and the loopback/cf-connecting-ip guard remains the
-    # boundary). INTERNAL_BASE_URL reaches the app over the compose network by
-    # service name (not loopback — separate container); the route's
-    # cf-connecting-ip guard still rejects any public-tunnel request.
+    # to compute send times — AND the app's INTERNAL_CRON_TOKEN (cron.env, the
+    # defense-in-depth bearer for the internal route; split out of auth.env
+    # 2026-07-21 per the ADR-0053 addendum so cron containers no longer carry
+    # NEXTAUTH_SECRET / Entra creds). INTERNAL_BASE_URL reaches the app over
+    # the compose network by service name (not loopback — separate container);
+    # the route's cf-connecting-ip guard still rejects any public-tunnel request.
     #
     # Idempotent: the route's log row is unique on (site, report_date), so a
     # second fire on the same day — or a restart-triggered re-fire — never
@@ -486,10 +504,9 @@ services:
     env_file:
       # DATABASE_URL — the daemon reads enabled configs' send_time_pt directly.
       - /home/bbarnard065/.dr3-vision-secrets/db.env
-      # Shares the app's INTERNAL_CRON_TOKEN (bearer for the internal route).
-      # Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
@@ -525,9 +542,9 @@ services:
     # TS and no @prisma/client — the fire time is fixed, so it reads nothing from
     # the DB (hence NO db.env here, unlike bonus-daily-report).
     #
-    # Needs only the app's INTERNAL_CRON_TOKEN (auth.env, the defense-in-depth
-    # bearer for the internal route; optional — both sides skip the check when
-    # absent and the loopback/cf-connecting-ip guard remains the boundary).
+    # Needs only the app's INTERNAL_CRON_TOKEN (cron.env, the defense-in-depth
+    # bearer for the internal route; split out of auth.env 2026-07-21 per the
+    # ADR-0053 addendum — cron containers no longer carry NEXTAUTH_SECRET).
     # INTERNAL_BASE_URL reaches the app over the compose network by service name
     # (not loopback — separate container); the route's cf-connecting-ip guard still
     # rejects any public-tunnel request.
@@ -545,10 +562,9 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (bearer for the internal route).
-      # Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
@@ -581,9 +597,9 @@ services:
     # daemon imports NO TS and no @prisma/client — the fire time is fixed, so it
     # reads nothing from the DB (hence NO db.env here).
     #
-    # Needs only the app's INTERNAL_CRON_TOKEN (auth.env, the defense-in-depth
-    # bearer for the internal route; optional — both sides skip the check when
-    # absent and the loopback/cf-connecting-ip guard remains the boundary).
+    # Needs only the app's INTERNAL_CRON_TOKEN (cron.env, the defense-in-depth
+    # bearer for the internal route; split out of auth.env 2026-07-21 per the
+    # ADR-0053 addendum — cron containers no longer carry NEXTAUTH_SECRET).
     # INTERNAL_BASE_URL reaches the app over the compose network by service name.
     #
     # Idempotent: the sweep upserts findings by fingerprint, so a slightly-early
@@ -599,10 +615,9 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (bearer for the internal route).
-      # Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
@@ -632,9 +647,9 @@ services:
     # `fuel_prices`. The daemon imports NO TS and no @prisma/client — the fire time is
     # fixed, so it reads nothing from the DB (hence NO db.env here).
     #
-    # Needs the app's INTERNAL_CRON_TOKEN (auth.env, the defense-in-depth bearer for
-    # the internal route; optional — both sides skip the check when absent and the
-    # loopback/cf-connecting-ip guard remains the boundary). The EIA_API_KEY is read
+    # Needs the app's INTERNAL_CRON_TOKEN (cron.env, the defense-in-depth bearer for
+    # the internal route; split out of auth.env 2026-07-21 per the ADR-0053 addendum
+    # — cron containers no longer carry NEXTAUTH_SECRET). The EIA_API_KEY is read
     # by the APP (the route calls the EIA API), not by this scheduler — see the `app`
     # service env. Absent key → the route logs + skips (fail-open); manual entry works.
     #
@@ -650,10 +665,9 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (bearer for the internal route).
-      # Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback —
@@ -707,16 +721,13 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal route). Optional: when absent both sides skip the bearer check and
-      # the loopback/cf-connecting-ip guard remains the boundary.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
-      # Carried for parity with the AP transport family (the creds are consumed by
-      # the `app` service, where the transport actually runs); harmless here and
-      # documents this service's membership. Optional / fail-open.
-      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close). The
+      # former msgraph-mail.env "parity" mount is gone for the same reason: the
+      # Graph creds are consumed by the `app` service (where the transport
+      # runs), and this daemon reads no MSGRAPH_* var — least-privilege beats
+      # documentation-by-mount.
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback — this
@@ -756,10 +767,9 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal route). Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       INTERNAL_BASE_URL: http://app:3000
@@ -803,10 +813,9 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal route). Optional: when absent both sides skip the bearer check.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       INTERNAL_BASE_URL: http://app:3000
@@ -870,17 +879,12 @@ services:
     healthcheck:
       disable: true
     env_file:
-      # Shares the app's INTERNAL_CRON_TOKEN (defense-in-depth bearer for the
-      # internal route). Optional: when absent both sides skip the bearer check and
-      # the loopback/cf-connecting-ip guard remains the boundary.
-      - path: /home/bbarnard065/.dr3-vision-secrets/auth.env
-        required: false
-      # The Graph Files creds are consumed by the `app` service (where the transport
-      # runs); carried here for parity with the transport family. Optional / fail-open.
-      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-files.env
-        required: false
-      - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
-        required: false
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close). The
+      # former msgraph-files.env / msgraph-mail.env "parity" mounts are gone for
+      # the same reason: the Graph creds are consumed by the `app` service
+      # (where the transport runs) and this daemon reads no MSGRAPH_* var.
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
     environment:
       NODE_ENV: production
       # Reach the app over the compose network by service name (not loopback — this

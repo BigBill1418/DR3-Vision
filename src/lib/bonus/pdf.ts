@@ -22,6 +22,7 @@ import { r2UploadSuccess } from '@/lib/observability/metrics';
 import { log } from '@/lib/observability/logger';
 import { pdfMonthYm } from '@/lib/bonus/pdf-data';
 import { assertPayoutReconciles } from '@/lib/bonus/reconcile-fetch';
+import { withChromium } from '@/lib/chromium-semaphore';
 
 export interface GenerateBonusPdfResult {
   storageKey: string;
@@ -68,26 +69,30 @@ function internalBaseUrl(): string {
  * Isolated so the browser is always closed even on a navigation/print failure.
  */
 async function renderPdfBuffer(monthId: string): Promise<Buffer> {
-  // Lazy import: Playwright is heavy and Node-only; keep it out of any bundle
-  // that merely imports this module's types.
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    const url = `${internalBaseUrl()}/internal/bonus-pdf/${encodeURIComponent(monthId)}`;
-    const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-    if (!resp || !resp.ok()) {
-      throw new Error(`internal pdf page returned ${resp ? resp.status() : 'no response'}`);
+  // Serialize against every other Chromium render in this process so overlapping
+  // PDF jobs can't OOM the serving container (audit 2026-07-16 RES).
+  return withChromium(async () => {
+    // Lazy import: Playwright is heavy and Node-only; keep it out of any bundle
+    // that merely imports this module's types.
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      const url = `${internalBaseUrl()}/internal/bonus-pdf/${encodeURIComponent(monthId)}`;
+      const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+      if (!resp || !resp.ok()) {
+        throw new Error(`internal pdf page returned ${resp ? resp.status() : 'no response'}`);
+      }
+      const pdf = await page.pdf({
+        format: 'Letter',
+        printBackground: true,
+        margin: { top: '0.5in', bottom: '0.5in', left: '0.5in', right: '0.5in' },
+      });
+      return Buffer.from(pdf);
+    } finally {
+      await browser.close();
     }
-    const pdf = await page.pdf({
-      format: 'Letter',
-      printBackground: true,
-      margin: { top: '0.5in', bottom: '0.5in', left: '0.5in', right: '0.5in' },
-    });
-    return Buffer.from(pdf);
-  } finally {
-    await browser.close();
-  }
+  });
 }
 
 /**

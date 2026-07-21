@@ -24,3 +24,31 @@ export function runTierOnce(tier: EscalationTier): Promise<string>;
 
 /** Truncate a response body for logging (default 300 chars). */
 export function truncateBody(text: string, max?: number): string;
+
+/**
+ * Publish an app-INDEPENDENT page (direct to ntfy, primary→fallback) that a tier
+ * fire failed after all retries. Fingerprinted per (tier, Pacific day). Returns
+ * whether a publish succeeded; a no-op returning `false` when the publisher token
+ * is unset. `now` (default `new Date()`) fixes the Pacific date for tests.
+ */
+export function publishFireFailure(tier: EscalationTier, now?: Date): Promise<boolean>;
+
+/** Injectable seams for `fireTierWithRetry` (all default to the real ones). */
+export interface FireTierDeps {
+  runTier?: (tier: EscalationTier) => Promise<string>;
+  publishFailure?: (tier: EscalationTier) => Promise<boolean>;
+  wait?: (ms: number) => Promise<void>;
+  maxAttempts?: number;
+  spacingMs?: number;
+}
+
+/**
+ * Fire one tier with bounded in-window retry (default 3 attempts / 15min). On
+ * success returns early; on the final failure publishes the app-independent
+ * fire-failure page. `deps` is injectable so retry/backstop logic is testable
+ * without real waits or real ntfy/app calls.
+ */
+export function fireTierWithRetry(
+  tier: EscalationTier,
+  deps?: FireTierDeps,
+): Promise<{ ok: boolean; attempts: number; paged?: boolean }>;

@@ -35,6 +35,36 @@
 const BASE = process.env.INTERNAL_BASE_URL ?? 'http://127.0.0.1:3000';
 const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 
+// ── Bounded in-window retry (audit P1-4) ────────────────────────────
+// A tier fire that fails (transport error / redirect / non-200 — usually the app
+// being down) is NOT "done until the next tier" any more. We retry it a bounded
+// number of times, spaced within the tier's own window, inside the same daemon
+// run. 3 attempts × 15min ≈ 30min covers the t3→t4 gap so the 08:30 auto-override
+// gets several shots before the 09:00 PT payroll deadline. No new infra: the
+// retry runs off the daemon's own timers, and the NEXT tier is armed immediately
+// (see scheduleNext) so retries never delay a later tier's wall-clock fire.
+const MAX_TIER_ATTEMPTS = 3;
+const RETRY_SPACING_MS = 15 * 60 * 1000;
+
+// ── Daemon-side, app-INDEPENDENT page on total fire failure (audit P1-4) ──
+// The tier fires go THROUGH the app (POST /api/internal/...). If the app is down,
+// every tier fails — including t4, the "payroll deadline missed" backstop, which
+// would otherwise route its page through the same dead app. So when a tier
+// exhausts its retries the daemon itself publishes DIRECTLY to ntfy (never
+// touching the app), mirroring the primary→fallback helper in
+// `scripts/bonus-eod-check.mjs`.
+const NTFY_PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
+const NTFY_FALLBACK_BASE = 'https://ntfy.sh';
+const NTFY_TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
+const NTFY_FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
+const NTFY_CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+const NTFY_TIMEOUT_MS = 5_000;
+
+// ADR-0037 severity: a failed t3 (auto-override + payroll PDF) or t4 (deadline
+// backstop) is an imminent payroll miss → urgent; a failed t1/t2 reminder is a
+// degraded self-monitor → high.
+const TIER_FAILURE_PRIORITY = { t1: 'high', t2: 'high', t3: 'urgent', t4: 'urgent' };
+
 // The four fire times (Pacific wall clock) → tier. Order does not matter; the
 // scheduler always picks the soonest upcoming one.
 const FIRES = [
@@ -59,6 +89,14 @@ const PACIFIC_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
   second: '2-digit',
   hourCycle: 'h23',
+});
+
+// Pacific calendar date (YYYY-MM-DD) for the daemon-side fire-failure dedup id.
+const PACIFIC_ISO_FMT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: PACIFIC_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
 });
 
 let stopping = false;
@@ -150,6 +188,122 @@ async function runTierOnce(tier) {
   return truncateBody(text);
 }
 
+/** Resolve after `ms`. */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * POST a body to ntfy with an abort timeout, resolving to `ok`. Never throws —
+ * a down/slow ntfy must not crash the daemon. Ported from `bonus-eod-check.mjs`.
+ */
+async function postWithTimeout(url, body, headers, timeoutMs = NTFY_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { method: 'POST', body, headers, signal: controller.signal });
+    return resp.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Publish an app-INDEPENDENT page that a tier fire failed after all retries.
+ * Goes straight to ntfy (primary → fallback), NOT through the app, so a down app
+ * — which is exactly what fails the tier fires, including the t4 backstop — can
+ * never swallow the alert. Fingerprinted per (tier, Pacific day) so a restart
+ * re-fire the same day dedupes. Returns whether a publish succeeded.
+ */
+async function publishFireFailure(tier, now = new Date()) {
+  const isoDate = PACIFIC_ISO_FMT.format(now);
+  const priority = TIER_FAILURE_PRIORITY[tier] ?? 'high';
+  const title = `[DR3-Vision] escalation tier ${tier} fire FAILED`.slice(0, 250);
+  const detail =
+    tier === 't3'
+      ? 'Auto-override + payroll PDF did NOT run — sign manually before the 09:00 AM PT deadline.'
+      : tier === 't4'
+        ? 'The payroll-deadline backstop did NOT run — verify payroll delivery manually.'
+        : 'Signature-reminder tier did not fire — check the app and bonus signatures.';
+  const body =
+    `The bonus escalation daemon could not reach the app to run tier ${tier} after ` +
+    `${MAX_TIER_ATTEMPTS} attempts (${isoDate} PT). ${detail}`;
+  const fingerprint = `bonus-escalation-fire-failed:${tier}:${isoDate}`;
+
+  const baseHeaders = {
+    Priority: priority,
+    Click: NTFY_CLICK_URL,
+    Tags: 'rotating_light,bonus,escalation',
+    'X-Dedup-Id': fingerprint,
+  };
+
+  // This is a safety-critical, app-INDEPENDENT payroll page (P1-4). The primary
+  // ntfy.barnardhq.com publish needs the bearer, so when the token is unset we
+  // must NOT post unauthenticated to the primary — but we still fall through to
+  // the tokenless, anonymous-publish ntfy.sh fallback topic rather than going
+  // silent (a stronger contract than bonus-eod-check's no-op, deliberately, since
+  // this alert flags a missed payroll deadline).
+  const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
+  if (token) {
+    const ok = await postWithTimeout(`${NTFY_PRIMARY_BASE}/${NTFY_TOPIC}`, body, {
+      ...baseHeaders,
+      'X-Title': title,
+      Authorization: `Bearer ${token}`,
+    });
+    if (ok) {
+      logTs(`published tier ${tier} fire-failure page to ${NTFY_TOPIC} (${fingerprint})`);
+      return true;
+    }
+    logTs(`primary ntfy publish failed for tier ${tier} — trying ntfy.sh fallback (${fingerprint})`);
+  } else {
+    logTs(
+      `NTFY_PUBLISHER_TOKEN unset — skipping primary, attempting tokenless ntfy.sh fallback for tier ${tier} (${fingerprint})`,
+    );
+  }
+  const fbOk = await postWithTimeout(`${NTFY_FALLBACK_BASE}/${NTFY_FALLBACK_TOPIC}`, body, {
+    ...baseHeaders,
+    'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
+  });
+  logTs(
+    fbOk
+      ? `published tier ${tier} fire-failure page to FALLBACK topic (${fingerprint})`
+      : `tier ${tier} fire-failure page FAILED (primary+fallback)`,
+  );
+  return fbOk;
+}
+
+/**
+ * Fire one tier with bounded in-window retry. On success, returns early. On the
+ * final failure, publishes the app-independent fire-failure page. Deps are
+ * injectable so the retry/backstop logic is unit-testable without real waits or
+ * real ntfy/app calls.
+ */
+async function fireTierWithRetry(tier, deps = {}) {
+  const {
+    runTier = runTierOnce,
+    publishFailure = publishFireFailure,
+    wait = sleep,
+    maxAttempts = MAX_TIER_ATTEMPTS,
+    spacingMs = RETRY_SPACING_MS,
+  } = deps;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const text = await runTier(tier);
+      logTs(`tier ${tier} run complete (attempt ${attempt}/${maxAttempts}): ${text}`);
+      return { ok: true, attempts: attempt };
+    } catch (err) {
+      logTs(`tier ${tier} attempt ${attempt}/${maxAttempts} failed: ${err?.message ?? err}`);
+      if (attempt < maxAttempts) await wait(spacingMs);
+    }
+  }
+  logTs(`tier ${tier} exhausted ${maxAttempts} attempts — publishing daemon-side page`);
+  const paged = await publishFailure(tier);
+  return { ok: false, attempts: maxAttempts, paged };
+}
+
 function scheduleNext() {
   if (stopping) return;
   const next = nextEscalationFire();
@@ -158,12 +312,16 @@ function scheduleNext() {
     `next escalation fire (${next.tier}) at ${fireAt} (in ${(next.delay / 1000 / 60).toFixed(1)}min)`,
   );
   setTimeout(() => {
-    runTierOnce(next.tier)
-      .then((text) => logTs(`tier ${next.tier} run complete: ${text}`))
-      .catch((err) =>
-        logTs(`tier ${next.tier} run failed (non-fatal, retry next tick): ${err?.message ?? err}`),
-      )
-      .finally(scheduleNext);
+    if (stopping) return;
+    // Arm the FOLLOWING tier immediately. `nextEscalationFire()` excludes the
+    // instant we just hit (its delta guard is >1s), so this schedules the next
+    // distinct tier — never a re-fire of this one. Doing it up-front means the
+    // bounded retry below (which can run ~30min) never pushes a later tier past
+    // its wall-clock time.
+    scheduleNext();
+    // Fire this tier with retry + app-independent backstop page, in the
+    // background relative to the scheduler.
+    void fireTierWithRetry(next.tier);
   }, next.delay); // NOT .unref() — this timer must keep the daemon alive
 }
 
@@ -178,7 +336,7 @@ function setupShutdown() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-export { runTierOnce, truncateBody };
+export { runTierOnce, truncateBody, fireTierWithRetry, publishFireFailure };
 
 // Only start the daemon when run as the entrypoint — keeps the module importable
 // (for the schedule-helper test) without spawning timers.

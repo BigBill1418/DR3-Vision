@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '@/lib/prisma';
 import { r2UploadSuccess } from '@/lib/observability/metrics';
 import { log } from '@/lib/observability/logger';
+import { withChromium } from '@/lib/chromium-semaphore';
 import { assertCorInventoryReconciles } from './service';
 import { CorNotFoundError } from './view';
 
@@ -61,24 +62,28 @@ function internalBaseUrl(): string {
  * Isolated so the browser is always closed even on a navigation/print failure.
  */
 async function renderPdfBuffer(certId: string): Promise<Buffer> {
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    const url = `${internalBaseUrl()}/internal/cor-pdf/${encodeURIComponent(certId)}`;
-    const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-    if (!resp || !resp.ok()) {
-      throw new Error(`internal cor pdf page returned ${resp ? resp.status() : 'no response'}`);
+  // Serialize against every other Chromium render in this process so overlapping
+  // PDF jobs can't OOM the serving container (audit 2026-07-16 RES).
+  return withChromium(async () => {
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      const url = `${internalBaseUrl()}/internal/cor-pdf/${encodeURIComponent(certId)}`;
+      const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+      if (!resp || !resp.ok()) {
+        throw new Error(`internal cor pdf page returned ${resp ? resp.status() : 'no response'}`);
+      }
+      const pdf = await page.pdf({
+        format: 'Letter',
+        printBackground: true,
+        margin: { top: '0.5in', bottom: '0.5in', left: '0.5in', right: '0.5in' },
+      });
+      return Buffer.from(pdf);
+    } finally {
+      await browser.close();
     }
-    const pdf = await page.pdf({
-      format: 'Letter',
-      printBackground: true,
-      margin: { top: '0.5in', bottom: '0.5in', left: '0.5in', right: '0.5in' },
-    });
-    return Buffer.from(pdf);
-  } finally {
-    await browser.close();
-  }
+  });
 }
 
 /** `YYYY-MM` for a @db.Date cover-month value (UTC components = the cover month). */
