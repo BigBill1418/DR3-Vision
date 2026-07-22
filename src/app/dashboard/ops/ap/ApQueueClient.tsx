@@ -8,8 +8,49 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-type Status = 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+type Status =
+  | 'pending'
+  | 'pending_review'
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval hop (>= $1,000). Not actionable
+  // from this panel (the second-approver flow handles it); typed here so a detail in
+  // that state renders without a cast.
+  | 'pending_second_approval'
+  | 'approved'
+  | 'rejected'
+  | 'quarantined';
 type Filter = Status | 'all';
+
+// ─── ADR-0046 Amendment 5 client mirrors (D-M5-2/4/6). ────────────────────────
+type Confidence = 'high' | 'medium' | 'low' | 'failed';
+interface ExtractionPrefill {
+  confidence: Confidence;
+  bestAmountCents: number | null;
+  bestVendor: string | null;
+}
+interface EquipmentOption {
+  id: string;
+  displayName: string;
+  category: string;
+}
+interface VarianceEvaluation {
+  tripped: boolean;
+  meanAmountCents: number;
+  invoiceCount: number;
+  varianceAbsCents: number;
+  variancePct: number;
+  direction: 'over' | 'under';
+}
+interface VarianceContext {
+  established: boolean;
+  vendorDisplayName?: string;
+  evaluation?: VarianceEvaluation;
+  recent?: Array<{ invoiceDate: string; amountCents: number }>;
+}
+interface EquipmentLinkView {
+  equipmentId: string | null;
+  displayName: string | null;
+  isNotEquipmentRelated: boolean;
+}
 
 interface ListRow {
   id: string;
@@ -47,6 +88,14 @@ interface Detail extends ListRow {
   heldByName: string | null;
   heldAt: string | null;
   holdNote: string | null;
+  // Amendment 5 (D-M5-1/2/4/6) — structured-decide surface.
+  extraction: ExtractionPrefill | null;
+  vendorFreeform: string | null;
+  explanation: string | null;
+  confirmedAmountCents: number | null;
+  varianceFlagState: string | null;
+  varianceAcknowledgmentNote: string | null;
+  equipmentLinks: EquipmentLinkView[];
   attachments: AttachmentView[];
   followups: Array<{
     id: string;
@@ -62,6 +111,7 @@ const TABS: Filter[] = ['pending', 'pending_review', 'approved', 'rejected', 'qu
 const STATUS_LABEL: Record<Filter, string> = {
   pending: 'pending',
   pending_review: 'on hold',
+  pending_second_approval: 'awaiting 2nd approval',
   approved: 'approved',
   rejected: 'rejected',
   quarantined: 'quarantined',
@@ -246,11 +296,17 @@ function StatusBadge({ status }: { status: Status }) {
     // pending shifts to sky so the amber hold chip is unmistakably distinct.
     pending: 'bg-sky-400 text-dr3-ink',
     pending_review: 'bg-amber-400 text-dr3-ink',
+    pending_second_approval: 'bg-violet-400 text-dr3-ink',
     approved: 'bg-emerald-500 text-white',
     rejected: 'bg-red-500 text-white',
     quarantined: 'bg-zinc-500 text-white',
   };
-  const label = status === 'pending_review' ? 'on hold' : status;
+  const label =
+    status === 'pending_review'
+      ? 'on hold'
+      : status === 'pending_second_approval'
+        ? 'awaiting 2nd approval'
+        : status;
   return (
     <span
       className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}
@@ -260,53 +316,197 @@ function StatusBadge({ status }: { status: Status }) {
   );
 }
 
-export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
-  const [note, setNote] = useState('');
-  const [vendor, setVendor] = useState(detail.vendor ?? '');
-  const [amount, setAmount] = useState(
-    detail.amountCents !== null ? (detail.amountCents / 100).toFixed(2) : '',
+// ADR-0046 Amendment 5 (D-M5-2) — the extraction-confidence badge on the confirmed-
+// amount input. HIGH → green "Verified"; MEDIUM → yellow "Please verify"; LOW → red
+// "Low confidence"; FAILED renders no badge (the input is blank with a placeholder).
+function ConfidenceBadge({ confidence }: { confidence: Confidence }) {
+  if (confidence === 'failed') return null;
+  const map: Record<Exclude<Confidence, 'failed'>, { cls: string; label: string }> = {
+    high: { cls: 'bg-emerald-500 text-white', label: '✓ Verified' },
+    medium: { cls: 'bg-amber-400 text-dr3-ink', label: '⚠ Please verify' },
+    low: { cls: 'bg-red-500 text-white', label: '⚠ Low confidence' },
+  };
+  const { cls, label } = map[confidence];
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${cls}`}>{label}</span>
   );
+}
+
+function confidenceHint(confidence: Confidence): string {
+  switch (confidence) {
+    case 'high':
+      return 'Extracted with high confidence — verify it matches the invoice.';
+    case 'medium':
+      return 'Multiple amounts were found — please verify against the invoice.';
+    case 'low':
+      return 'Low confidence — verify the amount against the invoice.';
+    case 'failed':
+      return 'Amount not extracted — please enter it manually from the invoice.';
+  }
+}
+
+export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
+  // Single reason/note field — Reject / Hold / NOT-DR3 (unchanged; Amendment 5 §5.4
+  // constraint #4: these keep their single field, they are NOT structured).
+  const [note, setNote] = useState('');
   const [siteCode, setSiteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // ── Amendment 5 (D-M5-1/2/4/6) — the STRUCTURED Approve fields. Extraction
+  // PRE-FILLS; the approver still confirms every field (hard rule #5). Seeded from
+  // the extraction result, falling back to any prior structured value.
+  const [vendorFreeform, setVendorFreeform] = useState(
+    detail.vendorFreeform ?? detail.extraction?.bestVendor ?? detail.vendor ?? '',
+  );
+  const [explanation, setExplanation] = useState('');
+  const prefillAmountCents = detail.confirmedAmountCents ?? detail.extraction?.bestAmountCents;
+  const [confirmedAmount, setConfirmedAmount] = useState(
+    typeof prefillAmountCents === 'number' ? (prefillAmountCents / 100).toFixed(2) : '',
+  );
+  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+  const [equipmentIds, setEquipmentIds] = useState<string[]>([]);
+  const [notEquipmentRelated, setNotEquipmentRelated] = useState(false);
+  const [equipmentQuery, setEquipmentQuery] = useState('');
+  const [variance, setVariance] = useState<VarianceContext | null>(null);
+  const [varianceAck, setVarianceAck] = useState(false);
+  const [varianceAckNote, setVarianceAckNote] = useState('');
+
+  // Structured Approve applies only to a real DR3 site (Woodland/Eugene). NOT-DR3
+  // (and an unselected site) uses the single-note path.
+  const isRealSite = siteCode === 'eugene' || siteCode === 'woodland';
+  const varianceTripped = !!variance?.evaluation?.tripped;
+
+  // D-M5-6 — load the site-filtered equipment options whenever the site changes.
+  // Reset the selection (options differ per site). NOT-DR3/blank clears the list.
+  useEffect(() => {
+    setEquipmentIds([]);
+    setNotEquipmentRelated(false);
+    setEquipmentQuery('');
+    if (!isRealSite) {
+      setEquipmentOptions([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/ops/ap/equipment?site=${siteCode}`);
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setEquipmentOptions(res.ok && Array.isArray(body.options) ? body.options : []);
+      } catch {
+        if (!cancelled) setEquipmentOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [siteCode, isRealSite]);
+
+  // D-M5-4 — re-check variance (debounced) whenever the typed vendor or confirmed
+  // amount changes on the structured path. A changed amount/vendor re-gates: the
+  // acknowledgment resets so the approver must re-acknowledge a still-tripped flag.
+  useEffect(() => {
+    setVarianceAck(false);
+    if (!isRealSite || !vendorFreeform.trim() || !confirmedAmount.trim()) {
+      setVariance(null);
+      return;
+    }
+    const parsed = parseUsdToCents(confirmedAmount);
+    if (typeof parsed !== 'number') {
+      setVariance(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/ops/ap/variance-check', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ vendor: vendorFreeform.trim(), confirmedAmountCents: parsed }),
+        });
+        const body = (await res.json().catch(() => ({}))) as VarianceContext;
+        if (!cancelled) setVariance(res.ok ? body : null);
+      } catch {
+        if (!cancelled) setVariance(null);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [vendorFreeform, confirmedAmount, isRealSite]);
+
+  const toggleEquipment = useCallback((id: string) => {
+    setNotEquipmentRelated(false);
+    setEquipmentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
   const decide = useCallback(
     async (decision: 'approved' | 'rejected') => {
-      // Amendment 3 + 2026-07-21 amendment — EVERY decision needs a note (plain-
-      // English client guard; the server re-validates). An approval records what the
-      // transaction was for + context; a rejection says why.
-      if (!note.trim()) {
-        setMsg(
-          decision === 'approved'
-            ? 'An approval needs a note describing what this transaction was for and any additional context. Add a note, then Approve.'
-            : 'A rejection needs a note explaining why. Add a note, then Reject.',
-        );
-        return;
-      }
-      // Operator directive 2026-07-15 — every decision files against a location
-      // (the server re-validates). Woodland/Eugene, or the NOT-DR3 disposition.
+      // Operator directive 2026-07-15 — every decision files against a location.
       if (!siteCode) {
         setMsg('Select the location (Woodland, Eugene, or NOT DR3) before deciding.');
         return;
       }
-      // ADR-0046 amendment 2026-07-20 — NOT DR3 needs a reason in the note (the
-      // server re-validates). Reject/Hold already require a note; this also covers
-      // the Approve + NOT-DR3 path, which is otherwise note-optional.
-      if (siteCode === 'not_dr3' && !note.trim()) {
-        setMsg('NOT DR3 requires a reason — add it in the note, then decide.');
-        return;
-      }
-      // M4 — normalize the currency input BEFORE trusting it (comma-truncation
-      // would file $1,234.56 as $1.00). Validate as an early-return guard, next
-      // to the note/site guards, so a bad amount never flips the request.
-      let amountCents: number | undefined;
-      if (amount.trim()) {
-        const parsed = parseUsdToCents(amount);
+      let payload: Record<string, unknown>;
+      if (decision === 'approved' && isRealSite) {
+        // ── STRUCTURED APPROVE (D-M5-1/4/6) — four required fields + variance gate.
+        // The server re-validates all of this; these are plain-English client guards.
+        const v = vendorFreeform.trim();
+        if (!v) {
+          setMsg('Enter the vendor name to approve.');
+          return;
+        }
+        if (!confirmedAmount.trim()) {
+          setMsg('Confirm the invoice amount to approve.');
+          return;
+        }
+        // M4 — normalize the currency input BEFORE trusting it (comma-truncation
+        // would file $1,234.56 as $1.00).
+        const parsed = parseUsdToCents(confirmedAmount);
         if (typeof parsed !== 'number') {
           setMsg(parsed.error);
           return;
         }
-        amountCents = parsed;
+        if (!explanation.trim()) {
+          setMsg('Enter what this transaction was for (explanation) to approve.');
+          return;
+        }
+        if (!notEquipmentRelated && equipmentIds.length === 0) {
+          setMsg('Select the equipment this invoice relates to, or choose "Not equipment-related".');
+          return;
+        }
+        if (varianceTripped && !varianceAck) {
+          setMsg('Acknowledge the variance ("I’ve verified the variance") before approving.');
+          return;
+        }
+        payload = {
+          decision,
+          siteId: siteCode,
+          vendorFreeform: v,
+          explanation: explanation.trim(),
+          confirmedAmountCents: parsed,
+          ...(notEquipmentRelated ? { notEquipmentRelated: true } : { equipmentIds }),
+          ...(varianceTripped
+            ? { varianceAcknowledged: true, varianceAckNote: varianceAckNote.trim() || undefined }
+            : {}),
+        };
+      } else {
+        // ── Single-note path — Reject (any site), or Approve + NOT-DR3. Keeps the
+        // pre-Amendment-5 contract (§5.4 #4).
+        if (!note.trim()) {
+          setMsg(
+            siteCode === 'not_dr3'
+              ? 'NOT DR3 requires a reason — add it in the note, then decide.'
+              : 'A rejection needs a note explaining why. Add a note, then Reject.',
+          );
+          return;
+        }
+        payload = {
+          decision,
+          note: note.trim(),
+          ...(siteCode === 'not_dr3' ? { notDr3: true } : { siteId: siteCode }),
+        };
       }
       setBusy(true);
       setMsg(null);
@@ -314,15 +514,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         const res = await fetch(`/api/ops/ap/${detail.id}/decide`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            decision,
-            note: note.trim() || undefined,
-            vendor: vendor.trim() || undefined,
-            ...(amountCents !== undefined ? { amountCents } : {}),
-            // NOT DR3 sends the disposition flag instead of a siteId (it is not a
-            // real site); Woodland/Eugene send the site code exactly as before.
-            ...(siteCode === 'not_dr3' ? { notDr3: true } : { siteId: siteCode }),
-          }),
+          body: JSON.stringify(payload),
         });
         const body = await res.json().catch(() => ({}));
         if (res.status === 409 && body.alreadyDecided) {
@@ -347,7 +539,21 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         onDecided();
       }
     },
-    [amount, note, vendor, siteCode, detail.id, onDecided],
+    [
+      note,
+      siteCode,
+      isRealSite,
+      vendorFreeform,
+      explanation,
+      confirmedAmount,
+      equipmentIds,
+      notEquipmentRelated,
+      varianceTripped,
+      varianceAck,
+      varianceAckNote,
+      detail.id,
+      onDecided,
+    ],
   );
 
   const resend = useCallback(async () => {
@@ -417,6 +623,16 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   }, [note, detail.id, onDecided]);
 
   const actionable = detail.status === 'pending' || detail.status === 'pending_review';
+
+  // Approve gating: a real-site Approve needs all four structured fields (+ variance
+  // ack when tripped); a NOT-DR3 Approve needs the single note. The server re-checks.
+  const structuredComplete =
+    !!vendorFreeform.trim() &&
+    !!confirmedAmount.trim() &&
+    !!explanation.trim() &&
+    (notEquipmentRelated || equipmentIds.length > 0) &&
+    (!varianceTripped || varianceAck);
+  const approveDisabled = busy || !siteCode || (isRealSite ? !structuredComplete : !note.trim());
 
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4">
@@ -510,49 +726,194 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       {actionable && (
         <section className="mt-5 border-t border-white/10 pt-4">
           <h3 className="text-sm font-semibold opacity-90">Decision</h3>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <label className="text-xs opacity-80">
-              Vendor (optional)
-              <input
-                value={vendor}
-                onChange={(e) => setVendor(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              />
-            </label>
-            <label className="text-xs opacity-80">
-              Amount USD (optional)
-              <input
-                value={amount}
-                inputMode="decimal"
-                onChange={(e) => setAmount(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              />
-            </label>
-            <label className="text-xs opacity-80">
-              Location <span className="text-amber-300">(required)</span>
-              <select
-                value={siteCode}
-                onChange={(e) => setSiteCode(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              >
-                <option value="">— select site —</option>
-                <option value="eugene">Eugene</option>
-                <option value="woodland">Woodland</option>
-                <option value="not_dr3">NOT DR3 – See Reason</option>
-              </select>
-              {siteCode === 'not_dr3' && (
-                <span className="mt-1 block text-amber-300">
-                  NOT DR3 — add the reason in the note below (required). This will NOT be filed
-                  against a DR3 site.
+
+          {/* Location — required, and it drives the structured-Approve vs single-note split. */}
+          <label className="mt-2 block text-xs opacity-80 sm:max-w-xs">
+            Location <span className="text-amber-300">(required)</span>
+            <select
+              value={siteCode}
+              onChange={(e) => setSiteCode(e.target.value)}
+              className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+            >
+              <option value="">— select site —</option>
+              <option value="eugene">Eugene</option>
+              <option value="woodland">Woodland</option>
+              <option value="not_dr3">NOT DR3 – See Reason</option>
+            </select>
+            {siteCode === 'not_dr3' && (
+              <span className="mt-1 block text-amber-300">
+                NOT DR3 — add the reason in the note below (required). This will NOT be filed against
+                a DR3 site.
+              </span>
+            )}
+          </label>
+
+          {/* D-M5-1/4/6 — structured Approve fields (real site only). Reject/Hold use the note below. */}
+          {isRealSite && (
+            <div className="mt-3 rounded border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <p className="text-xs font-semibold text-emerald-200">
+                To Approve, complete all four fields (extraction pre-fills; you confirm each):
+              </p>
+
+              <label className="mt-2 block text-xs opacity-80">
+                Vendor <span className="text-amber-300">(required to approve)</span>
+                <span className="mt-0.5 block opacity-70">
+                  Enter the vendor name carefully — check spelling and capitalization. This appears
+                  on the returned decision email and Mary’s GP filing.
                 </span>
+                <input
+                  value={vendorFreeform}
+                  onChange={(e) => setVendorFreeform(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+              </label>
+
+              <label className="mt-2 block text-xs opacity-80">
+                <span className="inline-flex items-center gap-2">
+                  Confirmed amount USD <span className="text-amber-300">(required to approve)</span>
+                  {detail.extraction && <ConfidenceBadge confidence={detail.extraction.confidence} />}
+                </span>
+                <input
+                  value={confirmedAmount}
+                  inputMode="decimal"
+                  placeholder={
+                    detail.extraction?.confidence === 'failed'
+                      ? 'Enter amount from invoice'
+                      : undefined
+                  }
+                  onChange={(e) => setConfirmedAmount(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+                {detail.extraction && (
+                  <span className="mt-0.5 block opacity-60">
+                    {confidenceHint(detail.extraction.confidence)}
+                  </span>
+                )}
+              </label>
+
+              <label className="mt-2 block text-xs opacity-80">
+                Explanation <span className="text-amber-300">(required to approve)</span>
+                <span className="mt-0.5 block opacity-70">
+                  What was this transaction for? Include any relevant context (site work, repair
+                  reason, event, etc.).
+                </span>
+                <textarea
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                  rows={2}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+              </label>
+
+              <div className="mt-2 text-xs opacity-80">
+                Equipment{' '}
+                <span className="text-amber-300">
+                  (required — pick one or more, or “Not equipment-related”)
+                </span>
+                <label className="mt-1 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={notEquipmentRelated}
+                    onChange={(e) => {
+                      setNotEquipmentRelated(e.target.checked);
+                      if (e.target.checked) setEquipmentIds([]);
+                    }}
+                  />
+                  <span>Not equipment-related</span>
+                </label>
+                {!notEquipmentRelated && (
+                  <>
+                    <input
+                      value={equipmentQuery}
+                      onChange={(e) => setEquipmentQuery(e.target.value)}
+                      placeholder="Search equipment…"
+                      className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                    />
+                    <div className="mt-1 max-h-40 overflow-auto rounded border border-white/10">
+                      {equipmentOptions.length === 0 && (
+                        <p className="px-2 py-1 opacity-60">
+                          No active equipment registered for this site. Ask an admin to add it, or
+                          Hold the invoice.
+                        </p>
+                      )}
+                      {equipmentOptions
+                        .filter((o) =>
+                          o.displayName
+                            .toLowerCase()
+                            .includes(equipmentQuery.trim().toLowerCase()),
+                        )
+                        .map((o) => (
+                          <label
+                            key={o.id}
+                            className="flex items-center gap-2 px-2 py-1 hover:bg-white/5"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={equipmentIds.includes(o.id)}
+                              onChange={() => toggleEquipment(o.id)}
+                            />
+                            <span>
+                              {o.displayName} <span className="opacity-50">· {o.category}</span>
+                            </span>
+                          </label>
+                        ))}
+                    </div>
+                    {equipmentIds.length > 0 && (
+                      <p className="mt-1 opacity-70">{equipmentIds.length} selected</p>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* D-M5-4 — RED variance banner + block-until-acknowledged gate. */}
+              {varianceTripped && variance?.evaluation && (
+                <div className="mt-3 rounded border border-red-500 bg-red-600/20 p-3 text-sm text-red-100">
+                  <p className="font-bold">
+                    ⚠ VARIANCE FLAG — {variance.vendorDisplayName} usually bills{' '}
+                    {dollars(variance.evaluation.meanAmountCents)} (avg from{' '}
+                    {variance.evaluation.invoiceCount} invoices, last 12 months).
+                  </p>
+                  <p className="mt-1">
+                    This invoice is ${confirmedAmount}, a{' '}
+                    {variance.evaluation.direction === 'over' ? 'increase' : 'decrease'} of{' '}
+                    {dollars(variance.evaluation.varianceAbsCents)} (
+                    {(variance.evaluation.variancePct * 100).toFixed(1)}%).
+                  </p>
+                  {variance.recent && variance.recent.length > 0 && (
+                    <p className="mt-1 opacity-90">
+                      Recent:{' '}
+                      {variance.recent
+                        .map((r) => `${r.invoiceDate} ${dollars(r.amountCents)}`)
+                        .join(' · ')}
+                    </p>
+                  )}
+                  <label className="mt-2 block">
+                    Acknowledgment note (optional — e.g. “confirmed with Morena”)
+                    <input
+                      value={varianceAckNote}
+                      onChange={(e) => setVarianceAckNote(e.target.value)}
+                      className="mt-1 w-full rounded border border-red-400/40 bg-black/30 px-2 py-1 text-red-50"
+                    />
+                  </label>
+                  <button
+                    onClick={() => setVarianceAck(true)}
+                    disabled={varianceAck}
+                    className="mt-2 rounded bg-red-500 px-3 py-1.5 font-semibold text-white disabled:opacity-60"
+                  >
+                    {varianceAck ? '✓ Variance verified' : 'I’ve verified the variance'}
+                  </button>
+                </div>
               )}
-            </label>
-          </div>
-          <label className="mt-2 block text-xs opacity-80">
-            Note <span className="text-amber-300">(required)</span>{' '}
+            </div>
+          )}
+
+          {/* Single reason/note — Reject / Hold / NOT-DR3 (unchanged single-field pattern). */}
+          <label className="mt-3 block text-xs opacity-80">
+            Reason / note{' '}
             <span className="opacity-70">
-              (what this transaction was for + any additional context · required to approve, reject,
-              or hold · appears on the returned invoice)
+              {isRealSite
+                ? '(required to Reject or Hold · appears on the returned invoice)'
+                : '(required — NOT-DR3 reason, or rejection/hold reason · appears on the returned invoice)'}
             </span>
             <textarea
               value={note}
@@ -560,20 +921,21 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
               rows={2}
               placeholder={
                 detail.status === 'pending_review'
-                  ? 'What this transaction was for + any additional context (required to approve/reject; or update the hold note)'
-                  : 'What this transaction was for + any additional context (required)'
+                  ? 'Reason to reject, or update the hold note'
+                  : 'Reason to reject or hold (or the NOT-DR3 reason)'
               }
               className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
             />
           </label>
+
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => decide('approved')}
-              disabled={busy || !note.trim()}
+              disabled={approveDisabled}
               title={
-                note.trim()
-                  ? undefined
-                  : 'An approval requires a note describing what this transaction was for and any additional context'
+                approveDisabled && isRealSite
+                  ? 'Approve requires vendor, confirmed amount, explanation, an equipment choice, and a variance acknowledgment if flagged'
+                  : undefined
               }
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
@@ -581,7 +943,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
             </button>
             <button
               onClick={() => decide('rejected')}
-              disabled={busy || !note.trim()}
+              disabled={busy || !siteCode || !note.trim()}
               title={note.trim() ? undefined : 'A rejection requires a note'}
               className="rounded bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >

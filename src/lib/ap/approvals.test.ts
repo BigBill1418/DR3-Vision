@@ -1123,3 +1123,130 @@ describe('hold → resolve + update note', () => {
     ).rejects.toBeInstanceOf(ApNoteRequiredError);
   });
 });
+
+// ADR-0046 Amendment 5 (D-M5-1/4/6) — the STRUCTURED Approve write: structured
+// columns persisted, deprecated vendor/amount_cents NOT written, equipment linked
+// atomically, variance state stamped.
+describe('decideRequest — structured Approve (Amendment 5)', () => {
+  it('persists vendor_freeform / explanation / confirmed_amount_cents and does NOT write the deprecated columns', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Sunbelt Rentals',
+      explanation: 'mower rental for the Woodland yard',
+      confirmedAmountCents: 12500,
+      equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+      varianceFlagState: 'not_applicable',
+    });
+    const row = db.requests[0]!;
+    expect(row.status).toBe('approved');
+    expect(row.vendor_freeform).toBe('Sunbelt Rentals');
+    expect(row.explanation).toBe('mower rental for the Woodland yard');
+    expect(row.confirmed_amount_cents).toBe(12500);
+    // Deprecated columns are LEFT UNWRITTEN (hard rule #1).
+    expect(row.vendor).toBeNull();
+    expect(row.amount_cents).toBeNull();
+    expect(row.decision_note).toBeNull();
+  });
+
+  it('writes a single is_not_equipment_related link for the explicit-none case', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Office Depot',
+      explanation: 'printer paper',
+      confirmedAmountCents: 4200,
+      equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+    });
+    expect(db.equipmentLinks).toHaveLength(1);
+    expect(db.equipmentLinks[0]!.is_not_equipment_related).toBe(true);
+    expect(db.equipmentLinks[0]!.equipment_id).toBeNull();
+    expect(db.equipmentLinks[0]!.request_id).toBe('req-1');
+  });
+
+  it('writes one link row per selected equipment id', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Fleet Fuel',
+      explanation: 'diesel',
+      confirmedAmountCents: 30000,
+      equipmentLinks: { equipmentIds: ['eq-1', 'eq-2'], notEquipmentRelated: false },
+    });
+    expect(db.equipmentLinks.map((l) => l.equipment_id).sort()).toEqual(['eq-1', 'eq-2']);
+    expect(db.equipmentLinks.every((l) => !l.is_not_equipment_related)).toBe(true);
+  });
+
+  it('stamps variance acknowledgment columns when state=acknowledged', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Clark Pest',
+      explanation: 'extra treatment',
+      confirmedAmountCents: 40000,
+      equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+      varianceFlagState: 'acknowledged',
+      varianceAcknowledgedBy: 'u-morena',
+      varianceAcknowledgmentNote: 'confirmed with Morena',
+    });
+    const row = db.requests[0]!;
+    expect(row.variance_flag_state).toBe('acknowledged');
+    expect(row.variance_acknowledged_by).toBe('u-morena');
+    expect(row.variance_acknowledged_at).not.toBeNull();
+    expect(row.variance_acknowledgment_note).toBe('confirmed with Morena');
+  });
+
+  it('does NOT create equipment links for the loser of a race', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq({ status: 'approved', decided_by: 'u-janette', decided_at: new Date() })],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await expect(
+      decideRequest({
+        prisma: fp(db),
+        requestId: 'req-1',
+        decision: 'approved',
+        actorUserId: 'u-morena',
+        siteId: 'site-w',
+        vendorFreeform: 'Sunbelt Rentals',
+        explanation: 'mower rental',
+        confirmedAmountCents: 12500,
+        equipmentLinks: { equipmentIds: ['eq-1'], notEquipmentRelated: false },
+      }),
+    ).rejects.toBeInstanceOf(ApAlreadyDecidedError);
+    expect(db.equipmentLinks).toHaveLength(0);
+  });
+});

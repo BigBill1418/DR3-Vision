@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-1/4/6 — structured Approve + equipment linking + variance banner)
+
+- **The AP Approve path is now STRUCTURED.** A real-site Approve (Woodland/Eugene)
+  requires four non-empty fields — vendor freeform (with the exact "check spelling
+  and capitalization…" helper prompt), an explanation (replaces the single note on
+  Approve only), a confirmed amount pre-filled from the extraction result with a
+  HIGH/MEDIUM/LOW/FAILED confidence badge (approver-overridable), and an equipment
+  multi-select (site-filtered typeahead over the new `equipment` master, with an
+  explicit mutually-exclusive "Not equipment-related" option; at least one selection
+  required; writes `ap_equipment_links`; NO inline creation). **Reject / Hold /
+  NOT-DR3 keep their single reason/note field unchanged** (§5.4 #4). Extraction only
+  pre-fills; the approver confirms every field (§5.4 #5).
+- **Variance banner + block-until-acknowledged gate (D-M5-4).** When the typed vendor
+  matches an ESTABLISHED baseline (`ap_vendor_baselines`, invoice_count ≥ 3) and the
+  confirmed amount trips the $50-flat OR 15%-percent thresholds (either-trips,
+  per-vendor overrides honored), a RED banner shows the baseline mean, invoice count,
+  and last 3 invoices, and the Approve button is disabled until the approver clicks
+  "I've verified the variance" (stamps `variance_acknowledged_by`/`_at` + optional
+  note; rides the decision email + stamped PDF footer).
+- **Server-side enforcement (never trust the client).** `src/lib/ap/variance.ts`
+  (pure either-trips evaluation + baseline/threshold resolution) and
+  `src/lib/ap/equipment.ts` (site-scoped active-equipment validation) back the decide
+  route: it re-validates all four required fields, re-checks equipment ids against the
+  site, and re-evaluates the variance — refusing an above-threshold trip that was not
+  acknowledged. New read endpoints `GET /api/ops/ap/equipment?site=` and
+  `POST /api/ops/ap/variance-check` feed the panel. `decideRequest` persists the
+  structured columns (`vendor_freeform`/`explanation`/`confirmed_amount_cents`/variance
+  state), writes `ap_equipment_links` atomically with the flip, and STOPS writing the
+  deprecated `vendor`/`amount_cents` (kept, per hard rule #1); the decision email +
+  stamp now read the structured columns (falling back to the legacy columns for
+  pre-Amendment-5 rows). Tests: `variance.test.ts`, `equipment.test.ts`, structured
+  cases in `decide/route.test.ts` + `approvals.test.ts`, and the rewritten
+  `ApQueueClient.test.tsx` gating test. (D-M5-3 dual-approval routing is a separate
+  slice.)
+
 ### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-2 — intake auto-extraction pipeline)
 
 - **New `src/lib/ap/extraction/` module: hybrid invoice amount/vendor extraction

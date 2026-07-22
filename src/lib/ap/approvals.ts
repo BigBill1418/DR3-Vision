@@ -19,6 +19,7 @@ import { log } from '@/lib/observability/logger';
 import { formatPacificDateTime } from '@/lib/time';
 import { getApAttachmentBytes, putApDecisionPdf } from '@/lib/r2';
 import { isInternal, internalDomain } from './senders';
+import type { ApVarianceFlagState } from './extraction/types';
 import {
   stampApproval,
   stampImage,
@@ -138,6 +139,29 @@ export interface DecideArgs {
    * REQUIRED, `siteId` MUST be absent, and the row is persisted with site_id NULL +
    * filed_not_dr3 true — never filed against a real site's books. */
   filedNotDr3?: boolean;
+  // ─── ADR-0046 Amendment 5 (D-M5-1/4/6) — structured Approve. Present ONLY on the
+  // structured Approve path (real-site approve); Reject / NOT-DR3 keep the single
+  // `note`/`vendor`/`amountCents` fields above. When `vendorFreeform` is set the
+  // decide write persists the structured columns and STOPS writing the deprecated
+  // `vendor`/`amount_cents` (hard rule #1 — columns kept, no longer written).
+  /** D-M5-1 — approver-typed vendor (replaces the deprecated `vendor` at decide). */
+  vendorFreeform?: string;
+  /** D-M5-1 — Approve's transaction explanation (replaces `decision_note` on Approve). */
+  explanation?: string;
+  /** D-M5-1 — approver-confirmed amount (replaces the deprecated `amount_cents`). */
+  confirmedAmountCents?: number;
+  /** D-M5-6 — equipment linkage written to ap_equipment_links, atomically with the
+   * decision. Exactly one of a non-empty `equipmentIds` OR `notEquipmentRelated`
+   * (validated at the route boundary). */
+  equipmentLinks?: { equipmentIds: readonly string[]; notEquipmentRelated: boolean };
+  /** D-M5-4 — variance flag state to stamp on the row. `acknowledged` is only ever
+   * passed after the route enforced an explicit acknowledgment of an above-threshold
+   * trip; a tripped-but-unacknowledged decision never reaches here. */
+  varianceFlagState?: ApVarianceFlagState;
+  /** D-M5-4 — approver who acknowledged the variance (set iff state=acknowledged). */
+  varianceAcknowledgedBy?: string;
+  /** D-M5-4 — optional additional acknowledgment note. */
+  varianceAcknowledgmentNote?: string;
   /** Test seam — inject a deterministic PDF renderer so unit tests never launch Chromium. */
   renderer?: PdfRenderer;
 }
@@ -256,6 +280,11 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   // action wins; a row already decided (or racing) matches nothing → count 0 →
   // ApAlreadyDecidedError below. The loser path mutated nothing, so it needs no
   // transaction.
+  // ADR-0046 Amendment 5 (D-M5-1) — the STRUCTURED Approve write. When the route
+  // supplies `vendorFreeform` the decision persists the structured columns and does
+  // NOT write the deprecated `vendor`/`amount_cents` (hard rule #1: kept, unwritten).
+  // The single-note fields stay the path for Reject / NOT-DR3.
+  const structured = typeof args.vendorFreeform === 'string';
   const res = await prisma.$transaction(async (tx) => {
     const r = await tx.apRequest.updateMany({
       where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
@@ -263,9 +292,32 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
         status: args.decision,
         decided_by: args.actorUserId,
         decided_at: decidedAt,
-        ...(args.note ? { decision_note: args.note } : {}),
-        ...(args.vendor ? { vendor: args.vendor } : {}),
-        ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
+        // Structured Approve → explanation + vendor_freeform + confirmed_amount_cents
+        // + variance state (each field explicit `| null` to satisfy exactOptional);
+        // otherwise the legacy single-note / deprecated columns.
+        ...(structured
+          ? {
+              vendor_freeform: args.vendorFreeform ?? null,
+              explanation: args.explanation ?? null,
+              confirmed_amount_cents:
+                typeof args.confirmedAmountCents === 'number' ? args.confirmedAmountCents : null,
+              variance_flag_state: args.varianceFlagState ?? 'not_applicable',
+              variance_acknowledged_by:
+                args.varianceFlagState === 'acknowledged'
+                  ? (args.varianceAcknowledgedBy ?? args.actorUserId)
+                  : null,
+              variance_acknowledged_at:
+                args.varianceFlagState === 'acknowledged' ? decidedAt : null,
+              variance_acknowledgment_note:
+                args.varianceFlagState === 'acknowledged'
+                  ? (args.varianceAcknowledgmentNote ?? null)
+                  : null,
+            }
+          : {
+              ...(args.note ? { decision_note: args.note } : {}),
+              ...(args.vendor ? { vendor: args.vendor } : {}),
+              ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
+            }),
         // Location: NOT-DR3 clears site_id and sets the marker (never both); a
         // normal decision files the resolved site (guaranteed present by
         // assertDecisionSite above — the conditional keeps exactOptional happy).
@@ -276,6 +328,23 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
             : {}),
       },
     });
+    if (r.count > 0 && args.equipmentLinks) {
+      // D-M5-6 — write the equipment linkage in the SAME transaction as the flip:
+      // one row per selected asset, OR a single is_not_equipment_related row for the
+      // explicit-none case. A committed decision always carries its equipment record.
+      const { equipmentIds, notEquipmentRelated } = args.equipmentLinks;
+      if (notEquipmentRelated) {
+        await tx.apEquipmentLink.create({
+          data: { request_id: args.requestId, is_not_equipment_related: true },
+        });
+      } else {
+        for (const equipmentId of equipmentIds) {
+          await tx.apEquipmentLink.create({
+            data: { request_id: args.requestId, equipment_id: equipmentId },
+          });
+        }
+      }
+    }
     if (r.count > 0) {
       // Won — audit the winning transition in the SAME tx (both-attempts-audited).
       await writeAudit(
@@ -290,11 +359,24 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
             outcome: 'won',
             status: args.decision,
             from_hold: priorStatus === 'pending_review',
-            has_note: !!args.note,
-            has_vendor: !!args.vendor,
-            has_amount: typeof args.amountCents === 'number',
+            structured,
+            has_note: structured ? !!args.explanation : !!args.note,
+            has_vendor: structured ? !!args.vendorFreeform : !!args.vendor,
+            has_amount: structured
+              ? typeof args.confirmedAmountCents === 'number'
+              : typeof args.amountCents === 'number',
             has_site: !!args.siteId,
             filed_not_dr3: !!args.filedNotDr3,
+            ...(structured
+              ? {
+                  variance_flag_state: args.varianceFlagState ?? 'not_applicable',
+                  equipment: args.equipmentLinks
+                    ? args.equipmentLinks.notEquipmentRelated
+                      ? 'not_equipment_related'
+                      : args.equipmentLinks.equipmentIds.length
+                    : null,
+                }
+              : {}),
           },
         },
         { tx },
@@ -592,6 +674,16 @@ export async function sendDecisionEmail(
       decision_note: true,
       vendor: true,
       amount_cents: true,
+      // ADR-0046 Amendment 5 (D-M5-1/4) — structured Approve columns. On an Approve
+      // these carry the decision facts; the deprecated vendor/amount_cents stay null.
+      // The email prefers the structured value and falls back to the legacy column so
+      // pre-Amendment-5 rows (and Reject/NOT-DR3) still render correctly.
+      vendor_freeform: true,
+      confirmed_amount_cents: true,
+      explanation: true,
+      variance_flag_state: true,
+      variance_acknowledgment_note: true,
+      variance_acknowledged_by: true,
       decided_by: true,
       sender_address: true,
       body_html_sanitized: true,
@@ -642,12 +734,29 @@ export async function sendDecisionEmail(
   // decision instant in Pacific wall-clock (+ ' PT') like every other AP surface
   // (notify.ts new-request "Received", stamp.ts stamp line, the hold-notice email).
   const decidedLabel = `${formatPacificDateTime(decidedAt)} PT`;
+  // Amendment 5 — prefer the structured Approve columns, falling back to the
+  // deprecated vendor/amount_cents (Reject/NOT-DR3 + pre-Amendment-5 rows).
+  const effectiveAmountCents =
+    typeof req.confirmed_amount_cents === 'number' ? req.confirmed_amount_cents : req.amount_cents;
+  const effectiveVendor = req.vendor_freeform ?? req.vendor;
+  // On an Approve the transaction narrative is `explanation`; otherwise decision_note.
+  const effectiveNote =
+    req.status === 'approved' ? (req.explanation ?? req.decision_note) : req.decision_note;
   const amountLine =
-    typeof req.amount_cents === 'number'
-      ? `<li>Amount: $${(req.amount_cents / 100).toFixed(2)}</li>`
+    typeof effectiveAmountCents === 'number'
+      ? `<li>Amount: $${(effectiveAmountCents / 100).toFixed(2)}</li>`
       : '';
-  const vendorLine = req.vendor ? `<li>Vendor: ${escapeHtml(req.vendor)}</li>` : '';
-  const noteLine = req.decision_note ? `<li>Note: ${escapeHtml(req.decision_note)}</li>` : '';
+  const vendorLine = effectiveVendor ? `<li>Vendor: ${escapeHtml(effectiveVendor)}</li>` : '';
+  const noteLine = effectiveNote ? `<li>Note: ${escapeHtml(effectiveNote)}</li>` : '';
+  // D-M5-4 — an acknowledged variance rides the decision email as an audit footer.
+  const varianceLine =
+    req.variance_flag_state === 'acknowledged'
+      ? `<li>⚠ Variance acknowledged by ${escapeHtml(await resolveName(prisma, req.variance_acknowledged_by))}${
+          req.variance_acknowledgment_note
+            ? ` — ${escapeHtml(req.variance_acknowledgment_note)}`
+            : ''
+        }</li>`
+      : '';
   // ADR-0046 Amendment 4 — the Great Plains matching keys (request id + original
   // subject) are STRIPPED from the mail body. They already ride the SUBJECT line
   // (below) and the stamped decision PDF, so repeating them inline was redundant
@@ -672,6 +781,7 @@ export async function sendDecisionEmail(
       ${vendorLine}
       ${amountLine}
       ${noteLine}
+      ${varianceLine}
     </ul>`;
 
   // ADR-0046 Amendment 4 — stamp the ORIGINAL invoice (both decisions), attach the
@@ -786,6 +896,11 @@ interface StampSourceRequest {
   body_text: string | null;
   decided_by: string | null;
   decision_note: string | null;
+  // Amendment 5 (D-M5-1/4) — the Approve narrative + an acknowledged-variance note
+  // ride the stamped PDF band too. Null on Reject / NOT-DR3 / pre-Amendment-5 rows.
+  explanation?: string | null;
+  variance_flag_state?: string | null;
+  variance_acknowledgment_note?: string | null;
 }
 
 /** One stamped decision artifact to attach + archive (ADR-0046 Amendment 4). */
@@ -950,6 +1065,22 @@ async function stampOneOriginal(
  * NULL. The caller already records the first artifact's dual-sha + attaches every
  * artifact, so this reorder auto-populates the sha with zero caller changes.
  */
+/**
+ * The note stamped onto the decision PDF band. On an Approve the narrative is the
+ * structured `explanation` (falling back to `decision_note` for pre-Amendment-5
+ * rows); Reject/NOT-DR3 keep `decision_note`. An acknowledged variance appends a
+ * compact audit suffix so the stamped document itself records the vetting.
+ */
+function stampNote(req: StampSourceRequest): string | null {
+  const base =
+    req.status === 'approved' ? (req.explanation ?? req.decision_note) : req.decision_note;
+  if (req.variance_flag_state !== 'acknowledged') return base;
+  const suffix = req.variance_acknowledgment_note
+    ? `[Variance acknowledged: ${req.variance_acknowledgment_note}]`
+    : '[Variance acknowledged]';
+  return base ? `${base} ${suffix}` : suffix;
+}
+
 async function buildDecisionStamp(
   prisma: PrismaClient,
   req: StampSourceRequest,
@@ -968,8 +1099,10 @@ async function buildDecisionStamp(
     decidedAt,
     // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too. Because
     // the note is stamped onto every attachment, dropping the body render (below)
-    // when attachments exist loses no approver-relevant context.
-    note: req.decision_note,
+    // when attachments exist loses no approver-relevant context. Amendment 5: on an
+    // Approve the narrative is `explanation`; an acknowledged variance appends an
+    // audit suffix so the stamped document shows the vetting.
+    note: stampNote(req),
     // 2026-07-15 directive — the site tag rides the per-page stamp line.
     siteName,
     // 2026-07-20 amendment — NOT-DR3 replaces the site slot with an explicit marker

@@ -48,6 +48,47 @@ export interface FakeApRequest {
   held_by: string | null;
   held_at: Date | null;
   hold_note: string | null;
+  // ADR-0046 Amendment 5 — structured decide + variance. Optional so existing test
+  // fixtures (pendingReq() etc.) need not enumerate them; create() defaults them and
+  // the structured decide write (updateMany) sets them at decision time.
+  vendor_freeform?: string | null;
+  explanation?: string | null;
+  confirmed_amount_cents?: number | null;
+  variance_flag_state?: string;
+  variance_acknowledged_by?: string | null;
+  variance_acknowledged_at?: Date | null;
+  variance_acknowledgment_note?: string | null;
+}
+export interface FakeEquipment {
+  id: string;
+  site_id: string;
+  display_name: string;
+  category: string;
+  is_active: boolean;
+}
+export interface FakeEquipmentLink {
+  id: string;
+  request_id: string;
+  equipment_id: string | null;
+  is_not_equipment_related: boolean;
+}
+export interface FakeVendorBaseline {
+  vendor_name_normalized: string;
+  vendor_display_name: string;
+  invoice_count: number;
+  mean_amount_cents: number;
+  median_amount_cents: number;
+  min_amount_cents: number;
+  max_amount_cents: number;
+  stddev_amount_cents: number | null;
+  variance_flat_override_cents: number | null;
+  variance_percent_override: number | null;
+}
+export interface FakeBaselineHistory {
+  id: string;
+  vendor_name_normalized: string;
+  invoice_date: Date;
+  invoice_amount_cents: number;
 }
 export interface FakeApApprover {
   id: string;
@@ -121,6 +162,11 @@ export interface FakeDb {
   decisionRecipients: Array<{ email: string; active: boolean }>;
   deltaTokens: Array<{ mailbox: string; folder: string; delta_token: string }>;
   pollRuns: FakePollRun[];
+  // ADR-0046 Amendment 5.
+  equipment: FakeEquipment[];
+  equipmentLinks: FakeEquipmentLink[];
+  baselines: FakeVendorBaseline[];
+  baselineHistory: FakeBaselineHistory[];
 }
 
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
@@ -137,6 +183,10 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     decisionRecipients: seed.decisionRecipients ?? [],
     deltaTokens: seed.deltaTokens ?? [],
     pollRuns: seed.pollRuns ?? [],
+    equipment: seed.equipment ?? [],
+    equipmentLinks: seed.equipmentLinks ?? [],
+    baselines: seed.baselines ?? [],
+    baselineHistory: seed.baselineHistory ?? [],
   };
 }
 
@@ -216,6 +266,13 @@ export function makeFakePrisma(db: FakeDb) {
           held_by: (d['held_by'] as string | null) ?? null,
           held_at: (d['held_at'] as Date | null) ?? null,
           hold_note: (d['hold_note'] as string | null) ?? null,
+          vendor_freeform: (d['vendor_freeform'] as string | null) ?? null,
+          explanation: (d['explanation'] as string | null) ?? null,
+          confirmed_amount_cents: (d['confirmed_amount_cents'] as number | null) ?? null,
+          variance_flag_state: (d['variance_flag_state'] as string | undefined) ?? 'not_applicable',
+          variance_acknowledged_by: (d['variance_acknowledged_by'] as string | null) ?? null,
+          variance_acknowledged_at: (d['variance_acknowledged_at'] as Date | null) ?? null,
+          variance_acknowledgment_note: (d['variance_acknowledgment_note'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -430,6 +487,72 @@ export function makeFakePrisma(db: FakeDb) {
           }),
         );
         return row ? pick(row, args.select) : null;
+      },
+    },
+    // ADR-0046 Amendment 5 (D-M5-6) — equipment master + link join.
+    equipment: {
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
+        let rows = db.equipment.filter((e) => {
+          if (idIn && !idIn.includes(e.id)) return false;
+          if (w['site_id'] !== undefined && e.site_id !== w['site_id']) return false;
+          if (w['is_active'] !== undefined && e.is_active !== w['is_active']) return false;
+          return true;
+        });
+        rows = rows.sort((a, b) => a.display_name.localeCompare(b.display_name));
+        return rows.map((e) => (args.select ? pick(e, args.select) : { ...e }));
+      },
+    },
+    apEquipmentLink: {
+      async create(args: { data: AnyRecord }) {
+        const d = args.data;
+        const row: FakeEquipmentLink = {
+          id: uid('eqlink'),
+          request_id: d['request_id'] as string,
+          equipment_id: (d['equipment_id'] as string | null) ?? null,
+          is_not_equipment_related: (d['is_not_equipment_related'] as boolean | undefined) ?? false,
+        };
+        db.equipmentLinks.push(row);
+        return { ...row };
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.equipmentLinks.filter(
+          (l) => w['request_id'] === undefined || l.request_id === w['request_id'],
+        );
+        return rows.map((l) => (args.select ? pick(l, args.select) : { ...l }));
+      },
+    },
+    // ADR-0046 Amendment 5 (D-M5-4) — vendor baseline + history.
+    apVendorBaseline: {
+      async findUnique(args: { where: AnyRecord }) {
+        const row = db.baselines.find(
+          (b) => b.vendor_name_normalized === args.where['vendor_name_normalized'],
+        );
+        return row ? { ...row } : null;
+      },
+    },
+    apVendorBaselineHistory: {
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        let rows = db.baselineHistory.filter(
+          (h) => w['vendor_name_normalized'] === undefined || h.vendor_name_normalized === w['vendor_name_normalized'],
+        );
+        rows = rows.sort((a, b) => b.invoice_date.getTime() - a.invoice_date.getTime());
+        if (typeof args.take === 'number') rows = rows.slice(0, args.take);
+        return rows.map((h) => (args.select ? pick(h, args.select) : { ...h }));
+      },
+      async create(args: { data: AnyRecord }) {
+        const d = args.data;
+        const row: FakeBaselineHistory = {
+          id: uid('hist'),
+          vendor_name_normalized: d['vendor_name_normalized'] as string,
+          invoice_date: (d['invoice_date'] as Date) ?? new Date(),
+          invoice_amount_cents: d['invoice_amount_cents'] as number,
+        };
+        db.baselineHistory.push(row);
+        return { ...row };
       },
     },
     auditLog: {
