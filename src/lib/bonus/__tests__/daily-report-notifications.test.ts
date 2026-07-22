@@ -283,6 +283,16 @@ describe('renderHtmlBody — EOD inventory', () => {
     expect(html).not.toContain('Inventory pending physical count');
   });
 
+  it('HEALTHY renders a `${date}T00:00:00Z` count date as its own day, not the prior day', () => {
+    // Regression (finding 4): the manager API writes snapshot_at at UTC midnight. Rendering
+    // that @db.Date key in the Pacific zone printed the PREVIOUS day (e.g. "Jul 21").
+    const html = bodyWithEod(
+      makeEod({ anchor: { countedAt: new Date('2026-07-22T00:00:00Z'), poolAttribution: 'measured', daysSince: 0, counter: 'Morena' } }),
+    );
+    expect(html).toContain('Jul 22, 2026 (today)');
+    expect(html).not.toContain('Jul 21, 2026');
+  });
+
   it('HEALTHY labels a positive delta as net inbound', () => {
     const html = bodyWithEod(makeEod({ deltaFromYesterday: 88 }));
     expect(html).toContain('net inbound');

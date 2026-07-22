@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { RecordValidationError } from '@/lib/loads/record-guards';
+import { pacificMidnightInstantOfDayISO } from '@/lib/time';
 
 interface Row {
   id: string;
@@ -153,7 +154,7 @@ describe('upsertBulkInboundDay — source attribution', () => {
     expect(row.submitted_by_id).toBe(ACTOR);
   });
 
-  it('writes a balance-admissible row: verified status, arrived_at at UTC midnight', async () => {
+  it('writes a balance-admissible row: verified status, arrived_at at PACIFIC midnight', async () => {
     await upsertBulkInboundDay({
       siteId: SITE,
       // A mid-day timestamp must still key to the business day.
@@ -165,7 +166,30 @@ describe('upsertBulkInboundDay — source attribution', () => {
     });
     const row = store.rows[0]!;
     expect(row.status).toBe('verified');
-    expect(row.arrived_at?.toISOString()).toBe('2026-07-20T00:00:00.000Z');
+    // Pacific midnight of 2026-07-20 (PDT, UTC-7) = 07:00Z — the same instant the D1
+    // promotion window keys on, so the row can never fall a Pacific day out of its month.
+    expect(row.arrived_at?.toISOString()).toBe('2026-07-20T07:00:00.000Z');
+  });
+
+  it('a first-of-month row lands INSIDE that month`s Pacific promotion window (finding 3)', async () => {
+    // A UTC-midnight July-1 row (2026-07-01T00:00:00Z = 2026-06-30 17:00 PDT) sits below
+    // the July promotion window`s lower bound and escapes the conflict-refusal → double
+    // count. The Pacific-midnight instant is exactly that lower bound, so it is caught.
+    await upsertBulkInboundDay({
+      siteId: SITE,
+      inboundDate: new Date('2026-07-01T00:00:00Z'),
+      totalUnits: 200,
+      programUnits: 200,
+      nonProgramUnits: 0,
+      actorUserId: ACTOR,
+    });
+    const arrivedAt = store.rows[0]!.arrived_at!;
+    const julyWindowLowerBound = pacificMidnightInstantOfDayISO('2026-07-01');
+    expect(arrivedAt.getTime()).toBe(julyWindowLowerBound.getTime());
+    // Explicitly NOT the old UTC-midnight value that escaped the window.
+    expect(arrivedAt.toISOString()).not.toBe('2026-07-01T00:00:00.000Z');
+    // And it is >= the window`s inclusive lower bound (detectConflicts would match it).
+    expect(arrivedAt.getTime()).toBeGreaterThanOrEqual(julyWindowLowerBound.getTime());
   });
 
   it('audits the insert with the provenance and unit counts', async () => {

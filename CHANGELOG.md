@@ -5,6 +5,35 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (Loads & Inventory code-review remediation — money-safe boundaries)
+
+Four review findings against `feat/loads-inventory-real-data`; every figure stays on the
+single `onHand` running balance (no second inventory total is ever committed).
+
+- **Promotion inbound reconciliation (major).** When a workbook carries its own
+  authoritative Processed ledger, the close is computed from the ledger but `onHand`
+  re-derives the live floor from the inserted `inbound_loads` rows. The raw DAY
+  per-shipment grid can over-sum inbound (June DAY23 Recology Healdsburg's 85-unit
+  non-program row, netted out of the billing close), so the stored close and the live
+  query-backed balance diverged (4,062 vs 3,977). `promoteWorkbookImport` now calls
+  `assertPromotedInboundReconciles` before any write and refuses the promotion
+  (`PromotionInboundReconciliationError`, 422) unless the promoted inbound sums exactly to
+  the ledger inbound. No-op without a ledger. `src/lib/audit/workbook-promotion.ts`.
+- **paper_bulk `arrived_at` boundary (major).** Bulk daily inbound wrote `arrived_at` at
+  UTC midnight; the D1 promotion conflict detector keys on Pacific-midnight instant
+  bounds, so a first-of-month paper row sat one Pacific day early and escaped that month's
+  promotion-refusal (silent double-count). Now written at Pacific midnight of the business
+  day (`pacificMidnightInstantOfDayISO`) — the exact bound the window uses; UTC-day
+  running-balance/EOD math is unchanged. `src/lib/loads/bulk-inbound.ts`.
+- **Physical-count anchor off-by-one (major).** `snapshot_at` is written by the manager
+  API as `${date}T00:00:00Z` (a @db.Date key, not a true instant). `daysSinceAnchor` and
+  the count-date display re-shifted it through the Pacific zone, printing the count one day
+  early and tripping the stale band a day early. Both now treat it as a @db.Date key
+  (render/age in UTC). `src/lib/loads/eod-inventory.ts`,
+  `src/lib/bonus/daily-report-notifications.ts`.
+- **Outdoor-removal regression test typecheck (blocker).** Already resolved at `ccf1fbd`
+  (bracket access for index-signature Record fields; TS4111 cleared).
+
 ### Added — 2026-07-22 (ADR-0037 Phase 4 — End-of-Day Inventory on the Daily Production Report)
 
 Spec §4 / §A.6. The ADR-0030 daily production email now answers "what is on the floor

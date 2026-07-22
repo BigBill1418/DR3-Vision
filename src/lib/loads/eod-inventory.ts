@@ -37,7 +37,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
-import { pacificDayKeyUTC } from '@/lib/time';
+import { dayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
 export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
@@ -106,9 +106,18 @@ export function endOfReportDay(reportDate: Date): Date {
   return new Date(reportDate.getTime() + 86_400_000 - 1);
 }
 
-/** Whole days between an anchor instant's Pacific day and a @db.Date day key. */
+/**
+ * Whole days between the anchor's count day and a @db.Date report-day key.
+ *
+ * `snapshot_at` is written by the manager API as `${countedAt}T00:00:00Z` — a
+ * @db.Date-shaped key (UTC midnight of the Pacific calendar day), NOT a true instant.
+ * So its own UTC Y/M/D ARE the count day; take the day key from those directly. Do NOT
+ * re-shift through the Pacific zone (`pacificDayKeyUTC`) — that pushes UTC-midnight back
+ * a Pacific day, making a same-day count read as "1 day ago" and tripping the stale band
+ * a day early (finding 4).
+ */
 export function daysSinceAnchor(countedAt: Date, reportDate: Date): number {
-  const anchorKey = pacificDayKeyUTC(countedAt);
+  const anchorKey = dayKeyUTCFromISO(dayISO(countedAt));
   return Math.round((reportDate.getTime() - anchorKey.getTime()) / 86_400_000);
 }
 

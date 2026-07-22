@@ -15,9 +15,14 @@
 // no BOL, no photos, no transporter, and no unload timings. When the iPads come
 // online the aggregate rows simply stop being written and per-load rows take over.
 //
-// The row is written at `status = 'verified'` with `arrived_at` at UTC midnight of
-// the business day, because that is exactly what {@link onHand} counts as inbound
-// (VERIFIED_INBOUND_STATUSES + the `arrived_at` window). The Q8 verify-gate
+// The row is written at `status = 'verified'` with `arrived_at` at the PACIFIC-midnight
+// instant of the business day (not UTC midnight), because that is exactly what
+// {@link onHand} counts as inbound (VERIFIED_INBOUND_STATUSES + the `arrived_at` window)
+// AND what the D1 promotion conflict detector keys on (`pacificMidnightInstantOfDayISO`
+// bounds). A UTC-midnight instant lands 7/8 h earlier — one Pacific day back — so a
+// first-of-month paper row would escape that month's promotion-refusal window and get
+// silently double-counted (finding 3). Pacific midnight of day N always falls within UTC
+// calendar day N, so the UTC-day-based running-balance/EOD math is unchanged. The Q8 verify-gate
 // invariant — `program + non_program == total_units` — is enforced here before the
 // write, so a paper row can never enter the balance with a split that does not sum.
 //
@@ -28,15 +33,22 @@
 
 import { prisma } from '@/lib/prisma';
 import { RecordValidationError } from '@/lib/loads/record-guards';
+import { dayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
 
 const TABLE = 'inbound_loads';
 
 /** Provenance tag for every row this service writes. */
 export const PAPER_BULK_SOURCE_TYPE = 'paper_bulk' as const;
 
-/** UTC-midnight key for the business day, matching the day-keyed unique index. */
-function inboundDateUTC(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+/**
+ * The `arrived_at` instant for a paper-bulk business day: PACIFIC midnight of that
+ * day (derived from the input's UTC calendar Y/M/D — the day key). This is the value
+ * both the day-keyed unique index and the D1 promotion window key on; a UTC-midnight
+ * value would sit one Pacific day earlier and slip a first-of-month row out of its own
+ * month's promotion-refusal window (finding 3).
+ */
+function inboundArrivedAt(date: Date): Date {
+  return pacificMidnightInstantOfDayISO(dayISO(date));
 }
 
 function assertWhole(name: string, n: number, min = 0): void {
@@ -65,7 +77,7 @@ function assertSplit(totalUnits: number, programUnits: number, nonProgramUnits: 
 export interface BulkInboundView {
   id: string;
   siteId: string;
-  /** The business day this aggregate covers (UTC midnight). */
+  /** The business day this aggregate covers (Pacific midnight of the day). */
   inboundDate: Date;
   totalUnits: number;
   programUnits: number;
@@ -117,7 +129,7 @@ export async function upsertBulkInboundDay(args: {
   slipNumber?: string | null;
 }): Promise<BulkInboundView> {
   assertSplit(args.totalUnits, args.programUnits, args.nonProgramUnits);
-  const day = inboundDateUTC(args.inboundDate);
+  const day = inboundArrivedAt(args.inboundDate);
 
   const existing = await prisma.inboundLoad.findFirst({
     where: { site_id: args.siteId, load_source_type: PAPER_BULK_SOURCE_TYPE, arrived_at: day },

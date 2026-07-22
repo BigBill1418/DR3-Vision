@@ -40,18 +40,19 @@ function fmtShort(d: Date): string {
   return SHORT_DATE.format(d);
 }
 /**
- * A physical-count `snapshot_at` is a true INSTANT, not a @db.Date day — render
- * it in Bill's Pacific wall clock (CLAUDE.md time rule). Formatting it in UTC
- * would push an afternoon count onto the following day.
+ * A physical-count `snapshot_at` is a @db.Date-shaped day key: the manager API writes
+ * it as `${countedAt}T00:00:00Z`, so its UTC components ARE the Pacific calendar count
+ * day. Render it in UTC — formatting a UTC-midnight key in the Pacific zone would push
+ * it onto the PREVIOUS day (finding 4). Matches the @db.Date rendering rule in time.ts.
  */
-const PACIFIC_SHORT_DATE = new Intl.DateTimeFormat('en-US', {
+const COUNT_DAY_SHORT_DATE = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
   year: 'numeric',
-  timeZone: 'America/Los_Angeles',
+  timeZone: 'UTC',
 });
-function fmtInstantShortPT(d: Date): string {
-  return PACIFIC_SHORT_DATE.format(d);
+function fmtCountDayShort(d: Date): string {
+  return COUNT_DAY_SHORT_DATE.format(d);
 }
 
 function fmtRange(start: Date, end: Date): string {
@@ -164,7 +165,7 @@ export function renderEodInventoryHtml(
 
   if (eod.state === 'stale') {
     const anchorLine = eod.anchor
-      ? `Last measured anchor: <strong>${escapeHtml(fmtInstantShortPT(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`
+      ? `Last measured anchor: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`
       : 'No physical count on record for this site.';
     return eodPanel(
       siteName,
@@ -181,7 +182,7 @@ export function renderEodInventoryHtml(
       ? '<em>n/a</em>'
       : `${eod.programPct.toFixed(1)}% / ${eod.nonProgramPct.toFixed(1)}%`;
   const counted = eod.anchor
-    ? `${fmtInstantShortPT(eod.anchor.countedAt)}${eod.anchor.daysSince === 0 ? ' (today)' : ` (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`}`
+    ? `${fmtCountDayShort(eod.anchor.countedAt)}${eod.anchor.daysSince === 0 ? ' (today)' : ` (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`}`
     : '—';
   const rows =
     eodRowHtml('Program units on hand', fmtUnits(eod.programOnHand), true) +

@@ -101,9 +101,13 @@ describe('daysSinceAnchor', () => {
     expect(daysSinceAnchor(countedAt(2026, 6, 30), REPORT_DATE)).toBe(22);
   });
 
-  it('reads a late-evening Pacific count as its Pacific day, not the UTC day', () => {
-    // 2026-07-21 23:30 PDT === 2026-07-22 06:30 UTC — still 1 day ago, not 0.
-    expect(daysSinceAnchor(new Date(Date.UTC(2026, 6, 22, 6, 30)), REPORT_DATE)).toBe(1);
+  it('reads a `${date}T00:00:00Z` day-key snapshot_at as its own count day (the API write shape)', () => {
+    // The manager API writes snapshot_at as `${countedAt}T00:00:00Z` — a @db.Date key,
+    // NOT a true instant. A same-day count is 0 days ago; it must NOT be re-shifted back a
+    // Pacific day (which read as "1 day ago" and tripped the stale band a day early). Finding 4.
+    expect(daysSinceAnchor(new Date('2026-07-22T00:00:00Z'), REPORT_DATE)).toBe(0);
+    expect(daysSinceAnchor(new Date('2026-07-21T00:00:00Z'), REPORT_DATE)).toBe(1);
+    expect(daysSinceAnchor(new Date('2026-06-30T00:00:00Z'), REPORT_DATE)).toBe(22);
   });
 });
 
@@ -164,6 +168,22 @@ describe('getEodInventorySnapshot', () => {
     expect(eod.anchor?.daysSince).toBe(0);
     expect(eod.anchor?.counter).toBe('Morena');
     expect(eod.staleDays).toBe(14);
+  });
+
+  it('HEALTHY — a same-day count stored as `${date}T00:00:00Z` reads as 0 days, not stale', async () => {
+    // Regression (finding 4): the manager API writes snapshot_at at UTC midnight of the
+    // count day. It must age from its own day (0), not one Pacific day earlier (which
+    // read as 1-day-ago and tripped the stale band a day early at the window boundary).
+    store.anchor = {
+      id: 'snap-apishape',
+      snapshot_at: new Date('2026-07-22T00:00:00Z'),
+      pool_attribution: 'measured',
+    };
+    store.balances.set(END_TODAY, { program: 3748, nonProgram: 229 });
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.state).toBe('healthy');
+    expect(eod.anchor?.daysSince).toBe(0);
   });
 
   it('HEALTHY — falls back to the audit actor_label when no user is attached', async () => {
