@@ -5,6 +5,18 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Docs — 2026-07-22 (ADR-0046 Amendment 5 finalize — operator runbook brought current)
+
+- **`docs/operator/ap-approvals.md`** now documents the FULL Amendment 5 approver
+  flow end-to-end: the structured four-field Approve (vendor freeform / explanation
+  / confirmed-amount / equipment multi-select with explicit "Not equipment-related"),
+  the intake auto-extraction confidence badges (HIGH/MEDIUM/LOW/FAILED) + the
+  `anthropic.env` operator handoff, the variance block-until-acknowledged gate, the
+  $1,000 second-approval routing (Woodland → Bill, Eugene → Shannon), and the
+  `/admin/ap/baselines` + `/admin/ap/history` (`can_view_ap_history`) access model.
+  Reject / Hold / NOT-DR3 documented as unchanged (single reason field). No code
+  change — runbook only.
+
 ### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-4/D-M5-5 — vendor baselines + invoice history)
 
 - **Vendor-baseline aggregation** (`src/lib/ap/baselines.ts`): a pure trailing-12-month

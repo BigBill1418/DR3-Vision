@@ -282,6 +282,79 @@ exclude on-hold (`pending_review`) items, which are being actively worked.
    reach the forwarder (Mary CC'd).
 
 
+## 2026-07-22 — Structured Approve + extraction + equipment + variance (ADR-0046 Amendment 5, D-M5-1/D-M5-2/D-M5-6)
+
+Kelsey's post-live feedback ("if all invoices are approved without thought, the
+approval is completely performative") drives this amendment: it installs vetting
+FRICTION on the Approve path. **The change is Approve-only** — Reject, Hold, and
+NOT-DR3 keep their single reason/note field and are untouched.
+
+### The structured Approve panel (four required fields)
+
+A real-site Approve (Woodland or Eugene) now requires **four non-empty fields**
+before the Approve button enables (the server re-validates all four — a
+hand-crafted API call missing any is refused):
+
+1. **Vendor** (freeform) — the approver types the vendor name. Helper prompt:
+   *"Enter the vendor name carefully — check spelling and capitalization. This
+   appears on the returned decision email and Mary's GP filing."* Vendors do not
+   need to be pre-registered; Vision matches loosely to the baseline table but
+   accepts any text. Writes `vendor_freeform` (the legacy `vendor` column is
+   deprecated — kept, no longer written).
+2. **Explanation** (freeform) — replaces the single "note" on the Approve path
+   only. *"What was this transaction for?"* Writes `explanation`.
+3. **Confirmed amount** — pre-filled from the intake auto-extraction (below) with
+   a confidence badge; the approver can always override. Writes
+   `confirmed_amount_cents` (the legacy `amount_cents` column is deprecated).
+4. **Equipment** (multi-select) — always shown; site-filtered typeahead over the
+   equipment master. The approver picks one or more assets **OR** the explicit,
+   mutually-exclusive **"Not equipment-related"** option — one selection is
+   required, which forces a decision every time. Writes `ap_equipment_links`.
+   **No inline creation** — if an asset is missing, an admin adds it via the
+   fleet/equipment surface (or Hold the invoice with a note). This is the
+   friction Kelsey asked for: a Stockton mower charge has no Stockton mower to
+   pick, so the approver pauses.
+
+Extraction only **pre-fills** these fields — the approver still confirms every
+one. Nothing is ever auto-approved or auto-filled without confirmation.
+
+### Amount auto-extraction + confidence badge (D-M5-2)
+
+At intake (during the poll, before the request reaches the queue) Vision runs a
+hybrid extraction and stores the result on `ap_requests.extraction`. Local
+pdf-parse + regex heuristics score the confirmed-amount pre-fill; a Claude API
+fallback fires **only** when the local pass is LOW/FAILED (and only when the
+Anthropic key is configured — see below). The confirmed-amount input shows a
+badge the approver reads before confirming:
+
+- **HIGH** → green ✓ *"Verified"*
+- **MEDIUM** → yellow ⚠ *"Please verify"*
+- **LOW** → red ⚠ *"Low confidence — verify against invoice"*
+- **FAILED** → no badge, blank input, *"Enter amount from invoice"*
+
+Extraction never blocks the poll; a failure just means the approver types the
+amount. **Operator handoff (§4):** the Claude fallback needs
+`~/.dr3-vision-secrets/anthropic.env` (`ANTHROPIC_API_KEY=…`, chmod 600) on
+CHAD-HQ; absent, low-confidence local extraction lands as-is for manual entry.
+Model/timeout are tunable via `AP_EXTRACTION_CLAUDE_MODEL` (default
+`claude-sonnet-4-6`) and `AP_EXTRACTION_CLAUDE_TIMEOUT_MS` (default `30000`).
+
+### Variance flag — block until acknowledged (D-M5-4, approver side)
+
+At Approve time, if the typed vendor matches an **established** baseline
+(`ap_vendor_baselines`, 3+ invoices in the trailing 12 months) and the confirmed
+amount trips the thresholds (**$50 flat OR 15%**, either-trips; per-vendor
+overrides honored), a **RED variance banner** appears above the Approve button
+showing the baseline mean, invoice count, and the last three invoices. **The
+Approve button is disabled** until the approver clicks **"I've verified the
+variance"** (which stamps `variance_acknowledged_by`/`_at` and an optional note,
+both riding the decision email + stamped PDF footer). Below threshold, or no
+baseline, the Approve flows normally with no gate. The server re-evaluates the
+variance and refuses an above-threshold trip that was not acknowledged — the
+gate is never client-trust.
+
+---
+
 ## 2026-07-22 — $1,000 second-approval workflow (ADR-0046 Amendment 5, D-M5-3)
 
 Any structured **Approve** whose confirmed amount is **≥ $1,000** no longer files
