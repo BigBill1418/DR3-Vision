@@ -1219,6 +1219,20 @@ const isImagePreview = (ct: string | null): boolean =>
   !!ct && /^image\/(png|jpeg|jpg|webp)$/i.test(ct);
 const isPdfPreview = (ct: string | null): boolean => (ct ?? '').toLowerCase() === 'application/pdf';
 
+// iOS/iPadOS Safari (WebKit) has NO inline <iframe> PDF viewer — a framed PDF renders
+// BLANK on the Eugene iPad. Detect it so the PDF preview surfaces a prominent
+// tap-to-open action instead of a dead frame. Covers iPadOS 13+, which masquerades as
+// desktop macOS (MacIntel) but reports touch points. Client-only (this block never
+// renders during SSR/hydration — it appears only after a user taps Preview).
+const isIosWebkit = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return (
+    /iP(hone|od|ad)/.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+};
+
 interface Presigned {
   url: string;
   inline: boolean;
@@ -1339,10 +1353,32 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
               alt={att.filename ?? 'attachment preview'}
               className="max-h-[32rem] w-auto max-w-full rounded border border-white/10 bg-white"
             />
+          ) : isPdfPreview(presigned.contentType) ? (
+            // iPad Safari (WebKit) renders a framed PDF BLANK. ALWAYS surface a
+            // prominent, touch-sized "Open PDF" action so the approver can read the
+            // invoice on the iPad. On iOS that action REPLACES the (blank) iframe; on
+            // desktop it rides above Chromium's working inline viewer.
+            <div>
+              <button
+                onClick={open}
+                disabled={busy}
+                className="mb-2 inline-flex w-full items-center justify-center rounded-md border border-white/25 bg-white/10 px-4 py-3 text-base font-semibold hover:bg-white/20 disabled:opacity-50 sm:w-auto"
+              >
+                Open PDF in new tab ↗
+              </button>
+              {!isIosWebkit() && (
+                // No sandbox="" here: a full sandbox kills Chromium's built-in PDF
+                // viewer. The frame is cross-origin (R2) and cannot script our origin;
+                // CSP frame-src scopes it to the R2 host (ADR-0046 Amendment 4).
+                <iframe
+                  src={presigned.url}
+                  title={att.filename ?? 'attachment preview'}
+                  className="h-[32rem] w-full rounded border border-white/10 bg-white"
+                />
+              )}
+            </div>
           ) : (
-            // No sandbox="" here: a full sandbox kills Chromium's built-in PDF
-            // viewer. The frame is cross-origin (R2) and cannot script our origin;
-            // CSP frame-src scopes it to the R2 host (ADR-0046 Amendment 4).
+            // Any other inline type — keep the plain frame.
             <iframe
               src={presigned.url}
               title={att.filename ?? 'attachment preview'}

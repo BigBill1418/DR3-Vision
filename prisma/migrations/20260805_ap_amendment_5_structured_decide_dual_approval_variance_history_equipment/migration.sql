@@ -4,7 +4,7 @@
 -- structured decide input, auto-extracted amount, a $1,000 dual-approval hop,
 -- vendor-baseline variance detection, invoice-history search, and equipment
 -- linking. This migration lays the DATA foundation for all of it: new
--- ap_requests columns, one status-enum value, three support enums, four new
+-- ap_requests columns, one status-enum value, three support enums, five new
 -- tables (vendor baseline history + computed baselines + equipment master +
 -- second-approver roster + the request↔equipment join), and a one-time backfill
 -- of the DEPRECATED vendor/amount_cents into the new structured columns.
@@ -36,10 +36,15 @@
 --     user backfills to "no history access" (admins are granted implicitly in
 --     code, not by this column).
 
--- ── Status enum: add the dual-approval hop, ordered BEFORE 'approved' so the DB
--- enum value order matches the schema.prisma declaration (keeps migrate diff
--- clean). Not USED anywhere in this migration, so ADD VALUE is transaction-safe on
--- PG12+. ─────────────────────────────────────────────────────────────────────
+-- ── Status enum: add the dual-approval hop, positioned BEFORE 'approved' so this
+-- value sits immediately before 'approved' (matching its neighbor placement in
+-- schema.prisma). NOTE: the OVERALL DB enum value order does NOT — and cannot —
+-- match schema.prisma: 20260716 appended 'pending_review' with a bare `ADD VALUE`
+-- (no BEFORE), so in the DB it lands at the END while schema.prisma declares it
+-- second. That divergence is harmless: Postgres enum value ORDER does not affect
+-- Prisma correctness or `migrate diff` (Prisma diffs the SET of values, not their
+-- physical order). Not USED anywhere in this migration, so ADD VALUE is
+-- transaction-safe on PG12+. ─────────────────────────────────────────────────
 ALTER TYPE "ApRequestStatus" ADD VALUE IF NOT EXISTS 'pending_second_approval' BEFORE 'approved';
 
 -- ── New support enums (D-M5-4 / D-M5-6). ────────────────────────────────────

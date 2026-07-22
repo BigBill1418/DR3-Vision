@@ -23,7 +23,7 @@ import {
 const fp = (db: FakeDb) => makeFakePrisma(db) as unknown as PrismaClient;
 
 const baseline = (over: Partial<EstablishedBaseline> = {}): EstablishedBaseline => ({
-  vendorDisplayName: 'Clark Pest',
+  vendorDisplayName: 'Fernbrook Pest',
   invoiceCount: 6,
   meanAmountCents: 20000, // $200.00
   flatThresholdCents: VARIANCE_FLAT_THRESHOLD_CENTS,
@@ -33,8 +33,8 @@ const baseline = (over: Partial<EstablishedBaseline> = {}): EstablishedBaseline 
 
 describe('normalizeVendorName', () => {
   it('trims, lowercases, and collapses internal whitespace', () => {
-    expect(normalizeVendorName('  Clark   Pest  ')).toBe('clark pest');
-    expect(normalizeVendorName('SUNBELT Rentals')).toBe('sunbelt rentals');
+    expect(normalizeVendorName('  Fernbrook   Pest  ')).toBe('fernbrook pest');
+    expect(normalizeVendorName('KESTREL Rentals')).toBe('kestrel rentals');
   });
 });
 
@@ -67,12 +67,31 @@ describe('evaluateVariance (pure, either-trips)', () => {
     expect(e.direction).toBe('under');
   });
 
-  it('honors a tighter per-vendor override (Clark Pest $25 flat + 6.25%)', () => {
+  it('honors a tighter per-vendor override (Fernbrook Pest $25 flat + 6.25%)', () => {
     const b = baseline({ flatThresholdCents: 2500, percentThreshold: 0.0625 });
     // $206 = +$6 (<$25 default flat WOULD not trip) but +3% (<6.25%) → no trip.
     expect(evaluateVariance(b, 20600).tripped).toBe(false);
     // $214 = +$14 (<$25) but +7% (>6.25%) → trips on the tighter percent.
     expect(evaluateVariance(b, 21400).tripped).toBe(true);
+  });
+
+  // Money-control boundary: the gate is a STRICT `>` on BOTH the flat and percent
+  // thresholds — a delta landing EXACTLY on a threshold must NOT fire; one cent past
+  // it must. This is the billing-critical fire/no-fire edge.
+  it('does NOT trip at EXACTLY the flat threshold, trips one cent past it (strict >)', () => {
+    // Baseline $1,000; flat $50. Percent (5% at the boundary) stays within bounds so
+    // ONLY the flat edge is exercised.
+    const b = baseline({ meanAmountCents: 100000 });
+    expect(evaluateVariance(b, 105000).tripped).toBe(false); // +$50.00 == flat → no fire
+    expect(evaluateVariance(b, 105001).tripped).toBe(true); // +$50.01  > flat → fire
+  });
+
+  it('does NOT trip at EXACTLY the percent threshold, trips one cent past it (strict >)', () => {
+    // Baseline $40; 15%. Flat ($50) stays within bounds so ONLY the percent edge is
+    // exercised. A delta of exactly 15% ($6.00) must not fire.
+    const b = baseline({ meanAmountCents: 4000 });
+    expect(evaluateVariance(b, 4600).tripped).toBe(false); // +15.000% == threshold → no fire
+    expect(evaluateVariance(b, 4601).tripped).toBe(true); // +15.025%  > threshold → fire
   });
 });
 
@@ -81,8 +100,8 @@ describe('loadEstablishedBaseline (prisma-backed)', () => {
     const db = newFakeDb({
       baselines: [
         {
-          vendor_name_normalized: 'clark pest',
-          vendor_display_name: 'Clark Pest',
+          vendor_name_normalized: 'fernbrook pest',
+          vendor_display_name: 'Fernbrook Pest',
           invoice_count: BASELINE_MIN_INVOICES - 1,
           mean_amount_cents: 20000,
           median_amount_cents: 20000,
@@ -94,7 +113,59 @@ describe('loadEstablishedBaseline (prisma-backed)', () => {
         },
       ],
     });
-    expect(await loadEstablishedBaseline(fp(db), 'Clark Pest')).toBeNull();
+    expect(await loadEstablishedBaseline(fp(db), 'Fernbrook Pest')).toBeNull();
+  });
+
+  // Money-control boundary: the "established baseline" gate is `>= BASELINE_MIN_INVOICES`
+  // (3). One below (2) is insufficient (test above); EXACTLY 3 must establish.
+  it('establishes a baseline at EXACTLY the 3-invoice minimum (the established gate)', async () => {
+    const db = newFakeDb({
+      baselines: [
+        {
+          vendor_name_normalized: 'fernbrook pest',
+          vendor_display_name: 'Fernbrook Pest',
+          invoice_count: BASELINE_MIN_INVOICES, // exactly 3 → established
+          mean_amount_cents: 20000,
+          median_amount_cents: 20000,
+          min_amount_cents: 19000,
+          max_amount_cents: 21000,
+          stddev_amount_cents: null,
+          variance_flat_override_cents: null,
+          variance_percent_override: null,
+        },
+      ],
+    });
+    const b = await loadEstablishedBaseline(fp(db), 'Fernbrook Pest');
+    expect(b).not.toBeNull();
+    expect(b!.invoiceCount).toBe(BASELINE_MIN_INVOICES);
+  });
+
+  it('honors a per-vendor percent override of EXACTLY 0 (any variance trips, NOT the 15% default)', async () => {
+    // Regression for the "0 override silently ignored" defect: an override of exactly
+    // 0 is a legitimate tightening control (any deviation trips) and must be honored,
+    // not dropped in favor of the 15% global default. The flat override is set huge so
+    // ONLY the percent override can fire — proving the 0 is live.
+    const db = newFakeDb({
+      baselines: [
+        {
+          vendor_name_normalized: 'fernbrook pest',
+          vendor_display_name: 'Fernbrook Pest',
+          invoice_count: 5,
+          mean_amount_cents: 20000,
+          median_amount_cents: 20000,
+          min_amount_cents: 20000,
+          max_amount_cents: 20000,
+          stddev_amount_cents: null,
+          variance_flat_override_cents: 100000, // huge → never fires; isolates the percent edge
+          variance_percent_override: 0,
+        },
+      ],
+    });
+    const b = await loadEstablishedBaseline(fp(db), 'Fernbrook Pest');
+    expect(b).not.toBeNull();
+    expect(b!.percentThreshold).toBe(0); // 0 honored, NOT coerced to the 0.15 default
+    expect(evaluateVariance(b!, 20001).tripped).toBe(true); // +$0.01 → pct>0 → fire
+    expect(evaluateVariance(b!, 20000).tripped).toBe(false); // exact mean → no variance
   });
 
   it('returns null for an unknown vendor', async () => {
@@ -105,8 +176,8 @@ describe('loadEstablishedBaseline (prisma-backed)', () => {
     const db = newFakeDb({
       baselines: [
         {
-          vendor_name_normalized: 'clark pest',
-          vendor_display_name: 'Clark Pest',
+          vendor_name_normalized: 'fernbrook pest',
+          vendor_display_name: 'Fernbrook Pest',
           invoice_count: 8,
           mean_amount_cents: 20000,
           median_amount_cents: 20000,
@@ -118,7 +189,7 @@ describe('loadEstablishedBaseline (prisma-backed)', () => {
         },
       ],
     });
-    const b = await loadEstablishedBaseline(fp(db), '  Clark  Pest ');
+    const b = await loadEstablishedBaseline(fp(db), '  Fernbrook  Pest ');
     expect(b).not.toBeNull();
     expect(b!.flatThresholdCents).toBe(2500);
     expect(b!.percentThreshold).toBeCloseTo(0.0625, 5);
@@ -130,8 +201,8 @@ describe('evaluateVarianceForDecision (the decide-route gate)', () => {
     newFakeDb({
       baselines: [
         {
-          vendor_name_normalized: 'sunbelt rentals',
-          vendor_display_name: 'Sunbelt Rentals',
+          vendor_name_normalized: 'kestrel rentals',
+          vendor_display_name: 'Kestrel Rentals',
           invoice_count: 5,
           mean_amount_cents: 20000,
           median_amount_cents: 20000,
@@ -145,18 +216,18 @@ describe('evaluateVarianceForDecision (the decide-route gate)', () => {
     });
 
   it('not_applicable when no established baseline', async () => {
-    const r = await evaluateVarianceForDecision(fp(newFakeDb()), 'Sunbelt Rentals', 999999);
+    const r = await evaluateVarianceForDecision(fp(newFakeDb()), 'Kestrel Rentals', 999999);
     expect(r.state).toBe('not_applicable');
     expect(r.evaluation).toBeNull();
   });
 
   it('below_threshold within bounds', async () => {
-    const r = await evaluateVarianceForDecision(fp(dbWith()), 'Sunbelt Rentals', 21000);
+    const r = await evaluateVarianceForDecision(fp(dbWith()), 'Kestrel Rentals', 21000);
     expect(r.state).toBe('below_threshold');
   });
 
   it('above_threshold when the amount trips', async () => {
-    const r = await evaluateVarianceForDecision(fp(dbWith()), 'Sunbelt Rentals', 50000);
+    const r = await evaluateVarianceForDecision(fp(dbWith()), 'Kestrel Rentals', 50000);
     expect(r.state).toBe('above_threshold');
     expect(r.evaluation!.tripped).toBe(true);
   });
@@ -172,8 +243,8 @@ describe('loadVarianceContext (panel banner)', () => {
     const db = newFakeDb({
       baselines: [
         {
-          vendor_name_normalized: 'clark pest',
-          vendor_display_name: 'Clark Pest',
+          vendor_name_normalized: 'fernbrook pest',
+          vendor_display_name: 'Fernbrook Pest',
           invoice_count: 4,
           mean_amount_cents: 20000,
           median_amount_cents: 20000,
@@ -185,13 +256,13 @@ describe('loadVarianceContext (panel banner)', () => {
         },
       ],
       baselineHistory: [
-        { id: 'h1', vendor_name_normalized: 'clark pest', invoice_date: new Date('2026-01-10'), invoice_amount_cents: 19000 },
-        { id: 'h2', vendor_name_normalized: 'clark pest', invoice_date: new Date('2026-04-10'), invoice_amount_cents: 20000 },
-        { id: 'h3', vendor_name_normalized: 'clark pest', invoice_date: new Date('2026-07-10'), invoice_amount_cents: 21000 },
-        { id: 'h4', vendor_name_normalized: 'clark pest', invoice_date: new Date('2025-12-10'), invoice_amount_cents: 18000 },
+        { id: 'h1', vendor_name_normalized: 'fernbrook pest', invoice_date: new Date('2026-01-10'), invoice_amount_cents: 19000 },
+        { id: 'h2', vendor_name_normalized: 'fernbrook pest', invoice_date: new Date('2026-04-10'), invoice_amount_cents: 20000 },
+        { id: 'h3', vendor_name_normalized: 'fernbrook pest', invoice_date: new Date('2026-07-10'), invoice_amount_cents: 21000 },
+        { id: 'h4', vendor_name_normalized: 'fernbrook pest', invoice_date: new Date('2025-12-10'), invoice_amount_cents: 18000 },
       ],
     });
-    const ctx = await loadVarianceContext(fp(db), 'Clark Pest', 50000);
+    const ctx = await loadVarianceContext(fp(db), 'Fernbrook Pest', 50000);
     expect(ctx.established).toBe(true);
     expect(ctx.evaluation!.tripped).toBe(true);
     expect(ctx.recent).toHaveLength(3);

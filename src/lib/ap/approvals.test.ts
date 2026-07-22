@@ -252,7 +252,12 @@ describe('decideRequest — first action wins + both attempts audited', () => {
     expect(db.requests[0]!.status).toBe('approved');
   });
 
-  it('carries the vendor/amount/note when supplied at decision (C9-D5 optional fields)', async () => {
+  it('write-stops the deprecated vendor/amount_cents on a non-structured decide, keeping only the note (hard rule #1)', async () => {
+    // Hard rule #1 (ADR-0046 Amendment 5) — the deprecated vendor / amount_cents
+    // columns are WRITE-STOPPED at decide on EVERY path (kept for historical data, no
+    // longer written). Even when a legacy client still supplies `vendor`/`amountCents`
+    // they are NOT persisted; the single `note` (decision_note) is the only field a
+    // non-structured decision carries.
     const db = newFakeDb({
       requests: [pendingReq()],
       users,
@@ -268,8 +273,8 @@ describe('decideRequest — first action wins + both attempts audited', () => {
       amountCents: 44100,
       note: 'ok to pay',
     });
-    expect(db.requests[0]!.vendor).toBe('Acme');
-    expect(db.requests[0]!.amount_cents).toBe(44100);
+    expect(db.requests[0]!.vendor).toBeNull();
+    expect(db.requests[0]!.amount_cents).toBeNull();
     expect(db.requests[0]!.decision_note).toBe('ok to pay');
   });
 

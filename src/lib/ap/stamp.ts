@@ -175,6 +175,33 @@ function locationMetaHtml(input: StampInput): string {
   return input.siteName ? `<div>Site: <b>${escapeHtml(input.siteName)}</b></div>` : '';
 }
 
+/**
+ * The approver line(s) in a stamped page's meta block. ADR-0046 Amendment 5
+ * (D-M5-3, spec §D-M5-3): a dual-approved (>= $1,000) invoice carries BOTH approvers
+ * + timestamps — `approverName`/`decidedAt` are the FIRST approver + their approval
+ * time and `secondApproverName`/`secondApprovedAt` the SECOND — so the meta block
+ * matches the authoritative stamp band line (which already carries both). A single
+ * decision keeps the "Approver / Decided" pair. Fixes a defect where a dual approval
+ * showed only the first approver AND mislabeled the first-approval time as the
+ * terminal "Decided" time.
+ */
+function approverMetaHtml(input: StampInput): string {
+  if (input.decision === 'approved' && input.secondApproverName && input.secondApprovedAt) {
+    return (
+      `<div>First approval: ${escapeHtml(input.approverName)} — ${escapeHtml(
+        formatPacificDateTime(input.decidedAt),
+      )} PT</div>` +
+      `<div>Second approval: ${escapeHtml(input.secondApproverName)} — ${escapeHtml(
+        formatPacificDateTime(input.secondApprovedAt),
+      )} PT</div>`
+    );
+  }
+  return (
+    `<div>Approver: ${escapeHtml(input.approverName)}</div>` +
+    `<div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>`
+  );
+}
+
 /** The branded HTML shell + visible stamp footer/watermark that gets printed. */
 export function buildStampHtml(input: StampInput): string {
   const stamp = escapeHtml(stampText(input));
@@ -229,8 +256,7 @@ export function buildStampHtml(input: StampInput): string {
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
     ${locationMetaHtml(input)}
-    <div>Approver: ${escapeHtml(input.approverName)}</div>
-    <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
+    ${approverMetaHtml(input)}
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
   </div>
   ${inner}
@@ -443,8 +469,7 @@ export function buildImageStampHtml(input: StampInput, imageDataUri: string): st
   <div class="meta">
     <div>Subject: <b>${subject}</b></div>
     ${locationMetaHtml(input)}
-    <div>Approver: ${escapeHtml(input.approverName)}</div>
-    <div>Decided: ${escapeHtml(formatPacificDateTime(input.decidedAt))} PT</div>
+    ${approverMetaHtml(input)}
     ${input.note && input.note.trim() ? `<div>Note: ${escapeHtml(input.note.trim())}</div>` : ''}
   </div>
   <img class="invoice-img" src="${imageDataUri}" alt="original invoice image" />

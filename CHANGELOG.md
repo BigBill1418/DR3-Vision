@@ -5,6 +5,49 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0046 Amendment 5 — pre-go-live hardening pass, Eugene iPad go-live)
+
+Focused fixes on the AP money module ahead of the Eugene iPad go-live. Each was
+surfaced by an adversarial verify pass.
+
+- **`src/app/dashboard/ops/ap/ApQueueClient.tsx`** — iPad AP PDF preview no longer
+  renders blank. iOS/iPadOS Safari (WebKit) has no inline `<iframe>` PDF viewer, so
+  the framed invoice was blank on the Eugene iPad. PDF attachments now always render
+  a prominent, touch-sized "Open PDF in new tab" action; on iOS that replaces the
+  dead frame, on desktop it rides above Chromium's working inline viewer. Image +
+  HTML-body previews unchanged.
+- **`src/lib/ap/extraction/claude-fallback.ts`** — the combined body + attachment
+  text sent to the metered Anthropic API is now capped at 60,000 chars (`MAX_TEXT_CHARS`,
+  mirroring the baseline-import structuring path), closing an unbounded-input cost/DoS
+  vector. Images were already size- + count-capped.
+- **`src/lib/ap/variance.ts`** — a per-vendor `variance_percent_override` of EXACTLY
+  0 is now honored (any variance trips) instead of being silently dropped in favor of
+  the 15% global default. Matches the flat-override semantics; treats "override is
+  set" as not-null, not truthy. A 0 override is a legitimate tightening control.
+- **`src/lib/ap/baselines.ts`** — `trailingWindowStart` no longer overflows on a
+  Feb-29 (leap-year) anchor. The 12-month window now clamps the day to the last valid
+  day of the target month (Feb 29 → Feb 28 of the prior non-leap year) instead of
+  rolling forward to Mar 1, which had excluded late-February invoices from the window.
+- **`src/lib/ap/stamp.ts`** — the dual-approval decision PDF meta block now shows
+  BOTH approvers + timestamps (First approval / Second approval), consistent with the
+  authoritative stamp band line, instead of showing only the first approver and
+  mislabeling the first-approval time as the terminal "Decided" time (spec §D-M5-3).
+- **`src/lib/ap/approvals.ts`** — the Reject / NOT-DR3 decide path no longer writes
+  the DEPRECATED `ap_requests.vendor` / `amount_cents` columns even when a legacy
+  client supplies them (hard rule #1: write-stopped on ALL decide paths, columns kept
+  for historical data). Reject / Hold / NOT-DR3 keep only their single `decision_note`.
+- **`src/lib/ap/variance.test.ts`** — synthetic invented vendor names replace
+  real-world company names in fixtures; added money-control boundary tests (established
+  gate at exactly 3 invoices; strict-`>` fire/no-fire at exactly the flat and percent
+  thresholds; the 0-override regression). Plus Feb-29 window tests
+  (`baselines.test.ts`), dual-approval meta-block tests (`stamp.test.ts`), and the
+  write-stop assertion (`approvals.test.ts`).
+- **migration `20260805_ap_amendment_5_...`** — corrected two inaccurate comments
+  (DDL unchanged): the table count ("four" → "five" new tables) and the `ALTER TYPE`
+  claim that the DB enum value order matches schema.prisma (it can't — `pending_review`
+  was appended out of order by an earlier migration; Postgres enum value order does not
+  affect Prisma correctness regardless).
+
 ### Fixed — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — override-reject email dropped first-approver context)
 
 - **`src/lib/ap/approvals.ts`** — a second-approver override REJECT email no longer

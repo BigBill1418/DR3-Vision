@@ -101,7 +101,13 @@ export async function loadEstablishedBaseline(
     invoiceCount: b.invoice_count,
     meanAmountCents: b.mean_amount_cents,
     flatThresholdCents: flat,
-    percentThreshold: Number.isFinite(percent) && percent > 0 ? percent : VARIANCE_PERCENT_THRESHOLD,
+    // Honor a per-vendor override of EXACTLY 0 (a legitimate tightening control:
+    // "any variance at all trips") — matching the flat override's `??` semantics
+    // where 0 is already honored. Treat "override is set" as not-null, not truthy;
+    // only a negative/NaN value (bad data) falls back to the 15% default. `percent`
+    // above already null-checks the source column, so this guard only rejects
+    // malformed magnitudes, never a deliberate 0.
+    percentThreshold: Number.isFinite(percent) && percent >= 0 ? percent : VARIANCE_PERCENT_THRESHOLD,
   };
 }
 

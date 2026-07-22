@@ -63,6 +63,12 @@ const OUTPUT_CENTS_PER_TOKEN = 1500 / 1_000_000;
 const MAX_IMAGE_BYTES = 4_000_000;
 const MAX_IMAGES = 10;
 
+/// Cap on the combined body+attachment TEXT sent to the metered Anthropic API, so a
+/// pathologically large invoice/email can't run up cost or blow the context window
+/// (cost/DoS). Mirrors the baseline-import structuring path's 60k slice. Images are
+/// separately size- + count-capped above.
+const MAX_TEXT_CHARS = 60_000;
+
 const SYSTEM_PROMPT =
   'You are an accounts-payable extraction assistant. From the invoice text and ' +
   'images, extract the single total invoice amount and the vendor name. Respond ' +
@@ -83,7 +89,8 @@ function decodedByteLength(base64: string): number {
 function buildContent(input: ClaudeFallbackInput): Anthropic.ContentBlockParam[] {
   const textParts = [input.bodyText, ...input.attachmentTexts.map((a) => `[${a.name}]\n${a.text}`)]
     .filter((t) => t && t.trim().length > 0)
-    .join('\n\n');
+    .join('\n\n')
+    .slice(0, MAX_TEXT_CHARS);
   const blocks: Anthropic.ContentBlockParam[] = [
     { type: 'text', text: USER_PROMPT + (textParts || '(no extractable text)') },
   ];

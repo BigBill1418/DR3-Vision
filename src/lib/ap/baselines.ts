@@ -48,11 +48,21 @@ export interface BaselineAggregate {
 /// (not "now") means a rebuild is deterministic and a dormant vendor's baseline
 /// doesn't silently empty out just because a year of wall-clock passed.
 export function trailingWindowStart(mostRecent: Date): Date {
+  const year = mostRecent.getUTCFullYear() - 1;
+  const month = mostRecent.getUTCMonth();
+  const day = mostRecent.getUTCDate();
+  // Clamp the day to the last valid day of the target month so a Feb-29 anchor (leap
+  // year) maps to Feb 28 of the prior NON-leap year, not an overflow to Mar 1. A naive
+  // Date.UTC(year-1, 1, 29) rolls forward to Mar 1, which would push the window start
+  // PAST late-February and silently exclude those invoices. `Date.UTC(year, month+1, 0)`
+  // is the last day of `month` in `year` (day 0 of the next month).
+  const lastDayOfMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(day, lastDayOfMonth);
   return new Date(
     Date.UTC(
-      mostRecent.getUTCFullYear() - 1,
-      mostRecent.getUTCMonth(),
-      mostRecent.getUTCDate(),
+      year,
+      month,
+      clampedDay,
       mostRecent.getUTCHours(),
       mostRecent.getUTCMinutes(),
       mostRecent.getUTCSeconds(),

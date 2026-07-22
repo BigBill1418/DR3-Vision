@@ -358,9 +358,13 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
                   : null,
             }
           : {
+              // Reject / Hold / NOT-DR3 keep ONLY their single reason (decision_note).
+              // Hard rule #1: the deprecated `vendor` / `amount_cents` columns are
+              // WRITE-STOPPED at decide on EVERY path (kept for historical data, no
+              // longer written) — Approve writes vendor_freeform / confirmed_amount_cents
+              // instead, and a non-structured decision writes neither. `args.vendor` /
+              // `args.amountCents` may still arrive from the client but are not persisted.
               ...(args.note ? { decision_note: args.note } : {}),
-              ...(args.vendor ? { vendor: args.vendor } : {}),
-              ...(typeof args.amountCents === 'number' ? { amount_cents: args.amountCents } : {}),
             }),
         // Location: NOT-DR3 clears site_id and sets the marker (never both); a
         // normal decision files the resolved site (guaranteed present by

@@ -33,6 +33,22 @@ describe('trailingWindowStart', () => {
       '2025-07-10',
     );
   });
+
+  it('clamps a Feb-29 (leap year) anchor to Feb 28 of the prior non-leap year, not Mar 1', () => {
+    // Naive Date.UTC(2023, 1, 29) overflows to 2023-03-01, which would push the window
+    // start past late-February and silently exclude those invoices. Clamp to Feb 28.
+    expect(trailingWindowStart(new Date('2024-02-29T00:00:00Z')).toISOString().slice(0, 10)).toBe(
+      '2023-02-28',
+    );
+  });
+
+  it('does not clamp a non-end-of-month day (no regression from the Feb-29 fix)', () => {
+    // A day that is valid in the target month must pass through unchanged even from a
+    // leap-year anchor — the clamp only engages when the day overflows the month.
+    expect(trailingWindowStart(new Date('2024-03-15T00:00:00Z')).toISOString().slice(0, 10)).toBe(
+      '2023-03-15',
+    );
+  });
 });
 
 describe('computeBaselineForVendor', () => {
