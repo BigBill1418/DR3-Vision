@@ -339,3 +339,221 @@ Loads & Inventory has been fully built (ADR-0037 + ADR-0048 + ADR-0055) but neve
 This handoff closes all four gaps together, with paper-total entry as the interim capture pattern until iPads come online. EOD inventory on the Daily Production Report is the visible outcome — once it shows real numbers, Vision has actually turned on for the floor.
 
 No new blockers surface from this session. Everything is a matter of executing existing infrastructure + a small set of new manager surfaces that fit the existing patterns.
+
+
+
+
+---
+
+## Amendment A — 2026-07-22 evening (state reconciliation + Phase 2 superseded + Phase 5 added: remove outdoor storage from Vision)
+
+**Context:** Between the original handoff push (2026-07-22 19:30 UTC) and this amendment, significant work landed in the repo that supersedes Phase 2 of the original plan. Bill also directed a new scope addition — remove outdoor storage from Vision entirely, per DR3's operating reality that units are never stored outside.
+
+### §A.1 — State changes since original handoff (last ~4 hours)
+
+**Loads & Inventory D7 GO-LIVE — SHIPPED 2026-07-22:**
+
+- `loads_inventory` rollout flipped `pilot → live` for BOTH Woodland and Eugene at `/admin/rollout` (audited, attributed to Bill).
+- Managers and operators are now activated at both sites.
+- `assertLoadsInventoryActivated` reads this per-site surface at request time — immediate, no deploy needed.
+- Reversible via inverse flip.
+- **P1-3 restore drill: MET** (`d4917d0`, passed twice against real R2 snapshot).
+- **P1-4 `RESTIC_PASSWORD` off-box: CONFIRMED** via Fleet 1Password item (SHA-256 matches on-box).
+- **`OPEN-ITEMS.md` O-3 / `restore-drills.md` / ADR-0037 contradiction: RECONCILED — all now CLOSED.**
+
+**MyMRC billing-field capture — SHIPPED 2026-07-22:**
+
+- ADR-0057 D3 addendum: batched `getRecordWithFields` Aura POST replaces the racy per-record navigation-interception detail fetch.
+- Prior transport captured ~0.4% of billing unit-counts. New transport: 200/200 SUCCESS at ~0.5 s per batch.
+- MyMRC data now flows with real haul-level billing detail, not just record IDs.
+- New: `src/lib/mymrc/record-fields-client.ts`, `src/lib/mymrc/enrich-details.ts`, `scripts/mymrc-enrich-details.mjs`.
+- Impact on this handoff: Phase 4 EOD inventory report gains a downstream — Amendment 5 Phase 2 (Pacific Trucking haul cross-check) unblocks sooner than originally scoped.
+
+**Bonus daily entry mattress footer — SHIPPED 2026-07-22 (out of scope for this handoff, noted for completeness).**
+
+**Follow-up flagged:** `outbound.ts` `allocation_pct` semantics — nullable, does not affect the running balance, resolve before Kelsey's 8/1 → 8/8 departure. Not in scope here.
+
+### §A.2 — Phase 2 SUPERSEDED
+
+The original Phase 2 (§2 Phase 2 in the handoff body — "Close the D7 gate for managers") is **entirely superseded** by the shipped GO-LIVE. Claude Code does NOT need to:
+
+- Modify `assertLoadsInventoryActivated` in `src/lib/loads/record-guards.ts` (per original §6 item 3)
+- Reconcile the restore-drill contradiction (already done)
+- Confirm `RESTIC_PASSWORD` off-box (already confirmed)
+- Verify the D7 gate before proceeding to Phase 3 (gate is already closed via rollout)
+
+Original §5 Actions for Bill items 3 and 4 (restore-drill and RESTIC confirmations) are also both **already complete**.
+
+**What Claude Code DOES do at start of Phase 2 work window:**
+- Verify the rollout surface shows `loads_inventory` = `live` at both `woodland` and `eugene` (single query, sanity check)
+- If for any reason the flip has reverted, escalate to Bill — do NOT execute Phase 3 while the gate is closed
+- Otherwise proceed directly to Phase 3
+
+### §A.3 — Phase 0 investigation checklist simplification
+
+With D7 already closed, some checks in §1 become vestigial:
+
+- **§1.2 (D7 activation gate state):** SKIP. Both sub-gates confirmed closed today (see §A.1 above).
+- **§1.1, §1.3, §1.4:** UNCHANGED — still needed for backfill promotion state, live capture state, and Daily Production Report state.
+
+### §A.4 — Phase 5 (NEW) — Remove outdoor storage from Vision entirely
+
+**Directive:** Bill (2026-07-22): *"we will also remove the units outdoor we are never allowed to store units outside. this can't be in the system."*
+
+DR3's operating reality is that units are never stored outside — this is a compliance stance regardless of what the MRC contract's stated 5,000-unit outdoor allowance permits. The system should not offer to track outdoor storage, warn on outdoor caps, or let anyone enter a non-zero outdoor value. Cleanest removal is to drop the concept from the schema, UI, math, warnings, and docs.
+
+#### §A.4.1 — What's in the system today (evidence)
+
+From current state (see `docs/adr/0037-loads-inventory-foundations.md` L122 and `docs/QUESTIONS.md` L42 verbatim):
+
+- `site_inventory_snapshots` carries **separate `indoor` / `outdoor` / `in_processing` fields** (with an implicit or stored `total`).
+- ADR-0037 references "existing indoor/outdoor/in-processing fields unchanged" — these fields were carried forward from the pre-ADR-0037 schema, not created by it.
+- **CA storage-limit warnings: 3,500 (warn) / 5,000 (hard)** — Claude Code must verify whether these are OUTDOOR-specific or TOTAL (the ADR line is ambiguous; the MRC contract's "5,000 units outdoor at Woodland" phrasing strongly suggests outdoor-specific but code-truth wins).
+- **OR storage-limit: 6,000** — likely total (Eugene has no outdoor cap in the MRC contract per available docs; verify).
+- **`docs/MRC-CONTRACTS.md` L43** references "5,000 units outdoor at Woodland" as the contracted allowance.
+
+#### §A.4.2 — Pre-migration audit
+
+Before dropping the column, run a one-off audit:
+
+```sql
+SELECT id, site_id, snapshot_date, indoor, outdoor, in_processing, total
+FROM site_inventory_snapshots
+WHERE outdoor IS NOT NULL AND outdoor > 0;
+```
+
+**If any rows return non-zero outdoor values** (unexpected but possible from early data entry):
+- Fold each non-zero outdoor into `indoor` on the same row (`indoor = indoor + outdoor`; `outdoor = 0`)
+- Write an audit row per updated snapshot documenting the fold (source: 'adr-0037-outdoor-removal')
+- Then proceed with column drop
+
+**If all outdoor values are null or zero:** no data fold required, straight to column drop.
+
+Deliverable: audit output + fold audit rows if any.
+
+#### §A.4.3 — Schema migration
+
+Migration name suggestion: `20260723_remove_outdoor_from_site_inventory_snapshots`.
+
+- Drop column `outdoor` from `site_inventory_snapshots`
+- If `total` is a stored column: verify no existing row has `total != indoor + in_processing` after the fold (§A.4.2); if divergence exists, add a fix-up in the same migration
+- If `total` is a derived column (view / computed): update the derivation to drop the outdoor addend
+
+Migration MUST clean-replay on empty PG16. CI gate.
+
+#### §A.4.4 — Code + type refactor
+
+Claude Code performs a full ripgrep pass on the term `outdoor` (case-insensitive) across:
+
+- `src/lib/loads/*` — running balance, physical count, snapshot handling
+- `src/lib/reports/*` — any surface that reads or displays outdoor
+- `src/app/**/*` — UI surfaces
+- `prisma/schema.prisma` — model definition
+- All test files — fixtures + assertions
+- Any migration SQL
+
+Removes:
+- `outdoor` field from Prisma model + types
+- Any `outdoor` field from Zod / validation schemas
+- Any `total = indoor + outdoor + in_processing` calculations → `total = indoor + in_processing`
+- Any UI input capturing outdoor
+- Any UI display of outdoor
+- Any test fixture using non-zero outdoor
+
+Keeps:
+- `indoor` field (unchanged)
+- `in_processing` field (unchanged — this is units currently being processed, different concept)
+- `total` field (recomputed without outdoor)
+- Program / non-program pool split logic (per ADR-0037 §3 — unchanged, orthogonal to indoor/outdoor)
+
+#### §A.4.5 — Storage-limit warnings
+
+Claude Code investigates the actual semantics of the CA 3,500/5,000 and OR 6,000 warnings in code:
+
+- If **outdoor-specific**: remove entirely. DR3 never stores outside; the cap is moot; the warning would fire on 0 unless someone enters a non-zero outdoor (which after §A.4.4 becomes impossible).
+- If **total-based**: preserve them. Woodland's total capacity has real-world implications regardless of indoor-vs-outdoor split. Same for Eugene.
+- If **indoor-specific**: preserve. Indoor capacity is DR3's real operating constraint.
+
+Bill's directive is to remove the outdoor concept — but if the storage-limit warning is protecting a real total-capacity boundary that happens to have been named after outdoor in old contract language, the warning stays with its underlying threshold reconsidered.
+
+Deliverable: an evidence-based decision documented in the migration or a post-acceptance ADR-0037 addendum, one of:
+- "Outdoor-specific warning removed; no CA total cap enforced"
+- "Warning re-scoped to CA total capacity; threshold X preserved as total cap"
+
+**Recommendation for Bill's review:** Woodland's real operating cap is likely the floor square footage times units-per-square-foot for indoor storage. That's the number MRC would audit us on if it ever came up. If Claude Code finds the 3,500/5,000 is outdoor-specific, the warning goes away entirely — Bill can reintroduce a total-based cap later if operationally warranted, but no automated warning is misleading.
+
+#### §A.4.6 — Documentation updates
+
+- **`docs/adr/0037-loads-inventory-foundations.md`** — remove L122 reference to "indoor/outdoor/in-processing fields unchanged"; replace with "indoor + in-processing fields, following ADR-0037 addendum (2026-07-22) removing outdoor from Vision per DR3 operational compliance."
+- **`docs/MRC-CONTRACTS.md`** — annotate the "5,000 units outdoor at Woodland" line: "*Contracted allowance not exercised: DR3 does not use outdoor storage. Vision does not track outdoor units per ADR-0037 addendum (2026-07-22).*"
+- **`docs/QUESTIONS.md`** — update L42 to reflect the current split (indoor/in_processing/total), removing outdoor from the described model
+- **`docs/operator/loads-inventory-foundations.md`** — physical count entry now captures indoor + in_processing (+ implicit total); update any prose about outdoor
+- **New audit log entry / ADR-0037 addendum** — one paragraph noting the removal decision + directive attribution + migration reference
+
+#### §A.4.7 — Testing
+
+- Unit tests: any `outdoor` fixture removed from unit-level tests; running-balance tests updated to sum `indoor + in_processing`
+- Integration test: after migration replay on empty DB, physical count entry accepts `indoor` + `in_processing` only and produces the correct `total`
+- Regression: the balance computation continues to match Rick's June close of 3,977 after the removal (assuming Phase 1 backfill precedes Phase 5)
+
+### §A.5 — Updated Actions for Bill
+
+Actions dropped (already complete per §A.1):
+
+- ~~Confirm restore-drill state~~ — DONE
+- ~~Confirm `RESTIC_PASSWORD` off-box~~ — DONE
+
+Actions remaining from §5 (unchanged):
+
+1. Confirm June Woodland workbook in file-drop (SHA `1eeeccbde0…`)
+2. Provide Eugene's Jun 24–30 daily log (or flag as pending)
+3. Pick §3.1 ongoing capture model (anchor-daily vs. backfill-and-run) — recommend anchor-daily for first month
+4. Pick §3.3 daily-close delegation — recommend Option B (managers enter, you close)
+5. Coordinate paper-workflow rollout with Morena, Janette, Rick
+
+Actions added for Phase 5:
+
+6. Approve the storage-limit warning outcome once Claude Code reports whether the 3,500/5,000/6,000 caps are outdoor-specific or total-based — one keystroke reply after their investigation
+
+### §A.6 — Updated Actions for Claude Code (execution order)
+
+Original §6 items 1, 2 unchanged (Phase 0 investigation with §A.3 simplification, then Phase 1 backfill promotion).
+
+**Item 3 — REMOVED:** Phase 2 D7 gate close. Superseded by GO-LIVE per §A.2.
+
+Original §6 items 4, 5 renumbered as 3, 4 (Phase 3 paper-bootstrap workflow, Phase 4 EOD inventory on Daily Production Report).
+
+**NEW Item 5 — Phase 5: Remove outdoor storage from Vision** per §A.4 above.
+
+Ordering rationale: Phase 5 executes AFTER Phase 1 backfill (so the pre-migration audit runs against the fully-populated `site_inventory_snapshots` including the June 1 anchor row). Phase 5 executes BEFORE Phase 4 EOD inventory on Daily Production Report (so the report code is written against the post-removal schema — no need to remove references later).
+
+Recommended sequence: **Phase 0 → Phase 1 → Phase 3 → Phase 5 → Phase 4**
+
+Original §6 items 6, 7 (runbook updates + tests) unchanged, with the additions per §A.4.6 and §A.4.7.
+
+### §A.7 — Updated success criteria
+
+Phase 2 items removed from §7.
+
+**New Phase 5 success criteria:**
+- Pre-migration audit output confirms all outdoor values are null/zero (or fold audit rows written if any non-zero)
+- `outdoor` column dropped from `site_inventory_snapshots`
+- Prisma model + types updated; no build error references `outdoor`
+- All UI surfaces capturing or displaying outdoor removed
+- CA / OR storage-limit warnings correctly classified (outdoor-specific removed; total or indoor preserved) with evidence
+- Docs updated per §A.4.6
+- Migration clean-replays on empty PG16
+- Post-Phase-5 running balance still produces Rick's 3,977 June close for Woodland
+
+### §A.8 — Session close (amended)
+
+The original handoff planned a manager-access unblock that shipped independently between planning and push. Phase 2 is retired. Phase 5 adds a compliance-driven schema cleanup that matches DR3's operational reality (no outdoor storage).
+
+Net scope of PR #162 as amended:
+- Phase 0: investigation (workbook + operational tables + report state)
+- Phase 1: June backfill promotion → 3,977 close verified
+- Phase 3: paper-bootstrap workflow (manager surfaces for daily aggregate entry; delegation of daily close per §3.3 Option B)
+- Phase 5: outdoor storage removed from Vision
+- Phase 4: EOD inventory on Daily Production Report (last, so it's built against the post-outdoor-removal schema)
+
+Same green-light execution posture. Claude Code investigates first, then runs through Phase 1 → 3 → 5 → 4 without stopping.
