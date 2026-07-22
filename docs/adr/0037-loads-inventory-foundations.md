@@ -133,9 +133,18 @@ post-deconstruction commodities — deconstruction is what`processed` counts).
 Schema can merge behind flags, but no loads surface activates beyond what is already
 shipped until: P0 guardrails deployed ✅ (live since 06-24) · CI correctness gate ✅
 (ADR-0033/0035, live) · scraper anomaly detection + hardened logout detection (lands
-in ADR-0038, gates the FEEDS) · **one recorded restore drill (P1-3)** and
-**RESTIC_PASSWORD confirmed off-box (P1-4)** — both still open, owner Bill, tracked
-here as blocking ops actions for activation (not for merging schema).
+in ADR-0038, gates the FEEDS) · **one recorded restore drill (P1-3)** ✅ MET
+(`d4917d0`, ran + passed twice 2026-07-22 against real R2 snapshot `f6eb8cf8`) and
+**RESTIC_PASSWORD confirmed off-box (P1-4)** ✅ CONFIRMED 2026-07-22 (Fleet 1Password
+item "DR3-Vision backups — restic + R2 repo", SHA-256 matches on-box). Both ops
+preconditions are now satisfied.
+
+**GO-LIVE 2026-07-22 — `loads_inventory` flipped `pilot → live` for Woodland +
+Eugene** (audited, `flipped_by` = Bill). Managers/operators are now activated at
+both sites; they reach the surface via the ungated "Loads & inventory" nav link on
+`/dashboard/[site]`. Reversible via the inverse flip. `outbound.ts` `allocation_pct`
+semantics remain "pending Kelsey" (nullable, does not touch the running balance) —
+capture before her 2026-08-01 departure.
 
 **Amendment (2026-07-21) — the D7 switch is now data-driven, not hardcoded.**
 The activation gate `assertLoadsInventoryActivated` no longer hardcodes
