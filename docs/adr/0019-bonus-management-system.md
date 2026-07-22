@@ -308,3 +308,24 @@ Rick (Eugene manager) gets 403. Operators (PIN users) cannot reach `/bonus` — 
 - ADR-0022 (Fleet observability wire-in)
 - `docs/SPRINT-2-PLAN.md` (ticket breakdown)
 - `Bonus_Spread_Sheet_2026.xlsx` (in transcripts, source of the formula correction)
+
+## Post-acceptance amendment — 8pm entry deadline (later shift, 2026-07-21)
+
+The team moved to a later work shift. The bonus-entry deadline (ADR-0019 §2,
+the "no entries for the site" end-of-day check) moves from **17:00 PT to 20:00
+PT** — "the bonus is to be entered by 8pm at the latest; after that we get the
+notification that it is late."
+
+- `scripts/bonus-eod-check.mjs` `FIRE_HOUR_PT` 17 → 20. The daemon still fires
+  once per Pacific day, per-site, DST-correct via the offset-reprobe
+  `nextFireInstant` (no hardcoded UTC offset), and pages `dr3-vision-system`
+  only when a bonus-enabled site has **zero** entries for the day (partial days
+  never page — the 2026-06-17 §2 revision stands).
+- The pure decision logic (`src/lib/bonus/eod-check.ts` `evaluateEod`) is
+  unchanged — only the fire hour moved.
+- **Signing escalation tiers (07:10 / 07:30 / 08:30 auto-sign / 09:00 PT,
+  `bonus-escalation-check.mjs`) are NOT affected.** Those govern SIGNING the
+  chain the morning after a period close — a distinct concern from entry. This
+  amendment deliberately does not touch them.
+
+The paired per-site "report on save" change lives in ADR-0030's amendment.

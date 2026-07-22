@@ -11,7 +11,8 @@
 // The two transition days: fall-back 2026-11-01 (02:00 PDT → 01:00 PST) and
 // spring-forward 2027-03-14 (02:00 PST → 03:00 PDT). We probe with a neutral 09:00
 // fire (clear of the 02:00 transition, so no non-existent / ambiguous wall time)
-// except bonus-eod-check, whose fire time is fixed at 17:00.
+// except bonus-eod-check, whose fire time is fixed at 20:00 PT (the 8pm entry
+// deadline, ADR-0019 §2 amendment 2026-07-21).
 
 import { describe, it, expect } from 'vitest';
 
@@ -68,22 +69,22 @@ describe.each(DAILY)('%s — DST transition days', (_name, nextFire) => {
   });
 });
 
-describe('bonus-eod-check — DST transition days (fixed 17:00 PT fire)', () => {
-  it('fires exactly ONCE at 17:00 PT on fall-back day (2026-11-01), then rolls to the next day', () => {
+describe('bonus-eod-check — DST transition days (fixed 20:00 PT deadline)', () => {
+  it('fires exactly ONCE at 20:00 PT on fall-back day (2026-11-01), then rolls to the next day', () => {
     const from = new Date('2026-11-01T07:30:00Z'); // Nov 1 00:30 PDT
     const fire1 = eodNextFire(from);
-    expect(pacificHHMM(fire1)).toBe('17:00');
-    expect(fire1.toISOString()).toBe('2026-11-02T01:00:00.000Z'); // Nov 1 17:00 PST (-8)
+    expect(pacificHHMM(fire1)).toBe('20:00');
+    expect(fire1.toISOString()).toBe('2026-11-02T04:00:00.000Z'); // Nov 1 20:00 PST (-8)
     const fire2 = eodNextFire(fire1);
-    expect(pacificHHMM(fire2)).toBe('17:00');
-    expect(fire2.toISOString()).toBe('2026-11-03T01:00:00.000Z');
+    expect(pacificHHMM(fire2)).toBe('20:00');
+    expect(fire2.toISOString()).toBe('2026-11-03T04:00:00.000Z');
   });
 
-  it('fires at 17:00 PT on spring-forward day (2027-03-14)', () => {
+  it('fires at 20:00 PT on spring-forward day (2027-03-14)', () => {
     const from = new Date('2027-03-14T08:30:00Z'); // Mar 14 00:30 PST
     const fire = eodNextFire(from);
-    expect(pacificHHMM(fire)).toBe('17:00');
-    expect(fire.toISOString()).toBe('2027-03-15T00:00:00.000Z'); // Mar 14 17:00 PDT (-7)
+    expect(pacificHHMM(fire)).toBe('20:00');
+    expect(fire.toISOString()).toBe('2027-03-15T03:00:00.000Z'); // Mar 14 20:00 PDT (-7)
   });
 });
 

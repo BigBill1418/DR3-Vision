@@ -2,16 +2,27 @@
 // ADR-0019 §2 + ADR-0028 — Bi-site EOD bonus-entry enforcement (daemon).
 //
 // Long-running daemon, same shape as bonus-period-close + bonus-escalation-check:
-// sleeps until the next 17:00 Pacific instant, fires, repeats. Per-site
+// sleeps until the next 20:00 Pacific instant, fires, repeats. Per-site
 // iteration covers Woodland + Eugene (any site with an active bonus signature
 // chain). One ntfy per site that has ZERO entries for the day, fingerprinted
 // per (site, date) — a partial day (at least one entry) never pages
 // (revised 2026-06-17, ADR-0019 §2).
+//
+// ── Entry deadline = 20:00 PT (ADR-0019 §2 amendment, 2026-07-21) ────
+// The team now works a later shift; the bonus entry deadline is 8:00 PM
+// Pacific ("entered by 8pm at the latest"). This daemon fires at that
+// deadline: any bonus-enabled site with zero entries for the Pacific day is
+// paged as LATE / not-entered. Previously the check fired at 17:00 PT
+// (the earlier shift's end-of-day). Nothing else about the decision changed —
+// only the fire hour moved 17 → 20.
 
 import { PrismaClient } from '@prisma/client';
 
 const PACIFIC_TZ = 'America/Los_Angeles';
-const FIRE_HOUR_PT = 17;
+// 20:00 PT — the 8pm entry deadline. DST-correct via nextFireInstant (offset
+// reprobe); NEVER a hardcoded UTC offset. Mirrors the deadline the on-save
+// report's "late" flag keys off (bonus_daily_report_config.send_time_pt = 20:00).
+const FIRE_HOUR_PT = 20;
 const FIRE_MINUTE_PT = 0;
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
@@ -91,7 +102,7 @@ function pacificOffsetMs(at) {
 }
 
 /**
- * Next UTC instant at which the Pacific wall clock reads 17:00:00 (FIRE_HOUR_PT:
+ * Next UTC instant at which the Pacific wall clock reads 20:00:00 (FIRE_HOUR_PT:
  * FIRE_MINUTE_PT), strictly after `from`. DST-correct via the OFFSET-REPROBE
  * technique ported from `scripts/bonus-period-close.mjs` (`msUntilNext0700Pacific`):
  * resolve the target Pacific wall time on each candidate Pacific calendar day and
