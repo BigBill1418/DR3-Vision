@@ -8,6 +8,7 @@ const HAUL_CENTS = 45000; // stub Primary haul rate
 
 function tonu(over: Partial<TonuInput> = {}): TonuInput {
   return {
+    dr3Hauled: true,
     dispatchedAt: null,
     cancelledAt: null,
     diverted: false,

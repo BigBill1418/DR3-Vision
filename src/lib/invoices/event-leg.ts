@@ -34,6 +34,9 @@ export async function fetchEventCostRows(
       customer: true,
       retrac_id: true,
       freight_cents: true,
+      // ADR-0056 amendment §A.3 — haul-mode gate. Freight rides MILES 0 ONLY when
+      // DR3 hauled; the labor side (EVENTO) bills in both modes.
+      dr3_hauled: true,
       driver_wages_cents: true,
       labor_wages_cents: true,
       mileage_cents: true,
@@ -99,5 +102,6 @@ export async function fetchEventCostRows(
     perDiemCents: r.per_diem_cents ?? 0,
     miscCents: r.misc_cents ?? 0,
     freightCents: r.freight_cents ?? 0,
+    dr3Hauled: r.dr3_hauled,
   }));
 }

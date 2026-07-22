@@ -315,16 +315,29 @@ export function composeTransportation(input: TransportationGenerationInput): Inv
   }
 
   if (input.eventsPending || input.events.length > 0) {
-    const eventFreight = input.events.reduce((acc, e) => acc + e.freightCents, 0);
+    // ADR-0056 amendment §A.3 — the two-haul-mode gate. Event freight rides
+    // `event_transportation_total` (→ MILES 0) ONLY for events DR3 actually hauled
+    // (Mode A, `dr3_hauled`). A Mode-B "someone else hauled" event contributes $0
+    // freight here even though its labor still bills via the EVENTO/B8 line (which
+    // is NOT gated — see composeProcessing). Full provenance for every event is
+    // still recorded in `source`, each stamped with its `dr3_hauled` flag.
+    const hauledEvents = input.events.filter((e) => e.dr3Hauled);
+    const eventFreight = hauledEvents.reduce((acc, e) => acc + e.freightCents, 0);
     lines.push({
       lineCode: LINE_CODE.eventFreight,
       description: 'Event freight',
-      quantity: input.events.length,
+      quantity: input.eventsPending ? input.events.length : hauledEvents.length,
       rateRef: null,
       amountCents: input.eventsPending ? 0 : eventFreight,
       source: input.eventsPending
         ? { pending: 'events-integration' }
-        : { events: input.events.map((e) => ({ id: e.id, freight_cents: e.freightCents })) },
+        : {
+            events: input.events.map((e) => ({
+              id: e.id,
+              freight_cents: e.freightCents,
+              dr3_hauled: e.dr3Hauled,
+            })),
+          },
       position: position++,
     });
   }

@@ -1940,6 +1940,67 @@ model MymrcAdminCredential {
   @@map("mymrc_admin_credentials")
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// MyMRC reconciliation queue (ADR-0057 D4 — the canonical write gate)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Vision NEVER auto-updates operational tables (`sources`, `source_aliases`,
+// `state_program_rules`, …) from MyMRC. Mirror sync instead writes candidate
+// changes here; an admin approves/rejects/snoozes each one at
+// `/admin/mymrc/reconcile` (mirrors the AP approval note pattern, ADR-0046).
+// On Approve, Vision writes the change to the target operational table and
+// stamps `decided_at`/`decided_by`. The pending row is preserved after a
+// decision (audit evidence).
+//
+// This is a NEW, separate model — do NOT confuse it with the pre-existing
+// `MymrcReconciliation`/`MymrcReconciliationItem` (the ADR-0038-era CSV
+// weight/count compliance upload). Different feature, different table.
+//
+// Bare scalar references (no Prisma relations): `mirror_record_id` /
+// `target_record_id` point at heterogeneous-PK rows across many mirror and
+// operational tables, so no FK is declared — the block stays self-contained,
+// matching the `mymrc_*_mirror` / `collection_events` pattern. `decided_by`
+// is a bare audit-actor user id (mirrors MymrcAdminCredential.updated_by / AP
+// decided_by). `mymrc_value` is required (the classifier always has the
+// MyMRC-side value, storing JSON `null` for `disappeared`); `vision_value` is
+// null for `new_record` (no matched Vision entity yet). `snooze_until` carries
+// the 7-day snooze wake time (NULL unless status = snoozed).
+enum ReconChangeKind {
+  new_record // mirror record with no matching Vision entity (name miss verbatim + alias)
+  field_update // mirror field differs from the linked Vision entity
+  disappeared // mirror row has disappeared_at; linked Vision entity may need deactivation
+}
+
+enum ReconStatus {
+  pending
+  approved
+  rejected
+  snoozed
+}
+
+model MymrcReconciliationQueue {
+  id               String          @id @default(uuid())
+  mirror_table     String // e.g. 'mymrc_accounts_mirror'
+  mirror_record_id String // bare reference to the mirror row (no FK; heterogeneous PKs)
+  target_table     String // operational target, e.g. 'sources'
+  target_record_id String? // existing Vision row if matched (null for new_record)
+  field_name       String // 'name' | 'address' | 'category' | ...
+  mymrc_value      Json // MyMRC-side value (JSON null for disappeared)
+  vision_value     Json? // Vision-side value (null for new_record)
+  change_kind      ReconChangeKind
+  status           ReconStatus     @default(pending)
+  created_at       DateTime        @default(now())
+  decided_at       DateTime?
+  decided_by       String? // bare audit-actor user id (no FK)
+  decision_note    String? // required at the API boundary on approve/reject (mirrors AP)
+  snooze_until     DateTime? // 7-day snooze wake time (set only when status = snoozed)
+
+  @@index([status, mirror_table, change_kind]) // pending queue filtered view (D4)
+  @@index([mirror_table, mirror_record_id]) // per-mirror-row lookups + classifier dedup pre-check
+  @@index([target_table, target_record_id]) // "what pending changes target this Vision row"
+  @@map("mymrc_reconciliation_queue")
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // 3-way audit engine + retro-audit (ADR-0039)
 //
@@ -2462,6 +2523,14 @@ model CollectionEvent {
   driver_onsite_hours Decimal?    @db.Decimal(5, 2)
   per_diem_days       Int?
   overnight           Boolean      @default(false)
+  // ADR-0056 amendment (Addendum A §A.3) — did DR3 perform the haul for this
+  // event? Gates whether the event's freight folds into the invoice's
+  // `event_transportation_total` (MILES 0 member). Default `true`: existing
+  // rows predate the distinction and were all DR3-hauled (they carry billed
+  // `freight_cents`), and unconditional summing is the CURRENT invoice
+  // behaviour — defaulting true preserves it and avoids a silent revenue drop.
+  // `false` is the new, explicitly-flagged exception (customer/third-party haul).
+  dr3_hauled          Boolean      @default(true)
   retrac_id          String?
   notes              String?
   source             RecordSource @default(manual)

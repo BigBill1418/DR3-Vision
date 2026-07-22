@@ -11,6 +11,14 @@
 
 /** The `tonu_billing` projection this assessor reads. All times UTC. */
 export interface TonuInput {
+  /**
+   * ADR-0056 amendment (Addendum A §A.3) — the haul-mode gate. A TONU is by
+   * definition DR3 dispatching a trailer; it can only occur when DR3 performed
+   * the haul (Mode A). When the event was hauled by a customer / third party
+   * (Mode B, `dr3_hauled = false`) DR3 never dispatched, so there is no TONU to
+   * bill — this guard runs FIRST, before dispatch timing.
+   */
+  dr3Hauled: boolean;
   /** When the driver was dispatched. Null ⇒ never dispatched (no TONU). */
   dispatchedAt: Date | null;
   /** When the order was cancelled, if it was. */
@@ -27,6 +35,7 @@ export interface TonuInput {
 
 /** Why a TONU is or is not billable. */
 export type TonuReason =
+  | 'not_dr3_hauled'
   | 'not_dispatched'
   | 'dispatched_no_bill'
   | 'cancelled_before_dispatch'
@@ -37,7 +46,7 @@ export type TonuReason =
 export type TonuAssessment =
   | {
       billable: false;
-      reason: 'not_dispatched' | 'dispatched_no_bill' | 'cancelled_before_dispatch';
+      reason: 'not_dr3_hauled' | 'not_dispatched' | 'dispatched_no_bill' | 'cancelled_before_dispatch';
     }
   | { billable: true; reason: 'cancelled_after_dispatch' | 'diverted'; billedCents: number };
 
@@ -63,6 +72,12 @@ export class TonuHaulRateUnavailableError extends Error {
  * the cancel timing would otherwise say "before dispatch".
  */
 export function assessTonu(input: TonuInput): TonuAssessment {
+  // ADR-0056 amendment §A.3 — haul-mode gate FIRST. A TONU is DR3 dispatching a
+  // trailer; if the event was hauled by a customer / third party (Mode B), DR3
+  // never dispatched and there is no TONU to bill, regardless of any stray
+  // dispatch/cancel/divert flag captured on the record.
+  if (!input.dr3Hauled) return { billable: false, reason: 'not_dr3_hauled' };
+
   // No dispatch ⇒ there was no haul to not-use; not a billable TONU. This guard is
   // FIRST so a data-entry `diverted`/`cancelledAt` flag on a never-dispatched order
   // cannot bill the haul rate (Rick §5.3: TONU requires a dispatch).

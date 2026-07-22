@@ -61,6 +61,7 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'bonus',
       'exports',
       'admin',
+      'mymrc-reconcile', // ADR-0057 D4 (admin-only; registry-ordered right after admin)
       'loads-inventory',
       'ops-ledger',
       'equipment',
@@ -157,6 +158,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'bonus',
       'exports',
       'admin',
+      'mymrc-reconcile', // ADR-0057 D4 (admin-only; registry-ordered right after admin)
       'production-report',
       'operational-intelligence',
       'loads-inventory',

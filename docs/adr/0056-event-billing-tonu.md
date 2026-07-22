@@ -70,9 +70,27 @@ A component is priced only if it has a **billable quantity**. A component with n
 - Zero billing behavior change until the generator is wired; pilot mode remains default.
 - Open (soft): the labor/driver/per-diem/IRS rate values await Rick; `tonu_billing` and the legs/vehicles capture UI are feature-agent follow-ups.
 
+## Amendment — 2026-07-22 (Addendum A §A.3): `dr3_hauled` two-haul-mode gate
+
+Rick clarified (2026-07-21) that a collection event has **two haul modes**, and only one bills DR3 freight:
+
+- **Mode A — DR3 hauled (`dr3_hauled = true`, the default).** DR3 dispatched the trailer and performed the haul. Event freight bills into `event_transportation_total` → the `MILES 0` aggregate (§9), exactly as before this amendment.
+- **Mode B — someone else hauled (`dr3_hauled = false`).** A customer or third party performed the haul. DR3 still ran the event labor, so the **EVENTO/B8 line bills unchanged**, but the freight side contributes **$0** to `MILES 0` — DR3 did not move the freight, so it cannot bill for it.
+
+Realized as a single `Boolean` column `collection_events.dr3_hauled` (NOT NULL, `@default(true)`). The default reproduces the pre-amendment behavior on the additive backfill: every existing event carries billed `freight_cents` and was summed unconditionally into `event_transportation_total`, so defaulting `true` is the money-adjacent safe direction (no silent revenue drop). `false` is the new, explicitly-flagged exception.
+
+**What the gate touches (and, deliberately, what it does not):**
+
+- **Freight only.** `event_transportation_total` = Σ `freight_cents` over events with `dr3_hauled = true`. Implemented at the producer — `composeTransportation` in `src/lib/invoices/generate.ts` filters the `B16.event_freight` reduce to hauled events; `fetchEventCostRows` (`event-leg.ts`) selects the flag onto `EventCostRow.dr3Hauled`. The `export-json.ts` MILES-0 aggregation is unchanged — it re-sums the already-filtered stored leaf, so the gate lives once, upstream.
+- **Labor is NOT gated.** The EVENTO/B8 aggregate (`eventMiscCents` = driver + labor wages + mileage + per diem + misc) fires in **both** modes — DR3 ran the event regardless of who hauled. `composeProcessing` is untouched.
+- **TONU is gated.** A TONU is by definition DR3 dispatching a trailer; it can only occur in Mode A. `assessTonu` (`tonu.ts`) now takes `dr3Hauled` and short-circuits to `{ billable: false, reason: 'not_dr3_hauled' }` **first**, before any dispatch/cancel/divert evaluation — so a stray flag on a Mode-B record never bills, and the gate runs ahead of the null-haul-rate refusal.
+
+**Scope note.** This amendment gates the **wired** invoice path (`event-leg.ts` → `generate.ts` `event_transportation_total`, and `assessTonu`). The pure `computeEventBilling` component model (D6) remains unwired; when the integrator folds its per-component split into `EVENTO` / `MILES 0`, the same rule applies — the freight-trip components (`eventTransportationCents`, IRS mileage, per-diem-of-an-overnight-haul) gate on `dr3_hauled`, the labor components do not — but that grouping is the invoice generator's call (per D6/§9) and is not baked here.
+
 ## Test plan
 
 - Migration `prisma migrate deploy` on a clean PG16 + `migrate diff` shows only the intended bare-FK pattern (no column/enum drift) — verified.
 - `state_program_rules` resolver already fails loud on a missing kind (existing tests); the new `irs_mileage_rate` kind inherits that path.
 - Compute layer covered by `src/lib/event-billing/compute.test.ts` (16 tests) + `tonu.test.ts` (7 tests), all pure: each §5.3 component priced with stub rates, per-leg independent tier pricing, the driver-vs-labor no-double-count invariant, per-diem-only-when-overnight, out-of-range freight refusal, `EventRateUnavailableError` on every unseeded-but-billable component, the zero-activity event totaling $0 with all-null rates, and TONU's four billability cases + haul-rate refusal. Run: `npx vitest run src/lib/event-billing`.
 - Generator-side math (folding `eventTransportationCents` into `MILES 0`, the `EVENTO` aggregate, TONU line placement) is tested when the generator consumes this module.
+- **Amendment §A.3 (`dr3_hauled`):** `src/lib/invoices/generate.dr3-hauled.test.ts` — Mode A puts event freight into `MILES 0` + labor into EVENTO; Mode B zeroes freight while EVENTO still bills; a mixed batch sums only hauled freight (June Chico fixture: EVENTO $4,235.35, freight $925). `src/lib/event-billing/tonu.dr3-hauled.test.ts` — Mode B never bills (gate runs first, no throw on null rate); Mode A happy path + null-rate refusal intact. Run: `npx vitest run src/lib/invoices/generate.dr3-hauled src/lib/event-billing/tonu`.

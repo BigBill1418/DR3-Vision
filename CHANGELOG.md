@@ -32,6 +32,56 @@ unblocks Vision's first-ever MyMRC pull.
   tamper/auth-tag/wrong-key/key_version fail closed, empty/whitespace rejected, missing
   key aborts, migration↔schema parity.
 
+### Added — 2026-07-22 (ADR-0057 D4 / Addendum A — MyMRC reconciliation queue + CA source disambiguation + two-haul-mode gate)
+
+The reconciliation layer that stands between MyMRC mirror data and Vision's operational
+tables. Vision NEVER auto-updates `sources` / `source_aliases` / `state_program_rules` from
+a MyMRC pull: the sync detects candidate changes, writes them to a review queue, and only an
+explicit admin **approve** applies one to an operational table (reject writes nothing, snooze
+defers 7 days). Every decision carries a required note and is audited in the same transaction
+as the state flip (first-action-wins). Built now, populates at the first post-Phase-0 backfill
+for Bill's bulk-approve — nothing here writes to an ops table until he acts.
+
+- `prisma/schema.prisma` — `MymrcReconciliationQueue` model → `mymrc_reconciliation_queue`
+  (generic field-level rows: `mirror_table`/`mirror_record_id`/`target_table`/`field_name`/
+  `mymrc_value`/`vision_value`/`change_kind`/`status`/audit + `snooze_until`), plus enums
+  `ReconChangeKind` (`new_record|field_update|disappeared`) and `ReconStatus`
+  (`pending|approved|rejected|snoozed`). Additive; 3 indexes (pending view, classifier dedup,
+  target lookup).
+- `prisma/schema.prisma` — `CollectionEvent.dr3_hauled Boolean @default(true)` on
+  `collection_events`. Default `true` reproduces current invoice output on the additive
+  backfill (all existing events carry billed freight) — the money-adjacent safe direction;
+  `false` is the new customer/third-party-haul exception.
+- `prisma/migrations/20260803_adr0057_reconciliation_queue/migration.sql` — additive: both
+  enum types, the `dr3_hauled` column, the queue table + indexes.
+- `src/lib/mymrc/reconcile-detect.ts` — pure, dual-compiled `new_record` classifier: a mirror
+  source name matching NEITHER `sources.name` (verbatim) NOR a normalized `source_aliases.alias`
+  becomes one queue candidate (reuses the byte-identical `normalizeSourceName` the upsert path
+  uses). Emits only `new_record`/`sources` this wave (accounts mirror is Phase-0-pending).
+- `src/lib/reconcile/apply.ts` — decision engine (approve/reject/snooze); the ONLY operational
+  write (`source.create`) is inside the approve branch of one transaction. Required-note gate
+  (`assertReconcileNote`, ≤2000), unsupported-target refusal (never silent no-op), plus
+  `bulkApproveReconciliations` (per-item tx so one bad apply fails alone) and
+  `pendingReconcileCount` for the tile badge.
+- `src/app/api/admin/mymrc/reconcile/**` — admin-gated (`requireAdmin`) pending-list GET,
+  per-item decide POST, and bulk-approve POST (all note-gated + length-capped).
+- `src/app/admin/mymrc/reconcile/` — admin review page + client; `mymrc-reconcile` dashboard
+  tile (admin-only, `Scale` icon).
+- `src/lib/mymrc/ca-source-seed.ts` — Rick's 2026-07-21 CA (Woodland) disambiguation constant
+  (`CA_SOURCE_DISAMBIGUATION`, 7 confirmed rows; `CA_SOURCE_DISAMBIGUATION_PENDING`, 5 hints
+  still awaiting Rick's exact canonical names). Pure/dual-compile-safe; the operator's canonical
+  reference when approving CA `new_record` candidates. No canonical name or address is invented.
+- `prisma/seed.mjs` + `prisma/seed/addendum-b-data.mjs` — §A.8.2 CA office aliases (woodland-
+  scoped, self-activating: each no-ops until its canonical Source clears the D4 queue); §A.4
+  Covanta seeded `is_active:false` with NO recycling rate (WTE % pending Rick).
+- `src/lib/commodity/fetch.ts` — an inactive vendor's name never reaches the customer-facing
+  commodity attachment (falls through to free-text buyer).
+- §A.3 two-haul-mode gate: `src/lib/invoices/{types,event-leg,generate}.ts` sum event freight
+  (`B16.event_freight` → `MILES 0`) only for `dr3_hauled` events (provenance still stamps all);
+  `src/lib/event-billing/tonu.ts` refuses TONU for a non-DR3-hauled event
+  (`not_dr3_hauled`). Labor/EVENTO (B8) fires in both modes.
+- §A.5 verify: `Xtraction × metal = 0.8100` pinned with a test guarding against silent drift.
+
 ### Added — 2026-07-22 (ADR-0057 D1/D9 — MRC-Scrape credential surface + auth transition)
 
 The admin UI/DB surface for the credential store above, plus the scrape's transition off
