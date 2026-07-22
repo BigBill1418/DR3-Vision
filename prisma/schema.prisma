@@ -1910,6 +1910,36 @@ model MymrcSyncRun {
   @@map("mymrc_sync_runs")
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// MyMRC admin credential store (ADR-0057 D1/D9)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Single encrypted row holding Bill's MyMRC (Salesforce Experience Cloud)
+// admin login. Replaces the retired per-site env-var scheme (ADR-0057 D1):
+// creds are entered through the admin surface and read by the scrape from
+// this table — never from a `.env` file (operator rule).
+//
+// The password is AES-256-GCM encrypted at rest; only
+// `src/lib/mymrc/credential-store.ts` ever decrypts it, and the plaintext
+// NEVER crosses a client boundary, an API response, or a log line. `username`
+// is stored plaintext (a login id, not a secret). Exactly one row exists:
+// `id = 'singleton'`, enforced by a CHECK constraint in the migration and by
+// keying every write on that id via upsert. `updated_by` is a bare
+// audit-actor user id (no FK; mirrors FileDrop.uploaded_by / AP decided_by).
+model MymrcAdminCredential {
+  id                  String   @id @default("singleton")
+  username            String
+  password_ciphertext String // base64(AES-256-GCM ciphertext)
+  password_iv         String // base64(12-byte GCM nonce)
+  password_auth_tag   String // base64(16-byte GCM auth tag)
+  key_version         Int      @default(1) // pins KDF+salt+cipher; bump to rotate scheme
+  updated_by          String // bare audit-actor user id (no FK)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@map("mymrc_admin_credentials")
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // 3-way audit engine + retro-audit (ADR-0039)
 //

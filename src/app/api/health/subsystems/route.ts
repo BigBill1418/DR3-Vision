@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { getMymrcCredentialStatus } from '@/lib/mymrc/credential-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,6 +37,24 @@ async function probeDb(): Promise<Subsystem> {
   }
 }
 
+// ADR-0057 — MyMRC creds now live in the DB store (entered at /admin/mrc-scrape),
+// NOT MYMRC_*_USERNAME/PASSWORD env. Read the non-secret status (no password/
+// ciphertext leaves Postgres). A DB error here should not turn the whole pill red
+// (probeDb already owns the DB-down signal) — degrade this one subsystem to amber.
+async function probeMymrc(): Promise<Subsystem> {
+  try {
+    const { configured } = await getMymrcCredentialStatus(prisma);
+    return {
+      key: 'mymrc',
+      label: 'MyMRC scrape',
+      status: configured ? 'green' : 'amber',
+      detail: configured ? 'Credentials configured' : 'Not configured',
+    };
+  } catch {
+    return { key: 'mymrc', label: 'MyMRC scrape', status: 'amber', detail: 'Unknown' };
+  }
+}
+
 function worst(subs: Subsystem[]): Status {
   if (subs.some((s) => s.status === 'red')) return 'red';
   if (subs.some((s) => s.status === 'amber')) return 'amber';
@@ -49,9 +68,6 @@ export async function GET(): Promise<Response> {
   }
 
   const r2 = present('R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET');
-  const mymrc =
-    present('MYMRC_WOODLAND_USERNAME', 'MYMRC_WOODLAND_PASSWORD') ||
-    present('MYMRC_CA_USERNAME', 'MYMRC_CA_PASSWORD');
   const ntfy = present('NTFY_PUBLISHER_TOKEN');
   const graph = present(
     'AUTH_MICROSOFT_ENTRA_ID_ID',
@@ -60,20 +76,17 @@ export async function GET(): Promise<Response> {
   );
   const glitchtip = present('GLITCHTIP_DSN');
 
+  const [db, mymrc] = await Promise.all([probeDb(), probeMymrc()]);
+
   const subsystems: Subsystem[] = [
-    await probeDb(),
+    db,
     {
       key: 'r2',
       label: 'Photo storage (R2)',
       status: r2 ? 'green' : 'amber',
       detail: r2 ? 'Configured' : 'Not configured',
     },
-    {
-      key: 'mymrc',
-      label: 'MyMRC scrape',
-      status: mymrc ? 'green' : 'amber',
-      detail: mymrc ? 'Credentials configured' : 'Not configured',
-    },
+    mymrc,
     {
       key: 'ntfy',
       label: 'ntfy publisher',

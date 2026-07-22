@@ -1,30 +1,35 @@
 #!/usr/bin/env node
-// Per-tick worker for the MyMRC ingestion sync (ADR-0038, rebuild of T-015).
+// Per-tick worker for the MyMRC ingestion sync (ADR-0038 transport, ADR-0057
+// D1/D9 auth model). Spawned once per hour by `scripts/mymrc-cron.mjs`.
 //
-// Spawned once per hour by `scripts/mymrc-cron.mjs`. For each site
-// (eugene, woodland), sequentially:
+// ADR-0057 D1 — SINGLE ADMIN IDENTITY. Vision logs into the MyMRC Salesforce
+// portal ONCE as Bill's admin user (no per-site logins, no service accounts —
+// those never existed). One Playwright session serves every feed; site scoping
+// happens on the DATA (records carry `Recycler__c`), not on the login. The admin
+// credential comes from the ENCRYPTED DB store (`getMymrcCredentials`, entered at
+// `/admin/mrc-scrape`) — NEVER a `.env`. The scrape decrypts using `MYMRC_CRED_KEY`
+// (see docker-compose.yml + docs/operator/mymrc-setup.md).
 //
-//   1. Read credentials from env. If missing → log "creds not configured,
-//      skipping" and continue WITHOUT paging (operator state, not a system
-//      error).
-//   2. Log in to the MyMRC Salesforce portal (Playwright) → a session-bound
-//      PortalClient (JSON transport; never parses Lightning DOM).
-//   3. Run all three feeds (hauls → processed → outbound): list → mirror upsert
-//      (first/last_seen + disappeared) → bounded detail pass → ALWAYS a
-//      run-ledger row. Hauls also feed `expected_loads`.
-//   4. Paging (auth_failed / contract_drift / zero-anomaly) is fired by the sync
-//      engine itself via `dr3-vision-system`, deduped per fingerprint.
+// ADR-0057 D9 — FAIL LOUD ON MISSING CREDS. The historical failure mode (months
+// of zero pulls) was startup treating absent credentials as "skip + exit 0". That
+// silent path is DELETED. If the store has no admin credential (or it can't be
+// decrypted), the worker pages `dr3-vision-system` and exits NON-ZERO. Unconfigured
+// is now noisy within one hourly tick, and the Docker healthcheck
+// (`scripts/mymrc-healthcheck.mjs`) reports unhealthy until creds are entered.
 //
-// After all sites, run the DEADMAN check (no successful run in >26h → page).
-//
-// Exit code:
-//   - 0 when every configured site completes (including no-creds skips and
-//     per-feed errors — the next tick retries cleanly without restart thrash).
-//   - 1 only when EVERY configured site failed to even start a session.
+// Exit codes:
+//   0  — every site's feeds ran (per-feed errors are handled/ledgered downstream).
+//   1  — admin session failed to start, or an unhandled fatal error.
+//   2  — DATABASE_URL missing.
+//   3  — D9: admin credentials not configured in the store.
+//   4  — D9: credentials present but undecryptable (bad/missing MYMRC_CRED_KEY,
+//         tampered ciphertext, or an unsupported key_version).
 //
 // Stays JavaScript (.mjs): the TS modules under `src/lib/mymrc/` are precompiled
 // to `dist/mymrc/` (CJS) at Docker build time via `tsconfig.mymrc.json`; this
-// wrapper consumes that output through `createRequire`.
+// wrapper consumes that output through `createRequire`. The `require(dist)` is
+// LAZY (inside `main`) so this module stays importable for unit tests without a
+// built `dist/`.
 
 import { chromium } from 'playwright';
 import { PrismaClient } from '@prisma/client';
@@ -33,12 +38,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
-const MYMRC_DIST = resolve(__dirname, '..', 'dist', 'mymrc');
-const mymrc = require(MYMRC_DIST);
-
-const SITES = mymrc.SITE_CODES ?? ['eugene', 'woodland'];
 const HEADLESS = (process.env.MYMRC_HEADLESS ?? 'true').toLowerCase() !== 'false';
+
+// Where an operator enters/rotates the admin credential. Surfaced in the D9 page
+// so the alert is directly actionable (ADR-0037 gate Q5).
+const ADMIN_SURFACE_URL =
+  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() ||
+  'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
 
 function log(level, message) {
   const line = `mymrc-sync[${new Date().toISOString()}]: ${message}`;
@@ -46,39 +52,90 @@ function log(level, message) {
   else console.log(line);
 }
 
-async function runOneSite({ site, prisma, browser }) {
-  const creds = mymrc.loadSiteCredentials(site);
-  if (!creds) {
-    log('info', `${site} — credentials not configured, skipping`);
-    return { site, status: 'no-credentials' };
+/**
+ * Orchestrate one scrape tick. Collaborators are INJECTED (`deps`) so the flow is
+ * unit-testable with fakes and never touches `dist/` or launches a real browser:
+ *   - mymrc:         the compiled `@/lib/mymrc` surface (loadAdminCredentials,
+ *                    createPortalClient, syncSite, checkDeadman, ntfyPager, SITE_CODES,
+ *                    CredentialsNotConfiguredError).
+ *   - prisma:        a PrismaClient.
+ *   - launchBrowser: `() => Promise<Browser>` — called ONLY after the D9 credential
+ *                    gate passes, so the common "not configured yet" tick never pays
+ *                    the Chromium launch cost.
+ *   - log:           structured logger.
+ * Returns the process exit code; the caller owns `process.exit`.
+ */
+export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn = log }) {
+  // ── D9 credential gate (ADR-0057 D9) — assert BEFORE any browser launch ──
+  let creds;
+  try {
+    creds = await mymrc.loadAdminCredentials(prisma);
+  } catch (err) {
+    const notConfigured = err instanceof mymrc.CredentialsNotConfiguredError;
+    const message = notConfigured
+      ? `MyMRC admin credentials not configured — enter them at ${ADMIN_SURFACE_URL}. ` +
+        `Sync cannot run until credentials are set.`
+      : `MyMRC admin credentials could not be loaded/decrypted: ${describeErr(err)}. ` +
+        `Check MYMRC_CRED_KEY on this container and re-enter credentials at ${ADMIN_SURFACE_URL} if needed.`;
+    logFn('error', message);
+    // Fail LOUD (no silent skip, no fallback — no service accounts exist).
+    await mymrc.ntfyPager
+      .page({
+        kind: 'error',
+        site: 'admin',
+        message,
+        fingerprint: notConfigured ? 'mymrc-creds-not-configured' : 'mymrc-creds-load-failed',
+      })
+      .catch(() => undefined);
+    return notConfigured ? 3 : 4;
   }
+
+  const browser = await launchBrowser();
   let client;
   try {
-    client = await mymrc.createPortalClient(browser, creds, {
-      log: (lvl, msg) => log(lvl, msg),
-    });
-  } catch (err) {
-    // Could not even start a session (login/context failure). The sync engine
-    // fires the auth page on its list attempt; here we just record the outcome.
-    const msg = err instanceof Error ? err.message : String(err);
-    log('error', `${site} — session start failed: ${msg}`);
-    return { site, status: 'session-failed', error: msg };
-  }
-  try {
-    const results = await mymrc.syncSite({
-      prisma,
-      client,
-      site,
-      log: (lvl, msg) => log(lvl, msg),
-    });
-    const summary = results
-      .map((r) => `${r.feed}=${r.status}(listed:${r.rowsListed},detail:${r.detailsFetched})`)
-      .join(' ');
-    log('info', `${site} done — ${summary}`);
-    return { site, status: 'ran', results };
+    // Single admin login (ADR-0057 D1). Storage state defaults to the single admin
+    // context path inside portal-client (`adminAuthStatePath()`), honoring
+    // MYMRC_AUTH_STATE_DIR.
+    try {
+      client = await mymrc.createPortalClient(browser, creds, { log: logFn });
+    } catch (err) {
+      const msg = describeErr(err);
+      logFn('error', `admin session start failed: ${msg}`);
+      await mymrc.ntfyPager
+        .page({
+          kind: 'auth_failed',
+          site: 'admin',
+          message: `MyMRC admin login/session failed to start: ${msg}`,
+          fingerprint: 'mymrc-auth-failed:admin',
+        })
+        .catch(() => undefined);
+      return 1;
+    }
+
+    const sites = mymrc.SITE_CODES ?? ['eugene', 'woodland'];
+    try {
+      // One admin session; the per-site passes reuse it (feeds are not login-scoped).
+      for (const site of sites) {
+        const results = await mymrc.syncSite({ prisma, client, site, log: logFn });
+        const summary = results
+          .map((r) => `${r.feed}=${r.status}(listed:${r.rowsListed},detail:${r.detailsFetched})`)
+          .join(' ');
+        logFn('info', `${site} done — ${summary}`);
+      }
+      // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
+      await mymrc.checkDeadman({ prisma, sites, log: logFn });
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+    return 0;
   } finally {
-    await client.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
   }
+}
+
+function describeErr(err) {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 async function main() {
@@ -87,31 +144,32 @@ async function main() {
     process.exit(2);
   }
 
+  const require = createRequire(import.meta.url);
+  const mymrc = require(resolve(__dirname, '..', 'dist', 'mymrc'));
   const prisma = new PrismaClient();
-  const browser = await chromium.launch({ headless: HEADLESS });
 
-  const outcomes = [];
+  let code = 1;
   try {
-    for (const site of SITES) {
-      // Sites run sequentially: shared browser, one login/context per site.
-      outcomes.push(await runOneSite({ site, prisma, browser }));
-    }
-    // Deadman: page once (deduped) for any feed with no success in >26h.
-    await mymrc.checkDeadman({ prisma, sites: SITES, log: (lvl, msg) => log(lvl, msg) });
+    code = await runMymrcScrape({
+      mymrc,
+      prisma,
+      launchBrowser: () => chromium.launch({ headless: HEADLESS }),
+      log,
+    });
   } finally {
-    await browser.close().catch(() => undefined);
     await prisma.$disconnect().catch(() => undefined);
   }
-
-  const configured = outcomes.filter((o) => o.status !== 'no-credentials');
-  const startedNone = configured.filter((o) => o.status === 'session-failed');
-  if (configured.length > 0 && startedNone.length === configured.length) {
-    process.exit(1); // every configured site failed to even start a session
-  }
-  process.exit(0);
+  process.exit(code);
 }
 
-main().catch((err) => {
-  log('error', `fatal: ${err && err.stack ? err.stack : err}`);
-  process.exit(1);
-});
+// Only run as the entrypoint — keeps the module importable for unit tests without
+// spawning Prisma/Chromium or requiring a built `dist/` (mirrors the guard in
+// scripts/bonus-period-close.mjs).
+const isEntrypoint =
+  process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+if (isEntrypoint) {
+  main().catch((err) => {
+    log('error', `fatal: ${err && err.stack ? err.stack : err}`);
+    process.exit(1);
+  });
+}

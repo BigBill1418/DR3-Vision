@@ -1,152 +1,133 @@
 # MyMRC scrape setup — DR3-Vision operator runbook
 
-Per ADR-0009, DR3-Vision pulls scheduled hauls from MyMRC by browser
-automation (Playwright) — there is no API path until MRC enables one.
-The `mymrc-scrape` cron container in `docker-compose.yml` runs a scrape
-once on boot and once at the top of every UTC hour. Each tick logs into
-both MyMRC accounts (Eugene + Woodland), extracts the next 7 days of
-scheduled hauls, and upserts them into the `expected_loads` table. The
-operator iPad queue (T-005) reflects new hauls within an hour of MRC
-scheduling them.
+**This is Vision's FIRST-EVER MyMRC sync.** Despite the pipeline shipping under
+ADR-0009/ADR-0038, Vision has never pulled a single record from MyMRC — the DR3
+service accounts the old env-var scheme referenced were never created, so the
+worker ran its fail-soft "creds not configured, skipping" path every hour and
+exited 0. ADR-0057 fixes the auth model (single admin identity) and the failure
+posture (fail loud, no silent skip). Follow this runbook to make the first pull
+happen.
 
-The wiring is **fail-soft**: when neither
-`MYMRC_EUGENE_USERNAME`/`MYMRC_EUGENE_PASSWORD` nor
-`MYMRC_WOODLAND_USERNAME`/`MYMRC_WOODLAND_PASSWORD` are set, the worker
-logs `creds not configured, skipping` for each tick and exits 0. No
-ntfy alert fires — that's an operator state, not a system failure.
-Until the credentials below are dropped, the operator queue is empty
-(or shows only manually-created loads) but nothing breaks.
+Per ADR-0009, DR3-Vision pulls from MyMRC by browser automation (Playwright) —
+there is no API path until MRC enables one. The `mymrc-scrape` cron container in
+`docker-compose.yml` runs a scrape once on boot and once at the top of every UTC
+hour.
 
-This is a one-time setup per fleet host.
+## What changed (ADR-0057)
 
-## 1. Credentials
+- **Single admin identity (D1).** The scrape logs into MyMRC **once** as Bill's
+  admin user — not per-site, no service accounts. Site scoping happens on the
+  data (records carry `Recycler__c` = "DR3 Woodland" / "DR3 Eugene"), not on the
+  login. The retired `MYMRC_{EUGENE,WOODLAND,OR,CA}_*` env vars are gone.
+- **Credentials live in the database, entered via the UI — NEVER a `.env`.**
+  Bill types his MyMRC admin login into the **`/admin/mrc-scrape`** admin surface;
+  it is stored **AES-256-GCM encrypted** in Postgres. There is no credentials file
+  to drop on the host.
+- **Fail loud (D9).** When no admin credential is configured (or it can't be
+  decrypted), the worker **pages `dr3-vision-system` and exits non-zero**, and the
+  container healthcheck reports **unhealthy**. The months-of-zero-pulls silent
+  path is deleted.
 
-The DR3 service accounts on MyMRC are managed by Bill / SVdP. They are
-**SVdP service accounts**, not personal accounts — never paste your
-own MyMRC login here. Two distinct accounts:
+## 1. Provision the encryption key (one-time, per fleet host)
 
-- **Eugene (Oregon program)** — administered by MRC Oregon LLC.
-- **Woodland (California program)** — administered by MRC California LLC.
+The only MyMRC-related **secret on the host** is the encryption **key** —
+`MYMRC_CRED_KEY` — NOT the MyMRC login (that lives in the DB). It is a dedicated
+32-byte random secret, deliberately separate from `NEXTAUTH_SECRET` (the scrape
+container is stripped of `NEXTAUTH_SECRET` per the ADR-0053 addendum so a
+compromised Chromium cron can't mint admin JWTs; deriving the cred key from it
+would reverse that hardening).
 
-If you don't have both pairs of credentials yet, ask Bill. Until both
-are dropped, the corresponding site's scrape is a fail-soft no-op.
-
-## 2. Drop the env_file on CHAD-HQ
+Generate it once and drop it into a mode-600 file that **both** the `app` and
+`mymrc-scrape` services mount:
 
 ```bash
-ssh 10.99.0.2
-mkdir -p ~/.dr3-vision-secrets
-tee ~/.dr3-vision-secrets/mymrc.env <<'EOF'
-# DR3-Vision — MyMRC scrape credentials (T-015 / ADR-0009)
-# Sourced by the `mymrc-scrape` service in docker-compose.yml.
-# The legacy MYMRC_OR_* / MYMRC_CA_* names are also accepted for
-# compatibility with `docs/MYMRC-INTEGRATION.md`.
-
-# Eugene (Oregon) — DR3 service account
-MYMRC_EUGENE_USERNAME=<eugene service account email>
-MYMRC_EUGENE_PASSWORD=<eugene service account password>
-
-# Woodland (California) — DR3 service account
-MYMRC_WOODLAND_USERNAME=<woodland service account email>
-MYMRC_WOODLAND_PASSWORD=<woodland service account password>
-EOF
-chmod 600 ~/.dr3-vision-secrets/mymrc.env
+ssh 10.99.0.2   # CHAD-HQ
+umask 077
+printf 'MYMRC_CRED_KEY=%s\n' "$(openssl rand -hex 32)" \
+  > ~/.dr3-vision-secrets/mymrc-cred-key.env
+chmod 600 ~/.dr3-vision-secrets/mymrc-cred-key.env
 ```
 
-Mode 600 is non-negotiable. The file holds two production
-service-account passwords; a leaked file gives full read/write on the
-DR3 MyMRC tenant for both jurisdictions.
+- `mymrc-scrape` mounts this file already (see `docker-compose.yml`, the
+  `mymrc-cred-key.env` env_file entry — the reader/decrypt side).
+- The **`app` service must mount the SAME file** (the writer/status side — it
+  encrypts on save and reads status for `/admin/mrc-scrape`). If it isn't mounted
+  on `app`, saving credentials in the UI fails. Confirm both services carry
+  `MYMRC_CRED_KEY`.
 
-**No trailing slash, no extra whitespace** on the values — env_file
-parsing preserves trailing whitespace into the password literally,
-which MyMRC's login form will then reject. Same lesson as the Entra
-ID setup (`docs/operator/entra-id-setup.md` §2 issuer note): MyMRC
-returns "Invalid username or password" with no further detail when
-the password has a stray space appended.
+Losing this key makes the stored credential undecryptable — the scrape will fail
+loud (exit 4) until the key is restored or Bill re-enters the login under a new
+key. Back it up in the 1Password Fleet vault.
 
-## 3. Recreate the cron container
+## 2. Enter the MyMRC admin credentials in the UI
 
-A plain `docker compose restart` will NOT pick up the new env_file —
-Compose bakes env_file values into the container at create time, so a
-stop/start cycle keeps the old (empty) env. Use
-`up -d --force-recreate` instead (same lesson as the Entra and ntfy
-setups):
+There is **no file to edit**. Bill (or whoever holds the admin login):
+
+1. Open **`https://dr3-vision.barnardhq.com/admin/mrc-scrape`**.
+2. Enter the MyMRC **admin** username + password (the account with visibility
+   into both DR3 Woodland and DR3 Eugene — no MFA on this account, so plain
+   Playwright login works).
+3. Save. The password is encrypted immediately and never leaves the server as
+   plaintext again.
+
+**No trailing whitespace on the password** — MyMRC's login form rejects a
+password with a stray space appended and returns only "Invalid username or
+password" with no further detail. The UI stores exactly what is typed (no
+trimming of the password body), so paste carefully.
+
+## 3. Activate the worker
+
+The `mymrc-scrape` service is **profile-gated** (`mymrc`) — it is not started by a
+plain `docker compose up -d` or the deployer. Activation is a deliberate action:
 
 ```bash
 cd /home/bbarnard065/DR3-Vision
-docker compose up -d --force-recreate --no-deps mymrc-scrape
+# Ensure the auth-state volume is owned by the container uid (first activation):
+docker run --rm -v dr3-vision_mymrc-auth-state:/v alpine chown -R 1001:1001 /v
+docker compose --profile mymrc up -d mymrc-scrape
 ```
 
-Within ~5 s the cron host logs `cron host started`, then within
-another ~10 s the boot scrape begins. Watch live:
+Then re-add `mymrc-scrape` to the noc-master service-registry `containers[]` so
+NOC watches its health.
+
+**Order matters.** If you activate the worker *before* entering credentials in the
+UI, that is fine and expected under D9 — the worker will page
+`dr3-vision-system` ("MyMRC admin credentials not configured — enter them at
+/admin/mrc-scrape") each tick and report unhealthy until the credential lands.
+That interim noise is the intended, self-limiting nudge, not a bug. (See the
+note in Troubleshooting on page frequency.)
+
+## 4. Verify
+
+Watch the boot scrape:
 
 ```bash
 docker logs -f dr3-vision-mymrc-scrape
 ```
 
-You should see (per site, sequentially):
+Configured + healthy looks like (single admin login, then per-site feeds):
 
 ```
-[mymrc-cron 2026-05-06T23:45:01.000Z] cron host started
-[mymrc-cron 2026-05-06T23:45:06.000Z] spawning .../mymrc-scrape.mjs
-mymrc-scrape: login required for eugene
-mymrc-scrape: login submitted for eugene
-mymrc-scrape: parsed 14 hauls for eugene
-mymrc-scrape: eugene ok — hauls=14 inserted=14 updated=0 cancelled=0 unmatchedSources=0
-mymrc-scrape: login required for woodland
-mymrc-scrape: login submitted for woodland
-mymrc-scrape: parsed 22 hauls for woodland
-mymrc-scrape: woodland ok — hauls=22 inserted=22 updated=0 cancelled=0 unmatchedSources=0
-[mymrc-cron 2026-05-06T23:45:51.000Z] scrape exit code 0
-[mymrc-cron 2026-05-06T23:45:51.000Z] next scrape in 814s
+[mymrc-cron ...] cron host started
+[mymrc-cron ...] spawning .../mymrc-scrape.mjs
+mymrc-sync[...]: mymrc: login required (admin)
+mymrc-sync[...]: mymrc: login submitted (admin)
+mymrc-sync[...]: eugene done — hauls=ok(listed:14,detail:14) processed=ok(...) outbound=ok(...)
+mymrc-sync[...]: woodland done — hauls=ok(listed:22,detail:22) processed=ok(...) outbound=ok(...)
+[mymrc-cron ...] scrape exit code 0
+[mymrc-cron ...] next scrape in 814s
 ```
 
-The next-scrape timer counts down to the top of the next UTC hour. If
-your `inserted` totals are `0` after the first run, either no hauls
-were scheduled in the next 7-day window or the source-name match fell
-through to nulls — see Troubleshooting below.
-
-## 4. Verify
+Confirm the container is healthy and the admin session was persisted:
 
 ```bash
-docker exec dr3-vision-mymrc-scrape env | grep ^MYMRC_
+docker inspect --format '{{.State.Health.Status}}' dr3-vision-mymrc-scrape   # → healthy
+docker exec dr3-vision-mymrc-scrape ls -la /var/lib/dr3-vision/mymrc-auth/mymrc-admin/
 ```
 
-Expect (passwords redacted in the output for safety):
-
-```
-MYMRC_EUGENE_USERNAME=eugene-service@svdp.us
-MYMRC_EUGENE_PASSWORD=...
-MYMRC_WOODLAND_USERNAME=woodland-service@svdp.us
-MYMRC_WOODLAND_PASSWORD=...
-MYMRC_HEADLESS=true
-MYMRC_AUTH_STATE_DIR=/var/lib/dr3-vision/mymrc-auth
-```
-
-Confirm the auth state files were written after the first successful
-login:
-
-```bash
-docker exec dr3-vision-mymrc-scrape ls -la /var/lib/dr3-vision/mymrc-auth/
-```
-
-You should see `mymrc-eugene/auth.json` and `mymrc-woodland/auth.json`
-with non-zero size. Subsequent scrapes reuse this state and skip the
-re-login round-trip — `login required` lines disappear from the logs
-on the second tick onward.
-
-Confirm the operator queue picks up the rows:
-
-```bash
-docker exec dr3-vision-postgres psql -U dr3 -d dr3_vision -c \
-  "SELECT site_id, count(*) FROM expected_loads
-   WHERE cancelled_at IS NULL
-     AND expected_arrival_at >= now() - interval '1 day'
-   GROUP BY site_id;"
-```
-
-Counts should match (or be close to) the per-site `parsed N hauls`
-lines in the cron log.
+You should see a non-zero `auth.json` under `mymrc-admin/` (single admin context —
+no per-site directories). Subsequent scrapes reuse this session and skip the
+re-login round-trip.
 
 ## 5. Force a one-shot scrape (no need to wait for the cron tick)
 
@@ -154,119 +135,72 @@ lines in the cron log.
 docker exec dr3-vision-mymrc-scrape node scripts/mymrc-scrape.mjs
 ```
 
-This runs the same code path as the hourly cron, exits when both
-sites complete (or all configured sites failed), and respects the
-same fail-soft contract.
+Same code path as the hourly cron. Exit codes: `0` success · `1` admin session
+failed to start · `2` no `DATABASE_URL` · `3` credentials not configured (D9) ·
+`4` credentials present but undecryptable (bad/missing `MYMRC_CRED_KEY` or a
+tampered row).
 
 ## 6. Rotation
 
-When the MyMRC service-account password rotates (per fleet 90-day
-policy):
+When the MyMRC admin password changes:
 
-1. Reset the password in the MyMRC UI (Bill or whoever holds the
-   account-recovery email).
-2. Update the value in `~/.dr3-vision-secrets/mymrc.env` on CHAD-HQ.
-3. Wipe the cached auth state so the next tick re-logs in cleanly:
-
-   ```bash
-   docker exec dr3-vision-mymrc-scrape rm -rf /var/lib/dr3-vision/mymrc-auth/mymrc-*
-   ```
-
-4. Recreate the container:
+1. Reset it in MyMRC.
+2. **Re-enter the new password at `/admin/mrc-scrape`.** That's the whole
+   rotation — no host file to edit, no container recreate.
+3. Wipe the cached admin session so the next tick re-logs in cleanly:
 
    ```bash
-   docker compose up -d --force-recreate --no-deps mymrc-scrape
+   docker exec dr3-vision-mymrc-scrape rm -rf /var/lib/dr3-vision/mymrc-auth/mymrc-admin
    ```
 
-There's no overlap window — the new password takes effect on the
-next scrape attempt. If MyMRC ever locks the account out from too
-many bad attempts during rotation, the worker will fire a
-`MyMRC scrape failed — <site>` ntfy with a 30-min cooldown until
-the lockout clears.
+There's no overlap window — the new password takes effect on the next scrape.
+
+Rotating the **encryption key** (`MYMRC_CRED_KEY`) is a different, rarer
+operation: it invalidates the stored ciphertext, so update the key file on both
+`app` and `mymrc-scrape`, recreate both, then re-enter the login in the UI (which
+re-encrypts under the new key).
 
 ## Troubleshooting
 
-### No notification fires but the queue stays empty
+### `[DR3-Vision] MyMRC sync error — admin` pages saying "credentials not configured"
 
-Most common causes (in descending order of likelihood):
+Working as intended (D9). The store has no admin credential yet — enter it at
+`/admin/mrc-scrape`. **Page frequency:** the worker is spawned fresh per tick, so
+the ntfy publisher's in-process cooldown does not dedup across ticks — expect
+roughly one page per hour (priority `high`, buffered into the 07:00 digest during
+quiet hours) until the credential is entered. It is self-limiting (stops the moment
+creds land) and backed by the always-visible container healthcheck. If you need to
+silence it before entering creds, `docker compose stop mymrc-scrape`.
 
-1. **No hauls scheduled in the next 7 days.** This is the normal state
-   over weekends and the first week of a new contract period. Confirm
-   by logging into MyMRC manually as the service account and visiting
-   the Scheduled Hauls page — if you see `(empty)` there, the scrape
-   is correctly reflecting reality.
-2. **Source-name mismatch.** When a haul row's Collection Site value
-   doesn't match any row in our `sources` table for the site, the
-   row still inserts but with `source_id = null` + the raw name in
-   `source_name_at_sync`. The operator queue still shows it (using
-   the synced name), but it can't be linked to a downstream load
-   workflow until the source is added to the seed. Look for a
-   non-zero `unmatchedSources=N` in the cron log; query the affected
-   row to see the raw name:
+### Container is `unhealthy`
 
-   ```sql
-   SELECT external_mymrc_haul_id, source_name_at_sync
-   FROM expected_loads
-   WHERE site_id = '<id>'
-     AND source_id IS NULL
-     AND cancelled_at IS NULL
-   ORDER BY last_synced_at DESC LIMIT 5;
-   ```
+The healthcheck (`scripts/mymrc-healthcheck.mjs`) reports unhealthy whenever no
+admin credential row exists. Enter creds at `/admin/mrc-scrape`; health flips
+green on the next probe (5-minute interval).
 
-   Then add the new source via the seed (the V2.1 admin Sources page
-   is on the backlog).
-3. **Login redirect on the boot scrape (cold container).** The first
-   scrape after a fresh deploy logs `login required for eugene` /
-   `login submitted for eugene`. If the scrape then logs
-   `still on login page after re-auth for eugene`, the credentials
-   are wrong. Re-check the env_file contents (no trailing whitespace,
-   no quotes around values) and recreate the container.
+### Login redirect loop / "still logged out after re-auth (admin)"
 
-### `MyMRC scrape failed — <site>` ntfy alerts
+The credentials are wrong. Re-check the login at `/admin/mrc-scrape` (no trailing
+whitespace on the password) and wipe the cached session (§6 step 3).
 
-Each per-site failure publishes once per 30-min window (per ADR-0037
-+ the wrapper's per-site fingerprint). Possible causes:
+### Exit code 4 / "could not be loaded/decrypted"
 
-- **MRC redesigned the portal.** Selectors live at
-  `src/lib/mymrc/selectors.ts` with a `SELECTOR_VERSION` constant.
-  This is the most fragile file in the codebase — when MRC ships a
-  major UI change, these need to be updated and a new ADR-0009
-  selectors-version note dropped in `docs/MYMRC-INTEGRATION.md`.
-- **MRC added CAPTCHA / 2FA.** This blocks the Playwright path
-  entirely. Fall back to manual CSV reconciliation (T-016) and
-  escalate to MRC for an API-access response.
-- **MyMRC outage.** Both sites fail simultaneously, errors mention
-  network timeouts. The wrapper does not page on the first failure
-  for an unconfigured site — only on a configured site that
-  previously worked. If outage > 1 hour, fire `dr3-vision-system`
-  manually with `[OPERATOR] MyMRC outage > 1h`.
-- **Account lockout.** Failure body contains `Invalid username or
-  password` — see Rotation, §6.
+`MYMRC_CRED_KEY` is missing or does not match the key the credential was stored
+under. Restore the correct key on the container (§1), or re-enter the login in the
+UI to re-encrypt under the current key.
 
-### "Unhandled error" alert mentions Playwright
+### `MRC redesigned the portal` / selectors broke
 
-Almost always one of:
-
-- Playwright browser binaries missing — should never happen in the
-  prod image (built on `mcr.microsoft.com/playwright:v1.48.0-jammy`)
-  but can happen in a dev environment. Run
-  `npx playwright install chromium` in the worker.
-- Memory pressure on CHAD-HQ — the cron host process should idle at
-  ~30MB and burn ~250MB during the chromium launch. If the host is
-  under load, the scrape may OOM. Check with
-  `docker stats dr3-vision-mymrc-scrape`.
+Selectors live at `src/lib/mymrc/selectors.ts` with a `SELECTOR_VERSION`
+constant — the most fragile file in the codebase. On a major MRC UI change these
+need updating. A wrong selector degrades to a loud `PortalContractDriftError` /
+`AuthFailedError` page, never a silent empty.
 
 ### How to disable the cron temporarily
-
-If MyMRC is undergoing a major change and the scrape is repeatedly
-failing, you can stop the cron without changing code:
 
 ```bash
 docker compose stop mymrc-scrape
 ```
 
-A `docker compose up -d` from the same compose file will bring it
-back. The `unless-stopped` restart policy means a manual `stop` is
-honored across daemon restarts. Operator queue rows already in the
-DB stay visible — they just won't refresh. Don't leave it stopped
-for more than 24h or scheduled hauls will be invisible to operators.
+The `unless-stopped` policy honors a manual `stop` across daemon restarts.
+Operator queue rows already in the DB stay visible; they just won't refresh.

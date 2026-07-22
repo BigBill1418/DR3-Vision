@@ -106,8 +106,8 @@ describe('VisionTile', () => {
   it('coming-soon tile is non-interactive and exposes no href', () => {
     const soon: DashboardTile = {
       ...base,
-      key: 'mrc-api',
-      label: 'MRC API Integration',
+      key: 'cip-capture',
+      label: 'CIP Capture',
       route: '#',
       status: 'coming-soon',
     };

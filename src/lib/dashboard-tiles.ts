@@ -272,13 +272,18 @@ const COMING_SOON_TILES: readonly DashboardTile[] = [
     scope: 'manager+',
   },
   {
-    key: 'mrc-api',
-    label: 'MRC API Integration',
-    description: 'Direct MyMRC API sync for settlements and tonnage.',
+    // ADR-0057 — MyMRC admin-credential surface. Lit up in place (like
+    // observability): Bill enters his MyMRC admin login here; the hourly
+    // Playwright scrape (mymrc-scrape container) reads it to pull DR3's data.
+    // It's a portal SCRAPE, not an API — hence the rename from the placeholder
+    // 'mrc-api'. Admin-only: this holds a 3rd-party admin credential.
+    key: 'mrc-scrape',
+    label: 'MRC-Scrape',
+    description: 'Enter MyMRC admin credentials for the hourly portal scrape.',
     icon: 'Plug',
-    route: '#',
-    status: 'coming-soon',
-    scope: 'manager+',
+    route: '/admin/mrc-scrape',
+    status: 'active',
+    scope: 'admin-only',
   },
   {
     key: 'observability',

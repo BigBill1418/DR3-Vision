@@ -166,6 +166,18 @@ services:
       # See docs/operator/ap-approvals.md.
       - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
         required: false
+      # ADR-0057 — MyMRC credential ENCRYPTION KEY (MYMRC_CRED_KEY), the AES-256-GCM
+      # key the app uses to ENCRYPT the admin login on save (/admin/mrc-scrape) and
+      # is the SAME file the mymrc-scrape worker mounts to DECRYPT it. Both sides
+      # MUST carry the identical key or encrypt-here / decrypt-there breaks. This is
+      # the encryption key ONLY — never the MyMRC login itself (that lives encrypted
+      # in Postgres), so it is compatible with the no-.env-for-creds rule. A
+      # DEDICATED key (not NEXTAUTH_SECRET) so a scrape compromise can never leak the
+      # JWT secret. Optional / FAIL-OPEN: absent → the save path returns a generic
+      # 500 (CredentialKeyUnavailableError, no internal leak) and status shows
+      # unconfigured; provision the key to enable credential entry.
+      - path: /home/bbarnard065/.dr3-vision-secrets/mymrc-cred-key.env
+        required: false
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
@@ -208,33 +220,40 @@ services:
       retries: 3
 
   mymrc-scrape:
-    # REBUILT under ADR-0038 (MyMRC ingestion rebuild, 2026-07-03) — the worker
-    # now runs the JSON-transport mirror sync (hauls/processed/outbound → mirror
-    # tables + run ledger; hauls also feed expected_loads). It stays PROFILE-GATED
-    # (`mymrc`): activation is a deliberate operator action, NOT auto-started by
-    # `docker compose up -d` or the swarmpilot deployer. To ENABLE, follow
-    # docs/operator/mymrc-ingestion.md: (1) drop MYMRC_* creds into
-    # ~/.dr3-vision-secrets/mymrc.env (mode 600), (2) ensure the mymrc-auth volume
-    # is owned by uid 1001 (`docker run --rm -v dr3-vision_mymrc-auth-state:/v
-    # alpine chown -R 1001:1001 /v`), (3) start with
-    # `docker compose --profile mymrc up -d`, and (4) re-add `mymrc-scrape` to the
-    # noc-master service-registry containers[]. A healthy run is silent; failures
-    # page `dr3-vision-system` (auth_failed / contract_drift / zero-anomaly /
-    # deadman) per ADR-0038 D4.
-    profiles: ['mymrc']
-    # Hourly cron host for the MyMRC scheduled-hauls scrape (T-015 /
-    # ADR-0009). Long-running Node process that re-spawns
-    # `scripts/mymrc-scrape.mjs` once on boot and once at the top of
-    # every UTC hour. Per-run lifecycle: launch chromium, scrape both
-    # sites sequentially with separate Playwright contexts, upsert
-    # `expected_loads`, exit. Failures fire `dr3-vision-system` ntfy
-    # with a 30-min cooldown per site.
+    # MyMRC ingestion worker (ADR-0038 JSON-transport mirror sync, ADR-0057 D1/D9
+    # admin-credential auth model). Long-running Node cron host that re-spawns
+    # `scripts/mymrc-scrape.mjs` on boot and at the top of every UTC hour. Each
+    # tick logs into MyMRC ONCE as Bill's admin identity (ADR-0057 D1 — no per-site
+    # logins, no service accounts), runs the mirror feeds (hauls/processed/outbound
+    # → mirror tables + run ledger; hauls also feed expected_loads), then exits.
     #
-    # Fail-soft: when MYMRC_*_USERNAME / MYMRC_*_PASSWORD are unset,
-    # the worker logs "creds not configured, skipping" and exits 0
-    # without ntfy publish — that's an operator state, not a system
-    # error. Drop credentials per `docs/operator/mymrc-ingestion.md` and
-    # the next hourly tick begins populating the queue.
+    # CREDENTIALS ARE IN THE DB, NOT A .env (ADR-0057). Bill enters his MyMRC admin
+    # login at /admin/mrc-scrape; it is stored AES-256-GCM encrypted in Postgres.
+    # The ONLY MyMRC-related secret on this container is the ENCRYPTION KEY
+    # (MYMRC_CRED_KEY, via mymrc-cred-key.env below) — never the MyMRC login itself.
+    #
+    # ADR-0057 D9 — FAIL LOUD, NO SILENT SKIP. When no admin credential is
+    # configured (or it can't be decrypted), the worker pages `dr3-vision-system`
+    # and exits NON-ZERO (was: skip + exit 0, the months-of-zero-pulls failure
+    # mode), and the healthcheck below reports UNHEALTHY. A healthy run is silent;
+    # failures page `dr3-vision-system` (auth_failed / contract_drift /
+    # zero-anomaly / deadman) per ADR-0038 D4.
+    #
+    # STAYS PROFILE-GATED (`mymrc`): activation is a deliberate operator action,
+    # NOT auto-started by `docker compose up -d` or the swarmpilot deployer. To
+    # ENABLE, follow docs/operator/mymrc-setup.md: (1) confirm mymrc-cred-key.env
+    # holds MYMRC_CRED_KEY (same value the app has — see NOTE below), (2) ensure
+    # the mymrc-auth volume is owned by uid 1001 (`docker run --rm -v
+    # dr3-vision_mymrc-auth-state:/v alpine chown -R 1001:1001 /v`), (3) start with
+    # `docker compose --profile mymrc up -d`, (4) enter admin creds at
+    # /admin/mrc-scrape, (5) re-add `mymrc-scrape` to the noc-master
+    # service-registry containers[].
+    #
+    # NOTE (integration prereq — app side, NOT wired here): the `app` service must
+    # ALSO carry the SAME MYMRC_CRED_KEY (it is the writer/status path). Mount
+    # mymrc-cred-key.env on `app` too, or the /admin/mrc-scrape save/status paths
+    # cannot encrypt/read. This block wires only the scrape (reader) side.
+    profiles: ['mymrc']
     image: dr3-vision-app:local
     container_name: dr3-vision-mymrc-scrape
     # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius
@@ -247,19 +266,26 @@ services:
     command: ['node', 'scripts/mymrc-cron.mjs']
     env_file:
       - /home/bbarnard065/.dr3-vision-secrets/db.env
-      # MyMRC credentials — optional file. When absent, worker no-ops
-      # per-tick and never alerts. See docs/operator/mymrc-ingestion.md.
-      - path: /home/bbarnard065/.dr3-vision-secrets/mymrc.env
+      # ADR-0057 — MyMRC credential ENCRYPTION KEY (MYMRC_CRED_KEY), the AES-256-GCM
+      # key that decrypts the admin login stored in Postgres. NOT the MyMRC login
+      # itself (that lives in the DB, entered at /admin/mrc-scrape). Deliberately a
+      # DEDICATED key (not NEXTAUTH_SECRET): this container is stripped of
+      # NEXTAUTH_SECRET (ADR-0053 addendum) so a compromised Chromium cron can't mint
+      # admin JWTs — deriving the cred key from it would reverse that hardening.
+      # required:false preserves deploy-before-provision (ADR-0057 D9): the container
+      # boots and fails LOUD at runtime (ntfy + non-zero exit + unhealthy) rather
+      # than blocking the deploy. The SAME MYMRC_CRED_KEY must also be mounted on the
+      # `app` service (see NOTE in the header comment).
+      - path: /home/bbarnard065/.dr3-vision-secrets/mymrc-cred-key.env
         required: false
-      # Re-uses the same ntfy publisher token as the app + migrate
-      # services; same fail-soft contract.
+      # Re-uses the same ntfy publisher token as the app + migrate services.
       - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
         required: false
     environment:
       NODE_ENV: production
       MYMRC_HEADLESS: 'true'
-      # Persist Playwright auth state across container restarts so we
-      # don't re-login every hour. Mounted volume below.
+      # Persist the single admin Playwright session across restarts (ADR-0057 D1 →
+      # <dir>/mymrc-admin/auth.json) so we don't re-login every hour. Mounted volume.
       MYMRC_AUTH_STATE_DIR: /var/lib/dr3-vision/mymrc-auth
     volumes:
       - mymrc-auth-state:/var/lib/dr3-vision/mymrc-auth
@@ -274,6 +300,16 @@ services:
       <<: *barnardhq-labels
       com.barnardhq.service: 'mymrc-scrape'
     logging: *logging
+    # ADR-0057 D9 — report UNHEALTHY until an admin credential is configured in the
+    # DB store (probes only row presence; no decrypt, so MYMRC_CRED_KEY isn't
+    # needed here). Makes the "never provisioned" state visible in `docker ps` /
+    # NOC. Long interval: this is a config-state signal, not a hot path.
+    healthcheck:
+      test: ['CMD', 'node', 'scripts/mymrc-healthcheck.mjs']
+      interval: 5m
+      timeout: 20s
+      start_period: 30s
+      retries: 2
 
   bonus-period-close:
     # Bonus period-close cron host (ADR-0019.1 §3/§6, T-204). Replaces the
