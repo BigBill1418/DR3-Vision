@@ -1,9 +1,23 @@
 # ADR-0038 — MyMRC ingestion rebuild (Salesforce portal: JSON transport, mirror tables, loud failure)
 
-**Status:** Accepted (2026-07-03, approved by Bill)
+**Status:** Accepted (2026-07-03, approved by Bill) — **auth model superseded by ADR-0057 (2026-07-21)**
 **Date:** 2026-07-03
-**Relates to:** ADR-0009 (Playwright write path), ADR-0037 (foundations), mission record §6-P1/§8, `docs/MYMRC-PORTAL-REDESIGN-2026-06-22.md`, 2026-06-23 readiness item P1-2
+**Relates to:** ADR-0009 (Playwright write path), ADR-0037 (foundations), mission record §6-P1/§8, `docs/MYMRC-PORTAL-REDESIGN-2026-06-22.md`, 2026-06-23 readiness item P1-2, **ADR-0057 (full-object ingestion + admin-user auth)**
 **Series:** second of three P1 ADRs — 0037 foundations (accepted), **0038 ingestion (this)**, 0039 3-way audit + retro-audit
+
+> **2026-07-21 correction (ADR-0057).** The auth model in this ADR — per-site
+> `DR3 Woodland` / `DR3 Eugene` **service accounts** (`MYMRC_WOODLAND_*` /
+> `MYMRC_EUGENE_*`) — was **never honored**. Those service accounts were never
+> created, so the `mymrc-scrape` container ran its fail-soft "creds not configured,
+> skipping" path and exited 0 every hour since deploy: **Vision has never pulled a
+> single row from MyMRC** (all three mirror tables empty, `mymrc_sync_runs` empty).
+> ADR-0057 retires the service-account pattern entirely, moves to Bill's single
+> **admin-user** credentials (`MYMRC_ADMIN_*`), extends the 3 hardcoded feeds to N
+> discovered objects, and converts the missing-creds path from a silent skip to a
+> **fail-loud** `CredentialsNotConfiguredError` (D9). The mirror-tables + Aura-
+> interception + run-ledger + typed-error architecture in this ADR is otherwise
+> correct and retained — it was aspirational-until-first-contact, and ADR-0057
+> Phase 0 is that first contact.
 
 ## Context
 
