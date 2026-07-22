@@ -5,6 +5,69 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0057 Phase 1 — real MyMRC ingestion, informed by the inaugural Phase-0 discovery)
+
+The first authenticated MyMRC pull (Phase 0, 2026-07-21) returned a real object
+catalog nothing like the original ADR guess — so Phase 1 was built against the
+**real** Phase-0 shapes (`docs/mymrc-discovery-2026-07-22.md`), not a guessed
+mirror schema. This feeds production billing; correctness and reliability were
+the bar. Schema foundation landed in `4057d0f`; this block is the ingestion
+wiring on top of it.
+
+- **Mappers adapted to the real object catalog** (`src/lib/mymrc/mappers.ts`).
+  `mapHaulRecord` now reads every real `Haul_Request__c` field (billing-authoritative
+  `Recycler_Program_Unit_Count__c`, `Recycling_Center_Lookup__r.Name` site
+  discriminator, transporter/collection/commodity/container, consumer-drop-off
+  units, docking date). Fixed two latent placeholder bugs: `weight_lbs` read the
+  non-existent `Weight__c` (always null) → now `Recycler_Weight__c`; the unit count
+  read a *Materials* field → now the correct haul field. `mapProcessedRecord` /
+  `mapOutboundRecord` map `Materials__c` (ONE object, split by `Type__c` at ingest
+  via new `classifyMaterialsType`); `weight_lbs` is hard-null (Materials has no
+  weight field). New `mapDockAvailabilityRecord` for the new
+  `Dock_Availability_Schedule__c` object (raw multipicklist codes; SF Time strings
+  kept verbatim, never `Date.parse`d). All mappers read `value` for identity, never
+  `displayValue`; the full raw record is preserved in `payload`.
+- **Windowed backfill worker** (`src/lib/mymrc/backfill.ts` + `backfill-targets.ts`)
+  — schema-agnostic engine: per object×list-view, pages `getItems` by
+  `currentPage`/`hasMoreData` to `hasMoreData:false`, persisting a
+  `mymrc_backfill_cursors` row after every page (resumable mid-pagination), then a
+  bounded (≤3) detail sweep of rows with `detail_fetched_at IS NULL`. Idempotent on
+  SF-id upsert keys; a pagination wedge fails loud (cursor error + ntfy) while a
+  per-record detail failure retries next run. 5 cursors wire the 4 real objects
+  (Haul ×2 views, Materials ×2 views, Dock ×1).
+- **Hourly sync wired to the real objects** (`src/lib/mymrc/sync.ts`). Site scoping
+  moved from the login to the DATA (ADR-0057 D1 / recon B §6): a single admin
+  session lists ALL records globally (`site_id` NULL at list time), and each row's
+  site is derived + stamped on the DETAIL pass from its discriminator
+  (`recycler_name`/`account_name` → `sites.code`), stamped **only when resolved**
+  (never a NULL over a prior attribution). All new mirror columns are populated.
+  **`expected_loads` join fixed (money-critical):** joins on the real
+  `Collection_Site__c` (the old code used `Rate_ID__c` and matched nothing) and
+  bills the authoritative `program_unit_count` (was the always-null `units`).
+- **Stale-session self-heal** (`src/lib/mymrc/portal-client.ts`). Fixes the live
+  bug where a tick ending logged-out wrote anonymous cookies over the good
+  `storageState`, poisoning every subsequent tick. `storageState` is now persisted
+  **only** after a positive auth check (money-safe latch); bootstrap proves auth up
+  front, discards a logged-out persisted state and re-logs-in, and purges the
+  poisoned file before failing loud on a hard auth failure. Bounded nav retries
+  absorb transient blips without an unbounded loop.
+- **Reconciliation-feed wiring** (`src/lib/mymrc/reconcile-feed.ts`,
+  `reconcile-detect.ts`). After each sync tick the scrape feeds unknown
+  collection-site / account names (real discriminators `Collection_Site__c` /
+  `Account__r.Name`) into the Wave-2 `mymrc_reconciliation_queue` as `new_record`
+  candidates for operator approval — **queue only, never a direct `sources` write**
+  (ADR-0057 D4). Dedups within a pass, across feeds, and across runs. `apply.ts`
+  now resolves the hauls mirror's site too, so hauls candidates are approvable; an
+  unresolved `site_id` throws `ReconNotFoundError` rather than approve an unscoped
+  `sources` row (money-safe invariant preserved through the nullability widening).
+- **Discovery fixture redaction hardened** (`src/lib/mymrc/discovery.ts`). Closes
+  the 143-name leak class — flat person-name audit/lookup fields (`*_By__c`,
+  `…ById`, `Owner`/`Manager`, `Employee_*`) are now scrubbed while opaque
+  Salesforce ids and all business fields (site/vendor/transporter names, counts,
+  dates) are retained. No real PII is committed: the raw disc3 fixtures were read
+  for structure only; the committed `__fixtures__/phase1/` set is fully synthetic
+  (DR3 Testville / Synthetic Hauling Co / fabricated ids).
+
 ### Changed — 2026-07-21 (ADR-0019 §2 / ADR-0030 amendment — later-shift bonus timing: 8pm entry deadline + report-on-save)
 
 The team now works a later shift. The bonus entry deadline moves to **8:00 PM
