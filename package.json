@@ -27,6 +27,7 @@
     "db:reset": "prisma migrate reset"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.5",
     "@auth/prisma-adapter": "^2.7.4",
     "@aws-sdk/client-s3": "^3.658.1",
     "@aws-sdk/s3-request-presigner": "^3.658.1",
@@ -70,6 +71,7 @@
     "next-themes": "^0.3.0",
     "papaparse": "^5.4.1",
     "pdf-lib": "^1.17.1",
+    "pdf-parse": "^2.4.5",
     "pino": "^10.3.1",
     "playwright": "^1.48.0",
     "prom-client": "^15.1.3",

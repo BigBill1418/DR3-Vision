@@ -16,6 +16,7 @@ import { putApAttachment } from '@/lib/r2';
 import { sanitizeEmailHtml } from './sanitize';
 import { domainOf, validateSender, type QuarantineReason, type SenderPolicy } from './senders';
 import { alertQuarantine, notifyNewRequest } from './notify';
+import { extractFromRequest } from './extraction/pipeline';
 import type { MailMessage, MailTransport, NormAttachment } from '@/lib/msgraph-mail';
 
 export type IngestOutcomeKind = 'created' | 'followup' | 'quarantined' | 'duplicate';
@@ -291,6 +292,24 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     return createQuarantine(ctx, msg, 'attachment_parse_failure');
   }
 
+  const bodyHtmlSanitized = sanitizeEmailHtml(msg.bodyHtml) || null;
+
+  // ADR-0046 Amendment 5 (D-M5-2) — auto-extract a best-guess invoice total +
+  // vendor at intake (hybrid local pdf-parse/regex + Claude fallback) so it lands
+  // atomically on the request row and pre-fills the decide panel. Fully fail-soft:
+  // extractFromRequest never throws, so a scanned image, a bad parse, or a
+  // Claude-API blip yields confidence:'failed' and never blocks the poll.
+  const extraction = await extractFromRequest(
+    { bodyText: msg.bodyText, bodyHtmlSanitized, attachments },
+    {
+      logCost: (cents, model) =>
+        log(
+          'info',
+          `[ap-ingest] extraction fallback ${model} cost=${cents}c for ${msg.internetMessageId}`,
+        ),
+    },
+  );
+
   let requestId: string;
   try {
     const row = await ctx.prisma.apRequest.create({
@@ -302,8 +321,9 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
         sender_address: msg.from,
         sender_validated: true,
         subject: msg.subject,
-        body_html_sanitized: sanitizeEmailHtml(msg.bodyHtml) || null,
+        body_html_sanitized: bodyHtmlSanitized,
         body_text: msg.bodyText,
+        extraction: extraction as unknown as Prisma.InputJsonValue,
       },
       select: { id: true },
     });
@@ -312,6 +332,10 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
     if (isUniqueViolation(e)) return { kind: 'duplicate' }; // move-race: another poll won
     throw e;
   }
+  log(
+    'info',
+    `[ap-ingest] extraction ${extraction.confidence} (${extraction.source}) amount=${extraction.best_amount_cents ?? 'null'} for ${requestId}`,
+  );
 
   await persistAttachments(ctx, requestId, attachments);
   await writeAudit({

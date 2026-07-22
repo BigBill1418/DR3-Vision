@@ -5,6 +5,28 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-2 — intake auto-extraction pipeline)
+
+- **New `src/lib/ap/extraction/` module: hybrid invoice amount/vendor extraction
+  at intake.** `pipeline.ts` (`extractFromRequest`) runs during `runApPoll` (inside
+  `ingestMessage`, after body sanitize + attachment fetch, before the queue insert)
+  and lands its `ExtractionResult` on `ap_requests.extraction` (jsonb) atomically at
+  insert. Ordered hybrid: `local-parser.ts` does pdf-parse text extraction + regex
+  heuristics against the four canonical labels (Total / Amount Due / Balance Due /
+  Grand Total) and scores HIGH / MEDIUM / LOW / FAILED exactly per spec §2;
+  `claude-fallback.ts` fires the Anthropic SDK **only** on LOW/FAILED local
+  confidence (model from `AP_EXTRACTION_CLAUDE_MODEL`, default `claude-sonnet-4-6`;
+  30s timeout; structured-JSON prompt; logs `cost_cents` per invoice). Fully
+  fail-soft — never blocks or fails the poll; a hard failure lands
+  `confidence:'failed'` with `error` populated. Extraction only PRE-FILLS the decide
+  panel — the approver still confirms every field (hard rule #5).
+  `ap_requests.extracted_haul_numbers` is left empty (Phase-2 hook only, gated on
+  ADR-0057). New deps: `@anthropic-ai/sdk`, `pdf-parse`. New Anthropic-key secret
+  mount (`~/.dr3-vision-secrets/anthropic.env`) enables the fallback; absent → local
+  low-confidence lands as-is for manual entry. Fixture-tested for all four tiers +
+  scanned-image / plain-text-email / multi-page + mocked Claude API
+  (`extraction.test.ts`, 22 cases; all fixtures synthetic).
+
 ### Fixed — 2026-07-22 (ADR-0057 D3 — backfill full history: Completed Hauls + inactive-materials views)
 
 - **MyMRC backfill now pages ALL list views per object — active AND history —
