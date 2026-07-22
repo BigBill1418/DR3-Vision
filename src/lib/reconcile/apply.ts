@@ -74,7 +74,10 @@ function hasNote(note: string | undefined | null): note is string {
  * note (mirrors the AP `assertDecisionNote` idiom). Kept separate from the apply
  * fn so callers validate BEFORE any state change. Throws {@link ReconNoteRequiredError}.
  */
-export function assertReconcileNote(decision: ReconDecision, note: string | undefined | null): void {
+export function assertReconcileNote(
+  decision: ReconDecision,
+  note: string | undefined | null,
+): void {
   if (hasNote(note)) return;
   throw new ReconNoteRequiredError(decision);
 }
@@ -147,6 +150,12 @@ async function mirrorSiteId(tx: Prisma.TransactionClient, row: QueueRowForApply)
       select: { site_id: true },
     });
     if (!rec) throw new ReconNotFoundError(`mirror row ${row.mirror_record_id}`);
+    // site_id is nullable (ADR-0057 Phase 1: derived on the detail pass). A mirror
+    // row whose site is not yet resolved must never approve into an unscoped
+    // `sources` row — surface it as not-found rather than write a wrong-site row.
+    if (!rec.site_id) {
+      throw new ReconNotFoundError(`unresolved site_id for mirror row ${row.mirror_record_id}`);
+    }
     return rec.site_id;
   }
   throw new ReconUnsupportedTargetError(row.mirror_table, row.target_table, row.change_kind);
@@ -291,7 +300,9 @@ export interface BulkApproveResult {
  * that item ALONE and never rolls back the others. The required note is applied to
  * all. Returns the ids approved + per-id failures.
  */
-export async function bulkApproveReconciliations(args: BulkApproveArgs): Promise<BulkApproveResult> {
+export async function bulkApproveReconciliations(
+  args: BulkApproveArgs,
+): Promise<BulkApproveResult> {
   const prisma = args.prisma ?? defaultPrisma;
   const pending = await listPendingReconciliations({
     prisma,

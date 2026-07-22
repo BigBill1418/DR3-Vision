@@ -1819,17 +1819,34 @@ enum MymrcSyncStatus {
 }
 
 model MymrcHaulsMirror {
-  id                     String    @id // Salesforce record id (e.g. a2KUJ00000G6id32AB)
-  site_id                String
-  external_haul_id       String?   @unique // portal Haul number, e.g. "H-133323" (detail pass)
+  id                     String    @id // Salesforce record id (Haul_Request__c, a2K…) — upsert key
+  // site_id is NULLABLE (ADR-0057 Phase-1): getItems returns record ids only, so the
+  // site is unknown at list-upsert time. It is derived on the DETAIL pass from
+  // `recycler_name` (Recycling_Center_Lookup__r.Name) → sites.code and stamped then.
+  // Nullable FK: NULL rows are simply unresolved-until-detail (never a broken ref).
+  site_id                String?
+  external_haul_id       String?   @unique // Name, portal Haul number e.g. "H-130975" (detail pass)
   status                 String? // Status__c, e.g. "Confirmed"
-  rate_id                String? // Rate_ID__c (landfill - transporter - recycler)
-  docking_appointment_at DateTime? // parsed from Docking_Appointment_Time__c / _Date__c
+  type                   String? // Type__c — splits docking-appointment vs consumer/illegal drop-off
+  rate_id                String? // Rate_ID__c (landfill - transporter - recycler descriptor)
+  recycler_name          String? // Recycling_Center_Lookup__r.Name — SITE DISCRIMINATOR (→ site_id)
+  recycler_account_id    String? // Recycling_Center_Lookup__c — 18-char Account id (structured join)
+  transporter_name       String? // Transporter__c — account-name string (denormalized, not an FK)
+  collection_site        String? // Collection_Site__c — expected_loads source-name join key
+  collection_source      String? // Collection_Source__c
+  commodity              String? // Commodity__c
+  container_type         String? // Container_Type__c (typographic apostrophe — normalize before compare)
+  // Billing-relevant unit counts (read from `value`, not displayValue).
+  program_unit_count     Int? // Recycler_Program_Unit_Count__c
+  non_program_unit_count Int? // Recycler_Non_Program_Unit_Count__c
+  unpaid_consumer_dropoff_units Int? // Unpaid_Consumer_Drop_Off_Units__c
+  docking_appointment_date DateTime? // Docking_Appointment_Date__c (Date)
+  docking_appointment_at DateTime? // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
   door                   String? // Docking_Appointment_Dock_Door__c
-  units                  Int? // program unit count when available on the record
-  weight_lbs             Decimal?  @db.Decimal(12, 2)
-  retrac_id              String? // Re-TRAC id; maps 1:1 to external_haul_id per ADR post-note
-  payload                Json? // full raw record representation (audit evidence)
+  units                  Int? // legacy generic unit count (back-compat; program_unit_count is authoritative)
+  weight_lbs             Decimal?  @db.Decimal(12, 2) // Recycler_Weight__c
+  retrac_id              String? // Re-TRAC id; 1:1 with external_haul_id per ADR post-note (UNVERIFIED)
+  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
   first_seen_at          DateTime  @default(now())
   last_seen_at           DateTime  @default(now())
   disappeared_at         DateTime? // stamped when absent from a full list fetch
@@ -1840,20 +1857,30 @@ model MymrcHaulsMirror {
   @@index([site_id])
   @@index([disappeared_at])
   @@index([detail_fetched_at])
+  @@index([recycler_account_id]) // structured site/customer join
   @@map("mymrc_hauls_mirror")
 }
 
+// Materials__c (a2L) rows where Type__c = 'Processing'. The Processed/Outbound
+// split is by Type__c at ingest (NOT by list view) — both views live in the same
+// a2L id space. `type` records the raw Type__c for traceability.
 model MymrcProcessedMirror {
-  id                    String    @id // Salesforce record id
-  site_id               String
-  external_materials_id String?   @unique // portal Materials number, e.g. "M-000300"
+  id                    String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
+  site_id               String?   // NULLABLE — derived on detail pass from account_name (see hauls note)
+  external_materials_id String?   @unique // Name, portal Materials number e.g. "M-000300"
+  type                  String? // Type__c (expected 'Processing')
+  account_name          String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
+  account_id            String? // Account__c — 18-char Account id (structured join)
+  materials_status      String? // Materials_Status__c, e.g. "Active"
   bol_id                String? // BOL_ID__c
   entry_date            DateTime? // Entry_Date__c
   processed_date        DateTime? // Processed_Date__c
-  units                 Int? // Number_of_Program_Units__c
-  weight_lbs            Decimal?  @db.Decimal(12, 2)
+  program_unit_count    Int? // Number_of_Program_Units__c (billable count)
+  non_program_unit_count Int? // Number_of_Non_Program_Units__c
+  units                 Int? // legacy generic unit count (back-compat; program_unit_count authoritative)
+  weight_lbs            Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
   retrac_id             String?
-  payload               Json?
+  payload               Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
   first_seen_at         DateTime  @default(now())
   last_seen_at          DateTime  @default(now())
   disappeared_at        DateTime?
@@ -1864,20 +1891,30 @@ model MymrcProcessedMirror {
   @@index([site_id])
   @@index([disappeared_at])
   @@index([detail_fetched_at])
+  @@index([account_id])
   @@map("mymrc_processed_mirror")
 }
 
+// Materials__c (a2L) rows where Type__c = 'Outbound'. Same object/id space as
+// the processed mirror — a record whose Type__c flips can appear in both tables;
+// the sync must classify by Type__c, not by which list view produced the id.
 model MymrcOutboundMirror {
-  id                    String    @id // Salesforce record id
-  site_id               String
-  external_materials_id String?   @unique // portal Materials number, e.g. "M-000264"
-  bol_id                String? // BOL_ID__c
+  id                    String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
+  site_id               String?   // NULLABLE — derived on detail pass from account_name (see hauls note)
+  external_materials_id String?   @unique // Name, portal Materials number e.g. "M-000264"
+  type                  String? // Type__c (expected 'Outbound')
+  account_name          String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
+  account_id            String? // Account__c — 18-char Account id (structured join)
+  materials_status      String? // Materials_Status__c
+  bol_id                String? // BOL_ID__c (e.g. "125829"), populated on outbound rows
+  vendor                String? // Outbound_Vendor_Name__c — LIST-ONLY column (captured from getItems, absent from detail)
   entry_date            DateTime? // Entry_Date__c
-  shipment_date         DateTime? // Shipment_Date__c
-  vendor                String? // Outbound_Vendor_Name__c
-  weight_lbs            Decimal?  @db.Decimal(12, 2)
+  shipment_date         DateTime? // no real Shipment_Date__c field exists on Materials — stays null (kept, not dropped)
+  program_unit_count    Int? // Number_of_Program_Units__c
+  non_program_unit_count Int? // Number_of_Non_Program_Units__c
+  weight_lbs            Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
   retrac_id             String?
-  payload               Json?
+  payload               Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
   first_seen_at         DateTime  @default(now())
   last_seen_at          DateTime  @default(now())
   disappeared_at        DateTime?
@@ -1888,7 +1925,79 @@ model MymrcOutboundMirror {
   @@index([site_id])
   @@index([disappeared_at])
   @@index([detail_fetched_at])
+  @@index([account_id])
   @@map("mymrc_outbound_mirror")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Dock_Availability_Schedule__c (a1t) — NEW mirror (ADR-0057 Phase 1)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Scheduling object (14 detail fields), NON-billing. Record count is exact
+// (14, not windowed). NO site discriminator exists in the field set, so this
+// mirror carries no site_id. displayValue/value divergence is severe here —
+// the sync must read `value`: Day_of_Week__c value is numeric codes ("1;2;…"),
+// Dock_Door__c value ("Dock Door 1") ≠ displayValue ("Schedule 1"). Multipicklist
+// fields (Container_Type__c, Day_of_Week__c) are one ";"-joined string — stored
+// RAW here (membership splitting is a read-side concern). Slot_Start/End_Time__c
+// are Salesforce Time values ("07:00:00.000Z") — stored as TEXT (NOT a datetime;
+// never Date.parse). Same list→detail two-pass lifecycle as the other mirrors.
+model MymrcDockAvailabilityMirror {
+  id                     String    @id // Salesforce record id (Dock_Availability_Schedule__c, a1t…)
+  external_schedule_id   String?   @unique // Name, e.g. "DA-SCHED-000058"
+  status                 String? // Status__c, e.g. "Active"
+  day_of_week            String? // Day_of_Week__c — RAW ";"-joined numeric codes ("1;2;3;4;5")
+  container_type         String? // Container_Type__c — RAW ";"-joined multipicklist
+  dock_door              String? // Dock_Door__c value ("Dock Door 1"), NOT displayValue
+  slot_start_time        String? // Slot_Start_Time__c — SF Time text ("07:00:00.000Z"), NOT a datetime
+  slot_end_time          String? // Slot_End_Time__c — SF Time text
+  available_appointments Int? // Number_of_Available_Appointments__c
+  availability_start_date DateTime? // Availability_Start_Date__c (Date)
+  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
+  first_seen_at          DateTime  @default(now())
+  last_seen_at           DateTime  @default(now())
+  disappeared_at         DateTime?
+  detail_fetched_at      DateTime?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  @@index([disappeared_at])
+  @@index([detail_fetched_at])
+  @@map("mymrc_dock_availability_mirror")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MyMRC backfill cursors (ADR-0057 D3) — resumable windowed backfill
+// ────────────────────────────────────────────────────────────────────────
+//
+// getItems paginates by offset/page-number (pageSize + currentPage, 0-based);
+// `hasMoreData:true` means the page is a FLOOR → keep paging until false. A full
+// historical backfill must page every list view of an object to completion and
+// dedupe ids across views. This table persists per-(object, list-view) progress
+// so a crashed/interrupted backfill resumes from `last_page_index` instead of
+// restarting. Self-contained: no FKs (matches the mirror/queue blocks).
+//
+// Key: (object_api_name, list_view_api_name). `list_view_api_name` defaults to ''
+// for an object-level cursor when a caller is not yet list-view-aware. `completed_at`
+// is stamped when hasMoreData:false is reached (cursor drained). `error` holds the
+// last human failure text (never credentials).
+model MymrcBackfillCursor {
+  id                       String    @id @default(uuid())
+  object_api_name          String // e.g. "Haul_Request__c"
+  list_view_api_name       String    @default("") // which list view is being paged ('' = object-level)
+  last_page_index          Int       @default(0) // 0-based currentPage of the last COMPLETED page
+  last_record_id           String? // last record id seen (audit/debug)
+  total_records_estimated  Int? // floor estimate while windowed; null until known
+  records_completed        Int       @default(0)
+  started_at               DateTime  @default(now())
+  completed_at             DateTime? // set when hasMoreData:false reached (backfill drained)
+  error                    String? // last human failure text (never credentials)
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
+
+  @@unique([object_api_name, list_view_api_name])
+  @@index([object_api_name])
+  @@map("mymrc_backfill_cursors")
 }
 
 model MymrcSyncRun {
