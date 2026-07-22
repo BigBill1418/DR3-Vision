@@ -281,8 +281,8 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     expect(res.physicalTotal).toBe(3977);
     expect(res.reconciledDelta).toBe(-23);
     const snap = store.createdSnapshots[0] as Record<string, unknown>;
-    expect(snap.units_indoor).toBe(3900);
-    expect(snap.units_in_processing).toBe(77);
+    expect(snap['units_indoor']).toBe(3900);
+    expect(snap['units_in_processing']).toBe(77);
     expect('units_outdoor' in snap).toBe(false);
   });
 });
