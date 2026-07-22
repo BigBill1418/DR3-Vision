@@ -127,7 +127,7 @@ services:
       - ${HOME}/.dr3-vision-secrets/entra.env
       - ${HOME}/.dr3-vision-secrets/m365.env
       - ${HOME}/.dr3-vision-secrets/ntfy.env
-      - ${HOME}/.dr3-vision-secrets/mymrc.env
+      - ${HOME}/.dr3-vision-secrets/mymrc-cred-key.env
 ```
 
 The order matters only if there are key conflicts (later files win). There shouldn't be any.
