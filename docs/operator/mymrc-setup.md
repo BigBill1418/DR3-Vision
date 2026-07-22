@@ -196,6 +196,30 @@ constant — the most fragile file in the codebase. On a major MRC UI change the
 need updating. A wrong selector degrades to a loud `PortalContractDriftError` /
 `AuthFailedError` page, never a silent empty.
 
+Real-portal facts (verified live 2026-07-22, `SELECTOR_VERSION` `2026-07-22`):
+login is by **placeholder** ("Username"/"Password") + a **"Log In"** button
+(the fields have no `name` and dynamic ids); the authenticated landing is
+**`/s/`** (title "Home", "Switch Account" banner) — **`/s/home` is a 404 for
+everyone**; objects are enumerated from the **nav → per-object `/s/<slug>`
+pages** (`hauls`, `illegal-dump-cip-`, `processed-materials`,
+`outbound-materials`, `availability`, `outbound-vendors`, `records-review`).
+The admin account views **one recycler at a time** (DR3 Woodland ↔ DR3 Eugene,
+"Switch Account"); records carry `Recycler__c`.
+
+### One-shot Phase 0 discovery (writable output dir)
+
+`node scripts/mymrc-discovery.mjs` enumerates every visible object and writes the
+report + per-object fixtures. In the container (`/app` is read-only for uid 1001)
+point it at a writable mounted volume:
+
+```bash
+MYMRC_DISCOVERY_OUT_DIR=/data/mymrc-discovery node scripts/mymrc-discovery.mjs
+```
+
+The repo layout (`docs/mymrc-discovery-<date>.md` + `src/lib/mymrc/__fixtures__/<object>/`)
+is preserved under the override, so the artifacts copy straight back into the repo.
+Defaults to the repo root when unset (local dev).
+
 ### How to disable the cron temporarily
 
 ```bash

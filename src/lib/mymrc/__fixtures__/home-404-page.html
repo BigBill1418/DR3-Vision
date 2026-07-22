@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<!-- The REAL /s/home page (ADR-0057 Phase 0, 2026-07-22): a 404 "Error" shell
+     that renders IDENTICALLY for authenticated AND anonymous sessions — it is
+     NOT a list view. The old discovery runner enumerated against it (zero
+     objects) and its weak auth check read it as "logged in" because there is no
+     password field. It carries NO authenticated marker (no Switch-Account
+     banner, no object nav) and NO login form, so the hardened looksLoggedOut()
+     must classify it as logged OUT (no positive auth marker). -->
+<html lang="en">
+  <head><title>Error</title></head>
+  <body>
+    <div class="error-page">
+      <h1>This page isn't available</h1>
+      <p>Sorry, the page you were looking for wasn't found.</p>
+    </div>
+  </body>
+</html>

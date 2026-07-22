@@ -107,6 +107,22 @@ describe('looksLoggedOut (ADR-0038 D4 hardening)', () => {
     ).toBe(true);
   });
 
+  it('flags the /s/home 404 shell that has NO password field (ADR-0057 false-positive fix)', () => {
+    // The real /s/home renders a 404 "Error" page for authed sessions too, with
+    // no password field — the old check read it as "logged in". A hardened,
+    // POSITIVE auth check must treat the absence of any auth marker as logged out
+    // so AuthFailedError actually fires on a failed login.
+    expect(
+      looksLoggedOut({ url: 'https://mrc-us.my.site.com/s/home', html: fixture('home-404-page.html'), usernameFieldVisible: false }),
+    ).toBe(true);
+  });
+
+  it('flags an unrecognized page with no authenticated marker as logged out', () => {
+    expect(
+      looksLoggedOut({ url: 'https://mrc-us.my.site.com/s/hauls', html: '<html><body>loading…</body></html>', usernameFieldVisible: false }),
+    ).toBe(true);
+  });
+
   it('flags the /s/login URL and a visible username field directly', () => {
     expect(looksLoggedOut({ url: 'https://mrc-us.my.site.com/s/login/', html: '', usernameFieldVisible: false })).toBe(true);
     expect(looksLoggedOut({ url: 'https://mrc-us.my.site.com/s/hauls', html: '', usernameFieldVisible: true })).toBe(true);

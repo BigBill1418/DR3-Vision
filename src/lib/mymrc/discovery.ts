@@ -263,6 +263,129 @@ export function enumerateObjects(
   return order.map((k) => byKey.get(k) as DiscoveredObject);
 }
 
+// ── Nav-based object-page discovery (ADR-0057 Phase 0, hardened 2026-07-22) ───
+//
+// The FIRST live run proved the old enumeration source wrong: it read
+// `/s/home`, which is a 404 "Error" page (NOT a list view) even when
+// authenticated, so it found zero objects. The real objects live behind the
+// authenticated NAV — one `/s/<slug>` ListView page per object. These pure
+// helpers turn the nav (either the `getNavigationMenu` Aura response or the DOM
+// `a[href^="/s/"]` links) into the ordered set of OBJECT slugs to visit.
+
+const GET_NAV_MENU_RE = /NavigationMenu(?:DataProvider)?\/ACTION\$getNavigationMenu/i;
+
+// `/s/<slug>` segments that are NOT object list pages (Home / FAQs / Support /
+// Reports / the login shell). Compared case-insensitively against the slug.
+const NON_OBJECT_SLUGS = new Set(['', 'home', 'help-articles', 'contact', 'login']);
+// Slug prefixes that are never enumerable objects (report builder, record
+// detail deep-links, profile/settings shells, the error page).
+const NON_OBJECT_SLUG_PREFIXES = ['report', 'detail', 'profile', 'settings', 'error'];
+
+/**
+ * Extract the object slug from a portal href, or `null` when the href is not an
+ * enumerable `/s/<slug>` object page. Absolute portal URLs and relative paths
+ * are both accepted; query/hash are dropped; a trailing slash is trimmed but an
+ * INTERIOR trailing dash (the live `illegal-dump-cip-` slug) is preserved.
+ */
+export function objectSlugFromHref(href: string): string | null {
+  if (typeof href !== 'string' || href.trim() === '') return null;
+  const withoutOrigin = href.replace(/^https?:\/\/[^/]+/i, '');
+  const match = /^\/s\/([^?#]*)/i.exec(withoutOrigin);
+  if (!match) return null;
+  const slug = (match[1] ?? '').replace(/\/+$/, '').toLowerCase();
+  if (NON_OBJECT_SLUGS.has(slug)) return null;
+  if (NON_OBJECT_SLUG_PREFIXES.some((p) => slug === p || slug.startsWith(`${p}/`))) return null;
+  return slug;
+}
+
+/**
+ * Reduce a raw href list (from the nav Aura menu and/or the DOM) to the ordered,
+ * de-duplicated set of OBJECT slugs to enumerate. Non-object pages
+ * (Home/FAQs/Support/Reports/login) are filtered out.
+ */
+export function objectPagesFromHrefs(hrefs: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const slugs: string[] = [];
+  for (const href of hrefs) {
+    const slug = objectSlugFromHref(href);
+    if (slug && !seen.has(slug)) {
+      seen.add(slug);
+      slugs.push(slug);
+    }
+  }
+  return slugs;
+}
+
+interface NavMenuItemLike {
+  label?: unknown;
+  target?: unknown;
+  actionValue?: unknown;
+  subMenu?: unknown;
+}
+
+/** Collect `target`/`actionValue` hrefs from a (possibly nested) menuItems tree. */
+function collectMenuHrefs(items: unknown, out: string[]): void {
+  if (!Array.isArray(items)) return;
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as NavMenuItemLike;
+    for (const candidate of [item.target, item.actionValue]) {
+      if (typeof candidate === 'string' && candidate.trim() !== '') out.push(candidate);
+    }
+    if (item.subMenu) collectMenuHrefs(item.subMenu, out);
+  }
+}
+
+/**
+ * Extract nav hrefs from an intercepted `getNavigationMenu` Aura response. Reads
+ * `returnValue.menuItems[].target` (the Experience Cloud nav data provider),
+ * recursing into `subMenu`. Returns `[]` when no nav action is present so the
+ * runner can fall back to the DOM links / the static object allowlist.
+ */
+export function extractNavMenuHrefs(bodies: readonly string[]): string[] {
+  const hrefs: string[] = [];
+  for (const body of bodies) {
+    for (const action of parseAuraActions(body)) {
+      const isNav =
+        (action.descriptor && GET_NAV_MENU_RE.test(action.descriptor)) ||
+        (!!action.returnValue &&
+          typeof action.returnValue === 'object' &&
+          'menuItems' in (action.returnValue as Record<string, unknown>));
+      if (!isNav) continue;
+      const rv = action.returnValue as { menuItems?: unknown };
+      collectMenuHrefs(rv.menuItems, hrefs);
+    }
+  }
+  return hrefs;
+}
+
+/**
+ * The object slugs to enumerate, resolved from the nav Aura response and/or the
+ * DOM `/s/` links, with a static allowlist fallback when neither yields an
+ * object page (a hardened run never enumerates nothing). Order: nav/DOM
+ * discoveries first (dedup), then any allowlist slug not already present.
+ */
+export function resolveObjectPages(input: {
+  navBodies?: readonly string[];
+  domHrefs?: readonly string[];
+  fallbackSlugs?: readonly string[];
+}): string[] {
+  const discovered = objectPagesFromHrefs([
+    ...extractNavMenuHrefs(input.navBodies ?? []),
+    ...(input.domHrefs ?? []),
+  ]);
+  const seen = new Set(discovered);
+  const result = [...discovered];
+  for (const slug of input.fallbackSlugs ?? []) {
+    const normalized = slug.toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
 // ── Record walking (detail pass) ─────────────────────────────────────────────
 
 function looksLikeRecord(o: unknown): o is SfRecord {
