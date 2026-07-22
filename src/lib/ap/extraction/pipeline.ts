@@ -39,7 +39,6 @@ export interface ExtractionDeps {
 }
 
 const PDF_NAME = /\.pdf$/i;
-const IMAGE_NAME = /\.(png|jpe?g|gif|webp)$/i;
 
 function isPdf(att: NormFileAttachment): boolean {
   return (att.contentType?.toLowerCase().includes('pdf') ?? false) || PDF_NAME.test(att.name ?? '');
