@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-21 (ADR-0019 §2 / ADR-0030 amendment — later-shift bonus timing: 8pm entry deadline + report-on-save)
+
+The team now works a later shift. The bonus entry deadline moves to **8:00 PM
+Pacific**, and the per-site production report is now primarily an **on-save**
+event ("the report goes out for each site as soon as the data is entered and
+saved"). No schema change — all timing lives in the daemon fire hour, the on-save
+path's send gate, and the `send_time_pt` config value.
+
+- `scripts/bonus-eod-check.mjs` — entry-deadline / "no entries" late-notification
+  daemon fire hour `FIRE_HOUR_PT` 17 → **20** (8pm PT). DST-correct via the existing
+  offset-reprobe `nextFireInstant` (no hardcoded UTC offset). Per-site ntfy for a
+  zero-entry site is unchanged apart from the hour.
+- `src/lib/bonus/daily-report-late.ts` — `maybeSendLateDailyReport` →
+  **`maybeSendDailyReportOnSave`**. The report now fires on **every** successful
+  save (removed the `!isPastScheduledSend → not_late` gate). Lateness (past the 8pm
+  deadline / a prior day) no longer gates the send — it only sets `late_submission`
+  and the LATE banner/subject. New outcomes `sent` / `resent` (on-time) alongside
+  `sent_late` / `resent_late`. Still fail-soft (never fails the save), still
+  idempotent per `(site, report_date)` via the log-row unique + resend-on-changed-
+  totals — a re-save of the same numbers never double-sends.
+- Callers updated: `src/app/api/bonus/entries/route.ts`,
+  `src/app/api/bonus/amendments/[id]/approve/route.ts`.
+- `prisma/seed.mjs` — daily-report `send_time_pt` seed 18:00 → **20:00** PT: the
+  value now means the 8pm deadline / lateness threshold, and the ADR-0030 scheduled
+  daemon becomes a pure end-of-window backstop (whichever path claims the log row
+  first sends; the other skips — no double-send).
+- **Signing escalation tiers (07:10 / 07:30 / 08:30 auto-sign / 09:00) are
+  UNCHANGED** — those govern the morning-after signing chain (ADR-0019 §-signing /
+  `bonus-escalation-check.mjs`), a separate concern from entry.
+- **Operator action for prod:** set each enabled site's daily-report `send_time_pt`
+  to `20:00` via Admin → Daily Report Config (the seed only affects fresh/CI DBs).
+  Until then the on-save report still fires on save; only the "late" flag threshold
+  stays at the old value. The 8pm not-entered ntfy is hardcoded in the daemon and
+  already correct.
+
 ### Added — 2026-07-22 (ADR-0057 D1/D9 — MyMRC admin credential store, encrypted DB surface)
 
 Foundation for the MRC-Scrape credential surface: Bill's MyMRC admin login now lives in
