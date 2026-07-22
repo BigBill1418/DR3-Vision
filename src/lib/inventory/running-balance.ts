@@ -150,6 +150,52 @@ export function snapshotTotalUnits(s: {
   return (s.units_indoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing;
 }
 
+/** The physical-snapshot fields `resolveAnchorPair` needs (a subset of the row). */
+export interface AnchorSnapshotFields {
+  units_indoor: number | null;
+  units_total: number | null;
+  units_in_processing: number;
+  program_units: Prisma.Decimal | null;
+  non_program_units: Prisma.Decimal | null;
+  pool_attribution: string | null;
+}
+
+/**
+ * Resolve a physical anchor snapshot into its pool-split pair + attribution — the
+ * SINGLE source of truth for how an anchor's program/non-program pools are derived
+ * (D-4). A `measured` anchor carrying BOTH pool columns is used directly (its split
+ * was validated to sum to the physical total at write time). Otherwise the whole
+ * physical count is attributed to the PROGRAM pool (`legacy`), per the documented
+ * onHand convention. `null` anchor → the zero pair (epoch/no-count case).
+ *
+ * Both `onHand` (the live floor) and the audit's `startBalance` (leg-fetchers) MUST
+ * call this so the two paths can never disagree on a measured anchor's pools — the
+ * divergence that produced spurious C6 `physical_reconcile` findings.
+ */
+export function resolveAnchorPair(anchor: AnchorSnapshotFields | null): {
+  pair: PoolPair;
+  pool: 'measured' | 'legacy';
+} {
+  const measured =
+    anchor != null &&
+    anchor.pool_attribution === 'measured' &&
+    anchor.program_units != null &&
+    anchor.non_program_units != null;
+  if (measured) {
+    return {
+      pair: {
+        program: anchor.program_units as Prisma.Decimal,
+        nonProgram: anchor.non_program_units as Prisma.Decimal,
+      },
+      pool: 'measured',
+    };
+  }
+  return {
+    pair: { program: anchor ? snapshotTotalUnits(anchor) : 0, nonProgram: 0 },
+    pool: 'legacy',
+  };
+}
+
 /**
  * Compute the pool-aware on-hand balance for a site as of `asOf`.
  *
@@ -175,23 +221,10 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     },
   });
 
-  const anchorUnits = anchor ? snapshotTotalUnits(anchor) : 0;
-  // ADR-0037 §3 pool split: a `measured` anchor carries an entered program/non-program
-  // split (which was validated to sum to the total at write time), so use it directly.
-  // Otherwise fall back to the LEGACY default — attribute the whole anchor to the
-  // program pool. Either way `program + nonProgram === total` holds for the anchor.
-  const measuredAnchor =
-    anchor != null &&
-    anchor.pool_attribution === 'measured' &&
-    anchor.program_units != null &&
-    anchor.non_program_units != null;
-  const anchorPair: PoolPair = measuredAnchor
-    ? {
-        program: anchor.program_units as Prisma.Decimal,
-        nonProgram: anchor.non_program_units as Prisma.Decimal,
-      }
-    : { program: anchorUnits, nonProgram: 0 };
-  const anchorPool: 'measured' | 'legacy' = measuredAnchor ? 'measured' : 'legacy';
+  // ADR-0037 §3 pool split via the shared resolver (D-4): `measured` anchors use
+  // their entered split; otherwise the whole count is attributed to the program pool.
+  // Either way `program + nonProgram === total` holds for the anchor.
+  const { pair: anchorPair, pool: anchorPool } = resolveAnchorPair(anchor);
   // No physical anchor yet → count everything from the epoch up to asOf.
   const since = anchor ? anchor.snapshot_at : new Date(0);
   const dateWindow = { gt: since, lte: asOf };

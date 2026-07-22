@@ -69,6 +69,7 @@ vi.mock('@/lib/prisma', () => ({
 import {
   computeRunningBalance,
   snapshotTotalUnits,
+  resolveAnchorPair,
   onHand,
   reconcilePhysicalCount,
   PoolSplitMismatchError,
@@ -83,6 +84,53 @@ const baseComponents = (): BalanceComponents => ({
   stripped: zeroPools(),
   wholeUnitsSold: zeroPools(),
   landfilled: zeroPools(),
+});
+
+describe('resolveAnchorPair — the single shared anchor pool resolver (D-4)', () => {
+  const base = {
+    units_indoor: 2483,
+    units_total: null,
+    units_in_processing: 0,
+  };
+  it('uses the measured split when both pool columns are present', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: D(1597),
+      non_program_units: D(886),
+      pool_attribution: 'measured',
+    });
+    expect(pool).toBe('measured');
+    expect(new Prisma.Decimal(pair.program).toString()).toBe('1597');
+    expect(new Prisma.Decimal(pair.nonProgram).toString()).toBe('886');
+  });
+  it('falls back to all-program (legacy) when a measured row is missing a pool', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: D(1597),
+      non_program_units: null,
+      pool_attribution: 'measured',
+    });
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(2483);
+    expect(pair.nonProgram).toBe(0);
+  });
+  it('attributes a legacy anchor entirely to the program pool', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: null,
+      non_program_units: null,
+      pool_attribution: 'legacy',
+    });
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(2483);
+    expect(pair.nonProgram).toBe(0);
+  });
+  it('null anchor → zero pair (epoch / no physical count)', () => {
+    const { pair, pool } = resolveAnchorPair(null);
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(0);
+    expect(pair.nonProgram).toBe(0);
+  });
 });
 
 describe('computeRunningBalance — pool-aware algebra', () => {

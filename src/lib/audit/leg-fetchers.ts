@@ -27,7 +27,11 @@
 //     rows anchored at the running balance (reuses `computeRunningBalance`).
 
 import type { PrismaClient } from '@prisma/client';
-import { computeRunningBalance, type PoolPair } from '@/lib/inventory/running-balance';
+import {
+  computeRunningBalance,
+  resolveAnchorPair,
+  type PoolPair,
+} from '@/lib/inventory/running-balance';
 import { aggregateSiteRates, resolveRateThresholds } from '@/lib/rates';
 import {
   c1Inbound,
@@ -435,8 +439,11 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
 /**
  * The pool-aware on-hand balance strictly BEFORE the window (the roll anchor).
  * Mirrors `running-balance.onHand`, bounded to `< windowStart`, over the injected
- * db (so it is testable with a fake client). The physical anchor is attributed to
- * the program pool per the documented onHand convention.
+ * db (so it is testable with a fake client). The anchor's pool split is resolved by
+ * the SHARED `resolveAnchorPair` (D-4) — a `measured` physical count uses its entered
+ * program/non-program split; otherwise the whole count is attributed to the program
+ * pool. This selects the pool columns so onHand and the audit can never disagree on a
+ * measured anchor (which previously produced spurious C6 `physical_reconcile` findings).
  */
 async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair> {
   const before = rangeDate(w.startISO);
@@ -448,11 +455,12 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
       units_indoor: true,
       units_total: true,
       units_in_processing: true,
+      program_units: true,
+      non_program_units: true,
+      pool_attribution: true,
     },
   });
-  const anchorUnits = anchor
-    ? (anchor.units_indoor ?? 0) + (anchor.units_total ?? 0) + anchor.units_in_processing
-    : 0;
+  const { pair: anchorPair } = resolveAnchorPair(anchor);
   const since = anchor ? anchor.snapshot_at : new Date(0);
   const flowWindow = { gt: since, lt: before };
 
@@ -480,7 +488,7 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
   ]);
 
   const bal = computeRunningBalance({
-    anchor: { program: anchorUnits, nonProgram: 0 },
+    anchor: anchorPair,
     verifiedInbound: {
       program: toNum(inbound._sum.program_unit_count),
       nonProgram: toNum(inbound._sum.non_program_unit_count),
