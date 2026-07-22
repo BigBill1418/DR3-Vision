@@ -148,6 +148,66 @@ export async function notifyNewRequest(args: {
   }).catch(() => undefined);
 }
 
+/** Cooldown for the second-approval routing page — per request, so a re-entry can't
+ * double-page but a distinct invoice always does. Routine hop, not an incident. */
+const SECOND_APPROVAL_COOLDOWN_MS = 30 * 60 * 1000;
+
+/**
+ * ADR-0046 Amendment 5 (D-M5-3) — a >= $1,000 Approve just entered
+ * `pending_second_approval`; page + email the SITE-APPROPRIATE second approver
+ * (Woodland → Bill, Eugene → Shannon). Fires ntfy `dr3-vision-system` (Bill's
+ * reader) the moment the state fires, and routes an email through the `ap_notify`
+ * gate to the routed second approver's address(es) — in pilot that reroutes to
+ * admins with a `[PILOT]` header (the existing rollout gate). No amounts/vendor in
+ * the ntfy body (ADR-0045: row id + site only); the email is a triage nudge with a
+ * TIER-1 deep link. Fail-soft — a paging/mail failure never fails the decision.
+ */
+export async function notifySecondApprovalNeeded(args: {
+  requestId: string;
+  subject: string | null;
+  siteCode: string;
+  siteLabel: string;
+  approverEmails: readonly string[];
+}): Promise<void> {
+  const subj = args.subject ?? '(no subject)';
+  await publishNtfy({
+    topic: SYSTEM_TOPIC,
+    title: `AP invoice ≥ $1,000 — second approval needed (${args.siteLabel})`,
+    // ADR-0045 — row id + site only; never the amount/vendor in the page body.
+    body: `A vendor invoice was first-approved and needs a SECOND approval before payment. Site: ${args.siteLabel}. Request id: ${args.requestId}. Open the AP queue to confirm or override.`,
+    priority: 'high',
+    tags: ['warning', 'ap', 'second-approval', 'dr3-vision'],
+    clickUrl: apRequestUrl(args.requestId),
+    fingerprint: `ap-second-approval:${args.requestId}`,
+    cooldownMs: SECOND_APPROVAL_COOLDOWN_MS,
+  }).catch(() => undefined);
+
+  if (args.approverEmails.length === 0) {
+    // No rostered second approver for the site (Woodland relies on admin-
+    // eligibility). The ntfy page (Bill's reader) still fired above; the pilot
+    // ap_notify gate reroutes any email to admins anyway, so nothing is lost.
+    log.warn(
+      { requestId: args.requestId, siteCode: args.siteCode },
+      '[ap-notify] no rostered second-approver address — routing notification page-only',
+    );
+    return;
+  }
+  const htmlBody = `<p>A vendor invoice ≥ $1,000 was first-approved in DR3-Vision and now needs your <b>second approval</b> before payment.</p>
+    <ul>
+      <li>Site: ${escapeHtml(args.siteLabel)}</li>
+    </ul>
+    <p><a href="${apRequestUrl(args.requestId)}">Open this request in the AP approval queue</a> to review the first approver’s decision and confirm — or reject to override. First action wins.</p>`;
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [...args.approverEmails],
+    subject: `DR3-Vision — second approval needed (≥ $1,000): ${subj}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    importance: 'high',
+  }).catch(() => undefined);
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')

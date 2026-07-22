@@ -281,3 +281,59 @@ exclude on-hold (`pending_review`) items, which are being actively worked.
    email, a hold notice reaches the forwarder, and a decision email + stamped PDF
    reach the forwarder (Mary CC'd).
 
+
+## 2026-07-22 — $1,000 second-approval workflow (ADR-0046 Amendment 5, D-M5-3)
+
+Any structured **Approve** whose confirmed amount is **≥ $1,000** no longer files
+immediately. It moves to `pending_second_approval` and waits for the site's
+designated second approver. Nothing else changes: sub-$1,000 Approves, every
+Reject/Hold, and every NOT-DR3 disposition stay single-action (first-action-wins),
+and the decision email + stamped PDF still fire only on the final approved/rejected
+state.
+
+### Routing (who is the second approver)
+
+- **Woodland → Bill** (admin — always eligible; needs no roster row).
+- **Eugene → Shannon Rockwell** (must be provisioned in `ap_second_approvers`).
+- **NOT DR3 → not applicable** — the invoice returns to sender, no payment, no
+  second approval.
+
+### Provision Shannon Rockwell (operator handoff, spec §4)
+
+1. Confirm Shannon has a DR3-Vision user account (or provision one).
+2. Give her AP-queue access — she must be able to open the queue to act. Add her to
+   the `ap_approvers` roster (or grant admin role); without it `requireApApprover`
+   refuses her at the queue before the second-approval check ever runs.
+3. Insert the second-approver roster row (site is the CODE, not a sites.id):
+   ```sql
+   INSERT INTO ap_second_approvers (id, user_id, site_id, active)
+   VALUES (gen_random_uuid(), '<shannon-user-id>', 'eugene', true);
+   ```
+   A row is ACTIVE when `active = true` AND (`active_until` IS NULL OR in the future).
+   Bill/Woodland needs no `ap_second_approvers` row — admin-eligibility covers it.
+
+### What the approvers see
+
+- A first approver who approves a ≥ $1,000 invoice is told it now needs a second
+  approval (and where it routed). No decision email is sent yet.
+- The site's second approver gets an ntfy page (`dr3-vision-system`) + an email
+  (through the `ap_notify` pilot gate — [PILOT] → admins until the surface is live),
+  and sees an **"awaiting 2nd approval"** tab + a badge count on `/`.
+- The second-approval panel shows the first approver's decision (vendor, amount,
+  explanation, equipment, any acknowledged variance) read-only, then **Confirm second
+  approval** or **Reject (override)**. An override reject requires a note and CCs the
+  first approver on the rejection.
+
+### First approver == second approver (decision (c))
+
+If Bill (admin) is the first approver on a Woodland invoice ≥ $1,000, the
+second-approval step still fires. He may self-fulfill, but the panel requires an
+explicit **re-confirmation** checkbox AND a **30-second** minimum wait since first
+approval before the buttons enable. Both are enforced server-side — a hand-crafted
+request without the re-confirm flag, or before the 30 s elapses, is refused.
+
+### Decision artifacts for ≥ $1,000
+
+The final decision email + stamped PDF carry **both** approvers + PT timestamps:
+*"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
+[T2 PT]"*. Sub-$1,000 decisions are unchanged (single approver on the stamp).

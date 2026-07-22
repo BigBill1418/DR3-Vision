@@ -56,6 +56,16 @@ export interface StampInput {
    * Mutually exclusive with `siteName` (an approver picks a site OR marks NOT DR3).
    */
   notDr3?: boolean;
+  /**
+   * ADR-0046 Amendment 5 (D-M5-3) — the $1,000 second-approval hop. When set (an
+   * Approve whose confirmed amount was >= $1,000), the stamp line carries BOTH
+   * approvers: `approverName`/`decidedAt` are the FIRST approver + their approval
+   * time, and these two are the SECOND approver + confirmation time, appended as
+   * "; second approval by [Second] on [T2 PT]". Null on sub-$1K single-action
+   * decisions (unchanged single-approver stamp).
+   */
+  secondApproverName?: string | null;
+  secondApprovedAt?: Date | null;
   /** kind='body': the C10-sanitized message body HTML (re-sanitized before render). */
   bodyHtmlSanitized?: string | null;
   /** kind='attachment': the original attachment filename (display only). */
@@ -116,10 +126,30 @@ export function neutralizeRemoteImageSrcs(html: string): string {
  * "Approved by …"; a rejection reads "Rejected by …" but keeps the same shape.
  */
 export function stampText(
-  input: Pick<StampInput, 'decision' | 'approverName' | 'decidedAt' | 'siteName' | 'notDr3'>,
+  input: Pick<
+    StampInput,
+    | 'decision'
+    | 'approverName'
+    | 'decidedAt'
+    | 'siteName'
+    | 'notDr3'
+    | 'secondApproverName'
+    | 'secondApprovedAt'
+  >,
 ): string {
   const verb = input.decision === 'approved' ? STAMP_TEXT_PREFIX : 'Rejected by';
   const when = formatPacificDateTime(input.decidedAt);
+  // ADR-0046 Amendment 5 (D-M5-3) — a >= $1,000 approval carries BOTH approvers on
+  // the stamp line. The leading "Approved by [First] …" is the first approver; the
+  // second-approval clause names the site's second approver + their confirmation
+  // time. Sub-$1K decisions carry no second approver → the clause is empty and the
+  // single-approver line is unchanged.
+  const second =
+    input.decision === 'approved' && input.secondApproverName && input.secondApprovedAt
+      ? `; second approval by ${input.secondApproverName} on ${formatPacificDateTime(
+          input.secondApprovedAt,
+        )} PT`
+      : '';
   // Location rides the stamp line itself so every page of the returned document
   // says where this belongs. NOT-DR3 (2026-07-20) takes the slot with an explicit
   // marker (the full reason rides the note band + email body); otherwise the tagged
@@ -129,7 +159,7 @@ export function stampText(
     : input.siteName
       ? ` — Site: ${input.siteName}`
       : '';
-  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision${location}`;
+  return `${verb} ${input.approverName} on ${when} PT via DR3-Vision${second}${location}`;
 }
 
 /**

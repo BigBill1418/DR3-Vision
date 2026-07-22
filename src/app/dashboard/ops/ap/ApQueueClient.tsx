@@ -96,6 +96,17 @@ interface Detail extends ListRow {
   varianceFlagState: string | null;
   varianceAcknowledgmentNote: string | null;
   equipmentLinks: EquipmentLinkView[];
+  // Amendment 5 (D-M5-3) — dual-approval read surface + viewer-scoped eligibility.
+  firstApproverName: string | null;
+  firstApprovedAt: string | null;
+  secondApproverName: string | null;
+  secondApprovedAt: string | null;
+  secondApproverNote: string | null;
+  secondApproval: {
+    eligible: boolean;
+    isFirstApprover: boolean;
+    selfWaitRemainingMs: number;
+  } | null;
   attachments: AttachmentView[];
   followups: Array<{
     id: string;
@@ -105,7 +116,16 @@ interface Detail extends ListRow {
   }>;
 }
 
-const TABS: Filter[] = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined', 'all'];
+const TABS: Filter[] = [
+  'pending',
+  'pending_review',
+  // D-M5-3 — the $1,000 second-approval queue tab (second approvers work from here).
+  'pending_second_approval',
+  'approved',
+  'rejected',
+  'quarantined',
+  'all',
+];
 
 /** Tab/label text — the raw enum value `pending_review` reads as "On hold". */
 const STATUS_LABEL: Record<Filter, string> = {
@@ -521,6 +541,14 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           setMsg(`This request was ${body.error}. Refreshing.`);
         } else if (!res.ok) {
           setMsg(body.error ?? `decide failed (${res.status})`);
+        } else if (body.secondApprovalPending) {
+          // D-M5-3 — a >= $1,000 Approve went to second approval instead of
+          // terminating. No decision email yet; the second approver was notified.
+          setMsg(
+            `Approved — this invoice is ≥ $1,000, so it now needs a SECOND approval${
+              body.secondApproverLabel ? ` from ${body.secondApproverLabel}` : ''
+            } before payment. No decision email is sent until the second approval is confirmed.`,
+          );
         } else {
           const mailNote =
             body.mail === 'sent'
@@ -673,6 +701,30 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
             ? ' · decision emailed.'
             : ' · decision email NOT confirmed sent.'}
         </p>
+      )}
+
+      {/* D-M5-3 — a decided >= $1,000 request shows BOTH approvers + timestamps. */}
+      {detail.firstApproverName &&
+        (detail.status === 'approved' || detail.status === 'rejected') && (
+          <p className="mt-1 text-sm opacity-80">
+            First approval by {detail.firstApproverName}
+            {detail.firstApprovedAt && ` at ${fmt(detail.firstApprovedAt)}`}
+            {detail.secondApproverName && (
+              <>
+                {' · '}
+                {detail.status === 'rejected' ? 'overridden' : 'second approval'} by{' '}
+                {detail.secondApproverName}
+                {detail.secondApprovedAt && ` at ${fmt(detail.secondApprovedAt)}`}
+              </>
+            )}
+            {detail.status === 'rejected' &&
+              detail.secondApproverNote &&
+              ` — “${detail.secondApproverNote}”`}
+          </p>
+        )}
+
+      {detail.status === 'pending_second_approval' && (
+        <SecondApprovalPanel detail={detail} onDecided={onDecided} />
       )}
 
       <section className="mt-4">
@@ -987,6 +1039,175 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
 
       {msg && <p className="mt-3 rounded bg-black/30 px-3 py-2 text-sm">{msg}</p>}
     </div>
+  );
+}
+
+// ADR-0046 Amendment 5 (D-M5-3) — the $1,000 SECOND-APPROVAL panel. Rendered when a
+// request is `pending_second_approval`. Shows the first approver's decision facts
+// read-only, then — for the SITE's eligible second approver — Approve (→ approved)
+// or Reject (→ rejected override, note required). When the viewer is ALSO the first
+// approver (self-fulfillment, decision (c)), a re-confirmation checkbox + a 30-second
+// countdown gate the buttons. All of this is advisory: the server re-checks
+// eligibility, the reconfirm flag, and the 30s wait before it will commit.
+function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
+  const sa = detail.secondApproval;
+  const [note, setNote] = useState('');
+  const [reconfirm, setReconfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [waitMs, setWaitMs] = useState(sa?.selfWaitRemainingMs ?? 0);
+
+  // Count the self-reconfirm wait down to zero (only meaningful on the self path).
+  useEffect(() => {
+    setWaitMs(sa?.selfWaitRemainingMs ?? 0);
+  }, [sa?.selfWaitRemainingMs]);
+  useEffect(() => {
+    if (waitMs <= 0) return;
+    const t = setInterval(() => setWaitMs((ms) => Math.max(0, ms - 1000)), 1000);
+    return () => clearInterval(t);
+  }, [waitMs]);
+
+  const isSelf = !!sa?.isFirstApprover;
+  const waitSec = Math.ceil(waitMs / 1000);
+  const gated = isSelf && (waitMs > 0 || !reconfirm);
+
+  const submit = useCallback(
+    async (decision: 'approved' | 'rejected') => {
+      if (decision === 'rejected' && !note.trim()) {
+        setMsg('A second-approval rejection needs a note explaining why the first approval is being overridden.');
+        return;
+      }
+      if (isSelf && !reconfirm) {
+        setMsg('You are both approvers — check the re-confirmation box to fulfill the second approval.');
+        return;
+      }
+      setBusy(true);
+      setMsg(null);
+      try {
+        const res = await fetch(`/api/ops/ap/${detail.id}/second-approval`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            decision,
+            ...(decision === 'rejected' ? { note: note.trim() } : {}),
+            ...(isSelf ? { reconfirm: true } : {}),
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 409 && body.alreadyDecided) setMsg(`This request was ${body.error}. Refreshing.`);
+        else if (!res.ok) setMsg(body.error ?? `second approval failed (${res.status})`);
+        else if (decision === 'approved')
+          setMsg('Second approval confirmed — the invoice is APPROVED and the decision was emailed to accounting.');
+        else setMsg('First approval OVERRIDDEN — the invoice is REJECTED; the first approver was CC’d on the rejection.');
+      } catch (e) {
+        setMsg(e instanceof Error ? e.message : 'second approval failed');
+      } finally {
+        setBusy(false);
+        onDecided();
+      }
+    },
+    [note, isSelf, reconfirm, detail.id, onDecided],
+  );
+
+  return (
+    <section className="mt-5 border-t border-white/10 pt-4">
+      <div className="rounded border border-violet-400/60 bg-violet-400/10 px-3 py-2 text-sm">
+        <span className="font-semibold text-violet-200">AWAITING SECOND APPROVAL (≥ $1,000)</span>
+        {detail.firstApproverName && (
+          <span className="opacity-90"> · first-approved by {detail.firstApproverName}</span>
+        )}
+        {detail.firstApprovedAt && <span className="opacity-70"> · {fmt(detail.firstApprovedAt)}</span>}
+      </div>
+
+      {/* First approver's decision facts — read-only context for the second approver. */}
+      <div className="mt-3 rounded border border-white/10 bg-white/5 p-3 text-sm">
+        <h3 className="text-sm font-semibold opacity-90">First approver’s decision</h3>
+        <ul className="mt-1 space-y-0.5 opacity-90">
+          {detail.vendorFreeform && <li>Vendor: {detail.vendorFreeform}</li>}
+          {detail.confirmedAmountCents !== null && <li>Amount: {dollars(detail.confirmedAmountCents)}</li>}
+          {detail.explanation && <li>Explanation: {detail.explanation}</li>}
+          {detail.equipmentLinks.length > 0 && (
+            <li>
+              Equipment:{' '}
+              {detail.equipmentLinks.some((l) => l.isNotEquipmentRelated)
+                ? 'Not equipment-related'
+                : detail.equipmentLinks.map((l) => l.displayName ?? '(unknown)').join(', ')}
+            </li>
+          )}
+          {detail.varianceFlagState === 'acknowledged' && (
+            <li className="text-amber-200">
+              ⚠ Variance acknowledged
+              {detail.varianceAcknowledgmentNote ? ` — ${detail.varianceAcknowledgmentNote}` : ''}
+            </li>
+          )}
+        </ul>
+      </div>
+
+      {sa?.eligible ? (
+        <div className="mt-3">
+          {isSelf && (
+            <div className="rounded border border-amber-400/60 bg-amber-400/15 p-3 text-sm">
+              <p className="font-semibold text-amber-200">
+                You are both the first and second approver on this invoice.
+              </p>
+              <p className="mt-1 opacity-90">
+                Please re-review the decision above, then re-confirm below. A 30-second pause is
+                required before you can self-fulfill.
+              </p>
+              <label className="mt-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={reconfirm}
+                  onChange={(e) => setReconfirm(e.target.checked)}
+                />
+                <span>I have re-reviewed and re-confirm this decision.</span>
+              </label>
+              {waitMs > 0 && (
+                <p className="mt-1 text-amber-200">Please wait {waitSec}s before confirming…</p>
+              )}
+            </div>
+          )}
+
+          <label className="mt-3 block text-xs opacity-80">
+            Rejection note{' '}
+            <span className="opacity-70">(required only to Reject — explains the override)</span>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="Why is the first approval being overridden?"
+              className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+            />
+          </label>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={() => submit('approved')}
+              disabled={busy || gated}
+              title={gated ? 'Re-confirm and wait out the 30-second pause to self-fulfill' : undefined}
+              className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Confirm second approval
+            </button>
+            <button
+              onClick={() => submit('rejected')}
+              disabled={busy || !note.trim() || gated}
+              title={note.trim() ? undefined : 'A rejection requires a note'}
+              className="rounded bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Reject (override)
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 rounded bg-black/30 px-3 py-2 text-sm opacity-80">
+          This invoice is waiting for its site’s designated second approver to confirm or override.
+          You are not the second approver for this site.
+        </p>
+      )}
+
+      {msg && <p className="mt-3 rounded bg-black/30 px-3 py-2 text-sm">{msg}</p>}
+    </section>
   );
 }
 

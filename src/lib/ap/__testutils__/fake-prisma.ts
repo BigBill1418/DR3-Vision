@@ -20,7 +20,13 @@ function p2002(target: string): Error {
 
 export interface FakeApRequest {
   id: string;
-  status: 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+  status:
+    | 'pending'
+    | 'pending_review'
+    | 'pending_second_approval'
+    | 'approved'
+    | 'rejected'
+    | 'quarantined';
   internet_message_id: string;
   conversation_id: string | null;
   received_at: Date;
@@ -58,6 +64,14 @@ export interface FakeApRequest {
   variance_acknowledged_by?: string | null;
   variance_acknowledged_at?: Date | null;
   variance_acknowledgment_note?: string | null;
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval stamps. Optional so existing
+  // fixtures need not enumerate them; create() defaults them and the two decide legs
+  // set them at their respective transitions.
+  first_approver_id?: string | null;
+  first_approved_at?: Date | null;
+  second_approver_id?: string | null;
+  second_approved_at?: Date | null;
+  second_approver_note?: string | null;
 }
 export interface FakeEquipment {
   id: string;
@@ -95,6 +109,13 @@ export interface FakeApApprover {
   user_id: string;
   active_until: Date | null;
   created_by: string | null;
+}
+export interface FakeSecondApprover {
+  id: string;
+  user_id: string;
+  site_id: string; // site CODE: 'woodland' | 'eugene'
+  active: boolean;
+  active_until: Date | null;
 }
 export interface FakeSite {
   id: string;
@@ -167,6 +188,7 @@ export interface FakeDb {
   equipmentLinks: FakeEquipmentLink[];
   baselines: FakeVendorBaseline[];
   baselineHistory: FakeBaselineHistory[];
+  secondApprovers: FakeSecondApprover[];
 }
 
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
@@ -187,6 +209,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     equipmentLinks: seed.equipmentLinks ?? [],
     baselines: seed.baselines ?? [],
     baselineHistory: seed.baselineHistory ?? [],
+    secondApprovers: seed.secondApprovers ?? [],
   };
 }
 
@@ -273,6 +296,11 @@ export function makeFakePrisma(db: FakeDb) {
           variance_acknowledged_by: (d['variance_acknowledged_by'] as string | null) ?? null,
           variance_acknowledged_at: (d['variance_acknowledged_at'] as Date | null) ?? null,
           variance_acknowledgment_note: (d['variance_acknowledgment_note'] as string | null) ?? null,
+          first_approver_id: (d['first_approver_id'] as string | null) ?? null,
+          first_approved_at: (d['first_approved_at'] as Date | null) ?? null,
+          second_approver_id: (d['second_approver_id'] as string | null) ?? null,
+          second_approved_at: (d['second_approved_at'] as Date | null) ?? null,
+          second_approver_note: (d['second_approver_note'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -300,8 +328,18 @@ export function makeFakePrisma(db: FakeDb) {
       },
       async count(args: { where?: AnyRecord }) {
         const w = args.where ?? {};
-        return db.requests.filter((r) => w['status'] === undefined || r.status === w['status'])
-          .length;
+        const siteIn = (w['site_id'] as { in?: string[] } | undefined)?.in;
+        return db.requests.filter((r) => {
+          if (w['status'] !== undefined && r.status !== w['status']) return false;
+          if (siteIn && !siteIn.includes(r.site_id ?? '')) return false;
+          if (
+            w['site_id'] !== undefined &&
+            typeof w['site_id'] === 'string' &&
+            r.site_id !== w['site_id']
+          )
+            return false;
+          return true;
+        }).length;
       },
     },
     apFollowup: {
@@ -488,6 +526,17 @@ export function makeFakePrisma(db: FakeDb) {
         );
         return row ? pick(row, args.select) : null;
       },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const codeIn = (w['code'] as { in?: string[] } | undefined)?.in;
+        const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
+        const rows = db.sites.filter((s) => {
+          if (codeIn && !codeIn.includes(s.code)) return false;
+          if (idIn && !idIn.includes(s.id)) return false;
+          return true;
+        });
+        return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
     },
     // ADR-0046 Amendment 5 (D-M5-6) — equipment master + link join.
     equipment: {
@@ -555,6 +604,19 @@ export function makeFakePrisma(db: FakeDb) {
         return { ...row };
       },
     },
+    // ADR-0046 Amendment 5 (D-M5-3) — second-approver roster (site CODE keyed).
+    apSecondApprover: {
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.secondApprovers.filter((s) => matchSecondApprover(s, w));
+        return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.secondApprovers.find((s) => matchSecondApprover(s, w));
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+    },
     auditLog: {
       async create(args: { data: AnyRecord }) {
         const d = args.data;
@@ -576,6 +638,26 @@ export function makeFakePrisma(db: FakeDb) {
     },
   };
   return client;
+}
+
+/** Match an ap_second_approver row against the D-M5-3 routing/eligibility where
+ * shapes: `{ site_id, active, OR: [{active_until:null},{active_until:{gt}}] }` plus
+ * an optional `user_id`. */
+function matchSecondApprover(s: FakeSecondApprover, w: Record<string, unknown>): boolean {
+  if (w['user_id'] !== undefined && s.user_id !== w['user_id']) return false;
+  if (w['site_id'] !== undefined && s.site_id !== w['site_id']) return false;
+  if (w['active'] !== undefined && s.active !== w['active']) return false;
+  const or = w['OR'] as Array<Record<string, unknown>> | undefined;
+  if (or) {
+    const active = or.some((clause) => {
+      if ('active_until' in clause && clause['active_until'] === null) return s.active_until === null;
+      const au = clause['active_until'] as { gt?: Date } | undefined;
+      if (au && au.gt) return s.active_until !== null && s.active_until.getTime() > au.gt.getTime();
+      return false;
+    });
+    if (!active) return false;
+  }
+  return true;
 }
 
 /** Match an ap_approver row against the AP roster/expiry where shapes. */

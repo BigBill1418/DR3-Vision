@@ -21,6 +21,12 @@ import { getApAttachmentBytes, putApDecisionPdf } from '@/lib/r2';
 import { isInternal, internalDomain } from './senders';
 import type { ApVarianceFlagState } from './extraction/types';
 import {
+  requiresSecondApproval,
+  activeSecondApproversForSite,
+  secondApproverSiteLabel,
+} from './second-approval-routing';
+import { notifySecondApprovalNeeded } from './notify';
+import {
   stampApproval,
   stampImage,
   stampOntoOriginalPdf,
@@ -113,12 +119,27 @@ export class ApAlreadyDecidedError extends Error {
   }
 }
 
-export type ApMailOutcome = 'sent' | 'refused_no_recipients' | 'disabled' | 'failed';
+export type ApMailOutcome =
+  | 'sent'
+  | 'refused_no_recipients'
+  | 'disabled'
+  | 'failed'
+  // ADR-0046 Amendment 5 (D-M5-3) — a >= $1,000 Approve moved to
+  // `pending_second_approval` instead of terminating; NO decision email is sent yet
+  // (it fires only on the final approved/rejected state). The second approver was
+  // paged/emailed via `notifySecondApprovalNeeded` instead.
+  | 'second_approval_pending';
 
 export interface DecideResult {
   requestId: string;
   decision: ApDecision;
   mail: ApMailOutcome;
+  /** D-M5-3 — true when a >= $1,000 Approve routed to `pending_second_approval`
+   * rather than terminating. The UI branches on this before reading `mail`. */
+  secondApprovalPending?: boolean;
+  /** D-M5-3 — the routed second approver label (e.g. "Eugene (Shannon Rockwell)")
+   * for the first approver's confirmation message. */
+  secondApproverLabel?: string;
 }
 
 export interface DecideArgs {
@@ -285,13 +306,28 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   // NOT write the deprecated `vendor`/`amount_cents` (hard rule #1: kept, unwritten).
   // The single-note fields stay the path for Reject / NOT-DR3.
   const structured = typeof args.vendorFreeform === 'string';
+  // ADR-0046 Amendment 5 (D-M5-3) — a structured Approve whose confirmed amount is
+  // >= $1,000 does NOT terminate at `approved`: it moves to `pending_second_approval`
+  // and stamps the FIRST approver (not decided_by/decided_at — those belong to the
+  // terminal second decision). NOT-DR3 and every Reject are unaffected. Sub-$1K
+  // Approves keep the single-action first-action-wins contract.
+  const secondApprovalNeeded =
+    structured &&
+    args.decision === 'approved' &&
+    !args.filedNotDr3 &&
+    requiresSecondApproval(args.confirmedAmountCents);
+  const targetStatus = secondApprovalNeeded ? 'pending_second_approval' : args.decision;
   const res = await prisma.$transaction(async (tx) => {
     const r = await tx.apRequest.updateMany({
       where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
       data: {
-        status: args.decision,
-        decided_by: args.actorUserId,
-        decided_at: decidedAt,
+        status: targetStatus,
+        // Terminal decisions stamp decided_by/decided_at now; the second-approval hop
+        // instead stamps the FIRST approver and leaves the terminal actor to the
+        // second-approval leg.
+        ...(secondApprovalNeeded
+          ? { first_approver_id: args.actorUserId, first_approved_at: decidedAt }
+          : { decided_by: args.actorUserId, decided_at: decidedAt }),
         // Structured Approve → explanation + vendor_freeform + confirmed_amount_cents
         // + variance state (each field explicit `| null` to satisfy exactOptional);
         // otherwise the legacy single-note / deprecated columns.
@@ -357,7 +393,9 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
           after: {
             attempted: args.decision,
             outcome: 'won',
-            status: args.decision,
+            status: targetStatus,
+            // D-M5-3 — a >= $1,000 Approve routed to second approval (not terminal).
+            second_approval_pending: secondApprovalNeeded,
             from_hold: priorStatus === 'pending_review',
             structured,
             has_note: structured ? !!args.explanation : !!args.note,
@@ -409,6 +447,37 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       name,
       winner?.decided_at ?? row.decided_at,
     );
+  }
+
+  // D-M5-3 — a >= $1,000 Approve is now AWAITING second approval, NOT terminal. No
+  // decision email fires yet (it only fires on the final approved/rejected state);
+  // instead page + email the site-appropriate second approver. Fail-soft: a routing
+  // notification failure never rolls back the (committed) first approval.
+  if (secondApprovalNeeded && args.siteId) {
+    const siteCode =
+      (await prisma.site.findUnique({ where: { id: args.siteId }, select: { code: true } }))
+        ?.code ?? '';
+    const routed = await activeSecondApproversForSite(prisma, siteCode).catch(() => ({
+      userIds: [] as string[],
+      emails: [] as string[],
+    }));
+    const subject =
+      (await prisma.apRequest.findUnique({ where: { id: args.requestId }, select: { subject: true } }))
+        ?.subject ?? null;
+    await notifySecondApprovalNeeded({
+      requestId: args.requestId,
+      subject,
+      siteCode,
+      siteLabel: secondApproverSiteLabel(siteCode),
+      approverEmails: routed.emails,
+    }).catch(() => undefined);
+    return {
+      requestId: args.requestId,
+      decision: args.decision,
+      mail: 'second_approval_pending',
+      secondApprovalPending: true,
+      secondApproverLabel: secondApproverSiteLabel(siteCode),
+    };
   }
 
   // Won. The flip + its audit already committed atomically above. The decision
@@ -684,6 +753,14 @@ export async function sendDecisionEmail(
       variance_flag_state: true,
       variance_acknowledgment_note: true,
       variance_acknowledged_by: true,
+      // ADR-0046 Amendment 5 (D-M5-3) — dual-approval identities + times. Present on
+      // a >= $1,000 decision; the mail renders BOTH approvers + PT timestamps, and a
+      // second-approver override reject CCs the first approver.
+      first_approver_id: true,
+      first_approved_at: true,
+      second_approver_id: true,
+      second_approved_at: true,
+      second_approver_note: true,
       decided_by: true,
       sender_address: true,
       body_html_sanitized: true,
@@ -730,6 +807,18 @@ export async function sendDecisionEmail(
   const approverName = await resolveName(prisma, req.decided_by);
   const subject = req.subject ?? '(no subject)';
   const decidedAt = req.decided_at ?? new Date();
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval (>= $1,000). Both approvers ride
+  // the mail + stamp. The stamp's leading "Approved by …" is the FIRST approver +
+  // their approval time; the second-approval clause names the second approver +
+  // confirmation time. A second-approver override REJECT CCs the first approver so
+  // they see the override.
+  const isDual = req.first_approver_id != null;
+  const firstApproverName = isDual ? await resolveName(prisma, req.first_approver_id) : null;
+  const secondApproverName = req.second_approver_id
+    ? await resolveName(prisma, req.second_approver_id)
+    : null;
+  const firstApprovedAt = req.first_approved_at ?? null;
+  const secondApprovedAt = req.second_approved_at ?? null;
   // Bill + both facilities read Pacific; the fleet host clock is UTC. Render the
   // decision instant in Pacific wall-clock (+ ' PT') like every other AP surface
   // (notify.ts new-request "Received", stamp.ts stamp line, the hold-notice email).
@@ -748,6 +837,23 @@ export async function sendDecisionEmail(
       : '';
   const vendorLine = effectiveVendor ? `<li>Vendor: ${escapeHtml(effectiveVendor)}</li>` : '';
   const noteLine = effectiveNote ? `<li>Note: ${escapeHtml(effectiveNote)}</li>` : '';
+  // D-M5-3 — the approver line. For a >= $1,000 decision both approvers + PT
+  // timestamps appear (first approved / second confirmed-or-overrode); otherwise the
+  // single terminal approver. A second-approver override reject also states the
+  // override note explicitly.
+  const approverLine = isDual
+    ? `<li>First approval: ${escapeHtml(firstApproverName ?? approverName)}${
+        firstApprovedAt ? ` on ${escapeHtml(formatPacificDateTime(firstApprovedAt))} PT` : ''
+      }</li>
+      <li>Second ${req.status === 'rejected' ? 'approval (override)' : 'approval'}: ${escapeHtml(
+        secondApproverName ?? approverName,
+      )}${secondApprovedAt ? ` on ${escapeHtml(formatPacificDateTime(secondApprovedAt))} PT` : ''}</li>`
+    : `<li>Approver: ${escapeHtml(approverName)}</li>
+      <li>Decided at: ${escapeHtml(decidedLabel)}</li>`;
+  const overrideNoteLine =
+    isDual && req.status === 'rejected' && req.second_approver_note
+      ? `<li>Second-approver override reason: ${escapeHtml(req.second_approver_note)}</li>`
+      : '';
   // D-M5-4 — an acknowledged variance rides the decision email as an audit footer.
   const varianceLine =
     req.variance_flag_state === 'acknowledged'
@@ -776,11 +882,11 @@ export async function sendDecisionEmail(
     <ul>
       <li>Decision: <b>${escapeHtml(req.status.toUpperCase())}</b></li>
       ${locationLine}
-      <li>Approver: ${escapeHtml(approverName)}</li>
-      <li>Decided at: ${escapeHtml(decidedLabel)}</li>
+      ${approverLine}
       ${vendorLine}
       ${amountLine}
       ${noteLine}
+      ${overrideNoteLine}
       ${varianceLine}
     </ul>`;
 
@@ -790,14 +896,22 @@ export async function sendDecisionEmail(
   // Playwright); an R2-unconfigured window degrades to the stamped cover page.
   // Fail-soft: a render/download/R2 failure must NEVER block the decision mail to
   // accounting (the decision itself already stands). Preserve the .catch(→null).
+  // D-M5-3 — on a >= $1,000 APPROVED row the stamp leads with the FIRST approver +
+  // their approval time and appends the second-approval clause; every other decision
+  // (sub-$1K approve, any reject, NOT-DR3) uses the single terminal approver.
+  const dualApproved = isDual && req.status === 'approved';
+  const stampApproverName = dualApproved ? (firstApproverName ?? approverName) : approverName;
+  const stampDecidedAt = dualApproved ? (firstApprovedAt ?? decidedAt) : decidedAt;
   const artifacts = await buildDecisionStamp(
     prisma,
     req,
-    approverName,
-    decidedAt,
+    stampApproverName,
+    stampDecidedAt,
     siteName,
     filedNotDr3,
     renderer,
+    dualApproved ? secondApproverName : null,
+    dualApproved ? secondApprovedAt : null,
   ).catch((e) => {
     log.warn(
       { requestId, err: e instanceof Error ? e.message : String(e) },
@@ -846,6 +960,26 @@ export async function sendDecisionEmail(
     });
   }
 
+  // D-M5-3 — a second-approver override REJECT CCs the FIRST approver so they see
+  // their approval was overridden. Resolve their address and add it to the CC set
+  // (de-duped, and never the primary recipient).
+  let effectiveCc = cc;
+  if (isDual && req.status === 'rejected' && req.first_approver_id) {
+    const firstEmail = (
+      await prisma.user.findUnique({
+        where: { id: req.first_approver_id },
+        select: { email: true },
+      })
+    )?.email;
+    if (
+      firstEmail &&
+      !recipients.some((r) => r.toLowerCase() === firstEmail.toLowerCase()) &&
+      !effectiveCc.some((c) => c.toLowerCase() === firstEmail.toLowerCase())
+    ) {
+      effectiveCc = [...effectiveCc, firstEmail];
+    }
+  }
+
   // ADR-0047 — the AP module is org-wide + born pilot; the actual delivery
   // routes through the rollout gate (in pilot it reroutes to admins). The
   // empty-recipient REFUSE above still guards the LIVE roster (Mary's GP filing)
@@ -854,7 +988,7 @@ export async function sendDecisionEmail(
     surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
     site: null,
     recipients,
-    ...(cc.length > 0 ? { cc } : {}),
+    ...(effectiveCc.length > 0 ? { cc: effectiveCc } : {}),
     // Location rides the SUBJECT line too (2026-07-15 directive) — visible before
     // the mail is even opened, next to the GP matching key. NOT-DR3 (2026-07-20)
     // shows "NOT DR3" here so accounting sees it in the inbox list.
@@ -901,6 +1035,9 @@ interface StampSourceRequest {
   explanation?: string | null;
   variance_flag_state?: string | null;
   variance_acknowledgment_note?: string | null;
+  // D-M5-3 — a second-approver override reject's note rides the stamp band (the
+  // single-reject note stays in decision_note).
+  second_approver_note?: string | null;
 }
 
 /** One stamped decision artifact to attach + archive (ADR-0046 Amendment 4). */
@@ -927,6 +1064,9 @@ type StampBase = Pick<
   | 'note'
   | 'siteName'
   | 'notDr3'
+  // D-M5-3 — dual-approval clause on a >= $1,000 approved stamp.
+  | 'secondApproverName'
+  | 'secondApprovedAt'
 >;
 
 interface FileAttachmentRow {
@@ -1072,8 +1212,13 @@ async function stampOneOriginal(
  * compact audit suffix so the stamped document itself records the vetting.
  */
 function stampNote(req: StampSourceRequest): string | null {
+  // On an Approve the narrative is `explanation`; on a Reject it is the single
+  // `decision_note`, or — for a >= $1,000 second-approver override — the
+  // `second_approver_note` explaining the override.
   const base =
-    req.status === 'approved' ? (req.explanation ?? req.decision_note) : req.decision_note;
+    req.status === 'approved'
+      ? (req.explanation ?? req.decision_note)
+      : (req.second_approver_note ?? req.decision_note);
   if (req.variance_flag_state !== 'acknowledged') return base;
   const suffix = req.variance_acknowledgment_note
     ? `[Variance acknowledged: ${req.variance_acknowledgment_note}]`
@@ -1089,6 +1234,10 @@ async function buildDecisionStamp(
   siteName: string | null,
   filedNotDr3: boolean,
   renderer?: PdfRenderer,
+  // D-M5-3 — the second approver (name + confirmation time) on a >= $1,000 approved
+  // stamp; null on every single-approver decision.
+  secondApproverName: string | null = null,
+  secondApprovedAt: Date | null = null,
 ): Promise<StampedArtifact[]> {
   const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
   const base: StampBase = {
@@ -1097,6 +1246,8 @@ async function buildDecisionStamp(
     approverName,
     decision,
     decidedAt,
+    secondApproverName,
+    secondApprovedAt,
     // ADR-0046 Amendment 3 — the decision note rides on the stamped PDF too. Because
     // the note is stamped onto every attachment, dropping the body render (below)
     // when attachments exist loses no approver-relevant context. Amendment 5: on an

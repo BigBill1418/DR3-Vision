@@ -53,6 +53,12 @@ function pendingDetail(): React.ComponentProps<typeof DetailPanel>['detail'] {
     varianceFlagState: null,
     varianceAcknowledgmentNote: null,
     equipmentLinks: [],
+    firstApproverName: null,
+    firstApprovedAt: null,
+    secondApproverName: null,
+    secondApprovedAt: null,
+    secondApproverNote: null,
+    secondApproval: null,
     attachments: [],
     followups: [],
   };

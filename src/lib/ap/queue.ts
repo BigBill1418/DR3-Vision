@@ -87,6 +87,15 @@ export interface ApDetailView extends ApListRow {
   varianceAcknowledgmentNote: string | null;
   /** D-M5-6 — equipment linkage recorded on a decided row (for read-back). */
   equipmentLinks: ApEquipmentLinkView[];
+  // ─── ADR-0046 Amendment 5 (D-M5-3) — dual-approval read surface. Present on a
+  // >= $1,000 request (awaiting or after second approval); null otherwise.
+  firstApproverId: string | null;
+  firstApproverName: string | null;
+  firstApprovedAt: string | null;
+  secondApproverId: string | null;
+  secondApproverName: string | null;
+  secondApprovedAt: string | null;
+  secondApproverNote: string | null;
   attachments: ApAttachmentView[];
   followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
 }
@@ -104,7 +113,15 @@ function toExtractionPrefill(raw: unknown): ApExtractionPrefill | null {
   };
 }
 
-const LIST_STATUSES = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined'] as const;
+const LIST_STATUSES = [
+  'pending',
+  'pending_review',
+  // D-M5-3 — the $1,000 second-approval queue (a distinct tab for second approvers).
+  'pending_second_approval',
+  'approved',
+  'rejected',
+  'quarantined',
+] as const;
 export type ApListFilter = (typeof LIST_STATUSES)[number] | 'all';
 
 export function isApListFilter(v: string | null): v is ApListFilter {
@@ -148,6 +165,7 @@ export async function listApRequests(
   const counts: Record<string, number> = {
     pending: 0,
     pending_review: 0,
+    pending_second_approval: 0,
     approved: 0,
     rejected: 0,
     quarantined: 0,
@@ -192,6 +210,14 @@ export async function getApRequestDetail(
   const heldByName = r.held_by
     ? (await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ?? null
     : null;
+  // D-M5-3 — resolve the dual-approval identities for the second-approval panel +
+  // read-back. Only queried when present (a >= $1,000 request).
+  const firstApproverName = r.first_approver_id
+    ? (await prisma.user.findUnique({ where: { id: r.first_approver_id }, select: { name: true } }))?.name ?? null
+    : null;
+  const secondApproverName = r.second_approver_id
+    ? (await prisma.user.findUnique({ where: { id: r.second_approver_id }, select: { name: true } }))?.name ?? null
+    : null;
   return {
     id: r.id,
     status: r.status,
@@ -226,6 +252,13 @@ export async function getApRequestDetail(
       displayName: l.equipment?.display_name ?? null,
       isNotEquipmentRelated: l.is_not_equipment_related,
     })),
+    firstApproverId: r.first_approver_id,
+    firstApproverName,
+    firstApprovedAt: r.first_approved_at ? r.first_approved_at.toISOString() : null,
+    secondApproverId: r.second_approver_id,
+    secondApproverName,
+    secondApprovedAt: r.second_approved_at ? r.second_approved_at.toISOString() : null,
+    secondApproverNote: r.second_approver_note,
     attachments: r.attachments.map((a) => ({
       id: a.id,
       kind: a.kind,

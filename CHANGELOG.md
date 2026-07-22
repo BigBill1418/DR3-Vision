@@ -5,6 +5,43 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — $1,000 second-approval workflow)
+
+- **A structured Approve whose confirmed amount is ≥ $1,000 no longer terminates.**
+  It moves to a new `pending_second_approval` state, stamping the first approver
+  (`first_approver_id`/`first_approved_at`) + all four required field values, and
+  pages/emails the SITE-appropriate second approver (Woodland → Bill, Eugene →
+  Shannon Rockwell from `ap_second_approvers`). **NOT-DR3 and every Reject/Hold — and
+  every sub-$1,000 Approve — are unchanged** (single-action, first-action-wins). The
+  decision email + stamped PDF fire ONLY on the terminal `approved`/`rejected` state.
+- **Second-approver decisions** (`POST /api/ops/ap/[id]/second-approval`,
+  `decideSecondApproval`): Approve → `approved`; Reject → `rejected` (override), with
+  `second_approver_note` and the first approver **CC'd** on the rejection email. The
+  approved decision email + stamp now carry **BOTH** approver names + PT timestamps
+  ("Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
+  [T2 PT]"). First-action-wins among second approvers (atomic conditional flip).
+- **Authorization is server-side only.** Eligible = admin role OR an active
+  `ap_second_approvers` row for the decision's site. The first-approver == would-be
+  second-approver case (decision (c)) still fires the state but requires an explicit
+  re-confirmation click AND a 30-second minimum wait since first approval, both
+  enforced in `decideSecondApproval`.
+- **UI:** a distinct "awaiting 2nd approval" tab + status badge; a second-approval
+  panel showing the first approver's decision read-only, gated to the site's eligible
+  second approver, with the self-fulfillment re-confirm + 30s countdown UX; a decided
+  ≥ $1,000 row shows both approvers. The `/` AP tile badge folds in the awaiting-2nd
+  count for second approvers (admins see all; a rostered second approver sees only
+  their site(s)).
+- **Notification:** `notifySecondApprovalNeeded` pages `dr3-vision-system` (row id +
+  site only, ADR-0045) + emails the routed second approver through the `ap_notify`
+  pilot gate ([PILOT] → admins until live). Fail-soft — never fails the first
+  approval.
+- **Operator handoff (§4):** provision Shannon Rockwell — insert an
+  `ap_second_approvers` row `{ user_id: <Shannon>, site_id: 'eugene', active: true }`
+  (Bill/Woodland needs no row; admin-eligibility covers it). See the runbook.
+- Tests: state-machine transitions, site routing, eligibility, override-reject CC,
+  first==second re-confirm + 30s-wait edge case, first-action-wins, dual stamp line
+  (`second-approval.test.ts`, 18 cases).
+
 ### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-1/4/6 — structured Approve + equipment linking + variance banner)
 
 - **The AP Approve path is now STRUCTURED.** A real-site Approve (Woodland/Eugene)
