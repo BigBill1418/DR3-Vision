@@ -5,6 +5,125 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0057 Phase 1 — real MyMRC ingestion, informed by the inaugural Phase-0 discovery)
+
+The first authenticated MyMRC pull (Phase 0, 2026-07-21) returned a real object
+catalog nothing like the original ADR guess — so Phase 1 was built against the
+**real** Phase-0 shapes (`docs/mymrc-discovery-2026-07-22.md`), not a guessed
+mirror schema. This feeds production billing; correctness and reliability were
+the bar. Schema foundation landed in `4057d0f`; this block is the ingestion
+wiring on top of it.
+
+- **Mappers adapted to the real object catalog** (`src/lib/mymrc/mappers.ts`).
+  `mapHaulRecord` now reads every real `Haul_Request__c` field (billing-authoritative
+  `Recycler_Program_Unit_Count__c`, `Recycling_Center_Lookup__r.Name` site
+  discriminator, transporter/collection/commodity/container, consumer-drop-off
+  units, docking date). Fixed two latent placeholder bugs: `weight_lbs` read the
+  non-existent `Weight__c` (always null) → now `Recycler_Weight__c`; the unit count
+  read a *Materials* field → now the correct haul field. `mapProcessedRecord` /
+  `mapOutboundRecord` map `Materials__c` (ONE object, split by `Type__c` at ingest
+  via new `classifyMaterialsType`); `weight_lbs` is hard-null (Materials has no
+  weight field). New `mapDockAvailabilityRecord` for the new
+  `Dock_Availability_Schedule__c` object (raw multipicklist codes; SF Time strings
+  kept verbatim, never `Date.parse`d). All mappers read `value` for identity, never
+  `displayValue`; the full raw record is preserved in `payload`.
+- **Windowed backfill worker** (`src/lib/mymrc/backfill.ts` + `backfill-targets.ts`)
+  — schema-agnostic engine: per object×list-view, pages `getItems` by
+  offset/`hasMoreData` to `hasMoreData:false`, persisting a
+  `mymrc_backfill_cursors` row after every page (resumable mid-pagination), then a
+  bounded (≤3) detail sweep of rows with `detail_fetched_at IS NULL`. Idempotent on
+  SF-id upsert keys; a pagination wedge fails loud (cursor error + ntfy) while a
+  per-record detail failure retries next run. 5 cursors wire the 4 real objects
+  (Haul ×2 views, Materials ×2 views, Dock ×1).
+- **Offset-pagination transport — backfill is now LIVE, no longer inert**
+  (`src/lib/mymrc/list-page.ts`, `backfill-portal-client.ts`,
+  `scripts/mymrc-backfill.mjs`; closes OPEN-ITEMS C-24). The `getItems` OFFSET
+  pagination was CONFIRMED LIVE 2026-07-22: an Aura
+  `ListViewDataManagerController.getItems` action with
+  `{filterName, entityName, pageSize:50, layoutType:"LIST", sortBy:null,
+  getCount:false, enableRowActions:false, offset:N}` returning
+  `{records, offset, hasMoreData}`, looped to `hasMoreData:false`. `list-page.ts`
+  encodes the request/response codec + list-view id resolver PURE (unit-tested);
+  `createBackfillPortalClient` maps the engine's 0-based `pageIndex → offset =
+  pageIndex*pageSize` (a pure function of the resumable cursor) and replays the
+  getItems POST, reusing the live aura framework envelope the browser sent
+  (immune to `fwuid` drift) — chosen over DOM infinite-scroll for determinism.
+  The shared, self-healing admin session was extracted to `openAdminSession`
+  (both the steady-state client and the backfill transport reuse it — one auth
+  path). List-view ids: 2 captured live (Docking, Processed); the other 3 resolve
+  at RUNTIME from the browser's own getItems request, or via a
+  `MYMRC_LISTVIEW_IDS` operator override — an id that resolves to NONE fails LOUD
+  per-target (a resumable wedge + ntfy), never guessed. Run one-shot:
+  `node scripts/mymrc-backfill.mjs` (resumable + idempotent; safe to re-run).
+- **Hourly sync wired to the real objects** (`src/lib/mymrc/sync.ts`). Site scoping
+  moved from the login to the DATA (ADR-0057 D1 / recon B §6): a single admin
+  session lists ALL records globally (`site_id` NULL at list time), and each row's
+  site is derived + stamped on the DETAIL pass from its discriminator
+  (`recycler_name`/`account_name` → `sites.code`), stamped **only when resolved**
+  (never a NULL over a prior attribution). All new mirror columns are populated.
+  **`expected_loads` join fixed (money-critical):** joins on the real
+  `Collection_Site__c` (the old code used `Rate_ID__c` and matched nothing) and
+  bills the authoritative `program_unit_count` (was the always-null `units`).
+- **Stale-session self-heal** (`src/lib/mymrc/portal-client.ts`). Fixes the live
+  bug where a tick ending logged-out wrote anonymous cookies over the good
+  `storageState`, poisoning every subsequent tick. `storageState` is now persisted
+  **only** after a positive auth check (money-safe latch); bootstrap proves auth up
+  front, discards a logged-out persisted state and re-logs-in, and purges the
+  poisoned file before failing loud on a hard auth failure. Bounded nav retries
+  absorb transient blips without an unbounded loop.
+- **Reconciliation-feed wiring** (`src/lib/mymrc/reconcile-feed.ts`,
+  `reconcile-detect.ts`). After each sync tick the scrape feeds unknown
+  collection-site / account names (real discriminators `Collection_Site__c` /
+  `Account__r.Name`) into the Wave-2 `mymrc_reconciliation_queue` as `new_record`
+  candidates for operator approval — **queue only, never a direct `sources` write**
+  (ADR-0057 D4). Dedups within a pass, across feeds, and across runs. `apply.ts`
+  now resolves the hauls mirror's site too, so hauls candidates are approvable; an
+  unresolved `site_id` throws `ReconNotFoundError` rather than approve an unscoped
+  `sources` row (money-safe invariant preserved through the nullability widening).
+- **Discovery fixture redaction hardened** (`src/lib/mymrc/discovery.ts`). Closes
+  the 143-name leak class — flat person-name audit/lookup fields (`*_By__c`,
+  `…ById`, `Owner`/`Manager`, `Employee_*`) are now scrubbed while opaque
+  Salesforce ids and all business fields (site/vendor/transporter names, counts,
+  dates) are retained. The raw disc3 fixtures were read for structure only; the
+  committed `__fixtures__/phase1/` set is fully synthetic (DR3 Testville / Synthetic
+  Hauling Co / fabricated ids). (Correction: a few real DR3 record numbers had
+  leaked into inline test data / schema comments outside that dir — scrubbed in the
+  2026-07-22 review remediation below.)
+
+### Fixed — 2026-07-22 (ADR-0057 Phase 1 review remediation — pre-deploy, same branch)
+
+Review of the Phase-1 branch before deploy caught four issues; all fixed here.
+
+- **BLOCKER — windowed list mass-marked the haul tail as disappeared (billing
+  loss).** The hourly sync ran disappeared-detection (`markDisappeared`, an
+  `updateMany` over every active row NOT in the listed set) against whatever
+  `fetchListRecordIds` returned — but the transport only returns the FIRST Aura
+  window when a feed exceeds one page (Haul/Materials routinely do). Once the
+  mirror held more than one window (guaranteed the moment backfill drains the
+  tail), every tick stamped `disappeared_at` on the unseen tail, and
+  `feedExpectedLoads` (which filters `disappeared_at: null`) silently dropped those
+  hauls from the billing queue. Fix: `fetchListRecordIds` now returns
+  `{ ids, complete }` (`complete = !hasMoreData`), and `syncFeed` runs
+  disappeared-detection **only on a proven-complete list**; a windowed page skips it
+  (never over-marks — a truly-removed record stays active until a complete list is
+  seen, the money-safe direction). New tests lock both branches.
+- **DR deadman false-green for Eugene.** The scrape looped `['eugene','woodland']`
+  against ONE global admin session (C-21: the session sees a single recycler
+  context). The now-global list pass let the vestigial `eugene` pass "succeed" and
+  write an `ok` `mymrc_sync_runs` row, so `checkDeadman` reported Eugene healthy
+  forever despite zero Eugene records. Fix: the scrape resolves the **active
+  recycler context** (`resolveActiveSites`, default `woodland`, overridable via
+  `MYMRC_ACTIVE_SITES`) and syncs + deadman-watches only that set — no false-green.
+- **Backfill worker was orphaned + PII in new test files.** The backfill surface
+  (`runBackfill`/`buildBackfillTargets`) is now exported from the `@/lib/mymrc`
+  barrel (was omitted despite the "export the surface" commit); it remains INERT
+  pending a production paginating portal adapter (OPEN-ITEMS C-24). And a few real
+  DR3 record numbers from the Phase-0 pull (a haul number, a dock-schedule number,
+  and one real Account id) that had been copied into newly-committed test/schema
+  files were replaced with the established synthetic values
+  (`H-900001`/`DA-900001`/`001460000SYNTHTVLAAQ`) — correcting the earlier "fully
+  synthetic" claim for this branch.
+
 ### Changed — 2026-07-21 (ADR-0019 §2 / ADR-0030 amendment — later-shift bonus timing: 8pm entry deadline + report-on-save)
 
 The team now works a later shift. The bonus entry deadline moves to **8:00 PM

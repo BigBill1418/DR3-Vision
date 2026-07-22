@@ -74,7 +74,10 @@ function hasNote(note: string | undefined | null): note is string {
  * note (mirrors the AP `assertDecisionNote` idiom). Kept separate from the apply
  * fn so callers validate BEFORE any state change. Throws {@link ReconNoteRequiredError}.
  */
-export function assertReconcileNote(decision: ReconDecision, note: string | undefined | null): void {
+export function assertReconcileNote(
+  decision: ReconDecision,
+  note: string | undefined | null,
+): void {
   if (hasNote(note)) return;
   throw new ReconNoteRequiredError(decision);
 }
@@ -136,20 +139,35 @@ interface TargetWrite {
 
 /**
  * Resolve the `site_id` a mirror record belongs to (needed to create a scoped
- * `sources` row on approve). Only the processed mirror is wired in this wave — the
- * classifier emits only `mymrc_processed_mirror`. Other mirrors throw so an approve
- * never writes an unscoped/wrong-site row.
+ * `sources` row on approve). The classifier emits `new_record` candidates from
+ * the processed AND hauls mirrors (ADR-0057 Phase 1); both resolve their site
+ * from the mirror row's own (nullable) `site_id`. Any other mirror throws so an
+ * approve never writes an unscoped/wrong-site row.
+ *
+ * site_id is nullable (ADR-0057 Phase 1: derived on the detail pass). A mirror
+ * row whose site is not yet resolved must never approve into an unscoped `sources`
+ * row — surface it as not-found rather than write a wrong-site row.
  */
 async function mirrorSiteId(tx: Prisma.TransactionClient, row: QueueRowForApply): Promise<string> {
+  let rec: { site_id: string | null } | null;
   if (row.mirror_table === 'mymrc_processed_mirror') {
-    const rec = await tx.mymrcProcessedMirror.findUnique({
+    rec = await tx.mymrcProcessedMirror.findUnique({
       where: { id: row.mirror_record_id },
       select: { site_id: true },
     });
-    if (!rec) throw new ReconNotFoundError(`mirror row ${row.mirror_record_id}`);
-    return rec.site_id;
+  } else if (row.mirror_table === 'mymrc_hauls_mirror') {
+    rec = await tx.mymrcHaulsMirror.findUnique({
+      where: { id: row.mirror_record_id },
+      select: { site_id: true },
+    });
+  } else {
+    throw new ReconUnsupportedTargetError(row.mirror_table, row.target_table, row.change_kind);
   }
-  throw new ReconUnsupportedTargetError(row.mirror_table, row.target_table, row.change_kind);
+  if (!rec) throw new ReconNotFoundError(`mirror row ${row.mirror_record_id}`);
+  if (!rec.site_id) {
+    throw new ReconNotFoundError(`unresolved site_id for mirror row ${row.mirror_record_id}`);
+  }
+  return rec.site_id;
 }
 
 /**
@@ -291,7 +309,9 @@ export interface BulkApproveResult {
  * that item ALONE and never rolls back the others. The required note is applied to
  * all. Returns the ids approved + per-id failures.
  */
-export async function bulkApproveReconciliations(args: BulkApproveArgs): Promise<BulkApproveResult> {
+export async function bulkApproveReconciliations(
+  args: BulkApproveArgs,
+): Promise<BulkApproveResult> {
   const prisma = args.prisma ?? defaultPrisma;
   const pending = await listPendingReconciliations({
     prisma,

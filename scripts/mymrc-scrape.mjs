@@ -53,6 +53,38 @@ function log(level, message) {
 }
 
 /**
+ * The recycler contexts to pull THIS run. ADR-0057's admin session lands in ONE
+ * recycler context (observed: DR3 Woodland); the MyMRC "Switch Account" transport
+ * that reaches the other (Eugene) is not built yet (OPEN-ITEMS C-21). This matters
+ * for the DEADMAN: the list pass is GLOBAL, so calling `syncSite` for a site the
+ * session cannot see still "succeeds" (it lists the visible context's ids) and
+ * writes an `ok` mymrc_sync_run for that site — a FALSE-GREEN that makes
+ * `checkDeadman` believe the unpulled site is healthy forever, even though zero of
+ * its records are ingested. So we pull ONLY the active context and pass that same
+ * set to the deadman: the pilot's single recycler (`woodland`) by default,
+ * overridable via `MYMRC_ACTIVE_SITES` (comma list) once Switch-Account lands.
+ * Tokens are validated against the known SITE_CODES; unknown tokens are dropped
+ * with a warn, and an empty result falls back to the pilot default — never sync
+ * (or deadman-watch) nothing silently.
+ */
+export function resolveActiveSites({ explicit, envValue, known, log: logFn = log }) {
+  const knownSet = new Set((known ?? []).map((s) => String(s).toLowerCase()));
+  const ok = (s) => knownSet.size === 0 || knownSet.has(s);
+  const DEFAULT = ['woodland'];
+  const raw = explicit ?? (envValue ? String(envValue).split(',') : null);
+  if (!raw) return DEFAULT.filter(ok).length ? DEFAULT.filter(ok) : DEFAULT;
+  const cleaned = raw.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+  const valid = cleaned.filter(ok);
+  const dropped = cleaned.filter((s) => !ok(s));
+  if (dropped.length) logFn('warn', `mymrc: ignoring unknown MYMRC_ACTIVE_SITES token(s): ${dropped.join(', ')}`);
+  if (valid.length === 0) {
+    logFn('warn', 'mymrc: no valid active sites resolved from MYMRC_ACTIVE_SITES — falling back to pilot default (woodland)');
+    return DEFAULT;
+  }
+  return valid;
+}
+
+/**
  * Orchestrate one scrape tick. Collaborators are INJECTED (`deps`) so the flow is
  * unit-testable with fakes and never touches `dist/` or launches a real browser:
  *   - mymrc:         the compiled `@/lib/mymrc` surface (loadAdminCredentials,
@@ -65,7 +97,7 @@ function log(level, message) {
  *   - log:           structured logger.
  * Returns the process exit code; the caller owns `process.exit`.
  */
-export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn = log }) {
+export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn = log, activeSites }) {
   // ── D9 credential gate (ADR-0057 D9) — assert BEFORE any browser launch ──
   let creds;
   try {
@@ -112,7 +144,15 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
       return 1;
     }
 
-    const sites = mymrc.SITE_CODES ?? ['eugene', 'woodland'];
+    // Only the recycler context(s) this session can actually see — never the
+    // vestigial second site whose `ok` runs would false-green the deadman (C-21).
+    const sites = resolveActiveSites({
+      explicit: activeSites,
+      envValue: process.env.MYMRC_ACTIVE_SITES,
+      known: mymrc.SITE_CODES ?? ['eugene', 'woodland'],
+      log: logFn,
+    });
+    logFn('info', `mymrc: active recycler context(s) this run: ${sites.join(', ')}`);
     try {
       // One admin session; the per-site passes reuse it (feeds are not login-scoped).
       for (const site of sites) {
@@ -122,6 +162,25 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
           .join(' ');
         logFn('info', `${site} done — ${summary}`);
       }
+      // ADR-0057 D4 — feed the reconciliation queue: any collection-site name on a
+      // freshly-upserted mirror (Materials__c.Account__r.Name /
+      // Haul_Request__c.Collection_Site__c) unknown to `sources` becomes a
+      // `new_record` candidate for Bill to approve. NEVER auto-writes sources —
+      // queue only. Best-effort: a feed failure must not turn a good sync tick into
+      // a non-zero exit. The `typeof` guard keeps injected-fake test harnesses
+      // (which don't stub this) working unchanged.
+      if (typeof mymrc.feedReconciliationQueue === 'function') {
+        try {
+          const fr = await mymrc.feedReconciliationQueue({ prisma, log: logFn });
+          logFn(
+            'info',
+            `reconcile-feed — ${fr.queued} new candidate(s) queued (${fr.skippedExisting} already queued)`,
+          );
+        } catch (err) {
+          logFn('error', `reconcile-feed failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
+
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
     } finally {

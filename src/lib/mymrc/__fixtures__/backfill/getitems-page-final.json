@@ -1,0 +1,21 @@
+{
+  "actions": [
+    {
+      "id": "bf-2",
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [
+          { "recordId": "a2Kf0000FAKE0101ZZA" },
+          { "recordId": "" },
+          { "recordId": "a2Kf0000FAKE0102ZZB" }
+        ],
+        "columnWidthMapping": { "Name": -1, "Status__c": -1 },
+        "offset": 103,
+        "hasMoreData": false,
+        "filterTitle": "Docking Appointments (RC)",
+        "entityLabelPlural": "haul requests",
+        "isErrorListView": false
+      }
+    }
+  ]
+}

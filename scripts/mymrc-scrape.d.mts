@@ -17,7 +17,31 @@ export interface MymrcScrapeDeps {
   launchBrowser: () => Promise<unknown>;
   /** Structured logger (defaults to the module's console logger). */
   log?: (level: string, message: string) => void;
+  /**
+   * The recycler context(s) to pull this run (overrides `MYMRC_ACTIVE_SITES`).
+   * Omitted ⇒ resolved from env, defaulting to the pilot single context
+   * (`woodland`). Only these sites sync AND are deadman-watched — a site the
+   * session cannot see must not be synced (its `ok` run would false-green the
+   * deadman, C-21).
+   */
+  activeSites?: string[];
 }
+
+/** Resolver args for {@link resolveActiveSites}. */
+export interface ResolveActiveSitesArgs {
+  explicit?: string[];
+  envValue?: string;
+  known?: string[];
+  log?: (level: string, message: string) => void;
+}
+
+/**
+ * Resolve the active recycler context(s) for a run: an explicit list, else the
+ * `MYMRC_ACTIVE_SITES` comma list, else the pilot default (`['woodland']`).
+ * Tokens are lower-cased, validated against `known`, and an empty/invalid result
+ * falls back to the default (never returns an empty set).
+ */
+export function resolveActiveSites(args: ResolveActiveSitesArgs): string[];
 
 /**
  * Run one scrape tick and RESOLVE the process exit code (never calls

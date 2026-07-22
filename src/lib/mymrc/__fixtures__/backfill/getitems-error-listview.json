@@ -1,0 +1,15 @@
+{
+  "actions": [
+    {
+      "id": "bf-9",
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [],
+        "offset": 0,
+        "hasMoreData": false,
+        "filterTitle": "Broken View",
+        "isErrorListView": true
+      }
+    }
+  ]
+}

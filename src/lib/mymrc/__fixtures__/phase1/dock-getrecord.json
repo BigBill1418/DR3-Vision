@@ -1,0 +1,32 @@
+{
+  "apiName": "Dock_Availability_Schedule__c",
+  "childRelationships": {},
+  "eTag": "0000000000000000000000000000dock",
+  "id": "a1tUJ00000SYNDOCK1AE",
+  "recordTypeId": "012000000000000AAA",
+  "recordTypeInfo": null,
+  "lastModifiedDate": "2026-07-21T04:05:25.000Z",
+  "systemModstamp": "2026-07-21T04:05:25.000Z",
+  "weakEtag": 1784606725000,
+  "fields": {
+    "Id": { "displayValue": null, "value": "a1tUJ00000SYNDOCK1AE" },
+    "Name": { "displayValue": null, "value": "DA-SCHED-900050" },
+    "Status__c": { "displayValue": "Active", "value": "Active" },
+    "Day_of_Week__c": {
+      "displayValue": "Monday;Tuesday;Wednesday",
+      "value": "1;2;3"
+    },
+    "Container_Type__c": {
+      "displayValue": "20’ Sea Container;28’ Trailer;53’ Trailer",
+      "value": "20’ Sea Container;28’ Trailer;53’ Trailer"
+    },
+    "Dock_Door__c": { "displayValue": "Schedule 2", "value": "Dock Door 2" },
+    "Slot_Start_Time__c": { "displayValue": "7:00 AM", "value": "07:00:00.000Z" },
+    "Slot_End_Time__c": { "displayValue": "9:30 AM", "value": "09:30:00.000Z" },
+    "Number_of_Available_Appointments__c": { "displayValue": null, "value": 3 },
+    "Availability_Start_Date__c": { "displayValue": "4/15/2026", "value": "2026-04-15" },
+    "CreatedDate": { "displayValue": "2/26/2026 2:44 PM", "value": "2026-02-26T22:44:29.000Z" },
+    "LastModifiedDate": { "displayValue": "7/20/2026 9:05 PM", "value": "2026-07-21T04:05:25.000Z" },
+    "SystemModstamp": { "displayValue": "7/20/2026 9:05 PM", "value": "2026-07-21T04:05:25.000Z" }
+  }
+}

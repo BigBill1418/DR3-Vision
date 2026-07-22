@@ -69,6 +69,33 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * Map a MyMRC site-discriminator display name to a DR3-Vision site code. Real
+ * values are `Recycling_Center_Lookup__r.Name` (hauls) / `Account__r.Name`
+ * (materials) = "DR3 Eugene" / "DR3 Woodland". Site scoping now happens on the
+ * DATA, not the login (ADR-0057 D1): the single admin session sees ALL records,
+ * so each mirror row is attributed to a site from this field on the DETAIL pass
+ * (recon B §6 — the old per-site loop mis-attributed every row to the first
+ * site). Returns null for an unrecognized/blank name; the row's `site_id` then
+ * stays NULL (unresolved-until-detail) rather than being force-attributed.
+ */
+export function siteCodeFromDiscriminator(name: string | null | undefined): SiteCode | null {
+  if (!name) return null;
+  const n = name.toLowerCase();
+  if (n.includes('eugene')) return 'eugene';
+  if (n.includes('woodland')) return 'woodland';
+  return null;
+}
+
+/** Resolve a site code to its `sites.id`, or null when unknown/unresolved. */
+export type SiteIdResolver = (code: SiteCode | null) => string | null;
+
+/** Build a code→id resolver from the preloaded site rows (one query per run). */
+export function makeSiteIdResolver(sites: readonly { id: string; code: string }[]): SiteIdResolver {
+  const byCode = new Map(sites.map((s) => [s.code, s.id]));
+  return (code) => (code ? (byCode.get(code) ?? null) : null);
+}
+
 // ── Per-feed adapter (concrete Prisma types stay inside the closures) ────────
 
 interface FeedAdapter {
@@ -98,7 +125,14 @@ function toJson(v: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(v ?? null)) as Prisma.InputJsonValue;
 }
 
-function haulsAdapter(prisma: PrismaClient, client: PortalClient, siteId: string): FeedAdapter {
+// The list-pass mirror operations are GLOBAL (site-independent): the single
+// admin session lists ALL records regardless of site, so `site_id` is UNKNOWN at
+// list time and is set to NULL on create, then derived + stamped on the DETAIL
+// pass from the record's discriminator (recon B §6). `markDisappeared` /
+// `idsNeedingDetail` are therefore global too — a per-site filter would mis-scope
+// against the global id set.
+
+function haulsAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcHaulsMirror;
   return {
     feed: 'hauls',
@@ -106,7 +140,8 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, siteId: string
       for (const id of ids) {
         await model.upsert({
           where: { id },
-          create: { id, site_id: siteId, first_seen_at: seenAt, last_seen_at: seenAt },
+          // site_id intentionally omitted → NULL until derived on the detail pass.
+          create: { id, first_seen_at: seenAt, last_seen_at: seenAt },
           update: { last_seen_at: seenAt, disappeared_at: null },
         });
       }
@@ -114,26 +149,39 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, siteId: string
     },
     async markDisappeared(keepIds, at) {
       const r = await model.updateMany({
-        where: { site_id: siteId, disappeared_at: null, id: { notIn: [...keepIds] } },
+        where: { disappeared_at: null, id: { notIn: [...keepIds] } },
         data: { disappeared_at: at },
       });
       return r.count;
     },
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
-        where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
+        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
         select: { id: true, external_haul_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_haul_id }));
     },
     async applyDetail(recordId, at) {
       const row: HaulMirrorRow = mapHaulRecord(await client.fetchRecordDetail('hauls', recordId));
+      const siteId = resolveSiteId(siteCodeFromDiscriminator(row.recycler_name));
       await model.update({
         where: { id: recordId },
         data: {
           external_haul_id: row.external_id,
           status: row.status,
+          type: row.type,
           rate_id: row.rate_id,
+          recycler_name: row.recycler_name,
+          recycler_account_id: row.recycler_account_id,
+          transporter_name: row.transporter_name,
+          collection_site: row.collection_site,
+          collection_source: row.collection_source,
+          commodity: row.commodity,
+          container_type: row.container_type,
+          program_unit_count: row.program_unit_count,
+          non_program_unit_count: row.non_program_unit_count,
+          unpaid_consumer_dropoff_units: row.unpaid_consumer_dropoff_units,
+          docking_appointment_date: row.docking_appointment_date,
           docking_appointment_at: row.docking_appointment_at,
           door: row.door,
           units: row.units,
@@ -141,13 +189,16 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, siteId: string
           retrac_id: row.retrac_id,
           payload: toJson(row.payload),
           detail_fetched_at: at,
+          // Only stamp a RESOLVED site — never overwrite with NULL (keeps a prior
+          // attribution if a later fetch can't classify the row).
+          ...(siteId ? { site_id: siteId } : {}),
         },
       });
     },
   };
 }
 
-function processedAdapter(prisma: PrismaClient, client: PortalClient, siteId: string): FeedAdapter {
+function processedAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcProcessedMirror;
   return {
     feed: 'processed',
@@ -155,7 +206,7 @@ function processedAdapter(prisma: PrismaClient, client: PortalClient, siteId: st
       for (const id of ids) {
         await model.upsert({
           where: { id },
-          create: { id, site_id: siteId, first_seen_at: seenAt, last_seen_at: seenAt },
+          create: { id, first_seen_at: seenAt, last_seen_at: seenAt },
           update: { last_seen_at: seenAt, disappeared_at: null },
         });
       }
@@ -163,39 +214,47 @@ function processedAdapter(prisma: PrismaClient, client: PortalClient, siteId: st
     },
     async markDisappeared(keepIds, at) {
       const r = await model.updateMany({
-        where: { site_id: siteId, disappeared_at: null, id: { notIn: [...keepIds] } },
+        where: { disappeared_at: null, id: { notIn: [...keepIds] } },
         data: { disappeared_at: at },
       });
       return r.count;
     },
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
-        where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
+        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
         select: { id: true, external_materials_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
     async applyDetail(recordId, at) {
       const row: ProcessedMirrorRow = mapProcessedRecord(await client.fetchRecordDetail('processed', recordId));
+      const siteId = resolveSiteId(siteCodeFromDiscriminator(row.account_name));
       await model.update({
         where: { id: recordId },
         data: {
           external_materials_id: row.external_id,
+          type: row.type,
+          account_name: row.account_name,
+          account_id: row.account_id,
+          materials_status: row.materials_status,
           bol_id: row.bol_id,
           entry_date: row.entry_date,
           processed_date: row.processed_date,
+          program_unit_count: row.program_unit_count,
+          non_program_unit_count: row.non_program_unit_count,
           units: row.units,
           weight_lbs: row.weight_lbs,
           retrac_id: row.retrac_id,
           payload: toJson(row.payload),
           detail_fetched_at: at,
+          ...(siteId ? { site_id: siteId } : {}),
         },
       });
     },
   };
 }
 
-function outboundAdapter(prisma: PrismaClient, client: PortalClient, siteId: string): FeedAdapter {
+function outboundAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcOutboundMirror;
   return {
     feed: 'outbound',
@@ -203,7 +262,7 @@ function outboundAdapter(prisma: PrismaClient, client: PortalClient, siteId: str
       for (const id of ids) {
         await model.upsert({
           where: { id },
-          create: { id, site_id: siteId, first_seen_at: seenAt, last_seen_at: seenAt },
+          create: { id, first_seen_at: seenAt, last_seen_at: seenAt },
           update: { last_seen_at: seenAt, disappeared_at: null },
         });
       }
@@ -211,42 +270,53 @@ function outboundAdapter(prisma: PrismaClient, client: PortalClient, siteId: str
     },
     async markDisappeared(keepIds, at) {
       const r = await model.updateMany({
-        where: { site_id: siteId, disappeared_at: null, id: { notIn: [...keepIds] } },
+        where: { disappeared_at: null, id: { notIn: [...keepIds] } },
         data: { disappeared_at: at },
       });
       return r.count;
     },
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
-        where: { site_id: siteId, id: { in: [...listedIds] }, detail_fetched_at: null },
+        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
         select: { id: true, external_materials_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
     async applyDetail(recordId, at) {
+      // `vendor` (Outbound_Vendor_Name__c) is a LIST-ONLY column absent from the
+      // record detail — it stays null here until the list pass threads it in
+      // (documented follow-up). Everything else comes from the detail record.
       const row: OutboundMirrorRow = mapOutboundRecord(await client.fetchRecordDetail('outbound', recordId));
+      const siteId = resolveSiteId(siteCodeFromDiscriminator(row.account_name));
       await model.update({
         where: { id: recordId },
         data: {
           external_materials_id: row.external_id,
+          type: row.type,
+          account_name: row.account_name,
+          account_id: row.account_id,
+          materials_status: row.materials_status,
           bol_id: row.bol_id,
+          vendor: row.vendor,
           entry_date: row.entry_date,
           shipment_date: row.shipment_date,
-          vendor: row.vendor,
+          program_unit_count: row.program_unit_count,
+          non_program_unit_count: row.non_program_unit_count,
           weight_lbs: row.weight_lbs,
           retrac_id: row.retrac_id,
           payload: toJson(row.payload),
           detail_fetched_at: at,
+          ...(siteId ? { site_id: siteId } : {}),
         },
       });
     },
   };
 }
 
-function adapterFor(feed: FeedName, prisma: PrismaClient, client: PortalClient, siteId: string): FeedAdapter {
-  if (feed === 'hauls') return haulsAdapter(prisma, client, siteId);
-  if (feed === 'processed') return processedAdapter(prisma, client, siteId);
-  return outboundAdapter(prisma, client, siteId);
+function adapterFor(feed: FeedName, prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+  if (feed === 'hauls') return haulsAdapter(prisma, client, resolveSiteId);
+  if (feed === 'processed') return processedAdapter(prisma, client, resolveSiteId);
+  return outboundAdapter(prisma, client, resolveSiteId);
 }
 
 // ── One site+feed run ────────────────────────────────────────────────────────
@@ -293,6 +363,11 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   const siteRow = await ctx.prisma.site.findUnique({ where: { code: ctx.site }, select: { id: true } });
   if (!siteRow) throw new Error(`mymrc-sync: site code "${ctx.site}" not found`);
   const siteId = siteRow.id;
+  // Preloaded code→id map for deriving each mirror row's site on the detail pass
+  // (global pull, site-on-data — recon B §6). One query per run.
+  const resolveSiteId = makeSiteIdResolver(
+    await ctx.prisma.site.findMany({ select: { id: true, code: true } }),
+  );
 
   const prior = await ctx.prisma.mymrcSyncRun.findFirst({
     where: { site_id: siteId, feed: ctx.feed },
@@ -317,8 +392,8 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   }
 
   try {
-    const adapter = adapterFor(ctx.feed, ctx.prisma, ctx.client, siteId);
-    const ids = await ctx.client.fetchListRecordIds(ctx.feed);
+    const adapter = adapterFor(ctx.feed, ctx.prisma, ctx.client, resolveSiteId);
+    const { ids, complete } = await ctx.client.fetchListRecordIds(ctx.feed);
     rowsListed = ids.length;
 
     if (isZeroAnomaly(ids.length, lastOk?.rows_listed ?? null)) {
@@ -330,7 +405,23 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     }
 
     rowsUpserted = await adapter.upsertListed(ids, started);
-    await adapter.markDisappeared(ids, started);
+    // Disappeared-detection is a WHOLE-SET operation: `markDisappeared` stamps
+    // every active mirror row NOT in `ids`. Running it against a WINDOWED page
+    // (the transport only returns the first Aura window when the feed exceeds one
+    // page — Haul_Request__c/Materials__c routinely do) would mass-mark the unseen
+    // tail as disappeared and drop those (billing-relevant) hauls from
+    // `expected_loads`. So it runs ONLY when the list is proven COMPLETE. On a
+    // partial page we skip it (never over-mark; a truly-removed record simply
+    // stays active until a complete list is seen — the money-safe direction). The
+    // windowed history is drained into the mirror by the backfill worker.
+    if (complete) {
+      await adapter.markDisappeared(ids, started);
+    } else {
+      log(
+        'warn',
+        `mymrc-sync: ${tag} list WINDOWED (${ids.length} ids, hasMoreData) — disappeared-detection SKIPPED to avoid over-marking the unseen tail`,
+      );
+    }
 
     const needDetail = await adapter.idsNeedingDetail(ids);
     for (const group of chunk(needDetail, concurrency)) {
@@ -411,6 +502,9 @@ async function feedExpectedLoads(
   scrapedAt: Date,
   log: Logger,
 ): Promise<void> {
+  // Only site-attributed, detail-fetched hauls feed a site's expected_loads: the
+  // global list pass leaves `site_id` NULL until the detail pass derives it, so
+  // filtering by `site_id` naturally excludes not-yet-classified rows.
   const rows = await prisma.mymrcHaulsMirror.findMany({
     where: {
       site_id: siteId,
@@ -421,8 +515,9 @@ async function feedExpectedLoads(
     select: {
       external_haul_id: true,
       docking_appointment_at: true,
-      rate_id: true,
-      units: true,
+      collection_site: true,
+      transporter_name: true,
+      program_unit_count: true,
     },
   });
   const hauls: ScrapedHaul[] = [];
@@ -431,12 +526,13 @@ async function feedExpectedLoads(
     hauls.push({
       external_mymrc_haul_id: r.external_haul_id,
       expected_arrival_at: r.docking_appointment_at,
-      // The Haul record has no discrete collection-site field; Rate_ID__c is the
-      // best available descriptor (landfill - transporter - recycler). Unmatched
-      // names persist as source_name_at_sync with a null FK (existing behavior).
-      source_name: r.rate_id ?? '(unknown MyMRC rate)',
-      transporter_name: null,
-      expected_unit_count: r.units,
+      // Real collection-site name (Collection_Site__c) is the join key against
+      // `sources.name` (recon B §7 — the old code used Rate_ID__c and matched
+      // nothing). Unmatched names persist as source_name_at_sync with a null FK.
+      source_name: r.collection_site ?? '(unknown MyMRC collection site)',
+      transporter_name: r.transporter_name,
+      // Billing-authoritative program-unit count (Recycler_Program_Unit_Count__c).
+      expected_unit_count: r.program_unit_count,
       bol_number: null,
       scheduled_at_mymrc: r.docking_appointment_at,
     });
