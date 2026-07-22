@@ -1,0 +1,22 @@
+{
+  "actions": [
+    {
+      "id": "201;a",
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [
+          { "recordId": "001UJ000001Aa11YAM" },
+          { "recordId": "001UJ000001Dd44YAM" }
+        ],
+        "columnWidthMapping": { "Name": -1, "Type": -1 },
+        "fields": ["Name", "Type", "Id"],
+        "offset": 50,
+        "hasMoreData": false,
+        "filterTitle": "Recently Viewed Accounts",
+        "isErrorListView": false
+      },
+      "error": []
+    }
+  ],
+  "context": { "fwuid": "SYNTHETIC-FWUID-not-a-real-capture" }
+}

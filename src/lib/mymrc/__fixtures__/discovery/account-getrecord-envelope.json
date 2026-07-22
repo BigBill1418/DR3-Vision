@@ -1,0 +1,65 @@
+{
+  "actions": [
+    {
+      "id": "301;a",
+      "descriptor": "serviceComponent://ui.force.components.controllers.detail.DetailController/ACTION$getRecordWithFields",
+      "params": { "recordId": "001UJ000001Aa11YAM" },
+      "state": "SUCCESS",
+      "returnValue": {
+        "apiName": "Account",
+        "id": "001UJ000001Aa11YAM",
+        "childRelationships": {},
+        "fields": {
+          "Id": { "displayValue": null, "value": "001UJ000001Aa11YAM" },
+          "Name": { "displayValue": null, "value": "DR3 Woodland" },
+          "Recycler__c": { "displayValue": null, "value": "DR3 Woodland" },
+          "BillingCity": { "displayValue": null, "value": "Woodland" },
+          "Phone": { "displayValue": null, "value": "+1-555-0100" },
+          "Owner": {
+            "displayValue": "Jane Operator",
+            "value": {
+              "apiName": "User",
+              "id": "005UJ0000011jXaYAI",
+              "childRelationships": {},
+              "fields": {
+                "Id": { "displayValue": null, "value": "005UJ0000011jXaYAI" },
+                "Name": { "displayValue": null, "value": "Jane Operator" },
+                "Email": { "displayValue": null, "value": "jane.operator@example.com" }
+              }
+            }
+          },
+          "CreatedBy": {
+            "displayValue": "Sam Admin",
+            "value": {
+              "apiName": "User",
+              "id": "005UJ0000011kYbZAJ",
+              "childRelationships": {},
+              "fields": {
+                "Id": { "displayValue": null, "value": "005UJ0000011kYbZAJ" },
+                "Name": { "displayValue": null, "value": "Sam Admin" }
+              }
+            }
+          },
+          "Primary_Contact__r": {
+            "displayValue": "Pat Client",
+            "value": {
+              "apiName": "Contact",
+              "id": "003UJ000002Zz99YAM",
+              "childRelationships": {},
+              "fields": {
+                "Id": { "displayValue": null, "value": "003UJ000002Zz99YAM" },
+                "Name": { "displayValue": null, "value": "Pat Client" },
+                "FirstName": { "displayValue": null, "value": "Pat" },
+                "LastName": { "displayValue": null, "value": "Client" },
+                "Email": { "displayValue": null, "value": "pat.client@example.com" },
+                "MobilePhone": { "displayValue": null, "value": "+1-555-0199" }
+              }
+            }
+          }
+        }
+      },
+      "error": []
+    }
+  ],
+  "context": { "fwuid": "SYNTHETIC-FWUID-not-a-real-capture" }
+}

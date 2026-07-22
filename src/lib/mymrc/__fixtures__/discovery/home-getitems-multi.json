@@ -1,0 +1,67 @@
+{
+  "actions": [
+    {
+      "id": "101;a",
+      "descriptor": "serviceComponent://ui.force.components.controllers.lists.listViewDataManager.ListViewDataManagerController/ACTION$getItems",
+      "params": {
+        "entityName": "Account",
+        "listViewApiName": "AllAccounts",
+        "pageSize": 50,
+        "currentPage": 0
+      },
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [
+          { "recordId": "001UJ000001Aa11YAM" },
+          { "recordId": "001UJ000001Bb22YAM" },
+          { "recordId": "001UJ000001Cc33YAM" }
+        ],
+        "columnWidthMapping": {
+          "Name": -1,
+          "BillingCity": -1,
+          "Recycler__c": -1
+        },
+        "fields": ["Name", "BillingCity", "Recycler__c", "Id"],
+        "offset": 50,
+        "hasMoreData": false,
+        "filterTitle": "All Accounts",
+        "isErrorListView": false,
+        "entityLabelPlural": "accounts"
+      },
+      "error": []
+    },
+    {
+      "id": "102;a",
+      "descriptor": "serviceComponent://ui.force.components.controllers.lists.listViewDataManager.ListViewDataManagerController/ACTION$getItems",
+      "params": {
+        "entityName": "Haul_Request__c",
+        "listViewApiName": "All_Hauls",
+        "pageSize": 50,
+        "currentPage": 0
+      },
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [
+          { "recordId": "a2KUJ00000G6id32AB" },
+          { "recordId": "a2KUJ00000G7ab99AB" }
+        ],
+        "columnWidthMapping": {
+          "Name": -1,
+          "Status__c": -1,
+          "Docking_Appointment_Date__c": -1
+        },
+        "fields": ["Name", "Status__c", "Docking_Appointment_Date__c", "Id"],
+        "offset": 50,
+        "hasMoreData": true,
+        "filterTitle": "All Active Hauls",
+        "isErrorListView": false,
+        "entityLabelPlural": "haul requests"
+      },
+      "error": []
+    }
+  ],
+  "context": {
+    "fwuid": "SYNTHETIC-FWUID-not-a-real-capture",
+    "app": "siteforce:communityApp"
+  }
+}
