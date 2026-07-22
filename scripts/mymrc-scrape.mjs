@@ -122,6 +122,25 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
           .join(' ');
         logFn('info', `${site} done — ${summary}`);
       }
+      // ADR-0057 D4 — feed the reconciliation queue: any collection-site name on a
+      // freshly-upserted mirror (Materials__c.Account__r.Name /
+      // Haul_Request__c.Collection_Site__c) unknown to `sources` becomes a
+      // `new_record` candidate for Bill to approve. NEVER auto-writes sources —
+      // queue only. Best-effort: a feed failure must not turn a good sync tick into
+      // a non-zero exit. The `typeof` guard keeps injected-fake test harnesses
+      // (which don't stub this) working unchanged.
+      if (typeof mymrc.feedReconciliationQueue === 'function') {
+        try {
+          const fr = await mymrc.feedReconciliationQueue({ prisma, log: logFn });
+          logFn(
+            'info',
+            `reconcile-feed — ${fr.queued} new candidate(s) queued (${fr.skippedExisting} already queued)`,
+          );
+        } catch (err) {
+          logFn('error', `reconcile-feed failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
+
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
     } finally {
