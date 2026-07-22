@@ -51,15 +51,18 @@ const stubClient: BackfillPortalClient = {
 
 type P = Parameters<typeof buildBackfillTargets>[0]['prisma'];
 
-describe('buildBackfillTargets — the 5 cursors over the 4 real objects', () => {
-  it('binds each (object, list-view) to the right mirror', () => {
+describe('buildBackfillTargets — the 8 cursors (active + history) over the 4 real objects', () => {
+  it('binds each (object, list-view) to the right mirror, active then history', () => {
     const { prisma } = makeFakePrisma();
     const targets = buildBackfillTargets({ prisma: prisma as unknown as P, client: stubClient });
     expect(targets.map((t) => [t.objectApiName, t.listViewApiName])).toEqual([
       ['Haul_Request__c', 'docking_appointments_rc'],
       ['Haul_Request__c', 'consumer_drop_off_rc'],
+      ['Haul_Request__c', 'completed_hauls'],
       ['Materials__c', 'processed_active'],
+      ['Materials__c', 'processed_inactive'],
       ['Materials__c', 'outbound_active'],
+      ['Materials__c', 'outbound_inactive'],
       ['Dock_Availability_Schedule__c', ''],
     ]);
   });
@@ -118,7 +121,7 @@ describe('materials detail write — Type__c mismatch warns but still persists',
     const { prisma, processed } = makeFakePrisma();
     const log = vi.fn();
     const targets = buildBackfillTargets({ prisma: prisma as unknown as P, client: stubClient, log });
-    const processedTarget = targets[2];
+    const processedTarget = targets[3]; // processed_active
     const record: SfRecord = {
       apiName: 'Materials__c',
       id: 'a2Lxx',
@@ -134,13 +137,59 @@ describe('materials detail write — Type__c mismatch warns but still persists',
     expect(processed.updates).toHaveLength(1); // persisted regardless (traceable via type column)
     expect(processed.updates[0]?.data?.['site_id']).toBe('site-eug');
   });
+
+  it('routes an INACTIVE Processing record by Type__c to the processed mirror with no mismatch warning', async () => {
+    const { prisma, processed } = makeFakePrisma();
+    const log = vi.fn();
+    const targets = buildBackfillTargets({ prisma: prisma as unknown as P, client: stubClient, log });
+    const processedInactive = targets[4]; // processed_inactive (HISTORY view)
+    expect(processedInactive?.listViewApiName).toBe('processed_inactive');
+    const record: SfRecord = {
+      apiName: 'Materials__c',
+      id: 'a2Linactive',
+      fields: {
+        Name: f('M-800001'),
+        Type__c: f('Processing'), // an inactive record still routes by Type__c
+        Number_of_Program_Units__c: f(120),
+        Account__r: f({ apiName: 'Account', id: 'x', fields: { Name: f('DR3 Woodland') } }, 'DR3 Woodland'),
+      },
+    };
+    await processedInactive?.writeDetail(record, AT);
+    // Correct Type → no mismatch warning; persists to the SAME processed mirror as the active view.
+    expect(log).not.toHaveBeenCalledWith('warn', expect.stringContaining('under Processing view'));
+    expect(processed.updates).toHaveLength(1);
+    expect(processed.updates[0]?.where).toEqual({ id: 'a2Linactive' });
+    expect(processed.updates[0]?.data?.['type']).toBe('Processing');
+    expect(processed.updates[0]?.data?.['site_id']).toBe('site-wood');
+  });
+
+  it('routes an INACTIVE Outbound record by Type__c to the outbound mirror', async () => {
+    const { prisma, outbound } = makeFakePrisma();
+    const targets = buildBackfillTargets({ prisma: prisma as unknown as P, client: stubClient });
+    const outboundInactive = targets[6]; // outbound_inactive (HISTORY view)
+    expect(outboundInactive?.listViewApiName).toBe('outbound_inactive');
+    const record: SfRecord = {
+      apiName: 'Materials__c',
+      id: 'a2Loutinactive',
+      fields: {
+        Name: f('M-700001'),
+        Type__c: f('Outbound'),
+        Number_of_Program_Units__c: f(90),
+        Account__r: f({ apiName: 'Account', id: 'x', fields: { Name: f('DR3 Eugene') } }, 'DR3 Eugene'),
+      },
+    };
+    await outboundInactive?.writeDetail(record, AT);
+    expect(outbound.updates).toHaveLength(1);
+    expect(outbound.updates[0]?.where).toEqual({ id: 'a2Loutinactive' });
+    expect(outbound.updates[0]?.data?.['type']).toBe('Outbound');
+  });
 });
 
 describe('dock detail write — reads value (not displayValue), keeps time strings verbatim', () => {
   it('persists canonical value fields for the dock schedule', async () => {
     const { prisma, dock } = makeFakePrisma();
     const targets = buildBackfillTargets({ prisma: prisma as unknown as P, client: stubClient });
-    const dockTarget = targets[4];
+    const dockTarget = targets[7];
     const record: SfRecord = {
       apiName: 'Dock_Availability_Schedule__c',
       id: 'a1txx',

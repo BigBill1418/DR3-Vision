@@ -50,14 +50,21 @@ const noopLog: Logger = () => undefined;
 //
 // Which authenticated list page to load to (a) capture the aura envelope and (b)
 // resolve a list-view id at runtime. Keyed by the DR3 `list_view_api_name` slug
-// because the two Materials views live on SEPARATE nav pages, while the two Haul
-// views share `/s/hauls`. These bindings are stable DR3 conventions; a redesign
-// that moves them fails LOUD (no capture → PortalContractDriftError), never silent.
+// because the two Materials nav pages are SEPARATE, while all Haul views share
+// `/s/hauls`. A HISTORY view (completed_hauls / *_inactive, ADR-0057 D3) lives on
+// the SAME object nav page as its active sibling — the list-view PICKER switches
+// which view renders, so the route is shared and the id is resolved by observed
+// fallback / override / runtime capture, not by a distinct page. These bindings
+// are stable DR3 conventions; a redesign that moves them fails LOUD (no capture →
+// PortalContractDriftError), never silent.
 const LIST_PAGE_BY_SLUG: Readonly<Record<string, string>> = {
   docking_appointments_rc: '/s/hauls',
   consumer_drop_off_rc: '/s/hauls',
+  completed_hauls: '/s/hauls',
   processed_active: '/s/processed-materials',
+  processed_inactive: '/s/processed-materials',
   outbound_active: '/s/outbound-materials',
+  outbound_inactive: '/s/outbound-materials',
   '': '/s/availability',
 };
 

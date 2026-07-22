@@ -231,14 +231,30 @@ export interface ListViewBinding {
 }
 
 /**
- * The 5 (object, list-view) cursors of the 4 real objects. Only 2 list-view ids
- * were captured live 2026-07-22 (`observedFilterName`); the other 3 are `null` on
+ * The 8 (object, list-view) cursors of the 4 real objects — the ACTIVE/default
+ * views AND the HISTORY views (added ADR-0057 D3, 2026-07-22). The active views
+ * alone miss the bulk of the record history: the live first backfill paged only
+ * the default views, so "Completed Hauls" (~720+ historical trailer deliveries)
+ * and the two inactive-Materials views were never pulled. Paging BOTH the active
+ * and the history view per object is what makes the backfill full-history.
+ *
+ * Dedup is the mirror upsert key (`salesforce_record_id`): a haul id that appears
+ * in both an active view (docking/consumer) AND "Completed Hauls" upserts ONCE —
+ * the two cursors page independently, the mirror stores the id once, and the
+ * detail sweep (`detail_fetched_at IS NULL`, targets run sequentially) fetches it
+ * once. Inactive Materials still route by `Type__c` to processed/outbound — the
+ * inactive VIEWS only widen coverage; the routing is unchanged.
+ *
+ * `observedFilterName` carries the `00B…`/`00BUJ…` id captured LIVE 2026-07-22
+ * (5 views); the other 3 (Consumer Drop-Off, Outbound active, Dock) are `null` on
  * purpose — ADR-0057 forbids GUESSING a transport id, so they resolve at RUNTIME
  * (from the browser's own getItems request on the list page) or from an operator
- * override, and a target whose id resolves to NONE fails LOUD per-target (a wedge
- * the engine records + pages) rather than paging a wrong/empty list silently.
+ * override (`MYMRC_LISTVIEW_IDS`), and a target whose id resolves to NONE fails
+ * LOUD per-target (a wedge the engine records + pages) rather than paging a
+ * wrong/empty list silently. Adding a further view later is a one-line change.
  */
 export const BACKFILL_LIST_VIEWS: readonly ListViewBinding[] = [
+  // ── Haul_Request__c → mymrc_hauls_mirror ──
   {
     slug: 'docking_appointments_rc',
     objectApiName: 'Haul_Request__c',
@@ -252,10 +268,25 @@ export const BACKFILL_LIST_VIEWS: readonly ListViewBinding[] = [
     observedFilterName: null,
   },
   {
+    // HISTORY view — the bulk of haul history (~720+ completed hauls, paginates).
+    slug: 'completed_hauls',
+    objectApiName: 'Haul_Request__c',
+    filterTitle: 'Completed Hauls',
+    observedFilterName: '00B4p000005DAqSEAW',
+  },
+  // ── Materials__c → mymrc_processed_mirror / mymrc_outbound_mirror (split by Type__c) ──
+  {
     slug: 'processed_active',
     objectApiName: 'Materials__c',
     filterTitle: 'All Active Processed Materials',
     observedFilterName: '00B4p000005DAqlEAG',
+  },
+  {
+    // HISTORY view — inactive processed materials (still Type__c 'Processing').
+    slug: 'processed_inactive',
+    objectApiName: 'Materials__c',
+    filterTitle: 'All Inactive Processed Materials',
+    observedFilterName: '00BUJ000001sJxx2AE',
   },
   {
     slug: 'outbound_active',
@@ -263,6 +294,14 @@ export const BACKFILL_LIST_VIEWS: readonly ListViewBinding[] = [
     filterTitle: 'All Active Outbound Materials',
     observedFilterName: null,
   },
+  {
+    // HISTORY view — inactive outbound materials (still Type__c 'Outbound').
+    slug: 'outbound_inactive',
+    objectApiName: 'Materials__c',
+    filterTitle: 'All Inactive Outbound Materials',
+    observedFilterName: '00BUJ000001sJuj2AE',
+  },
+  // ── Dock_Availability_Schedule__c → mymrc_dock_availability_mirror (single view) ──
   {
     slug: '',
     objectApiName: 'Dock_Availability_Schedule__c',

@@ -206,6 +206,78 @@ describe('backfill offset transport — multi-view object merges deduped by reco
   });
 });
 
+// ── History-view coverage (ADR-0057 D3): active + completed dedup once ────────
+
+describe('backfill offset transport — a haul in BOTH an active and the completed view upserts once', () => {
+  it('active + Completed Hauls page independently; the overlapping id is stored + detailed once', async () => {
+    const { prisma } = makeFakePrisma();
+    const { session } = makeSession({
+      pages: {
+        DOCK_ID: { 0: { ids: ['h1', 'h2'], hasMoreData: false } },
+        COMPLETED_ID: { 0: { ids: ['h2', 'h3', 'h4'], hasMoreData: false } }, // h2 overlaps the active view
+      },
+    });
+    // completed_hauls has an OBSERVED id, but override it to prove the config key wires the new view.
+    const client = createBackfillPortalClient(session, {
+      listViewOverrides: { docking_appointments_rc: 'DOCK_ID', completed_hauls: 'COMPLETED_ID' },
+    });
+    const store = new Map<string, { detail: boolean }>();
+    const targets = [
+      mirrorTarget('Haul_Request__c', 'docking_appointments_rc', store),
+      mirrorTarget('Haul_Request__c', 'completed_hauls', store),
+    ];
+
+    const res = await runBackfill({ prisma: prisma as unknown as P, client, targets, now: nowFn });
+
+    expect(res.complete).toBe(true);
+    expect([...store.keys()].sort()).toEqual(['h1', 'h2', 'h3', 'h4']); // h2 deduped by the mirror key
+    // Detail fetched exactly once per distinct id across both views (h2 not refetched under completed).
+    expect((session.fetchRecordDetail as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]).sort()).toEqual([
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+    ]);
+  });
+});
+
+describe('backfill offset transport — config override keys the new history views', () => {
+  it('resolves completed_hauls / processed_inactive / outbound_inactive from MYMRC_LISTVIEW_IDS overrides', async () => {
+    const { prisma } = makeFakePrisma();
+    const { session, offsetsByFilter } = makeSession({
+      pages: {
+        COMPLETED_OVERRIDE: { 0: { ids: ['h1'], hasMoreData: false } },
+        PROC_INACTIVE_OVERRIDE: { 0: { ids: ['p1'], hasMoreData: false } },
+        OUT_INACTIVE_OVERRIDE: { 0: { ids: ['o1'], hasMoreData: false } },
+      },
+    });
+    const client = createBackfillPortalClient(session, {
+      listViewOverrides: {
+        completed_hauls: 'COMPLETED_OVERRIDE',
+        processed_inactive: 'PROC_INACTIVE_OVERRIDE',
+        outbound_inactive: 'OUT_INACTIVE_OVERRIDE',
+      },
+    });
+    const store = new Map<string, { detail: boolean }>();
+    const targets = [
+      mirrorTarget('Haul_Request__c', 'completed_hauls', store),
+      mirrorTarget('Materials__c', 'processed_inactive', store),
+      mirrorTarget('Materials__c', 'outbound_inactive', store),
+    ];
+
+    const res = await runBackfill({ prisma: prisma as unknown as P, client, targets, now: nowFn });
+
+    expect(res.complete).toBe(true);
+    // Each override id was the one actually POSTed (never the observed fallback, never guessed).
+    expect(Object.keys(offsetsByFilter).sort()).toEqual([
+      'COMPLETED_OVERRIDE',
+      'OUT_INACTIVE_OVERRIDE',
+      'PROC_INACTIVE_OVERRIDE',
+    ]);
+    expect([...store.keys()].sort()).toEqual(['h1', 'o1', 'p1']);
+  });
+});
+
 // ── Resume mid-object ────────────────────────────────────────────────────────
 
 describe('backfill offset transport — resumes at the next offset, never re-pages', () => {
