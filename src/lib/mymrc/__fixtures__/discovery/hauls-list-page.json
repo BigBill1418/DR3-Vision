@@ -1,0 +1,39 @@
+{
+  "actions": [
+    {
+      "id": "201;a",
+      "descriptor": "serviceComponent://ui.force.components.controllers.lists.listViewDataManager.ListViewDataManagerController/ACTION$getItems",
+      "params": {
+        "entityName": "Haul__c",
+        "listViewApiName": "All_Hauls",
+        "pageSize": 50,
+        "currentPage": 0
+      },
+      "state": "SUCCESS",
+      "returnValue": {
+        "recordIdActionsList": [
+          { "recordId": "a2KUJ00000G6id32AB" },
+          { "recordId": "a2KUJ00000G7ab99AB" },
+          { "recordId": "a2KUJ00000G8cd11AB" }
+        ],
+        "columnWidthMapping": {
+          "Name": -1,
+          "Status__c": -1,
+          "Docking_Appointment_Date__c": -1,
+          "Recycler__c": -1
+        },
+        "fields": ["Name", "Status__c", "Docking_Appointment_Date__c", "Recycler__c", "Id"],
+        "offset": 0,
+        "hasMoreData": false,
+        "filterTitle": "All Hauls",
+        "isErrorListView": false,
+        "entityLabelPlural": "hauls"
+      },
+      "error": []
+    }
+  ],
+  "context": {
+    "fwuid": "SYNTHETIC-FWUID-not-a-real-capture",
+    "app": "siteforce:communityApp"
+  }
+}

@@ -1,11 +1,30 @@
 <!DOCTYPE html>
-<!-- Minimal authenticated Experience Cloud shell marker (Hauls list). The real
-     shell renders a Lightning app; this carries only the signals isLoginPage()
-     keys on: no login form, no 404/error title, an authenticated nav. -->
+<!-- Minimal AUTHENTICATED Experience Cloud shell (ADR-0057 Phase 0, captured
+     shape 2026-07-22). The real /s/ landing renders title "Home", the
+     "Switch Account" banner naming the current recycler, and the object nav.
+     looksLoggedOut() keys on those POSITIVE markers: the Switch-Account banner
+     and >=2 object nav links, with no visible "Log in" control. -->
 <html lang="en">
-  <head><title>Hauls | MyMRC</title></head>
+  <head><title>Home | MyMRC</title></head>
   <body>
-    <nav aria-label="recycler-portal"><a href="/s/hauls">Hauls</a></nav>
+    <header>
+      <div class="account-banner">
+        Good morning, Bill Barnard! You're currently viewing as DR3 Woodland.
+        <button type="button" class="switch-account">Switch Account</button>
+      </div>
+    </header>
+    <nav aria-label="recycler-portal">
+      <a href="/s/hauls">Hauls</a>
+      <a href="/s/illegal-dump-cip-">Illegal/Consumer Drop-Off</a>
+      <a href="/s/processed-materials">Processed</a>
+      <a href="/s/outbound-materials">Outbound</a>
+      <a href="/s/availability">Availability</a>
+      <a href="/s/outbound-vendors">My Outbound Vendors</a>
+      <a href="/s/records-review">Records Review</a>
+      <a href="/s/report/Report/Recent">Reports</a>
+      <a href="/s/help-articles">FAQs</a>
+      <a href="/s/contact">Support</a>
+    </nav>
     <main><lightning-datatable></lightning-datatable></main>
   </body>
 </html>

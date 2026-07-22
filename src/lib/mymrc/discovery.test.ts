@@ -5,25 +5,34 @@ import {
   estimateCount,
   extractAllRecords,
   extractListViews,
+  extractNavMenuHrefs,
   extractRecordFields,
   isGetItemsAction,
   isGetRecordAction,
   listRecordIds,
+  objectPagesFromHrefs,
+  objectSlugFromHref,
   parseAuraActions,
   redactRecord,
   renderDiscoveryMarkdown,
+  resolveObjectPages,
   summarizeSobjectsProbe,
   type DiscoveredObjectReport,
 } from './discovery';
+import { OBJECT_NAV_SLUGS } from './selectors';
 import type { SfRecord } from './types';
 
 import homeMulti from './__fixtures__/discovery/home-getitems-multi.json';
 import descriptorless from './__fixtures__/discovery/descriptorless-getitems.json';
 import accountEnvelope from './__fixtures__/discovery/account-getrecord-envelope.json';
+import navMenu from './__fixtures__/discovery/nav-getnavigationmenu.json';
+import haulsListPage from './__fixtures__/discovery/hauls-list-page.json';
 
 const homeBody = JSON.stringify(homeMulti);
 const descriptorlessBody = JSON.stringify(descriptorless);
 const accountBody = JSON.stringify(accountEnvelope);
+const navBody = JSON.stringify(navMenu);
+const haulsPageBody = JSON.stringify(haulsListPage);
 const ACCOUNT_ID = '001UJ000001Aa11YAM';
 
 // ── Aura action layer ────────────────────────────────────────────────────────
@@ -133,6 +142,121 @@ describe('enumerateObjects', () => {
     ]);
     expect(account?.listViews).toEqual(['All Accounts', 'Recently Viewed Accounts']);
     expect(account?.columns).toContain('Type'); // contributed by the 2nd list view
+  });
+});
+
+// ── Nav-based object-page discovery (ADR-0057 Phase 0 live fix) ───────────────
+
+describe('objectSlugFromHref', () => {
+  it('extracts object slugs from relative and absolute portal hrefs', () => {
+    expect(objectSlugFromHref('/s/hauls')).toBe('hauls');
+    expect(objectSlugFromHref('https://mrc-us.my.site.com/s/processed-materials')).toBe(
+      'processed-materials',
+    );
+    expect(objectSlugFromHref('/s/outbound-materials/')).toBe('outbound-materials');
+    expect(objectSlugFromHref('/s/hauls?foo=bar#top')).toBe('hauls');
+  });
+
+  it('preserves the live trailing-dash slug (illegal-dump-cip-)', () => {
+    expect(objectSlugFromHref('/s/illegal-dump-cip-')).toBe('illegal-dump-cip-');
+  });
+
+  it('rejects non-object pages: Home, FAQs, Support, Reports, login, detail', () => {
+    expect(objectSlugFromHref('/s/')).toBeNull();
+    expect(objectSlugFromHref('/s/home')).toBeNull();
+    expect(objectSlugFromHref('/s/help-articles')).toBeNull();
+    expect(objectSlugFromHref('/s/contact')).toBeNull();
+    expect(objectSlugFromHref('/s/report/Report/Recent')).toBeNull();
+    expect(objectSlugFromHref('/s/login/')).toBeNull();
+    expect(objectSlugFromHref('/s/detail/a2KUJ00000G6id32AB')).toBeNull();
+    expect(objectSlugFromHref('https://example.com/other')).toBeNull();
+    expect(objectSlugFromHref('')).toBeNull();
+  });
+});
+
+describe('objectPagesFromHrefs', () => {
+  it('filters + dedupes a raw href list to ordered object slugs', () => {
+    expect(
+      objectPagesFromHrefs([
+        '/s/',
+        '/s/hauls',
+        '/s/hauls',
+        '/s/help-articles',
+        '/s/processed-materials',
+        '/s/report/Report/Recent',
+        '/s/contact',
+      ]),
+    ).toEqual(['hauls', 'processed-materials']);
+  });
+});
+
+describe('extractNavMenuHrefs', () => {
+  it('reads menuItems (incl. subMenu) targets from a getNavigationMenu response', () => {
+    const hrefs = extractNavMenuHrefs([navBody]);
+    expect(hrefs).toContain('/s/hauls');
+    expect(hrefs).toContain('/s/outbound-vendors'); // nested in subMenu
+    expect(hrefs).toContain('/s/records-review'); // nested in subMenu
+    expect(hrefs).toContain('/s/report/Report/Recent'); // non-object; filtered later
+  });
+
+  it('returns [] when no nav action is present', () => {
+    expect(extractNavMenuHrefs([homeBody])).toEqual([]);
+    expect(extractNavMenuHrefs(['{"actions":[]}'])).toEqual([]);
+  });
+});
+
+describe('resolveObjectPages', () => {
+  it('yields the seven live object pages from the nav (Home/FAQs/Support/Reports skipped)', () => {
+    const slugs = resolveObjectPages({ navBodies: [navBody] });
+    expect(slugs).toEqual([
+      'hauls',
+      'illegal-dump-cip-',
+      'processed-materials',
+      'outbound-materials',
+      'availability',
+      'outbound-vendors',
+      'records-review',
+    ]);
+    // Exactly the object allowlist, in nav order.
+    expect([...slugs].sort()).toEqual([...OBJECT_NAV_SLUGS].sort());
+  });
+
+  it('merges DOM links and dedupes against the nav', () => {
+    const slugs = resolveObjectPages({
+      navBodies: [navBody],
+      domHrefs: ['/s/hauls', 'https://mrc-us.my.site.com/s/availability'],
+    });
+    expect(slugs.filter((s) => s === 'hauls')).toHaveLength(1);
+    expect(slugs.filter((s) => s === 'availability')).toHaveLength(1);
+  });
+
+  it('falls back to the static allowlist when nav + DOM yield nothing', () => {
+    expect(resolveObjectPages({ navBodies: [], domHrefs: [], fallbackSlugs: OBJECT_NAV_SLUGS })).toEqual(
+      [...OBJECT_NAV_SLUGS],
+    );
+  });
+});
+
+describe('enumerateObjects — per-object list pages (not /s/home)', () => {
+  it('enumerates an object from its own ListView page getItems', () => {
+    const objects = enumerateObjects([haulsPageBody]);
+    expect(objects).toHaveLength(1);
+    const haul = objects[0];
+    expect(haul?.objectApiName).toBe('Haul__c');
+    expect(haul?.keyPrefix).toBe('a2K');
+    expect(haul?.recordIds).toEqual([
+      'a2KUJ00000G6id32AB',
+      'a2KUJ00000G7ab99AB',
+      'a2KUJ00000G8cd11AB',
+    ]);
+    expect(haul?.columns).toContain('Recycler__c');
+    expect(haul?.count).toEqual({ listed: 3, windowed: false, pageOffset: 0, known: true });
+  });
+
+  it('merges getItems across multiple object pages into distinct objects', () => {
+    // Two per-object-page bodies (the real enumeration accumulates one per nav slug).
+    const objects = enumerateObjects([haulsPageBody, homeBody]);
+    expect(objects.map((o) => o.objectApiName)).toEqual(['Haul__c', 'Account', 'Haul_Request__c']);
   });
 });
 

@@ -39,6 +39,39 @@ path's send gate, and the `send_time_pt` config value.
   Until then the on-save report still fires on save; only the "late" flag threshold
   stays at the old value. The 8pm not-entered ntfy is hardcoded in the daemon and
   already correct.
+### Fixed — 2026-07-22 (ADR-0057 Phase 0 — MyMRC scrape/discovery against the REAL portal)
+
+First live run of the ADR-0038/0057 code (written against synthetic fixtures, never run
+live) revealed four divergences from the real `mrc-us.my.site.com` portal. Selectors
+bumped `2026-06-22` → `2026-07-22`. Branch `fix/mymrc-scrape-live-portal`.
+
+- **Login now fills by PLACEHOLDER + submits by ROLE.** The Lightning login fields have no
+  `name` and dynamic numeric ids; the only stable hook is the placeholder ("Username" /
+  "Password"), and the button reads "Log In". `src/lib/mymrc/selectors.ts` +
+  `portal-client.login()` + `scripts/mymrc-discovery.mjs` now use
+  `getByPlaceholder(...)` / `getByRole('button', { name: /log ?in/i })`. Fixes silent
+  logged-out no-op affecting BOTH the hourly sync and discovery.
+- **Hardened `looksLoggedOut` to a POSITIVE auth-marker check.** `/s/home` is a 404 "Error"
+  page for authed + anon sessions alike (no password field) — the old check read it as
+  "logged in", so `AuthFailedError` never fired on a failed login. Logged-in now requires
+  a Switch-Account / "viewing as DR3" banner or ≥2 object nav links AND no visible "Log in"
+  control. The discovery runner delegates to the shared, fixture-tested predicate.
+- **Discovery enumerates via the NAV → per-object list pages, not `/s/home`.** New pure
+  helpers in `discovery.ts` (`objectSlugFromHref`, `objectPagesFromHrefs`,
+  `extractNavMenuHrefs`, `resolveObjectPages`) resolve the object slugs (`hauls`,
+  `illegal-dump-cip-`, `processed-materials`, `outbound-materials`, `availability`,
+  `outbound-vendors`, `records-review`) from the `getNavigationMenu` Aura response / DOM
+  links (Home/FAQs/Support/Reports filtered), with a static allowlist fallback. Auth is
+  verified at `/s/` (the real authenticated landing), never `/s/home`.
+- **Discovery output dir configurable via `MYMRC_DISCOVERY_OUT_DIR`** (defaults to repo
+  root). Fixes the `EACCES` the first run hit writing under the container's read-only
+  `/app` as uid 1001; point it at a writable mounted volume.
+- Fixtures: rewrote `authed-shell.html` to the real `/s/` shell, added `home-404-page.html`
+  (the `/s/home` trap), `discovery/nav-getnavigationmenu.json`, `discovery/hauls-list-page.json`.
+  New unit tests cover nav→object-page resolution, per-object-page enumeration, and the
+  logged-in detector (authed-nav vs login-form vs `/s/home` 404). No schema/migration change.
+- **FOLLOW-UP flagged (not implemented):** "Switch Account" (DR3 Woodland ↔ DR3 Eugene) —
+  the hourly scrape may need to iterate both account contexts to pull both sites' data.
 
 ### Added — 2026-07-22 (ADR-0057 D1/D9 — MyMRC admin credential store, encrypted DB surface)
 

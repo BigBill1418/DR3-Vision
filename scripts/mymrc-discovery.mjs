@@ -35,16 +35,24 @@ const require = createRequire(import.meta.url);
 const MYMRC_DIST = resolve(__dirname, '..', 'dist', 'mymrc');
 const REPO_ROOT = resolve(__dirname, '..');
 
+// Output root for the discovery report + per-object fixtures. Defaults to the
+// repo root (docs/ + src/lib/mymrc/__fixtures__/ land in-tree for local dev),
+// but is OVERRIDABLE so the container — which runs as uid 1001 with a read-only
+// /app — can point discovery at a writable mounted volume (ADR-0057 Phase 0:
+// the first live run died with EACCES writing under /app). The repo layout is
+// preserved under the override so the artifacts are trivially copied back.
+const OUT_DIR = process.env.MYMRC_DISCOVERY_OUT_DIR?.trim() || REPO_ROOT;
+
 // Require compiled modules directly (not the index barrel) so this runner stays
 // on files disjoint from the concurrent transport rework.
 const disc = require(resolve(MYMRC_DIST, 'discovery.js'));
 const store = require(resolve(MYMRC_DIST, 'credential-store.js'));
 const portal = require(resolve(MYMRC_DIST, 'portal-client.js'));
 const ntfy = require(resolve(MYMRC_DIST, 'ntfy.js'));
-const { SELECTORS, LOGIN_URL } = require(resolve(MYMRC_DIST, 'selectors.js'));
+const { LOGIN_URL, AUTHED_HOME_URL, PORTAL_ORIGIN, OBJECT_NAV_SLUGS } = require(
+  resolve(MYMRC_DIST, 'selectors.js'),
+);
 
-const PORTAL_ORIGIN = 'https://mrc-us.my.site.com';
-const HOME_URL = `${PORTAL_ORIGIN}/s/home`;
 const SOBJECTS_PATH = '/services/data/v58.0/sobjects/';
 const AURA_URL_RE = /\/s\/sfsites\/aura/i;
 const NAV_TIMEOUT_MS = 45_000;
@@ -72,28 +80,48 @@ function detailUrl(recordId) {
   return `${PORTAL_ORIGIN}/s/detail/${encodeURIComponent(recordId)}`;
 }
 
+// Hardened auth check (ADR-0057 Phase 0): the old runner keyed only on the URL +
+// a visible username field, so `/s/home` — a 404 "Error" shell for EVERYONE —
+// read as "logged in" and the loud AuthFailedError never fired. Delegate to the
+// shared, fixture-tested `looksLoggedOut` (positive auth-marker predicate).
 async function isLoggedOut(page) {
-  if (/\/s\/login(\/|\?|$)/i.test(page.url())) return true;
-  return page
-    .locator(SELECTORS.loginRedirectMarker)
+  const usernameFieldVisible = await page
+    .getByPlaceholder('Username')
     .first()
     .isVisible()
     .catch(() => false);
+  const html = await page.content().catch(() => '');
+  return portal.looksLoggedOut({ url: page.url(), html, usernameFieldVisible });
 }
 
-// Mirrors portal-client.login() (that helper is not exported; the sequence is a
-// 3-selector fill+submit). Single admin identity — no per-site context (D1).
+// Mirrors portal-client.login() (that helper is not exported): the live Lightning
+// form fields have no `name` + dynamic ids, so fill by PLACEHOLDER and submit by
+// ROLE. Single admin identity — no per-site context (D1).
 async function login(page, creds) {
   if (!page.url().includes('/login')) {
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
   }
-  await page.locator(SELECTORS.loginEmailField).first().fill(creds.username);
-  await page.locator(SELECTORS.loginPasswordField).first().fill(creds.password);
+  await page.getByPlaceholder('Username').first().fill(creds.username);
+  await page.getByPlaceholder('Password').first().fill(creds.password);
   await Promise.all([
     page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => undefined),
-    page.locator(SELECTORS.loginSubmitButton).first().click(),
+    page
+      .getByRole('button', { name: /log ?in/i })
+      .first()
+      .click(),
   ]);
   await page.waitForTimeout(3_000);
+}
+
+// Read the authenticated nav's `/s/` links from the DOM (a fallback / supplement
+// to the getNavigationMenu Aura response). `$$eval` is Playwright's element-query
+// API — the callback runs in the page context purely to serialize `href`
+// attributes back to Node; it is NOT JavaScript `eval` and executes no dynamic
+// code. The returned strings are filtered by the pure `objectSlugFromHref`.
+async function navHrefsFromDom(page) {
+  return page
+    .$$eval('a[href*="/s/"]', (as) => as.map((a) => a.getAttribute('href')).filter(Boolean))
+    .catch(() => []);
 }
 
 // Navigate and collect every intercepted Aura response body during load+settle.
@@ -144,7 +172,7 @@ async function probeSObjects(context) {
 }
 
 async function writeObjectFixture(bundle) {
-  const dir = resolve(REPO_ROOT, 'src', 'lib', 'mymrc', '__fixtures__', bundle.objectApiName);
+  const dir = resolve(OUT_DIR, 'src', 'lib', 'mymrc', '__fixtures__', bundle.objectApiName);
   await mkdir(dir, { recursive: true });
   await writeFile(
     resolve(dir, 'list-getItems-response.json'),
@@ -198,11 +226,13 @@ async function main() {
     context.setDefaultTimeout(NAV_TIMEOUT_MS);
     const page = await context.newPage();
 
-    await page.goto(HOME_URL, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    // Verify auth against the AUTHENTICATED landing page (/s/), NOT /s/home —
+    // the latter is a 404 "Error" shell for authed + anon sessions alike.
+    await page.goto(AUTHED_HOME_URL, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
     if (await isLoggedOut(page)) {
       log('info', 'login required — authenticating admin session');
       await login(page, creds);
-      await page.goto(HOME_URL, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+      await page.goto(AUTHED_HOME_URL, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
     }
     if (await isLoggedOut(page)) {
       // D5: loud, no fallback.
@@ -217,10 +247,34 @@ async function main() {
     }
     await context.storageState({ path: stateFile }).catch(() => undefined);
 
-    // Enumerate from the home shell, then one detail per object.
-    const homeBodies = await collectAura(page, HOME_URL);
-    const objects = disc.enumerateObjects(homeBodies, disc.extractAllRecords(homeBodies));
-    log('info', `enumerated ${objects.length} object(s) from /s/home`);
+    // Resolve the OBJECT pages to enumerate from the authenticated nav — the
+    // getNavigationMenu Aura response first, DOM `/s/` links as supplement, and
+    // the static object allowlist as fallback (a hardened run never enumerates
+    // nothing). /s/home is NOT a list view, so we never read it.
+    const navBodies = await collectAura(page, AUTHED_HOME_URL);
+    const domHrefs = await navHrefsFromDom(page);
+    const objectSlugs = disc.resolveObjectPages({
+      navBodies,
+      domHrefs,
+      fallbackSlugs: OBJECT_NAV_SLUGS,
+    });
+    log('info', `nav → ${objectSlugs.length} object page(s): ${objectSlugs.join(', ')}`);
+
+    // Visit each object's ListView page and accumulate its Aura bodies. The
+    // per-page getItems actions are the real enumeration source (record ids +
+    // columns per object).
+    const listBodies = [];
+    for (const slug of objectSlugs) {
+      const url = `${PORTAL_ORIGIN}/s/${slug}`;
+      const bodies = await collectAura(page, url);
+      if (await isLoggedOut(page)) {
+        throw new portal.AuthFailedError(`mymrc: logged out during /s/${slug} enumeration (discovery)`);
+      }
+      listBodies.push(...bodies);
+      log('info', `/s/${slug}: ${bodies.length} Aura response(s) captured`);
+    }
+    const objects = disc.enumerateObjects(listBodies, disc.extractAllRecords(listBodies));
+    log('info', `enumerated ${objects.length} object(s) from ${objectSlugs.length} nav page(s)`);
 
     const reportObjects = [];
     for (const obj of objects) {
@@ -247,7 +301,7 @@ async function main() {
 
       const bundle = disc.buildObjectFixture({
         report: reportRow,
-        listReturnValue: findListReturnValue(homeBodies, obj.objectApiName),
+        listReturnValue: findListReturnValue(listBodies, obj.objectApiName),
         record,
         capturedAt,
       });
@@ -265,7 +319,7 @@ async function main() {
       objects: reportObjects,
       sobjectsProbe,
     });
-    const docPath = resolve(REPO_ROOT, 'docs', `mymrc-discovery-${capturedAt}.md`);
+    const docPath = resolve(OUT_DIR, 'docs', `mymrc-discovery-${capturedAt}.md`);
     await mkdir(dirname(docPath), { recursive: true });
     await writeFile(docPath, markdown);
     log('info', `wrote ${docPath}`);

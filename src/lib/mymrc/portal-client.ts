@@ -186,11 +186,47 @@ export function extractRecord(bodies: readonly string[], recordId: string): SfRe
   return best;
 }
 
+// The recycler object links that only appear in the AUTHENTICATED Experience
+// Cloud nav (ADR-0057 §Consequences first-contact). Two+ of these present is a
+// positive logged-in marker no anonymous/404 page carries.
+const AUTHED_NAV_LINKS: readonly string[] = [
+  '/s/hauls',
+  '/s/processed-materials',
+  '/s/outbound-materials',
+  '/s/availability',
+  '/s/outbound-vendors',
+  '/s/records-review',
+  '/s/illegal-dump-cip-',
+];
+
+/** A visible login form OR a "Log in" link/button pointing at `/s/login`. */
+function hasVisibleLoginControl(html: string): boolean {
+  if (/placeholder="Username"/i.test(html) && /type="password"/i.test(html)) return true;
+  if (/\/s\/login/i.test(html) && /log\s*in/i.test(html)) return true;
+  return false;
+}
+
 /**
- * Pure logged-out predicate (ADR-0038 D4). Detects the login form AND the
- * 404/logged-out error page ("Error" title + "404 Error… Log in" body) that the
- * old scraper mis-read as an empty-but-ok result. `usernameFieldVisible` is the
- * Playwright signal; `url`/`html` are the page state.
+ * Positive authenticated marker: the "Switch Account" / "viewing as DR3" banner,
+ * or ≥2 of the object nav links. `/s/home` (title "Error", no nav) carries none.
+ */
+function hasAuthenticatedMarker(html: string): boolean {
+  if (/switch account/i.test(html)) return true;
+  if (/viewing as\s+dr3/i.test(html)) return true;
+  return AUTHED_NAV_LINKS.filter((href) => html.includes(href)).length >= 2;
+}
+
+/**
+ * Pure logged-out predicate (ADR-0038 D4, HARDENED 2026-07-22 for ADR-0057
+ * Phase 0). The old check keyed only on a password field / a "404 Error" title,
+ * so the REAL `/s/home` page — a 404 "Error" shell that renders for
+ * authenticated AND anonymous sessions alike, with NO password field — slipped
+ * through as "logged in" (false positive: AuthFailedError never fired on a
+ * genuinely failed login). This is now a POSITIVE test: a session is logged-IN
+ * only when an authenticated marker is present (Switch-Account banner or the
+ * object nav) AND no visible "Log in" control remains. Anything else — the login
+ * form, the `/s/login` URL, a bare 404 shell, an unrecognized page — is treated
+ * as logged OUT so the loud AuthFailedError path actually fires.
  */
 export function looksLoggedOut(input: {
   url: string;
@@ -200,16 +236,11 @@ export function looksLoggedOut(input: {
   if (input.usernameFieldVisible) return true;
   if (/\/s\/login(\/|\?|$)/i.test(input.url)) return true;
   const html = input.html;
-  // 404 / expired-session shell: title "Error" plus a "404 Error" body and a
-  // login link — the exact page the ADR calls out.
-  const has404 = /\b404\s*error\b/i.test(html);
-  const hasLoginLink = /log\s*in/i.test(html) && /\/s\/login/i.test(html);
-  const errorTitle = /<title>\s*error\s*<\/title>/i.test(html);
-  if (has404 && hasLoginLink) return true;
-  if (errorTitle && hasLoginLink) return true;
-  // A visible login form in the markup (JS-shim redirect that leaves the URL).
-  if (/placeholder="Username"/i.test(html) && /type="password"/i.test(html)) return true;
-  return false;
+  if (hasVisibleLoginControl(html)) return true;
+  // Logged in ONLY with a positive marker and no login control (checked above).
+  if (hasAuthenticatedMarker(html)) return false;
+  // No auth marker (e.g. the /s/home 404 "Error" shell) ⇒ NOT authenticated.
+  return true;
 }
 
 // ── Playwright transport ─────────────────────────────────────────────────────
@@ -352,15 +383,23 @@ export async function createPortalClient(
   };
 }
 
+// Proven-live login (ADR-0057 Phase 0, 2026-07-22): the Lightning form fields
+// have no `name` and dynamic numeric ids, so we locate them by PLACEHOLDER and
+// the submit by ROLE — the only stable hooks. `getByPlaceholder`/`getByRole`
+// normalize whitespace, absorbing the trailing-whitespace padding the live form
+// sometimes renders.
 async function login(page: Page, creds: MymrcCredentials, log: Logger): Promise<void> {
   if (!page.url().includes('/login')) {
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
   }
-  await page.locator(SELECTORS.loginEmailField).first().fill(creds.username);
-  await page.locator(SELECTORS.loginPasswordField).first().fill(creds.password);
+  await page.getByPlaceholder('Username').first().fill(creds.username);
+  await page.getByPlaceholder('Password').first().fill(creds.password);
   await Promise.all([
     page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => undefined),
-    page.locator(SELECTORS.loginSubmitButton).first().click(),
+    page
+      .getByRole('button', { name: /log ?in/i })
+      .first()
+      .click(),
   ]);
   await page.waitForTimeout(3_000);
   log('info', 'mymrc: login submitted (admin)');

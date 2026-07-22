@@ -42,7 +42,14 @@ export {
   type SyncSiteContext,
 } from './sync';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
-export { SELECTORS, SELECTOR_VERSION, LOGIN_URL } from './selectors';
+export {
+  SELECTORS,
+  SELECTOR_VERSION,
+  LOGIN_URL,
+  AUTHED_HOME_URL,
+  PORTAL_ORIGIN,
+  OBJECT_NAV_SLUGS,
+} from './selectors';
 export { SITE_CODES, FEED_NAMES } from './types';
 export type {
   SiteCode,

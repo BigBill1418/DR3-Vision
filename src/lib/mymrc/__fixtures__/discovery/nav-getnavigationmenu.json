@@ -1,0 +1,41 @@
+{
+  "actions": [
+    {
+      "id": "88;a",
+      "descriptor": "serviceComponent://ui.communities.components.aura.components.forceCommunity.navigationMenu.NavigationMenuDataProvider/ACTION$getNavigationMenu",
+      "params": {
+        "navigationLinkSetDeveloperName": "Default_Navigation",
+        "publishStatus": "Live"
+      },
+      "state": "SUCCESS",
+      "returnValue": {
+        "menuItems": [
+          { "id": "1", "label": "Hauls", "type": "InternalLink", "target": "/s/hauls", "actionType": "InternalLink" },
+          { "id": "2", "label": "Illegal/Consumer Drop-Off", "type": "InternalLink", "target": "/s/illegal-dump-cip-" },
+          { "id": "3", "label": "Processed", "type": "InternalLink", "target": "/s/processed-materials" },
+          { "id": "4", "label": "Outbound", "type": "InternalLink", "target": "/s/outbound-materials" },
+          { "id": "5", "label": "Availability", "type": "InternalLink", "target": "/s/availability" },
+          {
+            "id": "6",
+            "label": "Vendors",
+            "type": "MenuLabel",
+            "target": null,
+            "subMenu": [
+              { "id": "6a", "label": "My Outbound Vendors", "type": "InternalLink", "target": "/s/outbound-vendors" },
+              { "id": "6b", "label": "Records Review", "type": "InternalLink", "target": "/s/records-review" }
+            ]
+          },
+          { "id": "7", "label": "Reports", "type": "InternalLink", "target": "/s/report/Report/Recent" },
+          { "id": "8", "label": "FAQs", "type": "InternalLink", "target": "/s/help-articles" },
+          { "id": "9", "label": "Support", "type": "InternalLink", "target": "/s/contact" },
+          { "id": "10", "label": "Home", "type": "InternalLink", "target": "/s/" }
+        ]
+      },
+      "error": []
+    }
+  ],
+  "context": {
+    "fwuid": "SYNTHETIC-FWUID-not-a-real-capture",
+    "app": "siteforce:communityApp"
+  }
+}
