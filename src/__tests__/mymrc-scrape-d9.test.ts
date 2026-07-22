@@ -20,13 +20,18 @@ type PageCall = { kind: string; site: string; message: string; fingerprint: stri
 function harness(over: Record<string, unknown> = {}) {
   const pageCalls: PageCall[] = [];
   const portalArgs: unknown[][] = [];
-  const fakeClient = { close: vi.fn(async () => undefined) };
+  // The batched detail transport is built over the list client's shared session
+  // (ADR-0057 D3 addendum) — the fake client exposes getSession() for that.
+  const fakeSession = {};
+  const fakeClient = { close: vi.fn(async () => undefined), getSession: vi.fn(() => fakeSession) };
   const fakeBrowser = { close: vi.fn(async () => undefined) };
   const launchBrowser = vi.fn(async () => fakeBrowser);
   const createPortalClient = vi.fn(async (...args: unknown[]) => {
     portalArgs.push(args);
     return fakeClient;
   });
+  const playwrightRecordFieldsSession = vi.fn(() => ({}));
+  const createRecordFieldsClient = vi.fn(() => ({ fetchRecordFields: vi.fn() }));
   const syncSite = vi.fn(async ({ site }: { site: string }) => [
     { feed: 'hauls', status: 'ok', rowsListed: 3, detailsFetched: 1, site },
   ]);
@@ -35,6 +40,8 @@ function harness(over: Record<string, unknown> = {}) {
     CredentialsNotConfiguredError,
     loadAdminCredentials: vi.fn(async () => ({ username: 'bill@svdp.us', password: 'pw' })),
     createPortalClient,
+    playwrightRecordFieldsSession,
+    createRecordFieldsClient,
     syncSite,
     checkDeadman,
     SITE_CODES: ['eugene', 'woodland'],

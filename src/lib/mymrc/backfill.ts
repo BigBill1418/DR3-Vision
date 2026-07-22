@@ -41,9 +41,14 @@
 import type { PrismaClient } from '@prisma/client';
 import { AuthFailedError } from './portal-client';
 import { ntfyPager, type Pager } from './ntfy';
+import { sweepTargetDetail } from './enrich-details';
+import type { RecordFieldsClient } from './record-fields-client';
 import type { SfRecord } from './types';
 
-const DETAIL_CONCURRENCY = 3;
+// Detail is now fetched in BATCHES (record-fields-client): ~100 record-ids per
+// getRecordWithFields POST, replacing the racy ≤3 per-record navigation pool.
+const DETAIL_BATCH_SIZE = 100;
+const DETAIL_PACING_MS = 1_000;
 // A misbehaving portal that always returns hasMoreData:true must wedge loudly,
 // never spin forever. 10k pages ≫ any plausible history for these objects.
 const MAX_PAGES = 10_000;
@@ -76,8 +81,6 @@ export interface BackfillListPage {
 export interface BackfillPortalClient {
   /** Fetch one 0-based page of a list view. Throws AuthFailedError when logged out. */
   fetchListPage(objectApiName: string, listViewApiName: string, pageIndex: number): Promise<BackfillListPage>;
-  /** Fetch one record's detail representation. Throws AuthFailedError when logged out. */
-  fetchRecordDetail(recordId: string): Promise<SfRecord>;
 }
 
 /**
@@ -91,6 +94,11 @@ export interface BackfillPortalClient {
 export interface BackfillTarget {
   objectApiName: string;
   listViewApiName: string;
+  /**
+   * The `Object__c.Field__c` set the mirror's mapper reads — the `optionalFields`
+   * sent with the batched getRecordWithFields POST (FLS-safe, bounded payload).
+   */
+  optionalFields: readonly string[];
   /** Idempotently create id-only mirror rows for these ids (never clears detail_fetched_at). */
   upsertListed(ids: readonly string[], seenAt: Date): Promise<number>;
   /** Mirror rows for this target still lacking a detail fetch (resumable detail cursor). */
@@ -135,12 +143,20 @@ export interface BackfillResult {
 
 export interface BackfillContext {
   prisma: PrismaClient;
+  /** Pagination transport (list windows → mirror ids). */
   client: BackfillPortalClient;
+  /** Batched getRecordWithFields transport for the detail pass (record-fields-client). */
+  recordFields: RecordFieldsClient;
   targets: readonly BackfillTarget[];
   pager?: Pager;
   log?: Logger;
   now?: () => Date;
-  detailConcurrency?: number;
+  /** Record-ids per getRecordWithFields POST (default 100). */
+  detailBatchSize?: number;
+  /** Pause between detail POSTs, ms (default 1000). */
+  detailPacingMs?: number;
+  /** Injected sleep (test seam). */
+  sleep?: (ms: number) => Promise<void>;
   maxPages?: number;
 }
 
@@ -246,34 +262,6 @@ async function persistError(
     .catch(() => undefined); // a cursor-write failure must never mask the original wedge
 }
 
-// ── Bounded detail pool (strict ≤ limit in flight) ───────────────────────────
-
-/**
- * Run `worker` over `items` with at most `limit` in flight. `worker` owns its
- * own error handling EXCEPT it may throw to abort the whole pool (used for a
- * fatal AuthFailedError). Concurrency is capped by the runner count, so no more
- * than `limit` calls are ever outstanding.
- */
-async function runPool<T>(items: readonly T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
-  const size = Math.max(1, limit);
-  let index = 0;
-  let aborted = false;
-  const runner = async (): Promise<void> => {
-    while (!aborted && index < items.length) {
-      const item = items[index];
-      index += 1;
-      if (item === undefined) continue;
-      try {
-        await worker(item);
-      } catch (err) {
-        aborted = true; // stop scheduling; propagate the fatal error
-        throw err;
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(size, items.length) }, runner));
-}
-
 // ── One target ───────────────────────────────────────────────────────────────
 
 async function pageTarget(
@@ -346,38 +334,26 @@ async function sweepDetail(
   now: Date,
   log: Logger,
 ): Promise<{ fetched: number; failures: number; auth: boolean; authMessage: string }> {
-  const pending = await target.idsNeedingDetail();
-  const concurrency = ctx.detailConcurrency ?? DETAIL_CONCURRENCY;
-  let fetched = 0;
-  let failures = 0;
-  let auth = false;
-  let authMessage = '';
-
-  try {
-    await runPool(pending, concurrency, async (id) => {
-      try {
-        const record = await ctx.client.fetchRecordDetail(id);
-        await target.writeDetail(record, now);
-        fetched += 1;
-      } catch (err) {
-        if (err instanceof AuthFailedError) {
-          auth = true;
-          authMessage = err.message;
-          throw err; // abort the pool — the whole session is dead
-        }
-        failures += 1;
-        log(
-          'warn',
-          `mymrc-backfill: ${target.objectApiName} detail ${id} failed (retry next run): ${describe(err)}`,
-        );
-      }
-    });
-  } catch {
-    // Only an AuthFailedError re-thrown from the worker reaches here (the `auth`
-    // flag is already set); any other worker error is swallowed above.
+  // Delegate to the ONE shared batch-sweep primitive (record-fields-client via
+  // enrich-details). `failures` folds per-id ERRORs (FLS/deleted) AND `missing`
+  // (transport gaps) — both leave `detail_fetched_at` NULL and retry next run,
+  // exactly the prior per-record retry philosophy.
+  const swept = await sweepTargetDetail(target, ctx.recordFields, {
+    now,
+    batchSize: ctx.detailBatchSize ?? DETAIL_BATCH_SIZE,
+    pacingMs: ctx.detailPacingMs ?? DETAIL_PACING_MS,
+    ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
+    log,
+  });
+  for (const e of swept.errors) {
+    log('warn', `mymrc-backfill: ${target.objectApiName} detail ${e.recordId} ${e.state} (retry next run): ${e.message}`);
   }
-
-  return { fetched, failures, auth, authMessage };
+  return {
+    fetched: swept.fetched,
+    failures: swept.errors.length + swept.missing,
+    auth: swept.auth,
+    authMessage: swept.authMessage,
+  };
 }
 
 async function runTarget(ctx: BackfillContext, target: BackfillTarget, now: Date): Promise<BackfillTargetResult> {

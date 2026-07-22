@@ -10,8 +10,9 @@ import {
   syncFeed,
 } from './sync';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
+import type { BatchActionError, RecordFieldsClient } from './record-fields-client';
 import type { Pager } from './ntfy';
-import type { FeedName, SfRecord, SyncRunStatus } from './types';
+import type { SfRecord, SyncRunStatus } from './types';
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -115,11 +116,34 @@ function list(ids: string[], complete = true): { ids: string[]; complete: boolea
 function fakeClient(over: Partial<PortalClient>): PortalClient {
   return {
     fetchListRecordIds: vi.fn(async () => list([])),
-    fetchRecordDetail: vi.fn(async (_feed: FeedName, id: string) => processedRecord(id)),
     close: vi.fn(async () => undefined),
     ...over,
   };
 }
+
+// The BATCHED getRecordWithFields detail transport (record-fields-client). Serves
+// one SfRecord per requested id in ONE call; `errorIds` come back as per-action
+// ERRORs (retried next run). `record` picks which record shape to return per id.
+function fakeRecordFields(opts?: {
+  record?: (id: string) => SfRecord;
+  errorIds?: string[];
+}): RecordFieldsClient {
+  const recordFn = opts?.record ?? processedRecord;
+  const errorIds = new Set(opts?.errorIds ?? []);
+  return {
+    fetchRecordFields: vi.fn(async (ids: readonly string[]) => {
+      const records = new Map<string, SfRecord>();
+      const errors: BatchActionError[] = [];
+      for (const id of ids) {
+        if (errorIds.has(id)) errors.push({ recordId: id, state: 'ERROR', message: 'record vanished mid-run' });
+        else records.set(id, recordFn(id));
+      }
+      return { records, errors };
+    }),
+  };
+}
+
+const RF = fakeRecordFields();
 
 interface FakeOpts {
   prior?: { status: SyncRunStatus; started_at: Date } | null;
@@ -174,7 +198,7 @@ describe('syncFeed — happy path', () => {
     const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['id1', 'id2'])) });
     const { pager, calls } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('ok');
     expect(res.rowsListed).toBe(2);
@@ -193,7 +217,7 @@ describe('syncFeed — disappeared-detection is gated on list completeness (bill
     const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['id1', 'id2'], true)) });
     const { pager } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('ok');
     // updateMany is the markDisappeared call — it MUST fire on a complete list.
@@ -210,7 +234,7 @@ describe('syncFeed — disappeared-detection is gated on list completeness (bill
     const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['id1', 'id2'], false)) });
     const { pager } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('ok'); // still a healthy run — data was upserted
     expect(model.upsert).toHaveBeenCalled(); // the window's rows were refreshed
@@ -221,13 +245,11 @@ describe('syncFeed — disappeared-detection is gated on list completeness (bill
 describe('syncFeed — detail pass derives site_id + populates real columns', () => {
   it('stamps site_id from the account discriminator and writes program_unit_count/type', async () => {
     const { prisma, modelUpdate } = fakePrisma({ needDetail: ['m1'] });
-    const client = fakeClient({
-      fetchListRecordIds: vi.fn(async () => list(['m1'])),
-      fetchRecordDetail: vi.fn(async () => processedRecordEugene('m1')),
-    });
+    const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['m1'])) });
+    const recordFields = fakeRecordFields({ record: () => processedRecordEugene('m1') });
     const { pager } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('ok');
     const data = modelUpdate.mock.calls[0]?.[0]?.data;
@@ -239,13 +261,11 @@ describe('syncFeed — detail pass derives site_id + populates real columns', ()
 
   it('leaves site_id unset (undefined in the update) when the discriminator is unresolvable', async () => {
     const { prisma, modelUpdate } = fakePrisma({ needDetail: ['m2'] });
-    const client = fakeClient({
-      fetchListRecordIds: vi.fn(async () => list(['m2'])),
-      fetchRecordDetail: vi.fn(async () => processedRecord('m2')), // no Account__r
-    });
+    const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['m2'])) });
+    const recordFields = fakeRecordFields({ record: () => processedRecord('m2') }); // no Account__r
     const { pager } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('ok');
     const data = modelUpdate.mock.calls[0]?.[0]?.data;
@@ -261,7 +281,7 @@ describe('syncFeed — zero-anomaly', () => {
     const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list([])) });
     const { pager, calls } = spyPager();
 
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'woodland', feed: 'processed', pager, now: NOW });
 
     expect(res.status).toBe('error');
     expect(calls[0]?.kind).toBe('zero_anomaly');
@@ -273,7 +293,7 @@ describe('syncFeed — zero-anomaly', () => {
     const { prisma } = fakePrisma({ lastOk: null });
     const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list([])) });
     const { pager, calls } = spyPager();
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'woodland', feed: 'processed', pager, now: NOW });
     expect(res.status).toBe('ok');
     expect(calls).toHaveLength(0);
   });
@@ -288,7 +308,7 @@ describe('syncFeed — typed failures always write a ledger row (D4)', () => {
       }),
     });
     const { pager, calls } = spyPager();
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'eugene', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'eugene', feed: 'processed', pager, now: NOW });
     expect(res.status).toBe('auth_failed');
     expect(calls[0]?.kind).toBe('auth_failed');
     expect(calls[0]?.fingerprint).toBe('mymrc-auth-failed:eugene');
@@ -303,7 +323,7 @@ describe('syncFeed — typed failures always write a ledger row (D4)', () => {
       }),
     });
     const { pager, calls } = spyPager();
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'eugene', feed: 'outbound', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields: RF, site: 'eugene', feed: 'outbound', pager, now: NOW });
     expect(res.status).toBe('contract_drift');
     expect(calls[0]?.kind).toBe('contract_drift');
     expect(ledgerCreate).toHaveBeenCalledTimes(1);
@@ -313,15 +333,11 @@ describe('syncFeed — typed failures always write a ledger row (D4)', () => {
 describe('syncFeed — a failed detail fetch does not fail the run (retries next run)', () => {
   it('leaves status ok, counts only successful details', async () => {
     const { prisma } = fakePrisma({ needDetail: ['ok1', 'bad2'] });
-    const client = fakeClient({
-      fetchListRecordIds: vi.fn(async () => list(['ok1', 'bad2'])),
-      fetchRecordDetail: vi.fn(async (_f: FeedName, id: string) => {
-        if (id === 'bad2') throw new PortalContractDriftError('record vanished mid-run');
-        return processedRecord(id);
-      }),
-    });
+    const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['ok1', 'bad2'])) });
+    // 'bad2' comes back as a per-action ERROR in the batch (retried next run).
+    const recordFields = fakeRecordFields({ errorIds: ['bad2'] });
     const { pager, calls } = spyPager();
-    const res = await syncFeed({ prisma: prisma as unknown as P, client, site: 'woodland', feed: 'processed', pager, now: NOW });
+    const res = await syncFeed({ prisma: prisma as unknown as P, client, recordFields, site: 'woodland', feed: 'processed', pager, now: NOW });
     expect(res.status).toBe('ok'); // partial detail progress is never a run failure
     expect(res.detailsFetched).toBe(1);
     expect(calls).toHaveLength(0);

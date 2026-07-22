@@ -43,6 +43,11 @@ import {
   mapOutboundRecord,
   mapProcessedRecord,
 } from './mappers';
+import {
+  DOCK_OPTIONAL_FIELDS,
+  HAUL_OPTIONAL_FIELDS,
+  MATERIALS_OPTIONAL_FIELDS,
+} from './record-fields-client';
 import type { SfRecord } from './types';
 
 export type Logger = (level: 'info' | 'warn' | 'error', message: string) => void;
@@ -92,6 +97,7 @@ function haulsTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget 
   return {
     objectApiName: 'Haul_Request__c',
     listViewApiName,
+    optionalFields: HAUL_OPTIONAL_FIELDS,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -146,6 +152,7 @@ function processedTarget(deps: TargetDeps, listViewApiName: string): BackfillTar
   return {
     objectApiName: 'Materials__c',
     listViewApiName,
+    optionalFields: MATERIALS_OPTIONAL_FIELDS,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -194,6 +201,7 @@ function outboundTarget(deps: TargetDeps, listViewApiName: string): BackfillTarg
   return {
     objectApiName: 'Materials__c',
     listViewApiName,
+    optionalFields: MATERIALS_OPTIONAL_FIELDS,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -243,6 +251,7 @@ function dockTarget(deps: TargetDeps): BackfillTarget {
   return {
     objectApiName: 'Dock_Availability_Schedule__c',
     listViewApiName: '',
+    optionalFields: DOCK_OPTIONAL_FIELDS,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({

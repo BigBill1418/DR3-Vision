@@ -14,6 +14,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
 import { fingerprint, ntfyPager, type Pager } from './ntfy';
+import { optionalFieldsForFeed, type RecordFieldsClient } from './record-fields-client';
 import { upsertScrapedHauls } from './upsert';
 import type {
   FeedName,
@@ -21,11 +22,14 @@ import type {
   OutboundMirrorRow,
   ProcessedMirrorRow,
   ScrapedHaul,
+  SfRecord,
   SiteCode,
   SyncRunStatus,
 } from './types';
 
-const DETAIL_CONCURRENCY = 3;
+// Detail is fetched in BATCHES via the getRecordWithFields transport (~100 ids
+// per POST), replacing the racy per-record `/s/detail/<id>` navigation.
+const DETAIL_BATCH_SIZE = 100;
 const REPAGE_MS = 6 * 60 * 60 * 1000; // re-page a persisting failure at most every 6h
 const DEADMAN_MS = 26 * 60 * 60 * 1000; // no successful run in >26h → page
 
@@ -111,8 +115,8 @@ interface FeedAdapter {
    * MyMRC id (H-…/M-…) when it is already known.
    */
   idsNeedingDetail(listedIds: readonly string[]): Promise<DetailTarget[]>;
-  /** Fetch + map + persist one record's detail; throws on transport failure. */
-  applyDetail(recordId: string, at: Date): Promise<void>;
+  /** Map + persist one already-fetched record's detail (stamps detail_fetched_at). */
+  applyDetailRecord(record: SfRecord, at: Date): Promise<void>;
 }
 
 /** A record awaiting a detail fetch: Salesforce record id + (best-known) external id. */
@@ -132,7 +136,7 @@ function toJson(v: unknown): Prisma.InputJsonValue {
 // `idsNeedingDetail` are therefore global too — a per-site filter would mis-scope
 // against the global id set.
 
-function haulsAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function haulsAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcHaulsMirror;
   return {
     feed: 'hauls',
@@ -161,11 +165,11 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId:
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_haul_id }));
     },
-    async applyDetail(recordId, at) {
-      const row: HaulMirrorRow = mapHaulRecord(await client.fetchRecordDetail('hauls', recordId));
+    async applyDetailRecord(record, at) {
+      const row: HaulMirrorRow = mapHaulRecord(record);
       const siteId = resolveSiteId(siteCodeFromDiscriminator(row.recycler_name));
       await model.update({
-        where: { id: recordId },
+        where: { id: record.id },
         data: {
           external_haul_id: row.external_id,
           status: row.status,
@@ -198,7 +202,7 @@ function haulsAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId:
   };
 }
 
-function processedAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function processedAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcProcessedMirror;
   return {
     feed: 'processed',
@@ -226,11 +230,11 @@ function processedAdapter(prisma: PrismaClient, client: PortalClient, resolveSit
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
-    async applyDetail(recordId, at) {
-      const row: ProcessedMirrorRow = mapProcessedRecord(await client.fetchRecordDetail('processed', recordId));
+    async applyDetailRecord(record, at) {
+      const row: ProcessedMirrorRow = mapProcessedRecord(record);
       const siteId = resolveSiteId(siteCodeFromDiscriminator(row.account_name));
       await model.update({
-        where: { id: recordId },
+        where: { id: record.id },
         data: {
           external_materials_id: row.external_id,
           type: row.type,
@@ -254,7 +258,7 @@ function processedAdapter(prisma: PrismaClient, client: PortalClient, resolveSit
   };
 }
 
-function outboundAdapter(prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function outboundAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
   const model = prisma.mymrcOutboundMirror;
   return {
     feed: 'outbound',
@@ -282,14 +286,14 @@ function outboundAdapter(prisma: PrismaClient, client: PortalClient, resolveSite
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
     },
-    async applyDetail(recordId, at) {
+    async applyDetailRecord(record, at) {
       // `vendor` (Outbound_Vendor_Name__c) is a LIST-ONLY column absent from the
       // record detail — it stays null here until the list pass threads it in
       // (documented follow-up). Everything else comes from the detail record.
-      const row: OutboundMirrorRow = mapOutboundRecord(await client.fetchRecordDetail('outbound', recordId));
+      const row: OutboundMirrorRow = mapOutboundRecord(record);
       const siteId = resolveSiteId(siteCodeFromDiscriminator(row.account_name));
       await model.update({
-        where: { id: recordId },
+        where: { id: record.id },
         data: {
           external_materials_id: row.external_id,
           type: row.type,
@@ -313,23 +317,27 @@ function outboundAdapter(prisma: PrismaClient, client: PortalClient, resolveSite
   };
 }
 
-function adapterFor(feed: FeedName, prisma: PrismaClient, client: PortalClient, resolveSiteId: SiteIdResolver): FeedAdapter {
-  if (feed === 'hauls') return haulsAdapter(prisma, client, resolveSiteId);
-  if (feed === 'processed') return processedAdapter(prisma, client, resolveSiteId);
-  return outboundAdapter(prisma, client, resolveSiteId);
+function adapterFor(feed: FeedName, prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+  if (feed === 'hauls') return haulsAdapter(prisma, resolveSiteId);
+  if (feed === 'processed') return processedAdapter(prisma, resolveSiteId);
+  return outboundAdapter(prisma, resolveSiteId);
 }
 
 // ── One site+feed run ────────────────────────────────────────────────────────
 
 export interface SyncFeedContext {
   prisma: PrismaClient;
+  /** List transport (record ids per feed). */
   client: PortalClient;
+  /** Batched getRecordWithFields transport for the detail pass (record-fields-client). */
+  recordFields: RecordFieldsClient;
   site: SiteCode;
   feed: FeedName;
   pager?: Pager;
   log?: Logger;
   now?: () => Date;
-  detailConcurrency?: number;
+  /** Record-ids per getRecordWithFields POST (default 100). */
+  detailBatchSize?: number;
   /** Per-run correlation id. Defaults to a fresh crypto.randomUUID when omitted. */
   runId?: string;
 }
@@ -354,7 +362,7 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   const log = ctx.log ?? noopLog;
   const nowFn = ctx.now ?? ((): Date => new Date());
   const started = nowFn();
-  const concurrency = ctx.detailConcurrency ?? DETAIL_CONCURRENCY;
+  const batchSize = ctx.detailBatchSize ?? DETAIL_BATCH_SIZE;
   const runId = ctx.runId ?? randomUUID();
   // Prefix every line of this run with its correlation id so a run's logs and its
   // ledger row (which persists the same `run_id`) join without timestamp guessing.
@@ -392,7 +400,7 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   }
 
   try {
-    const adapter = adapterFor(ctx.feed, ctx.prisma, ctx.client, resolveSiteId);
+    const adapter = adapterFor(ctx.feed, ctx.prisma, resolveSiteId);
     const { ids, complete } = await ctx.client.fetchListRecordIds(ctx.feed);
     rowsListed = ids.length;
 
@@ -423,20 +431,26 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
       );
     }
 
+    // Detail pass — BATCHED getRecordWithFields (record-fields-client): chunk the
+    // still-null ids ≤batchSize, one direct POST per chunk, map+upsert each
+    // returned record. A logged-out session throws AuthFailedError (fatal for the
+    // run, existing behavior); per-id ERRORs (FLS/deleted) and transport gaps stay
+    // NULL and retry next run — the same money-safe retry as before, no longer racy.
     const needDetail = await adapter.idsNeedingDetail(ids);
-    for (const group of chunk(needDetail, concurrency)) {
-      const settled = await Promise.allSettled(group.map((t) => adapter.applyDetail(t.id, started)));
-      for (const [i, res] of settled.entries()) {
-        if (res.status === 'fulfilled') detailsFetched += 1;
-        else {
-          const target = group[i];
-          if (res.reason instanceof AuthFailedError) throw res.reason; // auth is fatal for the run
-          const extId = target?.externalId ?? '(unfetched)';
-          log(
-            'warn',
-            `mymrc-sync: ${tag} detail record=${target?.id ?? '?'} external=${extId} failed (retry next run): ${describe(res.reason)}`,
-          );
-        }
+    const externalById = new Map(needDetail.map((t) => [t.id, t.externalId]));
+    const optionalFields = optionalFieldsForFeed(ctx.feed);
+    for (const group of chunk(needDetail.map((t) => t.id), batchSize)) {
+      const { records, errors } = await ctx.recordFields.fetchRecordFields(group, optionalFields);
+      for (const [, record] of records) {
+        await adapter.applyDetailRecord(record, started);
+        detailsFetched += 1;
+      }
+      for (const e of errors) {
+        const extId = externalById.get(e.recordId) ?? '(unfetched)';
+        log(
+          'warn',
+          `mymrc-sync: ${tag} detail record=${e.recordId} external=${extId} ${e.state} (retry next run): ${e.message}`,
+        );
       }
     }
 
@@ -545,6 +559,7 @@ async function feedExpectedLoads(
 export interface SyncSiteContext {
   prisma: PrismaClient;
   client: PortalClient;
+  recordFields: RecordFieldsClient;
   site: SiteCode;
   pager?: Pager;
   log?: Logger;
@@ -559,6 +574,7 @@ export async function syncSite(ctx: SyncSiteContext): Promise<SyncFeedResult[]> 
       await syncFeed({
         prisma: ctx.prisma,
         client: ctx.client,
+        recordFields: ctx.recordFields,
         site: ctx.site,
         feed,
         ...(ctx.pager ? { pager: ctx.pager } : {}),

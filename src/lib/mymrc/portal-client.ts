@@ -348,7 +348,13 @@ export interface ListRecordIdsResult {
  */
 export interface PortalClient {
   fetchListRecordIds(feed: FeedName): Promise<ListRecordIdsResult>;
-  fetchRecordDetail(feed: FeedName, recordId: string): Promise<SfRecord>;
+  /**
+   * The underlying proven-authenticated admin session. Exposed so the batched
+   * detail transport (record-fields-client) can be built over the SAME session
+   * (one admin login serves both list + detail) without this module importing
+   * record-fields-client (avoids a transport import cycle).
+   */
+  getSession(): AdminSession;
   close(): Promise<void>;
 }
 
@@ -617,14 +623,8 @@ export async function createPortalClient(
       return { ids, complete: !hasMoreData };
     },
 
-    async fetchRecordDetail(feed: FeedName, recordId: string): Promise<SfRecord> {
-      const url = detailUrl(recordId);
-      const bodies = await session.collectAura(url);
-      if (await session.isLoginPage()) {
-        await session.purgeState();
-        throw new AuthFailedError(`mymrc: logged out during ${feed} detail ${recordId}`);
-      }
-      return extractRecord(bodies, recordId);
+    getSession(): AdminSession {
+      return session;
     },
 
     async close(): Promise<void> {

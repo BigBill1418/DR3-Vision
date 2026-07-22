@@ -32,8 +32,6 @@ import type { BackfillListPage, BackfillPortalClient } from './backfill';
 import {
   AuthFailedError,
   PortalContractDriftError,
-  detailUrl,
-  extractRecord,
   type AdminSession,
 } from './portal-client';
 import {
@@ -53,7 +51,6 @@ import {
   type CapturedListView,
   type ListViewBinding,
 } from './list-page';
-import type { SfRecord } from './types';
 
 export type Logger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: Logger = () => undefined;
@@ -100,8 +97,6 @@ export interface BackfillSession {
   }>;
   /** POST an offset-replay to the Aura endpoint with the given form fields → raw response body. */
   postGetItems(formFields: Record<string, string>): Promise<string>;
-  /** Fetch one record's detail representation (throws AuthFailedError when logged out). */
-  fetchRecordDetail(recordId: string): Promise<SfRecord>;
   /** `true` when the session currently looks logged-out. */
   isLoggedOut(): Promise<boolean>;
   /** Purge the poisoned storageState so the next run boots clean. */
@@ -262,10 +257,6 @@ export function createBackfillPortalClient(
       );
       return { ids: parsed.recordIds, hasMoreData, totalCount: total };
     },
-
-    async fetchRecordDetail(recordId): Promise<SfRecord> {
-      return session.fetchRecordDetail(recordId);
-    },
   };
 }
 
@@ -284,8 +275,10 @@ const CAPTURE_SETTLE_MS = 4_000;
  *     RESPONSES (for the correlate step), plus the endpoint URL to replay against.
  *   - `postGetItems` replays via the context's own request API, so the session
  *     cookie jar authenticates the POST with no manual cookie handling.
- *   - `fetchRecordDetail` reuses the interception detail path (collectAura +
- *     extractRecordDetail), with the same logged-out guard as the steady-state client.
+ * Detail is no longer fetched here (the racy per-record `/s/detail/<id>`
+ * interception is dead): the batched getRecordWithFields transport
+ * (record-fields-client.ts) captures billing fields via `captureListPage`'s
+ * envelope.
  */
 export function playwrightBackfillSession(admin: AdminSession, log: Logger = noopLog): BackfillSession {
   let endpointUrl: string | null = null;
@@ -341,15 +334,6 @@ export function playwrightBackfillSession(admin: AdminSession, log: Logger = noo
         },
       });
       return resp.text();
-    },
-
-    async fetchRecordDetail(recordId) {
-      const bodies = await admin.collectAura(detailUrl(recordId));
-      if (await admin.isLoginPage()) {
-        await admin.purgeState();
-        throw new AuthFailedError(`mymrc-backfill: logged out during detail ${recordId}`);
-      }
-      return extractRecord(bodies, recordId);
     },
 
     async isLoggedOut() {
