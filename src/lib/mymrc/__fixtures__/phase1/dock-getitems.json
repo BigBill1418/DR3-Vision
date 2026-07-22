@@ -1,0 +1,31 @@
+{
+  "orderedByInfo": [{ "label": "Schedule Name", "isAscending": true }],
+  "scope": ["All schedules"],
+  "filteredByLabels": ["Status"],
+  "recordIdActionsList": [
+    { "recordId": "a1tUJ00000SYNDOCK1AE" },
+    { "recordId": "a1tUJ00000SYNDOCK2BF" }
+  ],
+  "columnWidthMapping": {
+    "Name": -1,
+    "Day_of_Week__c": -1,
+    "Slot_Start_Time__c": -1,
+    "Slot_End_Time__c": -1,
+    "Number_of_Available_Appointments__c": -1
+  },
+  "wrappedColumns": [],
+  "offset": 14,
+  "hasMoreData": false,
+  "filterTitle": "Dock Availability Schedules",
+  "isErrorListView": false,
+  "entityLabelPlural": "schedules",
+  "fields": [
+    "Name",
+    "Day_of_Week__c",
+    "Container_Type__c",
+    "Slot_Start_Time__c",
+    "Slot_End_Time__c",
+    "Number_of_Available_Appointments__c",
+    "Id"
+  ]
+}

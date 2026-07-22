@@ -1,0 +1,31 @@
+{
+  "orderedByInfo": [{ "label": "Materials ID", "isAscending": true }],
+  "scope": ["All materials"],
+  "filteredByLabels": ["Record Type", "Materials Status", "My Materials"],
+  "recordIdActionsList": [
+    { "recordId": "a2LUJ00000SYNOUTB2AG" },
+    { "recordId": "a2LUJ00000SYNOUTB3CH" }
+  ],
+  "columnWidthMapping": {
+    "Name": -1,
+    "Account__r.Name": -1,
+    "BOL_ID__c": -1,
+    "Outbound_Vendor_Name__c": -1,
+    "Entry_Date__c": -1
+  },
+  "wrappedColumns": [],
+  "offset": 50,
+  "hasMoreData": true,
+  "filterTitle": "All Active Outbound Materials",
+  "isErrorListView": false,
+  "entityLabelPlural": "materials",
+  "fields": [
+    "Name",
+    "Account__r.Name",
+    "BOL_ID__c",
+    "Outbound_Vendor_Name__c",
+    "Entry_Date__c",
+    "Id",
+    "SystemModstamp"
+  ]
+}

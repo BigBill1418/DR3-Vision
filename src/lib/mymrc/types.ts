@@ -111,26 +111,75 @@ interface MirrorBase {
   payload: unknown;
 }
 
+// Field provenance below is the REAL Phase-0 object catalog
+// (docs/mymrc-discovery-2026-07-22.md). Every Salesforce field is a
+// `{displayValue, value}` pair; mappers read `value` for identity/number/date,
+// and `displayValue` only where it is the canonical human label.
 export interface HaulMirrorRow extends MirrorBase {
-  status: string | null;
-  rate_id: string | null;
-  docking_appointment_at: Date | null;
-  door: string | null;
-  units: number | null;
+  status: string | null; // Status__c
+  type: string | null; // Type__c — docking-appointment vs consumer/illegal drop-off discriminator
+  rate_id: string | null; // Rate_ID__c (denormalized landfill-transporter-recycler descriptor)
+  recycler_name: string | null; // Recycling_Center_Lookup__r.Name — SITE discriminator (→ site_id on detail)
+  recycler_account_id: string | null; // Recycling_Center_Lookup__c — 18-char Account id (structured join)
+  transporter_name: string | null; // Transporter__c — account-name string (denormalized, NOT an FK)
+  collection_site: string | null; // Collection_Site__c — expected_loads source-name join key
+  collection_source: string | null; // Collection_Source__c
+  commodity: string | null; // Commodity__c
+  container_type: string | null; // Container_Type__c — RAW value (typographic apostrophe; normalize before compare)
+  program_unit_count: number | null; // Recycler_Program_Unit_Count__c — billing-authoritative
+  non_program_unit_count: number | null; // Recycler_Non_Program_Unit_Count__c
+  unpaid_consumer_dropoff_units: number | null; // Unpaid_Consumer_Drop_Off_Units__c
+  docking_appointment_date: Date | null; // Docking_Appointment_Date__c (Date, noon-UTC)
+  docking_appointment_at: Date | null; // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
+  door: string | null; // Docking_Appointment_Dock_Door__c
+  units: number | null; // legacy back-compat mirror of program_unit_count (program_unit_count is authoritative)
 }
 
 export interface ProcessedMirrorRow extends MirrorBase {
-  bol_id: string | null;
-  entry_date: Date | null;
-  processed_date: Date | null;
-  units: number | null;
+  type: string | null; // Type__c (expected 'Processing')
+  account_name: string | null; // Account__r.Name — SITE discriminator (→ site_id on detail)
+  account_id: string | null; // Account__c — 18-char Account id (structured join)
+  materials_status: string | null; // Materials_Status__c
+  bol_id: string | null; // BOL_ID__c
+  entry_date: Date | null; // Entry_Date__c
+  processed_date: Date | null; // Processed_Date__c
+  program_unit_count: number | null; // Number_of_Program_Units__c (billable count)
+  non_program_unit_count: number | null; // Number_of_Non_Program_Units__c
+  units: number | null; // legacy back-compat mirror of program_unit_count
 }
 
 export interface OutboundMirrorRow extends MirrorBase {
-  bol_id: string | null;
-  entry_date: Date | null;
-  shipment_date: Date | null;
-  vendor: string | null;
+  type: string | null; // Type__c (expected 'Outbound')
+  account_name: string | null; // Account__r.Name — SITE discriminator (→ site_id on detail)
+  account_id: string | null; // Account__c — 18-char Account id (structured join)
+  materials_status: string | null; // Materials_Status__c
+  bol_id: string | null; // BOL_ID__c
+  vendor: string | null; // Outbound_Vendor_Name__c — LIST-ONLY (absent from the record detail; see mappers.ts)
+  entry_date: Date | null; // Entry_Date__c
+  shipment_date: Date | null; // no real Materials field — stays null (kept, forward-compatible)
+  program_unit_count: number | null; // Number_of_Program_Units__c
+  non_program_unit_count: number | null; // Number_of_Non_Program_Units__c
+}
+
+/**
+ * Dock_Availability_Schedule__c (a1t) — NEW non-billing scheduling object.
+ * No site discriminator exists in its 14-field set (no site_id column). Slot
+ * times are Salesforce Time strings ("07:00:00.000Z"), NOT datetimes — kept as
+ * strings verbatim. Multipicklists (day_of_week codes, container_type) are stored
+ * RAW ";"-joined per the schema; membership splitting is a downstream concern.
+ */
+export interface DockAvailabilityMirrorRow {
+  id: string; // Salesforce record id (a1t…)
+  external_id: string | null; // Name ("DA-SCHED-000058") → external_schedule_id column
+  status: string | null; // Status__c
+  day_of_week: string | null; // Day_of_Week__c — RAW value ";"-joined numeric codes ("1;2;3;4;5")
+  container_type: string | null; // Container_Type__c — RAW value ";"-joined multipicklist
+  dock_door: string | null; // Dock_Door__c value ("Dock Door 1"), NOT displayValue ("Schedule 1")
+  slot_start_time: string | null; // Slot_Start_Time__c — SF Time text ("07:00:00.000Z")
+  slot_end_time: string | null; // Slot_End_Time__c — SF Time text
+  available_appointments: number | null; // Number_of_Available_Appointments__c
+  availability_start_date: Date | null; // Availability_Start_Date__c (Date, noon-UTC)
+  payload: unknown; // FULL raw record representation
 }
 
 export type MirrorRow = HaulMirrorRow | ProcessedMirrorRow | OutboundMirrorRow;

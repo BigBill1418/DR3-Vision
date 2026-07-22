@@ -1,0 +1,64 @@
+{
+  "apiName": "Materials__c",
+  "childRelationships": {},
+  "eTag": "0000000000000000000000000000proc",
+  "id": "a2LUJ00000SYNPROC1AC",
+  "recordTypeId": "0124p000000Zwx1AAC",
+  "recordTypeInfo": {
+    "available": true,
+    "defaultRecordTypeMapping": false,
+    "master": false,
+    "name": "Processing",
+    "recordTypeId": "0124p000000Zwx1AAC"
+  },
+  "lastModifiedDate": "2026-05-02T19:13:18.000Z",
+  "systemModstamp": "2026-05-02T19:13:18.000Z",
+  "weakEtag": 1729105998000,
+  "fields": {
+    "Id": { "displayValue": null, "value": "a2LUJ00000SYNPROC1AC" },
+    "Name": { "displayValue": null, "value": "M-900100" },
+    "Type__c": { "displayValue": "Processing", "value": "Processing" },
+    "Materials_Status__c": { "displayValue": "Active", "value": "Active" },
+    "Review_Status__c": { "displayValue": "Approved", "value": "Approved" },
+    "BOL_ID__c": { "displayValue": null, "value": null },
+    "Entry_Date__c": { "displayValue": "5/1/2026", "value": "2026-05-01" },
+    "Processed_Date__c": { "displayValue": "5/1/2026", "value": "2026-05-01" },
+    "Number_of_Program_Units__c": { "displayValue": null, "value": 200 },
+    "Number_of_Non_Program_Units__c": { "displayValue": null, "value": 5 },
+    "Number_of_Cutting_Employees__c": { "displayValue": null, "value": 4 },
+    "Number_of_Attached_Files__c": { "displayValue": null, "value": 0 },
+    "Record_Locked__c": { "displayValue": null, "value": true },
+    "Unlock_Record__c": { "displayValue": null, "value": false },
+    "User_Reviewed__c": { "displayValue": null, "value": true },
+    "Account__c": { "displayValue": null, "value": "001460000SYNTHTVLAAQ" },
+    "Account__r": {
+      "displayValue": "DR3 Testville",
+      "value": {
+        "apiName": "Account",
+        "childRelationships": {},
+        "eTag": "0000000000000000000000000000acct",
+        "id": "001460000SYNTHTVLAAQ",
+        "recordTypeId": "01246000000qpShAAI",
+        "recordTypeInfo": {
+          "available": true,
+          "defaultRecordTypeMapping": true,
+          "master": false,
+          "name": "MRC Account",
+          "recordTypeId": "01246000000qpShAAI"
+        },
+        "lastModifiedById": "005UJ0000011SYNTAAA",
+        "lastModifiedDate": "2026-07-22T00:24:40.000Z",
+        "systemModstamp": "2026-07-22T00:24:40.000Z",
+        "weakEtag": 1784679880000,
+        "fields": {
+          "Id": { "displayValue": null, "value": "001460000SYNTHTVLAAQ" },
+          "Name": { "displayValue": null, "value": "DR3 Testville" }
+        }
+      }
+    },
+    "CreatedDate": { "displayValue": "5/2/2026 12:34 PM", "value": "2026-05-02T19:34:06.000Z" },
+    "LastModifiedDate": { "displayValue": "5/2/2026 12:13 PM", "value": "2026-05-02T19:13:18.000Z" },
+    "SystemModstamp": { "displayValue": "5/2/2026 12:13 PM", "value": "2026-05-02T19:13:18.000Z" },
+    "MRC_Comment__c": { "displayValue": null, "value": null }
+  }
+}

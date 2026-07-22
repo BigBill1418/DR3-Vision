@@ -1,0 +1,75 @@
+{
+  "apiName": "Haul_Request__c",
+  "childRelationships": {},
+  "eTag": "0000000000000000000000000000haul",
+  "id": "a2KUJ00000SYNTH01AB",
+  "recordTypeId": "012000000000000AAA",
+  "recordTypeInfo": null,
+  "lastModifiedDate": "2026-07-20T12:51:20.000Z",
+  "systemModstamp": "2026-07-20T12:51:20.000Z",
+  "weakEtag": 1784551880000,
+  "fields": {
+    "Id": { "displayValue": null, "value": "a2KUJ00000SYNTH01AB" },
+    "Name": { "displayValue": null, "value": "H-900001" },
+    "Status__c": { "displayValue": "Confirmed", "value": "Confirmed" },
+    "Type__c": { "displayValue": "General", "value": "General" },
+    "Commodity__c": {
+      "displayValue": "Whole Mattresses and Foundations",
+      "value": "Whole Mattresses and Foundations"
+    },
+    "Container_Type__c": { "displayValue": "28’ Trailer", "value": "28’ Trailer" },
+    "Rate_ID__c": {
+      "displayValue": null,
+      "value": "Testville Transfer Station - Synthetic Hauling Co - DR3 parent account CA - DR3 Testville"
+    },
+    "Transporter__c": {
+      "displayValue": null,
+      "value": "Synthetic Hauling Co - DR3 parent account CA"
+    },
+    "Collection_Site__c": { "displayValue": null, "value": "Testville Transfer Station" },
+    "Collection_Source__c": { "displayValue": null, "value": null },
+    "Recycler_Program_Unit_Count__c": { "displayValue": null, "value": 42 },
+    "Recycler_Non_Program_Unit_Count__c": { "displayValue": null, "value": 3 },
+    "Unpaid_Consumer_Drop_Off_Units__c": { "displayValue": null, "value": null },
+    "Recycler_Weight__c": { "displayValue": null, "value": 1234.5 },
+    "Docking_Appointment_Date__c": { "displayValue": "7/20/2026", "value": "2026-07-20" },
+    "Docking_Appointment_Time__c": { "displayValue": null, "value": "2026/07/20 12:00 PT" },
+    "Docking_Appointment_Dock_Door__c": { "displayValue": null, "value": "Dock Door 1" },
+    "Docking_Appointment_Id__c": { "displayValue": null, "value": "DA-900001" },
+    "Pickup_Address__c": {
+      "displayValue": null,
+      "value": "100 Synthetic Dump Rd.<br>Testville, CA 90001"
+    },
+    "Recycling_Center_Lookup__c": { "displayValue": null, "value": "001460000SYNTHTVLAAQ" },
+    "Recycling_Center_Lookup__r": {
+      "displayValue": "DR3 Testville",
+      "value": {
+        "apiName": "Account",
+        "childRelationships": {},
+        "eTag": "0000000000000000000000000000acct",
+        "id": "001460000SYNTHTVLAAQ",
+        "recordTypeId": "01246000000qpShAAI",
+        "recordTypeInfo": {
+          "available": true,
+          "defaultRecordTypeMapping": true,
+          "master": false,
+          "name": "MRC Account",
+          "recordTypeId": "01246000000qpShAAI"
+        },
+        "lastModifiedById": "005UJ0000011SYNTAAA",
+        "lastModifiedDate": "2026-07-22T00:24:40.000Z",
+        "systemModstamp": "2026-07-22T00:24:40.000Z",
+        "weakEtag": 1784679880000,
+        "fields": {
+          "Id": { "displayValue": null, "value": "001460000SYNTHTVLAAQ" },
+          "Name": { "displayValue": null, "value": "DR3 Testville" }
+        }
+      }
+    },
+    "CreatedDate": { "displayValue": "6/8/2026 1:52 PM", "value": "2026-06-08T20:52:33.000Z" },
+    "LastModifiedDate": { "displayValue": "7/20/2026 5:51 AM", "value": "2026-07-20T12:51:20.000Z" },
+    "SystemModstamp": { "displayValue": "7/20/2026 5:51 AM", "value": "2026-07-20T12:51:20.000Z" },
+    "Recycler_Reviewed__c": { "displayValue": null, "value": false },
+    "MRC_Comment_for_Recyclers__c": { "displayValue": null, "value": null }
+  }
+}

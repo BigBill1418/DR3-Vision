@@ -1,0 +1,31 @@
+{
+  "orderedByInfo": [{ "label": "Haul ID", "isAscending": true }],
+  "scope": ["All hauls"],
+  "filteredByLabels": ["Status", "My Haul", "Docking Appointment"],
+  "recordIdActionsList": [
+    { "recordId": "a2KUJ00000SYNTH01AB" },
+    { "recordId": "a2KUJ00000SYNTH02CD" },
+    { "recordId": "a2KUJ00000SYNTH03EF" }
+  ],
+  "columnWidthMapping": {
+    "Name": -1,
+    "Status__c": -1,
+    "Docking_Appointment_Date__c": -1,
+    "Recycling_Center_Lookup__r.Name": -1
+  },
+  "wrappedColumns": [],
+  "offset": 50,
+  "hasMoreData": true,
+  "filterTitle": "Docking Appointments (RC)",
+  "isErrorListView": false,
+  "entityLabelPlural": "hauls",
+  "fields": [
+    "Name",
+    "Status__c",
+    "Type__c",
+    "Docking_Appointment_Date__c",
+    "Recycling_Center_Lookup__r.Name",
+    "Id",
+    "SystemModstamp"
+  ]
+}
