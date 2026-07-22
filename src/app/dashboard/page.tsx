@@ -155,7 +155,12 @@ function SiteSummaryCard({ s }: { s: SiteSummary }) {
           <span className={TONE_TEXT[s.mirrorWorst.tone]}>MyMRC {s.mirrorWorst.relative}</span>
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+      {/* 2×2 on narrow / half-width cards; 4-up only at lg where the card is wide
+          enough. `min-w-0` lets each cell shrink so a wide value wraps inside its
+          own track instead of overflowing into the neighbour (the 768px overlap
+          bug). The Open/Closed status renders at a smaller scale than the numeric
+          stats so it is never the widest/largest element in the card. */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 lg:grid-cols-4">
         <Metric label="On dock now" value={nf(s.loadsActive)} unit="loads" />
         <Metric label="Arrived today" value={nf(s.loadsArrivedToday)} unit="loads" />
         <Metric
@@ -168,6 +173,7 @@ function SiteSummaryCard({ s }: { s: SiteSummary }) {
           value={processedLabel}
           unit=""
           valueClass={TONE_TEXT[processedTone] ?? 'text-dr3-mist'}
+          status
         />
       </div>
       {s.commodityOutstandingUsd != null && s.commodityOutstandingUsd > 0 && (
@@ -185,17 +191,25 @@ function Metric({
   value,
   unit,
   valueClass,
+  status = false,
 }: {
   label: string;
   value: string;
   unit: string;
   valueClass?: string;
+  // A `status` metric holds a word ("Open"/"Closed") rather than a number.
+  // Rendered a step down from the numeric stats so a wide word never becomes
+  // the largest element and cannot overrun its grid track.
+  status?: boolean;
 }) {
+  const valueSize = status ? 'text-base' : 'text-2xl';
   return (
-    <div>
+    <div className="min-w-0">
       <div className="text-xs font-semibold uppercase tracking-wide text-dr3-mist-dim">{label}</div>
-      <div className="flex items-baseline gap-1">
-        <span className={`text-2xl font-bold tabular-nums ${valueClass ?? 'text-dr3-mist'}`}>
+      <div className="flex flex-wrap items-baseline gap-1">
+        <span
+          className={`${valueSize} font-bold tabular-nums leading-tight ${valueClass ?? 'text-dr3-mist'}`}
+        >
           {value}
         </span>
         {unit ? <span className="text-xs text-dr3-mist-dim">{unit}</span> : null}
