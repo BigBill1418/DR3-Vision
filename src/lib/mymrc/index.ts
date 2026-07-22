@@ -49,11 +49,11 @@ export {
   type SyncSiteContext,
 } from './sync';
 // Windowed historical backfill (ADR-0057 D3). The engine, its production target
-// wiring, AND the offset-paginating portal adapter that drives it. The getItems
-// OFFSET pagination mechanism was CONFIRMED LIVE 2026-07-22 (see list-page.ts) —
-// so the adapter (`createBackfillPortalClient` + `playwrightBackfillSession`) is
-// no longer INERT; the `scripts/mymrc-backfill.mjs` entrypoint runs it one-shot.
-// See OPEN-ITEMS C-24 (now closed).
+// wiring, AND the SORT-FLIP-paginating portal adapter that drives it. Plain offset
+// pagination TRUNCATED the two big views at the SOQL OFFSET 2000 ceiling (2050
+// rows); sort-flip (asc+desc by Id, pageSize 2000, getCount) pages the full
+// history when totalCount ≤ 8000 — CONFIRMED LIVE 2026-07-22 (see list-page.ts).
+// The `scripts/mymrc-backfill.mjs` entrypoint runs it one-shot.
 export {
   runBackfill,
   type BackfillPortalClient,
@@ -73,6 +73,9 @@ export {
 } from './backfill-portal-client';
 export {
   offsetForPage,
+  sortFlipStep,
+  sortFlipLastPageIndex,
+  sortFlipExceedsCoverage,
   buildGetItemsMessage,
   buildGetItemsFormFields,
   parseGetItemsResponse,
@@ -84,6 +87,8 @@ export {
   BACKFILL_LIST_VIEWS,
   GETITEMS_DESCRIPTOR,
   DEFAULT_PAGE_SIZE,
+  BACKFILL_PAGE_SIZE,
+  SORT_FLIP_STEP_COUNT,
   type GetItemsParams,
   type GetItemsPage,
   type AuraFrameworkParams,
