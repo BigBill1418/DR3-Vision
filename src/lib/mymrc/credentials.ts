@@ -1,77 +1,71 @@
-// Per-site MyMRC credential reader.
+// ADR-0057 D1/D9 — MyMRC admin credential reader (DB-backed, single identity).
 //
-// Credentials live in env vars on CHAD-HQ (`~/.dr3-vision-secrets/mymrc.env`,
-// mode 600 — see `docs/operator/mymrc-setup.md`). The reader supports
-// two naming schemes for each site so the operator runbook and the
-// sprint-1 ticket text can both stay valid:
+// Vision now logs into MyMRC as Bill's ONE admin identity (ADR-0057 D1). Those
+// credentials live ENCRYPTED in Postgres (see credential-store.ts) and are
+// entered via the `/admin/mrc-scrape` admin surface — NEVER a `.env` file. This
+// module is the scrape worker's read path over that store.
 //
-//   - Site-name form (preferred — matches the runbook):
-//       MYMRC_EUGENE_USERNAME / MYMRC_EUGENE_PASSWORD
-//       MYMRC_WOODLAND_USERNAME / MYMRC_WOODLAND_PASSWORD
+// It replaces the retired per-site env-var scheme. The old
+// `MYMRC_{EUGENE,WOODLAND,OR,CA}_{USERNAME,PASSWORD}` variables were NEVER
+// honored (the service accounts they named were never created — see ADR-0038
+// preamble + ADR-0057 context: zero pulls in months), so they are deleted
+// outright rather than migrated. Site scoping no longer happens on the login
+// identity; it happens on the DATA (records carry `Recycler__c` = "DR3 Woodland"
+// / "DR3 Eugene").
 //
-//   - Jurisdiction form (legacy alias from `docs/MYMRC-INTEGRATION.md`):
-//       MYMRC_OR_USERNAME / MYMRC_OR_PASSWORD     -> Eugene
-//       MYMRC_CA_USERNAME / MYMRC_CA_PASSWORD     -> Woodland
-//
-// Either pair satisfies a site; the site-name form wins on conflict.
-// Both halves of a pair must be present together — a half-set pair is
-// treated as "not configured" rather than failing partially-through.
-//
-// Returning `null` for "not configured" is the contract the cron
-// wrapper relies on for the fail-soft path: when no credentials are
-// present, the wrapper logs and exits 0 without publishing to ntfy
-// (it's an operator state, not a system error).
+// D9 posture change (ADR-0057 D9): missing credentials are NO LONGER a fail-soft
+// "skip + exit 0" operator state. They are a LOUD failure — `loadAdminCredentials`
+// THROWS `CredentialsNotConfiguredError`, and the caller pages + exits non-zero.
+// This is what closes the historical silent-no-op failure mode.
 
-import type { SiteCode, SiteCredentials } from './types';
+import { getMymrcCredentials, type MymrcCredentials } from './credential-store';
+import type { PrismaClient } from '@prisma/client';
 
-interface EnvPair {
-  username: string | undefined;
-  password: string | undefined;
-}
-
-function readEnvPair(usernameKey: string, passwordKey: string): EnvPair {
-  return {
-    username: process.env[usernameKey]?.trim() || undefined,
-    password: process.env[passwordKey]?.trim() || undefined,
-  };
-}
-
-function pickCompletePair(...candidates: EnvPair[]): EnvPair | null {
-  for (const pair of candidates) {
-    if (pair.username && pair.password) return pair;
+/**
+ * Thrown at scrape startup when NO admin credentials are configured in the DB
+ * store (ADR-0057 D9). Distinct from a decrypt/key failure (which the store
+ * surfaces as `CredentialDecryptError` / `CredentialKeyUnavailableError`): this
+ * one means "Bill has not entered his MyMRC login yet", and the fix is to enter
+ * it at `/admin/mrc-scrape` — not to investigate corruption.
+ */
+export class CredentialsNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CredentialsNotConfiguredError';
   }
-  return null;
 }
 
 /**
- * Load credentials for a single site, or `null` if neither naming
- * scheme produced a complete pair. Never throws — partial config (only
- * username, only password) is treated as unconfigured.
+ * Load the single MyMRC admin credential from the encrypted DB store and return
+ * the decrypted `{ username, password }`. SERVER/SCRAPE ONLY — the caller must
+ * never log or forward the password.
+ *
+ * Fail-loud (ADR-0057 D9): THROWS `CredentialsNotConfiguredError` when the store
+ * is empty — there is no `null`/skip path. It may also propagate the store's
+ * fail-closed errors (`CredentialDecryptError` on tamper/wrong-key,
+ * `CredentialKeyUnavailableError` when `MYMRC_CRED_KEY` is unset while a row
+ * exists); those are loud by design too and must NOT be masked as "unconfigured".
  */
-export function loadSiteCredentials(site: SiteCode): SiteCredentials | null {
-  const candidates: EnvPair[] = [];
-  if (site === 'eugene') {
-    candidates.push(readEnvPair('MYMRC_EUGENE_USERNAME', 'MYMRC_EUGENE_PASSWORD'));
-    candidates.push(readEnvPair('MYMRC_OR_USERNAME', 'MYMRC_OR_PASSWORD'));
-  } else {
-    candidates.push(readEnvPair('MYMRC_WOODLAND_USERNAME', 'MYMRC_WOODLAND_PASSWORD'));
-    candidates.push(readEnvPair('MYMRC_CA_USERNAME', 'MYMRC_CA_PASSWORD'));
+export async function loadAdminCredentials(prisma: PrismaClient): Promise<MymrcCredentials> {
+  const creds = await getMymrcCredentials(prisma);
+  if (!creds) {
+    throw new CredentialsNotConfiguredError(
+      'MyMRC admin credentials are not configured — enter them at /admin/mrc-scrape',
+    );
   }
-  const pair = pickCompletePair(...candidates);
-  if (!pair || !pair.username || !pair.password) return null;
-  return { site, username: pair.username, password: pair.password };
+  return creds;
 }
 
 /**
- * Where Playwright stores per-site auth state between scrape runs.
- * Defaults to `~/.dr3-vision/mymrc-{site}/auth.json`; the
- * `MYMRC_AUTH_STATE_DIR` env var overrides the parent dir for local
- * testing. Returns the JSON file path — caller is responsible for
- * ensuring the parent dir exists.
+ * Where Playwright persists the admin session between scrape runs. Single admin
+ * context (ADR-0057 D1) — one path, NOT per-site. `MYMRC_AUTH_STATE_DIR`
+ * overrides the parent dir (set to a mounted volume in compose); otherwise it
+ * defaults under `~/.dr3-vision`. Returns the JSON file path — the caller
+ * (portal-client) ensures the parent dir exists.
  */
-export function authStatePath(site: SiteCode): string {
+export function adminAuthStatePath(): string {
   const root =
     process.env['MYMRC_AUTH_STATE_DIR']?.trim() ||
     `${process.env['HOME'] ?? '/tmp'}/.dr3-vision`;
-  return `${root}/mymrc-${site}/auth.json`;
+  return `${root}/mymrc-admin/auth.json`;
 }

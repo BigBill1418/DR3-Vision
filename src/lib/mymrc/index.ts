@@ -5,7 +5,7 @@
 // dependent transport (`portal-client.ts`) is exported but only the cron
 // worker imports it; the Next.js app process never bundles Playwright.
 
-export { loadSiteCredentials, authStatePath } from './credentials';
+export { loadAdminCredentials, adminAuthStatePath, CredentialsNotConfiguredError } from './credentials';
 export {
   setMymrcCredentials,
   getMymrcCredentials,

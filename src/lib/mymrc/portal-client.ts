@@ -23,10 +23,11 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
-import { authStatePath } from './credentials';
+import { adminAuthStatePath } from './credentials';
+import type { MymrcCredentials } from './credential-store';
 import { listRecordIds } from './mappers';
 import { LOGIN_URL, SELECTORS } from './selectors';
-import type { FeedName, GetItemsReturnValue, SiteCredentials, SfRecord } from './types';
+import type { FeedName, GetItemsReturnValue, SfRecord } from './types';
 
 // ── Typed errors ─────────────────────────────────────────────────────────────
 
@@ -247,13 +248,13 @@ export interface PortalClient {
  */
 export async function createPortalClient(
   browser: Browser,
-  creds: SiteCredentials,
+  creds: MymrcCredentials,
   opts: PortalClientOptions = {},
 ): Promise<PortalClient> {
   const log = opts.log ?? noopLog;
   const navTimeout = opts.navTimeoutMs ?? NAV_TIMEOUT_MS;
   const settleMs = opts.settleMs ?? SETTLE_MS;
-  const stateFile = opts.storageStatePath ?? authStatePath(creds.site);
+  const stateFile = opts.storageStatePath ?? adminAuthStatePath();
   await mkdir(dirname(stateFile), { recursive: true });
 
   const context: BrowserContext = await browser.newContext({
@@ -283,11 +284,11 @@ export async function createPortalClient(
 
   async function ensureAuthenticated(targetUrl: string): Promise<void> {
     if (!(await isLoginPage())) return;
-    log('info', `mymrc: login required (${creds.site})`);
+    log('info', 'mymrc: login required (admin)');
     await login(page, creds, log);
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
     if (await isLoginPage()) {
-      throw new AuthFailedError(`mymrc: still logged out after re-auth (${creds.site})`);
+      throw new AuthFailedError('mymrc: still logged out after re-auth (admin)');
     }
   }
 
@@ -351,7 +352,7 @@ export async function createPortalClient(
   };
 }
 
-async function login(page: Page, creds: SiteCredentials, log: Logger): Promise<void> {
+async function login(page: Page, creds: MymrcCredentials, log: Logger): Promise<void> {
   if (!page.url().includes('/login')) {
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' });
   }
@@ -362,7 +363,7 @@ async function login(page: Page, creds: SiteCredentials, log: Logger): Promise<v
     page.locator(SELECTORS.loginSubmitButton).first().click(),
   ]);
   await page.waitForTimeout(3_000);
-  log('info', `mymrc: login submitted (${creds.site})`);
+  log('info', 'mymrc: login submitted (admin)');
 }
 
 function describeError(err: unknown): string {
