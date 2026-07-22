@@ -66,6 +66,7 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'equipment',
       'commodity-payments', // ADR-0052 (org-reach: admin passes)
       'file-drop', // O-2 (admin-only)
+      'mrc-scrape', // ADR-0057 (admin-only; lit up in the coming-soon array, trails actives)
       'observability',
     ]);
   });
@@ -109,10 +110,10 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
       'photo-annotation',
       'processor-workflow',
       'cip-capture',
-      'mrc-api',
     ]);
-    // 'observability' is no longer here — lit up 2026-06-06 (active, admin-only),
-    // so Rick (manager) doesn't see it at all.
+    // 'observability' and 'mrc-scrape' are no longer here — both lit up as active
+    // admin-only tiles (observability 2026-06-06, mrc-scrape ADR-0057), so Rick
+    // (manager) doesn't see either at all.
   });
 
   it('the three paused tiles carry status coming-soon (2026-06-06 flip)', () => {
@@ -164,6 +165,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
       'equipment', // ADR-0044 (manager+, active)
       'commodity-payments', // ADR-0052 (org-reach: admin passes)
       'file-drop', // O-2 (admin-only)
+      'mrc-scrape', // ADR-0057 (admin-only)
       'observability',
     ]);
   });
@@ -269,6 +271,35 @@ describe('File Drop tile — O-2 admin-only', () => {
       false,
     ); // all_sites manager still not admin
     expect(canSeeTile(makeSession('operator', WOODLAND), tileByKey('file-drop'), WOODLAND)).toBe(
+      false,
+    );
+  });
+});
+
+describe('MRC-Scrape tile — ADR-0057 admin-only', () => {
+  it('is registered active, admin-only, at /admin/mrc-scrape (renamed from the mrc-api placeholder)', () => {
+    const tile = tileByKey('mrc-scrape');
+    expect(tile.status).toBe('active');
+    expect(tile.scope).toBe('admin-only');
+    expect(tile.route).toBe('/admin/mrc-scrape');
+    expect(tile.label).toBe('MRC-Scrape');
+    expect(tile.icon).toBe('Plug');
+    expect(tile.featured).toBeUndefined();
+  });
+
+  it('no longer registers the old mrc-api key', () => {
+    expect(DASHBOARD_TILES.map((t) => t.key)).not.toContain('mrc-api');
+  });
+
+  it('is visible to admin and hidden from every manager (incl. all_sites) and operators', () => {
+    expect(canSeeTile(makeSession('admin', EUGENE), tileByKey('mrc-scrape'), WOODLAND)).toBe(true);
+    expect(canSeeTile(makeSession('manager', WOODLAND), tileByKey('mrc-scrape'), WOODLAND)).toBe(
+      false,
+    );
+    expect(canSeeTile(makeSession('manager', null, false, true), tileByKey('mrc-scrape'))).toBe(
+      false,
+    ); // all_sites manager still not admin
+    expect(canSeeTile(makeSession('operator', WOODLAND), tileByKey('mrc-scrape'), WOODLAND)).toBe(
       false,
     );
   });

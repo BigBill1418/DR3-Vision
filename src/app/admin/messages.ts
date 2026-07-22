@@ -163,6 +163,32 @@ export const adminMessages = {
     actionRestore: 'Restore',
   },
 
+  // MRC-Scrape credential surface (ADR-0057)
+  mrc: {
+    pageTitle: 'MRC-Scrape',
+    heading: 'MyMRC credentials',
+    subtitle:
+      'The admin login the hourly portal scrape uses to pull DR3 data from MyMRC. Stored encrypted; the password is never displayed.',
+    usernameLabel: 'MyMRC username',
+    usernameHelp: 'The login id (email or username) for Bill’s MyMRC admin account.',
+    passwordLabel: 'MyMRC password',
+    passwordHelpUnset: 'Enter the MyMRC admin password. Stored encrypted; never shown again.',
+    passwordHelpSet:
+      'A password is already stored (encrypted) and is never pre-filled. Re-enter it to save any change.',
+    passwordSetPlaceholder: '•••••••• (set)',
+    statusConfigured: 'Configured',
+    statusNotConfigured: 'Not configured',
+    lastUpdated: 'Last updated',
+    updatedBy: 'Updated by',
+    save: 'Save credentials',
+    saving: 'Saving…',
+    saved: 'Credentials saved.',
+    usernameRequired: 'MyMRC username is required.',
+    passwordRequired: 'MyMRC password is required.',
+    whitespaceTrimmed:
+      'Leading or trailing spaces were removed before saving — MyMRC rejects them.',
+  },
+
   // File-drop inbox (O-2)
   fileDrop: {
     title: 'File Drop',
