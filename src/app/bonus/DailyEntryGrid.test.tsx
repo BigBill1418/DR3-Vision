@@ -105,6 +105,90 @@ describe('DailyEntryGrid date seeding', () => {
   });
 });
 
+// ── Footer: total processed mattresses ──────────────────────────
+//
+// Bill's ask: the entry grid footer already shows the Day total in dollars; it
+// must ALSO show the total processed mattresses (the live sum of the per-employee
+// counts). The figure lives at data-testid="grid-total-mattresses", carries an
+// exact aria-label (so it can't be confused with the dollar total), and reacts to
+// typing the same way the dollar total does. It sums the RAW parsed counts (what
+// was processed), not the calculator's bonus floor.
+
+function mattressesCell(): HTMLElement {
+  return container.querySelector('[data-testid="grid-total-mattresses"]') as HTMLElement;
+}
+
+describe('DailyEntryGrid — total processed mattresses footer', () => {
+  it('renders the mattress total equal to the sum of the seeded counts', () => {
+    const rows: GridRowProps[] = [
+      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40, note: null },
+      { bonus_employee_id: 'emp-bilal', full_name: 'Bilal Khan', mattress_count: 10, note: null },
+    ];
+    mount(
+      <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,
+    );
+    const cell = mattressesCell();
+    expect(cell).not.toBeNull();
+    // Exact via aria-label; visible text also carries the number + caption.
+    expect(cell.getAttribute('aria-label')).toBe('Total processed mattresses: 50');
+    expect(cell.textContent).toContain('50');
+    expect(cell.textContent).toContain('mattresses');
+  });
+
+  it('blank inputs contribute nothing (empty day = 0)', () => {
+    mount(
+      <DailyEntryGrid
+        rule={rule}
+        entryDate="2026-06-13"
+        editable
+        monthState="draft"
+        rows={rowsWith(null)}
+      />,
+    );
+    expect(mattressesCell().getAttribute('aria-label')).toBe('Total processed mattresses: 0');
+  });
+
+  it('updates live as a count is typed (same reactivity as the dollar total)', () => {
+    mount(
+      <DailyEntryGrid
+        rule={rule}
+        entryDate="2026-06-12"
+        editable
+        monthState="draft"
+        rows={rowsWith(40)}
+      />,
+    );
+    expect(mattressesCell().getAttribute('aria-label')).toBe('Total processed mattresses: 40');
+    setInputValue(countInput(), '55');
+    expect(mattressesCell().getAttribute('aria-label')).toBe('Total processed mattresses: 55');
+  });
+
+  it('sums the raw processed count, not the calculator floor (fractional entry)', () => {
+    const rows: GridRowProps[] = [
+      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40.5, note: null },
+      { bonus_employee_id: 'emp-bilal', full_name: 'Bilal Khan', mattress_count: 10, note: null },
+    ];
+    mount(
+      <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,
+    );
+    // 40.5 + 10 = 50.5 — proves it isn't flooring to 50 like the bonus math would.
+    expect(mattressesCell().getAttribute('aria-label')).toBe('Total processed mattresses: 50.5');
+  });
+
+  it('shows the mattress total on the read-only (locked) path too', () => {
+    mount(
+      <DailyEntryGrid
+        rule={rule}
+        entryDate="2026-06-12"
+        editable={false}
+        monthState="signed"
+        rows={rowsWith(94)}
+      />,
+    );
+    expect(mattressesCell().getAttribute('aria-label')).toBe('Total processed mattresses: 94');
+  });
+});
+
 // ── ADR-0029 batch amendment-modal wiring ───────────────────────
 //
 // A non-admin manager editing a PRIOR day's count cannot write directly: the
