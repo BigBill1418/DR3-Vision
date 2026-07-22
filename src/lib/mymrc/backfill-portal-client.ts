@@ -1,14 +1,23 @@
-// ADR-0057 Phase 1 (D3) — the OFFSET-paginating BackfillPortalClient.
+// ADR-0057 Phase 1 (D3) — the SORT-FLIP-paginating BackfillPortalClient.
 //
 // This is the production adapter the windowed backfill engine (backfill.ts) was
 // built to consume: `fetchListPage(objectApiName, listViewApiName, pageIndex)`.
-// It maps the engine's 0-based `pageIndex` onto the CONFIRMED getItems `offset`
-// (`offsetForPage` = pageIndex * pageSize) and replays the Aura getItems action
-// against `/s/sfsites/aura`, reusing the live aura framework envelope the browser
-// itself sent on the list page (immune to fwuid drift) — the offset-replay path
-// (ladder #1), chosen over DOM infinite-scroll for DETERMINISM: page N is a pure
-// function of the cursor, so the engine's DB-durable `last_page_index` resume is
-// exact and a page is never skipped or double-fetched.
+// It maps the engine's 0-based `pageIndex` onto the sort-flip PLAN (`sortFlipStep`
+// — asc@0, asc@pageSize, desc@0, desc@pageSize; see list-page.ts) and replays the
+// Aura getItems action against `/s/sfsites/aura`, reusing the live aura framework
+// envelope the browser itself sent on the list page (immune to fwuid drift) — the
+// replay path (ladder #1), chosen for DETERMINISM: page N is a pure function of
+// the cursor, so the engine's DB-durable `last_page_index` resume is exact and a
+// page is never skipped or double-fetched.
+//
+// WHY SORT-FLIP (not plain offset): the Salesforce list-view getItems transport is
+// hard-capped at OFFSET 2000 (SOQL limit) — plain `offset = pageIndex*pageSize`
+// TRUNCATED "Completed Hauls" / "All Active Outbound Materials" at 2050 rows (the
+// live bug this fixes). CONFIRMED LIVE 2026-07-22: no cursor token, UI-API
+// disabled, but pageSize 2000 + `sortBy:'Id'`/`'-Id'` + `getCount:true` are all
+// honoured — so ascending Id reaches the first 4000 rows, descending the last
+// 4000, and their union is the whole view when `totalCount ≤ 8000` (overlap dedups
+// on the mirror upsert key). A view above 8000 wedges LOUD, never silently caps.
 //
 // LAYERING (why an injectable `BackfillSession`): the fragile Playwright I/O is
 // isolated behind `BackfillSession`, so the offset loop, list-view id resolution,
@@ -29,14 +38,17 @@ import {
 } from './portal-client';
 import {
   BACKFILL_LIST_VIEWS,
+  BACKFILL_PAGE_SIZE,
   buildGetItemsFormFields,
   correlateCapturedListViews,
-  DEFAULT_PAGE_SIZE,
   messageIsGetItems,
-  offsetForPage,
   parseAuraPostData,
   parseGetItemsResponse,
   resolveFilterName,
+  sortFlipExceedsCoverage,
+  sortFlipLastPageIndex,
+  sortFlipStep,
+  SORT_FLIP_STEP_COUNT,
   type AuraFrameworkParams,
   type CapturedListView,
   type ListViewBinding,
@@ -120,7 +132,7 @@ export function createBackfillPortalClient(
   opts: BackfillPortalClientOptions = {},
 ): BackfillPortalClient {
   const log = opts.log ?? noopLog;
-  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+  const pageSize = opts.pageSize ?? BACKFILL_PAGE_SIZE;
   const overrides = opts.listViewOverrides ?? {};
 
   // Session-wide caches: the aura framework envelope (any list page yields it) and
@@ -179,11 +191,25 @@ export function createBackfillPortalClient(
         );
       }
 
-      const offset = offsetForPage(pageIndex, pageSize);
+      // SORT-FLIP pagination (breaks the SOQL OFFSET 2000 ceiling; see list-page.ts).
+      // `pageIndex` indexes the fixed 4-step plan (asc@0, asc@pageSize, desc@0,
+      // desc@pageSize). An index past the plan is only reachable on the
+      // coverage-overflow path OR a stale pre-sort-flip cursor — either way, fail
+      // LOUD rather than silently mark complete.
+      const step = sortFlipStep(pageIndex, pageSize);
+      if (!step) {
+        throw new PortalContractDriftError(
+          `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} pageIndex ${pageIndex} is past the ` +
+            `${SORT_FLIP_STEP_COUNT}-step sort-flip plan (max coverage ${SORT_FLIP_STEP_COUNT * pageSize} records). ` +
+            `Either the list view exceeds that (unreachable via the getItems offset ceiling — needs a non-getItems ` +
+            `transport) or a stale pre-sort-flip cursor is being resumed (reset the cursor to re-run). Refusing to mark complete.`,
+        );
+      }
+
       const actionId = `bf-${actionSeq++}`;
       const formFields = buildGetItemsFormFields(
         framework,
-        { entityName: objectApiName, filterName, offset, pageSize },
+        { entityName: objectApiName, filterName, offset: step.offset, pageSize, sortBy: step.sortBy, getCount: true },
         actionId,
       );
 
@@ -198,16 +224,43 @@ export function createBackfillPortalClient(
         if (await session.isLoggedOut()) {
           await session.purgeState();
           throw new AuthFailedError(
-            `mymrc-backfill: logged out paging ${objectApiName}/${listViewApiName || '(default)'} at offset ${offset}`,
+            `mymrc-backfill: logged out paging ${objectApiName}/${listViewApiName || '(default)'} at page ${pageIndex} ` +
+              `(sort ${step.sortBy}, offset ${step.offset})`,
           );
         }
         throw err;
       }
+
+      const total = parsed.totalCount;
+      // Coverage overflow: a view too large for sort-flip to fully reach. Keep
+      // paging every reachable window (so the ≤8000 rows still land in the mirror),
+      // but NEVER let a page report drained — force the engine to the plan wall,
+      // where `sortFlipStep` returns null and we wedge LOUD (above). This is the
+      // "do NOT silently cap" guarantee.
+      if (total !== null && sortFlipExceedsCoverage(total, pageSize)) {
+        log(
+          'warn',
+          `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} totalCount=${total} EXCEEDS sort-flip ` +
+            `coverage (${SORT_FLIP_STEP_COUNT * pageSize}); paging reachable windows then wedging LOUD (a middle rank ` +
+            `band is unreachable via the getItems offset ceiling)`,
+        );
+        return { ids: parsed.recordIds, hasMoreData: true, totalCount: total };
+      }
+
+      // `totalCount` decides how many steps cover the view. If it is somehow absent
+      // (contract drift — it is reliably present live), run the FULL plan rather
+      // than risk under-covering: over-paging is idempotent, silent loss is not.
+      const lastNeeded = total !== null ? sortFlipLastPageIndex(total, pageSize) : SORT_FLIP_STEP_COUNT - 1;
+      if (total === null) {
+        log('warn', `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} getCount returned no totalCount — running full sort-flip plan`);
+      }
+      const hasMoreData = pageIndex < lastNeeded;
       log(
         'info',
-        `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} offset ${offset} → ${parsed.recordIds.length} ids (hasMoreData=${parsed.hasMoreData})`,
+        `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} page ${pageIndex} (sort ${step.sortBy}, offset ${step.offset}) → ` +
+          `${parsed.recordIds.length} ids · totalCount=${total ?? 'n/a'} · lastNeeded=${lastNeeded} · hasMoreData=${hasMoreData}`,
       );
-      return { ids: parsed.recordIds, hasMoreData: parsed.hasMoreData };
+      return { ids: parsed.recordIds, hasMoreData, totalCount: total };
     },
 
     async fetchRecordDetail(recordId): Promise<SfRecord> {

@@ -58,6 +58,13 @@ export interface BackfillListPage {
   ids: string[];
   /** `true` ⇒ more pages exist beyond this one (Aura `getItems.hasMoreData`). */
   hasMoreData: boolean;
+  /**
+   * The list view's ABSOLUTE record count (`getItems getCount:true` → `totalCount`),
+   * when the transport supplies it. Persisted as the cursor's
+   * `total_records_estimated` so it is the TRUE total for reconciliation — not the
+   * `records_completed` running count, which double-counts sort-flip window overlap.
+   */
+  totalCount?: number | null;
 }
 
 /**
@@ -178,10 +185,16 @@ async function persistProgress(
     lastPageIndex: number;
     lastRecordId: string | null;
     recordsCompleted: number;
+    /** The portal's absolute `totalCount` when known; else null (falls back to the running count). */
+    totalRecordsEstimated: number | null;
     completedAt: Date | null;
     startedAt: Date;
   },
 ): Promise<void> {
+  // Prefer the portal's absolute total (accurate for reconciliation); fall back to
+  // the running completed count when the transport didn't report one. sort-flip
+  // window overlap inflates `records_completed`, so the two now differ by design.
+  const totalEstimated = data.totalRecordsEstimated ?? data.recordsCompleted;
   await prisma.mymrcBackfillCursor.upsert({
     where: cursorWhere(objectApiName, listViewApiName),
     create: {
@@ -190,8 +203,7 @@ async function persistProgress(
       last_page_index: data.lastPageIndex,
       last_record_id: data.lastRecordId,
       records_completed: data.recordsCompleted,
-      // While windowed this is the running floor; at drain it is exact.
-      total_records_estimated: data.recordsCompleted,
+      total_records_estimated: totalEstimated,
       completed_at: data.completedAt,
       started_at: data.startedAt,
       error: null,
@@ -200,7 +212,7 @@ async function persistProgress(
       last_page_index: data.lastPageIndex,
       last_record_id: data.lastRecordId,
       records_completed: data.recordsCompleted,
-      total_records_estimated: data.recordsCompleted,
+      total_records_estimated: totalEstimated,
       completed_at: data.completedAt,
       error: null,
     },
@@ -284,6 +296,7 @@ async function pageTarget(
   let lastRecordId = cursor?.last_record_id ?? null;
   let recordsListed = 0;
   let pages = 0;
+  let latestTotal: number | null = null;
 
   try {
     for (;;) {
@@ -296,6 +309,7 @@ async function pageTarget(
       await target.upsertListed(page.ids, now);
       runningCompleted += page.ids.length;
       recordsListed += page.ids.length;
+      if (typeof page.totalCount === 'number') latestTotal = page.totalCount;
       if (page.ids.length > 0) {
         const tail = page.ids[page.ids.length - 1];
         if (tail !== undefined) lastRecordId = tail;
@@ -305,6 +319,7 @@ async function pageTarget(
         lastPageIndex: pageIndex,
         lastRecordId,
         recordsCompleted: runningCompleted,
+        totalRecordsEstimated: latestTotal,
         completedAt: drained ? now : null,
         startedAt,
       });

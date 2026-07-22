@@ -53,6 +53,21 @@ export interface GetItemsParams {
   filterName: string;
   offset: number;
   pageSize?: number;
+  /**
+   * The list-view sort override. `'Id'` / `'-Id'` = ascending / descending by the
+   * unique Record ID — a stable TOTAL order (CONFIRMED live 2026-07-22:
+   * orderedByInfo echoes "Record ID" asc/desc). `null`/absent keeps the view's
+   * own default sort. The sort-flip pagination (see {@link sortFlipStep}) drives
+   * `'Id'` then `'-Id'` to reach past the SOQL OFFSET 2000 ceiling.
+   */
+  sortBy?: string | null;
+  /**
+   * Ask the list view to also compute its absolute `totalCount` (CONFIRMED live:
+   * `getCount:true` ⇒ the returnValue carries `totalCount`). The sort-flip planner
+   * needs it to know how many pages/directions cover the view and to fail LOUD
+   * when a view exceeds the reachable window.
+   */
+  getCount?: boolean;
 }
 
 /**
@@ -73,8 +88,8 @@ export function buildGetItemsMessage(p: GetItemsParams, actionId: string = '0'):
           entityName: p.entityName,
           pageSize: p.pageSize ?? DEFAULT_PAGE_SIZE,
           layoutType: 'LIST',
-          sortBy: null,
-          getCount: false,
+          sortBy: p.sortBy ?? null,
+          getCount: p.getCount ?? false,
           enableRowActions: false,
           offset: p.offset,
         },
@@ -82,6 +97,82 @@ export function buildGetItemsMessage(p: GetItemsParams, actionId: string = '0'):
     ],
   };
   return JSON.stringify(message);
+}
+
+// ── Sort-flip pagination plan (breaks the SOQL OFFSET 2000 ceiling) ───────────
+//
+// CONFIRMED LIVE 2026-07-22 against `mrc-us.my.site.com` (probe capture):
+//   • `getItems` is HARD-capped at pageSize 2000 (5000/6200/10000 all return 2000).
+//   • the `offset` param is HARD-capped at 2000 (offset 2050+ returns a degenerate
+//     SUCCESS with NO recordIdActionsList and a "list view isn't available in
+//     Lightning" `message` — the silent truncation this fix kills). This is the
+//     SOQL `OFFSET` clause limit (max 2000).
+//   • there is NO page/cursor token anywhere in the returnValue, and the org has
+//     the UI-API disabled (`API_DISABLED_FOR_ORG`) — so a cursor transport is out.
+//   • `sortBy:'Id'`/`'-Id'` IS honoured (orderedByInfo → "Record ID" asc/desc).
+//   • `getCount:true` returns the absolute `totalCount`.
+//
+// STRATEGY — sort-flip. With pageSize 2000 and the offset capped at 2000, ONE sort
+// direction reaches the FIRST `2*PAGE_SIZE` (=4000) rows by Id: offset 0 → ranks
+// [0,2000), offset 2000 → ranks [2000,4000). Ascending by the unique Id covers the
+// low 4000; descending covers the high 4000 (the last 4000 rows). Their union is
+// the WHOLE view iff `totalCount ≤ 4*PAGE_SIZE` (=8000) — the two windows meet in
+// the middle. Overlap deduplicates naturally on the mirror upsert key
+// (`salesforce_record_id`). A view with `totalCount > 8000` has a middle rank
+// window neither direction can reach: the planner refuses to mark it complete and
+// wedges LOUD (never a silent cap).
+
+/** getItems pageSize cap == the SOQL OFFSET cap (both 2000, CONFIRMED live). The
+ *  sort-flip plan's second offset step equals this, so no request exceeds either. */
+export const BACKFILL_PAGE_SIZE = 2_000;
+
+/** Ascending / descending sort on the unique Record ID — a stable total order. */
+const SORT_ASC = 'Id';
+const SORT_DESC = '-Id';
+
+/**
+ * The sort-flip step for a 0-based `pageIndex`, or `null` when the index is past
+ * the plan (only reached on the coverage-overflow wedge, or a stale pre-sort-flip
+ * cursor). Four steps: asc@0, asc@PAGE_SIZE, desc@0, desc@PAGE_SIZE — the two
+ * ascending steps tile the first 4000 rows, the two descending steps the last
+ * 4000. `pageSize` is injectable purely so tests can shrink the ceiling.
+ */
+export function sortFlipStep(
+  pageIndex: number,
+  pageSize: number = BACKFILL_PAGE_SIZE,
+): { sortBy: string; offset: number } | null {
+  const steps: ReadonlyArray<{ sortBy: string; offset: number }> = [
+    { sortBy: SORT_ASC, offset: 0 },
+    { sortBy: SORT_ASC, offset: pageSize },
+    { sortBy: SORT_DESC, offset: 0 },
+    { sortBy: SORT_DESC, offset: pageSize },
+  ];
+  return steps[pageIndex] ?? null;
+}
+
+/** Number of sort-flip steps in the plan (the coverage ceiling is `2*this*pageSize/2`… i.e. `2*pageSize*2`). */
+export const SORT_FLIP_STEP_COUNT = 4;
+
+/**
+ * The 0-based index of the LAST sort-flip step needed to fully cover a view of
+ * `totalCount` rows: `ceil(totalCount / pageSize) - 1`, because each step yields
+ * one `pageSize` window and asc+desc tile from both ends. The engine stops (sets
+ * `completed_at`) when the page it just fetched is this index.
+ */
+export function sortFlipLastPageIndex(totalCount: number, pageSize: number = BACKFILL_PAGE_SIZE): number {
+  const ps = Math.max(1, Math.trunc(pageSize));
+  return Math.ceil(Math.max(0, totalCount) / ps) - 1;
+}
+
+/**
+ * `true` when a view of `totalCount` rows exceeds what sort-flip can reach
+ * (`> 4 * pageSize` = 8000 live): the two 4000-row windows no longer meet, so a
+ * middle rank band is unreachable via the getItems offset ceiling. The client
+ * turns this into a LOUD wedge — it must never masquerade as complete.
+ */
+export function sortFlipExceedsCoverage(totalCount: number, pageSize: number = BACKFILL_PAGE_SIZE): boolean {
+  const ps = Math.max(1, Math.trunc(pageSize));
+  return totalCount > SORT_FLIP_STEP_COUNT * ps;
 }
 
 // ── getItems response codec ──────────────────────────────────────────────────
@@ -94,12 +185,16 @@ export interface GetItemsPage {
   hasMoreData: boolean;
   filterTitle: string | null;
   entityLabelPlural: string | null;
+  /** The list view's absolute record count when `getCount:true` was sent (else null). */
+  totalCount: number | null;
 }
 
 interface GetItemsReturnScalars extends GetItemsReturnValue {
   offset?: unknown;
   filterTitle?: unknown;
   entityLabelPlural?: unknown;
+  totalCount?: unknown;
+  message?: unknown;
 }
 
 function isGetItemsReturnValue(v: unknown): v is GetItemsReturnScalars {
@@ -133,7 +228,8 @@ export function parseGetItemsResponse(body: string): GetItemsPage {
       ? ((parsed as { actions: Array<{ state?: string; returnValue?: unknown }> }).actions)
       : [];
   for (const action of actions) {
-    if (action?.state === 'SUCCESS' && isGetItemsReturnValue(action.returnValue)) {
+    if (action?.state !== 'SUCCESS') continue;
+    if (isGetItemsReturnValue(action.returnValue)) {
       const rv = action.returnValue;
       if (rv.isErrorListView === true) {
         throw new PortalContractDriftError('getItems: list view reported isErrorListView=true');
@@ -144,7 +240,22 @@ export function parseGetItemsResponse(body: string): GetItemsPage {
         hasMoreData: rv.hasMoreData === true,
         filterTitle: strOrNull(rv.filterTitle),
         entityLabelPlural: strOrNull(rv.entityLabelPlural),
+        totalCount: numOrNull((rv as GetItemsReturnScalars).totalCount),
       };
+    }
+    // The OFFSET-CEILING response: a SUCCESS action whose returnValue has NO
+    // recordIdActionsList but carries `message` + `hasMoreData:false` — what the
+    // portal returns past offset 2000 ("this list view isn't available in
+    // Lightning…"). The sort-flip plan never requests offset > pageSize so this is
+    // not expected, but if the portal shifts we surface a CLEAR ceiling error
+    // rather than the old misleading "no getItems action" (which masked the 2050
+    // truncation as generic drift).
+    const rv = action.returnValue as GetItemsReturnScalars | undefined;
+    if (rv && typeof rv === 'object' && 'message' in rv && 'hasMoreData' in rv && !('recordIdActionsList' in rv)) {
+      throw new PortalContractDriftError(
+        `getItems: offset-ceiling response (no records; message: ${JSON.stringify(strOrNull(rv.message))}) — ` +
+          `requested offset exceeded the SOQL OFFSET 2000 cap`,
+      );
     }
   }
   throw new PortalContractDriftError(
@@ -246,7 +357,8 @@ export interface ListViewBinding {
  * inactive VIEWS only widen coverage; the routing is unchanged.
  *
  * `observedFilterName` carries the `00B…`/`00BUJ…` id captured LIVE 2026-07-22
- * (5 views); the other 3 (Consumer Drop-Off, Outbound active, Dock) are `null` on
+ * (6 views — Outbound active added on the sort-flip probe re-capture); the other 2
+ * (Consumer Drop-Off, Dock) are `null` on
  * purpose — ADR-0057 forbids GUESSING a transport id, so they resolve at RUNTIME
  * (from the browser's own getItems request on the list page) or from an operator
  * override (`MYMRC_LISTVIEW_IDS`), and a target whose id resolves to NONE fails
@@ -292,7 +404,10 @@ export const BACKFILL_LIST_VIEWS: readonly ListViewBinding[] = [
     slug: 'outbound_active',
     objectApiName: 'Materials__c',
     filterTitle: 'All Active Outbound Materials',
-    observedFilterName: null,
+    // Captured LIVE 2026-07-22 (sort-flip probe) — runtime capture on
+    // /s/outbound-materials returned this id for the title. Pinned so the view
+    // resolves even if a future capture misses it.
+    observedFilterName: '00B4p000005DAqkEAG',
   },
   {
     // HISTORY view — inactive outbound materials (still Type__c 'Outbound').
