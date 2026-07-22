@@ -337,3 +337,19 @@ export async function signFileDropDownload(
   });
   return getSignedUrl(getClient(), cmd, { expiresIn: opts.expiresIn ?? 300 });
 }
+
+/**
+ * Server-side GET of a file-drop object's bytes (the AP baseline import reads a
+ * Bill-uploaded AP-report PDF this way). Returns null when R2 is unconfigured or the
+ * key is a non-fetchable `pending-r2-…` placeholder, so the caller surfaces
+ * "unreadable" instead of throwing. Mirrors getApAttachmentBytes.
+ */
+export async function getFileDropBytes(storageKey: string): Promise<Uint8Array | null> {
+  if (!isConfigured()) return null;
+  if (storageKey.startsWith('pending-r2-')) return null;
+  const bucket = process.env['R2_BUCKET']!;
+  const res = await getClient().send(new GetObjectCommand({ Bucket: bucket, Key: storageKey }));
+  const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+  if (!body?.transformToByteArray) return null;
+  return body.transformToByteArray();
+}

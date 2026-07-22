@@ -228,6 +228,19 @@ model User {
   // once her account exists.
   can_view_billing_verify Boolean @default(false)
 
+  // ADR-0046 Amendment 5 (D-M5-5) — READ-ONLY access to the AP invoice-history
+  // search surface (`/admin/ap/history`). Admin role grants it implicitly; this
+  // column grants it to a designated SECOND APPROVER (Shannon Rockwell, Eugene)
+  // who is not an admin, resolved in `src/lib/auth-helpers.ts`
+  // (`requireApHistoryRead` / `checkApHistoryRead`: role==='admin' OR fresh-DB
+  // read of this flag). Follows the `can_view_billing_verify` precedent exactly —
+  // read FRESH from Postgres every request, NEVER carried in the NextAuth JWT,
+  // grants exactly that one read surface and no admin power (hard rule #2). NOT
+  // attached to the general `ap_approvers` roster (avoids leaking historical AP
+  // data to shift operators). The `ap_second_approvers` roster is the intended
+  // grant vehicle for non-admin second approvers.
+  can_view_ap_history     Boolean @default(false)
+
   // ADR-0030 — super-admin gate for the Bill-only daily-production-report
   // admin tile (`/admin/production-report`). Distinct from `role = admin`:
   // admin-role Kelsey is NOT super-admin. Promotion is a DB UPDATE, not a UI affordance.
@@ -3274,9 +3287,59 @@ enum ApRequestStatus {
   // accounting can see it is actively being held before a final decision. From
   // pending_review any approver may still approve/reject (first-action-wins).
   pending_review
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval hop. An Approve whose
+  // confirmed_amount_cents >= 100000 ($1,000) does NOT terminate at `approved`;
+  // it moves to `pending_second_approval` with the first approver's four required
+  // fields (vendor_freeform / explanation / confirmed_amount_cents /
+  // equipment link) + first_approver_id/first_approved_at stamped, awaiting the
+  // site-appropriate second approver (Woodland→Bill, Eugene→Shannon). Sub-$1K
+  // Approves and every Reject/Hold/NOT-DR3 disposition are unchanged
+  // (single-action, first-action-wins). Placed BEFORE `approved` so the Postgres
+  // enum value order (migration uses `ADD VALUE ... BEFORE 'approved'`) matches
+  // this declaration — keeps `prisma migrate diff` clean.
+  pending_second_approval
   approved
   rejected
   quarantined
+}
+
+/// ADR-0046 Amendment 5 (D-M5-4) — variance-flag lifecycle on an Approve. Set on
+/// the `ap_requests` row at decide time. `not_applicable`: the disposition isn't a
+/// site Approve, or the vendor has no ESTABLISHED baseline (invoice_count < 3).
+/// `below_threshold`: baseline exists and confirmed_amount is within the flat +
+/// percent bounds — Approve flows normally. `above_threshold`: baseline exists and
+/// confirmed_amount trips a threshold — the RED variance banner shows and Approve
+/// is BLOCKED until acknowledged. `acknowledged`: the approver clicked "I've
+/// verified the variance" (stamps variance_acknowledged_by/at + optional note),
+/// unblocking Approve. Default `not_applicable` so every pre-existing row backfills
+/// harmlessly.
+enum ApVarianceFlagState {
+  not_applicable
+  below_threshold
+  above_threshold
+  acknowledged
+}
+
+/// ADR-0046 Amendment 5 (D-M5-4) — provenance of an `ap_vendor_baseline_history`
+/// row. `bill_upload`: extracted from a Bill-uploaded AP report PDF (GP history
+/// dump) via the `/admin/ap/baselines/import` surface. `vision_approval`: written
+/// automatically on every Vision `approved` state transition (post-Amendment 5) so
+/// baselines stay fresh between Bill's periodic re-uploads.
+enum ApBaselineHistorySource {
+  bill_upload
+  vision_approval
+}
+
+/// ADR-0046 Amendment 5 (D-M5-6) — the equipment/asset category on the
+/// consolidated `equipment` master. Drives the site-filtered multi-select on the
+/// Approve panel. No inline creation from the approver panel (D-M5-6) — the master
+/// is admin-managed; the approver only REFERENCES rows via `ap_equipment_links`.
+enum EquipmentCategory {
+  vehicle
+  forklift
+  baler
+  terex
+  other
 }
 
 /// The Graph attachment taxonomy (C10.3). `file` = a downloaded fileAttachment (or
@@ -3371,14 +3434,68 @@ model ApRequest {
   // second half of the dual-sha tamper record (decision_pdf_sha256 is the first).
   decision_pdf_r2_key        String?
   original_attachment_sha256 String?
+
+  // ─── ADR-0046 Amendment 5 (2026-07-22) — structured decide + auto-extraction +
+  // dual approval + variance detection + Phase-2 haul hook. All ADDITIVE; the
+  // deprecated `vendor`/`amount_cents` columns above are KEPT (hard rule #1) and
+  // simply stop being written at decide — the migration backfills their existing
+  // values into `vendor_freeform` / `confirmed_amount_cents`.
+
+  // D-M5-1 — structured Approve input. `vendor_freeform` replaces the optional
+  // `vendor`; `explanation` replaces the freeform decide `note` on the APPROVE
+  // path only (Reject/Hold/NOT-DR3 keep `decision_note`/`hold_note`);
+  // `confirmed_amount_cents` is the approver-confirmed amount (pre-filled from
+  // extraction, always approver-confirmed — never auto-applied, hard rule #5).
+  vendor_freeform            String?
+  explanation                String?
+  confirmed_amount_cents     Int?
+
+  // D-M5-2 — auto-extraction result computed at intake (hybrid local pdf-parse +
+  // Claude API fallback). See src/lib/ap/extraction/types.ts (ExtractionResult):
+  // { best_amount_cents, best_vendor, confidence, source, candidates,
+  // attempted_at, model?, cost_cents?, error? }. Pre-fills the decide panel; the
+  // approver still confirms every field.
+  extraction                 Json?
+
+  // D-M5-7 — Phase-2 schema hook ONLY. Ships as an empty text[] (@default([]));
+  // NO code populates it in Phase 1. Wire-up (MyMRC haul cross-check against
+  // mymrc_hauls_mirror) is gated on ADR-0057 Phase 1 completion (hard rule #2).
+  extracted_haul_numbers     String[]        @default([])
+
+  // D-M5-3 — dual-approval stamps. On an Approve >= $1,000 the first approver's id
+  // + time land here and status → pending_second_approval; the site-appropriate
+  // second approver's id + time (and, on an override reject, second_approver_note)
+  // land on the terminal decision. Sub-$1K approves leave these null. Bare
+  // audit-actor columns (no FK — matches decided_by/held_by).
+  first_approver_id          String?
+  first_approved_at          DateTime?
+  second_approver_id         String?
+  second_approved_at         DateTime?
+  second_approver_note       String?
+
+  // D-M5-4 — variance detection state + acknowledgment audit. Default
+  // not_applicable; acknowledgment columns populate only when the RED banner was
+  // acknowledged.
+  variance_flag_state          ApVarianceFlagState @default(not_applicable)
+  variance_acknowledged_by     String?
+  variance_acknowledged_at     DateTime?
+  variance_acknowledgment_note String?
+
   created_at                 DateTime        @default(now())
   updated_at                 DateTime        @updatedAt
 
-  attachments ApAttachment[]
-  followups   ApFollowup[]
+  attachments     ApAttachment[]
+  followups       ApFollowup[]
+  // D-M5-6 — equipment/vehicle links selected at Approve time (distinct row per
+  // equipment; a single is_not_equipment_related row for the explicit-none case).
+  equipment_links ApEquipmentLink[]
 
   @@index([status, received_at])
   @@index([conversation_id])
+  // D-M5-4/5 — history search + baseline lookup by vendor + approver.
+  @@index([vendor_freeform])
+  @@index([first_approver_id])
+  @@index([second_approver_id])
   @@map("ap_requests")
 }
 
@@ -3517,6 +3634,124 @@ model ApApprover {
   updated_at   DateTime  @updatedAt
 
   @@map("ap_approvers")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0046 Amendment 5 (2026-07-22) — approver-side vetting friction: vendor
+// baseline + variance detection (D-M5-4), equipment linking (D-M5-6), and the
+// $1,000 second-approval roster (D-M5-3). Five self-contained tables at the
+// schema tail. FK columns to sibling-owned models (users.id, sites.id) are bare
+// scalars whose constraints are created at the DB level in migration
+// 20260805_ap_amendment_5_structured_decide_dual_approval_variance_history_equipment
+// (mirrors ap_approvers / equipment_events). The `equipment` master + its
+// ap_equipment_links back-relation are wholly within this block, so a proper
+// Prisma relation is declared for those two.
+// ────────────────────────────────────────────────────────────────────────
+
+/// ADR-0046 Amendment 5 (D-M5-4) — raw AP-history rows feeding vendor baselines.
+/// Two provenances (`source`): Bill-uploaded AP-report PDFs (bill_upload) and
+/// Vision's own approved invoices (vision_approval, inserted on each `approved`
+/// transition so baselines stay fresh). `vendor_name_normalized` (lowered,
+/// trimmed, whitespace-collapsed) is the aggregation + typeahead key. `site_id` is
+/// a bare FK → sites.id (nullable; a combined upload may not resolve a site).
+model ApVendorBaselineHistory {
+  id                     String                  @id @default(uuid())
+  vendor_name            String
+  vendor_name_normalized String
+  invoice_date           DateTime                @db.Date
+  invoice_amount_cents   Int
+  site_id                String? // bare FK → sites.id (constraint in migration)
+  source                 ApBaselineHistorySource
+  imported_at            DateTime                @default(now())
+  imported_by            String? // bare audit-actor column (users.id)
+
+  @@index([vendor_name_normalized])
+  @@index([site_id])
+  @@index([invoice_date])
+  @@map("ap_vendor_baseline_history")
+}
+
+/// ADR-0046 Amendment 5 (D-M5-4) — COMPUTED per-vendor baseline over the trailing
+/// 12 months, refreshed nightly (cron) + on-demand. PK is `vendor_name_normalized`
+/// (one row per vendor). A baseline is ESTABLISHED (used for variance flagging)
+/// only when `invoice_count >= 3`. Per-vendor admin overrides tighten/loosen the
+/// global $50 flat + 15% thresholds; `variance_percent_override` is a fraction
+/// (e.g. 0.0625 for Clark Pest's 6.25%).
+model ApVendorBaseline {
+  vendor_name_normalized       String   @id
+  vendor_display_name          String
+  invoice_count                Int
+  mean_amount_cents            Int
+  median_amount_cents          Int
+  min_amount_cents             Int
+  max_amount_cents             Int
+  stddev_amount_cents          Int?
+  computed_at                  DateTime @default(now())
+  variance_flat_override_cents Int? // admin per-vendor flat override (cents)
+  variance_percent_override    Decimal? @db.Decimal(6, 4) // admin per-vendor percent override (fraction)
+
+  @@map("ap_vendor_baselines")
+}
+
+/// ADR-0046 Amendment 5 (D-M5-6) — the consolidated equipment/asset master the
+/// Approve-panel multi-select reads from (site-filtered by the decision's site
+/// tag). No equipment MASTER existed before Amendment 5 (equipment_events is a
+/// Terex-first LOG keyed by a plain `equipment_code` string, not a registry); this
+/// is that registry. Admin-managed — the approver panel may only REFERENCE rows
+/// (no inline creation, hard rule #3). `is_active=false` hides an asset from the
+/// picker without deleting its links.
+model Equipment {
+  id           String            @id @default(uuid())
+  site_id      String // bare FK → sites.id (constraint in migration)
+  display_name String
+  category     EquipmentCategory
+  is_active    Boolean           @default(true)
+  created_at   DateTime          @default(now())
+  updated_at   DateTime          @updatedAt
+
+  links ApEquipmentLink[]
+
+  @@index([site_id, is_active])
+  @@map("equipment")
+}
+
+/// ADR-0046 Amendment 5 (D-M5-6) — join of an Approve decision to the equipment it
+/// referenced. Distinct row per selected asset; a SINGLE row with
+/// `is_not_equipment_related=true` (and `equipment_id` null) records the explicit
+/// "Not equipment-related" choice — mutually exclusive with real equipment picks
+/// (app-enforced). At least one row is required to Approve.
+model ApEquipmentLink {
+  id                       String     @id @default(uuid())
+  request_id               String
+  request                  ApRequest  @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  equipment_id             String? // FK → equipment.id; null when is_not_equipment_related
+  equipment                Equipment? @relation(fields: [equipment_id], references: [id], onDelete: Restrict)
+  is_not_equipment_related Boolean    @default(false)
+  created_at               DateTime   @default(now())
+
+  @@index([request_id])
+  @@index([equipment_id])
+  @@map("ap_equipment_links")
+}
+
+/// ADR-0046 Amendment 5 (D-M5-3) — the $1,000 second-approval roster, keyed by
+/// SITE CODE (not a sites.id FK — the spec pins `site_id` to the literal
+/// 'woodland' | 'eugene' codes; a migration CHECK enforces the domain). NOT-DR3
+/// has no second approver. A row is ACTIVE when `active=true` AND active_until is
+/// null OR in the future. `user_id` is a bare FK → users.id. Seed: Bill (woodland,
+/// admin) implicitly; Shannon Rockwell (eugene) provisioned by Bill (§4).
+model ApSecondApprover {
+  id           String    @id @default(uuid())
+  user_id      String // bare FK → users.id (constraint in migration)
+  site_id      String // site CODE: 'woodland' | 'eugene' (CHECK in migration)
+  active       Boolean   @default(true)
+  active_from  DateTime  @default(now())
+  active_until DateTime?
+  created_at   DateTime  @default(now())
+
+  @@index([site_id, active])
+  @@index([user_id])
+  @@map("ap_second_approvers")
 }
 
 // ────────────────────────────────────────────────────────────────────────

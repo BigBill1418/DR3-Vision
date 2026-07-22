@@ -298,6 +298,47 @@ describe('site tag on the stamp (2026-07-15 directive)', () => {
     });
     expect(html).toContain('Site: <b>Eugene</b>');
   });
+
+  // D-M5-3 (spec §D-M5-3) — a dual-approved (>= $1,000) invoice must carry BOTH
+  // approvers + timestamps in the meta block, consistent with the authoritative stamp
+  // band line. Regression for a defect where the meta block showed only the first
+  // approver AND mislabeled the first-approval time as the terminal "Decided" time.
+  it('the meta block shows BOTH approvers on a dual approval, not a single "Decided" line', () => {
+    const html = buildStampHtml({
+      kind: 'body',
+      requestId: 'req-1',
+      subject: 'Invoice 123',
+      approverName: 'Rick Albritton', // FIRST approver
+      decision: 'approved',
+      decidedAt: new Date('2026-07-15T19:00:00Z'), // first-approval time
+      secondApproverName: 'Shannon Rockwell',
+      secondApprovedAt: new Date('2026-07-16T17:30:00Z'),
+      siteName: 'Eugene',
+      bodyHtmlSanitized: '<p>hi</p>',
+    });
+    expect(html).toContain('First approval: Rick Albritton');
+    expect(html).toContain('Second approval: Shannon Rockwell');
+    // The lone terminal "Decided:" line must NOT appear on a dual approval (it would
+    // mislabel the first-approval time as the terminal decision).
+    expect(html).not.toContain('<div>Decided:');
+    expect(html).not.toContain('<div>Approver:');
+  });
+
+  it('the meta block keeps the single Approver/Decided pair on a sub-$1K decision', () => {
+    const html = buildStampHtml({
+      kind: 'body',
+      requestId: 'req-1',
+      subject: 'Invoice 123',
+      approverName: 'Rick Albritton',
+      decision: 'approved',
+      decidedAt: new Date('2026-07-15T19:00:00Z'),
+      siteName: 'Eugene',
+      bodyHtmlSanitized: '<p>hi</p>',
+    });
+    expect(html).toContain('<div>Approver: Rick Albritton</div>');
+    expect(html).toContain('<div>Decided:');
+    expect(html).not.toContain('First approval:');
+  });
 });
 
 // ADR-0046 amendment (2026-07-20) — the NOT-DR3 disposition must render "NOT DR3 —

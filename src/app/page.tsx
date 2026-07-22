@@ -26,6 +26,7 @@ import { prisma } from '@/lib/prisma';
 import { BONUS_SITE_CODE } from '@/lib/bonus/access';
 import { canActOnApRequest } from '@/lib/ap/approvers';
 import { pendingApCount } from '@/lib/ap/approvals';
+import { awaitingSecondApprovalCount } from '@/lib/ap/second-approval-routing';
 import { DASHBOARD_TILES, canSeeTile, type DashboardTile } from '@/lib/dashboard-tiles';
 import { VisionShell } from '@/app/_components/vision-shell';
 import { VisionTile } from '@/app/_components/vision-tile';
@@ -61,12 +62,23 @@ export default async function Page() {
     userId: session.user.id,
   });
   const apPending = isApApprover ? await pendingApCount() : 0;
+  // ADR-0046 Amendment 5 (D-M5-3) — second approvers also see a distinct "awaiting
+  // 2nd approval" count for the >= $1,000 requests routed to their site(s). Folded
+  // into the single AP-tile badge (admins see all; a rostered second approver sees
+  // only their sites; everyone else contributes 0).
+  const apAwaitingSecond = isApApprover
+    ? await awaitingSecondApprovalCount(prisma, {
+        role: session.user.role,
+        userId: session.user.id,
+      })
+    : 0;
+  const apBadge = apPending + apAwaitingSecond;
 
   const visible = DASHBOARD_TILES.filter((t) =>
     canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover),
   )
     .map((t) => resolveRoute(t, ownSiteCode))
-    .map((t) => (t.key === 'ap-approvals' && apPending > 0 ? { ...t, badgeCount: apPending } : t));
+    .map((t) => (t.key === 'ap-approvals' && apBadge > 0 ? { ...t, badgeCount: apBadge } : t));
 
   const active = visible.filter((t) => t.status === 'active');
   const comingSoon = visible.filter((t) => t.status === 'coming-soon');

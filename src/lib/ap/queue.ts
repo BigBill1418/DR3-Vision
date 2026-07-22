@@ -7,8 +7,17 @@
 
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
+import type { ExtractionConfidence, ExtractionResult } from './extraction/types';
 
-export type ApStatus = 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+export type ApStatus =
+  | 'pending'
+  | 'pending_review'
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval hop (>= $1,000). Mirrors the
+  // Prisma ApRequestStatus enum so the read models type-check.
+  | 'pending_second_approval'
+  | 'approved'
+  | 'rejected'
+  | 'quarantined';
 
 export interface ApListRow {
   id: string;
@@ -37,6 +46,22 @@ export interface ApAttachmentView {
   nestedSubject: string | null;
 }
 
+/** ADR-0046 Amendment 5 (D-M5-2) — the extraction pre-fill surfaced to the panel:
+ * the best-guess amount/vendor + confidence tier (the badge). Null when the row has
+ * no extraction (pre-Amendment-5 rows). */
+export interface ApExtractionPrefill {
+  confidence: ExtractionConfidence;
+  bestAmountCents: number | null;
+  bestVendor: string | null;
+}
+
+/** ADR-0046 Amendment 5 (D-M5-6) — one recorded equipment link on a decided row. */
+export interface ApEquipmentLinkView {
+  equipmentId: string | null;
+  displayName: string | null;
+  isNotEquipmentRelated: boolean;
+}
+
 export interface ApDetailView extends ApListRow {
   conversationId: string | null;
   bodyHtmlSanitized: string | null;
@@ -50,11 +75,53 @@ export interface ApDetailView extends ApListRow {
   /** Amendment 3 — hold record. */
   heldAt: string | null;
   holdNote: string | null;
+  // ─── ADR-0046 Amendment 5 (D-M5-1/2/4/6) — structured decide surface.
+  /** D-M5-2 — extraction pre-fill for the confirmed-amount input + confidence badge. */
+  extraction: ApExtractionPrefill | null;
+  /** D-M5-1 — structured Approve values (present on Amendment-5 approved rows). */
+  vendorFreeform: string | null;
+  explanation: string | null;
+  confirmedAmountCents: number | null;
+  /** D-M5-4 — variance flag state stamped at decide. */
+  varianceFlagState: string | null;
+  varianceAcknowledgmentNote: string | null;
+  /** D-M5-6 — equipment linkage recorded on a decided row (for read-back). */
+  equipmentLinks: ApEquipmentLinkView[];
+  // ─── ADR-0046 Amendment 5 (D-M5-3) — dual-approval read surface. Present on a
+  // >= $1,000 request (awaiting or after second approval); null otherwise.
+  firstApproverId: string | null;
+  firstApproverName: string | null;
+  firstApprovedAt: string | null;
+  secondApproverId: string | null;
+  secondApproverName: string | null;
+  secondApprovedAt: string | null;
+  secondApproverNote: string | null;
   attachments: ApAttachmentView[];
   followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
 }
 
-const LIST_STATUSES = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined'] as const;
+/** Narrow the persisted `extraction` JSONB to the pre-fill the panel needs. Tolerant
+ * of a malformed/legacy blob (returns null rather than throwing). */
+function toExtractionPrefill(raw: unknown): ApExtractionPrefill | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const e = raw as Partial<ExtractionResult>;
+  if (typeof e.confidence !== 'string') return null;
+  return {
+    confidence: e.confidence as ExtractionConfidence,
+    bestAmountCents: typeof e.best_amount_cents === 'number' ? e.best_amount_cents : null,
+    bestVendor: typeof e.best_vendor === 'string' ? e.best_vendor : null,
+  };
+}
+
+const LIST_STATUSES = [
+  'pending',
+  'pending_review',
+  // D-M5-3 — the $1,000 second-approval queue (a distinct tab for second approvers).
+  'pending_second_approval',
+  'approved',
+  'rejected',
+  'quarantined',
+] as const;
 export type ApListFilter = (typeof LIST_STATUSES)[number] | 'all';
 
 export function isApListFilter(v: string | null): v is ApListFilter {
@@ -98,6 +165,7 @@ export async function listApRequests(
   const counts: Record<string, number> = {
     pending: 0,
     pending_review: 0,
+    pending_second_approval: 0,
     approved: 0,
     rejected: 0,
     quarantined: 0,
@@ -131,6 +199,8 @@ export async function getApRequestDetail(
     include: {
       attachments: { orderBy: { created_at: 'asc' } },
       followups: { orderBy: { received_at: 'asc' } },
+      // Amendment 5 (D-M5-6) — equipment linkage recorded on a decided row.
+      equipment_links: { include: { equipment: { select: { display_name: true } } } },
     },
   });
   if (!r) return null;
@@ -139,6 +209,14 @@ export async function getApRequestDetail(
     : null;
   const heldByName = r.held_by
     ? (await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ?? null
+    : null;
+  // D-M5-3 — resolve the dual-approval identities for the second-approval panel +
+  // read-back. Only queried when present (a >= $1,000 request).
+  const firstApproverName = r.first_approver_id
+    ? (await prisma.user.findUnique({ where: { id: r.first_approver_id }, select: { name: true } }))?.name ?? null
+    : null;
+  const secondApproverName = r.second_approver_id
+    ? (await prisma.user.findUnique({ where: { id: r.second_approver_id }, select: { name: true } }))?.name ?? null
     : null;
   return {
     id: r.id,
@@ -163,6 +241,24 @@ export async function getApRequestDetail(
     decisionMailSentAt: r.decision_mail_sent_at ? r.decision_mail_sent_at.toISOString() : null,
     heldAt: r.held_at ? r.held_at.toISOString() : null,
     holdNote: r.hold_note,
+    extraction: toExtractionPrefill(r.extraction),
+    vendorFreeform: r.vendor_freeform,
+    explanation: r.explanation,
+    confirmedAmountCents: r.confirmed_amount_cents,
+    varianceFlagState: r.variance_flag_state,
+    varianceAcknowledgmentNote: r.variance_acknowledgment_note,
+    equipmentLinks: r.equipment_links.map((l) => ({
+      equipmentId: l.equipment_id,
+      displayName: l.equipment?.display_name ?? null,
+      isNotEquipmentRelated: l.is_not_equipment_related,
+    })),
+    firstApproverId: r.first_approver_id,
+    firstApproverName,
+    firstApprovedAt: r.first_approved_at ? r.first_approved_at.toISOString() : null,
+    secondApproverId: r.second_approver_id,
+    secondApproverName,
+    secondApprovedAt: r.second_approved_at ? r.second_approved_at.toISOString() : null,
+    secondApproverNote: r.second_approver_note,
     attachments: r.attachments.map((a) => ({
       id: a.id,
       kind: a.kind,

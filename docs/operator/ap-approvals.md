@@ -281,3 +281,176 @@ exclude on-hold (`pending_review`) items, which are being actively worked.
    email, a hold notice reaches the forwarder, and a decision email + stamped PDF
    reach the forwarder (Mary CC'd).
 
+
+## 2026-07-22 — Structured Approve + extraction + equipment + variance (ADR-0046 Amendment 5, D-M5-1/D-M5-2/D-M5-6)
+
+Kelsey's post-live feedback ("if all invoices are approved without thought, the
+approval is completely performative") drives this amendment: it installs vetting
+FRICTION on the Approve path. **The change is Approve-only** — Reject, Hold, and
+NOT-DR3 keep their single reason/note field and are untouched.
+
+### The structured Approve panel (four required fields)
+
+A real-site Approve (Woodland or Eugene) now requires **four non-empty fields**
+before the Approve button enables (the server re-validates all four — a
+hand-crafted API call missing any is refused):
+
+1. **Vendor** (freeform) — the approver types the vendor name. Helper prompt:
+   *"Enter the vendor name carefully — check spelling and capitalization. This
+   appears on the returned decision email and Mary's GP filing."* Vendors do not
+   need to be pre-registered; Vision matches loosely to the baseline table but
+   accepts any text. Writes `vendor_freeform` (the legacy `vendor` column is
+   deprecated — kept, no longer written).
+2. **Explanation** (freeform) — replaces the single "note" on the Approve path
+   only. *"What was this transaction for?"* Writes `explanation`.
+3. **Confirmed amount** — pre-filled from the intake auto-extraction (below) with
+   a confidence badge; the approver can always override. Writes
+   `confirmed_amount_cents` (the legacy `amount_cents` column is deprecated).
+4. **Equipment** (multi-select) — always shown; site-filtered typeahead over the
+   equipment master. The approver picks one or more assets **OR** the explicit,
+   mutually-exclusive **"Not equipment-related"** option — one selection is
+   required, which forces a decision every time. Writes `ap_equipment_links`.
+   **No inline creation** — if an asset is missing, an admin adds it via the
+   fleet/equipment surface (or Hold the invoice with a note). This is the
+   friction Kelsey asked for: a Stockton mower charge has no Stockton mower to
+   pick, so the approver pauses.
+
+Extraction only **pre-fills** these fields — the approver still confirms every
+one. Nothing is ever auto-approved or auto-filled without confirmation.
+
+### Amount auto-extraction + confidence badge (D-M5-2)
+
+At intake (during the poll, before the request reaches the queue) Vision runs a
+hybrid extraction and stores the result on `ap_requests.extraction`. Local
+pdf-parse + regex heuristics score the confirmed-amount pre-fill; a Claude API
+fallback fires **only** when the local pass is LOW/FAILED (and only when the
+Anthropic key is configured — see below). The confirmed-amount input shows a
+badge the approver reads before confirming:
+
+- **HIGH** → green ✓ *"Verified"*
+- **MEDIUM** → yellow ⚠ *"Please verify"*
+- **LOW** → red ⚠ *"Low confidence — verify against invoice"*
+- **FAILED** → no badge, blank input, *"Enter amount from invoice"*
+
+Extraction never blocks the poll; a failure just means the approver types the
+amount. **Operator handoff (§4):** the Claude fallback needs
+`~/.dr3-vision-secrets/anthropic.env` (`ANTHROPIC_API_KEY=…`, chmod 600) on
+CHAD-HQ; absent, low-confidence local extraction lands as-is for manual entry.
+Model/timeout are tunable via `AP_EXTRACTION_CLAUDE_MODEL` (default
+`claude-sonnet-4-6`) and `AP_EXTRACTION_CLAUDE_TIMEOUT_MS` (default `30000`).
+
+### Variance flag — block until acknowledged (D-M5-4, approver side)
+
+At Approve time, if the typed vendor matches an **established** baseline
+(`ap_vendor_baselines`, 3+ invoices in the trailing 12 months) and the confirmed
+amount trips the thresholds (**$50 flat OR 15%**, either-trips; per-vendor
+overrides honored), a **RED variance banner** appears above the Approve button
+showing the baseline mean, invoice count, and the last three invoices. **The
+Approve button is disabled** until the approver clicks **"I've verified the
+variance"** (which stamps `variance_acknowledged_by`/`_at` and an optional note,
+both riding the decision email + stamped PDF footer). Below threshold, or no
+baseline, the Approve flows normally with no gate. The server re-evaluates the
+variance and refuses an above-threshold trip that was not acknowledged — the
+gate is never client-trust.
+
+---
+
+## 2026-07-22 — $1,000 second-approval workflow (ADR-0046 Amendment 5, D-M5-3)
+
+Any structured **Approve** whose confirmed amount is **≥ $1,000** no longer files
+immediately. It moves to `pending_second_approval` and waits for the site's
+designated second approver. Nothing else changes: sub-$1,000 Approves, every
+Reject/Hold, and every NOT-DR3 disposition stay single-action (first-action-wins),
+and the decision email + stamped PDF still fire only on the final approved/rejected
+state.
+
+### Routing (who is the second approver)
+
+- **Woodland → Bill** (admin — always eligible; needs no roster row).
+- **Eugene → Shannon Rockwell** (must be provisioned in `ap_second_approvers`).
+- **NOT DR3 → not applicable** — the invoice returns to sender, no payment, no
+  second approval.
+
+### Provision Shannon Rockwell (operator handoff, spec §4)
+
+1. Confirm Shannon has a DR3-Vision user account (or provision one).
+2. Give her AP-queue access — she must be able to open the queue to act. Add her to
+   the `ap_approvers` roster (or grant admin role); without it `requireApApprover`
+   refuses her at the queue before the second-approval check ever runs.
+3. Insert the second-approver roster row (site is the CODE, not a sites.id):
+   ```sql
+   INSERT INTO ap_second_approvers (id, user_id, site_id, active)
+   VALUES (gen_random_uuid(), '<shannon-user-id>', 'eugene', true);
+   ```
+   A row is ACTIVE when `active = true` AND (`active_until` IS NULL OR in the future).
+   Bill/Woodland needs no `ap_second_approvers` row — admin-eligibility covers it.
+
+### What the approvers see
+
+- A first approver who approves a ≥ $1,000 invoice is told it now needs a second
+  approval (and where it routed). No decision email is sent yet.
+- The site's second approver gets an ntfy page (`dr3-vision-system`) + an email
+  (through the `ap_notify` pilot gate — [PILOT] → admins until the surface is live),
+  and sees an **"awaiting 2nd approval"** tab + a badge count on `/`.
+- The second-approval panel shows the first approver's decision (vendor, amount,
+  explanation, equipment, any acknowledged variance) read-only, then **Confirm second
+  approval** or **Reject (override)**. An override reject requires a note and CCs the
+  first approver on the rejection.
+
+### First approver == second approver (decision (c))
+
+If Bill (admin) is the first approver on a Woodland invoice ≥ $1,000, the
+second-approval step still fires. He may self-fulfill, but the panel requires an
+explicit **re-confirmation** checkbox AND a **30-second** minimum wait since first
+approval before the buttons enable. Both are enforced server-side — a hand-crafted
+request without the re-confirm flag, or before the 30 s elapses, is refused.
+
+### Decision artifacts for ≥ $1,000
+
+The final decision email + stamped PDF carry **both** approvers + PT timestamps:
+*"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
+[T2 PT]"*. Sub-$1,000 decisions are unchanged (single approver on the stamp).
+
+## 2026-07-22 — Vendor baselines + invoice history (ADR-0046 Amendment 5, D-M5-4/D-M5-5)
+
+### Vendor baselines (`/admin/ap/baselines`, admin-only)
+
+A per-vendor trailing-12-month baseline (mean/median/min/max/count) drives the
+variance flag on the Approve panel. Sources of history:
+
+- **Bill-uploaded AP reports** (`source='bill_upload'`) — imported via
+  `/admin/ap/baselines/import` (below).
+- **Vision's own approved invoices** (`source='vision_approval'`) — appended
+  automatically on every terminal Approve, so baselines stay fresh between uploads.
+
+A baseline is **established** (used to flag variance) only at **3+** invoices in the
+window. Global thresholds are **$50 flat OR 15%** (either trips); set a **per-vendor
+override** (e.g. Clark Pest → $25 / 6.25%) right on this page. **Overrides survive every
+rebuild** — only the aggregate columns are recomputed.
+
+Baselines rebuild **nightly** (the `ap-baseline-rebuild` cron, 01:30 PT, internal route
+`/api/internal/ap/baseline-rebuild`) and **on demand** via the **Refresh baselines**
+button.
+
+### Importing a Bill AP report (`/admin/ap/baselines/import`, admin-only)
+
+1. Bill uploads the GP AP-history PDF to **/admin/file-drop**.
+2. On the import page, pick that file-drop and click **Preview** — Vision parses it
+   (local pdf-parse tabular parse; a Claude structuring fallback runs when the
+   Anthropic key is configured and the local parse is thin). **Nothing is written yet.**
+3. Review the parsed rows. **Drop** any that look wrong (the preview is the guard —
+   there is no DB-level dedupe, so import a given report once).
+4. Click **Confirm import** — the rows land in `ap_vendor_baseline_history`
+   (`source='bill_upload'`) and baselines rebuild immediately.
+
+### Invoice history search (`/admin/ap/history`)
+
+**Access is restricted to admins + designated second approvers** via the
+`can_view_ap_history` flag (`UPDATE users SET can_view_ap_history = true WHERE id = …`,
+or admin role). The **general approver roster does NOT see this surface** — it exposes
+historical AP data. Shannon (Eugene second approver) should be granted the flag.
+
+The surface is a union of **Vision-decided invoices** + **Bill-uploaded history**
+(distinguished by a Source column). Filter by vendor (typeahead), date range, amount
+range, site, approver, and source; click a row for full decision context (Vision rows)
+or raw imported values. No aggregate reports/dashboards by design.

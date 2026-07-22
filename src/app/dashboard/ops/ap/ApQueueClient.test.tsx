@@ -1,19 +1,28 @@
 // @vitest-environment jsdom
 //
-// ADR-0046 2026-07-21 amendment — the approver panel must GATE approval on a note:
-// Approve is disabled until a non-empty note is entered (mirroring how Reject
-// already gates). Interaction test over the DetailPanel, no network round-trip.
+// ADR-0046 Amendment 5 (D-M5-1/4/6) — the STRUCTURED Approve panel: a real-site
+// Approve gates on four fields (vendor, confirmed amount, explanation, equipment
+// choice); Reject / Hold keep their single note field. Interaction test over the
+// DetailPanel. `fetch` is stubbed to an empty/failed response so the equipment +
+// variance effects degrade cleanly (no network); the gating logic under test is
+// purely client-side.
 
 import React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { DetailPanel } from './ApQueueClient';
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof fetch,
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-// Build a minimal PENDING detail. The return type is pulled from the component's
-// own prop type so the object stays in lockstep with the interface without
-// exporting it, and its literal fields (e.g. status) are contextually checked.
 function pendingDetail(): React.ComponentProps<typeof DetailPanel>['detail'] {
   return {
     id: 'req-1',
@@ -37,42 +46,80 @@ function pendingDetail(): React.ComponentProps<typeof DetailPanel>['detail'] {
     heldByName: null,
     heldAt: null,
     holdNote: null,
+    extraction: null,
+    vendorFreeform: null,
+    explanation: null,
+    confirmedAmountCents: null,
+    varianceFlagState: null,
+    varianceAcknowledgmentNote: null,
+    equipmentLinks: [],
+    firstApproverName: null,
+    firstApprovedAt: null,
+    secondApproverName: null,
+    secondApprovedAt: null,
+    secondApproverNote: null,
+    secondApproval: null,
     attachments: [],
     followups: [],
   };
 }
 
-const noteField = () => screen.getByPlaceholderText(/what this transaction was for/i);
 const approveBtn = () => screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement;
 const rejectBtn = () => screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement;
+const locationSelect = () => screen.getByRole('combobox') as HTMLSelectElement;
+const noteField = () => screen.getByPlaceholderText(/reason to reject or hold/i);
 
-describe('DetailPanel — approval requires a note (ADR-0046 2026-07-21)', () => {
-  it('disables Approve (and Reject) until a non-empty note is entered', () => {
+function selectSite(code: string) {
+  fireEvent.change(locationSelect(), { target: { value: code } });
+}
+
+describe('DetailPanel — structured Approve gating (Amendment 5)', () => {
+  it('hides the structured fields until a real site is selected', () => {
     render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
-    expect(approveBtn().disabled).toBe(true);
-    expect(rejectBtn().disabled).toBe(true);
+    expect(screen.queryByRole('textbox', { name: /enter the vendor name carefully/i })).toBeNull();
+    selectSite('woodland');
+    expect(screen.getByRole('textbox', { name: /enter the vendor name carefully/i })).toBeTruthy();
+  });
 
-    fireEvent.change(noteField(), {
-      target: { value: 'fuel for the Woodland box truck, June' },
+  it('keeps Approve disabled until all four structured fields are complete', () => {
+    render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
+    expect(approveBtn().disabled).toBe(true); // no site
+
+    selectSite('woodland');
+    expect(approveBtn().disabled).toBe(true); // real site, nothing filled
+
+    fireEvent.change(screen.getByRole('textbox', { name: /enter the vendor name carefully/i }), {
+      target: { value: 'Sunbelt Rentals' },
     });
-    expect(approveBtn().disabled).toBe(false);
-    expect(rejectBtn().disabled).toBe(false);
+    fireEvent.change(screen.getByRole('textbox', { name: /confirmed amount usd/i }), {
+      target: { value: '125.00' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /what was this transaction for/i }), {
+      target: { value: 'mower rental' },
+    });
+    expect(approveBtn().disabled).toBe(true); // still missing the equipment choice
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /not equipment-related/i }));
+    expect(approveBtn().disabled).toBe(false); // all four satisfied
   });
 
-  it('re-disables Approve when the note is cleared to whitespace', () => {
+  it('Reject gates on the single note field, independent of the structured fields', () => {
     render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
-    fireEvent.change(noteField(), { target: { value: 'ok to pay' } });
-    expect(approveBtn().disabled).toBe(false);
-
-    fireEvent.change(noteField(), { target: { value: '   ' } });
+    selectSite('woodland');
+    expect(rejectBtn().disabled).toBe(true);
+    fireEvent.change(noteField(), { target: { value: 'duplicate invoice' } });
+    expect(rejectBtn().disabled).toBe(false);
+    // A rejection reason does NOT satisfy the structured Approve gate.
     expect(approveBtn().disabled).toBe(true);
   });
 
-  it('marks the note field required and prompts for transaction purpose + context', () => {
+  it('NOT-DR3 uses the single note field (no structured fields shown)', () => {
     render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
-    // The field is prompted for what the transaction was for + additional context…
-    expect(noteField()).toBeTruthy();
-    // …and the label carries an unmistakable (required) marker.
-    expect(screen.getAllByText(/\(required\)/i).length).toBeGreaterThan(0);
+    selectSite('not_dr3');
+    expect(screen.queryByRole('textbox', { name: /enter the vendor name carefully/i })).toBeNull();
+    // Approve on NOT-DR3 gates on the note.
+    expect(approveBtn().disabled).toBe(true);
+    fireEvent.change(noteField(), { target: { value: 'parent-org bill, not DR3' } });
+    expect(approveBtn().disabled).toBe(false);
   });
 });

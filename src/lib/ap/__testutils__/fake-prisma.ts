@@ -20,7 +20,13 @@ function p2002(target: string): Error {
 
 export interface FakeApRequest {
   id: string;
-  status: 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+  status:
+    | 'pending'
+    | 'pending_review'
+    | 'pending_second_approval'
+    | 'approved'
+    | 'rejected'
+    | 'quarantined';
   internet_message_id: string;
   conversation_id: string | null;
   received_at: Date;
@@ -48,12 +54,74 @@ export interface FakeApRequest {
   held_by: string | null;
   held_at: Date | null;
   hold_note: string | null;
+  // ADR-0046 Amendment 5 — structured decide + variance. Optional so existing test
+  // fixtures (pendingReq() etc.) need not enumerate them; create() defaults them and
+  // the structured decide write (updateMany) sets them at decision time.
+  vendor_freeform?: string | null;
+  explanation?: string | null;
+  confirmed_amount_cents?: number | null;
+  variance_flag_state?: string;
+  variance_acknowledged_by?: string | null;
+  variance_acknowledged_at?: Date | null;
+  variance_acknowledgment_note?: string | null;
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval stamps. Optional so existing
+  // fixtures need not enumerate them; create() defaults them and the two decide legs
+  // set them at their respective transitions.
+  first_approver_id?: string | null;
+  first_approved_at?: Date | null;
+  second_approver_id?: string | null;
+  second_approved_at?: Date | null;
+  second_approver_note?: string | null;
+}
+export interface FakeEquipment {
+  id: string;
+  site_id: string;
+  display_name: string;
+  category: string;
+  is_active: boolean;
+}
+export interface FakeEquipmentLink {
+  id: string;
+  request_id: string;
+  equipment_id: string | null;
+  is_not_equipment_related: boolean;
+}
+export interface FakeVendorBaseline {
+  vendor_name_normalized: string;
+  vendor_display_name: string;
+  invoice_count: number;
+  mean_amount_cents: number;
+  median_amount_cents: number;
+  min_amount_cents: number;
+  max_amount_cents: number;
+  stddev_amount_cents: number | null;
+  variance_flat_override_cents: number | null;
+  variance_percent_override: number | null;
+}
+export interface FakeBaselineHistory {
+  id: string;
+  vendor_name_normalized: string;
+  invoice_date: Date;
+  invoice_amount_cents: number;
+  // Optional so pre-Amendment-5 seeds (variance.test) need not enumerate them;
+  // create() defaults them and the D-M5-4 paths (rebuild/history) tolerate absence.
+  vendor_name?: string;
+  site_id?: string | null;
+  source?: string;
+  imported_by?: string | null;
 }
 export interface FakeApApprover {
   id: string;
   user_id: string;
   active_until: Date | null;
   created_by: string | null;
+}
+export interface FakeSecondApprover {
+  id: string;
+  user_id: string;
+  site_id: string; // site CODE: 'woodland' | 'eugene'
+  active: boolean;
+  active_until: Date | null;
 }
 export interface FakeSite {
   id: string;
@@ -121,6 +189,12 @@ export interface FakeDb {
   decisionRecipients: Array<{ email: string; active: boolean }>;
   deltaTokens: Array<{ mailbox: string; folder: string; delta_token: string }>;
   pollRuns: FakePollRun[];
+  // ADR-0046 Amendment 5.
+  equipment: FakeEquipment[];
+  equipmentLinks: FakeEquipmentLink[];
+  baselines: FakeVendorBaseline[];
+  baselineHistory: FakeBaselineHistory[];
+  secondApprovers: FakeSecondApprover[];
 }
 
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
@@ -137,6 +211,11 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     decisionRecipients: seed.decisionRecipients ?? [],
     deltaTokens: seed.deltaTokens ?? [],
     pollRuns: seed.pollRuns ?? [],
+    equipment: seed.equipment ?? [],
+    equipmentLinks: seed.equipmentLinks ?? [],
+    baselines: seed.baselines ?? [],
+    baselineHistory: seed.baselineHistory ?? [],
+    secondApprovers: seed.secondApprovers ?? [],
   };
 }
 
@@ -216,6 +295,18 @@ export function makeFakePrisma(db: FakeDb) {
           held_by: (d['held_by'] as string | null) ?? null,
           held_at: (d['held_at'] as Date | null) ?? null,
           hold_note: (d['hold_note'] as string | null) ?? null,
+          vendor_freeform: (d['vendor_freeform'] as string | null) ?? null,
+          explanation: (d['explanation'] as string | null) ?? null,
+          confirmed_amount_cents: (d['confirmed_amount_cents'] as number | null) ?? null,
+          variance_flag_state: (d['variance_flag_state'] as string | undefined) ?? 'not_applicable',
+          variance_acknowledged_by: (d['variance_acknowledged_by'] as string | null) ?? null,
+          variance_acknowledged_at: (d['variance_acknowledged_at'] as Date | null) ?? null,
+          variance_acknowledgment_note: (d['variance_acknowledgment_note'] as string | null) ?? null,
+          first_approver_id: (d['first_approver_id'] as string | null) ?? null,
+          first_approved_at: (d['first_approved_at'] as Date | null) ?? null,
+          second_approver_id: (d['second_approver_id'] as string | null) ?? null,
+          second_approved_at: (d['second_approved_at'] as Date | null) ?? null,
+          second_approver_note: (d['second_approver_note'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -243,8 +334,18 @@ export function makeFakePrisma(db: FakeDb) {
       },
       async count(args: { where?: AnyRecord }) {
         const w = args.where ?? {};
-        return db.requests.filter((r) => w['status'] === undefined || r.status === w['status'])
-          .length;
+        const siteIn = (w['site_id'] as { in?: string[] } | undefined)?.in;
+        return db.requests.filter((r) => {
+          if (w['status'] !== undefined && r.status !== w['status']) return false;
+          if (siteIn && !siteIn.includes(r.site_id ?? '')) return false;
+          if (
+            w['site_id'] !== undefined &&
+            typeof w['site_id'] === 'string' &&
+            r.site_id !== w['site_id']
+          )
+            return false;
+          return true;
+        }).length;
       },
     },
     apFollowup: {
@@ -431,6 +532,142 @@ export function makeFakePrisma(db: FakeDb) {
         );
         return row ? pick(row, args.select) : null;
       },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const codeIn = (w['code'] as { in?: string[] } | undefined)?.in;
+        const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
+        const rows = db.sites.filter((s) => {
+          if (codeIn && !codeIn.includes(s.code)) return false;
+          if (idIn && !idIn.includes(s.id)) return false;
+          return true;
+        });
+        return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
+    },
+    // ADR-0046 Amendment 5 (D-M5-6) — equipment master + link join.
+    equipment: {
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
+        let rows = db.equipment.filter((e) => {
+          if (idIn && !idIn.includes(e.id)) return false;
+          if (w['site_id'] !== undefined && e.site_id !== w['site_id']) return false;
+          if (w['is_active'] !== undefined && e.is_active !== w['is_active']) return false;
+          return true;
+        });
+        rows = rows.sort((a, b) => a.display_name.localeCompare(b.display_name));
+        return rows.map((e) => (args.select ? pick(e, args.select) : { ...e }));
+      },
+    },
+    apEquipmentLink: {
+      async create(args: { data: AnyRecord }) {
+        const d = args.data;
+        const row: FakeEquipmentLink = {
+          id: uid('eqlink'),
+          request_id: d['request_id'] as string,
+          equipment_id: (d['equipment_id'] as string | null) ?? null,
+          is_not_equipment_related: (d['is_not_equipment_related'] as boolean | undefined) ?? false,
+        };
+        db.equipmentLinks.push(row);
+        return { ...row };
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.equipmentLinks.filter(
+          (l) => w['request_id'] === undefined || l.request_id === w['request_id'],
+        );
+        return rows.map((l) => (args.select ? pick(l, args.select) : { ...l }));
+      },
+    },
+    // ADR-0046 Amendment 5 (D-M5-4) — vendor baseline + history.
+    apVendorBaseline: {
+      async findUnique(args: { where: AnyRecord }) {
+        const row = db.baselines.find(
+          (b) => b.vendor_name_normalized === args.where['vendor_name_normalized'],
+        );
+        return row ? { ...row } : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        void args;
+        return db.baselines.map((b) => (args.select ? pick(b, args.select) : { ...b }));
+      },
+      // upsert writes ONLY the aggregate columns supplied in create/update — the
+      // override columns (variance_flat_override_cents/variance_percent_override) are
+      // never in that payload, so a rebuild preserves them (matches Prisma semantics
+      // and the D-M5-4 override-preservation contract).
+      async upsert(args: { where: AnyRecord; create: AnyRecord; update: AnyRecord }) {
+        const key = args.where['vendor_name_normalized'];
+        const existing = db.baselines.find((b) => b.vendor_name_normalized === key);
+        if (existing) {
+          Object.assign(existing, args.update);
+          return { ...existing };
+        }
+        const row = {
+          vendor_name_normalized: key as string,
+          vendor_display_name: '',
+          invoice_count: 0,
+          mean_amount_cents: 0,
+          median_amount_cents: 0,
+          min_amount_cents: 0,
+          max_amount_cents: 0,
+          stddev_amount_cents: null,
+          variance_flat_override_cents: null,
+          variance_percent_override: null,
+          ...args.create,
+        } as FakeVendorBaseline;
+        db.baselines.push(row);
+        return { ...row };
+      },
+      async deleteMany(args: { where?: AnyRecord } = {}) {
+        const inList = ((args.where?.['vendor_name_normalized'] as { in?: string[] })?.in) ?? null;
+        const before = db.baselines.length;
+        db.baselines = db.baselines.filter((b) =>
+          inList ? !inList.includes(b.vendor_name_normalized) : false,
+        );
+        return { count: before - db.baselines.length };
+      },
+    },
+    apVendorBaselineHistory: {
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        let rows = db.baselineHistory.filter((h) => {
+          if (w['vendor_name_normalized'] !== undefined && h.vendor_name_normalized !== w['vendor_name_normalized'])
+            return false;
+          if (w['source'] !== undefined && h.source !== w['source']) return false;
+          return true;
+        });
+        rows = rows.sort((a, b) => b.invoice_date.getTime() - a.invoice_date.getTime());
+        if (typeof args.take === 'number') rows = rows.slice(0, args.take);
+        return rows.map((h) => (args.select ? pick(h, args.select) : { ...h }));
+      },
+      async create(args: { data: AnyRecord }) {
+        const d = args.data;
+        const row: FakeBaselineHistory = {
+          id: uid('hist'),
+          vendor_name: (d['vendor_name'] as string) ?? '',
+          vendor_name_normalized: d['vendor_name_normalized'] as string,
+          invoice_date: (d['invoice_date'] as Date) ?? new Date(),
+          invoice_amount_cents: d['invoice_amount_cents'] as number,
+          site_id: (d['site_id'] as string | null) ?? null,
+          source: (d['source'] as string) ?? 'bill_upload',
+          imported_by: (d['imported_by'] as string | null) ?? null,
+        };
+        db.baselineHistory.push(row);
+        return { ...row };
+      },
+    },
+    // ADR-0046 Amendment 5 (D-M5-3) — second-approver roster (site CODE keyed).
+    apSecondApprover: {
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.secondApprovers.filter((s) => matchSecondApprover(s, w));
+        return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.secondApprovers.find((s) => matchSecondApprover(s, w));
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
     },
     auditLog: {
       async create(args: { data: AnyRecord }) {
@@ -448,11 +685,37 @@ export function makeFakePrisma(db: FakeDb) {
         return { id: uid('audit'), ...row };
       },
     },
-    async $transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
-      return fn(client);
+    // Supports BOTH Prisma $transaction shapes: the interactive callback form
+    // (`$transaction(async (tx) => …)`) and the batch/array form
+    // (`$transaction([p1, p2, …])`, used by confirmBaselineImport).
+    async $transaction<T>(
+      arg: ((tx: unknown) => Promise<T>) | ReadonlyArray<Promise<unknown>>,
+    ): Promise<T | unknown[]> {
+      if (Array.isArray(arg)) return Promise.all(arg);
+      return (arg as (tx: unknown) => Promise<T>)(client);
     },
   };
   return client;
+}
+
+/** Match an ap_second_approver row against the D-M5-3 routing/eligibility where
+ * shapes: `{ site_id, active, OR: [{active_until:null},{active_until:{gt}}] }` plus
+ * an optional `user_id`. */
+function matchSecondApprover(s: FakeSecondApprover, w: Record<string, unknown>): boolean {
+  if (w['user_id'] !== undefined && s.user_id !== w['user_id']) return false;
+  if (w['site_id'] !== undefined && s.site_id !== w['site_id']) return false;
+  if (w['active'] !== undefined && s.active !== w['active']) return false;
+  const or = w['OR'] as Array<Record<string, unknown>> | undefined;
+  if (or) {
+    const active = or.some((clause) => {
+      if ('active_until' in clause && clause['active_until'] === null) return s.active_until === null;
+      const au = clause['active_until'] as { gt?: Date } | undefined;
+      if (au && au.gt) return s.active_until !== null && s.active_until.getTime() > au.gt.getTime();
+      return false;
+    });
+    if (!active) return false;
+  }
+  return true;
 }
 
 /** Match an ap_approver row against the AP roster/expiry where shapes. */

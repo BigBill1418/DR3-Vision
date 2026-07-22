@@ -5,6 +5,199 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0046 Amendment 5 — pre-go-live hardening pass, Eugene iPad go-live)
+
+Focused fixes on the AP money module ahead of the Eugene iPad go-live. Each was
+surfaced by an adversarial verify pass.
+
+- **`src/app/dashboard/ops/ap/ApQueueClient.tsx`** — iPad AP PDF preview no longer
+  renders blank. iOS/iPadOS Safari (WebKit) has no inline `<iframe>` PDF viewer, so
+  the framed invoice was blank on the Eugene iPad. PDF attachments now always render
+  a prominent, touch-sized "Open PDF in new tab" action; on iOS that replaces the
+  dead frame, on desktop it rides above Chromium's working inline viewer. Image +
+  HTML-body previews unchanged.
+- **`src/lib/ap/extraction/claude-fallback.ts`** — the combined body + attachment
+  text sent to the metered Anthropic API is now capped at 60,000 chars (`MAX_TEXT_CHARS`,
+  mirroring the baseline-import structuring path), closing an unbounded-input cost/DoS
+  vector. Images were already size- + count-capped.
+- **`src/lib/ap/variance.ts`** — a per-vendor `variance_percent_override` of EXACTLY
+  0 is now honored (any variance trips) instead of being silently dropped in favor of
+  the 15% global default. Matches the flat-override semantics; treats "override is
+  set" as not-null, not truthy. A 0 override is a legitimate tightening control.
+- **`src/lib/ap/baselines.ts`** — `trailingWindowStart` no longer overflows on a
+  Feb-29 (leap-year) anchor. The 12-month window now clamps the day to the last valid
+  day of the target month (Feb 29 → Feb 28 of the prior non-leap year) instead of
+  rolling forward to Mar 1, which had excluded late-February invoices from the window.
+- **`src/lib/ap/stamp.ts`** — the dual-approval decision PDF meta block now shows
+  BOTH approvers + timestamps (First approval / Second approval), consistent with the
+  authoritative stamp band line, instead of showing only the first approver and
+  mislabeling the first-approval time as the terminal "Decided" time (spec §D-M5-3).
+- **`src/lib/ap/approvals.ts`** — the Reject / NOT-DR3 decide path no longer writes
+  the DEPRECATED `ap_requests.vendor` / `amount_cents` columns even when a legacy
+  client supplies them (hard rule #1: write-stopped on ALL decide paths, columns kept
+  for historical data). Reject / Hold / NOT-DR3 keep only their single `decision_note`.
+- **`src/lib/ap/variance.test.ts`** — synthetic invented vendor names replace
+  real-world company names in fixtures; added money-control boundary tests (established
+  gate at exactly 3 invoices; strict-`>` fire/no-fire at exactly the flat and percent
+  thresholds; the 0-override regression). Plus Feb-29 window tests
+  (`baselines.test.ts`), dual-approval meta-block tests (`stamp.test.ts`), and the
+  write-stop assertion (`approvals.test.ts`).
+- **migration `20260805_ap_amendment_5_...`** — corrected two inaccurate comments
+  (DDL unchanged): the table count ("four" → "five" new tables) and the `ALTER TYPE`
+  claim that the DB enum value order matches schema.prisma (it can't — `pending_review`
+  was appended out of order by an earlier migration; Postgres enum value order does not
+  affect Prisma correctness regardless).
+
+### Fixed — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — override-reject email dropped first-approver context)
+
+- **`src/lib/ap/approvals.ts`** — a second-approver override REJECT email no longer
+  drops the FIRST approver's `explanation` and equipment linkage. On a structured
+  Approve the narrative lives in the `explanation` column (`decision_note` stays
+  null), so the `effectiveNote` fallback resolved to NULL on a reject and the
+  forwarder + CC'd first approver got the override reason but not what the
+  transaction was for. The rejection email now renders the first approval note and
+  the first approver's equipment linkage explicitly, per spec §D-M5-3 (line 680:
+  vendor + explanation + amount + equipment + note). Regression covered in
+  `second-approval.test.ts`.
+
+### Docs — 2026-07-22 (ADR-0046 Amendment 5 finalize — operator runbook brought current)
+
+- **`docs/operator/ap-approvals.md`** now documents the FULL Amendment 5 approver
+  flow end-to-end: the structured four-field Approve (vendor freeform / explanation
+  / confirmed-amount / equipment multi-select with explicit "Not equipment-related"),
+  the intake auto-extraction confidence badges (HIGH/MEDIUM/LOW/FAILED) + the
+  `anthropic.env` operator handoff, the variance block-until-acknowledged gate, the
+  $1,000 second-approval routing (Woodland → Bill, Eugene → Shannon), and the
+  `/admin/ap/baselines` + `/admin/ap/history` (`can_view_ap_history`) access model.
+  Reject / Hold / NOT-DR3 documented as unchanged (single reason field). No code
+  change — runbook only.
+
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-4/D-M5-5 — vendor baselines + invoice history)
+
+- **Vendor-baseline aggregation** (`src/lib/ap/baselines.ts`): a pure trailing-12-month
+  roll-up per normalized vendor (mean/median/min/max/stddev/count, anchored on the
+  vendor's most-recent invoice) feeding `ap_vendor_baselines`, which variance detection
+  reads. A baseline is **established** (used to flag) at 3+ invoices.
+- **`rebuildVendorBaselines`** recomputes every vendor from `ap_vendor_baseline_history`
+  and **preserves admin per-vendor threshold overrides** (`variance_flat_override_cents`,
+  `variance_percent_override`) — the aggregate columns are upserted, the override columns
+  are never touched. Runs **nightly** (new `ap-baseline-rebuild` cron → internal route
+  `/api/internal/ap/baseline-rebuild`, 01:30 PT) and **on demand** (admin "Refresh"
+  button).
+- **Baseline freshness feed**: every TERMINAL `approved` transition (sub-$1K in
+  `decideRequest`; the ≥$1K second-approve in `decideSecondApproval`) appends a
+  `vision_approval` row to `ap_vendor_baseline_history` in the same transaction — so
+  baselines stay current between Bill's re-uploads. Rejects and the second-approval hop
+  do **not** feed.
+- **Baseline import** (`/admin/ap/baselines/import`, admin-only): pick a Bill-uploaded
+  AP-report PDF from file-drop → **preview** parsed rows (local pdf-parse tabular parse +
+  Claude structuring fallback when configured, `src/lib/ap/baseline-import.ts`) →
+  **confirm** to write `bill_upload` history and rebuild. The preview is the human guard
+  (no DB-level dedupe); drop bad rows before confirming.
+- **Per-vendor override management** (`/admin/ap/baselines`, admin-only): set stricter/
+  looser flat-$ + percent thresholds per vendor; changes are audited.
+- **Invoice history search** (`/admin/ap/history`): union of Vision-decided invoices
+  (`ap_requests`) + Bill-uploaded history (`ap_vendor_baseline_history` where
+  `source='bill_upload'`; the `vision_approval` feed is excluded to avoid double-counting).
+  Filters: vendor typeahead, date range, amount range, site, approver, source. Per-row
+  detail modal. No aggregate dashboards (per spec).
+- **New scoped read gate** `can_view_ap_history` (`requireApHistoryRead`/
+  `checkApHistoryRead`): admins + designated second approvers only — the general
+  `ap_approvers` roster is excluded (hard rule #2, mirrors `can_view_billing_verify`).
+
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — $1,000 second-approval workflow)
+
+- **A structured Approve whose confirmed amount is ≥ $1,000 no longer terminates.**
+  It moves to a new `pending_second_approval` state, stamping the first approver
+  (`first_approver_id`/`first_approved_at`) + all four required field values, and
+  pages/emails the SITE-appropriate second approver (Woodland → Bill, Eugene →
+  Shannon Rockwell from `ap_second_approvers`). **NOT-DR3 and every Reject/Hold — and
+  every sub-$1,000 Approve — are unchanged** (single-action, first-action-wins). The
+  decision email + stamped PDF fire ONLY on the terminal `approved`/`rejected` state.
+- **Second-approver decisions** (`POST /api/ops/ap/[id]/second-approval`,
+  `decideSecondApproval`): Approve → `approved`; Reject → `rejected` (override), with
+  `second_approver_note` and the first approver **CC'd** on the rejection email. The
+  approved decision email + stamp now carry **BOTH** approver names + PT timestamps
+  ("Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
+  [T2 PT]"). First-action-wins among second approvers (atomic conditional flip).
+- **Authorization is server-side only.** Eligible = admin role OR an active
+  `ap_second_approvers` row for the decision's site. The first-approver == would-be
+  second-approver case (decision (c)) still fires the state but requires an explicit
+  re-confirmation click AND a 30-second minimum wait since first approval, both
+  enforced in `decideSecondApproval`.
+- **UI:** a distinct "awaiting 2nd approval" tab + status badge; a second-approval
+  panel showing the first approver's decision read-only, gated to the site's eligible
+  second approver, with the self-fulfillment re-confirm + 30s countdown UX; a decided
+  ≥ $1,000 row shows both approvers. The `/` AP tile badge folds in the awaiting-2nd
+  count for second approvers (admins see all; a rostered second approver sees only
+  their site(s)).
+- **Notification:** `notifySecondApprovalNeeded` pages `dr3-vision-system` (row id +
+  site only, ADR-0045) + emails the routed second approver through the `ap_notify`
+  pilot gate ([PILOT] → admins until live). Fail-soft — never fails the first
+  approval.
+- **Operator handoff (§4):** provision Shannon Rockwell — insert an
+  `ap_second_approvers` row `{ user_id: <Shannon>, site_id: 'eugene', active: true }`
+  (Bill/Woodland needs no row; admin-eligibility covers it). See the runbook.
+- Tests: state-machine transitions, site routing, eligibility, override-reject CC,
+  first==second re-confirm + 30s-wait edge case, first-action-wins, dual stamp line
+  (`second-approval.test.ts`, 18 cases).
+
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-1/4/6 — structured Approve + equipment linking + variance banner)
+
+- **The AP Approve path is now STRUCTURED.** A real-site Approve (Woodland/Eugene)
+  requires four non-empty fields — vendor freeform (with the exact "check spelling
+  and capitalization…" helper prompt), an explanation (replaces the single note on
+  Approve only), a confirmed amount pre-filled from the extraction result with a
+  HIGH/MEDIUM/LOW/FAILED confidence badge (approver-overridable), and an equipment
+  multi-select (site-filtered typeahead over the new `equipment` master, with an
+  explicit mutually-exclusive "Not equipment-related" option; at least one selection
+  required; writes `ap_equipment_links`; NO inline creation). **Reject / Hold /
+  NOT-DR3 keep their single reason/note field unchanged** (§5.4 #4). Extraction only
+  pre-fills; the approver confirms every field (§5.4 #5).
+- **Variance banner + block-until-acknowledged gate (D-M5-4).** When the typed vendor
+  matches an ESTABLISHED baseline (`ap_vendor_baselines`, invoice_count ≥ 3) and the
+  confirmed amount trips the $50-flat OR 15%-percent thresholds (either-trips,
+  per-vendor overrides honored), a RED banner shows the baseline mean, invoice count,
+  and last 3 invoices, and the Approve button is disabled until the approver clicks
+  "I've verified the variance" (stamps `variance_acknowledged_by`/`_at` + optional
+  note; rides the decision email + stamped PDF footer).
+- **Server-side enforcement (never trust the client).** `src/lib/ap/variance.ts`
+  (pure either-trips evaluation + baseline/threshold resolution) and
+  `src/lib/ap/equipment.ts` (site-scoped active-equipment validation) back the decide
+  route: it re-validates all four required fields, re-checks equipment ids against the
+  site, and re-evaluates the variance — refusing an above-threshold trip that was not
+  acknowledged. New read endpoints `GET /api/ops/ap/equipment?site=` and
+  `POST /api/ops/ap/variance-check` feed the panel. `decideRequest` persists the
+  structured columns (`vendor_freeform`/`explanation`/`confirmed_amount_cents`/variance
+  state), writes `ap_equipment_links` atomically with the flip, and STOPS writing the
+  deprecated `vendor`/`amount_cents` (kept, per hard rule #1); the decision email +
+  stamp now read the structured columns (falling back to the legacy columns for
+  pre-Amendment-5 rows). Tests: `variance.test.ts`, `equipment.test.ts`, structured
+  cases in `decide/route.test.ts` + `approvals.test.ts`, and the rewritten
+  `ApQueueClient.test.tsx` gating test. (D-M5-3 dual-approval routing is a separate
+  slice.)
+
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-2 — intake auto-extraction pipeline)
+
+- **New `src/lib/ap/extraction/` module: hybrid invoice amount/vendor extraction
+  at intake.** `pipeline.ts` (`extractFromRequest`) runs during `runApPoll` (inside
+  `ingestMessage`, after body sanitize + attachment fetch, before the queue insert)
+  and lands its `ExtractionResult` on `ap_requests.extraction` (jsonb) atomically at
+  insert. Ordered hybrid: `local-parser.ts` does pdf-parse text extraction + regex
+  heuristics against the four canonical labels (Total / Amount Due / Balance Due /
+  Grand Total) and scores HIGH / MEDIUM / LOW / FAILED exactly per spec §2;
+  `claude-fallback.ts` fires the Anthropic SDK **only** on LOW/FAILED local
+  confidence (model from `AP_EXTRACTION_CLAUDE_MODEL`, default `claude-sonnet-4-6`;
+  30s timeout; structured-JSON prompt; logs `cost_cents` per invoice). Fully
+  fail-soft — never blocks or fails the poll; a hard failure lands
+  `confidence:'failed'` with `error` populated. Extraction only PRE-FILLS the decide
+  panel — the approver still confirms every field (hard rule #5).
+  `ap_requests.extracted_haul_numbers` is left empty (Phase-2 hook only, gated on
+  ADR-0057). New deps: `@anthropic-ai/sdk`, `pdf-parse`. New Anthropic-key secret
+  mount (`~/.dr3-vision-secrets/anthropic.env`) enables the fallback; absent → local
+  low-confidence lands as-is for manual entry. Fixture-tested for all four tiers +
+  scanned-image / plain-text-email / multi-page + mocked Claude API
+  (`extraction.test.ts`, 22 cases; all fixtures synthetic).
 ### Fixed — 2026-07-22 — MyMRC backfill truncated the two big views at 2050 rows (SOQL OFFSET 2000 ceiling)
 
 The historical backfill (ADR-0057 D3) paged the Salesforce Experience Cloud list

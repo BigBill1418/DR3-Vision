@@ -8,8 +8,49 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-type Status = 'pending' | 'pending_review' | 'approved' | 'rejected' | 'quarantined';
+type Status =
+  | 'pending'
+  | 'pending_review'
+  // ADR-0046 Amendment 5 (D-M5-3) — dual-approval hop (>= $1,000). Not actionable
+  // from this panel (the second-approver flow handles it); typed here so a detail in
+  // that state renders without a cast.
+  | 'pending_second_approval'
+  | 'approved'
+  | 'rejected'
+  | 'quarantined';
 type Filter = Status | 'all';
+
+// ─── ADR-0046 Amendment 5 client mirrors (D-M5-2/4/6). ────────────────────────
+type Confidence = 'high' | 'medium' | 'low' | 'failed';
+interface ExtractionPrefill {
+  confidence: Confidence;
+  bestAmountCents: number | null;
+  bestVendor: string | null;
+}
+interface EquipmentOption {
+  id: string;
+  displayName: string;
+  category: string;
+}
+interface VarianceEvaluation {
+  tripped: boolean;
+  meanAmountCents: number;
+  invoiceCount: number;
+  varianceAbsCents: number;
+  variancePct: number;
+  direction: 'over' | 'under';
+}
+interface VarianceContext {
+  established: boolean;
+  vendorDisplayName?: string;
+  evaluation?: VarianceEvaluation;
+  recent?: Array<{ invoiceDate: string; amountCents: number }>;
+}
+interface EquipmentLinkView {
+  equipmentId: string | null;
+  displayName: string | null;
+  isNotEquipmentRelated: boolean;
+}
 
 interface ListRow {
   id: string;
@@ -47,6 +88,25 @@ interface Detail extends ListRow {
   heldByName: string | null;
   heldAt: string | null;
   holdNote: string | null;
+  // Amendment 5 (D-M5-1/2/4/6) — structured-decide surface.
+  extraction: ExtractionPrefill | null;
+  vendorFreeform: string | null;
+  explanation: string | null;
+  confirmedAmountCents: number | null;
+  varianceFlagState: string | null;
+  varianceAcknowledgmentNote: string | null;
+  equipmentLinks: EquipmentLinkView[];
+  // Amendment 5 (D-M5-3) — dual-approval read surface + viewer-scoped eligibility.
+  firstApproverName: string | null;
+  firstApprovedAt: string | null;
+  secondApproverName: string | null;
+  secondApprovedAt: string | null;
+  secondApproverNote: string | null;
+  secondApproval: {
+    eligible: boolean;
+    isFirstApprover: boolean;
+    selfWaitRemainingMs: number;
+  } | null;
   attachments: AttachmentView[];
   followups: Array<{
     id: string;
@@ -56,12 +116,22 @@ interface Detail extends ListRow {
   }>;
 }
 
-const TABS: Filter[] = ['pending', 'pending_review', 'approved', 'rejected', 'quarantined', 'all'];
+const TABS: Filter[] = [
+  'pending',
+  'pending_review',
+  // D-M5-3 — the $1,000 second-approval queue tab (second approvers work from here).
+  'pending_second_approval',
+  'approved',
+  'rejected',
+  'quarantined',
+  'all',
+];
 
 /** Tab/label text — the raw enum value `pending_review` reads as "On hold". */
 const STATUS_LABEL: Record<Filter, string> = {
   pending: 'pending',
   pending_review: 'on hold',
+  pending_second_approval: 'awaiting 2nd approval',
   approved: 'approved',
   rejected: 'rejected',
   quarantined: 'quarantined',
@@ -246,11 +316,17 @@ function StatusBadge({ status }: { status: Status }) {
     // pending shifts to sky so the amber hold chip is unmistakably distinct.
     pending: 'bg-sky-400 text-dr3-ink',
     pending_review: 'bg-amber-400 text-dr3-ink',
+    pending_second_approval: 'bg-violet-400 text-dr3-ink',
     approved: 'bg-emerald-500 text-white',
     rejected: 'bg-red-500 text-white',
     quarantined: 'bg-zinc-500 text-white',
   };
-  const label = status === 'pending_review' ? 'on hold' : status;
+  const label =
+    status === 'pending_review'
+      ? 'on hold'
+      : status === 'pending_second_approval'
+        ? 'awaiting 2nd approval'
+        : status;
   return (
     <span
       className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase ${color[status]}`}
@@ -260,53 +336,197 @@ function StatusBadge({ status }: { status: Status }) {
   );
 }
 
-export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
-  const [note, setNote] = useState('');
-  const [vendor, setVendor] = useState(detail.vendor ?? '');
-  const [amount, setAmount] = useState(
-    detail.amountCents !== null ? (detail.amountCents / 100).toFixed(2) : '',
+// ADR-0046 Amendment 5 (D-M5-2) — the extraction-confidence badge on the confirmed-
+// amount input. HIGH → green "Verified"; MEDIUM → yellow "Please verify"; LOW → red
+// "Low confidence"; FAILED renders no badge (the input is blank with a placeholder).
+function ConfidenceBadge({ confidence }: { confidence: Confidence }) {
+  if (confidence === 'failed') return null;
+  const map: Record<Exclude<Confidence, 'failed'>, { cls: string; label: string }> = {
+    high: { cls: 'bg-emerald-500 text-white', label: '✓ Verified' },
+    medium: { cls: 'bg-amber-400 text-dr3-ink', label: '⚠ Please verify' },
+    low: { cls: 'bg-red-500 text-white', label: '⚠ Low confidence' },
+  };
+  const { cls, label } = map[confidence];
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${cls}`}>{label}</span>
   );
+}
+
+function confidenceHint(confidence: Confidence): string {
+  switch (confidence) {
+    case 'high':
+      return 'Extracted with high confidence — verify it matches the invoice.';
+    case 'medium':
+      return 'Multiple amounts were found — please verify against the invoice.';
+    case 'low':
+      return 'Low confidence — verify the amount against the invoice.';
+    case 'failed':
+      return 'Amount not extracted — please enter it manually from the invoice.';
+  }
+}
+
+export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
+  // Single reason/note field — Reject / Hold / NOT-DR3 (unchanged; Amendment 5 §5.4
+  // constraint #4: these keep their single field, they are NOT structured).
+  const [note, setNote] = useState('');
   const [siteCode, setSiteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // ── Amendment 5 (D-M5-1/2/4/6) — the STRUCTURED Approve fields. Extraction
+  // PRE-FILLS; the approver still confirms every field (hard rule #5). Seeded from
+  // the extraction result, falling back to any prior structured value.
+  const [vendorFreeform, setVendorFreeform] = useState(
+    detail.vendorFreeform ?? detail.extraction?.bestVendor ?? detail.vendor ?? '',
+  );
+  const [explanation, setExplanation] = useState('');
+  const prefillAmountCents = detail.confirmedAmountCents ?? detail.extraction?.bestAmountCents;
+  const [confirmedAmount, setConfirmedAmount] = useState(
+    typeof prefillAmountCents === 'number' ? (prefillAmountCents / 100).toFixed(2) : '',
+  );
+  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
+  const [equipmentIds, setEquipmentIds] = useState<string[]>([]);
+  const [notEquipmentRelated, setNotEquipmentRelated] = useState(false);
+  const [equipmentQuery, setEquipmentQuery] = useState('');
+  const [variance, setVariance] = useState<VarianceContext | null>(null);
+  const [varianceAck, setVarianceAck] = useState(false);
+  const [varianceAckNote, setVarianceAckNote] = useState('');
+
+  // Structured Approve applies only to a real DR3 site (Woodland/Eugene). NOT-DR3
+  // (and an unselected site) uses the single-note path.
+  const isRealSite = siteCode === 'eugene' || siteCode === 'woodland';
+  const varianceTripped = !!variance?.evaluation?.tripped;
+
+  // D-M5-6 — load the site-filtered equipment options whenever the site changes.
+  // Reset the selection (options differ per site). NOT-DR3/blank clears the list.
+  useEffect(() => {
+    setEquipmentIds([]);
+    setNotEquipmentRelated(false);
+    setEquipmentQuery('');
+    if (!isRealSite) {
+      setEquipmentOptions([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/ops/ap/equipment?site=${siteCode}`);
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setEquipmentOptions(res.ok && Array.isArray(body.options) ? body.options : []);
+      } catch {
+        if (!cancelled) setEquipmentOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [siteCode, isRealSite]);
+
+  // D-M5-4 — re-check variance (debounced) whenever the typed vendor or confirmed
+  // amount changes on the structured path. A changed amount/vendor re-gates: the
+  // acknowledgment resets so the approver must re-acknowledge a still-tripped flag.
+  useEffect(() => {
+    setVarianceAck(false);
+    if (!isRealSite || !vendorFreeform.trim() || !confirmedAmount.trim()) {
+      setVariance(null);
+      return;
+    }
+    const parsed = parseUsdToCents(confirmedAmount);
+    if (typeof parsed !== 'number') {
+      setVariance(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/ops/ap/variance-check', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ vendor: vendorFreeform.trim(), confirmedAmountCents: parsed }),
+        });
+        const body = (await res.json().catch(() => ({}))) as VarianceContext;
+        if (!cancelled) setVariance(res.ok ? body : null);
+      } catch {
+        if (!cancelled) setVariance(null);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [vendorFreeform, confirmedAmount, isRealSite]);
+
+  const toggleEquipment = useCallback((id: string) => {
+    setNotEquipmentRelated(false);
+    setEquipmentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
   const decide = useCallback(
     async (decision: 'approved' | 'rejected') => {
-      // Amendment 3 + 2026-07-21 amendment — EVERY decision needs a note (plain-
-      // English client guard; the server re-validates). An approval records what the
-      // transaction was for + context; a rejection says why.
-      if (!note.trim()) {
-        setMsg(
-          decision === 'approved'
-            ? 'An approval needs a note describing what this transaction was for and any additional context. Add a note, then Approve.'
-            : 'A rejection needs a note explaining why. Add a note, then Reject.',
-        );
-        return;
-      }
-      // Operator directive 2026-07-15 — every decision files against a location
-      // (the server re-validates). Woodland/Eugene, or the NOT-DR3 disposition.
+      // Operator directive 2026-07-15 — every decision files against a location.
       if (!siteCode) {
         setMsg('Select the location (Woodland, Eugene, or NOT DR3) before deciding.');
         return;
       }
-      // ADR-0046 amendment 2026-07-20 — NOT DR3 needs a reason in the note (the
-      // server re-validates). Reject/Hold already require a note; this also covers
-      // the Approve + NOT-DR3 path, which is otherwise note-optional.
-      if (siteCode === 'not_dr3' && !note.trim()) {
-        setMsg('NOT DR3 requires a reason — add it in the note, then decide.');
-        return;
-      }
-      // M4 — normalize the currency input BEFORE trusting it (comma-truncation
-      // would file $1,234.56 as $1.00). Validate as an early-return guard, next
-      // to the note/site guards, so a bad amount never flips the request.
-      let amountCents: number | undefined;
-      if (amount.trim()) {
-        const parsed = parseUsdToCents(amount);
+      let payload: Record<string, unknown>;
+      if (decision === 'approved' && isRealSite) {
+        // ── STRUCTURED APPROVE (D-M5-1/4/6) — four required fields + variance gate.
+        // The server re-validates all of this; these are plain-English client guards.
+        const v = vendorFreeform.trim();
+        if (!v) {
+          setMsg('Enter the vendor name to approve.');
+          return;
+        }
+        if (!confirmedAmount.trim()) {
+          setMsg('Confirm the invoice amount to approve.');
+          return;
+        }
+        // M4 — normalize the currency input BEFORE trusting it (comma-truncation
+        // would file $1,234.56 as $1.00).
+        const parsed = parseUsdToCents(confirmedAmount);
         if (typeof parsed !== 'number') {
           setMsg(parsed.error);
           return;
         }
-        amountCents = parsed;
+        if (!explanation.trim()) {
+          setMsg('Enter what this transaction was for (explanation) to approve.');
+          return;
+        }
+        if (!notEquipmentRelated && equipmentIds.length === 0) {
+          setMsg('Select the equipment this invoice relates to, or choose "Not equipment-related".');
+          return;
+        }
+        if (varianceTripped && !varianceAck) {
+          setMsg('Acknowledge the variance ("I’ve verified the variance") before approving.');
+          return;
+        }
+        payload = {
+          decision,
+          siteId: siteCode,
+          vendorFreeform: v,
+          explanation: explanation.trim(),
+          confirmedAmountCents: parsed,
+          ...(notEquipmentRelated ? { notEquipmentRelated: true } : { equipmentIds }),
+          ...(varianceTripped
+            ? { varianceAcknowledged: true, varianceAckNote: varianceAckNote.trim() || undefined }
+            : {}),
+        };
+      } else {
+        // ── Single-note path — Reject (any site), or Approve + NOT-DR3. Keeps the
+        // pre-Amendment-5 contract (§5.4 #4).
+        if (!note.trim()) {
+          setMsg(
+            siteCode === 'not_dr3'
+              ? 'NOT DR3 requires a reason — add it in the note, then decide.'
+              : 'A rejection needs a note explaining why. Add a note, then Reject.',
+          );
+          return;
+        }
+        payload = {
+          decision,
+          note: note.trim(),
+          ...(siteCode === 'not_dr3' ? { notDr3: true } : { siteId: siteCode }),
+        };
       }
       setBusy(true);
       setMsg(null);
@@ -314,21 +534,21 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         const res = await fetch(`/api/ops/ap/${detail.id}/decide`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            decision,
-            note: note.trim() || undefined,
-            vendor: vendor.trim() || undefined,
-            ...(amountCents !== undefined ? { amountCents } : {}),
-            // NOT DR3 sends the disposition flag instead of a siteId (it is not a
-            // real site); Woodland/Eugene send the site code exactly as before.
-            ...(siteCode === 'not_dr3' ? { notDr3: true } : { siteId: siteCode }),
-          }),
+          body: JSON.stringify(payload),
         });
         const body = await res.json().catch(() => ({}));
         if (res.status === 409 && body.alreadyDecided) {
           setMsg(`This request was ${body.error}. Refreshing.`);
         } else if (!res.ok) {
           setMsg(body.error ?? `decide failed (${res.status})`);
+        } else if (body.secondApprovalPending) {
+          // D-M5-3 — a >= $1,000 Approve went to second approval instead of
+          // terminating. No decision email yet; the second approver was notified.
+          setMsg(
+            `Approved — this invoice is ≥ $1,000, so it now needs a SECOND approval${
+              body.secondApproverLabel ? ` from ${body.secondApproverLabel}` : ''
+            } before payment. No decision email is sent until the second approval is confirmed.`,
+          );
         } else {
           const mailNote =
             body.mail === 'sent'
@@ -347,7 +567,21 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         onDecided();
       }
     },
-    [amount, note, vendor, siteCode, detail.id, onDecided],
+    [
+      note,
+      siteCode,
+      isRealSite,
+      vendorFreeform,
+      explanation,
+      confirmedAmount,
+      equipmentIds,
+      notEquipmentRelated,
+      varianceTripped,
+      varianceAck,
+      varianceAckNote,
+      detail.id,
+      onDecided,
+    ],
   );
 
   const resend = useCallback(async () => {
@@ -418,6 +652,16 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
 
   const actionable = detail.status === 'pending' || detail.status === 'pending_review';
 
+  // Approve gating: a real-site Approve needs all four structured fields (+ variance
+  // ack when tripped); a NOT-DR3 Approve needs the single note. The server re-checks.
+  const structuredComplete =
+    !!vendorFreeform.trim() &&
+    !!confirmedAmount.trim() &&
+    !!explanation.trim() &&
+    (notEquipmentRelated || equipmentIds.length > 0) &&
+    (!varianceTripped || varianceAck);
+  const approveDisabled = busy || !siteCode || (isRealSite ? !structuredComplete : !note.trim());
+
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -457,6 +701,30 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
             ? ' · decision emailed.'
             : ' · decision email NOT confirmed sent.'}
         </p>
+      )}
+
+      {/* D-M5-3 — a decided >= $1,000 request shows BOTH approvers + timestamps. */}
+      {detail.firstApproverName &&
+        (detail.status === 'approved' || detail.status === 'rejected') && (
+          <p className="mt-1 text-sm opacity-80">
+            First approval by {detail.firstApproverName}
+            {detail.firstApprovedAt && ` at ${fmt(detail.firstApprovedAt)}`}
+            {detail.secondApproverName && (
+              <>
+                {' · '}
+                {detail.status === 'rejected' ? 'overridden' : 'second approval'} by{' '}
+                {detail.secondApproverName}
+                {detail.secondApprovedAt && ` at ${fmt(detail.secondApprovedAt)}`}
+              </>
+            )}
+            {detail.status === 'rejected' &&
+              detail.secondApproverNote &&
+              ` — “${detail.secondApproverNote}”`}
+          </p>
+        )}
+
+      {detail.status === 'pending_second_approval' && (
+        <SecondApprovalPanel detail={detail} onDecided={onDecided} />
       )}
 
       <section className="mt-4">
@@ -510,49 +778,194 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       {actionable && (
         <section className="mt-5 border-t border-white/10 pt-4">
           <h3 className="text-sm font-semibold opacity-90">Decision</h3>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <label className="text-xs opacity-80">
-              Vendor (optional)
-              <input
-                value={vendor}
-                onChange={(e) => setVendor(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              />
-            </label>
-            <label className="text-xs opacity-80">
-              Amount USD (optional)
-              <input
-                value={amount}
-                inputMode="decimal"
-                onChange={(e) => setAmount(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              />
-            </label>
-            <label className="text-xs opacity-80">
-              Location <span className="text-amber-300">(required)</span>
-              <select
-                value={siteCode}
-                onChange={(e) => setSiteCode(e.target.value)}
-                className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-              >
-                <option value="">— select site —</option>
-                <option value="eugene">Eugene</option>
-                <option value="woodland">Woodland</option>
-                <option value="not_dr3">NOT DR3 – See Reason</option>
-              </select>
-              {siteCode === 'not_dr3' && (
-                <span className="mt-1 block text-amber-300">
-                  NOT DR3 — add the reason in the note below (required). This will NOT be filed
-                  against a DR3 site.
+
+          {/* Location — required, and it drives the structured-Approve vs single-note split. */}
+          <label className="mt-2 block text-xs opacity-80 sm:max-w-xs">
+            Location <span className="text-amber-300">(required)</span>
+            <select
+              value={siteCode}
+              onChange={(e) => setSiteCode(e.target.value)}
+              className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+            >
+              <option value="">— select site —</option>
+              <option value="eugene">Eugene</option>
+              <option value="woodland">Woodland</option>
+              <option value="not_dr3">NOT DR3 – See Reason</option>
+            </select>
+            {siteCode === 'not_dr3' && (
+              <span className="mt-1 block text-amber-300">
+                NOT DR3 — add the reason in the note below (required). This will NOT be filed against
+                a DR3 site.
+              </span>
+            )}
+          </label>
+
+          {/* D-M5-1/4/6 — structured Approve fields (real site only). Reject/Hold use the note below. */}
+          {isRealSite && (
+            <div className="mt-3 rounded border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <p className="text-xs font-semibold text-emerald-200">
+                To Approve, complete all four fields (extraction pre-fills; you confirm each):
+              </p>
+
+              <label className="mt-2 block text-xs opacity-80">
+                Vendor <span className="text-amber-300">(required to approve)</span>
+                <span className="mt-0.5 block opacity-70">
+                  Enter the vendor name carefully — check spelling and capitalization. This appears
+                  on the returned decision email and Mary’s GP filing.
                 </span>
+                <input
+                  value={vendorFreeform}
+                  onChange={(e) => setVendorFreeform(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+              </label>
+
+              <label className="mt-2 block text-xs opacity-80">
+                <span className="inline-flex items-center gap-2">
+                  Confirmed amount USD <span className="text-amber-300">(required to approve)</span>
+                  {detail.extraction && <ConfidenceBadge confidence={detail.extraction.confidence} />}
+                </span>
+                <input
+                  value={confirmedAmount}
+                  inputMode="decimal"
+                  placeholder={
+                    detail.extraction?.confidence === 'failed'
+                      ? 'Enter amount from invoice'
+                      : undefined
+                  }
+                  onChange={(e) => setConfirmedAmount(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+                {detail.extraction && (
+                  <span className="mt-0.5 block opacity-60">
+                    {confidenceHint(detail.extraction.confidence)}
+                  </span>
+                )}
+              </label>
+
+              <label className="mt-2 block text-xs opacity-80">
+                Explanation <span className="text-amber-300">(required to approve)</span>
+                <span className="mt-0.5 block opacity-70">
+                  What was this transaction for? Include any relevant context (site work, repair
+                  reason, event, etc.).
+                </span>
+                <textarea
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                  rows={2}
+                  className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                />
+              </label>
+
+              <div className="mt-2 text-xs opacity-80">
+                Equipment{' '}
+                <span className="text-amber-300">
+                  (required — pick one or more, or “Not equipment-related”)
+                </span>
+                <label className="mt-1 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={notEquipmentRelated}
+                    onChange={(e) => {
+                      setNotEquipmentRelated(e.target.checked);
+                      if (e.target.checked) setEquipmentIds([]);
+                    }}
+                  />
+                  <span>Not equipment-related</span>
+                </label>
+                {!notEquipmentRelated && (
+                  <>
+                    <input
+                      value={equipmentQuery}
+                      onChange={(e) => setEquipmentQuery(e.target.value)}
+                      placeholder="Search equipment…"
+                      className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                    />
+                    <div className="mt-1 max-h-40 overflow-auto rounded border border-white/10">
+                      {equipmentOptions.length === 0 && (
+                        <p className="px-2 py-1 opacity-60">
+                          No active equipment registered for this site. Ask an admin to add it, or
+                          Hold the invoice.
+                        </p>
+                      )}
+                      {equipmentOptions
+                        .filter((o) =>
+                          o.displayName
+                            .toLowerCase()
+                            .includes(equipmentQuery.trim().toLowerCase()),
+                        )
+                        .map((o) => (
+                          <label
+                            key={o.id}
+                            className="flex items-center gap-2 px-2 py-1 hover:bg-white/5"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={equipmentIds.includes(o.id)}
+                              onChange={() => toggleEquipment(o.id)}
+                            />
+                            <span>
+                              {o.displayName} <span className="opacity-50">· {o.category}</span>
+                            </span>
+                          </label>
+                        ))}
+                    </div>
+                    {equipmentIds.length > 0 && (
+                      <p className="mt-1 opacity-70">{equipmentIds.length} selected</p>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* D-M5-4 — RED variance banner + block-until-acknowledged gate. */}
+              {varianceTripped && variance?.evaluation && (
+                <div className="mt-3 rounded border border-red-500 bg-red-600/20 p-3 text-sm text-red-100">
+                  <p className="font-bold">
+                    ⚠ VARIANCE FLAG — {variance.vendorDisplayName} usually bills{' '}
+                    {dollars(variance.evaluation.meanAmountCents)} (avg from{' '}
+                    {variance.evaluation.invoiceCount} invoices, last 12 months).
+                  </p>
+                  <p className="mt-1">
+                    This invoice is ${confirmedAmount}, a{' '}
+                    {variance.evaluation.direction === 'over' ? 'increase' : 'decrease'} of{' '}
+                    {dollars(variance.evaluation.varianceAbsCents)} (
+                    {(variance.evaluation.variancePct * 100).toFixed(1)}%).
+                  </p>
+                  {variance.recent && variance.recent.length > 0 && (
+                    <p className="mt-1 opacity-90">
+                      Recent:{' '}
+                      {variance.recent
+                        .map((r) => `${r.invoiceDate} ${dollars(r.amountCents)}`)
+                        .join(' · ')}
+                    </p>
+                  )}
+                  <label className="mt-2 block">
+                    Acknowledgment note (optional — e.g. “confirmed with Morena”)
+                    <input
+                      value={varianceAckNote}
+                      onChange={(e) => setVarianceAckNote(e.target.value)}
+                      className="mt-1 w-full rounded border border-red-400/40 bg-black/30 px-2 py-1 text-red-50"
+                    />
+                  </label>
+                  <button
+                    onClick={() => setVarianceAck(true)}
+                    disabled={varianceAck}
+                    className="mt-2 rounded bg-red-500 px-3 py-1.5 font-semibold text-white disabled:opacity-60"
+                  >
+                    {varianceAck ? '✓ Variance verified' : 'I’ve verified the variance'}
+                  </button>
+                </div>
               )}
-            </label>
-          </div>
-          <label className="mt-2 block text-xs opacity-80">
-            Note <span className="text-amber-300">(required)</span>{' '}
+            </div>
+          )}
+
+          {/* Single reason/note — Reject / Hold / NOT-DR3 (unchanged single-field pattern). */}
+          <label className="mt-3 block text-xs opacity-80">
+            Reason / note{' '}
             <span className="opacity-70">
-              (what this transaction was for + any additional context · required to approve, reject,
-              or hold · appears on the returned invoice)
+              {isRealSite
+                ? '(required to Reject or Hold · appears on the returned invoice)'
+                : '(required — NOT-DR3 reason, or rejection/hold reason · appears on the returned invoice)'}
             </span>
             <textarea
               value={note}
@@ -560,20 +973,21 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
               rows={2}
               placeholder={
                 detail.status === 'pending_review'
-                  ? 'What this transaction was for + any additional context (required to approve/reject; or update the hold note)'
-                  : 'What this transaction was for + any additional context (required)'
+                  ? 'Reason to reject, or update the hold note'
+                  : 'Reason to reject or hold (or the NOT-DR3 reason)'
               }
               className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
             />
           </label>
+
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => decide('approved')}
-              disabled={busy || !note.trim()}
+              disabled={approveDisabled}
               title={
-                note.trim()
-                  ? undefined
-                  : 'An approval requires a note describing what this transaction was for and any additional context'
+                approveDisabled && isRealSite
+                  ? 'Approve requires vendor, confirmed amount, explanation, an equipment choice, and a variance acknowledgment if flagged'
+                  : undefined
               }
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
@@ -581,7 +995,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
             </button>
             <button
               onClick={() => decide('rejected')}
-              disabled={busy || !note.trim()}
+              disabled={busy || !siteCode || !note.trim()}
               title={note.trim() ? undefined : 'A rejection requires a note'}
               className="rounded bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
@@ -628,6 +1042,175 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   );
 }
 
+// ADR-0046 Amendment 5 (D-M5-3) — the $1,000 SECOND-APPROVAL panel. Rendered when a
+// request is `pending_second_approval`. Shows the first approver's decision facts
+// read-only, then — for the SITE's eligible second approver — Approve (→ approved)
+// or Reject (→ rejected override, note required). When the viewer is ALSO the first
+// approver (self-fulfillment, decision (c)), a re-confirmation checkbox + a 30-second
+// countdown gate the buttons. All of this is advisory: the server re-checks
+// eligibility, the reconfirm flag, and the 30s wait before it will commit.
+function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
+  const sa = detail.secondApproval;
+  const [note, setNote] = useState('');
+  const [reconfirm, setReconfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [waitMs, setWaitMs] = useState(sa?.selfWaitRemainingMs ?? 0);
+
+  // Count the self-reconfirm wait down to zero (only meaningful on the self path).
+  useEffect(() => {
+    setWaitMs(sa?.selfWaitRemainingMs ?? 0);
+  }, [sa?.selfWaitRemainingMs]);
+  useEffect(() => {
+    if (waitMs <= 0) return;
+    const t = setInterval(() => setWaitMs((ms) => Math.max(0, ms - 1000)), 1000);
+    return () => clearInterval(t);
+  }, [waitMs]);
+
+  const isSelf = !!sa?.isFirstApprover;
+  const waitSec = Math.ceil(waitMs / 1000);
+  const gated = isSelf && (waitMs > 0 || !reconfirm);
+
+  const submit = useCallback(
+    async (decision: 'approved' | 'rejected') => {
+      if (decision === 'rejected' && !note.trim()) {
+        setMsg('A second-approval rejection needs a note explaining why the first approval is being overridden.');
+        return;
+      }
+      if (isSelf && !reconfirm) {
+        setMsg('You are both approvers — check the re-confirmation box to fulfill the second approval.');
+        return;
+      }
+      setBusy(true);
+      setMsg(null);
+      try {
+        const res = await fetch(`/api/ops/ap/${detail.id}/second-approval`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            decision,
+            ...(decision === 'rejected' ? { note: note.trim() } : {}),
+            ...(isSelf ? { reconfirm: true } : {}),
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 409 && body.alreadyDecided) setMsg(`This request was ${body.error}. Refreshing.`);
+        else if (!res.ok) setMsg(body.error ?? `second approval failed (${res.status})`);
+        else if (decision === 'approved')
+          setMsg('Second approval confirmed — the invoice is APPROVED and the decision was emailed to accounting.');
+        else setMsg('First approval OVERRIDDEN — the invoice is REJECTED; the first approver was CC’d on the rejection.');
+      } catch (e) {
+        setMsg(e instanceof Error ? e.message : 'second approval failed');
+      } finally {
+        setBusy(false);
+        onDecided();
+      }
+    },
+    [note, isSelf, reconfirm, detail.id, onDecided],
+  );
+
+  return (
+    <section className="mt-5 border-t border-white/10 pt-4">
+      <div className="rounded border border-violet-400/60 bg-violet-400/10 px-3 py-2 text-sm">
+        <span className="font-semibold text-violet-200">AWAITING SECOND APPROVAL (≥ $1,000)</span>
+        {detail.firstApproverName && (
+          <span className="opacity-90"> · first-approved by {detail.firstApproverName}</span>
+        )}
+        {detail.firstApprovedAt && <span className="opacity-70"> · {fmt(detail.firstApprovedAt)}</span>}
+      </div>
+
+      {/* First approver's decision facts — read-only context for the second approver. */}
+      <div className="mt-3 rounded border border-white/10 bg-white/5 p-3 text-sm">
+        <h3 className="text-sm font-semibold opacity-90">First approver’s decision</h3>
+        <ul className="mt-1 space-y-0.5 opacity-90">
+          {detail.vendorFreeform && <li>Vendor: {detail.vendorFreeform}</li>}
+          {detail.confirmedAmountCents !== null && <li>Amount: {dollars(detail.confirmedAmountCents)}</li>}
+          {detail.explanation && <li>Explanation: {detail.explanation}</li>}
+          {detail.equipmentLinks.length > 0 && (
+            <li>
+              Equipment:{' '}
+              {detail.equipmentLinks.some((l) => l.isNotEquipmentRelated)
+                ? 'Not equipment-related'
+                : detail.equipmentLinks.map((l) => l.displayName ?? '(unknown)').join(', ')}
+            </li>
+          )}
+          {detail.varianceFlagState === 'acknowledged' && (
+            <li className="text-amber-200">
+              ⚠ Variance acknowledged
+              {detail.varianceAcknowledgmentNote ? ` — ${detail.varianceAcknowledgmentNote}` : ''}
+            </li>
+          )}
+        </ul>
+      </div>
+
+      {sa?.eligible ? (
+        <div className="mt-3">
+          {isSelf && (
+            <div className="rounded border border-amber-400/60 bg-amber-400/15 p-3 text-sm">
+              <p className="font-semibold text-amber-200">
+                You are both the first and second approver on this invoice.
+              </p>
+              <p className="mt-1 opacity-90">
+                Please re-review the decision above, then re-confirm below. A 30-second pause is
+                required before you can self-fulfill.
+              </p>
+              <label className="mt-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={reconfirm}
+                  onChange={(e) => setReconfirm(e.target.checked)}
+                />
+                <span>I have re-reviewed and re-confirm this decision.</span>
+              </label>
+              {waitMs > 0 && (
+                <p className="mt-1 text-amber-200">Please wait {waitSec}s before confirming…</p>
+              )}
+            </div>
+          )}
+
+          <label className="mt-3 block text-xs opacity-80">
+            Rejection note{' '}
+            <span className="opacity-70">(required only to Reject — explains the override)</span>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="Why is the first approval being overridden?"
+              className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+            />
+          </label>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={() => submit('approved')}
+              disabled={busy || gated}
+              title={gated ? 'Re-confirm and wait out the 30-second pause to self-fulfill' : undefined}
+              className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Confirm second approval
+            </button>
+            <button
+              onClick={() => submit('rejected')}
+              disabled={busy || !note.trim() || gated}
+              title={note.trim() ? undefined : 'A rejection requires a note'}
+              className="rounded bg-red-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Reject (override)
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 rounded bg-black/30 px-3 py-2 text-sm opacity-80">
+          This invoice is waiting for its site’s designated second approver to confirm or override.
+          You are not the second approver for this site.
+        </p>
+      )}
+
+      {msg && <p className="mt-3 rounded bg-black/30 px-3 py-2 text-sm">{msg}</p>}
+    </section>
+  );
+}
+
 // ADR-0046 Amendment 4 — inline preview render rules (client mirror of the
 // server allowlist; the server is authoritative and signs the inline URL only
 // for these types). Anything past the cap opens in a new tab instead of framing.
@@ -635,6 +1218,20 @@ const PREVIEW_SIZE_CAP = 15 * 1024 * 1024; // 15 MB
 const isImagePreview = (ct: string | null): boolean =>
   !!ct && /^image\/(png|jpeg|jpg|webp)$/i.test(ct);
 const isPdfPreview = (ct: string | null): boolean => (ct ?? '').toLowerCase() === 'application/pdf';
+
+// iOS/iPadOS Safari (WebKit) has NO inline <iframe> PDF viewer — a framed PDF renders
+// BLANK on the Eugene iPad. Detect it so the PDF preview surfaces a prominent
+// tap-to-open action instead of a dead frame. Covers iPadOS 13+, which masquerades as
+// desktop macOS (MacIntel) but reports touch points. Client-only (this block never
+// renders during SSR/hydration — it appears only after a user taps Preview).
+const isIosWebkit = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return (
+    /iP(hone|od|ad)/.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+};
 
 interface Presigned {
   url: string;
@@ -756,10 +1353,32 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
               alt={att.filename ?? 'attachment preview'}
               className="max-h-[32rem] w-auto max-w-full rounded border border-white/10 bg-white"
             />
+          ) : isPdfPreview(presigned.contentType) ? (
+            // iPad Safari (WebKit) renders a framed PDF BLANK. ALWAYS surface a
+            // prominent, touch-sized "Open PDF" action so the approver can read the
+            // invoice on the iPad. On iOS that action REPLACES the (blank) iframe; on
+            // desktop it rides above Chromium's working inline viewer.
+            <div>
+              <button
+                onClick={open}
+                disabled={busy}
+                className="mb-2 inline-flex w-full items-center justify-center rounded-md border border-white/25 bg-white/10 px-4 py-3 text-base font-semibold hover:bg-white/20 disabled:opacity-50 sm:w-auto"
+              >
+                Open PDF in new tab ↗
+              </button>
+              {!isIosWebkit() && (
+                // No sandbox="" here: a full sandbox kills Chromium's built-in PDF
+                // viewer. The frame is cross-origin (R2) and cannot script our origin;
+                // CSP frame-src scopes it to the R2 host (ADR-0046 Amendment 4).
+                <iframe
+                  src={presigned.url}
+                  title={att.filename ?? 'attachment preview'}
+                  className="h-[32rem] w-full rounded border border-white/10 bg-white"
+                />
+              )}
+            </div>
           ) : (
-            // No sandbox="" here: a full sandbox kills Chromium's built-in PDF
-            // viewer. The frame is cross-origin (R2) and cannot script our origin;
-            // CSP frame-src scopes it to the R2 host (ADR-0046 Amendment 4).
+            // Any other inline type — keep the plain frame.
             <iframe
               src={presigned.url}
               title={att.filename ?? 'attachment preview'}
