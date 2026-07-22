@@ -62,7 +62,6 @@ function makeInput(overrides: Partial<MetricInput> = {}): MetricInput {
       dock_sla_minutes: 60,
       inbound_processing_deadline_days: 30,
       max_units_indoor: 0,
-      max_units_outdoor: 0,
       max_units_total_on_site: 6000,
     },
     periodStart: PERIOD_START,

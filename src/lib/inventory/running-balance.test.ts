@@ -17,7 +17,6 @@ const store = {
   anchor: null as null | {
     snapshot_at: Date;
     units_indoor: number | null;
-    units_outdoor: number | null;
     units_total: number | null;
     units_in_processing: number;
     program_units?: Prisma.Decimal | null;
@@ -163,11 +162,10 @@ describe('computeRunningBalance — pool-aware algebra', () => {
 });
 
 describe('snapshotTotalUnits', () => {
-  it('sums CA indoor+outdoor+in_processing', () => {
+  it('sums CA indoor+in_processing (no outdoor — ADR-0037 addendum)', () => {
     expect(
       snapshotTotalUnits({
-        units_indoor: 3000,
-        units_outdoor: 1000,
+        units_indoor: 4000,
         units_total: null,
         units_in_processing: 62,
       }),
@@ -177,7 +175,6 @@ describe('snapshotTotalUnits', () => {
     expect(
       snapshotTotalUnits({
         units_indoor: null,
-        units_outdoor: null,
         units_total: 5000,
         units_in_processing: 40,
       }),
@@ -189,8 +186,7 @@ describe('onHand — DB adapter', () => {
   beforeEach(() => {
     store.anchor = {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
-      units_indoor: 3000,
-      units_outdoor: 1000,
+      units_indoor: 4000,
       units_total: null,
       units_in_processing: 62,
     };
@@ -244,7 +240,6 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     store.anchor = {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
       units_indoor: 4000,
-      units_outdoor: 0,
       units_total: null,
       units_in_processing: 0,
     };
@@ -260,7 +255,7 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     const res = await reconcilePhysicalCount({
       siteId: 'site-woodland',
       countedAt: new Date('2026-07-03T00:00:00Z'),
-      physical: { units_indoor: 3990, units_outdoor: 0, units_in_processing: 0 },
+      physical: { units_indoor: 3990, units_in_processing: 0 },
       actorUserId: 'user-bill',
     });
     expect(res.computedTotal.toString()).toBe('4000');
@@ -271,6 +266,24 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     const snap = store.createdSnapshots[0] as { snapshot_kind: string; reconciled_delta: number };
     expect(snap.snapshot_kind).toBe('physical');
     expect(snap.reconciled_delta).toBe(-10);
+  });
+
+  // ADR-0037 addendum (2026-07-22) — outdoor removed from Vision. A CA physical
+  // count is indoor + in-processing only, and the persisted anchor carries no
+  // outdoor field at all.
+  it('accepts a CA physical count of indoor + in_processing and totals them', async () => {
+    const res = await reconcilePhysicalCount({
+      siteId: 'site-woodland',
+      countedAt: new Date('2026-07-03T00:00:00Z'),
+      physical: { units_indoor: 3900, units_in_processing: 77 },
+      actorUserId: 'user-bill',
+    });
+    expect(res.physicalTotal).toBe(3977);
+    expect(res.reconciledDelta).toBe(-23);
+    const snap = store.createdSnapshots[0] as Record<string, unknown>;
+    expect(snap.units_indoor).toBe(3900);
+    expect(snap.units_in_processing).toBe(77);
+    expect('units_outdoor' in snap).toBe(false);
   });
 });
 
@@ -283,7 +296,6 @@ describe('reconcilePhysicalCount — measured pool split validation', () => {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
       units_total: 4000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
     };
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
@@ -369,7 +381,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: D(700),
       non_program_units: D(300),
@@ -387,7 +398,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: null,
       non_program_units: null,
@@ -404,7 +414,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: null,
       non_program_units: null,

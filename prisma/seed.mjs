@@ -143,7 +143,6 @@ async function seedSites() {
       jurisdiction: r.jurisdiction,
       mrc_program_code: r.mrc_program_code,
       max_units_indoor: intOrNull(r.max_units_indoor),
-      max_units_outdoor: intOrNull(r.max_units_outdoor),
       max_units_total_on_site: intOrNull(r.max_units_total_on_site),
       customer_service_open: r.customer_service_open,
       customer_service_close: r.customer_service_close,

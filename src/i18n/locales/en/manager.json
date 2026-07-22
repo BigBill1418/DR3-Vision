@@ -153,7 +153,6 @@
     "help": "Enter the physical count. When you split the program and non-program pools, they must add up to the total.",
     "date_label": "Count date",
     "units_indoor_label": "Units indoor",
-    "units_outdoor_label": "Units outdoor",
     "units_total_label": "Units on site",
     "units_processing_label": "Units in processing",
     "program_units_label": "Program units",

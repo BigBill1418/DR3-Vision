@@ -156,7 +156,6 @@ function PhysicalCountPanel({
   const t = useT();
   const [date, setDate] = useState(todayIso());
   const [indoor, setIndoor] = useState('');
-  const [outdoor, setOutdoor] = useState('');
   const [total, setTotal] = useState('');
   const [processing, setProcessing] = useState('');
   const [program, setProgram] = useState('');
@@ -165,7 +164,7 @@ function PhysicalCountPanel({
   const [msg, setMsg] = useState<FieldMsg | null>(null);
 
   // Live physical-count total = the jurisdiction unit fields + in-processing.
-  const physicalTotal = liveNum(indoor) + liveNum(outdoor) + liveNum(total) + liveNum(processing);
+  const physicalTotal = liveNum(indoor) + liveNum(total) + liveNum(processing);
   const bothPools = program.trim() !== '' && nonProgram.trim() !== '';
   const splitSum = liveNum(program) + liveNum(nonProgram);
   const mismatch = bothPools && splitSum !== physicalTotal;
@@ -182,7 +181,6 @@ function PhysicalCountPanel({
         body: JSON.stringify({
           countedAt: date,
           units_indoor: unitOrNull(indoor),
-          units_outdoor: unitOrNull(outdoor),
           units_total: unitOrNull(total),
           units_in_processing: liveNum(processing),
           program_units: unitOrNull(program) ?? undefined,
@@ -200,7 +198,6 @@ function PhysicalCountPanel({
       }
       setMsg({ kind: 'ok', text: t('physical_count.save_success') });
       setIndoor('');
-      setOutdoor('');
       setTotal('');
       setProcessing('');
       setProgram('');
@@ -217,7 +214,7 @@ function PhysicalCountPanel({
         <h2 className="text-lg font-semibold text-dr3-cyan">{t('physical_count.heading')}</h2>
         <p className="mt-1 text-xs opacity-70">{t('physical_count.help')}</p>
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <label className={labelCls}>
           <span className="opacity-70">{t('physical_count.date_label')}</span>
           <input
@@ -235,16 +232,6 @@ function PhysicalCountPanel({
             className={inputCls}
             value={indoor}
             onChange={(e) => setIndoor(e.target.value)}
-          />
-        </label>
-        <label className={labelCls}>
-          <span className="opacity-70">{t('physical_count.units_outdoor_label')}</span>
-          <input
-            type="number"
-            min="0"
-            className={inputCls}
-            value={outdoor}
-            onChange={(e) => setOutdoor(e.target.value)}
           />
         </label>
         <label className={labelCls}>

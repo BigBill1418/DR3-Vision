@@ -27,10 +27,10 @@ The two operating sites: Eugene (Oregon) and Woodland (California). Each row enc
 
 Per-site differences locked in here:
 
-- Eugene: 6,000 unit total cap, no in/outdoor split, 70% recycling target, 5-year retention, 60-day processing window, end-of-month billing only, no CIP
-- Woodland: 3,500 indoor + 5,000 outdoor caps, 75% recycling target, 4-year retention, 45-day processing window, mid+end-of-month billing, CIP enabled
+- Eugene: 6,000 unit total cap, no indoor cap, 70% recycling target, 5-year retention, 60-day processing window, end-of-month billing only, no CIP
+- Woodland: 3,500 indoor cap (outdoor storage is not tracked — ADR-0037 addendum 2026-07-22), 75% recycling target, 4-year retention, 45-day processing window, mid+end-of-month billing, CIP enabled
 
-Empty cells (`,,`) are intentional — Eugene has no indoor/outdoor split, Woodland has no total cap.
+Empty cells (`,,`) are intentional — Eugene has no indoor cap, Woodland has no total cap.
 
 ### `users.csv` — 6 rows
 

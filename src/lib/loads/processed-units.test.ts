@@ -36,7 +36,6 @@ const store = {
   anchor: null as null | {
     snapshot_at: Date;
     units_indoor: number | null;
-    units_outdoor: number | null;
     units_total: number | null;
     units_in_processing: number;
   },
@@ -274,7 +273,7 @@ describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', (
   it('CLOSES normally (no ack, no acknowledgment audit) when the balance stays non-negative', async () => {
     const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
     // A 500-unit physical anchor absorbs the 200 stripped → +300, non-negative.
-    store.anchor = { snapshot_at: new Date('2026-07-01T00:00:00Z'), units_indoor: 500, units_outdoor: null, units_total: null, units_in_processing: 0 };
+    store.anchor = { snapshot_at: new Date('2026-07-01T00:00:00Z'), units_indoor: 500, units_total: null, units_in_processing: 0 };
     store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
     const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
     expect(closed.closedAt).not.toBeNull();

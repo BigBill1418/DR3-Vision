@@ -219,7 +219,6 @@ export interface StagingRowInput {
 export interface OpeningInventoryCandidate {
   date: string;
   unitsIndoor: number | null;
-  unitsOutdoor: number | null;
   unitsTotal: number | null;
   unitsInProcessing: number;
 }
@@ -484,7 +483,6 @@ export function decodeStagingRows(
       out.opening = {
         date,
         unitsIndoor: optInt(p, 'unitsIndoor', where),
-        unitsOutdoor: optInt(p, 'unitsOutdoor', where),
         unitsTotal: optInt(p, 'unitsTotal', where),
         unitsInProcessing: optInt(p, 'unitsInProcessing', where) ?? 0,
       };
@@ -667,7 +665,6 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
   const anchorUnits = c.opening
     ? snapshotTotalUnits({
         units_indoor: c.opening.unitsIndoor,
-        units_outdoor: c.opening.unitsOutdoor,
         units_total: c.opening.unitsTotal,
         units_in_processing: c.opening.unitsInProcessing,
       })
@@ -1052,7 +1049,6 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
           source: 'import',
           import_id: pid,
           units_indoor: candidates.opening.unitsIndoor,
-          units_outdoor: candidates.opening.unitsOutdoor,
           units_total: candidates.opening.unitsTotal,
           units_in_processing: candidates.opening.unitsInProcessing,
         },

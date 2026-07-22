@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Removed — 2026-07-22 (ADR-0037 Phase 5 — outdoor storage removed from Vision)
+
+Bill's directive: *"we will also remove the units outdoor we are never allowed to store
+units outside. this can't be in the system."* DR3 never stores units outside, so the
+concept is gone from schema, UI, math, warnings and docs.
+
+- **Schema** — migration `20260806_remove_outdoor_from_site_inventory_snapshots` drops
+  `site_inventory_snapshots.units_outdoor` and `sites.max_units_outdoor`. Any non-zero
+  outdoor count is first folded into `units_indoor` with an `audit_log` row per fold
+  (`actor_label = 'adr-0037-outdoor-removal'`) — no unit is destroyed. The production
+  pre-migration audit returned 0 non-zero rows, so no fold ran there. Clean-replayed
+  end-to-end on an empty PG16.
+- **Math** — `snapshotTotalUnits()` (running balance), the audit leg fetchers, COR
+  prefill and workbook promotion now sum `indoor + total + in_processing`. The
+  physical-count API drops `units_outdoor` from its Zod schema; the Loads & Inventory
+  physical-count panel drops the outdoor input (and the `units_outdoor_label` string in
+  all three locales).
+- **Warnings** — CA 3,500 is INDOOR-based and OR 6,000 is TOTAL-based; both preserved.
+  CA 5,000 was OUTDOOR-specific and is removed with the column, so compliance metric 6
+  now grades Woodland against the 3,500 indoor cap instead of the old 8,500 indoor +
+  outdoor sum. Classification evidence recorded in the ADR-0037 addendum.
+- **Regression** — Woodland's corrected June close still computes 3,977 (3,748 program +
+  229 non-program) after the removal.
+
 ### Added — 2026-07-22 (ADR-0037 Phase 3 — paper-bootstrap manager surfaces)
 
 Woodland and Eugene run the floor on paper daily logs; there are no operator iPads on

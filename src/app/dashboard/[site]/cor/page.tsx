@@ -34,7 +34,7 @@ export default async function CorPage({ params }: Props) {
   // an empty CA surface for an OR facility).
   const site = await prisma.site.findUnique({
     where: { id: result.ctx.siteId },
-    select: { jurisdiction: true, max_units_indoor: true, max_units_outdoor: true },
+    select: { jurisdiction: true, max_units_indoor: true },
   });
   if (!site || site.jurisdiction !== 'california') notFound();
 

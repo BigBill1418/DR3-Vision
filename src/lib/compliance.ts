@@ -74,7 +74,6 @@ export interface MetricInput {
     | 'dock_sla_minutes'
     | 'inbound_processing_deadline_days'
     | 'max_units_indoor'
-    | 'max_units_outdoor'
     | 'max_units_total_on_site'
   >;
   periodStart: Date;
@@ -600,8 +599,10 @@ async function metric5Reconciliation(input: MetricInput): Promise<MetricResult> 
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * Per COMPLIANCE.md §6:
- *   - California (Woodland): 3,500 indoor + 5,000 outdoor (separate counters)
+ * Per COMPLIANCE.md §6, as amended by the ADR-0037 addendum (2026-07-22):
+ *   - California (Woodland): 3,500 indoor (the contracted 5,000-unit outdoor
+ *     allowance is NOT exercised — DR3 never stores units outside, so outdoor
+ *     capacity is not tracked and does not add to the graded capacity)
  *   - Oregon (Eugene):       6,000 total on-site (off-site prohibited)
  *
  * Schema gap: `site_inventory_snapshots` is the intended data source but
@@ -612,17 +613,13 @@ async function metric5Reconciliation(input: MetricInput): Promise<MetricResult> 
  * undercount — units sitting in inventory from before the period are
  * still on-site today.)
  *
- * Indoor/outdoor split: the schema has no per-load indoor/outdoor flag,
- * so for CA we sum the two limits and grade against total on-site. The
- * snapshot writer (when it lands) will give us the split. Caption notes
- * this caveat.
+ * Capacity: CA grades against the indoor cap, OR against the total on-site
+ * cap. There is no outdoor addend.
  */
 async function metric6StorageInventory(input: MetricInput): Promise<MetricResult> {
-  // Indoor + outdoor for CA, total for OR.
-  const capacity =
-    (input.site.max_units_total_on_site ?? 0) +
-    (input.site.max_units_indoor ?? 0) +
-    (input.site.max_units_outdoor ?? 0);
+  // Indoor cap for CA, total on-site cap for OR (no outdoor cap — ADR-0037
+  // addendum 2026-07-22).
+  const capacity = (input.site.max_units_total_on_site ?? 0) + (input.site.max_units_indoor ?? 0);
 
   // Live computed: units that arrived but haven't fallen off the on-site
   // counter. `processed` is the only state that removes a load from

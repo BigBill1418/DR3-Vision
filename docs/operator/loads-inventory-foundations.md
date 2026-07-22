@@ -102,6 +102,11 @@ units** — they are post-deconstruction material, and deconstruction is what
 becomes the new anchor and records the delta vs. the computed balance (never
 silently absorbed).
 
+A physical count captures **units indoor** (CA) or **units on site** (OR), plus
+**units in processing**; the total is the sum of what was entered. There is no
+outdoor field — DR3 never stores units outside, and Vision does not track outdoor
+storage (ADR-0037 addendum, 2026-07-22).
+
 ### 3. Inbound verify gate (program / non-program split)
 
 The manager verify step now enforces, server-side, that

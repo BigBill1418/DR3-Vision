@@ -41,7 +41,9 @@ This document is a working reference. The authoritative documents are the execut
 
 ### Storage (Article 6.5–6.6)
 - **3,500 units indoor** at Woodland
-- **5,000 units outdoor** at Woodland
+- **5,000 units outdoor** at Woodland — *contracted allowance not exercised: DR3 does
+  not use outdoor storage. Vision does not track outdoor units per the ADR-0037
+  addendum (2026-07-22).*
 - Exceeding either threshold is **termination grounds** — automatic notification automation required
 - Daily inventory snapshots are required for compliance reporting
 

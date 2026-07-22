@@ -136,16 +136,18 @@ export const VERIFIED_INBOUND_STATUSES: readonly LoadStatus[] = [
   'processed',
 ] as const;
 
-/** Sum the non-null physical unit fields of a snapshot into a single total. */
+/**
+ * Sum the non-null physical unit fields of a snapshot into a single total.
+ *
+ * ADR-0037 addendum (2026-07-22): outdoor storage is not tracked — DR3 never
+ * stores units outside — so the total is indoor + total + in-processing only.
+ */
 export function snapshotTotalUnits(s: {
   units_indoor: number | null;
-  units_outdoor: number | null;
   units_total: number | null;
   units_in_processing: number;
 }): number {
-  return (
-    (s.units_indoor ?? 0) + (s.units_outdoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing
-  );
+  return (s.units_indoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing;
 }
 
 /**
@@ -165,7 +167,6 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     select: {
       snapshot_at: true,
       units_indoor: true,
-      units_outdoor: true,
       units_total: true,
       units_in_processing: true,
       program_units: true,
@@ -266,7 +267,6 @@ export interface ReconcileResult {
 /** Physical unit fields for a new anchor snapshot (jurisdiction-appropriate subset). */
 export interface PhysicalCountInput {
   units_indoor?: number | null;
-  units_outdoor?: number | null;
   units_total?: number | null;
   units_in_processing?: number;
 }
@@ -292,7 +292,6 @@ export async function reconcilePhysicalCount(args: {
   const poolAttribution = args.poolAttribution ?? 'measured';
   const physicalTotal = snapshotTotalUnits({
     units_indoor: args.physical.units_indoor ?? null,
-    units_outdoor: args.physical.units_outdoor ?? null,
     units_total: args.physical.units_total ?? null,
     units_in_processing: args.physical.units_in_processing ?? 0,
   });
@@ -322,7 +321,6 @@ export async function reconcilePhysicalCount(args: {
         snapshot_kind: 'physical',
         source: 'manual',
         units_indoor: args.physical.units_indoor ?? null,
-        units_outdoor: args.physical.units_outdoor ?? null,
         units_total: args.physical.units_total ?? null,
         units_in_processing: args.physical.units_in_processing ?? 0,
         reconciled_delta: reconciledDelta,

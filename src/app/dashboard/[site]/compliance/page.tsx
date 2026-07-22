@@ -185,7 +185,6 @@ export default async function CompliancePage({ params, searchParams }: Props) {
       dock_sla_minutes: true,
       inbound_processing_deadline_days: true,
       max_units_indoor: true,
-      max_units_outdoor: true,
       max_units_total_on_site: true,
     },
   });

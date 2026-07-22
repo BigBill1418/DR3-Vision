@@ -19,7 +19,6 @@ const store = {
   anchor: null as null | {
     snapshot_at: Date;
     units_indoor: number | null;
-    units_outdoor: number | null;
     units_total: number | null;
     units_in_processing: number;
     program_units?: Prisma.Decimal | null;
@@ -80,7 +79,6 @@ function rickMorningAnchor() {
   store.anchor = {
     snapshot_at: new Date('2026-07-20T14:00:00Z'),
     units_indoor: null,
-    units_outdoor: null,
     units_total: 1289,
     units_in_processing: 0,
     program_units: D(137),

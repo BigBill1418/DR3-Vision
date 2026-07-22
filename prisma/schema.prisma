@@ -39,9 +39,9 @@ model Site {
   jurisdiction     Jurisdiction
   mrc_program_code String // e.g. 'MRC-OR-2025' or 'MRC-CA-2025'
 
-  // Storage limits
+  // Storage limits. ADR-0037 addendum (2026-07-22): outdoor storage is not
+  // tracked — DR3 never stores units outside, so there is no outdoor cap.
   max_units_indoor        Int? // CA only
-  max_units_outdoor       Int? // CA only
   max_units_total_on_site Int? // OR only (off-site prohibited)
 
   // Operational windows
@@ -138,7 +138,6 @@ model SiteInventorySnapshot {
   site                Site     @relation(fields: [site_id], references: [id])
   snapshot_at         DateTime @default(now())
   units_indoor        Int? // CA only
-  units_outdoor       Int? // CA only
   units_total         Int? // OR only
   units_in_processing Int      @default(0)
 

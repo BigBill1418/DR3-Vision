@@ -373,7 +373,6 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
       select: {
         snapshot_at: true,
         units_indoor: true,
-        units_outdoor: true,
         units_total: true,
         units_in_processing: true,
       },
@@ -426,8 +425,7 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
     };
   }
   for (const r of snapshots) {
-    const total =
-      (r.units_indoor ?? 0) + (r.units_outdoor ?? 0) + (r.units_total ?? 0) + r.units_in_processing;
+    const total = (r.units_indoor ?? 0) + (r.units_total ?? 0) + r.units_in_processing;
     at(toISO(r.snapshot_at)).physicalSnapshot = total;
   }
 
@@ -448,16 +446,12 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
     select: {
       snapshot_at: true,
       units_indoor: true,
-      units_outdoor: true,
       units_total: true,
       units_in_processing: true,
     },
   });
   const anchorUnits = anchor
-    ? (anchor.units_indoor ?? 0) +
-      (anchor.units_outdoor ?? 0) +
-      (anchor.units_total ?? 0) +
-      anchor.units_in_processing
+    ? (anchor.units_indoor ?? 0) + (anchor.units_total ?? 0) + anchor.units_in_processing
     : 0;
   const since = anchor ? anchor.snapshot_at : new Date(0);
   const flowWindow = { gt: since, lt: before };
