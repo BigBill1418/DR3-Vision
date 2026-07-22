@@ -59,6 +59,7 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     // → equipment (ADR-0044, manager+) → observability (admin-only, trails actives).
     expect(activeKeys(bill)).toEqual([
       'bonus',
+      'operations', // ADR-0020 re-enable 2026-07-22 (manager+, active; registry-ordered after bonus)
       'exports',
       'admin',
       'mymrc-reconcile', // ADR-0057 D4 (admin-only; registry-ordered right after admin)
@@ -74,20 +75,32 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
 
   it('Janette (Woodland manager) sees Bonus + Exports + Ops-Ledger + Equipment active, no Admin', () => {
     const janette = makeSession('manager', WOODLAND);
-    expect(activeKeys(janette)).toEqual(['bonus', 'exports', 'ops-ledger', 'equipment']);
+    expect(activeKeys(janette)).toEqual([
+      'bonus',
+      'operations',
+      'exports',
+      'ops-ledger',
+      'equipment',
+    ]);
     expect(canSeeTile(janette, tileByKey('admin'), WOODLAND)).toBe(false);
     expect(canSeeTile(janette, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
 
   it('Morena (both-sites manager, primary_site_id null) sees the same as Janette', () => {
     const morena = makeSession('manager', null);
-    expect(activeKeys(morena)).toEqual(['bonus', 'exports', 'ops-ledger', 'equipment']);
+    expect(activeKeys(morena)).toEqual([
+      'bonus',
+      'operations',
+      'exports',
+      'ops-ledger',
+      'equipment',
+    ]);
     expect(canSeeTile(morena, tileByKey('bonus'), WOODLAND)).toBe(true);
   });
 
   it('Rick (Eugene manager) sees Bonus + Exports + Ops-Ledger + Equipment — ADR-0019.2 §1, NO Admin', () => {
     const rick = makeSession('manager', EUGENE);
-    expect(activeKeys(rick)).toEqual(['bonus', 'exports', 'ops-ledger', 'equipment']);
+    expect(activeKeys(rick)).toEqual(['bonus', 'operations', 'exports', 'ops-ledger', 'equipment']);
     expect(canSeeTile(rick, tileByKey('bonus'), WOODLAND)).toBe(true);
     expect(canSeeTile(rick, tileByKey('admin'), WOODLAND)).toBe(false);
   });
@@ -102,10 +115,10 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
   it('coming-soon tiles are visible to every manager/admin (Rick included), in registry order', () => {
     const rick = makeSession('manager', EUGENE);
     const comingSoon = visibleTiles(rick, WOODLAND).filter((t) => t.status === 'coming-soon');
-    // The three paused tiles (operations, compliance, reconciliation) sit where
-    // they always did in ACTIVE_TILES, so they lead the coming-soon group.
+    // Operations was re-enabled 2026-07-22 (ADR-0020); compliance + reconciliation
+    // remain paused and sit where they always did in ACTIVE_TILES, so they lead the
+    // coming-soon group.
     expect(comingSoon.map((t) => t.key)).toEqual([
-      'operations',
       'compliance',
       'reconciliation',
       'photo-annotation',
@@ -117,8 +130,9 @@ describe('canSeeTile / visibleTiles — ADR-0020 matrix', () => {
     // (manager) doesn't see either at all.
   });
 
-  it('the three paused tiles carry status coming-soon (2026-06-06 flip)', () => {
-    for (const key of ['operations', 'compliance', 'reconciliation']) {
+  it('operations is active (ADR-0020 re-enable 2026-07-22); compliance + reconciliation stay paused', () => {
+    expect(tileByKey('operations').status).toBe('active');
+    for (const key of ['compliance', 'reconciliation']) {
       expect(tileByKey(key).status).toBe('coming-soon');
     }
   });
@@ -156,6 +170,7 @@ describe('production-report tile — ADR-0030 super-admin-only', () => {
         .map((t) => t.key),
     ).toEqual([
       'bonus',
+      'operations', // ADR-0020 re-enable 2026-07-22 (manager+, active)
       'exports',
       'admin',
       'mymrc-reconcile', // ADR-0057 D4 (admin-only; registry-ordered right after admin)
