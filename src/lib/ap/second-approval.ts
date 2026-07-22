@@ -38,6 +38,7 @@ import {
   SECOND_APPROVAL_SELF_MIN_WAIT_MS,
   canFulfillSecondApproval,
 } from './second-approval-routing';
+import { recordVisionApproval } from './baselines';
 import type { PdfRenderer } from './stamp';
 
 const TABLE = 'ap_requests';
@@ -139,6 +140,9 @@ export async function decideSecondApproval(args: SecondApprovalArgs): Promise<Se
       first_approved_at: true,
       decided_by: true,
       decided_at: true,
+      received_at: true,
+      vendor_freeform: true,
+      confirmed_amount_cents: true,
     },
   });
   if (!row) throw new ApRequestNotFoundError(args.requestId);
@@ -187,6 +191,19 @@ export async function decideSecondApproval(args: SecondApprovalArgs): Promise<Se
         ...(args.decision === 'rejected' && note ? { second_approver_note: note } : {}),
       },
     });
+    // D-M5-4 — a second-approver Approve is the TERMINAL approved transition for a
+    // >= $1K invoice; feed its `vision_approval` history row in the same tx (mirrors
+    // the sub-$1K path in decideRequest). No-op on reject.
+    if (r.count > 0 && args.decision === 'approved' && row.site_id) {
+      await recordVisionApproval(tx, {
+        vendorFreeform: row.vendor_freeform ?? '',
+        confirmedAmountCents:
+          typeof row.confirmed_amount_cents === 'number' ? row.confirmed_amount_cents : Number.NaN,
+        siteId: row.site_id,
+        invoiceDate: row.received_at,
+        actorUserId: args.actor.userId,
+      });
+    }
     if (r.count > 0) {
       await writeAudit(
         {

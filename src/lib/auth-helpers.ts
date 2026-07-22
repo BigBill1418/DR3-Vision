@@ -300,3 +300,55 @@ export async function checkBillingVerifyRead(): Promise<BillingVerifyResult> {
     throw e;
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// AP invoice-history read gate (ADR-0046 Amendment 5, D-M5-5)
+//
+// One gate for the single read surface `/admin/ap/history` (the union of Vision
+// invoices + Bill's imported AP history). Grants iff `role === 'admin'` OR the
+// caller's fresh-from-DB `can_view_ap_history` flag is true — the same
+// scoped-flag shape as can_view_billing_verify (hard rule #2: the flag unlocks
+// exactly this page and no admin power). The intended grantees are the DESIGNATED
+// SECOND APPROVERS (Bill implicitly via admin; Shannon via the flag), NOT the
+// general ap_approvers roster (operators must never see historical AP data). The
+// flag is read fresh every request, never carried in the session token, and is
+// consulted NOWHERE ELSE.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface ApHistoryContext {
+  userId: string;
+  /** How access was granted — for the log line. */
+  via: 'admin' | 'can_view_ap_history';
+}
+
+/** READ gate for /admin/ap/history. no session → 401; ungranted → 403. */
+export async function requireApHistoryRead(): Promise<ApHistoryContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  if (session.user.role === 'admin') {
+    return { userId: session.user.id, via: 'admin' };
+  }
+  const u = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { can_view_ap_history: true },
+  });
+  if (u?.can_view_ap_history) {
+    return { userId: session.user.id, via: 'can_view_ap_history' };
+  }
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type ApHistoryResult =
+  | { ok: true; ctx: ApHistoryContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkApHistoryRead(): Promise<ApHistoryResult> {
+  try {
+    return { ok: true, ctx: await requireApHistoryRead() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}

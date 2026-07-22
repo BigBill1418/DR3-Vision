@@ -103,6 +103,12 @@ export interface FakeBaselineHistory {
   vendor_name_normalized: string;
   invoice_date: Date;
   invoice_amount_cents: number;
+  // Optional so pre-Amendment-5 seeds (variance.test) need not enumerate them;
+  // create() defaults them and the D-M5-4 paths (rebuild/history) tolerate absence.
+  vendor_name?: string;
+  site_id?: string | null;
+  source?: string;
+  imported_by?: string | null;
 }
 export interface FakeApApprover {
   id: string;
@@ -581,13 +587,55 @@ export function makeFakePrisma(db: FakeDb) {
         );
         return row ? { ...row } : null;
       },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        void args;
+        return db.baselines.map((b) => (args.select ? pick(b, args.select) : { ...b }));
+      },
+      // upsert writes ONLY the aggregate columns supplied in create/update — the
+      // override columns (variance_flat_override_cents/variance_percent_override) are
+      // never in that payload, so a rebuild preserves them (matches Prisma semantics
+      // and the D-M5-4 override-preservation contract).
+      async upsert(args: { where: AnyRecord; create: AnyRecord; update: AnyRecord }) {
+        const key = args.where['vendor_name_normalized'];
+        const existing = db.baselines.find((b) => b.vendor_name_normalized === key);
+        if (existing) {
+          Object.assign(existing, args.update);
+          return { ...existing };
+        }
+        const row = {
+          vendor_name_normalized: key as string,
+          vendor_display_name: '',
+          invoice_count: 0,
+          mean_amount_cents: 0,
+          median_amount_cents: 0,
+          min_amount_cents: 0,
+          max_amount_cents: 0,
+          stddev_amount_cents: null,
+          variance_flat_override_cents: null,
+          variance_percent_override: null,
+          ...args.create,
+        } as FakeVendorBaseline;
+        db.baselines.push(row);
+        return { ...row };
+      },
+      async deleteMany(args: { where?: AnyRecord } = {}) {
+        const inList = ((args.where?.['vendor_name_normalized'] as { in?: string[] })?.in) ?? null;
+        const before = db.baselines.length;
+        db.baselines = db.baselines.filter((b) =>
+          inList ? !inList.includes(b.vendor_name_normalized) : false,
+        );
+        return { count: before - db.baselines.length };
+      },
     },
     apVendorBaselineHistory: {
       async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
-        let rows = db.baselineHistory.filter(
-          (h) => w['vendor_name_normalized'] === undefined || h.vendor_name_normalized === w['vendor_name_normalized'],
-        );
+        let rows = db.baselineHistory.filter((h) => {
+          if (w['vendor_name_normalized'] !== undefined && h.vendor_name_normalized !== w['vendor_name_normalized'])
+            return false;
+          if (w['source'] !== undefined && h.source !== w['source']) return false;
+          return true;
+        });
         rows = rows.sort((a, b) => b.invoice_date.getTime() - a.invoice_date.getTime());
         if (typeof args.take === 'number') rows = rows.slice(0, args.take);
         return rows.map((h) => (args.select ? pick(h, args.select) : { ...h }));
@@ -596,9 +644,13 @@ export function makeFakePrisma(db: FakeDb) {
         const d = args.data;
         const row: FakeBaselineHistory = {
           id: uid('hist'),
+          vendor_name: (d['vendor_name'] as string) ?? '',
           vendor_name_normalized: d['vendor_name_normalized'] as string,
           invoice_date: (d['invoice_date'] as Date) ?? new Date(),
           invoice_amount_cents: d['invoice_amount_cents'] as number,
+          site_id: (d['site_id'] as string | null) ?? null,
+          source: (d['source'] as string) ?? 'bill_upload',
+          imported_by: (d['imported_by'] as string | null) ?? null,
         };
         db.baselineHistory.push(row);
         return { ...row };
@@ -633,8 +685,14 @@ export function makeFakePrisma(db: FakeDb) {
         return { id: uid('audit'), ...row };
       },
     },
-    async $transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
-      return fn(client);
+    // Supports BOTH Prisma $transaction shapes: the interactive callback form
+    // (`$transaction(async (tx) => …)`) and the batch/array form
+    // (`$transaction([p1, p2, …])`, used by confirmBaselineImport).
+    async $transaction<T>(
+      arg: ((tx: unknown) => Promise<T>) | ReadonlyArray<Promise<unknown>>,
+    ): Promise<T | unknown[]> {
+      if (Array.isArray(arg)) return Promise.all(arg);
+      return (arg as (tx: unknown) => Promise<T>)(client);
     },
   };
   return client;

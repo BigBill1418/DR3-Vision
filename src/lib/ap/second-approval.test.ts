@@ -293,6 +293,30 @@ describe('second leg — decideSecondApproval', () => {
     const body = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
     expect(body.htmlBody).toContain('Morena');
     expect(body.htmlBody).toContain('Shannon Rockwell');
+    // D-M5-4 — the terminal second-approve feeds a vision_approval history row.
+    expect(db.baselineHistory).toHaveLength(1);
+    expect(db.baselineHistory[0]!.source).toBe('vision_approval');
+    expect(db.baselineHistory[0]!.vendor_name_normalized).toBe('acme repairs');
+    expect(db.baselineHistory[0]!.invoice_amount_cents).toBe(250000);
+  });
+
+  it('a second-approver REJECT does NOT feed the baseline (D-M5-4)', async () => {
+    const db = newFakeDb({
+      requests: [awaitingReq()],
+      users,
+      sites,
+      secondApprovers,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideSecondApproval({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actor: { userId: 'u-shannon', role: 'manager' },
+      note: 'Amount looks inflated vs. the quote — sending back.',
+    });
+    expect(db.requests[0]!.status).toBe('rejected');
+    expect(db.baselineHistory).toHaveLength(0);
   });
 
   it('admin (Bill) may fulfill a Eugene second approval (always eligible)', async () => {

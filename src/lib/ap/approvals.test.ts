@@ -1157,6 +1157,50 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
     expect(row.decision_note).toBeNull();
   });
 
+  it('feeds a vision_approval baseline-history row on a terminal (sub-$1K) Approve (D-M5-4)', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Clark Pest Control',
+      explanation: 'monthly service',
+      confirmedAmountCents: 12500,
+      equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+    });
+    expect(db.baselineHistory).toHaveLength(1);
+    expect(db.baselineHistory[0]!.source).toBe('vision_approval');
+    expect(db.baselineHistory[0]!.vendor_name_normalized).toBe('clark pest control');
+    expect(db.baselineHistory[0]!.invoice_amount_cents).toBe(12500);
+  });
+
+  it('does NOT feed the baseline when a >= $1K Approve routes to second approval', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Big Vendor',
+      explanation: 'large repair',
+      confirmedAmountCents: 250000, // >= $1,000 → pending_second_approval (not terminal)
+      equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+    });
+    expect(db.requests[0]!.status).toBe('pending_second_approval');
+    expect(db.baselineHistory).toHaveLength(0);
+  });
+
   it('writes a single is_not_equipment_related link for the explicit-none case', async () => {
     const db = newFakeDb({
       requests: [pendingReq()],

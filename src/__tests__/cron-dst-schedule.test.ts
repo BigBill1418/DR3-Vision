@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 
 import { nextFireInstantAt as auditNextFire } from '../../scripts/audit-sweep-cron.mjs';
 import { nextFireInstantAt as apExpiryNextFire } from '../../scripts/ap-approver-expiry-cron.mjs';
+import { nextFireInstantAt as apBaselineNextFire } from '../../scripts/ap-baseline-rebuild-cron.mjs';
 import { nextFireInstantAt as boardPackNextFire } from '../../scripts/board-pack-digest-cron.mjs';
 import { nextFireInstantAt as dailyReportNextFire } from '../../scripts/bonus-daily-report.mjs';
 import { nextFireInstant as eodNextFire } from '../../scripts/bonus-eod-check.mjs';
@@ -46,6 +47,7 @@ function pacificWeekday(at: Date): string {
 const DAILY: ReadonlyArray<[string, (from: Date, h: number, m: number) => Date]> = [
   ['audit-sweep-cron', auditNextFire as never],
   ['ap-approver-expiry-cron', apExpiryNextFire as never],
+  ['ap-baseline-rebuild-cron', apBaselineNextFire as never],
   ['board-pack-digest-cron', boardPackNextFire as never],
   ['bonus-daily-report', dailyReportNextFire as never],
 ];

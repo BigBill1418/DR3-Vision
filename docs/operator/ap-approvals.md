@@ -337,3 +337,47 @@ request without the re-confirm flag, or before the 30 s elapses, is refused.
 The final decision email + stamped PDF carry **both** approvers + PT timestamps:
 *"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
 [T2 PT]"*. Sub-$1,000 decisions are unchanged (single approver on the stamp).
+
+## 2026-07-22 — Vendor baselines + invoice history (ADR-0046 Amendment 5, D-M5-4/D-M5-5)
+
+### Vendor baselines (`/admin/ap/baselines`, admin-only)
+
+A per-vendor trailing-12-month baseline (mean/median/min/max/count) drives the
+variance flag on the Approve panel. Sources of history:
+
+- **Bill-uploaded AP reports** (`source='bill_upload'`) — imported via
+  `/admin/ap/baselines/import` (below).
+- **Vision's own approved invoices** (`source='vision_approval'`) — appended
+  automatically on every terminal Approve, so baselines stay fresh between uploads.
+
+A baseline is **established** (used to flag variance) only at **3+** invoices in the
+window. Global thresholds are **$50 flat OR 15%** (either trips); set a **per-vendor
+override** (e.g. Clark Pest → $25 / 6.25%) right on this page. **Overrides survive every
+rebuild** — only the aggregate columns are recomputed.
+
+Baselines rebuild **nightly** (the `ap-baseline-rebuild` cron, 01:30 PT, internal route
+`/api/internal/ap/baseline-rebuild`) and **on demand** via the **Refresh baselines**
+button.
+
+### Importing a Bill AP report (`/admin/ap/baselines/import`, admin-only)
+
+1. Bill uploads the GP AP-history PDF to **/admin/file-drop**.
+2. On the import page, pick that file-drop and click **Preview** — Vision parses it
+   (local pdf-parse tabular parse; a Claude structuring fallback runs when the
+   Anthropic key is configured and the local parse is thin). **Nothing is written yet.**
+3. Review the parsed rows. **Drop** any that look wrong (the preview is the guard —
+   there is no DB-level dedupe, so import a given report once).
+4. Click **Confirm import** — the rows land in `ap_vendor_baseline_history`
+   (`source='bill_upload'`) and baselines rebuild immediately.
+
+### Invoice history search (`/admin/ap/history`)
+
+**Access is restricted to admins + designated second approvers** via the
+`can_view_ap_history` flag (`UPDATE users SET can_view_ap_history = true WHERE id = …`,
+or admin role). The **general approver roster does NOT see this surface** — it exposes
+historical AP data. Shannon (Eugene second approver) should be granted the flag.
+
+The surface is a union of **Vision-decided invoices** + **Bill-uploaded history**
+(distinguished by a Source column). Filter by vendor (typeahead), date range, amount
+range, site, approver, and source; click a row for full decision context (Vision rows)
+or raw imported values. No aggregate reports/dashboards by design.

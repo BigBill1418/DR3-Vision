@@ -827,6 +827,45 @@ services:
       com.barnardhq.service: 'ap-approver-expiry'
     logging: *logging
 
+  ap-baseline-rebuild:
+    # AP vendor-baseline rebuild cron host (ADR-0046 Amendment 5, D-M5-4).
+    #
+    # Same shape as ap-approver-expiry: a single long-running Node process under
+    # `unless-stopped` that is a THIN Pacific scheduler. It sleeps until the next
+    # 01:30 America/Los_Angeles instant (recomputed each cycle off the Pacific wall
+    # clock so it survives the Mar/Nov DST shifts) and on each fire POSTs the app's
+    # internal, loopback-guarded route (`/api/internal/ap/baseline-rebuild`). That
+    # route does the real work compiled inside the Next app via
+    # `rebuildVendorBaselines`: recompute every vendor baseline over the trailing 12
+    # months from ap_vendor_baseline_history, PRESERVING admin threshold overrides.
+    # The daemon imports NO TS and no @prisma/client — the fire time is fixed.
+    #
+    # Idempotent: two runs in a row produce the same baseline table.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-ap-baseline-rebuild
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/ap-baseline-rebuild-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'ap-baseline-rebuild'
+    logging: *logging
+
   board-pack-digest:
     # Board-pack digest cron host (ADR-0045 §3 addendum, planning rollup §1.8).
     #

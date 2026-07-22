@@ -26,6 +26,7 @@ import {
   secondApproverSiteLabel,
 } from './second-approval-routing';
 import { notifySecondApprovalNeeded } from './notify';
+import { recordVisionApproval } from './baselines';
 import {
   stampApproval,
   stampImage,
@@ -286,7 +287,14 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   }
   const row = await prisma.apRequest.findUnique({
     where: { id: args.requestId },
-    select: { id: true, status: true, subject: true, decided_by: true, decided_at: true },
+    select: {
+      id: true,
+      status: true,
+      subject: true,
+      decided_by: true,
+      decided_at: true,
+      received_at: true,
+    },
   });
   if (!row) throw new ApRequestNotFoundError(args.requestId);
   if (row.status === 'quarantined') throw new ApNotActionableError('quarantined');
@@ -380,6 +388,22 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
           });
         }
       }
+    }
+    // D-M5-4 — feed a `vision_approval` history row on every TERMINAL approved
+    // decision (sub-$1K structured Approve; the >= $1K path terminates in
+    // decideSecondApproval, which feeds there). Kept in the SAME tx as the flip so
+    // the approval + its baseline row commit together. Guarded to a structured
+    // Approve with a real site; recordVisionApproval itself no-ops on a blank
+    // vendor / non-finite amount so it can never wedge the approval.
+    if (r.count > 0 && targetStatus === 'approved' && structured && args.siteId) {
+      await recordVisionApproval(tx, {
+        vendorFreeform: args.vendorFreeform ?? '',
+        confirmedAmountCents:
+          typeof args.confirmedAmountCents === 'number' ? args.confirmedAmountCents : Number.NaN,
+        siteId: args.siteId,
+        invoiceDate: row.received_at,
+        actorUserId: args.actorUserId,
+      });
     }
     if (r.count > 0) {
       // Won — audit the winning transition in the SAME tx (both-attempts-audited).

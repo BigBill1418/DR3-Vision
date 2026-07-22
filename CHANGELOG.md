@@ -5,6 +5,39 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-4/D-M5-5 — vendor baselines + invoice history)
+
+- **Vendor-baseline aggregation** (`src/lib/ap/baselines.ts`): a pure trailing-12-month
+  roll-up per normalized vendor (mean/median/min/max/stddev/count, anchored on the
+  vendor's most-recent invoice) feeding `ap_vendor_baselines`, which variance detection
+  reads. A baseline is **established** (used to flag) at 3+ invoices.
+- **`rebuildVendorBaselines`** recomputes every vendor from `ap_vendor_baseline_history`
+  and **preserves admin per-vendor threshold overrides** (`variance_flat_override_cents`,
+  `variance_percent_override`) — the aggregate columns are upserted, the override columns
+  are never touched. Runs **nightly** (new `ap-baseline-rebuild` cron → internal route
+  `/api/internal/ap/baseline-rebuild`, 01:30 PT) and **on demand** (admin "Refresh"
+  button).
+- **Baseline freshness feed**: every TERMINAL `approved` transition (sub-$1K in
+  `decideRequest`; the ≥$1K second-approve in `decideSecondApproval`) appends a
+  `vision_approval` row to `ap_vendor_baseline_history` in the same transaction — so
+  baselines stay current between Bill's re-uploads. Rejects and the second-approval hop
+  do **not** feed.
+- **Baseline import** (`/admin/ap/baselines/import`, admin-only): pick a Bill-uploaded
+  AP-report PDF from file-drop → **preview** parsed rows (local pdf-parse tabular parse +
+  Claude structuring fallback when configured, `src/lib/ap/baseline-import.ts`) →
+  **confirm** to write `bill_upload` history and rebuild. The preview is the human guard
+  (no DB-level dedupe); drop bad rows before confirming.
+- **Per-vendor override management** (`/admin/ap/baselines`, admin-only): set stricter/
+  looser flat-$ + percent thresholds per vendor; changes are audited.
+- **Invoice history search** (`/admin/ap/history`): union of Vision-decided invoices
+  (`ap_requests`) + Bill-uploaded history (`ap_vendor_baseline_history` where
+  `source='bill_upload'`; the `vision_approval` feed is excluded to avoid double-counting).
+  Filters: vendor typeahead, date range, amount range, site, approver, source. Per-row
+  detail modal. No aggregate dashboards (per spec).
+- **New scoped read gate** `can_view_ap_history` (`requireApHistoryRead`/
+  `checkApHistoryRead`): admins + designated second approvers only — the general
+  `ap_approvers` roster is excluded (hard rule #2, mirrors `can_view_billing_verify`).
+
 ### Added — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — $1,000 second-approval workflow)
 
 - **A structured Approve whose confirmed amount is ≥ $1,000 no longer terminates.**
