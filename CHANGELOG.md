@@ -5,6 +5,33 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0057 D1/D9 — MyMRC admin credential store, encrypted DB surface)
+
+Foundation for the MRC-Scrape credential surface: Bill's MyMRC admin login now lives in
+an encrypted single-row DB table instead of a `.env` file (operator rule — no `.env` for
+these creds). This is the store the admin entry UI writes and the scrape reads; it
+unblocks Vision's first-ever MyMRC pull.
+
+- `prisma/schema.prisma` — new `MymrcAdminCredential` model → `mymrc_admin_credentials`.
+  Single row (`id='singleton'`, CHECK-enforced): `username` (plaintext login id),
+  `password_ciphertext` / `password_iv` / `password_auth_tag` (base64 AES-256-GCM),
+  `key_version`, `updated_by` (bare audit-actor id), timestamps.
+- `prisma/migrations/20260802_adr0057_mymrc_admin_credentials/migration.sql` — additive
+  CREATE TABLE (ADR-0035 clean-replay), singleton CHECK constraint.
+- `src/lib/mymrc/credential-store.ts` — server/scrape module (dual-compiled under
+  `tsconfig.mymrc.json`, so no `@/` alias / no `server-only`): `setMymrcCredentials`
+  (encrypt + upsert + password-free audit row), `getMymrcCredentials` (decrypt; scrape
+  read path; fail-closed on tamper), `getMymrcCredentialStatus` (no password/ciphertext,
+  safe for the UI). Password is write-only across every boundary.
+- **Encryption key = dedicated `MYMRC_CRED_KEY`, NOT `NEXTAUTH_SECRET`** (scrypt +
+  fixed app salt). The scrape container is deliberately stripped of `NEXTAUTH_SECRET`
+  (ADR-0053 addendum); a dedicated key lets both the app (writer) and scrape (reader)
+  decrypt without reversing that hardening. INTEGRATION PREREQ: `MYMRC_CRED_KEY` must be
+  injected into BOTH the `app` and `mymrc-scrape` runtime env (tracked with O-12).
+- `src/lib/mymrc/credential-store.test.ts` — 21 tests: round-trip, status leaks nothing,
+  tamper/auth-tag/wrong-key/key_version fail closed, empty/whitespace rejected, missing
+  key aborts, migration↔schema parity.
+
 ### Added — 2026-07-21 (ADR-0057 accepted — MyMRC full-object ingestion via admin-user creds)
 
 Ships the ADR-0057 decision (from the 2026-07-21 handoff): retire the never-honored
