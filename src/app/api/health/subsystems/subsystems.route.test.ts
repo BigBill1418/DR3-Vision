@@ -3,6 +3,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const queryRaw = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => [{ ok: 1 }]);
 vi.mock('@/lib/prisma', () => ({ prisma: { $queryRaw: (...a: unknown[]) => queryRaw(...a) } }));
 
+// ADR-0057 — MyMRC creds moved from MYMRC_*_ env to the DB store. Mock the status
+// reader; `mymrcConfigured` flips the configured/unconfigured cases.
+let mymrcConfigured = false;
+vi.mock('@/lib/mymrc/credential-store', () => ({
+  getMymrcCredentialStatus: async () => ({
+    configured: mymrcConfigured,
+    username: mymrcConfigured ? 'bill@svdp.us' : null,
+    updatedAt: null,
+    updatedBy: null,
+  }),
+}));
+
 // audit 2026-07-16 · HEALTH — the route now requires a manager/admin role. Mock
 // auth() so the config-presence assertions run as a manager by default; the
 // operator-403 case flips it.
@@ -17,8 +29,6 @@ const ENV_KEYS = [
   'R2_ACCESS_KEY_ID',
   'R2_SECRET_ACCESS_KEY',
   'R2_BUCKET',
-  'MYMRC_WOODLAND_USERNAME',
-  'MYMRC_WOODLAND_PASSWORD',
   'NTFY_PUBLISHER_TOKEN',
   'AUTH_MICROSOFT_ENTRA_ID_ID',
   'AUTH_MICROSOFT_ENTRA_ID_SECRET',
@@ -37,6 +47,7 @@ beforeEach(() => {
   queryRaw.mockClear();
   queryRaw.mockResolvedValue([{ ok: 1 }]);
   sessionRole = 'manager';
+  mymrcConfigured = false;
   clearEnv();
 });
 afterEach(clearEnv);
@@ -74,8 +85,7 @@ describe('GET /api/health/subsystems', () => {
     process.env['R2_ACCESS_KEY_ID'] = 'x';
     process.env['R2_SECRET_ACCESS_KEY'] = 'x';
     process.env['R2_BUCKET'] = 'b';
-    process.env['MYMRC_WOODLAND_USERNAME'] = 'u';
-    process.env['MYMRC_WOODLAND_PASSWORD'] = 'p';
+    mymrcConfigured = true;
     process.env['NTFY_PUBLISHER_TOKEN'] = 't';
     process.env['AUTH_MICROSOFT_ENTRA_ID_ID'] = 'id';
     process.env['AUTH_MICROSOFT_ENTRA_ID_SECRET'] = 's';
@@ -92,5 +102,13 @@ describe('GET /api/health/subsystems', () => {
     const body = await res.json();
     expect(get(body.subsystems, 'db').status).toBe('red');
     expect(body.overall).toBe('red');
+  });
+
+  it('mymrc goes green when the DB credential store reports configured', async () => {
+    mymrcConfigured = true;
+    const body = await (await GET()).json();
+    const mymrc = get(body.subsystems, 'mymrc');
+    expect(mymrc.status).toBe('green');
+    expect(mymrc.detail).toBe('Credentials configured');
   });
 });

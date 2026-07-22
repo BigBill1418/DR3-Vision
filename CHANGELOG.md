@@ -32,6 +32,40 @@ unblocks Vision's first-ever MyMRC pull.
   tamper/auth-tag/wrong-key/key_version fail closed, empty/whitespace rejected, missing
   key aborts, migration↔schema parity.
 
+### Added — 2026-07-22 (ADR-0057 D1/D9 — MRC-Scrape credential surface + auth transition)
+
+The admin UI/DB surface for the credential store above, plus the scrape's transition off
+per-site `.env` logins onto the single DB-backed admin identity. With this, Bill can enter
+his MyMRC admin login at `/admin/mrc-scrape` and the hourly scrape decrypts it — the last
+step before Phase 0 discovery (O-12).
+
+- `src/app/admin/mrc-scrape/` — admin-only page (`/admin/mrc-scrape`) composing the
+  write-only credential form (`MrcScrapeForm`, no `<form>` per hard rule #10) and the
+  read-only status panel (`ScrapeStatus`) via a `MrcScrapePanels` shell that refetches
+  status on save. Password is never pre-filled, never returned, never logged.
+- `src/app/api/admin/mrc-scrape/credentials` (POST, save) + `.../status` (GET, read-only
+  state: credential-configured, last run, per-object mirror counts + `neverRun`). Both
+  admin-gated; neither returns the password/ciphertext.
+- `src/lib/dashboard-tiles.ts` — lit up the `mrc-scrape` admin tile (was a coming-soon
+  placeholder) → route `/admin/mrc-scrape`, `scope: admin-only`.
+- `scripts/mymrc-scrape.mjs` / `mymrc-cron.mjs` — single admin login (no per-site loop);
+  **D9 fail-loud**: unconfigured/undecryptable creds page `dr3-vision-system` and exit
+  non-zero (was silent skip + exit 0). New `scripts/mymrc-healthcheck.mjs` +
+  compose `healthcheck` report UNHEALTHY until a credential row exists.
+- `src/lib/mymrc/credentials.ts` / `portal-client.ts` — auth model swapped from
+  `SiteCredentials`/per-site auth-state to the DB store + single admin session
+  (`~/.dr3-vision/mymrc-admin/auth.json`); `CredentialsNotConfiguredError` (D9).
+- `docker-compose.yml` — **end-to-end key path wired**: `mymrc-cred-key.env`
+  (`MYMRC_CRED_KEY`) mounted on BOTH `app` (encrypt on save) and `mymrc-scrape`
+  (decrypt), both `required: false` (deploy-before-provision). Retired the per-site
+  `mymrc.env` mount + `MYMRC_{EUGENE,WOODLAND,OR,CA}_*` vars.
+- `src/app/api/health/subsystems/route.ts` — the MyMRC subsystem pill now reads the DB
+  credential store (`getMymrcCredentialStatus`) instead of the retired `MYMRC_*_USERNAME`
+  env greps, so it reflects real configured state; a store read error degrades that one
+  tile to amber rather than reddening the whole footer.
+- Tests: credential + status routes, form + status components, D9 orchestration, and a
+  compose-wiring guard asserting BOTH `app` and `mymrc-scrape` mount `MYMRC_CRED_KEY`.
+
 ### Added — 2026-07-21 (ADR-0057 accepted — MyMRC full-object ingestion via admin-user creds)
 
 Ships the ADR-0057 decision (from the 2026-07-21 handoff): retire the never-honored
