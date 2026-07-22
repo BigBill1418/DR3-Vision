@@ -9,6 +9,7 @@
     "build": "next build",
     "build:mymrc": "tsc --project tsconfig.mymrc.json",
     "mymrc:scrape": "node scripts/mymrc-scrape.mjs",
+    "mymrc:backfill": "node scripts/mymrc-backfill.mjs",
     "start": "next start",
     "lint": "next lint --max-warnings 0",
     "typecheck": "tsc --noEmit",

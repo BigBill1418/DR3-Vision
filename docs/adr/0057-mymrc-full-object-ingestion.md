@@ -74,6 +74,18 @@ mymrc_backfill_cursors(
 
 Backfill worker resumes from `(last_page_index, last_record_id)` on restart. Bounded concurrency ≤3 detail fetches (same as ADR-0038 D3). After `completed_at` is set, hourly cadence takes over — cursor is retired for that object.
 
+#### D3 pagination — CONFIRMED-LIVE mechanism (2026-07-22)
+
+The `getItems` pagination was captured live against `mrc-us.my.site.com` (the transport was NOT guessable, so it was reverse-engineered before implementation — ADR-0057's "never guess the transport" rule). It is OFFSET pagination on the Aura `ListViewDataManagerController.getItems` action:
+
+- **Request params:** `{ filterName:<listViewId>, entityName:<Object__c>, pageSize:50, layoutType:"LIST", sortBy:null, getCount:false, enableRowActions:false, offset:<N> }`. `filterName` is the Salesforce **list-view id** (`00B…`), e.g. Materials "All Active Processed Materials" = `00B4p000005DAqlEAG`, Haul "Docking Appointments (RC)" = `00B4p000005DAqWEAW`.
+- **Response scalars:** `{ records:[…≤pageSize], offset:<cumulative-count-fetched>, hasMoreData:<bool>, filterTitle, entityLabelPlural }`.
+- **Loop:** start `offset=0`; each response reports a cumulative `offset` + `hasMoreData`; repeat until `hasMoreData:false`. Because a ListView returns exactly `pageSize` rows per page until the last, the request offset for a 0-based page index is the pure function `offset = pageIndex * pageSize` — which is what makes the DB-durable `last_page_index` cursor resumable with no in-memory running offset.
+
+**Implementation (Phase 1 D3):** the request/response codec + the list-view-id resolver are PURE (`src/lib/mymrc/list-page.ts`, unit-tested); `createBackfillPortalClient` (`backfill-portal-client.ts`) drives the offset loop over the shared self-healing admin session (`openAdminSession`), replaying the getItems POST with the **live aura framework envelope the browser itself sent** on the list page (immune to per-release `fwuid` drift) — the offset-replay path (ladder #1), chosen over DOM infinite-scroll for determinism. Multi-view objects (Haul ×2, Materials ×2) page each view as its own cursor and merge deduped by `salesforce_record_id` (the mirror upsert key). One-shot entrypoint: `scripts/mymrc-backfill.mjs`.
+
+**List-view id resolution (never guessed):** precedence is operator override (`MYMRC_LISTVIEW_IDS` env, `{slug:id}`) → runtime capture (the browser's own getItems request on the list page, matched by object + filter title) → the id observed live 2026-07-22. Only 2 of 5 ids were captured live; the other 3 (Consumer Drop-Off, Outbound, Dock) resolve at runtime or via override, and an id that resolves to NONE fails LOUD per-target (a resumable wedge + ntfy), never a wrong/empty list.
+
 ### D4 — Reconciliation authority: admin-approve queue, no auto-updates
 
 Vision NEVER auto-updates operational tables (`sources`, `source_aliases`, `state_program_rules`, etc.) from MyMRC. Instead, mirror sync writes candidate changes to a queue:

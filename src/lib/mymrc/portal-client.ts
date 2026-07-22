@@ -65,9 +65,11 @@ function listUrl(feed: FeedName): string {
 // route differs, the record's getRecordWithFields still fires for this id and
 // interception catches it. A wrong URL degrades to a loud
 // PortalContractDriftError (no getRecordWithFields), never a silent empty.
-function detailUrl(recordId: string): string {
+export function detailUrl(recordId: string): string {
   return `${PORTAL_ORIGIN}/s/detail/${encodeURIComponent(recordId)}`;
 }
+
+export { PORTAL_ORIGIN };
 
 // ── Pure parse layer (fixture-tested; no Playwright) ─────────────────────────
 
@@ -336,8 +338,35 @@ export interface PortalClient {
 }
 
 /**
- * Log in (reusing persisted storage state when present) and return a
- * session-bound, PROVEN-AUTHENTICATED PortalClient. Caller owns the `Browser`.
+ * A PROVEN-AUTHENTICATED admin browser session with the self-heal + Aura
+ * plumbing every MyMRC transport shares. Both the steady-state `PortalClient`
+ * (interception transport) and the backfill offset transport build on ONE of
+ * these — so auth, the stale-session self-heal, and the money-safe persistence
+ * latch live in exactly one place (ADR-0057 Phase 1). `getPage()`/`getContext()`
+ * return the LIVE page/context (the self-heal rebuilds the context, so callers
+ * must never cache the reference across an `ensureAuthenticated`).
+ */
+export interface AdminSession {
+  getPage(): Page;
+  getContext(): BrowserContext;
+  /** Bounded-retry navigation; never throws (a dead nav reads as logged-out). */
+  gotoWithRetry(url: string, waitUntil: 'domcontentloaded' | 'networkidle'): Promise<void>;
+  /** Re-login in place if the session dropped; purge + throw AuthFailedError if it stays out. */
+  ensureAuthenticated(targetUrl: string): Promise<void>;
+  /** `true` when the current page looks logged-out (positive-marker test, D4). */
+  isLoginPage(): Promise<boolean>;
+  /** Navigate + collect every intercepted `/s/sfsites/aura` RESPONSE body during load+settle. */
+  collectAura(url: string): Promise<string[]>;
+  /** Delete the poisoned storageState so the next tick boots clean (best-effort). */
+  purgeState(): Promise<void>;
+  /** Persist the session snapshot ONLY when positively authenticated this run. */
+  persistIfAuthenticated(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * Open a proven-authenticated admin session (reusing persisted storage state
+ * when present). Caller owns the `Browser`.
  *
  * STALE-SESSION SELF-HEAL (ADR-0057 Phase 1, recon B §8). The live failure this
  * closes: a tick that ended logged-out wrote its anonymous cookies over the
@@ -353,11 +382,11 @@ export interface PortalClient {
  *     `close()` when the session is known logged-out, never on a failed login.
  * Bounded nav retries absorb a transient blip without an unbounded loop.
  */
-export async function createPortalClient(
+export async function openAdminSession(
   browser: Browser,
   creds: MymrcCredentials,
   opts: PortalClientOptions = {},
-): Promise<PortalClient> {
+): Promise<AdminSession> {
   const log = opts.log ?? noopLog;
   const navTimeout = opts.navTimeoutMs ?? NAV_TIMEOUT_MS;
   const settleMs = opts.settleMs ?? SETTLE_MS;
@@ -413,13 +442,11 @@ export async function createPortalClient(
     }
   }
 
-  /** Delete a poisoned storageState so the next tick boots clean (best-effort). */
   async function purgeState(): Promise<void> {
     lastKnownAuthenticated = false;
     await rm(stateFile, { force: true }).catch(() => undefined);
   }
 
-  /** Persist the session ONLY when positively authenticated this run. */
   async function persistIfAuthenticated(): Promise<void> {
     if (!mayPersistState(lastKnownAuthenticated)) return;
     await context.storageState({ path: stateFile }).catch(() => undefined);
@@ -451,11 +478,6 @@ export async function createPortalClient(
     await persistIfAuthenticated();
   }
 
-  /**
-   * Mid-run guard: the session can drop between feeds. Re-login IN PLACE; if it
-   * still fails, purge the poisoned file and fail loud (D5). Never persists a
-   * logged-out session.
-   */
   async function ensureAuthenticated(targetUrl: string): Promise<void> {
     if (!(await isLoginPage())) return;
     log('warn', 'mymrc: session dropped mid-run — re-authenticating (admin)');
@@ -469,7 +491,6 @@ export async function createPortalClient(
     lastKnownAuthenticated = true;
   }
 
-  // Navigate and collect every intercepted Aura response body during load+settle.
   async function collectAura(url: string): Promise<string[]> {
     const bodies: string[] = [];
     const onResponse = (resp: Awaited<ReturnType<Page['waitForResponse']>>): void => {
@@ -492,13 +513,46 @@ export async function createPortalClient(
   await bootstrap();
 
   return {
+    getPage: () => page,
+    getContext: () => context,
+    gotoWithRetry,
+    ensureAuthenticated,
+    isLoginPage,
+    collectAura,
+    purgeState,
+    persistIfAuthenticated,
+    async close(): Promise<void> {
+      // ONLY persist a session we positively confirmed authenticated. A tick that
+      // ended logged-out must NOT overwrite the good file (recon B §8) — and if it
+      // hard-failed, `purgeState()` already removed it.
+      await persistIfAuthenticated();
+      await context.close().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * Log in (reusing persisted storage state when present) and return a
+ * session-bound, PROVEN-AUTHENTICATED PortalClient. Caller owns the `Browser`.
+ * A thin consumer of {@link openAdminSession} — all the auth/self-heal contract
+ * lives there; this adds only the steady-state list/detail interception transport.
+ */
+export async function createPortalClient(
+  browser: Browser,
+  creds: MymrcCredentials,
+  opts: PortalClientOptions = {},
+): Promise<PortalClient> {
+  const log = opts.log ?? noopLog;
+  const session = await openAdminSession(browser, creds, opts);
+
+  return {
     async fetchListRecordIds(feed: FeedName): Promise<ListRecordIdsResult> {
       const url = listUrl(feed);
-      await gotoWithRetry(url, 'domcontentloaded');
-      await ensureAuthenticated(url);
-      const bodies = await collectAura(url);
-      if (await isLoginPage()) {
-        await purgeState();
+      await session.gotoWithRetry(url, 'domcontentloaded');
+      await session.ensureAuthenticated(url);
+      const bodies = await session.collectAura(url);
+      if (await session.isLoginPage()) {
+        await session.purgeState();
         throw new AuthFailedError(`mymrc: logged out during ${feed} list`);
       }
       const { ids, hasMoreData } = extractListView(bodies, feed);
@@ -513,26 +567,22 @@ export async function createPortalClient(
         log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection is SKIPPED (never over-mark against a partial page)`);
       }
       log('info', `mymrc: ${feed} list → ${ids.length} record ids (complete=${!hasMoreData})`);
-      await persistIfAuthenticated();
+      await session.persistIfAuthenticated();
       return { ids, complete: !hasMoreData };
     },
 
     async fetchRecordDetail(feed: FeedName, recordId: string): Promise<SfRecord> {
       const url = detailUrl(recordId);
-      const bodies = await collectAura(url);
-      if (await isLoginPage()) {
-        await purgeState();
+      const bodies = await session.collectAura(url);
+      if (await session.isLoginPage()) {
+        await session.purgeState();
         throw new AuthFailedError(`mymrc: logged out during ${feed} detail ${recordId}`);
       }
       return extractRecord(bodies, recordId);
     },
 
     async close(): Promise<void> {
-      // ONLY persist a session we positively confirmed authenticated. A tick that
-      // ended logged-out must NOT overwrite the good file (recon B §8) — and if it
-      // hard-failed, `purgeState()` already removed it.
-      await persistIfAuthenticated();
-      await context.close().catch(() => undefined);
+      await session.close();
     },
   };
 }

@@ -28,14 +28,17 @@ export {
 } from './mappers';
 export {
   createPortalClient,
+  openAdminSession,
   AuthFailedError,
   PortalContractDriftError,
   extractListRecordIds,
   extractRecord,
+  detailUrl,
   looksLoggedOut,
   type PortalClient,
   type PortalClientOptions,
   type ListRecordIdsResult,
+  type AdminSession,
 } from './portal-client';
 export {
   syncFeed,
@@ -45,13 +48,12 @@ export {
   type SyncFeedResult,
   type SyncSiteContext,
 } from './sync';
-// Windowed historical backfill (ADR-0057 D3). The engine + production target
-// wiring are exported so a cron entrypoint can drive them — BUT note the engine
-// depends on a `BackfillPortalClient.fetchListPage(...)` paginating transport
-// that does NOT yet exist as a production Playwright adapter (Phase 0 captured
-// only the first Aura window per object; the getItems pagination mechanism is
-// unproven and must NOT be guessed — ADR-0057). Until that adapter lands,
-// backfill ships INERT (nothing invokes it). See OPEN-ITEMS C-24.
+// Windowed historical backfill (ADR-0057 D3). The engine, its production target
+// wiring, AND the offset-paginating portal adapter that drives it. The getItems
+// OFFSET pagination mechanism was CONFIRMED LIVE 2026-07-22 (see list-page.ts) —
+// so the adapter (`createBackfillPortalClient` + `playwrightBackfillSession`) is
+// no longer INERT; the `scripts/mymrc-backfill.mjs` entrypoint runs it one-shot.
+// See OPEN-ITEMS C-24 (now closed).
 export {
   runBackfill,
   type BackfillPortalClient,
@@ -63,6 +65,32 @@ export {
   type BackfillStatus,
 } from './backfill';
 export { buildBackfillTargets } from './backfill-targets';
+export {
+  createBackfillPortalClient,
+  playwrightBackfillSession,
+  type BackfillSession,
+  type BackfillPortalClientOptions,
+} from './backfill-portal-client';
+export {
+  offsetForPage,
+  buildGetItemsMessage,
+  buildGetItemsFormFields,
+  parseGetItemsResponse,
+  parseGetItemsRequest,
+  parseAuraPostData,
+  messageIsGetItems,
+  correlateCapturedListViews,
+  resolveFilterName,
+  BACKFILL_LIST_VIEWS,
+  GETITEMS_DESCRIPTOR,
+  DEFAULT_PAGE_SIZE,
+  type GetItemsParams,
+  type GetItemsPage,
+  type AuraFrameworkParams,
+  type CapturedListView,
+  type CapturedGetItemsRequest,
+  type ListViewBinding,
+} from './list-page';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
 export {
   detectProcessedRecordChanges,

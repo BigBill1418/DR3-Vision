@@ -29,12 +29,32 @@ wiring on top of it.
   `displayValue`; the full raw record is preserved in `payload`.
 - **Windowed backfill worker** (`src/lib/mymrc/backfill.ts` + `backfill-targets.ts`)
   — schema-agnostic engine: per object×list-view, pages `getItems` by
-  `currentPage`/`hasMoreData` to `hasMoreData:false`, persisting a
+  offset/`hasMoreData` to `hasMoreData:false`, persisting a
   `mymrc_backfill_cursors` row after every page (resumable mid-pagination), then a
   bounded (≤3) detail sweep of rows with `detail_fetched_at IS NULL`. Idempotent on
   SF-id upsert keys; a pagination wedge fails loud (cursor error + ntfy) while a
   per-record detail failure retries next run. 5 cursors wire the 4 real objects
   (Haul ×2 views, Materials ×2 views, Dock ×1).
+- **Offset-pagination transport — backfill is now LIVE, no longer inert**
+  (`src/lib/mymrc/list-page.ts`, `backfill-portal-client.ts`,
+  `scripts/mymrc-backfill.mjs`; closes OPEN-ITEMS C-24). The `getItems` OFFSET
+  pagination was CONFIRMED LIVE 2026-07-22: an Aura
+  `ListViewDataManagerController.getItems` action with
+  `{filterName, entityName, pageSize:50, layoutType:"LIST", sortBy:null,
+  getCount:false, enableRowActions:false, offset:N}` returning
+  `{records, offset, hasMoreData}`, looped to `hasMoreData:false`. `list-page.ts`
+  encodes the request/response codec + list-view id resolver PURE (unit-tested);
+  `createBackfillPortalClient` maps the engine's 0-based `pageIndex → offset =
+  pageIndex*pageSize` (a pure function of the resumable cursor) and replays the
+  getItems POST, reusing the live aura framework envelope the browser sent
+  (immune to `fwuid` drift) — chosen over DOM infinite-scroll for determinism.
+  The shared, self-healing admin session was extracted to `openAdminSession`
+  (both the steady-state client and the backfill transport reuse it — one auth
+  path). List-view ids: 2 captured live (Docking, Processed); the other 3 resolve
+  at RUNTIME from the browser's own getItems request, or via a
+  `MYMRC_LISTVIEW_IDS` operator override — an id that resolves to NONE fails LOUD
+  per-target (a resumable wedge + ntfy), never guessed. Run one-shot:
+  `node scripts/mymrc-backfill.mjs` (resumable + idempotent; safe to re-run).
 - **Hourly sync wired to the real objects** (`src/lib/mymrc/sync.ts`). Site scoping
   moved from the login to the DATA (ADR-0057 D1 / recon B §6): a single admin
   session lists ALL records globally (`site_id` NULL at list time), and each row's
