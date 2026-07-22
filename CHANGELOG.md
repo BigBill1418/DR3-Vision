@@ -9,6 +9,38 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 - **`loads_inventory` rollout surface flipped `pilot → live` for Woodland + Eugene** (audited, attributed to Bill). Managers/operators are now activated at both sites; the `assertLoadsInventoryActivated` gate reads this per-site surface at request time, so the change is immediate (no deploy). Reversible via the inverse flip at `/admin/rollout`.
 - Both D7 ops preconditions closed: **P1-3 restore drill MET** (`d4917d0`, passed twice vs real R2 snapshot), **P1-4 RESTIC_PASSWORD off-box CONFIRMED** via the Fleet 1Password item (SHA-256 matches on-box). Reconciled the `OPEN-ITEMS.md` O-3 / `restore-drills.md` / ADR-0037 contradiction — all now CLOSED.
 - Follow-up captured: `outbound.ts` `allocation_pct` semantics "pending Kelsey" (nullable, does not affect the running balance) — resolve before her 2026-08-01 departure.
+### Added — 2026-07-22 (Navigation — always-visible "← Dashboard" bar across the manager surface)
+
+Closed a long-standing navigation gap: 30 of the 57 manager-surface pages had NO
+in-app path back to the Vision Dashboard (`/`) — you were forced onto the browser
+Back button. Root cause: the `/bonus` and `/dashboard` route-group layouts rendered
+no home nav, and `/admin/**` had no group layout at all. Fixed centrally (one shared
+component wired into the three route-group layouts) rather than patching each page.
+
+- **`src/app/_components/back-to-dashboard.tsx`** (new) — the shared nav bar. A real
+  `<Link href="/">` styled to the dr3 deep-space theme (bordered pill + chevron), a
+  ≥44px touch target for the floor iPads (WCAG 2.5.5), high-contrast with a persistent
+  (non-hover-only) affordance and a visible focus ring. Two exports: `BackToDashboardBar`
+  (presentational, explicit label — used by English-only `/admin`) and
+  `BackToDashboardNav` (resolves EN/ES/UR via `useT()` — used by bonus/dashboard).
+- **`src/app/bonus/layout.tsx`** + **`src/app/dashboard/layout.tsx`** — render the
+  i18n nav bar at the top inside the existing `I18nProvider` (bonus keeps its
+  `SiteSwitchBanner` below it).
+- **`src/app/admin/layout.tsx`** (new) — first-ever `/admin` route-group layout;
+  renders the bar for all ~27 admin pages. English-only per ADR-0017 (no `I18nProvider`).
+- **`src/i18n/locales/{en,es,ur}/manager.json`** — new `nav.back_to_dashboard` +
+  `nav.back_to_dashboard_aria` keys (CLAUDE.md hard rule #4).
+- **`src/app/_components/vision-shell.tsx`** — the landing-page logo is now a
+  `<Link href="/">` (aria-labelled), visually unchanged (belt-and-suspenders home path).
+- Coverage: all 55 pages under `/bonus` (8), `/dashboard` (20), `/admin` (27) now reach
+  `/` via the inherited layout bar; residual gapped pages = 0. Deliberately excluded:
+  `/` (is the dashboard), `/login`, `/operator/**` (PIN iPad flow), `/internal/**`
+  (headless PDF), `/survey/[token]` (public). Pages with their own page-level back-link
+  (e.g. "← All sites") are untouched — the layout bar sits cleanly above them (different
+  targets: page links go up one level, the bar goes to `/`).
+- Tests: `back-to-dashboard.test.tsx` (4) + one layout test each for admin/bonus/dashboard
+  asserting a link to `/`. 7 green. Verified visually with Playwright at the iPad viewport
+  (768×1024): `/bonus`, `/admin/users`, `/dashboard/[site]/compliance`.
 
 ### Changed — 2026-07-22 (ADR-0057 D3 addendum — MyMRC billing-field capture: batched getRecordWithFields transport)
 

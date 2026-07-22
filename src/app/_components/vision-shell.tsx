@@ -14,6 +14,8 @@
 
 import * as React from 'react';
 import type { ReactNode } from 'react';
+import Link from 'next/link';
+import { HOME_ROUTE } from '@/lib/routes';
 import { DashboardAvatar } from './dashboard-avatar';
 import { HealthPill } from './health-pill';
 
@@ -49,7 +51,11 @@ export function VisionShell({
         {/* ── Header band ───────────────────────────────────────── */}
         <header className="flex flex-col gap-6 border-b border-dr3-steel-light/20 pb-8 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-3">
-            <div className="relative w-fit">
+            <Link
+              href={HOME_ROUTE}
+              aria-label="DR3 Vision — dashboard home"
+              className="relative w-fit rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-dr3-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-dr3-space"
+            >
               {/* soft halo so the logo's dark field melts into the page */}
               <span
                 aria-hidden="true"
@@ -61,7 +67,7 @@ export function VisionShell({
                 alt="DR3 Vision"
                 className="h-14 w-auto select-none rounded-xl ring-1 ring-dr3-steel-light/20 sm:h-[4.5rem]"
               />
-            </div>
+            </Link>
             <p className="pl-1 text-[11px] font-medium uppercase tracking-[0.35em] text-dr3-cyan/70">
               Operations · Compliance · Payroll
             </p>

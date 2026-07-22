@@ -4,6 +4,10 @@
     "_comment_2": "Manager portal namespace. Written in Nastaʿlīq Urdu script (NOT romanized).",
     "_comment_3": "Manager-specific terms: dashboard = ڈیش بورڈ, dock = ڈاک, compliance = تعمیل."
   },
+  "nav": {
+    "back_to_dashboard": "ڈیش بورڈ",
+    "back_to_dashboard_aria": "ڈیش بورڈ پر واپس جائیں"
+  },
   "load_status": {
     "expected": "متوقع",
     "arrived": "پہنچ گئی",
