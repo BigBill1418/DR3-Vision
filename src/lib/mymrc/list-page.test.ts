@@ -215,21 +215,40 @@ describe('resolveFilterName — strict precedence, never guesses', () => {
 
 // ── BACKFILL_LIST_VIEWS integrity ────────────────────────────────────────────
 
-describe('BACKFILL_LIST_VIEWS — the 5 cursors of the 4 real objects', () => {
-  it('covers exactly the backfill-targets cursor keys', () => {
+describe('BACKFILL_LIST_VIEWS — the 8 cursors (active + history) of the 4 real objects', () => {
+  it('covers exactly the backfill-targets cursor keys, including the history views', () => {
     const keys = BACKFILL_LIST_VIEWS.map((b: ListViewBinding) => `${b.objectApiName}/${b.slug}`).sort();
     expect(keys).toEqual(
       [
         'Dock_Availability_Schedule__c/',
         'Haul_Request__c/consumer_drop_off_rc',
         'Haul_Request__c/docking_appointments_rc',
+        'Haul_Request__c/completed_hauls',
         'Materials__c/outbound_active',
+        'Materials__c/outbound_inactive',
         'Materials__c/processed_active',
+        'Materials__c/processed_inactive',
       ].sort(),
     );
   });
-  it('carries the 2 observed live ids and leaves the 3 uncaptured null', () => {
+  it('carries the 5 observed live ids and leaves the 3 uncaptured null', () => {
     const observed = BACKFILL_LIST_VIEWS.filter((b) => b.observedFilterName !== null);
-    expect(observed.map((b) => b.slug).sort()).toEqual(['docking_appointments_rc', 'processed_active']);
+    expect(observed.map((b) => b.slug).sort()).toEqual(
+      ['completed_hauls', 'docking_appointments_rc', 'outbound_inactive', 'processed_active', 'processed_inactive'].sort(),
+    );
+    const uncaptured = BACKFILL_LIST_VIEWS.filter((b) => b.observedFilterName === null);
+    expect(uncaptured.map((b) => b.slug).sort()).toEqual(['', 'consumer_drop_off_rc', 'outbound_active'].sort());
+  });
+  it('pins the confirmed live history-view ids (guards against silent drift)', () => {
+    const bySlug = (slug: string): ListViewBinding =>
+      BACKFILL_LIST_VIEWS.find((b) => b.slug === slug)!;
+    expect(bySlug('completed_hauls').observedFilterName).toBe('00B4p000005DAqSEAW');
+    expect(bySlug('processed_inactive').observedFilterName).toBe('00BUJ000001sJxx2AE');
+    expect(bySlug('outbound_inactive').observedFilterName).toBe('00BUJ000001sJuj2AE');
+    // Materials history views bind to the Materials object (routed by Type__c at detail).
+    expect(bySlug('processed_inactive').objectApiName).toBe('Materials__c');
+    expect(bySlug('outbound_inactive').objectApiName).toBe('Materials__c');
+    // Completed Hauls binds to the haul object → same mymrc_hauls_mirror as the active views.
+    expect(bySlug('completed_hauls').objectApiName).toBe('Haul_Request__c');
   });
 });

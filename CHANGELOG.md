@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0057 D3 — backfill full history: Completed Hauls + inactive-materials views)
+
+- **MyMRC backfill now pages ALL list views per object — active AND history —
+  so it pulls full history, not just active records.** Caught during the live
+  first backfill: the worker paged only the active/default views, so **"Completed
+  Hauls" (the ~720+ historical trailer deliveries)** and the inactive-Materials
+  views were never pulled. `BACKFILL_LIST_VIEWS` (`src/lib/mymrc/list-page.ts`)
+  gains 3 history cursors — `completed_hauls` (→ `mymrc_hauls_mirror`,
+  `00B4p000005DAqSEAW`, paginates — the bulk of haul history), `processed_inactive`
+  (→ `mymrc_processed_mirror`, `00BUJ000001sJxx2AE`), `outbound_inactive`
+  (→ `mymrc_outbound_mirror`, `00BUJ000001sJuj2AE`) — all captured live 2026-07-22.
+  `buildBackfillTargets` (`backfill-targets.ts`) enumerates all 8 cursors; the
+  offset loop, resumable per-view cursors, and dedup-by-`salesforce_record_id` are
+  unchanged. A haul id that appears in both an active view (Docking/Consumer) AND
+  Completed Hauls **upserts once** (mirror key) and its detail is fetched once
+  (`detail_fetched_at IS NULL`, targets run sequentially). Inactive Materials still
+  route by `Type__c` to processed/outbound — the inactive VIEWS only widen
+  coverage. **No migration:** cursor rows are created lazily by the worker on first
+  run (`mymrc_backfill_cursors` upsert). Config-drivable: `MYMRC_LISTVIEW_IDS`
+  keys the new views (`completed_hauls` / `processed_inactive` / `outbound_inactive`);
+  adding a further view later is a one-line map entry. Residual: the Hauls picker's
+  "More" menu may expose further uncatalogued views (OPEN-ITEMS C-25) — captured +
+  added only once an id is in hand (ids are never guessed).
+
 ### Added — 2026-07-22 (ADR-0057 Phase 1 — real MyMRC ingestion, informed by the inaugural Phase-0 discovery)
 
 The first authenticated MyMRC pull (Phase 0, 2026-07-21) returned a real object

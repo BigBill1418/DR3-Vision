@@ -82,9 +82,26 @@ The `getItems` pagination was captured live against `mrc-us.my.site.com` (the tr
 - **Response scalars:** `{ records:[…≤pageSize], offset:<cumulative-count-fetched>, hasMoreData:<bool>, filterTitle, entityLabelPlural }`.
 - **Loop:** start `offset=0`; each response reports a cumulative `offset` + `hasMoreData`; repeat until `hasMoreData:false`. Because a ListView returns exactly `pageSize` rows per page until the last, the request offset for a 0-based page index is the pure function `offset = pageIndex * pageSize` — which is what makes the DB-durable `last_page_index` cursor resumable with no in-memory running offset.
 
-**Implementation (Phase 1 D3):** the request/response codec + the list-view-id resolver are PURE (`src/lib/mymrc/list-page.ts`, unit-tested); `createBackfillPortalClient` (`backfill-portal-client.ts`) drives the offset loop over the shared self-healing admin session (`openAdminSession`), replaying the getItems POST with the **live aura framework envelope the browser itself sent** on the list page (immune to per-release `fwuid` drift) — the offset-replay path (ladder #1), chosen over DOM infinite-scroll for determinism. Multi-view objects (Haul ×2, Materials ×2) page each view as its own cursor and merge deduped by `salesforce_record_id` (the mirror upsert key). One-shot entrypoint: `scripts/mymrc-backfill.mjs`.
+**Implementation (Phase 1 D3):** the request/response codec + the list-view-id resolver are PURE (`src/lib/mymrc/list-page.ts`, unit-tested); `createBackfillPortalClient` (`backfill-portal-client.ts`) drives the offset loop over the shared self-healing admin session (`openAdminSession`), replaying the getItems POST with the **live aura framework envelope the browser itself sent** on the list page (immune to per-release `fwuid` drift) — the offset-replay path (ladder #1), chosen over DOM infinite-scroll for determinism. Multi-view objects page each view as its own cursor and merge deduped by `salesforce_record_id` (the mirror upsert key). One-shot entrypoint: `scripts/mymrc-backfill.mjs`.
 
-**List-view id resolution (never guessed):** precedence is operator override (`MYMRC_LISTVIEW_IDS` env, `{slug:id}`) → runtime capture (the browser's own getItems request on the list page, matched by object + filter title) → the id observed live 2026-07-22. Only 2 of 5 ids were captured live; the other 3 (Consumer Drop-Off, Outbound, Dock) resolve at runtime or via override, and an id that resolves to NONE fails LOUD per-target (a resumable wedge + ntfy), never a wrong/empty list.
+**ACTIVE vs HISTORY views — the full-history fix (2026-07-22).** Each object exposes a *default/active* list view AND one or more *history* views. The active view alone is NOT the full record set: it shows only active/default records. Caught during the live first backfill — the worker paged only the active/default views, so **"Completed Hauls" (the ~720+ historical trailer deliveries) and the inactive-Materials views were never pulled**. The fix pages BOTH the active and the history view(s) per object; both bind to the same mirror and dedup by `salesforce_record_id` (a haul in Docking **and** Completed Hauls upserts once, detail fetched once). Inactive Materials still route by `Type__c` to processed/outbound — the inactive VIEWS only widen coverage. The catalog is CONFIG-DRIVABLE (`BACKFILL_LIST_VIEWS` map + `MYMRC_LISTVIEW_IDS` override); adding a further view later is a one-line map entry.
+
+Full view catalog (8 cursors — `slug` → object → mirror → list-view id, ids captured live 2026-07-22):
+
+| slug | object | mirror | active/history | list-view id (observed) |
+| ---- | ------ | ------ | -------------- | ----------------------- |
+| `docking_appointments_rc` | Haul_Request__c | hauls | active | `00B4p000005DAqWEAW` |
+| `consumer_drop_off_rc` | Haul_Request__c | hauls | active | *(runtime/override — not captured)* |
+| `completed_hauls` | Haul_Request__c | hauls | **history** | `00B4p000005DAqSEAW` |
+| `processed_active` | Materials__c (Type `Processing`) | processed | active | `00B4p000005DAqlEAG` |
+| `processed_inactive` | Materials__c (Type `Processing`) | processed | **history** | `00BUJ000001sJxx2AE` |
+| `outbound_active` | Materials__c (Type `Outbound`) | outbound | active | *(runtime/override — not captured)* |
+| `outbound_inactive` | Materials__c (Type `Outbound`) | outbound | **history** | `00BUJ000001sJuj2AE` |
+| `''` | Dock_Availability_Schedule__c | dock_availability | single | *(runtime/override — not captured)* |
+
+Reference (active ids captured but bound to `null` pending a code decision, not used as observed fallback yet): Haul consumer-drop-off `00B4p000005DAqUEAW`, Outbound active `00B4p000005DAqkEAG`, Dock `00B4p000005DAqCEAW`. The Hauls list-view picker also shows a **"More"** entry — there may be additional haul views not yet catalogued (OPEN-ITEMS C-25); ids are NEVER guessed, so any further view is added only once its id is captured.
+
+**List-view id resolution (never guessed):** precedence is operator override (`MYMRC_LISTVIEW_IDS` env, `{slug:id}`) → runtime capture (the browser's own getItems request on the list page, matched by object + filter title) → the id observed live 2026-07-22. 5 of 8 ids are observed-live; the other 3 (Consumer Drop-Off, Outbound active, Dock) resolve at runtime or via override, and an id that resolves to NONE fails LOUD per-target (a resumable wedge + ntfy), never a wrong/empty list.
 
 ### D4 — Reconciliation authority: admin-approve queue, no auto-updates
 

@@ -20,7 +20,17 @@
 //   MYMRC_LISTVIEW_IDS='{"consumer_drop_off_rc":"00B…","outbound_active":"00B…"}'
 //   (JSON map of DR3 list_view_api_name slug → Salesforce list-view id). Highest
 //   authority; lets an operator unblock a not-yet-resolved view without a deploy.
-//   The dock cursor's slug is the EMPTY string: {"":"00B…"}.
+//   Full key set (8 cursors, ADR-0057 D3 — ACTIVE + HISTORY views):
+//     Haul_Request__c : "docking_appointments_rc", "consumer_drop_off_rc",
+//                       "completed_hauls"                    (HISTORY)
+//     Materials__c    : "processed_active", "processed_inactive" (HISTORY),
+//                       "outbound_active",  "outbound_inactive"  (HISTORY)
+//     Dock_Availability_Schedule__c : ""  (the dock cursor's slug is the EMPTY string)
+//   Observed-live ids (fallback when neither runtime capture nor override supply one):
+//     docking_appointments_rc=00B4p000005DAqWEAW, processed_active=00B4p000005DAqlEAG,
+//     completed_hauls=00B4p000005DAqSEAW, processed_inactive=00BUJ000001sJxx2AE,
+//     outbound_inactive=00BUJ000001sJuj2AE. The other 3 (consumer_drop_off_rc,
+//     outbound_active, "") have NO observed id → resolve at runtime or via override.
 //
 // Fail-loud parity with the sync (ADR-0057 D5/D9):
 //   0 — every cursor complete (or only transient detail gaps left — re-run drains).

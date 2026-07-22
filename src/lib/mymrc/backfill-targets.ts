@@ -4,16 +4,23 @@
 // canonical mappers (mappers.ts) so detail-column mapping has ONE source of
 // truth shared with the hourly sync.
 //
-// Cursor keys (object_api_name, list_view_api_name):
+// Cursor keys (object_api_name, list_view_api_name) — ACTIVE + HISTORY views
+// (history added ADR-0057 D3, 2026-07-22, so the backfill pulls FULL history):
 //   Haul_Request__c   / docking_appointments_rc  → mymrc_hauls_mirror
 //   Haul_Request__c   / consumer_drop_off_rc      → mymrc_hauls_mirror
-//   Materials__c      / processed_active          → mymrc_processed_mirror   (Type__c 'Processing')
-//   Materials__c      / outbound_active           → mymrc_outbound_mirror    (Type__c 'Outbound')
+//   Haul_Request__c   / completed_hauls           → mymrc_hauls_mirror        (HISTORY — bulk of haul history)
+//   Materials__c      / processed_active          → mymrc_processed_mirror    (Type__c 'Processing')
+//   Materials__c      / processed_inactive        → mymrc_processed_mirror    (HISTORY — Type__c 'Processing')
+//   Materials__c      / outbound_active           → mymrc_outbound_mirror     (Type__c 'Outbound')
+//   Materials__c      / outbound_inactive         → mymrc_outbound_mirror     (HISTORY — Type__c 'Outbound')
 //   Dock_Availability_Schedule__c / ''            → mymrc_dock_availability_mirror
 // list_view_api_name is a DR3-INTERNAL slug (the transport maps it to the actual
-// portal list-view + URL). Both hauls list views bind to the same mirror; their
-// detail sweeps dedup naturally (idsNeedingDetail reads detail_fetched_at IS NULL,
-// targets run sequentially).
+// portal list-view + URL). All three hauls list views bind to the same mirror,
+// and both Materials views per Type bind to the same mirror; their detail sweeps
+// dedup naturally (idsNeedingDetail reads detail_fetched_at IS NULL, targets run
+// sequentially), so an id surfacing in both an active and a history view upserts
+// once and its detail is fetched once. The inactive Materials VIEWS only widen
+// coverage — routing is still by Type__c, unchanged.
 //
 // site_id derivation (ADR-0057 Recon B §6): getItems yields ids only, so the
 // list-upsert leaves site_id NULL; the DETAIL pass resolves it from the record's
@@ -134,11 +141,11 @@ function haulsTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget 
   };
 }
 
-function processedTarget(deps: TargetDeps): BackfillTarget {
+function processedTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget {
   const model = deps.prisma.mymrcProcessedMirror;
   return {
     objectApiName: 'Materials__c',
-    listViewApiName: 'processed_active',
+    listViewApiName,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -182,11 +189,11 @@ function processedTarget(deps: TargetDeps): BackfillTarget {
   };
 }
 
-function outboundTarget(deps: TargetDeps): BackfillTarget {
+function outboundTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget {
   const model = deps.prisma.mymrcOutboundMirror;
   return {
     objectApiName: 'Materials__c',
-    listViewApiName: 'outbound_active',
+    listViewApiName,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -291,8 +298,20 @@ function toJson(v: unknown): Prisma.InputJsonValue {
 
 /**
  * The full production target set for the windowed backfill — the 4 real objects
- * across their 5 (object, list-view) cursors. Order is deliberate: hauls first
- * (feeds expected_loads), then materials, then non-billing dock last.
+ * across their 8 (object, list-view) cursors: the ACTIVE/default views AND the
+ * HISTORY views (ADR-0057 D3, 2026-07-22). The history views are what make the
+ * backfill full-history rather than active-only: `completed_hauls` carries the
+ * bulk of the haul record history (~720+ completed hauls, paginates), and the two
+ * inactive-Materials views widen processed/outbound coverage. Both hauls-history
+ * and the active hauls bind to the SAME mymrc_hauls_mirror; an id in both an
+ * active and the completed view upserts ONCE (mirror key = salesforce_record_id)
+ * and its detail is fetched once (`detail_fetched_at IS NULL`, targets run
+ * sequentially). Inactive Materials still route by `Type__c` to processed/outbound
+ * — reusing the same `warnOnTypeMismatch` guard as the active views.
+ *
+ * Order is deliberate: hauls first (feeds expected_loads) — active views before
+ * the history sweep — then materials (active then inactive), then non-billing
+ * dock last.
  */
 export function buildBackfillTargets(args: {
   prisma: PrismaClient;
@@ -308,8 +327,11 @@ export function buildBackfillTargets(args: {
   return [
     haulsTarget(deps, 'docking_appointments_rc'),
     haulsTarget(deps, 'consumer_drop_off_rc'),
-    processedTarget(deps),
-    outboundTarget(deps),
+    haulsTarget(deps, 'completed_hauls'),
+    processedTarget(deps, 'processed_active'),
+    processedTarget(deps, 'processed_inactive'),
+    outboundTarget(deps, 'outbound_active'),
+    outboundTarget(deps, 'outbound_inactive'),
     dockTarget(deps),
   ];
 }
