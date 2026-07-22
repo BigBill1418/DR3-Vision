@@ -22,9 +22,33 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBackfillPortalClient, type BackfillSession } from './backfill-portal-client';
 import { runBackfill, type BackfillContext, type BackfillTarget } from './backfill';
+import type { RecordFieldsClient } from './record-fields-client';
 import type { Pager } from './ntfy';
 import type { AuraFrameworkParams } from './list-page';
-import type { SfRecord } from './types';
+
+// Detail is now BATCHED (record-fields-client): this fake serves one SfRecord per
+// requested id in a single call and records the ids so the "detailed once" dedup
+// (idsNeedingDetail IS NULL + sequential targets) is still asserted end-to-end.
+function makeRecordFields(): { client: RecordFieldsClient; requestedIds: () => string[] } {
+  const requested: string[] = [];
+  return {
+    client: {
+      fetchRecordFields: vi.fn(async (ids: readonly string[]) => {
+        requested.push(...ids);
+        return {
+          records: new Map(ids.map((id) => [id, { apiName: 'X__c', id, fields: {} }])),
+          errors: [],
+        };
+      }),
+    },
+    requestedIds: () => requested,
+  };
+}
+// Shared fake for the pagination-focused tests (they don't assert on detail ids).
+const RF = makeRecordFields().client;
+/** runBackfill with the shared record-fields fake injected (pagination tests). */
+const runBF = (args: Omit<BackfillContext, 'recordFields'>): Promise<ReturnType<typeof runBackfill> extends Promise<infer R> ? R : never> =>
+  runBackfill({ recordFields: RF, ...args });
 
 const NOW = new Date('2026-08-04T12:00:00.000Z');
 const nowFn = (): Date => NOW;
@@ -92,7 +116,6 @@ function makeSession(opts: {
         }],
       });
     }),
-    fetchRecordDetail: vi.fn(async (id: string): Promise<SfRecord> => ({ apiName: 'X__c', id, fields: {} })),
     isLoggedOut: vi.fn(async () => opts.loggedOut === true),
     purgeState: vi.fn(async () => { purgeCount += 1; }),
   };
@@ -141,6 +164,7 @@ function mirrorTarget(objectApiName: string, slug: string, store: Map<string, { 
   return {
     objectApiName,
     listViewApiName: slug,
+    optionalFields: [],
     async upsertListed(ids) {
       for (const id of ids) if (!store.has(id)) store.set(id, { detail: false });
       return ids.length;
@@ -173,7 +197,7 @@ describe('sort-flip transport — pages a view larger than one sort direction re
     const store = new Map<string, { detail: boolean }>();
     const target = mirrorTarget('Haul_Request__c', 'completed_hauls', store);
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], now: nowFn });
+    const res = await runBF({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], now: nowFn });
 
     // Plan: asc@0, asc@2, desc@0 — then totalCount=5 says lastNeeded=2, so it stops.
     expect(requestsByFilter['HAUL']).toEqual([
@@ -197,7 +221,7 @@ describe('sort-flip transport — pages a view larger than one sort direction re
     const { prisma } = makeFakePrisma();
     const { session, requestsByFilter } = makeSession({ views: { HAUL: ['a', 'b', 'c'] } }); // total 3 ≤ 2*pageSize
     const store = new Map<string, { detail: boolean }>();
-    const res = await runBackfill({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [mirrorTarget('Haul_Request__c', 'completed_hauls', store)], now: nowFn });
+    const res = await runBF({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [mirrorTarget('Haul_Request__c', 'completed_hauls', store)], now: nowFn });
     expect(requestsByFilter['HAUL']).toEqual([{ sortBy: 'Id', offset: 0 }, { sortBy: 'Id', offset: 2 }]); // no desc
     expect([...store.keys()].sort()).toEqual(['a', 'b', 'c']);
     expect(res.targets[0]?.status).toBe('complete');
@@ -215,7 +239,7 @@ describe('sort-flip transport — a view beyond coverage pages the reachable win
     const store = new Map<string, { detail: boolean }>();
     const { pager, calls } = spyPager();
 
-    const res = await runBackfill({
+    const res = await runBF({
       prisma: prisma as unknown as P,
       client: mkClient(session, { completed_hauls: 'BIG' }),
       targets: [mirrorTarget('Haul_Request__c', 'completed_hauls', store)],
@@ -252,15 +276,18 @@ describe('sort-flip transport — multi-view object merges deduped by record id'
       mirrorTarget('Haul_Request__c', 'consumer_drop_off_rc', store),
     ];
 
+    const rf = makeRecordFields();
     const res = await runBackfill({
       prisma: prisma as unknown as P,
+      recordFields: rf.client,
       client: mkClient(session, { docking_appointments_rc: 'DOCK', consumer_drop_off_rc: 'CONSUMER' }),
       targets, now: nowFn,
     });
 
     expect(res.complete).toBe(true);
     expect([...store.keys()].sort()).toEqual(['h1', 'h2', 'h3']); // h2 deduped by the mirror key
-    expect((session.fetchRecordDetail as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]).sort()).toEqual(['h1', 'h2', 'h3']);
+    // Detail fetched once per id (batched) — the overlapping h2 is not re-detailed.
+    expect(rf.requestedIds().sort()).toEqual(['h1', 'h2', 'h3']);
   });
 });
 
@@ -276,15 +303,17 @@ describe('sort-flip transport — a haul in BOTH an active and the completed vie
       mirrorTarget('Haul_Request__c', 'completed_hauls', store),
     ];
 
+    const rf = makeRecordFields();
     const res = await runBackfill({
       prisma: prisma as unknown as P,
+      recordFields: rf.client,
       client: mkClient(session, { docking_appointments_rc: 'DOCK', completed_hauls: 'COMPLETED' }),
       targets, now: nowFn,
     });
 
     expect(res.complete).toBe(true);
     expect([...store.keys()].sort()).toEqual(['h1', 'h2', 'h3', 'h4']);
-    expect((session.fetchRecordDetail as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]).sort()).toEqual(['h1', 'h2', 'h3', 'h4']);
+    expect(rf.requestedIds().sort()).toEqual(['h1', 'h2', 'h3', 'h4']);
   });
 });
 
@@ -301,7 +330,7 @@ describe('sort-flip transport — config override keys the new history views', (
       mirrorTarget('Materials__c', 'outbound_inactive', store),
     ];
 
-    const res = await runBackfill({
+    const res = await runBF({
       prisma: prisma as unknown as P,
       client: mkClient(session, {
         completed_hauls: 'COMPLETED_OVERRIDE',
@@ -335,7 +364,7 @@ describe('sort-flip transport — resumes at the next step, never re-pages a win
     const store = new Map<string, { detail: boolean }>();
     const target = mirrorTarget('Haul_Request__c', 'completed_hauls', store);
 
-    await runBackfill({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], now: nowFn });
+    await runBF({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], now: nowFn });
 
     // Only the descending step is requested — the two ascending windows are NOT re-paged.
     expect(requestsByFilter['HAUL']).toEqual([{ sortBy: '-Id', offset: 0 }]);
@@ -358,7 +387,7 @@ describe('sort-flip transport — an unresolvable list-view id fails LOUD', () =
     const target = mirrorTarget('Haul_Request__c', 'consumer_drop_off_rc', store);
     const { pager, calls } = spyPager();
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, client: bfClient, targets: [target], pager: pager as unknown as Pager, now: nowFn });
+    const res = await runBF({ prisma: prisma as unknown as P, client: bfClient, targets: [target], pager: pager as unknown as Pager, now: nowFn });
 
     expect(res.targets[0]?.status).toBe('error');
     expect(res.targets[0]?.error).toMatch(/could not resolve list-view id/i);
@@ -378,7 +407,7 @@ describe('sort-flip transport — a logged-out replay maps to auth_failed', () =
     const target = mirrorTarget('Haul_Request__c', 'completed_hauls', store);
     const { pager, calls } = spyPager();
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], pager: pager as unknown as Pager, now: nowFn });
+    const res = await runBF({ prisma: prisma as unknown as P, client: mkClient(session, { completed_hauls: 'HAUL' }), targets: [target], pager: pager as unknown as Pager, now: nowFn });
 
     expect(res.targets[0]?.status).toBe('auth_failed');
     expect(calls[0]?.['kind']).toBe('auth_failed');

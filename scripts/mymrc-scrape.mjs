@@ -144,6 +144,14 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
       return 1;
     }
 
+    // Batched getRecordWithFields detail transport (ADR-0057 D3 addendum) over the
+    // SAME admin session as the list client — one login serves list + detail.
+    // Replaces the racy per-record `/s/detail/<id>` navigation.
+    const recordFields = mymrc.createRecordFieldsClient(
+      mymrc.playwrightRecordFieldsSession(client.getSession(), logFn),
+      { log: logFn },
+    );
+
     // Only the recycler context(s) this session can actually see — never the
     // vestigial second site whose `ok` runs would false-green the deadman (C-21).
     const sites = resolveActiveSites({
@@ -156,7 +164,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     try {
       // One admin session; the per-site passes reuse it (feeds are not login-scoped).
       for (const site of sites) {
-        const results = await mymrc.syncSite({ prisma, client, site, log: logFn });
+        const results = await mymrc.syncSite({ prisma, client, recordFields, site, log: logFn });
         const summary = results
           .map((r) => `${r.feed}=${r.status}(listed:${r.rowsListed},detail:${r.detailsFetched})`)
           .join(' ');

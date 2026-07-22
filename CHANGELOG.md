@@ -5,6 +5,38 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-22 (ADR-0057 D3 addendum — MyMRC billing-field capture: batched getRecordWithFields transport)
+
+Replaced the racy per-record `/s/detail/<id>` navigation-interception detail fetch
+(which captured ~0.4% of billing unit-counts because the billing-bearing
+`getRecordWithFields` response frequently landed outside the settle window) with a
+batched direct Aura POST that replays `getRecordWithFields` — ~100 record-ids per
+POST — reusing the list-page framework envelope. Proven live (200 actions/POST →
+200/200 SUCCESS, ~0.5 s). Transport swap only — mappers, upsert, and mirror schema
+unchanged. Architecture: `scratchpad/mymrc-field-capture-architecture.md` (Terry).
+
+- **`src/lib/mymrc/record-fields-client.ts`** (new) — the batched transport: pure
+  codec (`buildGetRecordWithFieldsMessage`/`…FormFields`,
+  `parseGetRecordWithFieldsResponse` correlating each action by its echoed `action.id`
+  → recordId, per-action SUCCESS/ERROR isolation), the `optionalFields` sets matching
+  each mapper (FLS-safe, bounded payload, incl. relationship fields like
+  `Haul_Request__c.Recycling_Center_Lookup__r.Name`), and `createRecordFieldsClient`
+  (bounded exponential backoff on non-200 / Aura EXCEPTION, one logged-out self-heal
+  that rebuilds + re-logs-in + re-captures the envelope, then fails LOUD with
+  `AuthFailedError`).
+- **`src/lib/mymrc/enrich-details.ts`** (new) — `sweepTargetDetail` (the ONE shared
+  batch-sweep primitive) + `enrichDetails` (whole-backlog runner). Resumable off
+  `detail_fetched_at IS NULL`; a zero-SUCCESS batch or a logged-out session pages
+  `dr3-vision-system` (ADR-0038 D4).
+- **`src/lib/mymrc/sync.ts`** + **`backfill.ts`** — the steady-state hourly detail
+  pass AND the backfill detail sweep now use the batched transport (both previously
+  fetched detail per-record on a shared page — the same root-cause race). The batch
+  client is built over the SAME admin session as the list client
+  (`PortalClient.getSession()`), so one login still serves list + detail.
+- **`scripts/mymrc-enrich-details.mjs`** (new) — one-shot backlog enrichment runner
+  with a BEFORE/AFTER coverage reconciliation report.
+- Tests: `record-fields-client.test.ts` (18), `enrich-details.test.ts` (9); the
+  backfill/sync/scrape suites updated for the transport swap. 348 mymrc tests green.
 ### Added — 2026-07-22 (Bonus daily entry — total processed mattresses in the footer)
 
 Operator (Bill) asked to see the total processed mattresses alongside the existing

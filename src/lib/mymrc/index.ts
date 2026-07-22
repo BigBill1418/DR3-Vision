@@ -71,6 +71,37 @@ export {
   type BackfillSession,
   type BackfillPortalClientOptions,
 } from './backfill-portal-client';
+// Batched getRecordWithFields billing-field capture (ADR-0057 D3 addendum,
+// 2026-07-22). Replaces the racy per-record `/s/detail/<id>` navigation with a
+// direct multi-action Aura POST (~100 ids/POST) reusing the list-page envelope.
+export {
+  createRecordFieldsClient,
+  playwrightRecordFieldsSession,
+  buildGetRecordWithFieldsMessage,
+  buildGetRecordWithFieldsFormFields,
+  parseGetRecordWithFieldsResponse,
+  optionalFieldsForFeed,
+  chunkIds,
+  GETRECORD_WITH_FIELDS_DESCRIPTOR,
+  HAUL_OPTIONAL_FIELDS,
+  MATERIALS_OPTIONAL_FIELDS,
+  DOCK_OPTIONAL_FIELDS,
+  type RecordFieldsClient,
+  type RecordFieldsSession,
+  type RecordFieldsClientOptions,
+  type BatchFetchResult,
+  type BatchParseResult,
+  type BatchActionError,
+} from './record-fields-client';
+export {
+  enrichDetails,
+  sweepTargetDetail,
+  type EnrichContext,
+  type EnrichResult,
+  type EnrichTargetResult,
+  type DetailSweepResult,
+  type SweepOptions,
+} from './enrich-details';
 export {
   offsetForPage,
   sortFlipStep,

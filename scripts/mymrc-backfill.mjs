@@ -135,8 +135,14 @@ export async function runMymrcBackfill({ mymrc, prisma, launchBrowser, log: logF
     try {
       const backfillSession = mymrc.playwrightBackfillSession(session, logFn);
       const client = mymrc.createBackfillPortalClient(backfillSession, { log: logFn, listViewOverrides: overrides });
+      // Batched getRecordWithFields detail transport (ADR-0057 D3 addendum) over
+      // the same admin session — replaces the racy per-record detail navigation.
+      const recordFields = mymrc.createRecordFieldsClient(
+        mymrc.playwrightRecordFieldsSession(session, logFn),
+        { log: logFn },
+      );
       const targets = mymrc.buildBackfillTargets({ prisma, client, log: logFn });
-      const result = await mymrc.runBackfill({ prisma, client, targets, log: logFn });
+      const result = await mymrc.runBackfill({ prisma, client, recordFields, targets, log: logFn });
 
       const summary = result.targets
         .map(
