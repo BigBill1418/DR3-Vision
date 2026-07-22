@@ -5,6 +5,27 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-21 (ADR-0057 accepted — MyMRC full-object ingestion via admin-user creds)
+
+Ships the ADR-0057 decision (from the 2026-07-21 handoff): retire the never-honored
+per-site service-account MyMRC auth, move to Bill's single admin-user credentials,
+extend ADR-0038's 3 hardcoded feeds to N discovered Salesforce objects, add a manual
+reconciliation queue as the write gate to operational tables, and convert the
+missing-creds path from a silent skip to a fail-loud `CredentialsNotConfiguredError`
+(D9). Historical framing preserved: Vision has never pulled a byte from MyMRC — all
+three mirror tables are empty and Phase 0 is first contact.
+
+- `docs/adr/0057-mymrc-full-object-ingestion.md` — Accepted (2026-07-21).
+- `docs/adr/0038-mymrc-ingestion-rebuild.md` — annotated: auth model superseded by
+  ADR-0057; documents the never-created service accounts + silent-no-op history.
+- **NOT IMPLEMENTED YET.** Phase 0 discovery + Phase 1 foundation are HALTED on the
+  credential prerequisite: `MYMRC_ADMIN_USERNAME` / `MYMRC_ADMIN_PASSWORD` are not yet
+  provisioned into the `mymrc-scrape` runtime env (only the old, never-honored
+  `MYMRC_WOODLAND_*` / `MYMRC_EUGENE_*` vars exist). Per operator rule these will NOT
+  be a committed `.env` file — Bill injects them via the approved secrets mechanism
+  when ready (security confirmed 2026-07-22). Tracked as OPEN-ITEMS **O-12**. No
+  code/schema/auth changes in this PR — decision doc only.
+
 ### Fixed — 2026-07-21 (admin user creation rejected valid operator/manager payloads — ADR-0017)
 
 `POST /api/admin/users` returned **"Invalid request payload"** (422) when creating an
