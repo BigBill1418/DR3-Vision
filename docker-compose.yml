@@ -247,21 +247,24 @@ services:
     # failures page `dr3-vision-system` (auth_failed / contract_drift /
     # zero-anomaly / deadman) per ADR-0038 D4.
     #
-    # STAYS PROFILE-GATED (`mymrc`): activation is a deliberate operator action,
-    # NOT auto-started by `docker compose up -d` or the swarmpilot deployer. To
-    # ENABLE, follow docs/operator/mymrc-setup.md: (1) confirm mymrc-cred-key.env
-    # holds MYMRC_CRED_KEY (same value the app has — see NOTE below), (2) ensure
-    # the mymrc-auth volume is owned by uid 1001 (`docker run --rm -v
-    # dr3-vision_mymrc-auth-state:/v alpine chown -R 1001:1001 /v`), (3) start with
-    # `docker compose --profile mymrc up -d`, (4) enter admin creds at
-    # /admin/mrc-scrape, (5) re-add `mymrc-scrape` to the noc-master
-    # service-registry containers[].
+    # ALWAYS-ON (un-gated 2026-07-22): the admin credential is now provisioned in the
+    # DB store (entered at /admin/mrc-scrape, ADR-0057 D1), so this is a persistent
+    # part of the default compose set — started AND kept up by `docker compose up -d`
+    # and the swarmpilot deployer (`restart: unless-stopped`). It was previously
+    # `profiles: ['mymrc']`, which excluded it from the deployer's default up and
+    # meant the hourly sync NEVER ran in prod (empty `mymrc_sync_runs` ledger; data
+    # existed only from manual `--profile mymrc run` backfills). The healthcheck
+    # below still reports UNHEALTHY until a credential is configured, so a
+    # deploy-before-provision window is visible, not silent. One-time host prep if
+    # the mymrc-auth volume predates uid 1001 ownership: `docker run --rm -v
+    # dr3-vision_mymrc-auth-state:/v alpine chown -R 1001:1001 /v`. Follow-up:
+    # add `mymrc-scrape` to the noc-master service-registry containers[] for fleet
+    # monitoring (tracked in ADR-0057).
     #
     # NOTE (integration prereq — app side, NOT wired here): the `app` service must
     # ALSO carry the SAME MYMRC_CRED_KEY (it is the writer/status path). Mount
     # mymrc-cred-key.env on `app` too, or the /admin/mrc-scrape save/status paths
     # cannot encrypt/read. This block wires only the scrape (reader) side.
-    profiles: ['mymrc']
     image: dr3-vision-app:local
     container_name: dr3-vision-mymrc-scrape
     # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius

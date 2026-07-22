@@ -254,3 +254,44 @@ Live re-pagination result, reconciled against portal `totalCount`:
 the other six views unchanged and still complete. If a view ever exceeds 8000 rows,
 it will require a non-`getItems` transport (e.g. re-enabling the UI-API cursor) —
 the wedge names this explicitly.
+
+## Post-acceptance implementation notes — 2026-07-22 (worker reliability + activation)
+
+Two fixes to the steady-state hourly worker, surfaced once it began running against
+the live portal.
+
+**(a) Mid-run re-authentication hardened.** The MyMRC/Salesforce portal drops the
+admin session MID-TICK almost every hour (the `mymrc_sync_runs` ledger alternated
+`ok`/`auth_failed`). The old `ensureAuthenticated` re-logged-in ON THE SAME, now
+DIRTY browser context/page (aborted nav, half-torn Aura listeners) — an unreliable
+recovery that healed some ticks and threw `AuthFailedError` on others. It now
+recovers the SAME way `bootstrap` recovers a poisoned persisted state: tear the
+dirty context down, rebuild a CLEAN one via `newSessionContext(false)`, open a new
+page, log in, and verify a positive auth marker — reassigning the `context`/`page`
+closure vars so the healed page carries the rest of the tick. The shared
+"rebuild-clean + login + verify" step is factored into one `rebuildAndLogin` helper
+used by both paths (bootstrap's observable behavior is unchanged). The mid-run path
+wraps it in a BOUNDED retry (`reauthAttempts`, default 3, short `reauthBackoffMs`
+between attempts) to absorb transient `net::ERR_ABORTED` nav flakiness before
+finally purging the poisoned `storageState` and throwing `AuthFailedError` (D5 — a
+genuinely dead session still pages, never silently under-syncs billing). All
+money-safe invariants are preserved: `mayPersistState`/`persistIfAuthenticated`
+(state written ONLY after a positive auth check), `purgeState` on final failure,
+and the `planSessionStep`/`looksLoggedOut` positive-marker checks.
+(`src/lib/mymrc/portal-client.ts`; coverage in `portal-client.reauth.test.ts`.)
+
+**(b) Worker is now ALWAYS-ON (un-gated).** The `mymrc-scrape` service in
+`docker-compose.yml` carried `profiles: ['mymrc']`, which excluded it from the
+deployer's default `docker compose up -d` — so the hourly sync worker NEVER ran in
+production. The empty `mymrc_sync_runs` ledger and mirror tables held data only from
+manual `--profile mymrc run` backfills. Now that the admin credential is provisioned
+in the DB store (entered at `/admin/mrc-scrape`, D1), the `profiles: ['mymrc']` line
+is removed so the worker joins the default compose set and the swarmpilot deployer
+starts and keeps it up (`restart: unless-stopped`). The credential-state healthcheck
+(`mymrc-healthcheck.mjs`, reports UNHEALTHY-until-provisioned) is unchanged and now
+satisfied. No other `profiles: ['mymrc']` service exists — the `ap` and
+`workbook-sync` profiles are separate and stay gated.
+
+**Follow-up (fleet monitoring):** add `mymrc-scrape` to the noc-master
+service-registry `containers[]` so the always-on worker's health surfaces in NOC /
+InfraWatch alongside the other DR3-Vision services.
