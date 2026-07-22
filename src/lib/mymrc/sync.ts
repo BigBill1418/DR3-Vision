@@ -393,7 +393,7 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
 
   try {
     const adapter = adapterFor(ctx.feed, ctx.prisma, ctx.client, resolveSiteId);
-    const ids = await ctx.client.fetchListRecordIds(ctx.feed);
+    const { ids, complete } = await ctx.client.fetchListRecordIds(ctx.feed);
     rowsListed = ids.length;
 
     if (isZeroAnomaly(ids.length, lastOk?.rows_listed ?? null)) {
@@ -405,7 +405,23 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     }
 
     rowsUpserted = await adapter.upsertListed(ids, started);
-    await adapter.markDisappeared(ids, started);
+    // Disappeared-detection is a WHOLE-SET operation: `markDisappeared` stamps
+    // every active mirror row NOT in `ids`. Running it against a WINDOWED page
+    // (the transport only returns the first Aura window when the feed exceeds one
+    // page — Haul_Request__c/Materials__c routinely do) would mass-mark the unseen
+    // tail as disappeared and drop those (billing-relevant) hauls from
+    // `expected_loads`. So it runs ONLY when the list is proven COMPLETE. On a
+    // partial page we skip it (never over-mark; a truly-removed record simply
+    // stays active until a complete list is seen — the money-safe direction). The
+    // windowed history is drained into the mirror by the backfill worker.
+    if (complete) {
+      await adapter.markDisappeared(ids, started);
+    } else {
+      log(
+        'warn',
+        `mymrc-sync: ${tag} list WINDOWED (${ids.length} ids, hasMoreData) — disappeared-detection SKIPPED to avoid over-marking the unseen tail`,
+      );
+    }
 
     const needDetail = await adapter.idsNeedingDetail(ids);
     for (const group of chunk(needDetail, concurrency)) {

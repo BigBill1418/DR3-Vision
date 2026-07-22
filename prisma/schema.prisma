@@ -1825,7 +1825,7 @@ model MymrcHaulsMirror {
   // `recycler_name` (Recycling_Center_Lookup__r.Name) → sites.code and stamped then.
   // Nullable FK: NULL rows are simply unresolved-until-detail (never a broken ref).
   site_id                String?
-  external_haul_id       String?   @unique // Name, portal Haul number e.g. "H-130975" (detail pass)
+  external_haul_id       String?   @unique // Name, portal Haul number e.g. "H-900001" (detail pass)
   status                 String? // Status__c, e.g. "Confirmed"
   type                   String? // Type__c — splits docking-appointment vs consumer/illegal drop-off
   rate_id                String? // Rate_ID__c (landfill - transporter - recycler descriptor)
@@ -1944,7 +1944,7 @@ model MymrcOutboundMirror {
 // never Date.parse). Same list→detail two-pass lifecycle as the other mirrors.
 model MymrcDockAvailabilityMirror {
   id                     String    @id // Salesforce record id (Dock_Availability_Schedule__c, a1t…)
-  external_schedule_id   String?   @unique // Name, e.g. "DA-SCHED-000058"
+  external_schedule_id   String?   @unique // Name, e.g. "DA-900001"
   status                 String? // Status__c, e.g. "Active"
   day_of_week            String? // Day_of_Week__c — RAW ";"-joined numeric codes ("1;2;3;4;5")
   container_type         String? // Container_Type__c — RAW ";"-joined multipicklist

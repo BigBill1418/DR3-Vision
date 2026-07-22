@@ -35,6 +35,7 @@ export {
   looksLoggedOut,
   type PortalClient,
   type PortalClientOptions,
+  type ListRecordIdsResult,
 } from './portal-client';
 export {
   syncFeed,
@@ -44,6 +45,24 @@ export {
   type SyncFeedResult,
   type SyncSiteContext,
 } from './sync';
+// Windowed historical backfill (ADR-0057 D3). The engine + production target
+// wiring are exported so a cron entrypoint can drive them — BUT note the engine
+// depends on a `BackfillPortalClient.fetchListPage(...)` paginating transport
+// that does NOT yet exist as a production Playwright adapter (Phase 0 captured
+// only the first Aura window per object; the getItems pagination mechanism is
+// unproven and must NOT be guessed — ADR-0057). Until that adapter lands,
+// backfill ships INERT (nothing invokes it). See OPEN-ITEMS C-24.
+export {
+  runBackfill,
+  type BackfillPortalClient,
+  type BackfillTarget,
+  type BackfillListPage,
+  type BackfillContext,
+  type BackfillResult,
+  type BackfillTargetResult,
+  type BackfillStatus,
+} from './backfill';
+export { buildBackfillTargets } from './backfill-targets';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
 export {
   detectProcessedRecordChanges,

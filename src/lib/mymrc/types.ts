@@ -170,7 +170,7 @@ export interface OutboundMirrorRow extends MirrorBase {
  */
 export interface DockAvailabilityMirrorRow {
   id: string; // Salesforce record id (a1t…)
-  external_id: string | null; // Name ("DA-SCHED-000058") → external_schedule_id column
+  external_id: string | null; // Name ("DA-900001") → external_schedule_id column
   status: string | null; // Status__c
   day_of_week: string | null; // Day_of_Week__c — RAW value ";"-joined numeric codes ("1;2;3;4;5")
   container_type: string | null; // Container_Type__c — RAW value ";"-joined multipicklist

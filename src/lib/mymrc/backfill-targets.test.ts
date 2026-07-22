@@ -73,14 +73,14 @@ describe('haul detail write — derives site_id from recycler_name, maps billing
       apiName: 'Haul_Request__c',
       id: 'a2Kxx',
       fields: {
-        Name: f('H-130975'),
+        Name: f('H-900001'),
         Status__c: f('Confirmed'),
         Type__c: f('General'),
         Recycler_Program_Unit_Count__c: f(412),
         Recycler_Non_Program_Unit_Count__c: f(3),
-        Recycling_Center_Lookup__c: f('0014600000is4tFAAQ'),
+        Recycling_Center_Lookup__c: f('001460000SYNTHTVLAAQ'),
         Recycling_Center_Lookup__r: f(
-          { apiName: 'Account', id: '0014600000is4tFAAQ', fields: { Name: f('DR3 Woodland') } },
+          { apiName: 'Account', id: '001460000SYNTHTVLAAQ', fields: { Name: f('DR3 Woodland') } },
           'DR3 Woodland',
         ),
       },
@@ -91,9 +91,9 @@ describe('haul detail write — derives site_id from recycler_name, maps billing
     const data = hauls.updates[0]?.data;
     expect(hauls.updates[0]?.where).toEqual({ id: 'a2Kxx' });
     expect(data?.['site_id']).toBe('site-wood');
-    expect(data?.['external_haul_id']).toBe('H-130975');
+    expect(data?.['external_haul_id']).toBe('H-900001');
     expect(data?.['program_unit_count']).toBe(412);
-    expect(data?.['recycler_account_id']).toBe('0014600000is4tFAAQ');
+    expect(data?.['recycler_account_id']).toBe('001460000SYNTHTVLAAQ');
     expect(data?.['detail_fetched_at']).toBe(AT);
   });
 
@@ -123,7 +123,7 @@ describe('materials detail write — Type__c mismatch warns but still persists',
       apiName: 'Materials__c',
       id: 'a2Lxx',
       fields: {
-        Name: f('M-000300'),
+        Name: f('M-900001'),
         Type__c: f('Outbound'),
         Number_of_Program_Units__c: f(510),
         Account__r: f({ apiName: 'Account', id: 'x', fields: { Name: f('DR3 Eugene') } }, 'DR3 Eugene'),
@@ -145,7 +145,7 @@ describe('dock detail write — reads value (not displayValue), keeps time strin
       apiName: 'Dock_Availability_Schedule__c',
       id: 'a1txx',
       fields: {
-        Name: f('DA-SCHED-000058'),
+        Name: f('DA-900001'),
         Status__c: f('Active'),
         Day_of_Week__c: f('1;2;3;4;5', 'Monday;Tuesday;Wednesday;Thursday;Friday'),
         Dock_Door__c: f('Dock Door 1', 'Schedule 1'),
@@ -157,7 +157,7 @@ describe('dock detail write — reads value (not displayValue), keeps time strin
     await dockTarget?.writeDetail(record, AT);
 
     const data = dock.updates[0]?.data;
-    expect(data?.['external_schedule_id']).toBe('DA-SCHED-000058');
+    expect(data?.['external_schedule_id']).toBe('DA-900001');
     expect(data?.['day_of_week']).toBe('1;2;3;4;5'); // numeric codes (value), not "Monday;…"
     expect(data?.['dock_door']).toBe('Dock Door 1'); // value, not "Schedule 1"
     expect(data?.['slot_start_time']).toBe('07:00:00.000Z'); // verbatim SF Time text

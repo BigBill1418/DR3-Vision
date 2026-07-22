@@ -64,9 +64,45 @@ wiring on top of it.
   the 143-name leak class — flat person-name audit/lookup fields (`*_By__c`,
   `…ById`, `Owner`/`Manager`, `Employee_*`) are now scrubbed while opaque
   Salesforce ids and all business fields (site/vendor/transporter names, counts,
-  dates) are retained. No real PII is committed: the raw disc3 fixtures were read
-  for structure only; the committed `__fixtures__/phase1/` set is fully synthetic
-  (DR3 Testville / Synthetic Hauling Co / fabricated ids).
+  dates) are retained. The raw disc3 fixtures were read for structure only; the
+  committed `__fixtures__/phase1/` set is fully synthetic (DR3 Testville / Synthetic
+  Hauling Co / fabricated ids). (Correction: a few real DR3 record numbers had
+  leaked into inline test data / schema comments outside that dir — scrubbed in the
+  2026-07-22 review remediation below.)
+
+### Fixed — 2026-07-22 (ADR-0057 Phase 1 review remediation — pre-deploy, same branch)
+
+Review of the Phase-1 branch before deploy caught four issues; all fixed here.
+
+- **BLOCKER — windowed list mass-marked the haul tail as disappeared (billing
+  loss).** The hourly sync ran disappeared-detection (`markDisappeared`, an
+  `updateMany` over every active row NOT in the listed set) against whatever
+  `fetchListRecordIds` returned — but the transport only returns the FIRST Aura
+  window when a feed exceeds one page (Haul/Materials routinely do). Once the
+  mirror held more than one window (guaranteed the moment backfill drains the
+  tail), every tick stamped `disappeared_at` on the unseen tail, and
+  `feedExpectedLoads` (which filters `disappeared_at: null`) silently dropped those
+  hauls from the billing queue. Fix: `fetchListRecordIds` now returns
+  `{ ids, complete }` (`complete = !hasMoreData`), and `syncFeed` runs
+  disappeared-detection **only on a proven-complete list**; a windowed page skips it
+  (never over-marks — a truly-removed record stays active until a complete list is
+  seen, the money-safe direction). New tests lock both branches.
+- **DR deadman false-green for Eugene.** The scrape looped `['eugene','woodland']`
+  against ONE global admin session (C-21: the session sees a single recycler
+  context). The now-global list pass let the vestigial `eugene` pass "succeed" and
+  write an `ok` `mymrc_sync_runs` row, so `checkDeadman` reported Eugene healthy
+  forever despite zero Eugene records. Fix: the scrape resolves the **active
+  recycler context** (`resolveActiveSites`, default `woodland`, overridable via
+  `MYMRC_ACTIVE_SITES`) and syncs + deadman-watches only that set — no false-green.
+- **Backfill worker was orphaned + PII in new test files.** The backfill surface
+  (`runBackfill`/`buildBackfillTargets`) is now exported from the `@/lib/mymrc`
+  barrel (was omitted despite the "export the surface" commit); it remains INERT
+  pending a production paginating portal adapter (OPEN-ITEMS C-24). And a few real
+  DR3 record numbers from the Phase-0 pull (a haul number, a dock-schedule number,
+  and one real Account id) that had been copied into newly-committed test/schema
+  files were replaced with the established synthetic values
+  (`H-900001`/`DA-900001`/`001460000SYNTHTVLAAQ`) — correcting the earlier "fully
+  synthetic" claim for this branch.
 
 ### Changed — 2026-07-21 (ADR-0019 §2 / ADR-0030 amendment — later-shift bonus timing: 8pm entry deadline + report-on-save)
 

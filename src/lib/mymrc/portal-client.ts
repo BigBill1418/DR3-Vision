@@ -313,11 +313,24 @@ export interface PortalClientOptions {
 const DEFAULT_NAV_RETRIES = 2;
 
 /**
+ * A list fetch result: the window's record ids PLUS whether that window is the
+ * COMPLETE active set. `complete=false` means the portal reported
+ * `hasMoreData:true` — only the first Aura window was returned, so the ids are a
+ * PARTIAL page. The sync engine MUST NOT run disappeared-detection against a
+ * partial page (it would mass-mark the unseen tail as disappeared and drop those
+ * rows from billing) — this flag is the guard that makes that impossible.
+ */
+export interface ListRecordIdsResult {
+  ids: string[];
+  complete: boolean;
+}
+
+/**
  * The transport contract the sync engine depends on. Kept minimal so tests can
  * substitute a fake and never touch Playwright.
  */
 export interface PortalClient {
-  fetchListRecordIds(feed: FeedName): Promise<string[]>;
+  fetchListRecordIds(feed: FeedName): Promise<ListRecordIdsResult>;
   fetchRecordDetail(feed: FeedName, recordId: string): Promise<SfRecord>;
   close(): Promise<void>;
 }
@@ -479,7 +492,7 @@ export async function createPortalClient(
   await bootstrap();
 
   return {
-    async fetchListRecordIds(feed: FeedName): Promise<string[]> {
+    async fetchListRecordIds(feed: FeedName): Promise<ListRecordIdsResult> {
       const url = listUrl(feed);
       await gotoWithRetry(url, 'domcontentloaded');
       await ensureAuthenticated(url);
@@ -489,17 +502,19 @@ export async function createPortalClient(
         throw new AuthFailedError(`mymrc: logged out during ${feed} list`);
       }
       const { ids, hasMoreData } = extractListView(bodies, feed);
-      // Completeness signal (D4 diagnosability): the Aura payload has no absolute
-      // record total, so a windowed page is the only over-mark risk we can detect.
-      // We do NOT throw — hasMoreData=true is a normal state for large feeds
-      // (processed/outbound routinely exceed one page) — but we WARN loudly so a
-      // truncated list is diagnosable rather than silently over-marking disappeared.
+      // Completeness signal: the Aura payload has no absolute record total, so a
+      // windowed page (`hasMoreData:true`) is the only over-mark risk we can
+      // detect. We do NOT throw — windowing is a normal state for large feeds
+      // (processed/outbound routinely exceed one page) — but we surface
+      // `complete:false` to the caller so it can SKIP disappeared-detection (the
+      // sync engine's money-safe guard), and WARN so a truncated list is
+      // diagnosable. The backfill worker drains the tail into the mirror.
       if (hasMoreData) {
-        log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection sees only this page`);
+        log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection is SKIPPED (never over-mark against a partial page)`);
       }
-      log('info', `mymrc: ${feed} list → ${ids.length} record ids`);
+      log('info', `mymrc: ${feed} list → ${ids.length} record ids (complete=${!hasMoreData})`);
       await persistIfAuthenticated();
-      return ids;
+      return { ids, complete: !hasMoreData };
     },
 
     async fetchRecordDetail(feed: FeedName, recordId: string): Promise<SfRecord> {

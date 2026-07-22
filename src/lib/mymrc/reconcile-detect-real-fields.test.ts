@@ -32,11 +32,11 @@ function processedPayload(accountName: string | null, materialsNumber = 'M-00026
       displayValue: accountName,
       value: {
         apiName: 'Account',
-        id: '0014600000is4tFAAQ',
+        id: '001460000SYNTHTVLAAQ',
         fields: { Name: { displayValue: null, value: accountName } },
       },
     };
-    fields['Account__c'] = { displayValue: null, value: '0014600000is4tFAAQ' };
+    fields['Account__c'] = { displayValue: null, value: '001460000SYNTHTVLAAQ' };
   }
   return { apiName: 'Materials__c', id: 'a2LUJ0000000001AAA', fields };
 }
