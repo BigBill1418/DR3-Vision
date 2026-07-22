@@ -69,6 +69,12 @@ interface Props {
 
 const SOFT_WARN_THRESHOLD = 200;
 
+// Counts allow one decimal place, so a day's sum can pick up binary-float dust
+// (0.1 + 0.2). Round to a single decimal, then render integers cleanly and
+// fractional totals to one place, with a thousands separator for tablet legibility.
+const formatMattresses = (n: number): string =>
+  (Math.round(n * 10) / 10).toLocaleString('en-US', { maximumFractionDigits: 1 });
+
 // T-330: accept 0–9999 with an optional single decimal place. The numeric range
 // (0..999) and one-decimal rule are re-enforced by parsedCount and, server-side,
 // by isValidMattressCount — this pattern is the input-shape gate only. Negatives
@@ -131,6 +137,18 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     }
     return sum;
   }, [state, rows, rule]);
+
+  // Live sum of the per-employee mattress counts (the "total processed" figure —
+  // same reactivity as `totalCents`). Uses the raw parsed count, NOT the calculator
+  // floor: this is how many mattresses were processed, not a bonus input.
+  const totalMattresses = useMemo(() => {
+    let sum = 0;
+    for (const r of rows) {
+      const n = parsedCount(state[r.bonus_employee_id]?.count ?? '');
+      if (n != null) sum += n;
+    }
+    return sum;
+  }, [state, rows]);
 
   const setRow = (id: string, patch: Partial<RowState>) => {
     setSaved(false);
@@ -338,9 +356,19 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-dr3-steel-light/30 bg-dr3-space-2/70">
-              <td className="px-4 py-3 font-semibold text-dr3-mist" colSpan={3}>
-                Day total
+              <td className="px-4 py-3 font-semibold text-dr3-mist">Day total</td>
+              {/* Total processed mattresses — under the Mattresses column, aligned
+                  with the per-row counts; captioned + aria-labelled so it can't be
+                  read as a dollar figure alongside the Bonus total. */}
+              <td
+                className="whitespace-nowrap px-4 py-3 text-right font-mono text-base font-bold text-dr3-mist"
+                data-testid="grid-total-mattresses"
+                aria-label={`Total processed mattresses: ${formatMattresses(totalMattresses)}`}
+              >
+                {formatMattresses(totalMattresses)}
+                <span className="ml-1 text-xs font-normal text-dr3-mist-dim">mattresses</span>
               </td>
+              <td className="px-4 py-3" />
               <td
                 className="px-4 py-3 text-right font-mono text-base font-bold text-dr3-cyan-bright"
                 data-testid="grid-total"

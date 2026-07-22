@@ -37,6 +37,29 @@ unchanged. Architecture: `scratchpad/mymrc-field-capture-architecture.md` (Terry
   with a BEFORE/AFTER coverage reconciliation report.
 - Tests: `record-fields-client.test.ts` (18), `enrich-details.test.ts` (9); the
   backfill/sync/scrape suites updated for the transport swap. 348 mymrc tests green.
+### Added — 2026-07-22 (Bonus daily entry — total processed mattresses in the footer)
+
+Operator (Bill) asked to see the total processed mattresses alongside the existing
+dollar Day total on the Daily Bonus entry grid.
+
+- **`src/app/bonus/DailyEntryGrid.tsx`** — the `<tfoot>` "Day total" row now shows
+  the live sum of the per-employee mattress counts under the Mattresses column, next
+  to the existing dollar total under the Bonus column. The sum (`totalMattresses`) is
+  a `useMemo` over the same input state that drives `totalCents`, so it ticks as the
+  operator types — and on the read-only/locked path too. It sums the RAW parsed
+  counts (what was processed), NOT the calculator's bonus floor, so a fractional
+  entry (e.g. 40.5) is reflected exactly. The figure is `font-mono` bold, right-
+  aligned to match `grid-total`, carries a "mattresses" caption plus an exact
+  `aria-label` (`data-testid="grid-total-mattresses"`) so it can't be mistaken for a
+  dollar amount, and is iPad-legible.
+- **`src/app/bonus/months/[id]/ReadOnlyGrid.tsx`** — for visual consistency, the
+  locked month grid's "Total payout" footer now fills its previously-empty Mattresses
+  cell with the period's total processed mattresses (column sum of each row's month
+  total; `data-testid="readonly-total-mattresses"`).
+- **`src/app/bonus/DailyEntryGrid.test.tsx`** — new coverage: the mattress total
+  renders and equals the sum of entered counts, contributes 0 for blank inputs,
+  updates live when a count changes, sums raw (not floored) fractional counts, and
+  renders on the read-only path.
 
 ### Fixed — 2026-07-22 (ADR-0057 — MyMRC scrape worker: re-auth reliability + activation)
 

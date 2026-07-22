@@ -42,6 +42,10 @@ export function ReadOnlyGrid({ days, rows, grandTotalCents }: ReadOnlyGridProps)
     return <p className="text-sm text-dr3-mist-dim">No mattress counts were keyed this month.</p>;
   }
 
+  // Total processed mattresses for the period — the column sum of each row's
+  // month total, mirroring the entry grid's footer (dollar total + mattress total).
+  const grandTotalMattresses = rows.reduce((sum, r) => sum + r.totalMattresses, 0);
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs uppercase tracking-wide text-dr3-cyan">Locked · read-only</p>
@@ -89,7 +93,13 @@ export function ReadOnlyGrid({ days, rows, grandTotalCents }: ReadOnlyGridProps)
               {days.map((d) => (
                 <td key={d.iso} className="pt-3" />
               ))}
-              <td className="pt-3" />
+              <td
+                className="pl-3 pt-3 text-right tabular-nums"
+                data-testid="readonly-total-mattresses"
+                aria-label={`Total processed mattresses: ${grandTotalMattresses.toLocaleString('en-US')}`}
+              >
+                {grandTotalMattresses.toLocaleString('en-US')}
+              </td>
               <td className="pl-3 pt-3 text-right tabular-nums">{formatCents(grandTotalCents)}</td>
             </tr>
           </tfoot>
