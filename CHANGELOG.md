@@ -5,6 +5,36 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0057 — MyMRC scrape worker: re-auth reliability + activation)
+
+Two fixes to the hourly `mymrc-scrape` worker, surfaced once it began running
+against the live portal. This feeds the billing mirror — both changes preserve the
+money-safe persistence invariants.
+
+- **`src/lib/mymrc/portal-client.ts`** — mid-run re-authentication no longer fails
+  intermittently. The Salesforce portal drops the admin session mid-tick almost every
+  hour (the `mymrc_sync_runs` ledger alternated `ok`/`auth_failed`); the old
+  `ensureAuthenticated` re-logged-in on the SAME, now-dirty browser context, which is
+  unreliable. It now recovers exactly the way `bootstrap` recovers a poisoned
+  persisted state — tear the dirty context down, rebuild a CLEAN one
+  (`newSessionContext(false)` + new page), log in, and verify a positive auth marker
+  — via a shared `rebuildAndLogin` helper, wrapped in a bounded retry
+  (`reauthAttempts`, default 3, with a short `reauthBackoffMs`) to absorb transient
+  `net::ERR_ABORTED` nav flakiness before purging state and failing loud with
+  `AuthFailedError`. All money-safe gates unchanged (`mayPersistState`, `purgeState`
+  on final failure, positive-marker `looksLoggedOut`). New coverage:
+  `src/lib/mymrc/portal-client.reauth.test.ts` (clean-context heal succeeds; heal on
+  a later retry; retries-exhausted → purge + throw).
+- **`docker-compose.yml`** — the `mymrc-scrape` worker is now ALWAYS-ON. It carried
+  `profiles: ['mymrc']`, which excluded it from the deployer's default
+  `docker compose up -d`, so the hourly sync NEVER ran in production (empty
+  `mymrc_sync_runs` ledger; data only from manual `--profile mymrc run` backfills).
+  With the admin credential now provisioned in the DB store, the profile gate is
+  removed so the swarmpilot deployer starts and keeps it up (`restart: unless-stopped`).
+  Command, healthcheck, resource limits, volumes, and `MYMRC_CRED_KEY` wiring are
+  unchanged; the `ap` and `workbook-sync` profiles are separate and stay gated.
+  Follow-up: add `mymrc-scrape` to the noc-master service-registry for fleet monitoring.
+
 ### Fixed — 2026-07-22 (ADR-0046 Amendment 5 — pre-go-live hardening pass, Eugene iPad go-live)
 
 Focused fixes on the AP money module ahead of the Eugene iPad go-live. Each was

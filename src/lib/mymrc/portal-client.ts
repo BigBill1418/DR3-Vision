@@ -309,10 +309,25 @@ export interface PortalClientOptions {
    * retry would risk a lockout / a tick that never returns. Default 2 retries.
    */
   navRetries?: number;
+  /**
+   * Bounded attempts for a MID-RUN re-authentication (the portal drops the admin
+   * session mid-tick — the live alternating `ok`/`auth_failed` this fix targets).
+   * Each attempt tears the now-DIRTY context down and rebuilds a CLEAN one — the
+   * SAME recovery `bootstrap` uses for a poisoned persisted state — because a
+   * same-page relogin on a half-torn context is unreliable. Bounded on purpose:
+   * a persistently logged-out portal must fail LOUD (AuthFailedError + purge),
+   * never spin forever risking a lockout. Total attempts = this value. Default 3.
+   */
+  reauthAttempts?: number;
+  /** Short backoff between mid-run re-auth attempts, ms — absorbs transient
+   * `net::ERR_ABORTED` nav flakiness before the next clean rebuild. Default 800. */
+  reauthBackoffMs?: number;
   log?: Logger;
 }
 
 const DEFAULT_NAV_RETRIES = 2;
+const DEFAULT_REAUTH_ATTEMPTS = 3;
+const DEFAULT_REAUTH_BACKOFF_MS = 800;
 
 /**
  * A list fetch result: the window's record ids PLUS whether that window is the
@@ -391,6 +406,8 @@ export async function openAdminSession(
   const navTimeout = opts.navTimeoutMs ?? NAV_TIMEOUT_MS;
   const settleMs = opts.settleMs ?? SETTLE_MS;
   const navRetries = Math.max(0, opts.navRetries ?? DEFAULT_NAV_RETRIES);
+  const reauthAttempts = Math.max(1, opts.reauthAttempts ?? DEFAULT_REAUTH_ATTEMPTS);
+  const reauthBackoffMs = Math.max(0, opts.reauthBackoffMs ?? DEFAULT_REAUTH_BACKOFF_MS);
   const stateFile = opts.storageStatePath ?? adminAuthStatePath();
   await mkdir(dirname(stateFile), { recursive: true });
 
@@ -452,6 +469,24 @@ export async function openAdminSession(
     await context.storageState({ path: stateFile }).catch(() => undefined);
   }
 
+  // The ONE clean-recovery primitive shared by bootstrap (poisoned persisted
+  // state) and ensureAuthenticated (mid-run drop). A logged-out state — whether
+  // loaded from disk or induced mid-run by the flaky portal — leaves the context
+  // DIRTY (anonymous cookies, an aborted nav, half-torn Aura listeners). A relogin
+  // ON that dirty context is unreliable (the live alternating `ok`/`auth_failed`).
+  // So we always: tear the context down, rebuild a FRESH one WITHOUT the persisted
+  // seed, open a new page, log in, navigate to `verifyUrl`, and report whether the
+  // session is now authenticated. The `context`/`page` closure vars are reassigned
+  // in place, so every later `collectAura`/`fetch` call uses the HEALED page.
+  async function rebuildAndLogin(verifyUrl: string): Promise<boolean> {
+    await context.close().catch(() => undefined);
+    context = await newSessionContext(false);
+    page = await context.newPage();
+    await login(page, creds, log);
+    await gotoWithRetry(verifyUrl, 'domcontentloaded');
+    return !(await isLoginPage());
+  }
+
   // Prove auth up front, self-healing a poisoned/stale persisted state.
   async function bootstrap(): Promise<void> {
     await gotoWithRetry(AUTHED_HOME_URL, 'domcontentloaded');
@@ -464,12 +499,7 @@ export async function openAdminSession(
 
     // Loaded state is logged-out → discard it and log in from a clean context.
     log('warn', 'mymrc: persisted session logged-out — discarding it, fresh login (admin)');
-    await context.close().catch(() => undefined);
-    context = await newSessionContext(false);
-    page = await context.newPage();
-    await login(page, creds, log);
-    await gotoWithRetry(AUTHED_HOME_URL, 'domcontentloaded');
-    const authedAfterRelogin = !(await isLoginPage());
+    const authedAfterRelogin = await rebuildAndLogin(AUTHED_HOME_URL);
     if (planSessionStep({ authedAfterLoad: false, authedAfterRelogin }) === 'purge-state-and-fail') {
       await purgeState(); // never leave the poisoned file behind, never persist
       throw new AuthFailedError('mymrc: still logged out after fresh login (admin)');
@@ -478,17 +508,33 @@ export async function openAdminSession(
     await persistIfAuthenticated();
   }
 
+  // Mid-run re-auth. The portal drops the admin session almost every tick (the
+  // live alternating `ok`/`auth_failed`). Recover the SAME way bootstrap does —
+  // rebuild a CLEAN context and log in — NOT a relogin on the dirty page (which is
+  // what made this flap). Bounded retries absorb the transient `net::ERR_ABORTED`
+  // nav flakiness; on final failure we purge the poisoned state and fail LOUD so a
+  // genuinely dead session pages (D5) rather than silently under-syncing billing.
   async function ensureAuthenticated(targetUrl: string): Promise<void> {
     if (!(await isLoginPage())) return;
-    log('warn', 'mymrc: session dropped mid-run — re-authenticating (admin)');
+    log('warn', 'mymrc: session dropped mid-run — rebuilding a clean session (admin)');
     lastKnownAuthenticated = false;
-    await login(page, creds, log);
-    await gotoWithRetry(targetUrl, 'domcontentloaded');
-    if (await isLoginPage()) {
-      await purgeState();
-      throw new AuthFailedError('mymrc: still logged out after re-auth (admin)');
+    for (let attempt = 1; attempt <= reauthAttempts; attempt++) {
+      try {
+        if (await rebuildAndLogin(targetUrl)) {
+          lastKnownAuthenticated = true;
+          log('info', `mymrc: mid-run re-auth recovered on attempt ${attempt}/${reauthAttempts} (admin)`);
+          return;
+        }
+        log('warn', `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} still logged out (admin)`);
+      } catch (e: unknown) {
+        log('warn', `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} threw — ${describeError(e)} (admin)`);
+      }
+      if (attempt < reauthAttempts && reauthBackoffMs > 0) {
+        await page.waitForTimeout(reauthBackoffMs).catch(() => undefined);
+      }
     }
-    lastKnownAuthenticated = true;
+    await purgeState(); // never leave the poisoned file behind, never persist
+    throw new AuthFailedError('mymrc: still logged out after re-auth (admin)');
   }
 
   async function collectAura(url: string): Promise<string[]> {
