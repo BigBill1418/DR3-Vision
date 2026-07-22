@@ -5,6 +5,48 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0046 Amendment 6 — AP attachment preview reliability, DESKTOP)
+
+Approvers reported the AP invoice preview as unreliable ("can't see the invoice").
+Two independent defects, one proven against the live DB. Desktop-scoped: AP review is
+managers/admins via Entra SSO; the floor iPads are 403 on the AP surface, so no
+iPad-specific handling was added. No schema change, no new dependency, no CSP change,
+and the app still never proxies attachment bytes (hard rule #7).
+
+- **The strict MIME gate was hiding the Preview button entirely (PRIMARY, confirmed
+  live).** Amendment 4 gated inline eligibility on an anchored `^application/pdf$`
+  regex, but the stored `content_type` is Microsoft Graph's label persisted verbatim
+  at ingest and never normalized. A live query found **2 of 41 file attachments are
+  PDFs stored as `application/octet-stream`** (both `.pdf` by filename) — those
+  rendered *no Preview button at all*, download-only. The anchored form also rejected
+  `application/pdf; name="inv.pdf"`. The gate now strips `;`-parameters and falls back
+  to the filename extension for the genuinely ambiguous types
+  (`application/octet-stream` / empty). It stays a positive allowlist: an
+  octet-stream `.xlsx` still keeps a plain download.
+- **`src/lib/ap/inline-preview.ts` (new)** — the broadened predicate lives in ONE
+  shared, pure module imported by BOTH the server route and `ApQueueClient.tsx`, so
+  the two copies of this rule can no longer drift (Amendment 4 hand-wrote it twice).
+- **Canonical Content-Type on the wire.** The presign previously set
+  `ResponseContentType` from the *stored* type, so an octet-stream `.pdf` served
+  `inline` would still download rather than frame. The route now signs with — and
+  echoes — `effectiveInlineContentType()` (`application/pdf`, `image/jpeg`, …), and
+  its Prisma `select` gained `filename` to make the fallback possible server-side.
+- **Expired presigned URLs blanked the frame on the *second* look (SECONDARY).** The
+  URL is minted on expand (so the first view was always fresh), but the client cached
+  it forever while the TTL was 300 s — a collapse/re-expand >5 min later, or a
+  read-then-download, replayed an expired URL → R2 `403` → blank iframe / dead link.
+  TTL raised 300 → **900 s** (route passes it explicitly and returns it in the body so
+  the client never hard-codes a drifting value; the `r2.ts` default is raised to match),
+  and the client cache now carries `mintedAt`/`expiresIn` and **re-mints** once within
+  60 s of expiry instead of returning the cache unconditionally.
+- Rejected on purpose: proxying bytes through the app (violates hard rule #7, would
+  stream invoice PDFs through load-sensitive CHAD) and adding pdf.js (desktop renders
+  inline cross-origin PDFs natively). CSP was audited and is not the blocker — the
+  live header already allows `frame-src https://*.r2.cloudflarestorage.com`.
+- Still unverified: an end-to-end render of a real signed AP PDF in a desktop browser
+  (needs an authenticated approver session behind CF Access). Post-deploy check in the
+  ADR.
+
 ### Changed — 2026-07-22 (ADR-0037 D7 — Loads & Inventory GO-LIVE)
 - **`loads_inventory` rollout surface flipped `pilot → live` for Woodland + Eugene** (audited, attributed to Bill). Managers/operators are now activated at both sites; the `assertLoadsInventoryActivated` gate reads this per-site surface at request time, so the change is immediate (no deploy). Reversible via the inverse flip at `/admin/rollout`.
 - Both D7 ops preconditions closed: **P1-3 restore drill MET** (`d4917d0`, passed twice vs real R2 snapshot), **P1-4 RESTIC_PASSWORD off-box CONFIRMED** via the Fleet 1Password item (SHA-256 matches on-box). Reconciled the `OPEN-ITEMS.md` O-3 / `restore-drills.md` / ADR-0037 contradiction — all now CLOSED.

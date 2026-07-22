@@ -916,3 +916,115 @@ ap_second_approvers (
 - Variance flag fire rate (% of Approves where variance fires)
 - Variance acknowledgment note fill rate (% where approver adds context vs. bare click)
 - Second-approver rejection rate (signal for whether the second layer is catching real issues)
+
+---
+
+## Amendment 6 — AP attachment preview reliability, DESKTOP-scoped (2026-07-22)
+
+**Status:** Accepted (2026-07-22, operator-directed). Bug-fix amendment to
+Amendment 4 §(a). No schema change, no new dependency, no CSP change.
+
+**Scope note — DESKTOP ONLY.** AP review happens on desktop: managers/admins
+authenticating via Entra SSO. The floor iPads are PIN operators and are **403 on the
+AP surface**, so no iPad-specific handling is introduced here. The existing desktop
+inline `<iframe>` preview and the existing download/open control are kept as-is.
+
+### Problem
+
+Approvers reported the invoice preview as unreliable — "can't see the invoice." Two
+independent defects, one proven against the live DB and one certain from the code.
+
+**Defect 1 (PRIMARY, confirmed live) — the strict MIME gate hid the Preview button.**
+Amendment 4 gated inline eligibility on an anchored `^application/pdf$` regex
+(server) mirrored by a strict string equality (client). The stored `content_type` is
+whatever Microsoft Graph labeled the attachment, persisted verbatim at ingest
+(`normalize.ts` → `ingest.ts`) and never normalized. A live query of `ap_attachments`
+found **2 of 41 file attachments are PDFs stored as `application/octet-stream`**
+(both `.pdf` by filename). The anchored regex rejects those — and also rejects the
+parameterized `application/pdf; name="inv.pdf"` form — so those invoices render
+**no Preview button at all**, download-only. This is deterministic per-sender: any
+relay that mislabels the MIME repeats it on every invoice from that vendor.
+
+**Defect 2 (SECONDARY, certain by code) — 300 s URL lifetime + cache-forever.**
+`signApAttachmentDownload` minted with `expiresIn: 300`, and the client cached the
+presigned URL and never re-minted (`resolve()` returned the cache unconditionally).
+The URL is minted **on expand**, not at queue render, so the *first* view is always
+fresh — the hypothesis that it goes stale before first use is wrong. The real failure
+is **reuse**: a reviewer who collapses "Hide preview" and re-expands >5 min later, or
+who reads the invoice then clicks download/open, replays an expired URL → R2 `403` →
+blank iframe / dead link. AP review is not instantaneous, so both are routine.
+
+### Decision
+
+Keep the presigned-inline-in-iframe architecture and harden it. Explicitly rejected:
+proxying the bytes through the app (violates hard rule #7 — codified in `r2.ts` — and
+would stream invoice PDFs through load-sensitive CHAD), and adding pdf.js (desktop
+browsers already render inline cross-origin PDFs natively; a ~1 MB dependency with a
+large regression surface buys nothing here). CSP was audited and is **not** the
+blocker — the live header already carries
+`frame-src 'self' https://*.r2.cloudflarestorage.com`, which matches the presign host.
+
+**1. Broadened inline gate, in ONE shared predicate used by both sides.** New module
+`src/lib/ap/inline-preview.ts` (pure, no server-only imports, so the client may
+import it directly) is the single source of truth. An attachment is inline-PDF when
+its `content_type` — with `;`-parameters stripped, trimmed, lowercased — is
+`application/pdf`, **OR** it is `application/octet-stream`/empty **and** the filename
+ends in `.pdf` (case-insensitive). The same tolerance is mirrored for images
+(`.png/.jpeg/.jpg/.webp`). Both the route and `ApQueueClient.tsx` call the shared
+helper, so the two can no longer drift — which is how Amendment 4's two hand-written
+copies of the rule became a maintenance hazard in the first place.
+
+The attachment route's Prisma `select` now includes `filename` (it previously did
+not), which is what makes the filename fallback possible server-side.
+
+**2. Canonical Content-Type on the wire.** A subtlety the gate alone does not fix:
+the presign sets `ResponseContentType` from the *stored* type, so an octet-stream
+`.pdf` served as `application/octet-stream; inline` would still download rather than
+frame. The route therefore signs with `effectiveInlineContentType()` — the
+**canonical** type (`application/pdf`, `image/jpeg`, …) rather than the mislabeled
+stored one — and echoes that same canonical value to the client, which is what the
+client's render branch keys on. `image/jpg` (not a real MIME) canonicalizes to
+`image/jpeg`.
+
+**3. TTL raise + re-mint on staleness.** `AP_ATTACHMENT_URL_TTL_SECONDS = 900`
+(raised from 300); the route passes it explicitly and returns it in the response body
+so the client never has to hard-code a value that could drift from the server's. The
+`r2.ts` default is likewise raised 300 → 900 for any other caller. Client-side, the
+`Presigned` cache entry now carries `mintedAt` + `expiresIn`, and `resolve()` reuses
+the cache **only while fresh** — re-minting once the URL is within
+`PRESIGN_STALE_SKEW_SECONDS` (60 s) of expiry. A collapse/re-expand or a
+read-then-download therefore gets a live URL instead of a 403.
+
+### Consequences
+
+- The 2 live octet-stream invoices (and every future mislabeled one) regain their
+  Preview button immediately on deploy — no backfill, no data migration.
+- The gate stays a **positive allowlist**: broadening is bounded to PDFs and the four
+  image types, and the filename fallback only applies to the genuinely ambiguous
+  types (`application/octet-stream` / empty). A real non-inline type is never
+  reinterpreted, and an octet-stream `.xlsx` still keeps a plain download (tested).
+- Presigned AP URLs now live 15 min instead of 5. Still short-lived, still scoped to
+  a single object, still only mintable by an authenticated approver
+  (`requireApApprover()` is unchanged). The re-mint means the effective window a
+  reviewer can operate in is unbounded without lengthening any individual URL's life.
+- Hard rule #7 (the app never proxies attachment bytes) is preserved.
+
+### Verification
+
+Unit tests cover the live-confirmed case (`application/octet-stream` + `.pdf` →
+inline, signed as `application/pdf`), the parameterized `application/pdf; name="x"`
+form, the negative (`application/octet-stream` + `.xlsx` → plain download), and the
+staleness decision (fresh → reuse; at/after TTL−60 s → re-mint; a cached 300 s URL
+10 min old → re-mint). Route tests assert the response `contentType`/`expiresIn` and
+the arguments handed to the signer.
+
+**Not verified in this change:** an end-to-end render of a real signed AP PDF in a
+desktop browser — that needs an authenticated approver session behind CF Access.
+Recommended one-time post-deploy check: as an approver, expand one of the two
+octet-stream rows and confirm the Preview button now appears and frames, and
+`curl -I` the returned URL to confirm `content-type: application/pdf` +
+`content-disposition: inline`.
+
+**Rollback:** revert the app image. The change is code-only (no schema, no config),
+and reverting restores the Amendment 4 behavior exactly — the stricter gate and the
+300 s TTL.

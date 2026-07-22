@@ -224,7 +224,11 @@ export async function signApAttachmentDownload(
         }
       : {}),
   });
-  return getSignedUrl(getClient(), cmd, { expiresIn: opts.expiresIn ?? 300 });
+  // ADR-0046 Amendment 6 — default TTL raised 300 → 900s so a routine collapse/
+  // re-expand (or read-then-download) during desktop review doesn't reuse an
+  // expired URL (R2 403 → blank frame). The AP route passes `expiresIn` explicitly
+  // (AP_ATTACHMENT_URL_TTL_SECONDS); this default covers any other caller.
+  return getSignedUrl(getClient(), cmd, { expiresIn: opts.expiresIn ?? 900 });
 }
 
 // ────────────────────────────────────────────────────────────────────────
