@@ -22,6 +22,9 @@ export {
   mapHaulRecord,
   mapProcessedRecord,
   mapOutboundRecord,
+  mapDockAvailabilityRecord,
+  classifyMaterialsType,
+  type OutboundMapOptions,
 } from './mappers';
 export {
   createPortalClient,
@@ -43,6 +46,25 @@ export {
 } from './sync';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
 export {
+  detectProcessedRecordChanges,
+  detectHaulRecordChanges,
+  extractSourceName,
+  extractHaulSourceName,
+  normalizeSourceName,
+  type ReconciliationCandidate,
+  type MirrorTable,
+  type ProcessedMirrorRecord,
+  type HaulMirrorRecord,
+  type SourceRow,
+  type SourceAliasRow,
+} from './reconcile-detect';
+export {
+  feedReconciliationQueue,
+  type FeedReconciliationContext,
+  type FeedReconciliationResult,
+  type FeedLogger,
+} from './reconcile-feed';
+export {
   SELECTORS,
   SELECTOR_VERSION,
   LOGIN_URL,
@@ -60,5 +82,6 @@ export type {
   HaulMirrorRow,
   ProcessedMirrorRow,
   OutboundMirrorRow,
+  DockAvailabilityMirrorRow,
   SyncRunStatus,
 } from './types';
