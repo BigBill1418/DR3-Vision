@@ -136,6 +136,21 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     scope: 'admin-only',
   },
   {
+    // ADR-0057 D4 — MyMRC reconciliation queue. Candidate changes MyMRC sync
+    // detected against Vision's operational tables; admin approves/rejects/snoozes
+    // each one (Vision never auto-updates ops tables). The badge carries the
+    // pending count (pendingReconcileCount), set per-render by the `/` launcher.
+    key: 'mymrc-reconcile',
+    label: 'MyMRC Reconcile',
+    description: 'Approve, reject, or snooze the changes MyMRC sync proposes for Vision tables.',
+    // `Scale` is in the curated ICONS map (src/app/_components/vision-tile.tsx) and
+    // reads as reconciliation/balance — reused rather than expanding the map.
+    icon: 'Scale',
+    route: '/admin/mymrc/reconcile',
+    status: 'active',
+    scope: 'admin-only',
+  },
+  {
     key: 'production-report',
     label: 'Production Report',
     description: 'Daily email automation config',
