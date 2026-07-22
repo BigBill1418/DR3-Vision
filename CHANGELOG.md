@@ -5,6 +5,39 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 — MyMRC backfill truncated the two big views at 2050 rows (SOQL OFFSET 2000 ceiling)
+
+The historical backfill (ADR-0057 D3) paged the Salesforce Experience Cloud list
+views by `offset = pageIndex * 50`. **Salesforce hard-caps the SOQL `OFFSET` at
+2000**, so at offset 2050 the portal returned a degenerate `SUCCESS` (no
+`recordIdActionsList`, just a "list view isn't available in Lightning" `message`)
+that the loop mis-read as end-of-data. The two large views were silently truncated
+at **2050 rows** (confirmed live: `completed_hauls` and `outbound_active` both
+stuck at 2050 with a drift error); every view under 2000 finished clean.
+
+Replaced offset pagination with **sort-flip** (`src/lib/mymrc/list-page.ts`,
+`backfill-portal-client.ts`). CONFIRMED LIVE 2026-07-22 against `mrc-us.my.site.com`:
+`getItems` has no cursor token and the org's UI-API is disabled, but pageSize 2000,
+`sortBy:'Id'`/`'-Id'` (a stable total order by Record ID), and `getCount:true`
+(→ absolute `totalCount`) are all honoured. Ascending Id reaches the first 4000
+rows (offsets 0 + 2000), descending the last 4000; their union is the whole view
+when `totalCount ≤ 8000` (overlap dedups on the `salesforce_record_id` upsert key).
+A view above 8000 pages every reachable window then **wedges LOUD** — never a silent
+cap, never a false "complete". `total_records_estimated` now stores the true
+`totalCount` (not the overlap-inflated running count).
+
+- Live re-pagination result (verified against portal `totalCount`):
+  `completed_hauls` **2050 → 6185 of 6185**, `outbound_active` **2050 → 4490 of
+  4490**; all six other views unchanged and still complete. Mirror rows:
+  hauls 3072 → 7207, outbound 2074 → 4514.
+- Pinned the live-captured `outbound_active` list-view id (`00B4p000005DAqkEAG`).
+- Hardened `parseGetItemsResponse` to raise a CLEAR offset-ceiling error on the
+  degenerate past-2000 response instead of a misleading "no getItems action".
+- Tests: sort-flip plan + coverage math (`list-page.test.ts`), and an end-to-end
+  faithful-fake run proving it pages PAST the old 2050 ceiling and wedges loud on a
+  view beyond coverage (`backfill-portal-client.test.ts`). Detail enrichment
+  (`detail_fetched_at`) is unchanged — the standing hourly/backfill sweep fills it.
+
 ### Added — 2026-07-22 — quarterly off-host RESTORE DRILL (proves the backup lane is restorable)
 
 Closes the "a backup nobody has restored is a rumor" gap for the DR3-Vision

@@ -215,3 +215,42 @@ Real-portal facts (captured live from `https://mrc-us.my.site.com`):
 - **Discovery output dir is configurable via `MYMRC_DISCOVERY_OUT_DIR`.** The runner previously wrote `docs/mymrc-discovery-<date>.md` + `src/lib/mymrc/__fixtures__/<object>/` under `/app`, which is read-only for uid 1001 in the container (the first live run died with `EACCES`). The out-dir now defaults to the repo root (unchanged for local dev) but can point at a writable mounted volume; the repo layout (`docs/` + `src/lib/mymrc/__fixtures__/`) is preserved under the override so artifacts copy back trivially.
 
 - **FOLLOW-UP (not implemented this pass): "Switch Account" multi-recycler.** The admin account views ONE recycler at a time (DR3 Woodland ↔ DR3 Eugene) via the "Switch Account" banner; records carry the recycler (`Recycler__c`). The hourly scrape currently pulls whichever context the session lands in. To pull BOTH sites' data it will need to iterate account contexts (switch account, re-enumerate) per tick — evidence-backed but deferred; flagged here for Phase 1.
+
+## Backfill pagination — SOQL OFFSET 2000 ceiling → sort-flip (2026-07-22)
+
+The D3 backfill paged `getItems` by `offset = pageIndex * pageSize`. **Salesforce
+hard-caps the SOQL `OFFSET` at 2000**, so the two large list views were SILENTLY
+TRUNCATED at 2050 rows (`completed_hauls` and `outbound_active` both stuck at 2050
+with a `getItems: no SUCCESS … action` drift error; every view < 2000 finished
+clean). Fixed on branch `fix/mymrc-backfill-offset-2000-cap`.
+
+Live probe facts (captured from `mrc-us.my.site.com`, 2026-07-22):
+
+- **`pageSize` is hard-capped at 2000** (5000/6200/10000 all return exactly 2000).
+- **`offset` is hard-capped at 2000** — offset 2050+ returns a degenerate
+  `SUCCESS` with NO `recordIdActionsList` and a "list view isn't available in
+  Lightning Experience" `message` (the SOQL OFFSET limit). This is what the old
+  loop mis-read as end-of-data.
+- **No page/cursor token** anywhere in the `getItems` returnValue, and the org has
+  the **UI-API disabled** (`API_DISABLED_FOR_ORG`) — so a cursor transport is out.
+- **`sortBy:'Id'`/`'-Id'` IS honoured** (orderedByInfo → "Record ID" asc/desc) — a
+  stable, unique TOTAL order.
+- **`getCount:true` returns the absolute `totalCount`.**
+
+**Solution — sort-flip.** With pageSize 2000 and the offset capped at 2000, ONE
+sort direction reaches the first 4000 rows by Id (offsets 0 + 2000). Ascending by
+the unique Id covers the low 4000; descending covers the high 4000. Their union is
+the WHOLE view iff `totalCount ≤ 8000` (the two 4000-row windows meet in the
+middle); overlap deduplicates on the mirror upsert key (`salesforce_record_id`). A
+view with `totalCount > 8000` has an unreachable middle band → the planner pages
+every reachable window then **wedges LOUD** (never a silent cap, never a false
+"complete"). The resumable `last_page_index` cursor now indexes the fixed 4-step
+plan (asc@0, asc@2000, desc@0, desc@2000); `total_records_estimated` holds the true
+`totalCount`. (`src/lib/mymrc/list-page.ts` `sortFlipStep`/`sortFlipLastPageIndex`/
+`sortFlipExceedsCoverage`; `backfill-portal-client.ts`.)
+
+Live re-pagination result, reconciled against portal `totalCount`:
+`completed_hauls` **2050 → 6185 of 6185**, `outbound_active` **2050 → 4490 of 4490**;
+the other six views unchanged and still complete. If a view ever exceeds 8000 rows,
+it will require a non-`getItems` transport (e.g. re-enabling the UI-API cursor) —
+the wedge names this explicitly.
