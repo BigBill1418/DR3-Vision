@@ -490,3 +490,203 @@ Bill's directive translates to: extend the existing production pipeline (already
 Everything else (Rick's 13-question source disambiguation from earlier today, event billing wiring, etc.) is separate work. This handoff is exclusively MyMRC ingestion + reconciliation surface.
 
 Standing by after Phase 0 for scope check if Bill wants to review discovery output before Phase 1 mirror schemas ship. Per Bill's execution posture: **do NOT wait for scope check** — Phase 1 proceeds automatically after Phase 0 completes.
+
+
+
+
+---
+
+## Addendum A — Rick's 2026-07-21 disambiguation (CA source seeds + naming pattern + event billing nuance)
+
+Rick delivered full answers to the 13-question source-disambiguation batch. Unblocks the June Woodland load and clarifies the MyMRC naming pattern in a way that affects both Vision's seed data AND the Phase 1 reconciliation-queue rendering.
+
+**This addendum captures:**
+
+- 13 disambiguated CA sources with canonical MyMRC names, addresses, and program/non-program classification
+- Naming pattern reveal (formal vs informal, with concrete examples)
+- Event billing DR3-hauled flag (nuance not in ADR-0056)
+- Covanta inactive confirmation
+- Xtraction 81/19 re-confirmation against ADR-0055 seed
+- No changes to Phase 0/1 execution order — this is data + one small schema addition
+
+### §A.1 — CA source disambiguation table (13 sources, ready to seed)
+
+Rick's answers, normalized to Vision's schema shape:
+
+**MyMRC-contracted formal-name sites (2):**
+
+| Vision display name | `mymrc_name` (verbatim MyMRC canonical) | Address | site_type | is_program | Notes |
+|---|---|---|---|---|---|
+| Western Placer WMA | Western Placer Waste Management Authority | 3195 Athens Ave, Lincoln CA 95648 | `mrc_inbound` | true | Confusingly named "Western Placerville" in daily log |
+| Lake County Waste Solutions | Lake County Waste Solutions | 230 Soda Bay Road, Lakeport CA 95453 | `mrc_inbound` | true | Distinct from Eastlake Landfill (Clearlake) |
+
+**Retailer chains (brand + location naming):**
+
+| Vision display name | `mymrc_name` | Address | site_type | is_program |
+|---|---|---|---|---|
+| Sleep Number Sacramento | Sleep Number Sacramento | 1620 National Drive, Sacramento CA 95834 | `cvp_retailer` | true |
+| Sleep Number - Redding | Sleep Number - Redding | 19899 Alexander Ave, Anderson CA 96007 | `cvp_retailer` | true |
+| IKEA Palo Alto | Ikea Palo Alto | (no MyMRC address — retailer) | `cvp_retailer` | true |
+| IKEA Emeryville | Ikea Emeryville | (no MyMRC address — retailer) | `cvp_retailer` | true |
+| IKEA West Sacramento | Ikea w sac | (no MyMRC address — retailer) | `cvp_retailer` | true |
+
+**Regional hauler (multi-location; Crescent City yard only for now):**
+
+| Vision display name | `mymrc_name` | Address | site_type | is_program |
+|---|---|---|---|---|
+| Humboldt Moving - Crescent City | Humboldt Moving and Storage Co - Crescent City Yard | 1528 Northwest Drive, Crescent City CA 95531 | `mrc_inbound` | true |
+
+**MyMRC-contracted new site (came on within last 3 months):**
+
+| Vision display name | `mymrc_name` | Address | site_type | is_program |
+|---|---|---|---|---|
+| Recology San Francisco | Recology San Francisco | 501 Tunnel Ave, San Francisco CA 94134 | `mrc_inbound` | true |
+
+**Office-manager-added sites (SHORT/INFORMAL NAMES in MyMRC — critical pattern):**
+
+| Vision display name | `mymrc_name` (verbatim short form) | Assignment | site_type | is_program |
+|---|---|---|---|---|
+| Golden Bear | `Golden Bear` | Livermore + Stockton (years) | `non_mrc_dropoff` | **false** |
+| Recology Healdsburg | `Healdsburg` | Stockton (not registered as regular MyMRC site) | `non_mrc_dropoff` | **false** |
+| Go Getter Company | `Go Getter` | Recent add; drops without dock appointment | `non_mrc_dropoff` | true |
+| Recology Sonoma | `Sonoma` | Stockton (not registered as regular MyMRC site) | `non_mrc_dropoff` | **false** |
+
+**Notice the naming asymmetry:** office-added sources use bare short forms in MyMRC (`Healdsburg`, `Sonoma`, `Golden Bear`, `Go Getter`) but Vision needs to display the full contextual name for operator clarity. This is exactly what `source_aliases` from ADR-0038's 2026-07-21 amendment was designed for — Rick's typed short form joins to Vision's canonical entity.
+
+### §A.2 — Two-tier naming pattern (schema + Phase 1 reconciliation impact)
+
+**The pattern Rick's answers reveal:**
+
+- **MyMRC-contracted sites** (formal contract with MRC) → **full formal name** in MyMRC (`Western Placer Waste Management Authority`, `Glenwood Central Recieving Station`, `Recology San Francisco`)
+- **Retailer chains** → **brand + location** (`Sleep Number Sacramento`, `Ikea Palo Alto`, `Ikea w sac` — including inconsistent capitalization/abbreviation)
+- **Office-manager-added sites** (Rick types them in when unloading) → **shortened informal names** (`Healdsburg`, `Sonoma`, `Golden Bear`, `Go Getter`)
+
+**Vision's `sources` table + `source_aliases` accommodate this** — no schema change needed. The 2026-07-21 alias-fallback amendment to ADR-0038 already handles two-step matching (verbatim `sources.name` → `source_aliases` fallback with normalized matching). Seeding these 13 sources works IF we populate both a canonical display name AND the exact MyMRC verbatim string as an alias.
+
+**Phase 1 reconciliation-queue impact:**
+
+When `mymrc_accounts_mirror` populates from Bill's admin creds during Phase 1 backfill (per PR #146 §3.5), the office-manager-added sources may NOT appear in `Account` — Rick's answer explicitly notes: *"Not associated with the MYMRC as a regular Site"*, *"Not in the MYMRC Portal as a regular site"*. These sources exist only as strings on individual `Materials__c` (Processing) records, not as separate Account entities.
+
+**Implication for reconciliation classifier (per PR #146 §3.4):**
+
+- `detectAccountChanges` won't surface `Healdsburg`/`Sonoma`/`Golden Bear`/`Go Getter` because they don't exist as Accounts
+- BUT `detectProcessedRecordChanges` (new detector, sibling function) SHOULD surface them from `mymrc_processed_mirror.payload.source_name_at_sync` fields
+- If verbatim source name doesn't match `sources.name` OR any `source_aliases.alias`, emit `change_kind=new_record` with `target_table='sources'` and suggested alias
+
+This is a **small extension to §3.4** in PR #146. Classifier surfaces manual-drop-off short-name sources as reconciliation candidates when they appear in processed records but not in the sources table.
+
+### §A.3 — Event billing: DR3-hauled flag (ADR-0056 amendment)
+
+**Rick's Q1c #12 detail:** *"Yes Event units, If we haul we also add haul rate as well as Labor"*
+
+Two modes for event billing (ADR-0056 currently only models the single "all six components fire" case):
+
+**Mode A — DR3 hauled:**
+- Event labor (EVENTO line on CA processing invoice)
+- Event freight (rolls into MILES 0 as `event_transportation_total`)
+- All 6 ADR-0056 components can fire
+
+**Mode B — Someone else hauled:**
+- Event labor ONLY (EVENTO line)
+- No event freight line
+- Only the labor-side ADR-0056 components fire
+
+**Schema addition to ADR-0056:**
+
+```
+events.dr3_hauled boolean NOT NULL
+  -- when true: freight-side components fire (legs[], IRS mileage, per diem)
+  -- when false: only labor + driver_wages components fire
+```
+
+**Impact on `MILES 0` aggregation (PR #128/#137 §9):**
+
+Current formula:
+```
+miles_0_extended_price = 
+    regular_freight_total 
+  + event_transportation_total 
+  + container_rental_total
+```
+
+Event_transportation_total should sum ONLY events where `dr3_hauled=true`. Events with `dr3_hauled=false` contribute $0 to that component even if labor is non-zero.
+
+**Real production example (June Chico event):**
+- Labor $4,235.35 → EVENTO line ✓
+- Event freight $925 → contributes to MILES 0 ✓
+- Therefore `events.chico_2026_06.dr3_hauled = true`
+
+**TONU also gated by `dr3_hauled=true`** (only fires if DR3 dispatched a driver in the first place).
+
+### §A.4 — Covanta WTE confirmation
+
+**Rick:** *"COVANTA is not used"*
+
+- `outbound_vendors` seed: Covanta remains with `is_active=false` (per my 2026-07-21 note)
+- Attachment renderer includes WTE block only if data present for the invoice period (never, currently)
+- No Covanta recycling rate seeded
+- If Covanta reactivates, Rick supplies rate then
+
+### §A.5 — Xtraction 81/19 re-confirmation
+
+**Rick:** *"Xtraction has a 81% Steel And 19% Landfill"*
+
+Matches ADR-0055 seed exactly:
+- `recycling_rates` seed: `vendor=Xtraction, commodity=steel, recycling_percent=0.81, effective_from=<origin>`
+- Derived: `outbound_records.landfilled_lbs = load_lbs × 0.19` when `vendor=Xtraction, commodity=steel`
+
+No change needed. Confirms production data captured from Stockton 2025 workbook (PR #137 §11).
+
+### §A.6 — Q4 line-item structure (already correct)
+
+**Rick:** *"Incentive Should be it own Line Item and EVENT Misc as well. on the summery page of the billing spreadsheet on the summery tab you will see the different line items we need for billing."*
+
+Vision's ADR-0041 item code taxonomy (PR #137 §9) already gives Incentive its own `REIMBO` line and Event Labor its own `EVENTO` line. No change needed. Rick's answer confirms the June IVC072778 real-invoice structure we reverse-engineered.
+
+### §A.7 — Container rental per-location breakdown (data source confirmed)
+
+**Rick pointed at:** *"the transportation billing Spread sheets under Container Rental For Rental Rate and number of trailers assigned to each location."*
+
+Vision already has this workbook (`California_Transportation_June_2026.xlsx`, Container Rentals tab, 44 rows, $10,800/mo total per PR #137 §12). Seeding `container_rentals` from that tab gives per-location invoice breakdown for free per ADR-0040 D3.
+
+### §A.8 — Actions for Claude Code (delta on top of PR #146)
+
+Extends PR #146's §5 execution:
+
+1. **Seed the 13 CA sources** from §A.1 as part of Phase 1 foundation — but as new-record candidates in `mymrc_reconciliation_queue`, NOT directly written to `sources` (per PR #146 D4). Bill approves via `/admin/mymrc/reconcile`.
+
+2. **Pre-seed `source_aliases`** for the naming asymmetry — for each of the 4 office-manager-added sources, seed both the display name AND the verbatim MyMRC short form as an alias, so the two-step fallback works from day one:
+   - `Recology Healdsburg` → aliases: `[Healdsburg]`
+   - `Recology Sonoma` → aliases: `[Sonoma]`
+   - `Golden Bear` → aliases: `[Golden Bear]` (identical, but explicit for reconciliation classifier)
+   - `Go Getter Company` → aliases: `[Go Getter]`
+
+3. **Extend PR #146 §3.4 reconciliation classifier** with `detectProcessedRecordChanges` — surfaces new-record candidates from `mymrc_processed_mirror.payload.source_name_at_sync` when the verbatim name matches neither `sources.name` nor any `source_aliases.alias`. This is how office-manager-added sources will initially surface in the reconciliation queue.
+
+4. **ADR-0056 amendment** — add `events.dr3_hauled boolean NOT NULL`. Update `MILES 0` aggregation to filter `event_transportation_total` by `dr3_hauled=true`. Update TONU trigger to require `dr3_hauled=true`. Document in ADR-0056 §schema as a small amendment.
+
+5. **`outbound_vendors` seed** — Covanta seeded but `is_active=false` per §A.4. Attachment renderer skips inactive vendors.
+
+6. **`recycling_rates` seed verification** — confirm Xtraction × steel = 0.81 is in the seed exactly (no change expected, verification only).
+
+### §A.9 — Actions for Bill
+
+**When Phase 1 completes and the reconciliation queue populates:**
+
+The 13 CA sources from §A.1 will appear as `new_record` candidates. Bulk-approve them all (they're already verified with Rick). This closes the CA-side canonical name gap complementing the OR-side S-4/5/6/7 fix in PR #146 Phase 1.
+
+**Nothing to do before Phase 1 completes.** This addendum is data + one small schema field; Claude Code handles it in the existing execution flow.
+
+### §A.10 — What's now unblocked
+
+- **June Woodland load** — all 12 previously-unknown source names have canonical MyMRC names + classification
+- **~4,494 units of previously-unknown source origin** for June — now attributable
+- **Two-tier MyMRC naming pattern** documented (formal / retailer / office-informal) — informs both source seeding and reconciliation classifier
+- **Event billing DR3-hauled flag** — completes ADR-0056 event model, ready for wire-in to invoice generator
+- **Covanta and Xtraction final answers** — ADR-0055 seed lockdown
+
+### §A.11 — Session close
+
+Rick's answer closes the CA-side source-disambiguation loop. Every June Woodland processed unit now has an attributable source. Combined with PR #146's Phase 1 (which populates `mymrc_accounts_mirror` for the OR-side canonical name fix), Vision's source registry becomes reconciled across both jurisdictions once Bill approves the reconciliation queue candidates post-backfill.
+
+No new blockers. All items in this addendum are data + small classifier extension + one boolean field on `events`.
