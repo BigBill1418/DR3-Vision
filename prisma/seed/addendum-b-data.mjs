@@ -117,6 +117,22 @@ export const WOODLAND_SOURCE_ALIASES = [
   ['Vacaville', 'Recology Vacaville Solano'],
 ];
 
+/// ADR-0057 Addendum A (§A.8.2) — the 4 CA "office" (non_mrc_dropoff) sources'
+/// verbatim workbook short forms → canonical MyMRC name. Distinct from
+/// WOODLAND_SOURCE_ALIASES: those canonicals already exist in sources.csv, whereas
+/// these 4 canonicals are NEW sources that gate through the ADR-0057 D4 reconciliation
+/// queue (not written to `sources` here). seedAliasesForSite therefore SKIPS each pair
+/// until its canonical Source is approved via the queue — the seed is idempotent and
+/// self-activating (re-runnable; no-op until the source lands). Alias is globally
+/// UNIQUE. Canonical names lock-step with CA_SOURCE_DISAMBIGUATION
+/// (src/lib/mymrc/ca-source-seed.ts) — change both together.
+export const CA_OFFICE_SOURCE_ALIASES = [
+  ['Healdsburg', 'Recology Healdsburg'],
+  ['Sonoma', 'Recology Sonoma'],
+  ['Golden Bear', 'Golden Bear'],
+  ['Go Getter', 'Go Getter Company'],
+];
+
 /// §2 — [name, notes] provenance agencies (origin of delivered mattresses; never billed).
 export const PROVENANCE_AGENCIES = [
   ['Sponsors', 'Halfway house on Hwy 99 next to Lindholm. Reclassified from a drop-off kind to a provenance agency (rollup §2, Rick 2026-07-19). No billing.'],

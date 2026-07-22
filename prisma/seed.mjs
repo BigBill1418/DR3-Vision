@@ -47,6 +47,7 @@ import {
   GP_SITE_BILLING_IDENTIFIERS,
   SOURCE_ALIASES,
   WOODLAND_SOURCE_ALIASES,
+  CA_OFFICE_SOURCE_ALIASES,
   PROVENANCE_AGENCIES,
 } from './seed/addendum-b-data.mjs';
 
@@ -227,7 +228,18 @@ async function seedOutboundVendorsAndRecyclingRates() {
     }
     rateCount += 1;
   }
-  console.log(`  ✔ recycling rates seeded: ${rateCount} (Green Zone, Xtraction, Biomass — others pending Morena)`);
+  // ADR-0057 §A.4 — Covanta seeded as an INACTIVE vendor with NO recycling rate.
+  // Covanta WTE (waste-to-energy) is the destination for the Xtraction 19% landfill
+  // fraction, but its block boundary + recovery % are PENDING Rick (breakdown.ts §11
+  // / OPEN-ITEMS S-8). is_active=false keeps it out of the entry-surface vendor picker
+  // (listActiveOutboundVendors) AND off the commodity-attachment (fetch.ts suppresses
+  // an inactive vendor's name). No rate is invented (a WTE % is not a recycling %).
+  await prisma.outboundVendor.upsert({
+    where: { name: 'Covanta' },
+    create: { name: 'Covanta', is_active: false, notes: 'WTE destination; block/recovery % PENDING Rick (ADR-0057 §A.4). Inactive until confirmed.' },
+    update: { is_active: false },
+  });
+  console.log(`  ✔ recycling rates seeded: ${rateCount} (Green Zone, Xtraction, Biomass — others pending Morena); Covanta seeded inactive (no rate)`);
 }
 
 async function getSiteIdsByCode() {
@@ -579,7 +591,10 @@ async function seedSourceAliases(siteIds) {
   const woodland = siteIds.get('woodland');
   const eugeneCount = eugene ? await seedAliasesForSite(eugene, SOURCE_ALIASES) : 0;
   const woodlandCount = woodland ? await seedAliasesForSite(woodland, WOODLAND_SOURCE_ALIASES) : 0;
-  console.log(`  source_aliases: ${eugeneCount} eugene + ${woodlandCount} woodland present (idempotent)`);
+  // ADR-0057 §A.8.2 CA office aliases — canonicals gate through the D4 reconciliation
+  // queue, so each pair no-ops until its Source is approved (re-runnable, self-activating).
+  const caOfficeCount = woodland ? await seedAliasesForSite(woodland, CA_OFFICE_SOURCE_ALIASES) : 0;
+  console.log(`  source_aliases: ${eugeneCount} eugene + ${woodlandCount} woodland + ${caOfficeCount} CA-office present (idempotent)`);
 }
 
 // ─── Provenance agencies (rollup §2 — mirrors 20260730b migration) ───────────

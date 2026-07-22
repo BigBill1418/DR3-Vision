@@ -57,7 +57,10 @@ export async function loadCommodityBreakdown(
         ticket_number: true,
         retrac_id: true,
         buyer: true,
-        vendor: { select: { name: true } },
+        // ADR-0057 §A.4 — pull is_active so the renderer can SKIP an inactive vendor
+        // (e.g. Covanta, seeded inactive pending Rick): its name must never surface on
+        // the customer-facing commodity attachment.
+        vendor: { select: { name: true, is_active: true } },
         recycling_percent_applied: true,
         recycled_lbs: true,
         landfilled_lbs: true,
@@ -90,7 +93,8 @@ export async function loadCommodityBreakdown(
       weightLbs: r.weight_lbs,
       ticketNumber: r.ticket_number,
       retracId: r.retrac_id,
-      recyclerName: r.vendor?.name ?? r.buyer ?? null,
+      // Skip inactive vendors (§A.4): fall through to the free-text buyer, else null.
+      recyclerName: (r.vendor?.is_active ? r.vendor.name : null) ?? r.buyer ?? null,
       recyclingPercentApplied: r.recycling_percent_applied != null ? Number(r.recycling_percent_applied) : null,
       recycledLbs: r.recycled_lbs,
       landfilledLbs: r.landfilled_lbs,

@@ -15,4 +15,5 @@ export const GP_SITE_BILLING_IDENTIFIERS: readonly {
 export const CANONICAL_OR_NAMES: readonly string[];
 export const SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
 export const WOODLAND_SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
+export const CA_OFFICE_SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
 export const PROVENANCE_AGENCIES: readonly (readonly [name: string, notes: string])[];
