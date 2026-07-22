@@ -15,13 +15,22 @@ import type { OutboundVendorOption, OutboundRecyclingResult } from '@/lib/loads/
 import type { LandfilledView } from '@/lib/loads/landfilled';
 import type { EventView } from '@/lib/events/service';
 import type { OrCountView } from '@/lib/events/or-counts';
+import type { BulkInboundView } from '@/lib/loads/bulk-inbound';
 
-type Tab = 'physical' | 'dropoffs' | 'outbound' | 'landfilled' | 'events' | 'orcounts';
+type Tab =
+  | 'physical'
+  | 'bulkinbound'
+  | 'dropoffs'
+  | 'outbound'
+  | 'landfilled'
+  | 'events'
+  | 'orcounts';
 // ADR-0047 UI gate — the events + OR-counts tabs are gated by
 // `loads_events_or_tabs`; the base physical/drop-off/outbound/landfilled tabs are not.
 const EVENTS_OR_TABS: ReadonlySet<Tab> = new Set(['events', 'orcounts']);
 const TABS: { id: Tab; label: string }[] = [
   { id: 'physical', label: 'Physical count' },
+  { id: 'bulkinbound', label: 'Bulk daily inbound' },
   { id: 'dropoffs', label: 'Consumer drop-offs' },
   { id: 'outbound', label: 'Outbound materials' },
   { id: 'landfilled', label: 'Landfilled units' },
@@ -99,6 +108,7 @@ export function LoadsInventoryClient({
         {tab === 'physical' && (
           <PhysicalCountPanel siteCode={siteCode} computedTotal={computedTotal} />
         )}
+        {tab === 'bulkinbound' && <BulkInboundPanel siteCode={siteCode} />}
         {tab === 'dropoffs' && <DropoffsPanel siteCode={siteCode} />}
         {tab === 'outbound' && <OutboundPanel siteCode={siteCode} />}
         {tab === 'landfilled' && <LandfilledPanel siteCode={siteCode} />}
@@ -890,6 +900,144 @@ function LandfilledPanel({ siteCode }: { siteCode: string }) {
           String(r.programUnits),
           String(r.nonProgramUnits),
           r.reason.replace('_', ' '),
+          r.slipNumber ?? '—',
+        ])}
+      />
+    </div>
+  );
+}
+
+// Bulk daily inbound (ADR-0037 Phase 3 §3.2b — paper bootstrap) -----------
+//
+// One synthesized `paper_bulk` inbound row per site per day: the paper daily log's
+// total units + the program / non-program split. It keeps the inflow side of the
+// running balance honest while there are no iPads on the dock; per-load capture
+// replaces it (not adds to it) once the operator flow goes live. Re-entering a day
+// AMENDS that day's row — it never stacks a second one.
+function BulkInboundPanel({ siteCode }: { siteCode: string }) {
+  const [rows, setRows] = useState<BulkInboundView[]>([]);
+  const [date, setDate] = useState(todayIso());
+  const [total, setTotal] = useState('');
+  const [program, setProgram] = useState('');
+  const [nonProgram, setNonProgram] = useState('0');
+  const [slip, setSlip] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<FieldMsg | null>(null);
+
+  const load = useCallback(async () => {
+    setRows(await getRows<BulkInboundView>(`/api/manager/${siteCode}/bulk-inbound`));
+  }, [siteCode]);
+  useEffect(() => void load(), [load]);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/manager/${siteCode}/bulk-inbound`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          inboundDate: date,
+          totalUnits: Number(total),
+          programUnits: Number(program || '0'),
+          nonProgramUnits: Number(nonProgram || '0'),
+          slipNumber: slip || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        setMsg({
+          kind: 'err',
+          text: err.error ? `Save failed: ${err.error}` : `Save failed (${res.status}).`,
+        });
+        return;
+      }
+      setMsg({ kind: 'ok', text: `Inbound recorded for ${date}.` });
+      setTotal('');
+      setProgram('');
+      setNonProgram('0');
+      setSlip('');
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const split = liveNum(program) + liveNum(nonProgram);
+  const sums = split === liveNum(total);
+  const canSave = Number(total) > 0 && sums;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <p className="text-xs opacity-70">
+        Paper bootstrap: enter the whole day&apos;s inbound as ONE aggregate row (source{' '}
+        <code>paper_bulk</code>). Per-load detail is not required — the day total plus the
+        program / non-program split is what the running balance needs. Re-entering a date amends
+        that day.
+      </p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <label className={labelCls}>
+          <span className="opacity-70">Date</span>
+          <input
+            type="date"
+            className={inputCls}
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Total units</span>
+          <input
+            type="number"
+            min="1"
+            className={inputCls}
+            value={total}
+            onChange={(e) => setTotal(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Program (billed)</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={program}
+            onChange={(e) => setProgram(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Non-program</span>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={nonProgram}
+            onChange={(e) => setNonProgram(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Daily-log slip #</span>
+          <input className={inputCls} value={slip} onChange={(e) => setSlip(e.target.value)} />
+        </label>
+      </div>
+      <div className="flex items-center gap-4">
+        <button type="button" disabled={!canSave || busy} onClick={save} className={btnCls}>
+          {busy ? 'Saving…' : 'Save day'}
+        </button>
+        <span className={sums ? 'text-xs opacity-70' : 'text-xs text-red-300'}>
+          Program + non-program = {split} / total {liveNum(total)}
+          {sums ? '' : ' — must match'}
+        </span>
+        <Msg msg={msg} />
+      </div>
+      <RecordTable
+        head={['Date', 'Total', 'Program', 'Non-program', 'Source', 'Slip']}
+        rows={rows.map((r) => [
+          isoDate(r.inboundDate),
+          String(r.totalUnits),
+          String(r.programUnits),
+          String(r.nonProgramUnits),
+          r.loadSourceType,
           r.slipNumber ?? '—',
         ])}
       />

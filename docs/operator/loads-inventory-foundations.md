@@ -1,6 +1,6 @@
 # Loads & Inventory Foundations (ADR-0037) — operator/office guide
 
-_Last updated: 2026-07-03. Audience: office staff, managers, super-admin (Bill).
+_Last updated: 2026-07-22. Audience: office staff, managers, super-admin (Bill).
 These are **desktop office/manager surfaces**, not operator iPad surfaces — the
 iPad inbound flow is untouched by this work._
 
@@ -11,15 +11,15 @@ provenance so the P1 retro-audit (ADR-0039) can run over any historical window.
 
 ## Activation gate (read this first)
 
-Per ADR-0037 **D7**, the schema and these surfaces merge, but the manager
-loads/inventory surfaces are **admin-only for now**. A plain site manager will see
-a "Not yet activated" screen until the two Bill-owned ops gates close:
+Per ADR-0037 **D7**, the manager loads/inventory surfaces are gated by the ADR-0047
+per-site `loads_inventory` rollout surface. **It went `live` for both Woodland and
+Eugene on 2026-07-22**, so managers and operators at both sites can use these pages
+today. Admins always pass the gate; a site whose surface is `pilot`/unregistered sees
+a "Not yet activated" screen.
 
-- one recorded restore drill (P1-3), and
-- `RESTIC_PASSWORD` confirmed off-box (P1-4).
-
-Flip the gate in one place — `assertLoadsInventoryActivated` in
-`src/lib/loads/record-guards.ts` (change the role check) — once those close. The
+The flip is **data**, not code: an admin flips it at `/admin/rollout` (audited,
+reversible, no deploy). Do NOT edit `assertLoadsInventoryActivated` in
+`src/lib/loads/record-guards.ts` to change exposure — it reads that surface. The
 super-admin **Processed Units** surface is not affected by this gate (it is
 already super-admin-only).
 
@@ -56,12 +56,14 @@ This is **distinct** from two things it is often confused with:
   payroll). Processed-units is a **site-level billing** record; it does not touch
   payroll.
 
-### 2. Loads & Inventory — manager CRUD-lite (admin-only for now)
+### 2. Loads & Inventory — manager CRUD-lite
 
 Route: **/dashboard/&lt;site&gt;/loads-inventory** · Dashboard tile:
-**Loads & Inventory** · Visible to: **admin only** (D7 gate).
+**Loads & Inventory** · Visible to: **site managers + admins** (D7 gate, live at both
+sites since 2026-07-22).
 
-Three record types, each with create + list + edit-before-lock, all site-scoped:
+Three record types, each with create + list + edit-before-lock, all site-scoped
+(plus the paper-bootstrap **Bulk daily inbound** tab — see the paper workflow below):
 
 - **Consumer drop-offs** (workbook Paid-Unpaid tab; CA CIP). Each drop-off has a
   **kind**: only **incentive** drop-offs compute an incentive
@@ -178,3 +180,102 @@ with the split is stored as `pool_attribution = 'measured'`.
   physical count is `'measured'`; otherwise it uses legacy attribution. Either way
   `program + non-program = total`.
 
+
+---
+
+## The paper daily workflow (pre-iPad bootstrap) — ADR-0037 Phase 3
+
+Woodland and Eugene run the floor on **paper daily logs**. There are no operator
+iPads on the dock yet, so nothing writes per-load inbound records. Phase 3 makes the
+whole Loads & Inventory surface operable from those paper logs — a manager types the
+day's aggregates, and the running balance stays arithmetically honest.
+
+### The six input streams, and who enters what
+
+| # | Stream | Where | Who |
+|---|---|---|---|
+| 1 | Physical count (program / non-program split) | Loads & Inventory → **Physical count** | Site manager |
+| 2 | Consumer drop-offs (incentive / unpaid / illegal) | Loads & Inventory → **Consumer drop-offs** | Site manager |
+| 3 | Outbound materials (renovation whole units; baled / shredded weight) | Loads & Inventory → **Outbound materials** | Site manager |
+| 4 | Landfilled units (bed-bug / soiled / water-logged / other) | Loads & Inventory → **Landfilled units** | Site manager |
+| 5 | Inbound loads | Loads & Inventory → **Bulk daily inbound** (paper) *or* the iPad dock flow (later) | Site manager (paper) / operator + manager verify (iPad) |
+| 6 | Daily close — processed (stripped) units | **/dashboard/&lt;site&gt;/processed-units-close** to enter/amend · **/admin/processed-units** to close + lock | Manager enters · **Bill closes** |
+
+### 5. Bulk daily inbound — the paper substitute for per-load capture
+
+Route: Loads & Inventory → **Bulk daily inbound** tab.
+
+Enter the day's inbound as **one aggregate row per site per day**: total units plus
+the **program / non-program split** (they must sum to the total — the server refuses
+otherwise, because the program pool is what MRC is billed on). Optionally record the
+paper daily-log slip / page number.
+
+- The row is written with `load_source_type = 'paper_bulk'` and `count_mode = 'total'`.
+  That provenance tag is permanent and visible in the list — a paper aggregate is
+  never mistaken for a verified dock capture (no BOL, no photos, no transporter, no
+  unload timings).
+- It counts toward the running balance exactly like a verified inbound load, because
+  the same program/non-program invariant the dock verify gate enforces is enforced
+  here before the write.
+- **Re-entering a date amends that day** — it never stacks a second row. Fix a
+  miscount by typing the day again.
+- When the iPads come online, simply stop entering bulk days: per-load rows take over,
+  the historical `paper_bulk` rows stay queryable as-is, and no data migration is
+  needed. Never enter both for the same day — that would double-count the inflow.
+
+### 6. Daily close — managers enter, Bill closes (§3.3 Option B)
+
+Route (manager): **/dashboard/&lt;site&gt;/processed-units-close** — linked from the top
+of Loads & Inventory.
+Route (Bill): **/admin/processed-units** — unchanged, super-admin only.
+
+- The **manager enters** the day's stripped units (program / non-program), saved units,
+  material ticket #, headcount, and pocketcoil estimate — and may **amend the day as
+  many times as needed** while it is open.
+- **Only Bill closes and locks a day.** There is no close control on the manager page
+  and no manager close API — closing exists in exactly one super-admin-gated place.
+  After close, every write to that day is refused (`409 closed`) and corrections
+  follow the amendment path, never an in-place edit.
+- Whole units sold + landfilled are **derived** from the day's renovation-outbound and
+  landfilled rows on both surfaces — never typed twice.
+
+### A manager's day, on paper
+
+1. **Morning** — count the floor and enter a **physical count** (program + non-program).
+   That becomes the anchor the balance runs from.
+2. **Through the day** — enter events as they happen: drop-offs, outbound, landfilled.
+3. **End of day** — enter **Bulk daily inbound** (the day's total in, split
+   program / non-program) and the **daily close** (stripped units) on the
+   processed-units-close page.
+4. **Check** — the three tiles at the top of Loads & Inventory should track the paper
+   log. A drift means an input stream was missed; the next physical count records the
+   delta rather than silently absorbing it.
+5. **Bill** — reviews and **closes** the day at `/admin/processed-units`.
+
+### Ongoing capture model — pick ONE (§3.1, operator decision pending)
+
+Both patterns are supported by the same surfaces; the difference is operational
+discipline, not code. Bill picks one and it becomes the standing instruction to
+Morena, Janette and Rick.
+
+**Option A — anchor-daily.** A physical count every morning, before the shift starts.
+
+- The balance restarts from a known-good number every day, so drift can never
+  accumulate past 24 hours.
+- Inbound accuracy matters less — a missed bulk-inbound entry shows up as that day's
+  reconciled delta and is corrected the next morning.
+- Costs one count per site per morning, every day, forever.
+- **Recommended for the first month** while the capture habit is forming.
+
+**Option B — backfill-and-run.** A physical count as a periodic anchor (weekly, or
+monthly), with the balance running on inbound + outbound arithmetic in between.
+
+- Far less counting labor.
+- Requires that **every** stream be entered every day — especially bulk daily inbound.
+  One missed day silently biases the balance until the next anchor.
+- Drift is discovered late (at the next count) and is harder to attribute to a day.
+- **Move here once the numbers hold up** against verified in/out for a full month —
+  weekly anchor first, monthly only if weekly proves boring.
+
+Whichever is picked: a physical count **always** records `reconciled_delta`
+(physical − computed). The drift is written down, never absorbed.

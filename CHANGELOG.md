@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0037 Phase 3 — paper-bootstrap manager surfaces)
+
+Woodland and Eugene run the floor on paper daily logs; there are no operator iPads on
+the dock yet, so nothing writes per-load inbound and the daily close bottlenecked on
+Bill. Phase 3 makes the whole Loads & Inventory surface operable from paper without
+weakening the money-safe boundary.
+
+- **Bulk daily inbound (§3.2 option b)** — new tab on `/dashboard/<site>/loads-inventory`.
+  A manager enters the day's inbound as ONE synthesized `inbound_loads` row per site per
+  day: total units + a program / non-program split validated to sum (the program pool is
+  the billed pool). Written as `load_source_type = 'paper_bulk'`, `count_mode = 'total'`,
+  `status = 'verified'`, `arrived_at` at UTC midnight of the business day — the exact
+  shape `onHand()` counts as inbound, so the D6 inflow arithmetic is preserved without
+  per-load detail. Re-entering a date AMENDS that day (never a second row): enforced by a
+  partial unique index and by the service's amend-in-place path, both audited. New
+  service `src/lib/loads/bulk-inbound.ts`; new API `GET|POST /api/manager/<site>/bulk-inbound`
+  behind the existing `requireActivatedManager` (site-scoped + D7 gate). Converts to
+  per-load capture with no schema change when the iPads arrive.
+- **Manager daily-close ENTRY (§3.3 Option B)** — new manager route
+  `/dashboard/<site>/processed-units-close` mirroring `/admin/processed-units` for entry
+  and amendment ONLY, plus `GET|POST /api/manager/<site>/processed-units`. Managers can
+  amend a day right up to close; `upsertProcessedUnits` refuses any write once the day is
+  closed (409 `closed`).
+- **Close-and-lock authority is unchanged and unshared.** `/admin/processed-units` and
+  `POST /api/admin/processed-units/<id>/close` are untouched and remain super-admin only.
+  There is deliberately NO close handler under `/api/manager/**` and no manager surface
+  imports `closeProcessedUnitsDay` — `src/lib/loads/close-authority.test.ts` asserts that
+  boundary structurally so it cannot erode by accident.
+- **Migration `20260806_adr0037_paper_bulk_inbound_source`** — purely additive:
+  `LoadSourceType` gains `paper_bulk`, plus the partial unique index
+  (`site_id, arrived_at WHERE load_source_type = 'paper_bulk'`) and the manager-list
+  lookup index. Clean-replays on an empty PG16.
+- **Docs** — `docs/operator/loads-inventory-foundations.md` gains the paper daily
+  workflow (six input streams, who enters what, a manager's day) and stubs BOTH §3.1
+  ongoing-capture models — anchor-daily vs. backfill-and-run — with the trade-offs, for
+  Bill to pick operationally. The stale D7 "admin-only" section is corrected to the
+  data-driven rollout surface now live at both sites.
+
 ### Changed — 2026-07-22 (ADR-0037 D7 — Loads & Inventory GO-LIVE)
 - **`loads_inventory` rollout surface flipped `pilot → live` for Woodland + Eugene** (audited, attributed to Bill). Managers/operators are now activated at both sites; the `assertLoadsInventoryActivated` gate reads this per-site surface at request time, so the change is immediate (no deploy). Reversible via the inverse flip at `/admin/rollout`.
 - Both D7 ops preconditions closed: **P1-3 restore drill MET** (`d4917d0`, passed twice vs real R2 snapshot), **P1-4 RESTIC_PASSWORD off-box CONFIRMED** via the Fleet 1Password item (SHA-256 matches on-box). Reconciled the `OPEN-ITEMS.md` O-3 / `restore-drills.md` / ADR-0037 contradiction — all now CLOSED.

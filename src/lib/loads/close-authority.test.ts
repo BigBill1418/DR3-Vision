@@ -1,0 +1,178 @@
+// ADR-0037 Phase 3 (§3.3 Option B) — the money-safe manager/admin boundary.
+//
+// Managers ENTER and AMEND the daily close; only Bill CLOSES and LOCKS it. This is a
+// structural boundary, so it is tested structurally: no close handler may exist under
+// the manager namespace, no manager surface may import the close service, and the
+// service itself must refuse a manager's write once a day is closed.
+//
+// If a future change grants managers close authority, it must delete these tests
+// deliberately — it cannot happen by accident.
+
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
+
+const SRC = join(process.cwd(), 'src');
+const MANAGER_API = join(SRC, 'app', 'api', 'manager', '[site]');
+const MANAGER_PAGES = join(SRC, 'app', 'dashboard', '[site]');
+const ADMIN_CLOSE_ROUTE = join(
+  SRC,
+  'app',
+  'api',
+  'admin',
+  'processed-units',
+  '[id]',
+  'close',
+  'route.ts',
+);
+
+function walk(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    return e.isDirectory() ? walk(p) : [p];
+  });
+}
+
+describe('close authority — structural boundary', () => {
+  it('exposes the ONE close route under the super-admin admin namespace', () => {
+    expect(existsSync(ADMIN_CLOSE_ROUTE)).toBe(true);
+    const src = readFileSync(ADMIN_CLOSE_ROUTE, 'utf8');
+    expect(src).toContain('session?.user?.is_super_admin');
+    expect(src).toContain('closeProcessedUnitsDay');
+  });
+
+  it('exposes a manager ENTRY route with no close sibling', () => {
+    const managerFiles = walk(MANAGER_API);
+    expect(managerFiles).toContain(join(MANAGER_API, 'processed-units', 'route.ts'));
+    expect(managerFiles.filter((f) => f.includes('close'))).toEqual([]);
+  });
+
+  it('never imports the close service into a manager route or page', () => {
+    const offenders = [...walk(MANAGER_API), ...walk(MANAGER_PAGES)].filter((f) =>
+      readFileSync(f, 'utf8').includes('closeProcessedUnitsDay'),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('never calls the admin close endpoint from a manager page', () => {
+    const offenders = walk(MANAGER_PAGES).filter((f) =>
+      /\/api\/admin\/processed-units/.test(readFileSync(f, 'utf8')),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('gates the manager entry route on requireActivatedManager, not is_super_admin', () => {
+    const src = readFileSync(join(MANAGER_API, 'processed-units', 'route.ts'), 'utf8');
+    expect(src).toContain('requireActivatedManager');
+    expect(src).not.toContain('is_super_admin');
+  });
+});
+
+// ── Service-level half: a manager can amend up to the close and never past it ──
+
+interface Row {
+  id: string;
+  site_id: string;
+  production_date: Date;
+  stripped_program: Prisma.Decimal;
+  stripped_non_program: Prisma.Decimal;
+  saved_units: Prisma.Decimal | null;
+  closed_at: Date | null;
+}
+const store = { rows: [] as Row[], audits: [] as Record<string, unknown>[] };
+
+vi.mock('@/lib/prisma', () => {
+  const processedUnitsDaily = {
+    findUnique: async ({
+      where,
+    }: {
+      where: { site_id_production_date?: { site_id: string; production_date: Date } };
+    }) => {
+      const k = where.site_id_production_date!;
+      const hit = store.rows.find(
+        (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+      );
+      return hit ? { ...hit } : null;
+    },
+    upsert: async ({
+      where,
+      create,
+      update,
+    }: {
+      where: { site_id_production_date: { site_id: string; production_date: Date } };
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => {
+      const k = where.site_id_production_date;
+      const found = store.rows.find(
+        (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+      );
+      if (found) return Object.assign(found, update);
+      const row = { id: `p${store.rows.length + 1}`, closed_at: null, ...create } as Row;
+      store.rows.push(row);
+      return row;
+    },
+  };
+  const zero = { _sum: {} as Record<string, number | null> };
+  const tx = {
+    processedUnitsDaily,
+    auditLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        store.audits.push(data);
+        return data;
+      },
+    },
+  };
+  return {
+    prisma: {
+      processedUnitsDaily,
+      outboundMaterial: { aggregate: async () => zero, groupBy: async () => [] },
+      landfilledUnit: { aggregate: async () => zero, groupBy: async () => [] },
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    },
+  };
+});
+
+const { upsertProcessedUnits, ProcessedUnitsError } = await import('@/lib/loads/processed-units');
+
+const SITE = 'site-woodland';
+const DAY = new Date('2026-07-20T00:00:00Z');
+const entry = (actor: string) => ({
+  siteId: SITE,
+  productionDate: DAY,
+  strippedProgram: 150,
+  strippedNonProgram: 25,
+  actorUserId: actor,
+});
+
+beforeEach(() => {
+  store.rows = [];
+  store.audits = [];
+});
+
+describe('close authority — manager amends before close, never after', () => {
+  it('lets a manager enter and then amend an open day', async () => {
+    await upsertProcessedUnits(entry('user-morena'));
+    const amended = await upsertProcessedUnits({
+      ...entry('user-morena'),
+      strippedProgram: 161,
+    });
+    expect(store.rows).toHaveLength(1);
+    expect(amended.strippedProgram).toBe('161');
+  });
+
+  it('refuses a manager write once Bill has closed the day', async () => {
+    await upsertProcessedUnits(entry('user-morena'));
+    // Bill closes + locks it via the admin-only path (simulated here as the stamp).
+    store.rows[0]!.closed_at = new Date('2026-07-21T15:00:00Z');
+    await expect(upsertProcessedUnits(entry('user-morena'))).rejects.toBeInstanceOf(
+      ProcessedUnitsError,
+    );
+    await expect(upsertProcessedUnits(entry('user-morena'))).rejects.toMatchObject({
+      reason: 'closed',
+      status: 409,
+    });
+  });
+});
