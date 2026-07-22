@@ -68,6 +68,50 @@ template, adapted from its aws-cli/gzip R2 path to our restic/`pg_dump -Fc` path
 - **Install-time verified** (2026-07-22): `systemctl start` → `Result=success`,
   exit 0, `audit_log=9920/9995` (99.2%), scratch DB dropped, metric live in
   Prometheus.
+### Added — 2026-07-22 (ADR-0020 — Operations Dashboard re-enabled for the Eugene iPad go-live)
+
+- **The Operations Dashboard tile is `active` again** (`src/lib/dashboard-tiles.ts`,
+  `key: 'operations'`, still `manager+`). It was paused to `coming-soon` 2026-06-06
+  "while the underlying surfaces are reworked"; those surfaces (processed-units
+  daily close, loads/inventory running balance, Terex throughput/downtime/cost,
+  the MyMRC mirror backfill, commodity-payment aging, the compliance slate, bonus
+  close) have since landed, so `/dashboard` now leads with a comprehensive,
+  legible overview instead of a bare site list. Re-enable is the one-field flip the
+  registry comment always promised.
+- **New per-site Operations Overview** (`src/app/dashboard/[site]/page.tsx` now
+  leads with `overview/OpsOverviewPanel.tsx`, fed by
+  `src/lib/dashboard/ops-overview.ts` → `computeOpsOverview`). At-a-glance cards +
+  compact tables for: today's active/arrived loads, processing-close status (open
+  vs closed = billing-ready), floor inventory (program / non-program / total),
+  Terex throughput (7- & 30-day units/day), 30-day downtime + cost, contract
+  recycling/recovery rates, the seven-tile compliance slate summary, commodity-
+  payment aging (outstanding $, awaiting-invoice > 30d, invoiced-unpaid > 45d,
+  disputed), bonus-period standing, and **MyMRC sync freshness** per feed
+  (hauls/processed/outbound + shared dock schedule) with last-synced relative +
+  absolute Pacific time so staleness is visible. Each panel deep-links to its
+  source surface and degrades to an explicit note (never a crash) on read failure.
+  The aggregation is a thin orchestrator over the existing source-of-truth modules
+  — it re-derives no billing/compliance number.
+- **Combined both-sites view** on the `/dashboard` picker for admin / all-sites
+  managers (`computeSiteSummary`): Eugene + Woodland side-by-side (on-dock,
+  arrived-today, on-floor, processing state, commodity outstanding, worst MyMRC
+  freshness) above the site links. Single-site managers are unaffected.
+- **iPad-first legibility:** dark Vision palette (ADR-0014), no sub-12px real-data
+  text, WCAG-AA contrast, ≥44px touch targets, no hover-only affordances, tables
+  scroll inside their own container (zero horizontal page scroll verified at
+  768×1024 / 1024×768 / 390 / 1440 via Playwright), every figure labeled with a
+  unit, times shown in Pacific. Refresh is the 30s ops cadence (`OverviewPoller`)
+  — lighter than the old 5s dock poll now that the surface aggregates heavier
+  analytics.
+- **Site isolation preserved** (hard rule #2): every read is scoped to the
+  resolved site id; the mirror `site_id IN {this site}` filter also excludes
+  not-yet-resolved NULL rows; the shared MyMRC dock schedule is labeled "all sites"
+  since it carries no site discriminator. The 403 gate for off-site managers is
+  unchanged.
+- Tests: `src/lib/dashboard/ops-overview.test.ts` (freshness grading + commodity
+  aging buckets), `src/app/dashboard/[site]/overview/OpsOverviewPanel.test.tsx`
+  (rendered legibility contract + degraded-panel handling), and updated
+  `src/lib/dashboard-tiles.test.ts` for the flip. Full suite green (2731 passed).
 
 ### Fixed — 2026-07-22 (ADR-0057 D3 — backfill full history: Completed Hauls + inactive-materials views)
 
@@ -108,7 +152,7 @@ wiring on top of it.
   discriminator, transporter/collection/commodity/container, consumer-drop-off
   units, docking date). Fixed two latent placeholder bugs: `weight_lbs` read the
   non-existent `Weight__c` (always null) → now `Recycler_Weight__c`; the unit count
-  read a *Materials* field → now the correct haul field. `mapProcessedRecord` /
+  read a _Materials_ field → now the correct haul field. `mapProcessedRecord` /
   `mapOutboundRecord` map `Materials__c` (ONE object, split by `Type__c` at ingest
   via new `classifyMaterialsType`); `weight_lbs` is hard-null (Materials has no
   weight field). New `mapDockAvailabilityRecord` for the new
@@ -129,11 +173,11 @@ wiring on top of it.
   pagination was CONFIRMED LIVE 2026-07-22: an Aura
   `ListViewDataManagerController.getItems` action with
   `{filterName, entityName, pageSize:50, layoutType:"LIST", sortBy:null,
-  getCount:false, enableRowActions:false, offset:N}` returning
+getCount:false, enableRowActions:false, offset:N}` returning
   `{records, offset, hasMoreData}`, looped to `hasMoreData:false`. `list-page.ts`
   encodes the request/response codec + list-view id resolver PURE (unit-tested);
   `createBackfillPortalClient` maps the engine's 0-based `pageIndex → offset =
-  pageIndex*pageSize` (a pure function of the resumable cursor) and replays the
+pageIndex*pageSize` (a pure function of the resumable cursor) and replays the
   getItems POST, reusing the live aura framework envelope the browser sent
   (immune to `fwuid` drift) — chosen over DOM infinite-scroll for determinism.
   The shared, self-healing admin session was extracted to `openAdminSession`
@@ -246,6 +290,7 @@ path's send gate, and the `send_time_pt` config value.
   Until then the on-save report still fires on save; only the "late" flag threshold
   stays at the old value. The 8pm not-entered ntfy is hardcoded in the daemon and
   already correct.
+
 ### Fixed — 2026-07-22 (ADR-0057 Phase 0 — MyMRC scrape/discovery against the REAL portal)
 
 First live run of the ADR-0038/0057 code (written against synthetic fixtures, never run
@@ -421,7 +466,7 @@ only `undefined` — but `UserCreateForm` sends an explicit **`null`** for any f
 doesn't apply to the chosen role (an operator's email + processor_role, a manager's pin).
 The schema's own comment already documented that null must be allowed; the implementation
 didn't. Fixed by switching the three optional fields to `.nullish()` (nullable + optional).
-The existing operator test used `email: ''` (empty string, which the old schema *did*
+The existing operator test used `email: ''` (empty string, which the old schema _did_
 accept), so it never caught the real form's `null` — added regression tests using the
 exact null-field payloads the form sends (operator and manager). Reproduced against prod
 (422 with `fieldErrors: email, processor_role`) before the fix; no schema/DB change.
@@ -465,6 +510,7 @@ corrected file will recover the ~18 dropped January events but will NOT remove t
 `2026-01-15` row keys on a different date, so it won't dedup against the 1900 row).
 Soft-void the single garbage event (`event_date=1900-01-14`, `import_id=42d0ebdd`)
 BEFORE re-importing. Do not delete-and-reimport the whole batch.
+
 ### Changed — 2026-07-21 (AP approvals now require an explanatory note — ADR-0046 amendment)
 
 Approving an AP invoice now REQUIRES a non-empty note describing what the transaction
@@ -513,6 +559,7 @@ dr3-vision-backup` the script intended is **not reachable** from the CHAD host t
   `dr3-vision-backup` only if the dr3-vision-publisher token is placed on the host.
 - Verified against the live repo: full run pushed snapshot `c7cd38a2`, prune +
   deadman + OK page all succeeded.
+
 ### Changed — 2026-07-21 (Terex importer finalized + Woodland source-alias backfill)
 
 Two ADR-0048 D3 / source-alias items. No money moved; no rates/IDs/classifications
@@ -550,6 +597,7 @@ MACHINE MAINTENANCE LOG`). The real file is a 41-sheet `.xlsx`; the importer now
   resolution against `sources.csv`, and migration parity. `docs/OPEN-ITEMS.md` S-10
   records the 15 still-unresolved June Woodland names (Rick), which block the June
   Woodland promotion (import `ba3beeeb-442d-46ed-ad30-b1a7975906f9`).
+
 ### Fixed — 2026-07-21 (Full-stack security/reliability audit — wave 1)
 
 Adversarially-confirmed audit findings, fixed on `fix/audit-wave1`. No money
@@ -559,16 +607,16 @@ moved, no rates/IDs/classifications invented, pilot mode untouched.
   `resolveTransportationInputs` filtered inbound loads on `status: 'verified'` exactly,
   while the MRC Monthly Invoice export treats four statuses as billing-ready. Any load
   advanced to `submitted`/`submitted_to_mymrc`/`processed` silently dropped its freight
-  + CA fuel surcharge from invoice generation. Now reuses the canonical
-  `INVOICE_STATUSES` set verbatim (`src/lib/exports.ts`) so generation and the MRC
-  export are structurally incapable of drifting. Inventory's `VERIFIED_INBOUND_STATUSES`
-  is deliberately left distinct (billing vs verified-on-hand are different contracts).
-  DB-idiom test seeds a load in every `LoadStatus` and asserts exactly the billing-ready
-  set reaches both the freight and CA-fuel legs.
+  - CA fuel surcharge from invoice generation. Now reuses the canonical
+    `INVOICE_STATUSES` set verbatim (`src/lib/exports.ts`) so generation and the MRC
+    export are structurally incapable of drifting. Inventory's `VERIFIED_INBOUND_STATUSES`
+    is deliberately left distinct (billing vs verified-on-hand are different contracts).
+    DB-idiom test seeds a load in every `LoadStatus` and asserts exactly the billing-ready
+    set reaches both the freight and CA-fuel legs.
 - **P1-4 — Payroll escalation cron could silently fail on payroll morning
   (`scripts/bonus-escalation-check.mjs`, `src/lib/bonus/escalation.ts`)** — a failed
-  tier fire was logged "retry next tick" and dropped; the t4 backstop paged *through the
-  app* (the thing that's down when fires fail); and a period whose whole window was
+  tier fire was logged "retry next tick" and dropped; the t4 backstop paged _through the
+  app_ (the thing that's down when fires fail); and a period whose whole window was
   missed was keyed to `period_end == yesterday` and stranded forever unpaged. Fixes:
   bounded in-window retry (3 attempts / 15-min spacing, off the daemon's own timers);
   an app-independent direct-to-ntfy backstop page (primary→fallback, fingerprinted, no-op

@@ -70,10 +70,10 @@ export interface DashboardTile {
 
 // ── Registry, grouped by ADR-0020 origin ──────────────────────────────
 // NOTE: the launcher at `/` sorts tiles by `status`, not by which array they
-// live in. As of 2026-06-06 three tiles here carry `status: 'coming-soon'`
-// (operations, compliance, reconciliation) — paused at operator request while
-// the underlying surfaces are reworked. Their routes are preserved so a future
-// re-enable is a one-field flip back to 'active'.
+// live in. Two tiles here carry `status: 'coming-soon'` (compliance,
+// reconciliation) — paused 2026-06-06 while the underlying surfaces are reworked.
+// The operations tile was re-enabled 2026-07-22 (ADR-0020) for the Eugene iPad
+// go-live; its /dashboard route now renders the comprehensive OpsOverview.
 const ACTIVE_TILES: readonly DashboardTile[] = [
   {
     key: 'bonus',
@@ -88,13 +88,13 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
   {
     key: 'operations',
     label: 'Operations Dashboard',
-    description: 'Live load activity, photos, and processing throughput by site.',
+    description:
+      'Live load activity, processing close, inventory, equipment, compliance, and MyMRC sync — by site.',
     icon: 'LayoutDashboard',
-    // Route preserved (the /dashboard site picker still exists and is reachable
-    // from sub-pages); only the launcher entry point is paused — flip back to
-    // 'active' to restore the tile.
+    // Re-enabled 2026-07-22 (ADR-0020) for the Eugene iPad go-live: the /dashboard
+    // picker → /dashboard/[site] now renders the comprehensive OpsOverview.
     route: '/dashboard',
-    status: 'coming-soon',
+    status: 'active',
     scope: 'manager+',
   },
   {

@@ -38,8 +38,11 @@ export const viewport: Viewport = {
   themeColor: '#070C12',
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // Pinch-zoom stays enabled for accessibility — an operator on the floor iPad
+  // must be able to zoom an invoice or table. Locking scale is a WCAG 1.4.4
+  // regression, so allow up to 5× (WCAG 2.0 minimum).
+  maximumScale: 5,
+  userScalable: true,
 };
 
 // Per CLAUDE.md hard rule #4 the shell ships English / Spanish / Urdu
