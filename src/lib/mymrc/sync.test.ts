@@ -116,6 +116,7 @@ function list(ids: string[], complete = true): { ids: string[]; complete: boolea
 function fakeClient(over: Partial<PortalClient>): PortalClient {
   return {
     fetchListRecordIds: vi.fn(async () => list([])),
+    getSession: vi.fn() as unknown as PortalClient['getSession'],
     close: vi.fn(async () => undefined),
     ...over,
   };

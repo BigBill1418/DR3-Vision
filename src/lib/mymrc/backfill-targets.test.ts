@@ -46,7 +46,6 @@ function makeFakePrisma() {
 
 const stubClient: BackfillPortalClient = {
   fetchListPage: vi.fn(async () => ({ ids: [], hasMoreData: false })),
-  fetchRecordDetail: vi.fn(async (id: string) => ({ apiName: 'X', id, fields: {} })),
 };
 
 type P = Parameters<typeof buildBackfillTargets>[0]['prisma'];
