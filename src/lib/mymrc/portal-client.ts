@@ -20,13 +20,13 @@
 // A green run with no data is impossible by construction.
 
 import type { Browser, BrowserContext, Page } from 'playwright';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { adminAuthStatePath } from './credentials';
 import type { MymrcCredentials } from './credential-store';
 import { listRecordIds } from './mappers';
-import { LOGIN_URL, SELECTORS } from './selectors';
+import { AUTHED_HOME_URL, LOGIN_URL, SELECTORS } from './selectors';
 import type { FeedName, GetItemsReturnValue, SfRecord } from './types';
 
 // ── Typed errors ─────────────────────────────────────────────────────────────
@@ -243,6 +243,49 @@ export function looksLoggedOut(input: {
   return true;
 }
 
+// ── Stale-session self-heal (pure planner; unit-tested) ──────────────────────
+
+/**
+ * The next step the session bootstrap takes. Encodes the ADR-0057 self-heal
+ * contract: a poisoned/stale persisted `storageState` (a prior tick that ended
+ * logged-out and wrote its anonymous cookies over the good file — the live bug
+ * this fixes) must be DISCARDED and re-logged-in; a login that still fails must
+ * PURGE the file so the next tick starts clean and then fail LOUD.
+ */
+export type SessionStep =
+  | 'return-authenticated' // session is logged in — proceed (and persist if fresh)
+  | 'discard-and-relogin' // loaded state is logged-out — drop it, fresh login
+  | 'purge-state-and-fail'; // relogin still logged-out — delete file + AuthFailedError
+
+/**
+ * Decide the next self-heal step. PURE (no Playwright/fs) so the money-safe
+ * invariants are unit-tested directly:
+ *   - authed after loading persisted state      ⇒ return-authenticated
+ *   - not authed, relogin not yet attempted     ⇒ discard-and-relogin
+ *   - not authed, relogin succeeded             ⇒ return-authenticated
+ *   - not authed, relogin failed                ⇒ purge-state-and-fail
+ * A logged-out session NEVER maps to a state-persisting step.
+ */
+export function planSessionStep(input: {
+  authedAfterLoad: boolean;
+  /** `null` when a fresh login has not been attempted yet. */
+  authedAfterRelogin: boolean | null;
+}): SessionStep {
+  if (input.authedAfterLoad) return 'return-authenticated';
+  if (input.authedAfterRelogin === null) return 'discard-and-relogin';
+  return input.authedAfterRelogin ? 'return-authenticated' : 'purge-state-and-fail';
+}
+
+/**
+ * Money-safe persistence gate: a `storageState` snapshot may be written back
+ * ONLY when the session has been positively confirmed authenticated this run.
+ * This is what stops `close()` from overwriting a good file with a logged-out
+ * session at the end of a failed tick (recon B §8).
+ */
+export function mayPersistState(lastKnownAuthenticated: boolean): boolean {
+  return lastKnownAuthenticated === true;
+}
+
 // ── Playwright transport ─────────────────────────────────────────────────────
 
 const NAV_TIMEOUT_MS = 45_000;
@@ -258,8 +301,16 @@ export interface PortalClientOptions {
   storageStatePath?: string;
   navTimeoutMs?: number;
   settleMs?: number;
+  /**
+   * Bounded retries for a transient navigation failure (network blip, slow LDS
+   * bootstrap). Total attempts = 1 + retries. Bounded on purpose — an unbounded
+   * retry would risk a lockout / a tick that never returns. Default 2 retries.
+   */
+  navRetries?: number;
   log?: Logger;
 }
+
+const DEFAULT_NAV_RETRIES = 2;
 
 /**
  * The transport contract the sync engine depends on. Kept minimal so tests can
@@ -273,9 +324,21 @@ export interface PortalClient {
 
 /**
  * Log in (reusing persisted storage state when present) and return a
- * session-bound PortalClient. One re-login is attempted on a logged-out shell,
- * then AuthFailedError. Caller owns the `Browser`; `close()` disposes the
- * context (and persists fresh storage state).
+ * session-bound, PROVEN-AUTHENTICATED PortalClient. Caller owns the `Browser`.
+ *
+ * STALE-SESSION SELF-HEAL (ADR-0057 Phase 1, recon B §8). The live failure this
+ * closes: a tick that ended logged-out wrote its anonymous cookies over the
+ * good `storageState` file (the old `close()` persisted UNCONDITIONALLY), so the
+ * NEXT tick booted from a poisoned state and stayed broken until an operator
+ * cleared the file. The contract is now:
+ *   - Bootstrap PROVES auth up front by navigating to the authed home.
+ *   - If the loaded state is logged-out, DISCARD it (rebuild the context with no
+ *     seed) and do a FRESH login.
+ *   - If login still fails, DELETE the poisoned file so the next tick starts
+ *     clean, then throw `AuthFailedError` (D5 — the scrape worker pages).
+ *   - A `storageState` is persisted ONLY after a positive auth check — never on
+ *     `close()` when the session is known logged-out, never on a failed login.
+ * Bounded nav retries absorb a transient blip without an unbounded loop.
  */
 export async function createPortalClient(
   browser: Browser,
@@ -285,17 +348,27 @@ export async function createPortalClient(
   const log = opts.log ?? noopLog;
   const navTimeout = opts.navTimeoutMs ?? NAV_TIMEOUT_MS;
   const settleMs = opts.settleMs ?? SETTLE_MS;
+  const navRetries = Math.max(0, opts.navRetries ?? DEFAULT_NAV_RETRIES);
   const stateFile = opts.storageStatePath ?? adminAuthStatePath();
   await mkdir(dirname(stateFile), { recursive: true });
 
-  const context: BrowserContext = await browser.newContext({
-    userAgent: USER_AGENT,
-    viewport: { width: 1440, height: 900 },
-    ...(existsSync(stateFile) ? { storageState: stateFile } : {}),
-  });
-  context.setDefaultNavigationTimeout(navTimeout);
-  context.setDefaultTimeout(navTimeout);
-  const page = await context.newPage();
+  // `context`/`page` are reassignable: the self-heal rebuilds the context WITHOUT
+  // the persisted seed to guarantee a clean login when the loaded state is bad.
+  let context: BrowserContext = await newSessionContext(true);
+  let page: Page = await context.newPage();
+  // Money-safe latch: no `storageState` write happens unless this is true.
+  let lastKnownAuthenticated = false;
+
+  async function newSessionContext(seedFromFile: boolean): Promise<BrowserContext> {
+    const ctx = await browser.newContext({
+      userAgent: USER_AGENT,
+      viewport: { width: 1440, height: 900 },
+      ...(seedFromFile && existsSync(stateFile) ? { storageState: stateFile } : {}),
+    });
+    ctx.setDefaultNavigationTimeout(navTimeout);
+    ctx.setDefaultTimeout(navTimeout);
+    return ctx;
+  }
 
   async function usernameVisible(): Promise<boolean> {
     return page
@@ -313,14 +386,74 @@ export async function createPortalClient(
     });
   }
 
+  // Bounded-retry navigation. Never throws — a nav that never resolves leaves the
+  // page on its prior/blank URL, which `isLoginPage()` reads as logged-out, so
+  // the auth/self-heal path (not an unhandled throw) decides what happens next.
+  async function gotoWithRetry(url: string, waitUntil: 'domcontentloaded' | 'networkidle'): Promise<void> {
+    for (let attempt = 0; attempt <= navRetries; attempt++) {
+      try {
+        await page.goto(url, { waitUntil });
+        return;
+      } catch (e: unknown) {
+        log('warn', `mymrc: goto ${url} attempt ${attempt + 1}/${navRetries + 1} — ${describeError(e)}`);
+      }
+    }
+  }
+
+  /** Delete a poisoned storageState so the next tick boots clean (best-effort). */
+  async function purgeState(): Promise<void> {
+    lastKnownAuthenticated = false;
+    await rm(stateFile, { force: true }).catch(() => undefined);
+  }
+
+  /** Persist the session ONLY when positively authenticated this run. */
+  async function persistIfAuthenticated(): Promise<void> {
+    if (!mayPersistState(lastKnownAuthenticated)) return;
+    await context.storageState({ path: stateFile }).catch(() => undefined);
+  }
+
+  // Prove auth up front, self-healing a poisoned/stale persisted state.
+  async function bootstrap(): Promise<void> {
+    await gotoWithRetry(AUTHED_HOME_URL, 'domcontentloaded');
+    const authedAfterLoad = !(await isLoginPage());
+    if (planSessionStep({ authedAfterLoad, authedAfterRelogin: null }) === 'return-authenticated') {
+      lastKnownAuthenticated = true;
+      log('info', 'mymrc: persisted admin session valid');
+      return;
+    }
+
+    // Loaded state is logged-out → discard it and log in from a clean context.
+    log('warn', 'mymrc: persisted session logged-out — discarding it, fresh login (admin)');
+    await context.close().catch(() => undefined);
+    context = await newSessionContext(false);
+    page = await context.newPage();
+    await login(page, creds, log);
+    await gotoWithRetry(AUTHED_HOME_URL, 'domcontentloaded');
+    const authedAfterRelogin = !(await isLoginPage());
+    if (planSessionStep({ authedAfterLoad: false, authedAfterRelogin }) === 'purge-state-and-fail') {
+      await purgeState(); // never leave the poisoned file behind, never persist
+      throw new AuthFailedError('mymrc: still logged out after fresh login (admin)');
+    }
+    lastKnownAuthenticated = true;
+    await persistIfAuthenticated();
+  }
+
+  /**
+   * Mid-run guard: the session can drop between feeds. Re-login IN PLACE; if it
+   * still fails, purge the poisoned file and fail loud (D5). Never persists a
+   * logged-out session.
+   */
   async function ensureAuthenticated(targetUrl: string): Promise<void> {
     if (!(await isLoginPage())) return;
-    log('info', 'mymrc: login required (admin)');
+    log('warn', 'mymrc: session dropped mid-run — re-authenticating (admin)');
+    lastKnownAuthenticated = false;
     await login(page, creds, log);
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    await gotoWithRetry(targetUrl, 'domcontentloaded');
     if (await isLoginPage()) {
+      await purgeState();
       throw new AuthFailedError('mymrc: still logged out after re-auth (admin)');
     }
+    lastKnownAuthenticated = true;
   }
 
   // Navigate and collect every intercepted Aura response body during load+settle.
@@ -335,9 +468,7 @@ export async function createPortalClient(
     };
     page.on('response', onResponse);
     try {
-      await page.goto(url, { waitUntil: 'networkidle' }).catch((e: unknown) => {
-        log('warn', `mymrc: goto ${url} — ${describeError(e)}`);
-      });
+      await gotoWithRetry(url, 'networkidle');
       await page.waitForTimeout(settleMs);
     } finally {
       page.off('response', onResponse);
@@ -345,13 +476,18 @@ export async function createPortalClient(
     return bodies;
   }
 
+  await bootstrap();
+
   return {
     async fetchListRecordIds(feed: FeedName): Promise<string[]> {
       const url = listUrl(feed);
-      await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+      await gotoWithRetry(url, 'domcontentloaded');
       await ensureAuthenticated(url);
       const bodies = await collectAura(url);
-      if (await isLoginPage()) throw new AuthFailedError(`mymrc: logged out during ${feed} list`);
+      if (await isLoginPage()) {
+        await purgeState();
+        throw new AuthFailedError(`mymrc: logged out during ${feed} list`);
+      }
       const { ids, hasMoreData } = extractListView(bodies, feed);
       // Completeness signal (D4 diagnosability): the Aura payload has no absolute
       // record total, so a windowed page is the only over-mark risk we can detect.
@@ -362,8 +498,7 @@ export async function createPortalClient(
         log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection sees only this page`);
       }
       log('info', `mymrc: ${feed} list → ${ids.length} record ids`);
-      // Persist fresh session best-effort.
-      await context.storageState({ path: stateFile }).catch(() => undefined);
+      await persistIfAuthenticated();
       return ids;
     },
 
@@ -371,13 +506,17 @@ export async function createPortalClient(
       const url = detailUrl(recordId);
       const bodies = await collectAura(url);
       if (await isLoginPage()) {
+        await purgeState();
         throw new AuthFailedError(`mymrc: logged out during ${feed} detail ${recordId}`);
       }
       return extractRecord(bodies, recordId);
     },
 
     async close(): Promise<void> {
-      await context.storageState({ path: stateFile }).catch(() => undefined);
+      // ONLY persist a session we positively confirmed authenticated. A tick that
+      // ended logged-out must NOT overwrite the good file (recon B §8) — and if it
+      // hard-failed, `purgeState()` already removed it.
+      await persistIfAuthenticated();
       await context.close().catch(() => undefined);
     },
   };
