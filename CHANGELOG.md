@@ -5,6 +5,30 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (ADR-0037 Phase 4 — End-of-Day Inventory on the Daily Production Report)
+
+Spec §4 / §A.6. The ADR-0030 daily production email now answers "what is on the floor
+tonight?" per site, without opening the app. Written against the post-Phase-5 schema.
+
+- **New module** `src/lib/loads/eod-inventory.ts` — `getEodInventorySnapshot(site, date)`
+  returns program / non-program / total on hand, delta from yesterday's EOD (net
+  inbound − outbound), the program/NP split %, days since the last physical count, and
+  that count's date + counter (resolved from the append-only audit row, not a
+  denormalised column). Every figure is read from `onHand` / `computeRunningBalance`
+  (ADR-0037 D6) — no second inventory computation exists.
+- **Freshness gate** — `EOD_INVENTORY_STALE_DAYS` (default 14). HEALTHY requires a
+  `measured` physical anchor inside the window; otherwise the report renders the
+  "Inventory pending physical count" warning band with the last anchor date + age, and
+  NEVER the healthy figures (a drifted balance read as fact is a mis-billing hazard —
+  MRC is billed on program units). A site with no anchor and no movement renders a
+  neutral ZERO band so pre-backfill sites read gracefully.
+- **Wire-up** — `buildDailyReport` attaches the snapshot; `renderHtmlBody` renders the
+  per-site "End-of-Day Inventory" panel after the Trend block. An inventory read failure
+  logs and drops the section rather than blocking the production report.
+- **Docs** — ADR-0030 amendment (section spec, gate, asOf discipline, config) +
+  `docs/operator/daily-production-report.md` (EOD section, the three states, how to
+  clear a stale band, window tuning) + `.env.example`.
+
 ### Removed — 2026-07-22 (ADR-0037 Phase 5 — outdoor storage removed from Vision)
 
 Bill's directive: *"we will also remove the units outdoor we are never allowed to store

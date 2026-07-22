@@ -58,6 +58,21 @@ let todayRows: TodayRow[];
 let historyRows: HistoryRow[];
 let adjustmentRows: AdjustmentRow[];
 
+// ADR-0037 Phase 4: buildDailyReport also reads EOD inventory. That path has its
+// own tests (src/lib/loads/eod-inventory.test.ts); here it is stubbed so these
+// aggregation tests stay DB-free and unchanged in scope.
+let eodSnapshot: unknown = null;
+let eodThrows = false;
+vi.mock('@/lib/loads/eod-inventory', () => ({
+  getEodInventorySnapshot: vi.fn(async () => {
+    if (eodThrows) throw new Error('inventory down');
+    return eodSnapshot;
+  }),
+}));
+vi.mock('@/lib/observability/logger', () => ({
+  log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+
 vi.mock('@/lib/bonus/daily-entry', () => ({
   resolveActiveRule: vi.fn(async () => WOODLAND_RULE),
 }));
@@ -104,6 +119,8 @@ vi.mock('@/lib/prisma', () => ({
 }));
 
 beforeEach(() => {
+  eodSnapshot = null;
+  eodThrows = false;
   siteRow = { id: WOODLAND, code: 'woodland', name: 'Woodland' };
   todayRows = [];
   historyRows = [];
@@ -550,5 +567,29 @@ describe('2026-07-06 investigation lock-ins', () => {
   it('Jul 31 same-period-last-month clamps to Jun 30 (overflow-safe)', () => {
     const d = sameDomPriorMonth(new Date(Date.UTC(2026, 6, 31)));
     expect([d.getUTCMonth() + 1, d.getUTCDate()]).toEqual([6, 30]);
+  });
+});
+
+// ── ADR-0037 Phase 4 — EOD inventory wire-up ────────────────────────
+
+describe('buildDailyReport EOD inventory wiring', () => {
+  it('attaches the EOD inventory snapshot to the report', async () => {
+    eodSnapshot = { state: 'healthy', totalOnHand: 3977 };
+    const report = await build(new Date(Date.UTC(2026, 6, 22)));
+    expect(report.eodInventory).toEqual({ state: 'healthy', totalOnHand: 3977 });
+  });
+
+  it('still produces the production report when the inventory read fails', async () => {
+    eodThrows = true;
+    todayRows = [
+      {
+        mattress_count: dec(60),
+        entered_at: new Date(Date.UTC(2026, 6, 22, 1)),
+        bonus_employee: { id: 'e1', full_name: 'Jeremy' },
+      },
+    ];
+    const report = await build(new Date(Date.UTC(2026, 6, 22)));
+    expect(report.totalToday).toBe(60);
+    expect(report.eodInventory).toBeUndefined();
   });
 });

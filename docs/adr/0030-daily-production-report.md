@@ -280,3 +280,83 @@ time.
 - `prisma/seed.mjs` daily-report `send_time_pt` 18:00 → 20:00 (fresh/CI DBs).
   Live configs are admin-owned; setting each enabled site to 20:00 via Admin →
   Daily Report Config aligns the "late" flag threshold with the 8pm deadline.
+
+## Post-acceptance amendment — End-of-Day Inventory section (ADR-0037 Phase 4, 2026-07-22)
+
+Extends the "Email content" section above. The report now carries a per-site
+**End-of-Day Inventory** block, rendered after the Trend block, so the one email
+Bill and Operations already read every evening answers "what is on the floor
+tonight?" without opening the app.
+
+**Source of truth.** Every figure comes from `onHand`
+(`src/lib/inventory/running-balance.ts`) — the single `computeRunningBalance`
+consumer (ADR-0037 D6). `src/lib/loads/eod-inventory.ts`
+(`getEodInventorySnapshot(site, date)`) reads the balance at the end of the report
+day and at the end of the prior day and derives presentation facts only; it
+re-implements no inventory arithmetic. A change to the inventory equation
+propagates here for free — and cannot diverge, which is the whole point of D6.
+
+**Content (healthy state).**
+
+```
+============================================
+End-of-Day Inventory — Woodland
+============================================
+Program units on hand:      3,748
+Non-program units on hand:    229
+Total on hand:              3,977
+
+Change from yesterday:      -142 (net outbound)
+Program / NP split:         94.2% / 5.8%
+
+Latest physical count:      Jul 22, 2026 (today)
+Counter:                    Morena
+```
+
+The counter is resolved from the append-only audit row `reconcilePhysicalCount`
+writes with the snapshot (the audit log IS the provenance record — no
+denormalised name column), and is HTML-escaped as the one untrusted string in the
+panel. `snapshot_at` is a true instant, so it renders in Pacific.
+
+**Freshness gate (the load-bearing rule).** A computed balance drifts. The
+healthy block renders ONLY when a **`measured`** physical anchor exists within
+`EOD_INVENTORY_STALE_DAYS` (default **14**) of the report day. `measured` — not
+merely `physical` — because a `legacy` anchor has no program/non-program split
+(the whole count is attributed to the program pool), and MRC is billed on program
+units. Otherwise the section renders the STALE warning band, and **never** the
+healthy format:
+
+```
+⚠ Inventory pending physical count
+Last measured anchor:       Jun 30, 2026 (22 days ago)
+Computed balance is drift-prone; verify with a floor count.
+```
+
+A site with no anchor and no movement at all (pre-backfill) renders a third,
+neutral ZERO band ("No inventory activity recorded yet") rather than a stale
+alarm about data nobody has entered yet.
+
+**Availability.** `buildDailyReport` wraps the inventory read in try/catch: on
+failure it logs and omits the section. The production numbers are the point of
+this report and must still go out; a missing section is never a way to say
+"stale" — staleness is a state on the snapshot and always renders its band.
+
+**asOf discipline.** The report day is a `@db.Date`-shaped key (UTC midnight of
+the Pacific calendar day). End-of-day is that key's last millisecond
+(23:59:59.999Z), which includes every `@db.Date` operational row for the day and
+every paper-bulk inbound row (written at UTC midnight of its day key) while
+excluding the next day's rows — a Pacific-midnight bound would pull those in on
+any backfilled report. Trade-off: an iPad-captured load whose `arrived_at`
+instant falls after 17:00 PT is attributed to the following day's report; no unit
+is lost.
+
+**Config.** `EOD_INVENTORY_STALE_DAYS` (integer > 0) in the app environment. A
+missing, blank, zero, negative or non-integer value falls back to 14 — a bad env
+can never widen the window to infinity. No new DB column and no migration.
+
+**Tests.** `src/lib/loads/eod-inventory.test.ts` (gate, delta, split, anchor age,
+healthy/stale/zero) + the EOD cases in
+`src/lib/bonus/__tests__/daily-report-notifications.test.ts` (each state's
+rendering, including the assertion that the healthy format never appears behind a
+stale anchor) and the wiring/degradation cases in
+`src/lib/bonus/__tests__/daily-report.test.ts`.
