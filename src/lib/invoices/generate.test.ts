@@ -39,6 +39,7 @@ function event(over: Partial<EventCostRow> = {}): EventCostRow {
     perDiemCents: 27500,
     miscCents: 1000,
     freightCents: 50000,
+    dr3Hauled: true,
     retracId: null,
     ...over,
   };

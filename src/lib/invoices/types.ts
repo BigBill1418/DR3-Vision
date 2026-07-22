@@ -181,6 +181,15 @@ export interface EventCostRow {
   miscCents: number;
   /** Rides B16 transportation, not B8. */
   freightCents: number;
+  /**
+   * ADR-0056 amendment (Addendum A §A.3 — `collection_events.dr3_hauled`): true
+   * when DR3 performed the haul (Mode A), false when a customer / third party
+   * hauled (Mode B). The freight side (`freightCents` → `event_transportation_total`
+   * → `MILES 0`) bills ONLY in Mode A; the labor side (`eventMiscCents` → EVENTO)
+   * bills in BOTH modes. Defaults to true on the column (billing-safe backfill —
+   * reproduces the pre-amendment "always DR3-hauled" behavior).
+   */
+  dr3Hauled: boolean;
   retracId: string | null;
 }
 
