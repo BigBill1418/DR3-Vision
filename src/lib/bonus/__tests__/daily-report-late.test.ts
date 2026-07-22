@@ -1,5 +1,11 @@
-// 2026-07-11 Bill directive — on-save late report path. Mirrors the
-// daily-report-runner test mocking pattern (module-mocked prisma + build/send).
+// ADR-0019 §2 amendment (2026-07-21 later-shift) — on-SAVE report path. The
+// report fires on every save; lateness (past the 8pm deadline / a prior day)
+// only sets the flag/banner. Mirrors the daily-report-runner test mocking
+// pattern (module-mocked prisma + build/send).
+//
+// Fixtures: send_time_pt = 12:00 PT (the deadline in these tests). BEFORE_SEND
+// (11:00 AM PDT) is an ON-TIME save → sends a normal report; AFTER_SEND
+// (1:00 PM PDT) is a LATE save → sends flagged late.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -47,7 +53,7 @@ vi.mock('@/lib/observability/logger', () => ({
 }));
 
 import {
-  maybeSendLateDailyReport,
+  maybeSendDailyReportOnSave,
   isPastScheduledSend,
   formatSendTimePt,
 } from '../daily-report-late';
@@ -125,12 +131,43 @@ describe('formatSendTimePt', () => {
   });
 });
 
-describe('maybeSendLateDailyReport', () => {
-  it('on-time save (before send time) is a no-op', async () => {
+describe('maybeSendDailyReportOnSave', () => {
+  it('on-time save (before deadline) sends a NORMAL report — no late flag/banner', async () => {
     findFirstConfig.mockResolvedValue(makeConfig());
-    const out = await maybeSendLateDailyReport('site-w', TODAY, BEFORE_SEND);
-    expect(out).toBe('not_late');
-    expect(sendDailyReport).not.toHaveBeenCalled();
+    findUniqueLog.mockResolvedValue(null);
+    buildDailyReport.mockResolvedValue(makeReport());
+
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, BEFORE_SEND);
+    // The report goes out on save (ADR-0019 §2 amendment) — the report goes out
+    // as soon as data is saved — but with no late framing.
+    expect(out).toBe('sent');
+
+    // No lateInfo → the sender produces the same report the scheduled fire would.
+    const sendArgs = sendDailyReport.mock.calls[0]![0] as { lateInfo?: unknown };
+    expect(sendArgs.lateInfo).toBeUndefined();
+
+    const created = createLog.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(created.data['late_submission']).toBe(false);
+  });
+
+  it('on-time re-save with CHANGED totals re-sends without the late flag (resent)', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue({
+      id: 'log-1',
+      total_today: 200,
+      total_bonus_cents: 9000,
+      resend_count: 0,
+    });
+    buildDailyReport.mockResolvedValue(makeReport(240));
+
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, BEFORE_SEND);
+    expect(out).toBe('resent');
+
+    const sendArgs = sendDailyReport.mock.calls[0]![0] as { lateInfo?: unknown };
+    expect(sendArgs.lateInfo).toBeUndefined();
+    const claim = updateManyLog.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(claim.data['late_submission']).toBe(false);
+    expect(claim.data['resend_count']).toEqual({ increment: 1 });
   });
 
   it('late first save sends immediately with the late flag and logs late_submission', async () => {
@@ -138,7 +175,7 @@ describe('maybeSendLateDailyReport', () => {
     findUniqueLog.mockResolvedValue(null);
     buildDailyReport.mockResolvedValue(makeReport());
 
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('sent_late');
 
     const sendArgs = sendDailyReport.mock.calls[0]![0] as {
@@ -164,7 +201,7 @@ describe('maybeSendLateDailyReport', () => {
     });
     buildDailyReport.mockResolvedValue({ ...makeReport(240), reportDate: YESTERDAY });
 
-    const out = await maybeSendLateDailyReport('site-w', YESTERDAY, BEFORE_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', YESTERDAY, BEFORE_SEND);
     expect(out).toBe('resent_late');
 
     // The resend is CLAIMED via a CAS updateMany — guarded on the stored totals
@@ -197,7 +234,7 @@ describe('maybeSendLateDailyReport', () => {
     buildDailyReport.mockResolvedValue(makeReport());
     createLog.mockRejectedValue(p2002()); // the atomic claim loses the race
 
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('skipped_unchanged');
     expect(sendDailyReport).not.toHaveBeenCalled(); // the point: never a duplicate report
   });
@@ -213,7 +250,7 @@ describe('maybeSendLateDailyReport', () => {
     buildDailyReport.mockResolvedValue(makeReport(240));
     updateManyLog.mockResolvedValue({ count: 0 }); // CAS matched nothing — we lost
 
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('skipped_unchanged');
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
@@ -228,7 +265,7 @@ describe('maybeSendLateDailyReport', () => {
     });
     buildDailyReport.mockResolvedValue(makeReport(271));
 
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('skipped_unchanged');
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
@@ -238,27 +275,27 @@ describe('maybeSendLateDailyReport', () => {
     findUniqueLog.mockResolvedValue(null);
     buildDailyReport.mockResolvedValue(makeReport(0));
 
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('skipped_zero');
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
 
   it('no enabled config / no recipients / future day are no-ops', async () => {
     findFirstConfig.mockResolvedValue(null);
-    expect(await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND)).toBe('skipped_no_config');
+    expect(await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND)).toBe('skipped_no_config');
 
     findFirstConfig.mockResolvedValue(makeConfig({ recipients: [] }));
-    expect(await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND)).toBe(
+    expect(await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND)).toBe(
       'skipped_no_recipients',
     );
 
     findFirstConfig.mockResolvedValue(makeConfig());
-    expect(await maybeSendLateDailyReport('site-w', TOMORROW, AFTER_SEND)).toBe('skipped_future');
+    expect(await maybeSendDailyReportOnSave('site-w', TOMORROW, AFTER_SEND)).toBe('skipped_future');
   });
 
   it('NEVER throws — a mail/DB failure logs and returns error (the save already committed)', async () => {
     findFirstConfig.mockRejectedValue(new Error('db down'));
-    const out = await maybeSendLateDailyReport('site-w', TODAY, AFTER_SEND);
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('error');
   });
 });

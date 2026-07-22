@@ -750,8 +750,12 @@ async function seedDailyReportConfig(siteIds) {
       create: {
         site_id,
         enabled: true,
-        // @db.Time column — only the time-of-day matters. 18:00 PT.
-        send_time_pt: new Date('1970-01-01T18:00:00.000Z'),
+        // @db.Time column — only the time-of-day matters. 20:00 PT: the 8pm
+        // entry deadline (ADR-0019 §2 amendment, 2026-07-21 later-shift). The
+        // report now fires on save (see daily-report-late.ts); send_time_pt is
+        // the LATENESS THRESHOLD for the on-save "late" flag AND the scheduled
+        // daemon's end-of-window backstop — both anchored to the 8pm deadline.
+        send_time_pt: new Date('1970-01-01T20:00:00.000Z'),
         subject_template: 'DR3 Daily Production Report — {site} — {date}',
         updated_at: new Date(),
       },

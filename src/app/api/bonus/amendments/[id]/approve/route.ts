@@ -12,7 +12,7 @@ import {
 } from '@/lib/bonus/amendment-notifications';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
-import { maybeSendLateDailyReport } from '@/lib/bonus/daily-report-late';
+import { maybeSendDailyReportOnSave } from '@/lib/bonus/daily-report-late';
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         const key = `${a.site_id}:${a.target_entry_date.toISOString().slice(0, 10)}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        await maybeSendLateDailyReport(a.site_id, a.target_entry_date);
+        await maybeSendDailyReportOnSave(a.site_id, a.target_entry_date);
       }
     } catch (lateErr) {
       // Fail-soft: the approval already committed; the report push must never

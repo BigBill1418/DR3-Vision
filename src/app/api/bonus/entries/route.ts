@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
-import { maybeSendLateDailyReport } from '@/lib/bonus/daily-report-late';
+import { maybeSendDailyReportOnSave } from '@/lib/bonus/daily-report-late';
 import {
   upsertDailyEntries,
   isValidMattressCount,
@@ -134,11 +134,11 @@ export async function POST(req: Request) {
   }
 
   if (result.ok === true) {
-    // 2026-07-11 Bill directive: a save AFTER the scheduled report time still
-    // pushes the production report out immediately, flagged with the
-    // submission time. Awaited but fail-soft by contract (never throws, never
-    // fails the save); adds nothing on an on-time save.
-    await maybeSendLateDailyReport(ctx.siteId, date);
+    // ADR-0019 §2 amendment (2026-07-21 later-shift): the per-site production
+    // report goes out immediately on save — flagged LATE when entered after the
+    // 8pm deadline. Awaited but fail-soft by contract (never throws, never fails
+    // the save); idempotent per (site, day) so a re-save never double-sends.
+    await maybeSendDailyReportOnSave(ctx.siteId, date);
     return NextResponse.json({ monthId: result.monthId, entries: result.entries }, { status: 200 });
   }
 

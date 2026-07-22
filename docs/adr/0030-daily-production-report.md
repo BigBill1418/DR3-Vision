@@ -253,3 +253,30 @@ directly. Per Bill's Q-0047-1 disposition it is **grandfathered** (on the
 `notifyStaff()` on the incident-night deploy. ADR-0049 (workbook sync) structurally
 fixes the underlying report-accuracy problem this grandfathering was necessary for,
 so gating it became moot; a post-8/1 revisit is optional.
+
+## Post-acceptance amendment — report-on-save (later shift, 2026-07-21)
+
+Paired with the ADR-0019 §2 move of the entry deadline to 8pm PT. Under the
+later shift the operator wants the per-site production report to go out **as
+soon as the data is entered and saved**, rather than only at a fixed scheduled
+time.
+
+- The on-save path (`src/lib/bonus/daily-report-late.ts`, added 2026-07-11 for
+  late entries) is generalized: `maybeSendLateDailyReport` →
+  `maybeSendDailyReportOnSave`, and it now fires on **every** successful save
+  (the `!isPastScheduledSend → not_late` gate is removed). Lateness (entered
+  after the 8pm deadline / on a prior day) no longer gates the send — it only
+  sets `late_submission` + the LATE banner/subject. An on-time on-save send is
+  byte-for-byte the report the scheduled fire would have produced.
+- Idempotency is unchanged and load-bearing: the `bonus_daily_report_log`
+  unique `(site_id, report_date)` + claim-before-send + resend-only-on-changed-
+  totals means a re-save of identical numbers never re-sends, and a corrected
+  save re-sends once with "supersedes the earlier send".
+- The ADR-0030 scheduled daemon (`scripts/bonus-daily-report.mjs`) is retained
+  as a pure **end-of-window backstop**. With `send_time_pt` seeded to 20:00 PT
+  it wakes at the deadline; if the on-save path already sent, it finds the log
+  row and skips (`skipped_already_logged`) — the unique constraint makes a
+  double-send structurally impossible.
+- `prisma/seed.mjs` daily-report `send_time_pt` 18:00 → 20:00 (fresh/CI DBs).
+  Live configs are admin-owned; setting each enabled site to 20:00 via Admin →
+  Daily Report Config aligns the "late" flag threshold with the 8pm deadline.
