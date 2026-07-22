@@ -373,6 +373,10 @@ describe('second leg — decideSecondApproval', () => {
     const args = notifyStaffSpy.mock.calls[0]![0] as { cc?: string[]; htmlBody: string };
     expect(args.cc).toContain('morena@svdp.us');
     expect(args.htmlBody).toContain('Amount exceeds the approved scope');
+    // D-M5-3 (spec line 680) — the override-reject email must also carry the FIRST
+    // approver's explanation. It lives in `explanation` (decision_note stays null on a
+    // structured Approve), so it must be rendered explicitly, not via the note fallback.
+    expect(args.htmlBody).toContain('Baler hydraulics rebuild');
   });
 
   it('a second-approval reject with NO note is refused (override must be explained)', async () => {

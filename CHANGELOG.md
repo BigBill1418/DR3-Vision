@@ -5,6 +5,18 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-22 (ADR-0046 Amendment 5 D-M5-3 — override-reject email dropped first-approver context)
+
+- **`src/lib/ap/approvals.ts`** — a second-approver override REJECT email no longer
+  drops the FIRST approver's `explanation` and equipment linkage. On a structured
+  Approve the narrative lives in the `explanation` column (`decision_note` stays
+  null), so the `effectiveNote` fallback resolved to NULL on a reject and the
+  forwarder + CC'd first approver got the override reason but not what the
+  transaction was for. The rejection email now renders the first approval note and
+  the first approver's equipment linkage explicitly, per spec §D-M5-3 (line 680:
+  vendor + explanation + amount + equipment + note). Regression covered in
+  `second-approval.test.ts`.
+
 ### Docs — 2026-07-22 (ADR-0046 Amendment 5 finalize — operator runbook brought current)
 
 - **`docs/operator/ap-approvals.md`** now documents the FULL Amendment 5 approver

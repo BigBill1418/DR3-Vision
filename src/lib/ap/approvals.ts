@@ -878,6 +878,41 @@ export async function sendDecisionEmail(
     isDual && req.status === 'rejected' && req.second_approver_note
       ? `<li>Second-approver override reason: ${escapeHtml(req.second_approver_note)}</li>`
       : '';
+  // D-M5-3 — a second-approver override REJECT must carry the FIRST approver's full
+  // context so the forwarder + CC'd first approver see WHAT was approved, not just
+  // the override reason. On a structured Approve the narrative lives in `explanation`
+  // (decision_note stays null), so the effectiveNote fallback above resolves it to
+  // NULL on a reject and drops it — render `explanation` explicitly here. The first
+  // approver's equipment linkage rides the same block (spec §D-M5-3, line 680).
+  const isDualOverrideReject = isDual && req.status === 'rejected';
+  const firstApprovalNoteLine =
+    isDualOverrideReject && req.explanation
+      ? `<li>First approval note: ${escapeHtml(req.explanation)}</li>`
+      : '';
+  let firstApprovalEquipmentLine = '';
+  if (isDualOverrideReject) {
+    const links = await prisma.apEquipmentLink.findMany({
+      where: { request_id: requestId },
+      select: { equipment_id: true, is_not_equipment_related: true },
+    });
+    if (links.some((l) => l.is_not_equipment_related)) {
+      firstApprovalEquipmentLine = '<li>Equipment: not equipment-related</li>';
+    } else {
+      const ids = links
+        .map((l) => l.equipment_id)
+        .filter((id): id is string => typeof id === 'string');
+      if (ids.length > 0) {
+        const equipment = await prisma.equipment.findMany({
+          where: { id: { in: ids } },
+          select: { display_name: true },
+        });
+        const names = equipment.map((e) => e.display_name).filter(Boolean);
+        if (names.length > 0) {
+          firstApprovalEquipmentLine = `<li>Equipment: ${escapeHtml(names.join(', '))}</li>`;
+        }
+      }
+    }
+  }
   // D-M5-4 — an acknowledged variance rides the decision email as an audit footer.
   const varianceLine =
     req.variance_flag_state === 'acknowledged'
@@ -910,6 +945,8 @@ export async function sendDecisionEmail(
       ${vendorLine}
       ${amountLine}
       ${noteLine}
+      ${firstApprovalNoteLine}
+      ${firstApprovalEquipmentLine}
       ${overrideNoteLine}
       ${varianceLine}
     </ul>`;
