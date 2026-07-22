@@ -1,0 +1,10 @@
+[Unit]
+Description=Quarterly trigger for the DR3-Vision R2 restore drill
+
+[Timer]
+# 16th of Jan/Apr/Jul/Oct, 18:13 UTC (11:13 PDT / 10:13 PST — waking hours).
+OnCalendar=*-01,04,07,10-16 18:13:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

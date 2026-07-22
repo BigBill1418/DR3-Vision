@@ -5,6 +5,37 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 — quarterly off-host RESTORE DRILL (proves the backup lane is restorable)
+
+Closes the "a backup nobody has restored is a rumor" gap for the DR3-Vision
+lane — the one that carries bonus/payroll/PII. Proves the encrypted restic/R2
+backup leg (`scripts/dr3-pg-backup.sh`) is actually *restorable*, on a schedule,
+without anyone having to remember. Clones the proven DroneOps restore-drill
+template, adapted from its aws-cli/gzip R2 path to our restic/`pg_dump -Fc` path.
+
+- **`scripts/restore-drill.sh`** — pulls the newest `dr3-vision`-tagged snapshot
+  from the dedicated R2 restic repo, refuses to certify anything **>48h old**,
+  streams `restic dump` → `pg_restore` into a throwaway `dr3_vision_restore_drill`
+  DB on the live `dr3-vision-postgres` container, asserts key tables non-empty
+  (`audit_log`, `bonus_daily_entries`, `bonus_employees`) **and** the largest
+  table (`audit_log`) restores to **≥90% of live**, then drops the scratch DB via
+  an EXIT `trap` (guarded to that exact constant name, even on failure paths).
+  Mirrors the template's spine: `set -euo pipefail`, `fail()` → ntfy + `exit 1`,
+  `PIPESTATUS`-gated restic failure, atomic freshness-metric stamp **only** on
+  full success. ntfy is FAILURE-ONLY (ADR-0037) → `infrawatch-alerts` (`high`,
+  6h cooldown, dedup `dr3-vision-restore-drill`); a healthy drill is silent.
+- **`scripts/systemd/dr3-vision-restore-drill.{service,timer}`** — `Type=oneshot`
+  service (User `bbarnard065`, `TimeoutStartSec=30min`) + quarterly timer
+  (`OnCalendar=*-01,04,07,10-16 18:13:00 UTC`, `Persistent=true`). On full success
+  stamps the node-exporter textfile metric
+  `dr3_vision_restore_drill_last_success_timestamp_seconds` (written atomically to
+  `/var/lib/node_exporter/textfile_collector/`, scraped by BOS Prometheus as
+  instance `CHAD-HQ`) — so a silently-dead timer is itself alertable via staleness.
+  Installed + enabled on CHAD-HQ; next fire 2026-10-16 18:13 UTC.
+- **Install-time verified** (2026-07-22): `systemctl start` → `Result=success`,
+  exit 0, `audit_log=9920/9995` (99.2%), scratch DB dropped, metric live in
+  Prometheus.
+
 ### Fixed — 2026-07-22 (ADR-0057 D3 — backfill full history: Completed Hauls + inactive-materials views)
 
 - **MyMRC backfill now pages ALL list views per object — active AND history —
