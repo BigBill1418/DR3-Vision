@@ -452,9 +452,53 @@ const PII_SEGMENTS = new Set([
 // Relationship prefixes whose `.Name` resolves to a person (flat dotted keys).
 const PERSON_RELATIONSHIP_RE = /(^|\.)(createdby|lastmodifiedby|owner|manager|user|contact)\./i;
 
+// FLAT fields whose HUMAN value (displayValue, or a name-shaped value) is a
+// person's name — even though the field is NOT a nested person record and its
+// segment is not a bare PII segment. This closes the leak the first live run left
+// (143 unredacted names): audit/lookup fields carry the person in displayValue —
+//   - `*_By__c` custom fields  (Cancelled_By__c, Approved_By__c, Received_By__c)
+//   - the `…ById` standard lookups (CreatedById, LastModifiedById, OwnerId)
+//   - flat `CreatedBy` / `LastModifiedBy` / `Owner` / `Manager` lookups
+//   - any `Employee_*` field
+// Matched against the field's LAST segment (lowercased). Deliberately NARROW: it
+// must NOT touch business fields the fixtures rely on (site/vendor/transporter
+// names, unit counts, weights, dates, object ids) — `_by` requires an underscore
+// boundary (so "Standby__c" is not a person field), and no business segment here
+// starts with "employee" or ends with "…byid"/"owner"/"manager".
+const PERSON_NAME_FIELD_RE = new RegExp(
+  [
+    '^employee', // Employee_Name__c, Employee_Signature__c, Employee_*
+    '_by(__c|__r)?$', // Cancelled_By__c, Approved_By, Received_By__r
+    '(created|lastmodified|owner|manager)(?:by)?id$', // CreatedById, LastModifiedById, OwnerId, ManagerId
+    '^(createdby|lastmodifiedby|owner|manager)$', // flat lookup carrying the name in displayValue
+  ].join('|'),
+  'i',
+);
+
 function lastSegment(fieldName: string): string {
   const i = fieldName.lastIndexOf('.');
   return (i >= 0 ? fieldName.slice(i + 1) : fieldName).toLowerCase();
+}
+
+/** A 15- or 18-char Salesforce record id — opaque, carries no PII (keep it). */
+function isSalesforceId(v: unknown): v is string {
+  return (
+    typeof v === 'string' &&
+    (v.length === 15 || v.length === 18) &&
+    /^[A-Za-z0-9]+$/.test(v)
+  );
+}
+
+/**
+ * Scrub the VALUE of a person-name field: a name-shaped string becomes REDACTED,
+ * an opaque Salesforce id is KEPT (no PII, preserves record structure), and
+ * null/numbers/booleans pass through unchanged.
+ */
+function redactPersonValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v;
+  if (isSalesforceId(v)) return v;
+  if (typeof v === 'string') return REDACTED;
+  return v;
 }
 
 function isRecordLike(v: unknown): v is SfRecord & Record<string, unknown> {
@@ -493,6 +537,17 @@ function redactField(name: string, field: SfField, ownerApiName: string): SfFiel
   }
 
   const seg = lastSegment(name);
+
+  // Flat person-name field (audit/lookup/employee): the person is in displayValue
+  // (and sometimes the value). Redact displayValue + any name-shaped value; keep
+  // opaque Salesforce ids so the record structure survives for regression tests.
+  if (PERSON_NAME_FIELD_RE.test(seg)) {
+    return {
+      displayValue: field.displayValue == null ? null : REDACTED,
+      value: redactPersonValue(value),
+    };
+  }
+
   const isPii =
     PII_SEGMENTS.has(seg) ||
     (seg === 'name' && (PERSON_OBJECTS.has(ownerApiName.toLowerCase()) || PERSON_RELATIONSHIP_RE.test(name)));
