@@ -7,6 +7,13 @@
 // rule #10, decisions use onClick handlers, never <form> elements.
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  AP_ATTACHMENT_URL_TTL_SECONDS,
+  isInlineImage,
+  isInlinePdf,
+  isInlinePreviewable,
+  isPresignStale,
+} from '@/lib/ap/inline-preview';
 
 type Status =
   | 'pending'
@@ -1211,13 +1218,13 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
   );
 }
 
-// ADR-0046 Amendment 4 — inline preview render rules (client mirror of the
-// server allowlist; the server is authoritative and signs the inline URL only
-// for these types). Anything past the cap opens in a new tab instead of framing.
+// ADR-0046 Amendment 4/6 — inline preview render rules. The inline predicates are
+// the SHARED `inline-preview` helpers (same code the server route decides with, so
+// the two can't drift): they strip MIME params and fall back to the filename
+// extension for mislabeled octet-stream/empty types. The server is authoritative and
+// signs the inline URL (with a canonical Content-Type) only for these; anything past
+// the cap opens in a new tab instead of framing.
 const PREVIEW_SIZE_CAP = 15 * 1024 * 1024; // 15 MB
-const isImagePreview = (ct: string | null): boolean =>
-  !!ct && /^image\/(png|jpeg|jpg|webp)$/i.test(ct);
-const isPdfPreview = (ct: string | null): boolean => (ct ?? '').toLowerCase() === 'application/pdf';
 
 // iOS/iPadOS Safari (WebKit) has NO inline <iframe> PDF viewer — a framed PDF renders
 // BLANK on the Eugene iPad. Detect it so the PDF preview surfaces a prominent
@@ -1237,6 +1244,11 @@ interface Presigned {
   url: string;
   inline: boolean;
   contentType: string | null;
+  // ADR-0046 Amendment 6 — freshness: when the cached URL was minted (client clock)
+  // and the server-declared TTL, so `resolve()` re-mints before R2 expiry instead of
+  // serving a stale URL (→ R2 403 → blank iframe / dead download).
+  mintedAt: number;
+  expiresIn: number;
 }
 
 function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentView }) {
@@ -1245,9 +1257,11 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
   const [expanded, setExpanded] = useState(false);
   const [presigned, setPresigned] = useState<Presigned | null>(null);
 
-  // Fetch (once) + cache the short-lived presigned URL for this attachment.
+  // Fetch + cache the short-lived presigned URL. ADR-0046 Amendment 6: reuse the
+  // cache only while FRESH; re-mint once within the skew of expiry so a re-expand or
+  // read-then-download minutes later never hits an expired (403) URL.
   const resolve = useCallback(async (): Promise<Presigned | null> => {
-    if (presigned) return presigned;
+    if (presigned && !isPresignStale(presigned.mintedAt, presigned.expiresIn)) return presigned;
     const res = await fetch(`/api/ops/ap/${requestId}/attachment/${att.id}`);
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.url) {
@@ -1255,6 +1269,9 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
         url: body.url,
         inline: !!body.inline,
         contentType: body.contentType ?? att.contentType,
+        mintedAt: Date.now(),
+        expiresIn:
+          typeof body.expiresIn === 'number' ? body.expiresIn : AP_ATTACHMENT_URL_TTL_SECONDS,
       };
       setPresigned(p);
       return p;
@@ -1320,7 +1337,7 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
       </li>
     );
   }
-  const previewable = isImagePreview(att.contentType) || isPdfPreview(att.contentType);
+  const previewable = isInlinePreviewable(att.contentType, att.filename);
   const oversize = att.byteSize != null && att.byteSize > PREVIEW_SIZE_CAP;
   return (
     <li className="rounded border border-white/10 bg-white/5 px-2 py-1">
@@ -1345,7 +1362,7 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
       </div>
       {expanded && presigned?.inline && (
         <div className="mt-2">
-          {isImagePreview(presigned.contentType) ? (
+          {isInlineImage(presigned.contentType, att.filename) ? (
             // Presigned R2 image preview; Next/Image can't sign/proxy R2 GETs.
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -1353,7 +1370,7 @@ function AttachmentRow({ requestId, att }: { requestId: string; att: AttachmentV
               alt={att.filename ?? 'attachment preview'}
               className="max-h-[32rem] w-auto max-w-full rounded border border-white/10 bg-white"
             />
-          ) : isPdfPreview(presigned.contentType) ? (
+          ) : isInlinePdf(presigned.contentType, att.filename) ? (
             // iPad Safari (WebKit) renders a framed PDF BLANK. ALWAYS surface a
             // prominent, touch-sized "Open PDF" action so the approver can read the
             // invoice on the iPad. On iOS that action REPLACES the (blank) iframe; on

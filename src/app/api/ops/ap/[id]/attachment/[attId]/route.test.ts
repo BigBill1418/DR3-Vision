@@ -56,6 +56,58 @@ describe('GET /api/ops/ap/[id]/attachment/[attId] — inline allowlist', () => {
       kind: 'file',
       storage_key: 'ap/req-1/att-1/f',
       content_type: 'application/octet-stream',
+      filename: null,
+    });
+    const res = await call();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.inline).toBe(false);
+    expect(signApAttachmentDownload).toHaveBeenCalledWith(
+      'ap/req-1/att-1/f',
+      expect.objectContaining({ inline: false }),
+    );
+  });
+
+  // ADR-0046 Amendment 6 — LIVE defect: PDFs stored as application/octet-stream.
+  it('signs an INLINE application/pdf url for an octet-stream .pdf (filename fallback)', async () => {
+    findFirst.mockResolvedValue({
+      kind: 'file',
+      storage_key: 'ap/req-1/att-1/f',
+      content_type: 'application/octet-stream',
+      filename: 'Invoice-4471.PDF',
+    });
+    const res = await call();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.inline).toBe(true);
+    expect(body.contentType).toBe('application/pdf'); // canonicalized on the wire
+    expect(body.expiresIn).toBe(900);
+    expect(signApAttachmentDownload).toHaveBeenCalledWith(
+      'ap/req-1/att-1/f',
+      expect.objectContaining({ inline: true, contentType: 'application/pdf', expiresIn: 900 }),
+    );
+  });
+
+  it('signs INLINE for a parameterized application/pdf; name="x"', async () => {
+    findFirst.mockResolvedValue({
+      kind: 'file',
+      storage_key: 'ap/req-1/att-1/f',
+      content_type: 'application/pdf; name="inv.pdf"',
+      filename: 'inv.pdf',
+    });
+    const res = await call();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.inline).toBe(true);
+    expect(body.contentType).toBe('application/pdf');
+  });
+
+  it('keeps download for an octet-stream .xlsx (no false inline)', async () => {
+    findFirst.mockResolvedValue({
+      kind: 'file',
+      storage_key: 'ap/req-1/att-1/f',
+      content_type: 'application/octet-stream',
+      filename: 'ledger.xlsx',
     });
     const res = await call();
     expect(res.status).toBe(200);
