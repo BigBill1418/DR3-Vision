@@ -4,6 +4,10 @@
     "_comment_2": "Manager portal namespace. Vocabulary aligned with operator.json: source = origen, BOL = BOL, unload = descargar, mattress = colchón.",
     "_comment_3": "Manager-specific terms: dashboard = panel, dock = muelle, compliance = cumplimiento, dispatch = despachar."
   },
+  "nav": {
+    "back_to_dashboard": "Panel",
+    "back_to_dashboard_aria": "Volver al panel"
+  },
   "load_status": {
     "expected": "Esperada",
     "arrived": "Llegó",

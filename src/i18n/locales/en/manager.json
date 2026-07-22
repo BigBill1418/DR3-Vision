@@ -3,6 +3,10 @@
     "_comment_1": "Manager portal namespace — separate from operator.json so the dashboard surface can iterate without churning the iPad strings.",
     "_comment_2": "Per CLAUDE.md hard rule #4 EN/ES/UR are all required on every user-facing surface. The /admin surface is explicitly out of scope (admin-only, English-only per ADR-0017)."
   },
+  "nav": {
+    "back_to_dashboard": "Dashboard",
+    "back_to_dashboard_aria": "Back to dashboard"
+  },
   "load_status": {
     "expected": "Expected",
     "arrived": "Arrived",

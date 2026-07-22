@@ -5,6 +5,39 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-22 (Navigation — always-visible "← Dashboard" bar across the manager surface)
+
+Closed a long-standing navigation gap: 30 of the 57 manager-surface pages had NO
+in-app path back to the Vision Dashboard (`/`) — you were forced onto the browser
+Back button. Root cause: the `/bonus` and `/dashboard` route-group layouts rendered
+no home nav, and `/admin/**` had no group layout at all. Fixed centrally (one shared
+component wired into the three route-group layouts) rather than patching each page.
+
+- **`src/app/_components/back-to-dashboard.tsx`** (new) — the shared nav bar. A real
+  `<Link href="/">` styled to the dr3 deep-space theme (bordered pill + chevron), a
+  ≥44px touch target for the floor iPads (WCAG 2.5.5), high-contrast with a persistent
+  (non-hover-only) affordance and a visible focus ring. Two exports: `BackToDashboardBar`
+  (presentational, explicit label — used by English-only `/admin`) and
+  `BackToDashboardNav` (resolves EN/ES/UR via `useT()` — used by bonus/dashboard).
+- **`src/app/bonus/layout.tsx`** + **`src/app/dashboard/layout.tsx`** — render the
+  i18n nav bar at the top inside the existing `I18nProvider` (bonus keeps its
+  `SiteSwitchBanner` below it).
+- **`src/app/admin/layout.tsx`** (new) — first-ever `/admin` route-group layout;
+  renders the bar for all ~27 admin pages. English-only per ADR-0017 (no `I18nProvider`).
+- **`src/i18n/locales/{en,es,ur}/manager.json`** — new `nav.back_to_dashboard` +
+  `nav.back_to_dashboard_aria` keys (CLAUDE.md hard rule #4).
+- **`src/app/_components/vision-shell.tsx`** — the landing-page logo is now a
+  `<Link href="/">` (aria-labelled), visually unchanged (belt-and-suspenders home path).
+- Coverage: all 55 pages under `/bonus` (8), `/dashboard` (20), `/admin` (27) now reach
+  `/` via the inherited layout bar; residual gapped pages = 0. Deliberately excluded:
+  `/` (is the dashboard), `/login`, `/operator/**` (PIN iPad flow), `/internal/**`
+  (headless PDF), `/survey/[token]` (public). Pages with their own page-level back-link
+  (e.g. "← All sites") are untouched — the layout bar sits cleanly above them (different
+  targets: page links go up one level, the bar goes to `/`).
+- Tests: `back-to-dashboard.test.tsx` (4) + one layout test each for admin/bonus/dashboard
+  asserting a link to `/`. 7 green. Verified visually with Playwright at the iPad viewport
+  (768×1024): `/bonus`, `/admin/users`, `/dashboard/[site]/compliance`.
+
 ### Changed — 2026-07-22 (ADR-0057 D3 addendum — MyMRC billing-field capture: batched getRecordWithFields transport)
 
 Replaced the racy per-record `/s/detail/<id>` navigation-interception detail fetch
