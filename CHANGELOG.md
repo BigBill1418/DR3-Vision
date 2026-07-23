@@ -5,6 +5,19 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-23 (ADR-0058 floor-probe gate unreachable — middleware auth redirect)
+
+- Added `/api/internal/inventory/` to the middleware public-path allow-list
+  (`src/lib/public-paths.ts`). The ADR-0058 anchor-safety gate calls the
+  session-less `/api/internal/inventory/floor-probe` route over loopback, but the
+  route was never exempted from the NextAuth middleware, so every gate call was
+  307'd to `/login`. The bridge fails closed on the non-200, so the backfill —
+  and the recurring hourly bridge — could never write. The route self-checks the
+  bearer token and 404s any `cf-connecting-ip` request, so the exemption is the
+  same loopback-guarded posture as the survey/bonus/ap crons. Regression case
+  added to `src/__tests__/public-paths.test.ts`. This is the ADR-0036 class of
+  bug the allow-list comments warn about, caught on first live run.
+
 ### Added — 2026-07-23 (MyMRC processed → inventory bridge + single 8pm production-report send — ADR-0058)
 
 Wires the authoritative MyMRC processed feed to inventory and consolidates the daily
