@@ -132,3 +132,40 @@ Status polled every 30s from the dashboard. Tap opens an inline expandable panel
   `text-sm`→`text-xs` + `line-clamp-2`, with a `min-h-[88px]` floor (iPad tap
   target). The shell grid goes `sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4`,
   `gap-5`→`gap-3`.
+
+## Amendment — 2026-07-22 (Operations Dashboard tile disable → re-enable; #156)
+
+The Decision table above (line 41) presents **Operations Dashboard** as an active tile
+since Sprint 2. That was not continuously true: the tile was paused to `coming-soon`
+on **2026-06-06** "while the underlying surfaces are reworked," and is now **`active`
+again** for the Eugene iPad go-live. This amendment records the full cycle so a reader
+of the Decision table alone isn't misled.
+
+- **Re-enable (`src/lib/dashboard-tiles.ts`, `key: 'operations'`, still `manager+`).**
+  The surfaces the pause waited on have since landed — processed-units daily close,
+  loads/inventory running balance, Terex throughput/downtime/cost, the MyMRC mirror
+  backfill, commodity-payment aging, the compliance slate, bonus close — so
+  `/dashboard` now leads with a comprehensive overview instead of a bare site list.
+  Re-enable is the one-field flip the registry comment always promised.
+- **Born LIVE, not behind a rollout ramp.** The re-enable ships directly to production
+  for the Eugene go-live (not gated to `pilot` first) — a deliberate decision given the
+  overview aggregates only existing source-of-truth modules and re-derives no
+  billing/compliance number.
+- **New per-site Operations Overview** (`src/app/dashboard/[site]/page.tsx` leads with
+  `overview/OpsOverviewPanel.tsx`, fed by `src/lib/dashboard/ops-overview.ts` →
+  `computeOpsOverview`): at-a-glance cards + compact tables for today's active/arrived
+  loads, processing-close status, floor inventory (program / non-program / total),
+  Terex throughput + downtime + cost, contract recycling/recovery rates, the
+  seven-tile compliance slate, commodity-payment aging, bonus-period standing, and
+  **MyMRC sync freshness** per feed (Pacific time so staleness is visible). Each panel
+  deep-links to its source surface and degrades to an explicit note (never a crash) on
+  read failure.
+- **Combined both-sites view** on the `/dashboard` picker for admin / all-sites
+  managers (`computeSiteSummary`): Eugene + Woodland side-by-side. Single-site managers
+  are unaffected.
+- **iPad-first legibility** per ADR-0014: dark Vision palette, no sub-12px real-data
+  text, WCAG-AA contrast, ≥44px touch targets, tables scroll inside their own
+  container (zero horizontal page scroll verified 768×1024 / 1024×768 / 390 / 1440 via
+  Playwright). Refresh is the 30s ops cadence (`OverviewPoller`). Site isolation
+  (hard rule #2) preserved — every read scoped to the resolved site id; the shared
+  MyMRC dock schedule is labeled "all sites" since it carries no site discriminator.

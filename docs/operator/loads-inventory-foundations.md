@@ -1,6 +1,6 @@
 # Loads & Inventory Foundations (ADR-0037) — operator/office guide
 
-_Last updated: 2026-07-22. Audience: office staff, managers, super-admin (Bill).
+_Last updated: 2026-07-23. Audience: office staff, managers, super-admin (Bill).
 These are **desktop office/manager surfaces**, not operator iPad surfaces — the
 iPad inbound flow is untouched by this work._
 

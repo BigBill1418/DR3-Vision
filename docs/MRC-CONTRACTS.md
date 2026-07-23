@@ -84,7 +84,7 @@ These are the dashboard-tracked metrics in `docs/COMPLIANCE.md`:
 3. **Dock-appointment SLA** — ≥90% within 60 minutes
 4. **Recycling rate** — CA ≥75%, OR ≥70% by weight
 5. **In/out reconciliation** — ≥97% match
-6. **Storage inventory** — within site limit (CA 3,500/5,000, OR 6,000)
+6. **Storage inventory** — within site limit (CA **indoor** 3,500; OR **total on-site** 6,000). Vision grades **indoor-only** — the CA 5,000 outdoor allowance is not tracked or graded (DR3 never stores units outside; outdoor was removed from Vision per the ADR-0037 addendum, 2026-07-22).
 7. **Records retention status** — within window (CA 4yr / OR 5yr)
 
 Failing any of these triggers contract penalties, the most severe being storage breach (termination grounds) and recycling rate below threshold (10% withhold).

@@ -210,7 +210,7 @@ Real-portal facts (captured live from `https://mrc-us.my.site.com`):
 
 - **`looksLoggedOut` is now a POSITIVE auth-marker check.** Logged-in ⇔ an authenticated marker is present (the "Switch Account" / "viewing as DR3" banner, or ≥2 object nav links) AND no visible "Log in" control. A bare 404 shell / unrecognized page with no marker is treated as logged out so the loud D5 `AuthFailedError` path actually fires.
 
-- **Enumeration walks the NAV → per-object list pages, not `/s/home`.** After auth-verifying at `/s/`, discovery reads the nav (the `NavigationMenuDataProvider/getNavigationMenu` Aura response, supplemented by DOM `a[href^="/s/"]` links, with a static object allowlist as fallback) and visits each OBJECT page. The object slugs (2026-07-22): `hauls`, `illegal-dump-cip-`, `processed-materials`, `outbound-materials`, `availability`, `outbound-vendors`, `records-review`. Non-object nav entries — Home (`/s/`), FAQs (`/s/help-articles`), Support (`/s/contact`), Reports (`/s/report/Report/Recent`) — are filtered out. Each object page's `ListViewDataManagerController/getItems` Aura action is the real record-id source; one `/s/detail/<id>` (`getRecordWithFields`) per object captures the field set, as before. (The hourly sync's three feeds already point at `/s/hauls` `/s/processed-materials` `/s/outbound-materials` — correct object pages — so only its login + auth check needed the fix.)
+- **Enumeration walks the NAV → per-object list pages, not `/s/home`.** After auth-verifying at `/s/`, discovery reads the nav (the `NavigationMenuDataProvider/getNavigationMenu` Aura response, supplemented by DOM `a[href^="/s/"]` links, with a static object allowlist as fallback) and visits each OBJECT page. The object slugs (2026-07-22): `hauls`, `illegal-dump-cip-`, `processed-materials`, `outbound-materials`, `availability`, `outbound-vendors`, `records-review`. Non-object nav entries — Home (`/s/`), FAQs (`/s/help-articles`), Support (`/s/contact`), Reports (`/s/report/Report/Recent`) — are filtered out. Each object page's `ListViewDataManagerController/getItems` Aura action is the real record-id source; the per-record field set (`getRecordWithFields`) is then captured for each id. **(As of 2026-07-22 the detail capture is a batched direct-Aura POST — see "Detail transport — batched getRecordWithFields (2026-07-22)" below. The original per-record `/s/detail/<id>` navigation-interception described here was replaced by #160 because it captured only ~0.4% of billing unit-counts; this passage is retained for historical context — do NOT implement the retired per-record transport.)** (The hourly sync's three feeds already point at `/s/hauls` `/s/processed-materials` `/s/outbound-materials` — correct object pages — so only its login + auth check needed the fix.)
 
 - **Discovery output dir is configurable via `MYMRC_DISCOVERY_OUT_DIR`.** The runner previously wrote `docs/mymrc-discovery-<date>.md` + `src/lib/mymrc/__fixtures__/<object>/` under `/app`, which is read-only for uid 1001 in the container (the first live run died with `EACCES`). The out-dir now defaults to the repo root (unchanged for local dev) but can point at a writable mounted volume; the repo layout (`docs/` + `src/lib/mymrc/__fixtures__/`) is preserved under the override so artifacts copy back trivially.
 
@@ -295,3 +295,51 @@ satisfied. No other `profiles: ['mymrc']` service exists — the `ap` and
 **Follow-up (fleet monitoring):** add `mymrc-scrape` to the noc-master
 service-registry `containers[]` so the always-on worker's health surfaces in NOC /
 InfraWatch alongside the other DR3-Vision services.
+
+## Detail transport — batched getRecordWithFields (2026-07-22) — D3 addendum (#160)
+
+The billing-bearing fields (unit counts, weights) live only on each record's DETAIL,
+not in the `getItems` list rows. The original detail capture (see the 2026-07-22
+implementation note above) fetched detail **per record by navigating to
+`/s/detail/<id>` and intercepting the resulting `getRecordWithFields` Aura response**
+on a shared page. That transport was racy: the billing-bearing response frequently
+landed OUTSIDE the navigation settle window, so **only ~0.4% of billing unit-counts
+were actually captured** — a money-critical hole (billing bills on program units, and
+the units were missing).
+
+**Decision — replace per-record navigation with a batched direct Aura POST.** The
+detail capture now replays the `getRecordWithFields` action as a **batched direct POST
+to the Aura endpoint** (~100 record-ids per POST), reusing the live list-page
+framework envelope (immune to per-release `fwuid` drift, exactly like the getItems
+offset-replay in D3). It is a **transport swap only** — the mappers, the mirror
+upsert, and the mirror schema are unchanged. Proven live: 200 actions/POST →
+200/200 SUCCESS in ~0.5 s; the backfill enrichment sweep took billing-field capture
+from **~0.4% → 100%**.
+
+- **`src/lib/mymrc/record-fields-client.ts`** (new) — the batched transport: a PURE
+  codec (`buildGetRecordWithFieldsMessage`/`…FormFields`,
+  `parseGetRecordWithFieldsResponse` correlating each action to its recordId by the
+  echoed `action.id`, per-action SUCCESS/ERROR isolation so one bad id can't sink the
+  batch), the `optionalFields` sets matching each mapper (FLS-safe, bounded payload,
+  incl. relationship fields like `Haul_Request__c.Recycling_Center_Lookup__r.Name`),
+  and `createRecordFieldsClient` (bounded exponential backoff on non-200 / Aura
+  EXCEPTION; one logged-out self-heal that rebuilds + re-logs-in + re-captures the
+  envelope, then fails LOUD with `AuthFailedError` — D5).
+- **`src/lib/mymrc/enrich-details.ts`** (new) — `sweepTargetDetail` (the ONE shared
+  batch-sweep primitive) + `enrichDetails` (whole-backlog runner). **Resumable off
+  `detail_fetched_at IS NULL`**; a zero-SUCCESS batch or a logged-out session pages
+  `dr3-vision-system` (ADR-0038 D4).
+- **`src/lib/mymrc/sync.ts`** + **`backfill.ts`** — BOTH the steady-state hourly detail
+  pass AND the backfill detail sweep now use the batched transport (both previously
+  fetched detail per-record on a shared page — the same root-cause race). The batch
+  client is built over the SAME admin session as the list client
+  (`PortalClient.getSession()`), so one login still serves list + detail.
+- **`scripts/mymrc-enrich-details.mjs`** (new) — one-shot backlog enrichment runner
+  with a BEFORE/AFTER coverage reconciliation report.
+- Tests: `record-fields-client.test.ts` (18), `enrich-details.test.ts` (9); the
+  backfill/sync/scrape suites updated for the transport swap.
+
+Architecture note: `scratchpad/mymrc-field-capture-architecture.md` (Terry). This
+addendum supersedes the "one `/s/detail/<id>` per object … as before" passage in the
+2026-07-22 implementation note above (that passage is retained for historical context
+and annotated inline).

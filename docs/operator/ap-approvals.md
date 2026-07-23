@@ -454,3 +454,27 @@ The surface is a union of **Vision-decided invoices** + **Bill-uploaded history*
 (distinguished by a Source column). Filter by vendor (typeahead), date range, amount
 range, site, approver, and source; click a row for full decision context (Vision rows)
 or raw imported values. No aggregate reports/dashboards by design.
+
+## 2026-07-22 — Attachment preview reliability (ADR-0046 Amendment 6)
+
+**AP review is desktop-only, and the invoice preview is now reliable.** AP approvers
+work on desktop/office iPads via Entra SSO (the floor operator iPads are 403 on the AP
+surface), so the preview fixes are desktop-scoped — no iPad-specific handling. Two
+independent defects that had made the preview flaky ("can't see the invoice") were
+fixed with no schema change, no new dependency, and no CSP change (the app still never
+proxies attachment bytes):
+
+- **Preview button now appears for every PDF.** The inline-eligibility check was a
+  strict `^application/pdf$` gate, but Microsoft Graph sometimes stores a `.pdf` as
+  `application/octet-stream` (or `application/pdf; name="…"`) — those showed no Preview
+  button at all. The broadened MIME predicate strips `;`-parameters and falls back to
+  the filename extension for genuinely ambiguous types; it stays a positive allowlist
+  (an octet-stream `.xlsx` still just downloads).
+- **Canonical content-type on the wire.** The presigned R2 URL now signs with — and
+  echoes — the *effective* inline content-type (`application/pdf`, `image/jpeg`, …)
+  rather than the stored label, so an octet-stream `.pdf` frames inline instead of
+  downloading.
+- **No more blank frame on a second look.** The presigned-URL TTL was raised 300 →
+  900 s and the client now **re-mints** within 60 s of expiry instead of replaying an
+  expired URL (which had returned an R2 403 → blank iframe on a collapse/re-expand or
+  read-then-download after 5 min).
