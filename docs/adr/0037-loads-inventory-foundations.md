@@ -131,6 +131,21 @@ post-deconstruction commodities — deconstruction is what`processed` counts).
 - Every quantity edge is a named boundary with real-`Decimal` tests + an e2e path —
   no second divergent computation of the same truth (the 06-22→23 incident class).
 
+**Count-day boundary — Pacific-midnight anchor convention (D-3 fix, 2026-07-22, commit
+5b0f4ae).** The anchor's day boundary is a money-critical edge. Physical anchors were
+originally stamped at UTC-midnight (`${date}T00:00:00Z` = 17:00 PT the prior day) while
+the four outflow tables are `@db.Date` — so the count day's own
+stripping/outbound/landfill was dropped (`> anchor`) while same-Pacific-day inbound
+(`arrived_at`, a `timestamptz`) was still included: a permanent overstatement of the
+count day. New physical snapshots are now stamped at **Pacific-midnight (00:00 PT) of
+the counted day**, and a shared **`anchorFlowBounds`** derives Pacific-calendar-consistent
+flow windows (`@db.Date` outflow strictly after the anchor's Pacific day; `arrived_at`
+on/after Pacific midnight of the following day) used by BOTH `onHand` and the audit's
+`startBalance` — the same "one shared function" rule as D6/ADR-0039. Migration
+`20260807` (idempotent) corrected the two existing PROD anchors' `snapshot_at`
+00:00→07:00Z with an `audit_log` row each; no unit/pool value changed. See ADR-0030's
+EOD amendment and CHANGELOG 2026-07-22.
+
 ### D7 — Activation gates (readiness checklist, enforced before feature exposure)
 
 Schema can merge behind flags, but no loads surface activates beyond what is already
@@ -649,3 +664,35 @@ unwired ADR-0057 `CA_SOURCE_DISAMBIGUATION` constant still marks Golden Bear / R
 Sonoma / Recology Healdsburg `inCatalog:false`; it has no runtime consumer today, so there
 is no dup-insert risk, but it should be reconciled (`inCatalog:true`) when that classifier
 is wired.
+
+## Phase 3 amendment — paper-bootstrap bulk inbound (`paper_bulk`, 2026-07-22, commit d6fd8b6)
+
+Woodland and Eugene run the floor on paper daily logs — there are no operator iPads on
+the dock yet, so nothing writes per-load inbound and the daily close bottlenecked on
+Bill. Phase 3 makes the whole Loads & Inventory surface operable from paper WITHOUT
+weakening the money-safe boundary. The D2/D5 decisions above assumed per-load iPad
+capture; this amendment records the bridge until that lands.
+
+- **`LoadSourceType` gains `paper_bulk`.** A manager enters a day's inbound as ONE
+  synthesized `inbound_loads` row per site per day — total units + a program /
+  non-program split validated to sum (the program pool is the billed pool) — written as
+  `load_source_type = 'paper_bulk'`, `count_mode = 'total'`, `status = 'verified'`. It
+  is the exact shape `onHand()` counts as inbound, so the **D6 inflow arithmetic is
+  preserved with no per-load detail**. `paper_bulk` carries an explicit pool split (no
+  `source`) and therefore has NO source-classification point (see §B7.1).
+- **One aggregate row per site per day, amend-in-place.** Re-entering a date AMENDS that
+  day (never a second row), enforced by a **partial unique index**
+  (`site_id, arrived_at WHERE load_source_type = 'paper_bulk'`) and the service's
+  amend-in-place path, both audited. `arrived_at` is written at **Pacific midnight of
+  the business day** (`pacificMidnightInstantOfDayISO`) so it sits inside the D1
+  promotion-conflict window and the count-day boundary above (an earlier UTC-midnight
+  stamp let a first-of-month paper row escape that month's promotion-refusal — a silent
+  double-count, fixed same session).
+- **Permanent provenance, superseded WITHOUT a schema change.** The `paper_bulk`
+  provenance tag is permanent on those rows; when operator iPads arrive, per-load
+  capture simply starts writing normal `inbound_loads` rows alongside — no migration,
+  no backfill, the running-balance math is identical.
+- **Migration `20260806_adr0037_paper_bulk_inbound_source`** — purely additive (enum
+  value + the two indexes); clean-replays on an empty PG16. Close-and-lock authority is
+  unchanged and unshared (super-admin only; `close-authority.test.ts` asserts the
+  boundary structurally). Operator workflow: `docs/operator/loads-inventory-foundations.md` §5.

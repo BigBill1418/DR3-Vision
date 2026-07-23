@@ -9,6 +9,18 @@
 > encrypted in Postgres**. The only MyMRC secret on the host is the encryption key
 > `MYMRC_CRED_KEY` (see `mymrc-setup.md`). The "What lands where", paging table, and run-ledger
 > query sections below remain accurate.
+>
+> **The worker is now ALWAYS-ON (un-gated).** As of ADR-0057, the `mymrc-scrape`
+> service no longer carries `profiles: ['mymrc']` — it joins the default
+> `docker compose up -d` set and the swarmpilot deployer starts and keeps it up
+> (`restart: unless-stopped`). The "Enabling the service" section below (which describes
+> the old profile-gated `--profile mymrc` start) is therefore obsolete: nothing has to be
+> manually started once the admin credential is provisioned at `/admin/mrc-scrape`. The
+> credential-state healthcheck reports UNHEALTHY-until-provisioned; the mid-run session
+> drop is self-healed by a hardened re-auth (rebuild-clean-context + re-login), and a
+> genuinely dead session pages on `dr3-vision-system`. Historical backfill is a separate
+> one-shot runner (`scripts/mymrc-backfill.mjs` / `mymrc-enrich-details.mjs`), not the
+> hourly worker.
 
 The ADR-0038 rebuild replaces the old DOM scraper (ADR-0009 / `mymrc-setup.md`).
 DR3-Vision now pulls the three MyMRC feeds — **Hauls** (inbound), **Processed**,
