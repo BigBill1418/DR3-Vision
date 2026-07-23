@@ -189,6 +189,29 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
         }
       }
 
+      // ADR-0058 — bridge the freshly-refreshed processed mirror into inventory
+      // (`processed_units_daily`, the Stripped leg). Runs right after the mirror is
+      // current so ordering is guaranteed (mirror-fresh → bridge). Only the trailing
+      // window is re-aggregated each tick (the precedence guard makes a wider window
+      // harmless — the one-time full backfill is a separate script). Best-effort,
+      // non-fatal: a bridge failure must not turn a good scrape tick into a non-zero
+      // exit. The `typeof` guard keeps injected-fake test harnesses working unchanged.
+      if (typeof mymrc.bridgeProcessedToInventory === 'function') {
+        try {
+          const br = await mymrc.bridgeProcessedToInventory({
+            prisma,
+            sinceProductionDate: recentProcessedFloor(),
+            log: logFn,
+          });
+          logFn(
+            'info',
+            `processed-bridge — ins:${br.inserted} upd:${br.updated} skip:${br.skippedGuarded} same:${br.unchanged}`,
+          );
+        } catch (err) {
+          logFn('error', `processed-bridge failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
+
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
     } finally {
@@ -203,6 +226,18 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
 function describeErr(err) {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * The trailing-window floor (a @db.Date-shaped UTC-midnight key, ~10 days back) the
+ * hourly bridge re-aggregates so a steady-state tick is cheap and can pick up a
+ * portal revision of a recent day. A generous window is safe: the bridge's precedence
+ * guard + absolute-value writes make re-checking older days harmless, never a
+ * double-count. UTC-vs-Pacific day skew (7–8h) is immaterial at a 10-day floor. The
+ * one-time full backfill uses the standalone script with no floor.
+ */
+export function recentProcessedFloor(now = new Date()) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 10));
 }
 
 async function main() {

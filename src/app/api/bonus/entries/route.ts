@@ -13,7 +13,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
-import { maybeSendDailyReportOnSave } from '@/lib/bonus/daily-report-late';
 import {
   upsertDailyEntries,
   isValidMattressCount,
@@ -134,11 +133,13 @@ export async function POST(req: Request) {
   }
 
   if (result.ok === true) {
-    // ADR-0019 §2 amendment (2026-07-21 later-shift): the per-site production
-    // report goes out immediately on save — flagged LATE when entered after the
-    // 8pm deadline. Awaited but fail-soft by contract (never throws, never fails
-    // the save); idempotent per (site, day) so a re-save never double-sends.
-    await maybeSendDailyReportOnSave(ctx.siteId, date);
+    // ADR-0058 (supersedes the 2026-07-21 on-save-primary amendment): the daily
+    // production report is a SINGLE end-of-window send at 20:00 PT via the
+    // scheduled `runDailyReportFire`. The on-save re-send was removed — it fired on
+    // every save across two shifts and each inventory change, spamming the team with
+    // several emails/day. The 8pm missing-data ntfy (bonus-eod-check) is the safety
+    // net; the operator backfill (POST /api/internal/bonus/daily-report) is the
+    // escape hatch for a post-8pm entry.
     return NextResponse.json({ monthId: result.monthId, entries: result.entries }, { status: 200 });
   }
 

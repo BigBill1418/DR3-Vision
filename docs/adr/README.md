@@ -59,6 +59,9 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0049   | Woodland workbook → Vision sync bridge to cutover (Graph `Files.Read.All`, 10-min poll, workbook-wins, R2 archival) | Accepted (2026-07-09 — operator build-all; mock-first, parser finalization + enable flip gated) |
 | 0050   | Compliance-admin ledger (owner-per-item evidence ledger + expiration alerts)                                   | Proposed (post-cutover build, not before 8/1)                   |
 | 0055   | Recycling-rate configuration + outbound stewardship derivation (per-recycler recycled/landfilled split; CalRecycle O-7 input; not billed) | Accepted (2026-07-18)                                           |
+| 0056   | Event billing / TONU                                                                                          | Accepted                                                        |
+| 0057   | MyMRC full-object ingestion via admin user credentials                                                        | Accepted (2026-07-21)                                           |
+| 0058   | MyMRC processed → inventory bridge + single 8pm production-report send                                        | Accepted (2026-07-23)                                           |
 
 ## How to write a new ADR
 

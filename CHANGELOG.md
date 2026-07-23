@@ -5,6 +5,59 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-23 (MyMRC processed → inventory bridge + single 8pm production-report send — ADR-0058)
+
+Wires the authoritative MyMRC processed feed to inventory and consolidates the daily
+production-report send to a single 8:00pm PT email. Money-critical: `processed_units_daily`
+(the running balance's `Stripped` leg) was **empty (0 rows on prod)** so inventory on-hand
+never decremented from production. See ADR-0058 and
+`docs/plans/2026-07-23-mymrc-processed-inventory-bridge.md`.
+
+- **Bridge `mymrc_processed_mirror` → `processed_units_daily`.** New bundle-safe
+  `src/lib/mymrc/processed-bridge.ts` (Prisma-injected, no `@/`) aggregates (SUMs) `Processing`,
+  non-`disappeared` mirror rows per (site, `processed_date::date`) into
+  `stripped_program`/`stripped_non_program` (explicit split, legacy `units` → program-only
+  fallback), keyed to the Pacific `@db.Date` production day (noon-stamp ⇒ drift-free).
+  `source='mymrc'` (existing enum value — **no migration**; the `(site_id, production_date)`
+  unique index already exists on prod). Aggregation is mandatory — multi-row days are real.
+- **Idempotent, precedence-guarded, audited writer.** Single atomic
+  `INSERT … ON CONFLICT (site_id, production_date) DO UPDATE … WHERE source='mymrc' AND
+  closed_at IS NULL AND (values IS DISTINCT FROM …)` with absolute-value SETs (double-count-proof)
+  and an `xmax`-discriminated `RETURNING`. A `manual` close or workbook `import` row — or any
+  closed day — is left byte-identical with no error. Every real write emits an `audit_log` row
+  (`actor_label='mymrc-processed-bridge'`); a guarded no-op writes none.
+- **Runs hourly on MyMRC scrape completion** (`scripts/mymrc-scrape.mjs`, after
+  `feedReconciliationQueue`, best-effort/non-fatal — no new container). The hourly path
+  re-aggregates only a ~10-day trailing window.
+- **Anchor-safe one-shot backfill** (`scripts/mymrc-processed-bridge-backfill.mjs`;
+  `--backfill`/`--since`/`--site`/`--dry-run`). Proven inert for the live floor: `onHand` sums
+  only `production_date > anchorDay` and the latest Woodland anchor is 2026-07-22, so all
+  backfilled rows (≤ 2026-07-20) are excluded. **Gated on a MANDATORY pre/post `onHand(now)`
+  byte-identical invariance assertion** via a new internal `POST /api/internal/inventory/floor-probe`
+  route (`guardInternalCron`); drift aborts non-zero + pages `dr3-vision-system`.
+- **Single 8:00pm PT production-report send.** Removed the on-save re-send — the multi-email
+  cause (`maybeSendDailyReportOnSave` call sites in `api/bonus/entries` + the amendment-approve
+  route; retired `src/lib/bonus/daily-report-late.ts`). The already-configured 20:00 PT scheduled
+  fire (`runDailyReportFire`, `send_time_pt=20:00`) is now the sole send, per site. **Supersedes
+  the 2026-07-21 on-save-primary amendment** (ADR-0019 §2 / ADR-0030). Safety net = the 8pm
+  missing-data ntfy; escape hatch = the operator backfill (`POST /api/internal/bonus/daily-report`).
+- **8pm missing-data ntfy — verified, not rebuilt.** `scripts/bonus-eod-check.mjs` fires at
+  20:00 PT per site and pages on zero bonus entries, confirmed ADR-0036/0037-compliant (topic
+  `dr3-vision-system`, `[DR3-Vision]` title, Bearer, `high`, tier-3 click, per-(site,day) dedup,
+  primary→fallback, weekend/holiday skips). No change.
+- **Tonight's report accuracy under mirror lag.** The report presents three labelled facts —
+  reconciled floor (as of the anchor date), processed-today (bonus daily total, "confirmed in
+  MyMRC in 1–3 days"), and an explicit **estimated** post-production floor (floor − today,
+  program pool) with lag + inbound caveats — without polluting the authoritative running balance.
+  Collapses once the bridge catches up (`movementToday`). Eugene's processed leg stays empty
+  until ADR-0057 C-21 (Switch-Account) — not a bug.
+- **Tests:** aggregation/multi-row-day, `disappeared_at` + `type` exclusion, idempotency
+  (re-run no double-count), precedence vs manual/import/closed, program/non-program split +
+  legacy fallback, noon-key → Pacific `@db.Date`, `sinceProductionDate` window, dry-run;
+  onHand anchor-boundary inertness (backfill ≤ anchor changes floor by 0); backfill floor-gate;
+  floor-probe route; the same-day reconciliation render; and the removed-on-save-send route
+  assertions.
+
 ### Added — 2026-07-23 (Non-program mattress classification — the MRC billing split)
 
 The definitive program vs non-program source rule (Rick/Morena), the LAST item on

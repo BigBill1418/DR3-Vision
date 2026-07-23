@@ -11,8 +11,6 @@ import {
   requestIdsForGroup,
 } from '@/lib/bonus/amendment-notifications';
 import { prisma } from '@/lib/prisma';
-import { log } from '@/lib/observability/logger';
-import { maybeSendDailyReportOnSave } from '@/lib/bonus/daily-report-late';
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -89,32 +87,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
-    // 2026-07-11 Bill directive: an approved amendment changes a prior day's
-    // production numbers AFTER that day's report went out — push the corrected
-    // report immediately, flagged. One send per distinct (site, entry day) in
-    // the batch; fail-soft by contract (an email problem never fails the
-    // approval, which has already committed).
-    try {
-      const applied = await prisma.bonusAmendmentRequest.findMany({
-        where: { id: { in: notifyRequestIds } },
-        select: { site_id: true, target_entry_date: true },
-      });
-      const seen = new Set<string>();
-      for (const a of applied ?? []) {
-        const key = `${a.site_id}:${a.target_entry_date.toISOString().slice(0, 10)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        await maybeSendDailyReportOnSave(a.site_id, a.target_entry_date);
-      }
-    } catch (lateErr) {
-      // Fail-soft: the approval already committed; the report push must never
-      // turn a successful decision into a 500.
-      log.error(
-        { err: lateErr },
-        '[amendments] late daily-report push failed (approval unaffected)',
-      );
-    }
-
+    // ADR-0058 (supersedes the 2026-07-11 on-approve push): an approved amendment's
+    // corrected numbers land in the SINGLE 20:00 PT scheduled report (and, for a
+    // closed-day correction, are re-sent via the operator backfill). The on-approve
+    // immediate re-send was removed with the on-save path — one send per site per day.
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof AmendmentRequestError) {

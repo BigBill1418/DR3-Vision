@@ -370,4 +370,71 @@ describe('renderHtmlBody — EOD inventory', () => {
     expect(html).not.toContain('<script>x</script>');
     expect(html).toContain('&lt;script&gt;');
   });
+
+  it('HEALTHY carries the on-hand caveat (reconciled floor, not a live net position)', () => {
+    const html = bodyWithEod(makeEod());
+    expect(html).toContain('On-hand is the reconciled floor from the last physical count');
+    expect(html).toContain('not reflected in this number');
+  });
+});
+
+// ADR-0058 §3.3 — same-day production vs. inventory reconciliation (mirror-lag).
+describe('renderHtmlBody — Today\'s Production vs. Inventory (ADR-0058 §3.3)', () => {
+  // A fresh measured anchor whose data does NOT yet reflect today's production
+  // (movementToday false = the mirror-lag case this section exists for).
+  const laggingEod = (over: Partial<EodInventorySnapshot> = {}): EodInventorySnapshot =>
+    makeEod({
+      programOnHand: 1597,
+      nonProgramOnHand: 886,
+      totalOnHand: 2483,
+      movementToday: false,
+      anchor: {
+        countedAt: new Date('2026-07-22T00:00:00Z'),
+        poolAttribution: 'measured',
+        daysSince: 1,
+        counter: 'Morena',
+      },
+      ...over,
+    });
+
+  it('renders the three labelled facts with an EXPLICIT estimate when the floor lags today', () => {
+    // makeReport default totalToday = 79 + 60 + 55 = 194.
+    const html = renderHtmlBody(makeReport({ eodInventory: laggingEod() }), {
+      includeBonusDollars: false,
+      includeComparisons: false,
+    });
+    expect(html).toContain("Today's Production vs. Inventory");
+    expect(html).toContain('Reconciled floor (as of Jul 22, 2026 count)');
+    expect(html).toContain('2,483 units');
+    expect(html).toContain('Processed today (entered)');
+    expect(html).toContain('194 units');
+    expect(html).toContain('confirmed in MyMRC in 1–3 days');
+    // Estimate = (1597 − 194) program + 886 non-program = 2,289.
+    expect(html).toContain('Estimated floor after today');
+    expect(html).toContain('2,289 units');
+    expect(html).toContain('(estimate)');
+    expect(html).toContain('does not yet reflect today');
+  });
+
+  it('collapses (renders nothing extra) once today is reflected in the floor (movementToday)', () => {
+    const html = renderHtmlBody(makeReport({ eodInventory: laggingEod({ movementToday: true }) }), {
+      includeBonusDollars: false,
+      includeComparisons: false,
+    });
+    expect(html).not.toContain("Today's Production vs. Inventory");
+  });
+
+  it('renders nothing on a zero-production day', () => {
+    const zeroLines = makeReport({ eodInventory: laggingEod(), lines: [], totalToday: 0 });
+    const html = renderHtmlBody(zeroLines, { includeBonusDollars: false, includeComparisons: false });
+    expect(html).not.toContain("Today's Production vs. Inventory");
+  });
+
+  it('renders nothing behind a stale anchor (no trustworthy floor to estimate from)', () => {
+    const html = renderHtmlBody(makeReport({ eodInventory: laggingEod({ state: 'stale' }) }), {
+      includeBonusDollars: false,
+      includeComparisons: false,
+    });
+    expect(html).not.toContain("Today's Production vs. Inventory");
+  });
 });
