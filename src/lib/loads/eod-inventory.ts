@@ -9,12 +9,15 @@
 // to the inventory equation happens in `running-balance.ts` and is inherited here.
 //
 // FRESHNESS GATE (spec §4): a computed running balance drifts. The healthy block
-// only renders when a `measured` physical anchor exists within
-// `EOD_INVENTORY_STALE_DAYS` (default 14) of the report day. Otherwise the report
-// carries the STALE warning band — "Inventory pending physical count" — with the
-// last anchor date and its age. There is deliberately NO path that renders
-// healthy-state numbers on a stale anchor: a drifted floor count presented as
-// fact is how a mis-billed month starts (MRC is billed on PROGRAM units).
+// renders only for a `measured` physical anchor whose data is CURRENT within
+// `EOD_INVENTORY_STALE_DAYS` (default 14) of the report day. Currency is graded by
+// FLOW-recency, not anchor age alone (`flowThrough` — the newer of the anchor's day
+// and the latest operational flow): a measured anchor kept current by daily flows
+// stays fresh past its own age; a measured anchor with no recent flow goes stale on
+// schedule. Otherwise the report carries the STALE warning band — "Inventory pending
+// physical count" — with the last anchor date and its age. There is deliberately NO
+// path that renders healthy-state numbers on a stale anchor: a drifted floor count
+// presented as fact is how a mis-billed month starts (MRC is billed on PROGRAM units).
 //
 // Why `measured` and not merely `physical`: a `legacy` anchor carries no
 // program/non-program split (the whole count is attributed to the program pool —
@@ -36,8 +39,8 @@
 // lost, it is attributed one day later.
 
 import { prisma } from '@/lib/prisma';
-import { onHand } from '@/lib/inventory/running-balance';
-import { dayISO, dayKeyUTCFromISO } from '@/lib/time';
+import { onHand, VERIFIED_INBOUND_STATUSES } from '@/lib/inventory/running-balance';
+import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
 export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
@@ -97,6 +100,22 @@ export interface EodInventorySnapshot {
   nonProgramPct: number | null;
   /** Latest physical anchor at/before end of day. Null when none exists. */
   anchor: EodAnchorInfo | null;
+  /**
+   * Most recent Pacific calendar day (a @db.Date-shaped key) whose data feeds this
+   * balance — the LATER of the anchor's day and the newest operational flow row
+   * (verified inbound / processed / renovation-sold / landfilled / drop-off) at/before
+   * end of day. This is what makes freshness reflect FLOW-recency, not just anchor age:
+   * an old physical count kept current by daily flows still grades fresh. Null when the
+   * site has no anchor and no flow at all (the zero state).
+   */
+  flowThrough: Date | null;
+  /**
+   * True when the newest data feeding the balance is dated the REPORT day — i.e. real
+   * inventory activity happened today (a flow row, or a physical count taken today).
+   * Drives the send gate: a day with inventory movement but zero bonus entries still
+   * reports.
+   */
+  movementToday: boolean;
   /** The freshness window this snapshot was graded against. */
   staleDays: number;
 }
@@ -109,12 +128,13 @@ export function endOfReportDay(reportDate: Date): Date {
 /**
  * Whole days between the anchor's count day and a @db.Date report-day key.
  *
- * `snapshot_at` is written by the manager API as `${countedAt}T00:00:00Z` — a
- * @db.Date-shaped key (UTC midnight of the Pacific calendar day), NOT a true instant.
- * So its own UTC Y/M/D ARE the count day; take the day key from those directly. Do NOT
- * re-shift through the Pacific zone (`pacificDayKeyUTC`) — that pushes UTC-midnight back
- * a Pacific day, making a same-day count read as "1 day ago" and tripping the stale band
- * a day early (finding 4).
+ * `snapshot_at` is written by the manager API at Pacific-midnight (00:00 PT = 07:00Z
+ * PDT / 08:00Z PST) of the count day (D-3). Its own UTC Y/M/D still ARE the count day
+ * (07:00/08:00Z is the same UTC date as 00:00Z), so take the day key from those directly
+ * via `dayISO`. Do NOT re-shift the instant through the Pacific zone (`pacificDayKeyUTC`)
+ * — that pushes the count back a Pacific day, making a same-day count read as "1 day ago"
+ * and tripping the stale band a day early (finding 4). Correct for both the current
+ * Pacific-midnight stamp and any legacy UTC-midnight row.
  */
 export function daysSinceAnchor(countedAt: Date, reportDate: Date): number {
   const anchorKey = dayKeyUTCFromISO(dayISO(countedAt));
@@ -122,23 +142,46 @@ export function daysSinceAnchor(countedAt: Date, reportDate: Date): number {
 }
 
 /**
- * The freshness gate, pure. HEALTHY requires a `measured` anchor inside the
- * window; everything else is stale — except a genuinely empty site (no anchor,
- * no movement), which is `zero`.
+ * The freshness gate, pure. HEALTHY requires a `measured` anchor (the pool split is
+ * only trustworthy behind a measured count — MRC is billed on program units) whose
+ * data is CURRENT inside the window. Currency is measured by flow-recency, not anchor
+ * age alone: `flowDaysSince` (whole days since the newest data feeding the balance —
+ * anchor OR flow) tightens the age, so a measured anchor kept current by daily flows
+ * stays healthy past its own age. Everything else is stale — except a genuinely empty
+ * site (no anchor, no movement), which is `zero`.
+ *
+ * `flowDaysSince` omitted/null → age from the anchor alone (the pre-flow-recency
+ * behavior); it is always ≤ the anchor's own `daysSince`, so flows can only rescue
+ * freshness, never worsen it.
  */
 export function classifyEodInventory(args: {
   anchor: { poolAttribution: string; daysSince: number } | null;
   totalOnHand: number;
   priorTotal: number;
   staleDays: number;
+  flowDaysSince?: number | null;
 }): EodInventoryState {
   const { anchor } = args;
   if (anchor !== null) {
-    return anchor.poolAttribution === 'measured' && anchor.daysSince <= args.staleDays
+    const effectiveDaysSince =
+      args.flowDaysSince != null ? Math.min(anchor.daysSince, args.flowDaysSince) : anchor.daysSince;
+    return anchor.poolAttribution === 'measured' && effectiveDaysSince <= args.staleDays
       ? 'healthy'
       : 'stale';
   }
   return args.totalOnHand === 0 && args.priorTotal === 0 ? 'zero' : 'stale';
+}
+
+/**
+ * A compact fingerprint of an EOD inventory for the report resend decision. Captures
+ * everything that must trigger a re-send when it changes: the freshness state, BOTH
+ * pools (a program/non-program shift with an unchanged total still moves the MRC
+ * billing basis), and the flow-recency day. `undefined` inventory (an inventory read
+ * failure — the section is dropped) → empty string, so it never forces a resend.
+ */
+export function eodInventorySignature(eod: EodInventorySnapshot | undefined): string {
+  if (!eod) return '';
+  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}`;
 }
 
 /** Percent of `total` represented by `part`, one decimal. Null when total ≤ 0. */
@@ -164,6 +207,51 @@ async function resolveCounter(snapshotId: string): Promise<string | null> {
 }
 
 /**
+ * The newest Pacific calendar day (a @db.Date-shaped key) with data feeding the
+ * balance at/before `endOfDay`: the latest of every operational flow row's date. The
+ * anchor's own day is folded in by the caller. Each source's max date is mapped to its
+ * Pacific day key — @db.Date columns already ARE that key (UTC-midnight of the Pacific
+ * day); `arrived_at` is a true instant, so it is shifted through the Pacific zone.
+ * Null when the site has no flow at all.
+ */
+async function latestFlowDayKey(siteId: string, endOfDay: Date): Promise<Date | null> {
+  const [inbound, dropoff, processed, renovation, landfilled] = await Promise.all([
+    prisma.inboundLoad.aggregate({
+      _max: { arrived_at: true },
+      where: {
+        site_id: siteId,
+        status: { in: [...VERIFIED_INBOUND_STATUSES] },
+        arrived_at: { lte: endOfDay },
+      },
+    }),
+    prisma.consumerDropoff.aggregate({
+      _max: { dropoff_date: true },
+      where: { site_id: siteId, dropoff_date: { lte: endOfDay } },
+    }),
+    prisma.processedUnitsDaily.aggregate({
+      _max: { production_date: true },
+      where: { site_id: siteId, production_date: { lte: endOfDay } },
+    }),
+    prisma.outboundMaterial.aggregate({
+      _max: { ship_date: true },
+      where: { site_id: siteId, sub_category: 'renovation', ship_date: { lte: endOfDay } },
+    }),
+    prisma.landfilledUnit.aggregate({
+      _max: { disposal_date: true },
+      where: { site_id: siteId, disposal_date: { lte: endOfDay } },
+    }),
+  ]);
+  const keys: Date[] = [];
+  if (inbound._max.arrived_at) keys.push(pacificDayKeyUTC(inbound._max.arrived_at));
+  if (dropoff._max.dropoff_date) keys.push(dropoff._max.dropoff_date);
+  if (processed._max.production_date) keys.push(processed._max.production_date);
+  if (renovation._max.ship_date) keys.push(renovation._max.ship_date);
+  if (landfilled._max.disposal_date) keys.push(landfilled._max.disposal_date);
+  if (keys.length === 0) return null;
+  return new Date(Math.max(...keys.map((d) => d.getTime())));
+}
+
+/**
  * End-of-day inventory for one site on one Pacific calendar day (spec §4).
  *
  * Site-scoped (CLAUDE.md hard rule #2). Read-only: it records nothing and can
@@ -178,7 +266,7 @@ export async function getEodInventorySnapshot(
   const endOfDay = endOfReportDay(reportDate);
   const endOfPriorDay = endOfReportDay(new Date(reportDate.getTime() - 86_400_000));
 
-  const [balance, priorBalance, anchorRow] = await Promise.all([
+  const [balance, priorBalance, anchorRow, latestFlow] = await Promise.all([
     onHand(siteId, endOfDay),
     onHand(siteId, endOfPriorDay),
     prisma.siteInventorySnapshot.findFirst({
@@ -186,6 +274,7 @@ export async function getEodInventorySnapshot(
       orderBy: { snapshot_at: 'desc' },
       select: { id: true, snapshot_at: true, pool_attribution: true },
     }),
+    latestFlowDayKey(siteId, endOfDay),
   ]);
 
   const anchor: EodAnchorInfo | null = anchorRow
@@ -196,6 +285,16 @@ export async function getEodInventorySnapshot(
         counter: await resolveCounter(anchorRow.id),
       }
     : null;
+
+  // flowThrough = the LATER of the anchor's Pacific day and the newest flow day. This
+  // is the recency that grades freshness and that movementToday keys on.
+  const anchorDayKey = anchorRow ? dayKeyUTCFromISO(dayISO(anchorRow.snapshot_at)) : null;
+  const flowThrough = mostRecentDay(anchorDayKey, latestFlow);
+  const flowDaysSince =
+    flowThrough != null
+      ? Math.round((reportDate.getTime() - flowThrough.getTime()) / 86_400_000)
+      : null;
+  const movementToday = flowThrough != null && flowThrough.getTime() === reportDate.getTime();
 
   const programOnHand = balance.program.toNumber();
   const nonProgramOnHand = balance.nonProgram.toNumber();
@@ -209,6 +308,7 @@ export async function getEodInventorySnapshot(
       totalOnHand,
       priorTotal: priorBalance.total.toNumber(),
       staleDays,
+      flowDaysSince,
     }),
     programOnHand,
     nonProgramOnHand,
@@ -219,6 +319,15 @@ export async function getEodInventorySnapshot(
     programPct: pctOf(programOnHand, totalOnHand),
     nonProgramPct: pctOf(nonProgramOnHand, totalOnHand),
     anchor,
+    flowThrough,
+    movementToday,
     staleDays,
   };
+}
+
+/** The later of two @db.Date-shaped day keys; passes through a lone non-null; null if both null. */
+function mostRecentDay(a: Date | null, b: Date | null): Date | null {
+  if (a == null) return b;
+  if (b == null) return a;
+  return a.getTime() >= b.getTime() ? a : b;
 }

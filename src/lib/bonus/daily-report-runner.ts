@@ -22,6 +22,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { buildDailyReport } from '@/lib/bonus/daily-report';
 import { sendDailyReport } from '@/lib/bonus/daily-report-notifications';
+import { eodInventorySignature } from '@/lib/loads/eod-inventory';
 import { appToday } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
 
@@ -182,7 +183,9 @@ export async function runDailyReportFire(
       }
 
       const report = await buildDailyReport(cfg.site_id, dayKey);
-      if (cfg.skip_if_zero && report.totalToday === 0) {
+      // skip_if_zero yields to real inventory activity: a day with a flow row or a
+      // physical count but no bonus entries still reports (the operator wants the line).
+      if (cfg.skip_if_zero && report.totalToday === 0 && !report.eodInventory?.movementToday) {
         outcomes.push({ siteCode, status: 'skipped_zero' });
         continue;
       }
@@ -217,6 +220,7 @@ export async function runDailyReportFire(
               total_bonus_cents: report.totalBonusCents,
               mtd_total: report.mtd.total ?? 0,
               delivered_count: 0, // finalized post-send
+              eod_inventory_sig: eodInventorySignature(report.eodInventory),
             },
             select: { id: true },
           });

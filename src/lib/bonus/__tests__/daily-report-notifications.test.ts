@@ -255,6 +255,8 @@ function makeEod(overrides: Partial<EodInventorySnapshot> = {}): EodInventorySna
       daysSince: 0,
       counter: 'Morena',
     },
+    flowThrough: REPORT_DAY,
+    movementToday: true,
     staleDays: 14,
     ...overrides,
   };

@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-23 (Loads & Inventory correctness close-out — D-3 boundary + EOD report truthfulness)
+
+Three remaining correctness items on `feat/loads-inventory-real-data`, all money-critical
+(the inventory figure is the MRC billing basis). Every number still rides the single
+`onHand` running balance.
+
+- **D-3 count-day boundary was timezone-broken (major).** The physical anchor was stamped
+  at UTC-midnight (`${date}T00:00:00Z` = 17:00 PT the prior day) while the four outflow
+  tables are `@db.Date` — so the count day's own stripping/outbound/landfill was dropped
+  (`> anchor`) while same-Pacific-day inbound (`arrived_at`, a timestamptz) was included:
+  a permanent overstatement of the count day. New physical snapshots are now stamped at
+  **Pacific-midnight** (00:00 PT) of the counted day, and a shared `anchorFlowBounds`
+  derives Pacific-calendar-consistent flow windows — `@db.Date` outflow strictly after the
+  anchor's Pacific day, `arrived_at` on/after Pacific midnight of the following day — used
+  by BOTH `onHand` and the audit's `startBalance` (the D-4 "one shared function" rule).
+  The two existing PROD anchors (Woodland 2026-06-30 = 3748/229/3977, 2026-07-22 =
+  1597/886/2483) had `snapshot_at` corrected 00:00→07:00Z with an `audit_log` row each;
+  every unit/pool value is untouched (migration `20260807`, idempotent). `onHand` verified
+  live: 3748/229/3977 as of the June close, 1597/886/2483 now.
+  `src/lib/inventory/running-balance.ts`, `src/lib/audit/leg-fetchers.ts`,
+  `src/app/api/manager/[site]/snapshots/route.ts`.
+- **EOD report-send gates made the inventory line truthful (major).** The on-save resend
+  key compared only mattress totals, so an inventory change never re-sent → the "End-of-Day
+  Inventory" was a stale mid-day number; and `skip_if_zero` suppressed the whole report on a
+  zero-bonus day even when a physical count or flow happened. Now: the resend decision
+  carries a compact EOD-inventory fingerprint (`bonus_daily_report_log.eod_inventory_sig` —
+  state + both pools + flow-recency; migration `20260808`), so an inventory change re-sends
+  even when the mattress totals are identical; a zero-bonus day with real inventory activity
+  today still reports; and freshness now grades on **flow-recency** (`flowThrough`), not
+  anchor age alone, so a measured anchor kept current by daily flows stays fresh while an old
+  anchor with no flow goes stale on schedule. An inventory-read failure already degrades to a
+  dropped section (never kills the report). `src/lib/loads/eod-inventory.ts`,
+  `src/lib/bonus/daily-report-late.ts`, `src/lib/bonus/daily-report-runner.ts`.
+- **Storage-limit warning disposition (operator-cleared).** Confirmed the split Phase 5
+  already implemented: Woodland OUTDOOR 5,000 warning removed (outdoor concept gone), Woodland
+  INDOOR 3,500 and Eugene TOTAL 6,000 preserved. No residual outdoor-keyed warning remains;
+  disposition recorded in ADR-0037 §A.4.5.
+
 ### Fixed — 2026-07-22 (Loads & Inventory code-review remediation — money-safe boundaries)
 
 Four review findings against `feat/loads-inventory-real-data`; every figure stays on the

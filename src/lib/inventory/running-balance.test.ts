@@ -70,6 +70,7 @@ import {
   computeRunningBalance,
   snapshotTotalUnits,
   resolveAnchorPair,
+  anchorFlowBounds,
   onHand,
   reconcilePhysicalCount,
   PoolSplitMismatchError,
@@ -130,6 +131,40 @@ describe('resolveAnchorPair — the single shared anchor pool resolver (D-4)', (
     expect(pool).toBe('legacy');
     expect(pair.program).toBe(0);
     expect(pair.nonProgram).toBe(0);
+  });
+});
+
+describe('anchorFlowBounds — the count-day boundary (D-3)', () => {
+  // A physical count is the CLOSING position of its Pacific calendar day: flows on
+  // that day are in the count; only LATER Pacific days add. New anchors are stamped
+  // at Pacific-midnight (00:00 PT = 07:00Z PDT).
+  const anchorAt = new Date('2026-07-22T07:00:00Z'); // 00:00 PDT, July 22
+
+  it('null anchor → epoch for both bounds (count everything)', () => {
+    const b = anchorFlowBounds(null);
+    expect(b.dateSince.getTime()).toBe(0);
+    expect(b.inboundSince.getTime()).toBe(0);
+  });
+
+  it('@db.Date bound is the anchor Pacific day-key; excludes that day, includes the next', () => {
+    const { dateSince } = anchorFlowBounds(anchorAt);
+    // dateSince is the anchor's own Pacific day @db.Date key (UTC-midnight July 22).
+    expect(dateSince.toISOString()).toBe('2026-07-22T00:00:00.000Z');
+    // `{ gt: dateSince }` excludes the count day's own @db.Date rows (July 22 @ 00:00Z)…
+    expect(new Date('2026-07-22T00:00:00Z').getTime() > dateSince.getTime()).toBe(false);
+    // …and includes the next Pacific day's rows (July 23 @ 00:00Z).
+    expect(new Date('2026-07-23T00:00:00Z').getTime() > dateSince.getTime()).toBe(true);
+  });
+
+  it('inbound instant bound is Pacific-midnight of the day AFTER the anchor day', () => {
+    const { inboundSince } = anchorFlowBounds(anchorAt);
+    // 00:00 PDT July 23 = 07:00Z July 23.
+    expect(inboundSince.toISOString()).toBe('2026-07-23T07:00:00.000Z');
+    // A same-Pacific-day arrival (July 22, 10:00 PDT = 17:00Z) is EXCLUDED (baked into
+    // the count) — the asymmetry D-3 eliminates (it was included pre-fix).
+    expect(new Date('2026-07-22T17:00:00Z').getTime() >= inboundSince.getTime()).toBe(false);
+    // A next-Pacific-day arrival (July 23, 10:00 PDT = 17:00Z) IS included.
+    expect(new Date('2026-07-23T17:00:00Z').getTime() >= inboundSince.getTime()).toBe(true);
   });
 });
 

@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/running-balance';
 import { requireActivatedManager, loadsErrorResponse, clampLimit } from '@/lib/loads/route-helpers';
+import { pacificMidnightInstantOfDayISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,7 +63,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     const d = parsed.data;
     const result = await reconcilePhysicalCount({
       siteId: ctx.siteId,
-      countedAt: new Date(`${d.countedAt}T00:00:00Z`),
+      // D-3: anchor the count at Pacific-midnight (00:00 PT) of the counted day, NOT
+      // UTC-midnight. `${date}T00:00:00Z` is 17:00 PT the PRIOR day — it mis-dated the
+      // count and made same-Pacific-day flow attribution asymmetric. See anchorFlowBounds.
+      countedAt: pacificMidnightInstantOfDayISO(d.countedAt),
       physical: {
         units_indoor: d.units_indoor ?? null,
         units_total: d.units_total ?? null,

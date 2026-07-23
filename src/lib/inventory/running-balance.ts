@@ -16,6 +16,13 @@
 //                      − landfilled units     (landfilled_units split)         [Landfilled]
 //   … everything since the anchor.
 //
+// COUNT-DAY BOUNDARY (D-3): the anchor `snapshot_at` is stamped at Pacific-midnight
+// (00:00 PT) of its count day, and flows attribute to America/Los_Angeles calendar
+// days. A physical count is that day's CLOSING position — its own day's flows are
+// already in the count, only LATER Pacific days add. `anchorFlowBounds` derives the
+// two lower bounds (@db.Date columns vs the `arrived_at` instant) so both sides of
+// the boundary use the same Pacific-day convention (no same-day inbound/outflow skew).
+//
 // Weight-based `outbound_materials` (sub_category `baled`/`shredded`) NEVER
 // subtract units — they are post-deconstruction commodities, and deconstruction is
 // what `stripped` already counts. `processed_units_daily.saved_units` SUBTRACTS from
@@ -34,6 +41,7 @@
 
 import { Prisma, type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
 
 const D = Prisma.Decimal;
 type DecimalLike = Prisma.Decimal | number | string;
@@ -197,6 +205,42 @@ export function resolveAnchorPair(anchor: AnchorSnapshotFields | null): {
 }
 
 /**
+ * The flow-window lower bounds since a physical anchor, Pacific-calendar consistent
+ * (D-3 — the SINGLE definition, shared by `onHand` and the audit's `startBalance`).
+ *
+ * A physical count is the CLOSING position of its Pacific calendar day: flows dated
+ * that day are already reflected in the count, so only flows on LATER Pacific days
+ * add to the balance. The two operational storage shapes need different bounds:
+ *
+ *  - `@db.Date` columns (processed_units_daily / outbound_materials / landfilled_units
+ *    / consumer_dropoffs) store a Pacific calendar day at UTC-midnight (00:00:00Z).
+ *    The anchor's Pacific-midnight instant (07:00Z PDT / 08:00Z PST) sits BETWEEN two
+ *    consecutive UTC-midnight day keys, so `{ gt: anchorDay }` cleanly excludes the
+ *    anchor's own Pacific day and includes every later day. (`anchorDay` is that
+ *    Pacific day's own @db.Date key, so the comparison is day-vs-day.)
+ *  - `inbound_loads.arrived_at` is a true `timestamptz` instant, so the anchor day is
+ *    excluded by starting the window at Pacific-midnight of the day AFTER the anchor's
+ *    Pacific day (`gte`). Comparing the raw anchor instant against `arrived_at` (the
+ *    pre-D-3 bug) let a same-Pacific-day arrival slip in while same-day @db.Date
+ *    outflow was dropped — the asymmetry this eliminates.
+ *
+ * A null anchor (no physical count yet) → epoch for both: count everything up to asOf.
+ * Requires the anchor `snapshot_at` to be stamped at Pacific-midnight (00:00 PT) of its
+ * count day (the manager API and reconcilePhysicalCount both do); an old UTC-midnight
+ * stamp still yields the correct @db.Date bound but mis-attributes the anchor's Pacific
+ * day for inbound — the two prod rows were corrected (migration 20260807).
+ */
+export function anchorFlowBounds(anchorAt: Date | null): {
+  dateSince: Date;
+  inboundSince: Date;
+} {
+  if (anchorAt == null) return { dateSince: new Date(0), inboundSince: new Date(0) };
+  const anchorDay = pacificDayKeyUTC(anchorAt);
+  const dayAfter = new Date(anchorDay.getTime() + 86_400_000);
+  return { dateSince: anchorDay, inboundSince: pacificMidnightInstantOfDayISO(dayISO(dayAfter)) };
+}
+
+/**
  * Compute the pool-aware on-hand balance for a site as of `asOf`.
  *
  * Anchor pool split: physical snapshots do not yet carry a program/non-program
@@ -225,9 +269,14 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
   // their entered split; otherwise the whole count is attributed to the program pool.
   // Either way `program + nonProgram === total` holds for the anchor.
   const { pair: anchorPair, pool: anchorPool } = resolveAnchorPair(anchor);
-  // No physical anchor yet → count everything from the epoch up to asOf.
-  const since = anchor ? anchor.snapshot_at : new Date(0);
-  const dateWindow = { gt: since, lte: asOf };
+  // D-3: Pacific-calendar-consistent flow windows since the anchor. `@db.Date`
+  // outflow columns key on `dateWindow` (Pacific days strictly after the anchor's
+  // day); `arrived_at` (a true instant) keys on `inboundWindow` (on/after Pacific
+  // midnight of the day AFTER the anchor's day). No physical anchor → epoch (count
+  // everything up to asOf). See anchorFlowBounds for the storage-shape rationale.
+  const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
+  const dateWindow = { gt: dateSince, lte: asOf };
+  const inboundWindow = { gte: inboundSince, lte: asOf };
 
   const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled] = await Promise.all([
     prisma.inboundLoad.aggregate({
@@ -235,7 +284,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       where: {
         site_id: siteId,
         status: { in: [...VERIFIED_INBOUND_STATUSES] },
-        arrived_at: dateWindow,
+        arrived_at: inboundWindow,
       },
     }),
     prisma.consumerDropoff.aggregate({

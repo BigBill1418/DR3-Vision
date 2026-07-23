@@ -583,3 +583,23 @@ indoor and outdoor caps (8,500). It now grades against the indoor cap alone (3,5
 so a real on-site count near the June close (3,977) grades **red**. That is the honest
 reading of DR3's actual operating constraint — indoor capacity — and is surfaced for
 Bill's confirmation rather than papered over with a synthetic total cap.
+
+#### §A.4.5 — Storage-limit warning disposition (operator-CLEARED, 2026-07-23)
+
+Bill confirmed the storage-limit warning split. This is the FINAL disposition for the
+three thresholds Phase 5's investigation classified; it closes the "surface for Bill's
+confirmation" item above.
+
+| Site | Threshold | Keyed on | Kind | Disposition |
+|---|---|---|---|---|
+| Woodland (CA) | **3,500** | `sites.max_units_indoor` | INDOOR | **PRESERVED** — real indoor capacity; drives compliance metric 6 (CA) and the COR capacity banner's 90 % warn (3,150). |
+| Woodland (CA) | **5,000** | `sites.max_units_outdoor` | OUTDOOR | **REMOVED** — DR3 is never allowed to store units outside (Bill, 2026-07-22). Column dropped by migration `20260806_remove_outdoor_from_site_inventory_snapshots`; the only warning consumer was the metric-6 capacity sum, so no outdoor-keyed warning survives. |
+| Eugene (OR) | **6,000** | `sites.max_units_total_on_site` | TOTAL | **PRESERVED** — real total on-site capacity (off-site prohibited); drives compliance metric 6 (OR). |
+
+Verified live (2026-07-23, `dr3-vision-postgres`): `sites` holds `woodland.max_units_indoor = 3500`,
+`eugene.max_units_total_on_site = 6000`, and `woodland.max_units_outdoor = 5000` (the
+value the deploy's `20260806` migration retires with the column). No runtime code path
+warns on the outdoor cap after Phase 5 — `metric6StorageInventory`
+(`src/lib/compliance.ts`) sums `max_units_total_on_site + max_units_indoor` only, and the
+COR banner (`src/app/dashboard/[site]/cor/page.tsx`) reads `max_units_indoor` only; the
+remaining `outdoor` mentions in code are removal-rationale comments, not warnings.

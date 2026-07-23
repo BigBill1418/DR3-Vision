@@ -129,13 +129,23 @@ describe('runDailyReportFire', () => {
     expect(createLog).not.toHaveBeenCalled();
   });
 
-  it('skips on skip_if_zero when the report has zero units', async () => {
+  it('skips on skip_if_zero when the report has zero units AND no inventory movement', async () => {
     findManyConfigs.mockResolvedValue([makeConfig({ skip_if_zero: true })]);
     buildDailyReport.mockResolvedValue(makeReport({ totalToday: 0 }));
     const { outcomes } = await runDailyReportFire(NOW);
     expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'skipped_zero' }]);
     expect(sendDailyReport).not.toHaveBeenCalled();
     expect(createLog).not.toHaveBeenCalled();
+  });
+
+  it('skip_if_zero YIELDS to inventory movement — a zero-bonus day with a count/flow still sends', async () => {
+    findManyConfigs.mockResolvedValue([makeConfig({ skip_if_zero: true })]);
+    buildDailyReport.mockResolvedValue(
+      makeReport({ totalToday: 0, eodInventory: { movementToday: true } }),
+    );
+    const { outcomes } = await runDailyReportFire(NOW);
+    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 }]);
+    expect(sendDailyReport).toHaveBeenCalledTimes(1);
   });
 
   it('happy path: sends and writes a log row with the correct fields', async () => {
@@ -163,6 +173,7 @@ describe('runDailyReportFire', () => {
         total_bonus_cents: 1275,
         mtd_total: 500,
         delivered_count: 0,
+        eod_inventory_sig: '', // makeReport carries no eodInventory → empty fingerprint
       },
       select: { id: true },
     });

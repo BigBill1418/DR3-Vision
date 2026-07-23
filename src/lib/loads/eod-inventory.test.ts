@@ -25,6 +25,15 @@ const store = {
   audit: null as null | { actor_label: string | null; actor: { name: string } | null },
   // Balance by asOf epoch — the module reads end-of-report-day and end-of-prior-day.
   balances: new Map<number, { program: number; nonProgram: number }>(),
+  // Latest flow-row date per source (drives flowThrough / movementToday). Default null
+  // = no flow at all, so flowThrough falls to the anchor's own day.
+  flowMax: {
+    inboundArrivedAt: null as Date | null,
+    dropoffDate: null as Date | null,
+    productionDate: null as Date | null,
+    shipDate: null as Date | null,
+    disposalDate: null as Date | null,
+  },
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -40,10 +49,18 @@ vi.mock('@/lib/prisma', () => ({
     auditLog: {
       findFirst: async () => store.audit,
     },
+    inboundLoad: { aggregate: async () => ({ _max: { arrived_at: store.flowMax.inboundArrivedAt } }) },
+    consumerDropoff: { aggregate: async () => ({ _max: { dropoff_date: store.flowMax.dropoffDate } }) },
+    processedUnitsDaily: {
+      aggregate: async () => ({ _max: { production_date: store.flowMax.productionDate } }),
+    },
+    outboundMaterial: { aggregate: async () => ({ _max: { ship_date: store.flowMax.shipDate } }) },
+    landfilledUnit: { aggregate: async () => ({ _max: { disposal_date: store.flowMax.disposalDate } }) },
   },
 }));
 
 vi.mock('@/lib/inventory/running-balance', () => ({
+  VERIFIED_INBOUND_STATUSES: ['verified', 'submitted_to_mymrc', 'processed'],
   onHand: async (_siteId: string, asOf: Date) => {
     const b = store.balances.get(asOf.getTime()) ?? { program: 0, nonProgram: 0 };
     const program = new D(b.program);
@@ -55,10 +72,12 @@ vi.mock('@/lib/inventory/running-balance', () => ({
 import {
   getEodInventorySnapshot,
   classifyEodInventory,
+  eodInventorySignature,
   eodInventoryStaleDays,
   endOfReportDay,
   daysSinceAnchor,
   DEFAULT_EOD_INVENTORY_STALE_DAYS,
+  type EodInventorySnapshot,
 } from '@/lib/loads/eod-inventory';
 
 const SITE = 'site-woodland';
@@ -75,6 +94,13 @@ beforeEach(() => {
   store.anchor = null;
   store.audit = null;
   store.balances = new Map();
+  store.flowMax = {
+    inboundArrivedAt: null,
+    dropoffDate: null,
+    productionDate: null,
+    shipDate: null,
+    disposalDate: null,
+  };
   delete process.env['EOD_INVENTORY_STALE_DAYS'];
 });
 
@@ -140,6 +166,64 @@ describe('classifyEodInventory (the freshness gate)', () => {
     expect(
       classifyEodInventory({ anchor: null, totalOnHand: 0, priorTotal: 0, staleDays: 14 }),
     ).toBe('zero');
+  });
+
+  it('flow-recency rescues an old measured anchor kept current by recent flow', () => {
+    // Anchor 20 days old (past the 14-day window), but the balance was fed by a flow
+    // only 2 days ago → the number is current → healthy (freshness = flow-recency).
+    expect(
+      classifyEodInventory({
+        ...base,
+        anchor: { poolAttribution: 'measured', daysSince: 20 },
+        flowDaysSince: 2,
+      }),
+    ).toBe('healthy');
+  });
+
+  it('an old measured anchor with no recent flow stays stale', () => {
+    // No flow since the count → flowDaysSince tracks the anchor age → still stale.
+    expect(
+      classifyEodInventory({
+        ...base,
+        anchor: { poolAttribution: 'measured', daysSince: 20 },
+        flowDaysSince: 20,
+      }),
+    ).toBe('stale');
+  });
+
+  it('flow-recency never rescues a legacy anchor — the pool split is untrustworthy', () => {
+    expect(
+      classifyEodInventory({
+        ...base,
+        anchor: { poolAttribution: 'legacy', daysSince: 20 },
+        flowDaysSince: 0,
+      }),
+    ).toBe('stale');
+  });
+});
+
+describe('eodInventorySignature (the resend fingerprint)', () => {
+  const mk = (over: Partial<EodInventorySnapshot>): EodInventorySnapshot =>
+    ({ state: 'healthy', programOnHand: 1597, nonProgramOnHand: 886, flowThrough: null, ...over }) as EodInventorySnapshot;
+
+  it('undefined inventory → empty string (an inventory read failure never forces a resend)', () => {
+    expect(eodInventorySignature(undefined)).toBe('');
+  });
+
+  it('captures state, both pools, and flow-recency', () => {
+    const t = Date.UTC(2026, 6, 22);
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(`healthy:1597:886:${t}`);
+  });
+
+  it('a program/non-program shift with an unchanged total STILL changes the signature', () => {
+    // Both total 2483 (MRC bills on program only — the shift must re-send).
+    expect(eodInventorySignature(mk({ programOnHand: 1600, nonProgramOnHand: 883 }))).not.toBe(
+      eodInventorySignature(mk({ programOnHand: 1597, nonProgramOnHand: 886 })),
+    );
+  });
+
+  it('a state change (healthy → stale) changes the signature', () => {
+    expect(eodInventorySignature(mk({ state: 'stale' }))).not.toBe(eodInventorySignature(mk({})));
   });
 });
 
@@ -250,5 +334,48 @@ describe('getEodInventorySnapshot', () => {
     expect(eod.programPct).toBeNull();
     expect(eod.nonProgramPct).toBeNull();
     expect(eod.anchor).toBeNull();
+    expect(eod.flowThrough).toBeNull();
+    expect(eod.movementToday).toBe(false);
+  });
+
+  it('flowThrough + movementToday reflect a flow dated the report day; it keeps an OLD anchor fresh', async () => {
+    // Anchor 17 days old (past the 14-day window) — stale on its own — but a
+    // processed-units row dated today feeds the balance → current → healthy.
+    store.anchor = { id: 'snap-old', snapshot_at: countedAt(2026, 7, 5), pool_attribution: 'measured' };
+    store.flowMax.productionDate = new Date(Date.UTC(2026, 6, 22)); // @db.Date key = report day
+    store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.flowThrough?.getTime()).toBe(REPORT_DATE.getTime());
+    expect(eod.movementToday).toBe(true);
+    expect(eod.anchor?.daysSince).toBe(17); // the count itself is old…
+    expect(eod.state).toBe('healthy'); // …but recent flow keeps the number current
+  });
+
+  it('a same-day inbound arrival (a true instant) counts as movementToday', async () => {
+    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 20), pool_attribution: 'measured' };
+    store.flowMax.inboundArrivedAt = new Date(Date.UTC(2026, 6, 22, 18, 0, 0)); // 11:00 PDT July 22
+    store.balances.set(END_TODAY, { program: 50, nonProgram: 0 });
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.movementToday).toBe(true);
+    expect(eod.flowThrough?.getTime()).toBe(REPORT_DATE.getTime());
+  });
+
+  it('no flow + an anchor before today → flowThrough is the anchor day, movementToday false', async () => {
+    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 20), pool_attribution: 'measured' };
+    store.balances.set(END_TODAY, { program: 10, nonProgram: 0 });
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.movementToday).toBe(false);
+    expect(eod.flowThrough?.getTime()).toBe(new Date(Date.UTC(2026, 6, 20)).getTime());
+  });
+
+  it('a physical count taken on the report day is itself movementToday', async () => {
+    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.movementToday).toBe(true);
   });
 });

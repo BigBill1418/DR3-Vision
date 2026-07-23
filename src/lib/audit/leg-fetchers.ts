@@ -30,6 +30,7 @@ import type { PrismaClient } from '@prisma/client';
 import {
   computeRunningBalance,
   resolveAnchorPair,
+  anchorFlowBounds,
   type PoolPair,
 } from '@/lib/inventory/running-balance';
 import { aggregateSiteRates, resolveRateThresholds } from '@/lib/rates';
@@ -461,29 +462,38 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
     },
   });
   const { pair: anchorPair } = resolveAnchorPair(anchor);
-  const since = anchor ? anchor.snapshot_at : new Date(0);
-  const flowWindow = { gt: since, lt: before };
+  // D-3: Pacific-calendar-consistent anchor bounds (shared with onHand). `@db.Date`
+  // outflow columns exclude the anchor's own Pacific day (`gt dateSince`); the
+  // `arrived_at` instant excludes it via Pacific midnight of the following day
+  // (`gte inboundSince`). Upper bound stays the audit window start (`lt before`).
+  const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
+  const dateFlowWindow = { gt: dateSince, lt: before };
+  const inboundFlowWindow = { gte: inboundSince, lt: before };
 
   const [inbound, dropoffs, stripped, renovation, landfilled] = await Promise.all([
     db.inboundLoad.aggregate({
       _sum: { program_unit_count: true, non_program_unit_count: true },
-      where: { site_id: w.siteId, status: { in: [...VERIFIED_STATUSES] }, arrived_at: flowWindow },
+      where: {
+        site_id: w.siteId,
+        status: { in: [...VERIFIED_STATUSES] },
+        arrived_at: inboundFlowWindow,
+      },
     }),
     db.consumerDropoff.aggregate({
       _sum: { units: true },
-      where: { site_id: w.siteId, dropoff_date: flowWindow },
+      where: { site_id: w.siteId, dropoff_date: dateFlowWindow },
     }),
     db.processedUnitsDaily.aggregate({
       _sum: { stripped_program: true, stripped_non_program: true },
-      where: { site_id: w.siteId, production_date: flowWindow },
+      where: { site_id: w.siteId, production_date: dateFlowWindow },
     }),
     db.outboundMaterial.aggregate({
       _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, sub_category: 'renovation', ship_date: flowWindow },
+      where: { site_id: w.siteId, sub_category: 'renovation', ship_date: dateFlowWindow },
     }),
     db.landfilledUnit.aggregate({
       _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, disposal_date: flowWindow },
+      where: { site_id: w.siteId, disposal_date: dateFlowWindow },
     }),
   ]);
 

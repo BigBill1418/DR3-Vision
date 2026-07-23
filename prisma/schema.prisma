@@ -867,6 +867,13 @@ model BonusDailyReportLog {
   late_submission   Boolean   @default(false)
   data_entered_at   DateTime?
   resend_count      Int       @default(0)
+  // ADR-0037 Phase 4 (EOD inventory truthfulness) — a compact fingerprint of the
+  // EOD inventory carried by the last send (state + program + non-program +
+  // flow-recency). The resend decision compares this so an INVENTORY change
+  // re-sends even when the mattress totals are unchanged (the number in the
+  // team's last email must reflect current data, not a stale mid-day floor).
+  // Null on rows written before this column / when no inventory section shipped.
+  eod_inventory_sig String?
   created_at        DateTime  @default(now())
 
   @@unique([site_id, report_date])
