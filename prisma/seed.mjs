@@ -48,6 +48,8 @@ import {
   SOURCE_ALIASES,
   WOODLAND_SOURCE_ALIASES,
   CA_OFFICE_SOURCE_ALIASES,
+  NONPROGRAM_CHARGING_SOURCES,
+  NONPROGRAM_CHARGING_ALIASES,
   PROVENANCE_AGENCIES,
 } from './seed/addendum-b-data.mjs';
 
@@ -594,6 +596,44 @@ async function seedSourceAliases(siteIds) {
   // queue, so each pair no-ops until its Source is approved (re-runnable, self-activating).
   const caOfficeCount = woodland ? await seedAliasesForSite(woodland, CA_OFFICE_SOURCE_ALIASES) : 0;
   console.log(`  source_aliases: ${eugeneCount} eugene + ${woodlandCount} woodland + ${caOfficeCount} CA-office present (idempotent)`);
+}
+
+// ─── Non-program charging collection sites (ADR-0037, Morena — mirrors the ─────
+// 20260809 migration). Program vs non-program is the MRC billing split (billed on
+// program units only), so these are money-critical. The 10 CA (Woodland) charging
+// sites + the OR (Eugene) Recyclops are seeded is_non_program=true, site_type=
+// collection_site, active_billing=false (zero MRC invoice lines). Then the two
+// MyMRC/workbook aliases ("Recology Sonoma"/"Recology Healdsburg") are attached.
+// Idempotent upsert keyed on canonical (site_id, name); re-runnable.
+async function seedNonProgramChargingSources(siteIds) {
+  let count = 0;
+  for (const s of NONPROGRAM_CHARGING_SOURCES) {
+    const site_id = siteIds.get(s.site);
+    if (!site_id) continue; // partial seed — skip, re-runnable
+    const data = {
+      site_id,
+      name: s.name,
+      state: s.state,
+      is_active: true,
+      is_non_program: true,
+      site_type: 'collection_site',
+      active_billing: false,
+      notes: `${s.state === 'CA' ? 'CA' : 'OR'} non-program charging collection site (ADR-0037, Morena 2026-07-23). Non-MRC — inbound units default to the non-program (non-billable) pool.`,
+    };
+    await prisma.source.upsert({
+      where: { site_id_name: { site_id, name: s.name } },
+      create: data,
+      update: data,
+    });
+    count += 1;
+  }
+  // Aliases attach after the canonical sources exist (woodland-scoped; both canonicals
+  // are CA). seedAliasesForSite skips a pair whose canonical is absent — re-runnable.
+  const woodland = siteIds.get('woodland');
+  const aliasCount = woodland
+    ? await seedAliasesForSite(woodland, NONPROGRAM_CHARGING_ALIASES)
+    : 0;
+  console.log(`  non-program charging sources: ${count} sources + ${aliasCount} aliases (idempotent)`);
 }
 
 // ─── Provenance agencies (rollup §2 — mirrors 20260730b migration) ───────────
@@ -2092,6 +2132,8 @@ async function main() {
   await seedSources(siteIds);
   console.log('▶ classifying source billing (rollup §4 svdp_internal_store + Roseburg parked)');
   await seedSourceBillingClassification(siteIds);
+  console.log('▶ seeding non-program charging collection sites (ADR-0037, Morena)');
+  await seedNonProgramChargingSources(siteIds);
   console.log('▶ seeding source aliases (rollup §1/§12)');
   await seedSourceAliases(siteIds);
   console.log('▶ seeding provenance agencies (rollup §2)');

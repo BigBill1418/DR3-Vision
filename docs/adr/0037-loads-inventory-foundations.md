@@ -603,3 +603,49 @@ warns on the outdoor cap after Phase 5 — `metric6StorageInventory`
 (`src/lib/compliance.ts`) sums `max_units_total_on_site + max_units_indoor` only, and the
 COR banner (`src/app/dashboard/[site]/cor/page.tsx`) reads `max_units_indoor` only; the
 remaining `outdoor` mentions in code are removal-rationale comments, not warnings.
+
+### §B7.1 — Definitive non-program classification rule (Rick/Morena, 2026-07-23)
+
+The FINAL word on the program vs non-program split (the MRC billing basis — billed on
+PROGRAM units only). Supersedes the pre-existing implicit "explicit flag only" model.
+
+**A mattress source is NON-program if EITHER:**
+
+1. **Explicit list** — it is a "charging" collection site. CA (Woodland): Golden Bear,
+   Monte Diablo, San Martin, Martinez, Petaluma, Sonoma, Annapolis, Healdsburg, Vasco,
+   Brentwood. OR (Eugene): Roseburg (pre-existing), Recyclops.
+2. **Out-of-state** — the units' GENERATED-location `state` is known and differs from the
+   recycler's operating state (Woodland = CA, Eugene = OR). This is where the mattresses
+   were generated, not the hauler's HQ. A NULL/blank state is UNKNOWN → falls back to the
+   explicit flag only; it is never treated as out-of-state.
+
+Default = program when neither applies.
+
+**Implementation.** One shared pure helper `isSourceNonProgram(source, recyclerState)`
+(`src/lib/inventory/source-classification.ts`); recycler state from `sites.jurisdiction`
+via `recyclerStateForJurisdiction`. Both classification paths call it — the verify-gate
+default split (`verify-gate.ts`) and the workbook-promotion alias resolver
+(`site-alias.ts`) — so the rules never drift. `defaultProgramSplit` stays a pure
+boolean→split mapping; the caller passes the effective determination. paper_bulk carries
+an explicit split (no source) and has no classification point.
+
+**Seeding.** The 10 CA + Recyclops (Eugene) are seeded `is_non_program=true`,
+`site_type=collection_site`, `active_billing=false` (zero MRC invoice lines — money-safe,
+matching Roseburg / the SVDP internal stores), `state` CA/OR, `is_active=true`. All 10 CA
+sites are in-state, so only the explicit flag classifies them (the out-of-state rule cannot
+catch an in-CA site — this is exactly why the explicit list is required). Aliases:
+`Recology Sonoma`→Sonoma, `Recology Healdsburg`→Healdsburg (the only surviving MyMRC/June-
+workbook variants; Golden Bear appears verbatim). Idempotent migration
+`20260809_adr0037_nonprogram_charging_sources` + seed parity
+(`seedNonProgramChargingSources` / `NONPROGRAM_CHARGING_SOURCES`). Applied LIVE to PROD in
+one transaction with an `audit_log` row per insert (`actor_label='adr-0037-nonprogram-sources'`):
+this is an explicit operator directive (its own approval per the ADR-0057 D4 exception), so
+these sources bypass the reconcile queue and are audited instead.
+
+**Deferred (needs Rick's data, out of scope here):** the trans-charge BILLING setup for
+these charging sites (`is_trans_charge` + canonical mileage + rate tiers) — left at the
+`false` default so no false trans-charge variance rows are produced. Separately, the
+unwired ADR-0057 `CA_SOURCE_DISAMBIGUATION` constant still marks Golden Bear / Recology
+Sonoma / Recology Healdsburg `inCatalog:false`; it has no runtime consumer today, so there
+is no dup-insert risk, but it should be reconciled (`inCatalog:true`) when that classifier
+is wired.

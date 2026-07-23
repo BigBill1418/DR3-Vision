@@ -8,7 +8,7 @@ interface MockLoad {
   site_id: string;
   status: string;
   total_units: number | null;
-  source: { is_non_program: boolean } | null;
+  source: { is_non_program: boolean; state?: string | null } | null;
   // ADR-0041 (capture half) — present on real selects; optional here so the
   // pre-0041 cases (no site/dr3) exercise the "no DR3# issued" path unchanged.
   site?: { jurisdiction: string } | null;
@@ -147,6 +147,37 @@ describe('verifyLoad — server-side gate', () => {
   });
 
   it('defaults all-program from a PROGRAM source when no split is supplied (B7)', async () => {
+    await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
+    const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
+    expect(upd.program_unit_count).toBe(175);
+    expect(upd.non_program_unit_count).toBe(0);
+  });
+
+  it('defaults NON-PROGRAM from an OUT-OF-STATE source (state ≠ recycler state), even with is_non_program=false', async () => {
+    // OR-generated units delivered to a CA (Woodland) recycler → out-of-state → non-program.
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 175,
+      source: { is_non_program: false, state: 'OR' },
+      site: { jurisdiction: 'california' },
+    };
+    await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
+    const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
+    expect(upd.program_unit_count).toBe(0);
+    expect(upd.non_program_unit_count).toBe(175);
+  });
+
+  it('defaults ALL-PROGRAM from an in-state source (state = recycler state), is_non_program=false', async () => {
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 175,
+      source: { is_non_program: false, state: 'CA' },
+      site: { jurisdiction: 'california' },
+    };
     await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
     const upd = store.updates[0] as { program_unit_count: number; non_program_unit_count: number };
     expect(upd.program_unit_count).toBe(175);

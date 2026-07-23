@@ -5,6 +5,44 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-23 (Non-program mattress classification — the MRC billing split)
+
+The definitive program vs non-program source rule (Rick/Morena), the LAST item on
+`feat/loads-inventory-real-data`. Money-critical: MRC is billed on PROGRAM units only, so
+a mis-classified source silently mis-states the billable pool.
+
+- **The rule, in ONE shared helper.** `src/lib/inventory/source-classification.ts` —
+  `isSourceNonProgram(source, recyclerState)`: a source is NON-program if EITHER its
+  explicit `is_non_program` flag is set, OR its generated-location `state` is KNOWN and
+  differs from the recycler's operating state (out-of-state). A NULL/blank state falls back
+  to the flag only — a missing state is never treated as out-of-state. Recycler state comes
+  from the site's jurisdiction (`recyclerStateForJurisdiction`: california→CA, oregon→OR) —
+  no hard-coded site-id map. Wired into BOTH classification paths so the two rules can never
+  drift: the verify gate's default split (`verify-gate.ts`) and the workbook-promotion alias
+  resolver (`site-alias.ts` → `resolveInboundSplit`). `defaultProgramSplit` stays a pure
+  boolean→split mapping; the caller passes the effective determination. (paper_bulk carries
+  an explicit split with no source, so it has no classification point.)
+- **11 explicit non-program "charging" collection sites seeded.** CA (Woodland): Golden
+  Bear, Monte Diablo, San Martin, Martinez, Petaluma, Sonoma, Annapolis, Healdsburg, Vasco,
+  Brentwood; OR (Eugene): Recyclops. (Roseburg already existed — untouched.) All
+  `is_non_program=true`, `site_type=collection_site`, `active_billing=false` (zero MRC
+  invoice lines — money-safe, matches Roseburg / the SVDP stores), `is_active=true`, `state`
+  CA/OR. All 10 CA sites are in-state, so only the explicit flag classifies them (the
+  out-of-state rule can't catch an in-CA site — exactly why the list is needed). Idempotent
+  migration `20260809_adr0037_nonprogram_charging_sources` + dev/CI seed parity
+  (`seedNonProgramChargingSources`, `NONPROGRAM_CHARGING_SOURCES`). Applied LIVE to PROD in
+  one transaction with an `audit_log` row per insert (`actor_label='adr-0037-nonprogram-sources'`,
+  13 rows) — an explicit operator directive is its own approval (overrides the ADR-0057 D4
+  reconcile-queue routing for these sources).
+- **Source aliases:** the only surviving MyMRC/workbook variants were `Recology Sonoma`→
+  Sonoma and `Recology Healdsburg`→Healdsburg (Golden Bear appears verbatim; the other 8
+  have no variant). Verified against the June workbook staging (`workbook_import_rows`) and
+  the CA disambiguation set.
+- **No anchor regression:** the June (2026-06-30 = 3748/229/**3977**) and current
+  (2026-07-22 = 1597/886/**2483**) Woodland physical snapshots are `measured` direct
+  snapshots and were untouched; `onHand` reads frozen per-load split columns, so
+  classification is orthogonal to the anchors. 0 `inbound_loads` reference the new sources.
+
 ### Fixed — 2026-07-23 (Loads & Inventory correctness close-out — D-3 boundary + EOD report truthfulness)
 
 Three remaining correctness items on `feat/loads-inventory-real-data`, all money-critical

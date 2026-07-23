@@ -16,4 +16,10 @@ export const CANONICAL_OR_NAMES: readonly string[];
 export const SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
 export const WOODLAND_SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
 export const CA_OFFICE_SOURCE_ALIASES: readonly (readonly [alias: string, canonical: string])[];
+export const NONPROGRAM_CHARGING_SOURCES: readonly {
+  readonly site: 'woodland' | 'eugene';
+  readonly name: string;
+  readonly state: 'CA' | 'OR';
+}[];
+export const NONPROGRAM_CHARGING_ALIASES: readonly (readonly [alias: string, canonical: string])[];
 export const PROVENANCE_AGENCIES: readonly (readonly [name: string, notes: string])[];

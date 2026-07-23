@@ -28,6 +28,10 @@ import {
   siteGetsVisionDr3Number,
   DR3_NUMBER_SEQUENCE,
 } from '@/lib/events/sequences';
+import {
+  isSourceNonProgram,
+  recyclerStateForJurisdiction,
+} from '@/lib/inventory/source-classification';
 
 /** Split does not reconcile, or the load cannot be verified from its current state. */
 export class VerifyGateError extends Error {
@@ -83,6 +87,10 @@ export function assertProgramSplit(
 /**
  * Site-driven DEFAULT split (Addendum B7): a non-program source puts all units in
  * the non-program pool; a program source puts all in the program pool. Pure.
+ *
+ * `sourceIsNonProgram` is the EFFECTIVE determination (see
+ * {@link isSourceNonProgram} — the explicit flag OR the out-of-state rule), computed
+ * by the caller so this function stays a pure mapping from a boolean to the split.
  */
 export function defaultProgramSplit(
   totalUnits: number,
@@ -121,7 +129,7 @@ export async function verifyLoad(args: {
       status: true,
       total_units: true,
       dr3_number: true,
-      source: { select: { is_non_program: true } },
+      source: { select: { is_non_program: true, state: true } },
       site: { select: { jurisdiction: true } },
     },
   });
@@ -158,7 +166,14 @@ export async function verifyLoad(args: {
         422,
       );
     }
-    const def = defaultProgramSplit(load.total_units, load.source.is_non_program);
+    // EFFECTIVE program-ness (ADR-0037, Rick/Morena): the explicit `is_non_program`
+    // flag OR the out-of-state rule (source.state ≠ the recycler's operating state).
+    // `recyclerStateForJurisdiction` reads the site's jurisdiction (CA/OR). If the site
+    // row is somehow absent, fall back to the explicit flag only (never guess).
+    const effectiveNonProgram = load.site
+      ? isSourceNonProgram(load.source, recyclerStateForJurisdiction(load.site.jurisdiction))
+      : load.source.is_non_program;
+    const def = defaultProgramSplit(load.total_units, effectiveNonProgram);
     programUnits = def.programUnits;
     nonProgramUnits = def.nonProgramUnits;
     log.info(
@@ -167,10 +182,13 @@ export async function verifyLoad(args: {
         siteId: args.siteId,
         defaulted: true,
         source_is_non_program: load.source.is_non_program,
+        source_state: load.source.state,
+        recycler_state: load.site ? recyclerStateForJurisdiction(load.site.jurisdiction) : null,
+        effective_non_program: effectiveNonProgram,
         programUnits,
         nonProgramUnits,
       },
-      '[verify-gate] program split defaulted from source flag',
+      '[verify-gate] program split defaulted from effective source classification',
     );
   } else if (programUnits === undefined || nonProgramUnits === undefined) {
     throw new VerifyGateError(
