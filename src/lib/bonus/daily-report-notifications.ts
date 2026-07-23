@@ -194,11 +194,63 @@ export function renderEodInventoryHtml(
     eodRowHtml('Latest physical count', counted) +
     // Counter is a stored user/system name — escaped, it is the one untrusted
     // string in this panel.
-    eodRowHtml('Counter', escapeHtml(eod.anchor?.counter ?? '—'));
+    eodRowHtml('Counter', escapeHtml(eod.anchor?.counter ?? '—')) +
+    // ADR-0058 §3.3 — what on-hand actually means, so a reconciled floor is never
+    // misread as a live net position (no inbound feed yet; floor drifts until
+    // re-counted).
+    `<tr><td colspan="2" style="padding-top:10px;font-size:11px;color:${MUTED};line-height:1.5">On-hand is the reconciled floor from the last physical count plus confirmed movement since. Today's production and any not-yet-entered inbound loads are not reflected in this number.</td></tr>`;
   return eodPanel(
     siteName,
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table>`,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ADR-0058 §3.3 — Same-day production vs. inventory reconciliation.
+//
+// The MyMRC mirror lags (days), so on the report night the EOD floor shows the
+// reconciled anchor WITHOUT today's ~800 processed. Rather than inject a bonus
+// proxy into the authoritative running balance (a money-safety hazard), present
+// three clearly-labelled facts: the reconciled floor as of the anchor date,
+// today's production (the bonus daily total), and an EXPLICITLY ESTIMATED floor
+// after today's production (floor − today, program pool). Renders ONLY while
+// today's stripping is not yet reflected in the floor (`!movementToday`) — once the
+// bridge catches up, `onHand` reflects it natively and a separate estimate would
+// double-subtract, so this collapses to nothing.
+// ─────────────────────────────────────────────────────────────────────
+
+export function renderProcessedTodayHtml(report: DailyReport): string {
+  const eod = report.eodInventory;
+  // Needs a trustworthy floor (healthy = fresh measured anchor) and real production
+  // today. When today's production is already in the floor (movementToday — the
+  // bridge caught up, or a count was taken today; there is no inbound feed yet, so
+  // that is the only way it flips on the report day), an estimate would double-count.
+  if (!eod || eod.state !== 'healthy' || report.totalToday <= 0 || eod.movementToday) return '';
+
+  const anchorDate = eod.anchor ? fmtCountDayShort(eod.anchor.countedAt) : '—';
+  const estProgram = Math.round((eod.programOnHand - report.totalToday) * 10) / 10;
+  const estTotal = Math.round((estProgram + eod.nonProgramOnHand) * 10) / 10;
+
+  const line = (label: string, value: string, note?: string): string =>
+    `<tr><td style="padding:3px 0;font-size:13px;color:${INK}">${escapeHtml(label)}` +
+    (note ? ` <span style="color:${MUTED};font-size:12px">${escapeHtml(note)}</span>` : '') +
+    `</td><td style="padding:3px 0;font-size:13px;color:${INK};text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;padding-left:16px"><strong>${value}</strong></td></tr>`;
+
+  const inner =
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">` +
+    line(`Reconciled floor (as of ${anchorDate} count)`, `${fmtUnits(eod.totalOnHand)} units`) +
+    line('Processed today (entered)', `${report.totalToday.toLocaleString('en-US')} units`, '— confirmed in MyMRC in 1–3 days') +
+    line('Estimated floor after today', `≈ ${fmtUnits(estTotal)} units`, '(estimate)') +
+    `</table>` +
+    `<div style="font-size:11px;color:${MUTED};line-height:1.5;padding-top:8px">Estimate = reconciled floor − today's entered production (program pool). Today's stripping is not yet confirmed in MyMRC and inbound loads are not yet fed, so the floor above does not yet reflect today's production.</div>`;
+
+  return `
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:18px 0 0;background:${SVDP_CREAM};border-left:3px solid ${SVDP_GOLD};border-radius:4px">
+    <tr><td style="padding:14px 16px">
+      <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">Today's Production vs. Inventory</div>
+      ${inner}
+    </td></tr>
+  </table>`;
 }
 
 export interface RenderOptions {
@@ -277,6 +329,10 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
   // ADR-0037 Phase 4 — EOD inventory section (healthy / stale / zero, or omitted
   // when the inventory read failed). Always after the trend block.
   const eodBlock = renderEodInventoryHtml(report.eodInventory, report.siteName);
+  // ADR-0058 §3.3 — same-day production vs. inventory reconciliation (mirror-lag
+  // honest estimate). Empty unless there is production today the floor doesn't yet
+  // reflect. Rendered right after the EOD panel.
+  const processedTodayBlock = renderProcessedTodayHtml(report);
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -300,7 +356,7 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
             <thead>${headerRow}</thead>
             <tbody>${rows}</tbody>
             <tfoot>${footerRow}</tfoot>
-          </table>${comparisonBlock}${eodBlock}
+          </table>${comparisonBlock}${eodBlock}${processedTodayBlock}
           <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:22px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Sent automatically by DR3-Vision — replaces the manual daily processing email.<br>
             St. Vincent de Paul Society of Lane County

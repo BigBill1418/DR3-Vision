@@ -74,12 +74,8 @@ let amendmentRow: { submission_group_id: string | null; requested_by?: { email: 
   submission_group_id: null,
   requested_by: { email: 'janette@svdp.us' },
 };
-const maybeSendDailyReportOnSave = vi.fn<(...a: unknown[]) => Promise<string>>(
-  async () => 'sent',
-);
-vi.mock('@/lib/bonus/daily-report-late', () => ({
-  maybeSendDailyReportOnSave: (...a: unknown[]) => maybeSendDailyReportOnSave(...a),
-}));
+// ADR-0058 — the on-approve daily-report re-send was REMOVED with the on-save path;
+// the amendments approve route no longer imports/triggers any report send.
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {

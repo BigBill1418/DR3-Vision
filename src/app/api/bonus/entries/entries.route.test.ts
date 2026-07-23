@@ -99,14 +99,14 @@ function reset() {
   });
 }
 
-// 2026-07-11 — the on-save late-report hook is a fail-soft side effect; mock it
-// to a spy so route tests stay deterministic and we can assert it fires on a
-// successful save (the real behavior is unit-tested in daily-report-late.test.ts).
-const maybeSendDailyReportOnSave = vi.fn<(...a: unknown[]) => Promise<string>>(
-  async () => 'sent',
+// ADR-0058 — the on-save daily-report send was REMOVED (the single 20:00 PT
+// scheduled send is now the sole path). Spy the send module so we can prove the
+// entries route no longer triggers ANY report send on save.
+const sendDailyReport = vi.fn<(...a: unknown[]) => Promise<{ attempted: number; delivered_count: number }>>(
+  async () => ({ attempted: 0, delivered_count: 0 }),
 );
-vi.mock('@/lib/bonus/daily-report-late', () => ({
-  maybeSendDailyReportOnSave: (...a: unknown[]) => maybeSendDailyReportOnSave(...a),
+vi.mock('@/lib/bonus/daily-report-notifications', () => ({
+  sendDailyReport: (...a: unknown[]) => sendDailyReport(...a),
 }));
 
 vi.mock('@/lib/prisma', () => {
@@ -375,7 +375,8 @@ describe('POST /api/bonus/entries — write path', () => {
       }),
     );
     expect(res.status).toBe(200);
-    expect(maybeSendDailyReportOnSave).toHaveBeenCalledTimes(1);
+    // ADR-0058 — no report send fires on save; the 20:00 PT scheduled fire is sole.
+    expect(sendDailyReport).not.toHaveBeenCalled();
     const body = (await res.json()) as {
       entries: Array<{ entered_by_user_id: string; mattress_count: number }>;
     };

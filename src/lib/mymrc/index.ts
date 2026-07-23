@@ -147,6 +147,15 @@ export {
   type FeedReconciliationResult,
   type FeedLogger,
 } from './reconcile-feed';
+// ADR-0058 — processed → inventory bridge (mymrc_processed_mirror →
+// processed_units_daily, the Stripped leg). Runs on scrape completion (hourly) and
+// one-shot for backfill; precedence-guarded + audited + double-count-proof.
+export {
+  bridgeProcessedToInventory,
+  type ProcessedBridgeContext,
+  type ProcessedBridgeResult,
+  type BridgeLogger,
+} from './processed-bridge';
 export {
   SELECTORS,
   SELECTOR_VERSION,
