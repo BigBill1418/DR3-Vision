@@ -79,6 +79,12 @@ export default async function LoadsInventoryPage({ params }: Props) {
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
           Loads &amp; inventory — {result.ctx.siteName}
         </h1>
+        <Link
+          href={`/dashboard/${siteCode}/processed-units-close`}
+          className="mt-2 inline-block text-sm underline opacity-90"
+        >
+          Daily close entry (stripped units) →
+        </Link>
 
         <div className="mt-6 grid grid-cols-3 gap-4">
           <BalanceTile label="Program on hand" value={balance.program.toString()} accent />

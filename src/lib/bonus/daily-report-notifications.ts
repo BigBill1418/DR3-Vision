@@ -8,6 +8,7 @@ import { sendSystemEmail } from '@/lib/m365-mail';
 import { log } from '@/lib/observability/logger';
 import { formatCents } from '@/lib/bonus/calculator';
 import type { DailyReport, ComparisonTotal } from '@/lib/bonus/daily-report';
+import type { EodInventorySnapshot } from '@/lib/loads/eod-inventory';
 
 // ─────────────────────────────────────────────────────────────────────
 // Formatting
@@ -38,6 +39,22 @@ function fmtFull(d: Date): string {
 function fmtShort(d: Date): string {
   return SHORT_DATE.format(d);
 }
+/**
+ * A physical-count `snapshot_at` is a @db.Date-shaped day key: the manager API writes
+ * it as `${countedAt}T00:00:00Z`, so its UTC components ARE the Pacific calendar count
+ * day. Render it in UTC — formatting a UTC-midnight key in the Pacific zone would push
+ * it onto the PREVIOUS day (finding 4). Matches the @db.Date rendering rule in time.ts.
+ */
+const COUNT_DAY_SHORT_DATE = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
+function fmtCountDayShort(d: Date): string {
+  return COUNT_DAY_SHORT_DATE.format(d);
+}
+
 function fmtRange(start: Date, end: Date): string {
   return `${MONTH_DAY.format(start)} – ${MONTH_DAY.format(end)}, ${end.getUTCFullYear()}`;
 }
@@ -48,6 +65,11 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Whole-unit display for a units figure (Decimal(7,1) flows can be fractional). */
+function fmtUnits(n: number): string {
+  return (Math.round(n * 10) / 10).toLocaleString('en-US');
 }
 
 function comparisonLineHtml(label: string, c: ComparisonTotal): string {
@@ -88,6 +110,96 @@ const UP_GREEN = '#2e7d32';
 // not hotlinked off the WordPress site (that URL 404'd / is not reliable in mail
 // clients). The PNG is checked in at public/brand/svdp-logo-white.png.
 const SVDP_LOGO_URL = 'https://dr3-vision.svdp.us/brand/svdp-logo-white.png';
+
+// ─────────────────────────────────────────────────────────────────────
+// ADR-0037 Phase 4 (spec §4) — End-of-Day Inventory section
+//
+// HARD RULE: the healthy block (on-hand figures, delta, split) renders ONLY for
+// `state === 'healthy'` — a fresh `measured` physical anchor. `stale` and `zero`
+// each get their own band and NO figures. Presenting a drifted computed balance
+// as a floor count is exactly the mis-billing hazard the gate exists to prevent.
+// ─────────────────────────────────────────────────────────────────────
+
+const WARN_BG = '#FEF3C7';
+const WARN_BORDER = '#F59E0B';
+const WARN_INK = '#92400E';
+
+function eodRowHtml(label: string, value: string, strong = false): string {
+  const cell = `padding:3px 0;font-size:13px;color:${INK}`;
+  const v = strong ? `<strong>${value}</strong>` : value;
+  return `<tr><td style="${cell}">${escapeHtml(label)}</td><td style="${cell};text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;padding-left:16px">${v}</td></tr>`;
+}
+
+function eodDeltaHtml(delta: number): string {
+  const rounded = Math.round(delta * 10) / 10;
+  if (rounded === 0) return 'no change';
+  const up = rounded > 0;
+  const sign = up ? '+' : '−';
+  const color = up ? UP_GREEN : SVDP_RED;
+  const note = up ? 'net inbound' : 'net outbound';
+  return `<strong style="color:${color}">${sign}${fmtUnits(Math.abs(rounded))}</strong> <span style="color:${MUTED}">(${note})</span>`;
+}
+
+function eodPanel(siteName: string, inner: string): string {
+  return `
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:18px 0 0;background:${SVDP_CREAM};border-left:3px solid ${SVDP_GOLD};border-radius:4px">
+    <tr><td style="padding:14px 16px">
+      <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">End-of-Day Inventory — ${escapeHtml(siteName)}</div>
+      ${inner}
+    </td></tr>
+  </table>`;
+}
+
+export function renderEodInventoryHtml(
+  eod: EodInventorySnapshot | undefined,
+  siteName: string,
+): string {
+  if (!eod) return '';
+
+  if (eod.state === 'zero') {
+    return eodPanel(
+      siteName,
+      `<div style="font-size:13px;color:${MUTED};line-height:1.5">No inventory activity recorded yet — awaiting the first physical count and daily entries.</div>`,
+    );
+  }
+
+  if (eod.state === 'stale') {
+    const anchorLine = eod.anchor
+      ? `Last measured anchor: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`
+      : 'No physical count on record for this site.';
+    return eodPanel(
+      siteName,
+      `<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding:10px 12px;background:${WARN_BG};border:1px solid ${WARN_BORDER};border-radius:6px;font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:${WARN_INK}">` +
+        `<strong>⚠ Inventory pending physical count</strong><br>${anchorLine}<br>` +
+        `Computed balance is drift-prone; verify with a floor count.` +
+        `</td></tr></table>`,
+    );
+  }
+
+  // healthy — a `measured` anchor inside the freshness window.
+  const split =
+    eod.programPct === null || eod.nonProgramPct === null
+      ? '<em>n/a</em>'
+      : `${eod.programPct.toFixed(1)}% / ${eod.nonProgramPct.toFixed(1)}%`;
+  const counted = eod.anchor
+    ? `${fmtCountDayShort(eod.anchor.countedAt)}${eod.anchor.daysSince === 0 ? ' (today)' : ` (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`}`
+    : '—';
+  const rows =
+    eodRowHtml('Program units on hand', fmtUnits(eod.programOnHand), true) +
+    eodRowHtml('Non-program units on hand', fmtUnits(eod.nonProgramOnHand), true) +
+    eodRowHtml('Total on hand', fmtUnits(eod.totalOnHand), true) +
+    `<tr><td colspan="2" style="height:6px;font-size:0;line-height:0">&nbsp;</td></tr>` +
+    `<tr><td style="padding:3px 0;font-size:13px;color:${INK}">Change from yesterday</td><td style="padding:3px 0;font-size:13px;color:${INK};text-align:right;white-space:nowrap;padding-left:16px">${eodDeltaHtml(eod.deltaFromYesterday)}</td></tr>` +
+    eodRowHtml('Program / non-program split', split) +
+    eodRowHtml('Latest physical count', counted) +
+    // Counter is a stored user/system name — escaped, it is the one untrusted
+    // string in this panel.
+    eodRowHtml('Counter', escapeHtml(eod.anchor?.counter ?? '—'));
+  return eodPanel(
+    siteName,
+    `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table>`,
+  );
+}
 
 export interface RenderOptions {
   includeBonusDollars: boolean;
@@ -162,6 +274,10 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
   </table>`;
   }
 
+  // ADR-0037 Phase 4 — EOD inventory section (healthy / stale / zero, or omitted
+  // when the inventory read failed). Always after the trend block.
+  const eodBlock = renderEodInventoryHtml(report.eodInventory, report.siteName);
+
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:${SVDP_CREAM}">
@@ -184,7 +300,7 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
             <thead>${headerRow}</thead>
             <tbody>${rows}</tbody>
             <tfoot>${footerRow}</tfoot>
-          </table>${comparisonBlock}
+          </table>${comparisonBlock}${eodBlock}
           <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:22px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Sent automatically by DR3-Vision — replaces the manual daily processing email.<br>
             St. Vincent de Paul Society of Lane County

@@ -16,6 +16,13 @@
 //                      − landfilled units     (landfilled_units split)         [Landfilled]
 //   … everything since the anchor.
 //
+// COUNT-DAY BOUNDARY (D-3): the anchor `snapshot_at` is stamped at Pacific-midnight
+// (00:00 PT) of its count day, and flows attribute to America/Los_Angeles calendar
+// days. A physical count is that day's CLOSING position — its own day's flows are
+// already in the count, only LATER Pacific days add. `anchorFlowBounds` derives the
+// two lower bounds (@db.Date columns vs the `arrived_at` instant) so both sides of
+// the boundary use the same Pacific-day convention (no same-day inbound/outflow skew).
+//
 // Weight-based `outbound_materials` (sub_category `baled`/`shredded`) NEVER
 // subtract units — they are post-deconstruction commodities, and deconstruction is
 // what `stripped` already counts. `processed_units_daily.saved_units` SUBTRACTS from
@@ -34,6 +41,7 @@
 
 import { Prisma, type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
 
 const D = Prisma.Decimal;
 type DecimalLike = Prisma.Decimal | number | string;
@@ -136,16 +144,100 @@ export const VERIFIED_INBOUND_STATUSES: readonly LoadStatus[] = [
   'processed',
 ] as const;
 
-/** Sum the non-null physical unit fields of a snapshot into a single total. */
+/**
+ * Sum the non-null physical unit fields of a snapshot into a single total.
+ *
+ * ADR-0037 addendum (2026-07-22): outdoor storage is not tracked — DR3 never
+ * stores units outside — so the total is indoor + total + in-processing only.
+ */
 export function snapshotTotalUnits(s: {
   units_indoor: number | null;
-  units_outdoor: number | null;
   units_total: number | null;
   units_in_processing: number;
 }): number {
-  return (
-    (s.units_indoor ?? 0) + (s.units_outdoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing
-  );
+  return (s.units_indoor ?? 0) + (s.units_total ?? 0) + s.units_in_processing;
+}
+
+/** The physical-snapshot fields `resolveAnchorPair` needs (a subset of the row). */
+export interface AnchorSnapshotFields {
+  units_indoor: number | null;
+  units_total: number | null;
+  units_in_processing: number;
+  program_units: Prisma.Decimal | null;
+  non_program_units: Prisma.Decimal | null;
+  pool_attribution: string | null;
+}
+
+/**
+ * Resolve a physical anchor snapshot into its pool-split pair + attribution — the
+ * SINGLE source of truth for how an anchor's program/non-program pools are derived
+ * (D-4). A `measured` anchor carrying BOTH pool columns is used directly (its split
+ * was validated to sum to the physical total at write time). Otherwise the whole
+ * physical count is attributed to the PROGRAM pool (`legacy`), per the documented
+ * onHand convention. `null` anchor → the zero pair (epoch/no-count case).
+ *
+ * Both `onHand` (the live floor) and the audit's `startBalance` (leg-fetchers) MUST
+ * call this so the two paths can never disagree on a measured anchor's pools — the
+ * divergence that produced spurious C6 `physical_reconcile` findings.
+ */
+export function resolveAnchorPair(anchor: AnchorSnapshotFields | null): {
+  pair: PoolPair;
+  pool: 'measured' | 'legacy';
+} {
+  const measured =
+    anchor != null &&
+    anchor.pool_attribution === 'measured' &&
+    anchor.program_units != null &&
+    anchor.non_program_units != null;
+  if (measured) {
+    return {
+      pair: {
+        program: anchor.program_units as Prisma.Decimal,
+        nonProgram: anchor.non_program_units as Prisma.Decimal,
+      },
+      pool: 'measured',
+    };
+  }
+  return {
+    pair: { program: anchor ? snapshotTotalUnits(anchor) : 0, nonProgram: 0 },
+    pool: 'legacy',
+  };
+}
+
+/**
+ * The flow-window lower bounds since a physical anchor, Pacific-calendar consistent
+ * (D-3 — the SINGLE definition, shared by `onHand` and the audit's `startBalance`).
+ *
+ * A physical count is the CLOSING position of its Pacific calendar day: flows dated
+ * that day are already reflected in the count, so only flows on LATER Pacific days
+ * add to the balance. The two operational storage shapes need different bounds:
+ *
+ *  - `@db.Date` columns (processed_units_daily / outbound_materials / landfilled_units
+ *    / consumer_dropoffs) store a Pacific calendar day at UTC-midnight (00:00:00Z).
+ *    The anchor's Pacific-midnight instant (07:00Z PDT / 08:00Z PST) sits BETWEEN two
+ *    consecutive UTC-midnight day keys, so `{ gt: anchorDay }` cleanly excludes the
+ *    anchor's own Pacific day and includes every later day. (`anchorDay` is that
+ *    Pacific day's own @db.Date key, so the comparison is day-vs-day.)
+ *  - `inbound_loads.arrived_at` is a true `timestamptz` instant, so the anchor day is
+ *    excluded by starting the window at Pacific-midnight of the day AFTER the anchor's
+ *    Pacific day (`gte`). Comparing the raw anchor instant against `arrived_at` (the
+ *    pre-D-3 bug) let a same-Pacific-day arrival slip in while same-day @db.Date
+ *    outflow was dropped — the asymmetry this eliminates.
+ *
+ * A null anchor (no physical count yet) → epoch for both: count everything up to asOf.
+ * Requires the anchor `snapshot_at` to be stamped at Pacific-midnight (00:00 PT) of its
+ * count day (the manager API and reconcilePhysicalCount both do); an old UTC-midnight
+ * stamp still yields the correct @db.Date bound but mis-attributes the anchor's Pacific
+ * day for inbound — the two prod rows were corrected (migration 20260807).
+ */
+export function anchorFlowBounds(anchorAt: Date | null): {
+  dateSince: Date;
+  inboundSince: Date;
+} {
+  if (anchorAt == null) return { dateSince: new Date(0), inboundSince: new Date(0) };
+  const anchorDay = pacificDayKeyUTC(anchorAt);
+  const dayAfter = new Date(anchorDay.getTime() + 86_400_000);
+  return { dateSince: anchorDay, inboundSince: pacificMidnightInstantOfDayISO(dayISO(dayAfter)) };
 }
 
 /**
@@ -165,7 +257,6 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     select: {
       snapshot_at: true,
       units_indoor: true,
-      units_outdoor: true,
       units_total: true,
       units_in_processing: true,
       program_units: true,
@@ -174,26 +265,18 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     },
   });
 
-  const anchorUnits = anchor ? snapshotTotalUnits(anchor) : 0;
-  // ADR-0037 §3 pool split: a `measured` anchor carries an entered program/non-program
-  // split (which was validated to sum to the total at write time), so use it directly.
-  // Otherwise fall back to the LEGACY default — attribute the whole anchor to the
-  // program pool. Either way `program + nonProgram === total` holds for the anchor.
-  const measuredAnchor =
-    anchor != null &&
-    anchor.pool_attribution === 'measured' &&
-    anchor.program_units != null &&
-    anchor.non_program_units != null;
-  const anchorPair: PoolPair = measuredAnchor
-    ? {
-        program: anchor.program_units as Prisma.Decimal,
-        nonProgram: anchor.non_program_units as Prisma.Decimal,
-      }
-    : { program: anchorUnits, nonProgram: 0 };
-  const anchorPool: 'measured' | 'legacy' = measuredAnchor ? 'measured' : 'legacy';
-  // No physical anchor yet → count everything from the epoch up to asOf.
-  const since = anchor ? anchor.snapshot_at : new Date(0);
-  const dateWindow = { gt: since, lte: asOf };
+  // ADR-0037 §3 pool split via the shared resolver (D-4): `measured` anchors use
+  // their entered split; otherwise the whole count is attributed to the program pool.
+  // Either way `program + nonProgram === total` holds for the anchor.
+  const { pair: anchorPair, pool: anchorPool } = resolveAnchorPair(anchor);
+  // D-3: Pacific-calendar-consistent flow windows since the anchor. `@db.Date`
+  // outflow columns key on `dateWindow` (Pacific days strictly after the anchor's
+  // day); `arrived_at` (a true instant) keys on `inboundWindow` (on/after Pacific
+  // midnight of the day AFTER the anchor's day). No physical anchor → epoch (count
+  // everything up to asOf). See anchorFlowBounds for the storage-shape rationale.
+  const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
+  const dateWindow = { gt: dateSince, lte: asOf };
+  const inboundWindow = { gte: inboundSince, lte: asOf };
 
   const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled] = await Promise.all([
     prisma.inboundLoad.aggregate({
@@ -201,7 +284,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       where: {
         site_id: siteId,
         status: { in: [...VERIFIED_INBOUND_STATUSES] },
-        arrived_at: dateWindow,
+        arrived_at: inboundWindow,
       },
     }),
     prisma.consumerDropoff.aggregate({
@@ -266,7 +349,6 @@ export interface ReconcileResult {
 /** Physical unit fields for a new anchor snapshot (jurisdiction-appropriate subset). */
 export interface PhysicalCountInput {
   units_indoor?: number | null;
-  units_outdoor?: number | null;
   units_total?: number | null;
   units_in_processing?: number;
 }
@@ -292,7 +374,6 @@ export async function reconcilePhysicalCount(args: {
   const poolAttribution = args.poolAttribution ?? 'measured';
   const physicalTotal = snapshotTotalUnits({
     units_indoor: args.physical.units_indoor ?? null,
-    units_outdoor: args.physical.units_outdoor ?? null,
     units_total: args.physical.units_total ?? null,
     units_in_processing: args.physical.units_in_processing ?? 0,
   });
@@ -322,7 +403,6 @@ export async function reconcilePhysicalCount(args: {
         snapshot_kind: 'physical',
         source: 'manual',
         units_indoor: args.physical.units_indoor ?? null,
-        units_outdoor: args.physical.units_outdoor ?? null,
         units_total: args.physical.units_total ?? null,
         units_in_processing: args.physical.units_in_processing ?? 0,
         reconciled_delta: reconciledDelta,

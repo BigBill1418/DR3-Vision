@@ -5,6 +5,196 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-23 (Non-program mattress classification — the MRC billing split)
+
+The definitive program vs non-program source rule (Rick/Morena), the LAST item on
+`feat/loads-inventory-real-data`. Money-critical: MRC is billed on PROGRAM units only, so
+a mis-classified source silently mis-states the billable pool.
+
+- **The rule, in ONE shared helper.** `src/lib/inventory/source-classification.ts` —
+  `isSourceNonProgram(source, recyclerState)`: a source is NON-program if EITHER its
+  explicit `is_non_program` flag is set, OR its generated-location `state` is KNOWN and
+  differs from the recycler's operating state (out-of-state). A NULL/blank state falls back
+  to the flag only — a missing state is never treated as out-of-state. Recycler state comes
+  from the site's jurisdiction (`recyclerStateForJurisdiction`: california→CA, oregon→OR) —
+  no hard-coded site-id map. Wired into BOTH classification paths so the two rules can never
+  drift: the verify gate's default split (`verify-gate.ts`) and the workbook-promotion alias
+  resolver (`site-alias.ts` → `resolveInboundSplit`). `defaultProgramSplit` stays a pure
+  boolean→split mapping; the caller passes the effective determination. (paper_bulk carries
+  an explicit split with no source, so it has no classification point.)
+- **11 explicit non-program "charging" collection sites seeded.** CA (Woodland): Golden
+  Bear, Monte Diablo, San Martin, Martinez, Petaluma, Sonoma, Annapolis, Healdsburg, Vasco,
+  Brentwood; OR (Eugene): Recyclops. (Roseburg already existed — untouched.) All
+  `is_non_program=true`, `site_type=collection_site`, `active_billing=false` (zero MRC
+  invoice lines — money-safe, matches Roseburg / the SVDP stores), `is_active=true`, `state`
+  CA/OR. All 10 CA sites are in-state, so only the explicit flag classifies them (the
+  out-of-state rule can't catch an in-CA site — exactly why the list is needed). Idempotent
+  migration `20260809_adr0037_nonprogram_charging_sources` + dev/CI seed parity
+  (`seedNonProgramChargingSources`, `NONPROGRAM_CHARGING_SOURCES`). Applied LIVE to PROD in
+  one transaction with an `audit_log` row per insert (`actor_label='adr-0037-nonprogram-sources'`,
+  13 rows) — an explicit operator directive is its own approval (overrides the ADR-0057 D4
+  reconcile-queue routing for these sources).
+- **Source aliases:** the only surviving MyMRC/workbook variants were `Recology Sonoma`→
+  Sonoma and `Recology Healdsburg`→Healdsburg (Golden Bear appears verbatim; the other 8
+  have no variant). Verified against the June workbook staging (`workbook_import_rows`) and
+  the CA disambiguation set.
+- **No anchor regression:** the June (2026-06-30 = 3748/229/**3977**) and current
+  (2026-07-22 = 1597/886/**2483**) Woodland physical snapshots are `measured` direct
+  snapshots and were untouched; `onHand` reads frozen per-load split columns, so
+  classification is orthogonal to the anchors. 0 `inbound_loads` reference the new sources.
+
+### Fixed — 2026-07-23 (Loads & Inventory correctness close-out — D-3 boundary + EOD report truthfulness)
+
+Three remaining correctness items on `feat/loads-inventory-real-data`, all money-critical
+(the inventory figure is the MRC billing basis). Every number still rides the single
+`onHand` running balance.
+
+- **D-3 count-day boundary was timezone-broken (major).** The physical anchor was stamped
+  at UTC-midnight (`${date}T00:00:00Z` = 17:00 PT the prior day) while the four outflow
+  tables are `@db.Date` — so the count day's own stripping/outbound/landfill was dropped
+  (`> anchor`) while same-Pacific-day inbound (`arrived_at`, a timestamptz) was included:
+  a permanent overstatement of the count day. New physical snapshots are now stamped at
+  **Pacific-midnight** (00:00 PT) of the counted day, and a shared `anchorFlowBounds`
+  derives Pacific-calendar-consistent flow windows — `@db.Date` outflow strictly after the
+  anchor's Pacific day, `arrived_at` on/after Pacific midnight of the following day — used
+  by BOTH `onHand` and the audit's `startBalance` (the D-4 "one shared function" rule).
+  The two existing PROD anchors (Woodland 2026-06-30 = 3748/229/3977, 2026-07-22 =
+  1597/886/2483) had `snapshot_at` corrected 00:00→07:00Z with an `audit_log` row each;
+  every unit/pool value is untouched (migration `20260807`, idempotent). `onHand` verified
+  live: 3748/229/3977 as of the June close, 1597/886/2483 now.
+  `src/lib/inventory/running-balance.ts`, `src/lib/audit/leg-fetchers.ts`,
+  `src/app/api/manager/[site]/snapshots/route.ts`.
+- **EOD report-send gates made the inventory line truthful (major).** The on-save resend
+  key compared only mattress totals, so an inventory change never re-sent → the "End-of-Day
+  Inventory" was a stale mid-day number; and `skip_if_zero` suppressed the whole report on a
+  zero-bonus day even when a physical count or flow happened. Now: the resend decision
+  carries a compact EOD-inventory fingerprint (`bonus_daily_report_log.eod_inventory_sig` —
+  state + both pools + flow-recency; migration `20260808`), so an inventory change re-sends
+  even when the mattress totals are identical; a zero-bonus day with real inventory activity
+  today still reports; and freshness now grades on **flow-recency** (`flowThrough`), not
+  anchor age alone, so a measured anchor kept current by daily flows stays fresh while an old
+  anchor with no flow goes stale on schedule. An inventory-read failure already degrades to a
+  dropped section (never kills the report). `src/lib/loads/eod-inventory.ts`,
+  `src/lib/bonus/daily-report-late.ts`, `src/lib/bonus/daily-report-runner.ts`.
+- **Storage-limit warning disposition (operator-cleared).** Confirmed the split Phase 5
+  already implemented: Woodland OUTDOOR 5,000 warning removed (outdoor concept gone), Woodland
+  INDOOR 3,500 and Eugene TOTAL 6,000 preserved. No residual outdoor-keyed warning remains;
+  disposition recorded in ADR-0037 §A.4.5.
+
+### Fixed — 2026-07-22 (Loads & Inventory code-review remediation — money-safe boundaries)
+
+Four review findings against `feat/loads-inventory-real-data`; every figure stays on the
+single `onHand` running balance (no second inventory total is ever committed).
+
+- **Promotion inbound reconciliation (major).** When a workbook carries its own
+  authoritative Processed ledger, the close is computed from the ledger but `onHand`
+  re-derives the live floor from the inserted `inbound_loads` rows. The raw DAY
+  per-shipment grid can over-sum inbound (June DAY23 Recology Healdsburg's 85-unit
+  non-program row, netted out of the billing close), so the stored close and the live
+  query-backed balance diverged (4,062 vs 3,977). `promoteWorkbookImport` now calls
+  `assertPromotedInboundReconciles` before any write and refuses the promotion
+  (`PromotionInboundReconciliationError`, 422) unless the promoted inbound sums exactly to
+  the ledger inbound. No-op without a ledger. `src/lib/audit/workbook-promotion.ts`.
+- **paper_bulk `arrived_at` boundary (major).** Bulk daily inbound wrote `arrived_at` at
+  UTC midnight; the D1 promotion conflict detector keys on Pacific-midnight instant
+  bounds, so a first-of-month paper row sat one Pacific day early and escaped that month's
+  promotion-refusal (silent double-count). Now written at Pacific midnight of the business
+  day (`pacificMidnightInstantOfDayISO`) — the exact bound the window uses; UTC-day
+  running-balance/EOD math is unchanged. `src/lib/loads/bulk-inbound.ts`.
+- **Physical-count anchor off-by-one (major).** `snapshot_at` is written by the manager
+  API as `${date}T00:00:00Z` (a @db.Date key, not a true instant). `daysSinceAnchor` and
+  the count-date display re-shifted it through the Pacific zone, printing the count one day
+  early and tripping the stale band a day early. Both now treat it as a @db.Date key
+  (render/age in UTC). `src/lib/loads/eod-inventory.ts`,
+  `src/lib/bonus/daily-report-notifications.ts`.
+- **Outdoor-removal regression test typecheck (blocker).** Already resolved at `ccf1fbd`
+  (bracket access for index-signature Record fields; TS4111 cleared).
+
+### Added — 2026-07-22 (ADR-0037 Phase 4 — End-of-Day Inventory on the Daily Production Report)
+
+Spec §4 / §A.6. The ADR-0030 daily production email now answers "what is on the floor
+tonight?" per site, without opening the app. Written against the post-Phase-5 schema.
+
+- **New module** `src/lib/loads/eod-inventory.ts` — `getEodInventorySnapshot(site, date)`
+  returns program / non-program / total on hand, delta from yesterday's EOD (net
+  inbound − outbound), the program/NP split %, days since the last physical count, and
+  that count's date + counter (resolved from the append-only audit row, not a
+  denormalised column). Every figure is read from `onHand` / `computeRunningBalance`
+  (ADR-0037 D6) — no second inventory computation exists.
+- **Freshness gate** — `EOD_INVENTORY_STALE_DAYS` (default 14). HEALTHY requires a
+  `measured` physical anchor inside the window; otherwise the report renders the
+  "Inventory pending physical count" warning band with the last anchor date + age, and
+  NEVER the healthy figures (a drifted balance read as fact is a mis-billing hazard —
+  MRC is billed on program units). A site with no anchor and no movement renders a
+  neutral ZERO band so pre-backfill sites read gracefully.
+- **Wire-up** — `buildDailyReport` attaches the snapshot; `renderHtmlBody` renders the
+  per-site "End-of-Day Inventory" panel after the Trend block. An inventory read failure
+  logs and drops the section rather than blocking the production report.
+- **Docs** — ADR-0030 amendment (section spec, gate, asOf discipline, config) +
+  `docs/operator/daily-production-report.md` (EOD section, the three states, how to
+  clear a stale band, window tuning) + `.env.example`.
+
+### Removed — 2026-07-22 (ADR-0037 Phase 5 — outdoor storage removed from Vision)
+
+Bill's directive: *"we will also remove the units outdoor we are never allowed to store
+units outside. this can't be in the system."* DR3 never stores units outside, so the
+concept is gone from schema, UI, math, warnings and docs.
+
+- **Schema** — migration `20260806_remove_outdoor_from_site_inventory_snapshots` drops
+  `site_inventory_snapshots.units_outdoor` and `sites.max_units_outdoor`. Any non-zero
+  outdoor count is first folded into `units_indoor` with an `audit_log` row per fold
+  (`actor_label = 'adr-0037-outdoor-removal'`) — no unit is destroyed. The production
+  pre-migration audit returned 0 non-zero rows, so no fold ran there. Clean-replayed
+  end-to-end on an empty PG16.
+- **Math** — `snapshotTotalUnits()` (running balance), the audit leg fetchers, COR
+  prefill and workbook promotion now sum `indoor + total + in_processing`. The
+  physical-count API drops `units_outdoor` from its Zod schema; the Loads & Inventory
+  physical-count panel drops the outdoor input (and the `units_outdoor_label` string in
+  all three locales).
+- **Warnings** — CA 3,500 is INDOOR-based and OR 6,000 is TOTAL-based; both preserved.
+  CA 5,000 was OUTDOOR-specific and is removed with the column, so compliance metric 6
+  now grades Woodland against the 3,500 indoor cap instead of the old 8,500 indoor +
+  outdoor sum. Classification evidence recorded in the ADR-0037 addendum.
+- **Regression** — Woodland's corrected June close still computes 3,977 (3,748 program +
+  229 non-program) after the removal.
+
+### Added — 2026-07-22 (ADR-0037 Phase 3 — paper-bootstrap manager surfaces)
+
+Woodland and Eugene run the floor on paper daily logs; there are no operator iPads on
+the dock yet, so nothing writes per-load inbound and the daily close bottlenecked on
+Bill. Phase 3 makes the whole Loads & Inventory surface operable from paper without
+weakening the money-safe boundary.
+
+- **Bulk daily inbound (§3.2 option b)** — new tab on `/dashboard/<site>/loads-inventory`.
+  A manager enters the day's inbound as ONE synthesized `inbound_loads` row per site per
+  day: total units + a program / non-program split validated to sum (the program pool is
+  the billed pool). Written as `load_source_type = 'paper_bulk'`, `count_mode = 'total'`,
+  `status = 'verified'`, `arrived_at` at UTC midnight of the business day — the exact
+  shape `onHand()` counts as inbound, so the D6 inflow arithmetic is preserved without
+  per-load detail. Re-entering a date AMENDS that day (never a second row): enforced by a
+  partial unique index and by the service's amend-in-place path, both audited. New
+  service `src/lib/loads/bulk-inbound.ts`; new API `GET|POST /api/manager/<site>/bulk-inbound`
+  behind the existing `requireActivatedManager` (site-scoped + D7 gate). Converts to
+  per-load capture with no schema change when the iPads arrive.
+- **Manager daily-close ENTRY (§3.3 Option B)** — new manager route
+  `/dashboard/<site>/processed-units-close` mirroring `/admin/processed-units` for entry
+  and amendment ONLY, plus `GET|POST /api/manager/<site>/processed-units`. Managers can
+  amend a day right up to close; `upsertProcessedUnits` refuses any write once the day is
+  closed (409 `closed`).
+- **Close-and-lock authority is unchanged and unshared.** `/admin/processed-units` and
+  `POST /api/admin/processed-units/<id>/close` are untouched and remain super-admin only.
+  There is deliberately NO close handler under `/api/manager/**` and no manager surface
+  imports `closeProcessedUnitsDay` — `src/lib/loads/close-authority.test.ts` asserts that
+  boundary structurally so it cannot erode by accident.
+- **Migration `20260806_adr0037_paper_bulk_inbound_source`** — purely additive:
+  `LoadSourceType` gains `paper_bulk`, plus the partial unique index
+  (`site_id, arrived_at WHERE load_source_type = 'paper_bulk'`) and the manager-list
+  lookup index. Clean-replays on an empty PG16.
+- **Docs** — `docs/operator/loads-inventory-foundations.md` gains the paper daily
+  workflow (six input streams, who enters what, a manager's day) and stubs BOTH §3.1
+  ongoing-capture models — anchor-daily vs. backfill-and-run — with the trade-offs, for
+  Bill to pick operationally. The stale D7 "admin-only" section is corrected to the
+  data-driven rollout surface now live at both sites.
 ### Fixed — 2026-07-22 (ADR-0046 Amendment 6 — AP attachment preview reliability, DESKTOP)
 
 Approvers reported the AP invoice preview as unreliable ("can't see the invoice").

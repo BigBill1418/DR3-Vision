@@ -120,9 +120,12 @@ post-deconstruction commodities — deconstruction is what`processed` counts).
 - `site_inventory_snapshots` gains `snapshot_kind enum(physical, computed)` +
   `reconciled_delta Int?` + provenance. A **physical count** becomes the new anchor;
   the delta vs. the computed balance is recorded and audited, never silently
-  absorbed. Existing indoor/outdoor/in-processing fields unchanged (CA storage-limit
-  warnings 3,500/5,000 and OR 6,000 read from them; warn-only at 90%/100%, never
-  blocking — mission §5).
+  absorbed. Existing indoor + in-processing fields unchanged, following the
+  **ADR-0037 addendum (2026-07-22)** removing outdoor from Vision per DR3
+  operational compliance (see "Addendum — outdoor storage removed" below). The CA
+  storage-limit warning reads the **indoor** cap (3,500) and OR the **total on-site**
+  cap (6,000); warn-only at 90%/100%, never blocking — mission §5. The contracted CA
+  5,000-unit **outdoor** allowance is not exercised and is no longer modelled.
 - **Acceptance anchor:** the June 2026 Woodland close must reproduce **4,062 units**
   (Pool-A snapshot) once historical data is loaded — this is a §7(b) criterion.
 - Every quantity edge is a named boundary with real-`Decimal` tests + an e2e path —
@@ -545,3 +548,104 @@ Alias coverage is locked by `src/lib/audit/workbook/addendum-b-alias-resolution.
 ### Kelsey AP-approver auto-remove date (§7)
 
 `ap_approvers` Kelsey row `active_until` moved 2026-08-01 → **2026-08-08** (vacation → transfer extended one week). Migration UPDATE guarded by the old value (idempotent; clean no-op on a fresh CI DB); seed.mjs mirrors it.
+
+### Addendum — outdoor storage removed from Vision (2026-07-22)
+
+Per Bill's directive on 2026-07-22 — *"we will also remove the units outdoor we are
+never allowed to store units outside. this can't be in the system."* — the outdoor
+storage concept is removed from Vision entirely: `site_inventory_snapshots.units_outdoor`
+and `sites.max_units_outdoor` are dropped, the physical-count UI no longer offers an
+outdoor field, and the running balance / audit legs / COR prefill sum
+`indoor + total + in_processing` only. DR3 never stores units outside; the MRC
+contract's 5,000-unit outdoor allowance at Woodland is a contracted allowance that is
+not exercised (annotated in `docs/MRC-CONTRACTS.md`).
+
+Migration: `prisma/migrations/20260806_remove_outdoor_from_site_inventory_snapshots`.
+The pre-migration audit on production (2026-07-22) returned **0 rows** with a non-zero
+`units_outdoor` (1 snapshot row total, `units_outdoor` NULL), so no data fold was
+required; the migration nevertheless folds any non-zero outdoor into indoor and writes
+an `audit_log` row per fold (`actor_label = 'adr-0037-outdoor-removal'`) so it is
+correct on any database that carries outdoor counts.
+
+**Storage-limit warning classification (compliance metric 6, `src/lib/compliance.ts`).**
+The three thresholds were classified against code, not contract prose:
+
+- **CA 3,500 — INDOOR-specific** (`sites.max_units_indoor`; also drives the COR
+  capacity banner's 90% warn at 3,150 in `src/app/dashboard/[site]/cor/page.tsx`).
+  **Preserved.**
+- **CA 5,000 — OUTDOOR-specific** (`sites.max_units_outdoor`; its only consumer was
+  the metric-6 capacity sum). **Removed** with the column.
+- **OR 6,000 — TOTAL-based** (`sites.max_units_total_on_site`, off-site prohibited).
+  **Preserved.**
+
+Consequence to note: metric 6 previously graded Woodland against the *sum* of the
+indoor and outdoor caps (8,500). It now grades against the indoor cap alone (3,500),
+so a real on-site count near the June close (3,977) grades **red**. That is the honest
+reading of DR3's actual operating constraint — indoor capacity — and is surfaced for
+Bill's confirmation rather than papered over with a synthetic total cap.
+
+#### §A.4.5 — Storage-limit warning disposition (operator-CLEARED, 2026-07-23)
+
+Bill confirmed the storage-limit warning split. This is the FINAL disposition for the
+three thresholds Phase 5's investigation classified; it closes the "surface for Bill's
+confirmation" item above.
+
+| Site | Threshold | Keyed on | Kind | Disposition |
+|---|---|---|---|---|
+| Woodland (CA) | **3,500** | `sites.max_units_indoor` | INDOOR | **PRESERVED** — real indoor capacity; drives compliance metric 6 (CA) and the COR capacity banner's 90 % warn (3,150). |
+| Woodland (CA) | **5,000** | `sites.max_units_outdoor` | OUTDOOR | **REMOVED** — DR3 is never allowed to store units outside (Bill, 2026-07-22). Column dropped by migration `20260806_remove_outdoor_from_site_inventory_snapshots`; the only warning consumer was the metric-6 capacity sum, so no outdoor-keyed warning survives. |
+| Eugene (OR) | **6,000** | `sites.max_units_total_on_site` | TOTAL | **PRESERVED** — real total on-site capacity (off-site prohibited); drives compliance metric 6 (OR). |
+
+Verified live (2026-07-23, `dr3-vision-postgres`): `sites` holds `woodland.max_units_indoor = 3500`,
+`eugene.max_units_total_on_site = 6000`, and `woodland.max_units_outdoor = 5000` (the
+value the deploy's `20260806` migration retires with the column). No runtime code path
+warns on the outdoor cap after Phase 5 — `metric6StorageInventory`
+(`src/lib/compliance.ts`) sums `max_units_total_on_site + max_units_indoor` only, and the
+COR banner (`src/app/dashboard/[site]/cor/page.tsx`) reads `max_units_indoor` only; the
+remaining `outdoor` mentions in code are removal-rationale comments, not warnings.
+
+### §B7.1 — Definitive non-program classification rule (Rick/Morena, 2026-07-23)
+
+The FINAL word on the program vs non-program split (the MRC billing basis — billed on
+PROGRAM units only). Supersedes the pre-existing implicit "explicit flag only" model.
+
+**A mattress source is NON-program if EITHER:**
+
+1. **Explicit list** — it is a "charging" collection site. CA (Woodland): Golden Bear,
+   Monte Diablo, San Martin, Martinez, Petaluma, Sonoma, Annapolis, Healdsburg, Vasco,
+   Brentwood. OR (Eugene): Roseburg (pre-existing), Recyclops.
+2. **Out-of-state** — the units' GENERATED-location `state` is known and differs from the
+   recycler's operating state (Woodland = CA, Eugene = OR). This is where the mattresses
+   were generated, not the hauler's HQ. A NULL/blank state is UNKNOWN → falls back to the
+   explicit flag only; it is never treated as out-of-state.
+
+Default = program when neither applies.
+
+**Implementation.** One shared pure helper `isSourceNonProgram(source, recyclerState)`
+(`src/lib/inventory/source-classification.ts`); recycler state from `sites.jurisdiction`
+via `recyclerStateForJurisdiction`. Both classification paths call it — the verify-gate
+default split (`verify-gate.ts`) and the workbook-promotion alias resolver
+(`site-alias.ts`) — so the rules never drift. `defaultProgramSplit` stays a pure
+boolean→split mapping; the caller passes the effective determination. paper_bulk carries
+an explicit split (no source) and has no classification point.
+
+**Seeding.** The 10 CA + Recyclops (Eugene) are seeded `is_non_program=true`,
+`site_type=collection_site`, `active_billing=false` (zero MRC invoice lines — money-safe,
+matching Roseburg / the SVDP internal stores), `state` CA/OR, `is_active=true`. All 10 CA
+sites are in-state, so only the explicit flag classifies them (the out-of-state rule cannot
+catch an in-CA site — this is exactly why the explicit list is required). Aliases:
+`Recology Sonoma`→Sonoma, `Recology Healdsburg`→Healdsburg (the only surviving MyMRC/June-
+workbook variants; Golden Bear appears verbatim). Idempotent migration
+`20260809_adr0037_nonprogram_charging_sources` + seed parity
+(`seedNonProgramChargingSources` / `NONPROGRAM_CHARGING_SOURCES`). Applied LIVE to PROD in
+one transaction with an `audit_log` row per insert (`actor_label='adr-0037-nonprogram-sources'`):
+this is an explicit operator directive (its own approval per the ADR-0057 D4 exception), so
+these sources bypass the reconcile queue and are audited instead.
+
+**Deferred (needs Rick's data, out of scope here):** the trans-charge BILLING setup for
+these charging sites (`is_trans_charge` + canonical mileage + rate tiers) — left at the
+`false` default so no false trans-charge variance rows are produced. Separately, the
+unwired ADR-0057 `CA_SOURCE_DISAMBIGUATION` constant still marks Golden Bear / Recology
+Sonoma / Recology Healdsburg `inCatalog:false`; it has no runtime consumer today, so there
+is no dup-insert risk, but it should be reconciled (`inCatalog:true`) when that classifier
+is wired.

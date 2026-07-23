@@ -39,9 +39,9 @@ model Site {
   jurisdiction     Jurisdiction
   mrc_program_code String // e.g. 'MRC-OR-2025' or 'MRC-CA-2025'
 
-  // Storage limits
+  // Storage limits. ADR-0037 addendum (2026-07-22): outdoor storage is not
+  // tracked — DR3 never stores units outside, so there is no outdoor cap.
   max_units_indoor        Int? // CA only
-  max_units_outdoor       Int? // CA only
   max_units_total_on_site Int? // OR only (off-site prohibited)
 
   // Operational windows
@@ -138,7 +138,6 @@ model SiteInventorySnapshot {
   site                Site     @relation(fields: [site_id], references: [id])
   snapshot_at         DateTime @default(now())
   units_indoor        Int? // CA only
-  units_outdoor       Int? // CA only
   units_total         Int? // OR only
   units_in_processing Int      @default(0)
 
@@ -444,6 +443,10 @@ enum LoadSourceType {
   b2b_haul // standard transporter delivery (MVP)
   cip_consumer // consumer drop-off (V2.2 per ADR-0010)
   event // ADR-0037 Addendum B1 — event units (daily-log `list!Q` source type)
+  // ADR-0037 Phase 3 §3.2(b) — one synthesized aggregate row per site per day,
+  // entered by a manager from the paper daily log during the pre-iPad bootstrap.
+  // Never a dock capture; provenance is explicit so per-load rows stay distinct.
+  paper_bulk
 }
 
 enum LoadStatus {
@@ -580,6 +583,10 @@ model InboundLoad {
   @@index([retrac_id]) // ADR-0037 D2 — external join key for workbook parity
   @@index([site_id, transport_charged]) // ADR-0037 — Inbound-tab split queries
   @@index([provenance_agency_id]) // ADR-0037 amendment — provenance-agency lookups
+  // ADR-0037 Phase 3 — one paper_bulk row per site per day (partial unique index,
+  // `WHERE load_source_type = 'paper_bulk'`, declared in the migration; Prisma has no
+  // partial-index syntax, so this @@index only mirrors the lookup shape).
+  @@index([site_id, load_source_type, arrived_at])
   @@map("inbound_loads")
 }
 
@@ -860,6 +867,13 @@ model BonusDailyReportLog {
   late_submission   Boolean   @default(false)
   data_entered_at   DateTime?
   resend_count      Int       @default(0)
+  // ADR-0037 Phase 4 (EOD inventory truthfulness) — a compact fingerprint of the
+  // EOD inventory carried by the last send (state + program + non-program +
+  // flow-recency). The resend decision compares this so an INVENTORY change
+  // re-sends even when the mattress totals are unchanged (the number in the
+  // team's last email must reflect current data, not a stale mid-day floor).
+  // Null on rows written before this column / when no inventory section shipped.
+  eod_inventory_sig String?
   created_at        DateTime  @default(now())
 
   @@unique([site_id, report_date])

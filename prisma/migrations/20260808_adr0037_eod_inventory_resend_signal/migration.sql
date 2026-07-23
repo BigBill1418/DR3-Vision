@@ -1,0 +1,12 @@
+-- ADR-0037 Phase 4 — EOD inventory truthfulness on the Daily Production Report.
+--
+-- The on-save resend decision compared ONLY the mattress totals, so an inventory
+-- change (a load verified, a physical count entered) after the day's report had
+-- already gone out never triggered a re-send — the team's last email held a stale
+-- mid-day floor number under an "End-of-Day Inventory" heading.
+--
+-- This column persists a compact fingerprint of the EOD inventory carried by the
+-- last send (state + program + non-program + flow-recency). Additive + nullable:
+-- existing rows read as NULL (treated as "no inventory sent yet"), so the change
+-- is backward-compatible and needs no backfill.
+ALTER TABLE "bonus_daily_report_log" ADD COLUMN "eod_inventory_sig" TEXT;

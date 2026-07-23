@@ -119,9 +119,68 @@ DROP TABLE bonus_daily_report_config;
 ALTER TABLE users DROP COLUMN is_super_admin;
 ```
 
+## End-of-Day Inventory section (ADR-0037 Phase 4)
+
+Every production email carries a per-site **End-of-Day Inventory** block below the
+Trend block. The numbers come from the ONE running balance (`onHand`) the manager
+surface uses — the email and the app can never disagree.
+
+**Healthy state** (a `measured` physical count within the freshness window):
+
+```
+End-of-Day Inventory — Woodland
+Program units on hand:        3,748
+Non-program units on hand:      229
+Total on hand:                3,977
+Change from yesterday:         -142 (net outbound)
+Program / non-program split:  94.2% / 5.8%
+Latest physical count:        Jul 22, 2026 (today)
+Counter:                      Morena
+```
+
+**Stale state** — this is what you will see until a floor count is recorded, and
+it is deliberate. No on-hand figures are shown, because a computed balance drifts
+between counts and a drifted number read as fact is how a month gets mis-billed:
+
+```
+⚠ Inventory pending physical count
+Last measured anchor:  Jun 30, 2026 (22 days ago)
+Computed balance is drift-prone; verify with a floor count.
+```
+
+To clear it: record a physical count (Manager → Inventory → Physical count) with
+BOTH pools entered (program + non-program must sum to the counted total). A count
+entered without the split is stored as `legacy` and still reads as stale — the
+billing-relevant split is what makes the balance trustworthy.
+
+**Zero state** — a site with no count and no activity yet (pre-backfill) shows
+"No inventory activity recorded yet — awaiting the first physical count and daily
+entries." That is normal before the workbook backfill lands; it is not an error.
+
+**Missing section.** If the block is absent entirely, the inventory read failed;
+the production numbers still went out by design. Check the app log for
+`[daily-report] EOD inventory unavailable`.
+
+### Freshness window
+
+`EOD_INVENTORY_STALE_DAYS` (app environment, integer > 0, **default 14**) sets how
+many days a physical count stays trusted. Change it in the app's compose env and
+recreate the container:
+
+```bash
+ssh -F ~/noc-master/config/swarm-auto-update.sshconfig chad-hq
+cd ~/DR3-Vision
+# set EOD_INVENTORY_STALE_DAYS in the app env, then:
+docker compose up -d --no-deps app
+```
+
+A missing/blank/zero/negative/non-integer value silently falls back to 14 — the
+window can never be widened by a malformed env.
+
 ## Known limitations
 
 - Patrick Dills shows in the Eugene email like any other processor (he's a Lead processor too — separation-of-duties carve-out only applies to the amendment workflow, not to production reporting).
 - The Eugene comparison block will read "no previous data available" for same-day-last-year and prior-month same-period until enough Eugene history accrues (first full month: roughly mid-July 2026; first full year: June 2027).
 - The daemon does not retry a failed M365 Graph send. Failed sends are logged and the next day's fire is independent. Use the manual re-send path above for critical missed days.
+- End-of-Day Inventory attributes an iPad-captured load arriving after 5 PM Pacific to the NEXT day's report (the day bound is the report day's last UTC millisecond, which keeps backfilled reports from pulling in the following day's paperwork). No unit is lost — it lands one day later. Paper-bulk inbound entries, daily closes, outbound and landfilled rows are date-keyed and always land on their own day.
 - The "Pace vs. last month" comparison clamps the prior month's end date to that month's last day (Mar 31 → Feb 28). On months with mismatched lengths the percentage is informational only; the absolute totals are the trustworthy numbers.

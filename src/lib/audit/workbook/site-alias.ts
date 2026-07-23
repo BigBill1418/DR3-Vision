@@ -9,6 +9,10 @@
 
 import type { PrismaClient } from '@prisma/client';
 import type { SiteAliasResolver } from '../types';
+import {
+  isSourceNonProgram,
+  recyclerStateForJurisdiction,
+} from '@/lib/inventory/source-classification';
 
 function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -45,9 +49,11 @@ export function inMemoryAliasResolver(entries: Record<string, AliasEntryInput>):
  * DB-backed resolver over ADR-0037's `sources` + `source_aliases` (B7). A raw
  * workbook site name resolves to its owning `Source` — first by exact canonical
  * `Source.name` (case/whitespace-insensitive), then by the alias table. The
- * source's `site_id` + `is_non_program` classification (a property of the
- * collection site, not the commodity) come back with it. Unresolvable names are
- * never dropped — the caller emits an `unresolved_site` finding.
+ * source's `site_id` + EFFECTIVE program/non-program classification come back with
+ * it. `isNonProgram` is the definitive determination (see {@link isSourceNonProgram}):
+ * the explicit `is_non_program` flag OR the out-of-state rule (the source's `state` ≠
+ * the recycler's operating state, derived from its site's jurisdiction). Unresolvable
+ * names are never dropped — the caller emits an `unresolved_site` finding.
  *
  * Built eagerly (one read of both tables) so `resolve()` stays synchronous, as
  * the `SiteAliasResolver` contract requires. Canonical names win over aliases on
@@ -61,10 +67,22 @@ export async function sourceAliasResolver(db: PrismaClient): Promise<SiteAliasRe
       site_id: true,
       name: true,
       is_non_program: true,
+      state: true,
+      site: { select: { jurisdiction: true } },
       aliases: { select: { alias: true } },
     },
     orderBy: { id: 'asc' },
   });
+
+  // EFFECTIVE program-ness per source (ADR-0037, Rick/Morena): the explicit flag OR the
+  // out-of-state rule, keyed on the source's OWN site's recycler state. Computed once per
+  // source so both the alias and canonical index entries share it. The `site` relation is
+  // always present on the real select; if it is ever absent, fall back to the explicit flag
+  // only (the out-of-state rule needs the recycler state — never guess without it).
+  const effectiveNonProgram = (s: (typeof sources)[number]): boolean =>
+    s.site
+      ? isSourceNonProgram(s, recyclerStateForJurisdiction(s.site.jurisdiction))
+      : s.is_non_program;
 
   const index = new Map<string, AliasEntry>();
   // Aliases first (globally unique), then canonical names overlaid on top so a
@@ -74,7 +92,7 @@ export async function sourceAliasResolver(db: PrismaClient): Promise<SiteAliasRe
       sourceId: s.id,
       siteId: s.site_id,
       canonicalName: s.name,
-      isNonProgram: s.is_non_program,
+      isNonProgram: effectiveNonProgram(s),
     };
     for (const a of s.aliases) index.set(normalizeName(a.alias), entry);
   }
@@ -87,7 +105,7 @@ export async function sourceAliasResolver(db: PrismaClient): Promise<SiteAliasRe
       sourceId: s.id,
       siteId: s.site_id,
       canonicalName: s.name,
-      isNonProgram: s.is_non_program,
+      isNonProgram: effectiveNonProgram(s),
     });
   }
 

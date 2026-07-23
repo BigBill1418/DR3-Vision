@@ -26,14 +26,18 @@
 //   - Weekend/holiday skips do NOT apply here: those gate the *scheduled* fire;
 //     data someone entered means work happened, and the directive is
 //     "regardless of when it gets put in".
-//   - Idempotent per content: a save that leaves the day's totals unchanged
+//   - Idempotent per content: a save that leaves the day's numbers unchanged
 //     from the last send is a no-op (so repeated saves of the same numbers
-//     never spam). A save that CHANGES the totals after a report already went
-//     out re-sends with "supersedes the earlier send" and bumps resend_count —
-//     the team always ends the day holding the real numbers.
-//   - A zero-total day never sends from this path (nothing to report;
-//     skip_if_zero stays the scheduled path's business, and the EOD daemon
-//     pages the zero-entry site separately at 20:00 PT).
+//     never spam). "Content" is the production totals AND the EOD inventory
+//     fingerprint (state + both pools + flow-recency), so an inventory change
+//     (a verified load, a physical count) re-sends even when the mattress totals
+//     are identical — the team's last email always carries current inventory,
+//     not a stale mid-day floor. Any change re-sends with "supersedes the earlier
+//     send" and bumps resend_count.
+//   - A zero-BONUS day still sends when there is real inventory activity today (a
+//     flow row or a physical count on this day) — that is exactly the day an
+//     operator wants an inventory line. It is a no-op only when there is neither
+//     production nor inventory movement.
 //   - FAIL-SOFT by contract: this function never throws — a mail failure must
 //     never fail the manager's save. Failures log loud and the next save (or
 //     tomorrow's operator eyeball of the log table) retries naturally.
@@ -45,6 +49,7 @@ import { log } from '@/lib/observability/logger';
 import { buildDailyReport } from './daily-report';
 import { sendDailyReport } from './daily-report-notifications';
 import { pacificSecondsOfDay, sendTimeSecondsOfDay } from './daily-report-runner';
+import { eodInventorySignature } from '@/lib/loads/eod-inventory';
 
 /** True for a Prisma P2002 unique-constraint violation (the claim-lost signal). */
 function isUniqueViolation(e: unknown): boolean {
@@ -122,15 +127,23 @@ export async function maybeSendDailyReportOnSave(
     }
 
     const report = await buildDailyReport(siteId, entryDay);
-    if (report.totalToday === 0) return 'skipped_zero';
+    // A zero-bonus day still reports when there is real inventory activity today (a flow
+    // row or a physical count on this day) — that is exactly the day an operator wants an
+    // inventory line. Skip only when there is neither production nor inventory movement.
+    if (report.totalToday === 0 && !report.eodInventory?.movementToday) return 'skipped_zero';
 
+    // The resend key includes the EOD inventory fingerprint so an inventory change
+    // (a verified load, a physical count) re-sends even when the mattress totals are
+    // unchanged — otherwise the team's last email holds a stale mid-day floor number.
+    const inventorySig = eodInventorySignature(report.eodInventory);
     const existing = await prisma.bonusDailyReportLog.findUnique({
       where: { site_id_report_date: { site_id: siteId, report_date: entryDay } },
     });
     if (
       existing &&
       existing.total_today === report.totalToday &&
-      existing.total_bonus_cents === report.totalBonusCents
+      existing.total_bonus_cents === report.totalBonusCents &&
+      (existing.eod_inventory_sig ?? '') === inventorySig
     ) {
       return 'skipped_unchanged';
     }
@@ -155,13 +168,21 @@ export async function maybeSendDailyReportOnSave(
       late_submission: late,
       data_entered_at: now,
       sent_at: now,
+      eod_inventory_sig: inventorySig,
     };
     let logId: string;
     if (existing) {
       const claim = await prisma.bonusDailyReportLog.updateMany({
         where: {
           id: existing.id,
-          NOT: { total_today: report.totalToday, total_bonus_cents: report.totalBonusCents },
+          // Win the resend unless the row ALREADY holds this exact content (totals AND
+          // the inventory fingerprint) — a concurrent resend of the same content matches
+          // nothing (count 0) and bails; an inventory-only change still wins.
+          NOT: {
+            total_today: report.totalToday,
+            total_bonus_cents: report.totalBonusCents,
+            eod_inventory_sig: inventorySig,
+          },
         },
         data: { ...claimData, resend_count: { increment: 1 } },
       });

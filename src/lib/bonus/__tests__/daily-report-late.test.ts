@@ -211,7 +211,11 @@ describe('maybeSendDailyReportOnSave', () => {
       data: Record<string, unknown>;
     };
     expect(claim.where.id).toBe('log-1');
-    expect(claim.where.NOT).toEqual({ total_today: 240, total_bonus_cents: 12400 });
+    expect(claim.where.NOT).toEqual({
+      total_today: 240,
+      total_bonus_cents: 12400,
+      eod_inventory_sig: '',
+    });
     expect(claim.data['resend_count']).toEqual({ increment: 1 });
     expect(claim.data['late_submission']).toBe(true);
     expect(claim.data['total_today']).toBe(240);
@@ -270,13 +274,72 @@ describe('maybeSendDailyReportOnSave', () => {
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
 
-  it('a zero-total day never sends from the late path', async () => {
+  it('a zero-bonus day with NO inventory movement never sends from the late path', async () => {
     findFirstConfig.mockResolvedValue(makeConfig());
     findUniqueLog.mockResolvedValue(null);
     buildDailyReport.mockResolvedValue(makeReport(0));
 
     const out = await maybeSendDailyReportOnSave('site-w', TODAY, AFTER_SEND);
     expect(out).toBe('skipped_zero');
+    expect(sendDailyReport).not.toHaveBeenCalled();
+  });
+
+  // ADR-0037 Phase 4 — EOD inventory truthfulness on the on-save path.
+  const eodInv = (over: Record<string, unknown> = {}) => ({
+    state: 'healthy',
+    programOnHand: 1597,
+    nonProgramOnHand: 886,
+    flowThrough: null,
+    movementToday: false,
+    ...over,
+  });
+
+  it('a zero-BONUS day with inventory movement today STILL sends (not skipped_zero)', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue(null);
+    buildDailyReport.mockResolvedValue({
+      ...makeReport(0),
+      eodInventory: eodInv({ movementToday: true }),
+    });
+
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, BEFORE_SEND);
+    expect(out).toBe('sent');
+    expect(sendDailyReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('an INVENTORY change re-sends even when the mattress totals are identical', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue({
+      id: 'log-1',
+      total_today: 271,
+      total_bonus_cents: 12400,
+      resend_count: 0,
+      eod_inventory_sig: 'healthy:1700:783:', // the earlier send's inventory
+    });
+    buildDailyReport.mockResolvedValue({
+      ...makeReport(271), // SAME mattress totals…
+      eodInventory: eodInv({ programOnHand: 1597, nonProgramOnHand: 886 }),
+    });
+
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, BEFORE_SEND);
+    expect(out).toBe('resent'); // …but the floor count moved → re-send
+    const claim = updateManyLog.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(claim.data['eod_inventory_sig']).toBe('healthy:1597:886:');
+  });
+
+  it('identical totals AND identical inventory is idempotent (no resend)', async () => {
+    findFirstConfig.mockResolvedValue(makeConfig());
+    findUniqueLog.mockResolvedValue({
+      id: 'log-1',
+      total_today: 271,
+      total_bonus_cents: 12400,
+      resend_count: 0,
+      eod_inventory_sig: 'healthy:1597:886:',
+    });
+    buildDailyReport.mockResolvedValue({ ...makeReport(271), eodInventory: eodInv() });
+
+    const out = await maybeSendDailyReportOnSave('site-w', TODAY, BEFORE_SEND);
+    expect(out).toBe('skipped_unchanged');
     expect(sendDailyReport).not.toHaveBeenCalled();
   });
 

@@ -17,7 +17,6 @@ const store = {
   anchor: null as null | {
     snapshot_at: Date;
     units_indoor: number | null;
-    units_outdoor: number | null;
     units_total: number | null;
     units_in_processing: number;
     program_units?: Prisma.Decimal | null;
@@ -70,6 +69,8 @@ vi.mock('@/lib/prisma', () => ({
 import {
   computeRunningBalance,
   snapshotTotalUnits,
+  resolveAnchorPair,
+  anchorFlowBounds,
   onHand,
   reconcilePhysicalCount,
   PoolSplitMismatchError,
@@ -84,6 +85,87 @@ const baseComponents = (): BalanceComponents => ({
   stripped: zeroPools(),
   wholeUnitsSold: zeroPools(),
   landfilled: zeroPools(),
+});
+
+describe('resolveAnchorPair — the single shared anchor pool resolver (D-4)', () => {
+  const base = {
+    units_indoor: 2483,
+    units_total: null,
+    units_in_processing: 0,
+  };
+  it('uses the measured split when both pool columns are present', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: D(1597),
+      non_program_units: D(886),
+      pool_attribution: 'measured',
+    });
+    expect(pool).toBe('measured');
+    expect(new Prisma.Decimal(pair.program).toString()).toBe('1597');
+    expect(new Prisma.Decimal(pair.nonProgram).toString()).toBe('886');
+  });
+  it('falls back to all-program (legacy) when a measured row is missing a pool', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: D(1597),
+      non_program_units: null,
+      pool_attribution: 'measured',
+    });
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(2483);
+    expect(pair.nonProgram).toBe(0);
+  });
+  it('attributes a legacy anchor entirely to the program pool', () => {
+    const { pair, pool } = resolveAnchorPair({
+      ...base,
+      program_units: null,
+      non_program_units: null,
+      pool_attribution: 'legacy',
+    });
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(2483);
+    expect(pair.nonProgram).toBe(0);
+  });
+  it('null anchor → zero pair (epoch / no physical count)', () => {
+    const { pair, pool } = resolveAnchorPair(null);
+    expect(pool).toBe('legacy');
+    expect(pair.program).toBe(0);
+    expect(pair.nonProgram).toBe(0);
+  });
+});
+
+describe('anchorFlowBounds — the count-day boundary (D-3)', () => {
+  // A physical count is the CLOSING position of its Pacific calendar day: flows on
+  // that day are in the count; only LATER Pacific days add. New anchors are stamped
+  // at Pacific-midnight (00:00 PT = 07:00Z PDT).
+  const anchorAt = new Date('2026-07-22T07:00:00Z'); // 00:00 PDT, July 22
+
+  it('null anchor → epoch for both bounds (count everything)', () => {
+    const b = anchorFlowBounds(null);
+    expect(b.dateSince.getTime()).toBe(0);
+    expect(b.inboundSince.getTime()).toBe(0);
+  });
+
+  it('@db.Date bound is the anchor Pacific day-key; excludes that day, includes the next', () => {
+    const { dateSince } = anchorFlowBounds(anchorAt);
+    // dateSince is the anchor's own Pacific day @db.Date key (UTC-midnight July 22).
+    expect(dateSince.toISOString()).toBe('2026-07-22T00:00:00.000Z');
+    // `{ gt: dateSince }` excludes the count day's own @db.Date rows (July 22 @ 00:00Z)…
+    expect(new Date('2026-07-22T00:00:00Z').getTime() > dateSince.getTime()).toBe(false);
+    // …and includes the next Pacific day's rows (July 23 @ 00:00Z).
+    expect(new Date('2026-07-23T00:00:00Z').getTime() > dateSince.getTime()).toBe(true);
+  });
+
+  it('inbound instant bound is Pacific-midnight of the day AFTER the anchor day', () => {
+    const { inboundSince } = anchorFlowBounds(anchorAt);
+    // 00:00 PDT July 23 = 07:00Z July 23.
+    expect(inboundSince.toISOString()).toBe('2026-07-23T07:00:00.000Z');
+    // A same-Pacific-day arrival (July 22, 10:00 PDT = 17:00Z) is EXCLUDED (baked into
+    // the count) — the asymmetry D-3 eliminates (it was included pre-fix).
+    expect(new Date('2026-07-22T17:00:00Z').getTime() >= inboundSince.getTime()).toBe(false);
+    // A next-Pacific-day arrival (July 23, 10:00 PDT = 17:00Z) IS included.
+    expect(new Date('2026-07-23T17:00:00Z').getTime() >= inboundSince.getTime()).toBe(true);
+  });
 });
 
 describe('computeRunningBalance — pool-aware algebra', () => {
@@ -163,11 +245,10 @@ describe('computeRunningBalance — pool-aware algebra', () => {
 });
 
 describe('snapshotTotalUnits', () => {
-  it('sums CA indoor+outdoor+in_processing', () => {
+  it('sums CA indoor+in_processing (no outdoor — ADR-0037 addendum)', () => {
     expect(
       snapshotTotalUnits({
-        units_indoor: 3000,
-        units_outdoor: 1000,
+        units_indoor: 4000,
         units_total: null,
         units_in_processing: 62,
       }),
@@ -177,7 +258,6 @@ describe('snapshotTotalUnits', () => {
     expect(
       snapshotTotalUnits({
         units_indoor: null,
-        units_outdoor: null,
         units_total: 5000,
         units_in_processing: 40,
       }),
@@ -189,8 +269,7 @@ describe('onHand — DB adapter', () => {
   beforeEach(() => {
     store.anchor = {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
-      units_indoor: 3000,
-      units_outdoor: 1000,
+      units_indoor: 4000,
       units_total: null,
       units_in_processing: 62,
     };
@@ -244,7 +323,6 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     store.anchor = {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
       units_indoor: 4000,
-      units_outdoor: 0,
       units_total: null,
       units_in_processing: 0,
     };
@@ -260,7 +338,7 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     const res = await reconcilePhysicalCount({
       siteId: 'site-woodland',
       countedAt: new Date('2026-07-03T00:00:00Z'),
-      physical: { units_indoor: 3990, units_outdoor: 0, units_in_processing: 0 },
+      physical: { units_indoor: 3990, units_in_processing: 0 },
       actorUserId: 'user-bill',
     });
     expect(res.computedTotal.toString()).toBe('4000');
@@ -271,6 +349,24 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     const snap = store.createdSnapshots[0] as { snapshot_kind: string; reconciled_delta: number };
     expect(snap.snapshot_kind).toBe('physical');
     expect(snap.reconciled_delta).toBe(-10);
+  });
+
+  // ADR-0037 addendum (2026-07-22) — outdoor removed from Vision. A CA physical
+  // count is indoor + in-processing only, and the persisted anchor carries no
+  // outdoor field at all.
+  it('accepts a CA physical count of indoor + in_processing and totals them', async () => {
+    const res = await reconcilePhysicalCount({
+      siteId: 'site-woodland',
+      countedAt: new Date('2026-07-03T00:00:00Z'),
+      physical: { units_indoor: 3900, units_in_processing: 77 },
+      actorUserId: 'user-bill',
+    });
+    expect(res.physicalTotal).toBe(3977);
+    expect(res.reconciledDelta).toBe(-23);
+    const snap = store.createdSnapshots[0] as Record<string, unknown>;
+    expect(snap['units_indoor']).toBe(3900);
+    expect(snap['units_in_processing']).toBe(77);
+    expect('units_outdoor' in snap).toBe(false);
   });
 });
 
@@ -283,7 +379,6 @@ describe('reconcilePhysicalCount — measured pool split validation', () => {
       snapshot_at: new Date('2026-06-30T00:00:00Z'),
       units_total: 4000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
     };
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
@@ -369,7 +464,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: D(700),
       non_program_units: D(300),
@@ -387,7 +481,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: null,
       non_program_units: null,
@@ -404,7 +497,6 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
       snapshot_at: new Date('2026-07-01T00:00:00Z'),
       units_total: 1000,
       units_indoor: null,
-      units_outdoor: null,
       units_in_processing: 0,
       program_units: null,
       non_program_units: null,

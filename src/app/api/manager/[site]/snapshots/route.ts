@@ -9,15 +9,16 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/running-balance';
 import { requireActivatedManager, loadsErrorResponse, clampLimit } from '@/lib/loads/route-helpers';
+import { pacificMidnightInstantOfDayISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const Create = z.object({
   countedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  // Jurisdiction-appropriate subset (CA indoor/outdoor, OR total); blanks are null.
+  // Jurisdiction-appropriate subset (CA indoor, OR total); blanks are null.
+  // Outdoor is not tracked — ADR-0037 addendum (2026-07-22).
   units_indoor: z.number().int().nullable().optional(),
-  units_outdoor: z.number().int().nullable().optional(),
   units_total: z.number().int().nullable().optional(),
   units_in_processing: z.number().int().nonnegative().default(0),
   program_units: z.number().int().nonnegative().optional(),
@@ -39,7 +40,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
         snapshot_at: true,
         snapshot_kind: true,
         units_indoor: true,
-        units_outdoor: true,
         units_total: true,
         units_in_processing: true,
         reconciled_delta: true,
@@ -63,10 +63,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     const d = parsed.data;
     const result = await reconcilePhysicalCount({
       siteId: ctx.siteId,
-      countedAt: new Date(`${d.countedAt}T00:00:00Z`),
+      // D-3: anchor the count at Pacific-midnight (00:00 PT) of the counted day, NOT
+      // UTC-midnight. `${date}T00:00:00Z` is 17:00 PT the PRIOR day — it mis-dated the
+      // count and made same-Pacific-day flow attribution asymmetric. See anchorFlowBounds.
+      countedAt: pacificMidnightInstantOfDayISO(d.countedAt),
       physical: {
         units_indoor: d.units_indoor ?? null,
-        units_outdoor: d.units_outdoor ?? null,
         units_total: d.units_total ?? null,
         units_in_processing: d.units_in_processing,
       },

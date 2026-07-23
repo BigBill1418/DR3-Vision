@@ -12,8 +12,10 @@ import {
   promoteWorkbookImport,
   decodeStagingRows,
   computeCloseFromCandidates,
+  assertPromotedInboundReconciles,
   PromotionConflictError,
   PromotionBalanceAssertionError,
+  PromotionInboundReconciliationError,
   PromotionParseError,
   type StagingRowInput,
   type PromotionScope,
@@ -154,6 +156,58 @@ describe('computeCloseFromCandidates', () => {
     const close = computeCloseFromCandidates(c);
     expect(close.total.toString()).toBe('4062');
     expect(close.program.plus(close.nonProgram).equals(close.total)).toBe(true);
+  });
+});
+
+// ── Finding 1: the promoted inbound must reconcile to the authoritative ledger ──
+// When a workbook carries its OWN Processed ledger, the close is computed from the
+// ledger but `onHand` re-derives the live floor from the inserted inbound rows. If the
+// raw DAY grid over-sums inbound (June DAY23's netted-out non-program row), the stored
+// close and the live query-backed balance diverge. The guard refuses that commit.
+describe('assertPromotedInboundReconciles (finding 1)', () => {
+  const ledgerRow = (programInbound: number, nonProgramInbound: number): StagingRowInput =>
+    row('inventory_ledger', {
+      programOpen: 1423,
+      nonProgramOpen: 0,
+      programInbound,
+      nonProgramInbound,
+      programStripped: 17126,
+      nonProgramStripped: 0,
+      savedUnits: 0,
+      sold: 0,
+      landfilled: 0,
+    });
+  // Inbound rows summing to program 135 / non-program 95 (the raw grid).
+  const gridInbound: StagingRowInput[] = [
+    row('inbound', { date: '2026-06-03', units: 145, programUnits: 135, nonProgramUnits: 10 }, 'Depot Alpha'),
+    row('inbound', { date: '2026-06-23', units: 85, programUnits: 0, nonProgramUnits: 85 }, 'Depot Alpha'),
+  ];
+
+  it('passes when the promoted inbound sums exactly to the ledger inbound', () => {
+    const c = decodeStagingRows([ledgerRow(135, 95), ...gridInbound], SCOPE, RESOLVER);
+    expect(() => assertPromotedInboundReconciles(c)).not.toThrow();
+  });
+
+  it('REFUSES when the grid over-sums non-program inbound vs the ledger (the DAY23 case)', () => {
+    // Ledger nets the 85-unit non-program row out (authoritative non-program inbound = 10),
+    // but the grid rows sum to 95. Committing would leave the live floor 85 above the close.
+    const c = decodeStagingRows([ledgerRow(135, 10), ...gridInbound], SCOPE, RESOLVER);
+    expect(() => assertPromotedInboundReconciles(c)).toThrow(PromotionInboundReconciliationError);
+  });
+
+  it('is a no-op without a ledger (close then equals the inserted rows by construction)', () => {
+    const c = decodeStagingRows(woodlandRows(), SCOPE, RESOLVER);
+    expect(c.inventoryLedger).toBeNull();
+    expect(() => assertPromotedInboundReconciles(c)).not.toThrow();
+  });
+
+  it('promoteWorkbookImport refuses to commit an over-summing import (nothing inserted)', async () => {
+    const { db, stores } = makeDb([ledgerRow(135, 10), ...gridInbound]);
+    await expect(
+      promoteWorkbookImport({ db, importId: IMPORT, scope: { ...SCOPE, expectedCloseTotal: null }, promotedByUserId: 'u1', resolver: RESOLVER }),
+    ).rejects.toBeInstanceOf(PromotionInboundReconciliationError);
+    expect(stores.inbound).toHaveLength(0);
+    expect(stores.promotions).toHaveLength(0);
   });
 });
 

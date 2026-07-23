@@ -153,7 +153,6 @@ export async function computeCorPrefill(
         id: true,
         snapshot_at: true,
         units_indoor: true,
-        units_outdoor: true,
         units_total: true,
         units_in_processing: true,
         reconciled_delta: true,

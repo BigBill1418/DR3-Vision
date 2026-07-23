@@ -58,4 +58,52 @@ describe('sourceAliasResolver', () => {
     const resolver = await sourceAliasResolver(db([]));
     expect(resolver.resolve('Nowhere Yard')).toBeNull();
   });
+
+  // ADR-0037 (Rick/Morena) — EFFECTIVE classification: a flag-false source whose state
+  // differs from its site's recycler state resolves as NON-program (out-of-state rule);
+  // an in-state flag-false source resolves as program; the explicit flag still wins.
+  it('classifies an OUT-OF-STATE source (state ≠ recycler state) as non-program', async () => {
+    const resolver = await sourceAliasResolver(
+      db([
+        {
+          id: 's1',
+          site_id: 'site-wood',
+          name: 'Ashland Yard',
+          is_non_program: false,
+          state: 'OR', // Oregon-generated units delivered to Woodland (CA)
+          site: { jurisdiction: 'california' },
+          aliases: [],
+        },
+      ]),
+    );
+    expect(resolver.resolve('Ashland Yard')?.isNonProgram).toBe(true);
+  });
+
+  it('classifies an IN-STATE flag-false source as program; explicit flag still wins', async () => {
+    const resolver = await sourceAliasResolver(
+      db([
+        {
+          id: 's1',
+          site_id: 'site-wood',
+          name: 'Local Yard',
+          is_non_program: false,
+          state: 'CA',
+          site: { jurisdiction: 'california' },
+          aliases: [],
+        },
+        {
+          id: 's2',
+          site_id: 'site-wood',
+          name: 'Golden Bear',
+          is_non_program: true, // explicit non-program, in-state
+          state: 'CA',
+          site: { jurisdiction: 'california' },
+          aliases: [{ alias: 'Recology Sonoma' }],
+        },
+      ]),
+    );
+    expect(resolver.resolve('Local Yard')?.isNonProgram).toBe(false);
+    expect(resolver.resolve('Golden Bear')?.isNonProgram).toBe(true);
+    expect(resolver.resolve('Recology Sonoma')?.isNonProgram).toBe(true);
+  });
 });

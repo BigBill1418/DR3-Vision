@@ -154,7 +154,6 @@
     "help": "Ingrese el conteo físico. Cuando divida los grupos del programa y fuera del programa, deben sumar el total.",
     "date_label": "Fecha del conteo",
     "units_indoor_label": "Unidades en interiores",
-    "units_outdoor_label": "Unidades en exteriores",
     "units_total_label": "Unidades en el sitio",
     "units_processing_label": "Unidades en procesamiento",
     "program_units_label": "Unidades del programa",

@@ -12,6 +12,8 @@
 import { prisma } from '@/lib/prisma';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { getEodInventorySnapshot, type EodInventorySnapshot } from '@/lib/loads/eod-inventory';
+import { log } from '@/lib/observability/logger';
 
 export interface ProcessorLine {
   employeeId: string;
@@ -44,6 +46,15 @@ export interface DailyReport {
   priorMonthSamePeriod: ComparisonTotal;
   /** Percentage delta MTD vs prior-month same period. null when prior is 0 or null. */
   paceDeltaPct: number | null;
+  /**
+   * ADR-0037 Phase 4 (spec §4) — end-of-day inventory for this site/day, carrying
+   * its own freshness state (healthy / stale / zero). `undefined` ONLY when the
+   * inventory read failed: the production numbers are the point of this report and
+   * must still go out, so an inventory outage drops the section rather than the
+   * email. It is never `undefined` to mean "stale" — staleness is a state on the
+   * snapshot and renders the warning band.
+   */
+  eodInventory?: EodInventorySnapshot | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -202,6 +213,16 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
   const priorEnd = sameDomPriorMonth(reportDate);
   const priorMonthSamePeriod = await comparisonOrNull(siteId, priorStart, priorEnd);
 
+  // ADR-0037 Phase 4 — EOD inventory, read from the ONE running balance. Degrades
+  // to an omitted section (logged, never silent-empty numbers) so an inventory
+  // failure can never suppress the production report itself.
+  let eodInventory: EodInventorySnapshot | undefined;
+  try {
+    eodInventory = await getEodInventorySnapshot(siteId, reportDate);
+  } catch (err) {
+    log.error({ err, siteId }, '[daily-report] EOD inventory unavailable — section omitted');
+  }
+
   const paceDeltaPct =
     priorMonthSamePeriod.total === null || priorMonthSamePeriod.total === 0 || mtd.total === null
       ? null
@@ -219,5 +240,6 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
     mtd,
     priorMonthSamePeriod,
     paceDeltaPct,
+    eodInventory,
   };
 }

@@ -156,6 +156,34 @@ export class PromotionBalanceAssertionError extends Error {
   }
 }
 
+/**
+ * The inbound rows a promotion would insert do NOT sum to the workbook's own
+ * authoritative Processed-ledger inbound. Promoting the raw DAY per-shipment grid
+ * as-is (which can over-sum — e.g. June DAY23 Recology Healdsburg's 85-unit
+ * non-program row, netted out of the billing close by the workbook's F=I38−L39
+ * accounting; see the `[inbound-reconciliation]` flag) while the close is computed
+ * from the ledger would leave the live query-backed on-hand floor ABOVE the billed
+ * close — the "two competing totals" divergence `running-balance.ts` exists to kill.
+ * Refused rather than committed (422): the office reconciles the grid, then re-promotes.
+ */
+export class PromotionInboundReconciliationError extends Error {
+  readonly status = 422 as const;
+  constructor(
+    readonly expected: { program: string; nonProgram: string },
+    readonly promoted: { program: string; nonProgram: string },
+  ) {
+    super(
+      `promotion refused — promoted inbound (program ${promoted.program} / non-program ` +
+        `${promoted.nonProgram}) does not reconcile to the workbook's authoritative Processed ` +
+        `ledger inbound (program ${expected.program} / non-program ${expected.nonProgram}). ` +
+        `The raw DAY per-shipment grid over-sums the billing inbound; see the ` +
+        `[inbound-reconciliation] flag. Committing it would push the live on-hand floor above ` +
+        `the billed close.`,
+    );
+    this.name = 'PromotionInboundReconciliationError';
+  }
+}
+
 export class PromotionImportNotFoundError extends Error {
   readonly status = 404 as const;
   constructor(importId: string) {
@@ -219,7 +247,6 @@ export interface StagingRowInput {
 export interface OpeningInventoryCandidate {
   date: string;
   unitsIndoor: number | null;
-  unitsOutdoor: number | null;
   unitsTotal: number | null;
   unitsInProcessing: number;
 }
@@ -484,7 +511,6 @@ export function decodeStagingRows(
       out.opening = {
         date,
         unitsIndoor: optInt(p, 'unitsIndoor', where),
-        unitsOutdoor: optInt(p, 'unitsOutdoor', where),
         unitsTotal: optInt(p, 'unitsTotal', where),
         unitsInProcessing: optInt(p, 'unitsInProcessing', where) ?? 0,
       };
@@ -667,7 +693,6 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
   const anchorUnits = c.opening
     ? snapshotTotalUnits({
         units_indoor: c.opening.unitsIndoor,
-        units_outdoor: c.opening.unitsOutdoor,
         units_total: c.opening.unitsTotal,
         units_in_processing: c.opening.unitsInProcessing,
       })
@@ -713,6 +738,33 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
     landfilled: { program: landfilled.program, nonProgram: landfilled.nonProgram },
     savedUnits,
   });
+}
+
+/**
+ * Money-safe reconciliation guard (finding 1). When the workbook carries its OWN
+ * authoritative Processed ledger, the inbound rows the promotion inserts into
+ * `inbound_loads` MUST sum to the ledger's billing-authoritative inbound. The close
+ * (D2 assertion) is computed from the ledger, but `onHand` re-derives the live floor
+ * from the inserted rows — so if the promoted grid over-sums inbound (the DAY23
+ * netted-out non-program row), the stored close and the live query-backed balance
+ * diverge. Refuse the promotion instead of committing that split. No-op without a
+ * ledger: the close is then the per-record recompute, which equals the inserted rows
+ * by construction, so no divergence is possible.
+ */
+export function assertPromotedInboundReconciles(c: PromotionCandidates): void {
+  if (!c.inventoryLedger) return;
+  const grid = c.inbound.reduce(
+    (a, i) => ({ program: a.program.plus(i.programUnits), nonProgram: a.nonProgram.plus(i.nonProgramUnits) }),
+    { program: new D(0), nonProgram: new D(0) },
+  );
+  const ledProgram = new D(c.inventoryLedger.programInbound);
+  const ledNonProgram = new D(c.inventoryLedger.nonProgramInbound);
+  if (!grid.program.equals(ledProgram) || !grid.nonProgram.equals(ledNonProgram)) {
+    throw new PromotionInboundReconciliationError(
+      { program: ledProgram.toString(), nonProgram: ledNonProgram.toString() },
+      { program: grid.program.toString(), nonProgram: grid.nonProgram.toString() },
+    );
+  }
 }
 
 /**
@@ -1015,6 +1067,10 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
   const candidates = decodeStagingRows(stagingRows, scope, resolver);
   const counts = countCandidates(candidates);
   const close = computeCloseFromCandidates(candidates);
+  // Finding 1 (money-safe): the inserted inbound rows must reconcile to the ledger the
+  // close was computed from, or the live `onHand` floor would diverge from the stored
+  // close. Fail fast, before any write — nothing to roll back.
+  assertPromotedInboundReconciles(candidates);
 
   const fromDate = dayKeyUTCFromISO(scope.from);
   const toDate = dayKeyUTCFromISO(scope.to);
@@ -1052,7 +1108,6 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
           source: 'import',
           import_id: pid,
           units_indoor: candidates.opening.unitsIndoor,
-          units_outdoor: candidates.opening.unitsOutdoor,
           units_total: candidates.opening.unitsTotal,
           units_in_processing: candidates.opening.unitsInProcessing,
         },

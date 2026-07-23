@@ -126,11 +126,56 @@ export const WOODLAND_SOURCE_ALIASES = [
 /// self-activating (re-runnable; no-op until the source lands). Alias is globally
 /// UNIQUE. Canonical names lock-step with CA_SOURCE_DISAMBIGUATION
 /// (src/lib/mymrc/ca-source-seed.ts) — change both together.
+// NOTE (ADR-0037, 2026-07-23): Golden Bear / Sonoma / Healdsburg are now ALSO canonical
+// non-program `sources` under Morena's names (NONPROGRAM_CHARGING_SOURCES), with the MyMRC
+// variants "Recology Sonoma"/"Recology Healdsburg" carried as aliases the OTHER way (see
+// NONPROGRAM_CHARGING_ALIASES). These §A.8.2 ADR-0057 pairs are LEFT AS-IS to preserve that
+// ADR's contract: the Sonoma/Healdsburg pairs still no-op (their 'Recology …' canonical is
+// not a Source), and the 'Golden Bear'→'Golden Bear' pair resolves to the same source it
+// already names (a harmless self-alias in dev/CI only — the prod migration does not create
+// it). Go Getter still gates through the ADR-0057 D4 queue until its canonical is approved.
 export const CA_OFFICE_SOURCE_ALIASES = [
   ['Healdsburg', 'Recology Healdsburg'],
   ['Sonoma', 'Recology Sonoma'],
   ['Golden Bear', 'Golden Bear'],
   ['Go Getter', 'Go Getter Company'],
+];
+
+/// ADR-0037 (Rick/Morena definitive rules, 2026-07-23) — NON-PROGRAM "charging"
+/// collection sites. Program vs non-program is the MRC billing split (billed on program
+/// units only), so these are money-critical. Rule 1 (explicit list): a charging collection
+/// site is non-program. The 10 CA (Woodland) charging sites below + the OR (Eugene)
+/// Recyclops are seeded is_non_program=true. Roseburg (the other OR non-program site) is
+/// seeded elsewhere — not repeated here. All 10 CA sites are IN-state (CA), so ONLY the
+/// explicit flag makes them non-program; the out-of-state rule (Rule 2, in
+/// src/lib/inventory/source-classification.ts) can't catch an in-CA site.
+///
+/// site_type='collection_site' (they ARE collection sites) + active_billing=false → zero
+/// MRC invoice lines (money-safe, matches Roseburg / SVDP stores). Seeded by
+/// seedNonProgramChargingSources (dev/CI) AND mirrored EXACTLY by the
+/// 20260809_adr0037_nonprogram_charging_sources migration (prod path). Change both together.
+export const NONPROGRAM_CHARGING_SOURCES = [
+  { site: 'woodland', name: 'Golden Bear', state: 'CA' },
+  { site: 'woodland', name: 'Monte Diablo', state: 'CA' },
+  { site: 'woodland', name: 'San Martin', state: 'CA' },
+  { site: 'woodland', name: 'Martinez', state: 'CA' },
+  { site: 'woodland', name: 'Petaluma', state: 'CA' },
+  { site: 'woodland', name: 'Sonoma', state: 'CA' },
+  { site: 'woodland', name: 'Annapolis', state: 'CA' },
+  { site: 'woodland', name: 'Healdsburg', state: 'CA' },
+  { site: 'woodland', name: 'Vasco', state: 'CA' },
+  { site: 'woodland', name: 'Brentwood', state: 'CA' },
+  { site: 'eugene', name: 'Recyclops', state: 'OR' },
+];
+
+/// [alias, canonical] MyMRC/workbook name variants for the charging sites above (woodland-
+/// scoped). Only Sonoma + Healdsburg have surviving variants ("Recology Sonoma" /
+/// "Recology Healdsburg" in the June workbook staging + MyMRC CA disambiguation); "Golden
+/// Bear" appears verbatim. Alias is globally UNIQUE. Mirrors the alias INSERT in the
+/// 20260809 migration.
+export const NONPROGRAM_CHARGING_ALIASES = [
+  ['Recology Sonoma', 'Sonoma'],
+  ['Recology Healdsburg', 'Healdsburg'],
 ];
 
 /// §2 — [name, notes] provenance agencies (origin of delivered mattresses; never billed).

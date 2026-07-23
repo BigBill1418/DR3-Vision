@@ -27,7 +27,12 @@
 //     rows anchored at the running balance (reuses `computeRunningBalance`).
 
 import type { PrismaClient } from '@prisma/client';
-import { computeRunningBalance, type PoolPair } from '@/lib/inventory/running-balance';
+import {
+  computeRunningBalance,
+  resolveAnchorPair,
+  anchorFlowBounds,
+  type PoolPair,
+} from '@/lib/inventory/running-balance';
 import { aggregateSiteRates, resolveRateThresholds } from '@/lib/rates';
 import {
   c1Inbound,
@@ -373,7 +378,6 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
       select: {
         snapshot_at: true,
         units_indoor: true,
-        units_outdoor: true,
         units_total: true,
         units_in_processing: true,
       },
@@ -426,8 +430,7 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
     };
   }
   for (const r of snapshots) {
-    const total =
-      (r.units_indoor ?? 0) + (r.units_outdoor ?? 0) + (r.units_total ?? 0) + r.units_in_processing;
+    const total = (r.units_indoor ?? 0) + (r.units_total ?? 0) + r.units_in_processing;
     at(toISO(r.snapshot_at)).physicalSnapshot = total;
   }
 
@@ -437,8 +440,11 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
 /**
  * The pool-aware on-hand balance strictly BEFORE the window (the roll anchor).
  * Mirrors `running-balance.onHand`, bounded to `< windowStart`, over the injected
- * db (so it is testable with a fake client). The physical anchor is attributed to
- * the program pool per the documented onHand convention.
+ * db (so it is testable with a fake client). The anchor's pool split is resolved by
+ * the SHARED `resolveAnchorPair` (D-4) — a `measured` physical count uses its entered
+ * program/non-program split; otherwise the whole count is attributed to the program
+ * pool. This selects the pool columns so onHand and the audit can never disagree on a
+ * measured anchor (which previously produced spurious C6 `physical_reconcile` findings).
  */
 async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair> {
   const before = rangeDate(w.startISO);
@@ -448,45 +454,51 @@ async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair>
     select: {
       snapshot_at: true,
       units_indoor: true,
-      units_outdoor: true,
       units_total: true,
       units_in_processing: true,
+      program_units: true,
+      non_program_units: true,
+      pool_attribution: true,
     },
   });
-  const anchorUnits = anchor
-    ? (anchor.units_indoor ?? 0) +
-      (anchor.units_outdoor ?? 0) +
-      (anchor.units_total ?? 0) +
-      anchor.units_in_processing
-    : 0;
-  const since = anchor ? anchor.snapshot_at : new Date(0);
-  const flowWindow = { gt: since, lt: before };
+  const { pair: anchorPair } = resolveAnchorPair(anchor);
+  // D-3: Pacific-calendar-consistent anchor bounds (shared with onHand). `@db.Date`
+  // outflow columns exclude the anchor's own Pacific day (`gt dateSince`); the
+  // `arrived_at` instant excludes it via Pacific midnight of the following day
+  // (`gte inboundSince`). Upper bound stays the audit window start (`lt before`).
+  const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
+  const dateFlowWindow = { gt: dateSince, lt: before };
+  const inboundFlowWindow = { gte: inboundSince, lt: before };
 
   const [inbound, dropoffs, stripped, renovation, landfilled] = await Promise.all([
     db.inboundLoad.aggregate({
       _sum: { program_unit_count: true, non_program_unit_count: true },
-      where: { site_id: w.siteId, status: { in: [...VERIFIED_STATUSES] }, arrived_at: flowWindow },
+      where: {
+        site_id: w.siteId,
+        status: { in: [...VERIFIED_STATUSES] },
+        arrived_at: inboundFlowWindow,
+      },
     }),
     db.consumerDropoff.aggregate({
       _sum: { units: true },
-      where: { site_id: w.siteId, dropoff_date: flowWindow },
+      where: { site_id: w.siteId, dropoff_date: dateFlowWindow },
     }),
     db.processedUnitsDaily.aggregate({
       _sum: { stripped_program: true, stripped_non_program: true },
-      where: { site_id: w.siteId, production_date: flowWindow },
+      where: { site_id: w.siteId, production_date: dateFlowWindow },
     }),
     db.outboundMaterial.aggregate({
       _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, sub_category: 'renovation', ship_date: flowWindow },
+      where: { site_id: w.siteId, sub_category: 'renovation', ship_date: dateFlowWindow },
     }),
     db.landfilledUnit.aggregate({
       _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, disposal_date: flowWindow },
+      where: { site_id: w.siteId, disposal_date: dateFlowWindow },
     }),
   ]);
 
   const bal = computeRunningBalance({
-    anchor: { program: anchorUnits, nonProgram: 0 },
+    anchor: anchorPair,
     verifiedInbound: {
       program: toNum(inbound._sum.program_unit_count),
       nonProgram: toNum(inbound._sum.non_program_unit_count),
