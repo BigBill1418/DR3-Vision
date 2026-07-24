@@ -41,6 +41,16 @@ const TABLE = 'inbound_loads';
 export const PAPER_BULK_SOURCE_TYPE = 'paper_bulk' as const;
 
 /**
+ * ADR-0059 — the PROVISIONAL MyMRC-haul aggregate provenance. A manager `paper_bulk`
+ * entry (this service) SUPERSEDES it: a confirming write for a day must retire any
+ * `mymrc_haul` row for that (site, arrived_at) first, because the generalized partial
+ * unique index (migration 20260810) allows only ONE aggregate inbound row per (site,
+ * day) across both provenances. Precedence: iPad-confirmed > manual paper_bulk >
+ * mymrc_haul provisional.
+ */
+export const MYMRC_HAUL_SOURCE_TYPE = 'mymrc_haul' as const;
+
+/**
  * The `arrived_at` instant for a paper-bulk business day: PACIFIC midnight of that
  * day (derived from the input's UTC calendar Y/M/D — the day key). This is the value
  * both the day-keyed unique index and the D1 promotion window key on; a UTC-midnight
@@ -144,6 +154,37 @@ export async function upsertBulkInboundDay(args: {
   };
 
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0059 — confirmation supersedes provisional. Before installing the manager's
+    // paper_bulk row, retire any provisional `mymrc_haul` aggregate the bridge wrote for
+    // the same (site, arrived_at): otherwise the generalized partial unique index would
+    // reject this insert when a provisional row already owns the slot. Delete-then-write
+    // in ONE transaction; the delete is audited (hard rule #6). On the AMEND path a
+    // paper_bulk row already owns the slot, so the unique index guarantees no mymrc_haul
+    // row can coexist and this is a no-op. This is the write-side of the same
+    // delete-then-write contract the future iPad floor-confirmation endpoint will reuse.
+    const provisional = await tx.inboundLoad.findFirst({
+      where: { site_id: args.siteId, load_source_type: MYMRC_HAUL_SOURCE_TYPE, arrived_at: day },
+      select: { id: true, total_units: true, program_unit_count: true, non_program_unit_count: true },
+    });
+    if (provisional) {
+      await tx.inboundLoad.delete({ where: { id: provisional.id } });
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: args.actorUserId,
+          action: 'delete',
+          table_name: TABLE,
+          row_id: provisional.id,
+          before: {
+            load_source_type: MYMRC_HAUL_SOURCE_TYPE,
+            arrived_at: day.toISOString().slice(0, 10),
+            total_units: provisional.total_units,
+            program_unit_count: provisional.program_unit_count,
+            non_program_unit_count: provisional.non_program_unit_count,
+          },
+        },
+      });
+    }
+
     const written = existing
       ? await tx.inboundLoad.update({ where: { id: existing.id }, data: counts })
       : await tx.inboundLoad.create({

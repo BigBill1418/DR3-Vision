@@ -156,6 +156,16 @@ export {
   type ProcessedBridgeResult,
   type BridgeLogger,
 } from './processed-bridge';
+// ADR-0059 — hauls → inventory INBOUND bridge (mymrc_hauls_mirror Delivered/General →
+// inbound_loads, the PROVISIONAL Inbound leg). Runs on scrape completion (hourly) and
+// one-shot for backfill; precedence-guarded (paper_bulk wins) + audited +
+// double-count-proof. Filters `status='Delivered'` and does NOT exclude
+// `disappeared_at` — the inverse of the processed bridge.
+export {
+  bridgeInboundHaulsToInventory,
+  type InboundBridgeContext,
+  type InboundBridgeResult,
+} from './inbound-bridge';
 export {
   SELECTORS,
   SELECTOR_VERSION,

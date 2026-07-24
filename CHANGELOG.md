@@ -5,6 +5,65 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-23 (MyMRC hauls → inventory INBOUND bridge — ADR-0059)
+
+Wires the recycler's received-count feed to inventory as PROVISIONAL inbound. Before this,
+the running balance's `Inbound` leg was fed only by manual `paper_bulk` manager entries, so
+on-hand never **rose** from real intake, only fell from processing (ADR-0058). MyMRC haul
+counts become provisional inbound now; a manager `paper_bulk` entry or a future iPad
+floor-confirmation upgrades a day to confirmed. See ADR-0059 and
+`docs/plans/2026-07-23-mymrc-inbound-inventory-bridge.md`.
+
+- **Bridge `mymrc_hauls_mirror` (Delivered, General) → `inbound_loads`.** New bundle-safe
+  `src/lib/mymrc/inbound-bridge.ts` (Prisma-injected, no `@/`) aggregates (SUMs)
+  `status='Delivered' AND type='General'` mirror rows per (site, `docking_appointment_date::date`)
+  into `program_unit_count`/`non_program_unit_count`/`total_units`, keyed to `arrived_at` =
+  Pacific-midnight of the delivery day (exactly as `bulk-inbound.ts`), `status='verified'`,
+  `count_mode='total'`, `load_source_type='mymrc_haul'`. **The single most important divergence
+  from ADR-0058: it filters on `status='Delivered'` and does NOT exclude `disappeared_at`** —
+  Delivered hauls scroll off the rolling list, so ~7,191/7,215 are `disappeared_at`-stamped;
+  excluding them would capture almost nothing. `type='Consumer Dropoff'` is excluded (a separate
+  leg). Grain is per-(site, day) aggregate, never per-haul, to coexist with `paper_bulk` without
+  double-count.
+- **One migration** (`20260810_adr0059_mymrc_haul_inbound_source`): adds `mymrc_haul` to
+  `enum LoadSourceType` and **generalizes** the ADR-0037 paper_bulk partial unique index to
+  `(site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')` — the DB-level
+  "one aggregate inbound row per (site, day)" invariant that makes a paper_bulk↔mymrc_haul
+  double-count physically impossible. Additive, idempotent, clean-replay proven on a fresh PG16.
+- **Idempotent, precedence-guarded, audited writer.** Single atomic
+  `INSERT … ON CONFLICT (site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')
+  DO UPDATE … WHERE load_source_type='mymrc_haul' AND (values IS DISTINCT FROM …)` with
+  absolute-value SETs (double-count-proof) + `xmax`-discriminated `RETURNING`. A `paper_bulk`
+  (manager) row is left byte-identical with no error; precedence is iPad-confirmed > paper_bulk >
+  mymrc_haul. Every real write emits an `audit_log` row (`actor_label='mymrc-inbound-bridge'`).
+- **Confirmation supersedes provisional (write side).** `upsertBulkInboundDay`
+  (`src/lib/loads/bulk-inbound.ts`) now DELETEs any `mymrc_haul` row for the (site, day) before
+  installing the manager's `paper_bulk` row, in one transaction, delete audited — the same
+  delete-then-write contract the future iPad floor-confirmation endpoint reuses.
+- **Runs hourly on MyMRC scrape completion** (`scripts/mymrc-scrape.mjs`, right after the ADR-0058
+  processed bridge, best-effort/non-fatal — no new container). Hourly path re-aggregates only a
+  ~10-day trailing window.
+- **Anchor-safe one-shot backfill** (`scripts/mymrc-inbound-bridge-backfill.mjs`;
+  `--backfill`/`--since`/`--site`/`--dry-run`). Proven inert for the live floor: `onHand` sums
+  inbound with `arrived_at >= Pacific-midnight of the day AFTER the anchor`, and the latest dated
+  Delivered General haul is 2026-07-21 ≤ the 2026-07-22 Woodland anchor, so all backfilled rows
+  are excluded. **Gated on the ADR-0058 MANDATORY pre/post `onHand(now)` byte-identical invariance
+  assertion** (floor-probe route); drift aborts non-zero + pages `dr3-vision-system`. Historical
+  backfill is honestly **partial** — 2,301 undated Delivered General hauls (all pre-anchor, inert)
+  are skipped and counted (`haulsUndated`).
+- **Report labels provisional inbound honestly.** `EodInventorySnapshot` gains a derived
+  read-only `inboundProvisional` flag (one cheap read of rows `onHand` already sums, no
+  arithmetic); the Daily Production Report labels such a day **"Inbound: provisional — from MyMRC
+  haul counts, pending floor confirmation"** in the muted tone, and the honesty footer +
+  tonight-accuracy caveat are amended. The label drops automatically once a `paper_bulk`/iPad
+  confirmation replaces the provisional row; the resend fingerprint fires on that flip.
+- **Backfill reconciliation (read-only, prod)** — 610 (site, day) aggregate rows,
+  439,357 program / 0 non-program (dated Delivered General; 2,301 undated skipped); all-Delivered
+  General program 629,973 ≈ 0.970 × processed 649,428; latest bridged delivery day 2026-07-21 <
+  Woodland anchor 2026-07-22; Eugene inbound empty; current Woodland floor 1597/886/2483 unchanged
+  by the backfill. **The operator runs the migration + real backfill + on-box floor-invariance
+  verification.**
+
 ### Added — 2026-07-23 (MyMRC processed → inventory bridge + single 8pm production-report send — ADR-0058)
 
 Wires the authoritative MyMRC processed feed to inventory and consolidates the daily

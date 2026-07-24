@@ -34,6 +34,8 @@ const store = {
     shipDate: null as Date | null,
     disposalDate: null as Date | null,
   },
+  // ADR-0059 — how many provisional mymrc_haul inbound rows the balance's window holds.
+  provisionalInboundCount: 0,
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -49,7 +51,11 @@ vi.mock('@/lib/prisma', () => ({
     auditLog: {
       findFirst: async () => store.audit,
     },
-    inboundLoad: { aggregate: async () => ({ _max: { arrived_at: store.flowMax.inboundArrivedAt } }) },
+    inboundLoad: {
+      aggregate: async () => ({ _max: { arrived_at: store.flowMax.inboundArrivedAt } }),
+      // ADR-0059 provisional-inbound probe — count of mymrc_haul rows in the balance window.
+      count: async () => store.provisionalInboundCount,
+    },
     consumerDropoff: { aggregate: async () => ({ _max: { dropoff_date: store.flowMax.dropoffDate } }) },
     processedUnitsDaily: {
       aggregate: async () => ({ _max: { production_date: store.flowMax.productionDate } }),
@@ -61,6 +67,9 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/inventory/running-balance', () => ({
   VERIFIED_INBOUND_STATUSES: ['verified', 'submitted_to_mymrc', 'processed'],
+  // ADR-0059 — the EOD module now derives the inbound window from the anchor; a trivial
+  // stub suffices (the provisional count mock ignores the window).
+  anchorFlowBounds: () => ({ dateSince: new Date(0), inboundSince: new Date(0) }),
   onHand: async (_siteId: string, asOf: Date) => {
     const b = store.balances.get(asOf.getTime()) ?? { program: 0, nonProgram: 0 };
     const program = new D(b.program);
@@ -101,6 +110,7 @@ beforeEach(() => {
     shipDate: null,
     disposalDate: null,
   };
+  store.provisionalInboundCount = 0;
   delete process.env['EOD_INVENTORY_STALE_DAYS'];
 });
 
@@ -210,9 +220,19 @@ describe('eodInventorySignature (the resend fingerprint)', () => {
     expect(eodInventorySignature(undefined)).toBe('');
   });
 
-  it('captures state, both pools, and flow-recency', () => {
+  it('captures state, both pools, flow-recency, and the provisional flag', () => {
     const t = Date.UTC(2026, 6, 22);
-    expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(`healthy:1597:886:${t}`);
+    // ADR-0059 — trailing `:c` = confirmed (no provisional inbound); `:p` = provisional.
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(`healthy:1597:886:${t}:c`);
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t), inboundProvisional: true }))).toBe(
+      `healthy:1597:886:${t}:p`,
+    );
+  });
+
+  it('ADR-0059: a provisional→confirmed flip changes the signature even when pools are unchanged', () => {
+    expect(eodInventorySignature(mk({ inboundProvisional: true }))).not.toBe(
+      eodInventorySignature(mk({ inboundProvisional: false })),
+    );
   });
 
   it('a program/non-program shift with an unchanged total STILL changes the signature', () => {
@@ -377,5 +397,23 @@ describe('getEodInventorySnapshot', () => {
 
     const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
     expect(eod.movementToday).toBe(true);
+  });
+
+  it('ADR-0059: inboundProvisional=true when the balance window holds a mymrc_haul row', async () => {
+    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
+    store.provisionalInboundCount = 1;
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.inboundProvisional).toBe(true);
+  });
+
+  it('ADR-0059: inboundProvisional=false when no mymrc_haul row is in the window (e.g. a paper_bulk day)', async () => {
+    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
+    store.provisionalInboundCount = 0;
+
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.inboundProvisional).toBe(false);
   });
 });

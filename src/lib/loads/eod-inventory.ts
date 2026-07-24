@@ -39,7 +39,7 @@
 // lost, it is attributed one day later.
 
 import { prisma } from '@/lib/prisma';
-import { onHand, VERIFIED_INBOUND_STATUSES } from '@/lib/inventory/running-balance';
+import { onHand, VERIFIED_INBOUND_STATUSES, anchorFlowBounds } from '@/lib/inventory/running-balance';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
@@ -116,6 +116,15 @@ export interface EodInventorySnapshot {
    * reports.
    */
   movementToday: boolean;
+  /**
+   * ADR-0059 — true when the balance's inbound since the anchor includes any
+   * `load_source_type='mymrc_haul'` row: PROVISIONAL, unconfirmed inbound bridged from
+   * MyMRC Delivered-haul counts, not yet floor-confirmed. Derived from the SAME rows
+   * `onHand` already sums (one cheap `count`, no arithmetic) — it cannot move a billing
+   * figure. Drives the report's provisional label; it goes false automatically once a
+   * `paper_bulk` (manager) or iPad confirmation replaces the provisional row for a day.
+   */
+  inboundProvisional: boolean;
   /** The freshness window this snapshot was graded against. */
   staleDays: number;
 }
@@ -181,7 +190,10 @@ export function classifyEodInventory(args: {
  */
 export function eodInventorySignature(eod: EodInventorySnapshot | undefined): string {
   if (!eod) return '';
-  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}`;
+  // ADR-0059 — include `inboundProvisional`: a provisional→confirmed flip (a manager
+  // paper_bulk entry replacing the mymrc_haul row) can leave the pools unchanged yet
+  // drops the "provisional" label, so the resend must fire on that transition too.
+  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}:${eod.inboundProvisional ? 'p' : 'c'}`;
 }
 
 /** Percent of `total` represented by `part`, one decimal. Null when total ≤ 0. */
@@ -300,6 +312,20 @@ export async function getEodInventorySnapshot(
   const nonProgramOnHand = balance.nonProgram.toNumber();
   const totalOnHand = balance.total.toNumber();
 
+  // ADR-0059 — is any of the inbound `onHand` summed for this balance PROVISIONAL
+  // (`mymrc_haul`)? Uses the exact inbound window `onHand` keys on (gte Pacific-midnight
+  // of the day after the anchor's Pacific day), so it reflects the same rows the balance
+  // summed — a read of already-counted rows, never new arithmetic.
+  const { inboundSince } = anchorFlowBounds(anchorRow ? anchorRow.snapshot_at : null);
+  const provisionalInboundCount = await prisma.inboundLoad.count({
+    where: {
+      site_id: siteId,
+      load_source_type: 'mymrc_haul',
+      status: { in: [...VERIFIED_INBOUND_STATUSES] },
+      arrived_at: { gte: inboundSince, lte: endOfDay },
+    },
+  });
+
   return {
     siteId,
     reportDate,
@@ -321,6 +347,7 @@ export async function getEodInventorySnapshot(
     anchor,
     flowThrough,
     movementToday,
+    inboundProvisional: provisionalInboundCount > 0,
     staleDays,
   };
 }
