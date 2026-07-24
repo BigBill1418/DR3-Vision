@@ -195,10 +195,16 @@ export function renderEodInventoryHtml(
     // Counter is a stored user/system name — escaped, it is the one untrusted
     // string in this panel.
     eodRowHtml('Counter', escapeHtml(eod.anchor?.counter ?? '—')) +
-    // ADR-0058 §3.3 — what on-hand actually means, so a reconciled floor is never
-    // misread as a live net position (no inbound feed yet; floor drifts until
-    // re-counted).
-    `<tr><td colspan="2" style="padding-top:10px;font-size:11px;color:${MUTED};line-height:1.5">On-hand is the reconciled floor from the last physical count plus confirmed movement since. Today's production and any not-yet-entered inbound loads are not reflected in this number.</td></tr>`;
+    // ADR-0059 — when the balance's inbound includes a provisional MyMRC-haul aggregate,
+    // say so plainly in the muted/warn tone. It is NOT presented as confirmed truth; the
+    // label drops automatically once a paper_bulk (manager) or iPad confirmation replaces
+    // the provisional row for a day.
+    (eod.inboundProvisional
+      ? `<tr><td colspan="2" style="padding-top:10px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>Inbound: provisional</strong> — from MyMRC haul counts, pending floor confirmation.</td></tr>`
+      : '') +
+    // ADR-0058 §3.3 / ADR-0059 — what on-hand actually means, so a reconciled floor is
+    // never misread as a fully-confirmed live net position.
+    `<tr><td colspan="2" style="padding-top:10px;font-size:11px;color:${MUTED};line-height:1.5">On-hand is the reconciled floor from the last physical count plus movement since — inbound marked <em>provisional</em> is from MyMRC haul counts, not yet floor-confirmed. Today's production is not reflected in this number.</td></tr>`;
   return eodPanel(
     siteName,
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table>`,
@@ -242,7 +248,7 @@ export function renderProcessedTodayHtml(report: DailyReport): string {
     line('Processed today (entered)', `${report.totalToday.toLocaleString('en-US')} units`, '— confirmed in MyMRC in 1–3 days') +
     line('Estimated floor after today', `≈ ${fmtUnits(estTotal)} units`, '(estimate)') +
     `</table>` +
-    `<div style="font-size:11px;color:${MUTED};line-height:1.5;padding-top:8px">Estimate = reconciled floor − today's entered production (program pool). Today's stripping is not yet confirmed in MyMRC and inbound loads are not yet fed, so the floor above does not yet reflect today's production.</div>`;
+    `<div style="font-size:11px;color:${MUTED};line-height:1.5;padding-top:8px">Estimate = reconciled floor − today's entered production (program pool). Today's stripping may not yet be in MyMRC, and today's inbound is provisional from MyMRC haul counts, so the floor above does not yet fully reflect today's movement.</div>`;
 
   return `
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:18px 0 0;background:${SVDP_CREAM};border-left:3px solid ${SVDP_GOLD};border-radius:4px">

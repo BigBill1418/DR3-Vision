@@ -257,6 +257,7 @@ function makeEod(overrides: Partial<EodInventorySnapshot> = {}): EodInventorySna
     },
     flowThrough: REPORT_DAY,
     movementToday: true,
+    inboundProvisional: false,
     staleDays: 14,
     ...overrides,
   };
@@ -283,6 +284,17 @@ describe('renderHtmlBody — EOD inventory', () => {
     expect(html).toContain('Jul 22, 2026 (today)');
     expect(html).toContain('Morena');
     expect(html).not.toContain('Inventory pending physical count');
+  });
+
+  it('ADR-0059: HEALTHY shows the provisional-inbound label only when inboundProvisional is true', () => {
+    const provisional = bodyWithEod(makeEod({ inboundProvisional: true }));
+    expect(provisional).toContain('Inbound: provisional');
+    expect(provisional).toContain('pending floor confirmation');
+
+    const confirmed = bodyWithEod(makeEod({ inboundProvisional: false }));
+    expect(confirmed).not.toContain('Inbound: provisional');
+    // The honesty footer still explains what "provisional" means in either case.
+    expect(confirmed).toContain('not yet floor-confirmed');
   });
 
   it('HEALTHY renders a `${date}T00:00:00Z` count date as its own day, not the prior day', () => {
@@ -413,7 +425,9 @@ describe('renderHtmlBody — Today\'s Production vs. Inventory (ADR-0058 §3.3)'
     expect(html).toContain('Estimated floor after today');
     expect(html).toContain('2,289 units');
     expect(html).toContain('(estimate)');
-    expect(html).toContain('does not yet reflect today');
+    // ADR-0059 — the caveat now names inbound as provisional (inbound IS fed now).
+    expect(html).toContain('does not yet fully reflect today');
+    expect(html).toContain('inbound is provisional from MyMRC haul counts');
   });
 
   it('collapses (renders nothing extra) once today is reflected in the floor (movementToday)', () => {

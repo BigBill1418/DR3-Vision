@@ -212,6 +212,30 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
         }
       }
 
+      // ADR-0059 — bridge the freshly-refreshed hauls mirror into inventory
+      // (`inbound_loads`, the PROVISIONAL Inbound leg) right after the processed bridge,
+      // so ordering is guaranteed (mirror-fresh → bridge) and both legs feed the balance
+      // within the hour. Only the trailing window is re-aggregated each tick (the
+      // precedence guard + absolute-value writes make a wider window harmless — the
+      // one-time full backfill is a separate script). Best-effort, non-fatal: a bridge
+      // failure must not turn a good scrape tick into a non-zero exit. The `typeof` guard
+      // keeps injected-fake test harnesses working unchanged.
+      if (typeof mymrc.bridgeInboundHaulsToInventory === 'function') {
+        try {
+          const ir = await mymrc.bridgeInboundHaulsToInventory({
+            prisma,
+            sinceDeliveryDate: recentProcessedFloor(),
+            log: logFn,
+          });
+          logFn(
+            'info',
+            `inbound-bridge — ins:${ir.inserted} upd:${ir.updated} skip:${ir.skippedGuarded} same:${ir.unchanged} undated:${ir.haulsUndated}`,
+          );
+        } catch (err) {
+          logFn('error', `inbound-bridge failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
+
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
     } finally {

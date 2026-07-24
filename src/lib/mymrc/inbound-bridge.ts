@@ -1,0 +1,402 @@
+// ADR-0059 D1/D2/D3 — MyMRC hauls → inventory INBOUND bridge (the second leg).
+//
+// Aggregates the recycler's received-count feed (`mymrc_hauls_mirror`,
+// `status='Delivered'`, `type='General'`) into `inbound_loads` — the `Inbound` leg
+// the running balance (`src/lib/inventory/running-balance.ts`) reads. Before this,
+// that leg was fed only by manual `paper_bulk` manager entries (#166), so on-hand
+// never ROSE from real intake, only fell from processing. This module wires the two
+// together as PROVISIONAL (unconfirmed) inbound, honestly labeled in the report,
+// upgraded to confirmed later by a manager `paper_bulk` entry or a future iPad
+// floor-confirmation.
+//
+// THE CRITICAL DIVERGENCE FROM THE SIBLING PROCESSED BRIDGE (ADR-0058):
+//   - The processed mirror keeps ALL history in its list view (0 disappeared), so
+//     ADR-0058 filters `disappeared_at IS NULL`. The HAULS mirror is the OPPOSITE:
+//     `Delivered` hauls scroll off the rolling active list within a day, so ~7,191 of
+//     7,215 rows are `disappeared_at`-stamped. This bridge therefore filters on
+//     `status='Delivered'` and DOES **NOT** exclude `disappeared_at` — excluding it
+//     would capture almost nothing. Do NOT "fix" this to match ADR-0058.
+//   - Only `status='Delivered'` carries the recycler's real count; `Confirmed`
+//     (scheduled) rows count 0 and `Rejected` rows are excluded.
+//   - Only `type='General'` (B2B truck inbound) is this leg's source;
+//     `type='Consumer Dropoff'` is a SEPARATE leg (`onHand`'s `dropoffUnits`) and is
+//     excluded here to avoid double-counting it.
+//
+// MONEY-SAFE by construction (ADR-0059 D2/D3):
+//   - GRAIN is per-(site, delivery day) AGGREGATE, not per-haul. `onHand` sums EVERY
+//     verified inbound row for a day regardless of `load_source_type`, so a per-haul
+//     MyMRC row plus a manager `paper_bulk` aggregate for the same day would
+//     double-count. One aggregate row per site/day + a generalized partial unique index
+//     (`(site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')`,
+//     migration 20260810) makes a second aggregate row physically impossible.
+//   - PRECEDENCE: it only ever writes rows it OWNS (`load_source_type='mymrc_haul'`)
+//     and never a day a manager already owns (`paper_bulk`). Enforced twice — a JS
+//     pre-check (skip guarded days) AND the atomic `ON CONFLICT … DO UPDATE … WHERE
+//     load_source_type='mymrc_haul'` guard that is the authoritative backstop against a
+//     manager-entry race. A `paper_bulk` row is left byte-identical with no error.
+//   - DOUBLE-COUNT-PROOF: the writer SETs ABSOLUTE aggregated values (never increments),
+//     so re-running the bridge hourly is inherently idempotent. The `IS DISTINCT FROM`
+//     clause additionally suppresses no-op `updated_at` churn.
+//   - AUDITED (CLAUDE.md hard rule #6): every real INSERT/UPDATE emits an `audit_log`
+//     row (`actor_label='mymrc-inbound-bridge'`) in the SAME transaction; a
+//     guard-blocked no-op writes none.
+//
+// COMPLETENESS (honest partial backfill, ADR-0059 §0/§8): only Delivered General hauls
+// carrying a `docking_appointment_date` (the delivery-day key) are bridged. Undated
+// list-only hauls are SKIPPED and counted in `haulsUndated`; every undated haul is
+// historical (pre-anchor) and inert for the live floor, so the historical inbound
+// backfill is partial by design and the live/forward path is fully covered.
+//
+// SITE-AGNOSTIC: Woodland-only today (Eugene has 0 haul-mirror rows — ADR-0057 C-21
+// Switch-Account not built); the code simply writes nothing for a site with no rows.
+//
+// Bundle constraint (tsconfig.mymrc.json): compiled standalone — NO `@/…` imports.
+// Prisma is INJECTED; only its TYPES are imported. `pacificMidnightInstantOfDayISO`
+// (from `@/lib/time`) is REPLICATED inline below (byte-identical), because the delivery
+// day's `arrived_at` MUST equal exactly what `bulk-inbound.ts` writes and what `onHand`
+// keys its inbound window on — a divergent instant would silently mis-window a load. The
+// atomic upsert is raw SQL run through the injected client's `$queryRawUnsafe` with
+// POSITIONAL parameters (injection-safe — the SQL text is a constant, every value bound).
+
+import { randomUUID } from 'node:crypto';
+import type { PrismaClient } from '@prisma/client';
+
+export type BridgeLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
+
+export interface InboundBridgeContext {
+  prisma: PrismaClient;
+  /** Restrict to these site_ids; default = every site present in the hauls mirror. */
+  siteIds?: string[];
+  /**
+   * Lower bound on the delivery day (`docking_appointment_date`). When omitted the
+   * bridge writes the FULL dated history (backfill). The hourly path passes a recent
+   * floor so a steady-state tick only re-aggregates the trailing window. The precedence
+   * guard + absolute writes make a wider window harmless (just slower).
+   */
+  sinceDeliveryDate?: Date;
+  /**
+   * When true, compute + classify every affected day but perform NO writes and NO audit
+   * rows. `inserted`/`updated` report what WOULD happen. Used by the backfill script's
+   * `--dry-run`.
+   */
+  dryRun?: boolean;
+  log?: BridgeLogger;
+}
+
+export interface InboundBridgeResult {
+  daysConsidered: number;
+  inserted: number;
+  updated: number;
+  /** paper_bulk-owned (manager/confirmed) days left untouched (precedence). */
+  skippedGuarded: number;
+  /** mymrc_haul days already holding the exact aggregated values (no write). */
+  unchanged: number;
+  /** Delivered General hauls skipped for a NULL docking_appointment_date (§0/§8). */
+  haulsUndated: number;
+}
+
+// ── Pacific-midnight instant (inlined replica of @/lib/time — see module header) ──
+// The true UTC instant of Pacific local midnight (00:00:00) for a `YYYY-MM-DD` day key.
+// DST-correct via Intl (no external deps). MUST stay byte-identical to
+// `pacificMidnightInstantOfDayISO` so a bridged `arrived_at` lands on the SAME instant
+// `onHand`'s inbound window (gte Pacific-midnight of the day after the anchor) keys on.
+
+const PACIFIC_TZ = 'America/Los_Angeles';
+
+const PACIFIC_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: PACIFIC_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** The signed offset (ms) such that `utc = pacificWallClockAsUTC - offset`. */
+function pacificOffsetMs(at: Date): number {
+  const parts = PACIFIC_PARTS_FMT.formatToParts(at);
+  const get = (t: string): number => Number(parts.find((p) => p.type === t)?.value);
+  const asUTC = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second'),
+  );
+  return asUTC - at.getTime();
+}
+
+/** The true UTC instant of Pacific local midnight for a `YYYY-MM-DD` day KEY. */
+function pacificMidnightInstantOfDayISO(dayIso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dayIso);
+  if (!m) throw new Error(`pacificMidnightInstantOfDayISO: not a YYYY-MM-DD day key: ${dayIso}`);
+  const approx = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0));
+  return new Date(approx.getTime() - pacificOffsetMs(approx));
+}
+
+// ── mirror + existing-row shapes the bridge needs ──
+
+/** A hauls-mirror row shape the aggregation needs. */
+interface HaulMirrorRow {
+  site_id: string | null;
+  docking_appointment_date: Date | null;
+  program_unit_count: number | null;
+  non_program_unit_count: number | null;
+}
+
+/** An existing aggregate `inbound_loads` row shape the precedence pre-check needs. */
+interface ExistingInboundRow {
+  site_id: string;
+  arrived_at: Date | null;
+  load_source_type: string;
+  program_unit_count: number | null;
+  non_program_unit_count: number | null;
+}
+
+interface DayAggregate {
+  siteId: string;
+  /** `YYYY-MM-DD` — the delivery day key (UTC components of the noon-stamped date). */
+  iso: string;
+  /** The Pacific-midnight instant of `iso` — the `arrived_at` value written/matched. */
+  arrivedAt: Date;
+  program: number;
+  nonProgram: number;
+}
+
+/**
+ * `docking_appointment_date` is a noon-stamped `timestamp without time zone` (mappers
+ * anchor Salesforce date-only fields at 12:00 UTC). Noon is TZ-stable, so the UTC
+ * calendar day equals the delivery day the recycler recorded — take the day key from the
+ * UTC components directly. `docking_appointment_date::date` (the R1 reconciliation SQL)
+ * yields the same day.
+ */
+function deliveryDayIso(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Coerce a number | string | null to a JS number for equality. */
+function toNumber(v: unknown): number {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v;
+  return Number((v as { toString(): string }).toString());
+}
+
+// The atomic, precedence-guarded, double-count-proof upsert (ADR-0059 D3). Absolute
+// SETs; the WHERE guard means the statement is a silent no-op (0 rows returned) for a
+// paper_bulk row OR an already-equal mymrc_haul row. `(xmax = 0)` in the RETURNING
+// discriminates the INSERT path (xmax=0 ⇒ true) from the ON CONFLICT UPDATE path
+// (xmax≠0 ⇒ false). The `ON CONFLICT … WHERE` predicate names the GENERALIZED partial
+// unique index (migration 20260810) so both paper_bulk and mymrc_haul rows arbitrate on
+// the same (site_id, arrived_at) slot — a paper_bulk row on the day blocks the insert,
+// then the DO UPDATE guard (`load_source_type='mymrc_haul'`) refuses to touch it. Params:
+// $1 id, $2 site_id, $3 arrived_at (ISO instant), $4 total, $5 program, $6 non_program.
+const UPSERT_SQL = `
+INSERT INTO inbound_loads
+  (id, site_id, load_source_type, status, count_mode, arrived_at,
+   total_units, program_unit_count, non_program_unit_count, submitted_at, created_at, updated_at)
+VALUES
+  ($1, $2, 'mymrc_haul', 'verified', 'total', $3::timestamptz,
+   $4::int, $5::int, $6::int, now(), now(), now())
+ON CONFLICT (site_id, arrived_at) WHERE load_source_type IN ('paper_bulk', 'mymrc_haul')
+DO UPDATE
+  SET total_units            = EXCLUDED.total_units,
+      program_unit_count     = EXCLUDED.program_unit_count,
+      non_program_unit_count = EXCLUDED.non_program_unit_count,
+      updated_at             = now()
+  WHERE inbound_loads.load_source_type = 'mymrc_haul'
+    AND ( inbound_loads.total_units            IS DISTINCT FROM EXCLUDED.total_units
+       OR inbound_loads.program_unit_count     IS DISTINCT FROM EXCLUDED.program_unit_count
+       OR inbound_loads.non_program_unit_count IS DISTINCT FROM EXCLUDED.non_program_unit_count )
+RETURNING id, (xmax = 0) AS inserted
+`;
+
+/**
+ * Bridge `mymrc_hauls_mirror` (Delivered, General) → `inbound_loads`, aggregated per
+ * (site, delivery day). Idempotent + precedence-guarded (see module header). Never
+ * writes an operational table other than `inbound_loads`; never touches a paper_bulk /
+ * manager row.
+ */
+export async function bridgeInboundHaulsToInventory(
+  ctx: InboundBridgeContext,
+): Promise<InboundBridgeResult> {
+  const log = ctx.log ?? ((): void => undefined);
+  const { prisma } = ctx;
+  const dryRun = ctx.dryRun === true;
+  const sinceIso = ctx.sinceDeliveryDate ? deliveryDayIso(ctx.sinceDeliveryDate) : null;
+
+  const result: InboundBridgeResult = {
+    daysConsidered: 0,
+    inserted: 0,
+    updated: 0,
+    skippedGuarded: 0,
+    unchanged: 0,
+    haulsUndated: 0,
+  };
+
+  // 1. Pull the received (Delivered) B2B (General) haul rows. `disappeared_at` is
+  //    DELIBERATELY not filtered (the inverse of the processed bridge — see header).
+  //    An undated haul is NOT excluded by the query so it can be COUNTED as haulsUndated
+  //    (an honest completeness signal), then skipped in aggregation.
+  const mirrorRows = (await prisma.mymrcHaulsMirror.findMany({
+    where: {
+      status: 'Delivered',
+      type: 'General',
+      site_id: { not: null },
+      ...(ctx.siteIds && ctx.siteIds.length > 0 ? { site_id: { in: ctx.siteIds } } : {}),
+    },
+    select: {
+      site_id: true,
+      docking_appointment_date: true,
+      program_unit_count: true,
+      non_program_unit_count: true,
+    },
+  })) as HaulMirrorRow[];
+
+  // 2. Aggregate (SUM) per (site, delivery day). Undated hauls are tallied + skipped;
+  //    windowed by sinceDeliveryDate on the derived delivery day.
+  const byKey = new Map<string, DayAggregate>();
+  for (const r of mirrorRows) {
+    if (r.site_id == null) continue; // belt-and-suspenders (query already excludes null)
+    if (r.docking_appointment_date == null) {
+      result.haulsUndated += 1;
+      continue;
+    }
+    const iso = deliveryDayIso(r.docking_appointment_date);
+    if (sinceIso != null && iso < sinceIso) continue;
+    const key = `${r.site_id}|${iso}`;
+    const agg =
+      byKey.get(key) ??
+      ({
+        siteId: r.site_id,
+        iso,
+        arrivedAt: pacificMidnightInstantOfDayISO(iso),
+        program: 0,
+        nonProgram: 0,
+      } satisfies DayAggregate);
+    agg.program += r.program_unit_count ?? 0;
+    agg.nonProgram += r.non_program_unit_count ?? 0;
+    byKey.set(key, agg);
+  }
+
+  const aggregates = [...byKey.values()];
+  result.daysConsidered = aggregates.length;
+  if (aggregates.length === 0) {
+    log(
+      'info',
+      `inbound-bridge: no dated Delivered General hauls to bridge${sinceIso ? ` (since ${sinceIso})` : ''} ` +
+        `(undated skipped: ${result.haulsUndated})`,
+    );
+    return result;
+  }
+
+  // 3. Preload the existing AGGREGATE rows (paper_bulk|mymrc_haul) for exactly the
+  //    candidate (site, arrived_at) set — ONE query — so the JS pre-check classifies
+  //    skippedGuarded / unchanged deterministically (the SQL guard remains the
+  //    authoritative race backstop). Per-load (b2b_haul) rows are NOT aggregate rows and
+  //    do not participate in the day-slot uniqueness, so they are excluded here.
+  const siteIds = [...new Set(aggregates.map((a) => a.siteId))];
+  const arrivedAts = [...new Map(aggregates.map((a) => [a.arrivedAt.getTime(), a.arrivedAt])).values()];
+  const existingRows = (await prisma.inboundLoad.findMany({
+    where: {
+      site_id: { in: siteIds },
+      arrived_at: { in: arrivedAts },
+      load_source_type: { in: ['paper_bulk', 'mymrc_haul'] },
+    },
+    select: {
+      site_id: true,
+      arrived_at: true,
+      load_source_type: true,
+      program_unit_count: true,
+      non_program_unit_count: true,
+    },
+  })) as ExistingInboundRow[];
+  const existingByKey = new Map<string, ExistingInboundRow>();
+  for (const e of existingRows) {
+    if (e.arrived_at == null) continue;
+    existingByKey.set(`${e.site_id}|${e.arrived_at.getTime()}`, e);
+  }
+
+  // 4. Per affected day: pre-check precedence, then the guarded upsert + audit in a
+  //    per-day transaction.
+  for (const agg of aggregates) {
+    const existing = existingByKey.get(`${agg.siteId}|${agg.arrivedAt.getTime()}`);
+
+    // PRECEDENCE: a paper_bulk (manager/confirmed) row owns the day — never touch it.
+    if (existing && existing.load_source_type !== 'mymrc_haul') {
+      result.skippedGuarded += 1;
+      continue;
+    }
+    // UNCHANGED: a mymrc_haul row already holding these exact values.
+    if (
+      existing &&
+      toNumber(existing.program_unit_count) === agg.program &&
+      toNumber(existing.non_program_unit_count) === agg.nonProgram
+    ) {
+      result.unchanged += 1;
+      continue;
+    }
+    if (dryRun) {
+      if (existing) result.updated += 1;
+      else result.inserted += 1;
+      continue;
+    }
+
+    const total = agg.program + agg.nonProgram;
+    await prisma.$transaction(async (tx) => {
+      const rows = (await tx.$queryRawUnsafe(
+        UPSERT_SQL,
+        randomUUID(),
+        agg.siteId,
+        agg.arrivedAt.toISOString(),
+        total,
+        agg.program,
+        agg.nonProgram,
+      )) as Array<{ id: string; inserted: boolean }>;
+
+      // 0 rows ⇒ the WHERE guard blocked the write. Given the pre-check already excluded
+      // the known guarded/unchanged cases, reaching here with 0 rows means the row
+      // changed ownership/values UNDER us (a manager paper_bulk entry, or a concurrent
+      // identical mymrc_haul write, landed between preload and this statement). Either
+      // way we did NOT write and must NOT audit — the guard held. Count it as guarded (a
+      // manager row was protected) rather than as a phantom write.
+      if (rows.length === 0) {
+        result.skippedGuarded += 1;
+        return;
+      }
+      const rec = rows[0] as { id: string; inserted: boolean };
+      if (rec.inserted) result.inserted += 1;
+      else result.updated += 1;
+
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: null,
+          actor_label: 'mymrc-inbound-bridge',
+          action: rec.inserted ? 'insert' : 'update',
+          table_name: 'inbound_loads',
+          row_id: rec.id,
+          after: {
+            arrived_at: agg.iso,
+            total_units: total,
+            program_unit_count: agg.program,
+            non_program_unit_count: agg.nonProgram,
+            load_source_type: 'mymrc_haul',
+          },
+        },
+      });
+    });
+  }
+
+  log(
+    'info',
+    `inbound-bridge${dryRun ? ' (dry-run)' : ''}: days=${result.daysConsidered} ` +
+      `ins=${result.inserted} upd=${result.updated} skip=${result.skippedGuarded} ` +
+      `same=${result.unchanged} undated=${result.haulsUndated}`,
+  );
+  return result;
+}

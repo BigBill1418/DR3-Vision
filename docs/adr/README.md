@@ -62,6 +62,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0056   | Event billing / TONU                                                                                          | Accepted                                                        |
 | 0057   | MyMRC full-object ingestion via admin user credentials                                                        | Accepted (2026-07-21)                                           |
 | 0058   | MyMRC processed → inventory bridge + single 8pm production-report send                                        | Accepted (2026-07-23)                                           |
+| 0059   | MyMRC hauls → inventory INBOUND bridge (provisional Inbound leg)                                              | Accepted (2026-07-23)                                           |
 
 ## How to write a new ADR
 

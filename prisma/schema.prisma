@@ -447,6 +447,13 @@ enum LoadSourceType {
   // entered by a manager from the paper daily log during the pre-iPad bootstrap.
   // Never a dock capture; provenance is explicit so per-load rows stay distinct.
   paper_bulk
+  // ADR-0059 — one synthesized aggregate row per (site, delivery day), bridged from
+  // MyMRC `Delivered` `General` hauls (the recycler's received count). PROVISIONAL /
+  // unconfirmed: this enum value IS the provisional-state marker — a manager
+  // `paper_bulk` entry or a future iPad floor-confirmation supersedes it (the
+  // generalized partial unique index + upsertBulkInboundDay's delete enforce that
+  // precedence). Never a dock capture.
+  mymrc_haul
 }
 
 enum LoadStatus {
@@ -584,8 +591,12 @@ model InboundLoad {
   @@index([site_id, transport_charged]) // ADR-0037 — Inbound-tab split queries
   @@index([provenance_agency_id]) // ADR-0037 amendment — provenance-agency lookups
   // ADR-0037 Phase 3 — one paper_bulk row per site per day (partial unique index,
-  // `WHERE load_source_type = 'paper_bulk'`, declared in the migration; Prisma has no
-  // partial-index syntax, so this @@index only mirrors the lookup shape).
+  // `WHERE load_source_type IN ('paper_bulk','mymrc_haul')` (ADR-0059 generalized the
+  // ADR-0037 paper_bulk-only predicate to also cover the MyMRC-haul aggregate, so at
+  // most ONE aggregate inbound row can exist per (site, day) across both source types —
+  // the DB-level guard that makes a paper_bulk↔mymrc_haul double-count impossible).
+  // Declared in the migration; Prisma has no partial-index syntax, so this @@index only
+  // mirrors the lookup shape.
   @@index([site_id, load_source_type, arrived_at])
   @@map("inbound_loads")
 }

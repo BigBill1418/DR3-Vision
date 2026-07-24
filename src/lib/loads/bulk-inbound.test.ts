@@ -63,6 +63,11 @@ vi.mock('@/lib/prisma', () => {
       Object.assign(row, data);
       return row;
     },
+    delete: async ({ where }: { where: { id: string } }) => {
+      const i = store.rows.findIndex((r) => r.id === where.id);
+      const [removed] = store.rows.splice(i, 1);
+      return removed;
+    },
   };
   const tx = {
     inboundLoad,
@@ -249,5 +254,69 @@ describe('upsertBulkInboundDay — one row per site per day', () => {
     });
     expect(store.rows).toHaveLength(2);
     expect(await listBulkInboundDays(SITE)).toHaveLength(2);
+  });
+});
+
+describe('upsertBulkInboundDay — ADR-0059 confirmation supersedes provisional', () => {
+  it('DELETES the provisional mymrc_haul row for the day and installs the paper_bulk row (delete audited, one aggregate row remains)', async () => {
+    const day = pacificMidnightInstantOfDayISO('2026-07-20');
+    // A provisional bridge aggregate already owns this (site, day) slot.
+    store.rows.push({
+      id: 'mymrc-1',
+      site_id: SITE,
+      load_source_type: 'mymrc_haul',
+      count_mode: 'total',
+      status: 'verified',
+      arrived_at: day,
+      submitted_at: null,
+      submitted_by_id: null,
+      total_units: 561,
+      program_unit_count: 561,
+      non_program_unit_count: 0,
+      slip_number: null,
+    });
+
+    const view = await upsertBulkInboundDay({
+      siteId: SITE,
+      inboundDate: DAY,
+      totalUnits: 180,
+      programUnits: 150,
+      nonProgramUnits: 30,
+      actorUserId: ACTOR,
+    });
+
+    // The provisional row is gone; exactly one aggregate row remains — the paper_bulk one.
+    expect(store.rows.some((r) => r.id === 'mymrc-1')).toBe(false);
+    expect(store.rows).toHaveLength(1);
+    expect(store.rows[0]!.load_source_type).toBe('paper_bulk');
+    expect(view.totalUnits).toBe(180);
+    // The delete is audited (before the insert), then the insert.
+    expect(store.audits.map((a) => a.action)).toEqual(['delete', 'insert']);
+    expect(store.audits[0]).toMatchObject({
+      action: 'delete',
+      table_name: 'inbound_loads',
+      before: { load_source_type: 'mymrc_haul', program_unit_count: 561 },
+    });
+  });
+
+  it('amending a paper_bulk day writes no delete (no mymrc_haul row can coexist under the unique index)', async () => {
+    await upsertBulkInboundDay({
+      siteId: SITE,
+      inboundDate: DAY,
+      totalUnits: 100,
+      programUnits: 100,
+      nonProgramUnits: 0,
+      actorUserId: ACTOR,
+    });
+    await upsertBulkInboundDay({
+      siteId: SITE,
+      inboundDate: DAY,
+      totalUnits: 120,
+      programUnits: 120,
+      nonProgramUnits: 0,
+      actorUserId: ACTOR,
+    });
+    expect(store.audits.map((a) => a.action)).toEqual(['insert', 'update']); // no delete
+    expect(store.rows).toHaveLength(1);
   });
 });
