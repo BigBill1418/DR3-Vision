@@ -30,3 +30,40 @@ The running-balance MATH is correct (Decimal, pool-aware, physical-anchored) but
 - Every inbound writer stamps `expected_load_id` / `external_mymrc_haul_id` (unique) to prevent double-count.
 - Do NOT modify the manager's manual physical-count snapshot values.
 - Verify the CONTAINER (`docker exec`), never just git HEAD (deployer build-races-pull trap).
+
+
+
+
+---
+
+## Continuation — 2026-07-24 (both MyMRC→inventory bridges LIVE + backfilled + verified)
+
+**The gap flagged above ("inventory forward accuracy depends on adoption") is now CLOSED by two bridges.** Bill asked why inventory didn't come down after production was entered → root cause: `processed_units_daily` empty, bonus entries never bridged to inventory. Both legs now wired from the authoritative MyMRC data.
+
+### PROCESSED bridge — ADR-0058, PR #170 + gate hotfix #171 (main → 6b4252b)
+- `src/lib/mymrc/processed-bridge.ts`: `mymrc_processed_mirror` (type='Processing', disappeared_at IS NULL) → `processed_units_daily`, guarded upsert per (site,production_date) WHERE source='mymrc' AND closed_at IS NULL, absolute SET, `source='mymrc'` (no migration).
+- **Backfill DONE:** 976 Woodland days, program 649,428 / np 6,130, **0/976 mismatch** vs mirror, 0 rows ≥ 07-22 anchor, floor 2,483 byte-identical (gate PASSED), 0 clobbered. Eugene 0 (no mirror rows).
+- **Single 8pm send fixed:** the "double send" was the on-save re-send (`maybeSendDailyReportOnSave`), NOT two crons — removed + `daily-report-late.ts` deleted; `send_time_pt=20:00` both sites; `bonus-eod-check.mjs` 8pm missing-data ntfy verified.
+
+### INBOUND bridge — ADR-0059, PR #172 (main → ad93b61)
+- `src/lib/mymrc/inbound-bridge.ts`: MyMRC `mymrc_hauls_mirror` status='Delivered' AND type='General' → `inbound_loads` as PROVISIONAL (`load_source_type='mymrc_haul'`; iPad/paper_bulk confirmation supersedes via `upsertBulkInboundDay` delete). **KEY: `disappeared_at` is INVERTED for hauls** (Delivered scroll off list <1d → filter status='Delivered', do NOT exclude disappeared). Per-(site,day) AGGREGATE grain; migration `20260810` (enum `mymrc_haul` + generalized partial unique index `(site_id,arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')` blocks double-count vs paper_bulk).
+- **Backfill DONE:** 610 Woodland days, program 439,357 / np 0, **0/610 mismatch** vs mirror Delivered-General, floor 2,483 byte-identical, 0 double-count, Eugene 0, 2,301 undated pre-anchor hauls skipped (honest partial). Inbound ≈ 0.97 × processed → matches the real 3,977→2,483 drawdown.
+
+### Both legs LIVE + hourly
+`scripts/mymrc-scrape.mjs` runs BOTH bridges on every hourly scrape (verified live: daemon healthy, both fire each cycle). onHand forward = anchor(2,483) + inbound(mymrc) − processed(mymrc), accruing from 07-23; physical count still wins when a manager does one. Inbound labeled "provisional — pending floor confirmation".
+
+### TWO bugs fixed en route (do not regress)
+1. **Deployer was HELD, not slow** — subagents wrote ADR/plan drafts into the LIVE deploy checkout (`/host-home/DR3-Vision`), tripping the "operator local edits — deploy HELD (audit §3.5/§3.16)" dirty-tree guard. Fix = clean the checkout. **Keep agent scratch in worktrees ONLY.**
+2. **floor-probe gate 307'd to /login** — the new `/api/internal/inventory/floor-probe` route was missing from `isPublic` (`src/lib/public-paths.ts`); the anchor-safety gate failed CLOSED so nothing wrote. Fixed #171 (add `/api/internal/inventory/` exemption + regression test). The ADR-0036 bug class.
+
+### 8pm report verification (2026-07-23 fire)
+- **Woodland: sent 20:00 PT exactly, 3/3, inventory `healthy 2,483`.** ✓
+- **Eugene: sent 16:07 PT (transient cutover artifact — old on-save fired ~40min before the fix deployed), complete data (210 mattresses, nothing missed); 8pm daemon deduped.** Going forward on-save is gone → both sites 8pm-only (daemon evaluates both in one fire).
+- Today's 07-23 inbound not yet in report (MyMRC lags ~1-2d); flows in as scraped since 07-23 > anchor.
+
+### Tomorrow's 8pm-fire watch (armed 2026-07-23, Bill's request)
+- Durable: `~/.local/bin/dr3-8pm-report-check.sh` on droneops-server (user crontab `12 3 25 7 *` = 03:12 UTC 07-25 = 20:12 PDT 07-24) → queries `bonus_daily_report_log` for report_date 2026-07-24 both sites → ntfy `dr3-vision-system` (default=both sent, high=missing) → self-removes. Survives session end.
+- In-session CronCreate (03:14 UTC 07-25) re-engages to report in-channel if alive.
+- Expected: both woodland+eugene delivered_count>0 @ ~20:00 PT, daemon "fire complete" shows both `sent`.
+
+**Nothing open on this work.** PRs #170/#171/#172 merged, deployed, container-verified, math-reconciled. Bill's directive: "stand down tonight, ping tomorrow with the result."
