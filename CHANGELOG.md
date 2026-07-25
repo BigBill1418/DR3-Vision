@@ -5,6 +5,40 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-25 (iPad floor inventory-validation surfaces — ADR-0060)
+
+Builds the day-to-day inventory-validation layer the floor was missing: operators can now confirm/correct/
+enter the day's inbound haul counts, take a physical on-hand count, and confirm the day's processed counts —
+all on the existing operator iPad PIN shell, completing the ADR-0059 confirmation contract. Before this the
+contract existed only as a backend function reachable from the manager DESKTOP (prod: 610 provisional
+`mymrc_haul` rows, 0 confirmations of any kind). See ADR-0060 and
+`docs/plans/2026-07-25-ipad-floor-surfaces-buildout.md`.
+
+- **Three floor surfaces + a hub** on the operator PIN shell (iPad/green/i18n en·es·ur, ≥44px tap targets,
+  on-screen number steppers — no hardware keyboard): `/operator/[site]/today` (hub + on-hand headline;
+  the post-PIN shift landing), `/operator/[site]/inbound` (confirm/correct/enter the day's inbound),
+  `/operator/[site]/count` (physical on-hand → new anchor), `/operator/[site]/processed` (confirm processed
+  count). Each respects the ADR-0047 per-site `loads_inventory` rollout flag; the per-load dock queue stays
+  reachable from the hub regardless of rollout state.
+- **New floor endpoints** under `/api/operator/[site]/**` (inbound GET+POST, count POST, processed POST),
+  gated by a new `requireOperatorForSite` helper (operators-only, single-site) + `requireActivatedOperator`
+  (rollout gate). Every write re-derives operator + site from the session server-side.
+- **Inbound confirmation** completes the ADR-0059 D4 contract: `src/lib/loads/floor-inbound.ts`
+  `confirmFloorInboundDay` retires the day's `mymrc_haul` provisional and installs one aggregate row
+  `load_source_type='ipad_floor'` (new tier; precedence `ipad_floor > paper_bulk > mymrc_haul`), reusing the
+  delete-then-write + absolute-SET + audited-in-tx money-safety pattern. A day owned by an office
+  `paper_bulk` row is refused (409 `office_owned`); the floor never clobbers office data.
+- **On-hand / processed** reuse `reconcilePhysicalCount` / `upsertProcessedUnits` with the operator as actor
+  (establishes Eugene's first anchor); close/lock stays admin-only.
+- **Money-safety (D5):** `onHand` sums all verified inbound regardless of source type, so an aggregate row
+  plus per-load `b2b_haul` rows for the same day would double-count (the partial unique index only bars two
+  *aggregate* rows). The floor confirm path refuses such a day (409 `per_load_exists`), and the ADR-0059
+  MyMRC inbound bridge now closes the same latent gap (`inbound-bridge.ts` skips days with verified per-load
+  rows — `skippedPerLoad`). Both guards are covered by tests.
+- **One additive migration** (`20260812_adr0060_ipad_floor_inbound_source`): `ipad_floor` enum value +
+  widen the ADR-0059 partial unique index to `IN ('paper_bulk','mymrc_haul','ipad_floor')`. Clean-replay +
+  idempotent, verified on a fresh PG16.
+
 ### Added — 2026-07-23 (MyMRC hauls → inventory INBOUND bridge — ADR-0059)
 
 Wires the recycler's received-count feed to inventory as PROVISIONAL inbound. Before this,

@@ -49,6 +49,8 @@ interface Store {
   mirror: MirrorRow[];
   inbound: Map<string, InboundRow>; // keyed `${site_id}|${arrived_at epoch}`
   audit: AuditRow[];
+  // ADR-0060 D5 — verified per-load (b2b_haul) dock rows the per-load guard reads.
+  perLoad: Array<{ site_id: string; arrived_at: Date; load_source_type: string; status: string }>;
 }
 
 /** A noon-stamped delivery date (how the mapper stores Salesforce date-only fields). */
@@ -83,7 +85,7 @@ function inbound(over: Partial<InboundRow> & { arrived_at: Date }): InboundRow {
 }
 
 function store(over: Partial<Store> = {}): Store {
-  return { mirror: [], inbound: new Map(), audit: [], ...over };
+  return { mirror: [], inbound: new Map(), audit: [], perLoad: [], ...over };
 }
 
 /** A where-matcher for exactly the mirror filters the bridge uses (NO disappeared_at). */
@@ -151,13 +153,32 @@ function fakePrisma(s: Store): PrismaClient {
     inboundLoad: {
       findMany: async ({ where }: { where: Record<string, unknown> }) => {
         const sid = (where['site_id'] as { in: string[] }).in;
-        const arr = (where['arrived_at'] as { in: Date[] }).in.map((d) => d.getTime());
-        const lst = (where['load_source_type'] as { in: string[] }).in;
+        const arrivedAt = where['arrived_at'] as
+          | { in: Date[] }
+          | { gte: Date; lt: Date }
+          | undefined;
+        const lst = where['load_source_type'] as { in?: string[]; notIn?: string[] };
+        // ADR-0060 D5 per-load preload: notIn aggregate types + arrived_at range window.
+        if (lst?.notIn && arrivedAt && 'gte' in arrivedAt) {
+          const status = where['status'] as { in: string[] } | undefined;
+          return s.perLoad
+            .filter(
+              (r) =>
+                sid.includes(r.site_id) &&
+                !lst.notIn!.includes(r.load_source_type) &&
+                (!status || status.in.includes(r.status)) &&
+                r.arrived_at.getTime() >= arrivedAt.gte.getTime() &&
+                r.arrived_at.getTime() < arrivedAt.lt.getTime(),
+            )
+            .map((r) => ({ site_id: r.site_id, arrived_at: r.arrived_at }));
+        }
+        // Aggregate preload: arrived_at.in + load_source_type.in.
+        const arr = (arrivedAt as { in: Date[] }).in.map((d) => d.getTime());
         return [...s.inbound.values()].filter(
           (r) =>
             sid.includes(r.site_id) &&
             arr.includes(r.arrived_at.getTime()) &&
-            lst.includes(r.load_source_type),
+            (lst.in ? lst.in.includes(r.load_source_type) : true),
         );
       },
     },
@@ -370,7 +391,54 @@ describe('bridgeInboundHaulsToInventory — window + dry-run + site scope + empt
   it('no matching hauls → a clean zero result, no writes', async () => {
     const s = store();
     const res = await bridgeInboundHaulsToInventory({ prisma: fakePrisma(s) });
-    expect(res).toEqual({ daysConsidered: 0, inserted: 0, updated: 0, skippedGuarded: 0, unchanged: 0, haulsUndated: 0 });
+    expect(res).toEqual({
+      daysConsidered: 0,
+      inserted: 0,
+      updated: 0,
+      skippedGuarded: 0,
+      unchanged: 0,
+      haulsUndated: 0,
+      skippedPerLoad: 0,
+    });
     expect(s.inbound.size).toBe(0);
+  });
+});
+
+describe('bridgeInboundHaulsToInventory — ADR-0060 D5 per-load double-count guard', () => {
+  it('SKIPS a day that already has a verified per-load b2b_haul row (no aggregate written, no audit)', async () => {
+    const s = store({
+      mirror: [mirror({ program_unit_count: 561 })],
+      perLoad: [
+        {
+          site_id: 'woodland',
+          // A dock capture inside the 2026-07-20 Pacific day.
+          arrived_at: new Date('2026-07-20T18:00:00Z'),
+          load_source_type: 'b2b_haul',
+          status: 'verified',
+        },
+      ],
+    });
+    const res = await bridgeInboundHaulsToInventory({ prisma: fakePrisma(s) });
+    expect(res).toMatchObject({ daysConsidered: 1, inserted: 0, skippedPerLoad: 1 });
+    // No aggregate row written for the guarded day; no audit.
+    expect(s.inbound.has(keyOf('woodland', arrivedFor('2026-07-20')))).toBe(false);
+    expect(s.audit).toHaveLength(0);
+  });
+
+  it('a per-load row on a DIFFERENT Pacific day does not block the aggregate', async () => {
+    const s = store({
+      mirror: [mirror({ program_unit_count: 561 })],
+      perLoad: [
+        {
+          site_id: 'woodland',
+          arrived_at: new Date('2026-07-19T18:00:00Z'), // prior Pacific day
+          load_source_type: 'b2b_haul',
+          status: 'verified',
+        },
+      ],
+    });
+    const res = await bridgeInboundHaulsToInventory({ prisma: fakePrisma(s) });
+    expect(res).toMatchObject({ daysConsidered: 1, inserted: 1, skippedPerLoad: 0 });
+    expect(s.inbound.has(keyOf('woodland', arrivedFor('2026-07-20')))).toBe(true);
   });
 });

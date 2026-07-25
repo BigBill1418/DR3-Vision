@@ -27,13 +27,18 @@
 //     verified inbound row for a day regardless of `load_source_type`, so a per-haul
 //     MyMRC row plus a manager `paper_bulk` aggregate for the same day would
 //     double-count. One aggregate row per site/day + a generalized partial unique index
-//     (`(site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')`,
-//     migration 20260810) makes a second aggregate row physically impossible.
+//     (`(site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul',
+//     'ipad_floor')`, migrations 20260810 + 20260812) makes a second AGGREGATE row
+//     physically impossible. That index does NOT bar an aggregate coexisting with per-load
+//     (b2b_haul) dock rows for the same day — that latent gap (ADR-0059 §4-C) is CLOSED
+//     here by the ADR-0060 D5 per-load guard (`skippedPerLoad`): a day already holding a
+//     VERIFIED per-load inbound row is skipped entirely.
 //   - PRECEDENCE: it only ever writes rows it OWNS (`load_source_type='mymrc_haul'`)
-//     and never a day a manager already owns (`paper_bulk`). Enforced twice — a JS
-//     pre-check (skip guarded days) AND the atomic `ON CONFLICT … DO UPDATE … WHERE
-//     load_source_type='mymrc_haul'` guard that is the authoritative backstop against a
-//     manager-entry race. A `paper_bulk` row is left byte-identical with no error.
+//     and never a day an office (`paper_bulk`) or floor (`ipad_floor`) confirm already
+//     owns. Enforced twice — a JS pre-check (skip guarded days) AND the atomic `ON
+//     CONFLICT … DO UPDATE … WHERE load_source_type='mymrc_haul'` guard that is the
+//     authoritative backstop against a confirm race. A confirmed row is left byte-
+//     identical with no error.
 //   - DOUBLE-COUNT-PROOF: the writer SETs ABSOLUTE aggregated values (never increments),
 //     so re-running the bridge hourly is inherently idempotent. The `IS DISTINCT FROM`
 //     clause additionally suppresses no-op `updated_at` churn.
@@ -93,6 +98,14 @@ export interface InboundBridgeResult {
   unchanged: number;
   /** Delivered General hauls skipped for a NULL docking_appointment_date (§0/§8). */
   haulsUndated: number;
+  /**
+   * ADR-0060 D5 — days skipped because a VERIFIED per-load (b2b_haul / non-aggregate)
+   * inbound row already covers them. `onHand` sums EVERY verified inbound row regardless
+   * of source, so writing an aggregate for a day that already has per-load rows would
+   * double-count. This closes the latent gap ADR-0059 §4-C flagged: the bridge now skips
+   * such days entirely (the floor confirm path does the same, refusing with a 409).
+   */
+  skippedPerLoad: number;
 }
 
 // ── Pacific-midnight instant (inlined replica of @/lib/time — see module header) ──
@@ -136,6 +149,22 @@ function pacificMidnightInstantOfDayISO(dayIso: string): Date {
   const approx = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0));
   return new Date(approx.getTime() - pacificOffsetMs(approx));
 }
+
+/** The Pacific calendar day (`YYYY-MM-DD`) of a true instant — for the D5 per-load guard. */
+function pacificDayIsoOf(at: Date): string {
+  const parts = PACIFIC_PARTS_FMT.formatToParts(at);
+  const get = (t: string): string => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+// ADR-0060 D5 — the three aggregate provenances the day-slot uniqueness spans. A per-load
+// (b2b_haul / anything NOT in this set) verified row is what onHand would double-count
+// against a bridged aggregate on the same Pacific day, so days with such rows are skipped.
+const AGGREGATE_SOURCE_TYPES = ['paper_bulk', 'mymrc_haul', 'ipad_floor'] as const;
+// Statuses onHand treats as "verified inbound" (byte-identical to VERIFIED_INBOUND_STATUSES
+// in running-balance.ts; replicated here because this module compiles standalone with no
+// `@/…` imports — see the module header's bundle constraint).
+const VERIFIED_INBOUND_STATUSES = ['verified', 'submitted_to_mymrc', 'processed'] as const;
 
 // ── mirror + existing-row shapes the bridge needs ──
 
@@ -237,6 +266,7 @@ export async function bridgeInboundHaulsToInventory(
     skippedGuarded: 0,
     unchanged: 0,
     haulsUndated: 0,
+    skippedPerLoad: 0,
   };
 
   // 1. Pull the received (Delivered) B2B (General) haul rows. `disappeared_at` is
@@ -322,12 +352,42 @@ export async function bridgeInboundHaulsToInventory(
     existingByKey.set(`${e.site_id}|${e.arrived_at.getTime()}`, e);
   }
 
+  // 3b. ADR-0060 D5 — preload VERIFIED per-load (non-aggregate) inbound rows overlapping
+  //     the candidate window, keyed by `${site}|${Pacific-day}`. A day that already has a
+  //     per-load dock capture must NOT also get an aggregate row (onHand sums both →
+  //     double-count). One bounded query across the min→max arrived-at span (per-load
+  //     arrived_at is a real dock instant, so it is matched on its Pacific calendar day).
+  const arrivedTimes = arrivedAts.map((d) => d.getTime());
+  const windowStart = new Date(Math.min(...arrivedTimes));
+  const windowEnd = new Date(Math.max(...arrivedTimes) + 86_400_000); // +1 day, exclusive upper
+  const perLoadRows = (await prisma.inboundLoad.findMany({
+    where: {
+      site_id: { in: siteIds },
+      status: { in: [...VERIFIED_INBOUND_STATUSES] },
+      load_source_type: { notIn: [...AGGREGATE_SOURCE_TYPES] },
+      arrived_at: { gte: windowStart, lt: windowEnd },
+    },
+    select: { site_id: true, arrived_at: true },
+  })) as Array<{ site_id: string; arrived_at: Date | null }>;
+  const perLoadDays = new Set<string>();
+  for (const r of perLoadRows) {
+    if (r.arrived_at) perLoadDays.add(`${r.site_id}|${pacificDayIsoOf(r.arrived_at)}`);
+  }
+
   // 4. Per affected day: pre-check precedence, then the guarded upsert + audit in a
   //    per-day transaction.
   for (const agg of aggregates) {
     const existing = existingByKey.get(`${agg.siteId}|${agg.arrivedAt.getTime()}`);
 
-    // PRECEDENCE: a paper_bulk (manager/confirmed) row owns the day — never touch it.
+    // PER-LOAD GUARD (ADR-0060 D5): a verified per-load dock capture already covers this
+    // Pacific day — writing an aggregate would double-count in onHand. Skip entirely.
+    if (perLoadDays.has(`${agg.siteId}|${agg.iso}`)) {
+      result.skippedPerLoad += 1;
+      continue;
+    }
+
+    // PRECEDENCE: a paper_bulk (manager/confirmed) OR ipad_floor (operator-confirmed) row
+    // owns the day — never touch it. The bridge only ever writes rows it owns (mymrc_haul).
     if (existing && existing.load_source_type !== 'mymrc_haul') {
       result.skippedGuarded += 1;
       continue;
@@ -396,7 +456,7 @@ export async function bridgeInboundHaulsToInventory(
     'info',
     `inbound-bridge${dryRun ? ' (dry-run)' : ''}: days=${result.daysConsidered} ` +
       `ins=${result.inserted} upd=${result.updated} skip=${result.skippedGuarded} ` +
-      `same=${result.unchanged} undated=${result.haulsUndated}`,
+      `perload=${result.skippedPerLoad} same=${result.unchanged} undated=${result.haulsUndated}`,
   );
   return result;
 }
