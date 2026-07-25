@@ -454,6 +454,16 @@ enum LoadSourceType {
   // generalized partial unique index + upsertBulkInboundDay's delete enforce that
   // precedence). Never a dock capture.
   mymrc_haul
+  // ADR-0060 — one FLOOR-CONFIRMED aggregate row per (site, delivery day), written by an
+  // operator on the iPad (`/operator/[site]/inbound`) when they confirm, correct, or enter
+  // the day's inbound haul counts. This is the CONFIRMED terminal of the ADR-0059
+  // provisional lifecycle: `confirmFloorInboundDay` retires the day's `mymrc_haul`
+  // provisional and installs this row in one audited transaction. Precedence:
+  // ipad_floor > paper_bulk > mymrc_haul (a day owned by an office `paper_bulk` row is
+  // refused on the floor — office amends via the manager surface). The three-value
+  // partial unique index (migration 20260812) keeps at most one aggregate row per
+  // (site, day). Never a dock capture.
+  ipad_floor
 }
 
 enum LoadStatus {
@@ -590,13 +600,16 @@ model InboundLoad {
   @@index([retrac_id]) // ADR-0037 D2 — external join key for workbook parity
   @@index([site_id, transport_charged]) // ADR-0037 — Inbound-tab split queries
   @@index([provenance_agency_id]) // ADR-0037 amendment — provenance-agency lookups
-  // ADR-0037 Phase 3 — one paper_bulk row per site per day (partial unique index,
-  // `WHERE load_source_type IN ('paper_bulk','mymrc_haul')` (ADR-0059 generalized the
-  // ADR-0037 paper_bulk-only predicate to also cover the MyMRC-haul aggregate, so at
-  // most ONE aggregate inbound row can exist per (site, day) across both source types —
-  // the DB-level guard that makes a paper_bulk↔mymrc_haul double-count impossible).
-  // Declared in the migration; Prisma has no partial-index syntax, so this @@index only
-  // mirrors the lookup shape.
+  // ADR-0037 Phase 3 — one aggregate inbound row per site per day (partial unique index,
+  // `WHERE load_source_type IN ('paper_bulk','mymrc_haul','ipad_floor')`). ADR-0059
+  // generalized the ADR-0037 paper_bulk-only predicate to the MyMRC-haul aggregate, and
+  // ADR-0060 widened it again to the iPad floor-confirmed aggregate, so at most ONE
+  // aggregate inbound row can exist per (site, day) across ALL THREE source types — the
+  // DB-level guard that makes a paper_bulk↔mymrc_haul↔ipad_floor double-count impossible.
+  // (Per-load `b2b_haul` dock captures are NOT covered by the predicate; the aggregate-vs-
+  // per-load double-count is guarded on the write path — ADR-0060 D5.) Declared in the
+  // migration; Prisma has no partial-index syntax, so this @@index only mirrors the
+  // lookup shape.
   @@index([site_id, load_source_type, arrived_at])
   @@map("inbound_loads")
 }

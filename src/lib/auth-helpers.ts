@@ -99,6 +99,88 @@ export async function checkManagerForSite(siteCode: string): Promise<ManagerSite
 }
 
 // ────────────────────────────────────────────────────────────────────
+// ADR-0060 — floor (operator) guard for the iPad inventory-validation surfaces
+//
+// `requireOperatorForSite` is the canonical guard for the floor write path
+// (`/api/operator/[site]/**` and the `/operator/[site]/{today,inbound,count,processed}`
+// pages). It mirrors `requireManagerForSite` and the inline `ctx()` pattern in
+// `src/app/operator/[site]/actions.ts`, but is OPERATORS-ONLY on purpose:
+//
+//   - no session               -> 401
+//   - role !== 'operator'       -> 403  (managers/admins use the DESKTOP surfaces;
+//                                        granting them the floor path would make the
+//                                        audit actor ambiguous — ADR-0060 D2)
+//   - unknown site code         -> 404
+//   - operator off their site   -> 403  (operators are always single-site —
+//                                        all_sites:false per ADR-0030 — so there is
+//                                        no cross-site branch here)
+//
+// Every floor write re-derives operator + site from the session server-side; a
+// client-supplied siteId/userId is NEVER trusted (same rule as actions.ts).
+// ────────────────────────────────────────────────────────────────────
+
+export interface OperatorSiteContext {
+  siteId: string;
+  siteCode: string;
+  siteName: string;
+  userId: string;
+}
+
+/**
+ * Guard for /api/operator/* + the floor pages. Throws a `Response` on failure so
+ * route handlers can `return` it directly; on success returns the resolved site +
+ * operator identity.
+ */
+export async function requireOperatorForSite(siteCode: string): Promise<OperatorSiteContext> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    throw new Response('unauthenticated', { status: 401 });
+  }
+  if (session.user.role !== 'operator') {
+    throw new Response('forbidden', { status: 403 });
+  }
+  const site = await prisma.site.findUnique({
+    where: { code: siteCode },
+    select: { id: true, code: true, name: true },
+  });
+  if (!site) {
+    throw new Response('site not found', { status: 404 });
+  }
+  // Operators are hard-scoped to their primary site (ADR-0030 — never all_sites).
+  if (session.user.primary_site_id !== site.id) {
+    throw new Response('forbidden', { status: 403 });
+  }
+  return {
+    siteId: site.id,
+    siteCode: site.code,
+    siteName: site.name,
+    userId: session.user.id,
+  };
+}
+
+/**
+ * Pre-page-render variant of {@link requireOperatorForSite}. Same access rules but
+ * returns a tagged discriminated result instead of throwing, so a floor page can
+ * redirect to `/operator/[site]` (re-auth) on failure rather than rendering a raw 403.
+ */
+export type OperatorSiteResult =
+  | { ok: true; ctx: OperatorSiteContext }
+  | { ok: false; status: 401 | 403 | 404 };
+
+export async function checkOperatorForSite(siteCode: string): Promise<OperatorSiteResult> {
+  try {
+    const ctx = await requireOperatorForSite(siteCode);
+    return { ok: true, ctx };
+  } catch (e) {
+    if (e instanceof Response) {
+      const s = e.status;
+      if (s === 401 || s === 403 || s === 404) return { ok: false, status: s };
+    }
+    throw e;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Admin-only guard
 //
 // `/admin/*` (settings panel for user seeding) is gated to role=admin.

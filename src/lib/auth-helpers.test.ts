@@ -33,7 +33,13 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { requireManagerForSite, checkManagerForSite, checkApHistoryRead } from './auth-helpers';
+import {
+  requireManagerForSite,
+  checkManagerForSite,
+  checkApHistoryRead,
+  requireOperatorForSite,
+  checkOperatorForSite,
+} from './auth-helpers';
 
 function session(over: Record<string, unknown>): void {
   mockSession = { user: { id: 'u1', name: 'Test', email: 't@svdp.us', ...over } };
@@ -74,6 +80,52 @@ describe('requireManagerForSite — ADR-0024 all-sites manager', () => {
     session({ role: 'operator', primary_site_id: EUGENE_ID, all_sites: true });
     const r = await checkManagerForSite('eugene');
     expect(r).toEqual({ ok: false, status: 403 });
+  });
+});
+
+// ADR-0060 D2 — floor (operator) guard for the iPad inventory-validation surfaces.
+// Operators-only, single-site (never all_sites). Managers/admins are refused (they use
+// the desktop surfaces — keeps the audit actor unambiguous).
+describe('requireOperatorForSite — floor guard', () => {
+  it('no session → 401', async () => {
+    mockSession = null;
+    expect(await checkOperatorForSite('woodland')).toEqual({ ok: false, status: 401 });
+  });
+
+  it('manager role → 403 (floor path is operators-only)', async () => {
+    session({ role: 'manager', primary_site_id: WOODLAND_ID });
+    expect(await checkOperatorForSite('woodland')).toEqual({ ok: false, status: 403 });
+  });
+
+  it('admin role → 403 (floor path is operators-only)', async () => {
+    session({ role: 'admin', primary_site_id: null });
+    expect(await checkOperatorForSite('woodland')).toEqual({ ok: false, status: 403 });
+  });
+
+  it('unknown site → 404', async () => {
+    session({ role: 'operator', primary_site_id: WOODLAND_ID });
+    expect(await checkOperatorForSite('nowhere')).toEqual({ ok: false, status: 404 });
+  });
+
+  it('operator off their primary site → 403 (regression guard)', async () => {
+    session({ role: 'operator', primary_site_id: EUGENE_ID });
+    expect(await checkOperatorForSite('woodland')).toEqual({ ok: false, status: 403 });
+  });
+
+  it('all_sites is ignored for an operator off-site → 403 (operators are single-site, ADR-0030)', async () => {
+    session({ role: 'operator', primary_site_id: EUGENE_ID, all_sites: true });
+    expect(await checkOperatorForSite('woodland')).toEqual({ ok: false, status: 403 });
+  });
+
+  it('operator at their own site → allowed, returns the resolved site + operator id', async () => {
+    session({ role: 'operator', primary_site_id: WOODLAND_ID });
+    const ctx = await requireOperatorForSite('woodland');
+    expect(ctx).toMatchObject({
+      siteId: WOODLAND_ID,
+      siteCode: 'woodland',
+      siteName: 'DR3 Woodland',
+      userId: 'u1',
+    });
   });
 });
 

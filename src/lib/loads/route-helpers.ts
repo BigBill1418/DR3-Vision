@@ -6,7 +6,12 @@
 // so every route reports uniformly.
 
 import { NextResponse } from 'next/server';
-import { requireManagerForSite, type ManagerSiteContext } from '@/lib/auth-helpers';
+import {
+  requireManagerForSite,
+  requireOperatorForSite,
+  type ManagerSiteContext,
+  type OperatorSiteContext,
+} from '@/lib/auth-helpers';
 import { assertLoadsInventoryActivated, LoadsInventoryNotActivatedError } from '@/lib/loads/record-guards';
 import { log } from '@/lib/observability/logger';
 
@@ -19,6 +24,23 @@ export async function requireActivatedManager(siteCode: string): Promise<Manager
   const ctx = await requireManagerForSite(siteCode);
   try {
     await assertLoadsInventoryActivated(ctx.role, ctx.siteId);
+  } catch (e) {
+    if (e instanceof LoadsInventoryNotActivatedError) throw new Response('not_activated', { status: e.status });
+    throw e;
+  }
+  return ctx;
+}
+
+/**
+ * ADR-0060 — the FLOOR (operator) analogue of {@link requireActivatedManager}. Resolves
+ * the operator/site context AND enforces the same ADR-0047 per-site `loads_inventory`
+ * rollout gate, so the iPad floor surfaces flip live per site exactly like the manager
+ * desktop surfaces. Throws a `Response` on any failure (unauth/forbidden/not-activated).
+ */
+export async function requireActivatedOperator(siteCode: string): Promise<OperatorSiteContext> {
+  const ctx = await requireOperatorForSite(siteCode);
+  try {
+    await assertLoadsInventoryActivated('operator', ctx.siteId);
   } catch (e) {
     if (e instanceof LoadsInventoryNotActivatedError) throw new Response('not_activated', { status: e.status });
     throw e;

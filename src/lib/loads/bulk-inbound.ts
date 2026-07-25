@@ -57,7 +57,7 @@ export const MYMRC_HAUL_SOURCE_TYPE = 'mymrc_haul' as const;
  * value would sit one Pacific day earlier and slip a first-of-month row out of its own
  * month's promotion-refusal window (finding 3).
  */
-function inboundArrivedAt(date: Date): Date {
+export function inboundArrivedAt(date: Date): Date {
   return pacificMidnightInstantOfDayISO(dayISO(date));
 }
 
@@ -73,7 +73,7 @@ function assertWhole(name: string, n: number, min = 0): void {
  * Q8 split invariant. MRC is billed on PROGRAM units only, so a split that does not
  * sum to the day's total would silently mis-state the billable pool.
  */
-function assertSplit(totalUnits: number, programUnits: number, nonProgramUnits: number): void {
+export function assertSplit(totalUnits: number, programUnits: number, nonProgramUnits: number): void {
   assertWhole('total_units', totalUnits, 1);
   assertWhole('program_units', programUnits);
   assertWhole('non_program_units', nonProgramUnits);

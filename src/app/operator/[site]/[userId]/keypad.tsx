@@ -56,7 +56,9 @@ export function Keypad({ userId, siteCode }: Props) {
           submittedRef.current = false;
           return;
         }
-        router.push(`/operator/${siteCode}/queue`);
+        // ADR-0060 — land on the daily-validation HUB (the shift landing). It links to
+        // the per-load queue, which stays reachable there regardless of rollout state.
+        router.push(`/operator/${siteCode}/today`);
         router.refresh();
       })
       .catch(() => {
