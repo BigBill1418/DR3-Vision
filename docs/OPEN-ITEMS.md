@@ -16,6 +16,49 @@ window her cross-checks are possible.
 
 ---
 
+## 0 — 2026-07-25 session reconciliation (inventory pipeline + iPad floor + i18n)
+
+**Shipped + LIVE + verified this session (ADRs 0058–0061):**
+- **The MyMRC→inventory pipeline is now closed on BOTH legs.** ADR-0058 (processed bridge,
+  PR #170) feeds the `Stripped` outflow from `mymrc_processed_mirror`→`processed_units_daily`
+  (976 Woodland days backfilled, 0/976 mismatch vs mirror). ADR-0059 (inbound bridge, PR #172)
+  feeds the `Inbound` inflow from Delivered MyMRC hauls→`inbound_loads` as PROVISIONAL
+  (610 days, 0/610 mismatch). Both run hourly on scrape completion, both anchor-safe (floor
+  2,483 byte-identical, gate-verified). This CLOSES the prior "forward accuracy depends on
+  manual entry" gap — on-hand now moves on its own from MyMRC and is floor-confirmable. A
+  floor-probe auth hotfix (PR #171) made the anchor-safety gate reachable.
+- **Single 8pm production-report send** (ADR-0058) — the on-save re-send was removed; both
+  sites verified sending once at 20:00 PT (2026-07-24 fire: woodland 3/3, eugene 4/4).
+- **iPad floor validation surfaces LIVE** (ADR-0060, PR #173): F-1 `/operator/[site]/today`,
+  F-2 `/inbound` (confirm/correct/enter — upgrades provisional `mymrc_haul`→`ipad_floor`),
+  F-3 `/count` (physical on-hand → new anchor; establishes Eugene's first), F-4 `/processed`
+  (confirm). Precedence `ipad_floor > paper_bulk > mymrc_haul`; double-count guard (409 on
+  per-load days) + matching bridge guard. `loads_inventory` live both sites.
+- **iPad i18n parity LIVE** (ADR-0061, PR #174): en/es/ur now reachable on the floor
+  (switcher on the operator sign-in screens), per-operator + session-first (language follows
+  the operator, not the shared device), CI key-parity gate blocks locale drift. Verified live:
+  `<html lang/dir>` resolves per `users.locale` incl. `ur`→rtl. Deleted-operator name-picker
+  filter also shipped here.
+
+**STILL OPEN / accepted residuals from this work (honest):**
+- **C-20 stays open** — ADR-0060 built the confirm/count/processed surfaces but did NOT build
+  the `unit_status_movements` ledger writers ("mark saved" / "send to store"); `onHand` still
+  derives pools from `processed_units_daily` aggregate columns. Separate future change.
+- **Inbound is PROVISIONAL until floor-confirmed.** F-2 now provides the day-to-day
+  confirmation path (upgrades to `ipad_floor`), but that's an operational adoption step —
+  unconfirmed days render labeled "provisional." iPad floor-confirmation is the verification
+  layer going forward.
+- **Eugene** — no inventory anchor yet (F-3 establishes the first on first use) and no MyMRC
+  haul-mirror data (C-21 Switch-Account still pending), so its inventory reads zero until the
+  floor takes a count.
+- **Backfill is honestly partial** — 2,301 undated Delivered-General hauls were skipped
+  (all pre-anchor, inert to the live floor).
+- **Operator-login note:** the "Test Operator" (Woodland) account was soft-deleted yet still
+  selectable in the picker; the revocation kill-switch emptied its session → PIN "hang/bounce".
+  Reactivated for testing (PIN set); the picker now filters `deleted_at IS NOT NULL` (#174).
+
+---
+
 ## 1 — Operator actions (Bill)
 
 | #   | Item | Source | Notes / deadline |
