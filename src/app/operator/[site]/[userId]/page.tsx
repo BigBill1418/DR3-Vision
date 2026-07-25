@@ -47,7 +47,7 @@ export default async function OperatorPinPage({ params }: Props) {
   const t = (k: string) => translate(dict, k);
 
   return (
-    <main className="min-h-screen bg-black px-6 py-10 text-white">
+    <main className="min-h-screen bg-black px-6 pb-10 pt-20 text-white">
       <div className="mx-auto flex max-w-md flex-col items-center gap-8">
         <header className="flex w-full items-center justify-between gap-4">
           <Image

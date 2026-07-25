@@ -1,15 +1,19 @@
-// Server-side locale resolution. Precedence (most specific wins):
+// Server-side locale resolution. Precedence (most specific wins) —
+// SESSION-FIRST as of ADR-0061 D-4:
 //
-//   1. URL `?lang=` query param         — explicit override (debug + locale picker reload)
-//   2. Cookie `dr3_locale`              — pre-auth picker preference
-//   3. Active session's `users.locale`  — authenticated user preference
+//   1. URL `?lang=` query param         — explicit override (debug only)
+//   2. Active session's `users.locale`  — the signed-in operator's preference
+//   3. Cookie `dr3_locale`              — PRE-AUTH display hint only
 //   4. `'en'` default                   — never crash
 //
-// The cookie wins over the session because that's how the picker on
-// /login works: tap "Español" → cookie set → reload renders Spanish
-// immediately, even though no session exists yet. After the user
-// signs in, `auth.ts` writes the cookie value into `users.locale` so
-// the next session-based render lines up with the picker choice.
+// Why session beats the cookie (the D-4 fix): the floor iPad is SHARED.
+// A device-global `dr3_locale` cookie that outranked the session let one
+// person's pre-auth pick pin the whole shift's language and corrupt each
+// operator's stored preference. Language must follow the *operator*, not
+// the device. So once someone is signed in, THEIR `users.locale` wins; the
+// cookie only localizes the pre-auth sign-in screens (where there is no
+// session yet) — which is exactly what a Spanish/Urdu operator needs to
+// read in order to sign in. See ADR-0061 and `i18n/actions.ts`.
 
 import 'server-only';
 import { cookies } from 'next/headers';
@@ -19,26 +23,19 @@ import { DEFAULT_LOCALE, LOCALE_COOKIE, type Locale, isLocale } from './config';
 
 export interface LocaleContext {
   locale: Locale;
-  source: 'query' | 'cookie' | 'session' | 'default';
+  source: 'query' | 'session' | 'cookie' | 'default';
 }
 
-// Page-level resolver. Reads cookies + (optionally) the active session.
+// Page-level resolver. Reads (optionally) the active session + cookies.
 // Pages should call this once near the top of the server component
 // and pass the resolved locale down to children + client providers.
-export async function resolveLocale(searchParams?: {
-  lang?: string;
-}): Promise<LocaleContext> {
+export async function resolveLocale(searchParams?: { lang?: string }): Promise<LocaleContext> {
   if (searchParams?.lang && isLocale(searchParams.lang)) {
     return { locale: searchParams.lang, source: 'query' };
   }
-  const cookieStore = await cookies();
-  const cookieValue = cookieStore.get(LOCALE_COOKIE)?.value;
-  if (cookieValue && isLocale(cookieValue)) {
-    return { locale: cookieValue, source: 'cookie' };
-  }
-  // Session lookup is the slowest of the three so we save it for last.
-  // `auth()` short-circuits when no JWT is present, so the cost is
-  // bounded for unauthenticated visitors.
+  // Session first: the signed-in operator's stored preference outranks the
+  // shared-device cookie. `auth()` short-circuits when no JWT is present, so
+  // the cost is bounded for unauthenticated visitors (the sign-in screens).
   try {
     const session = await auth();
     if (session?.user?.id) {
@@ -52,8 +49,15 @@ export async function resolveLocale(searchParams?: {
     }
   } catch {
     // `auth()` can throw if invoked outside a request context (e.g.
-    // build-time generation). Falling through to the default is the
-    // right behavior — locale is never load-bearing for SSG.
+    // build-time generation). Falling through is the right behavior —
+    // locale is never load-bearing for SSG.
+  }
+  // Pre-auth hint: with no session, the cookie localizes the sign-in
+  // screens so a non-English operator can read them.
+  const cookieStore = await cookies();
+  const cookieValue = cookieStore.get(LOCALE_COOKIE)?.value;
+  if (cookieValue && isLocale(cookieValue)) {
+    return { locale: cookieValue, source: 'cookie' };
   }
   return { locale: DEFAULT_LOCALE, source: 'default' };
 }
