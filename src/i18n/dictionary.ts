@@ -28,21 +28,46 @@ import enManager from './locales/en/manager.json';
 import esManager from './locales/es/manager.json';
 import urManager from './locales/ur/manager.json';
 
-// The English JSON is the canonical shape. Spanish + Urdu inherit the
-// same keys; if any drift, the typecheck fails at compile time.
-export type Dictionary = typeof enOperator;
-export type ManagerDictionary = typeof enManager;
+// The English JSON is the canonical shape. Spanish + Urdu must carry the
+// SAME keys.
+//
+// `Widen<T>` recursively replaces literal value types (each string's own
+// literal, e.g. `"Confirm"`) with their base type (`string`). Without it,
+// `typeof enOperator` types every value as its exact English literal, so a
+// perfectly-parity Spanish file — same keys, translated values — would fail
+// assignment purely because `"Confirmar" !== "Confirm"`. That literal
+// mismatch is precisely why the old code reached for `as Dictionary`, and
+// that cast silently ALSO suppressed the real check (a MISSING key). Widening
+// the values restores a genuine compile-time guarantee: es/ur are assigned to
+// `Record<Locale, Dictionary>` WITHOUT a cast, so a key present in `en` but
+// missing in es/ur is now a hard `tsc` error again (ADR-0061 D-5).
+//
+// Compile-time checking cannot cover EXTRA keys (excess-property checks don't
+// apply to non-literal assignment — the inert `_meta._comment*` notes are
+// harmless extras) nor empty-string drift. The CI-blocking parity test
+// (`locale-parity.test.ts`) is the real, bidirectional guard; this type is
+// the fast local backstop.
+type Widen<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : { [K in keyof T]: Widen<T[K]> };
+
+export type Dictionary = Widen<typeof enOperator>;
+export type ManagerDictionary = Widen<typeof enManager>;
 
 const DICTIONARIES: Record<Locale, Dictionary> = {
   en: enOperator,
-  es: esOperator as Dictionary,
-  ur: urOperator as Dictionary,
+  es: esOperator,
+  ur: urOperator,
 };
 
 const MANAGER_DICTIONARIES: Record<Locale, ManagerDictionary> = {
   en: enManager,
-  es: esManager as ManagerDictionary,
-  ur: urManager as ManagerDictionary,
+  es: esManager,
+  ur: urManager,
 };
 
 export function getDictionary(locale: Locale): Dictionary {

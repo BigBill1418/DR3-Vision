@@ -5,6 +5,38 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-25 (iPad / floor surface i18n parity — ADR-0061)
+
+Makes the existing en/es/ur translations actually REACHABLE for floor PIN operators. The iPad already
+shipped the same language set as the Vision main portal and every operator surface was fully translated
+with correct RTL — but a Spanish/Urdu-reading floor operator had no way to SELECT or PERSIST their
+language, and the sign-in screens they must read first were hard-forced to English. This closes that gap
+without touching auth/PIN logic. See ADR-0061 and `docs/plans/2026-07-25-ipad-i18n-parity.md`.
+
+- **Floor locale switcher (D-1/D-2)** on the operator shell (`src/app/operator/_components/floor-locale-switcher.tsx`,
+  mounted in `operator/layout.tsx`), present on every operator screen including the pre-auth sign-in trio
+  and mid-shift. Three ≥44px targets, each label in its own script, top-corner chrome (logical `end`),
+  out of the RTL-forced numeric zones. Floor staff never reach `/login`, so this is their only path in.
+- **Session-first locale resolution (D-4)** — `getLocale`/`resolveLocale` now prefer the signed-in
+  operator's `users.locale` over the device-global `dr3_locale` cookie: `?lang=` > session > cookie
+  (pre-auth hint only) > `en`. On a shared iPad, language follows the OPERATOR, not the device — one
+  person's pick can no longer pin or mask another operator's language for a year.
+- **Per-operator persistence (D-3)** — the switcher writes `users.locale` directly when signed in
+  (`setFloorLocaleAction`); a pre-auth pick sets a short-lived explicit-pick marker cookie that
+  `mirrorLocaleCookie` folds into `users.locale` on sign-in (then consumes). Every future shift renders
+  in the operator's language on any iPad.
+- **Shared-device anti-corruption (D-4)** — `mirrorLocaleCookie` no longer folds the ambient device
+  `dr3_locale` cookie into `users.locale`; only an EXPLICIT pre-auth pick (marker) persists. This removes
+  the "one manager's pick overwrites every operator's stored preference on each sign-in" corruption.
+- **CI-blocking key-parity gate (D-5)** — new `src/i18n/locale-parity.test.ts` fails the build if any
+  locale file drifts (missing/extra key, or empty translation) from `en` in either namespace, ignoring
+  inert `_meta.*` notes. The false `as Dictionary` casts in `dictionary.ts` are replaced with a `Widen<>`
+  type so a key added to `en` but forgotten in es/ur is again a hard `tsc` error.
+- **Soft-deleted operators excluded from the name-picker** (`deleted_at: null`): a soft-deleted but still
+  `is_active` operator could be selected and pass the PIN, then get bounced by the revocation kill-switch
+  into a dead-end empty session. They no longer appear.
+- **No migration** — `users.locale` (`UserLocale @default(en)`) already exists. No schema change.
+
 ### Added — 2026-07-25 (iPad floor inventory-validation surfaces — ADR-0060)
 
 Builds the day-to-day inventory-validation layer the floor was missing: operators can now confirm/correct/
@@ -32,7 +64,7 @@ contract existed only as a backend function reachable from the manager DESKTOP (
   (establishes Eugene's first anchor); close/lock stays admin-only.
 - **Money-safety (D5):** `onHand` sums all verified inbound regardless of source type, so an aggregate row
   plus per-load `b2b_haul` rows for the same day would double-count (the partial unique index only bars two
-  *aggregate* rows). The floor confirm path refuses such a day (409 `per_load_exists`), and the ADR-0059
+  _aggregate_ rows). The floor confirm path refuses such a day (409 `per_load_exists`), and the ADR-0059
   MyMRC inbound bridge now closes the same latent gap (`inbound-bridge.ts` skips days with verified per-load
   rows — `skippedPerLoad`). Both guards are covered by tests.
 - **One additive migration** (`20260812_adr0060_ipad_floor_inbound_source`): `ipad_floor` enum value +
@@ -66,7 +98,7 @@ floor-confirmation upgrades a day to confirmed. See ADR-0059 and
   double-count physically impossible. Additive, idempotent, clean-replay proven on a fresh PG16.
 - **Idempotent, precedence-guarded, audited writer.** Single atomic
   `INSERT … ON CONFLICT (site_id, arrived_at) WHERE load_source_type IN ('paper_bulk','mymrc_haul')
-  DO UPDATE … WHERE load_source_type='mymrc_haul' AND (values IS DISTINCT FROM …)` with
+DO UPDATE … WHERE load_source_type='mymrc_haul' AND (values IS DISTINCT FROM …)` with
   absolute-value SETs (double-count-proof) + `xmax`-discriminated `RETURNING`. A `paper_bulk`
   (manager) row is left byte-identical with no error; precedence is iPad-confirmed > paper_bulk >
   mymrc_haul. Every real write emits an `audit_log` row (`actor_label='mymrc-inbound-bridge'`).
@@ -97,6 +129,7 @@ floor-confirmation upgrades a day to confirmed. See ADR-0059 and
   Woodland anchor 2026-07-22; Eugene inbound empty; current Woodland floor 1597/886/2483 unchanged
   by the backfill. **The operator runs the migration + real backfill + on-box floor-invariance
   verification.**
+
 ### Fixed — 2026-07-23 (ADR-0058 floor-probe gate unreachable — middleware auth redirect)
 
 - Added `/api/internal/inventory/` to the middleware public-path allow-list
@@ -127,7 +160,7 @@ never decremented from production. See ADR-0058 and
   unique index already exists on prod). Aggregation is mandatory — multi-row days are real.
 - **Idempotent, precedence-guarded, audited writer.** Single atomic
   `INSERT … ON CONFLICT (site_id, production_date) DO UPDATE … WHERE source='mymrc' AND
-  closed_at IS NULL AND (values IS DISTINCT FROM …)` with absolute-value SETs (double-count-proof)
+closed_at IS NULL AND (values IS DISTINCT FROM …)` with absolute-value SETs (double-count-proof)
   and an `xmax`-discriminated `RETURNING`. A `manual` close or workbook `import` row — or any
   closed day — is left byte-identical with no error. Every real write emits an `audit_log` row
   (`actor_label='mymrc-processed-bridge'`); a guarded no-op writes none.
@@ -294,8 +327,8 @@ tonight?" per site, without opening the app. Written against the post-Phase-5 sc
 
 ### Removed — 2026-07-22 (ADR-0037 Phase 5 — outdoor storage removed from Vision)
 
-Bill's directive: *"we will also remove the units outdoor we are never allowed to store
-units outside. this can't be in the system."* DR3 never stores units outside, so the
+Bill's directive: _"we will also remove the units outdoor we are never allowed to store
+units outside. this can't be in the system."_ DR3 never stores units outside, so the
 concept is gone from schema, UI, math, warnings and docs.
 
 - **Schema** — migration `20260806_remove_outdoor_from_site_inventory_snapshots` drops
@@ -353,6 +386,7 @@ weakening the money-safe boundary.
   ongoing-capture models — anchor-daily vs. backfill-and-run — with the trade-offs, for
   Bill to pick operationally. The stale D7 "admin-only" section is corrected to the
   data-driven rollout surface now live at both sites.
+
 ### Fixed — 2026-07-22 (ADR-0046 Amendment 6 — AP attachment preview reliability, DESKTOP)
 
 Approvers reported the AP invoice preview as unreliable ("can't see the invoice").
@@ -366,7 +400,7 @@ and the app still never proxies attachment bytes (hard rule #7).
   regex, but the stored `content_type` is Microsoft Graph's label persisted verbatim
   at ingest and never normalized. A live query found **2 of 41 file attachments are
   PDFs stored as `application/octet-stream`** (both `.pdf` by filename) — those
-  rendered *no Preview button at all*, download-only. The anchored form also rejected
+  rendered _no Preview button at all_, download-only. The anchored form also rejected
   `application/pdf; name="inv.pdf"`. The gate now strips `;`-parameters and falls back
   to the filename extension for the genuinely ambiguous types
   (`application/octet-stream` / empty). It stays a positive allowlist: an
@@ -375,11 +409,11 @@ and the app still never proxies attachment bytes (hard rule #7).
   shared, pure module imported by BOTH the server route and `ApQueueClient.tsx`, so
   the two copies of this rule can no longer drift (Amendment 4 hand-wrote it twice).
 - **Canonical Content-Type on the wire.** The presign previously set
-  `ResponseContentType` from the *stored* type, so an octet-stream `.pdf` served
+  `ResponseContentType` from the _stored_ type, so an octet-stream `.pdf` served
   `inline` would still download rather than frame. The route now signs with — and
   echoes — `effectiveInlineContentType()` (`application/pdf`, `image/jpeg`, …), and
   its Prisma `select` gained `filename` to make the fallback possible server-side.
-- **Expired presigned URLs blanked the frame on the *second* look (SECONDARY).** The
+- **Expired presigned URLs blanked the frame on the _second_ look (SECONDARY).** The
   URL is minted on expand (so the first view was always fresh), but the client cached
   it forever while the TTL was 300 s — a collapse/re-expand >5 min later, or a
   read-then-download, replayed an expired URL → R2 `403` → blank iframe / dead link.
@@ -396,9 +430,11 @@ and the app still never proxies attachment bytes (hard rule #7).
   ADR.
 
 ### Changed — 2026-07-22 (ADR-0037 D7 — Loads & Inventory GO-LIVE)
+
 - **`loads_inventory` rollout surface flipped `pilot → live` for Woodland + Eugene** (audited, attributed to Bill). Managers/operators are now activated at both sites; the `assertLoadsInventoryActivated` gate reads this per-site surface at request time, so the change is immediate (no deploy). Reversible via the inverse flip at `/admin/rollout`.
 - Both D7 ops preconditions closed: **P1-3 restore drill MET** (`d4917d0`, passed twice vs real R2 snapshot), **P1-4 RESTIC_PASSWORD off-box CONFIRMED** via the Fleet 1Password item (SHA-256 matches on-box). Reconciled the `OPEN-ITEMS.md` O-3 / `restore-drills.md` / ADR-0037 contradiction — all now CLOSED.
 - Follow-up captured: `outbound.ts` `allocation_pct` semantics "pending Kelsey" (nullable, does not affect the running balance) — resolve before her 2026-08-01 departure.
+
 ### Added — 2026-07-22 (Navigation — always-visible "← Dashboard" bar across the manager surface)
 
 Closed a long-standing navigation gap: 30 of the 57 manager-surface pages had NO
@@ -464,6 +500,7 @@ unchanged. Architecture: `scratchpad/mymrc-field-capture-architecture.md` (Terry
   with a BEFORE/AFTER coverage reconciliation report.
 - Tests: `record-fields-client.test.ts` (18), `enrich-details.test.ts` (9); the
   backfill/sync/scrape suites updated for the transport swap. 348 mymrc tests green.
+
 ### Added — 2026-07-22 (Bonus daily entry — total processed mattresses in the footer)
 
 Operator (Bill) asked to see the total processed mattresses alongside the existing
@@ -711,6 +748,7 @@ surfaced by an adversarial verify pass.
   low-confidence lands as-is for manual entry. Fixture-tested for all four tiers +
   scanned-image / plain-text-email / multi-page + mocked Claude API
   (`extraction.test.ts`, 22 cases; all fixtures synthetic).
+
 ### Fixed — 2026-07-22 — MyMRC backfill truncated the two big views at 2050 rows (SOQL OFFSET 2000 ceiling)
 
 The historical backfill (ADR-0057 D3) paged the Salesforce Experience Cloud list
@@ -748,7 +786,7 @@ cap, never a false "complete". `total_records_estimated` now stores the true
 
 Closes the "a backup nobody has restored is a rumor" gap for the DR3-Vision
 lane — the one that carries bonus/payroll/PII. Proves the encrypted restic/R2
-backup leg (`scripts/dr3-pg-backup.sh`) is actually *restorable*, on a schedule,
+backup leg (`scripts/dr3-pg-backup.sh`) is actually _restorable_, on a schedule,
 without anyone having to remember. Clones the proven DroneOps restore-drill
 template, adapted from its aws-cli/gzip R2 path to our restic/`pg_dump -Fc` path.
 
@@ -774,6 +812,7 @@ template, adapted from its aws-cli/gzip R2 path to our restic/`pg_dump -Fc` path
 - **Install-time verified** (2026-07-22): `systemctl start` → `Result=success`,
   exit 0, `audit_log=9920/9995` (99.2%), scratch DB dropped, metric live in
   Prometheus.
+
 ### Added — 2026-07-22 (ADR-0020 — Operations Dashboard re-enabled for the Eugene iPad go-live)
 
 - **The Operations Dashboard tile is `active` again** (`src/lib/dashboard-tiles.ts`,
@@ -1169,10 +1208,10 @@ three mirror tables are empty and Phase 0 is first contact.
 operator (and managers were affected too). Root cause: the `optionalEmail` /
 `optionalProcessorRole` / `optionalPin` Zod schemas used `.optional()`, which accepts
 only `undefined` — but `UserCreateForm` sends an explicit **`null`** for any field that
-doesn't apply to the chosen role (an operator's email + processor_role, a manager's pin).
+doesn't apply to the chosen role (an operator's email + processor*role, a manager's pin).
 The schema's own comment already documented that null must be allowed; the implementation
 didn't. Fixed by switching the three optional fields to `.nullish()` (nullable + optional).
-The existing operator test used `email: ''` (empty string, which the old schema _did_
+The existing operator test used `email: ''` (empty string, which the old schema \_did*
 accept), so it never caught the real form's `null` — added regression tests using the
 exact null-field payloads the form sends (operator and manager). Reproduced against prod
 (422 with `fieldErrors: email, processor_role`) before the fix; no schema/DB change.

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { verifyPin } from '@/lib/pin-service';
 import { authConfig, setRevocationChecker, type RevocationVerdict } from '@/lib/auth.config';
-import { LOCALE_COOKIE, isLocale } from '@/i18n/config';
+import { LOCALE_PICK_COOKIE, isLocale } from '@/i18n/config';
 import { log } from '@/lib/observability/logger';
 
 // Full Node-runtime auth config. Two providers ride on this file:
@@ -36,21 +36,38 @@ const pinSchema = z.object({
   pin: z.string().regex(/^\d{4}$/),
 });
 
-// Mirror the pre-auth `dr3_locale` cookie to `users.locale` on a
-// successful sign-in. Per T-008 acceptance: the locale picker on
-// /login persists per-user, so the user's NEXT device login (which
-// may not carry the cookie) starts in the right language. Operator
-// PIN sign-in does the same, so a tap on "Español" before PIN entry
-// sticks for the operator's name on that iPad and on every other
-// iPad they sign in to.
-async function mirrorLocaleCookie(userId: string): Promise<void> {
+// Fold an EXPLICIT pre-auth locale pick into `users.locale` on a successful
+// sign-in (ADR-0061 D-3/D-4). The `dr3_locale_pick` marker is set by the
+// locale picker ONLY when the operator deliberately chose a language with no
+// session yet (the sign-in screens); its presence means "persist this to the
+// user who is about to authenticate." So a tap on "Español" before PIN entry
+// sticks for that operator and follows them to every iPad.
+//
+// Critically, the ambient device `dr3_locale` cookie is NEVER folded here.
+// On a shared floor iPad that cookie is device-global; folding it (the old
+// T-008 behavior) let one manager's pick overwrite each operator's stored
+// preference on every sign-in. Gating on the explicit marker instead is the
+// D-4 anti-corruption fix: with no marker, `users.locale` is left untouched
+// and the session-first resolver renders the operator's own language.
+//
+// Exported for unit testing.
+export async function mirrorLocaleCookie(userId: string): Promise<void> {
   try {
     const store = await cookies();
-    const value = store.get(LOCALE_COOKIE)?.value;
-    if (!value || !isLocale(value)) return;
+    const pick = store.get(LOCALE_PICK_COOKIE)?.value;
+    if (!pick || !isLocale(pick)) return;
     await prisma.user.update({
       where: { id: userId },
-      data: { locale: value },
+      data: { locale: pick },
+    });
+    // Consume the marker so it cannot re-apply to an unrelated later operator
+    // signing in on the same shared device.
+    store.set(LOCALE_PICK_COOKIE, '', {
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
     });
   } catch {
     // Non-fatal — locale persistence is a UX nicety, not a security

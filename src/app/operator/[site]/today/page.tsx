@@ -90,7 +90,7 @@ export default async function FloorTodayPage({ params }: Props) {
   );
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
+    <main className="min-h-screen bg-dr3-green-deep px-6 pb-8 pt-20 text-dr3-cream">
       <div className="mx-auto flex max-w-2xl flex-col gap-6">
         <header className="flex items-start justify-between gap-4">
           <div>

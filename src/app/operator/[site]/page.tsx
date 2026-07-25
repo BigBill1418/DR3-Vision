@@ -30,6 +30,12 @@ export default async function OperatorSitePage({ params }: Props) {
     where: {
       role: 'operator',
       is_active: true,
+      // Exclude soft-deleted operators. A `deleted_at` row can still be
+      // `is_active`, so without this it would appear in the picker and pass
+      // the PIN — but the ADR-0053 revocation kill-switch empties the session
+      // immediately, bouncing the operator with no working shift. Hide them
+      // from selection entirely (ADR-0061).
+      deleted_at: null,
       primary_site_id: site.id,
     },
     select: {
@@ -41,7 +47,7 @@ export default async function OperatorSitePage({ params }: Props) {
   });
 
   return (
-    <main className="min-h-screen bg-black px-6 py-10 text-white">
+    <main className="min-h-screen bg-black px-6 pb-10 pt-20 text-white">
       <div className="mx-auto flex max-w-2xl flex-col gap-8">
         <header className="flex items-center justify-between gap-4">
           <Image
