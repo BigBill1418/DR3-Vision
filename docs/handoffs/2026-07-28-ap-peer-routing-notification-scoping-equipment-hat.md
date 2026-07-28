@@ -622,3 +622,151 @@ Gates all of §3. Ask IT for:
 §4 corrects a wrong diagnosis carrying real billing-basis risk.
 
 Woodland iPad operators went in as this ships; the floor surfaces need nothing from this handoff.
+
+
+
+
+---
+
+## Amendment A — 2026-07-28 — Entra service account PROVISIONED (§3 prerequisite closed)
+
+**Status change:** §5.1 (the operator prerequisite gating all of §3) is **COMPLETE**. Bill provisioned the account directly in the tenant via PowerShell rather than routing through an IT ticket. Phase 3 is unblocked.
+
+### §A.1 — Provisioned values
+
+```
+Tenant ID     : 72843ea8-e50d-4500-a0d5-d924e9acb4d5
+Client ID     : 2da92424-7397-435d-96a1-d2a382293a53
+App reg name  : DR3-Vision
+Service UPN   : docs-dr3@svdp.us
+Object ID     : 7ad08443-3d96-400e-9e4d-0c34208305e2
+Licence       : SPB (Microsoft 365 Business Premium)
+Redirect URI  : https://dr3-vision.svdp.us/api/admin/doc-ingest/oauth/callback
+```
+
+Tenant/client/object IDs are not secrets and may appear in config and logs.
+
+### §A.2 — Client secret: ALREADY EXISTS — do not create another
+
+The DR3-Vision app registration carries `DR3-Vision Production`, valid **2026-05-06 → 2028-05-05**. This is the **same app registration the AP approvals mailbox already authenticates with**, so the secret is already present in the Vision secret store.
+
+**Do NOT add a second client secret.** Reuse the configured one. A second credential on the same registration doubles the rotation surface for no benefit.
+
+**Expiry 2028-05-05** — add to the rotation runbook alongside the MyMRC credential rotation. A silently expired app secret takes down both AP mail polling *and* document ingestion simultaneously, and presents as two unrelated outages.
+
+### §A.3 — Granted delegated scopes (verified live)
+
+`Get-MgOauth2PermissionGrant` against the app SP → Graph SP returns:
+
+```
+ConsentType : AllPrincipals
+Scope       : email Files.Read.All offline_access openid profile Sites.Read.All User.Read
+```
+
+- `Files.Read.All` + `Sites.Read.All` — read shared items across OneDrive and SharePoint
+- `offline_access` — **the refresh token, which is what makes unattended operation work (§A.4)**
+- `User.Read` — sign-in / own profile
+- `email`, `openid`, `profile` — pre-existing from the Entra SSO integration on this same registration; unrelated and harmless
+
+Admin consent is tenant-wide (`AllPrincipals`). No per-user consent prompt will appear.
+
+Redirect URIs on the registration, both confirmed present:
+
+```
+https://dr3-vision.svdp.us/api/admin/doc-ingest/oauth/callback   ← added for this work
+https://dr3-vision.svdp.us/api/auth/callback/microsoft-entra-id  ← pre-existing SSO, untouched
+```
+
+### §A.4 — Auth model: authorization-code + refresh token. NOT ROPC.
+
+**This supersedes the Conditional Access discussion in §3.5 and §5.1 of the main handoff. That framing was wrong and is retired.**
+
+The earlier draft assumed unattended sign-in implies ROPC (username/password grant), which breaks under any MFA requirement — hence the CA-exclusion and certificate-auth options. **ROPC is deprecated, disabled by default in most tenants, and unnecessary here.**
+
+The correct model:
+
+1. Bill clicks **Connect document service account** on an admin surface in Vision
+2. Standard authorization-code redirect to Microsoft
+3. **Bill signs in interactively as `docs-dr3@svdp.us`**, completing MFA if prompted
+4. Vision receives an authorization code, exchanges it for access + refresh tokens
+5. The refresh token is stored encrypted and rolled forward on every refresh thereafter
+
+**No Conditional Access changes are required.** The MFA claim from the original interactive sign-in is carried in the token chain and satisfies CA on every subsequent refresh. No exclusion, no certificate-based auth, no policy edit.
+
+**Claude Code must NOT implement ROPC.** Any design requiring the service account password at runtime is wrong.
+
+**The only condition that forces another interactive sign-in** is a sign-in-frequency CA policy that expires the refresh token, an admin revoking sessions, or a password rotation. Vision must detect that state, mark the connection `reauth_required`, and page Bill (§A.6) — never silently stop ingesting.
+
+**The service account password is not a runtime credential.** It is used once, by a human, in a browser, during step 3. It is stored in 1Password for recovery only. **It must never be written to the Vision secret store, `.env`, or any config.**
+
+### §A.5 — OneDrive provisioning
+
+`Get-MgUserDefaultDrive` may 404 immediately post-licensing. OneDrive provisions asynchronously and is reliably created by the account's first interactive sign-in — i.e. step 3 of §A.4 handles it as a side effect.
+
+Claude Code should not treat an initial 404 as an error. The connect flow's success check happens *after* the sign-in completes.
+
+### §A.6 — Connect surface requirements
+
+New admin surface (suggested `/admin/doc-ingest/connect`, admin-only):
+
+**Disconnected state:**
+- Explain that a one-time sign-in as `docs-dr3@svdp.us` is required, and name the account explicitly so Bill doesn't sign in as himself by reflex
+- **Connect document service account** button → authorization-code flow against the §A.1 redirect URI
+- State parameter with CSRF protection; verify on callback
+
+**Connected state:**
+- Signed-in account UPN (assert it matches `docs-dr3@svdp.us` — **if a different account authenticated, refuse the connection and say so plainly**; connecting as Bill personally would silently expose his own files instead of the service account's shares)
+- Token acquisition time, last successful refresh, refresh-token age
+- Granted scopes, verified against the §A.3 required set
+- OneDrive provisioning status
+- Active subscription count + next renewal
+- Last successful delta sweep
+- **Reconnect** action for the reauth path
+
+**`reauth_required` state:**
+- Triggered by any refresh failure attributable to an invalidated or expired token
+- Pages `dr3-vision-system` **immediately** — this is the ADR-0057 D9 posture; silence is never acceptable
+- Banner on the surface with the reconnect action
+- Line in Bill's 06:00 digest until resolved
+- **Ingestion halts loudly rather than degrading quietly**
+
+### §A.7 — Secret storage
+
+The refresh token, access token, and the existing client secret all follow the established discipline:
+
+- Encrypted at rest in Postgres, same pattern as the `/admin/mrc-scrape` MyMRC credentials (ADR-0057)
+- **Never in `.env`** for the account-identity credentials
+- Encryption key on CHAD-HQ under `~/.dr3-vision-secrets/`, mounted fail-soft
+- Fail-loud on a missing key — never silent no-op (ADR-0057 D9)
+
+If the existing AP-mailbox client secret already lives in a config path rather than the encrypted store, **leave it where it is** — moving it is out of scope here and would risk the AP integration. Document the split; unify later.
+
+### §A.8 — Corrections to the main handoff
+
+| Section | Correction |
+|---|---|
+| §3.5 (auth "settle against the tenant") | **Settled.** Authorization-code + refresh token per §A.4. No open question remains. |
+| §3.2 D1 (licensed user rationale) | Confirmed correct and provisioned. SPB, not Business Basic — Business Basic isn't in this tenant. |
+| §5.1 (IT provisioning ask) | **Complete.** Bill did it directly; no IT ticket. Only the webhook-reachability check remains (§A.9). |
+| §5.1 Conditional Access sub-item | **RETIRED.** No CA change needed. §A.4 supersedes. |
+| §6 Phase 3 gating | **Ungated.** Phase 3 may proceed as soon as Phases 1–2 complete. |
+
+### §A.9 — Sole remaining external unknown
+
+**Inbound Graph change notifications must reach `https://dr3-vision.svdp.us`.** Microsoft POSTs to that host; nothing in the tenant governs whether a firewall, proxy, or WAF permits it.
+
+Claude Code verifies empirically during the Phase 3 build by creating a subscription and confirming the validation handshake completes. **If the handshake fails, do not silently fall back to polling-only** — report to Bill so the network path gets fixed. The delta sweep (§3.2 D4) covers correctness meanwhile, but latency degrades from near-real-time to sweep-interval and Bill must know that happened.
+
+### §A.10 — Test file for end-to-end verification
+
+Once the connect flow ships and Bill signs in, he shares one file with `docs-dr3@svdp.us`. Expected chain:
+
+1. Discovery finds it (push, or sweep)
+2. `doc_sources` row created, status `pending_classification`
+3. Classifier proposes a kind + confidence
+4. It appears at `/admin/doc-ingest` for Bill's one-time confirmation (D5)
+5. Confirming registers the kind permanently
+6. Editing the file at source propagates automatically (D6), subject to the anomaly guardrail (D7)
+7. An `audit_log` row records the before/after
+
+**That chain working end-to-end on one real file is the Phase 3 acceptance test.**
