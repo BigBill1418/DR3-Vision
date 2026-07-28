@@ -194,8 +194,10 @@ export async function POST(
           },
           { status: 400 },
         );
-      // Server-authoritative: every submitted id must be ACTIVE and on this site.
-      if (equipmentIds.length > 0) await assertEquipmentForSite(prisma, siteId, equipmentIds);
+      // Server-authoritative: every submitted id must exist and be ACTIVE. The
+      // site check was removed 2026-07-28 (operator directive overriding ADR-0046
+      // Amendment 5 D-M5-6) — the picker is fleet-wide, so this must be too.
+      if (equipmentIds.length > 0) await assertEquipmentForSite(prisma, equipmentIds);
 
       // D-M5-4 — re-evaluate variance server-side; NEVER trust the client's flag. An
       // above-threshold trip that was not explicitly acknowledged is refused.

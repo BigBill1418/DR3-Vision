@@ -188,7 +188,9 @@ describe('POST /api/ops/ap/[id]/decide — structured Approve (D-M5-1/6)', () =>
     });
     expect(res.status).toBe(200);
     expect(resolveDecisionSiteId).toHaveBeenCalledTimes(1);
-    expect(assertEquipmentForSite).toHaveBeenCalledWith(expect.anything(), 'site-w', ['eq-1', 'eq-2']);
+    // Fleet-wide as of 2026-07-28 (operator directive overriding ADR-0046
+    // Amendment 5 D-M5-6): the validator no longer receives a site id.
+    expect(assertEquipmentForSite).toHaveBeenCalledWith(expect.anything(), ['eq-1', 'eq-2']);
     const arg = lastDecideArg();
     expect(arg.vendorFreeform).toBe('Sunbelt Rentals');
     expect(arg.explanation).toBe('mower rental');

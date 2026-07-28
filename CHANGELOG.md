@@ -5,6 +5,28 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Changed — 2026-07-28 (AP equipment selector is fleet-wide — ADR-0046 Amendment 7)
+
+Operator directive, overriding ADR-0046 Amendment 5 (D-M5-6). The Approve-panel
+equipment multi-select and its server-side validator no longer filter by site.
+
+- An invoice at either site can be for any asset (over-the-road trailers, tractors,
+  machines that move between facilities), and the registry has **no trustworthy site
+  attribution to filter on**: it was seeded (ADR-0062) from a machine list with no
+  `DR3 Eugene` facility and only 21 `DR3 Woodland` rows out of 554, so `site_id` came
+  from a coarse jurisdiction fallback. Filtering on a heuristic field produced
+  confidently wrong results — it hid the very asset the approver was looking at.
+- **Both sides moved together.** `listSiteEquipment` and `assertEquipmentForSite`
+  must agree on scope; changing only the picker would leave cross-site picks
+  rendering fine and then failing 400 on save. A test now asserts the pairing
+  ("every option the picker returns passes the validator").
+- `assertEquipmentForSite` is still a real trust boundary — ids must exist and be
+  active. Only the site predicate was dropped. The decision itself is still filed to
+  one site (or `filed_not_dr3`), still approver-gated, still audited.
+- Picker now offers ~521 active options. If that proves unwieldy, the answer is
+  search/grouping — not reinstating a filter on untrustworthy data (C-28).
+
+
 ### Fixed — 2026-07-28 (operator queue: current Pacific day only + a DST money-path bug)
 
 The iPad queue went live on the floor today. Two date defects, the second of which
