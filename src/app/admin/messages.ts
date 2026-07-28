@@ -201,6 +201,87 @@ export const adminMessages = {
       'Leading or trailing spaces were removed before saving — MyMRC rejects them.',
   },
 
+  // Equipment master (ADR-0063 — the admin surface C-27 was missing)
+  equipment: {
+    pageTitle: 'Equipment master',
+    pageSubtitle:
+      'The asset registry the AP approver picks from when linking an invoice to equipment. Site-scoped; deactivate to remove from the picker.',
+    navLink: 'Equipment master',
+    terexImportNote:
+      'Looking for the Terex downtime spreadsheet? That is a different table — use Terex history import.',
+    terexImportLink: 'Terex history import',
+    addEquipment: 'Add equipment',
+
+    // List
+    columnName: 'Name',
+    columnCategory: 'Category',
+    columnSite: 'Site',
+    columnStatus: 'Status',
+    columnLinks: 'AP links',
+    columnUpdated: 'Last updated',
+    columnActions: 'Actions',
+    edit: 'Edit',
+    deactivate: 'Deactivate',
+    reactivate: 'Reactivate',
+    statusActive: 'Active',
+    statusInactive: 'Inactive',
+    filterSite: 'Site',
+    filterCategory: 'Category',
+    filterStatus: 'Status',
+    filterAllSites: 'All sites',
+    filterAllCategories: 'All categories',
+    filterStatusActive: 'Active only',
+    filterStatusInactive: 'Inactive only',
+    filterStatusAll: 'All',
+    searchLabel: 'Search',
+    searchPlaceholder: 'Unit number or name — e.g. EQ43',
+    searchSubmit: 'Search',
+    searchClear: 'Clear',
+    empty: 'No equipment matches these filters.',
+    confirmDeactivate:
+      'Deactivate this equipment? It disappears from the AP approver’s picker at BOTH sites — that picker is fleet-wide, and this is the only thing that removes an option from it. Existing approvals keep referencing it. This is reversible.',
+
+    // Category labels
+    categoryVehicle: 'Vehicle',
+    categoryForklift: 'Forklift',
+    categoryBaler: 'Baler',
+    categoryTerex: 'Terex / shear',
+    categoryOther: 'Other',
+
+    // Create + edit form
+    createHeading: 'New equipment',
+    editHeading: 'Edit equipment',
+    nameLabel: 'Display name',
+    nameHelp:
+      'What the approver sees in the picker. Convention from the seeded roster: “<Unit #> — <Make> <Type>”, e.g. “EQ43 — Terex Shear”.',
+    nameRequired: 'Display name is required.',
+    nameTooLong: 'Display name is too long (200 characters maximum).',
+    nameTaken:
+      'Another equipment record at this site already uses that name. Names must be unique per site — check the inactive rows too.',
+    categoryLabel: 'Category',
+    categoryHelp: 'Drives nothing today beyond grouping; shear machines belong under Terex.',
+    siteLabel: 'Site',
+    siteHelp:
+      'Where this asset is filed. The AP approver’s picker is fleet-wide (ADR-0046 Amendment 7), so this does not limit who can select it — it is bookkeeping, and much of it came from a coarse jurisdiction guess at seed time, so correcting it here is expected. Editable even on assets an approval already cites.',
+    siteRequired: 'Site is required.',
+    submitCreate: 'Create equipment',
+    submitUpdate: 'Save changes',
+    cancel: 'Cancel',
+    notFound: 'Equipment not found.',
+
+    // Edit-page extras
+    deactivateHeading: 'Deactivate equipment',
+    deactivateHelper:
+      'Removes this asset from the AP approver’s picker — and since that picker is fleet-wide, this is the only thing that takes an option off it. Approvers at BOTH sites lose it. The row is never deleted: approvals that already cite it stay intact, and reactivation puts it back.',
+    deactivateButton: 'Deactivate equipment',
+    reactivateButton: 'Reactivate equipment',
+    linkedApprovalsNote: (n: number) =>
+      `Cited by ${n} AP approval${n === 1 ? '' : 's'} as equipment evidence.`,
+    noLinkedApprovals: 'Not yet cited by any AP approval.',
+    resultCount: (shown: number) =>
+      `${shown.toLocaleString()} record${shown === 1 ? '' : 's'} shown.`,
+  },
+
   // File-drop inbox (O-2)
   fileDrop: {
     title: 'File Drop',

@@ -5,6 +5,74 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-28 (`/admin/equipment` — the equipment master is maintainable from the UI — ADR-0063)
+
+ADR-0062 seeded 554 assets and closed the empty-picker problem, but it closed it with a
+**script**: every future fleet change (new truck, scrapped trailer, re-categorised machine)
+needed another run of `scripts/seed-equipment-master.mjs` against production. The AP code has
+always called the registry "admin-managed" and `/api/ops/ap/equipment` is read-only "because
+creation is admin-only" — but the admin surface was never built. That was **C-27**, now closed.
+
+- **`/admin/equipment`** — list with site / category / status filters plus search, all four
+  living in the URL (`?site=&category=&status=&q=`). **`/admin/equipment/new`** — create.
+  **`/admin/equipment/[id]`** — edit + activate/deactivate. New tile on the `/admin` hub.
+- **`POST /api/admin/equipment`** + **`PATCH /api/admin/equipment/[id]`**
+  (`{action:'update'|'deactivate'|'reactivate'}`), plus a `GET` list. Every handler re-checks
+  `requireAdmin()` — the API never leans on the page-layer gate — and every mutation writes its
+  `audit_log` row (`table_name='equipment'`, before/after) inside the **same** transaction
+  (hard rule #6).
+- **Nothing is ever hard-deleted.** `ap_equipment_links.equipment_id` is `onDelete: Restrict`
+  and those rows are financial-approval evidence, so `is_active=false` is the only removal —
+  which is exactly what `listSiteEquipment()` already filters on for the approver's picker.
+  The `[id]` route ships **no `DELETE` handler at all** (unlike `/api/admin/users/[id]`, which
+  aliases it to deactivate), so no client can form a request that even looks like a delete.
+  A test asserts the export is absent.
+- **`(site_id, display_name)` is now a real DB constraint** (migration
+  `20260813_adr0063_equipment_display_name_unique` + `@@unique` in the schema). The seed
+  script's idempotency was already keyed on that pair, but only by convention — once humans
+  can create rows, a duplicate would make the next seed re-run insert a third copy instead of
+  updating, and would put two indistinguishable options in front of an approver. Names are
+  normalised on write (trim + collapse whitespace) so the key means something; the index is
+  **unconditional** (covers inactive rows — reactivate a returning asset, don't re-create it);
+  the app pre-checks for a readable 409 and catches P2002 as the same reason for the race.
+  Verified against prod before writing the migration: 554 rows, **zero** duplicate groups —
+  which matters because `prisma migrate deploy` runs at container start, so a violation would
+  crash-loop the app rather than fail a build step.
+- **Every field stays editable, `site_id` included — even on assets an approval cites**
+  (ADR-0063 D4). This screen was first built with a site-LOCK on cited rows; ADR-0046
+  **Amendment 7** (PR #181, same day) made the AP selector fleet-wide, which killed the
+  lock's premise (`listSiteEquipment()`/`assertEquipmentForSite()` no longer read `site_id`,
+  so no asset is one an approver "could never have been offered") and made it harmful —
+  correcting the coarse C-28 jurisdiction guess is a core reason this screen exists, and the
+  lock would have made the _most-cited_ assets the ones nobody could fix. Both the decision
+  and its reversal are recorded in ADR-0063 D4 rather than quietly dropped. A transfer is
+  still bounded by per-site name uniqueness, and every edit is audited before/after.
+- **`is_active` is now the ONLY thing scoping the approver's picker** (ADR-0063 D4a, a
+  consequence of Amendment 7). The picker used to be narrowed by site _and_ status; it is now
+  `is_active: true` and nothing else. So deactivate/reactivate is the sole mechanism that adds
+  or removes an option from a financial-approval surface, and it hits **both sites at once** —
+  the confirm dialog and helper copy now say so, and the tests assert removal against
+  `listSiteEquipment()`'s exact predicate rather than a generic flag check.
+- **Known latent exposure, recorded not fixed:** the uniqueness key is per-site while the
+  picker is now fleet-wide, so two sites _could_ produce identical labels side by side in one
+  picker. Verified zero such duplicates among active rows in prod. The constraint stays
+  per-site deliberately — a global index would forbid distinct assets at different facilities
+  sharing a unit number (the roster already repeats 5) and would break the seed's idempotency
+  key. If duplicates ever appear the fix is naming/grouping in the multi-select.
+- **Search, not pagination** (ADR-0063 D2). Every maintenance task starts from a unit number
+  on a work order, and a `?page=` is view state that goes stale on mutation — deactivating a
+  row under the default `status=active` filter shifts every later row up a page, so the admin
+  returns to a page that no longer holds their record. `?q=` has no such failure mode.
+- **Born with the ADR-0017 Amendment 1 contract** rather than retrofitted with it: create/edit
+  carry the filters back on save, cancel and the back-link, and the create form's site select
+  seeds from `?site=` instead of `sites[0]` — which, ordered by name, is always DR3 Eugene, so
+  creating from a Woodland-scoped list would otherwise register the asset in the wrong site's
+  picker. `src/app/admin/equipment/list-url.ts` is a deliberate sibling of the users module,
+  not a generalisation of it (D5).
+- Verification: `npm test` 3212 passed / 2 skipped (311 files), `tsc --noEmit` 0 errors,
+  `next lint --max-warnings 0` clean, `next build` green. 76 new tests across the serializer,
+  the create form (jsdom) and the API routes.
+
 ### Fixed — 2026-07-28 (the iPad queue used the UTC day, not the Pacific day — ADR-0065)
 
 **Correctness fix, independent of any scoping request.** The operator queue computed "today"
@@ -149,7 +217,6 @@ equipment multi-select and its server-side validator no longer filter by site.
 - Picker now offers ~521 active options. If that proves unwieldy, the answer is
   search/grouping — not reinstating a filter on untrustworthy data (C-28).
 
-
 ### Fixed — 2026-07-28 (operator queue: current Pacific day only + a DST money-path bug)
 
 The iPad queue went live on the floor today. Two date defects, the second of which
@@ -183,7 +250,6 @@ reaches billing.
   Pacific evening-shift case the old code got wrong) and 4 new cases in
   `src/lib/time.test.ts` pinning 25h/23h/24h spans, backward stepping across the
   fall-back boundary, and midnight-landing for every offset.
-
 
 ### Added — 2026-07-28 (equipment master seeded — the AP approval picker finally has options — ADR-0062)
 
