@@ -192,12 +192,32 @@ export function pacificMidnightInstantOfDayISO(dayISO: string): Date {
   return new Date(approx.getTime() - pacificOffsetMs(approx));
 }
 
-/** Pacific local midnight instant `days` after the day of `instant`. */
+/**
+ * Pacific local midnight instant `days` after the Pacific day of `instant`.
+ * Negative `days` steps backwards. DST-correct in BOTH directions.
+ *
+ * Steps on the Pacific CALENDAR, not by 24h arithmetic. The previous
+ * implementation added `days * 86_400_000` and re-snapped, which silently
+ * broke on the DST FALL-BACK day (a 25-hour Pacific day): base + 24h lands at
+ * 23:00 PST — still inside the SAME Pacific day — so the re-snap returned the
+ * base instant unchanged and `pacificDayStartInstantPlus(1)` produced a
+ * ZERO-WIDTH window. Measured on 2026-11-01: 0h instead of 25h. (Spring-forward
+ * happened to be correct at 23h, which is why it went unnoticed.)
+ *
+ * That is a money-path defect, not a cosmetic one — this helper bounds the
+ * invoice generation window (`lib/invoices/generation-inputs.ts`), the manager
+ * loads date filters, and the operator queue's current-day window. A zero-width
+ * `lt` bound on a fall-back day drops every row in the range.
+ */
 export function pacificDayStartInstantPlus(days: number, instant: Date = new Date()): Date {
-  const base = pacificDayStartInstant(instant);
-  // Step by 24h then re-snap to Pacific midnight to absorb any DST shift.
-  const shifted = new Date(base.getTime() + days * 86_400_000);
-  return pacificDayStartInstant(shifted);
+  const iso = pacificDayISO(instant);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) throw new Error(`pacificDayStartInstantPlus: bad Pacific day key: ${iso}`);
+  // UTC arithmetic on the date-only components is a pure calendar step — it
+  // cannot be perturbed by any DST offset because no wall-clock time is involved.
+  const cal = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  cal.setUTCDate(cal.getUTCDate() + days);
+  return pacificMidnightInstantOfDayISO(dayISO(cal));
 }
 
 // ────────────────────────────────────────────────────────────────────

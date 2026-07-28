@@ -5,6 +5,41 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-28 (operator queue: current Pacific day only + a DST money-path bug)
+
+The iPad queue went live on the floor today. Two date defects, the second of which
+reaches billing.
+
+- **The queue showed the entire future.** `expected_arrival_at` was filtered with an
+  open-ended `gte` and no upper bound, so every future expected load sat on the
+  operator's queue — 14 rows on the day this was found, of which 1 was actually
+  today's. It is now bounded to the current Pacific day only: no historical, no
+  future (operator directive, 2026-07-28).
+- **The day boundary was UTC, not Pacific.** The lower bound was
+  `new Date().setHours(0,0,0,0)` — server-local midnight — and the deployed
+  container runs with no `TZ` set (UTC), while both sites are Pacific. Between
+  5 PM and midnight Pacific the UTC day has already rolled, so the queue silently
+  switched to **tomorrow mid-shift**, hiding the loads the evening crew was working.
+  Now uses `pacificDayStartInstant`, the same DST-correct boundary `onHand`'s inbound
+  window, `bulk-inbound`, the MyMRC bridge and the floor-confirm path already key on —
+  so the iPad's "today" is byte-identical to what billing counts.
+- **`pacificDayStartInstantPlus` was broken on the DST fall-back day — a money-path
+  bug found by the test written for the above.** It stepped `days * 86_400_000` and
+  re-snapped to Pacific midnight; on a 25-hour fall-back day (next: 2026-11-01)
+  base + 24h lands at 23:00 PST, still inside the SAME Pacific day, so the re-snap
+  returned the base instant and `pacificDayStartInstantPlus(1)` produced a
+  **zero-width window** (measured: 0h instead of 25h; spring-forward happened to be
+  correct at 23h, which is why it went unnoticed). It now steps on the Pacific
+  calendar, which cannot be perturbed by an offset. Affected callers:
+  `src/lib/invoices/generation-inputs.ts:99` (the **invoice generation window** — a
+  zero-width `lt` bound drops every row in range), the manager loads date filters
+  (`dashboard/[site]/loads/page.tsx`), and the new queue window.
+- Tests: `src/app/operator/[site]/queue/queue-window.test.ts` (6 — incl. the 6 PM
+  Pacific evening-shift case the old code got wrong) and 4 new cases in
+  `src/lib/time.test.ts` pinning 25h/23h/24h spans, backward stepping across the
+  fall-back boundary, and midnight-landing for every offset.
+
+
 ### Added — 2026-07-28 (equipment master seeded — the AP approval picker finally has options — ADR-0062)
 
 The AP Approve panel's equipment multi-select was backed by an **empty table**. All 12

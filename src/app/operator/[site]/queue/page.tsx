@@ -9,15 +9,18 @@ import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
 import { SignOutButton } from './sign-out-button';
 import { HOME_ROUTE } from '@/lib/routes';
+import { pacificDayStartInstant, pacificDayStartInstantPlus } from '@/lib/time';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
 // list of in-window inbound hauls for the operator's site, ordered
 // by expected arrival. Auto-refresh + pull-to-refresh are wired in
 // the `QueueClient` wrapper.
 //
-// "In-window" = arriving today or any later date that hasn't been
-// cancelled, plus anything that arrived earlier today and hasn't yet
-// been started. T-006 wires the load workflow that converts an
+// "In-window" = the CURRENT PACIFIC DAY ONLY, uncancelled (revised
+// 2026-07-28 — it previously meant "today or any later date", which put
+// the whole future on the queue). The iPad shows no historical and no
+// future hauls; see the window comment below for the Pacific-boundary
+// correctness reason. T-006 wires the load workflow that converts an
 // `ExpectedLoad` into an `InboundLoad`; until then "started" loads
 // just sit on the queue.
 //
@@ -47,14 +50,34 @@ export default async function OperatorQueuePage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  // The iPad shows the CURRENT PACIFIC DAY ONLY — no historical, no future
+  // (operator directive 2026-07-28, as the floor went live on this surface).
+  //
+  // Two defects are corrected here, and the second one is the load-bearing part:
+  //
+  //  1. The window was open-ended (`gte` with no upper bound), so every future
+  //     expected load sat on the queue — 14 rows on the day this was found, of
+  //     which 1 was actually today's.
+  //
+  //  2. The day boundary was `new Date().setHours(0,0,0,0)` — SERVER-LOCAL
+  //     midnight. The app container runs with no TZ set (UTC), and both sites
+  //     are Pacific. So between 5 PM and midnight Pacific, UTC has already
+  //     rolled over and the queue silently switched to TOMORROW mid-shift,
+  //     hiding the loads the evening crew was actually working.
+  //
+  // `pacificDayStartInstant` is the same DST-correct boundary `onHand`'s inbound
+  // window, `bulk-inbound`, the MyMRC bridge, and the floor-confirm path already
+  // key on — so the iPad's "today" is byte-identical to what billing counts.
+  // Do NOT reintroduce a second day-key definition here.
+  const windowAt = new Date();
+  const startOfTodayPT = pacificDayStartInstant(windowAt);
+  const startOfTomorrowPT = pacificDayStartInstantPlus(1, windowAt);
 
   const loads = await prisma.expectedLoad.findMany({
     where: {
       site_id: site.id,
       cancelled_at: null,
-      expected_arrival_at: { gte: startOfToday },
+      expected_arrival_at: { gte: startOfTodayPT, lt: startOfTomorrowPT },
     },
     select: {
       id: true,
