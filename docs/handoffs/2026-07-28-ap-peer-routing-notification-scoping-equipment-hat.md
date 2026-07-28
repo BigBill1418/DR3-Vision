@@ -770,3 +770,106 @@ Once the connect flow ships and Bill signs in, he shares one file with `docs-dr3
 7. An `audit_log` row records the before/after
 
 **That chain working end-to-end on one real file is the Phase 3 acceptance test.**
+
+
+
+
+---
+
+## Amendment B — 2026-07-28 (later) — Overlap reconciliation: §2.1 RETIRED, ADR renumber, C-27 folded into the escape hatch
+
+**Why this exists:** between the original push of this handoff and execution, work shipped on `main` that **overlaps §2 and takes the ADR number §3 was going to use.** Bill caught it before Claude Code ran, so nothing was built twice. This amendment reconciles the handoff against the shipped state.
+
+**Verified against repo state `2026-07-28T22:43Z` (173 docs).**
+
+### §B.1 — What shipped on 2026-07-28 that overlaps this handoff
+
+**ADR-0062 — equipment master seeded (SHIPPED).**
+
+The `equipment` table was **empty**. All 12 `ap_equipment_links` rows written since AP go-live are `is_not_equipment_related=true` — not because those invoices were non-equipment, but because approvers had nothing to pick. Seeded from `DR3 Machine List (2).xlsx` (file-drop `580024f8`, sha256 `4ffff995…`):
+
+- **554 rows live in prod** — eugene 413, woodland 141; 521 active / 33 inactive
+- Categories: 459 vehicle, 39 forklift, 19 baler, 4 terex, 33 other
+- Site mapping is **by jurisdiction** (California → `woodland`, everything else → `eugene`) — deliberately coarse, operator-directed, tracked as **C-28**
+- Seeder: `scripts/seed-equipment-master.mjs`, idempotent on `(site_id, display_name)`, audited; re-run verified 0 created / 554 unchanged
+
+**ADR-0046 Amendment 7 — equipment selector is fleet-wide (SHIPPED).**
+
+Site filtering removed from **both** `listSiteEquipment` and `assertEquipmentForSite`, moved together with a test asserting "every option the picker returns passes the validator." Reasoning recorded there is sharper than this handoff's: the registry has no trustworthy site attribution to filter on, so filtering *hid the very asset the approver was looking at*. `assertEquipmentForSite` remains a real trust boundary — ids must exist and be active; only the site predicate was dropped. Picker now offers ~521 active options.
+
+### §B.2 — §2.1 IS RETIRED. Do not execute it.
+
+**Both halves of §2.1 are already done.** Claude Code must NOT:
+
+- Search `/admin/file-drop` for an equipment list — **it was found, parsed, and seeded.** File `580024f8` is consumed.
+- Ask Bill to confirm which file to import — **already confirmed and imported.**
+- Re-run or re-implement equipment seeding — `scripts/seed-equipment-master.mjs` exists and is idempotent. Re-running it is a no-op, but there is no reason to.
+- Remove the site filter from the equipment selector — **Amendment 7 already did**, on both the picker and the validator.
+- Record a site-filter deviation in the amendment history — **Amendment 7 already recorded it.**
+
+§6 Phase 2 items 11 and 12 are struck. Phase 2 begins at item 13 (the `ap_equipment_requests` migration).
+
+### §B.3 — ADR number: the doc-ingestion ADR is **0063**, not 0062
+
+`docs/adr/0062-equipment-master-seed-and-site-mapping.md` exists. The main handoff §6 item 18 anticipated this ("take the next free number if 0062 is claimed") — it is claimed.
+
+**Author `docs/adr/0063-shared-file-document-ingestion.md`.** Verify 0063 is still free at draft time and take the next free number if not; numbers are never reserved.
+
+### §B.4 — C-27 changes the escape-hatch resolution design (§2.5)
+
+**§2.5 as written assumes a surface that does not exist.** It says *"Resolve opens the standard equipment-creation form pre-filled with the description as a hint."* There is no such form.
+
+**C-27 (open):** the AP code calls the equipment registry "admin-managed" and `/api/ops/ap/equipment` is read-only because "creation is admin-only" — **but the admin create/edit screen was never built.** The only route under `/api/admin/equipment` is the Terex *history* importer (`equipment_events`, a different table). The 554-row roster was seeded by script, so **every future fleet change — new truck, scrapped trailer, re-categorised machine — currently requires another script run against prod.**
+
+That is unsustainable independent of this handoff, and the escape-hatch resolution flow is the natural place to solve it.
+
+**Revised §2.5:** build the missing create/edit capability as part of the resolution flow.
+
+- **`/admin/equipment`** — list, create, edit, deactivate against the `equipment` table. Fields matching what the seeder writes: `display_name`, `category` (vehicle | forklift | baler | terex | other), `site_id`, `is_active`. Audited on every mutation, consistent with `actor_label` discipline.
+- **Resolving an `ap_equipment_requests` row** opens that create form pre-filled from the approver's free-text description, creates the real asset, sets `resolved_equipment_id`, stamps `resolved_by`/`resolved_at`.
+- **Backfill link is unchanged and remains the payoff** — on resolution, offer to repoint the original `ap_equipment_links` row at the newly-created `equipment_id`, so the historical invoice ends up correctly attributed.
+- **Deactivate, never hard-delete.** Inactive rows must remain resolvable for historical link integrity — the seeder already keeps 33 inactive rows for exactly this reason.
+- Mark **C-27 closed** when `/admin/equipment` ships.
+
+**Do NOT attempt to fix C-28 here.** The coarse jurisdiction site mapping is a known, operator-accepted state with an open question about which Eugene-Oregon facility is the actual DR3 Eugene operation. Out of scope; leave it tracked.
+
+### §B.5 — §1 is NOT duplicated, and the CHANGELOG confirms the root-cause hypothesis
+
+Nothing shipped has touched second-approval routing, notification scoping, or the digest. §1 stands in full.
+
+The Amendment 5 D-M5-3 CHANGELOG entry **independently confirms §1.2's hypothesis** — both halves, in the same entry:
+
+> **Authorization is server-side only.** Eligible = admin role OR an active `ap_second_approvers` row for the decision's site.
+
+> **Notification:** `notifySecondApprovalNeeded` … emails the routed second approver through the `ap_notify` pilot gate … **Fail-soft — never fails the first approval.**
+
+> **Operator handoff:** provision Shannon Rockwell — insert an `ap_second_approvers` row … **Bill/Woodland needs no row; admin-eligibility** covers it.
+
+Authorization accepts admin-eligibility. Notification resolves the roster. Woodland has no roster row **by design**. The recipient set resolves empty, and because the path is **fail-soft**, it never raised an error — it silently sent nothing, every time.
+
+**The named function is `notifySecondApprovalNeeded`** — start §1.3 Check C there.
+
+This also sharpens the §1.4 fix requirement: the shared resolver must be what *both* `decideSecondApproval`'s eligibility check and `notifySecondApprovalNeeded`'s recipient lookup consume. Fail-soft is correct behavior for a notification (a paging failure must not roll back an approval) — but fail-soft over an *empty recipient set* is indistinguishable from success. **The resolver must treat an empty recipient set as an error condition and page `dr3-vision-system`, even though the notification itself stays fail-soft.**
+
+### §B.6 — Also shipped 2026-07-28 (no overlap, context only)
+
+- **Operator queue: current Pacific day only, plus a DST money-path bug.** `pacificDayStartInstantPlus` produced a **zero-width window** on the fall-back day (next: 2026-11-01), affecting `src/lib/invoices/generation-inputs.ts:99` — the **invoice generation window**. Fixed by stepping on the Pacific calendar. Relevant here only as precedent: **use the existing `pacificDayStartInstant` helpers** for the §1.5 weekday clock and the §1.7 digest window rather than any new date arithmetic.
+- **Admin user list keeps its view across create/edit (ADR-0017).** No overlap.
+
+### §B.7 — Net revised scope
+
+| Section | Status |
+|---|---|
+| §1 — AP peer routing, notification scoping, 6am digest | **Unchanged, in full.** Urgent. |
+| §2.1 — equipment master + site filter | **RETIRED.** Shipped as ADR-0062 + Amendment 7. |
+| §2.2–§2.4, §2.6 — escape hatch, alert, dashboard count | **Unchanged.** |
+| §2.5 — resolution surface | **Revised per §B.4** — now also builds `/admin/equipment`, closing C-27. |
+| §3 — document ingestion | **Unchanged**, ADR renumbered to **0063**. |
+| §4 — Eugene mirror investigation | **Unchanged.** Investigation only, escalate on the Woodland-contamination finding. |
+| Amendment A — Entra provisioning | **Unchanged.** Phase 3 remains ungated. |
+
+**Bill's directive (2026-07-28): execute all four sections.**
+
+### §B.8 — Standing instruction
+
+This is the second time in one session that shipped work overlapped a queued handoff. **Before executing any phase, re-read `CHANGELOG.md` and `docs/OPEN-ITEMS.md` on current `main` and confirm the phase has not already shipped.** Where a handoff and shipped code disagree, **shipped code wins** — report the divergence rather than reverting it.
