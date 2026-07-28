@@ -3749,6 +3749,13 @@ model Equipment {
 
   links ApEquipmentLink[]
 
+  /// ADR-0063 D3 — `(site_id, display_name)` is the natural key. It is what
+  /// `scripts/seed-equipment-master.mjs` (ADR-0062) keys its idempotency on, and
+  /// what keeps two indistinguishable options out of the AP approver's picker.
+  /// Deliberately UNCONDITIONAL (covers `is_active=false` rows): equipment has no
+  /// `deleted_at`, deactivated rows are retained so historical `ap_equipment_links`
+  /// resolve, and a returning asset should be REACTIVATED rather than re-created.
+  @@unique([site_id, display_name])
   @@index([site_id, is_active])
   @@map("equipment")
 }

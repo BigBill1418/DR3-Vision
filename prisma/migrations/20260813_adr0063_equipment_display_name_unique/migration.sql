@@ -1,0 +1,33 @@
+-- ADR-0063 D3 — make `(site_id, display_name)` unique on the equipment master.
+--
+-- PURELY ADDITIVE / CLEAN-REPLAY SAFE (ADR-0035 invariant: replays on an empty PG16).
+-- No columns are added or altered, so the TEXT-vs-UUID id/FK hazard does not apply here.
+--
+-- WHY: `scripts/seed-equipment-master.mjs` (ADR-0062) keys its idempotency on exactly
+-- this pair — a re-run against a refreshed workbook does `findFirst({ site_id,
+-- display_name })` and updates in place, or inserts when absent. That contract was a
+-- CONVENTION held only by the one script. The moment the ADR-0063 admin UI lets a human
+-- create rows, a duplicate name within a site would make the next seed re-run insert a
+-- THIRD copy rather than update, and would put two indistinguishable options in the AP
+-- approver's picker — where the pick becomes financial-approval evidence. Promoting the
+-- convention to a DB constraint is what makes the seed script's idempotency real.
+--
+-- The application layer (`src/lib/admin-equipment.ts`) also pre-checks and returns a
+-- readable 409, but a check-then-act pre-check races under concurrent creates; this index
+-- is the actual guarantee and the app catches its P2002 as the same `name_taken` reason.
+--
+-- SCOPE / DEACTIVATED ROWS: the index is UNCONDITIONAL — it deliberately covers inactive
+-- rows too. Equipment has no `deleted_at`; `is_active=false` is the soft delete, and the
+-- row is retained precisely so historical `ap_equipment_links` still resolve. A partial
+-- index `WHERE is_active` would let an admin create a live duplicate of a deactivated
+-- asset, which is exactly the ambiguity the seed script's key is meant to prevent. The
+-- correct operator action for a returning asset is to REACTIVATE it, and the UI's
+-- `name_taken` copy says so.
+--
+-- SAFETY: verified against production (svdp-dev `dr3_vision`) on 2026-07-28 immediately
+-- before writing this migration — 554 rows, ZERO duplicate `(site_id, display_name)`
+-- groups. This migration therefore cannot fail on `prisma migrate deploy`, which matters
+-- because the deploy path runs migrations at container start: a constraint violation here
+-- would crash-loop the app, not just fail a step.
+CREATE UNIQUE INDEX IF NOT EXISTS "equipment_site_id_display_name_key"
+  ON "equipment" ("site_id", "display_name");

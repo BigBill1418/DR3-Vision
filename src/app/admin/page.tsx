@@ -61,6 +61,13 @@ const TILES = [
     testid: 'admin-tile-workbook',
   },
   {
+    href: '/admin/equipment',
+    label: 'Equipment master',
+    description:
+      'The asset registry the AP approver picks from (ADR-0063). Site-scoped; deactivate to remove from the picker.',
+    testid: 'admin-tile-equipment',
+  },
+  {
     href: '/admin/equipment/import',
     label: 'Terex history import',
     description: "Import Janette's Terex spreadsheet into the equipment log (ADR-0048 D3).",
