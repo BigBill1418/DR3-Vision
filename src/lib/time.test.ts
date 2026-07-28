@@ -129,4 +129,39 @@ describe('weekend + instant boundaries', () => {
     const next = pacificDayStartInstantPlus(1, new Date('2026-06-05T21:00:00Z'));
     expect(next.toISOString()).toBe('2026-06-06T07:00:00.000Z');
   });
+
+  // REGRESSION (2026-07-28): the old `base + days*86_400_000` + re-snap
+  // implementation returned the BASE INSTANT on the DST fall-back day — a
+  // 25-hour Pacific day, where +24h is still inside the same day. That made
+  // `pacificDayStartInstantPlus(1)` a ZERO-WIDTH window, which would have
+  // silently emptied the invoice generation window
+  // (`lib/invoices/generation-inputs.ts`), the manager loads date filters, and
+  // the operator queue on 2026-11-01.
+  it('spans a full 25h across the DST fall-back day (was 0h)', () => {
+    const noon = new Date('2026-11-01T19:00:00Z');
+    const start = pacificDayStartInstant(noon);
+    const next = pacificDayStartInstantPlus(1, noon);
+    expect(next.getTime() - start.getTime()).toBe(25 * 3_600_000);
+    expect(next.getTime()).toBeGreaterThan(start.getTime());
+  });
+
+  it('spans 23h across the DST spring-forward day', () => {
+    const noon = new Date('2026-03-08T19:00:00Z');
+    const start = pacificDayStartInstant(noon);
+    const next = pacificDayStartInstantPlus(1, noon);
+    expect(next.getTime() - start.getTime()).toBe(23 * 3_600_000);
+  });
+
+  it('steps backwards correctly across the fall-back boundary', () => {
+    const to = pacificDayStartInstantPlus(1, new Date('2026-11-04T19:00:00Z'));
+    expect(pacificDayISO(pacificDayStartInstantPlus(-7, to))).toBe('2026-10-29');
+  });
+
+  it('always lands on Pacific midnight for any offset', () => {
+    const base = new Date('2026-10-30T19:00:00Z');
+    for (const d of [-30, -7, -1, 0, 1, 7, 30]) {
+      const at = pacificDayStartInstantPlus(d, base);
+      expect(at.getTime()).toBe(pacificDayStartInstant(at).getTime());
+    }
+  });
 });
