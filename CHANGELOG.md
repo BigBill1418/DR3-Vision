@@ -5,6 +5,42 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-28 (equipment master seeded — the AP approval picker finally has options — ADR-0062)
+
+The AP Approve panel's equipment multi-select was backed by an **empty table**. All 12
+`ap_equipment_links` rows written since AP go-live are `is_not_equipment_related=true` — not
+because the invoices were non-equipment, but because approvers had **nothing to pick**. The AP
+code calls the registry "admin-managed", but no create surface was ever built, so there was no
+path (UI or API) to populate it.
+
+Seeded from `DR3 Machine List (2).xlsx` (file-drop `580024f8`, sha256 `4ffff995…`) — the
+SVdP-wide fleet register, 554 assets across 35 locations.
+
+- **554 equipment rows live in prod** — eugene 413, woodland 141; 521 active / 33 inactive.
+  By category: 459 vehicle, 39 forklift, 19 baler, 4 terex (shear machines, incl. Woodland's
+  `EQ74`), 33 other. Verified: 554 rows, 554 matching `audit_log` rows.
+- **Site mapping is by JURISDICTION** (the charter's own axis): California → `woodland`,
+  everything else → `eugene`. The workbook has **no `DR3 Eugene` facility** and only 21
+  `DR3 Woodland` rows, so this is deliberately coarse and operator-directed ("load all of this
+  in for all sites — just no better way for now"). It is **not** a claim that Cleveland
+  Warehouse is DR3 Eugene. Tracked as C-28; see ADR-0062 for the full reasoning.
+- **Stockton assets load without violating hard rule #1** — the `equipment` model has no
+  location column, so no location text is persisted for any row and the string "Stockton"
+  never enters a stored or rendered value. Satisfied by construction, not by dropping assets.
+- **Normalization:** `display_name` = `"<Unit #> — <Make> <Type>"` with `(#n)` suffixes for the
+  5 repeating unit numbers; 91 blank-Type rows resolved via Make (Great Dane/Fruehauf/Strick =
+  trailers, Freightliner/Volvo = tractors) and `F##` → forklift, leaving **29 genuinely unknown
+  rows as `other`** rather than guessing; Scrapped/Sold/Inactive/Out-of-Service/Transferred →
+  `is_active=false` (kept for historical link resolution, filtered out of the picker).
+  Ownership (Owned/Leased/Rented) is not persisted — no column, not an approval-time attribute.
+- **`scripts/seed-equipment-master.mjs`** — one-shot, idempotent (keyed on
+  `(site_id, display_name)`), audited (`actor_label='system:equipment-seed'`, source sha in the
+  `after` payload). Re-run verified: 0 created, 554 unchanged. Parse and write are split
+  (`--emit-json` / `--json`) because the deployed standalone image ships `@prisma/client` but
+  not `exceljs`.
+- **Still open:** there is no admin UI to maintain this registry (**C-27**) — every future fleet
+  change needs another script run until `/admin/equipment` ships.
+
 ### Fixed — 2026-07-28 (admin user list keeps its view across create/edit — ADR-0017)
 
 Creating a user from a site-filtered user list no longer throws the admin back to the unfiltered
