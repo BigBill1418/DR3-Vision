@@ -5,6 +5,37 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-28 (admin user list keeps its view across create/edit — ADR-0017)
+
+Creating a user from a site-filtered user list no longer throws the admin back to the unfiltered
+all-users list, and no longer defaults the new user to the wrong site. Reported from the real
+workflow: filter `/admin/users` to Woodland → **+ Add user** → save → land on the list of ALL users.
+
+- **Post-save navigation preserves the working view.** `UserCreateForm` pushed a hard-coded
+  `/admin/users` on save and on cancel, discarding the `?site=&role=&status=` filters that ARE the
+  list's state (ADR-0017 already specified URL-driven filters; the create round trip just never
+  carried them). Save/cancel now return to the exact filtered list. Same fix applied to the edit
+  form's cancel and to both back-links.
+- **The site select now defaults to the site you were filtered to.** It seeded from `sites[0]`,
+  and because sites are ordered by name, `DR3 Eugene` sorts before `DR3 Woodland` — so `sites[0]`
+  was _always_ Eugene. An operator created from a Woodland-scoped list was born in Eugene unless
+  the admin noticed and flipped the select, which crosses the Eugene/Woodland separation line
+  (CLAUDE.md hard rule #2) and puts the operator on the wrong name-picker with PIN-uniqueness
+  checked against the wrong peer set. **No bad data resulted** — a prod audit of every user row
+  found no wrong-site user; the three Woodland operators created 2026-07-28 all landed correctly.
+  This closes the footgun before it bit.
+- **New shared serializer** `src/app/admin/users/list-url.ts` (`pickUsersListParams` /
+  `buildUsersListHref` / `withUsersListQuery`) is now the single parser + serializer for the list's
+  view state, used by the list, create and edit surfaces. Params are **whitelisted** to
+  `site|role|status`, so nothing else rides the round trip into a `router.push`.
+- **Scoping note:** this is a UX/data-entry fix, not a leak. `/admin/users` is gated by
+  `requireAdmin()` (admin powers, not the `all_sites` reach check), so the only viewer of the
+  all-users list was already a global-reach admin.
+- **Tests:** `src/app/admin/users/list-url.test.ts` (11 cases — round trips, default-status
+  omission, whitelist) and `src/app/admin/users/new/UserCreateForm.test.tsx` (8 cases — Woodland
+  default, `sites[0]` fallback, POSTed `primary_site_id`, filtered-list redirect, no-navigate on
+  save failure). No schema change, no API change.
+
 ### Fixed — 2026-07-25 (iPad / floor surface i18n parity — ADR-0061)
 
 Makes the existing en/es/ur translations actually REACHABLE for floor PIN operators. The iPad already

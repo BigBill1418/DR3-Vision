@@ -15,9 +15,14 @@ import { adminMessages as M } from '@/app/admin/messages';
 
 interface Props {
   users: AdminUserDto[];
+  /**
+   * The list's current filters as a bare query string, appended to the Edit
+   * link so the edit page can hand the admin back to this same view.
+   */
+  listQuery?: string;
 }
 
-export function UserListClient({ users }: Props) {
+export function UserListClient({ users, listQuery = '' }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +148,9 @@ export function UserListClient({ users }: Props) {
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     <Link
-                      href={`/admin/users/${u.id}`}
+                      href={
+                        listQuery ? `/admin/users/${u.id}?${listQuery}` : `/admin/users/${u.id}`
+                      }
                       className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-1 text-xs text-dr3-mist hover:border-dr3-cyan/40 hover:text-dr3-cyan"
                       data-testid={`admin-user-edit-${u.id}`}
                     >
