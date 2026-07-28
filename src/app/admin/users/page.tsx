@@ -13,26 +13,20 @@ import { checkAdmin } from '@/lib/auth-helpers';
 import { listUsers, type AdminUserDto } from '@/lib/admin-users';
 import { adminMessages as M } from '@/app/admin/messages';
 import { UserListClient } from './UserListClient';
+import {
+  ROLES,
+  buildUsersListHref as buildHref,
+  buildUsersListQuery,
+  pickUsersListParams,
+  withUsersListQuery,
+  type RoleFilter,
+  type StatusFilter,
+  type UsersListSearchParams,
+} from './list-url';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = Promise<{
-  site?: string;
-  role?: string;
-  status?: string;
-}>;
-
-const ROLES = ['operator', 'manager', 'admin'] as const;
-const STATUSES = ['active', 'inactive', 'all'] as const;
-type RoleFilter = (typeof ROLES)[number];
-type StatusFilter = (typeof STATUSES)[number];
-
-function parseRole(v: string | undefined): RoleFilter | undefined {
-  return v && (ROLES as readonly string[]).includes(v) ? (v as RoleFilter) : undefined;
-}
-function parseStatus(v: string | undefined): StatusFilter {
-  return v && (STATUSES as readonly string[]).includes(v) ? (v as StatusFilter) : 'active';
-}
+type SearchParams = Promise<UsersListSearchParams>;
 
 export default async function AdminUsersPage({ searchParams }: { searchParams: SearchParams }) {
   const gate = await checkAdmin();
@@ -47,9 +41,16 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
     orderBy: { name: 'asc' },
   });
   const siteByCode = new Map(sites.map((s) => [s.code, s]));
-  const siteFilter = sp.site ? siteByCode.get(sp.site) : undefined;
-  const roleFilter = parseRole(sp.role);
-  const statusFilter = parseStatus(sp.status);
+  const view = pickUsersListParams(sp);
+  const siteFilter = view.site ? siteByCode.get(view.site) : undefined;
+  const roleFilter = view.role;
+  const statusFilter = view.status;
+
+  // The view state the create/edit round trip must carry and hand back, so
+  // saving a user returns the admin to the list they were working in rather
+  // than the unfiltered all-users list. `site` is normalised to the resolved
+  // code so an unknown ?site= doesn't ride along.
+  const listQuery = buildUsersListQuery({ ...view, site: siteFilter?.code });
 
   const users = await listUsers({
     siteId: siteFilter?.id,
@@ -81,7 +82,10 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
                 {M.audit.navLink}
               </Link>
               <Link
-                href="/admin/users/new"
+                href={withUsersListQuery('/admin/users/new', {
+                  ...view,
+                  site: siteFilter?.code,
+                })}
                 className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright"
                 data-testid="admin-add-user"
               >
@@ -98,7 +102,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: S
           status={statusFilter}
         />
 
-        <UserListClient users={users} />
+        <UserListClient users={users} listQuery={listQuery} />
       </div>
     </main>
   );
@@ -198,19 +202,6 @@ function FilterLink({
       {children}
     </Link>
   );
-}
-
-function buildHref(params: {
-  site: string | undefined;
-  role: RoleFilter | undefined;
-  status: StatusFilter;
-}): string {
-  const sp = new URLSearchParams();
-  if (params.site) sp.set('site', params.site);
-  if (params.role) sp.set('role', params.role);
-  if (params.status !== 'active') sp.set('status', params.status);
-  const qs = sp.toString();
-  return qs ? `/admin/users?${qs}` : '/admin/users';
 }
 
 function capitalize(s: string): string {

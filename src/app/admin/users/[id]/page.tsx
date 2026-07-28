@@ -7,14 +7,16 @@ import { checkAdmin } from '@/lib/auth-helpers';
 import { getUser } from '@/lib/admin-users';
 import { adminMessages as M } from '@/app/admin/messages';
 import { UserEditForm } from './UserEditForm';
+import { buildUsersListHref, pickUsersListParams, type UsersListSearchParams } from '../list-url';
 
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<UsersListSearchParams>;
 }
 
-export default async function EditUserPage({ params }: PageProps) {
+export default async function EditUserPage({ params, searchParams }: PageProps) {
   const { id } = await params;
   const gate = await checkAdmin();
   if (!gate.ok) {
@@ -33,12 +35,19 @@ export default async function EditUserPage({ params }: PageProps) {
 
   const isSelf = gate.ok && gate.ctx.userId === user.id;
 
+  // Return the admin to the filtered list they came from, not the bare one.
+  const view = pickUsersListParams(await searchParams);
+  const backHref = buildUsersListHref({
+    ...view,
+    site: view.site && sites.some((s) => s.code === view.site) ? view.site : undefined,
+  });
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-2xl flex-col gap-8">
         <header className="flex flex-col gap-1">
           <Link
-            href="/admin/users"
+            href={backHref}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
             ← {M.pageTitle}
@@ -48,7 +57,7 @@ export default async function EditUserPage({ params }: PageProps) {
             {user.name} <span className="capitalize">({user.role})</span>
           </p>
         </header>
-        <UserEditForm user={user} sites={sites} isSelf={isSelf} />
+        <UserEditForm user={user} sites={sites} isSelf={isSelf} backHref={backHref} />
       </div>
     </main>
   );

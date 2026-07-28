@@ -25,9 +25,11 @@ interface Props {
   user: AdminUserDto;
   sites: SiteOption[];
   isSelf: boolean;
+  /** Where cancel returns to — the list with the admin's filters applied. */
+  backHref?: string;
 }
 
-export function UserEditForm({ user, sites, isSelf }: Props) {
+export function UserEditForm({ user, sites, isSelf, backHref = '/admin/users' }: Props) {
   const router = useRouter();
 
   const [name, setName] = useState(user.name);
@@ -282,7 +284,7 @@ export function UserEditForm({ user, sites, isSelf }: Props) {
           </button>
           <button
             type="button"
-            onClick={() => router.push('/admin/users')}
+            onClick={() => router.push(backHref)}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             data-testid="admin-edit-cancel"
           >

@@ -20,14 +20,28 @@ type Role = 'operator' | 'manager' | 'admin';
 
 interface Props {
   sites: SiteOption[];
+  /**
+   * Where save/cancel return to — the user list *with the admin's filters
+   * still applied*. Defaults to the bare list for callers that have no view
+   * state to preserve.
+   */
+  backHref?: string | undefined;
+  /**
+   * Site code the list was filtered to, if any. Seeds the site select so
+   * creating a user from a Woodland-scoped list defaults to Woodland
+   * instead of the alphabetically-first site (Eugene).
+   */
+  initialSiteCode?: string | undefined;
 }
 
-export function UserCreateForm({ sites }: Props) {
+export function UserCreateForm({ sites, backHref = '/admin/users', initialSiteCode }: Props) {
   const router = useRouter();
   const [name, setName] = useState('');
   const [role, setRole] = useState<Role>('operator');
   const [email, setEmail] = useState('');
-  const [siteId, setSiteId] = useState<string>(sites[0]?.id ?? '');
+  const [siteId, setSiteId] = useState<string>(
+    () => sites.find((s) => s.code === initialSiteCode)?.id ?? sites[0]?.id ?? '',
+  );
   const [processorRole, setProcessorRole] = useState<string>('');
   const [allSites, setAllSites] = useState(false);
   const [canManageRates, setCanManageRates] = useState(false);
@@ -92,7 +106,7 @@ export function UserCreateForm({ sites }: Props) {
         setError(body.error ?? M.errors.serverError);
         return;
       }
-      router.push('/admin/users');
+      router.push(backHref);
       router.refresh();
     } finally {
       setPending(false);
@@ -285,7 +299,7 @@ export function UserCreateForm({ sites }: Props) {
         </button>
         <button
           type="button"
-          onClick={() => router.push('/admin/users')}
+          onClick={() => router.push(backHref)}
           className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           data-testid="admin-create-cancel"
         >

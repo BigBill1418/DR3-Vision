@@ -40,16 +40,16 @@ surface, gated to `role='admin'` at three layers:
 
 ### Routes
 
-| Path                     | Method  | Purpose                                  |
-| ------------------------ | ------- | ---------------------------------------- |
-| `/admin`                 | GET     | redirect → `/admin/users`                |
-| `/admin/users`           | GET     | list (filters via `?site=&role=&status=`) |
-| `/admin/users/new`       | GET     | create form                              |
-| `/admin/users/[id]`      | GET     | edit form (incl. PIN reset, deactivate)  |
-| `/api/admin/users`       | POST    | create                                   |
-| `/api/admin/users`       | GET     | list (JSON)                              |
-| `/api/admin/users/[id]`  | PATCH   | discriminated union (see below)          |
-| `/api/admin/users/[id]`  | DELETE  | alias for `{action:'deactivate'}`        |
+| Path                    | Method | Purpose                                   |
+| ----------------------- | ------ | ----------------------------------------- |
+| `/admin`                | GET    | redirect → `/admin/users`                 |
+| `/admin/users`          | GET    | list (filters via `?site=&role=&status=`) |
+| `/admin/users/new`      | GET    | create form                               |
+| `/admin/users/[id]`     | GET    | edit form (incl. PIN reset, deactivate)   |
+| `/api/admin/users`      | POST   | create                                    |
+| `/api/admin/users`      | GET    | list (JSON)                               |
+| `/api/admin/users/[id]` | PATCH  | discriminated union (see below)           |
+| `/api/admin/users/[id]` | DELETE | alias for `{action:'deactivate'}`         |
 
 ### PATCH discriminated union
 
@@ -67,7 +67,7 @@ A single transaction-per-mutation pattern in
 
 - `listUsers(filters)` — SELECT + JOIN to primary_site for the code.
 - `createUser(input, actor)` — `prisma.$transaction([User.create,
-  AuditLog.create])`. If the user is an operator, follows up with a
+AuditLog.create])`. If the user is an operator, follows up with a
   `setPin()` call (which writes its own audit row); on PIN failure
   the row is soft-deleted in a compensating transaction.
 - `updateUser`, `resetUserPin`, `deactivateUser`, `reactivateUser` —
@@ -173,6 +173,40 @@ is implicit (managers/admins always sign in via SSO post-Wave-A).
   mocked Prisma + auth). 29 cases total. The API tests exercise
   real Argon2id PIN hashing — the operator collision path is
   validated against a real-hash peer.
+
+## Amendment 1 — 2026-07-28: the list query string round-trips
+
+The "filters via `?site=&role=&status=`" contract in the Routes table above
+was only half-implemented. The list read the params, but every navigation
+away from it and back was a bare path — so create/edit silently reset the
+admin's working view to the unfiltered all-users list.
+
+Now normative:
+
+- **`src/app/admin/users/list-url.ts` is the single serializer + parser** for
+  the list's view state. The list page, `/admin/users/new` and
+  `/admin/users/[id]` all use it. Do not hand-roll a second one, and do not
+  push a bare `/admin/users` from a surface the admin navigated to FROM the
+  list.
+- **`/admin/users/new` and `/admin/users/[id]` accept the same three params**
+  and hand them back on save, cancel and the header back-link.
+- Params are **whitelisted** to `site|role|status` on the way through — the
+  create/edit pages feed what they were given into a `router.push`, so an
+  arbitrary pass-through would let an unexpected key ride the round trip.
+- **The create form's site select seeds from the `?site=` filter.** It
+  previously defaulted to `sites[0]`, which — with `orderBy: { name: 'asc' }`
+  and the seeded names `DR3 Eugene` / `DR3 Woodland` — was _always_ Eugene.
+  Creating from a Woodland-scoped list produced a Eugene user unless the
+  admin caught it. That is a hard-rule-#2 site-separation hazard, not a
+  cosmetic default: it lands the operator on the wrong name-picker and runs
+  the PIN-uniqueness check (`admin-users.ts` `setPin`, per-site) against the
+  wrong peer set. A prod audit at the time of the fix found no wrong-site
+  rows — the footgun was closed before it caused bad data.
+- Row actions (deactivate/reactivate) and edit **save** were already correct:
+  they use `router.refresh()` and never navigate, so the URL survives.
+
+Tests: `src/app/admin/users/list-url.test.ts`,
+`src/app/admin/users/new/UserCreateForm.test.tsx`.
 
 ## References
 
