@@ -12,7 +12,7 @@ import { tryBonusAccess } from '@/lib/bonus/access';
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary } from '@/i18n/dictionary';
 import { I18nProvider } from '@/i18n/provider';
-import { BackToDashboardNav } from '@/app/_components/back-to-dashboard';
+import { ManagerChromeNav } from '@/app/_components/manager-chrome';
 import { SiteSwitchBanner } from './SiteSwitchBanner';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,7 @@ export default async function BonusLayout({ children }: { children: React.ReactN
 
   return (
     <I18nProvider locale={locale} dict={dict}>
-      <BackToDashboardNav />
+      <ManagerChromeNav />
       {showBanner ? <SiteSwitchBanner activeSite={gate.ctx.siteCode} /> : null}
       {children}
     </I18nProvider>

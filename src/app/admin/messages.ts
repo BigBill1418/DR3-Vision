@@ -14,6 +14,18 @@ export const adminMessages = {
   pageTitle: 'User management',
   pageSubtitle: 'Seed and manage operators, managers, and admins for both sites.',
   backToDashboard: 'Back to dashboard',
+
+  // ADR-0065 — app-chrome labels. /admin mounts no I18nProvider (ADR-0017,
+  // English-only), so the chrome takes explicit labels from here rather than
+  // `useT()`. When the eventual admin i18n pass happens these move with the
+  // rest of this table.
+  nav: {
+    backToDashboard: 'Dashboard',
+    backToDashboardAria: 'Back to dashboard',
+    signOut: 'Log out',
+    signOutAria: 'Log out of DR3-Vision',
+  },
+
   forbiddenHeading: '403 — admin only',
   forbiddenBody: 'This area is restricted to administrators.',
 

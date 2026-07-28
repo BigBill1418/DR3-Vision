@@ -1,9 +1,10 @@
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
-import Link from 'next/link';
 import { prisma } from '@/lib/prisma';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
+import { ChevronBackIcon, NavPillLink } from '@/app/_components/nav-pill';
+import { GREEN_TONE } from '../../_components/floor-tone';
 import { Keypad } from './keypad';
 
 export const dynamic = 'force-dynamic';
@@ -47,8 +48,8 @@ export default async function OperatorPinPage({ params }: Props) {
   const t = (k: string) => translate(dict, k);
 
   return (
-    <main className="min-h-screen bg-black px-6 pb-10 pt-20 text-white">
-      <div className="mx-auto flex max-w-md flex-col items-center gap-8">
+    <main className="px-6 pb-10">
+      <div className="mx-auto flex max-w-md flex-col items-center gap-8 pt-6">
         <header className="flex w-full items-center justify-between gap-4">
           <Image
             src="/brand/dr3-vision-logo.jpg"
@@ -68,12 +69,16 @@ export default async function OperatorPinPage({ params }: Props) {
 
         <Keypad userId={operator.id} siteCode={site.code} />
 
-        <Link
+        {/* ADR-0065 — kept (Bill's "Not you?" exit is the fastest way off a
+            wrong name) but restyled to the shared >=44px pill. FloorChrome also
+            offers a generic Back here; this one is the LABELLED intent. */}
+        <NavPillLink
           href={`/operator/${site.code}`}
-          className="text-sm text-white/60 underline-offset-4 hover:text-white hover:underline"
-        >
-          {t('keypad.switch_user')}
-        </Link>
+          label={t('keypad.switch_user')}
+          ariaLabel={t('keypad.switch_user')}
+          toneClass={GREEN_TONE}
+          icon={<ChevronBackIcon />}
+        />
       </div>
     </main>
   );

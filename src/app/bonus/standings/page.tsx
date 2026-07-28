@@ -14,7 +14,6 @@
 
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { HOME_ROUTE } from '@/lib/routes';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { currentPeriodStandings, type CurrentPeriodStanding } from '@/lib/bonus/current-period';
 import { formatCents } from '@/lib/bonus/calculator';
@@ -40,12 +39,6 @@ export default async function BonusStandingsPage({
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-5xl flex-col gap-8">
         <header className="flex flex-col gap-2">
-          <Link
-            href={HOME_ROUTE}
-            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
-          >
-            ← Back to dashboard
-          </Link>
           <h1 className="text-3xl font-bold tracking-tight">Current pay period — live standings</h1>
           {period ? (
             <p className="text-sm text-dr3-mist-dim">
@@ -146,12 +139,6 @@ function ForbiddenPage() {
       <p className="mt-2 text-dr3-mist-dim">
         Bonus reporting is limited to site managers and administrators.
       </p>
-      <Link
-        href={HOME_ROUTE}
-        className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-mist hover:underline"
-      >
-        Back to dashboard
-      </Link>
     </main>
   );
 }

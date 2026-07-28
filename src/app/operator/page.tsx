@@ -20,8 +20,8 @@ export default async function OperatorRootPage() {
     orderBy: { name: 'asc' },
   });
   return (
-    <main className="min-h-screen bg-black px-6 py-10 text-white">
-      <div className="mx-auto flex max-w-md flex-col items-center gap-8 text-center">
+    <main className="px-6 pb-10">
+      <div className="mx-auto flex max-w-md flex-col items-center gap-8 pt-6 text-center">
         <Image
           src="/brand/dr3-vision-logo.jpg"
           alt="DR3-Vision"

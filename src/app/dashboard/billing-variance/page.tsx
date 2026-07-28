@@ -6,16 +6,16 @@
 // history provider is unavailable (current `main` state), it shows an honest empty
 // state: tier-now columns populate, last-billed/leakage read "—" with a TODO banner.
 
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { HOME_ROUTE } from '@/lib/routes';
 import { checkRateRead } from '@/lib/auth-helpers';
 import { buildVarianceReport } from '@/lib/billing-rates/variance';
 
 export const dynamic = 'force-dynamic';
 
 function usd(cents: number | null): string {
-  return cents == null ? '—' : `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return cents == null
+    ? '—'
+    : `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function num(n: number | null): string {
   return n == null ? '—' : String(n);
@@ -29,9 +29,6 @@ export default async function BillingVariancePage() {
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">Not authorized</h1>
         <p className="mt-2 text-dr3-mist-dim">This report is available to managers and admins.</p>
-        <Link href={HOME_ROUTE} className="mt-6 text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline">
-          ← Back to dashboard
-        </Link>
       </main>
     );
   }
@@ -42,14 +39,12 @@ export default async function BillingVariancePage() {
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <header className="flex flex-col gap-1">
-          <Link href={HOME_ROUTE} className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline">
-            ← Back to dashboard
-          </Link>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Freight rate variance</h1>
               <p className="text-sm text-dr3-mist-dim">
-                Current freight tier vs. the tier each trans-charge source was last billed under. As of {report.as_of}.
+                Current freight tier vs. the tier each trans-charge source was last billed under. As
+                of {report.as_of}.
               </p>
             </div>
             <a
@@ -68,14 +63,19 @@ export default async function BillingVariancePage() {
             className="rounded-md border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-100"
             data-testid="variance-provider-unavailable"
           >
-            Last-billed history is not yet available. The tier-now column reflects current
-            mileage; last-billed, per-haul delta, and monthly leakage populate once the
-            workbook/invoice import (ADR-0039 audit engine staging) lands.{' '}
-            <span className="opacity-80">TODO(ADR-0040 D6): wire a provider over the workbook staging tables.</span>
+            Last-billed history is not yet available. The tier-now column reflects current mileage;
+            last-billed, per-haul delta, and monthly leakage populate once the workbook/invoice
+            import (ADR-0039 audit engine staging) lands.{' '}
+            <span className="opacity-80">
+              TODO(ADR-0040 D6): wire a provider over the workbook staging tables.
+            </span>
           </p>
         ) : (
           <p className="text-sm text-dr3-mist-dim" data-testid="variance-total">
-            Total estimated monthly leakage: <span className="font-semibold text-dr3-cyan">{usd(report.total_monthly_leakage_cents)}</span>
+            Total estimated monthly leakage:{' '}
+            <span className="font-semibold text-dr3-cyan">
+              {usd(report.total_monthly_leakage_cents)}
+            </span>
           </p>
         )}
 

@@ -6,7 +6,9 @@
   },
   "nav": {
     "back_to_dashboard": "Panel",
-    "back_to_dashboard_aria": "Volver al panel"
+    "back_to_dashboard_aria": "Volver al panel",
+    "sign_out": "Cerrar sesión",
+    "sign_out_aria": "Cerrar sesión en DR3-Vision"
   },
   "load_status": {
     "expected": "Esperada",

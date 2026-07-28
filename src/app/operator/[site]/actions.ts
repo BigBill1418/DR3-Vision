@@ -5,12 +5,21 @@ import { revalidatePath } from 'next/cache';
 import { auth, signOut } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import * as svc from '@/lib/load-service';
+import { assertUiSurfaceActivated } from '@/lib/loads/record-guards';
+import { UI_SURFACE } from '@/lib/notify/rollout';
 import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/client';
 
 // Server-action wrappers for the operator workflow. Every action
 // re-derives operator + site from the active session (no client-trusted
 // site or operator ids) and then dispatches to `load-service` which
 // owns the state-machine guards.
+//
+// ADR-0065 — `ctx()` also enforces the per-site `ipad_queue` rollout gate. Before
+// this, the dock workflow was the ONE floor write path with no rollout gate at
+// all: hiding the queue card only hid the link, so a bookmarked
+// /operator/<site>/load/<id> could still drive these actions. They write
+// `inbound_loads`, which feeds `onHand` and billing — gating the page without
+// gating the action would have been a money-safety hole, not a cosmetic one.
 
 async function ctx(siteCode: string) {
   const session = await auth();
@@ -25,6 +34,8 @@ async function ctx(siteCode: string) {
   if (session.user.primary_site_id !== site.id) {
     throw new Error('operator not assigned to this site');
   }
+  // Fail-closed: unregistered / `pilot` / read-error ⇒ not activated.
+  await assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_QUEUE, site.id);
   return { operatorUserId: session.user.id, siteId: site.id, siteCode };
 }
 

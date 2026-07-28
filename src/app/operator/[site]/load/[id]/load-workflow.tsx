@@ -87,7 +87,13 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   };
 
   const pill =
-    pending > 0 ? <PendingPill count={pending} onTap={onPillTap} label={tPlural('pending_pill.label', pending, { count: pending })} /> : null;
+    pending > 0 ? (
+      <PendingPill
+        count={pending}
+        onTap={onPillTap}
+        label={tPlural('pending_pill.label', pending, { count: pending })}
+      />
+    ) : null;
 
   if (load.status === 'submitted' || load.status === 'rejected') {
     // Defensive — submit/reject server actions sign the operator
@@ -151,11 +157,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
       return (
         <>
           {pill}
-          <StageReject
-            siteCode={siteCode}
-            loadId={load.id}
-            onCancel={() => setShowReject(false)}
-          />
+          <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
         </>
       );
     }
@@ -208,7 +210,7 @@ function PendingPill({ onTap, label }: { count: number; onTap: () => void; label
     <button
       type="button"
       onClick={onTap}
-      className="mb-3 w-full rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-start text-xs font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
+      className="mb-3 flex min-h-[44px] w-full items-center rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-start text-sm font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
     >
       ⏳ {label}
     </button>

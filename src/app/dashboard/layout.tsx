@@ -11,14 +11,14 @@
 import { getLocale } from '@/i18n/get-locale';
 import { getManagerDictionary } from '@/i18n/dictionary';
 import { I18nProvider } from '@/i18n/provider';
-import { BackToDashboardNav } from '@/app/_components/back-to-dashboard';
+import { ManagerChromeNav } from '@/app/_components/manager-chrome';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const locale = await getLocale();
   const dict = getManagerDictionary(locale);
   return (
     <I18nProvider locale={locale} dict={dict}>
-      <BackToDashboardNav />
+      <ManagerChromeNav />
       {children}
     </I18nProvider>
   );

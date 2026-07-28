@@ -47,8 +47,8 @@ export default async function OperatorSitePage({ params }: Props) {
   });
 
   return (
-    <main className="min-h-screen bg-black px-6 pb-10 pt-20 text-white">
-      <div className="mx-auto flex max-w-2xl flex-col gap-8">
+    <main className="px-6 pb-10">
+      <div className="mx-auto flex max-w-2xl flex-col gap-8 pt-6">
         <header className="flex items-center justify-between gap-4">
           <Image
             src="/brand/dr3-vision-logo.jpg"

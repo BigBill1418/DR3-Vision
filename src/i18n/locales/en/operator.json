@@ -17,7 +17,6 @@
     "heading": "Today's queue",
     "signed_in_as": "Signed in as {{name}}",
     "site_caption": "{{site}} · Signed in as {{name}}",
-    "switch_user": "Switch user",
     "empty_heading": "No loads expected today",
     "last_sync": "Last sync {{when}}",
     "no_sync_yet": "No MyMRC sync has run yet.",
@@ -175,7 +174,8 @@
     "error_access_denied": "Your Microsoft account isn't authorized for DR3-Vision. Ask an admin to add you.",
     "error_not_configured": "Microsoft sign-in isn't configured yet. Ask an admin to finish the setup.",
     "error_session_expired": "Your sign-in session expired. Sign in again to continue.",
-    "error_generic": "Sign-in didn't complete. Try again."
+    "error_generic": "Sign-in didn't complete. Try again.",
+    "signed_out": "You've been signed out."
   },
   "relative_time": {
     "just_now": "just now",
@@ -193,7 +193,6 @@
   },
   "floor": {
     "common": {
-      "back": "← Back",
       "program": "Program",
       "non_program": "Non-program",
       "total": "Total",
@@ -270,5 +269,12 @@
       "submit": "Confirm count",
       "err_closed": "Today is closed. Ask an admin to reopen it."
     }
+  },
+  "nav": {
+    "back": "Back",
+    "back_aria": "Go back",
+    "log_out": "Log Out",
+    "log_out_aria": "Log out and return to the name picker",
+    "floor_chrome_aria": "Screen navigation"
   }
 }

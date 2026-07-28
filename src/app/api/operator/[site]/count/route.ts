@@ -7,12 +7,14 @@
 // this establishes its first one. `reconcilePhysicalCount` records the reconciled_delta
 // (physical − computed) and never clobbers an existing snapshot (it appends a new one).
 //
-// Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator`.
+// Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator` on the
+// per-surface `ipad_count` gate (ADR-0065), not the shared `loads_inventory` master gate.
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/running-balance';
 import { requireActivatedOperator, loadsErrorResponse } from '@/lib/loads/route-helpers';
+import { UI_SURFACE } from '@/lib/notify/rollout';
 import { pacificMidnightInstantOfDayISO, pacificDayISO } from '@/lib/time';
 
 export const runtime = 'nodejs';
@@ -32,7 +34,7 @@ const Create = z.object({
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
-    const ctx = await requireActivatedOperator(site);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
     const parsed = Create.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
     const d = parsed.data;

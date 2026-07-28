@@ -7,12 +7,18 @@
 // confirms the count, not the payroll inputs. Close/lock stays admin-only:
 // `upsertProcessedUnits` already refuses a closed day (typed 409), so that boundary holds.
 //
-// Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator`.
+// Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator` on the
+// per-surface `ipad_processed` gate (ADR-0065), not the shared `loads_inventory` master gate.
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { upsertProcessedUnits } from '@/lib/loads/processed-units';
-import { requireActivatedOperator, loadsErrorResponse } from '@/lib/loads/route-helpers';
+import {
+  requireActivatedOperator,
+  loadsErrorResponse,
+  assertCurrentPacificDay,
+} from '@/lib/loads/route-helpers';
+import { UI_SURFACE } from '@/lib/notify/rollout';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,10 +33,12 @@ const Body = z.object({
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
-    const ctx = await requireActivatedOperator(site);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_PROCESSED);
     const parsed = Body.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
     const d = parsed.data;
+    // ADR-0065 — current Pacific day only (same floor rule as /inbound).
+    assertCurrentPacificDay(d.productionDate);
     const row = await upsertProcessedUnits({
       siteId: ctx.siteId,
       productionDate: new Date(`${d.productionDate}T00:00:00Z`),
