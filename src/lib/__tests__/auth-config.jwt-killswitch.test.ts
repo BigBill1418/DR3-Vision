@@ -14,7 +14,7 @@
  * stubbed so importing `auth.config.ts` doesn't reach into Auth.js internals.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next-auth/providers/microsoft-entra-id', () => ({ default: (c: unknown) => c }));
 
@@ -22,7 +22,20 @@ import { authConfig, setRevocationChecker } from '@/lib/auth.config';
 import type { JWT } from 'next-auth/jwt';
 
 const jwt = authConfig.callbacks!.jwt!;
-const NOW_S = Math.floor(Date.now() / 1000);
+
+// FLAKE FIX (2026-07-28): `NOW_S` was `Math.floor(Date.now()/1000)` evaluated at
+// MODULE LOAD, while the callback computes its own `now` at CALL time. If the wall
+// clock crossed a second boundary between the two, `last_seen_at` came back as
+// NOW_S + 1 and the assertions failed by exactly one second
+// ("expected 1785275672 to be 1785275671"). Observed failing CI on a branch that
+// touched none of this code. Freezing the clock removes the race entirely — the
+// test and the implementation now read the same instant by construction.
+const NOW_S = 1_785_275_671; // fixed instant; value itself is arbitrary
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW_S * 1000);
+});
 
 function activeToken(overrides: Partial<JWT> = {}): JWT {
   return {
@@ -45,6 +58,7 @@ function call(args: Partial<JwtArgs>): ReturnType<typeof jwt> {
 afterEach(() => {
   setRevocationChecker(null);
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 describe('jwt callback — ADR-0053 D2 revocation enforcement', () => {

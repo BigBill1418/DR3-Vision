@@ -16,14 +16,19 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request): Promise<Response> {
   try {
     await requireApApprover();
+    // The option list is FLEET-WIDE as of 2026-07-28 (operator directive
+    // overriding ADR-0046 Amendment 5 D-M5-6) — see `lib/ap/equipment.ts`.
+    //
+    // `site` is still accepted and still validated when present, because the
+    // Approve panel only reaches this endpoint once a real site is chosen and a
+    // bad code should still fail loudly rather than silently widen. It no longer
+    // narrows the results.
     const site = new URL(req.url).searchParams.get('site');
-    // NOT-DR3 has no equipment; a real site code is required.
-    if (!site || !site.trim()) {
-      return NextResponse.json({ error: 'site is required' }, { status: 400 });
+    if (site && site.trim()) {
+      const siteId = await resolveDecisionSiteId(prisma, site);
+      if (!siteId) return NextResponse.json({ error: 'unknown site' }, { status: 400 });
     }
-    const siteId = await resolveDecisionSiteId(prisma, site);
-    if (!siteId) return NextResponse.json({ error: 'unknown site' }, { status: 400 });
-    const options = await listSiteEquipment(prisma, siteId);
+    const options = await listSiteEquipment(prisma);
     return NextResponse.json({ options });
   } catch (e) {
     if (e instanceof Response) return e;

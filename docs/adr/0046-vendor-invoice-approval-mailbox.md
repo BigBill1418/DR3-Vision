@@ -1028,3 +1028,59 @@ octet-stream rows and confirm the Preview button now appears and frames, and
 **Rollback:** revert the app image. The change is code-only (no schema, no config),
 and reverting restores the Amendment 4 behavior exactly — the stricter gate and the
 300 s TTL.
+
+---
+
+## Amendment 7 — the equipment selector is FLEET-WIDE, not site-filtered (2026-07-28)
+
+**This amendment OVERRIDES Amendment 5 / D-M5-6**, which specified "the
+site-filtered equipment option list for the Approve-panel multi-select" and a
+server-side validator that rejected "an id … registered to a different site".
+Recorded here per the operator directive that made the change.
+
+### Decision
+
+`listSiteEquipment` returns **every ACTIVE row in the `equipment` registry**,
+regardless of `site_id`. `assertEquipmentForSite` drops its site check in
+lockstep and no longer takes a `siteId` argument.
+
+### Why
+
+1. **The fleet is genuinely shared.** An invoice arriving at either site can be
+   for any asset — an over-the-road trailer, a tractor, a machine that moved
+   between facilities. Site-filtering hid the very asset an approver was looking
+   at, with no way to reach it.
+2. **The registry has no trustworthy site attribution to filter on.** The
+   `equipment` master was seeded (ADR-0062) from the SVdP-wide machine list,
+   which contains **no `DR3 Eugene` facility at all** and only 21 `DR3 Woodland`
+   rows out of 554. Rows were therefore mapped coarsely by jurisdiction
+   (California → woodland, everything else → eugene). Filtering a picker on a
+   field that was assigned by a fallback heuristic produces confidently wrong
+   results — worse than not filtering. See OPEN-ITEMS C-28.
+
+### The invariant this change had to preserve
+
+The picker and the server-side validator **must agree on scope**. Changing only
+the picker would leave every cross-site pick rendering fine and then failing 400
+on save — a silently broken approval path. Both moved together, and
+`src/lib/ap/equipment.test.ts` now asserts the pairing directly ("every option
+the picker returns passes the validator").
+
+### What did NOT change
+
+- `assertEquipmentForSite` remains a real server trust boundary: ids must
+  **exist** and be **active**. Only the site predicate was removed.
+- The **decision** is still filed to exactly one site or `filed_not_dr3`, still
+  gated by `requireApApprover`, still audited. CLAUDE.md hard rule #2 governs
+  where the money is filed; it was never a claim about which reference rows an
+  approver may look at.
+- `/api/ops/ap/equipment` still validates a `site` query param when one is
+  supplied (a bad code fails loudly) — it simply no longer narrows the results.
+
+### Consequence
+
+The picker now offers ~521 active options rather than a per-site subset. If that
+proves unwieldy on the Approve panel, the fix is search/grouping in the
+multi-select, **not** reinstating a filter on untrustworthy site data. Revisit
+only when the registry carries real per-asset location (C-28), at which point
+grouping by actual facility becomes possible.
