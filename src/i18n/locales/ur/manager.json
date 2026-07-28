@@ -6,7 +6,9 @@
   },
   "nav": {
     "back_to_dashboard": "ڈیش بورڈ",
-    "back_to_dashboard_aria": "ڈیش بورڈ پر واپس جائیں"
+    "back_to_dashboard_aria": "ڈیش بورڈ پر واپس جائیں",
+    "sign_out": "لاگ آؤٹ",
+    "sign_out_aria": "DR3-Vision سے لاگ آؤٹ کریں"
   },
   "load_status": {
     "expected": "متوقع",

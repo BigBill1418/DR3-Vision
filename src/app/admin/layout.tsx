@@ -7,12 +7,18 @@
 // dashboard groups — this layout intentionally does NOT mount an I18nProvider.
 // It renders the presentational bar directly with plain English strings.
 
-import { BackToDashboardBar } from '@/app/_components/back-to-dashboard';
+import { ManagerChromeBar } from '@/app/_components/manager-chrome';
+import { adminMessages as AM } from './messages';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <BackToDashboardBar label="Dashboard" ariaLabel="Back to dashboard" />
+      <ManagerChromeBar
+        backLabel={AM.nav.backToDashboard}
+        backAriaLabel={AM.nav.backToDashboardAria}
+        signOutLabel={AM.nav.signOut}
+        signOutAriaLabel={AM.nav.signOutAria}
+      />
       {children}
     </>
   );

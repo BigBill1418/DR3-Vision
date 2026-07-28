@@ -59,8 +59,21 @@ export function LoginForm() {
     }
   })();
 
+  // ADR-0065 — ManagerChrome signs out to `/login?signedout=1`. Without a
+  // confirmation, a successful sign-out is indistinguishable from being bounced
+  // here by an expired session, so the user re-authenticates out of doubt.
+  const signedOut = search.get('signedout') === '1';
+
   return (
     <div className="flex w-full flex-col gap-4 text-left">
+      {signedOut && !errorMessage && (
+        <p
+          role="status"
+          className="rounded-md border border-dr3-cyan/40 bg-dr3-cyan/10 px-3 py-2 text-sm text-dr3-cyan-bright"
+        >
+          {t('auth_login.signed_out')}
+        </p>
+      )}
       {errorMessage && (
         <p
           role="alert"

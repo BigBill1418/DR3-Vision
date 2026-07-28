@@ -16,6 +16,42 @@ window her cross-checks are possible.
 
 ---
 
+## 0.A — 2026-07-28 iPad gates + nav (ADR-0065) — residuals
+
+Shipped on `feat/ipad-gates-and-nav`: per-surface iPad rollout gates, current-Pacific-day
+floor scoping (incl. the UTC-vs-Pacific queue correctness fix), and the two app chromes
+(ManagerChrome / FloorChrome). See ADR-0065 + CHANGELOG 2026-07-28. Left open:
+
+- **C-30 — ~90 hardcoded `←` / `&larr;` glyphs remain across ~45 manager page files.**
+  In Urdu (RTL) they point the wrong way. DELIBERATELY out of scope for ADR-0065: the strings
+  the new chromes consume were fixed (`floor.common.back` deleted, chevrons now mirror via
+  `rtl:rotate-180`), but a 45-file sweep would have buried the gate work Bill needed on the
+  floor. Fix pattern is established — delete the glyph from the string, render
+  `ChevronBackIcon` in the component. Candidate for a mechanical follow-up PR.
+
+- **C-31 — `/admin` chrome labels are English-only.** `ManagerChromeBar` on `/admin` takes its
+  strings from `adminMessages.nav` because ADR-0017 keeps that surface English-only and mounts
+  no I18nProvider. Correct per ADR-0017, but it means "Log out" is untranslated for the one
+  admin surface. Moves with the eventual admin i18n pass, not before.
+
+- **C-32 — `/` (Vision Dashboard) chrome is English-only for the same structural reason.**
+  The root page has no route-group layout and therefore no I18nProvider; `VisionShell` is
+  already all-English ("Active", "Coming soon", the tagline). The new `SignOutPill` matches
+  that existing treatment rather than introducing a lone translated string. If `/` is ever
+  localized, the pill comes with it.
+
+- **O-12 — OPERATOR ACTION (Bill): the new rollout rows only exist after the migration runs.**
+  `20260813_adr0065_ipad_per_surface_rollout_gates` seeds all five surfaces × both sites on
+  deploy. Until it runs, `/admin/rollout` will not list them and the pages fail CLOSED
+  (unregistered ⇒ pilot ⇒ off) — which for `ipad_queue`/`ipad_inbound` means the truck queue
+  and inbound confirm go dark. **Deploy the migration and the app together**; do not ship the
+  app code ahead of the migration.
+
+- **C-33 — `pre-push` bonus suite flake (C-29) is unchanged.** Noted here only so a future
+  session does not re-diagnose it: `src/lib/bonus/__tests__/bonus-cycle-e2e.test.ts` and
+  `src/lib/ap/poll.test.ts` both time out intermittently under load (5s default timeout) on a
+  branch touching neither. Re-run before assuming a regression. `SKIP_PREPUSH` stays unused.
+
 ## 0 — 2026-07-25 session reconciliation (inventory pipeline + iPad floor + i18n)
 
 **Shipped + LIVE + verified this session (ADRs 0058–0061):**

@@ -12,8 +12,14 @@ import {
   type ManagerSiteContext,
   type OperatorSiteContext,
 } from '@/lib/auth-helpers';
-import { assertLoadsInventoryActivated, LoadsInventoryNotActivatedError } from '@/lib/loads/record-guards';
+import {
+  assertLoadsInventoryActivated,
+  assertUiSurfaceActivated,
+  LoadsInventoryNotActivatedError,
+} from '@/lib/loads/record-guards';
+import type { UiSurfaceCode } from '@/lib/notify/rollout';
 import { log } from '@/lib/observability/logger';
+import { pacificDayISO } from '@/lib/time';
 
 /**
  * Resolve the manager/site context AND enforce the ADR-0037 D7 activation gate.
@@ -25,27 +31,63 @@ export async function requireActivatedManager(siteCode: string): Promise<Manager
   try {
     await assertLoadsInventoryActivated(ctx.role, ctx.siteId);
   } catch (e) {
-    if (e instanceof LoadsInventoryNotActivatedError) throw new Response('not_activated', { status: e.status });
+    if (e instanceof LoadsInventoryNotActivatedError)
+      throw new Response('not_activated', { status: e.status });
     throw e;
   }
   return ctx;
 }
 
 /**
- * ADR-0060 — the FLOOR (operator) analogue of {@link requireActivatedManager}. Resolves
- * the operator/site context AND enforces the same ADR-0047 per-site `loads_inventory`
- * rollout gate, so the iPad floor surfaces flip live per site exactly like the manager
- * desktop surfaces. Throws a `Response` on any failure (unauth/forbidden/not-activated).
+ * ADR-0060 / ADR-0065 — the FLOOR (operator) analogue of {@link requireActivatedManager}.
+ * Resolves the operator/site context AND enforces the ADR-0047 per-site rollout gate for
+ * the NAMED surface. Throws a `Response` on any failure (unauth/forbidden/not-activated).
+ *
+ * `surfaceCode` is REQUIRED — there is deliberately no default. Under ADR-0060 every
+ * floor write shared the `loads_inventory` master gate, which is also the manager
+ * desktop's gate; ADR-0065 split them so one iPad screen can be turned off without
+ * dropping the managers' tabs. A default would silently re-couple them, so each caller
+ * must name the surface it is the write path for.
  */
-export async function requireActivatedOperator(siteCode: string): Promise<OperatorSiteContext> {
+export async function requireActivatedOperator(
+  siteCode: string,
+  surfaceCode: UiSurfaceCode,
+): Promise<OperatorSiteContext> {
   const ctx = await requireOperatorForSite(siteCode);
   try {
-    await assertLoadsInventoryActivated('operator', ctx.siteId);
+    await assertUiSurfaceActivated('operator', surfaceCode, ctx.siteId);
   } catch (e) {
-    if (e instanceof LoadsInventoryNotActivatedError) throw new Response('not_activated', { status: e.status });
+    if (e instanceof LoadsInventoryNotActivatedError)
+      throw new Response('not_activated', { status: e.status });
     throw e;
   }
   return ctx;
+}
+
+/**
+ * ADR-0065 — the floor iPad is CURRENT-DAY ONLY: "no historical or future
+ * views" (Bill, 2026-07-28). Hiding other days in the UI is not enough — the
+ * floor APIs take the target day in the request body, so an operator (or
+ * anything replaying a stale offline-queue entry) could reach another day by
+ * editing it. This is the server-side pin.
+ *
+ * Throws a `Response` (422 `date_not_today`) unless `dayValue` is the CURRENT
+ * Pacific calendar day. Pacific, not server-local: the container runs UTC, so a
+ * server-local comparison would start rejecting the operator's real day at 5 PM
+ * Pacific and accepting tomorrow's.
+ *
+ * Money-safety note: this refuses a WRITE to a non-current day rather than
+ * silently rewriting it to today. Silently retargeting a submitted count would
+ * file units against the wrong production day.
+ */
+export function assertCurrentPacificDay(dayValue: string, now: Date = new Date()): void {
+  if (dayValue !== pacificDayISO(now)) {
+    // The reason rides in `statusText`, not the body: `loadsErrorResponse` reads
+    // `e.statusText` when mapping a thrown Response to JSON, so a body-only
+    // Response (the older `new Response('not_activated', …)` shape) surfaces as
+    // a bare "error" with the reason dropped.
+    throw new Response(null, { status: 422, statusText: 'date_not_today' });
+  }
 }
 
 /**

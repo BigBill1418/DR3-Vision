@@ -7,12 +7,26 @@ import { onHand } from '@/lib/inventory/running-balance';
 import { countUnconfirmedInboundDays } from '@/lib/loads/floor-inbound';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate, translatePlural } from '@/i18n/dictionary';
-import { SignOutButton } from '../queue/sign-out-button';
+import { FloorPageHeading } from '../../_components/page-heading';
 
-// ADR-0060 F-1 — floor daily-validation HUB and shift landing (post-PIN). On-hand
-// headline + entry cards for the three validation tasks (confirm inbound, count on-hand,
-// confirm processed) when the site's ADR-0047 loads_inventory surface is live, plus the
-// pre-existing per-load queue card which stays reachable regardless of rollout state.
+// ADR-0060 F-1 / ADR-0065 — the floor daily-validation HUB and shift landing
+// (post-PIN, `keypad.tsx` lands here).
+//
+// THE HUB IS NEVER ROLLOUT-GATED. Bill: "leave the site picker do not strand
+// anyone." PIN success routes here, so gating the hub itself would drop a
+// successfully-authenticated operator onto a dead screen with no way forward.
+// What IS gated, each on its OWN ADR-0065 surface, is the CONTENT:
+//
+//   ipad_today_summary  the F-1 on-hand summary block
+//   ipad_inbound        the "confirm inbound" card
+//   ipad_count          the "count on hand" card
+//   ipad_processed      the "confirm processed" card
+//   ipad_queue          the truck-queue card (previously hardcoded un-gated)
+//
+// Every card is now gated, including the queue — an operator must never see a
+// card whose destination will refuse them. If every surface is off, the hub
+// still renders: the heading, an explanation, and the chrome's Log Out. Bounded,
+// honest, and never a dead end.
 
 export const dynamic = 'force-dynamic';
 
@@ -33,42 +47,54 @@ export default async function FloorTodayPage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  const live = await isUiSurfaceLive(UI_SURFACE.LOADS_INVENTORY, siteId);
+  const [summaryLive, inboundLive, countLive, processedLive, queueLive] = await Promise.all([
+    isUiSurfaceLive(UI_SURFACE.IPAD_TODAY_SUMMARY, siteId),
+    isUiSurfaceLive(UI_SURFACE.IPAD_INBOUND, siteId),
+    isUiSurfaceLive(UI_SURFACE.IPAD_COUNT, siteId),
+    isUiSurfaceLive(UI_SURFACE.IPAD_PROCESSED, siteId),
+    isUiSurfaceLive(UI_SURFACE.IPAD_QUEUE, siteId),
+  ]);
 
   const now = new Date();
-  const [balance, unconfirmed] = live
-    ? await Promise.all([onHand(siteId, now), countUnconfirmedInboundDays(siteId, 14, now)])
-    : [null, 0];
+  const balance = summaryLive ? await onHand(siteId, now) : null;
 
-  const validationCards: Card[] = live
-    ? [
-        {
-          href: `/operator/${siteCode}/inbound`,
-          title: t('floor.hub.card_inbound_title'),
-          body: t('floor.hub.card_inbound_body'),
-          ...(unconfirmed > 0
-            ? { badge: translatePlural(dict, 'floor.hub.card_inbound_badge', unconfirmed) }
-            : {}),
-        },
-        {
-          href: `/operator/${siteCode}/count`,
-          title: t('floor.hub.card_count_title'),
-          body: t('floor.hub.card_count_body'),
-        },
-        {
-          href: `/operator/${siteCode}/processed`,
-          title: t('floor.hub.card_processed_title'),
-          body: t('floor.hub.card_processed_body'),
-        },
-      ]
-    : [];
+  // ADR-0065 — the badge counted a 14-DAY lookback, which is exactly the
+  // historical view Bill ruled out for the floor. Scoped to the current
+  // Pacific day, so it means "today still needs confirming".
+  const unconfirmedToday = inboundLive ? await countUnconfirmedInboundDays(siteId, 1, now) : 0;
 
-  // The per-load queue is the pre-existing surface — always reachable, not rollout-gated.
-  const queueCard: Card = {
-    href: `/operator/${siteCode}/queue`,
-    title: t('floor.hub.card_queue_title'),
-    body: t('floor.hub.card_queue_body'),
-  };
+  const cards: Card[] = [];
+  if (inboundLive) {
+    cards.push({
+      href: `/operator/${siteCode}/inbound`,
+      title: t('floor.hub.card_inbound_title'),
+      body: t('floor.hub.card_inbound_body'),
+      ...(unconfirmedToday > 0
+        ? { badge: translatePlural(dict, 'floor.hub.card_inbound_badge', unconfirmedToday) }
+        : {}),
+    });
+  }
+  if (countLive) {
+    cards.push({
+      href: `/operator/${siteCode}/count`,
+      title: t('floor.hub.card_count_title'),
+      body: t('floor.hub.card_count_body'),
+    });
+  }
+  if (processedLive) {
+    cards.push({
+      href: `/operator/${siteCode}/processed`,
+      title: t('floor.hub.card_processed_title'),
+      body: t('floor.hub.card_processed_body'),
+    });
+  }
+  if (queueLive) {
+    cards.push({
+      href: `/operator/${siteCode}/queue`,
+      title: t('floor.hub.card_queue_title'),
+      body: t('floor.hub.card_queue_body'),
+    });
+  }
 
   const renderCard = (c: Card) => (
     <li key={c.href}>
@@ -90,19 +116,14 @@ export default async function FloorTodayPage({ params }: Props) {
   );
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 pb-8 pt-20 text-dr3-cream">
-      <div className="mx-auto flex max-w-2xl flex-col gap-6">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{t('floor.hub.heading')}</h1>
-            <p className="text-sm text-dr3-cream/70">
-              {t('floor.hub.caption', { site: siteName, name: operatorName })}
-            </p>
-          </div>
-          <SignOutButton siteCode={siteCode} />
-        </header>
+    <main className="px-6 pb-8">
+      <div className="mx-auto flex max-w-2xl flex-col gap-6 pt-6">
+        <FloorPageHeading
+          title={t('floor.hub.heading')}
+          caption={t('floor.hub.caption', { site: siteName, name: operatorName })}
+        />
 
-        {live && balance && (
+        {summaryLive && balance && (
           <section className="rounded-xl bg-dr3-green-dark/50 p-6">
             <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
               {t('floor.hub.on_hand_heading')}
@@ -115,7 +136,11 @@ export default async function FloorTodayPage({ params }: Props) {
           </section>
         )}
 
-        {!live && (
+        {cards.length > 0 ? (
+          <ul className="flex flex-col gap-3">{cards.map(renderCard)}</ul>
+        ) : (
+          // Every surface is off. Still not a dead end: the operator keeps the
+          // chrome's Log Out and knows why the screen is empty.
           <div className="rounded-lg bg-dr3-green-dark/40 p-6 text-center">
             <p className="text-lg font-medium">{t('floor.common.not_activated_heading')}</p>
             <p className="mt-2 text-sm text-dr3-cream/70">
@@ -123,11 +148,6 @@ export default async function FloorTodayPage({ params }: Props) {
             </p>
           </div>
         )}
-
-        <ul className="flex flex-col gap-3">
-          {validationCards.map(renderCard)}
-          {renderCard(queueCard)}
-        </ul>
       </div>
     </main>
   );

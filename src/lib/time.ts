@@ -193,6 +193,33 @@ export function pacificMidnightInstantOfDayISO(dayISO: string): Date {
 }
 
 /**
+ * The half-open [start, endExclusive) INSTANT window covering the current
+ * Pacific business day. The canonical way to bound a query on an instant column
+ * to "today" (ADR-0065).
+ *
+ * WHY THIS EXISTS RATHER THAN `new Date(); d.setHours(0,0,0,0)`: `setHours`
+ * computes SERVER-LOCAL midnight, and the app container runs with no TZ set
+ * (UTC). Between 5:00 PM and midnight Pacific, UTC has already rolled to the
+ * next day — so a server-local "today" silently becomes TOMORROW mid-shift for
+ * an evening-shift operator, hiding the loads they are actually working and
+ * showing the next day's. Both sites are Pacific (Woodland CA / Eugene OR).
+ *
+ * This is deliberately built from the same `pacificDayStartInstant` helper that
+ * `floor-inbound`, `bulk-inbound`, `onHand`'s inbound window and the MyMRC
+ * bridge already key on, so the iPad's notion of "today" is byte-identical to
+ * the one billing uses. Do NOT introduce a second day-key definition.
+ */
+export function currentPacificDayWindow(instant: Date = new Date()): {
+  start: Date;
+  endExclusive: Date;
+} {
+  return {
+    start: pacificDayStartInstant(instant),
+    endExclusive: pacificDayStartInstantPlus(1, instant),
+  };
+}
+
+/**
  * Pacific local midnight instant `days` after the Pacific day of `instant`.
  * Negative `days` steps backwards. DST-correct in BOTH directions.
  *

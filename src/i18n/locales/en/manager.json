@@ -5,7 +5,9 @@
   },
   "nav": {
     "back_to_dashboard": "Dashboard",
-    "back_to_dashboard_aria": "Back to dashboard"
+    "back_to_dashboard_aria": "Back to dashboard",
+    "sign_out": "Log out",
+    "sign_out_aria": "Log out of DR3-Vision"
   },
   "load_status": {
     "expected": "Expected",

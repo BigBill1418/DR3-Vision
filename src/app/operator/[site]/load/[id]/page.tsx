@@ -60,8 +60,8 @@ export default async function LoadPage({ params }: Props) {
   const t = (k: string) => translate(dict, k);
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-6 text-dr3-cream">
-      <div className="mx-auto max-w-2xl">
+    <main className="px-6 pb-6">
+      <div className="mx-auto max-w-2xl pt-6">
         <header className="mb-4">
           <h1 className="text-xl font-semibold">
             {load.source?.name ?? t('load_header.unknown_source')}

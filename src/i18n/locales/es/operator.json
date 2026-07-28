@@ -6,6 +6,13 @@
     "_comment_4": "  unload = descargar, reject = rechazar, stack = pila, mattress = colchón.",
     "_comment_5": "Operator = operador (mixed-gender default; occupational term per RAE)."
   },
+  "nav": {
+    "back": "Atrás",
+    "back_aria": "Volver",
+    "log_out": "Cerrar sesión",
+    "log_out_aria": "Cerrar sesión y volver al selector de nombres",
+    "floor_chrome_aria": "Navegación de pantalla"
+  },
   "site_picker": {
     "heading": "Elige tu sitio"
   },
@@ -24,7 +31,6 @@
     "heading": "Cola de hoy",
     "signed_in_as": "Sesión iniciada como {{name}}",
     "site_caption": "{{site}} · Sesión iniciada como {{name}}",
-    "switch_user": "Cambiar usuario",
     "empty_heading": "No se esperan cargas hoy",
     "last_sync": "Última sincronización {{when}}",
     "no_sync_yet": "Aún no se ha ejecutado ninguna sincronización con MyMRC.",
@@ -182,7 +188,8 @@
     "error_access_denied": "Tu cuenta de Microsoft no está autorizada para DR3-Vision. Pide a un administrador que te agregue.",
     "error_not_configured": "El inicio de sesión con Microsoft aún no está configurado. Pide a un administrador que termine la configuración.",
     "error_session_expired": "Tu sesión de inicio expiró. Inicia sesión de nuevo para continuar.",
-    "error_generic": "No se pudo completar el inicio de sesión. Intenta de nuevo."
+    "error_generic": "No se pudo completar el inicio de sesión. Intenta de nuevo.",
+    "signed_out": "Has cerrado sesión."
   },
   "relative_time": {
     "just_now": "ahora mismo",
@@ -200,7 +207,6 @@
   },
   "floor": {
     "common": {
-      "back": "← Atrás",
       "program": "Programa",
       "non_program": "Fuera de programa",
       "total": "Total",

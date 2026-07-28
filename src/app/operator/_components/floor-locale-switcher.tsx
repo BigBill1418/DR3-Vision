@@ -19,10 +19,17 @@ import { setFloorLocaleAction } from '@/i18n/actions';
 //     future shift renders in their language on any iPad.
 //
 // It is deliberately placed in the top-corner CHROME, out of the RTL-forced
-// numeric zones (keypad / steppers), and floats over any page background so
-// it stays legible on both the black sign-in screens and the green shell.
-// Buttons are ≥44px tap targets (gloved-hand / ADR-0060 sizing) and each
-// label is written in its own script with a matching `lang` attribute.
+// numeric zones (keypad / steppers). Buttons are ≥44px tap targets
+// (gloved-hand / ADR-0060 sizing) and each label is written in its own script
+// with a matching `lang` attribute.
+//
+// ADR-0065 — it used to position itself (`fixed end-3 top-3`) and float over
+// whatever the page drew, which made it OVERLAP page content: the logo on the
+// site picker and the sign-out button on the queue both rendered underneath it.
+// It is now laid out by FloorChrome in the trailing end of the sticky chrome
+// band, so it can never collide with page content. It keeps NO positioning of
+// its own — the band owns placement and the translucent backdrop that keeps it
+// legible over both the black sign-in screens and the green shell.
 
 export function FloorLocaleSwitcher() {
   const router = useRouter();
@@ -39,8 +46,7 @@ export function FloorLocaleSwitcher() {
 
   return (
     <div
-      // Logical `end` keeps it in the trailing top corner in both LTR and RTL.
-      className="fixed end-3 top-3 z-50 flex gap-1 rounded-xl border border-white/15 bg-black/55 p-1 backdrop-blur-sm"
+      className="flex shrink-0 gap-1 rounded-xl border border-white/15 bg-black/40 p-1"
       role="group"
       aria-label="Language"
     >

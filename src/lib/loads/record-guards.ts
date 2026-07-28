@@ -13,7 +13,7 @@
 // ops preconditions (restore drill + RESTIC_PASSWORD off-box) remain Bill's
 // go/no-go for approving that flip.
 
-import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
+import { isUiSurfaceLive, UI_SURFACE, type UiSurfaceCode } from '@/lib/notify/rollout';
 import type { PrismaClient } from '@prisma/client';
 
 /** The record cannot be edited because it has been locked (edit-before-any-lock). */
@@ -47,7 +47,9 @@ export class RecordValidationError extends Error {
 export class LoadsInventoryNotActivatedError extends Error {
   readonly status = 403 as const;
   constructor() {
-    super('loads/inventory surfaces are not yet activated (ADR-0037 D7 — admin-only until flipped live)');
+    super(
+      'loads/inventory surfaces are not yet activated (ADR-0037 D7 — admin-only until flipped live)',
+    );
     this.name = 'LoadsInventoryNotActivatedError';
   }
 }
@@ -67,8 +69,28 @@ export async function assertLoadsInventoryActivated(
   siteId: string,
   db?: PrismaClient,
 ): Promise<void> {
+  return assertUiSurfaceActivated(role, UI_SURFACE.LOADS_INVENTORY, siteId, db);
+}
+
+/**
+ * ADR-0065 — the generalized form of {@link assertLoadsInventoryActivated}, for a
+ * caller that names its OWN surface code instead of riding the shared
+ * `loads_inventory` master gate. Same fail-closed semantics: admins always pass
+ * (no DB read); everyone else passes only when that surface is `live` for the
+ * site; unregistered / `pilot` / read-error ⇒ throw.
+ *
+ * This is what lets Bill disable ONE iPad screen from /admin/rollout without
+ * dropping the manager desktop's loads/inventory tabs, which keep reading the
+ * master gate.
+ */
+export async function assertUiSurfaceActivated(
+  role: 'operator' | 'manager' | 'admin',
+  surfaceCode: UiSurfaceCode,
+  siteId: string,
+  db?: PrismaClient,
+): Promise<void> {
   if (role === 'admin') return;
-  const live = await isUiSurfaceLive(UI_SURFACE.LOADS_INVENTORY, siteId, db);
+  const live = await isUiSurfaceLive(surfaceCode, siteId, db);
   if (!live) throw new LoadsInventoryNotActivatedError();
 }
 

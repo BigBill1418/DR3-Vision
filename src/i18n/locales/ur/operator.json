@@ -6,6 +6,13 @@
     "_comment_4": "BOL kept as English literal (technical term carriers use); numerals are Western Arabic (0-9) per Pakistan business convention.",
     "_comment_5": "Operator term = آپریٹر (loanword, common in industrial Pakistani Urdu)."
   },
+  "nav": {
+    "back": "واپس",
+    "back_aria": "واپس جائیں",
+    "log_out": "لاگ آؤٹ",
+    "log_out_aria": "لاگ آؤٹ کریں اور نام کی فہرست پر واپس جائیں",
+    "floor_chrome_aria": "اسکرین نیویگیشن"
+  },
   "site_picker": {
     "heading": "اپنی سائٹ منتخب کریں"
   },
@@ -24,7 +31,6 @@
     "heading": "آج کی قطار",
     "signed_in_as": "{{name}} کے بطور سائن اِن",
     "site_caption": "{{site}} · {{name}} کے بطور سائن اِن",
-    "switch_user": "صارف تبدیل کریں",
     "empty_heading": "آج کوئی لوڈ متوقع نہیں",
     "last_sync": "آخری مطابقت {{when}}",
     "no_sync_yet": "MyMRC کے ساتھ ابھی تک کوئی مطابقت نہیں چلی۔",
@@ -182,7 +188,8 @@
     "error_access_denied": "آپ کا Microsoft اکاؤنٹ DR3-Vision کے لیے مجاز نہیں۔ ایڈمن سے کہیں کہ آپ کو شامل کرے۔",
     "error_not_configured": "Microsoft سائن اِن ابھی ترتیب نہیں دیا گیا۔ ایڈمن سے سیٹ اَپ مکمل کرنے کے لیے کہیں۔",
     "error_session_expired": "آپ کا سائن اِن سیشن ختم ہو گیا۔ جاری رکھنے کے لیے دوبارہ سائن اِن کریں۔",
-    "error_generic": "سائن اِن مکمل نہ ہو سکا۔ دوبارہ کوشش کریں۔"
+    "error_generic": "سائن اِن مکمل نہ ہو سکا۔ دوبارہ کوشش کریں۔",
+    "signed_out": "آپ لاگ آؤٹ ہو چکے ہیں۔"
   },
   "relative_time": {
     "just_now": "ابھی ابھی",
@@ -200,7 +207,6 @@
   },
   "floor": {
     "common": {
-      "back": "← واپس",
       "program": "پروگرام",
       "non_program": "غیر پروگرام",
       "total": "کل",

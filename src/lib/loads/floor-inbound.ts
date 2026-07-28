@@ -43,7 +43,13 @@ import {
   MYMRC_HAUL_SOURCE_TYPE,
   type BulkInboundView,
 } from '@/lib/loads/bulk-inbound';
-import { dayISO, dayKeyUTCFromISO, pacificDayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
+import {
+  dayISO,
+  dayKeyUTCFromISO,
+  pacificDayISO,
+  pacificDayStartInstantPlus,
+  pacificMidnightInstantOfDayISO,
+} from '@/lib/time';
 
 const TABLE = 'inbound_loads';
 
@@ -313,13 +319,17 @@ export async function listFloorInboundDays(
     new Date(dayKeyUTCFromISO(todayKey).getTime() - (days - 1) * 86_400_000),
   );
   const windowStart = pacificMidnightInstantOfDayISO(windowStartKey);
+  // ADR-0065 — the floor never shows a FUTURE day either. Without this upper
+  // bound a future-dated aggregate row would render as a selectable day that the
+  // server-side `assertCurrentPacificDay` pin then refuses to save.
+  const windowEnd = pacificDayStartInstantPlus(1, now);
 
   const [aggRows, perLoadRows] = await Promise.all([
     prisma.inboundLoad.findMany({
       where: {
         site_id: siteId,
         load_source_type: { in: [...AGGREGATE_SOURCE_TYPES] },
-        arrived_at: { gte: windowStart },
+        arrived_at: { gte: windowStart, lt: windowEnd },
       },
       orderBy: { arrived_at: 'desc' },
       select: {
@@ -337,7 +347,7 @@ export async function listFloorInboundDays(
         site_id: siteId,
         status: { in: [...VERIFIED_INBOUND_STATUSES] },
         load_source_type: { notIn: [...AGGREGATE_SOURCE_TYPES] },
-        arrived_at: { gte: windowStart },
+        arrived_at: { gte: windowStart, lt: windowEnd },
       },
       select: { arrived_at: true },
     }),
@@ -387,11 +397,12 @@ export async function countUnconfirmedInboundDays(
     new Date(dayKeyUTCFromISO(todayKey).getTime() - (days - 1) * 86_400_000),
   );
   const windowStart = pacificMidnightInstantOfDayISO(windowStartKey);
+  const windowEnd = pacificDayStartInstantPlus(1, now); // ADR-0065 — no future days
   return prisma.inboundLoad.count({
     where: {
       site_id: siteId,
       load_source_type: MYMRC_HAUL_SOURCE_TYPE,
-      arrived_at: { gte: windowStart },
+      arrived_at: { gte: windowStart, lt: windowEnd },
     },
   });
 }

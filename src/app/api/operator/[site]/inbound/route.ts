@@ -1,7 +1,8 @@
 // ADR-0060 F-2 — iPad FLOOR inbound-confirmation API (list + confirm/correct/enter).
 //
 // Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator`, the floor
-// analogue of the manager `requireActivatedManager` used by /api/manager/[site]/bulk-inbound
+// analogue of the manager `requireActivatedManager`. ADR-0065: this write path is gated on
+// its OWN `ipad_inbound` surface, not the shared `loads_inventory` master gate, used by /api/manager/[site]/bulk-inbound
 // (the desktop path this mirrors). Every write re-derives operator + site from the session
 // server-side — a client-supplied siteId/userId is never trusted.
 //
@@ -17,10 +18,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { confirmFloorInboundDay, listFloorInboundDays } from '@/lib/loads/floor-inbound';
-import { requireActivatedOperator, loadsErrorResponse } from '@/lib/loads/route-helpers';
+import {
+  requireActivatedOperator,
+  loadsErrorResponse,
+  assertCurrentPacificDay,
+} from '@/lib/loads/route-helpers';
+import { UI_SURFACE } from '@/lib/notify/rollout';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** ADR-0065 — the floor iPad shows exactly one day: today. */
+const FLOOR_DAY_WINDOW = 1;
 
 const Confirm = z.object({
   inboundDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -33,8 +42,9 @@ const Confirm = z.object({
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
-    const ctx = await requireActivatedOperator(site);
-    const rows = await listFloorInboundDays(ctx.siteId, ctx.userId);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_INBOUND);
+    // ADR-0065 — current Pacific day only (no historical/future views on the iPad).
+    const rows = await listFloorInboundDays(ctx.siteId, ctx.userId, FLOOR_DAY_WINDOW);
     return NextResponse.json({ rows });
   } catch (e) {
     return loadsErrorResponse(e, {
@@ -48,10 +58,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
-    const ctx = await requireActivatedOperator(site);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_INBOUND);
     const parsed = Confirm.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
     const d = parsed.data;
+    // ADR-0065 — current Pacific day only; a hand-edited or replayed body
+    // must not be able to confirm counts against another day.
+    assertCurrentPacificDay(d.inboundDate);
     const row = await confirmFloorInboundDay({
       siteId: ctx.siteId,
       // D-3: key the day at Pacific-midnight; `${date}T00:00:00Z` round-trips to the same

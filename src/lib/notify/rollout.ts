@@ -49,6 +49,28 @@ export const UI_SURFACE = {
   // Consulted by `assertLoadsInventoryActivated` (record-guards) and the
   // loads-inventory page gate. Default/unregistered ⇒ admin-only (fail-safe).
   LOADS_INVENTORY: 'loads_inventory',
+
+  // ── ADR-0065 — PER-SURFACE iPad (floor) gates ──────────────────────────────
+  // `loads_inventory` is a SHARED master gate: it also fronts the manager
+  // desktop loads/inventory tabs and every loads write. Bill needs to disable
+  // ONE iPad surface without a deploy AND without dropping the managers' tabs,
+  // so each operator surface gets its own row. These are read INSTEAD of
+  // `loads_inventory` on the iPad; the manager desktop keeps reading the master.
+  //
+  // The hub (`/operator/[site]/today`) is deliberately NOT gated — Bill:
+  // "leave the site picker do not strand anyone." Only its cards + its F-1
+  // on-hand summary block are gated, so a signed-in operator always lands
+  // somewhere navigable.
+  /** Truck queue + the per-load dock workflow (`/queue`, `/load/[id]`) and their writes. */
+  IPAD_QUEUE: 'ipad_queue',
+  /** Inbound haul-count confirmation (ADR-0060 F-2). */
+  IPAD_INBOUND: 'ipad_inbound',
+  /** Physical on-hand count (ADR-0060 F-3). */
+  IPAD_COUNT: 'ipad_count',
+  /** Processed / stripped-count confirmation (ADR-0060 F-4). */
+  IPAD_PROCESSED: 'ipad_processed',
+  /** The F-1 on-hand summary BLOCK inside the hub — not the hub itself. */
+  IPAD_TODAY_SUMMARY: 'ipad_today_summary',
 } as const;
 
 export type NotifySurfaceCode = (typeof NOTIFY_SURFACE)[keyof typeof NOTIFY_SURFACE];

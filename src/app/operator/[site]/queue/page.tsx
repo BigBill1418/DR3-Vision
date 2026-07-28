@@ -1,28 +1,36 @@
 import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
-import { formatDate, formatTime, formatRelative } from '@/lib/format';
+import { formatTime, formatRelative } from '@/lib/format';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { PendingBanner } from './pending-banner';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
-import { SignOutButton } from './sign-out-button';
 import { HOME_ROUTE } from '@/lib/routes';
-import { pacificDayStartInstant, pacificDayStartInstantPlus } from '@/lib/time';
+import { currentPacificDayWindow } from '@/lib/time';
+import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
 // list of in-window inbound hauls for the operator's site, ordered
 // by expected arrival. Auto-refresh + pull-to-refresh are wired in
 // the `QueueClient` wrapper.
 //
-// "In-window" = the CURRENT PACIFIC DAY ONLY, uncancelled (revised
-// 2026-07-28 — it previously meant "today or any later date", which put
-// the whole future on the queue). The iPad shows no historical and no
-// future hauls; see the window comment below for the Pacific-boundary
-// correctness reason. T-006 wires the load workflow that converts an
-// `ExpectedLoad` into an `InboundLoad`; until then "started" loads
-// just sit on the queue.
+// "In-window" = THE CURRENT PACIFIC DAY ONLY (ADR-0065). It previously meant
+// "arriving today or any later date" — an unbounded `gte` that put every future
+// load on the queue. On 2026-07-28 that was 14 rows where 1 was actionable.
+// Bill's directive for the floor iPad is explicit: "only going to show hauls
+// from the current day … no historical or future views."
+//
+// The bound is Pacific, not server-local. The container runs UTC, so the old
+// `new Date(); setHours(0,0,0,0)` computed the UTC day: after 5 PM Pacific the
+// queue would silently roll to TOMORROW mid-shift, hiding the loads the
+// evening-shift operator was actually working. `currentPacificDayWindow` is the
+// same day-key definition `floor-inbound` / `onHand` / the MyMRC bridge use, so
+// the iPad and billing agree on what "today" is.
+//
+// T-006 wires the load workflow that converts an `ExpectedLoad` into an
+// `InboundLoad`; until then "started" loads just sit on the queue.
 //
 // Per ADR-0014 this is the first OPERATOR working surface — green
 // palette, not the auth-screen black. The pre-PIN routes
@@ -50,34 +58,15 @@ export default async function OperatorQueuePage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  // The iPad shows the CURRENT PACIFIC DAY ONLY — no historical, no future
-  // (operator directive 2026-07-28, as the floor went live on this surface).
-  //
-  // Two defects are corrected here, and the second one is the load-bearing part:
-  //
-  //  1. The window was open-ended (`gte` with no upper bound), so every future
-  //     expected load sat on the queue — 14 rows on the day this was found, of
-  //     which 1 was actually today's.
-  //
-  //  2. The day boundary was `new Date().setHours(0,0,0,0)` — SERVER-LOCAL
-  //     midnight. The app container runs with no TZ set (UTC), and both sites
-  //     are Pacific. So between 5 PM and midnight Pacific, UTC has already
-  //     rolled over and the queue silently switched to TOMORROW mid-shift,
-  //     hiding the loads the evening crew was actually working.
-  //
-  // `pacificDayStartInstant` is the same DST-correct boundary `onHand`'s inbound
-  // window, `bulk-inbound`, the MyMRC bridge, and the floor-confirm path already
-  // key on — so the iPad's "today" is byte-identical to what billing counts.
-  // Do NOT reintroduce a second day-key definition here.
-  const windowAt = new Date();
-  const startOfTodayPT = pacificDayStartInstant(windowAt);
-  const startOfTomorrowPT = pacificDayStartInstantPlus(1, windowAt);
+  const now = new Date();
+  const today = currentPacificDayWindow(now);
 
   const loads = await prisma.expectedLoad.findMany({
     where: {
       site_id: site.id,
       cancelled_at: null,
-      expected_arrival_at: { gte: startOfTodayPT, lt: startOfTomorrowPT },
+      // Half-open [start, endExclusive) — current Pacific day only.
+      expected_arrival_at: { gte: today.start, lt: today.endExclusive },
     },
     select: {
       id: true,
@@ -104,20 +93,13 @@ export default async function OperatorQueuePage({ params }: Props) {
   });
   const lastSyncAt = latest?.last_synced_at ?? null;
 
-  const now = new Date();
-
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
-      <div className="mx-auto flex max-w-2xl flex-col gap-6">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{t('queue.heading')}</h1>
-            <p className="text-sm text-dr3-cream/70">
-              {t('queue.site_caption', { site: site.name, name: session.user.name })}
-            </p>
-          </div>
-          <SignOutButton siteCode={site.code} />
-        </header>
+    <main className="px-6 pb-8">
+      <div className="mx-auto flex max-w-2xl flex-col gap-6 pt-6">
+        <FloorPageHeading
+          title={t('queue.heading')}
+          caption={t('queue.site_caption', { site: site.name, name: session.user.name })}
+        />
 
         <QueueClient lastSyncAt={lastSyncAt?.toISOString() ?? null}>
           <PendingBanner />
@@ -137,19 +119,15 @@ export default async function OperatorQueuePage({ params }: Props) {
                 const transporterName =
                   l.transporter?.name ?? l.transporter_name_at_sync ?? t('queue.unknown_carrier');
                 const arrival = l.expected_arrival_at;
-                const isToday = arrival.toDateString() === now.toDateString();
                 return (
                   <li key={l.id}>
                     <QueueRow siteCode={site.code} expectedLoadId={l.id}>
+                      {/* No date shown: the queue is current-Pacific-day only
+                          (ADR-0065), so every row is today by construction. */}
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-xl font-semibold tabular-nums">
                           {formatTime(arrival, locale)}
                         </span>
-                        {!isToday && (
-                          <span className="text-sm text-dr3-cream/70">
-                            {formatDate(arrival, locale)}
-                          </span>
-                        )}
                       </div>
                       <p className="mt-2 text-base font-medium">{sourceName}</p>
                       <p className="text-sm text-dr3-cream/70">{transporterName}</p>

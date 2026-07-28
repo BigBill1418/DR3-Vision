@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { HOME_ROUTE } from '@/lib/routes';
 import { DashboardAvatar } from './dashboard-avatar';
 import { HealthPill } from './health-pill';
+import { SignOutPill } from './sign-out-pill';
 
 interface VisionShellProps {
   userName: string;
@@ -80,6 +81,11 @@ export function VisionShell({
               </span>
             </div>
             <DashboardAvatar name={userName} />
+            {/* ADR-0065 — `/` has no route-group layout, so it inherits no
+                ManagerChrome. Its natural slot is this header band. No back
+                pill: this IS the back destination. English labels, matching
+                the rest of this shell (no I18nProvider at the root). */}
+            <SignOutPill label="Log out" ariaLabel="Log out of DR3-Vision" />
           </div>
         </header>
 

@@ -1010,7 +1010,17 @@ async function seedRolloutSurfaces(siteIds) {
     'equipment_trend',
     'yard_list', // rollup §1.8 — manager Yard view, born pilot (admin-only until flipped)
     'loads_inventory', // ADR-0037 D7 — master loads/inventory + floor-operator gate, born pilot
+    // ADR-0065 — per-surface iPad gates Bill turned OFF (his decision AND the
+    // ADR-0047 default). `ipad_today_summary` gates only the F-1 on-hand block
+    // inside the hub; the hub itself is never gated (nobody gets stranded).
+    'ipad_count',
+    'ipad_processed',
+    'ipad_today_summary',
   ];
+  // ADR-0065 — retrofitted gates over surfaces that are ALREADY live to operators.
+  // Born-pilot protects new exposure; seeding these `pilot` would take working
+  // screens away on the next deploy. See the migration header for the full rationale.
+  const UI_LIVE = ['ipad_queue', 'ipad_inbound'];
 
   const rows = [];
   for (const code of ['woodland', 'eugene']) {
@@ -1022,6 +1032,8 @@ async function seedRolloutSurfaces(siteIds) {
       rows.push({ kind: 'notification', surface_code, site_id, rollout_state: 'live', updated_at: new Date() });
     for (const surface_code of UI_PILOT)
       rows.push({ kind: 'ui', surface_code, site_id, rollout_state: 'pilot', updated_at: new Date() });
+    for (const surface_code of UI_LIVE)
+      rows.push({ kind: 'ui', surface_code, site_id, rollout_state: 'live', updated_at: new Date() });
   }
   const res = await prisma.rolloutSurface.createMany({ data: rows, skipDuplicates: true });
   console.log(`  rollout_surfaces: ${res.count} inserted (idempotent; existing admin flips preserved)`);

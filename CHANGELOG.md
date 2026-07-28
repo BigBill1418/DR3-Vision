@@ -5,6 +5,129 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-28 (the iPad queue used the UTC day, not the Pacific day — ADR-0065)
+
+**Correctness fix, independent of any scoping request.** The operator queue computed "today"
+with `new Date(); d.setHours(0,0,0,0)` — **server-local** midnight. The app container runs UTC
+with no `TZ` set; both sites are Pacific (Woodland CA / Eugene OR). From **5:00 PM Pacific
+onward UTC has already rolled to the next day**, so an evening-shift operator's queue would
+silently switch to the WRONG DAY mid-shift — hiding the loads they were actually working and
+showing tomorrow's. It would have misfiled evening loads.
+
+- **New `currentPacificDayWindow()`** in `@/lib/time` returns the half-open `[start,
+endExclusive)` instant window for the current Pacific day, built from the same
+  `pacificDayStartInstant` that `floor-inbound`, `bulk-inbound`, `onHand` and the MyMRC bridge
+  already key on. **No second day-key definition was introduced** — the queue was the odd one
+  out, and now agrees with billing.
+- Covered by `src/lib/pacific-day-window.test.ts`, which asserts the exact failing case: at
+  6:00 PM Pacific (= 01:00 UTC the next day) the window still resolves to the Pacific day and
+  excludes tomorrow's loads. PST (winter, UTC-8) is covered too.
+
+### Changed — 2026-07-28 (the floor iPad shows the current day only — ADR-0065)
+
+Bill: _"vision on the ipad is only going to show hauls from the current day … no historical or
+future views."_ Live prod on 2026-07-28 had **14 uncancelled expected loads** in the queue's
+window (1 today, 13 across 07-29 → 08-07) because the filter was an unbounded `gte`.
+
+- **Queue** bounded to the current Pacific day. The per-row date badge is deleted — every row
+  is today by construction.
+- **`/inbound` (F-2)** lists 1 day, not 14. The hub's "unconfirmed" badge counted a **14-day
+  lookback** — exactly the historical view being ruled out — and is now scoped to today.
+  `listFloorInboundDays` / `countUnconfirmedInboundDays` also gained an **upper** bound at the
+  next Pacific midnight (they had only a window start), so no future-dated row can render as a
+  selectable day. Both are floor-only callers — the office paths are untouched.
+- **Server-side pin:** `assertCurrentPacificDay()` rejects (422 `date_not_today`) any floor
+  write naming another day. UI scoping is not a control: the floor APIs take the target day in
+  the request body, so a hand-edited or replayed offline-queue entry could otherwise reach
+  another day. It **refuses** rather than silently retargeting to today — silently rewriting
+  the day would file units against the wrong production day.
+- Swept `/operator/**` for other date affordances: there are no date pickers, day steppers or
+  date query params. `/count` is on-hand-now (no date); `/processed` was already today-only and
+  is now pinned server-side too.
+
+### Added — 2026-07-28 (per-surface iPad rollout gates — Bill can turn one screen off with no deploy — ADR-0065)
+
+Every iPad floor surface shared ONE rollout code, `loads_inventory` — which also gates the
+**manager desktop** loads-inventory + processed-units-close tabs and every loads write. It is
+`live` at both sites, so there was no way to disable a single iPad screen without dropping the
+managers' tabs.
+
+- **Five new `kind='ui'` surfaces**, each read by the screen _and_ the write path it governs:
+  `ipad_queue` (queue + `/load/[id]` + the dock server actions), `ipad_inbound`, `ipad_count`,
+  `ipad_processed`, `ipad_today_summary` (the F-1 on-hand block only).
+- **Seeded per Bill's decision:** `ipad_queue`/`ipad_inbound` **live**; `ipad_count`,
+  `ipad_processed`, `ipad_today_summary` **pilot** (off). Migration
+  `20260813_adr0065_ipad_per_surface_rollout_gates` is additive + idempotent (`ON CONFLICT DO
+NOTHING`, TEXT ids) and never reverts an admin flip; `prisma/seed.mjs` carries the same five.
+- **Deliberate ADR-0047 deviation, documented:** decision #3 says new surfaces are born pilot.
+  `ipad_queue`/`ipad_inbound` are seeded `live` because these gates are **retrofitted over
+  already-live functionality** — born-pilot protects _new_ exposure, it is not a mandate to
+  take a _working_ surface down. See ADR-0065 D2.
+- **The hub is never gated** ("leave the site picker do not strand anyone"). PIN success lands
+  there, so only its content is gated — the F-1 block and each card, now **including the truck
+  queue card**, which was previously hardcoded un-gated. With everything off the hub still
+  renders a heading, an explanation and Log Out.
+- **Writes are gated, not just pages.** `requireActivatedOperator` now requires an explicit
+  surface code (no default, so a caller cannot silently re-couple to the master gate). Most
+  importantly `operator/[site]/actions.ts` — the dock workflow — had **no rollout gate at
+  all**; it writes `inbound_loads`, which feeds `onHand` and billing, so a bookmarked
+  `/operator/<site>/load/<id>` could drive it regardless of the hidden card.
+- Re-enable path: `/admin/rollout` → flip the row → save. Verified the panel lists any
+  registered surface, so the new rows appear with no code change.
+
+### Added — 2026-07-28 (back + Log Out on every screen — ADR-0065, extends ADR-0064)
+
+Bill: _"we also need a back button and a log out button on every screen"_ and, for the iPad,
+_"switch user should be titled Log Out — make it available and easier to see from any page."_
+
+- **`ManagerChrome`** (dashboard / bonus / admin / `/`) extends the ADR-0064 back bar with a
+  sign-out. The manager surface previously had **no sign-out control anywhere** — a manager's
+  only way out was clearing cookies. Mounted in the three group layouts + `VisionShell`; zero
+  page edits. Logout is a **local** sign-out to `/login?signedout=1` (with a new "You've been
+  signed out" confirmation); the Entra/M365 session in the same browser is deliberately left
+  alone, so this is **not** a shared-device logout.
+- **`FloorChrome`** (operator) is a separate component because the auth models differ: PIN on a
+  shared device, and sign-out lands on the site's **name picker**, never `/login` — operators
+  have no SSO account and `/login` would strand them. Mounted once in the operator layout, so
+  all 9 screens inherit it. `/operator/[site]/load/[id]` — a 7-stage workflow whose only exits
+  were submit and reject — finally has a way out.
+- Back is always an **explicit destination, never `router.back()`**: the offline queue plus
+  `revalidatePath`/`redirect` make history unreliable.
+- **The green theme is preserved (hard rule #3 / ADR-0008).** The shared `NavPill` primitive
+  owns geometry only (`min-h-[44px]`, border, focus ring); the palette is passed in, with
+  `GREEN_TONE` living in `operator/_components/floor-tone.ts`. Putting a green tone in a shared
+  `_components` file tripped the ADR-0051 office dark-theme sweep — correctly — so the floor
+  palette physically lives in the floor tree.
+
+### Fixed — 2026-07-28 (operator surface alignment — ADR-0065)
+
+- **Locale switcher no longer overlaps page content.** It was `fixed end-3 top-3` and floated
+  over whatever the page drew: it covered the logo on the site picker (`py-10`) and sat on top
+  of the sign-out button on the queue (`py-8`). It now lays out inside the sticky chrome band,
+  so the overlap class is gone rather than papered over with per-page padding.
+- **Top clearance moved into the shell.** `FloorShell` owns `min-h-screen`, the ADR-0014
+  background split (black pre-PIN trio / green working screens) and clearance; all 9 pages
+  dropped their ad-hoc `pt-20` / `py-10` / `py-8` / `py-6`.
+- **Touch targets ≥44px (ADR-0060)** on the controls Bill asked about: the operator sign-out
+  (was `px-4 py-2` ≈40px), the `/inbound` `/count` `/processed` back links (≈40px, now supplied
+  by the chrome), and the load-workflow pending pill (was `px-3 py-2 text-xs`).
+- **Three incompatible operator header markups** collapsed into `FloorPageHeading`.
+- **RTL:** the back chevron was a hardcoded left-pointing path — wrong direction in Urdu. It
+  now mirrors via `rtl:rotate-180`, and the `'← Back'` glyph was stripped out of
+  `floor.common.back` (key removed; the chevron is rendered, not translated).
+- **Redundant back links removed** from `dashboard/billing-variance`, `bonus/standings` and
+  `bonus/page` now that the chrome is universal. Legitimate second-level parent links (e.g.
+  `← Admin`) are untouched.
+- New i18n keys in EN/ES/UR for both namespaces (`nav.sign_out*`, `nav.back*`, `nav.log_out*`,
+  `auth_login.signed_out`); the CI locale-parity gate passes.
+
+### Added — 2026-07-28 (ADR backfill)
+
+- **`docs/adr/0064-always-visible-back-bar.md` written** — six source files cited ADR-0064 but
+  the file was never committed with PR #163. Reconstructed from the shipped implementation.
+- `docs/adr/README.md` index backfilled with the missing rows for **0051, 0052, 0053, 0054,
+  0062**, plus 0064 and 0065.
+
 ### Changed — 2026-07-28 (AP equipment selector is fleet-wide — ADR-0046 Amendment 7)
 
 Operator directive, overriding ADR-0046 Amendment 5 (D-M5-6). The Approve-panel

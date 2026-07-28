@@ -1,16 +1,17 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import { prisma } from '@/lib/prisma';
 import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
+import { FloorPageHeading } from '../../_components/page-heading';
 import { CountClient } from './count-client';
 
 // ADR-0060 F-3 — floor physical on-hand count. Enters a `measured` physical snapshot as
 // the new anchor via reconcilePhysicalCount. Establishes Eugene's first anchor.
-// Operator-PIN gated + ADR-0047 rollout-gated.
+// Operator-PIN gated + ADR-0065 rollout-gated on its OWN `ipad_count` surface.
+// The count is always of on-hand NOW, so it carries no date affordance.
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,7 @@ export default async function FloorCountPage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  const live = await isUiSurfaceLive(UI_SURFACE.LOADS_INVENTORY, siteId);
+  const live = await isUiSurfaceLive(UI_SURFACE.IPAD_COUNT, siteId);
 
   let expectedTotal = '0';
   let jurisdiction: 'california' | 'oregon' = 'oregon';
@@ -40,17 +41,9 @@ export default async function FloorCountPage({ params }: Props) {
   }
 
   return (
-    <main className="min-h-screen bg-dr3-green-deep px-6 py-8 text-dr3-cream">
-      <div className="mx-auto flex max-w-2xl flex-col gap-6">
-        <header className="flex flex-col gap-2">
-          <Link
-            href={`/operator/${siteCode}/today`}
-            className="self-start rounded-md px-2 py-2 text-base font-semibold text-dr3-cream/80 hover:text-dr3-cream"
-          >
-            {t('floor.common.back')}
-          </Link>
-          <h1 className="text-2xl font-bold tracking-tight">{t('floor.count.heading')}</h1>
-        </header>
+    <main className="px-6 pb-8">
+      <div className="mx-auto flex max-w-2xl flex-col gap-6 pt-6">
+        <FloorPageHeading title={t('floor.count.heading')} />
 
         {!live ? (
           <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
