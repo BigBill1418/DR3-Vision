@@ -133,9 +133,14 @@ export interface FakeSite {
   code: string;
   name: string;
 }
-/** ADR-0066 §1.5 — a per-site holiday. `holiday_date` is the UTC day key. */
+/**
+ * ADR-0066 §1.5 — a per-site holiday. `holiday_date` is the UTC-midnight day key
+ * (the @db.Date storage invariant). It pauses the weekday clock ONLY when every
+ * active site observes it — see `fleetWideHolidays`.
+ */
 export interface FakeSiteHoliday {
-  id: string;
+  /** Optional: the scanner's fixtures set it, the digest's do not. */
+  id?: string;
   site_id: string;
   holiday_date: Date;
 }
@@ -174,6 +179,8 @@ export interface FakeUser {
   role: 'operator' | 'manager' | 'admin';
   all_sites: boolean;
   is_active: boolean;
+  /** Soft-delete marker. Optional so existing fixtures need not enumerate it. */
+  deleted_at?: Date | null;
 }
 export interface FakePollRun {
   id: string;
@@ -309,18 +316,43 @@ export function makeFakePrisma(db: FakeDb) {
         const row = rows[0];
         return row ? pick(row, args.select) : null;
       },
-      // ADR-0066 §1.5 — the escalation scanner's candidate read:
-      // `{ status: 'pending_second_approval', escalated_at: null }` (the shape the
-      // `ap_requests_pending_second_escalation_idx` partial index serves).
+      // ADR-0066 §1.5 + §1.7 — UNION of both consumers' query shapes. The
+      // escalation scanner reads `{ status: 'pending_second_approval',
+      // escalated_at: null }` (the shape the partial index serves); the morning
+      // digest reads a scalar status OR `{ in: [...] }`, plus an
+      // `escalated_at: { gte }` instant bound, ordered by `received_at` or
+      // `escalated_at`. Supporting only one would silently break the other's
+      // fixtures, so both are implemented here.
       async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
+        const statusCond = w['status'];
+        const statusIn =
+          statusCond && typeof statusCond === 'object'
+            ? (statusCond as { in?: string[] }).in
+            : undefined;
+        const escCond = w['escalated_at'];
+        const escGte = (escCond as { gte?: Date } | undefined)?.gte;
         let rows = db.requests.filter((r) => {
-          if (w['status'] !== undefined && r.status !== w['status']) return false;
-          if (w['escalated_at'] === null && escalatedAtOf(r) !== null) return false;
+          if (statusIn) {
+            if (!statusIn.includes(r.status)) return false;
+          } else if (statusCond !== undefined && r.status !== statusCond) return false;
+          // Scanner idempotency key: an ABSENT field must read as null.
+          if (escCond === null && escalatedAtOf(r) !== null) return false;
+          if (escGte) {
+            const e = escalatedAtOf(r);
+            if (e === null || e.getTime() < escGte.getTime()) return false;
+          }
           if (w['id'] !== undefined && r.id !== w['id']) return false;
           return true;
         });
-        rows = rows.sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
+        const ob = args.orderBy as AnyRecord | undefined;
+        if (ob?.['escalated_at'] !== undefined) {
+          rows = [...rows].sort(
+            (a, b) => (escalatedAtOf(a)?.getTime() ?? 0) - (escalatedAtOf(b)?.getTime() ?? 0),
+          );
+        } else {
+          rows = [...rows].sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
+        }
         return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
       },
       async create(args: { data: AnyRecord; select?: AnyRecord }) {
@@ -539,20 +571,32 @@ export function makeFakePrisma(db: FakeDb) {
         const row = db.users.find((u) => u.id === args.where['id']);
         return row ? pick(row, args.select) : null;
       },
-      // Honors the shapes the AP roster + rollout paths use: `id: { in: [...] }`,
-      // `is_active`, `email: { not: null }`, `role`, `all_sites`.
-      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+      // Honors the shapes the AP roster + rollout + digest paths use:
+      // `id: { in: [...] }`, `is_active`, `email: { not: null }`, `deleted_at: null`,
+      // `role` (scalar OR `{ in: [...] }`), `all_sites`, and `orderBy: { name }`.
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
         const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
-        const rows = db.users.filter((u) => {
+        const roleCond = w['role'];
+        const roleIn =
+          roleCond && typeof roleCond === 'object' ? (roleCond as { in?: string[] }).in : undefined;
+        let rows = db.users.filter((u) => {
           if (idIn && !idIn.includes(u.id)) return false;
           if (w['is_active'] !== undefined && u.is_active !== w['is_active']) return false;
           if (w['email'] && (w['email'] as AnyRecord)['not'] === null && u.email === null)
             return false;
-          if (w['role'] !== undefined && u.role !== w['role']) return false;
+          // Soft-delete filter: `deleted_at: null` excludes soft-deleted rows.
+          // A fixture that omits the field is treated as NOT deleted.
+          if (w['deleted_at'] === null && (u.deleted_at ?? null) !== null) return false;
+          if (roleIn) {
+            if (!roleIn.includes(u.role)) return false;
+          } else if (roleCond !== undefined && u.role !== roleCond) return false;
           if (w['all_sites'] !== undefined && u.all_sites !== w['all_sites']) return false;
           return true;
         });
+        if ((args.orderBy as AnyRecord | undefined)?.['name'] !== undefined) {
+          rows = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+        }
         return rows.map((u) => (args.select ? pick(u, args.select) : { ...u }));
       },
     },

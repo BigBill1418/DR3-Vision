@@ -1,0 +1,649 @@
+// ADR-0066 §1.7 — Bill's 06:00 PT weekday AP morning digest.
+//
+// ── What this is ────────────────────────────────────────────────────────────
+// An OVERSIGHT tool, not a work queue. Bill, verbatim: *"it's an oversight tool,
+// the team works off the live queue."* So it goes to exactly one person — and
+// that person is resolved by the `notify_daily_digest` PREF (§1.6), never by a
+// hardcoded address. If Bill's account changes, or he adds someone, the prefs
+// row is the only thing that moves.
+//
+// ── Coverage: everything pending ────────────────────────────────────────────
+// Bill chose the widest option explicitly. Four item sections plus two warning
+// classes:
+//
+//   1. `pending_second_approval` — WITH the individual who owes the signature,
+//      resolved through the shared §1.4 resolver (never re-derived here).
+//   2. `pending` — no first approval yet, flagged by age.
+//   3. `pending_review` (Hold) — only the ones that have gone STALE.
+//   4. Escalations that fired since the last digest.
+//   W1. Any ACTIVE approver with no `ap_approval_routing` row. This is how a
+//       missing pair gets noticed (§1.4: the table must be TOTAL).
+//   W2. Any invoice 3+ days old — which also marks the WHOLE digest high
+//       priority.
+//
+// ── Suppression (§1.7, and the easiest thing to get wrong) ──────────────────
+// A digest with nothing in it is not sent AT ALL. No zero-state noise, no
+// "0 pending" mail. Asserted directly in `morning-digest.test.ts`.
+//
+// The one deliberate refinement: "empty" means NO ITEMS **AND** NO WARNINGS. A
+// routing-coverage warning with an empty queue still sends. Suppressing it would
+// mean a missing routing pair stays invisible until an invoice happens to arrive
+// — which is the exact shape of the outage ADR-0066 exists to fix (a real
+// misconfiguration that looks like silence). A routing warning is a one-minute
+// fix that then stops recurring, so this cannot become chronic noise.
+//
+// ── Time (ADR-0065) ─────────────────────────────────────────────────────────
+// Both sites are Pacific; the container runs UTC. Every timestamp shown to Bill
+// goes through `formatPacificDateTime` and every AGE is counted in PACIFIC
+// CALENDAR DAYS. Counting in UTC would roll the day boundary at 4/5 PM Pacific
+// and over-age every evening invoice by a full day. No new date arithmetic —
+// the weekday gate and the day-step primitives come from `business-clock.ts`.
+//
+// ── Chokepoint (ADR-0047 / CLAUDE.md #12) ───────────────────────────────────
+// Sent via `notifyStaff()` on the EXISTING `ap_notify` surface — never a raw
+// mail import (enforced by `no-direct-mail.test.ts`). Reusing `ap_notify` rather
+// than registering a new surface is deliberate: `ap_notify` is `live` at both
+// sites (ADR-0066 Check D), and Bill's instruction for §1.7 was *"we want that
+// daily digest to go live as well - its time."* A new surface would be born
+// `pilot` and would NOT ship live.
+//
+// ── Separate email, deliberately (§1.7) ─────────────────────────────────────
+// Bill picked 06:00 WITHOUT the "merge with a future document-ingestion digest"
+// option. This module owns one email, one subject line, one cron service; a
+// future ingestion digest gets its own.
+
+import { prisma } from '@/lib/prisma';
+import type { PrismaClient } from '@prisma/client';
+import { notifyStaff, type NotifyStaffMode } from '@/lib/notify/notify-staff';
+import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
+import { log } from '@/lib/observability/logger';
+import { dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
+import {
+  fleetWideHolidays,
+  isBusinessDay,
+  isBusinessDayNow,
+  pacificDayISO,
+  pacificDayStartInstantPlus,
+} from './business-clock';
+import { dailyDigestRecipients } from './notification-prefs';
+import { resolveSecondApproval } from './second-approval-resolver';
+import { apQueueUrl, apRequestUrl } from './notify';
+
+/**
+ * Age (in Pacific calendar days) at which an item raises the age warning AND
+ * marks the whole digest high priority (§1.7).
+ */
+export const AGE_WARNING_DAYS = 3;
+
+/**
+ * A Hold is STALE at the same threshold. One number in the digest, not two:
+ * Bill asked for "Hold that have gone stale" without naming a figure, and a
+ * second, different age boundary in the same email is a thing to misread rather
+ * than a thing to act on.
+ */
+export const STALE_HOLD_DAYS = AGE_WARNING_DAYS;
+
+/**
+ * How far back to walk for the previous business day when bounding the
+ * escalation delta. Covers a long holiday weekend with room to spare.
+ */
+const MAX_LOOKBACK_DAYS = 7;
+
+/** DR3 brand (CLAUDE.md hard rule #3 — GREEN + BLACK, never SVdP red). */
+const DR3_GREEN_DEEP = '#00524c';
+const DR3_GREEN = '#0b7a6e';
+const INK = '#1a1a1a';
+const MUTED = '#6b6b6b';
+const HAIRLINE = '#e2e6e4';
+const PAPER = '#f4f6f5';
+const ALERT = '#8a1c1c';
+const ALERT_BG = '#fdf1f1';
+
+// ────────────────────────────────────────────────────────────────────────────
+// Payload
+// ────────────────────────────────────────────────────────────────────────────
+
+/** One invoice row in the digest. */
+export interface DigestItem {
+  requestId: string;
+  subject: string;
+  vendor: string | null;
+  amountCents: number | null;
+  /** Pacific calendar days since `received_at`. The uniform age definition. */
+  ageDays: number;
+  /** Pacific wall-clock label for `received_at`. */
+  receivedLabel: string;
+  /**
+   * Section-specific secondary fact: who owes the signature (second approval),
+   * when the hold was placed, or when the escalation fired. Null when N/A.
+   */
+  detail: string | null;
+  /** Tier-1 deep link to THIS request in the AP queue (ADR-0036 click policy). */
+  url: string;
+}
+
+export interface ApMorningDigestPayload {
+  /** Pacific day key the digest covers. */
+  dayISO: string;
+  /** `pending_second_approval`, each with who owes the signature. */
+  pendingSecondApproval: DigestItem[];
+  /** `pending` — nothing signed yet. */
+  awaitingFirstApproval: DigestItem[];
+  /** `pending_review` held for >= STALE_HOLD_DAYS. */
+  staleHolds: DigestItem[];
+  /** Escalations that fired since the previous digest. */
+  escalations: DigestItem[];
+  /** Routing-coverage + age warnings (and any resolver `problems`). */
+  warnings: string[];
+  /** True when any item is >= AGE_WARNING_DAYS old. Drives `importance: high`. */
+  highPriority: boolean;
+  /** Nothing to say at all — items AND warnings empty. Suppresses the send. */
+  empty: boolean;
+}
+
+export type ApMorningDigestSkipReason =
+  /** Weekend or fleet-wide holiday (§1.7 — weekdays only). */
+  | 'not_business_day'
+  /** No items and no warnings — suppressed entirely, no zero-state noise. */
+  | 'nothing_to_report'
+  /** No user has `notify_daily_digest` on (or the ones who do are unreachable). */
+  | 'no_recipients'
+  /** M365 unconfigured — `notifyStaff` fail-open no-op. */
+  | 'mail_disabled';
+
+export interface ApMorningDigestResult {
+  sent: boolean;
+  reason?: ApMorningDigestSkipReason;
+  dayISO: string;
+  highPriority: boolean;
+  counts: {
+    pendingSecondApproval: number;
+    awaitingFirstApproval: number;
+    staleHolds: number;
+    escalations: number;
+    warnings: number;
+  };
+  mode?: NotifyStaffMode;
+  recipients?: number;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Whole PACIFIC calendar days between two instants.
+ *
+ * ADR-0065: the app container runs UTC, so `(to - from) / 86_400_000` — or any
+ * UTC day-boundary read — rolls the day at 4/5 PM Pacific. An invoice that
+ * arrived at 6 PM Monday would read as 2 days old on Tuesday morning and would
+ * trip the 3-day alarm a full day early. Both sites are Pacific; the day key is
+ * the only correct boundary. `dayKeyUTCFromISO` turns each Pacific day key into
+ * a UTC-midnight anchor, so the subtraction is exact whole days by construction.
+ */
+export function pacificCalendarDaysBetween(from: Date, to: Date): number {
+  const a = dayKeyUTCFromISO(pacificDayISO(from)).getTime();
+  const b = dayKeyUTCFromISO(pacificDayISO(to)).getTime();
+  return Math.round((b - a) / 86_400_000);
+}
+
+function fmtAmount(cents: number | null): string | null {
+  if (cents === null) return null;
+  return `$${(cents / 100).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function fmtAge(days: number): string {
+  if (days <= 0) return 'today';
+  return days === 1 ? '1 day' : `${days} days`;
+}
+
+/**
+ * Start of the window for "escalations since the last digest": Pacific midnight
+ * of the PREVIOUS business day.
+ *
+ * Why midnight rather than the previous 06:00 PT fire instant: this is built
+ * ONLY from `pacificDayStartInstantPlus`, the ADR-0065 primitive that is already
+ * DST-correct in both directions. Reconstructing "06:00 PT on some past Pacific
+ * day" would mean new wall-clock arithmetic across the DST seam — the precise
+ * thing §B.6 forbids — to buy a tighter window.
+ *
+ * The cost is that escalations that fired between midnight and 06:00 PT on the
+ * previous business day appear in TWO consecutive digests. That is the correct
+ * direction to be wrong in: a repeated line is noise, a dropped escalation is
+ * the failure mode this whole ADR exists to eliminate.
+ */
+export async function escalationWindowStart(
+  db: PrismaClient,
+  now: Date = new Date(),
+): Promise<Date> {
+  const earliest = pacificDayStartInstantPlus(-MAX_LOOKBACK_DAYS, now);
+  const holidays = await fleetWideHolidays(db, pacificDayISO(earliest), pacificDayISO(now));
+  for (let back = 1; back <= MAX_LOOKBACK_DAYS; back++) {
+    const dayStart = pacificDayStartInstantPlus(-back, now);
+    if (isBusinessDay(dayStart, holidays)) return dayStart;
+  }
+  // Unreachable in a real calendar (7 consecutive non-business days would mean
+  // every site closed for a week) — but never return `now` and silently report
+  // zero escalations.
+  return earliest;
+}
+
+/** The columns every section reads. */
+const ITEM_SELECT = {
+  id: true,
+  subject: true,
+  vendor_freeform: true,
+  vendor: true,
+  confirmed_amount_cents: true,
+  amount_cents: true,
+  received_at: true,
+  status: true,
+  held_at: true,
+  hold_note: true,
+  first_approver_id: true,
+  first_approved_at: true,
+  escalated_at: true,
+} as const;
+
+interface RequestRow {
+  id: string;
+  subject: string | null;
+  vendor_freeform: string | null;
+  vendor: string | null;
+  confirmed_amount_cents: number | null;
+  amount_cents: number | null;
+  received_at: Date;
+  status: string;
+  held_at: Date | null;
+  hold_note: string | null;
+  first_approver_id: string | null;
+  first_approved_at: Date | null;
+  escalated_at: Date | null;
+}
+
+function toItem(row: RequestRow, now: Date, detail: string | null): DigestItem {
+  return {
+    requestId: row.id,
+    subject: row.subject ?? '(no subject)',
+    // The Amendment-5 structured column wins; `vendor` is the deprecated
+    // pre-Amendment-5 value kept for rows decided before the migration.
+    vendor: row.vendor_freeform ?? row.vendor,
+    amountCents: row.confirmed_amount_cents ?? row.amount_cents,
+    ageDays: pacificCalendarDaysBetween(row.received_at, now),
+    receivedLabel: `${formatPacificDateTime(row.received_at)} PT`,
+    detail,
+    url: apRequestUrl(row.id),
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Build
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Gather everything pending. Pure read — no writes, no sends, so it is safe to
+ * call from a test or a future admin "preview" surface.
+ */
+export async function buildApMorningDigest(
+  db: PrismaClient,
+  now: Date = new Date(),
+): Promise<ApMorningDigestPayload> {
+  const warnings: string[] = [];
+
+  const [secondRows, pendingRows, holdRows] = await Promise.all([
+    db.apRequest.findMany({
+      where: { status: 'pending_second_approval' },
+      select: ITEM_SELECT,
+      orderBy: { received_at: 'asc' },
+    }) as Promise<RequestRow[]>,
+    db.apRequest.findMany({
+      where: { status: 'pending' },
+      select: ITEM_SELECT,
+      orderBy: { received_at: 'asc' },
+    }) as Promise<RequestRow[]>,
+    db.apRequest.findMany({
+      where: { status: 'pending_review' },
+      select: ITEM_SELECT,
+      orderBy: { received_at: 'asc' },
+    }) as Promise<RequestRow[]>,
+  ]);
+
+  // ── 1. Pending second approval — WITH who owes the signature (§1.4 resolver).
+  // One resolver call per row. The backlog is a handful of invoices by design
+  // (ADR-0066 Check A found ZERO), so the N+1 is bounded and buys us the single
+  // source of truth: re-deriving "who owes this" here is exactly the drift that
+  // caused the outage.
+  const pendingSecondApproval: DigestItem[] = [];
+  for (const row of secondRows) {
+    if (!row.first_approver_id) {
+      warnings.push(
+        `Invoice ${row.id} is in pending_second_approval with NO first approver recorded — nobody can be told who owes the signature.`,
+      );
+      pendingSecondApproval.push(toItem(row, now, 'Owed by: unknown (no first approver recorded)'));
+      continue;
+    }
+    const routed = await resolveSecondApproval(db, {
+      firstApproverId: row.first_approver_id,
+      escalated: row.escalated_at != null,
+    });
+    // Label by OUTCOME, not by the recipient list alone. Escalation is ADDITIVE
+    // (§1.5) — the routed peer stays able to sign and the fallback joins them —
+    // so labelling an escalated row "(fallback)" would misreport who is still on
+    // the hook. Only a genuine fallback outcome (no row / unreachable peer)
+    // carries that word.
+    const names = (rs: readonly { name: string }[]) => rs.map((r) => r.name).join(', ');
+    let owed: string;
+    if (routed.recipients.length === 0) {
+      owed = 'nobody reachable';
+    } else if (routed.outcome === 'escalated') {
+      owed = `${names(routed.recipients)} (either may sign)`;
+    } else if (routed.outcome === 'routed' && routed.routedTo) {
+      owed = routed.routedTo.name;
+    } else {
+      owed = `${names(routed.recipients)} (fallback)`;
+    }
+    const waiting = row.first_approved_at
+      ? ` · first-signed ${formatPacificDateTime(row.first_approved_at)} PT`
+      : '';
+    const escalated = row.escalated_at ? ' · ESCALATED' : '';
+    pendingSecondApproval.push(toItem(row, now, `Owed by: ${owed}${waiting}${escalated}`));
+    // Surface routing misconfiguration discovered while resolving a REAL row —
+    // this is the digest half of the §B.5 alarm (§1.4: degrade loudly).
+    for (const p of routed.problems) warnings.push(`Invoice ${row.id}: ${p}`);
+  }
+
+  // ── 2. No first approval yet.
+  const awaitingFirstApproval = pendingRows.map((row) => toItem(row, now, null));
+
+  // ── 3. Holds that have gone stale. A fresh hold is someone actively working
+  // the invoice; only an ABANDONED one is oversight-worthy.
+  const staleHolds = holdRows
+    .filter(
+      (row) =>
+        row.held_at !== null && pacificCalendarDaysBetween(row.held_at, now) >= STALE_HOLD_DAYS,
+    )
+    .map((row) => {
+      const heldDays = row.held_at ? pacificCalendarDaysBetween(row.held_at, now) : 0;
+      const note = row.hold_note ? ` — "${row.hold_note}"` : '';
+      return toItem(row, now, `On hold ${fmtAge(heldDays)}${note}`);
+    });
+
+  // ── 4. Escalations that fired since the previous digest.
+  const windowStart = await escalationWindowStart(db, now);
+  const escalatedRows = (await db.apRequest.findMany({
+    where: { escalated_at: { gte: windowStart } },
+    select: ITEM_SELECT,
+    orderBy: { escalated_at: 'asc' },
+  })) as RequestRow[];
+  const escalations = escalatedRows.map((row) => {
+    const when = row.escalated_at
+      ? `${formatPacificDateTime(row.escalated_at)} PT`
+      : 'unknown time';
+    const resolved = row.status === 'pending_second_approval' ? '' : ` · now ${row.status}`;
+    return toItem(row, now, `Escalated ${when}${resolved}`);
+  });
+
+  // ── W1. Routing coverage (§1.4 — "the table must be TOTAL").
+  // Enumerate every ACTIVE approver-role user and diff against the active
+  // routing rows. An approver with no row falls back to admin IMMEDIATELY, which
+  // works but is not the separation-of-duties design — Bill must see it.
+  const [approvers, routingRows] = await Promise.all([
+    db.user.findMany({
+      where: { role: { in: ['manager', 'admin'] }, is_active: true, deleted_at: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+    db.apApprovalRouting.findMany({ where: { active: true }, select: { first_approver_id: true } }),
+  ]);
+  const routedIds = new Set(routingRows.map((r) => r.first_approver_id));
+  const unrouted = approvers.filter((u) => !routedIds.has(u.id));
+  if (unrouted.length > 0) {
+    const one = unrouted.length === 1;
+    const who = unrouted.map((u) => u.name).join(', ');
+    warnings.push(
+      `${unrouted.length} active approver${one ? '' : 's'} ${one ? 'has' : 'have'} no ` +
+        `ap_approval_routing row: ${who}. Their first approvals fall back to an admin ` +
+        `immediately (no 24h wait) instead of routing to a peer. Configure the pair in ` +
+        `ap_approval_routing.`,
+    );
+  }
+
+  // ── W2. The 3-day age line, which also raises the whole digest to high.
+  const aged = [...pendingSecondApproval, ...awaitingFirstApproval, ...staleHolds].filter(
+    (i) => i.ageDays >= AGE_WARNING_DAYS,
+  );
+  const highPriority = aged.length > 0;
+  if (highPriority) {
+    const oldest = aged.reduce((a, b) => (b.ageDays > a.ageDays ? b : a));
+    warnings.push(
+      `${aged.length} invoice${aged.length === 1 ? ' is' : 's are'} ${AGE_WARNING_DAYS}+ days old (oldest: ${fmtAge(
+        oldest.ageDays,
+      )}). This digest is marked high priority.`,
+    );
+  }
+
+  const empty =
+    pendingSecondApproval.length === 0 &&
+    awaitingFirstApproval.length === 0 &&
+    staleHolds.length === 0 &&
+    escalations.length === 0 &&
+    warnings.length === 0;
+
+  return {
+    dayISO: pacificDayISO(now),
+    pendingSecondApproval,
+    awaitingFirstApproval,
+    staleHolds,
+    escalations,
+    warnings,
+    highPriority,
+    empty,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Render
+// ────────────────────────────────────────────────────────────────────────────
+
+function renderItem(item: DigestItem): string {
+  const amount = fmtAmount(item.amountCents);
+  const bits: string[] = [];
+  if (item.vendor) bits.push(escapeHtml(item.vendor));
+  if (amount) bits.push(escapeHtml(amount));
+  bits.push(`received ${escapeHtml(item.receivedLabel)}`);
+  const ageColor = item.ageDays >= AGE_WARNING_DAYS ? ALERT : MUTED;
+  const ageWeight = item.ageDays >= AGE_WARNING_DAYS ? '700' : '400';
+  return `<tr><td style="padding:10px 0;border-bottom:1px solid ${HAIRLINE}">
+    <div style="font:600 14px/1.35 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${INK}">
+      <a href="${item.url}" style="color:${DR3_GREEN_DEEP};text-decoration:none">${escapeHtml(item.subject)}</a>
+    </div>
+    <div style="font:400 12px/1.5 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${MUTED};padding-top:3px">${bits.join(' &middot; ')}</div>
+    ${
+      item.detail
+        ? `<div style="font:400 12px/1.5 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${INK};padding-top:3px">${escapeHtml(item.detail)}</div>`
+        : ''
+    }
+    <div style="font:${ageWeight} 12px/1.5 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${ageColor};padding-top:3px">Age: ${escapeHtml(fmtAge(item.ageDays))}</div>
+  </td></tr>`;
+}
+
+function renderSection(title: string, items: readonly DigestItem[]): string {
+  if (items.length === 0) return '';
+  return `<div style="padding-top:22px">
+    <div style="font:700 11px/1 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${DR3_GREEN};text-transform:uppercase;letter-spacing:0.07em;padding-bottom:4px">${escapeHtml(title)} (${items.length})</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${items.map(renderItem).join('')}</table>
+  </div>`;
+}
+
+function renderWarnings(warnings: readonly string[]): string {
+  if (warnings.length === 0) return '';
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-top:20px;background:${ALERT_BG};border-left:4px solid ${ALERT};border-radius:4px">
+    <tr><td style="padding:12px 16px">
+      <div style="font:700 11px/1 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${ALERT};text-transform:uppercase;letter-spacing:0.07em;padding-bottom:6px">Needs attention</div>
+      <ul style="margin:0;padding-left:18px;font:400 13px/1.55 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${INK}">
+        ${warnings.map((w) => `<li style="padding-bottom:4px">${escapeHtml(w)}</li>`).join('')}
+      </ul>
+    </td></tr>
+  </table>`;
+}
+
+/** The digest email body. Pure — takes a payload, returns HTML. */
+export function renderApMorningDigestHtml(payload: ApMorningDigestPayload): string {
+  const total =
+    payload.pendingSecondApproval.length +
+    payload.awaitingFirstApproval.length +
+    payload.staleHolds.length;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:${PAPER}">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${PAPER}">
+    <tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="640" style="width:640px;max-width:100%;background:#ffffff;border-radius:8px;overflow:hidden">
+        <tr><td style="background:${DR3_GREEN_DEEP};padding:18px 24px">
+          <div style="color:#ffffff;font:700 17px/1.25 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif">AP morning digest</div>
+          <div style="color:#c9e3df;font:400 13px/1.4 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;padding-top:2px">${escapeHtml(payload.dayISO)} &middot; ${total} invoice${total === 1 ? '' : 's'} pending${payload.highPriority ? ' &middot; ACTION NEEDED' : ''}</div>
+        </td></tr>
+        <tr><td style="padding:18px 24px 26px">
+          ${renderWarnings(payload.warnings)}
+          ${renderSection('Awaiting second approval', payload.pendingSecondApproval)}
+          ${renderSection('Awaiting first approval', payload.awaitingFirstApproval)}
+          ${renderSection(`On hold ${STALE_HOLD_DAYS}+ days`, payload.staleHolds)}
+          ${renderSection('Escalated since the last digest', payload.escalations)}
+          <p style="font:400 12px/1.55 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${MUTED};margin:24px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
+            Oversight only — the team works the live queue at
+            <a href="${apQueueUrl()}" style="color:${DR3_GREEN_DEEP}">the AP approval queue</a>.
+            All times are Pacific. Sent weekdays at 06:00 PT; suppressed entirely when there is nothing pending.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+  </body></html>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Send
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface RunApMorningDigestArgs {
+  db?: PrismaClient;
+  now?: Date;
+}
+
+/**
+ * The 06:00 PT weekday fire. The cron daemon fires DAILY and THIS decides
+ * whether to send — same split as the board-pack digest, so the weekday/holiday
+ * calendar lives in the app (with the DB it needs) and never in a shell cron.
+ *
+ * Idempotent in the only sense that matters here: it writes nothing and holds no
+ * ledger, so a container restart that re-fires simply re-reads the same queue and
+ * sends the same read-only digest. There is no state to corrupt and nothing that
+ * a double-send could mis-record — a second copy of an oversight email is
+ * strictly better than a ledger that suppresses a real one.
+ */
+export async function runApMorningDigest(
+  args: RunApMorningDigestArgs = {},
+): Promise<ApMorningDigestResult> {
+  const db = args.db ?? prisma;
+  const now = args.now ?? new Date();
+  const dayISO = pacificDayISO(now);
+  const emptyCounts = {
+    pendingSecondApproval: 0,
+    awaitingFirstApproval: 0,
+    staleHolds: 0,
+    escalations: 0,
+    warnings: 0,
+  };
+
+  // §1.7 — weekdays only. The SHARED clock (§1.5), never a second calendar.
+  if (!(await isBusinessDayNow(db, now))) {
+    log.info({ dayISO }, '[ap-morning-digest] not a business day — no send');
+    return {
+      sent: false,
+      reason: 'not_business_day',
+      dayISO,
+      highPriority: false,
+      counts: emptyCounts,
+    };
+  }
+
+  const payload = await buildApMorningDigest(db, now);
+  const counts = {
+    pendingSecondApproval: payload.pendingSecondApproval.length,
+    awaitingFirstApproval: payload.awaitingFirstApproval.length,
+    staleHolds: payload.staleHolds.length,
+    escalations: payload.escalations.length,
+    warnings: payload.warnings.length,
+  };
+
+  // §1.7 — SUPPRESSED ENTIRELY when there is nothing to report.
+  if (payload.empty) {
+    log.info({ dayISO }, '[ap-morning-digest] nothing pending — digest suppressed');
+    return { sent: false, reason: 'nothing_to_report', dayISO, highPriority: false, counts };
+  }
+
+  // Audience by PREF, never by hardcoded address (§1.6 / §1.7).
+  const audience = await dailyDigestRecipients(db);
+  if (audience.length === 0) {
+    // Loud, not silent: an empty digest audience is the same class of defect as
+    // the empty second-approval recipient set that caused the outage.
+    log.warn(
+      { dayISO, ...counts },
+      '[ap-morning-digest] no user has notify_daily_digest enabled — digest has nobody to go to',
+    );
+    return {
+      sent: false,
+      reason: 'no_recipients',
+      dayISO,
+      highPriority: payload.highPriority,
+      counts,
+    };
+  }
+
+  const subject = `${payload.highPriority ? 'ACTION NEEDED — ' : ''}DR3-Vision AP morning digest — ${dayISO}`;
+  const notified = await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: audience.map((u) => ({ address: u.email, name: u.name })),
+    subject,
+    htmlBody: renderApMorningDigestHtml(payload),
+    fromDisplayName: 'DR3-Vision AP',
+    ...(payload.highPriority ? { importance: 'high' as const } : {}),
+    db,
+  });
+
+  if (notified.disabled) {
+    log.warn({ dayISO }, '[ap-morning-digest] M365 disabled — digest not delivered');
+    return {
+      sent: false,
+      reason: 'mail_disabled',
+      dayISO,
+      highPriority: payload.highPriority,
+      counts,
+      mode: notified.mode,
+      recipients: notified.intendedRecipients.length,
+    };
+  }
+
+  log.info(
+    { dayISO, mode: notified.mode, delivered: notified.delivered, ...counts },
+    '[ap-morning-digest] digest sent',
+  );
+  return {
+    sent: true,
+    dayISO,
+    highPriority: payload.highPriority,
+    counts,
+    mode: notified.mode,
+    recipients: notified.intendedRecipients.length,
+  };
+}
