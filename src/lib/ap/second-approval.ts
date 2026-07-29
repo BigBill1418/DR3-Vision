@@ -34,10 +34,10 @@ import {
   type ApDecision,
   type ApMailOutcome,
 } from './approvals';
-import {
-  SECOND_APPROVAL_SELF_MIN_WAIT_MS,
-  canFulfillSecondApproval,
-} from './second-approval-routing';
+import { SECOND_APPROVAL_SELF_MIN_WAIT_MS } from './second-approval-routing';
+// ADR-0066 §1.4 — the shared resolver. Both halves of the second-approval
+// question (may this actor sign? who do we tell?) go through it.
+import { canFulfillSecondApprovalByRouting } from './second-approval-resolver';
 import { recordVisionApproval } from './baselines';
 import type { PdfRenderer } from './stamp';
 
@@ -117,7 +117,9 @@ export interface SecondApprovalResult {
  * commit stands. Throws {@link ApSecondApprovalNotEligibleError} to a non-eligible
  * actor, and the self-reconfirm / min-wait errors on the first==second path.
  */
-export async function decideSecondApproval(args: SecondApprovalArgs): Promise<SecondApprovalResult> {
+export async function decideSecondApproval(
+  args: SecondApprovalArgs,
+): Promise<SecondApprovalResult> {
   const prisma = args.prisma ?? defaultPrisma;
   const now = args.now ?? new Date();
 
@@ -138,6 +140,9 @@ export async function decideSecondApproval(args: SecondApprovalArgs): Promise<Se
       filed_not_dr3: true,
       first_approver_id: true,
       first_approved_at: true,
+      // ADR-0066 §1.5 — escalation widens the eligible set additively, so the
+      // authorization check needs to know whether this request has escalated.
+      escalated_at: true,
       decided_by: true,
       decided_at: true,
       received_at: true,
@@ -160,7 +165,17 @@ export async function decideSecondApproval(args: SecondApprovalArgs): Promise<Se
   if (row.filed_not_dr3 || !siteCode) throw new ApNotActionableError('not_dr3');
 
   // Server-authoritative authorization — a non-eligible actor is refused.
-  const eligible = await canFulfillSecondApproval(prisma, args.actor, siteCode, now);
+  //
+  // ADR-0066 §1.4: this now consumes the SHARED resolver, the same one
+  // `notifySecondApprovalNeeded` uses for recipients. Previously this leg called
+  // `canFulfillSecondApproval` (roster + admin-eligibility) while the notify leg
+  // called `activeSecondApproversForSite` (roster ALONE) — so Bill was authorized
+  // but invisible, and every Woodland request notified nobody. One function now
+  // answers both halves; they cannot drift apart again.
+  const eligible = await canFulfillSecondApprovalByRouting(prisma, args.actor, {
+    firstApproverId: row.first_approver_id ?? '',
+    escalated: row.escalated_at != null,
+  });
   if (!eligible) throw new ApSecondApprovalNotEligibleError();
 
   // first_approver == second_approver (decision (c)) — the actor is the same person

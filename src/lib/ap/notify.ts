@@ -215,3 +215,80 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+/**
+ * ADR-0066 §B.5 — the routing-misconfiguration alarm.
+ *
+ * WHY THIS EXISTS, AND WHY IT USES BOTH CHANNELS:
+ *
+ * Fail-soft is the right posture for a notification — a paging failure must never
+ * roll back a committed approval. But fail-soft over an EMPTY RECIPIENT SET is
+ * indistinguishable from a successful send, and that indistinguishability is
+ * exactly what let >= $1,000 Woodland invoices sit unapproved and invisible for
+ * days. The send stays fail-soft; the CONDITION becomes loud.
+ *
+ * It pages ntfy AND emails, deliberately. Check C (2026-07-29) found that the
+ * pre-existing second-approval ntfy publish fires before the empty-recipient
+ * check and is wrapped in `.catch(() => undefined)` — Bill received nothing from
+ * it, while publisher auth verified healthy (HTTP 200). Whatever swallowed those
+ * pages would swallow this alarm too. Reporting a notification failure over the
+ * single channel that just demonstrably failed is how the bug repeats itself, so
+ * this deliberately does not depend on ntfy alone.
+ *
+ * Itself fail-soft: raising the alarm must never fail the approval either.
+ */
+export async function reportSecondApprovalRoutingProblem(args: {
+  requestId: string;
+  firstApproverId: string;
+  problems: readonly string[];
+  recipientCount: number;
+}): Promise<void> {
+  const summary =
+    args.recipientCount === 0
+      ? 'A second approval was authorized but has NO reachable recipient — it would sit unapproved and invisible.'
+      : 'AP second-approval routing is misconfigured.';
+  const detail = args.problems.length > 0 ? args.problems.join(' · ') : '(no detail)';
+
+  log.error(
+    {
+      requestId: args.requestId,
+      firstApproverId: args.firstApproverId,
+      recipientCount: args.recipientCount,
+      problems: args.problems,
+    },
+    '[ap-notify] second-approval routing problem',
+  );
+
+  await publishNtfy({
+    topic: SYSTEM_TOPIC,
+    title: 'AP second-approval routing problem',
+    // ADR-0045 — ids only in the page body, never amount or vendor.
+    body: `${summary} Request id: ${args.requestId}. ${detail}`,
+    priority: 'urgent',
+    tags: ['rotating_light', 'ap', 'routing', 'dr3-vision'],
+    clickUrl: apRequestUrl(args.requestId),
+    // Per-request fingerprint: distinct requests always page, a retry does not.
+    fingerprint: `ap-routing-problem:${args.requestId}`,
+    cooldownMs: SECOND_APPROVAL_COOLDOWN_MS,
+  }).catch(() => undefined);
+
+  // Recipients deliberately EMPTY: `notifyStaff` routes an empty intended-set to
+  // admins, which is exactly right here — this is an operator alarm about the
+  // routing table itself, so it must reach Bill rather than the (unreachable)
+  // person the broken routing pointed at.
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [],
+    subject: `DR3-Vision — AP second-approval routing problem (request ${args.requestId})`.slice(
+      0,
+      200,
+    ),
+    htmlBody: `<p><b>${escapeHtml(summary)}</b></p>
+      <p><a href="${apRequestUrl(args.requestId)}">Open the request in the AP queue</a></p>
+      <p>Detail: ${escapeHtml(detail)}</p>
+      <p>Fix the pair at <code>/admin/ap/routing</code>. The approval itself was NOT affected — this alarm reports that the <i>notification</i> could not reach its intended person.</p>`,
+    fromDisplayName: 'DR3-Vision AP',
+    importance: 'high',
+  }).catch(() => undefined);
+}

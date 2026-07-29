@@ -83,13 +83,82 @@ const sites: FakeSite[] = [
   { id: 'site-e', code: 'eugene', name: 'Eugene' },
 ];
 const users: FakeUser[] = [
-  { id: 'u-morena', name: 'Morena', email: 'morena@svdp.us', role: 'manager', all_sites: true, is_active: true },
-  { id: 'u-bill', name: 'Bill', email: 'bill@svdp.us', role: 'admin', all_sites: true, is_active: true },
-  { id: 'u-shannon', name: 'Shannon Rockwell', email: 'shannon@svdp.us', role: 'manager', all_sites: false, is_active: true },
-  { id: 'u-janette', name: 'Janette', email: 'janette@svdp.us', role: 'manager', all_sites: false, is_active: true },
+  {
+    id: 'u-morena',
+    name: 'Morena',
+    email: 'morena@svdp.us',
+    role: 'manager',
+    all_sites: true,
+    is_active: true,
+  },
+  {
+    id: 'u-bill',
+    name: 'Bill',
+    email: 'bill@svdp.us',
+    role: 'admin',
+    all_sites: true,
+    is_active: true,
+  },
+  {
+    id: 'u-shannon',
+    name: 'Shannon Rockwell',
+    email: 'shannon@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
+  {
+    id: 'u-janette',
+    name: 'Janette',
+    email: 'janette@svdp.us',
+    role: 'manager',
+    all_sites: false,
+    is_active: true,
+  },
 ];
+// Retained so the deprecated-but-not-dropped roster still has a fixture, and so a
+// regression that starts READING it again would be visible here.
 const secondApprovers: FakeSecondApprover[] = [
   { id: 'sa-shannon', user_id: 'u-shannon', site_id: 'eugene', active: true, active_until: null },
+];
+
+// ADR-0066 §1.4 — routing is person→person now, so these fixtures key on WHO
+// SIGNED FIRST rather than on the request's site. Morena↔Janette mirrors the real
+// Woodland pair; Janette→Shannon is used by the Eugene-flavoured cases so the
+// pre-existing "Shannon confirms" assertions still exercise a routed peer.
+const approvalRouting = [
+  {
+    id: 'ar-morena',
+    first_approver_id: 'u-morena',
+    second_approver_id: 'u-shannon',
+    fallback_approver_id: null,
+    fallback_after_hours: 24,
+    active: true,
+  },
+  {
+    id: 'ar-janette',
+    first_approver_id: 'u-janette',
+    second_approver_id: 'u-shannon',
+    fallback_approver_id: null,
+    fallback_after_hours: 24,
+    active: true,
+  },
+  {
+    id: 'ar-shannon',
+    first_approver_id: 'u-shannon',
+    second_approver_id: 'u-morena',
+    fallback_approver_id: null,
+    fallback_after_hours: 24,
+    active: true,
+  },
+  {
+    id: 'ar-bill',
+    first_approver_id: 'u-bill',
+    second_approver_id: 'u-morena',
+    fallback_approver_id: null,
+    fallback_after_hours: 24,
+    active: true,
+  },
 ];
 
 function fp(db: FakeDb): PrismaClient {
@@ -186,13 +255,18 @@ describe('first leg — decideRequest routes a >= $1,000 Approve to pending_seco
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideRequest(structuredApproveArgs(db));
     expect(res.decision).toBe('approved');
     expect(res.secondApprovalPending).toBe(true);
     expect(res.mail).toBe('second_approval_pending');
-    expect(res.secondApproverLabel).toBe('Eugene (Shannon Rockwell)');
+    // ADR-0066 §1.4 — the label is the routed PERSON, not a site string. Routing no
+    // longer depends on the site, so "Eugene (Shannon Rockwell)" became actively
+    // misleading: it implied Shannon was reached because the invoice was filed to
+    // Eugene, when in fact she was reached because Morena signed first.
+    expect(res.secondApproverLabel).toBe('Shannon Rockwell');
     const row = db.requests[0]!;
     expect(row.status).toBe('pending_second_approval');
     expect(row.first_approver_id).toBe('u-morena');
@@ -214,6 +288,7 @@ describe('first leg — decideRequest routes a >= $1,000 Approve to pending_seco
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideRequest(structuredApproveArgs(db, { confirmedAmountCents: 99_999 }));
@@ -257,13 +332,23 @@ describe('routing + eligibility', () => {
   it('admin is always eligible; rostered Shannon eligible for Eugene; a regular approver is NOT', async () => {
     const db = newFakeDb({ users, sites, secondApprovers });
     const p = fp(db);
-    expect(await canFulfillSecondApproval(p, { userId: 'u-bill', role: 'admin' }, 'eugene')).toBe(true);
-    expect(await canFulfillSecondApproval(p, { userId: 'u-bill', role: 'admin' }, 'woodland')).toBe(true);
-    expect(await canFulfillSecondApproval(p, { userId: 'u-shannon', role: 'manager' }, 'eugene')).toBe(true);
+    expect(await canFulfillSecondApproval(p, { userId: 'u-bill', role: 'admin' }, 'eugene')).toBe(
+      true,
+    );
+    expect(await canFulfillSecondApproval(p, { userId: 'u-bill', role: 'admin' }, 'woodland')).toBe(
+      true,
+    );
+    expect(
+      await canFulfillSecondApproval(p, { userId: 'u-shannon', role: 'manager' }, 'eugene'),
+    ).toBe(true);
     // Shannon is rostered for Eugene, not Woodland.
-    expect(await canFulfillSecondApproval(p, { userId: 'u-shannon', role: 'manager' }, 'woodland')).toBe(false);
+    expect(
+      await canFulfillSecondApproval(p, { userId: 'u-shannon', role: 'manager' }, 'woodland'),
+    ).toBe(false);
     // Morena is a first approver but not a second approver anywhere.
-    expect(await canFulfillSecondApproval(p, { userId: 'u-morena', role: 'manager' }, 'eugene')).toBe(false);
+    expect(
+      await canFulfillSecondApproval(p, { userId: 'u-morena', role: 'manager' }, 'eugene'),
+    ).toBe(false);
   });
 });
 
@@ -274,6 +359,7 @@ describe('second leg — decideSecondApproval', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideSecondApproval({
@@ -306,6 +392,7 @@ describe('second leg — decideSecondApproval', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     await decideSecondApproval({
@@ -325,6 +412,7 @@ describe('second leg — decideSecondApproval', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideSecondApproval({
@@ -356,6 +444,7 @@ describe('second leg — decideSecondApproval', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideSecondApproval({
@@ -393,10 +482,13 @@ describe('second leg — decideSecondApproval', () => {
 
   it('fulfilling an already-decided request loses the race (ApAlreadyDecidedError)', async () => {
     const db = newFakeDb({
-      requests: [awaitingReq({ status: 'approved', decided_by: 'u-shannon', decided_at: new Date() })],
+      requests: [
+        awaitingReq({ status: 'approved', decided_by: 'u-shannon', decided_at: new Date() }),
+      ],
       users,
       sites,
       secondApprovers,
+      approvalRouting,
     });
     await expect(
       decideSecondApproval({
@@ -439,6 +531,7 @@ describe('first == second self-fulfillment edge case (decision (c))', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
     });
     await expect(
       decideSecondApproval({
@@ -457,6 +550,7 @@ describe('first == second self-fulfillment edge case (decision (c))', () => {
       users,
       sites,
       secondApprovers,
+      approvalRouting,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });
     const res = await decideSecondApproval({
@@ -477,10 +571,14 @@ describe('first == second self-fulfillment edge case (decision (c))', () => {
 describe('awaiting-2nd badge count', () => {
   it('admin sees all awaiting; rostered second approver sees only their site; others see 0', async () => {
     const db = newFakeDb({
-      requests: [awaitingReq({ id: 'r-e', site_id: 'site-e' }), awaitingReq({ id: 'r-w', site_id: 'site-w' })],
+      requests: [
+        awaitingReq({ id: 'r-e', site_id: 'site-e' }),
+        awaitingReq({ id: 'r-w', site_id: 'site-w' }),
+      ],
       users,
       sites,
       secondApprovers,
+      approvalRouting,
     });
     const p = fp(db);
     expect(await awaitingSecondApprovalCount(p, { userId: 'u-bill', role: 'admin' })).toBe(2);
@@ -499,7 +597,9 @@ describe('stamp — dual-approval visible line', () => {
       secondApproverName: 'Shannon Rockwell',
       secondApprovedAt: new Date('2026-07-22T18:00:00Z'),
     });
-    expect(line).toMatch(/^Approved by Morena on .+ PT via DR3-Vision; second approval by Shannon Rockwell on .+ PT — Site: Eugene$/);
+    expect(line).toMatch(
+      /^Approved by Morena on .+ PT via DR3-Vision; second approval by Shannon Rockwell on .+ PT — Site: Eugene$/,
+    );
   });
 
   it('a single-approver stamp carries no second-approval clause', () => {

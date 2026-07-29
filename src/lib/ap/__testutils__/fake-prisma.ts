@@ -197,6 +197,18 @@ export interface FakeDb {
   secondApprovers: FakeSecondApprover[];
   // ADR-0066 §1.4 — person→person second-approval routing.
   approvalRouting: FakeApprovalRouting[];
+  // ADR-0066 §1.6 — per-user, per-event notification prefs.
+  notificationPrefs: FakeNotificationPref[];
+}
+
+/** ADR-0066 §1.6 — a MISSING row means column defaults, not "notify nobody". */
+export interface FakeNotificationPref {
+  id: string;
+  user_id: string;
+  notify_new_invoice: boolean;
+  notify_second_approval_request: boolean;
+  notify_daily_digest: boolean;
+  notify_decision_outcome: boolean;
 }
 
 /** ADR-0066 §1.4 — one row per first approver; the table must be total. */
@@ -229,6 +241,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     baselineHistory: seed.baselineHistory ?? [],
     secondApprovers: seed.secondApprovers ?? [],
     approvalRouting: seed.approvalRouting ?? [],
+    notificationPrefs: seed.notificationPrefs ?? [],
   };
 }
 
@@ -686,6 +699,32 @@ export function makeFakePrisma(db: FakeDb) {
         const w = args.where ?? {};
         const row = db.secondApprovers.find((s) => matchSecondApprover(s, w));
         return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+    },
+    // ADR-0066 §1.6 — per-user notification prefs. A MISSING row yields null so
+    // `wantsEvent` falls through to the column defaults (never "notify nobody").
+    apNotificationPref: {
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.notificationPrefs.find(
+          (p) => w['user_id'] === undefined || p.user_id === w['user_id'],
+        );
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.notificationPrefs.filter((p) => {
+          for (const k of [
+            'notify_new_invoice',
+            'notify_second_approval_request',
+            'notify_daily_digest',
+            'notify_decision_outcome',
+          ] as const) {
+            if (w[k] !== undefined && p[k] !== w[k]) return false;
+          }
+          return true;
+        });
+        return rows.map((p) => (args.select ? pick(p, args.select) : { ...p }));
       },
     },
     // ADR-0066 §1.4 — routing lookup keyed on the FIRST approver, not the site.

@@ -45,6 +45,15 @@ healthy from the Eugene side.
   by its own seed. Now keyed on email with a role guard; validated against live prod in a
   rolled-back transaction asserting 0 unreachable approvers and 0 prefs on email-less
   accounts. A regression test models the email-less operator account explicitly.
+- **Wired end-to-end:** `decideSecondApproval`'s eligibility check and the first-leg
+  notification now both call the shared resolver; the site-roster lookup is no longer read
+  on the decision path. `ap_second_approvers` is deprecated in ADR-0046 **Amendment 8**
+  (kept for audit continuity). `secondApproverSiteLabel()` is retired from this path — under
+  person routing "Eugene (Shannon Rockwell)" implied Shannon was reached because of the
+  site, when she was reached because Rick signed first; the resolved person's name is used.
+- **Per-user pref filtering** applies AFTER routing, so a pref can only subtract a person
+  from their own routed request — it can never turn a targeted request into a broadcast.
+  A missing prefs row takes column defaults rather than silently excluding the user.
 - Checks A-D reported: backlog **empty** (Bill had cleared it manually on Jul 27 in one
   batch), roster confirmed Shannon/eugene only, `ap_notify` live at both sites.
 
