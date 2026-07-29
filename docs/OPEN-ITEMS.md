@@ -102,6 +102,50 @@ inference that Bill has to confirm one document at a time.
   search must never become a discovery source: it would pull the whole tenant, PII included,
   into a mattress-recycling document pipeline. Worth an explicit decision on whether
   `Files.Read.All` alone suffices, rather than leaving the wider grant as a default.
+
+  **⚠ AMENDED 2026-07-29 — do not act on this item before running the test below.** The
+  premise above (that the 42-site reach comes from the `Sites.Read.All` grant) is **[I]
+  inferred and UNPROVEN**. Delegated `Files.Read.All` is documented as _"Read all files that
+  user can access"_, and delegated scopes are bounded by the account's own effective
+  SharePoint rights — so the reach may be a property of `docs-dr3`'s **org-wide site
+  membership**, in which case revoking the scope would remove our ability to subscribe to a
+  SharePoint list (ADR-0067 Amendment 6 §B) while reducing the file blast radius by roughly
+  nothing, and the real lever is group membership.
+  **The falsifiable test:** obtain a delegated token for `docs-dr3` requesting only
+  `Files.Read.All offline_access openid profile User.Read` — omitting `Sites.Read.All` — and
+  re-run the same site/driveItem enumeration. ~11,403 ⇒ premise wrong, retarget the item at
+  group membership. ~0 ⇒ premise right, decide the scope.
+  **⚠ RISK, operator decision required:** the cheap way to get that token is a
+  `refresh_token` grant with a narrowed `scope`. Microsoft rotates refresh tokens on
+  redemption, so a probe that discards the returned token **may invalidate the stored
+  credential and force Bill to re-run the Connect sign-in**. That is a production-auth risk
+  for an item nothing is currently blocked on, so it has NOT been run unilaterally. Either
+  accept the re-auth risk deliberately, or run the enumeration from a separately consented
+  test app.
+
+- **C-48 — the `/shares` route runs on UNDOCUMENTED permission (extends C-43).** **[D]** The
+  permission table at https://learn.microsoft.com/en-us/graph/api/shares-get lists delegated
+  `Files.ReadWrite`, `Files.ReadWrite.All`, `Sites.ReadWrite.All` for `GET /shares/{id}` and
+  does **not** list `Files.Read.All`. **[M]** It nonetheless returns 200 for us on
+  `Files.Read.All` (measured 2026-07-29). The measurement is believed over the table — these
+  tables lag — but the consequence stands: **both discovery routes are on borrowed time from
+  different clocks.** `sharedWithMe` has a dated deprecation (~2026-11); `/shares` has an
+  undated dependency on undocumented behaviour. Neither is a reason to stop using them today;
+  together they are the strongest argument for moving primary discovery to a SharePoint
+  library (ADR-0067 Amendment 6 §E) rather than deferring it until November.
+- **C-49 — discovery under-reports RIGHT NOW, and nothing detects it.** **[M]**
+  `sharedWithMe` returns 1 item while ≥2 documents are genuinely granted to `docs-dr3` (a
+  Graph search surfaced `DR3 Machine List (2).xlsx`, an Outlook-attachment share that appears
+  in no enumeration route). **No surface compares "reachable" against "watched"**, so the
+  under-reporting is invisible — the same silent-staleness shape as ADR-0057 D9, in the one
+  layer of this pipeline that does not guard against it. This **outranks the C-43 sunset**,
+  which is at least loud and dated. Two responses, in order: (1) move primary discovery to a
+  SharePoint library, where `delta` is the only enumeration Microsoft guarantees is complete;
+  (2) interim, a coverage-divergence anomaly cross-checking an independent route
+  (`/me/insights/shared` is documented to include _"documents that are attached as files and
+  sent to the user"_ — exactly the gap that lost the Machine List). Per ADR-0067 Amendment 3
+  §D4 such a cross-check may only ever ADD suspicion, never remove a source, and must never
+  become the enumeration itself.
 - **C-45 — UNVERIFIED against the live tenant (extends C-33 to the pipeline).** Everything
   in this phase is tested against stubbed Graph responses and a real-OOXML fixture; CI has
   no tenant and Bill has not yet completed the one-time sign-in (C-32). Specifically
