@@ -27,6 +27,14 @@ export const NOTIFY_SURFACE = {
   INVOICE_APPROVAL_NOTIFY: 'invoice_approval_notify',
   COR_NOTIFY: 'cor_notify',
   AP_NOTIFY: 'ap_notify',
+  // ADR-0046 Amendment 9 (§2.4) — an approver filed an equipment ESCAPE-HATCH
+  // request. Deliberately its OWN surface rather than riding `ap_notify`: the
+  // audience is different (the SITE MANAGERS who maintain the fleet, not the
+  // approver roster), and Bill must be able to ramp this to Morena/Rick without
+  // also ramping the AP queue's new-invoice broadcast. Born pilot. Per-site rows,
+  // and this surface is CALLED per-site (the request always carries a real site),
+  // so it never takes the conservative org-wide both-sites-must-be-live path.
+  AP_EQUIPMENT_REQUEST: 'ap_equipment_request',
   // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — Bethany's board-pack
   // digest. Org-wide surface, born pilot (resolves pilot unless BOTH sites live).
   BOARD_PACK_DIGEST: 'board_pack_digest',

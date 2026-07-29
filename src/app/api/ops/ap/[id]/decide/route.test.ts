@@ -96,7 +96,10 @@ beforeEach(() => {
   assertEquipmentForSite.mockReset();
   assertEquipmentForSite.mockImplementation(async (): Promise<void> => undefined);
   evaluateVarianceForDecision.mockReset();
-  evaluateVarianceForDecision.mockImplementation(async () => ({ state: 'not_applicable', evaluation: null }));
+  evaluateVarianceForDecision.mockImplementation(async () => ({
+    state: 'not_applicable',
+    evaluation: null,
+  }));
 });
 
 describe('POST /api/ops/ap/[id]/decide — free-text caps (F7-AP)', () => {
@@ -195,7 +198,10 @@ describe('POST /api/ops/ap/[id]/decide — structured Approve (D-M5-1/6)', () =>
     expect(arg.vendorFreeform).toBe('Sunbelt Rentals');
     expect(arg.explanation).toBe('mower rental');
     expect(arg.confirmedAmountCents).toBe(12500);
-    expect(arg.equipmentLinks).toEqual({ equipmentIds: ['eq-1', 'eq-2'], notEquipmentRelated: false });
+    expect(arg.equipmentLinks).toEqual({
+      equipmentIds: ['eq-1', 'eq-2'],
+      notEquipmentRelated: false,
+    });
     expect(arg.siteId).toBe('site-w');
     // Structured Approve does NOT go through the single-note guard.
     expect(assertDecisionNote).not.toHaveBeenCalled();
@@ -239,7 +245,9 @@ describe('POST /api/ops/ap/[id]/decide — structured Approve (D-M5-1/6)', () =>
   it('400s when BOTH equipment and Not-equipment-related are chosen', async () => {
     const res = await call({ ...APPROVE, notEquipmentRelated: true, equipmentIds: ['eq-1'] });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/not both/i);
+    // Amendment 9 widened this from a pairwise "not both" to a three-way
+    // "choose ONE" — the wording moved with the rule.
+    expect((await res.json()).error).toMatch(/choose one/i);
     expect(decideRequest).not.toHaveBeenCalled();
   });
 
@@ -250,6 +258,93 @@ describe('POST /api/ops/ap/[id]/decide — structured Approve (D-M5-1/6)', () =>
     const res = await call({ ...APPROVE, notEquipmentRelated: false, equipmentIds: ['eq-x'] });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/not available for this site/i);
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+});
+
+// ── ADR-0046 Amendment 9 (§2.2) — the equipment ESCAPE HATCH ────────────────
+//
+// The hatch is the third mutually exclusive disposition. These cases exist
+// because a three-way exclusive is exactly where a pairwise check silently rots:
+// the failure mode is not a crash, it is an approval that writes TWO dispositions
+// and trips a CHECK constraint in production, or ZERO and files against nothing.
+
+describe('POST /api/ops/ap/[id]/decide — equipment escape hatch (Amendment 9)', () => {
+  const APPROVE = {
+    decision: 'approved',
+    siteId: 'woodland',
+    vendorFreeform: 'Acme Rentals',
+    explanation: 'Forklift repair',
+    confirmedAmountCents: 45_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assertEquipmentForSite.mockImplementation(async () => undefined);
+    evaluateVarianceForDecision.mockResolvedValue({ state: 'not_applicable', evaluation: null });
+  });
+
+  it('accepts a description alone and passes it through — no equipment validation', async () => {
+    const res = await call({
+      ...APPROVE,
+      equipmentRequestDescription: '  Yellow Hyster forklift, unit 7, Woodland  ',
+    });
+    expect(res.status).toBe(200);
+    // The hatch cites no registry id, so the id validator must NOT run.
+    expect(assertEquipmentForSite).not.toHaveBeenCalled();
+    expect(lastDecideArg().equipmentLinks).toEqual({
+      equipmentIds: [],
+      notEquipmentRelated: false,
+      equipmentRequestDescription: 'Yellow Hyster forklift, unit 7, Woodland',
+    });
+  });
+
+  it('a whitespace-only description does NOT satisfy the equipment requirement', async () => {
+    // The hatch must never be the cheap way out. An empty description is the same
+    // as choosing nothing at all.
+    const res = await call({ ...APPROVE, equipmentRequestDescription: '   \n  ' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/select the equipment/i);
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+
+  it('400s the hatch combined with an equipment selection', async () => {
+    const res = await call({
+      ...APPROVE,
+      equipmentIds: ['eq-1'],
+      equipmentRequestDescription: 'a forklift',
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/choose one/i);
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+
+  it('400s the hatch combined with "Not equipment-related"', async () => {
+    const res = await call({
+      ...APPROVE,
+      notEquipmentRelated: true,
+      equipmentRequestDescription: 'a forklift',
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/choose one/i);
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+
+  it('400s an over-long description (storage-DoS boundary) before any state change', async () => {
+    const res = await call({ ...APPROVE, equipmentRequestDescription: 'x'.repeat(2001) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/2000 characters or fewer/i);
+    expect(decideRequest).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the OTHER Amendment 5 requirements — the hatch waives nothing', async () => {
+    const res = await call({
+      ...APPROVE,
+      explanation: '',
+      equipmentRequestDescription: 'a forklift',
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/explanation/i);
     expect(decideRequest).not.toHaveBeenCalled();
   });
 });

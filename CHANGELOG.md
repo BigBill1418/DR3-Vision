@@ -5,6 +5,57 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (AP equipment ESCAPE HATCH — ADR-0046 Amendment 9, PR #179 Phase 2 §2)
+
+An approver holding an invoice for a machine the fleet registry does not carry had
+exactly two options, and both were lies: pick a wrong-but-plausible asset, or tick
+"Not equipment-related". Either way the invoice was filed against the wrong thing and
+nothing recorded that the registry was incomplete. Per **C-28** that is not a corner
+case — the ADR-0062 seed is a coarse jurisdiction mapping of an SVdP machine list with
+no "DR3 Eugene" facility at all.
+
+- **A third, equally explicit choice on the Approve panel** — _"Equipment not in list —
+  describe it"_ — three-way mutually exclusive with the multi-select and "Not
+  equipment-related". A REQUIRED free-text description unblocks the approval and files a
+  tracked `ap_equipment_requests` row **in the same transaction as the decision**.
+  **Not a bypass:** it costs more than the two lies it replaces, not less, and every other
+  Amendment 5 requirement (vendor, explanation, confirmed amount, variance ack) still applies.
+- **The exactly-one-disposition rule moved into Postgres.** `ap_equipment_links` now carries
+  a CHECK over all three dispositions — the invariant used to be app-enforced, and a third
+  option is exactly the change a pairwise app check silently outgrows. A second CHECK
+  requires a `resolved` request to name the asset it produced and a `rejected` one to carry
+  a non-blank note. **Both replayed against live production inside `BEGIN; … ROLLBACK;`:**
+  all 17 existing link rows satisfy the new constraint, and four negative cases were each
+  rejected by Postgres.
+- **`/admin/ap/equipment-requests`** — the resolution worklist, linked from the equipment
+  hub. Ages are **Pacific calendar days** (ADR-0065 helpers; the container runs UTC and
+  would otherwise report this afternoon's request as a day old). **Resolve** reuses the
+  EXISTING ADR-0063 create form, pre-filled from the description, and — the payoff —
+  **repoints the original `ap_equipment_links` row at the new asset**, so the historical
+  invoice ends up correctly attributed. Create + stamp + backfill are one transaction
+  (`createEquipmentInTx`); a second transaction would strand an orphan asset on failure and
+  wedge the retry on the `(site_id, display_name)` unique. **Reject** requires a note and
+  **leaves the invoice approved** — bookkeeping cleanup, never a reversal. Nothing is ever
+  hard-deleted.
+- **ACCESS is admins PLUS site managers** — a deliberate, documented exception to
+  "`/admin/*` is admin-only", gated on a narrow `users.can_resolve_equipment_requests` flag
+  in the `can_view_ap_history` shape. The people who know the fleet are the site managers;
+  funnelling every unknown asset through the one admin rebuilds the bottleneck the hatch
+  exists to remove. Admin **powers** still gate on `role === 'admin'`; the flag unlocks this
+  worklist and nothing else, is read fresh from Postgres every request, and site reach is
+  re-derived from the ROW in the API so a single-site manager cannot act on the other site.
+  Seeded for Morena, Janette (Woodland) and Rick (Eugene) — **matched on email, never name**,
+  because each also has an email-less operator PIN account a name-keyed seed would hit.
+- **EMAIL ONLY to the site managers, Bill CC'd** (hard rule #5 — no ntfy for staff), through
+  `notifyStaff()` on its OWN rollout surface `ap_equipment_request`, per-site, born `pilot`
+  so Bill can ramp it independently of the AP new-invoice broadcast. The copy leads with the
+  ask and credits the approver by name: this is a request to create a properly-formed asset
+  record, not an error report, and if it reads as one the next approver goes back to ticking
+  "Not equipment-related". With no granted manager at a site the mail goes TO the admins —
+  ADR-0066 §B.5 is the record of what a fail-soft send to nobody costs.
+- **Ops Dashboard tile** with an open-count badge, site-scoped. Distinct from the AP badge:
+  two queues, two owner sets.
+
 ### Added — 2026-07-29 (AP second-approval escalation runs on a weekday clock — ADR-0066 §1.5)
 
 The backstop half of ADR-0066. Person-to-person routing decides _who_ a second approval

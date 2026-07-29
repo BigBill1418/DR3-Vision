@@ -90,6 +90,18 @@ export interface FakeEquipmentLink {
   request_id: string;
   equipment_id: string | null;
   is_not_equipment_related: boolean;
+  /** ADR-0046 Amendment 9 (§2.3) — the escape-hatch disposition. */
+  equipment_request_id?: string | null;
+}
+
+/** ADR-0046 Amendment 9 (§2.3) — a filed equipment ESCAPE-HATCH request. */
+export interface FakeEquipmentRequest {
+  id: string;
+  ap_request_id: string;
+  site_id: string;
+  description: string;
+  requested_by: string;
+  status: 'open' | 'resolved' | 'rejected';
 }
 export interface FakeVendorBaseline {
   vendor_name_normalized: string;
@@ -218,6 +230,8 @@ export interface FakeDb {
   // ADR-0046 Amendment 5.
   equipment: FakeEquipment[];
   equipmentLinks: FakeEquipmentLink[];
+  // ADR-0046 Amendment 9 (§2.3) — escape-hatch requests.
+  equipmentRequests: FakeEquipmentRequest[];
   baselines: FakeVendorBaseline[];
   baselineHistory: FakeBaselineHistory[];
   secondApprovers: FakeSecondApprover[];
@@ -265,6 +279,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     pollRuns: seed.pollRuns ?? [],
     equipment: seed.equipment ?? [],
     equipmentLinks: seed.equipmentLinks ?? [],
+    equipmentRequests: seed.equipmentRequests ?? [],
     baselines: seed.baselines ?? [],
     baselineHistory: seed.baselineHistory ?? [],
     secondApprovers: seed.secondApprovers ?? [],
@@ -708,6 +723,7 @@ export function makeFakePrisma(db: FakeDb) {
           request_id: d['request_id'] as string,
           equipment_id: (d['equipment_id'] as string | null) ?? null,
           is_not_equipment_related: (d['is_not_equipment_related'] as boolean | undefined) ?? false,
+          equipment_request_id: (d['equipment_request_id'] as string | null | undefined) ?? null,
         };
         db.equipmentLinks.push(row);
         return { ...row };
@@ -717,7 +733,39 @@ export function makeFakePrisma(db: FakeDb) {
         const rows = db.equipmentLinks.filter(
           (l) => w['request_id'] === undefined || l.request_id === w['request_id'],
         );
-        return rows.map((l) => (args.select ? pick(l, args.select) : { ...l }));
+        // ADR-0046 Amendment 9 — resolve the `equipment_request` relation when it
+        // is selected. `pick()` alone would yield `undefined` (the field is not on
+        // the link row), which is exactly the shape that let a hatch decision
+        // render NO equipment line in the override-reject email.
+        return rows.map((l) => {
+          const req = l.equipment_request_id
+            ? (db.equipmentRequests.find((r) => r.id === l.equipment_request_id) ?? null)
+            : null;
+          const hydrated = {
+            ...l,
+            equipment_request: req ? { description: req.description } : null,
+          };
+          return args.select ? pick(hydrated, args.select) : hydrated;
+        });
+      },
+    },
+    // ADR-0046 Amendment 9 (§2.3) — the escape-hatch request table. Only `create`
+    // is modelled: `decideRequest` is the only AP path that writes here, and the
+    // read/resolve surfaces are covered against their own stand-in in
+    // `equipment-requests.test.ts`.
+    apEquipmentRequest: {
+      async create(args: { data: AnyRecord; select?: AnyRecord }) {
+        const d = args.data;
+        const row: FakeEquipmentRequest = {
+          id: uid('eqreq'),
+          ap_request_id: d['ap_request_id'] as string,
+          site_id: d['site_id'] as string,
+          description: d['description'] as string,
+          requested_by: d['requested_by'] as string,
+          status: (d['status'] as FakeEquipmentRequest['status'] | undefined) ?? 'open',
+        };
+        db.equipmentRequests.push(row);
+        return args.select ? pick(row, args.select) : { ...row };
       },
     },
     // ADR-0046 Amendment 5 (D-M5-4) — vendor baseline + history.

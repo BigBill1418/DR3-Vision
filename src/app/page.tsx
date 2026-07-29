@@ -27,6 +27,8 @@ import { BONUS_SITE_CODE } from '@/lib/bonus/access';
 import { canActOnApRequest } from '@/lib/ap/approvers';
 import { pendingApCount } from '@/lib/ap/approvals';
 import { awaitingSecondApprovalCount } from '@/lib/ap/second-approval-routing';
+import { openEquipmentRequestCount } from '@/lib/ap/equipment-requests';
+import { checkEquipmentRequestAccess, siteScopeFor } from '@/lib/auth-helpers';
 import { DASHBOARD_TILES, canSeeTile, type DashboardTile } from '@/lib/dashboard-tiles';
 import { VisionShell } from '@/app/_components/vision-shell';
 import { VisionTile } from '@/app/_components/vision-tile';
@@ -74,11 +76,34 @@ export default async function Page() {
     : 0;
   const apBadge = apPending + apAwaitingSecond;
 
+  // ADR-0046 Amendment 9 (§2.6) — the equipment ESCAPE-HATCH worklist tile + its
+  // open-request badge. The grant is read fresh from Postgres (never the JWT), so
+  // it is resolved here and threaded into the visibility matrix. The count is
+  // SITE-SCOPED to the caller's reach (hard rule #2): a single-site manager's badge
+  // counts only their own site's backlog, which is the only backlog they can act
+  // on. Skipped entirely for everyone else — no gate, no query.
+  const equipmentRequestGate = await checkEquipmentRequestAccess();
+  const canResolveEquipmentRequests = equipmentRequestGate.ok;
+  const equipmentRequestBadge = equipmentRequestGate.ok
+    ? await openEquipmentRequestCount(
+        prisma,
+        (() => {
+          const siteIds = siteScopeFor(equipmentRequestGate.ctx);
+          return siteIds ? { siteIds } : {};
+        })(),
+      )
+    : 0;
+
   const visible = DASHBOARD_TILES.filter((t) =>
-    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover),
+    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover, canResolveEquipmentRequests),
   )
     .map((t) => resolveRoute(t, ownSiteCode))
-    .map((t) => (t.key === 'ap-approvals' && apBadge > 0 ? { ...t, badgeCount: apBadge } : t));
+    .map((t) => (t.key === 'ap-approvals' && apBadge > 0 ? { ...t, badgeCount: apBadge } : t))
+    .map((t) =>
+      t.key === 'ap-equipment-requests' && equipmentRequestBadge > 0
+        ? { ...t, badgeCount: equipmentRequestBadge }
+        : t,
+    );
 
   const active = visible.filter((t) => t.status === 'active');
   const comingSoon = visible.filter((t) => t.status === 'coming-soon');
