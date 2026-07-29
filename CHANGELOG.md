@@ -57,6 +57,45 @@ healthy from the Eugene side.
 - Checks A-D reported: backlog **empty** (Bill had cleared it manually on Jul 27 in one
   batch), roster confirmed Shannon/eugene only, `ap_notify` live at both sites.
 
+### Added — 2026-07-29 (AP morning digest, 06:00 PT weekdays — ADR-0066 §1.7)
+
+Bill's oversight mail. Ships **live**, not pilot — _"we want that daily digest to go live
+as well - its time."_ One email, one recipient, weekdays only, and **nothing at all when
+there is nothing pending**.
+
+- **`scripts/ap-morning-digest.mjs`** (thin Pacific scheduler) →
+  **`/api/internal/ap/morning-digest`** (loopback-guarded) → **`src/lib/ap/morning-digest.ts`**
+  (the work), plus the **`dr3-vision-ap-morning-digest`** compose service. Same split as the
+  board-pack digest: the daemon fires DAILY, the route decides whether to send.
+- **Recipient by pref, never by name.** `dailyDigestRecipients()` reads `notify_daily_digest`
+  (§1.6). A test asserts the digest re-targets when the pref moves — the roster is data.
+- **Coverage is everything pending:** invoices awaiting a second signature (each naming the
+  individual who owes it, resolved through the §1.4 shared resolver — never re-derived here),
+  invoices with no first approval, Holds stale at 3+ days, and escalations since the last
+  digest. Every row deep-links to `/dashboard/ops/ap?request=<id>` (ADR-0036 tier-1); that URL
+  policy is now **exported from `notify.ts`** instead of re-declared, so digest and
+  notification links cannot drift.
+- **Two warning classes.** Any **active approver with no `ap_approval_routing` row** is named
+  — that is how a missing pair gets noticed (§1.4: the table must be total). Any invoice **3+
+  days old** raises a line AND marks the whole mail `importance: high` with an
+  `ACTION NEEDED` subject.
+- **Suppressed entirely on an empty state** — asserted on the send path (`notifyStaff` is
+  never called), not merely on a payload flag. One deliberate refinement: a routing-coverage
+  warning over an empty queue still sends. Suppressing it would keep a real misconfiguration
+  invisible until an invoice happened to arrive, which is the exact shape of the outage this
+  ADR exists to remove.
+- **Pacific-correct ages.** Both sites are Pacific and the container is UTC, so ages count
+  **Pacific calendar days** (ADR-0065 day key). A UTC count rolls the boundary at 4/5 PM PT
+  and would trip the 3-day alarm a full day early on every evening arrival.
+- **No UTC cron.** 06:00 PT is 13:00 UTC in PDT and 14:00 UTC in PST, so no fixed cron
+  expression can express it — either literal is wrong for half the year and would put the
+  "morning" digest at 05:00 PT all winter. The daemon re-derives the next 06:00 Pacific
+  wall-clock instant every iteration from the tz database; pinned in
+  `cron-dst-schedule.test.ts` against both absolute instants and the fall-back seam.
+- Weekday/holiday gating reuses the shared §1.5 `isBusinessDayNow()` — no second calendar.
+  Sent through `notifyStaff()` on the **existing (live) `ap_notify`** surface, so it needs no
+  new rollout row and no migration; a new surface would be born pilot and would not ship live.
+
 ### Added — 2026-07-28 (`/admin/equipment` — the equipment master is maintainable from the UI — ADR-0063)
 
 ADR-0062 seeded 554 assets and closed the empty-picker problem, but it closed it with a

@@ -161,6 +161,74 @@ explicitly.
 - Any approver added without a routing row degrades **loudly** (immediate fallback
   - digest warning), not silently.
 
+## Implementation note — §1.7, the 06:00 PT morning digest (2026-07-29)
+
+Shipped **live**, not pilot. Bill: _"we want that daily digest to go live as
+well - its time."_
+
+**Files:** `src/lib/ap/morning-digest.ts` (build + render + send),
+`src/app/api/internal/ap/morning-digest/route.ts` (loopback-guarded internal
+route), `scripts/ap-morning-digest.mjs` (thin Pacific scheduler), compose service
+`dr3-vision-ap-morning-digest`.
+
+**Audience.** Resolved through `dailyDigestRecipients()` — the
+`notify_daily_digest` pref (§1.6) — never a hardcoded address. Bill's framing:
+_"it's an oversight tool, the team works off the live queue."_ A test asserts the
+digest re-targets when the pref moves, so the roster is data, not code.
+
+**Coverage** is the widest option, as chosen: `pending_second_approval` (each
+naming the individual who owes the signature, resolved through the §1.4 shared
+resolver rather than re-derived), `pending` with no first approval, Holds stale
+at 3+ days, escalations since the previous digest, plus two warning classes —
+active approvers with no `ap_approval_routing` row, and any invoice 3+ days old
+(which also marks the whole mail `importance: high`). Every row carries a tier-1
+deep link to `/dashboard/ops/ap?request=<id>`; that URL policy is now **exported
+from `notify.ts`** rather than re-declared, so the digest and the notification
+emails cannot drift on click targets.
+
+**Suppression, and its one refinement.** Nothing pending ⇒ **no email at all**,
+asserted on the send path (`notifyStaff` never called), not merely on a payload
+flag. "Nothing" means no items **and** no warnings. A routing-coverage warning
+over an empty queue **does** send: suppressing it would keep a missing pair
+invisible until an invoice happened to arrive — a real misconfiguration wearing
+the costume of silence, which is the precise failure this ADR exists to remove.
+It is a one-minute fix that then stops recurring, so it cannot become chronic
+noise.
+
+**Clock.** Weekday gating is `isBusinessDayNow()` from the shared §1.5 module —
+no second calendar. Ages are counted in **Pacific calendar days**
+(`pacificCalendarDaysBetween`, built on the ADR-0065 day key): counting in UTC
+would roll the boundary at 4/5 PM Pacific and trip the 3-day alarm a full day
+early on every evening arrival. The escalation delta window is anchored to
+Pacific midnight of the previous **business** day rather than the previous 06:00
+fire instant — that keeps it built purely from `pacificDayStartInstantPlus`
+instead of reconstructing a wall-clock hour across the DST seam. It over-covers
+by up to six hours (an escalation can appear in two consecutive digests) and that
+is the correct direction to be wrong in.
+
+**DST.** 06:00 PT is 13:00 UTC under PDT and 14:00 UTC under PST, so **no fixed
+UTC cron expression can express it** — either literal is wrong for half the year
+and would put the "morning" digest at 05:00 PT all winter. There is no crontab:
+the daemon re-derives the next 06:00 Pacific wall-clock instant every iteration
+from the tz database via the shared offset-reprobe helper. Pinned by
+`src/__tests__/cron-dst-schedule.test.ts`, which asserts both absolute UTC
+instants and the fall-back seam.
+
+**Rollout surface.** Sent through `notifyStaff()` on the **existing `ap_notify`**
+surface, deliberately: `ap_notify` is `live` at both sites (Check D above), while
+a newly registered surface would be born `pilot` and would _not_ ship live. No
+new `rollout_surfaces` row, no migration.
+
+**Separate email.** Bill picked 06:00 without the "merge with a future
+document-ingestion digest" option, so this owns one subject line and one cron
+service; an ingestion digest gets its own.
+
+**Deliberately out of scope.** No `/admin/ap/routing` page (the warning names the
+table, not a link to a page that does not exist yet); no per-send ledger table
+(the digest writes nothing, so a re-fire is at worst a duplicate oversight
+email); no ntfy — CLAUDE.md hard rule #5 keeps ntfy to system-level events, and
+staff notification is email.
+
 ## References
 
 - CLAUDE.md hard rules #2 (site separation), #5 (ntfy is Bill-only, system events), #6 (append-only audit)

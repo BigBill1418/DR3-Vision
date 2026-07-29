@@ -20,11 +20,16 @@ const DEADMAN_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 function baseUrl(): string {
   return process.env['PUBLIC_BASE_URL']?.replace(/\/+$/, '') ?? 'https://dr3-vision.svdp.us';
 }
-function apQueueUrl(): string {
+/** Section-level link to the AP queue (ADR-0036 tier-2 fallback). */
+export function apQueueUrl(): string {
   return `${baseUrl()}/dashboard/ops/ap`;
 }
-/** Tier-1 deep link to the specific request in the AP queue (ADR-0036 click policy). */
-function apRequestUrl(requestId: string): string {
+/**
+ * Tier-1 deep link to the specific request in the AP queue (ADR-0036 click policy).
+ * EXPORTED so the §1.7 morning digest links rows the same way the notification
+ * emails do — one definition of the click policy, not two that can drift.
+ */
+export function apRequestUrl(requestId: string): string {
   return `${apQueueUrl()}?request=${encodeURIComponent(requestId)}`;
 }
 

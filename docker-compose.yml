@@ -869,6 +869,68 @@ services:
       com.barnardhq.service: 'ap-baseline-rebuild'
     logging: *logging
 
+  ap-morning-digest:
+    # AP morning-digest cron host (ADR-0066 §1.7 — Bill's 06:00 PT oversight mail).
+    #
+    # Same shape as ap-approver-expiry / board-pack-digest: a single long-running
+    # Node process under `unless-stopped` that is a THIN Pacific scheduler. On
+    # each fire it POSTs the app's internal, loopback-guarded route
+    # (`/api/internal/ap/morning-digest`); the ROUTE does the real work compiled
+    # inside the Next app via `runApMorningDigest` — gather everything pending,
+    # resolve who owes each second signature (§1.4 resolver), diff the routing
+    # table for missing pairs, and send ONE email to the `notify_daily_digest`
+    # audience through `notifyStaff()` on the (live) `ap_notify` surface. The
+    # daemon imports NO TS and no @prisma/client.
+    #
+    # ── CLOCK: 06:00 America/Los_Angeles, and NOT a UTC cron ─────────────────
+    # This container's clock is UTC. 06:00 PT is 13:00 UTC under PDT and 14:00
+    # UTC under PST, so ANY fixed UTC cron expression is wrong for roughly half
+    # the year — it would drift an hour at each DST transition and land the
+    # "morning" digest at 05:00 PT all winter. There is deliberately no crontab:
+    # `scripts/ap-morning-digest.mjs` re-derives the next 06:00 Pacific
+    # WALL-CLOCK instant on every iteration from the tz database (Intl with
+    # timeZone: America/Los_Angeles) using the shared offset-reprobe helper. The
+    # March/November transitions need no change here and are pinned by
+    # `src/__tests__/cron-dst-schedule.test.ts`.
+    #
+    # WEEKDAYS ONLY (§1.7) is enforced in the ROUTE, not here: the weekend +
+    # fleet-wide-holiday calendar lives in `isBusinessDayNow` (the shared §1.5
+    # clock) where the DB is available. This daemon fires daily; a Saturday fire
+    # is a clean, logged no-op — as is any weekday with an empty queue, which is
+    # suppressed entirely rather than sending zero-state noise.
+    #
+    # Idempotent: the digest writes nothing and keeps no ledger, so a restart
+    # that re-fires simply re-reads the same queue. A duplicate oversight email
+    # is strictly preferable to a ledger that could suppress a real one.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-ap-morning-digest
+    # Resource ceilings (audit 2026-07-16 · RES) — blast-radius cap on the shared
+    # host. Pure fetch loop, no Chromium: a fraction of the board-pack ceiling.
+    mem_limit: 256m
+    pids_limit: 128
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/ap-morning-digest.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'ap-morning-digest'
+    logging: *logging
+
   board-pack-digest:
     # Board-pack digest cron host (ADR-0045 §3 addendum, planning rollup §1.8).
     #
