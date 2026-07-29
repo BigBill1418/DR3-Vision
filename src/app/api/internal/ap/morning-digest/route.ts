@@ -4,7 +4,8 @@
 // any request carrying a `cf-connecting-ip` header (i.e. it arrived through the
 // public Cloudflare tunnel) gets a 404; the thin `scripts/ap-morning-digest.mjs`
 // daemon reaches it over the compose network at 06:00 America/Los_Angeles daily.
-// An optional `INTERNAL_CRON_TOKEN` adds a bearer check (defense in depth).
+// `INTERNAL_CRON_TOKEN` is a MANDATORY bearer in production — `guardInternalCron`
+// REFUSES with 503 (and pages) when unset; fail-open applies only in non-prod.
 // `/api/internal/ap/` is already exempted in `public-paths.ts`, so the auth
 // middleware never 307s this session-less POST.
 //
