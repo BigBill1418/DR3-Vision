@@ -697,6 +697,64 @@ services:
       com.barnardhq.service: 'audit-sweep'
     logging: *logging
 
+  doc-ingest-sweep:
+    # Shared-file document-ingestion delta sweep (ADR-0067 §3.2 D4).
+    #
+    # ── Why this one is an INTERVAL daemon, unlike every other cron here ─────
+    # The other cron hosts are Pacific wall-clock schedulers because they produce
+    # something a human reads at a particular hour. This one is not a report: it
+    # is the CORRECTNESS PATH for shared-file ingestion. Microsoft Graph change
+    # notifications give low latency, but a push-only ingester fails SILENTLY
+    # when a subscription lapses or a notification is dropped — which is exactly
+    # how MyMRC ingested nothing for months while every surface reported success
+    # (ADR-0057 D9). §3.2 D4 forbids a webhook-only path for that reason.
+    #
+    # So this sweeps every 15 minutes REGARDLESS of webhook health, and the
+    # interval is precisely the bound on how long a missed change can stay
+    # invisible. Override with DOC_INGEST_SWEEP_INTERVAL_MINUTES.
+    #
+    # The daemon is thin: it imports NO TS and no @prisma/client, and only POSTs
+    # the app's internal, loopback-guarded `/api/internal/doc-ingest/sweep`. The
+    # ROUTE does the real work inside the Next app via `runDocIngestSweep`
+    # (discovery + folder traversal, subscription create/renew, per-drive delta,
+    # classify, guardrail, apply-or-stage) and ALWAYS writes a
+    # `doc_ingest_sweep_runs` ledger row, including on throw — so "the sweep has
+    # not run since Tuesday" is visible instead of silent.
+    #
+    # Idempotent: every revision is keyed on the driveItem `ctag`, so a re-POST
+    # after a restart, a re-delivered notification and a scheduled sweep all
+    # converge on the same state rather than stacking duplicate ingests.
+    #
+    # Needs only INTERNAL_CRON_TOKEN (cron.env — the defense-in-depth bearer for
+    # the internal route, per the ADR-0053 addendum cron secret split). No db.env:
+    # the daemon reads nothing from the database.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-doc-ingest-sweep
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/doc-ingest-sweep-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here → false "unhealthy").
+    healthcheck:
+      disable: true
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback —
+      # this is a separate container). The route's cf-connecting-ip guard still
+      # rejects any public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'doc-ingest-sweep'
+    logging: *logging
+
   fuel-price-fetch:
     # Weekly EIA fuel-price fetch cron host (ADR-0040 D4).
     #

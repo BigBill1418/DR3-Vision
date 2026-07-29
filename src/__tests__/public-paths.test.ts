@@ -29,6 +29,8 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/board-pack/send', // ADR-0045 §3 addendum — board-pack digest cron
     '/api/internal/workbook-sync/poll', // ADR-0049 D2 — mandatory day-one exemption for the workbook-sync poll cron
     '/api/internal/inventory/floor-probe', // ADR-0058 — anchor-safety floor-probe gate for the MyMRC inventory bridges
+    '/api/internal/doc-ingest/sweep', // ADR-0067 §3.2 D4 — the delta sweep IS the correctness path; a silent no-op here reproduces the MyMRC failure
+    '/api/doc-ingest/notifications', // ADR-0067 §3.2 — genuinely internet-facing; clientState is the protection, not a network boundary
     '/api/intake/contact', // ADR-0045 D3 — public token-guarded contact intake
     '/operator',
     '/operator/site',
@@ -47,6 +49,8 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/surveyx/whatever', // prefix must match the full segment
     '/api/internal', // bare prefix without a route is NOT public
     '/api/exports/bonus',
+    '/api/doc-ingestx/notifications', // prefix must match the full segment
+    '/admin/doc-ingest', // the OPERATOR surfaces stay admin-gated — only the Graph webhook is public
     '/metricsx',
   ])('does NOT exempt %s', (path) => {
     expect(isPublic(path)).toBe(false);

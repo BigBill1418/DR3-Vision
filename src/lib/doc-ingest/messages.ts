@@ -87,6 +87,104 @@ export const docIngestMessages = {
   loading: 'Loading…',
   loadFailed: 'Could not load connection status',
 
+  // ── Pipeline surfaces (§3.4) ──────────────────────────────────────────────
+  sources: {
+    title: 'Shared documents',
+    subtitle:
+      'Everything shared with the document service account. Vision reads the live file — a rename or a move is the same document, not a new one.',
+    confirmQueueHeading: 'Waiting for you',
+    confirmQueueBody:
+      'Nothing is ingested from a document until you confirm what it is. Confirm once — after that the kind is registered and you are never asked again.',
+    watchedHeading: 'Watched documents',
+    empty: 'Nothing has been shared with the service account yet.',
+    columnDocument: 'Document',
+    columnKind: 'Kind',
+    columnSite: 'Site',
+    columnPeriod: 'Period',
+    columnOwner: 'Shared by',
+    columnState: 'State',
+    columnLastIngested: 'Last ingested',
+    columnActions: 'Actions',
+    proposal: 'Suggested',
+    confidence: 'confidence',
+    confirm: 'Confirm',
+    correct: 'Correct',
+    reclassify: 'Change kind',
+    reclassifyReason: 'Why is the registered kind changing?',
+    disable: 'Stop ingesting',
+    enable: 'Resume ingesting',
+    disabled: 'Ingestion stopped by you',
+    unclassified: 'Unclassified',
+    // Hard rule #2 made visible: a NULL site is UNSCOPED, never "both".
+    noSite: 'No site yet',
+    sharedTwice: 'shared by more than one person — tracked as one document',
+    readBlocked: 'Cannot be read',
+    stateAccessDenied: 'Access lost',
+    stateDisappeared: 'Deleted in Microsoft',
+    stateActive: 'Active',
+    nestedIn: 'inside a shared folder',
+    saving: 'Saving…',
+    saveFailed: 'Could not save',
+  },
+
+  anomalies: {
+    title: 'Ingestion anomalies',
+    subtitle:
+      'Changes propagate automatically once a document is confirmed. These are the changes that looked ABNORMAL and were held instead.',
+    empty: 'Nothing is waiting. Every change has flowed through normally.',
+    stagedHeading: 'Held for review',
+    otherHeading: 'Other anomalies',
+    before: 'Before (currently in force)',
+    after: 'After (proposed)',
+    apply: 'Apply this revision',
+    discard: 'Discard this revision',
+    discardReason: 'Why is this revision being discarded?',
+    acknowledge: 'Acknowledge',
+    resolve: 'Mark resolved',
+    resolveNote: 'What was done?',
+    occurrences: 'seen',
+    times: 'times',
+    showResolved: 'Show resolved',
+    hideResolved: 'Hide resolved',
+    noVersion: 'This anomaly is not about a specific revision.',
+  },
+
+  health: {
+    title: 'Ingestion health',
+    subtitle:
+      'Push notifications give speed. The scheduled sweep gives correctness. This page answers whether the sweep is actually running.',
+    sweepHeading: 'Delta sweep',
+    lastSweep: 'Last successful sweep',
+    lastAttempt: 'Last attempt',
+    sweepStale: 'THE SWEEP HAS STOPPED',
+    // The one sentence on the page that has to land. It is the MyMRC failure,
+    // named, so nobody reads a stale sweep as a cosmetic problem.
+    sweepStaleBody:
+      'Shared documents are not being reconciled. Change notifications do NOT cover this — the sweep is what guarantees a change is never missed. Anything that changed since the last successful sweep is not in Vision.',
+    sweepHealthy: 'Running normally',
+    consecutiveFailures: 'Consecutive failed runs',
+    subscriptionsHeading: 'Change notifications (speed only)',
+    pushUnproven:
+      'No change notification has been received yet. That is expected until a watched document actually changes — it is not a fault on its own.',
+    subscriptionValidated: 'Validated',
+    subscriptionUnvalidated: 'Never validated',
+    notificationsReceived: 'Notifications received',
+    expires: 'Expires',
+    sourcesHeading: 'Documents',
+    accessLost: 'Access lost',
+    disappearedCount: 'Deleted in Microsoft',
+    readBlockedCount: 'Unreadable',
+    awaitingConfirmation: 'Awaiting your confirmation',
+    stagedHeading: 'Held revisions',
+    discoveryHeading: 'Shared-item discovery',
+    // §A.9-adjacent: the deprecation is surfaced where an operator will see it.
+    discoverySunset:
+      'Microsoft has deprecated the API Vision uses to enumerate shared files. It stops returning data on',
+    discoveryDaysLeft: 'days left',
+    discoveryExpired:
+      'This API has now stopped returning data. Shared-document discovery is BROKEN until the enumeration is replaced.',
+  },
+
   errors: {
     keyMissing:
       'The token encryption key is not mounted on this host. Provision ~/.dr3-vision-secrets/doc-ingest.env before connecting.',

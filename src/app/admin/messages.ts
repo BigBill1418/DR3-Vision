@@ -299,6 +299,13 @@ export const adminMessages = {
     columnType: 'Content type',
     columnStatus: 'Status',
     columnUploadedBy: 'Uploaded by',
+    // ADR-0067 — provenance. Named "Source" rather than "Ingest source" because
+    // the answer an operator wants is "where did this come from", and for a
+    // shared-file row that is the DOCUMENT's name, not a mechanism.
+    columnIngestSource: 'Source',
+    ingestManual: 'Uploaded',
+    ingestEmail: 'Email',
+    ingestSharedFile: 'Shared document',
     columnWhen: 'When',
     columnNote: 'Note',
     columnActions: 'Actions',
