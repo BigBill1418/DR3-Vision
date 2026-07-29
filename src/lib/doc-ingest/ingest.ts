@@ -86,11 +86,48 @@ export async function ingestSource(
     return { outcome: 'skipped_read_blocked', versionId: null, anomaliesRaised: 0 };
   }
 
-  const ctag = source.ctag;
+  // ── A missing content marker must RECOVER, never silently stop ────────────
+  // The superseded code returned `unchanged` here. The reasoning was sound as
+  // far as it went — no ctag means no idempotency key, and ingesting without one
+  // would append a duplicate revision every sweep forever — but it chose the
+  // wrong failure direction. `unchanged` is indistinguishable from success, so a
+  // source that lost its marker stopped being ingested PERMANENTLY and SILENTLY
+  // while the sweep reported `ok`.
+  //
+  // That is not hypothetical: `applyDeltaItems` blanked the marker on every
+  // delta pass (see the note there), so this branch was live on the only
+  // document in the system. The two defects composed into exactly the
+  // silent-staleness class ADR-0067 was written to eliminate.
+  //
+  // A marker is recoverable — Graph will tell us the current one — so recover
+  // it. If even that fails, raise a real anomaly. Never return "nothing to do"
+  // for a condition that means "I no longer know how to do this".
+  let ctag = source.ctag;
   if (!ctag) {
-    // No content marker means no idempotency key. Refusing is right: ingesting
-    // would append a duplicate revision on every single sweep, forever.
-    return { outcome: 'unchanged', versionId: null, anomaliesRaised: 0 };
+    try {
+      const fresh = await graph.getItem(source.drive_id, source.item_id);
+      ctag = fresh.ctag;
+      if (ctag) {
+        await prisma.docSource.update({ where: { id: source.id }, data: { ctag } });
+      }
+    } catch {
+      // fall through to the anomaly below — the recovery attempt is best-effort,
+      // the alarm is not.
+    }
+  }
+  if (!ctag) {
+    const res = await raiseAnomaly(prisma, {
+      kind: 'download_failed',
+      subject,
+      docSourceId: source.id,
+      detail:
+        `"${source.display_name}" has no content marker (ctag), so Vision cannot tell whether it has ` +
+        `changed and is NOT ingesting it. This is not "unchanged" — it is "unknown". Microsoft did not ` +
+        `supply a marker and a direct re-read did not recover one.`,
+      context: { driveId: source.drive_id, itemId: source.item_id },
+      now,
+    });
+    return { outcome: 'failed', versionId: null, anomaliesRaised: res.raised ? 1 : 0 };
   }
 
   const existingVersion = await prisma.docSourceVersion.findUnique({

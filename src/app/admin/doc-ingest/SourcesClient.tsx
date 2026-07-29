@@ -4,8 +4,11 @@
 //
 // Two sections, because they are two different jobs:
 //   1. WAITING FOR YOU — sources with no registered kind. This is the D5 confirm
-//      queue, and it is at the top because nothing is ingested from a source
-//      until it is answered.
+//      queue, and it is at the top because a document whose kind is unknown is a
+//      document the kind-specific checks are not running on. It is NOT true that
+//      nothing is ingested until it is answered (this comment said so until
+//      2026-07-29): capture and archive happen regardless — `doc_class` gates no
+//      admission in `ingest.ts`. Confirmation gates INTERPRETATION, not intake.
 //   2. WATCHED — sources already registered. Read-mostly; the only routine
 //      action is Bill's kill switch.
 //

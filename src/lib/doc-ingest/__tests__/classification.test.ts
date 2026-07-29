@@ -102,8 +102,15 @@ describe('classifySourceIfNeeded', () => {
     const anomaly = openAnomalies('unclassified')[0];
     expect(anomaly).toBeDefined();
     // Graceful: it waits for him rather than erroring or guessing wildly.
-    expect(String(anomaly?.['detail'])).toContain('waiting for confirmation');
-    expect(String(anomaly?.['detail'])).toContain('Nothing is ingested');
+    expect(String(anomaly?.['detail'])).toContain('Confirm it at /admin/doc-ingest');
+    // ── CORRECTED 2026-07-29 ────────────────────────────────────────────────
+    // This used to assert the detail contained "Nothing is ingested" — i.e. the
+    // test PINNED A FALSE STATEMENT in place. `doc_class` gates no admission in
+    // `ingest.ts`: by the time this anomaly is raised the document is already
+    // archived and already in the file-drop inbox. Assert what is true, and
+    // assert the falsehood is gone.
+    expect(String(anomaly?.['detail'])).toContain('captured and archived');
+    expect(String(anomaly?.['detail'])).not.toContain('Nothing is ingested');
   });
 
   it('FLAGS a misdirected vendor invoice and states the correct address', async () => {

@@ -863,3 +863,158 @@ trace. Sources predating the enrichment (TEREX.xlsx, live now) would also never
 have been filled. A known owner is now only ever replaced by another **known**
 owner, and a null one is backfilled. Both cases are pinned by regression tests;
 the create-path tests that passed throughout are the reason this needed one.
+
+## Amendment 6 — 2026-07-29 — the delta pass was silently freezing ingestion, and §D over-generalised
+
+Written after an independent architecture review. Two of the three findings were
+already live in production; one re-opens a route the previous amendment closed
+too broadly. From this amendment on, every factual claim carries **[M]**
+measured, **[D]** documented, or **[I]** inferred — see §D.
+
+### A. The delta pass blanked the content marker, permanently stopping ingestion
+
+**[D]** Microsoft documents that delta OMITS properties: _"Delta query won't
+return some DriveItem properties… **OneDrive for Business** — Create/Modify:
+**`ctag` omitted**. Delete: `ctag`, `name` omitted."_ —
+https://learn.microsoft.com/en-us/graph/api/driveitem-delta
+
+`applyDeltaItems` (`sweep.ts`) wrote `ctag: item.ctag` unconditionally, so every
+delta pass wrote **NULL over a good marker**. `ingestSource` then hit
+`if (!ctag) return { outcome: 'unchanged' }` — and `unchanged` is
+indistinguishable from success.
+
+**Net effect: after the first delta pass a document was NEVER INGESTED AGAIN,
+while every sweep reported `status: ok`.** That is exactly the silent-staleness
+class this ADR was written to eliminate (P3, ADR-0057 D9) — sitting inside the
+mechanism built to prevent it.
+
+**[M]** Confirmed on the live database 2026-07-29 18:13 UTC, before the fix:
+`doc_sources` held `ctag = NULL, etag = NULL` for TEREX.xlsx, while its
+`doc_source_versions` row held the real marker
+`c:{58DD7F92-C24C-4AC6-B3A5-1584F4DAE23F},2977`. `delta_synced_at` confirmed the
+delta pass had run. The only document in the system was already frozen.
+
+Two independent fixes, because either alone would have left the class open:
+
+1. **A delta page may SUPPLY a marker, never REMOVE one.** It is a change
+   _signal_, not a source of truth about content markers.
+2. **A missing marker RECOVERS or ALARMS — it never reports "nothing to do".**
+   `ingestSource` now re-reads the item from Graph to recover the current ctag,
+   and raises a `download_failed` anomaly if it cannot. The original reasoning
+   ("no ctag means no idempotency key, so refuse") was correct as far as it went
+   but chose the wrong failure direction: it returned the one outcome that looks
+   like success.
+
+The second fix matters more than the first. Fix 1 closes the known cause; fix 2
+closes every future cause, because the condition can no longer be silent.
+
+**A test had pinned the defect in place** — `ingest-d8.test.ts` asserted
+`outcome === 'unchanged'` for a null ctag, encoding the silent stop as intended
+behaviour. Replaced with the two tests that would have caught this.
+
+### B. Amendment 4 §D over-generalised, and that hid a live route
+
+§D concluded: _"There is nothing to subscribe to, at any permission level."_
+**That is false as written.** The defensible statement is narrower: \*there is no
+legal subscription target for **item-level shares in colleagues' personal
+OneDrives\***. That narrower claim holds, and §D's correction of P2 stands —
+**C-44 remains correctly closed.**
+
+What the broad phrasing hid: **[D]** a SharePoint **`list`** is a subscribable
+resource at `/sites/{site-id}/lists/{list-id}`, and the create-subscription
+permissions table gives its delegated permission as **`Sites.Read.All`** —
+https://learn.microsoft.com/en-us/graph/api/resources/change-notifications-api-overview
+and https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions
+(both verified by direct fetch, not recollection). **We already hold delegated
+`Sites.Read.All`.** A document library is a list. So push notifications are
+available **today, with no scope widening**, to any document that lives in a
+library rather than a personal OneDrive.
+
+**[D]** Separately, this independently re-kills the shortcut route: delta and
+notifications do not traverse `remoteItem`. _"When using delta in a drive with
+shared folders, the shared folders themselves will be returned… but the items
+contained within a shared folder will not be returned."_ —
+https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/using-sharing-links
+A subscription on our own drive root would fire when a _shortcut_ is added, never
+when a _document_ changes. Amendment 5's measured 1→0 NO-GO is now
+over-determined. **Stop revisiting the shortcut route.**
+
+### C. Confirmation gates INTERPRETATION, not intake — three surfaces said otherwise
+
+**[M]** `doc_class` appears in `ingest.ts` exactly three times and gates no
+admission: it selects which sentence a guardrail finding carries, fills the
+advisory `detected_kind`, and rides in the audit payload. An unconfirmed source
+is downloaded, hashed, archived to R2, versioned and applied identically to a
+confirmed one.
+
+Three shipped strings claimed otherwise — `messages.ts` (_"Nothing is ingested
+from a document until you confirm what it is"_), `classification.ts` (in a live
+anomaly Bill reads), and `SourcesClient.tsx` — **and a test asserted the false
+string**, which is how it survived.
+
+**The behaviour is right; the copy was wrong.** Capture-then-label is correct:
+archiving evidence must not wait on a human, and the blast radius is contained —
+an applied version lands in `file_drops` with `status: 'received'`, an operator
+inbox, not a computed figure. All three strings now say what is true. This is the
+same defect class as Amendment 4 §A's "completely empty": **a surface asserting a
+state the system was not in.** An operator who catches one false assertion is
+right to discount every assertion after it.
+
+Also fixed: `classification_attempted_at` was stamped even when the Claude
+fallback FAILED. Since §4C's staleness gate suppresses re-classification until
+newer content lands, one transient timeout froze a proposal permanently on a weak
+local guess. Only a completed attempt now counts as an attempt.
+
+### D. Claim labelling is mandatory from here
+
+Six of the errors recorded in Amendments 1–6 share one shape:
+
+> **A conclusion was drawn from an instrument structurally incapable of producing
+> the opposite result — then stated in the voice of a measurement.**
+
+A filtered `grep` that excluded the file class by construction. A permissions
+table recalled rather than fetched. A classifier handed `null` and asked whether
+the document was empty. A discovery route recommended without ever counting what
+it would return. Amendment 4 §A _named_ this pattern — and Amendment 5 and §B
+above then repeated it. **Naming a failure mode does not prevent it; a required
+field does.**
+
+Three rules, effective now:
+
+1. **Label every factual claim** `[M]` (what/when/which call), `[D]` (primary
+   URL, quoted from a fetch, not recalled), or `[I]` (from what, and what would
+   falsify it). **An unlabeled factual claim is a defect**, like an unlabeled
+   timestamp. Under this rule the `Files.ReadWrite.All` error does not survive
+   review, because the first question becomes _"where is the URL?"_ rather than
+   _"does this sound right?"_
+2. **No absence claim without a negative control** — one check that would have
+   found the thing if it were there.
+3. **No discovery-architecture change without "today N sources, after this
+   change M."** If M is unknown, the recommendation is not ready. This one line
+   would have stopped Amendment 3 §D before it reached Bill.
+
+Note that rule 2 restates a convention already codified fleet-wide (_trace the
+error string to its source; don't pattern-match a keyword to a plausible
+subsystem_) — which was written down and still did not fire. Prose guidance is
+invisible at the moment a claim is written; a required field is not.
+
+### E. Open, not fixed here
+
+- **Discovery under-reports RIGHT NOW** — `sharedWithMe` returns 1 while ≥2
+  documents are granted, and no surface compares reachable-vs-watched. This
+  outranks the November 2026 sunset, which is at least loud and dated.
+- **A dedicated SharePoint library is the recommended primary discovery route**
+  (complete `delta` enumeration, no deprecated API, push per §B, zero new
+  grants). Amendment 3 §D6 ranked it 6th partly on _"breaks liveness for files
+  that live elsewhere"_ — **[I]** that conflated **move** with **copy**; a moved
+  file still has one home and is still read live, so D1's premise is intact.
+  Blocked on an organisational decision, not a technical one.
+- **[D]** The `/shares` permission table lists delegated `Files.ReadWrite` /
+  `Files.ReadWrite.All` / `Sites.ReadWrite.All` and does **not** list
+  `Files.Read.All` — https://learn.microsoft.com/en-us/graph/api/shares-get —
+  while **[M]** it returns 200 for us on `Files.Read.All`. Our newest discovery
+  route runs on undocumented behaviour and our other on a deprecated API. Both
+  are dated, from different clocks. Recorded against C-43.
+- **The owner backfill has no failure latch** and the notification path takes no
+  lock (a batch of N drives runs N concurrent full discoveries). Neither is
+  load-bearing at current volume; both scale badly.

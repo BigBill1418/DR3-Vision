@@ -88,16 +88,68 @@ describe('ingestSource — idempotency', () => {
     expect(prisma._stores.fileDrops).toHaveLength(1);
   });
 
-  it('refuses to ingest a source with no ctag — no idempotency key, no work', async () => {
+  // ── REGRESSION 2026-07-29 — the silent permanent stop ─────────────────────
+  // A missing ctag used to return `unchanged`, which is indistinguishable from
+  // success. Combined with `applyDeltaItems` blanking the ctag on every delta
+  // page (OneDrive for Business omits ctag from delta results), a document
+  // stopped being ingested FOREVER while the sweep reported `ok`. Measured live:
+  // `doc_sources.ctag` was NULL while the version row held the real marker.
+  //
+  // The correct behaviour for "I no longer know how to tell if this changed" is
+  // to recover, and failing that to raise an alarm — never to report nothing to
+  // do. These two tests are the ones that would have caught it.
+  it('RECOVERS a missing ctag from Graph instead of silently stopping', async () => {
+    const source = await seedSource({ ctag: null });
+    const download = vi.fn(async () => workbookBytes([['Units'], [1]]));
+    const graph = makeGraph({
+      downloadItem: download,
+      getItem: async () => ({
+        id: 'item-1',
+        driveId: 'drive-A',
+        name: 'Daily Log.xlsm',
+        isFolder: false,
+        webUrl: null,
+        ctag: 'ctag-recovered',
+        etag: null,
+        size: 10,
+        contentType: null,
+        lastModifiedAt: null,
+        lastModifiedBy: null,
+        ownerUpn: null,
+        parentItemId: null,
+        parentPath: null,
+        deleted: false,
+      }),
+    });
+
+    const result = await ingestSource(p(), graph, source, { now: NOW, putBytes });
+
+    expect(result.outcome).toBe('applied');
+    expect(download).toHaveBeenCalledTimes(1);
+    // The recovered marker is persisted, so the NEXT sweep is a cheap no-op
+    // rather than a re-download.
+    expect(prisma._stores.sources[0]?.['ctag']).toBe('ctag-recovered');
+  });
+
+  it('raises an anomaly — never "unchanged" — when the marker cannot be recovered', async () => {
     const source = await seedSource({ ctag: null });
     const download = vi.fn(async () => new Uint8Array([1]));
-    const result = await ingestSource(p(), makeGraph({ downloadItem: download }), source, {
-      now: NOW,
-      putBytes,
+    const graph = makeGraph({
+      downloadItem: download,
+      getItem: async () => {
+        throw new Error('graph unavailable');
+      },
     });
-    // Ingesting would append a duplicate revision on every sweep, forever.
-    expect(result.outcome).toBe('unchanged');
+
+    const result = await ingestSource(p(), graph, source, { now: NOW, putBytes });
+
+    // "unknown" must never be reported as "unchanged".
+    expect(result.outcome).toBe('failed');
     expect(download).not.toHaveBeenCalled();
+    const anomaly = openAnomalies('download_failed')[0];
+    expect(anomaly).toBeDefined();
+    expect(String(anomaly?.['detail'])).toContain('no content marker');
+    expect(String(anomaly?.['detail'])).toContain('not "unchanged"');
   });
 });
 

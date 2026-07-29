@@ -93,8 +93,14 @@ export const docIngestMessages = {
     subtitle:
       'Everything shared with the document service account. Vision reads the live file — a rename or a move is the same document, not a new one.',
     confirmQueueHeading: 'Waiting for you',
+    // CORRECTED 2026-07-29. This used to read "Nothing is ingested from a
+    // document until you confirm what it is." That was false: an unconfirmed
+    // document IS downloaded, archived, and placed in the file-drop inbox —
+    // `doc_class` gates no admission anywhere in `ingest.ts`. Say what is
+    // actually true, because an operator who catches one false assertion
+    // rightly discounts every assertion after it.
     confirmQueueBody:
-      'Nothing is ingested from a document until you confirm what it is. Confirm once — after that the kind is registered and you are never asked again.',
+      'These are captured and archived already — confirming tells Vision what they ARE, so the right checks run on them. Confirm once; after that the kind is registered and you are never asked again.',
     watchedHeading: 'Watched documents',
     empty: 'Nothing has been shared with the service account yet.',
     columnDocument: 'Document',

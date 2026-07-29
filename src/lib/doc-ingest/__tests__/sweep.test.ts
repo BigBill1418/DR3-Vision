@@ -316,3 +316,56 @@ describe('a NEWLY DISCOVERED source is classified from real content, not from no
     expect(versions[0]).toHaveProperty('parse_summary');
   });
 });
+
+describe('a delta page may SUPPLY a content marker, never REMOVE one', () => {
+  // REGRESSION 2026-07-29, measured live before it was found by reasoning.
+  //
+  // Microsoft documents that delta omits properties — on OneDrive for Business,
+  // create/modify responses carry NO `ctag` at all:
+  //   "Delta query won't return some DriveItem properties… OneDrive for Business
+  //    — Create/Modify: ctag omitted."
+  //   https://learn.microsoft.com/en-us/graph/api/driveitem-delta
+  //
+  // `applyDeltaItems` wrote `ctag: item.ctag` unconditionally, so every delta
+  // pass blanked the marker. `ingestSource` then read a null ctag and reported
+  // `unchanged`. Net: the document was NEVER INGESTED AGAIN, and every sweep
+  // reported `ok`. Live evidence: doc_sources.ctag = NULL while the version row
+  // held `c:{58DD7F92-…},2977`.
+  it('does not null a good ctag when the delta page omits it', async () => {
+    const graph = makeGraph({
+      listSharedWithMe: async () => [item({ id: 'item-1', ctag: 'ctag-good' })],
+      deltaForDrive: async () => ({
+        // Exactly what OneDrive for Business returns: no ctag, no etag.
+        items: [item({ id: 'item-1', ctag: null, etag: null })],
+        deltaLink: 'delta-1',
+      }),
+    });
+
+    await runDocIngestSweep(p(), {
+      now: NOW,
+      graph,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+
+    const source = prisma._stores.sources[0];
+    expect(source?.['ctag']).toBe('ctag-good');
+  });
+
+  it('DOES take a ctag the delta page actually supplies', async () => {
+    const graph = makeGraph({
+      listSharedWithMe: async () => [item({ id: 'item-1', ctag: 'ctag-old' })],
+      deltaForDrive: async () => ({
+        items: [item({ id: 'item-1', ctag: 'ctag-new' })],
+        deltaLink: 'delta-1',
+      }),
+    });
+
+    await runDocIngestSweep(p(), {
+      now: NOW,
+      graph,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+
+    expect(prisma._stores.sources[0]?.['ctag']).toBe('ctag-new');
+  });
+});

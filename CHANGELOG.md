@@ -5,6 +5,39 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-29 (the delta pass was silently freezing ingestion — ADR-0067 Amendment 6)
+
+Found by an independent architecture review, then **confirmed on the live database**: the one
+document in the system had already stopped being ingested, permanently, while every sweep
+reported `status: ok`.
+
+- **A delta page may SUPPLY a content marker, never REMOVE one.** Microsoft omits `ctag` from
+  delta results on OneDrive for Business, and `applyDeltaItems` wrote it back unconditionally
+  — blanking a good marker on every pass. `ingestSource` then read the null and returned
+  `unchanged`, which is indistinguishable from success. Live evidence before the fix:
+  `doc_sources.ctag = NULL` while the version row held
+  `c:{58DD7F92-…},2977`. This is the exact silent-staleness class ADR-0067 exists to prevent
+  (ADR-0057 D9), sitting inside the mechanism built to prevent it.
+- **A missing marker now RECOVERS or ALARMS.** `ingestSource` re-reads the item from Graph to
+  recover the marker, and raises a `download_failed` anomaly if it cannot. "I no longer know
+  whether this changed" must never be reported as "nothing to do". This second fix matters
+  more than the first: it closes every future cause, not just the known one. **A test had
+  pinned the defect in place**, asserting `unchanged` for a null ctag — replaced.
+- **Confirmation gates interpretation, not intake — and three shipped strings said otherwise.**
+  `doc_class` gates no admission anywhere in `ingest.ts`; an unconfirmed document is downloaded,
+  archived and applied like any other. `messages.ts`, `SourcesClient.tsx` and a live anomaly
+  Bill reads all claimed _"nothing is ingested until you confirm"_, and a test asserted the
+  false string. The behaviour is right — capture-then-label, landing in the operator inbox at
+  `status: 'received'`, never a computed figure — so the copy was fixed, not the code.
+- **One transient Claude timeout no longer freezes a proposal forever.**
+  `classification_attempted_at` was stamped even on a failed fallback, and the staleness gate
+  then suppressed every retry until new content landed. Only a completed attempt counts now.
+- **Correction: Amendment 4 §D over-generalised.** "There is nothing to subscribe to, at any
+  permission level" is false; the true claim is narrower (no target for _item-level shares in
+  personal OneDrives_). A SharePoint **list** is subscribable at `/sites/{id}/lists/{id}` on
+  delegated **`Sites.Read.All`** — which we already hold. Push is available today, with no
+  scope widening, for documents in a library. C-44 remains correctly closed.
+
 ### Added — 2026-07-29 (register a shared document by URL — ADR-0067 Amendment 5)
 
 `sharedWithMe` returns **one** item in this tenant while at least two documents are

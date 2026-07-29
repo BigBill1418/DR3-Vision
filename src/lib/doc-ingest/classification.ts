@@ -98,7 +98,17 @@ export async function classifySourceIfNeeded(
       proposed_confidence: classification.confidence,
       proposed_reasoning: classification.reasoning,
       proposed_source: classification.source,
-      classification_attempted_at: now,
+      // ── Only a COMPLETED attempt counts as an attempt ──────────────────────
+      // The staleness gate above suppresses re-classification until content
+      // newer than `classification_attempted_at` lands. Stamping it on a FAILED
+      // fallback therefore made one transient Claude timeout permanent: the
+      // source would sit on a weak local guess forever, with `classification_error`
+      // as the only trace, and no amount of re-sweeping would retry it.
+      //
+      // `classifyDocument` never throws — it degrades to the local answer and
+      // reports `error` — so the failure is easy to miss precisely because
+      // everything downstream looks like it worked.
+      ...(error === null ? { classification_attempted_at: now } : {}),
       classification_error: error,
     },
   });
@@ -132,8 +142,15 @@ export async function classifySourceIfNeeded(
       subject,
       docSourceId: source.id,
       detail:
+        // The second sentence used to read "Nothing is ingested from an
+        // unconfirmed source." It was false — by the time this anomaly is
+        // raised the document is already archived and already in the file-drop
+        // inbox. `doc_class` gates no admission in `ingest.ts`; what it gates is
+        // which CHECKS apply. Same defect class as the "completely empty"
+        // anomaly: a surface asserting a state the system was not in.
         `"${source.display_name}" could not be classified automatically: ${classification.reasoning} ` +
-        `It is waiting for confirmation at /admin/doc-ingest. Nothing is ingested from an unconfirmed source.`,
+        `It has been captured and archived, but Vision does not know what kind of document it is, so the ` +
+        `checks that depend on that are not running. Confirm it at /admin/doc-ingest.`,
       context: { confidence: classification.confidence },
       now,
     });

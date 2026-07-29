@@ -336,11 +336,31 @@ async function applyDeltaItems(
       continue;
     }
 
+    // ── NEVER blank a content marker from a delta page ────────────────────────
+    // Microsoft documents that delta OMITS properties: on OneDrive for Business,
+    // create/modify responses do not carry `ctag` at all.
+    //   "Delta query won't return some DriveItem properties… OneDrive for
+    //    Business — Create/Modify: ctag omitted. Delete: ctag, name omitted."
+    //   https://learn.microsoft.com/en-us/graph/api/driveitem-delta
+    //
+    // Writing `ctag: item.ctag` unconditionally therefore wrote NULL over a good
+    // marker — and `ingestSource` treats a null ctag as "no idempotency key" and
+    // returns `unchanged`. Net effect: after the first delta pass a document was
+    // NEVER INGESTED AGAIN, while the sweep reported `status: ok` every time.
+    // That is precisely the silent-staleness failure this ADR exists to prevent
+    // (ADR-0057 D9), sitting inside the mechanism meant to prevent it.
+    //
+    // MEASURED LIVE 2026-07-29: `doc_sources` held ctag NULL and etag NULL for
+    // TEREX.xlsx while its version row held the real
+    // `c:{58DD7F92-…},2977` — the delta pass had blanked both.
+    //
+    // A delta page is a CHANGE SIGNAL, not a source of truth about content
+    // markers. It may only ever supply a marker, never remove one.
     await prisma.docSource.update({
       where: { id: existing.id },
       data: {
-        ctag: item.ctag,
-        etag: item.etag,
+        ...(item.ctag !== null ? { ctag: item.ctag } : {}),
+        ...(item.etag !== null ? { etag: item.etag } : {}),
         display_name: item.name,
         last_modified_at: item.lastModifiedAt ? new Date(item.lastModifiedAt) : null,
         last_seen_at: now,
