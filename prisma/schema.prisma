@@ -108,6 +108,10 @@ model Site {
   // Shared-file document ingestion (ADR-0067). A source with site_id NULL is
   // UNCLASSIFIED, not cross-site — see DocSource.
   doc_sources DocSource[]
+  // The classifier's PROPOSED site, before a human confirms it. Deliberately a
+  // separate edge from `doc_sources`: a proposal must never be readable as a
+  // site scoping decision (hard rule #2).
+  doc_sources_proposed DocSource[] @relation("DocSourceProposedSite")
 
   @@map("sites")
 }
@@ -1065,6 +1069,37 @@ enum DocIngestAnomalyKind {
   oversize
   unclassified
   reauth_required
+  // ── Pipeline phase (§3.2 D7 / D8, §A.9) ───────────────────────────────────
+  /// The sharer's account was disabled or they left. Distinct from
+  /// `access_denied` (share revoked, account fine): the operator action is "who
+  /// owns this now", and the alert must NAME the previous owner.
+  owner_lost
+  /// Password-protected or structurally unreadable. Marked and paged ONCE —
+  /// never retried in a loop (see `DocSource.read_blocked_at`).
+  unreadable
+  /// A billing/inventory aggregate moved beyond the variance threshold. Uses the
+  /// SAME either-trips $50-flat / 15% semantics as ADR-0046 Amendment 5 D-M5-4 —
+  /// one anomaly concept in the system, not two.
+  aggregate_variance
+  /// A previously-populated column went empty/null across a revision.
+  column_nulled
+  /// The revision dropped more than the configured share of rows.
+  row_count_drop
+  /// The revision no longer parses as its REGISTERED classification. Also the
+  /// ONLY trigger for re-classification — D5 forbids re-asking otherwise.
+  parse_broken
+  /// The Graph validation-token handshake failed. Surfaced rather than silently
+  /// degrading to polling-only (§A.9): the sweep still guarantees correctness,
+  /// but latency degrades and the operator must know.
+  webhook_validation_failed
+  /// The sweep itself failed. The sweep IS the correctness guarantee (D4).
+  sweep_failed
+  /// A vendor invoice was shared here. NOT routed by this pipeline — the AP
+  /// mailbox (ADR-0046) is its address, and the detail line says so.
+  misdirected_document
+  /// A shared folder tree is deeper than the traversal limit. The limit bounds
+  /// enumeration, but hitting it means files exist that Vision is NOT watching.
+  depth_limit_reached
 }
 
 enum DocIngestAnomalySeverity {
@@ -1169,12 +1204,50 @@ model DocSource {
   site_id String?
   site    Site?   @relation(fields: [site_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
 
-  /// Classifier output (next phase). Unconstrained TEXT on purpose: the class
+  /// CONFIRMED classification. Unconstrained TEXT on purpose: the class
   /// vocabulary is not settled, and an enum would force a migration on every new
   /// document type discovered in the wild.
+  ///
+  /// D5 — classify once, confirm once, then LOCKED. A non-null `doc_class` IS
+  /// the lock: the pipeline never re-asks. There is deliberately no separate
+  /// boolean, because a boolean can drift out of agreement with this column.
   doc_class        String?
   doc_class_source String? // 'classifier' | 'operator'
   classified_at    DateTime?
+  /// Confirmed reporting period, set alongside `doc_class`.
+  period           String?
+  classified_by    String? // bare audit-actor user id (no FK)
+
+  /// The classifier's PROPOSAL, awaiting confirmation. Separate from the
+  /// confirmed columns above so a proposal can never be mistaken for a decision.
+  proposed_class              String?
+  proposed_site_id            String?
+  proposed_site               Site?     @relation("DocSourceProposedSite", fields: [proposed_site_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+  proposed_period             String?
+  proposed_confidence         Float?
+  proposed_reasoning          String?
+  proposed_source             String? // 'local' | 'claude' — which half of the hybrid
+  classification_attempted_at DateTime?
+  classification_error        String?
+
+  /// Folder traversal (D8). `parent_item_id` is the containing folder's
+  /// driveItem id within the SAME drive; NULL means this row is a shared ROOT
+  /// (the thing a human actually shared), where `depth` is 0.
+  parent_item_id String?
+  depth          Int     @default(0)
+
+  /// D8 "same file shared twice" — two people sharing one item yields ONE
+  /// logical source (the (drive_id, item_id) key guarantees it). This counter is
+  /// the EVIDENCE the dedup happened, so the surface can say so.
+  shared_by_count Int @default(1)
+
+  /// D8 "password-protected / unreadable — mark, page, DO NOT retry in a loop."
+  /// This latch is what stops the loop. It clears when the CONTENT changes (a new
+  /// ctag is a genuinely new file and earns exactly one more attempt), which is
+  /// why the blocking ctag is recorded alongside the reason.
+  read_blocked_at     DateTime?
+  read_blocked_reason String?
+  read_blocked_ctag   String?
 
   /// `ctag` changes on CONTENT change; `etag` on content OR metadata change. The
   /// sweep compares ctag to decide whether a new version row is warranted.
@@ -1203,6 +1276,10 @@ model DocSource {
   @@index([state, enabled])
   @@index([site_id, doc_class])
   @@index([last_seen_at])
+  @@index([drive_id, parent_item_id])
+  // NOTE: the confirm-queue index (`classification_attempted_at`
+  // WHERE doc_class IS NULL) is PARTIAL and therefore lives only in the
+  // hand-written migration — Prisma cannot express a partial index.
   @@map("doc_sources")
 }
 
@@ -1235,11 +1312,35 @@ model DocSourceVersion {
   file_drop_id String?
   file_drop    FileDrop? @relation(fields: [file_drop_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
 
+  /// D6 + D7. After confirmation changes propagate AUTOMATICALLY — per-change
+  /// approval would defeat the feature. The guardrail replaces that gate by
+  /// catching ABNORMAL changes, so a version is in exactly one of three states:
+  ///   applied   — auto-flowed (the normal case); `applied_at` set, audit written
+  ///   staged    — a guardrail condition tripped; held for apply-or-discard
+  ///   discarded — a human rejected the staged revision
+  staged        Boolean   @default(false)
+  staged_reason String?
+  applied_at    DateTime?
+  applied_by    String? // bare audit-actor user id (no FK)
+  discarded_at  DateTime?
+  discarded_by  String?
+
+  /// The structural projection the guardrail compares revision-over-revision
+  /// (row count, populated columns, numeric aggregates). It is the "after" of
+  /// this comparison and the "before" of the next, which is why it is persisted
+  /// rather than recomputed.
+  parse_summary Json?
+  parse_error   String?
+
   created_at DateTime @default(now())
+
+  anomalies DocIngestAnomaly[]
 
   @@unique([doc_source_id, ctag])
   @@index([doc_source_id, observed_at])
   @@index([file_drop_id])
+  // NOTE: the staged-queue index (`observed_at` WHERE staged) is PARTIAL and
+  // lives only in the hand-written migration — Prisma cannot express it.
   @@map("doc_source_versions")
 }
 
@@ -1272,6 +1373,16 @@ model DocIngestSubscription {
   failure_count Int                        @default(0)
   last_error    String?
 
+  /// When Graph last actually DELIVERED a notification here. The only honest
+  /// measure of whether push works — `state = active` merely means the
+  /// subscription exists. Active-but-never-delivered is exactly the silent
+  /// webhook failure the sweep exists to cover (§A.9).
+  last_notification_at   DateTime?
+  /// When the validation-token handshake last succeeded. NULL on an active
+  /// subscription means push was never empirically proven.
+  validated_at           DateTime?
+  notifications_received Int       @default(0)
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1303,6 +1414,11 @@ model DocIngestAnomaly {
   subscription_id String?
   subscription    DocIngestSubscription? @relation(fields: [subscription_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
 
+  /// Which REVISION this anomaly is about. Required for the before/after diff on
+  /// /admin/doc-ingest/anomalies and so apply-or-discard knows its target.
+  doc_source_version_id String?
+  doc_source_version    DocSourceVersion? @relation(fields: [doc_source_version_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
   kind     DocIngestAnomalyKind
   severity DocIngestAnomalySeverity @default(warning)
   status   DocIngestAnomalyStatus   @default(open)
@@ -1319,13 +1435,58 @@ model DocIngestAnomaly {
   resolved_by     String? // bare audit-actor user id (no FK)
   resolution_note String?
 
+  /// Last time THIS anomaly paged. Same reasoning as
+  /// `DocIngestConnection.reauth_paged_at`: `publishNtfy`'s cooldown ledger is
+  /// per-process and per-container, so it would either re-page on every restart
+  /// or suppress the FIRST page after one. This column is the ledger every
+  /// process shares.
+  last_paged_at DateTime?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([status, severity, last_seen_at])
   @@index([doc_source_id])
   @@index([subscription_id])
+  @@index([doc_source_version_id])
   @@map("doc_ingest_anomalies")
+}
+
+/// The sweep ledger. Mirrors `ap_poll_runs` (ADR-0046 C6) and for the same
+/// reason: the row is ALWAYS written, including on throw. Without it, "the sweep
+/// has not run in three weeks" is invisible — which is exactly how MyMRC
+/// ingested nothing for months (ADR-0057 D9). The health surface reads
+/// `last sweep` from here, and a stale ledger is itself the alarm.
+model DocIngestSweepRun {
+  id          String    @id @default(uuid())
+  started_at  DateTime  @default(now())
+  finished_at DateTime?
+
+  /// 'ok' | 'partial' | 'failed' | 'halted' | 'skipped'. TEXT rather than an
+  /// enum so a new outcome never needs a migration; values are asserted in code.
+  status String
+
+  /// 'scheduled' | 'notification' | 'manual' — WHY this run happened. A fleet of
+  /// `notification` runs with no `scheduled` ones means the cron is dead and only
+  /// push is keeping things current: the exact posture D4 forbids relying on.
+  trigger String @default("scheduled")
+
+  sources_discovered    Int @default(0)
+  sources_updated       Int @default(0)
+  versions_created      Int @default(0)
+  versions_applied      Int @default(0)
+  versions_staged       Int @default(0)
+  anomalies_raised      Int @default(0)
+  subscriptions_renewed Int @default(0)
+
+  error  String? // human error text; never credentials or PII
+  run_id String? // per-run correlation id (crypto.randomUUID)
+
+  created_at DateTime @default(now())
+
+  @@index([started_at])
+  @@index([status, started_at])
+  @@map("doc_ingest_sweep_runs")
 }
 
 // ────────────────────────────────────────────────────────────────────────

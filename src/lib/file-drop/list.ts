@@ -18,6 +18,16 @@ export interface FileDropRow {
   createdISO: string;
   /** false for a `pending-r2-…` placeholder key (R2 was unconfigured at capture). */
   downloadable: boolean;
+  /**
+   * ADR-0067 — how this file got here. `manual` is the pre-ADR-0067 world and
+   * remains the default, so every historical row reads correctly with no
+   * backfill. `shared_file` rows were ingested automatically from a document
+   * shared with the service account.
+   */
+  ingestSource: 'manual' | 'email' | 'shared_file';
+  /** The shared document this came from, when `ingestSource` is `shared_file`. */
+  docSourceId: string | null;
+  docSourceName: string | null;
 }
 
 const LIST_LIMIT = 250;
@@ -26,6 +36,7 @@ export async function listFileDrops(): Promise<FileDropRow[]> {
   const drops = await prisma.fileDrop.findMany({
     orderBy: { created_at: 'desc' },
     take: LIST_LIMIT,
+    include: { doc_source: { select: { id: true, display_name: true } } },
   });
 
   const uploaderIds = [...new Set(drops.map((d) => d.uploaded_by))];
@@ -49,5 +60,8 @@ export async function listFileDrops(): Promise<FileDropRow[]> {
     uploadedByName: nameById.get(d.uploaded_by) ?? 'unknown',
     createdISO: d.created_at.toISOString(),
     downloadable: !d.r2_key.startsWith('pending-r2-'),
+    ingestSource: d.ingest_source,
+    docSourceId: d.doc_source?.id ?? null,
+    docSourceName: d.doc_source?.display_name ?? null,
   }));
 }

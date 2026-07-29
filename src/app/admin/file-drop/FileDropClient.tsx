@@ -37,6 +37,13 @@ function humanSize(bytes: number): string {
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+// ADR-0067 — provenance labels for the `ingest_source` column.
+const INGEST_SOURCE_LABEL: Record<FileDropRow['ingestSource'], string> = {
+  manual: M.ingestManual,
+  email: M.ingestEmail,
+  shared_file: M.ingestSharedFile,
+};
+
 const STATUS_LABEL: Record<FileDropRow['status'], string> = {
   received: M.statusReceived,
   routed: M.statusRouted,
@@ -220,6 +227,19 @@ export function FileDropClient({ initialRows }: { initialRows: FileDropRow[] }) 
                     <p className="mt-0.5 text-xs text-dr3-mist-dim">
                       {r.uploadedByName} · {fmt(r.createdISO)}
                     </p>
+                    {/* ADR-0067 provenance. Only rendered for a NON-manual row:
+                        every pre-ADR-0067 drop is `manual`, and stamping
+                        "Uploaded" on all of them would add a column of noise to
+                        say what the surface already implies. */}
+                    {r.ingestSource !== 'manual' ? (
+                      <p
+                        className="mt-0.5 text-xs text-dr3-cyan"
+                        data-testid="file-drop-ingest-source"
+                      >
+                        {INGEST_SOURCE_LABEL[r.ingestSource]}
+                        {r.docSourceName ? `: ${r.docSourceName}` : ''}
+                      </p>
+                    ) : null}
                   </div>
                   <span
                     className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ring-1 ${STATUS_STYLE[r.status]}`}

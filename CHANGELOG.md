@@ -5,6 +5,94 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (shared-file document ingestion PIPELINE — ADR-0067 §3.2 D4–D8 / §3.4, PR #179 Phase 3)
+
+The foundation (2026-07-29, same ADR) landed the delegated Entra connection and the five
+tables. This is the part that actually ingests: discovery, change subscriptions, the delta
+sweep, the classifier, and the anomaly guardrail.
+
+- **The delta sweep is the correctness path, and it is not optional.** A new
+  `doc-ingest-sweep` container runs `runDocIngestSweep` every 15 minutes on a schedule that
+  is **independent of webhook health** — it never checks whether a subscription exists and
+  never skips because a notification arrived. §3.2 D4 forbids a webhook-only path for a
+  specific reason: push fails SILENTLY when a subscription lapses or a notification is
+  dropped, which is exactly how MyMRC ingested nothing for months while every surface
+  reported success (ADR-0057 D9). Push buys latency; the sweep buys correctness. A
+  `doc_ingest_sweep_runs` ledger row is written on **every** run including a throw, so
+  "the sweep has not run since Tuesday" is visible instead of silent.
+- **Discovery keyed on the immutable driveItem id (D8).** A rename is not a new file, a
+  move is not a new file, and two people sharing one document is not two documents.
+  `projectDriveItem` unwraps the `remoteItem` facet so a source is keyed on the drive that
+  really hosts it, not on the local stub `sharedWithMe` hands back. Shared FOLDERS are
+  traversed to a configurable depth (default 5) so files added later are picked up — and
+  hitting the depth limit raises `depth_limit_reached` rather than quietly excluding them.
+- **Change subscriptions + the validation handshake**, with `clientState` minted per
+  subscription, stored **only as a SHA-256 hash**, and verified in constant time on every
+  inbound notification. `/api/doc-ingest/notifications` is the one route here that cannot
+  be loopback-gated (Graph must reach it), so that secret IS the authentication.
+  Auto-renewal runs 24 h ahead of expiry. **§A.9: a failed handshake never silently
+  degrades to polling-only** — it is reported, with the latency cost stated plainly.
+- **Classifier (D5) — classify once, confirm once, then LOCKED.** Local heuristics first
+  (filename, folder path, sheet names, header vocabulary), Claude API fallback only on weak
+  local confidence, reusing the ADR-0046 Amendment 5 D-M5-2 hybrid shape and the existing
+  `ANTHROPIC_API_KEY`. A non-null `doc_class` IS the lock — there is no second boolean to
+  drift out of agreement with it, and the pipeline never re-asks. `unknown` is a
+  first-class, graceful outcome (Bill pre-registers nothing, so it is the NORMAL path for a
+  new share): it queues and waits for him, it does not error, and it never pages.
+  A **vendor invoice is recognized so it can be REFUSED** — it is not routed here, and the
+  flag names `ap@svdp.us` (ADR-0046) as the correct address.
+- **Auto-flow (D6) + the anomaly guardrail (D7).** After confirmation, changes propagate
+  automatically — per-change approval would defeat the feature. The guardrail replaces that
+  gate by catching _abnormal_ changes: an aggregate past the variance threshold, a
+  previously-populated column emptied, more than 10 % of rows lost, or a document that no
+  longer parses as its registered classification. Those STAGE and page; everything else
+  flows, and **every auto-applied change writes a full before/after `audit_log` entry in
+  the same transaction as the state change.**
+- **One variance concept in the system, not two.** The aggregate check calls
+  `evaluateVariance` from ADR-0046 Amendment 5 (D-M5-4) — the same pure either-trips
+  function and the same $50-flat / 15 % constants the AP approver panel enforces, imported
+  rather than redefined. A test pins both values so a future tuning cannot silently fork
+  them.
+- **Every D8 condition has a test and a defined non-silent behaviour**: share revoked
+  (`access_denied`, deliberately NOT folded into "disappeared" — they need different
+  operator action) · owner leaves (`owner_lost`, inferred from every one of that owner's
+  shares vanishing at once, and the alert NAMES them) · renamed · moved · deleted
+  (last-known state retained) · shared twice (deduped, with the count as evidence) · folder
+  shared (later additions picked up) · nested folders (depth limit) · **`.xlsm` macro
+  workbooks parsed WITHOUT executing macros** (exceljs has no macro engine; tested against
+  real OOXML bytes) · password-protected (marked, paged once, then LATCHED — never retried
+  in a loop) · oversize (streamed with a cap; exceeding it PAGES rather than silently
+  truncating, because a truncated workbook parses cleanly and yields wrong numbers) ·
+  subscription lapse · tenant auth failure (halts cleanly, never a silent no-op).
+- **Surfaces (§3.4)**: `/admin/doc-ingest` (sources + the confirm queue),
+  `/admin/doc-ingest/anomalies` (before/after diff, apply or discard),
+  `/admin/doc-ingest/health` (sweep freshness FIRST — a page that led with "3 active
+  subscriptions" would look healthy while the correctness path was dead).
+  `/admin/file-drop` now shows the ingest source for non-manual rows.
+
+### ⚠ Two findings from the live Microsoft documentation that Bill must decide on
+
+- **`GET /me/drive/sharedWithMe` is DEPRECATED.** Microsoft deprecated it (and
+  `/me/insights/shared`) in November 2025; both "operate in a degraded state until
+  November 2026, after which [they] stop returning data", and Microsoft has published **no
+  one-to-one replacement**. That API _is_ discovery — the entire D1 premise rests on it.
+  Discovery therefore goes through a `SharedItemSource` seam so the enumeration can be
+  swapped without touching traversal, dedup or reconciliation, `/admin/doc-ingest/health`
+  renders a live countdown, and it is logged in `docs/OPEN-ITEMS.md` as **C-43**. A
+  speculative Search-API replacement was deliberately NOT shipped: it cannot be verified
+  against the live tenant today, and an unverified fallback that silently returns a
+  DIFFERENT set of sources is worse than a loud countdown.
+- **Change subscriptions need `Files.ReadWrite.All`.** Microsoft's own permissions table
+  for `PATCH /subscriptions` lists the delegated permission for a `driveItem` subscription
+  on OneDrive for Business as **Files.ReadWrite.All**. This integration holds
+  **Files.Read.All** by design (ADR-0067 D5, read-only, no write path anywhere). So Graph
+  is expected to refuse subscription creation with a 403 — the code still attempts it (so
+  the day the scope changes, push starts working with no code change), records the refusal
+  with that explanation, and leaves the sweep carrying correctness exactly as D4 requires.
+  Granting write access across every drive shared with the account, permanently, to save
+  minutes of latency on data the sweep already delivers, is **Bill's call, not a defect to
+  fix** — logged as **C-44**.
+
 ### Added — 2026-07-29 (AP equipment ESCAPE HATCH — ADR-0046 Amendment 9, PR #179 Phase 2 §2)
 
 An approver holding an invoice for a machine the fleet registry does not carry had

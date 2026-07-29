@@ -87,6 +87,24 @@ export function isPublic(pathname: string): boolean {
   // fetch gets a 307 and the bridge fails closed — the write never lands (the
   // ADR-0036 regression, made a mandatory day-one case here per ADR-0058).
   if (pathname.startsWith('/api/internal/inventory/')) return true;
+  // ADR-0067 §3.2 D4 — the document-ingestion delta sweep
+  // (`/api/internal/doc-ingest/sweep`). Same loopback-guarded internal-route
+  // pattern as the crons above. WITHOUT this exemption the middleware 307s the
+  // session-less `doc-ingest-sweep-cron.mjs` POST to /login, its fetch follows to
+  // a 200 HTML page, and the sweep silently no-ops while logging success. That is
+  // the standing ADR-0036 regression, and it is worse here than anywhere else:
+  // this sweep IS the correctness guarantee for shared-file ingestion, so a
+  // silent no-op reproduces the exact MyMRC failure (ADR-0057 D9) the sweep was
+  // built to prevent. The daemon uses `redirect:'manual'` as the second defence.
+  if (pathname.startsWith('/api/internal/doc-ingest/')) return true;
+  // ADR-0067 §3.2 — the Graph change-notification webhook
+  // (`/api/doc-ingest/notifications`). UNLIKE the loopback-guarded crons above,
+  // this endpoint is genuinely internet-reachable: Microsoft Graph POSTs to it
+  // from outside, so a `cf-connecting-ip` 404 would break it by design. The
+  // per-subscription `clientState` secret — verified in constant time against a
+  // stored hash on every notification — IS the protection, exactly as the
+  // shared-secret header is for /api/intake/.
+  if (pathname.startsWith('/api/doc-ingest/')) return true;
   // Operator name-picker + PIN-entry are pre-auth surfaces. The
   // /queue subroute does its own server-side session check (and is
   // gated to role=operator there), so middleware doesn't need to.

@@ -300,3 +300,223 @@ absence.** i18n'd user-facing copy will essentially never be found by a
   make the two-sign-in sequence unmistakable, and the operator instruction must
   never say "sign in as docs-dr3" without first saying "while signed into Vision
   as yourself".
+
+---
+
+# Pipeline addendum (accepted 2026-07-29) — §3.2 D4–D8 and §3.4
+
+**Appended, not renumbered.** Everything above stands. This records the decisions
+made building the ingestion pipeline itself: discovery, subscriptions, the delta
+sweep, the classifier, and the guardrail. Two of them are findings about
+Microsoft's own platform that change what is achievable, and they are stated
+first because they bound everything else.
+
+## P1 — ⚠ `sharedWithMe` is deprecated, and discovery is built behind a seam because of it
+
+`GET /me/drive/sharedWithMe` — the API this entire design depends on — was
+**deprecated by Microsoft in November 2025**. Per learn.microsoft.com it, and
+`/me/insights/shared` alongside it, "operate in a degraded state until November
+2026, after which [they] stop returning data." Microsoft has published **no
+one-to-one replacement**; their own Q&A thread on the deprecation concludes with
+"I am not aware of any publicly documented one-to-one replacement", gesturing
+only at the Microsoft Search API.
+
+This is not a detail to note and move past. "What has been shared with this
+account" _is_ discovery, and D1's whole premise — the owner shares, Vision reads
+in place — has no meaning without an enumeration of what was shared.
+
+What is done about it:
+
+- discovery calls a `SharedItemSource` interface, never Graph directly, so
+  replacing the enumeration is one implementation and not a rewrite of the
+  traversal, dedup and reconciliation logic, none of which cares where the roots
+  came from;
+- `SHARED_WITH_ME_SUNSET` is a single constant and `/admin/doc-ingest/health`
+  renders a live countdown from it;
+- it is logged as **C-43** in `docs/OPEN-ITEMS.md` with a date and an owner.
+
+**A speculative Search-API implementation is deliberately NOT shipped.** It
+cannot be verified against the live tenant today, and an unverified fallback that
+silently returns a _different_ set of sources is worse than a loud countdown: the
+failure mode of a wrong enumeration is a document nobody notices is missing,
+which is the exact class of silence this ADR exists to eliminate.
+
+## P2 — Change subscriptions need write consent we deliberately do not hold
+
+Microsoft's permissions table for `PATCH /subscriptions` lists the delegated
+permission required to create or manage a `driveItem` subscription on OneDrive
+for Business as **`Files.ReadWrite.All`**. D5 consented to **`Files.Read.All`** —
+read-only, with no write path anywhere in the codebase. Graph is therefore
+expected to refuse subscription creation with a 403.
+
+That is a real conflict between a requirement and a security posture, and it is
+resolved in favour of the posture:
+
+- the subscription attempt still runs, so the day the scope is widened push
+  begins working with **no code change**;
+- the refusal is recorded as an anomaly whose text states plainly that this is
+  the expected consequence of read-only consent and not a misconfiguration, so
+  nobody burns a day hunting a bug that is not there;
+- the sweep carries correctness regardless, exactly as D4 requires.
+
+The trade, stated so it can be decided rather than drifted into: granting
+`Files.ReadWrite.All` gives this integration **write access to every file the
+service account can reach, across every drive shared with it, permanently**, in
+exchange for reducing change latency from one sweep interval (15 minutes) to
+about a minute — on data that already arrives correctly. The recommendation is
+not to grant it. Either way it is Bill's decision (**C-44**), not a defect.
+
+## P3 — The sweep is the correctness path; push is only latency
+
+The strongest constraint in §3.2 D4, restated here because it is the decision
+every other one bends around: **a push-only ingester fails silently.** A
+subscription lapses, a notification is dropped, a handshake breaks behind a
+proxy — and nothing errors. The data stops moving while every surface keeps
+reporting success. That is precisely what had MyMRC ingesting nothing for months
+(ADR-0057 D9).
+
+So `runDocIngestSweep` runs on a schedule **independent of webhook health**. It
+never checks whether a subscription exists, never skips because a notification
+arrived recently, and does not stop when the push path is entirely dead — there
+is a test for each of those three. A `doc_ingest_sweep_runs` ledger row is
+written on **every** run including a throw (the `ap_poll_runs` contract, ADR-0046
+C6), because a sweep that stops running has to be visible; and
+`/admin/doc-ingest/health` leads with sweep freshness rather than subscription
+count, since a page headlining "3 active subscriptions" would look healthy while
+the correctness path was dead.
+
+Given P2, this is not merely defensive design — it is currently the _only_
+working path, which is a useful accident: the fallback is the thing under
+continuous test rather than a cold spare nobody exercises.
+
+## P4 — Identity is the immutable driveItem id, and the `remoteItem` unwrap is where that is won
+
+D8 requires that a rename is not a new file, a move is not a new file, and two
+people sharing one document is not two documents. All three collapse into one
+rule: key on `(drive_id, item_id)`.
+
+The subtlety is that `sharedWithMe` does not return that pair directly. It
+returns a **local stub** whose own `id` belongs to the _service account's_ drive,
+wrapping the real item in a `remoteItem` facet. Keying on the stub would make
+every source appear to live in one drive and would break dedup the moment the
+same file arrived by a second route. `projectDriveItem` therefore unwraps it
+once, at the transport boundary, and nothing downstream ever sees a stub.
+
+## P5 — Classification is locked by the absence of a second flag
+
+D5's "classify once, confirm once, then locked" is implemented as: `doc_class IS
+NOT NULL` **is** the lock. There is deliberately no `confirmed` boolean, because
+a boolean is a second source of truth that can disagree with the column it
+describes — and the first time it did, the pipeline would either re-ask a settled
+question or skip an unsettled one. `classifySourceIfNeeded` returns early on a
+non-null `doc_class`, and `confirmClassification` refuses to overwrite one
+(changing a registered kind is a separate, separately-audited action).
+
+`unknown` is a first-class outcome rather than a failure. Bill pre-registers
+nothing, so an unrecognized document is the _normal_ case for a new share: it
+queues, it waits for him, it does not error, and it does not page — paging on it
+would page on every share, which ADR-0037's gate rules out explicitly.
+
+`vendor_invoice` is in the vocabulary **so it can be refused**. It is not routed
+here, and the flag names `ap@svdp.us` (ADR-0046) as the correct address, because
+a document sitting in a queue nobody processes is the failure that flagging
+exists to prevent.
+
+## P6 — One variance concept, imported rather than reimplemented
+
+The D7 aggregate check calls `evaluateVariance` from ADR-0046 Amendment 5
+(D-M5-4) and re-exports its `$50`-flat / `15%` constants rather than declaring
+its own. The directive asked for one anomaly concept in the system and not two,
+and the mechanism matters: if these were separate constants, the first time
+anyone tuned one of them the system would hold two different opinions about what
+"abnormal" means, with nobody able to say which applied where. A test pins both
+values so a future fork is a red build rather than a silent divergence.
+
+Two deliberate consequences:
+
+- **Only _aggregate-looking_ columns are checked.** A workbook is full of numeric
+  columns that are not aggregates — years, row ids, ticket numbers — and scoring
+  those as money produces alarms that are pure noise. Under ADR-0037 a guardrail
+  that cries wolf is worse than none, because the operator learns to click
+  through it.
+- **A unit count is scaled into the evaluator's integer-cents space.** That is a
+  unit bridge, not a claim that counts are dollars: it makes the flat threshold
+  read as "50 units" for a count column, which is the same job the flat threshold
+  does for money — stopping the percentage rule firing on tiny numbers.
+
+## P7 — "Do not retry in a loop" is a stored latch, not a convention
+
+D8 requires that a password-protected or oversized file is marked and paged and
+then **left alone**. `doc_sources.read_blocked_at` + `read_blocked_ctag` are that
+latch. Two properties make it correct rather than merely present:
+
+- it lives in Postgres, so a container restart cannot forget it and resume the
+  loop;
+- it releases on a **content** change (a new `ctag`), because a genuinely new
+  file deserves exactly one more attempt while an unchanged one deserves none.
+
+Password-protected files are detected from the container's **magic bytes** before
+any parser runs: an encrypted OOXML file is an OLE/CFB compound file, not a
+damaged zip. Sniffing that gives a precise, actionable "this needs a password"
+rather than a generic parse failure — and precision is what justifies latching at
+all, since latching on an ambiguous error would strand a file that was merely
+corrupt for a moment.
+
+Oversize is refused by a **streaming** read that aborts at the cap, never by
+buffering and checking afterwards, and it never returns a truncated buffer: a
+truncated workbook parses perfectly cleanly and produces wrong billing numbers,
+which is the worst available outcome.
+
+`.xlsm` support is not a flag. exceljs is a pure-JS reader with no macro engine,
+so `vbaProject.bin` is simply never executed — it is a property of the parser
+rather than a setting, which is why it can be relied on. Tested against real OOXML
+bytes rather than a stub.
+
+## P8 — "Owner left" is inferred from the one signal we are actually allowed to see
+
+D8 asks that an owner leaving be distinguished from a share being revoked, and
+that the alert **name the previous owner**. Vision cannot ask Graph whether a
+person still exists: that needs `User.Read.All`, and this integration holds
+`User.Read` (its own identity) by design.
+
+So the inference is drawn from the only observable signature: **every** source a
+given owner shared became unreachable in the same pass, and there was more than
+one. A single revoked share does not look like that; a disabled account does. The
+alert names them from the `owner_upn` recorded at discovery — which, once the
+account is gone, is the only place that name still exists — and it states the
+alternative explanation rather than asserting a conclusion it cannot prove.
+
+It also suppresses the per-file anomalies it subsumes: twelve pages for one
+departure is exactly the deduplication failure ADR-0037's fourth question asks
+about.
+
+## P9 — Consequences
+
+**We commit to:**
+
+- Replacing the `sharedWithMe` enumeration before 2026-11-01 (**C-43**). The seam
+  makes it cheap; the countdown makes it hard to forget.
+- Keeping the sweep's independence from webhook health. Any future change that
+  makes the sweep conditional on a subscription, a notification, or a "nothing
+  changed" hint has reintroduced the push-only failure mode.
+- Treating a staged revision as _not the baseline_. The guardrail compares against
+  the last **applied** revision, so a rejected change can never silently become
+  the new normal.
+
+**We accept:**
+
+- Push notifications do not currently work (P2), so change latency is one sweep
+  interval. Correctness is unaffected.
+- The owner-left inference (P8) is a heuristic. It can be wrong in one direction
+  — an owner revoking all of their shares at once looks identical — and the alert
+  says so rather than hiding it.
+- The first non-empty row is taken as the header row. It is right for every
+  workbook this pipeline has seen, and a wrong guess degrades to "the guardrail
+  compares odd-looking column names consistently", not to a wrong number.
+
+**Unverified at time of writing (C-45):** nothing here has run against the live
+tenant. Bill has not completed the one-time sign-in, so the real `sharedWithMe`
+payload, the real validation handshake, a real subscription attempt, and real
+`.xlsm` daily-log bytes are all unproven. The design's answer to each of those
+failing is "slower" or "reported", never "silently wrong" — and first contact is
+exactly what should test that claim.

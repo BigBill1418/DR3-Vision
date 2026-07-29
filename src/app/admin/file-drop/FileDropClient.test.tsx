@@ -33,6 +33,12 @@ const ROW: FileDropRow = {
   uploadedByName: 'Bill',
   createdISO: '2026-07-16T18:30:00.000Z',
   downloadable: true,
+  // ADR-0067 — every pre-existing drop is a manual upload, which is exactly what
+  // the migration's column default asserts. The base fixture keeps that shape so
+  // the historical rendering stays covered.
+  ingestSource: 'manual',
+  docSourceId: null,
+  docSourceName: null,
 };
 
 function mount(rows: FileDropRow[]) {
