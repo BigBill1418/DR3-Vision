@@ -198,3 +198,45 @@ So `probeDefaultDrive` never throws and never fails the connect. A 404 records a
 Graph change subscriptions, the delta sweep, the document classifier, and the anomaly guardrail. Their tables, enums, indexes and relations exist; `acquireAccessToken(prisma)` is the auth seam; `latchReauthRequired` / `recordTransientRefreshFailure` are the failure seams; the `fingerprint` + partial-unique-over-open pattern is the idempotent anomaly-raise target.
 
 **Unverified at time of writing:** nothing in this ADR has executed against the live tenant. The migration is validated against live prod (rolled back); the flow is validated against stubbed Entra/Graph responses. First contact — the real authorize redirect, the real token response body, the real `/me`, the real `/me/drive` — happens when Bill clicks Connect, and remains unproven until then.
+
+
+---
+
+## Amendment 1 — 2026-07-29 — the app requires USER ASSIGNMENT (missing from Amendment A)
+
+**Symptom:** Bill clicked **Connect**, signed in as `docs-dr3@svdp.us`, and got
+*"Your Microsoft account isn't authorized for DR3-Vision. Ask an admin to add you."*
+
+That string appears **nowhere in this codebase** (grepped). It is **Microsoft's**
+rejection page, which names the application — so it reads as though Vision
+refused, when in fact Entra blocked the sign-in before OAuth consent was ever
+reached.
+
+**Cause, verified live via Graph:** the DR3-Vision service principal
+(`76787659-f9a8-4f48-96c3-d0d77d2719fe`) has **`appRoleAssignmentRequired: true`**,
+and only two principals are assigned — the user *Bill Barnard* and the group
+*DR3-Vision Admin Access*. `docs-dr3@svdp.us` is not among them, so Entra
+refuses it.
+
+**Amendment A did not mention this.** It documented the granted scopes, the
+redirect URI, the existing client secret and the auth model — all correct — but
+not that the enterprise application blocks unassigned users. Provisioning the
+account, licensing it and consenting the scopes is **necessary but not
+sufficient**.
+
+**Resolution (operator, admin rights required):** assign `docs-dr3@svdp.us`
+directly to the DR3-Vision enterprise application — *not* via the
+`DR3-Vision Admin Access` group. The group's name implies privileges a service
+account should not have, and the reason for its membership would not survive
+six months of institutional memory. The `AppRoleId` is the all-zero GUID
+(`00000000-…-0`), Entra's "default access" role for an app that declares no
+custom roles.
+
+**Why Claude Code could not do it:** the app-only Graph token available on the
+box carries 3 application grants and returns `Authorization_RequestDenied` even
+for `GET /users/{upn}` — it cannot write app role assignments.
+
+**Generalisable lesson:** an Entra app registration has two independent gates —
+*can this identity authenticate to the app at all* (assignment) and *what may it
+then do* (scopes/consent). Amendment A exhaustively documented the second and
+silently assumed the first.
