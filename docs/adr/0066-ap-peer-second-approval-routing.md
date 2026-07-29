@@ -161,6 +161,78 @@ explicitly.
 - Any approver added without a routing row degrades **loudly** (immediate fallback
   - digest warning), not silently.
 
+## Implementation note — §1.5, the escalation scanner (2026-07-29)
+
+Shipped as `scripts/ap-escalation-scan.mjs` (hourly, :10 past) →
+`/api/internal/ap/escalation-scan` → `runApEscalationScan()` in
+`src/lib/ap/escalation-scan.ts`. Five decisions worth recording, because each one
+was a fork where the obvious choice would have re-created the defect above.
+
+**1. The scanner does not implement escalation.** It decides _when_, and the
+resolver decides _what_. `resolveSecondApproval(…, { escalated: true })` already
+expresses the additive widening and is already consumed by the authorization
+check; re-deriving "who is the fallback" here would have re-created exactly the
+two-implementations-of-one-question shape that caused the outage. The same applies
+to the no-routing-row case: the scanner reads
+`outcome === 'fallback_no_routing_row'` rather than re-querying the table and
+re-deciding. The only thing it reads from `ap_approval_routing` directly is the
+numeric `fallback_after_hours` threshold, and only once the resolver has already
+confirmed a row exists.
+
+**2. Idempotency is a WRITE predicate, not a read filter.** `escalated_at IS NULL`
+appears in the candidate query _and_ as a condition on the claiming `updateMany`.
+Only the second is load-bearing: two overlapping scans can both read a row (a slow
+run meeting the next hourly fire; a restart mid-run), and the read filter would
+let both proceed. The audit row is written inside that same transaction, so there
+is no window in which a request is stamped escalated with no trail. The test runs
+the scan twice and counts one notification and one audit row.
+
+**3. A dedicated escalation email, not `notifySecondApprovalNeeded()`.** Reusing
+the existing function was the obvious move and is wrong: it pages
+`dr3-vision-system` unconditionally, so an hourly scanner would have pushed a
+staff workflow nudge onto Bill's phone. Hard rule #5 reserves ntfy for Bill and
+system-level events, and ADR-0037's gate agrees — an invoice waiting a day is
+neither actionable-in-five-minutes nor customer-visible.
+`notifySecondApprovalEscalated()` is email-only through `notifyStaff()`. The two
+conditions that _do_ page from the scanner are both genuinely system-level: a
+routing misconfiguration (`reportSecondApprovalRoutingProblem`, which emails as
+well as pages, per §B.5) and a scan that could not run.
+
+**4. Only the people escalation ADDED are emailed.** §1.6 says
+`second_approval_request` fires to "the individual it routed to, plus the fallback
+on escalation" — that describes the event's audience across its whole lifetime,
+not one send. The peer received theirs at first-approval time; re-sending it every
+escalation would train them to ignore it. The pref filter is applied _after_
+routing, so it can only subtract.
+
+**5. Two "impossible" states escalate immediately rather than aging.** A request
+with no routing row (§1.4, explicit) and a request in `pending_second_approval`
+with no `first_approved_at` (a data defect the clock cannot evaluate). Treating
+the latter as "not due yet" would leave it invisible forever, which is the failure
+class this ADR exists to remove. Escalation is additive, so making a defective row
+_more_ visible costs nothing, and the routing alarm carries the reason.
+
+**Fail-loud posture (§B.8 / ADR-0057 D9).** A scan that cannot run pages
+`dr3-vision-system` and re-throws so the route 500s. It must never return a clean
+empty result — "0 escalated" from a broken scanner is indistinguishable from "0
+escalated because the backlog is healthy," and that indistinguishability is the
+defect. A single poisoned row is contained so it cannot strand the rest of the
+backlog, but it still pages. Cooldown 6h (the AP poll deadman class), so a
+hard-down scanner pages 4×/day rather than 24.
+
+**Weekday clock.** `businessHoursElapsedExceeds()` from `business-clock.ts`, no new
+date arithmetic. Verified at the three instants that matter: first-approved Friday
+4pm PT is 8 business hours old on Saturday 4pm (no escalation), 16 on Monday 8am
+(no escalation), and 24 on Monday 4pm (escalates). A holiday pauses the clock only
+when observed at every site.
+
+**Deliberately out of scope.** The scanner writes no digest — §1.7's 06:00 warning
+lines consume the `problems` it returns, and that consumer is not built here. The
+compose service is declared but **not deployed** (deploys are manual on svdp-dev).
+Unlike its siblings the daemon carries no Pacific offset-reprobe math: it fires
+hourly, and an hour is an hour in every zone. That is pinned by a test across both
+DST transition days so it does not get "fixed" back into wall-clock arithmetic.
+
 ## References
 
 - CLAUDE.md hard rules #2 (site separation), #5 (ntfy is Bill-only, system events), #6 (append-only audit)

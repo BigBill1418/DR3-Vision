@@ -830,6 +830,68 @@ services:
       com.barnardhq.service: 'ap-approver-expiry'
     logging: *logging
 
+  ap-escalation-scan:
+    # AP second-approval escalation scanner (ADR-0066 §1.5).
+    #
+    # Same shape as ap-approver-expiry: a single long-running Node process under
+    # `unless-stopped` that is a THIN scheduler. It sleeps until the next :10 past
+    # the hour and POSTs the app's internal, loopback-guarded route
+    # (`/api/internal/ap/escalation-scan`). That route does the real work compiled
+    # inside the Next app via `runApEscalationScan`: read every open
+    # `pending_second_approval` with `escalated_at IS NULL`, age it on the WEEKDAY
+    # business clock (the clock pauses Fri evening → Mon, and on holidays observed
+    # at EVERY site), and for anything past its routing pair's
+    # `fallback_after_hours` stamp `escalated_at`/`escalated_to`, write an
+    # append-only audit row, and EMAIL the fallback approver. The daemon imports NO
+    # TS and no @prisma/client.
+    #
+    # HOURLY, so — unlike every sibling daemon — it needs no Pacific offset-reprobe
+    # math: an hour is an hour in every zone. The weekday/holiday calendar that
+    # decides what escalates lives in the app (src/lib/ap/business-clock.ts), where
+    # it is unit-tested.
+    #
+    # ESCALATION IS ADDITIVE: the originally routed peer stays able to sign and the
+    # fallback becomes additionally able — whoever acts first completes it.
+    #
+    # NO ntfy MOUNT, DELIBERATELY. Staff are never paged (CLAUDE.md hard rule #5);
+    # escalation reaches its approver by email through notifyStaff() inside the
+    # app. The two system-level pages this feature raises (a routing
+    # misconfiguration, and a scan that could not run) are published by the APP
+    # container, which already mounts ntfy.env — mounting it here would be a
+    # least-privilege regression documenting a path that does not exist.
+    #
+    # Idempotent: the scan claims each request conditionally on
+    # `escalated_at IS NULL`, so a re-fire, an overlapping tick, or a restart
+    # mid-run can never double-escalate or double-notify.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-ap-escalation-scan
+    # Resource ceilings (audit 2026-07-16 · RES) — conservative blast-radius cap on
+    # the shared host. Generous vs a fetch-only scheduler's RSS.
+    mem_limit: 1024m
+    pids_limit: 256
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/ap-escalation-scan.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'ap-escalation-scan'
+    logging: *logging
+
   ap-baseline-rebuild:
     # AP vendor-baseline rebuild cron host (ADR-0046 Amendment 5, D-M5-4).
     #

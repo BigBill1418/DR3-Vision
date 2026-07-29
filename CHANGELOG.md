@@ -5,6 +5,64 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (AP second-approval escalation runs on a weekday clock — ADR-0066 §1.5)
+
+The backstop half of ADR-0066. Person-to-person routing decides _who_ a second approval
+goes to; this decides what happens when that person does not act. An hourly scanner
+(`scripts/ap-escalation-scan.mjs` → `/api/internal/ap/escalation-scan` →
+`runApEscalationScan`) reads every open `pending_second_approval` with
+`escalated_at IS NULL` — exactly the `ap_requests_pending_second_escalation_idx` partial
+index — and escalates anything past its routing pair's `fallback_after_hours`.
+
+- **The clock is a weekday clock.** Bill's decision verbatim: _"weekdays only. The clock
+  pauses Friday evening and resumes Monday."_ A request first-approved **Friday 4pm does
+  not escalate Saturday — it escalates Monday 4pm**, the 24th business hour. Asserted
+  directly, at all three instants. Accrual reuses the shared `business-clock.ts`
+  (`businessHoursElapsedExceeds`) rather than introducing a second calendar; holidays pause
+  it only when observed at **every** site, since escalation is per-person and no longer
+  carries a site.
+- **Escalation is ADDITIVE, never a transfer.** The originally routed peer stays able to
+  sign; the fallback approver becomes _additionally_ able; whoever acts first completes it.
+  The widening itself is not re-implemented here — it is
+  `resolveSecondApproval(…, { escalated: true })`, the same function the authorization
+  check consumes. Re-deriving it is how the two halves drifted apart in the first place.
+  A test signs in as the peer **after** escalation and asserts they are still authorized.
+- **Idempotent on `escalated_at IS NULL`,** enforced twice: in the candidate query and
+  again as a conditional predicate on the claiming `updateMany`. The second is the one that
+  matters — two overlapping scans (a slow run meeting the next hourly fire, or a restart
+  mid-run) can both _read_ a row, but only the write that flips a still-NULL row wins.
+  Proven by running the scan twice and asserting **exactly one notification and exactly one
+  audit row**.
+- **No routing row ⇒ escalate immediately** (§1.4, no 24h wait) and raise the routing
+  alarm. The scanner reads the resolver's `outcome: 'fallback_no_routing_row'` rather than
+  re-deriving the condition.
+- **Staff are notified by EMAIL, never ntfy** (hard rule #5). A new
+  `notifySecondApprovalEscalated()` routes through `notifyStaff()` (ADR-0047 chokepoint,
+  `ap_notify` gate) filtered by each person's `second_approval_request` pref — it exists
+  precisely _because_ reusing `notifySecondApprovalNeeded()` would have pushed a staff
+  workflow nudge onto Bill's phone every hour. Only the people escalation **added** are
+  emailed; the peer already has the original request and is not re-sent it hourly. The copy
+  leads with "this is additive, not a hand-off," because that is the semantic operators
+  get wrong.
+- **Fail loud (§B.8 / ADR-0057 D9).** A scan that cannot run **pages `dr3-vision-system`
+  and re-throws** so the route 500s — it never returns a clean, empty result
+  indistinguishable from a healthy backlog, which is the exact shape of the outage this ADR
+  exists to fix. A single poisoned row is contained (the rest of the backlog still
+  escalates) but still pages. 6h cooldown, mirroring the AP poll deadman class.
+- **Every escalation is audited** in the same transaction as the stamp
+  (`actor_label='system:ap-escalation-scan'`, before/after JSON). The `after` records
+  `still_authorized` so an auditor can read straight off the row that the peer was never
+  removed.
+- **Compose:** `dr3-vision-ap-escalation-scan`, mirroring `ap-approver-expiry` (thin
+  scheduler, `cron.env` bearer, `INTERNAL_BASE_URL: http://app:3000`, healthcheck disabled,
+  `mem_limit`/`pids_limit`). It deliberately does **not** mount `ntfy.env` — the two
+  system-level pages this feature raises are published by the `app` container; mounting it
+  here would document a path that does not exist. Guarded by a compose-wiring test.
+  Deploy is manual on svdp-dev; **not deployed by this change.**
+- Unlike every sibling daemon the scheduler carries **no Pacific offset-reprobe math** —
+  it fires hourly, and an hour is an hour in every zone. Pinned across both DST transition
+  days so nobody "fixes" it back into wall-clock arithmetic.
+
 ### Fixed — 2026-07-29 (AP second approvals reached nobody — person-to-person routing — ADR-0066)
 
 Invoices >= $1,000 transitioned to `pending_second_approval` correctly and then sat

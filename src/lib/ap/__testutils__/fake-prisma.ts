@@ -72,6 +72,11 @@ export interface FakeApRequest {
   second_approver_id?: string | null;
   second_approved_at?: Date | null;
   second_approver_note?: string | null;
+  // ADR-0066 §1.5 — weekday-clock escalation stamps. Optional so every existing
+  // fixture keeps working; `escalated_at IS NULL` is the scanner's idempotency key,
+  // so an ABSENT field must read as null (see `escalatedAtOf`).
+  escalated_at?: Date | null;
+  escalated_to?: string | null;
 }
 export interface FakeEquipment {
   id: string;
@@ -127,6 +132,12 @@ export interface FakeSite {
   id: string;
   code: string;
   name: string;
+}
+/** ADR-0066 §1.5 — a per-site holiday. `holiday_date` is the UTC day key. */
+export interface FakeSiteHoliday {
+  id: string;
+  site_id: string;
+  holiday_date: Date;
 }
 export interface FakeAuditLog {
   actor_user_id: string | null;
@@ -199,6 +210,8 @@ export interface FakeDb {
   approvalRouting: FakeApprovalRouting[];
   // ADR-0066 §1.6 — per-user, per-event notification prefs.
   notificationPrefs: FakeNotificationPref[];
+  // ADR-0066 §1.5 — the weekday clock's holiday source (business-clock.ts).
+  siteHolidays: FakeSiteHoliday[];
 }
 
 /** ADR-0066 §1.6 — a MISSING row means column defaults, not "notify nobody". */
@@ -242,7 +255,13 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     secondApprovers: seed.secondApprovers ?? [],
     approvalRouting: seed.approvalRouting ?? [],
     notificationPrefs: seed.notificationPrefs ?? [],
+    siteHolidays: seed.siteHolidays ?? [],
   };
+}
+
+/** An ABSENT `escalated_at` reads as NULL — the scanner's idempotency predicate. */
+function escalatedAtOf(r: FakeApRequest): Date | null {
+  return r.escalated_at ?? null;
 }
 
 type AnyRecord = Record<string, unknown>;
@@ -290,6 +309,20 @@ export function makeFakePrisma(db: FakeDb) {
         const row = rows[0];
         return row ? pick(row, args.select) : null;
       },
+      // ADR-0066 §1.5 — the escalation scanner's candidate read:
+      // `{ status: 'pending_second_approval', escalated_at: null }` (the shape the
+      // `ap_requests_pending_second_escalation_idx` partial index serves).
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        let rows = db.requests.filter((r) => {
+          if (w['status'] !== undefined && r.status !== w['status']) return false;
+          if (w['escalated_at'] === null && escalatedAtOf(r) !== null) return false;
+          if (w['id'] !== undefined && r.id !== w['id']) return false;
+          return true;
+        });
+        rows = rows.sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
+        return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
+      },
       async create(args: { data: AnyRecord; select?: AnyRecord }) {
         const d = args.data;
         if (db.requests.some((r) => r.internet_message_id === d['internet_message_id'])) {
@@ -334,6 +367,8 @@ export function makeFakePrisma(db: FakeDb) {
           second_approver_id: (d['second_approver_id'] as string | null) ?? null,
           second_approved_at: (d['second_approved_at'] as Date | null) ?? null,
           second_approver_note: (d['second_approver_note'] as string | null) ?? null,
+          escalated_at: (d['escalated_at'] as Date | null) ?? null,
+          escalated_to: (d['escalated_to'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -349,7 +384,15 @@ export function makeFakePrisma(db: FakeDb) {
           }
           return s === cond;
         };
-        const targets = db.requests.filter((r) => r.id === w['id'] && statusMatches(r.status));
+        const targets = db.requests.filter((r) => {
+          if (r.id !== w['id']) return false;
+          if (!statusMatches(r.status)) return false;
+          // ADR-0066 §1.5 — the escalation claim is CONDITIONAL on
+          // `escalated_at IS NULL`. Honoring it here is what makes the
+          // "run the scan twice" idempotency test meaningful rather than decorative.
+          if (w['escalated_at'] === null && escalatedAtOf(r) !== null) return false;
+          return true;
+        });
         for (const r of targets) Object.assign(r, args.data);
         return { count: targets.length };
       },
@@ -569,6 +612,25 @@ export function makeFakePrisma(db: FakeDb) {
           return true;
         });
         return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
+      // ADR-0066 §1.5 — `fleetWideHolidays` divides by the site count to decide
+      // whether a holiday is observed at EVERY active site.
+      async count() {
+        return db.sites.length;
+      },
+    },
+    // ADR-0066 §1.5 — the weekday clock's holiday source. Only the range read
+    // `{ holiday_date: { gte, lte } }` used by `fleetWideHolidays` is implemented;
+    // `bonus-eod-check` uses the real client and is not modelled here.
+    siteHoliday: {
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const range = (args.where ?? {})['holiday_date'] as { gte?: Date; lte?: Date } | undefined;
+        const rows = db.siteHolidays.filter((h) => {
+          if (range?.gte && h.holiday_date.getTime() < range.gte.getTime()) return false;
+          if (range?.lte && h.holiday_date.getTime() > range.lte.getTime()) return false;
+          return true;
+        });
+        return rows.map((h) => (args.select ? pick(h, args.select) : { ...h }));
       },
     },
     // ADR-0046 Amendment 5 (D-M5-6) — equipment master + link join.

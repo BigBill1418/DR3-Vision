@@ -208,6 +208,67 @@ export async function notifySecondApprovalNeeded(args: {
   }).catch(() => undefined);
 }
 
+/**
+ * ADR-0066 §1.5 — the request has aged past its weekday-clock deadline and the
+ * FALLBACK approver has just been added as an additional signer.
+ *
+ * EMAIL ONLY, DELIBERATELY. `notifySecondApprovalNeeded` (above) pages
+ * `dr3-vision-system` on every call; reusing it here would push a staff workflow
+ * nudge onto Bill's phone once an hour. CLAUDE.md hard rule #5 reserves ntfy for
+ * Bill and SYSTEM-level events, and ADR-0037's gate agrees: an invoice waiting a
+ * day is not actionable-in-five-minutes and is not customer-visible. The
+ * conditions that DO page from the scanner are a routing misconfiguration
+ * ({@link reportSecondApprovalRoutingProblem}) and the scanner failing to run at
+ * all — both system-level, both Bill's.
+ *
+ * The copy leads with ADDITIVE, because that is the semantic operators get wrong:
+ * the originally routed peer is still able to sign, and whoever acts first
+ * completes it. Nothing is taken away from anyone.
+ *
+ * Fail-soft at the caller — an escalation that cannot be emailed must not undo
+ * the (committed) escalation stamp.
+ */
+export async function notifySecondApprovalEscalated(args: {
+  requestId: string;
+  subject: string | null;
+  /** Business hours the request waited; 0 for the immediate no-routing-row path. */
+  thresholdHours: number;
+  /** The originally routed peer, who REMAINS able to sign. */
+  routedToName: string | null;
+  approverEmails: readonly string[];
+}): Promise<void> {
+  if (args.approverEmails.length === 0) {
+    // Not necessarily a defect: the escalation target may have switched their
+    // `second_approval_request` pref off (§1.6). The EMPTY-ROUTING case is alarmed
+    // separately by the caller — this log distinguishes "opted out" from "nobody".
+    log.warn(
+      { requestId: args.requestId },
+      '[ap-notify] escalation had no pref-eligible recipient — email skipped',
+    );
+    return;
+  }
+  const subj = args.subject ?? '(no subject)';
+  const waited =
+    args.thresholdHours > 0
+      ? `has been waiting more than ${args.thresholdHours} business hours (weekdays only — the clock pauses over the weekend)`
+      : 'has no configured approval pair, so it escalated immediately';
+  const peer = args.routedToName
+    ? `${escapeHtml(args.routedToName)} can still sign it`
+    : 'the originally routed approver can still sign it';
+  const htmlBody = `<p>A vendor invoice ≥ $1,000 ${waited} for its <b>second approval</b>. You have been added as an additional approver.</p>
+    <p><b>This is additive, not a hand-off</b> — ${peer}. Whoever acts first completes it.</p>
+    <p><a href="${apRequestUrl(args.requestId)}">Open this request in the AP approval queue</a> to review the first approver’s decision and confirm — or reject to override.</p>`;
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [...args.approverEmails],
+    subject: `DR3-Vision — second approval ESCALATED (≥ $1,000): ${subj}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    importance: 'high',
+  });
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
