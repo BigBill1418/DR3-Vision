@@ -131,9 +131,15 @@ healthy from the Eugene side.
   directly**, for every roster member and for an approver with no routing row.
 - **Empty recipient set is now an error condition**, not silence. Fail-soft still never
   rolls back an approval, but the resolver reports `problems` and the caller alarms on
-  them. The alarm **emails Bill as well as paging ntfy** — Check C found the existing ntfy
-  publish is wrapped in `.catch(() => undefined)` and never reached him, so relying on
-  ntfy alone to report a notification failure would repeat the bug.
+  them. The alarm **emails Bill as well as paging ntfy**, as defence-in-depth: an alarm
+  about undelivered notifications should not itself depend on a single delivery path.
+  **Correction (same day):** the ADR originally guessed Bill's ntfy topic subscription was
+  why second-approval pages never reached him. That is FALSIFIED — a diagnostic publish to
+  `dr3-vision-system` (HTTP 200, id `mgTbY3HYWq5P`) arrived on his phone and `noc-reader`
+  holds read access to `*`. The ntfy leg's historical failure is unexplained and recorded
+  as an open question rather than a guessed cause; the app container has since been
+  recreated, so the deciding logs are gone. The EMAIL leg's empty recipient set is proven
+  and is what this change fixes.
 - **Per-user, per-event notification prefs** (`ap_notification_prefs`) replace what would
   have been a hardcoded exception. **Shannon now receives exactly one kind of email — a
   second-approval request on Rick's first signature — and nothing else, asserted in a
