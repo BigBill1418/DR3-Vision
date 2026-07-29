@@ -5,6 +5,77 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (Shared-file document ingestion FOUNDATION — ADR-0067 + Amendment A, PR #179 Phase 3)
+
+Bill hand-uploads every document Vision needs. This lands the foundation for stopping that:
+files **stay where they live in Microsoft**, shared to `docs-dr3@svdp.us`, and Vision reads
+the **live document**. An emailed attachment is a _snapshot_ — it stopped tracking its source
+the instant it was sent. A shared file is _current state_. That distinction is the whole ADR,
+and it is why the schema is version-aware rather than drop-shaped.
+
+- **Auth is delegated authorization-code + refresh token. NOT ROPC.** Amendment A supersedes
+  the directive's §3.5 entirely. §3.5 reasoned "unattended operation ⇒ non-interactive sign-in
+  ⇒ ROPC ⇒ negotiate Conditional Access with IT"; every step after the first is wrong.
+  Unattended _operation_ does not need unattended _sign-in_. Bill signs in **once**,
+  interactively, in a browser, as `docs-dr3@svdp.us`, completing MFA — and the refresh token
+  is redeemed indefinitely with nobody present. **No CA change needed**: the MFA claim rides
+  the token chain. An IT policy negotiation is replaced by one browser click.
+- **The service-account password is NOT a runtime credential**, and there is deliberately no
+  column, field, or env var for it anywhere. It is typed once into Microsoft's own sign-in
+  page. This is the regression check: if a future change needs it at runtime, that change has
+  reverted to ROPC and is wrong.
+- **The signed-in account is ASSERTED against Graph `/me`, and a mismatch is REFUSED** with no
+  token persisted. This is the control that matters. Bill is already signed into Entra; the
+  browser would happily reuse that session and the flow would **succeed** — leaving Vision
+  reading _his personal OneDrive and everything shared with him_ instead of the service
+  account's curated shares. It would look like it worked. Three layers guard it:
+  `prompt=login` (no silent SSO reuse), `login_hint` (right thing is the easy thing), and the
+  server-side `/me` assertion (the actual control). The connect page names the account
+  explicitly in both states, and says plainly which wrong account was used on refusal.
+- **`reauth_required` halts ingestion LOUDLY.** Any refresh failure attributable to a dead
+  token pages `dr3-vision-system` immediately on the transition (ADR-0057 D9 posture), raises
+  a banner + Reconnect, adds a line to Bill's 06:00 digest until resolved, and stops. Nothing
+  degrades quietly. **Only a dead token latches** — `invalid_grant` / `interaction_required` /
+  `consent_required` / `login_required`; a network blip, 429 or 5xx is recorded and retried,
+  because paging for a hiccup teaches the operator to ignore the page that matters. The dedup
+  ledger is the Postgres column `reauth_paged_at`, **not** the ntfy helper's per-process cache
+  — ingestion spans the app and a worker and containers restart, and a per-process cooldown
+  would either re-page on every restart or suppress the _first_ page after one.
+- **Schema, all additive; every existing row keeps working.** `doc_sources`,
+  `doc_source_versions`, `doc_ingest_subscriptions`, `doc_ingest_anomalies`, plus
+  `doc_ingest_connections` (the Amendment A addition), plus `file_drops.ingest_source`
+  (`manual` | `email` | `shared_file`, default `manual`) and `file_drops.doc_source_id` FK NULL.
+  No backfill: pre-existing drops **were** manual uploads, so the defaults are simply true.
+  `id` columns are **TEXT, not `uuid`** — a `uuid` id passes CI (no migrations there) and fails
+  only on deploy. **Validated against LIVE PROD in a `BEGIN; … ROLLBACK;`**: all 5 existing
+  `file_drops` rows read `manual`/NULL, all 18 id-shaped columns are `text`, the
+  `(drive_id, item_id)` natural key rejects a dupe, and the anomaly partial-unique dedups
+  OPEN rows while still permitting a RESOLVED row with the same fingerprint.
+- **§A.5 — OneDrive provisions asynchronously, and a 404 is NOT an error.** The drive is created
+  by the account's first interactive sign-in — the very one this flow performs. `probeDefaultDrive`
+  never throws and never fails the connect; a 404 renders as "still provisioning, this is normal".
+- **One app registration, one secret, and a coupling worth remembering.** Reuses
+  `2da92424-…` — the same registration AP mail (ADR-0046) and Graph Files (ADR-0049) use;
+  `readClientSecret()` falls back to `MSGRAPH_MAIL_SECRET` specifically so nobody mints a
+  second secret. ⚠ `DR3-Vision Production` is valid to **2028-05-05**, and it is shared: a
+  silent expiry stops AP mail polling **and** document ingestion at the same moment, presenting
+  as two unrelated outages. Surfaced on the connect page; belongs in the rotation runbook.
+- **New surfaces:** `/admin/doc-ingest/connect` (admin-only) + `POST /api/admin/doc-ingest/oauth/start`,
+  `GET …/oauth/callback` (the registered redirect URI), `GET …/status`. CSRF state and the PKCE
+  S256 verifier ride a sealed AES-256-GCM httpOnly `SameSite=Lax` cookie rather than a table —
+  no TTL sweeper for data needed for one round trip. Lax specifically: the callback is a
+  top-level GET from `login.microsoftonline.com`, and Strict would withhold the cookie and fail
+  every attempt. Status responses SELECT no ciphertext column, so they cannot leak a token.
+
+**Not built here** (next phase): Graph change subscriptions, the delta sweep, the classifier,
+and the anomaly guardrail. Tables, enums and indexes exist for all four; `acquireAccessToken()`
+is the auth seam and `latchReauthRequired()` / `recordTransientRefreshFailure()` are the failure
+seams.
+
+**Unverified:** nothing here has executed against the live tenant. The migration is proven
+against live prod (rolled back); the flow is proven against stubbed Entra/Graph responses.
+First contact happens when Bill clicks Connect.
+
 ### Added — 2026-07-29 (AP second-approval escalation runs on a weekday clock — ADR-0066 §1.5)
 
 The backstop half of ADR-0066. Person-to-person routing decides _who_ a second approval

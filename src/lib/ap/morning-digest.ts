@@ -66,6 +66,7 @@ import {
   pacificDayISO,
   pacificDayStartInstantPlus,
 } from './business-clock';
+import { docIngestReauthWarning } from '@/lib/doc-ingest/reauth';
 import { dailyDigestRecipients } from './notification-prefs';
 import { resolveSecondApproval } from './second-approval-resolver';
 import { apQueueUrl, apRequestUrl } from './notify';
@@ -446,7 +447,8 @@ export async function buildApMorningDigest(
       !!peer.email &&
       (peer.role === 'manager' || peer.role === 'admin');
     if (!reachable) {
-      const owner = approvers.find((u) => u.id === r.first_approver_id)?.name ?? r.first_approver_id;
+      const owner =
+        approvers.find((u) => u.id === r.first_approver_id)?.name ?? r.first_approver_id;
       brokenPairs.push(`${owner} → ${peer?.name ?? r.second_approver_id}`);
     }
   }
@@ -472,6 +474,18 @@ export async function buildApMorningDigest(
       )}). This digest is marked high priority.`,
     );
   }
+
+  // ── W3. Document ingestion is disconnected (ADR-0067 Amendment A §A.6).
+  //
+  // Bill's requirement is a line in the 06:00 digest UNTIL RESOLVED. This is a
+  // one-line system-health WARNING, not the "future document-ingestion digest"
+  // this module declines to absorb (§1.7) — that stays a separate email.
+  //
+  // It belongs in `warnings` specifically, because a warning sends even when the
+  // AP queue is empty: a halted ingester produces no items, so an items-gated
+  // line would be invisible exactly when it matters.
+  const docIngestWarning = await docIngestReauthWarning(db, now);
+  if (docIngestWarning) warnings.push(docIngestWarning);
 
   const empty =
     pendingSecondApproval.length === 0 &&
