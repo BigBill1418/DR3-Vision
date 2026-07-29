@@ -346,7 +346,10 @@ describe('decideRequest — NOT DR3 disposition', () => {
     expect(row.decision_note).toContain('parent-org bill');
     // The winning audit records the disposition.
     const won = writeAudit.mock.calls
-      .map((c) => c[0] as { after?: { outcome?: string; filed_not_dr3?: boolean; has_site?: boolean } })
+      .map(
+        (c) =>
+          c[0] as { after?: { outcome?: string; filed_not_dr3?: boolean; has_site?: boolean } },
+      )
       .find((a) => a.after?.outcome === 'won');
     expect(won?.after?.filed_not_dr3).toBe(true);
     expect(won?.after?.has_site).toBe(false);
@@ -1250,6 +1253,130 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
     expect(db.equipmentLinks.every((l) => !l.is_not_equipment_related)).toBe(true);
   });
 
+  // ── ADR-0046 Amendment 9 (§2.2/§2.3/§2.4) — the equipment ESCAPE HATCH ──────
+  //
+  // The hatch's whole value depends on the request row and the link being written
+  // by the SAME transaction as the decision. If they can drift, the two failure
+  // modes are both silent: an approval with no equipment record at all, or a
+  // request nobody filed an invoice for.
+
+  it('escape hatch: writes the request + a link pointing at it, in the decision transaction', async () => {
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      sites: [{ id: 'site-w', code: 'woodland', name: 'DR3 Woodland' }],
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Acme Rentals',
+      explanation: 'forklift repair',
+      confirmedAmountCents: 45000,
+      equipmentLinks: {
+        equipmentIds: [],
+        notEquipmentRelated: false,
+        equipmentRequestDescription: 'Yellow Hyster forklift, unit 7, Woodland',
+      },
+    });
+
+    expect(db.equipmentRequests).toHaveLength(1);
+    expect(db.equipmentRequests[0]).toMatchObject({
+      ap_request_id: 'req-1',
+      site_id: 'site-w',
+      status: 'open',
+      requested_by: 'u-morena',
+      description: 'Yellow Hyster forklift, unit 7, Woodland',
+    });
+
+    // EXACTLY ONE disposition on the link — the other two must stay empty, which
+    // is what the DB CHECK enforces in production.
+    expect(db.equipmentLinks).toHaveLength(1);
+    expect(db.equipmentLinks[0]).toMatchObject({
+      request_id: 'req-1',
+      equipment_id: null,
+      is_not_equipment_related: false,
+      equipment_request_id: db.equipmentRequests[0]!.id,
+    });
+
+    // The decision still landed. The hatch unblocks the approval; it does not
+    // defer or weaken it.
+    expect(db.requests[0]!.status).toBe('approved');
+  });
+
+  it('escape hatch: audits the disposition as `equipment_request`, never as 0 equipment', async () => {
+    // `equipment: 0` would be indistinguishable from a bug that dropped the
+    // linkage — the audit has to say which of the three choices was made.
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      sites: [{ id: 'site-w', code: 'woodland', name: 'DR3 Woodland' }],
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Acme Rentals',
+      explanation: 'forklift repair',
+      confirmedAmountCents: 45000,
+      equipmentLinks: {
+        equipmentIds: [],
+        notEquipmentRelated: false,
+        equipmentRequestDescription: 'Yellow Hyster forklift, unit 7',
+      },
+    });
+    // `writeAudit` is spied (see the module mock at the top of this file), so the
+    // rows are read off the spy rather than out of the fake db.
+    const auditArgs = writeAudit.mock.calls.map(
+      (c) => c[0] as { table_name: string; action: string; after?: Record<string, unknown> },
+    );
+    const decisionAudit = auditArgs.find(
+      (a) => a.table_name === 'ap_requests' && a.after?.['outcome'] === 'won',
+    );
+    expect(decisionAudit?.after?.['equipment']).toBe('equipment_request');
+
+    // And the request row gets its own provenance audit entry.
+    expect(
+      auditArgs.some((a) => a.table_name === 'ap_equipment_requests' && a.action === 'insert'),
+    ).toBe(true);
+  });
+
+  it('escape hatch: fires on the >= $1,000 second-approval hop too, not only terminal approvals', async () => {
+    // The registry gap is real whether or not a second signature is pending;
+    // waiting for it would just delay the fix by a day.
+    const db = newFakeDb({
+      requests: [pendingReq()],
+      users,
+      sites: [{ id: 'site-w', code: 'woodland', name: 'DR3 Woodland' }],
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      vendorFreeform: 'Acme Rentals',
+      explanation: 'engine rebuild',
+      confirmedAmountCents: 250_000,
+      equipmentLinks: {
+        equipmentIds: [],
+        notEquipmentRelated: false,
+        equipmentRequestDescription: 'Kenworth tractor, the blue one',
+      },
+    });
+    expect(res.secondApprovalPending).toBe(true);
+    expect(db.requests[0]!.status).toBe('pending_second_approval');
+    expect(db.equipmentRequests).toHaveLength(1);
+    expect(db.equipmentLinks[0]!.equipment_request_id).toBe(db.equipmentRequests[0]!.id);
+  });
+
   it('stamps variance acknowledgment columns when state=acknowledged', async () => {
     const db = newFakeDb({
       requests: [pendingReq()],
@@ -1279,7 +1406,9 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
 
   it('does NOT create equipment links for the loser of a race', async () => {
     const db = newFakeDb({
-      requests: [pendingReq({ status: 'approved', decided_by: 'u-janette', decided_at: new Date() })],
+      requests: [
+        pendingReq({ status: 'approved', decided_by: 'u-janette', decided_at: new Date() }),
+      ],
       users,
       decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
     });

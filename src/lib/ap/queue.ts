@@ -60,6 +60,13 @@ export interface ApEquipmentLinkView {
   equipmentId: string | null;
   displayName: string | null;
   isNotEquipmentRelated: boolean;
+  /**
+   * Amendment 9 (§2.2) — the escape-hatch request this link points at, if any.
+   * `description` is what the approver wrote; `status` says whether a site manager
+   * has acted on it yet. Surfaced on read-back so a decided invoice shows WHY it
+   * has no registry asset, rather than looking like an empty equipment record.
+   */
+  equipmentRequest: { id: string; description: string; status: string } | null;
 }
 
 export interface ApDetailView extends ApListRow {
@@ -97,7 +104,12 @@ export interface ApDetailView extends ApListRow {
   secondApprovedAt: string | null;
   secondApproverNote: string | null;
   attachments: ApAttachmentView[];
-  followups: Array<{ id: string; receivedAt: string; senderAddress: string; bodyText: string | null }>;
+  followups: Array<{
+    id: string;
+    receivedAt: string;
+    senderAddress: string;
+    bodyText: string | null;
+  }>;
 }
 
 /** Narrow the persisted `extraction` JSONB to the pre-fill the panel needs. Tolerant
@@ -155,11 +167,18 @@ export async function listApRequests(
   ]);
   // Batch-resolve holder names for on-hold rows (avoids N+1).
   const holderIds = Array.from(
-    new Set(rows.filter((r) => r.status === 'pending_review' && r.held_by).map((r) => r.held_by as string)),
+    new Set(
+      rows
+        .filter((r) => r.status === 'pending_review' && r.held_by)
+        .map((r) => r.held_by as string),
+    ),
   );
   const holderNames = new Map<string, string>();
   if (holderIds.length > 0) {
-    const users = await prisma.user.findMany({ where: { id: { in: holderIds } }, select: { id: true, name: true } });
+    const users = await prisma.user.findMany({
+      where: { id: { in: holderIds } },
+      select: { id: true, name: true },
+    });
     for (const u of users) holderNames.set(u.id, u.name);
   }
   const counts: Record<string, number> = {
@@ -183,7 +202,8 @@ export async function listApRequests(
       amountCents: r.amount_cents,
       attachmentCount: r._count.attachments,
       followupCount: r._count.followups,
-      heldByName: r.status === 'pending_review' && r.held_by ? holderNames.get(r.held_by) ?? null : null,
+      heldByName:
+        r.status === 'pending_review' && r.held_by ? (holderNames.get(r.held_by) ?? null) : null,
       holdNote: r.status === 'pending_review' ? r.hold_note : null,
     })),
     counts,
@@ -200,23 +220,38 @@ export async function getApRequestDetail(
       attachments: { orderBy: { created_at: 'asc' } },
       followups: { orderBy: { received_at: 'asc' } },
       // Amendment 5 (D-M5-6) — equipment linkage recorded on a decided row.
-      equipment_links: { include: { equipment: { select: { display_name: true } } } },
+      equipment_links: {
+        include: {
+          equipment: { select: { display_name: true } },
+          // Amendment 9 — the escape-hatch request behind a hatch link.
+          equipment_request: { select: { id: true, description: true, status: true } },
+        },
+      },
     },
   });
   if (!r) return null;
   const decidedByName = r.decided_by
-    ? (await prisma.user.findUnique({ where: { id: r.decided_by }, select: { name: true } }))?.name ?? null
+    ? ((await prisma.user.findUnique({ where: { id: r.decided_by }, select: { name: true } }))
+        ?.name ?? null)
     : null;
   const heldByName = r.held_by
-    ? (await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ?? null
+    ? ((await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ??
+      null)
     : null;
   // D-M5-3 — resolve the dual-approval identities for the second-approval panel +
   // read-back. Only queried when present (a >= $1,000 request).
   const firstApproverName = r.first_approver_id
-    ? (await prisma.user.findUnique({ where: { id: r.first_approver_id }, select: { name: true } }))?.name ?? null
+    ? ((
+        await prisma.user.findUnique({ where: { id: r.first_approver_id }, select: { name: true } })
+      )?.name ?? null)
     : null;
   const secondApproverName = r.second_approver_id
-    ? (await prisma.user.findUnique({ where: { id: r.second_approver_id }, select: { name: true } }))?.name ?? null
+    ? ((
+        await prisma.user.findUnique({
+          where: { id: r.second_approver_id },
+          select: { name: true },
+        })
+      )?.name ?? null)
     : null;
   return {
     id: r.id,
@@ -251,6 +286,13 @@ export async function getApRequestDetail(
       equipmentId: l.equipment_id,
       displayName: l.equipment?.display_name ?? null,
       isNotEquipmentRelated: l.is_not_equipment_related,
+      equipmentRequest: l.equipment_request
+        ? {
+            id: l.equipment_request.id,
+            description: l.equipment_request.description,
+            status: l.equipment_request.status,
+          }
+        : null,
     })),
     firstApproverId: r.first_approver_id,
     firstApproverName,

@@ -473,6 +473,53 @@ describe('second leg — decideSecondApproval', () => {
     expect(args.htmlBody).toContain('Baler hydraulics rebuild');
   });
 
+  it('override-reject email carries the ESCAPE-HATCH description (Amendment 9)', async () => {
+    // The override-reject mail exists to hand the forwarder the FIRST approver's
+    // full context. A hatch decision sets neither `equipment_id` nor
+    // `is_not_equipment_related`, so before Amendment 9 wired the relation in, both
+    // branches fell through and the email rendered NO equipment line at all —
+    // silently dropping the one thing the approver actually said about the asset.
+    const db = newFakeDb({
+      requests: [awaitingReq()],
+      users,
+      sites,
+      secondApprovers,
+      approvalRouting,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+      equipmentRequests: [
+        {
+          id: 'eqreq-1',
+          ap_request_id: 'req-1',
+          site_id: 'site-e',
+          description: 'Yellow Hyster forklift, unit 7, Eugene',
+          requested_by: 'u-morena',
+          status: 'open',
+        },
+      ],
+      equipmentLinks: [
+        {
+          id: 'link-1',
+          request_id: 'req-1',
+          equipment_id: null,
+          is_not_equipment_related: false,
+          equipment_request_id: 'eqreq-1',
+        },
+      ],
+    });
+    await decideSecondApproval({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actor: { userId: 'u-shannon', role: 'manager' },
+      note: 'Wrong cost centre',
+    });
+    const args = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
+    expect(args.htmlBody).toContain('Yellow Hyster forklift, unit 7, Eugene');
+    expect(args.htmlBody).toContain('not in the fleet list');
+    // And it must NOT be misreported as the "not equipment-related" disposition.
+    expect(args.htmlBody).not.toContain('Equipment: not equipment-related');
+  });
+
   it('a second-approval reject with NO note is refused (override must be explained)', async () => {
     const db = newFakeDb({ requests: [awaitingReq()], users, sites, secondApprovers });
     await expect(

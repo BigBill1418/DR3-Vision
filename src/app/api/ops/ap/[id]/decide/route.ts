@@ -13,6 +13,10 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireApApprover } from '@/lib/ap/approvers';
 import { assertEquipmentForSite, ApEquipmentInvalidError } from '@/lib/ap/equipment';
+import {
+  EQUIPMENT_REQUEST_DESCRIPTION_MAX,
+  ApEquipmentRequestError,
+} from '@/lib/ap/equipment-requests';
 import { evaluateVarianceForDecision } from '@/lib/ap/variance';
 import {
   ApAlreadyDecidedError,
@@ -64,6 +68,9 @@ interface DecideBody {
   equipmentIds?: string[];
   /** D-M5-6 — the explicit "Not equipment-related" choice. */
   notEquipmentRelated?: boolean;
+  /** Amendment 9 (§2.2) — the ESCAPE HATCH: free-text description of an asset the
+   * registry does not carry. Mutually exclusive with the other two. */
+  equipmentRequestDescription?: string;
   /** D-M5-4 — the approver acknowledged an above-threshold variance. */
   varianceAcknowledged?: boolean;
   /** D-M5-4 — optional additional acknowledgment note. */
@@ -93,15 +100,30 @@ export async function POST(
     // than silently truncating text that rides the returned invoice. Runs BEFORE any
     // state change or site resolution.
     if (tooLong(body.note, NOTE_MAX_LEN))
-      return NextResponse.json({ error: `note must be ${NOTE_MAX_LEN} characters or fewer` }, { status: 400 });
+      return NextResponse.json(
+        { error: `note must be ${NOTE_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
     if (tooLong(body.explanation, NOTE_MAX_LEN))
-      return NextResponse.json({ error: `explanation must be ${NOTE_MAX_LEN} characters or fewer` }, { status: 400 });
+      return NextResponse.json(
+        { error: `explanation must be ${NOTE_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
     if (tooLong(body.varianceAckNote, NOTE_MAX_LEN))
-      return NextResponse.json({ error: `variance note must be ${NOTE_MAX_LEN} characters or fewer` }, { status: 400 });
+      return NextResponse.json(
+        { error: `variance note must be ${NOTE_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
     if (tooLong(body.vendor, VENDOR_MAX_LEN))
-      return NextResponse.json({ error: `vendor must be ${VENDOR_MAX_LEN} characters or fewer` }, { status: 400 });
+      return NextResponse.json(
+        { error: `vendor must be ${VENDOR_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
     if (tooLong(body.vendorFreeform, VENDOR_MAX_LEN))
-      return NextResponse.json({ error: `vendor must be ${VENDOR_MAX_LEN} characters or fewer` }, { status: 400 });
+      return NextResponse.json(
+        { error: `vendor must be ${VENDOR_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
 
     // ADR-0046 amendment (2026-07-20) — the NOT-DR3 disposition. A decision is EITHER
     // filed against a real DR3 site OR marked NOT DR3, never both/neither.
@@ -154,10 +176,7 @@ export async function POST(
         typeof body.vendorFreeform === 'string' ? body.vendorFreeform.trim() : '';
       const explanation = typeof body.explanation === 'string' ? body.explanation.trim() : '';
       if (!vendorFreeform)
-        return NextResponse.json(
-          { error: 'Enter the vendor name to approve.' },
-          { status: 400 },
-        );
+        return NextResponse.json({ error: 'Enter the vendor name to approve.' }, { status: 400 });
       if (!explanation)
         return NextResponse.json(
           { error: 'Enter what this transaction was for (explanation) to approve.' },
@@ -170,27 +189,49 @@ export async function POST(
           { status: 400 },
         );
 
-      // D-M5-6 — equipment linkage is required: exactly one of a non-empty selection
-      // OR the explicit "Not equipment-related" choice (never both, never neither).
+      // D-M5-6 + Amendment 9 (§2.2) — equipment linkage is required, and is now a
+      // THREE-way exclusive choice: a non-empty selection, the explicit "Not
+      // equipment-related" choice, or the escape-hatch description. Exactly one —
+      // never two, never none. Counted rather than checked pairwise so adding a
+      // fourth disposition later cannot silently miss a combination (the DB CHECK
+      // `ap_equipment_links_exactly_one_disposition` is the backstop underneath).
       const equipmentIds = Array.isArray(body.equipmentIds)
         ? body.equipmentIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
         : [];
       const notEquipmentRelated = body.notEquipmentRelated === true;
+      const equipmentRequestDescription =
+        typeof body.equipmentRequestDescription === 'string'
+          ? body.equipmentRequestDescription.trim()
+          : '';
       if (equipmentIds.length > EQUIPMENT_MAX_IDS)
         return NextResponse.json(
           { error: `select at most ${EQUIPMENT_MAX_IDS} equipment items` },
           { status: 400 },
         );
-      if (notEquipmentRelated && equipmentIds.length > 0)
+      if (equipmentRequestDescription.length > EQUIPMENT_REQUEST_DESCRIPTION_MAX)
         return NextResponse.json(
-          { error: 'Choose equipment OR "Not equipment-related" — not both.' },
+          {
+            error: `equipment description must be ${EQUIPMENT_REQUEST_DESCRIPTION_MAX} characters or fewer`,
+          },
           { status: 400 },
         );
-      if (!notEquipmentRelated && equipmentIds.length === 0)
+      const chosen =
+        (equipmentIds.length > 0 ? 1 : 0) +
+        (notEquipmentRelated ? 1 : 0) +
+        (equipmentRequestDescription ? 1 : 0);
+      if (chosen > 1)
         return NextResponse.json(
           {
             error:
-              'Select the equipment this invoice relates to, or choose "Not equipment-related", to approve.',
+              'Choose ONE: the equipment from the list, "Not equipment-related", or describe equipment that isn’t in the list.',
+          },
+          { status: 400 },
+        );
+      if (chosen === 0)
+        return NextResponse.json(
+          {
+            error:
+              'Select the equipment this invoice relates to, describe it if it isn’t in the list, or choose "Not equipment-related", to approve.',
           },
           { status: 400 },
         );
@@ -201,7 +242,11 @@ export async function POST(
 
       // D-M5-4 — re-evaluate variance server-side; NEVER trust the client's flag. An
       // above-threshold trip that was not explicitly acknowledged is refused.
-      const variance = await evaluateVarianceForDecision(prisma, vendorFreeform, confirmedAmountCents);
+      const variance = await evaluateVarianceForDecision(
+        prisma,
+        vendorFreeform,
+        confirmedAmountCents,
+      );
       if (variance.state === 'above_threshold' && body.varianceAcknowledged !== true) {
         return NextResponse.json(
           {
@@ -227,10 +272,17 @@ export async function POST(
         vendorFreeform,
         explanation,
         confirmedAmountCents,
-        equipmentLinks: { equipmentIds, notEquipmentRelated },
+        equipmentLinks: {
+          equipmentIds,
+          notEquipmentRelated,
+          ...(equipmentRequestDescription ? { equipmentRequestDescription } : {}),
+        },
         varianceFlagState,
         ...(varianceFlagState === 'acknowledged'
-          ? { varianceAcknowledgedBy: identity.userId, ...(ackNote ? { varianceAcknowledgmentNote: ackNote } : {}) }
+          ? {
+              varianceAcknowledgedBy: identity.userId,
+              ...(ackNote ? { varianceAcknowledgmentNote: ackNote } : {}),
+            }
           : {}),
       });
       return NextResponse.json(result);
@@ -255,6 +307,8 @@ export async function POST(
     if (e instanceof Response) return e;
     if (e instanceof ApEquipmentInvalidError)
       return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof ApEquipmentRequestError)
+      return NextResponse.json({ error: e.message }, { status: e.status });
     if (e instanceof ApNoteRequiredError)
       return NextResponse.json({ error: e.message }, { status: 400 });
     if (e instanceof ApSiteRequiredError)

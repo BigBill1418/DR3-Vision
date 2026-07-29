@@ -26,7 +26,13 @@ import type { ApVarianceFlagState } from './extraction/types';
 // routing stopped depending on the site. Both remain exported from
 // `second-approval-routing` for the deprecated roster surface only.
 import { requiresSecondApproval } from './second-approval-routing';
-import { notifySecondApprovalNeeded, reportSecondApprovalRoutingProblem } from './notify';
+import {
+  notifySecondApprovalNeeded,
+  reportSecondApprovalRoutingProblem,
+  notifyEquipmentRequestCreated,
+} from './notify';
+// Amendment 9 (§2.2–§2.4) — the equipment escape hatch.
+import { createEquipmentRequestInTx, equipmentRequestRecipients } from './equipment-requests';
 // ADR-0066 §1.4/§1.6 — the shared resolver and the per-user pref filter.
 import { resolveSecondApproval } from './second-approval-resolver';
 import { filterBySecondApprovalPref } from './notification-prefs';
@@ -177,9 +183,18 @@ export interface DecideArgs {
   /** D-M5-1 — approver-confirmed amount (replaces the deprecated `amount_cents`). */
   confirmedAmountCents?: number;
   /** D-M5-6 — equipment linkage written to ap_equipment_links, atomically with the
-   * decision. Exactly one of a non-empty `equipmentIds` OR `notEquipmentRelated`
-   * (validated at the route boundary). */
-  equipmentLinks?: { equipmentIds: readonly string[]; notEquipmentRelated: boolean };
+   * decision. Exactly ONE of a non-empty `equipmentIds`, `notEquipmentRelated`, or
+   * `equipmentRequestDescription` (validated at the route boundary; the DB CHECK
+   * `ap_equipment_links_exactly_one_disposition` is the backstop).
+   *
+   * Amendment 9 (§2.2) — `equipmentRequestDescription` is the ESCAPE HATCH: the
+   * asset is not in the registry, so the approver describes it. That writes an
+   * `ap_equipment_requests` row + a link pointing at it, in this same transaction. */
+  equipmentLinks?: {
+    equipmentIds: readonly string[];
+    notEquipmentRelated: boolean;
+    equipmentRequestDescription?: string;
+  };
   /** D-M5-4 — variance flag state to stamp on the row. `acknowledged` is only ever
    * passed after the route enforced an explicit acknowledgment of an above-threshold
    * trip; a tripped-but-unacknowledged decision never reaches here. */
@@ -329,6 +344,11 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
     !args.filedNotDr3 &&
     requiresSecondApproval(args.confirmedAmountCents);
   const targetStatus = secondApprovalNeeded ? 'pending_second_approval' : args.decision;
+  // Amendment 9 (§2.4) — set inside the tx when the approver used the escape hatch;
+  // read AFTER commit to fire the site-manager email. Declared out here because the
+  // notification is deliberately OUTSIDE the transaction (fail-soft: a mail failure
+  // must never roll back a committed decision).
+  let equipmentRequestId: string | null = null;
   const res = await prisma.$transaction(async (tx) => {
     const r = await tx.apRequest.updateMany({
       where: { id: args.requestId, status: { in: [...ACTIONABLE_STATUSES] } },
@@ -384,8 +404,20 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       // D-M5-6 — write the equipment linkage in the SAME transaction as the flip:
       // one row per selected asset, OR a single is_not_equipment_related row for the
       // explicit-none case. A committed decision always carries its equipment record.
-      const { equipmentIds, notEquipmentRelated } = args.equipmentLinks;
-      if (notEquipmentRelated) {
+      //
+      // Amendment 9 (§2.2/§2.3) — or a single ESCAPE-HATCH row: the request and its
+      // link are written here too, so a filed request can never outlive a decision
+      // that rolled back (and vice versa). Same transaction, same guarantee.
+      const { equipmentIds, notEquipmentRelated, equipmentRequestDescription } =
+        args.equipmentLinks;
+      if (equipmentRequestDescription && args.siteId) {
+        equipmentRequestId = await createEquipmentRequestInTx(tx, {
+          apRequestId: args.requestId,
+          siteId: args.siteId,
+          description: equipmentRequestDescription,
+          requestedBy: args.actorUserId,
+        });
+      } else if (notEquipmentRelated) {
         await tx.apEquipmentLink.create({
           data: { request_id: args.requestId, is_not_equipment_related: true },
         });
@@ -441,9 +473,13 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
               ? {
                   variance_flag_state: args.varianceFlagState ?? 'not_applicable',
                   equipment: args.equipmentLinks
-                    ? args.equipmentLinks.notEquipmentRelated
-                      ? 'not_equipment_related'
-                      : args.equipmentLinks.equipmentIds.length
+                    ? // Amendment 9 — the hatch is its own audited disposition; it must
+                      // never read as `0 equipment` (indistinguishable from a bug).
+                      args.equipmentLinks.equipmentRequestDescription
+                      ? 'equipment_request'
+                      : args.equipmentLinks.notEquipmentRelated
+                        ? 'not_equipment_related'
+                        : args.equipmentLinks.equipmentIds.length
                     : null,
                 }
               : {}),
@@ -479,6 +515,24 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       name,
       winner?.decided_at ?? row.decided_at,
     );
+  }
+
+  // Amendment 9 (§2.4) — the approver used the equipment ESCAPE HATCH; tell the
+  // site managers there is an asset to add. Placed here, BEFORE the second-approval
+  // branch returns, so it fires on both the sub-$1K terminal Approve and the >= $1K
+  // hop — the registry gap is real either way and waiting on a second signature to
+  // report it just delays the fix. Fully fail-soft: the request row is already
+  // committed and visible on the worklist, so a mail failure loses nothing.
+  if (equipmentRequestId && args.siteId) {
+    await notifyEquipmentRequest(prisma, {
+      equipmentRequestId,
+      apRequestId: args.requestId,
+      siteId: args.siteId,
+      actorUserId: args.actorUserId,
+      description: args.equipmentLinks?.equipmentRequestDescription ?? '',
+      vendor: args.vendorFreeform ?? null,
+      amountCents: typeof args.confirmedAmountCents === 'number' ? args.confirmedAmountCents : null,
+    }).catch(() => undefined);
   }
 
   // D-M5-3 — a >= $1,000 Approve is now AWAITING second approval, NOT terminal. No
@@ -562,6 +616,47 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   // `mail` + a page, never silently).
   const mail = await sendDecisionEmail(prisma, args.requestId, args.renderer);
   return { requestId: args.requestId, decision: args.decision, mail };
+}
+
+/**
+ * Amendment 9 (§2.4) — resolve the site + recipients for a freshly filed equipment
+ * request and send the site-manager email.
+ *
+ * Split out of `decideRequest` so the decision path reads as one thing. Everything
+ * here is post-commit and best-effort; the CALLER wraps it in `.catch()`.
+ */
+async function notifyEquipmentRequest(
+  prisma: PrismaClient,
+  args: {
+    equipmentRequestId: string;
+    apRequestId: string;
+    siteId: string;
+    actorUserId: string;
+    description: string;
+    vendor: string | null;
+    amountCents: number | null;
+  },
+): Promise<void> {
+  const [site, approver, roster] = await Promise.all([
+    prisma.site.findUnique({
+      where: { id: args.siteId },
+      select: { id: true, code: true, name: true },
+    }),
+    prisma.user.findUnique({ where: { id: args.actorUserId }, select: { name: true } }),
+    equipmentRequestRecipients(prisma, args.siteId),
+  ]);
+  if (!site) return;
+  await notifyEquipmentRequestCreated({
+    requestId: args.equipmentRequestId,
+    apRequestId: args.apRequestId,
+    description: args.description,
+    approverName: approver?.name ?? null,
+    vendor: args.vendor,
+    amountCents: args.amountCents,
+    site: { id: site.id, code: site.code, name: site.name },
+    recipients: roster.to,
+    cc: roster.cc,
+  });
 }
 
 function baseUrl(): string {
@@ -945,9 +1040,24 @@ export async function sendDecisionEmail(
   if (isDualOverrideReject) {
     const links = await prisma.apEquipmentLink.findMany({
       where: { request_id: requestId },
-      select: { equipment_id: true, is_not_equipment_related: true },
+      select: {
+        equipment_id: true,
+        is_not_equipment_related: true,
+        // Amendment 9 — the escape-hatch disposition. Without this the override
+        // reject would render NO equipment line at all for a hatch decision:
+        // `equipment_id` is null and `is_not_equipment_related` is false, so both
+        // branches below fall through silently. That would drop the one thing the
+        // first approver actually said about the asset, in the exact email whose
+        // purpose is to carry their context to the forwarder.
+        equipment_request: { select: { description: true } },
+      },
     });
-    if (links.some((l) => l.is_not_equipment_related)) {
+    const described = links.find((l) => l.equipment_request)?.equipment_request?.description;
+    if (described) {
+      firstApprovalEquipmentLine = `<li>Equipment: not in the fleet list — described as “${escapeHtml(
+        described,
+      )}” (a request to add it was filed)</li>`;
+    } else if (links.some((l) => l.is_not_equipment_related)) {
       firstApprovalEquipmentLine = '<li>Equipment: not equipment-related</li>';
     } else {
       const ids = links

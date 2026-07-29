@@ -45,7 +45,13 @@ export type TileScope =
   | 'super-admin-only'
   | 'ap-approver'
   // ADR-0052 — admin OR all_sites manager (org reach; Daven's mechanism).
-  | 'org-reach';
+  | 'org-reach'
+  // ADR-0046 Amendment 9 (§2.5/§2.6) — admin OR a site manager holding
+  // `can_resolve_equipment_requests`. Resolved by the launcher via
+  // `checkEquipmentRequestAccess()`; a scoped grant, NOT the admin role and NOT
+  // site reach — see the guard in `src/lib/auth-helpers.ts` for why this one
+  // `/admin/*` surface is deliberately open to non-admins.
+  | 'equipment-request-resolver';
 
 export interface DashboardTile {
   /** Stable key (also used as the React list key + test selector). */
@@ -232,6 +238,21 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
     status: 'active',
     scope: 'ap-approver',
   },
+  // ADR-0046 Amendment 9 (§2.6) — the equipment ESCAPE-HATCH worklist. Its own
+  // tile rather than a second number folded into the AP badge: these are two
+  // different queues owned by two different sets of people (approvers vs site
+  // managers), and merging the counts would tell an approver they have work they
+  // cannot do. The badge carries the OPEN count, site-scoped for a single-site
+  // manager, set per-render by the `/` launcher.
+  {
+    key: 'ap-equipment-requests',
+    label: 'Equipment Requests',
+    description: 'Equipment an approver described because it isn’t in the fleet list yet.',
+    icon: 'Wrench',
+    route: '/admin/ap/equipment-requests',
+    status: 'active',
+    scope: 'equipment-request-resolver',
+  },
   // ADR-0052 — commodity payment reconciliation (Daven). Org reach (admin OR
   // all_sites), both sites in one view.
   {
@@ -338,6 +359,12 @@ type SessionLike = Pick<Session, 'user'> | null | undefined;
  *                       active ap_approvers roster member, per canActOnApRequest).
  *                       Gates the 'ap-approver' scope (ADR-0046). Defaults to
  *                       `false` so an absent flag never leaks the AP tile.
+ * @param canResolveEquipmentRequests whether the session may open the equipment
+ *                       ESCAPE-HATCH worklist (admin OR the
+ *                       `can_resolve_equipment_requests` grant, per
+ *                       `checkEquipmentRequestAccess`). Gates the
+ *                       'equipment-request-resolver' scope (ADR-0046 Amendment 9).
+ *                       Defaults to `false` — an absent flag never leaks the tile.
  */
 export function canSeeTile(
   session: SessionLike,
@@ -345,6 +372,7 @@ export function canSeeTile(
   woodlandSiteId: string | null = null,
   isSuperAdmin: boolean = false,
   isApApprover: boolean = false,
+  canResolveEquipmentRequests: boolean = false,
 ): boolean {
   const user = session?.user;
   if (!user?.id) return false;
@@ -379,6 +407,12 @@ export function canSeeTile(
       // CLAUDE.md hard rule #2). Mirrors hasOrgReach without importing it
       // (this module stays session-shaped, not viewer-shaped).
       return role === 'admin' || user.all_sites === true;
+    case 'equipment-request-resolver':
+      // ADR-0046 Amendment 9: the scoped `can_resolve_equipment_requests` grant
+      // (admins pass implicitly inside the resolver). NOT derivable from the
+      // session alone — the flag is read fresh from Postgres, never carried in the
+      // JWT — so the launcher resolves it and passes it in.
+      return canResolveEquipmentRequests === true;
     default:
       return false;
   }
@@ -392,8 +426,9 @@ export function visibleTiles(
   woodlandSiteId: string | null = null,
   isSuperAdmin: boolean = false,
   isApApprover: boolean = false,
+  canResolveEquipmentRequests: boolean = false,
 ): DashboardTile[] {
   return DASHBOARD_TILES.filter((t) =>
-    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover),
+    canSeeTile(session, t, woodlandSiteId, isSuperAdmin, isApApprover, canResolveEquipmentRequests),
   );
 }

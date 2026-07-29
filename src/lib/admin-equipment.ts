@@ -79,7 +79,7 @@ export interface AdminEquipmentDto {
   updated_at: Date;
 }
 
-interface ActorContext {
+export interface ActorContext {
   actorUserId: string;
   ip: string | null;
   userAgent: string | null;
@@ -218,55 +218,78 @@ export async function createEquipment(
   input: CreateEquipmentInput,
   actor: ActorContext,
 ): Promise<CreateEquipmentResult> {
+  try {
+    const created = await prisma.$transaction((tx) => createEquipmentInTx(tx, input, actor));
+    if (!created.ok) return created;
+    const codes = await siteCodeById();
+    return { ok: true, equipment: toDto(created.row, codes, 0) };
+  } catch (e) {
+    if (isUniqueViolation(e)) return { ok: false, reason: 'name_taken' };
+    throw e;
+  }
+}
+
+/**
+ * The create path as a TRANSACTION PARTICIPANT — validation, insert, and audit
+ * row against a caller-supplied `tx`.
+ *
+ * Extracted for ADR-0046 Amendment 9 (§2.5): resolving an equipment ESCAPE-HATCH
+ * request must create the asset, stamp the request resolved, and (optionally)
+ * repoint the historical `ap_equipment_links` row — all or nothing. Calling
+ * `createEquipment()` from inside that flow would open a SECOND, independent
+ * transaction, so a failure after it committed would leave an orphan asset with
+ * the request still sitting open. A nested `$transaction` cannot join an
+ * enclosing one; a tx-taking function can.
+ *
+ * Returns the raw row rather than a DTO because `toDto` needs the site-code map
+ * and link counts, which are reads the caller should do AFTER its own commit.
+ *
+ * The P2002 race backstop lives in the CALLERS, not here — a caught-and-swallowed
+ * unique violation inside an interactive transaction would leave the tx aborted
+ * but looking successful.
+ */
+export async function createEquipmentInTx(
+  tx: Prisma.TransactionClient,
+  input: CreateEquipmentInput,
+  actor: ActorContext,
+): Promise<{ ok: true; row: Equipment } | { ok: false; reason: CreateFailure }> {
   const display_name = normalizeDisplayName(input.display_name);
   if (!display_name) return { ok: false, reason: 'name_required' };
   if (display_name.length > DISPLAY_NAME_MAX) return { ok: false, reason: 'name_too_long' };
 
-  const site = await prisma.site.findUnique({
-    where: { id: input.site_id },
-    select: { id: true },
-  });
+  const site = await tx.site.findUnique({ where: { id: input.site_id }, select: { id: true } });
   if (!site) return { ok: false, reason: 'site_not_found' };
 
   // Friendly pre-check. The DB unique index (ADR-0063 D3) is the real guard —
   // this only exists so the common case yields a readable 409 instead of a
-  // raw P2002. The catch below closes the check-then-act race.
-  const dup = await prisma.equipment.findFirst({
+  // raw P2002. The callers' catch closes the check-then-act race.
+  const dup = await tx.equipment.findFirst({
     where: { site_id: input.site_id, display_name },
     select: { id: true },
   });
   if (dup) return { ok: false, reason: 'name_taken' };
 
-  try {
-    const created = await prisma.$transaction(async (tx) => {
-      const row = await tx.equipment.create({
-        data: {
-          site_id: input.site_id,
-          display_name,
-          category: input.category,
-          is_active: input.is_active ?? true,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actor_user_id: actor.actorUserId,
-          action: 'insert' satisfies AuditAction,
-          table_name: 'equipment',
-          row_id: row.id,
-          before: Prisma.JsonNull,
-          after: serializeForAudit(row),
-          ip: actor.ip,
-          user_agent: actor.userAgent,
-        },
-      });
-      return row;
-    });
-    const codes = await siteCodeById();
-    return { ok: true, equipment: toDto(created, codes, 0) };
-  } catch (e) {
-    if (isUniqueViolation(e)) return { ok: false, reason: 'name_taken' };
-    throw e;
-  }
+  const row = await tx.equipment.create({
+    data: {
+      site_id: input.site_id,
+      display_name,
+      category: input.category,
+      is_active: input.is_active ?? true,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      actor_user_id: actor.actorUserId,
+      action: 'insert' satisfies AuditAction,
+      table_name: 'equipment',
+      row_id: row.id,
+      before: Prisma.JsonNull,
+      after: serializeForAudit(row),
+      ip: actor.ip,
+      user_agent: actor.userAgent,
+    },
+  });
+  return { ok: true, row };
 }
 
 // ────────────────────────────────────────────────────────────────────

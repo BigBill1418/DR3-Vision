@@ -39,6 +39,24 @@ interface Props {
   initialSiteCode?: string | undefined;
   /** Category the list was filtered to, if any. Seeds the category select. */
   initialCategory?: EquipmentCategory | undefined;
+
+  // ── ADR-0046 Amendment 9 (§2.5) — reuse hooks ──────────────────────────────
+  // The equipment-request worklist RESOLVES a request by creating the real asset,
+  // which is this form, pre-filled from the approver's description. Rebuilding it
+  // there would fork the validation, the category list, the site-defaulting rule
+  // (the hard-rule-#2 defect this form was careful about) and the styling. These
+  // four optional props are the whole seam; nothing about the admin create page
+  // changes.
+  /** Seeds the name field — the resolver edits the approver's description into a name. */
+  initialDisplayName?: string | undefined;
+  /** POST target. Defaults to the plain admin create endpoint. */
+  endpoint?: string | undefined;
+  /** Extra fields merged into the POST body (e.g. the resolve action + backfill flag). */
+  extraBody?: Record<string, unknown> | undefined;
+  /** Called on success INSTEAD of navigating to `backHref`. */
+  onSaved?: (() => void) | undefined;
+  /** Overrides the submit button label. */
+  submitLabel?: string | undefined;
 }
 
 export function EquipmentCreateForm({
@@ -46,9 +64,14 @@ export function EquipmentCreateForm({
   backHref = '/admin/equipment',
   initialSiteCode,
   initialCategory,
+  initialDisplayName,
+  endpoint = '/api/admin/equipment',
+  extraBody,
+  onSaved,
+  submitLabel,
 }: Props) {
   const router = useRouter();
-  const [displayName, setDisplayName] = useState('');
+  const [displayName, setDisplayName] = useState(initialDisplayName ?? '');
   const [category, setCategory] = useState<EquipmentCategory>(initialCategory ?? 'vehicle');
   const [siteId, setSiteId] = useState<string>(
     () => sites.find((s) => s.code === initialSiteCode)?.id ?? sites[0]?.id ?? '',
@@ -75,14 +98,29 @@ export function EquipmentCreateForm({
 
     setPending(true);
     try {
-      const res = await fetch('/api/admin/equipment', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ site_id: siteId, display_name: name, category }),
+        // `site_id` / `display_name` / `category` are the admin-create contract;
+        // the resolve endpoint reads its own camelCase names out of `extraBody`.
+        // Both are sent so ONE form body serves both callers.
+        body: JSON.stringify({
+          site_id: siteId,
+          display_name: name,
+          category,
+          siteId,
+          displayName: name,
+          ...extraBody,
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setError(body.error ?? M.errors.serverError);
+        return;
+      }
+      if (onSaved) {
+        onSaved();
+        router.refresh();
         return;
       }
       router.push(backHref);
@@ -153,7 +191,7 @@ export function EquipmentCreateForm({
           className="inline-flex items-center gap-2 rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space transition-colors hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
           data-testid="admin-equipment-create-submit"
         >
-          {M.equipment.submitCreate}
+          {submitLabel ?? M.equipment.submitCreate}
         </button>
         <button
           type="button"
