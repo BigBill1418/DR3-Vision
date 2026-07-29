@@ -195,6 +195,18 @@ export interface FakeDb {
   baselines: FakeVendorBaseline[];
   baselineHistory: FakeBaselineHistory[];
   secondApprovers: FakeSecondApprover[];
+  // ADR-0066 §1.4 — person→person second-approval routing.
+  approvalRouting: FakeApprovalRouting[];
+}
+
+/** ADR-0066 §1.4 — one row per first approver; the table must be total. */
+export interface FakeApprovalRouting {
+  id: string;
+  first_approver_id: string;
+  second_approver_id: string;
+  fallback_approver_id: string | null;
+  fallback_after_hours: number;
+  active: boolean;
 }
 
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
@@ -216,6 +228,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     baselines: seed.baselines ?? [],
     baselineHistory: seed.baselineHistory ?? [],
     secondApprovers: seed.secondApprovers ?? [],
+    approvalRouting: seed.approvalRouting ?? [],
   };
 }
 
@@ -301,7 +314,8 @@ export function makeFakePrisma(db: FakeDb) {
           variance_flag_state: (d['variance_flag_state'] as string | undefined) ?? 'not_applicable',
           variance_acknowledged_by: (d['variance_acknowledged_by'] as string | null) ?? null,
           variance_acknowledged_at: (d['variance_acknowledged_at'] as Date | null) ?? null,
-          variance_acknowledgment_note: (d['variance_acknowledgment_note'] as string | null) ?? null,
+          variance_acknowledgment_note:
+            (d['variance_acknowledgment_note'] as string | null) ?? null,
           first_approver_id: (d['first_approver_id'] as string | null) ?? null,
           first_approved_at: (d['first_approved_at'] as Date | null) ?? null,
           second_approver_id: (d['second_approver_id'] as string | null) ?? null,
@@ -619,7 +633,7 @@ export function makeFakePrisma(db: FakeDb) {
         return { ...row };
       },
       async deleteMany(args: { where?: AnyRecord } = {}) {
-        const inList = ((args.where?.['vendor_name_normalized'] as { in?: string[] })?.in) ?? null;
+        const inList = (args.where?.['vendor_name_normalized'] as { in?: string[] })?.in ?? null;
         const before = db.baselines.length;
         db.baselines = db.baselines.filter((b) =>
           inList ? !inList.includes(b.vendor_name_normalized) : false,
@@ -628,10 +642,15 @@ export function makeFakePrisma(db: FakeDb) {
       },
     },
     apVendorBaselineHistory: {
-      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
+      async findMany(
+        args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {},
+      ) {
         const w = args.where ?? {};
         let rows = db.baselineHistory.filter((h) => {
-          if (w['vendor_name_normalized'] !== undefined && h.vendor_name_normalized !== w['vendor_name_normalized'])
+          if (
+            w['vendor_name_normalized'] !== undefined &&
+            h.vendor_name_normalized !== w['vendor_name_normalized']
+          )
             return false;
           if (w['source'] !== undefined && h.source !== w['source']) return false;
           return true;
@@ -667,6 +686,29 @@ export function makeFakePrisma(db: FakeDb) {
         const w = args.where ?? {};
         const row = db.secondApprovers.find((s) => matchSecondApprover(s, w));
         return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+    },
+    // ADR-0066 §1.4 — routing lookup keyed on the FIRST approver, not the site.
+    apApprovalRouting: {
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.approvalRouting.find((r) => {
+          if (
+            w['first_approver_id'] !== undefined &&
+            r.first_approver_id !== w['first_approver_id']
+          )
+            return false;
+          if (w['active'] !== undefined && r.active !== w['active']) return false;
+          return true;
+        });
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.approvalRouting.filter(
+          (r) => w['active'] === undefined || r.active === w['active'],
+        );
+        return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
       },
     },
     auditLog: {
@@ -708,7 +750,8 @@ function matchSecondApprover(s: FakeSecondApprover, w: Record<string, unknown>):
   const or = w['OR'] as Array<Record<string, unknown>> | undefined;
   if (or) {
     const active = or.some((clause) => {
-      if ('active_until' in clause && clause['active_until'] === null) return s.active_until === null;
+      if ('active_until' in clause && clause['active_until'] === null)
+        return s.active_until === null;
       const au = clause['active_until'] as { gt?: Date } | undefined;
       if (au && au.gt) return s.active_until !== null && s.active_until.getTime() > au.gt.getTime();
       return false;

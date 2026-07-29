@@ -5,6 +5,49 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-29 (AP second approvals reached nobody — person-to-person routing — ADR-0066)
+
+Invoices >= $1,000 transitioned to `pending_second_approval` correctly and then sat
+indefinitely with **no ntfy and no email**. Root cause is an authorization/notification
+divergence: `canFulfillSecondApproval()` accepted admin-eligibility, while
+`activeSecondApproversForSite()` queried the `ap_second_approvers` site roster **alone**.
+Bill was deliberately never given a `woodland` roster row _because_ admin-eligibility
+covered his authority — so every Woodland second-approval resolved to an **empty
+recipient set**, and because the notify path is fail-soft it sent nothing and raised
+nothing. Shannon (an explicit `eugene` row) was notified normally, which is why it looked
+healthy from the Eugene side.
+
+- **Routing is now person-to-person** (`ap_approval_routing`), keyed on who signed first:
+  Janette<->Morena, Kelsey->Morena, Rick<->Shannon, Bill->Morena. Data-driven, with a DB
+  `CHECK (first_approver_id <> second_approver_id)` so self-approval is impossible at the
+  storage layer. The table is total — an approver with no row falls back **immediately**
+  (no 24h wait) and raises a digest warning.
+- **One shared resolver** (`src/lib/ap/second-approval-resolver.ts`) is consumed by BOTH
+  the authorization check and the notification lookup, so they cannot drift apart again.
+  **The invariant — recipients non-empty whenever authorization is non-empty — is asserted
+  directly**, for every roster member and for an approver with no routing row.
+- **Empty recipient set is now an error condition**, not silence. Fail-soft still never
+  rolls back an approval, but the resolver reports `problems` and the caller alarms on
+  them. The alarm **emails Bill as well as paging ntfy** — Check C found the existing ntfy
+  publish is wrapped in `.catch(() => undefined)` and never reached him, so relying on
+  ntfy alone to report a notification failure would repeat the bug.
+- **Per-user, per-event notification prefs** (`ap_notification_prefs`) replace what would
+  have been a hardcoded exception. **Shannon now receives exactly one kind of email — a
+  second-approval request on Rick's first signature — and nothing else, asserted in a
+  test.** `decision_outcome` ships as a column, all false: nobody is notified.
+- `ap_second_approvers` is **deprecated, not dropped** — we stop reading it, the data stays
+  for audit continuity. Supersession recorded in ADR-0046's amendment history.
+- **Near-miss caught pre-deploy:** the first seed matched users by NAME. Bill, Janette and
+  Morena each have two live accounts — their manager account, and an **operator PIN account
+  created 2026-07-28 with no email at all**. A name match took the newest row and selected
+  the operator accounts, which would have made the routing table look populated while every
+  recipient resolved to a non-existent address — the same empty-recipient bug, reintroduced
+  by its own seed. Now keyed on email with a role guard; validated against live prod in a
+  rolled-back transaction asserting 0 unreachable approvers and 0 prefs on email-less
+  accounts. A regression test models the email-less operator account explicitly.
+- Checks A-D reported: backlog **empty** (Bill had cleared it manually on Jul 27 in one
+  batch), roster confirmed Shannon/eugene only, `ap_notify` live at both sites.
+
 ### Added — 2026-07-28 (`/admin/equipment` — the equipment master is maintainable from the UI — ADR-0063)
 
 ADR-0062 seeded 554 assets and closed the empty-picker problem, but it closed it with a
