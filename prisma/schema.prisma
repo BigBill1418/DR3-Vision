@@ -113,6 +113,10 @@ model Site {
   // site scoping decision (hard rule #2).
   doc_sources_proposed DocSource[] @relation("DocSourceProposedSite")
 
+  /// ADR-0068 — reimbursements filed against this site. Auto-filled from the
+  /// submitter, never client-chosen (hard rule #2: site reach is server-decided).
+  reimbursement_requests ReimbursementRequest[]
+
   @@map("sites")
 }
 
@@ -326,6 +330,15 @@ model User {
   // 3-way audit engine (ADR-0039)
   audit_findings_resolved   AuditFinding[]   @relation("AuditFindingResolver")
   workbook_imports_uploaded WorkbookImport[] @relation("WorkbookImportUploader")
+
+  // ADR-0068 — reimbursements. Four DISTINCT roles on one request, kept apart
+  // because the control depends on the distinction: the submitter may never
+  // approve (D4), and the beneficiary may never approve even when routing points
+  // at them (D6). Collapsing any two of these would erase the control.
+  reimbursements_submitted        ReimbursementRequest[] @relation("ReimbursementSubmitter")
+  reimbursements_benefiting       ReimbursementRequest[] @relation("ReimbursementBeneficiary")
+  reimbursements_second_approved  ReimbursementRequest[] @relation("ReimbursementSecondApprover")
+  reimbursements_routed_to        ReimbursementRequest[] @relation("ReimbursementRoutedTo")
 
   @@map("users")
 }
@@ -4965,4 +4978,106 @@ model TonuBilling {
   @@index([event_id])
   @@index([site_id])
   @@map("tonu_billing")
+}
+
+/// ADR-0068 §3 — employee reimbursement requests.
+///
+/// WHY THIS TABLE EXISTS, stated so it is never "simplified" away: Mary Scott
+/// (SVdP accounting) reported that Janette was approving her own reimbursement
+/// submissions. The old path was paper → scan → email Mary → Mary forwards into
+/// the AP mailbox → the shared AP queue, where the ORIGINATOR was invisible to
+/// Vision. It knew who forwarded (Mary) and who approved (Janette); the
+/// originator existed only as ink inside a scanned PDF. First-action-wins then
+/// did exactly what it was designed to do and let her claim her own submission.
+/// The approval stamp was manufacturing audit evidence for a review that never
+/// happened — worse than having no control at all.
+///
+/// Structured intake is what fixes it: the submitter is AUTHENTICATED, so
+/// "who originated this" is a stored fact rather than an inference, and
+/// "the submitter cannot approve" becomes a constraint rather than a detection
+/// problem.
+///
+/// Deliberately SEPARATE from `ap_requests`: a vendor invoice is an arm's-length
+/// transaction whose invoice is independent evidence, and "originator" is
+/// meaningless because vendors are not in the org chart. A reimbursement pays an
+/// insider against a form an insider wrote.
+model ReimbursementRequest {
+  id      String @id @default(uuid())
+  site_id String // bare FK → sites.id; auto-filled from the submitter, never client-chosen
+  site    Site   @relation(fields: [site_id], references: [id], onDelete: Restrict)
+
+  // ── Beneficiary (D2) ─────────────────────────────────────────────────────
+  /// Set when chosen from the roster picker. Exactly one of this and
+  /// `employee_name_freeform` is non-null (DB CHECK).
+  employee_user_id       String?
+  employee_user          User?   @relation("ReimbursementBeneficiary", fields: [employee_user_id], references: [id], onDelete: Restrict)
+  /// Set when the reimbursed person has no Vision account. The fallback matters —
+  /// not every reimbursed person is a user.
+  employee_name_freeform String?
+
+  amount_cents         Int
+  expense_date         DateTime // the EXPENSE date, not the submission date
+  category             ReimbursementCategory
+  purpose              String // business purpose, required
+  receipt_file_key     String // R2 object key — receipts NEVER live in this DB
+  receipt_content_type String
+
+  // ── First signature = submission (D4) ────────────────────────────────────
+  submitted_by String
+  submitter    User     @relation("ReimbursementSubmitter", fields: [submitted_by], references: [id], onDelete: Restrict)
+  submitted_at DateTime @default(now())
+
+  // ── Second signature ─────────────────────────────────────────────────────
+  status             ReimbursementStatus @default(pending_second_approval)
+  second_approver_id String?
+  second_approver    User?               @relation("ReimbursementSecondApprover", fields: [second_approver_id], references: [id], onDelete: Restrict)
+  second_approved_at DateTime?
+  /// REQUIRED on reject and hold (a refusal must say why); unused on approve,
+  /// where the substantive data was captured at submission.
+  decision_note      String?
+
+  // ── Routing / escalation (D5/D6/D9) ──────────────────────────────────────
+  routed_to_user_id String
+  routed_to         User                          @relation("ReimbursementRoutedTo", fields: [routed_to_user_id], references: [id], onDelete: Restrict)
+  escalated_at      DateTime?
+  escalated_to      String? // bare FK → users.id
+  escalation_reason ReimbursementEscalationReason?
+
+  // ── Output (D8) ──────────────────────────────────────────────────────────
+  decision_pdf_key      String?
+  decision_pdf_sha256   String?
+  sent_to_accounting_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, routed_to_user_id]) // queue + digest reads
+  @@index([site_id, expense_date]) // reporting
+  @@index([submitted_by])
+  @@map("reimbursement_requests")
+}
+
+enum ReimbursementCategory {
+  mileage
+  fuel
+  supplies
+  meals
+  tools
+  other
+}
+
+enum ReimbursementStatus {
+  pending_second_approval
+  approved
+  rejected
+  held
+}
+
+/// Why a request left its routed peer. `beneficiary_conflict` is IMMEDIATE (D6) —
+/// there is no valid local approver, so waiting 24h accomplishes nothing.
+enum ReimbursementEscalationReason {
+  timeout
+  beneficiary_conflict
+  no_routing_row
+  ambiguous_beneficiary
 }
