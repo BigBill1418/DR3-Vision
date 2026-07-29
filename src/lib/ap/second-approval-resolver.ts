@@ -215,13 +215,44 @@ export async function resolveSecondApproval(
 /**
  * Authorization half, expressed through the same resolver so it can never drift
  * from the notification half. Admin-eligibility is preserved.
+ *
+ * ⚠ SITE REACH IS STILL ENFORCED FOR NON-ADMINS (CLAUDE.md hard rule #2).
+ *
+ * The superseded check scoped a non-admin to the DECISION'S SITE: admin OR an
+ * active `ap_second_approvers` row *for that site*. Moving to person→person
+ * routing dropped the site term, and nothing replaced it — so Shannon
+ * (`manager`, `all_sites: false`, Eugene) could terminally approve a WOODLAND
+ * invoice, and would be emailed a deep link to it. Hard rule #2 is explicit that
+ * cross-site reach requires `admin` OR `all_sites`, and the handoff's own DO-NOT
+ * list says the AUTHORIZATION rule must not change — only routing and
+ * notification. That broadening was an accident of the rewrite, not a decision.
+ *
+ * The site term is therefore re-applied here. It does not constrain the intended
+ * pairs: Janette↔Morena are both Woodland, Rick↔Shannon both Eugene, Kelsey has
+ * `all_sites`, and Bill is admin. It only refuses the cross-site case nobody
+ * asked for.
+ *
+ * `requestSiteId` is optional so callers that genuinely have no site (there are
+ * none on this path today — NOT-DR3 is rejected upstream) degrade to the routing
+ * check alone rather than silently refusing everyone.
  */
 export async function canFulfillSecondApprovalByRouting(
   prisma: PrismaClient,
   actor: { userId: string; role: string },
-  args: { firstApproverId: string; escalated?: boolean },
+  args: { firstApproverId: string; escalated?: boolean; requestSiteId?: string | null },
 ): Promise<boolean> {
   if (actor.role === 'admin') return true; // unchanged rule (handoff DO-NOT list)
+
   const routed = await resolveSecondApproval(prisma, args);
-  return routed.authorizedUserIds.includes(actor.userId);
+  if (!routed.authorizedUserIds.includes(actor.userId)) return false;
+
+  // Routing said yes; hard rule #2 still has to agree.
+  if (!args.requestSiteId) return true;
+  const me = await prisma.user.findUnique({
+    where: { id: actor.userId },
+    select: { all_sites: true, primary_site_id: true },
+  });
+  if (!me) return false;
+  if (me.all_sites) return true;
+  return me.primary_site_id === args.requestSiteId;
 }

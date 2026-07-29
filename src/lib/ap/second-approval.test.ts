@@ -106,6 +106,10 @@ const users: FakeUser[] = [
     role: 'manager',
     all_sites: false,
     is_active: true,
+    // ADR-0066 — Shannon is the EUGENE manager. Hard rule #2 site reach is now
+    // enforced on the second-approval leg, so a fixture without a primary site
+    // would (correctly) be refused on a Eugene invoice.
+    primary_site_id: 'site-e',
   },
   {
     id: 'u-janette',
@@ -114,6 +118,7 @@ const users: FakeUser[] = [
     role: 'manager',
     all_sites: false,
     is_active: true,
+    primary_site_id: 'site-w',
   },
 ];
 // Retained so the deprecated-but-not-dropped roster still has a fixture, and so a

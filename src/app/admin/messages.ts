@@ -405,6 +405,8 @@ export const adminMessages = {
     // Errors
     errors: {
       selfPair: 'A person cannot be their own second approver.',
+      selfFallback:
+        'The fallback approver cannot be the first approver — on escalation they would become an authorized second approver on their own invoice.',
       firstApproverInvalid: 'The first approver must be an active manager or admin account.',
       secondApproverUnreachable:
         'That account cannot be a second approver — it is inactive, not a manager/admin, or has no email address. Routing to it would notify nobody.',

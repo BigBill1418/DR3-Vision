@@ -130,6 +130,8 @@ function routingReasonToResponse(reason: SaveRoutingReason): NextResponse {
   switch (reason) {
     case 'self_pair':
       return NextResponse.json({ error: AC.errors.selfPair }, { status: 422 });
+    case 'self_fallback':
+      return NextResponse.json({ error: AC.errors.selfFallback }, { status: 422 });
     case 'first_approver_invalid':
       return NextResponse.json({ error: AC.errors.firstApproverInvalid }, { status: 422 });
     case 'second_approver_unreachable':

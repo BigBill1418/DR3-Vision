@@ -181,6 +181,14 @@ export interface FakeUser {
   is_active: boolean;
   /** Soft-delete marker. Optional so existing fixtures need not enumerate it. */
   deleted_at?: Date | null;
+  /**
+   * ADR-0066 — the site-reach half of the second-approval authorization check
+   * (CLAUDE.md hard rule #2: cross-site reach needs `admin` or `all_sites`).
+   * Optional so pre-existing fixtures keep compiling; omitting it models a user
+   * with no primary site, who therefore passes the reach check only via
+   * `all_sites`.
+   */
+  primary_site_id?: string | null;
 }
 export interface FakePollRun {
   id: string;

@@ -311,9 +311,28 @@ describe('§1.5 ESCALATION IS ADDITIVE, NEVER A TRANSFER', () => {
     // Authorization still widened and was still stamped + audited…
     expect(res.escalated).toBe(1);
     expect(db.requests[0]?.escalated_to).toBe(U.bill.id);
-    // …the opt-out only emptied the email list.
-    const arg = notifySecondApprovalEscalated.mock.calls[0]?.[0] as { approverEmails: string[] };
-    expect(arg.approverEmails).toEqual([]);
+
+    // …and the drop is now LOUD rather than a send-to-nobody.
+    //
+    // This assertion was inverted by the adversarial review. It previously
+    // asserted `notifySecondApprovalEscalated` was still called with
+    // `approverEmails: []` — i.e. the scanner burned `escalated_at` (which is
+    // BOTH the idempotency key and the only "handled" record) and then notified
+    // nobody, reporting a result byte-identical to a healthy escalation. The next
+    // scan would skip the row forever. That is the original outage's shape: a
+    // recipient set emptied AFTER the check meant to catch it.
+    //
+    // The pointless send is now skipped and the condition alarms instead.
+    expect(notifySecondApprovalEscalated).not.toHaveBeenCalled();
+    expect(reportSecondApprovalRoutingProblem).toHaveBeenCalledTimes(1);
+    const alarm = reportSecondApprovalRoutingProblem.mock.calls[0]?.[0] as {
+      recipientCount: number;
+      problems: string[];
+    };
+    expect(alarm.recipientCount).toBe(0);
+    expect(alarm.problems.join(' ')).toMatch(/notified NOBODY/i);
+    // And the caller still sees it in the run result, not just in a log line.
+    expect(res.problems.join(' ')).toMatch(/notified NOBODY/i);
   });
 });
 

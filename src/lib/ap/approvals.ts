@@ -497,18 +497,6 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       firstApproverId: args.actorUserId,
     }).catch(() => null);
 
-    // §B.5 — fail-soft is right for the SEND, but an empty recipient set (or any
-    // routing misconfiguration) must be a LOUD condition, not silence. That
-    // indistinguishability is the whole defect. The alarm goes to ntfy AND email
-    // because Check C showed the existing ntfy publish never reached Bill.
-    if (!routed || routed.recipients.length === 0 || routed.problems.length > 0) {
-      await reportSecondApprovalRoutingProblem({
-        requestId: args.requestId,
-        firstApproverId: args.actorUserId,
-        problems: routed?.problems ?? ['Second-approval routing resolver threw.'],
-        recipientCount: routed?.recipients.length ?? 0,
-      }).catch(() => undefined);
-    }
     const subject =
       (
         await prisma.apRequest.findUnique({
@@ -519,6 +507,36 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
     // §1.6 — `second_approval_request` is NEVER a broadcast: exactly the routed
     // individual (plus the fallback once escalated), filtered by their own pref.
     const recipients = await filterBySecondApprovalPref(prisma, routed?.recipients ?? []);
+
+    // §B.5 — fail-soft is right for the SEND, but an empty recipient set (or any
+    // routing misconfiguration) must be a LOUD condition, not silence. That
+    // indistinguishability is the whole defect.
+    //
+    // ⚠ THE ALARM MUST SEE THE POST-FILTER SET. An earlier revision alarmed on
+    // `routed.recipients` (pre-filter) and then sent to the post-filter list with
+    // nothing re-checking emptiness — so an admin turning ONE person's
+    // `second_approval_request` pref off at /admin/ap/notifications silently
+    // recreated the original outage: resolver returns a healthy single recipient,
+    // no alarm fires, the filter empties the list, and the send logs a warn and
+    // returns. Zero email, zero alarm, indistinguishable from success. The hole
+    // was closed at the resolver and reopened one layer downstream, through the
+    // very screen this ADR added. Alarm on what will ACTUALLY be sent.
+    const filteredToNobody = (routed?.recipients.length ?? 0) > 0 && recipients.length === 0;
+    if (!routed || recipients.length === 0 || routed.problems.length > 0) {
+      const problems = [...(routed?.problems ?? [])];
+      if (!routed) problems.push('Second-approval routing resolver threw.');
+      if (filteredToNobody) {
+        problems.push(
+          `Every routed second approver (${routed?.recipients.map((r) => r.name).join(', ')}) has notify_second_approval_request OFF — the request is authorized but nobody will be told. Re-enable the pref at /admin/ap/notifications.`,
+        );
+      }
+      await reportSecondApprovalRoutingProblem({
+        requestId: args.requestId,
+        firstApproverId: args.actorUserId,
+        problems,
+        recipientCount: recipients.length,
+      }).catch(() => undefined);
+    }
     await notifySecondApprovalNeeded({
       requestId: args.requestId,
       subject,

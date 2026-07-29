@@ -388,6 +388,8 @@ export interface SaveRoutingInput {
 export type SaveRoutingReason =
   | 'first_approver_invalid'
   | 'self_pair'
+  /** The fallback approver IS the first approver — self-approval on escalation. */
+  | 'self_fallback'
   | 'second_approver_unreachable'
   | 'fallback_unreachable'
   | 'hours_out_of_range'
@@ -409,6 +411,22 @@ export async function saveRoutingRow(
 ): Promise<SaveRoutingResult> {
   if (input.first_approver_id === input.second_approver_id)
     return { ok: false, reason: 'self_pair' };
+  // ⚠ The FALLBACK column needs the same guard as the second-approver column.
+  //
+  // On escalation the resolver adds `fallback_approver_id` to BOTH
+  // `authorizedUserIds` and `recipients` (§1.5, additive). So a row where the
+  // fallback IS the first approver makes that person an authorized second
+  // approver on their own invoice — self-approval, arriving with an email that
+  // says "you have been added as an additional approver". The DB CHECK only
+  // covers first <> second, and the UI recomputes `peers` on a first-approver
+  // change without clearing an already-picked fallback, so the stale id posts
+  // straight through. Refuse it here, where both the UI and the API funnel.
+  if (
+    input.fallback_approver_id &&
+    input.fallback_approver_id === input.first_approver_id
+  ) {
+    return { ok: false, reason: 'self_fallback' };
+  }
   if (
     !Number.isInteger(input.fallback_after_hours) ||
     input.fallback_after_hours < FALLBACK_HOURS_MIN ||

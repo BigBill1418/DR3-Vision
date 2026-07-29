@@ -175,6 +175,9 @@ export async function decideSecondApproval(
   const eligible = await canFulfillSecondApprovalByRouting(prisma, args.actor, {
     firstApproverId: row.first_approver_id ?? '',
     escalated: row.escalated_at != null,
+    // Hard rule #2 — a non-admin without `all_sites` may only sign for their own
+    // site. Person routing must not become a cross-site reach escalation.
+    requestSiteId: row.site_id,
   });
   if (!eligible) throw new ApSecondApprovalNotEligibleError();
 

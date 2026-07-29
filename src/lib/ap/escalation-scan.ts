@@ -239,21 +239,62 @@ async function escalateIfDue(
   // pref filter can only SUBTRACT from an already-routed set — never turn this
   // into a broadcast.
   const recipients = await filterBySecondApprovalPref(prisma, targets);
-  await notifySecondApprovalEscalated({
-    requestId: req.id,
-    subject: req.subject,
-    thresholdHours,
-    routedToName: routed.routedTo?.name ?? null,
-    approverEmails: recipients.map((r) => r.email),
-  }).catch((err: unknown) => {
-    // Fail-soft on the SEND (a mail failure must not undo a committed escalation),
-    // but never silent: the failure is logged and returned in `problems`.
-    log.error(
-      { requestId: req.id, err: errText(err) },
-      '[ap-escalation-scan] escalation email failed',
-    );
-    problems.push(`Request ${req.id}: escalation email failed — ${errText(err)}`);
-  });
+
+  // ⚠ THE LATCH IS ALREADY BURNED AT THIS POINT.
+  //
+  // `escalated_at` is BOTH the idempotency key and the only "this was handled"
+  // record, and it was committed above. So any way of reaching this line with
+  // nobody notified is a ONE-SHOT silent drop: the next scan sees
+  // `escalated_at IS NOT NULL`, skips the row, and reports a perfectly clean
+  // `scanned: 0`. That is the original outage's shape — success and failure
+  // indistinguishable from the outside — reappearing one layer downstream.
+  //
+  // Two reachable routes here, both now ALARMED rather than merely logged:
+  //   (a) every escalation target has `notify_second_approval_request` OFF, so
+  //       the pref filter empties a non-empty routed set;
+  //   (b) the send throws (M365 429, transport blip, SIGTERM mid-flight).
+  //
+  // We deliberately do NOT roll the latch back. Un-latching would re-notify
+  // hourly forever on a persistent mail failure, and the escalation itself (the
+  // widened authority) DID happen and is audited. The right answer is to make
+  // the drop loud, so a human closes it, rather than to churn.
+  if (recipients.length === 0) {
+    const names = targets.map((t) => t.name).join(', ') || '(none resolved)';
+    const msg =
+      targets.length > 0
+        ? `Request ${req.id}: ESCALATED but notified NOBODY — every escalation target (${names}) has notify_second_approval_request OFF. The escalation is latched and will not retry.`
+        : `Request ${req.id}: ESCALATED but no reachable escalation target resolved. The escalation is latched and will not retry.`;
+    log.error({ requestId: req.id, targets: targets.length }, `[ap-escalation-scan] ${msg}`);
+    problems.push(msg);
+    await reportSecondApprovalRoutingProblem({
+      requestId: req.id,
+      firstApproverId: req.first_approver_id ?? '',
+      problems: [msg],
+      recipientCount: 0,
+    }).catch(() => undefined);
+  } else {
+    await notifySecondApprovalEscalated({
+      requestId: req.id,
+      subject: req.subject,
+      thresholdHours,
+      routedToName: routed.routedTo?.name ?? null,
+      approverEmails: recipients.map((r) => r.email),
+    }).catch(async (err: unknown) => {
+      // Fail-soft on the SEND (a mail failure must not undo a committed
+      // escalation) but NEVER silent — and, critically, not merely returned in
+      // `problems`, which only surfaces for THIS run. The latch is spent, so this
+      // has to page a human now or the escalation is lost for good.
+      const msg = `Request ${req.id}: escalation email FAILED after the escalation was latched — it will not retry. ${errText(err)}`;
+      log.error({ requestId: req.id, err: errText(err) }, '[ap-escalation-scan] ' + msg);
+      problems.push(msg);
+      await reportSecondApprovalRoutingProblem({
+        requestId: req.id,
+        firstApproverId: req.first_approver_id ?? '',
+        problems: [msg],
+        recipientCount: recipients.length,
+      }).catch(() => undefined);
+    });
+  }
 
   log.info(
     {

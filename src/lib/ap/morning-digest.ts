@@ -55,6 +55,7 @@
 import { prisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 import { notifyStaff, type NotifyStaffMode } from '@/lib/notify/notify-staff';
+import { publishNtfy } from '@/lib/ntfy';
 import { NOTIFY_SURFACE } from '@/lib/notify/rollout';
 import { log } from '@/lib/observability/logger';
 import { dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
@@ -414,8 +415,47 @@ export async function buildApMorningDigest(
     warnings.push(
       `${unrouted.length} active approver${one ? '' : 's'} ${one ? 'has' : 'have'} no ` +
         `ap_approval_routing row: ${who}. Their first approvals fall back to an admin ` +
-        `immediately (no 24h wait) instead of routing to a peer. Configure the pair in ` +
-        `ap_approval_routing.`,
+        `immediately (no 24h wait) instead of routing to a peer. Configure the pair at ` +
+        `/admin/ap/routing.`,
+    );
+  }
+
+  // ── W1b. A row that EXISTS but points at somebody unreachable.
+  //
+  // The §1.7 reasoning for reporting a MISSING pair over an empty queue —
+  // "suppressing it would keep the misconfiguration invisible until an invoice
+  // happened to arrive" — applies identically to a BROKEN pair, and originally
+  // did not cover it. An `unreachable_second_approver` only surfaced as a
+  // resolver `problems` entry while iterating real pending invoices, so an empty
+  // queue suppressed it entirely: a routing row aimed at a deactivated peer (or
+  // an email-less operator PIN account) stayed silent until the day it mattered.
+  // That is the same real-misconfiguration-wearing-the-costume-of-silence shape.
+  const routingDetail = await db.apApprovalRouting.findMany({
+    where: { active: true },
+    select: { first_approver_id: true, second_approver_id: true },
+  });
+  const brokenPairs: string[] = [];
+  for (const r of routingDetail) {
+    const peer = await db.user.findUnique({
+      where: { id: r.second_approver_id },
+      select: { name: true, email: true, role: true, is_active: true },
+    });
+    const reachable =
+      !!peer &&
+      peer.is_active &&
+      !!peer.email &&
+      (peer.role === 'manager' || peer.role === 'admin');
+    if (!reachable) {
+      const owner = approvers.find((u) => u.id === r.first_approver_id)?.name ?? r.first_approver_id;
+      brokenPairs.push(`${owner} → ${peer?.name ?? r.second_approver_id}`);
+    }
+  }
+  if (brokenPairs.length > 0) {
+    warnings.push(
+      `${brokenPairs.length} routing row${brokenPairs.length === 1 ? '' : 's'} point${brokenPairs.length === 1 ? 's' : ''} at an ` +
+        `unreachable second approver (inactive, non-approver role, or no email address): ` +
+        `${brokenPairs.join('; ')}. Those approvals silently fall back to an admin. ` +
+        `Fix at /admin/ap/routing.`,
     );
   }
 
@@ -594,12 +634,31 @@ export async function runApMorningDigest(
   // Audience by PREF, never by hardcoded address (§1.6 / §1.7).
   const audience = await dailyDigestRecipients(db);
   if (audience.length === 0) {
-    // Loud, not silent: an empty digest audience is the same class of defect as
-    // the empty second-approval recipient set that caused the outage.
-    log.warn(
+    // ⚠ A `log.warn` is NOT loud. This is the backstop's own failure mode, and it
+    // was the same fail-soft-over-an-empty-recipient-set shape the ADR exists to
+    // eliminate — in the component built to detect it.
+    //
+    // It compounds: the digest is the mitigation of last resort for a missing
+    // routing pair, a pref-silenced approver, and a latched-but-unsent
+    // escalation. If the digest itself goes quiet, every one of those loses its
+    // safety net simultaneously and nothing anywhere says so.
+    //
+    // `notify_daily_digest` defaults to FALSE, so a deleted prefs row, a
+    // deactivated account, or one toggle at /admin/ap/notifications is enough to
+    // reach here. Page it.
+    log.error(
       { dayISO, ...counts },
-      '[ap-morning-digest] no user has notify_daily_digest enabled — digest has nobody to go to',
+      '[ap-morning-digest] no user has notify_daily_digest enabled — the AP oversight digest has nobody to go to',
     );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'AP morning digest has no recipients',
+      body: `No user has notify_daily_digest enabled, so the ${dayISO} AP oversight digest was not sent. Pending second approvals and routing warnings are going unreported. Re-enable at /admin/ap/notifications.`,
+      priority: 'high',
+      tags: ['warning', 'ap', 'digest', 'dr3-vision'],
+      fingerprint: 'ap-digest-no-recipients',
+      cooldownMs: 12 * 60 * 60 * 1000, // daily cadence — page once, not per retry
+    }).catch(() => undefined);
     return {
       sent: false,
       reason: 'no_recipients',
