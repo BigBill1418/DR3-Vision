@@ -520,3 +520,127 @@ payload, the real validation handshake, a real subscription attempt, and real
 `.xlsm` daily-log bytes are all unproven. The design's answer to each of those
 failing is "slower" or "reported", never "silently wrong" — and first contact is
 exactly what should test that claim.
+
+---
+
+## Amendment 3 — 2026-07-29 — discovery must be re-founded, and §5.1's permission claim is FALSE
+
+### A. `sharedWithMe` is not merely deprecated — the capability is being removed
+
+`GET /me/drive/sharedWithMe` **and** `GET /me/drive/recent` **and** `/insights/shared`
+all carry the same retirement: degraded until **2026-11**, then no data. That is
+the whole *user-relative aggregation* family, which is why Microsoft's own Q&A
+answer is that there is **no one-to-one replacement** — the capability is going,
+not the URL.
+
+Worse, the degradation is **already active**: Microsoft applied a mitigation
+reducing the returned set to **1 item**. Independent reports show Graph Explorer
+listing 6 shares while the API returns 1, and `msgraph-sdk-dotnet#3040` is
+labelled *Won't fix* as a server-side limitation.
+
+*(Documentation ambiguity: a Microsoft moderator states 2027-11 on the
+replacement thread while the API reference says 2026-11. Plan to 2026-11-01.)*
+
+### B. ⚠ §5.1's "no tenant-wide file access" is FALSE for this registration
+
+§5.1 tells the operator to emphasise to IT: *"read-only, and scoped solely to
+what is explicitly shared with the account. **No tenant-wide file access.**"*
+
+**That is not true of app registration `2da92424-…`, and was not true when it was
+written.** Decoding a client-credentials token for that app returns:
+
+```
+roles: ['Mail.ReadWrite', 'Files.Read.All', 'Mail.Send']
+```
+
+Application `Files.Read.All` — tenant-wide read of **every** drive with no
+signed-in user — was granted 2026-07-09 for the ADR-0049 workbook bridge, whose
+D6 says as much explicitly. ADR-0067 D5 reuses that same registration.
+
+**The IT conversation therefore cannot honestly be framed as avoiding tenant-wide
+access.** It must be framed as *which token each code path uses*. §5.1 is
+corrected by this amendment; do not quote its original wording to anyone.
+
+**Corollary that must not be lost:** `Sites.Selected` buys **zero** isolation on
+this registration. Microsoft is explicit that a broader grant such as
+`Files.Read.All` *overrides* `Sites.Selected` restrictions. Achieving that
+security story requires a **separate app registration**, which contradicts D5.
+Nobody should propose `Sites.Selected` here as a security win.
+
+### C. The live-document vision SURVIVES. What is lost is zero-touch discovery.
+
+Every viable replacement returns a real `driveItem` in its home drive, keyed on
+immutable `(driveId, itemId)` and re-read live each sweep. **Nothing degrades to
+snapshots** except the email path, which is already labelled `ingest_source='email'`.
+
+**The honest re-scope, in one line: _"share it and Vision finds it"_ becomes
+_"share it and register it once."_** Bill's requirement — *"we will just share it
+to the spec address from various users and owners"* — **survives intact for
+staff**: they still just share. The one-time registration lands on Bill or an
+automation, never on the person sharing.
+
+### D. Ranked replacement (supersedes the P1 `SharedItemSource` default)
+
+1. **Shortcut / `remoteItem` enumeration — PRIMARY.** Staff share as today; a
+   shortcut is materialized in `docs-dr3`'s own OneDrive; enumeration becomes
+   `GET /users/docs-dr3@svdp.us/drive/root/children` filtered on the `remoteItem`
+   facet. **This is not a new API — it is the same facet by a different route**
+   (`sharedWithMe` items *always* carried `remoteItem`). The `projectDriveItem`
+   unwrap, `(drive_id,item_id)` keying, traversal, dedup and reconciliation are
+   **unchanged** — precisely the swap the `SharedItemSource` seam exists for.
+   Reads use the already-consented delegated `Files.Read.All`; automating
+   shortcut creation needs delegated **`Files.ReadWrite`** (the signed-in
+   account's OWN drive — **not** `.All`), so D3 survives literally: the write
+   creates a pointer in Vision's own service-account drive.
+   *Caveats:* shortcuts are **folder-only**, pushing the product toward "share a
+   folder"; and `onedrive-api-docs#1427` reports shortcuts missing from `/delta`
+   on OneDrive for Business — **discover via `/root/children`, not `/delta`**,
+   which is what the mandatory sweep already is.
+2. **`/shares/{encodedSharingUrl}` redemption — COMPANION**, and the answer for
+   single files. The sharing URL is a **registration token, never the read
+   path**: resolve once, capture `(driveId,itemId)`, read normally forever after.
+   ⚠ **Permission unverified** — the docs table lists `Files.ReadWrite` as
+   least-privileged and omits `Files.Read.All`; must be tested live. Note
+   `Prefer: redeemSharingLink` *grants durable access* — treat it as a write.
+3. **Group / Teams drive delta — the structural fix, and worth putting to Bill.**
+   Add `docs-dr3` to specific Teams; enumerate `/me/memberOf` →
+   `/groups/{id}/drive/root/delta`. **Discovery is permanently solved**, no
+   deprecated API anywhere in the path, and the blast radius is *legible to IT*
+   ("the service account is a member of these three Teams"). Cost: the document
+   must live in a Team rather than personal OneDrive.
+4. **Microsoft Search — cross-check only, never enumeration.** Relevance-ranked,
+   capped, eventually-consistent, no delta, no completeness guarantee. **A missing
+   document would be silent** — the exact failure class this ADR exists to
+   eliminate. Safe only as a reconciliation pass that *raises* an anomaly when it
+   sees a source `doc_sources` doesn't know; it may add suspicion, never remove a
+   source. **P1's refusal to ship a speculative Search implementation was correct
+   and stands.**
+5. **`/me/drive/following`** — one cheap call to settle; weak evidence it works on
+   OneDrive for Business.
+6. **Dedicated library + `Sites.Selected`** — re-evaluated honestly rather than
+   deferred to D1. Still not primary: highest staff behavioural cost ("save your
+   file *here*"), breaks liveness for files that live elsewhere, and per §B above
+   buys no isolation on this registration.
+7. **Email ingestion** — snapshot, already labelled, documented degradation path.
+
+### E. Measure at first contact — do not assume
+
+The moment Bill completes the Connect sign-in, run one pass covering:
+does `sharedWithMe` still return anything **in this tenant** (how much runway is
+actually left vs the 1-item mitigation)? · does `/shares` work with delegated
+`Files.Read.All`? · do shortcuts appear in `/root/children` **and** `/delta` on
+ODB? · does `/me/drive/following` return anything? Each is a single Graph call,
+and together they convert this amendment from reasoning into measurement.
+
+### F. Corrections to the research that produced this amendment
+
+- The `docs-dr3@svdp.us` mailbox was reported as returning **HTTP 500**. Measured
+  independently it returns **403** on `/mailFolders/inbox`, while
+  `dr3-vision@svdp.us` returns 200 with the same token. A 403 with
+  `Mail.ReadWrite` granted is the signature of an **ApplicationAccessPolicy**
+  scoping the app's mail access to the AP mailbox — a control working as
+  intended, **not** a defect. Email-based auto-registration would need that
+  policy widened, which is a decision, not a repair.
+- `docs-dr3`'s drive returns **200** (OneDrive provisioned — D10's concern is
+  settled). `dr3-vision@svdp.us` returns **404** for its drive, confirming D1's
+  reasoning that a shared mailbox has no drive identity.
