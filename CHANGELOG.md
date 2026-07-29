@@ -5,6 +5,200 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (AP second-approval escalation runs on a weekday clock — ADR-0066 §1.5)
+
+The backstop half of ADR-0066. Person-to-person routing decides _who_ a second approval
+goes to; this decides what happens when that person does not act. An hourly scanner
+(`scripts/ap-escalation-scan.mjs` → `/api/internal/ap/escalation-scan` →
+`runApEscalationScan`) reads every open `pending_second_approval` with
+`escalated_at IS NULL` — exactly the `ap_requests_pending_second_escalation_idx` partial
+index — and escalates anything past its routing pair's `fallback_after_hours`.
+
+- **The clock is a weekday clock.** Bill's decision verbatim: _"weekdays only. The clock
+  pauses Friday evening and resumes Monday."_ A request first-approved **Friday 4pm does
+  not escalate Saturday — it escalates Monday 4pm**, the 24th business hour. Asserted
+  directly, at all three instants. Accrual reuses the shared `business-clock.ts`
+  (`businessHoursElapsedExceeds`) rather than introducing a second calendar; holidays pause
+  it only when observed at **every** site, since escalation is per-person and no longer
+  carries a site.
+- **Escalation is ADDITIVE, never a transfer.** The originally routed peer stays able to
+  sign; the fallback approver becomes _additionally_ able; whoever acts first completes it.
+  The widening itself is not re-implemented here — it is
+  `resolveSecondApproval(…, { escalated: true })`, the same function the authorization
+  check consumes. Re-deriving it is how the two halves drifted apart in the first place.
+  A test signs in as the peer **after** escalation and asserts they are still authorized.
+- **Idempotent on `escalated_at IS NULL`,** enforced twice: in the candidate query and
+  again as a conditional predicate on the claiming `updateMany`. The second is the one that
+  matters — two overlapping scans (a slow run meeting the next hourly fire, or a restart
+  mid-run) can both _read_ a row, but only the write that flips a still-NULL row wins.
+  Proven by running the scan twice and asserting **exactly one notification and exactly one
+  audit row**.
+- **No routing row ⇒ escalate immediately** (§1.4, no 24h wait) and raise the routing
+  alarm. The scanner reads the resolver's `outcome: 'fallback_no_routing_row'` rather than
+  re-deriving the condition.
+- **Staff are notified by EMAIL, never ntfy** (hard rule #5). A new
+  `notifySecondApprovalEscalated()` routes through `notifyStaff()` (ADR-0047 chokepoint,
+  `ap_notify` gate) filtered by each person's `second_approval_request` pref — it exists
+  precisely _because_ reusing `notifySecondApprovalNeeded()` would have pushed a staff
+  workflow nudge onto Bill's phone every hour. Only the people escalation **added** are
+  emailed; the peer already has the original request and is not re-sent it hourly. The copy
+  leads with "this is additive, not a hand-off," because that is the semantic operators
+  get wrong.
+- **Fail loud (§B.8 / ADR-0057 D9).** A scan that cannot run **pages `dr3-vision-system`
+  and re-throws** so the route 500s — it never returns a clean, empty result
+  indistinguishable from a healthy backlog, which is the exact shape of the outage this ADR
+  exists to fix. A single poisoned row is contained (the rest of the backlog still
+  escalates) but still pages. 6h cooldown, mirroring the AP poll deadman class.
+- **Every escalation is audited** in the same transaction as the stamp
+  (`actor_label='system:ap-escalation-scan'`, before/after JSON). The `after` records
+  `still_authorized` so an auditor can read straight off the row that the peer was never
+  removed.
+- **Compose:** `dr3-vision-ap-escalation-scan`, mirroring `ap-approver-expiry` (thin
+  scheduler, `cron.env` bearer, `INTERNAL_BASE_URL: http://app:3000`, healthcheck disabled,
+  `mem_limit`/`pids_limit`). It deliberately does **not** mount `ntfy.env` — the two
+  system-level pages this feature raises are published by the `app` container; mounting it
+  here would document a path that does not exist. Guarded by a compose-wiring test.
+  Deploy is manual on svdp-dev; **not deployed by this change.**
+- Unlike every sibling daemon the scheduler carries **no Pacific offset-reprobe math** —
+  it fires hourly, and an hour is an hour in every zone. Pinned across both DST transition
+  days so nobody "fixes" it back into wall-clock arithmetic.
+
+### Added — 2026-07-29 (`/admin/ap/routing` + `/admin/ap/notifications` — the AP configuration screen — ADR-0066 §1.4/§1.6, Amendment 1)
+
+ADR-0066 shipped person-to-person routing and per-user notification prefs as **data with no
+UI**. Both tables could only be changed by writing a migration — wrong for a design whose
+premise is "staff change, code should not" — and the resolver's own warning already told
+admins to "configure the pair at `/admin/ap/routing`", a route that did not exist.
+
+- **One screen behind two routes.** `/admin/ap/routing` and `/admin/ap/notifications` render
+  the same component; the route only decides which tab reads as current. Bill: _"two separate
+  pages for six rows of config is worse."_ The routing filter is carried across the
+  cross-link by one serializer (`src/app/admin/ap/config/list-url.ts`) per ADR-0017
+  Amendment 1; saves `router.refresh()` and never navigate, so the URL view state survives.
+- **The pickers are keyed on REACHABILITY — active, manager/admin, and holding an email.**
+  This is the same lesson the migration seed had to learn the hard way: Bill, Janette and
+  Morena each have a second, **email-less operator PIN account with the same name** (created
+  2026-07-28 for the iPad rollout). A name-keyed picker would let an admin select one and the
+  routing table would read as fully populated while every notification resolved to nobody —
+  the outage, reintroduced through its own admin screen. Every option is labelled with its
+  email so two same-named accounts are distinguishable at the point of choice, and the
+  excluded namesakes are **disclosed** in the UI rather than hidden.
+- **Self-approval is impossible at three layers**: the picker never offers the first approver
+  as their own peer, the server rejects the pair before writing, and the DB
+  `CHECK (first_approver_id <> second_approver_id)` backstops both. The constraint violation
+  is caught by name and returned as a readable 422, not a 500.
+- **The totality requirement is now visible.** The screen enumerates active manager/admin
+  accounts, diffs them against active routing rows, and renders the gap in the same words the
+  resolver reports to the 06:00 digest. Graded `error` for an admin or an `ap_approvers`
+  roster member (they can first-approve today) and `warning` for an approver-role account
+  that would degrade silently the day they are added. Unreachable second approvers and
+  unreachable fallbacks are reported the same way.
+- **Prefs render EFFECTIVE values.** A user with no row shows the column defaults badged
+  "Defaults" — a missing row means defaults, never "notify nobody", and blank checkboxes
+  would misrepresent what the sender does. The first write materialises the row **from the
+  defaults**, so flipping one event never switches the other three off.
+  `second_approval_request` is captioned in full because the obvious reading of it is wrong:
+  it is never a broadcast, and the toggle can only remove a person from their OWN routed
+  requests.
+- **`decision_outcome` is rendered and refused** — disabled, badged "Not wired", and rejected
+  by the API. It has no send path; making it writable would promise an email nobody sends,
+  and hiding it would leave the column undocumented exactly where it is configured.
+- Every mutation writes its `audit_log` row (`ap_approval_routing` / `ap_notification_prefs`,
+  before/after JSON) **in the same transaction** as the write. Admin-gated on
+  `role === 'admin'` at both the page and API layers — never the `all_sites` reach flag.
+- New `/admin` hub tile. 44 tests across the API, the screen and the URL serializer.
+
+### Fixed — 2026-07-29 (AP second approvals reached nobody — person-to-person routing — ADR-0066)
+
+Invoices >= $1,000 transitioned to `pending_second_approval` correctly and then sat
+indefinitely with **no ntfy and no email**. Root cause is an authorization/notification
+divergence: `canFulfillSecondApproval()` accepted admin-eligibility, while
+`activeSecondApproversForSite()` queried the `ap_second_approvers` site roster **alone**.
+Bill was deliberately never given a `woodland` roster row _because_ admin-eligibility
+covered his authority — so every Woodland second-approval resolved to an **empty
+recipient set**, and because the notify path is fail-soft it sent nothing and raised
+nothing. Shannon (an explicit `eugene` row) was notified normally, which is why it looked
+healthy from the Eugene side.
+
+- **Routing is now person-to-person** (`ap_approval_routing`), keyed on who signed first:
+  Janette<->Morena, Kelsey->Morena, Rick<->Shannon, Bill->Morena. Data-driven, with a DB
+  `CHECK (first_approver_id <> second_approver_id)` so self-approval is impossible at the
+  storage layer. The table is total — an approver with no row falls back **immediately**
+  (no 24h wait) and raises a digest warning.
+- **One shared resolver** (`src/lib/ap/second-approval-resolver.ts`) is consumed by BOTH
+  the authorization check and the notification lookup, so they cannot drift apart again.
+  **The invariant — recipients non-empty whenever authorization is non-empty — is asserted
+  directly**, for every roster member and for an approver with no routing row.
+- **Empty recipient set is now an error condition**, not silence. Fail-soft still never
+  rolls back an approval, but the resolver reports `problems` and the caller alarms on
+  them. The alarm **emails Bill as well as paging ntfy** — Check C found the existing ntfy
+  publish is wrapped in `.catch(() => undefined)` and never reached him, so relying on
+  ntfy alone to report a notification failure would repeat the bug.
+- **Per-user, per-event notification prefs** (`ap_notification_prefs`) replace what would
+  have been a hardcoded exception. **Shannon now receives exactly one kind of email — a
+  second-approval request on Rick's first signature — and nothing else, asserted in a
+  test.** `decision_outcome` ships as a column, all false: nobody is notified.
+- `ap_second_approvers` is **deprecated, not dropped** — we stop reading it, the data stays
+  for audit continuity. Supersession recorded in ADR-0046's amendment history.
+- **Near-miss caught pre-deploy:** the first seed matched users by NAME. Bill, Janette and
+  Morena each have two live accounts — their manager account, and an **operator PIN account
+  created 2026-07-28 with no email at all**. A name match took the newest row and selected
+  the operator accounts, which would have made the routing table look populated while every
+  recipient resolved to a non-existent address — the same empty-recipient bug, reintroduced
+  by its own seed. Now keyed on email with a role guard; validated against live prod in a
+  rolled-back transaction asserting 0 unreachable approvers and 0 prefs on email-less
+  accounts. A regression test models the email-less operator account explicitly.
+- **Wired end-to-end:** `decideSecondApproval`'s eligibility check and the first-leg
+  notification now both call the shared resolver; the site-roster lookup is no longer read
+  on the decision path. `ap_second_approvers` is deprecated in ADR-0046 **Amendment 8**
+  (kept for audit continuity). `secondApproverSiteLabel()` is retired from this path — under
+  person routing "Eugene (Shannon Rockwell)" implied Shannon was reached because of the
+  site, when she was reached because Rick signed first; the resolved person's name is used.
+- **Per-user pref filtering** applies AFTER routing, so a pref can only subtract a person
+  from their own routed request — it can never turn a targeted request into a broadcast.
+  A missing prefs row takes column defaults rather than silently excluding the user.
+- Checks A-D reported: backlog **empty** (Bill had cleared it manually on Jul 27 in one
+  batch), roster confirmed Shannon/eugene only, `ap_notify` live at both sites.
+
+### Added — 2026-07-29 (AP morning digest, 06:00 PT weekdays — ADR-0066 §1.7)
+
+Bill's oversight mail. Ships **live**, not pilot — _"we want that daily digest to go live
+as well - its time."_ One email, one recipient, weekdays only, and **nothing at all when
+there is nothing pending**.
+
+- **`scripts/ap-morning-digest.mjs`** (thin Pacific scheduler) →
+  **`/api/internal/ap/morning-digest`** (loopback-guarded) → **`src/lib/ap/morning-digest.ts`**
+  (the work), plus the **`dr3-vision-ap-morning-digest`** compose service. Same split as the
+  board-pack digest: the daemon fires DAILY, the route decides whether to send.
+- **Recipient by pref, never by name.** `dailyDigestRecipients()` reads `notify_daily_digest`
+  (§1.6). A test asserts the digest re-targets when the pref moves — the roster is data.
+- **Coverage is everything pending:** invoices awaiting a second signature (each naming the
+  individual who owes it, resolved through the §1.4 shared resolver — never re-derived here),
+  invoices with no first approval, Holds stale at 3+ days, and escalations since the last
+  digest. Every row deep-links to `/dashboard/ops/ap?request=<id>` (ADR-0036 tier-1); that URL
+  policy is now **exported from `notify.ts`** instead of re-declared, so digest and
+  notification links cannot drift.
+- **Two warning classes.** Any **active approver with no `ap_approval_routing` row** is named
+  — that is how a missing pair gets noticed (§1.4: the table must be total). Any invoice **3+
+  days old** raises a line AND marks the whole mail `importance: high` with an
+  `ACTION NEEDED` subject.
+- **Suppressed entirely on an empty state** — asserted on the send path (`notifyStaff` is
+  never called), not merely on a payload flag. One deliberate refinement: a routing-coverage
+  warning over an empty queue still sends. Suppressing it would keep a real misconfiguration
+  invisible until an invoice happened to arrive, which is the exact shape of the outage this
+  ADR exists to remove.
+- **Pacific-correct ages.** Both sites are Pacific and the container is UTC, so ages count
+  **Pacific calendar days** (ADR-0065 day key). A UTC count rolls the boundary at 4/5 PM PT
+  and would trip the 3-day alarm a full day early on every evening arrival.
+- **No UTC cron.** 06:00 PT is 13:00 UTC in PDT and 14:00 UTC in PST, so no fixed cron
+  expression can express it — either literal is wrong for half the year and would put the
+  "morning" digest at 05:00 PT all winter. The daemon re-derives the next 06:00 Pacific
+  wall-clock instant every iteration from the tz database; pinned in
+  `cron-dst-schedule.test.ts` against both absolute instants and the fall-back seam.
+- Weekday/holiday gating reuses the shared §1.5 `isBusinessDayNow()` — no second calendar.
+  Sent through `notifyStaff()` on the **existing (live) `ap_notify`** surface, so it needs no
+  new rollout row and no migration; a new surface would be born pilot and would not ship live.
+
 ### Added — 2026-07-28 (`/admin/equipment` — the equipment master is maintainable from the UI — ADR-0063)
 
 ADR-0062 seeded 554 assets and closed the empty-picker problem, but it closed it with a

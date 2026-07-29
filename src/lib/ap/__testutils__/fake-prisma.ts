@@ -72,6 +72,11 @@ export interface FakeApRequest {
   second_approver_id?: string | null;
   second_approved_at?: Date | null;
   second_approver_note?: string | null;
+  // ADR-0066 §1.5 — weekday-clock escalation stamps. Optional so every existing
+  // fixture keeps working; `escalated_at IS NULL` is the scanner's idempotency key,
+  // so an ABSENT field must read as null (see `escalatedAtOf`).
+  escalated_at?: Date | null;
+  escalated_to?: string | null;
 }
 export interface FakeEquipment {
   id: string;
@@ -128,6 +133,17 @@ export interface FakeSite {
   code: string;
   name: string;
 }
+/**
+ * ADR-0066 §1.5 — a per-site holiday. `holiday_date` is the UTC-midnight day key
+ * (the @db.Date storage invariant). It pauses the weekday clock ONLY when every
+ * active site observes it — see `fleetWideHolidays`.
+ */
+export interface FakeSiteHoliday {
+  /** Optional: the scanner's fixtures set it, the digest's do not. */
+  id?: string;
+  site_id: string;
+  holiday_date: Date;
+}
 export interface FakeAuditLog {
   actor_user_id: string | null;
   actor_label: string | null;
@@ -163,6 +179,16 @@ export interface FakeUser {
   role: 'operator' | 'manager' | 'admin';
   all_sites: boolean;
   is_active: boolean;
+  /** Soft-delete marker. Optional so existing fixtures need not enumerate it. */
+  deleted_at?: Date | null;
+  /**
+   * ADR-0066 — the site-reach half of the second-approval authorization check
+   * (CLAUDE.md hard rule #2: cross-site reach needs `admin` or `all_sites`).
+   * Optional so pre-existing fixtures keep compiling; omitting it models a user
+   * with no primary site, who therefore passes the reach check only via
+   * `all_sites`.
+   */
+  primary_site_id?: string | null;
 }
 export interface FakePollRun {
   id: string;
@@ -195,6 +221,32 @@ export interface FakeDb {
   baselines: FakeVendorBaseline[];
   baselineHistory: FakeBaselineHistory[];
   secondApprovers: FakeSecondApprover[];
+  // ADR-0066 §1.4 — person→person second-approval routing.
+  approvalRouting: FakeApprovalRouting[];
+  // ADR-0066 §1.6 — per-user, per-event notification prefs.
+  notificationPrefs: FakeNotificationPref[];
+  // ADR-0066 §1.5 — the weekday clock's holiday source (business-clock.ts).
+  siteHolidays: FakeSiteHoliday[];
+}
+
+/** ADR-0066 §1.6 — a MISSING row means column defaults, not "notify nobody". */
+export interface FakeNotificationPref {
+  id: string;
+  user_id: string;
+  notify_new_invoice: boolean;
+  notify_second_approval_request: boolean;
+  notify_daily_digest: boolean;
+  notify_decision_outcome: boolean;
+}
+
+/** ADR-0066 §1.4 — one row per first approver; the table must be total. */
+export interface FakeApprovalRouting {
+  id: string;
+  first_approver_id: string;
+  second_approver_id: string;
+  fallback_approver_id: string | null;
+  fallback_after_hours: number;
+  active: boolean;
 }
 
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
@@ -216,7 +268,15 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     baselines: seed.baselines ?? [],
     baselineHistory: seed.baselineHistory ?? [],
     secondApprovers: seed.secondApprovers ?? [],
+    approvalRouting: seed.approvalRouting ?? [],
+    notificationPrefs: seed.notificationPrefs ?? [],
+    siteHolidays: seed.siteHolidays ?? [],
   };
+}
+
+/** An ABSENT `escalated_at` reads as NULL — the scanner's idempotency predicate. */
+function escalatedAtOf(r: FakeApRequest): Date | null {
+  return r.escalated_at ?? null;
 }
 
 type AnyRecord = Record<string, unknown>;
@@ -264,6 +324,45 @@ export function makeFakePrisma(db: FakeDb) {
         const row = rows[0];
         return row ? pick(row, args.select) : null;
       },
+      // ADR-0066 §1.5 + §1.7 — UNION of both consumers' query shapes. The
+      // escalation scanner reads `{ status: 'pending_second_approval',
+      // escalated_at: null }` (the shape the partial index serves); the morning
+      // digest reads a scalar status OR `{ in: [...] }`, plus an
+      // `escalated_at: { gte }` instant bound, ordered by `received_at` or
+      // `escalated_at`. Supporting only one would silently break the other's
+      // fixtures, so both are implemented here.
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const statusCond = w['status'];
+        const statusIn =
+          statusCond && typeof statusCond === 'object'
+            ? (statusCond as { in?: string[] }).in
+            : undefined;
+        const escCond = w['escalated_at'];
+        const escGte = (escCond as { gte?: Date } | undefined)?.gte;
+        let rows = db.requests.filter((r) => {
+          if (statusIn) {
+            if (!statusIn.includes(r.status)) return false;
+          } else if (statusCond !== undefined && r.status !== statusCond) return false;
+          // Scanner idempotency key: an ABSENT field must read as null.
+          if (escCond === null && escalatedAtOf(r) !== null) return false;
+          if (escGte) {
+            const e = escalatedAtOf(r);
+            if (e === null || e.getTime() < escGte.getTime()) return false;
+          }
+          if (w['id'] !== undefined && r.id !== w['id']) return false;
+          return true;
+        });
+        const ob = args.orderBy as AnyRecord | undefined;
+        if (ob?.['escalated_at'] !== undefined) {
+          rows = [...rows].sort(
+            (a, b) => (escalatedAtOf(a)?.getTime() ?? 0) - (escalatedAtOf(b)?.getTime() ?? 0),
+          );
+        } else {
+          rows = [...rows].sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
+        }
+        return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
+      },
       async create(args: { data: AnyRecord; select?: AnyRecord }) {
         const d = args.data;
         if (db.requests.some((r) => r.internet_message_id === d['internet_message_id'])) {
@@ -301,12 +400,15 @@ export function makeFakePrisma(db: FakeDb) {
           variance_flag_state: (d['variance_flag_state'] as string | undefined) ?? 'not_applicable',
           variance_acknowledged_by: (d['variance_acknowledged_by'] as string | null) ?? null,
           variance_acknowledged_at: (d['variance_acknowledged_at'] as Date | null) ?? null,
-          variance_acknowledgment_note: (d['variance_acknowledgment_note'] as string | null) ?? null,
+          variance_acknowledgment_note:
+            (d['variance_acknowledgment_note'] as string | null) ?? null,
           first_approver_id: (d['first_approver_id'] as string | null) ?? null,
           first_approved_at: (d['first_approved_at'] as Date | null) ?? null,
           second_approver_id: (d['second_approver_id'] as string | null) ?? null,
           second_approved_at: (d['second_approved_at'] as Date | null) ?? null,
           second_approver_note: (d['second_approver_note'] as string | null) ?? null,
+          escalated_at: (d['escalated_at'] as Date | null) ?? null,
+          escalated_to: (d['escalated_to'] as string | null) ?? null,
         };
         db.requests.push(row);
         return pick(row, args.select);
@@ -322,7 +424,15 @@ export function makeFakePrisma(db: FakeDb) {
           }
           return s === cond;
         };
-        const targets = db.requests.filter((r) => r.id === w['id'] && statusMatches(r.status));
+        const targets = db.requests.filter((r) => {
+          if (r.id !== w['id']) return false;
+          if (!statusMatches(r.status)) return false;
+          // ADR-0066 §1.5 — the escalation claim is CONDITIONAL on
+          // `escalated_at IS NULL`. Honoring it here is what makes the
+          // "run the scan twice" idempotency test meaningful rather than decorative.
+          if (w['escalated_at'] === null && escalatedAtOf(r) !== null) return false;
+          return true;
+        });
         for (const r of targets) Object.assign(r, args.data);
         return { count: targets.length };
       },
@@ -469,20 +579,32 @@ export function makeFakePrisma(db: FakeDb) {
         const row = db.users.find((u) => u.id === args.where['id']);
         return row ? pick(row, args.select) : null;
       },
-      // Honors the shapes the AP roster + rollout paths use: `id: { in: [...] }`,
-      // `is_active`, `email: { not: null }`, `role`, `all_sites`.
-      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+      // Honors the shapes the AP roster + rollout + digest paths use:
+      // `id: { in: [...] }`, `is_active`, `email: { not: null }`, `deleted_at: null`,
+      // `role` (scalar OR `{ in: [...] }`), `all_sites`, and `orderBy: { name }`.
+      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
         const idIn = (w['id'] as { in?: string[] } | undefined)?.in;
-        const rows = db.users.filter((u) => {
+        const roleCond = w['role'];
+        const roleIn =
+          roleCond && typeof roleCond === 'object' ? (roleCond as { in?: string[] }).in : undefined;
+        let rows = db.users.filter((u) => {
           if (idIn && !idIn.includes(u.id)) return false;
           if (w['is_active'] !== undefined && u.is_active !== w['is_active']) return false;
           if (w['email'] && (w['email'] as AnyRecord)['not'] === null && u.email === null)
             return false;
-          if (w['role'] !== undefined && u.role !== w['role']) return false;
+          // Soft-delete filter: `deleted_at: null` excludes soft-deleted rows.
+          // A fixture that omits the field is treated as NOT deleted.
+          if (w['deleted_at'] === null && (u.deleted_at ?? null) !== null) return false;
+          if (roleIn) {
+            if (!roleIn.includes(u.role)) return false;
+          } else if (roleCond !== undefined && u.role !== roleCond) return false;
           if (w['all_sites'] !== undefined && u.all_sites !== w['all_sites']) return false;
           return true;
         });
+        if ((args.orderBy as AnyRecord | undefined)?.['name'] !== undefined) {
+          rows = [...rows].sort((a, b) => a.name.localeCompare(b.name));
+        }
         return rows.map((u) => (args.select ? pick(u, args.select) : { ...u }));
       },
     },
@@ -542,6 +664,25 @@ export function makeFakePrisma(db: FakeDb) {
           return true;
         });
         return rows.map((s) => (args.select ? pick(s, args.select) : { ...s }));
+      },
+      // ADR-0066 §1.5 — `fleetWideHolidays` divides by the site count to decide
+      // whether a holiday is observed at EVERY active site.
+      async count() {
+        return db.sites.length;
+      },
+    },
+    // ADR-0066 §1.5 — the weekday clock's holiday source. Only the range read
+    // `{ holiday_date: { gte, lte } }` used by `fleetWideHolidays` is implemented;
+    // `bonus-eod-check` uses the real client and is not modelled here.
+    siteHoliday: {
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const range = (args.where ?? {})['holiday_date'] as { gte?: Date; lte?: Date } | undefined;
+        const rows = db.siteHolidays.filter((h) => {
+          if (range?.gte && h.holiday_date.getTime() < range.gte.getTime()) return false;
+          if (range?.lte && h.holiday_date.getTime() > range.lte.getTime()) return false;
+          return true;
+        });
+        return rows.map((h) => (args.select ? pick(h, args.select) : { ...h }));
       },
     },
     // ADR-0046 Amendment 5 (D-M5-6) — equipment master + link join.
@@ -619,7 +760,7 @@ export function makeFakePrisma(db: FakeDb) {
         return { ...row };
       },
       async deleteMany(args: { where?: AnyRecord } = {}) {
-        const inList = ((args.where?.['vendor_name_normalized'] as { in?: string[] })?.in) ?? null;
+        const inList = (args.where?.['vendor_name_normalized'] as { in?: string[] })?.in ?? null;
         const before = db.baselines.length;
         db.baselines = db.baselines.filter((b) =>
           inList ? !inList.includes(b.vendor_name_normalized) : false,
@@ -628,10 +769,15 @@ export function makeFakePrisma(db: FakeDb) {
       },
     },
     apVendorBaselineHistory: {
-      async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
+      async findMany(
+        args: { where?: AnyRecord; orderBy?: AnyRecord; take?: number; select?: AnyRecord } = {},
+      ) {
         const w = args.where ?? {};
         let rows = db.baselineHistory.filter((h) => {
-          if (w['vendor_name_normalized'] !== undefined && h.vendor_name_normalized !== w['vendor_name_normalized'])
+          if (
+            w['vendor_name_normalized'] !== undefined &&
+            h.vendor_name_normalized !== w['vendor_name_normalized']
+          )
             return false;
           if (w['source'] !== undefined && h.source !== w['source']) return false;
           return true;
@@ -667,6 +813,55 @@ export function makeFakePrisma(db: FakeDb) {
         const w = args.where ?? {};
         const row = db.secondApprovers.find((s) => matchSecondApprover(s, w));
         return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+    },
+    // ADR-0066 §1.6 — per-user notification prefs. A MISSING row yields null so
+    // `wantsEvent` falls through to the column defaults (never "notify nobody").
+    apNotificationPref: {
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.notificationPrefs.find(
+          (p) => w['user_id'] === undefined || p.user_id === w['user_id'],
+        );
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.notificationPrefs.filter((p) => {
+          for (const k of [
+            'notify_new_invoice',
+            'notify_second_approval_request',
+            'notify_daily_digest',
+            'notify_decision_outcome',
+          ] as const) {
+            if (w[k] !== undefined && p[k] !== w[k]) return false;
+          }
+          return true;
+        });
+        return rows.map((p) => (args.select ? pick(p, args.select) : { ...p }));
+      },
+    },
+    // ADR-0066 §1.4 — routing lookup keyed on the FIRST approver, not the site.
+    apApprovalRouting: {
+      async findFirst(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const row = db.approvalRouting.find((r) => {
+          if (
+            w['first_approver_id'] !== undefined &&
+            r.first_approver_id !== w['first_approver_id']
+          )
+            return false;
+          if (w['active'] !== undefined && r.active !== w['active']) return false;
+          return true;
+        });
+        return row ? (args.select ? pick(row, args.select) : { ...row }) : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        const rows = db.approvalRouting.filter(
+          (r) => w['active'] === undefined || r.active === w['active'],
+        );
+        return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
       },
     },
     auditLog: {
@@ -708,7 +903,8 @@ function matchSecondApprover(s: FakeSecondApprover, w: Record<string, unknown>):
   const or = w['OR'] as Array<Record<string, unknown>> | undefined;
   if (or) {
     const active = or.some((clause) => {
-      if ('active_until' in clause && clause['active_until'] === null) return s.active_until === null;
+      if ('active_until' in clause && clause['active_until'] === null)
+        return s.active_until === null;
       const au = clause['active_until'] as { gt?: Date } | undefined;
       if (au && au.gt) return s.active_until !== null && s.active_until.getTime() > au.gt.getTime();
       return false;

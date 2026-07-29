@@ -20,11 +20,16 @@ const DEADMAN_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 function baseUrl(): string {
   return process.env['PUBLIC_BASE_URL']?.replace(/\/+$/, '') ?? 'https://dr3-vision.svdp.us';
 }
-function apQueueUrl(): string {
+/** Section-level link to the AP queue (ADR-0036 tier-2 fallback). */
+export function apQueueUrl(): string {
   return `${baseUrl()}/dashboard/ops/ap`;
 }
-/** Tier-1 deep link to the specific request in the AP queue (ADR-0036 click policy). */
-function apRequestUrl(requestId: string): string {
+/**
+ * Tier-1 deep link to the specific request in the AP queue (ADR-0036 click policy).
+ * EXPORTED so the §1.7 morning digest links rows the same way the notification
+ * emails do — one definition of the click policy, not two that can drift.
+ */
+export function apRequestUrl(requestId: string): string {
   return `${apQueueUrl()}?request=${encodeURIComponent(requestId)}`;
 }
 
@@ -208,10 +213,148 @@ export async function notifySecondApprovalNeeded(args: {
   }).catch(() => undefined);
 }
 
+/**
+ * ADR-0066 §1.5 — the request has aged past its weekday-clock deadline and the
+ * FALLBACK approver has just been added as an additional signer.
+ *
+ * EMAIL ONLY, DELIBERATELY. `notifySecondApprovalNeeded` (above) pages
+ * `dr3-vision-system` on every call; reusing it here would push a staff workflow
+ * nudge onto Bill's phone once an hour. CLAUDE.md hard rule #5 reserves ntfy for
+ * Bill and SYSTEM-level events, and ADR-0037's gate agrees: an invoice waiting a
+ * day is not actionable-in-five-minutes and is not customer-visible. The
+ * conditions that DO page from the scanner are a routing misconfiguration
+ * ({@link reportSecondApprovalRoutingProblem}) and the scanner failing to run at
+ * all — both system-level, both Bill's.
+ *
+ * The copy leads with ADDITIVE, because that is the semantic operators get wrong:
+ * the originally routed peer is still able to sign, and whoever acts first
+ * completes it. Nothing is taken away from anyone.
+ *
+ * Fail-soft at the caller — an escalation that cannot be emailed must not undo
+ * the (committed) escalation stamp.
+ */
+export async function notifySecondApprovalEscalated(args: {
+  requestId: string;
+  subject: string | null;
+  /** Business hours the request waited; 0 for the immediate no-routing-row path. */
+  thresholdHours: number;
+  /** The originally routed peer, who REMAINS able to sign. */
+  routedToName: string | null;
+  approverEmails: readonly string[];
+}): Promise<void> {
+  if (args.approverEmails.length === 0) {
+    // Not necessarily a defect: the escalation target may have switched their
+    // `second_approval_request` pref off (§1.6). The EMPTY-ROUTING case is alarmed
+    // separately by the caller — this log distinguishes "opted out" from "nobody".
+    log.warn(
+      { requestId: args.requestId },
+      '[ap-notify] escalation had no pref-eligible recipient — email skipped',
+    );
+    return;
+  }
+  const subj = args.subject ?? '(no subject)';
+  const waited =
+    args.thresholdHours > 0
+      ? `has been waiting more than ${args.thresholdHours} business hours (weekdays only — the clock pauses over the weekend)`
+      : 'has no configured approval pair, so it escalated immediately';
+  const peer = args.routedToName
+    ? `${escapeHtml(args.routedToName)} can still sign it`
+    : 'the originally routed approver can still sign it';
+  const htmlBody = `<p>A vendor invoice ≥ $1,000 ${waited} for its <b>second approval</b>. You have been added as an additional approver.</p>
+    <p><b>This is additive, not a hand-off</b> — ${peer}. Whoever acts first completes it.</p>
+    <p><a href="${apRequestUrl(args.requestId)}">Open this request in the AP approval queue</a> to review the first approver’s decision and confirm — or reject to override.</p>`;
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [...args.approverEmails],
+    subject: `DR3-Vision — second approval ESCALATED (≥ $1,000): ${subj}`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    importance: 'high',
+  });
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * ADR-0066 §B.5 — the routing-misconfiguration alarm.
+ *
+ * WHY THIS EXISTS, AND WHY IT USES BOTH CHANNELS:
+ *
+ * Fail-soft is the right posture for a notification — a paging failure must never
+ * roll back a committed approval. But fail-soft over an EMPTY RECIPIENT SET is
+ * indistinguishable from a successful send, and that indistinguishability is
+ * exactly what let >= $1,000 Woodland invoices sit unapproved and invisible for
+ * days. The send stays fail-soft; the CONDITION becomes loud.
+ *
+ * It pages ntfy AND emails, deliberately. Check C (2026-07-29) found that the
+ * pre-existing second-approval ntfy publish fires before the empty-recipient
+ * check and is wrapped in `.catch(() => undefined)` — Bill received nothing from
+ * it, while publisher auth verified healthy (HTTP 200). Whatever swallowed those
+ * pages would swallow this alarm too. Reporting a notification failure over the
+ * single channel that just demonstrably failed is how the bug repeats itself, so
+ * this deliberately does not depend on ntfy alone.
+ *
+ * Itself fail-soft: raising the alarm must never fail the approval either.
+ */
+export async function reportSecondApprovalRoutingProblem(args: {
+  requestId: string;
+  firstApproverId: string;
+  problems: readonly string[];
+  recipientCount: number;
+}): Promise<void> {
+  const summary =
+    args.recipientCount === 0
+      ? 'A second approval was authorized but has NO reachable recipient — it would sit unapproved and invisible.'
+      : 'AP second-approval routing is misconfigured.';
+  const detail = args.problems.length > 0 ? args.problems.join(' · ') : '(no detail)';
+
+  log.error(
+    {
+      requestId: args.requestId,
+      firstApproverId: args.firstApproverId,
+      recipientCount: args.recipientCount,
+      problems: args.problems,
+    },
+    '[ap-notify] second-approval routing problem',
+  );
+
+  await publishNtfy({
+    topic: SYSTEM_TOPIC,
+    title: 'AP second-approval routing problem',
+    // ADR-0045 — ids only in the page body, never amount or vendor.
+    body: `${summary} Request id: ${args.requestId}. ${detail}`,
+    priority: 'urgent',
+    tags: ['rotating_light', 'ap', 'routing', 'dr3-vision'],
+    clickUrl: apRequestUrl(args.requestId),
+    // Per-request fingerprint: distinct requests always page, a retry does not.
+    fingerprint: `ap-routing-problem:${args.requestId}`,
+    cooldownMs: SECOND_APPROVAL_COOLDOWN_MS,
+  }).catch(() => undefined);
+
+  // Recipients deliberately EMPTY: `notifyStaff` routes an empty intended-set to
+  // admins, which is exactly right here — this is an operator alarm about the
+  // routing table itself, so it must reach Bill rather than the (unreachable)
+  // person the broken routing pointed at.
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [],
+    subject: `DR3-Vision — AP second-approval routing problem (request ${args.requestId})`.slice(
+      0,
+      200,
+    ),
+    htmlBody: `<p><b>${escapeHtml(summary)}</b></p>
+      <p><a href="${apRequestUrl(args.requestId)}">Open the request in the AP queue</a></p>
+      <p>Detail: ${escapeHtml(detail)}</p>
+      <p>Fix the pair at <code>/admin/ap/routing</code>. The approval itself was NOT affected — this alarm reports that the <i>notification</i> could not reach its intended person.</p>`,
+    fromDisplayName: 'DR3-Vision AP',
+    importance: 'high',
+  }).catch(() => undefined);
 }

@@ -19,6 +19,7 @@ import { describe, it, expect } from 'vitest';
 import { nextFireInstantAt as auditNextFire } from '../../scripts/audit-sweep-cron.mjs';
 import { nextFireInstantAt as apExpiryNextFire } from '../../scripts/ap-approver-expiry-cron.mjs';
 import { nextFireInstantAt as apBaselineNextFire } from '../../scripts/ap-baseline-rebuild-cron.mjs';
+import { nextFireInstantAt as apMorningDigestNextFire } from '../../scripts/ap-morning-digest.mjs';
 import { nextFireInstantAt as boardPackNextFire } from '../../scripts/board-pack-digest-cron.mjs';
 import { nextFireInstantAt as dailyReportNextFire } from '../../scripts/bonus-daily-report.mjs';
 import { nextFireInstant as eodNextFire } from '../../scripts/bonus-eod-check.mjs';
@@ -48,6 +49,9 @@ const DAILY: ReadonlyArray<[string, (from: Date, h: number, m: number) => Date]>
   ['audit-sweep-cron', auditNextFire as never],
   ['ap-approver-expiry-cron', apExpiryNextFire as never],
   ['ap-baseline-rebuild-cron', apBaselineNextFire as never],
+  // ADR-0066 §1.7 — 06:00 PT is 13:00 UTC under PDT and 14:00 UTC under PST, so a
+  // naive UTC cron would drift an hour twice a year. Pinned here like the rest.
+  ['ap-morning-digest', apMorningDigestNextFire as never],
   ['board-pack-digest-cron', boardPackNextFire as never],
   ['bonus-daily-report', dailyReportNextFire as never],
 ];
@@ -68,6 +72,33 @@ describe.each(DAILY)('%s — DST transition days', (_name, nextFire) => {
     const fire = nextFire(from, 9, 0);
     expect(pacificHHMM(fire)).toBe('09:00');
     expect(fire.toISOString()).toBe('2027-03-14T16:00:00.000Z'); // 09:00 PDT (-7)
+  });
+});
+
+describe('ap-morning-digest — the actual 06:00 PT fire across DST (ADR-0066 §1.7)', () => {
+  // The matrix above probes a neutral 09:00. This pins the REAL fire time, and
+  // pins it as an absolute UTC instant, because the whole point is that a fixed
+  // UTC cron entry cannot express it: 06:00 PT is 13:00 UTC in summer and 14:00
+  // UTC in winter. Either literal is wrong for half the year.
+  it('is 13:00 UTC under PDT and 14:00 UTC under PST', () => {
+    const summer = apMorningDigestNextFire(new Date('2026-07-29T00:00:00Z'), 6, 0);
+    expect(pacificHHMM(summer)).toBe('06:00');
+    expect(summer.toISOString()).toBe('2026-07-29T13:00:00.000Z'); // PDT (-7)
+
+    const winter = apMorningDigestNextFire(new Date('2026-12-09T00:00:00Z'), 6, 0);
+    expect(pacificHHMM(winter)).toBe('06:00');
+    expect(winter.toISOString()).toBe('2026-12-09T14:00:00.000Z'); // PST (-8)
+  });
+
+  it('fires once per day across the fall-back seam, still at 06:00 PT', () => {
+    // Fall-back is 2026-11-01 at 02:00 PDT → 01:00 PST, so 06:00 PT on Nov 1 is
+    // ALREADY PST. Consecutive fires shift by 25h of wall time here — which is
+    // exactly what a fixed UTC cron gets wrong.
+    const before = apMorningDigestNextFire(new Date('2026-10-30T20:00:00Z'), 6, 0);
+    expect(before.toISOString()).toBe('2026-10-31T13:00:00.000Z'); // Oct 31 06:00 PDT
+    const after = apMorningDigestNextFire(before, 6, 0);
+    expect(pacificHHMM(after)).toBe('06:00');
+    expect(after.toISOString()).toBe('2026-11-01T14:00:00.000Z'); // Nov 1 06:00 PST
   });
 });
 

@@ -315,6 +315,110 @@ export const adminMessages = {
     empty: 'Nothing dropped yet.',
     refresh: 'Refresh',
   },
+
+  // AP configuration — routing (§1.4) + notification prefs (§1.6), ADR-0066.
+  // ONE screen, two routes. Copy carries the semantics: the toggles here are
+  // not self-explanatory and a wrong reading of them is what the ADR is about.
+  apConfig: {
+    pageTitle: 'AP configuration',
+    pageSubtitle:
+      'Who checks whose approvals, and who hears about what. Both halves feed the same resolver that decides where a second-approval request actually goes.',
+    navLink: 'AP configuration',
+    tabRouting: 'Second-approval routing',
+    tabNotifications: 'Notification preferences',
+
+    // Problems panel
+    problemsHeading: 'Configuration warnings',
+    problemsNone:
+      'No warnings. Every active approver has a routing row and every routed person is reachable.',
+    problemsIntro:
+      'These are the same problems the resolver reports to the 06:00 digest. An approver with no routing row is not blocked — their second approvals fall back to an admin immediately, which is quiet enough to miss for a week.',
+    severityError: 'Will degrade',
+    severityWarning: 'Latent',
+
+    // Routing half
+    routingHeading: 'Second-approval routing',
+    routingIntro:
+      'Second approval is determined solely by who signed first (ADR-0066 §1.4). This table must be TOTAL — a first approver with no row falls back to the system admin immediately, with no 24-hour wait.',
+    routingColumnFirst: 'First approver',
+    routingColumnSecond: 'Second approver',
+    routingColumnFallback: 'Fallback',
+    routingColumnHours: 'Escalate after',
+    routingColumnStatus: 'Status',
+    routingColumnActions: '',
+    routingEmpty: 'No routing rows match this filter.',
+    routingAdd: 'Add routing pair',
+    routingEdit: 'Edit',
+    routingSave: 'Save pair',
+    routingCancel: 'Cancel',
+    routingActive: 'Active',
+    routingInactive: 'Inactive',
+    routingActiveLabel: 'Row is active',
+    routingFilterStatus: 'Routing rows',
+    routingFilterActive: 'Active only',
+    routingFilterInactive: 'Inactive only',
+    routingFilterAll: 'All',
+    routingHoursLabel: 'Escalate after (business hours)',
+    routingHoursHelp:
+      'Business hours on the weekday clock (§1.5), not wall-clock hours. Escalation is additive — the routed peer stays able to sign.',
+    routingFallbackNone: 'System admin',
+    routingFallbackHelp:
+      'Leave as “System admin” unless one specific person should be escalated to. NULL means every reachable admin.',
+    routingFirstHelp:
+      'One row per first approver. Picking someone who already has a row edits that row.',
+    routingSecondHelp:
+      'Only reachable people are listed: active, manager or admin, and holding an email address. Someone who cannot be emailed is not a second approver — routing to them looks configured and notifies nobody.',
+    routingSelfPairNote: 'A person can never be their own second approver.',
+    routingUpdatedBy: (who: string) => `Last changed by ${who}`,
+
+    // Namesake disclosure — the operator PIN accounts
+    namesakesHeading: 'Accounts deliberately excluded from the pickers',
+    namesakesIntro:
+      'These active accounts share a name with an approver but cannot be routed to — they are operator PIN accounts with no email address (created 2026-07-28 for the iPad rollout). Selecting one would leave the routing table looking populated while every notification resolved to nobody. Check the email, not the name.',
+    namesakesNone: 'None — every active account sharing an approver name is reachable.',
+
+    // Prefs half
+    prefsHeading: 'Notification preferences',
+    prefsIntro:
+      'Per-user, per-event scoping (ADR-0066 §1.6). These filter inside the ADR-0047 notifyStaff() chokepoint and the ap_notify rollout gate — a preference can never promote a pilot-gated surface to live.',
+    prefsColumnPerson: 'Person',
+    prefsColumnRow: 'Stored',
+    prefsRowStored: 'Saved row',
+    prefsRowDefaults: 'Defaults',
+    prefsRowDefaultsHelp:
+      'No ap_notification_prefs row exists for this person. The values shown are the column defaults and are what the system actually uses — a missing row never means “notify nobody”. Toggling anything writes the row.',
+    prefsEmpty: 'No approver-role accounts to configure.',
+
+    eventNewInvoice: 'New invoice',
+    eventNewInvoiceHelp:
+      'The one genuine broadcast: every user with this on is emailed when an invoice lands in the queue.',
+    eventSecondApproval: 'Second-approval request',
+    eventSecondApprovalHelp:
+      'NOT a broadcast. A person is emailed only for requests routed to THEM by the table above (plus the fallback approver on escalation). Switching this off removes someone from their OWN routed requests — it can never add them to anyone else’s.',
+    eventDailyDigest: 'Daily digest',
+    eventDailyDigestHelp: 'The 06:00 summary, including the configuration warnings above.',
+    eventDecisionOutcome: 'Decision outcome',
+    eventDecisionOutcomeHelp:
+      'Inert. Ships as a column with everyone off and no send path wired — nobody is notified when a decision completes, and this cannot be switched on here. Present so the column is documented where it would be configured.',
+    eventInertBadge: 'Not wired',
+
+    // Errors
+    errors: {
+      selfPair: 'A person cannot be their own second approver.',
+      selfFallback:
+        'The fallback approver cannot be the first approver — on escalation they would become an authorized second approver on their own invoice.',
+      firstApproverInvalid: 'The first approver must be an active manager or admin account.',
+      secondApproverUnreachable:
+        'That account cannot be a second approver — it is inactive, not a manager/admin, or has no email address. Routing to it would notify nobody.',
+      fallbackUnreachable:
+        'That fallback account is unreachable — it is inactive, not a manager/admin, or has no email address.',
+      hoursOutOfRange: 'Escalation hours must be a whole number between 1 and 168.',
+      userNotFound: 'That account no longer exists.',
+      notAnApprover: 'Notification preferences apply only to active manager and admin accounts.',
+      eventInert:
+        'Decision-outcome notifications are not wired to any send path and cannot be enabled.',
+    },
+  },
 } as const;
 
 export type AdminMessages = typeof adminMessages;

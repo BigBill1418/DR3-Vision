@@ -20,12 +20,16 @@ import { formatPacificDateTime } from '@/lib/time';
 import { getApAttachmentBytes, putApDecisionPdf } from '@/lib/r2';
 import { isInternal, internalDomain } from './senders';
 import type { ApVarianceFlagState } from './extraction/types';
-import {
-  requiresSecondApproval,
-  activeSecondApproversForSite,
-  secondApproverSiteLabel,
-} from './second-approval-routing';
-import { notifySecondApprovalNeeded } from './notify';
+// ADR-0066 §1.4 — `activeSecondApproversForSite` and `secondApproverSiteLabel` are
+// deliberately NO LONGER imported here. The site-roster lookup is what returned an
+// empty recipient set for Woodland, and the site label became misleading once
+// routing stopped depending on the site. Both remain exported from
+// `second-approval-routing` for the deprecated roster surface only.
+import { requiresSecondApproval } from './second-approval-routing';
+import { notifySecondApprovalNeeded, reportSecondApprovalRoutingProblem } from './notify';
+// ADR-0066 §1.4/§1.6 — the shared resolver and the per-user pref filter.
+import { resolveSecondApproval } from './second-approval-resolver';
+import { filterBySecondApprovalPref } from './notification-prefs';
 import { recordVisionApproval } from './baselines';
 import {
   stampApproval,
@@ -485,26 +489,70 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
     const siteCode =
       (await prisma.site.findUnique({ where: { id: args.siteId }, select: { code: true } }))
         ?.code ?? '';
-    const routed = await activeSecondApproversForSite(prisma, siteCode).catch(() => ({
-      userIds: [] as string[],
-      emails: [] as string[],
-    }));
+    // ADR-0066 §1.4 — routing is person→person now, resolved by the SAME shared
+    // function the authorization check uses. The old site-roster lookup
+    // (`activeSecondApproversForSite`) is what returned EMPTY for Woodland and
+    // silently notified nobody; it is no longer read from this path.
+    const routed = await resolveSecondApproval(prisma, {
+      firstApproverId: args.actorUserId,
+    }).catch(() => null);
+
     const subject =
-      (await prisma.apRequest.findUnique({ where: { id: args.requestId }, select: { subject: true } }))
-        ?.subject ?? null;
+      (
+        await prisma.apRequest.findUnique({
+          where: { id: args.requestId },
+          select: { subject: true },
+        })
+      )?.subject ?? null;
+    // §1.6 — `second_approval_request` is NEVER a broadcast: exactly the routed
+    // individual (plus the fallback once escalated), filtered by their own pref.
+    const recipients = await filterBySecondApprovalPref(prisma, routed?.recipients ?? []);
+
+    // §B.5 — fail-soft is right for the SEND, but an empty recipient set (or any
+    // routing misconfiguration) must be a LOUD condition, not silence. That
+    // indistinguishability is the whole defect.
+    //
+    // ⚠ THE ALARM MUST SEE THE POST-FILTER SET. An earlier revision alarmed on
+    // `routed.recipients` (pre-filter) and then sent to the post-filter list with
+    // nothing re-checking emptiness — so an admin turning ONE person's
+    // `second_approval_request` pref off at /admin/ap/notifications silently
+    // recreated the original outage: resolver returns a healthy single recipient,
+    // no alarm fires, the filter empties the list, and the send logs a warn and
+    // returns. Zero email, zero alarm, indistinguishable from success. The hole
+    // was closed at the resolver and reopened one layer downstream, through the
+    // very screen this ADR added. Alarm on what will ACTUALLY be sent.
+    const filteredToNobody = (routed?.recipients.length ?? 0) > 0 && recipients.length === 0;
+    if (!routed || recipients.length === 0 || routed.problems.length > 0) {
+      const problems = [...(routed?.problems ?? [])];
+      if (!routed) problems.push('Second-approval routing resolver threw.');
+      if (filteredToNobody) {
+        problems.push(
+          `Every routed second approver (${routed?.recipients.map((r) => r.name).join(', ')}) has notify_second_approval_request OFF — the request is authorized but nobody will be told. Re-enable the pref at /admin/ap/notifications.`,
+        );
+      }
+      await reportSecondApprovalRoutingProblem({
+        requestId: args.requestId,
+        firstApproverId: args.actorUserId,
+        problems,
+        recipientCount: recipients.length,
+      }).catch(() => undefined);
+    }
     await notifySecondApprovalNeeded({
       requestId: args.requestId,
       subject,
       siteCode,
-      siteLabel: secondApproverSiteLabel(siteCode),
-      approverEmails: routed.emails,
+      // ADR-0066 — the label is the resolved PERSON now, not "Woodland (Bill)".
+      // `secondApproverSiteLabel` became wrong the moment routing stopped
+      // depending on the site.
+      siteLabel: routed?.routedTo?.name ?? 'the fallback approver',
+      approverEmails: recipients.map((r: { email: string }) => r.email),
     }).catch(() => undefined);
     return {
       requestId: args.requestId,
       decision: args.decision,
       mail: 'second_approval_pending',
       secondApprovalPending: true,
-      secondApproverLabel: secondApproverSiteLabel(siteCode),
+      secondApproverLabel: routed?.routedTo?.name ?? 'the fallback approver',
     };
   }
 
@@ -1057,10 +1105,9 @@ export async function sendDecisionEmail(
     // Location rides the SUBJECT line too (2026-07-15 directive) — visible before
     // the mail is even opened, next to the GP matching key. NOT-DR3 (2026-07-20)
     // shows "NOT DR3" here so accounting sees it in the inbox list.
-    subject:
-      `DR3-Vision AP decision (${req.status}${
-        filedNotDr3 ? ' — NOT DR3' : siteName ? ` — ${siteName}` : ''
-      }) — ${subject}`.slice(0, 200),
+    subject: `DR3-Vision AP decision (${req.status}${
+      filedNotDr3 ? ' — NOT DR3' : siteName ? ` — ${siteName}` : ''
+    }) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
     ...(artifacts && artifacts.length > 0

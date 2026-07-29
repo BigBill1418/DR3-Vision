@@ -490,6 +490,7 @@ recorded WITHOUT filing against a real site: `site_id` stays NULL and a new mark
 column `ap_requests.filed_not_dr3` is set true.
 
 **Location invariant.** A decided row is now EXACTLY ONE of:
+
 - **site-filed** — `site_id` NOT NULL, `filed_not_dr3 = false` (Woodland/Eugene), or
 - **NOT DR3** — `filed_not_dr3 = true`, `site_id` NULL (reason required).
 
@@ -509,7 +510,7 @@ Never both; never neither (for rows decided after this ships). Enforced in depth
   site exactly as before. Persistence writes `filed_not_dr3 = true, site_id = NULL`
   for NOT-DR3; the winning audit row records `filed_not_dr3`.
 - **Route** (`/api/ops/ap/[id]/decide`) — accepts `notDr3?: boolean`. `notDr3 &&
-  siteId` → 400 (mutual exclusion, never silently pick one); `notDr3` without a
+siteId` → 400 (mutual exclusion, never silently pick one); `notDr3` without a
   non-empty note → 400; NOT-DR3 calls `decideRequest({ filedNotDr3: true })` and
   does NOT resolve/assert a site. The existing site path is unchanged.
 - **UI** — the location select gains `NOT DR3 – See Reason`; selecting it shows an
@@ -520,6 +521,7 @@ Never both; never neither (for rows decided after this ships). Enforced in depth
 **Accounting semantics.** So Mary never mistakes a NOT-DR3 decision for a DR3-site
 invoice, the disposition is unmissable everywhere accounting looks — in the same
 slot the site name occupies today:
+
 - **Decision email** — subject reads `(approved — NOT DR3)`; the body leads with
   `NOT DR3 — see reason: <reason>` in place of the `Site:` line.
 - **Stamped PDF / cover / image render** — the per-page stamp line reads
@@ -588,12 +590,12 @@ migration.
 
 **Approve requires four fields, all non-empty:**
 
-| Field | Type | Notes |
-|---|---|---|
-| `vendor` | freeform text | Approver types the vendor name. Helper prompt above the field: *"Enter the vendor name carefully — check spelling and capitalization. This appears on the returned decision email and Mary's GP filing."* Vendor doesn't need to be pre-registered; Vision matches loosely to existing vendors via the baseline table (§D-M5-4) but accepts any text. |
-| `explanation` | freeform text | Replaces today's single freeform "note". Prompt: *"What was this transaction for? Include any relevant context (site work, repair reason, event, etc.)."* Same non-empty gate as today. |
-| `confirmed_amount_cents` | integer | Approver-confirmed dollar amount. Pre-filled from the auto-extraction pipeline (§D-M5-2) with a confidence badge. Approver can override. |
-| `equipment_link_ids[]` | multi-select | Vehicles/equipment referenced by the invoice. Multi-select. Always shown. Approver picks one or more OR the explicit `Not equipment-related` option. Field is required with that explicit-none option available (§D-M5-6). |
+| Field                    | Type          | Notes                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vendor`                 | freeform text | Approver types the vendor name. Helper prompt above the field: _"Enter the vendor name carefully — check spelling and capitalization. This appears on the returned decision email and Mary's GP filing."_ Vendor doesn't need to be pre-registered; Vision matches loosely to existing vendors via the baseline table (§D-M5-4) but accepts any text. |
+| `explanation`            | freeform text | Replaces today's single freeform "note". Prompt: _"What was this transaction for? Include any relevant context (site work, repair reason, event, etc.)."_ Same non-empty gate as today.                                                                                                                                                               |
+| `confirmed_amount_cents` | integer       | Approver-confirmed dollar amount. Pre-filled from the auto-extraction pipeline (§D-M5-2) with a confidence badge. Approver can override.                                                                                                                                                                                                              |
+| `equipment_link_ids[]`   | multi-select  | Vehicles/equipment referenced by the invoice. Multi-select. Always shown. Approver picks one or more OR the explicit `Not equipment-related` option. Field is required with that explicit-none option available (§D-M5-6).                                                                                                                            |
 
 **Reject / Hold / NOT-DR3** keep their existing single reason-field pattern — no vendor / explanation / amount / equipment required to reject a bogus invoice.
 
@@ -611,18 +613,19 @@ migration.
    - `MEDIUM`: single match on any pattern but multiple candidates exist in the doc; or single non-canonical pattern match
    - `LOW`: multiple `Total`-like matches disagree; or no canonical pattern found, only bare amounts extracted
    - `FAILED`: no dollar amounts extracted at all (scanned image with no OCR, empty body)
-3. **Claude API fallback** — fires when local confidence is `LOW` or `FAILED`. Sends the sanitized body text + attachment text (extracted via pdf-parse; images sent as base64 up to size cap) to Claude with a structured extraction prompt: *"Extract the total invoice amount and vendor name. Return JSON with fields: amount_cents (integer), vendor (string), confidence (high|medium|low), reasoning (string)."* Uses the `anthropic` SDK via `~/.dr3-vision-secrets/anthropic.env` (new secret). Model: `claude-sonnet-4-6` for cost efficiency at DR3's invoice volume (~50-100/mo). Timeout 30s.
+3. **Claude API fallback** — fires when local confidence is `LOW` or `FAILED`. Sends the sanitized body text + attachment text (extracted via pdf-parse; images sent as base64 up to size cap) to Claude with a structured extraction prompt: _"Extract the total invoice amount and vendor name. Return JSON with fields: amount_cents (integer), vendor (string), confidence (high|medium|low), reasoning (string)."_ Uses the `anthropic` SDK via `~/.dr3-vision-secrets/anthropic.env` (new secret). Model: `claude-sonnet-4-6` for cost efficiency at DR3's invoice volume (~50-100/mo). Timeout 30s.
 4. **Storage:** `ap_requests.extraction jsonb` field carries `{best_amount_cents, best_vendor, confidence: 'high'|'medium'|'low'|'failed', source: 'local'|'claude_api', candidates: [{amount_cents, source_hint}], attempted_at, model?, cost_cents?, error?}`.
 
 **Failure mode:** if Claude API is unavailable OR local extraction fails outright, the request lands with `extraction.confidence = 'failed'` and `best_amount_cents = null`. Approver sees "Amount not extracted — please enter manually" and provides `confirmed_amount_cents` themselves. Approval still gates on all four required fields.
 
 **Approver UX (in decide panel):**
+
 - Best-guess amount pre-filled in the `confirmed_amount_cents` input
 - Confidence badge next to the input:
-  - `HIGH` → **green** ✓ badge, label *"Verified"*
-  - `MEDIUM` → **yellow** ⚠ badge, label *"Please verify"*
-  - `LOW` → **red** ⚠ badge, label *"Low confidence — verify against invoice"*
-  - `FAILED` → no badge, input is blank, placeholder *"Enter amount from invoice"*
+  - `HIGH` → **green** ✓ badge, label _"Verified"_
+  - `MEDIUM` → **yellow** ⚠ badge, label _"Please verify"_
+  - `LOW` → **red** ⚠ badge, label _"Low confidence — verify against invoice"_
+  - `FAILED` → no badge, input is blank, placeholder _"Enter amount from invoice"_
 - Approver can always override the pre-filled value
 
 **Cost budget:** at $0.05-0.20/invoice × ~50-100/mo (Claude API fallback path only, when local fails), total marginal cost is <$20/mo. Cost gets logged per-invoice for observability.
@@ -634,6 +637,7 @@ migration.
 **Applies to Approve only** — Reject / Hold / NOT-DR3 remain single-approver regardless of amount.
 
 **Second approvers, by site tag:**
+
 - Woodland → **Bill** (admin, always eligible)
 - Eugene → **Shannon Rockwell** (must be provisioned as an active approver, may need admin role)
 - NOT DR3 → **NOT APPLICABLE** — invoice returns to sender, no payment happens, no second approval needed
@@ -667,6 +671,7 @@ pending_second_approval
 ```
 
 **First-approver == second-approver edge case:** if Bill (admin) is the first approver on a Woodland invoice above $1K, the second-approval step still applies but Bill can't fulfill it alone. Options considered:
+
 - (a) Route to Shannon regardless
 - (b) Route to a fallback admin (e.g., Bethany)
 - (c) Allow Bill to self-fulfill with an explicit re-confirmation click
@@ -675,7 +680,7 @@ pending_second_approval
 
 **Notification:** ntfy `dr3-vision-system` fires the moment a request enters `pending_second_approval`, addressed to the site-appropriate second approver. The `ap-approvals` tile on `/` shows a distinct "awaiting 2nd approval" badge count for the second approvers. Existing `ap_notify` rollout gate still applies — in pilot, second-approval notifications reroute to admins with `[PILOT]` header.
 
-**Decision email routing:** only fires on final `approved` state (i.e., after second approval, or after first approval for sub-$1K invoices). The stamped PDF now carries BOTH approver names + timestamps: *"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on [T2 PT]"*. For sub-$1K invoices the stamp is unchanged.
+**Decision email routing:** only fires on final `approved` state (i.e., after second approval, or after first approval for sub-$1K invoices). The stamped PDF now carries BOTH approver names + timestamps: _"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on [T2 PT]"_. For sub-$1K invoices the stamp is unchanged.
 
 **Second approver can override first approval by rejecting.** The rejection email to the original forwarder carries both the first-approver's context (vendor + explanation + amount + equipment + note) and the second-approver's rejection note explaining why it was overridden. First approver is CC'd on the rejection so they see the override.
 
@@ -693,12 +698,14 @@ pending_second_approval
 **Baseline aggregation logic:**
 
 For each distinct `vendor_name` (normalized: trim, lowercase, collapse whitespace):
+
 - Filter history to trailing 12 months from most recent invoice date
 - Compute: `mean_amount_cents`, `median_amount_cents`, `min_amount_cents`, `max_amount_cents`, `stddev_amount_cents`, `invoice_count`
 - Baseline is considered established when `invoice_count >= 3` in the window
 - Vendors with fewer than 3 historical invoices are stored but NOT used for variance flagging (insufficient data)
 
 **Variance thresholds:**
+
 - **Global defaults:** $50 flat + 15% percentage (either trips fires the flag)
 - **Per-vendor overrides:** admin can set stricter or looser bounds at `/admin/ap/baselines` (e.g., Clark Pest → $25 flat + 6.25%, matching Kelsey's example)
 - **Effective logic:** flag fires when `abs(confirmed_amount - baseline_mean) > flat_threshold` OR `abs(confirmed_amount - baseline_mean) / baseline_mean > percent_threshold`. Either-trips (whichever's stricter fires first).
@@ -708,8 +715,8 @@ For each distinct `vendor_name` (normalized: trim, lowercase, collapse whitespac
 At Approve time, if the vendor matches an established baseline AND the current `confirmed_amount_cents` exceeds thresholds:
 
 - **RED variance banner** appears above the Approve button:
-  > *"⚠ VARIANCE FLAG — {vendor} usually bills ${baseline_mean:.2f} (avg from {invoice_count} invoices, last 12 months). This invoice is ${confirmed_amount:.2f}, a {variance_direction} of ${variance_abs:.2f} ({variance_pct:.1f}%). Recent history: [last 3 invoices with dates + amounts]"*
-- **Approve button DISABLED** until approver clicks *"I've verified the variance"* explicit acknowledgment button
+  > _"⚠ VARIANCE FLAG — {vendor} usually bills ${baseline_mean:.2f} (avg from {invoice_count} invoices, last 12 months). This invoice is ${confirmed_amount:.2f}, a {variance_direction} of ${variance_abs:.2f} ({variance_pct:.1f}%). Recent history: [last 3 invoices with dates + amounts]"_
+- **Approve button DISABLED** until approver clicks _"I've verified the variance"_ explicit acknowledgment button
 - Clicking the button:
   - Stamps `variance_acknowledged_by`, `variance_acknowledged_at`, and `variance_acknowledgment_note` (optional additional note the approver may add — e.g., "Confirmed with Morena, additional cockroach treatment this month")
   - Enables Approve button
@@ -718,6 +725,7 @@ At Approve time, if the vendor matches an established baseline AND the current `
 **Below-threshold (or no baseline):** no variance banner, no acknowledgment gate. Approve flows normally.
 
 **Baseline lifecycle:**
+
 - Bill re-uploads AP report periodically (quarterly is a reasonable cadence) to refresh baselines with new production data
 - Approved invoices in Vision (post-Amendment 5) also feed the baseline: on every `approved` state transition, insert a row into `ap_vendor_baseline_history` with `source='vision_approval'` — so baselines stay fresh even between Bill's re-uploads
 - Rebuild of aggregated `ap_vendor_baselines` runs nightly (cron) OR on-demand from `/admin/ap/baselines` refresh button
@@ -727,12 +735,14 @@ At Approve time, if the vendor matches an established baseline AND the current `
 New admin surface at `/admin/ap/history`, **scoped to admins + designated second approvers only** (Bill + Shannon in current config; the general approver roster Morena/Rick/Janette does NOT see this surface).
 
 **Permission model:**
+
 - New capability: `can_view_ap_history` — attached to admin role by default + granted explicitly to designated second approvers via `ap_second_approvers` config table
 - Not attached to `ap_approvers` roster by default (avoids leaking historical AP data to shift operators)
 
 **Data source:** union of `ap_requests` (Vision-recorded invoices) + `ap_vendor_baseline_history` (Bill-uploaded historical AP data). Distinguished by `source` column.
 
 **Filters:**
+
 - Vendor (typeahead search against unique vendor names from both sources)
 - Date range
 - Amount range (min/max)
@@ -741,11 +751,13 @@ New admin surface at `/admin/ap/history`, **scoped to admins + designated second
 - Source (Vision-approved / historical import)
 
 **Row detail:** clicking a row opens a modal showing:
+
 - All fields (vendor, amount, site, date, source)
 - If Vision-approved: full decision context (approvers, notes, equipment links, stamped PDF link)
 - If historical import: raw imported values
 
 **Use cases (validated with Bill):**
+
 - Second approver reviewing a $1K+ invoice can check the vendor's history before confirming
 - Audit response to any board or Bethany question
 - Rate renegotiation prep (vendor Y's charges over 24 months)
@@ -755,17 +767,20 @@ New admin surface at `/admin/ap/history`, **scoped to admins + designated second
 
 ### D-M5-6 — Equipment / vehicle linking
 
-**Field on every Approve** — always shown, required with explicit `Not equipment-related` option (Bill's directive: *"forces a decision every time"*).
+**Field on every Approve** — always shown, required with explicit `Not equipment-related` option (Bill's directive: _"forces a decision every time"_).
 
 **Data source:** existing equipment/fleet records in Vision. Consolidated view over:
+
 - Terex maintenance records (Terex assets are already tracked; see `docs/operator/fleet-observability-setup.md` + ADR-0030 references)
 - Fleet vehicles (trucks, forklifts, balers) — inventory sources TBD by implementation; likely a `fleet_assets` table or existing equipment table
 
 Implementer confirms exact source table(s) during migration design. Amendment 5 requires:
+
 - Consolidated `equipment_view` (materialized view or join) with columns: `id`, `site_id`, `display_name`, `category` (vehicle | forklift | baler | terex | other), `is_active`
 - If existing tables don't cover all categories, add missing tables (e.g., `fleet_vehicles` if not already present)
 
 **UI:**
+
 - Multi-select combobox on Approve panel
 - Options filtered by the currently-selected site tag (Woodland site → only Woodland-tagged equipment; Eugene → Eugene equipment)
 - Search by `display_name` (typeahead)
@@ -780,13 +795,14 @@ Implementer confirms exact source table(s) during migration design. Amendment 5 
 
 **Trigger:** once ADR-0057 Phase 1 lands (`mymrc_hauls_mirror` populated with real data from Bill's admin credentials), Vision can auto-cross-check invoice line items against MyMRC hauls.
 
-**Use case (Kelsey's example verbatim):** *"invoices from Pacific Trucking are for inbound loads from Eureka. I make sure these loads are recorded in MyMRC before approving them."*
+**Use case (Kelsey's example verbatim):** _"invoices from Pacific Trucking are for inbound loads from Eureka. I make sure these loads are recorded in MyMRC before approving them."_
 
 **Behavior:**
 
 At intake (part of the extraction pipeline in §D-M5-2), also extract any `H-####` haul references from the invoice body/attachments. Store in `ap_requests.extracted_haul_numbers` (text[] column).
 
 At approve time in the UI, for each extracted haul number:
+
 - Query `mymrc_hauls_mirror` by `external_name` (haul number)
 - **GREEN indicator** if the haul is found — display "H-1234 → matches: [date] [source] [units]"
 - **YELLOW indicator** if the haul is NOT found — display "H-1234 → not in MyMRC — verify with dispatch before approving"
@@ -872,12 +888,14 @@ ap_second_approvers (
 ```
 
 **Existing table adjustments:**
+
 - `ap_requests.vendor` → deprecate; migrate any existing values to `vendor_freeform` via one-time migration
 - `ap_requests.amount_cents` → deprecate; migrate to `confirmed_amount_cents`
 - `ap_requests.decision_note` → keep for Reject/Hold/NOT-DR3 dispositions; Approve now uses `explanation` instead
 - `equipment` (or equivalent existing table) → add `site_id` if not already present, add `is_active` if not already present
 
 **New capabilities / config:**
+
 - `can_view_ap_history` — admin role by default + granted via `ap_second_approvers`
 - `~/.dr3-vision-secrets/anthropic.env` — API key for Claude extraction fallback
 - New env var `AP_EXTRACTION_CLAUDE_MODEL` (default `claude-sonnet-4-6`)
@@ -886,6 +904,7 @@ ap_second_approvers (
 ### Rollout + test plan
 
 **Phase 1 (this amendment):**
+
 - Migration + all Amendment 5 schema changes
 - Extraction pipeline (D-M5-2) with fixture tests: HIGH/MEDIUM/LOW/FAILED cases, Claude API fallback with mock, image attachment path
 - Structured decide UI (D-M5-1) with tests: all-four-fields-required, equipment multi-select with explicit-none, vendor helper prompt
@@ -898,11 +917,13 @@ ap_second_approvers (
 - Migration clean-replay CI gate
 
 **Phase 2 (gated on ADR-0057 completion):**
+
 - Wire haul-number extraction in the pipeline (D-M5-2 extension)
 - Wire cross-check against `mymrc_hauls_mirror` at decide time (D-M5-7)
 - Fixture tests with mocked mirror data (green + yellow indicator cases)
 
 **Rollout:**
+
 - Phase 1 deploys to prod. `ap_notify` rollout gate still governs decision email routing.
 - Approver runbook updated (`docs/operator/ap-approvals.md`)
 - Bill uploads the initial AP report to file-drop; admin runs the baseline import via `/admin/ap/baselines/import`
@@ -911,6 +932,7 @@ ap_second_approvers (
 **Rollback:** revert the app image; Amendment 5 schema is additive (new columns nullable, new tables independent), so the old flow degrades to the pre-Amendment-5 behavior on the same schema. Data written under Amendment 5 (structured fields) remains visible in the DB even after rollback for post-incident forensics.
 
 **Watch metrics:**
+
 - Extraction confidence distribution (proportion HIGH / MEDIUM / LOW / FAILED across a week — informs when to increase Claude fallback aggressiveness)
 - Second-approval hop rate (% of Approves crossing the $1K threshold)
 - Variance flag fire rate (% of Approves where variance fires)
@@ -948,7 +970,7 @@ relay that mislabels the MIME repeats it on every invoice from that vendor.
 **Defect 2 (SECONDARY, certain by code) — 300 s URL lifetime + cache-forever.**
 `signApAttachmentDownload` minted with `expiresIn: 300`, and the client cached the
 presigned URL and never re-minted (`resolve()` returned the cache unconditionally).
-The URL is minted **on expand**, not at queue render, so the *first* view is always
+The URL is minted **on expand**, not at queue render, so the _first_ view is always
 fresh — the hypothesis that it goes stale before first use is wrong. The real failure
 is **reuse**: a reviewer who collapses "Hide preview" and re-expands >5 min later, or
 who reads the invoice then clicks download/open, replays an expired URL → R2 `403` →
@@ -978,7 +1000,7 @@ The attachment route's Prisma `select` now includes `filename` (it previously di
 not), which is what makes the filename fallback possible server-side.
 
 **2. Canonical Content-Type on the wire.** A subtlety the gate alone does not fix:
-the presign sets `ResponseContentType` from the *stored* type, so an octet-stream
+the presign sets `ResponseContentType` from the _stored_ type, so an octet-stream
 `.pdf` served as `application/octet-stream; inline` would still download rather than
 frame. The route therefore signs with `effectiveInlineContentType()` — the
 **canonical** type (`application/pdf`, `image/jpeg`, …) rather than the mislabeled
@@ -1084,3 +1106,47 @@ proves unwieldy on the Approve panel, the fix is search/grouping in the
 multi-select, **not** reinstating a filter on untrustworthy site data. Revisit
 only when the registry carries real per-asset location (C-28), at which point
 grouping by actual facility becomes possible.
+
+---
+
+## Amendment 8 — site-based second-approver routing is SUPERSEDED (2026-07-29)
+
+**Amendment 5 (D-M5-3)'s site-based routing is retired by ADR-0066.** Recorded
+here per that ADR's §1.4 requirement.
+
+### What was wrong
+
+D-M5-3 split one question across two code paths that then disagreed:
+
+| Path                             | Resolution                                                         |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `canFulfillSecondApproval()`     | admin-eligibility **OR** an `ap_second_approvers` row for the site |
+| `activeSecondApproversForSite()` | the roster row **alone**                                           |
+
+This amendment's own operator handoff said _"Bill/Woodland needs no row;
+admin-eligibility covers it"_ — correct for **authority**, fatal for
+**notification**. Every Woodland second-approval resolved to an empty recipient
+set, and because the notify path is fail-soft it sent nothing and raised nothing.
+Invoices ≥ $1,000 sat unapproved and invisible. Eugene looked healthy throughout,
+because Shannon has an explicit roster row.
+
+### What replaces it
+
+Routing is now **person → person**, keyed on who signed first
+(`ap_approval_routing`), resolved by **one shared function** that both the
+authorization check and the recipient lookup consume — see ADR-0066. The
+invariant "recipients non-empty whenever authorization is non-empty" is asserted
+directly in tests.
+
+### Status of the old machinery
+
+- **`ap_second_approvers` is DEPRECATED, not dropped.** Amendment 5 wrote it and
+  historical decisions reference that context; audit continuity outranks
+  tidiness. Nothing reads it on the decision path any more.
+- **`secondApproverSiteLabel()` is retired from the decision path.** Under person
+  routing "Eugene (Shannon Rockwell)" is actively misleading — it implies Shannon
+  was reached because the invoice was filed to Eugene, when she was reached
+  because Rick (or, in tests, Morena) signed first. The resolved person's name is
+  used instead.
+- **The authorization RULE is unchanged.** Admin-eligibility was always correct;
+  only routing and notification moved.

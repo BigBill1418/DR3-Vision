@@ -3519,6 +3519,13 @@ model ApRequest {
   variance_acknowledged_at     DateTime?
   variance_acknowledgment_note String?
 
+  // ADR-0066 §1.5 — 24h WEEKDAY-clock fallback to the fallback approver (default
+  // Bill). Escalation is ADDITIVE, never a transfer: the routed peer stays able to
+  // sign and whoever acts first completes it. Set once by the hourly scanner, which
+  // is idempotent on `escalated_at IS NULL`.
+  escalated_at               DateTime?
+  escalated_to               String? // bare FK → users.id (constraint in migration)
+
   created_at                 DateTime        @default(now())
   updated_at                 DateTime        @updatedAt
 
@@ -3785,6 +3792,69 @@ model ApEquipmentLink {
 /// has no second approver. A row is ACTIVE when `active=true` AND active_until is
 /// null OR in the future. `user_id` is a bare FK → users.id. Seed: Bill (woodland,
 /// admin) implicitly; Shannon Rockwell (eugene) provisioned by Bill (§4).
+/// ADR-0066 §1.4 — PERSON-TO-PERSON second-approval routing. Supersedes the
+/// site-based `ApSecondApprover` roster (Amendment 5 D-M5-3), which is deprecated
+/// but retained for audit continuity — we stop READING it, we never drop it.
+///
+/// WHY THIS REPLACED SITE ROUTING: the authorization path accepted admin-eligibility
+/// while the notification path queried the site roster alone. Bill was deliberately
+/// never given a `woodland` roster row (admin-eligibility covered him), so every
+/// Woodland second-approval resolved to an EMPTY recipient set and — because the
+/// notify path is fail-soft — sent nothing and raised nothing, every time. Routing
+/// by WHO SIGNED FIRST removes the site dependency entirely and gives better
+/// separation of duties: the two people on the same floor check each other.
+///
+/// The table must be TOTAL. An approver with no row falls back IMMEDIATELY (no 24h
+/// wait) to `fallback_approver_id` (NULL ⇒ system admin) and raises a warning line
+/// in Bill's 06:00 digest so the missing pair gets configured.
+model ApApprovalRouting {
+  id                   String   @id @default(uuid())
+  first_approver_id    String   @unique // bare FK → users.id
+  second_approver_id   String // bare FK → users.id
+  fallback_approver_id String? // bare FK → users.id; NULL ⇒ system admin (Bill)
+  /// Business HOURS (weekday clock, §1.5) before escalating to the fallback.
+  fallback_after_hours Int      @default(24)
+  active               Boolean  @default(true)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+  updated_by           String? // bare audit-actor user id
+
+  // CHECK (first_approver_id <> second_approver_id) lives in the migration —
+  // self-approval is never a valid pair.
+  @@index([active])
+  @@map("ap_approval_routing")
+}
+
+/// ADR-0066 §1.6 — per-user, per-event notification scoping. Generalizes what would
+/// otherwise be a hardcoded "don't email Shannon" exception: she does not work the
+/// daily queue and was buried in new-invoice noise for a queue she has no role in.
+///
+/// Event semantics (precise — see §1.6):
+///   `new_invoice`             → broadcast to every user with the pref on.
+///   `second_approval_request` → ONLY the specific person it routed to (plus the
+///                               fallback approver on escalation). NEVER a broadcast:
+///                               even with the pref on, a user is notified only for
+///                               requests routed to THEM.
+///   `daily_digest`            → Bill only (§1.7).
+///   `decision_outcome`        → NOBODY. Ships as a column, everyone false, for
+///                               future flexibility. Bill: "they don't need to know,
+///                               it's done."
+///
+/// Prefs filter WITHIN the ADR-0047 `notifyStaff()` chokepoint and the `ap_notify`
+/// rollout gate — they never bypass either.
+model ApNotificationPref {
+  id                             String   @id @default(uuid())
+  user_id                        String   @unique // bare FK → users.id
+  notify_new_invoice             Boolean  @default(true)
+  notify_second_approval_request Boolean  @default(true)
+  notify_daily_digest            Boolean  @default(false)
+  notify_decision_outcome        Boolean  @default(false)
+  updated_at                     DateTime @updatedAt
+  updated_by                     String? // bare audit-actor user id
+
+  @@map("ap_notification_prefs")
+}
+
 model ApSecondApprover {
   id           String    @id @default(uuid())
   user_id      String // bare FK → users.id (constraint in migration)
