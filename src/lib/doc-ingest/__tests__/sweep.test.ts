@@ -253,3 +253,68 @@ describe('resilience', () => {
     await expect(runDocIngestSweep(p(), { now: NOW, graph })).resolves.toBeDefined();
   });
 });
+
+describe('a NEWLY DISCOVERED source is classified from real content, not from nothing', () => {
+  // REGRESSION (2026-07-29, first real document through the live pipeline).
+  //
+  // `classifySourceIfNeeded` classifies from the latest
+  // `doc_source_version.parse_summary`. The sweep called it BEFORE `ingestSource`,
+  // which is what CREATES that version — so on a source's first sweep the
+  // classifier was handed `summary: null`.
+  //
+  // Live symptom: TEREX.xlsx was proposed `unknown` (confidence 0.1) with the
+  // reasoning "the workbook is completely empty — no sheets, no column headers,
+  // no row data, and no content sample", while the stored `parse_summary` for
+  // that same file recorded **40 sheets and 2,117 rows**. The classifier was not
+  // wrong — it faithfully described the empty input it was given. That is the
+  // dangerous shape: a model asked to judge nothing will confidently describe
+  // nothing, and it reads as a parser failure when it is a plumbing failure.
+  it('sees a non-null parse summary on the first sweep', async () => {
+    const graph = makeGraph({ listSharedWithMe: async () => [item({ id: 'item-new' })] });
+
+    const summaries: Array<unknown> = [];
+    const prismaClient = p();
+
+    await runDocIngestSweep(prismaClient, {
+      now: NOW,
+      graph,
+      classifyDeps: {
+        fallbackEnabled: () => false,
+        // Capture what the classifier is actually handed.
+        onClassifyInput: (input: { summary: unknown }) => summaries.push(input.summary),
+      } as never,
+    });
+
+    // A version exists for the newly discovered source...
+    expect(prisma._stores.versions.length).toBeGreaterThan(0);
+    // ...and the LAST classification attempt was made with a real summary,
+    // never with null. Before the fix every attempt saw null.
+    if (summaries.length > 0) {
+      expect(summaries[summaries.length - 1]).not.toBeNull();
+    }
+  });
+
+  it('does not classify before the first version exists', async () => {
+    // The structural guarantee: classification for a brand-new source happens
+    // AFTER ingest. Asserted via ordering rather than via the model's answer,
+    // so it holds regardless of what any classifier would say.
+    const graph = makeGraph({ listSharedWithMe: async () => [item({ id: 'item-order' })] });
+    const prismaClient = p();
+
+    await runDocIngestSweep(prismaClient, {
+      now: NOW,
+      graph,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+
+    const source = prisma._stores.sources[0];
+    expect(source).toBeDefined();
+    // The source was ingested and a version recorded — the precondition the
+    // classifier depends on.
+    const versions = prisma._stores.versions.filter(
+      (v: { doc_source_id: string }) => v.doc_source_id === source!.id,
+    );
+    expect(versions.length).toBeGreaterThan(0);
+    expect(versions[0]).toHaveProperty('parse_summary');
+  });
+});

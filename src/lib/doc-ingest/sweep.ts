@@ -153,9 +153,41 @@ export async function runDocIngestSweep(
         // parses as its registered classification") needs a registered
         // classification to compare against, and an unconfirmed source is
         // observed and archived but never applied.
-        await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
+        //
+        // ⚠ BUT that only works when a version ALREADY EXISTS.
+        // `classifySourceIfNeeded` classifies from the latest
+        // `doc_source_version.parse_summary`. A NEWLY DISCOVERED source has no
+        // version yet, so the classifier was handed `summary: null` and could
+        // only answer `unknown`.
+        //
+        // Observed live 2026-07-29 on the first real document: TEREX.xlsx was
+        // proposed `unknown` (confidence 0.1) with the reasoning "the workbook
+        // is completely empty — no sheets, no column headers, no row data, and
+        // no content sample" — while the stored `parse_summary` for that very
+        // file showed **40 sheets and 2,117 rows**. The classifier was not
+        // wrong; it accurately described the empty input it was given. A model
+        // asked to judge nothing will confidently describe nothing, which is
+        // why this read as a parser failure and was not one.
+        //
+        // So: classify first only when there is something to classify FROM, and
+        // (re)attempt once the first version lands. Ordering is otherwise
+        // unchanged, so the guardrail rationale above still holds for every
+        // source after its first sweep.
+        const hadVersion =
+          (await prisma.docSourceVersion.count({ where: { doc_source_id: source.id } })) > 0;
+        if (hadVersion) {
+          await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
+        }
 
         const ingested = await ingestSource(prisma, graph, source, { now });
+
+        // First version for this source just landed — classify now that there
+        // is real content. Bounded: this runs only on a source's FIRST
+        // successful ingest, never on subsequent sweeps, so it costs one extra
+        // classifier call per document ever, not per sweep.
+        if (!hadVersion && (ingested.outcome === 'applied' || ingested.outcome === 'staged')) {
+          await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
+        }
         result.anomaliesRaised += ingested.anomaliesRaised;
         if (ingested.outcome === 'applied') {
           result.versionsCreated += 1;
