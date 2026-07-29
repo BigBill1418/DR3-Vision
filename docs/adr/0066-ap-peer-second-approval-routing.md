@@ -53,10 +53,32 @@ indistinguishable from success** — that indistinguishability _is_ the defect.
 `dr3-vision-system` fires _before_ the empty-recipient check, so Bill should have
 been paged even with no email recipient. He was not — and that publish is wrapped
 in `.catch(() => undefined)`, swallowing every error. Publisher auth verifies
-healthy (HTTP 200), so the likely gap is topic subscription. **Consequence for
+healthy (HTTP 200).
+
+> **CORRECTION (2026-07-29, same day).** This ADR originally guessed that the gap
+> was Bill's topic subscription. **That guess is FALSIFIED.** A diagnostic publish
+> to `dr3-vision-system` (message id `mgTbY3HYWq5P`, HTTP 200) **arrived on his
+> phone**, and `ntfy user list` shows `noc-reader` holds `read-only access to
+> topic *` — so neither delivery nor ACL was ever the problem.
+>
+> **The ntfy leg's historical failure is therefore UNEXPLAINED.** Candidates, none
+> confirmed: the publish threw at the time and `.catch(() => undefined)` ate it
+> (env/token not yet provisioned on that code path); the ADR-0037 fingerprint
+> cooldown suppressed it (unlikely — the fingerprint is per-request); or the pages
+> did arrive and went unnoticed among other traffic. The app container has since
+> been recreated, so the logs that would settle it are gone.
+>
+> What IS proven either way: the EMAIL leg resolved to an empty recipient set and
+> sent nothing, every time. That is the defect this ADR fixes, and it stands
+> untouched by the correction.
+
+**Consequence for
 this design: the empty-recipient alarm emails Bill as well as paging him.**
-Relying solely on ntfy to report a notification failure would repeat the exact
-failure mode being fixed.
+Relying on a single channel to report a *notification* failure is the shape of
+the original bug regardless of which channel is healthy — a defence-in-depth
+argument, not a claim that ntfy is broken. The correction above does not weaken
+it: an alarm about undelivered notifications should not itself depend on one
+delivery path.
 
 ## Decision
 
