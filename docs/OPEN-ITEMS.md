@@ -16,6 +16,37 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AA — 2026-07-29 Document ingestion foundation (ADR-0067) — operator actions
+
+Shipped on `feat/doc-ingestion-foundation`: the ADR, the additive schema, and the
+`/admin/doc-ingest/connect` surface. Nothing ingests yet, and nothing can until these
+are done. See ADR-0067 + CHANGELOG 2026-07-29.
+
+- **C-31 — OPERATOR: provision `~/.dr3-vision-secrets/doc-ingest.env` on svdp-dev**
+  with `DOC_INGEST_TOKEN_KEY=$(openssl rand -hex 32)`, chmod 600. Until it exists,
+  `/admin/doc-ingest/connect` returns a loud 503 (by design — ADR-0067 D6; it never
+  silently no-ops). The compose mount is already wired `required: false`, so the app
+  boots fine without it.
+- **C-32 — OPERATOR (Bill, one time, in a browser): click Connect and sign in as
+  `docs-dr3@svdp.us` — NOT as yourself.** Signing in as yourself would succeed and
+  would connect your personal OneDrive instead of the service account's shares. The
+  server-side `/me` assertion refuses it, but the refusal costs a round trip and the
+  point is not to need it. Requires C-31 first.
+- **C-33 — Nothing in ADR-0067 has run against the LIVE tenant.** The migration is
+  validated against live prod (rolled back) and the flow against stubbed Entra/Graph
+  responses; CI has no tenant. The real authorize redirect, token response body, `/me`,
+  and `/me/drive` are unproven until C-32 happens. Expect first-contact surprises there
+  and nowhere else.
+- **C-34 — RUNBOOK: add the 2028-05-05 expiry of the shared `DR3-Vision Production`
+  client secret to the secret-rotation runbook,** with the coupling stated: it is the
+  SAME secret AP mailbox polling uses, so a silent expiry stops AP mail **and** document
+  ingestion simultaneously and will present as two unrelated outages. Surfaced on the
+  connect page, but a page nobody is looking at is not a reminder.
+- **C-35 — DECISION (Bill): who may share files to `docs-dr3@svdp.us`, and is there a
+  naming/foldering convention?** The classifier (next phase) has to guess document type
+  and site from what it finds. A convention would make that deterministic; without one it
+  is inference. Not blocking the foundation.
+
 ## 0.A — 2026-07-28 iPad gates + nav (ADR-0065) — residuals
 
 Shipped on `feat/ipad-gates-and-nav`: per-surface iPad rollout gates, current-Pacific-day

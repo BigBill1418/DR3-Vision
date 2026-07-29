@@ -87,6 +87,13 @@ const TILES = [
       'Dump any file (invoices, workbooks, images). Captured and listed for routing (O-2).',
     testid: 'admin-tile-file-drop',
   },
+  {
+    href: '/admin/doc-ingest/connect',
+    label: 'Document ingestion',
+    description:
+      'Connect the docs-dr3@svdp.us service account so Vision reads shared documents where they live, instead of emailed snapshots (ADR-0067).',
+    testid: 'admin-tile-doc-ingest',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {
