@@ -79,6 +79,12 @@ export const UI_SURFACE = {
   IPAD_PROCESSED: 'ipad_processed',
   /** The F-1 on-hand summary BLOCK inside the hub — not the hub itself. */
   IPAD_TODAY_SUMMARY: 'ipad_today_summary',
+
+  // ADR-0068 — the Employee Reimbursement tile on the site dashboard. Gated per
+  // site because spec §6.4 leaves open whether Eugene's reimbursement process
+  // runs the same way as Woodland's today; Bill can ramp one without the other
+  // and without a deploy.
+  REIMBURSEMENT_TILE: 'reimbursement_tile',
 } as const;
 
 export type NotifySurfaceCode = (typeof NOTIFY_SURFACE)[keyof typeof NOTIFY_SURFACE];

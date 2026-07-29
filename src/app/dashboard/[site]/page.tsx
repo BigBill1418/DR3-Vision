@@ -7,6 +7,7 @@ import { OverviewPoller } from './overview/OverviewPoller';
 import { OpsOverviewPanel } from './overview/OpsOverviewPanel';
 import { computeOpsOverview } from '@/lib/dashboard/ops-overview';
 import { getLocale } from '@/i18n/get-locale';
+import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
 // Operations Dashboard — per-site surface (ADR-0020 tile re-enable, 2026-07-22).
@@ -67,6 +68,12 @@ export default async function SiteDashboardPage({ params }: Props) {
       </main>
     );
   }
+
+  // ADR-0068 — the Employee Reimbursement tile, gated per site so Eugene and
+  // Woodland ramp independently (spec §6.4 leaves the Eugene question open).
+  // Unregistered/pilot ⇒ hidden, which is the fail-safe direction for a
+  // visibility gate.
+  const reimbursementTileLive = await isUiSurfaceLive(UI_SURFACE.REIMBURSEMENT_TILE, site.id);
 
   // The full operations picture. Every panel degrades to null on read failure —
   // a site with no data renders cleanly rather than throwing (see ops-overview).
@@ -135,11 +142,13 @@ export default async function SiteDashboardPage({ params }: Props) {
                 Vision knows who ORIGINATED the request as a fact rather than as
                 ink inside a scanned PDF, which is what makes "the submitter
                 cannot approve" a constraint instead of a detection problem. */}
-            <NavLink
-              href={`/dashboard/${site.code}/reimbursements`}
-              label="Employee reimbursement"
-              testId="dashboard-reimbursements-link"
-            />
+            {reimbursementTileLive && (
+              <NavLink
+                href={`/dashboard/${site.code}/reimbursements`}
+                label="Employee reimbursement"
+                testId="dashboard-reimbursements-link"
+              />
+            )}
           </nav>
         </header>
 
