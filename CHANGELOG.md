@@ -5,6 +5,37 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (employee reimbursements: dual approval — ADR-0068)
+
+Mary Scott escalated a real segregation-of-duties failure: Janette was approving her own
+reimbursement submissions. Vision had no concept of who ORIGINATED a request — it knew who
+forwarded it (Mary) and who approved it (Janette), while the originator existed only as ink
+inside a scanned PDF. The approval stamp was manufacturing audit evidence for a review that
+never happened, which is worse than having no control at all.
+
+- **The Employee Reimbursement tile** is live on the site dashboard, with a structured intake
+  form that retires the paper form. Because the submitter is authenticated, "who originated
+  this" becomes a stored fact — which is what turns "the submitter cannot approve" from a
+  detection problem into a constraint.
+- **Two signatures on every reimbursement, no dollar threshold.** Deliberately stricter than
+  vendor invoices, where only >= $1,000 needs a second: a reimbursement pays an insider
+  against a form an insider wrote, with no external counterparty.
+- **Enforced in THREE layers** — a database CHECK, the server-side resolver, and the UI.
+  Verified by replaying the whole migration chain on an empty PG16 and driving hostile INSERTs
+  at it: Janette-approves-Janette refused, Janette-submits/Morena-approves accepted.
+- **The beneficiary can never approve either**, which Bill's stated rule did not cover: Morena
+  submitting FOR Janette would otherwise route straight to Janette. That escalates to an admin
+  IMMEDIATELY, not after 24h — no valid local approver exists, so waiting achieves nothing.
+- **Free-text beneficiary names fail safe**: an ambiguous single-token match escalates rather
+  than guessing, because a wrong answer pays someone against their own signature.
+- **Approved goes to Mary as sole recipient**, never back to the submitter. Rejections and
+  holds go to the submitting manager with the note.
+- One routing table, one resolver — a thin wrapper over ADR-0066's, not a fork. Forking would
+  recreate the outage shape with a third answer.
+
+Deferred and tracked in ADR-0068 (none weakens the control): the AP-format stamped PDF, the
+plain 24h timeout escalation, the 06:00 digest fold-in, and the AP-queue type badge.
+
 ### Fixed — 2026-07-29 (the delta pass was silently freezing ingestion — ADR-0067 Amendment 6)
 
 Found by an independent architecture review, then **confirmed on the live database**: the one
