@@ -38,20 +38,40 @@ export type ApNotificationEvent =
   | 'daily_digest'
   | 'decision_outcome';
 
-const PREF_COLUMN: Record<ApNotificationEvent, string> = {
+/** Every event, in the order the admin grid renders its columns. */
+export const AP_NOTIFICATION_EVENTS = [
+  'new_invoice',
+  'second_approval_request',
+  'daily_digest',
+  'decision_outcome',
+] as const satisfies readonly ApNotificationEvent[];
+
+export const AP_PREF_COLUMN = {
   new_invoice: 'notify_new_invoice',
   second_approval_request: 'notify_second_approval_request',
   daily_digest: 'notify_daily_digest',
   decision_outcome: 'notify_decision_outcome',
-};
+} as const satisfies Record<ApNotificationEvent, string>;
 
-/** Column defaults, applied when a user has no prefs row at all. */
-const DEFAULTS: Record<ApNotificationEvent, boolean> = {
+const PREF_COLUMN: Record<ApNotificationEvent, string> = AP_PREF_COLUMN;
+
+/**
+ * Column defaults, applied when a user has no prefs row at all.
+ *
+ * EXPORTED because the admin surface (`ap/admin-config.ts`) has to render the
+ * EFFECTIVE value for a user with no row. Duplicating the table there would let
+ * the screen and the send path drift — the admin would be shown "notify" while
+ * the sender resolved "don't", which is the same class of divergence ADR-0066
+ * exists to remove.
+ */
+export const AP_PREF_DEFAULTS: Record<ApNotificationEvent, boolean> = {
   new_invoice: true,
   second_approval_request: true,
   daily_digest: false,
   decision_outcome: false,
 };
+
+const DEFAULTS = AP_PREF_DEFAULTS;
 
 /**
  * Does this user want this event? A missing row yields the column default (see

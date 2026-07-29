@@ -5,6 +5,51 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (`/admin/ap/routing` + `/admin/ap/notifications` — the AP configuration screen — ADR-0066 §1.4/§1.6, Amendment 1)
+
+ADR-0066 shipped person-to-person routing and per-user notification prefs as **data with no
+UI**. Both tables could only be changed by writing a migration — wrong for a design whose
+premise is "staff change, code should not" — and the resolver's own warning already told
+admins to "configure the pair at `/admin/ap/routing`", a route that did not exist.
+
+- **One screen behind two routes.** `/admin/ap/routing` and `/admin/ap/notifications` render
+  the same component; the route only decides which tab reads as current. Bill: _"two separate
+  pages for six rows of config is worse."_ The routing filter is carried across the
+  cross-link by one serializer (`src/app/admin/ap/config/list-url.ts`) per ADR-0017
+  Amendment 1; saves `router.refresh()` and never navigate, so the URL view state survives.
+- **The pickers are keyed on REACHABILITY — active, manager/admin, and holding an email.**
+  This is the same lesson the migration seed had to learn the hard way: Bill, Janette and
+  Morena each have a second, **email-less operator PIN account with the same name** (created
+  2026-07-28 for the iPad rollout). A name-keyed picker would let an admin select one and the
+  routing table would read as fully populated while every notification resolved to nobody —
+  the outage, reintroduced through its own admin screen. Every option is labelled with its
+  email so two same-named accounts are distinguishable at the point of choice, and the
+  excluded namesakes are **disclosed** in the UI rather than hidden.
+- **Self-approval is impossible at three layers**: the picker never offers the first approver
+  as their own peer, the server rejects the pair before writing, and the DB
+  `CHECK (first_approver_id <> second_approver_id)` backstops both. The constraint violation
+  is caught by name and returned as a readable 422, not a 500.
+- **The totality requirement is now visible.** The screen enumerates active manager/admin
+  accounts, diffs them against active routing rows, and renders the gap in the same words the
+  resolver reports to the 06:00 digest. Graded `error` for an admin or an `ap_approvers`
+  roster member (they can first-approve today) and `warning` for an approver-role account
+  that would degrade silently the day they are added. Unreachable second approvers and
+  unreachable fallbacks are reported the same way.
+- **Prefs render EFFECTIVE values.** A user with no row shows the column defaults badged
+  "Defaults" — a missing row means defaults, never "notify nobody", and blank checkboxes
+  would misrepresent what the sender does. The first write materialises the row **from the
+  defaults**, so flipping one event never switches the other three off.
+  `second_approval_request` is captioned in full because the obvious reading of it is wrong:
+  it is never a broadcast, and the toggle can only remove a person from their OWN routed
+  requests.
+- **`decision_outcome` is rendered and refused** — disabled, badged "Not wired", and rejected
+  by the API. It has no send path; making it writable would promise an email nobody sends,
+  and hiding it would leave the column undocumented exactly where it is configured.
+- Every mutation writes its `audit_log` row (`ap_approval_routing` / `ap_notification_prefs`,
+  before/after JSON) **in the same transaction** as the write. Admin-gated on
+  `role === 'admin'` at both the page and API layers — never the `all_sites` reach flag.
+- New `/admin` hub tile. 44 tests across the API, the screen and the URL serializer.
+
 ### Fixed — 2026-07-29 (AP second approvals reached nobody — person-to-person routing — ADR-0066)
 
 Invoices >= $1,000 transitioned to `pending_second_approval` correctly and then sat
