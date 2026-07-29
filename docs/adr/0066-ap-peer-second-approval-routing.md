@@ -233,6 +233,80 @@ Unlike its siblings the daemon carries no Pacific offset-reprobe math: it fires
 hourly, and an hour is an hour in every zone. That is pinned by a test across both
 DST transition days so it does not get "fixed" back into wall-clock arithmetic.
 
+## Amendment 1 — 2026-07-29: the §1.4/§1.6 admin surface
+
+Both tables shipped as data with no way to see or change them outside a
+migration. That is the wrong end state for a design whose whole premise is
+"staff change, code should not" — and §1.4's own `problems` string already told
+admins to "configure the pair at `/admin/ap/routing`", a route that did not
+exist. This amendment builds it.
+
+**One screen, two routes.** `/admin/ap/routing` and `/admin/ap/notifications`
+render the same component (`src/app/admin/ap/config/render.tsx`). Bill's
+instruction was explicit — _"two separate pages for six rows of config is
+worse."_ The routes exist because the two halves are separately linkable (the
+resolver's warning names the routing one); they are not separate surfaces. The
+filter state is carried across the cross-link by a single serializer,
+`src/app/admin/ap/config/list-url.ts`, per ADR-0017 Amendment 1.
+
+**The picker is keyed on reachability, and this is the load-bearing decision.**
+Only accounts that are ACTIVE, hold an approver role, and HAVE AN EMAIL are
+offered as a second approver or fallback — `getApConfig().selectable`, re-checked
+server-side in `saveRoutingRow()`. This is the same rule, in the same shape, that
+the seed had to learn: Bill, Janette and Morena each have a second, **email-less
+operator PIN account with the same name**. A name-keyed picker would let an admin
+select one, and the routing table would read as fully populated while every
+notification resolved to nobody — the outage, reintroduced through its own admin
+screen. Excluded namesakes are **disclosed** in the UI rather than hidden, and
+every option is labelled with its email, so two same-named accounts are
+distinguishable at the point of choice.
+
+**Self-approval is refused at three layers**: the picker never offers the first
+approver as their own peer, `saveRoutingRow()` rejects the pair before writing,
+and the DB `CHECK (first_approver_id <> second_approver_id)` backstops both. The
+constraint violation is **caught by name** and mapped to a readable message —
+the storage-layer guarantee is the last line of defence, not a 500.
+
+**Totality is surfaced, not assumed.** The screen enumerates active
+manager/admin accounts, diffs them against the active routing rows, and renders
+the gap using the same wording the resolver reports to the 06:00 digest. A
+missing row is graded `error` when the subject is an admin or sits on the
+`ap_approvers` roster (they can genuinely first-approve today) and `warning`
+otherwise (an approver-role account that would degrade silently the day they are
+added). Rows pointing at an unreachable second approver or fallback are reported
+the same way.
+
+**Prefs are shown as EFFECTIVE values.** A user with no `ap_notification_prefs`
+row is rendered with the column defaults and badged "Defaults", because a missing
+row means defaults, never "notify nobody" — showing blank checkboxes would
+misrepresent what the sender actually does. The first write materialises the row
+**from the defaults**, so flipping one event never silently switches the other
+three off. `second_approval_request` carries its full semantics in the UI: it is
+never a broadcast, and the toggle can only remove someone from their own routed
+requests.
+
+**`decision_outcome` is rendered and refused.** It ships as a column with
+everyone false and no send path, so the API rejects any attempt to enable it and
+the checkbox is disabled with a "Not wired" badge. Hiding the column would leave
+it undocumented exactly where it would be configured; making it writable would
+promise an email nobody sends.
+
+Every mutation writes its `audit_log` row (`table_name` `ap_approval_routing` /
+`ap_notification_prefs`, before/after JSON) **inside the same transaction** as
+the write, per `src/lib/admin-users.ts` and hard rule #6.
+
+Gating is `role === 'admin'` at both the page layer and the API layer — an admin
+POWER, never the `all_sites` reach flag (hard rule #2).
+
+Deliberately out of scope: deleting a routing row (deactivate instead — deletion
+would break totality and lose the pair's history), editing `ap_second_approvers`
+(deprecated, read-only history), and any i18n (the admin surface is English-only
+per ADR-0017, with every literal in `src/app/admin/messages.ts`).
+
+Tests: `src/app/api/admin/ap/config/config.test.ts`,
+`src/app/admin/ap/config/ApConfigScreen.test.tsx`,
+`src/app/admin/ap/config/list-url.test.ts`.
+
 ## References
 
 - CLAUDE.md hard rules #2 (site separation), #5 (ntfy is Bill-only, system events), #6 (append-only audit)

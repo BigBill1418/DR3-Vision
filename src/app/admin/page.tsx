@@ -74,6 +74,13 @@ const TILES = [
     testid: 'admin-tile-terex-import',
   },
   {
+    href: '/admin/ap/routing',
+    label: 'AP configuration',
+    description:
+      'Who checks whose approvals, and who hears about what (ADR-0066). Second-approval routing plus per-user notification preferences, on one screen.',
+    testid: 'admin-tile-ap-config',
+  },
+  {
     href: '/admin/file-drop',
     label: 'File Drop',
     description:
