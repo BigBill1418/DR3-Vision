@@ -57,6 +57,10 @@ interface EquipmentLinkView {
   equipmentId: string | null;
   displayName: string | null;
   isNotEquipmentRelated: boolean;
+  /** Amendment 9 (§2.2) — set on the escape-hatch disposition. Mirrors
+   * `ApEquipmentLinkView` in `@/lib/ap/queue`; this file keeps its own view
+   * types so the client bundle never imports the Prisma-backed module. */
+  equipmentRequest: { id: string; description: string; status: string } | null;
 }
 
 interface ListRow {
@@ -394,6 +398,10 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
   const [equipmentIds, setEquipmentIds] = useState<string[]>([]);
   const [notEquipmentRelated, setNotEquipmentRelated] = useState(false);
+  // Amendment 9 (§2.2) — the ESCAPE HATCH. `equipmentNotListed` is the third
+  // mutually exclusive choice; `equipmentDescription` is REQUIRED once it is on.
+  const [equipmentNotListed, setEquipmentNotListed] = useState(false);
+  const [equipmentDescription, setEquipmentDescription] = useState('');
   const [equipmentQuery, setEquipmentQuery] = useState('');
   const [variance, setVariance] = useState<VarianceContext | null>(null);
   const [varianceAck, setVarianceAck] = useState(false);
@@ -409,6 +417,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   useEffect(() => {
     setEquipmentIds([]);
     setNotEquipmentRelated(false);
+    setEquipmentNotListed(false);
+    setEquipmentDescription('');
     setEquipmentQuery('');
     if (!isRealSite) {
       setEquipmentOptions([]);
@@ -419,7 +429,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       try {
         const res = await fetch(`/api/ops/ap/equipment?site=${siteCode}`);
         const body = await res.json().catch(() => ({}));
-        if (!cancelled) setEquipmentOptions(res.ok && Array.isArray(body.options) ? body.options : []);
+        if (!cancelled)
+          setEquipmentOptions(res.ok && Array.isArray(body.options) ? body.options : []);
       } catch {
         if (!cancelled) setEquipmentOptions([]);
       }
@@ -463,9 +474,33 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     };
   }, [vendorFreeform, confirmedAmount, isRealSite]);
 
+  // Amendment 9 — the three choices are MUTUALLY EXCLUSIVE, so each setter clears
+  // the other two. Selecting from the list also clears the hatch (and its text, so
+  // a half-typed description can never ride along on an equipment-id decision).
   const toggleEquipment = useCallback((id: string) => {
     setNotEquipmentRelated(false);
+    setEquipmentNotListed(false);
+    setEquipmentDescription('');
     setEquipmentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const chooseNotEquipmentRelated = useCallback((checked: boolean) => {
+    setNotEquipmentRelated(checked);
+    if (checked) {
+      setEquipmentIds([]);
+      setEquipmentNotListed(false);
+      setEquipmentDescription('');
+    }
+  }, []);
+
+  const chooseEquipmentNotListed = useCallback((checked: boolean) => {
+    setEquipmentNotListed(checked);
+    if (checked) {
+      setEquipmentIds([]);
+      setNotEquipmentRelated(false);
+    } else {
+      setEquipmentDescription('');
+    }
   }, []);
 
   const decide = useCallback(
@@ -499,8 +534,16 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           setMsg('Enter what this transaction was for (explanation) to approve.');
           return;
         }
-        if (!notEquipmentRelated && equipmentIds.length === 0) {
-          setMsg('Select the equipment this invoice relates to, or choose "Not equipment-related".');
+        // Amendment 9 (§2.2) — exactly one of the three equipment dispositions. The
+        // hatch is NOT the cheap way out: it costs a required description.
+        if (equipmentNotListed && !equipmentDescription.trim()) {
+          setMsg('Describe the equipment so Morena and Rick can add it to the fleet.');
+          return;
+        }
+        if (!notEquipmentRelated && !equipmentNotListed && equipmentIds.length === 0) {
+          setMsg(
+            'Select the equipment this invoice relates to, describe it if it isn’t in the list, or choose "Not equipment-related".',
+          );
           return;
         }
         if (varianceTripped && !varianceAck) {
@@ -513,7 +556,11 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           vendorFreeform: v,
           explanation: explanation.trim(),
           confirmedAmountCents: parsed,
-          ...(notEquipmentRelated ? { notEquipmentRelated: true } : { equipmentIds }),
+          ...(equipmentNotListed
+            ? { equipmentRequestDescription: equipmentDescription.trim() }
+            : notEquipmentRelated
+              ? { notEquipmentRelated: true }
+              : { equipmentIds }),
           ...(varianceTripped
             ? { varianceAcknowledged: true, varianceAckNote: varianceAckNote.trim() || undefined }
             : {}),
@@ -583,6 +630,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       confirmedAmount,
       equipmentIds,
       notEquipmentRelated,
+      equipmentNotListed,
+      equipmentDescription,
       varianceTripped,
       varianceAck,
       varianceAckNote,
@@ -665,7 +714,12 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     !!vendorFreeform.trim() &&
     !!confirmedAmount.trim() &&
     !!explanation.trim() &&
-    (notEquipmentRelated || equipmentIds.length > 0) &&
+    // Amendment 9 — the hatch satisfies the equipment requirement only with a
+    // NON-EMPTY description. An empty one leaves Approve disabled, exactly like an
+    // empty selection would.
+    (notEquipmentRelated ||
+      equipmentIds.length > 0 ||
+      (equipmentNotListed && !!equipmentDescription.trim())) &&
     (!varianceTripped || varianceAck);
   const approveDisabled = busy || !siteCode || (isRealSite ? !structuredComplete : !note.trim());
 
@@ -801,8 +855,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
             </select>
             {siteCode === 'not_dr3' && (
               <span className="mt-1 block text-amber-300">
-                NOT DR3 — add the reason in the note below (required). This will NOT be filed against
-                a DR3 site.
+                NOT DR3 — add the reason in the note below (required). This will NOT be filed
+                against a DR3 site.
               </span>
             )}
           </label>
@@ -830,7 +884,9 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
               <label className="mt-2 block text-xs opacity-80">
                 <span className="inline-flex items-center gap-2">
                   Confirmed amount USD <span className="text-amber-300">(required to approve)</span>
-                  {detail.extraction && <ConfidenceBadge confidence={detail.extraction.confidence} />}
+                  {detail.extraction && (
+                    <ConfidenceBadge confidence={detail.extraction.confidence} />
+                  )}
                 </span>
                 <input
                   value={confirmedAmount}
@@ -867,20 +923,51 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
               <div className="mt-2 text-xs opacity-80">
                 Equipment{' '}
                 <span className="text-amber-300">
-                  (required — pick one or more, or “Not equipment-related”)
+                  (required — pick one or more, describe one that isn’t listed, or “Not
+                  equipment-related”)
                 </span>
                 <label className="mt-1 flex items-center gap-2">
                   <input
                     type="checkbox"
                     checked={notEquipmentRelated}
-                    onChange={(e) => {
-                      setNotEquipmentRelated(e.target.checked);
-                      if (e.target.checked) setEquipmentIds([]);
-                    }}
+                    onChange={(e) => chooseNotEquipmentRelated(e.target.checked)}
                   />
                   <span>Not equipment-related</span>
                 </label>
-                {!notEquipmentRelated && (
+                {/* Amendment 9 (§2.2) — the ESCAPE HATCH. Third mutually exclusive
+                    option, for the asset the registry does not carry (C-28: the
+                    ADR-0062 seed is a coarse jurisdiction mapping with no real DR3
+                    Eugene facility). The alternative it replaces is an approver
+                    quietly picking a wrong asset or ticking "not equipment-related"
+                    — a mis-filing with no trace. */}
+                <label className="mt-1 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={equipmentNotListed}
+                    onChange={(e) => chooseEquipmentNotListed(e.target.checked)}
+                    data-testid="ap-equipment-not-listed"
+                  />
+                  <span>Equipment not in list — describe it</span>
+                </label>
+                {equipmentNotListed && (
+                  <div className="mt-1 rounded border border-dr3-cyan/40 bg-dr3-cyan/10 p-2">
+                    <p className="opacity-90">
+                      Describe the equipment as specifically as you can — type, make/model if known,
+                      unit number or the nickname the crew uses, and which site it lives at. Morena
+                      and Rick will add it to the fleet properly.
+                    </p>
+                    <textarea
+                      value={equipmentDescription}
+                      onChange={(e) => setEquipmentDescription(e.target.value)}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder="e.g. Yellow Hyster forklift, unit 7 — the one the crew calls “Big Bird” — lives at Woodland"
+                      className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
+                      data-testid="ap-equipment-description"
+                    />
+                  </div>
+                )}
+                {!notEquipmentRelated && !equipmentNotListed && (
                   <>
                     <input
                       value={equipmentQuery}
@@ -891,15 +978,13 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                     <div className="mt-1 max-h-40 overflow-auto rounded border border-white/10">
                       {equipmentOptions.length === 0 && (
                         <p className="px-2 py-1 opacity-60">
-                          No active equipment registered for this site. Ask an admin to add it, or
+                          No active equipment registered. Describe it above instead of guessing, or
                           Hold the invoice.
                         </p>
                       )}
                       {equipmentOptions
                         .filter((o) =>
-                          o.displayName
-                            .toLowerCase()
-                            .includes(equipmentQuery.trim().toLowerCase()),
+                          o.displayName.toLowerCase().includes(equipmentQuery.trim().toLowerCase()),
                         )
                         .map((o) => (
                           <label
@@ -1081,11 +1166,15 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
   const submit = useCallback(
     async (decision: 'approved' | 'rejected') => {
       if (decision === 'rejected' && !note.trim()) {
-        setMsg('A second-approval rejection needs a note explaining why the first approval is being overridden.');
+        setMsg(
+          'A second-approval rejection needs a note explaining why the first approval is being overridden.',
+        );
         return;
       }
       if (isSelf && !reconfirm) {
-        setMsg('You are both approvers — check the re-confirmation box to fulfill the second approval.');
+        setMsg(
+          'You are both approvers — check the re-confirmation box to fulfill the second approval.',
+        );
         return;
       }
       setBusy(true);
@@ -1101,11 +1190,17 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
           }),
         });
         const body = await res.json().catch(() => ({}));
-        if (res.status === 409 && body.alreadyDecided) setMsg(`This request was ${body.error}. Refreshing.`);
+        if (res.status === 409 && body.alreadyDecided)
+          setMsg(`This request was ${body.error}. Refreshing.`);
         else if (!res.ok) setMsg(body.error ?? `second approval failed (${res.status})`);
         else if (decision === 'approved')
-          setMsg('Second approval confirmed — the invoice is APPROVED and the decision was emailed to accounting.');
-        else setMsg('First approval OVERRIDDEN — the invoice is REJECTED; the first approver was CC’d on the rejection.');
+          setMsg(
+            'Second approval confirmed — the invoice is APPROVED and the decision was emailed to accounting.',
+          );
+        else
+          setMsg(
+            'First approval OVERRIDDEN — the invoice is REJECTED; the first approver was CC’d on the rejection.',
+          );
       } catch (e) {
         setMsg(e instanceof Error ? e.message : 'second approval failed');
       } finally {
@@ -1123,7 +1218,9 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
         {detail.firstApproverName && (
           <span className="opacity-90"> · first-approved by {detail.firstApproverName}</span>
         )}
-        {detail.firstApprovedAt && <span className="opacity-70"> · {fmt(detail.firstApprovedAt)}</span>}
+        {detail.firstApprovedAt && (
+          <span className="opacity-70"> · {fmt(detail.firstApprovedAt)}</span>
+        )}
       </div>
 
       {/* First approver's decision facts — read-only context for the second approver. */}
@@ -1131,16 +1228,32 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
         <h3 className="text-sm font-semibold opacity-90">First approver’s decision</h3>
         <ul className="mt-1 space-y-0.5 opacity-90">
           {detail.vendorFreeform && <li>Vendor: {detail.vendorFreeform}</li>}
-          {detail.confirmedAmountCents !== null && <li>Amount: {dollars(detail.confirmedAmountCents)}</li>}
-          {detail.explanation && <li>Explanation: {detail.explanation}</li>}
-          {detail.equipmentLinks.length > 0 && (
-            <li>
-              Equipment:{' '}
-              {detail.equipmentLinks.some((l) => l.isNotEquipmentRelated)
-                ? 'Not equipment-related'
-                : detail.equipmentLinks.map((l) => l.displayName ?? '(unknown)').join(', ')}
-            </li>
+          {detail.confirmedAmountCents !== null && (
+            <li>Amount: {dollars(detail.confirmedAmountCents)}</li>
           )}
+          {detail.explanation && <li>Explanation: {detail.explanation}</li>}
+          {detail.equipmentLinks.length > 0 &&
+            (() => {
+              // Amendment 9 — three dispositions, exactly one of which is set.
+              const hatch = detail.equipmentLinks.find((l) => l.equipmentRequest);
+              if (hatch?.equipmentRequest) {
+                return (
+                  <li>
+                    Equipment: described (not in the fleet list) — “
+                    {hatch.equipmentRequest.description}”
+                    <span className="opacity-70"> · request {hatch.equipmentRequest.status}</span>
+                  </li>
+                );
+              }
+              return (
+                <li>
+                  Equipment:{' '}
+                  {detail.equipmentLinks.some((l) => l.isNotEquipmentRelated)
+                    ? 'Not equipment-related'
+                    : detail.equipmentLinks.map((l) => l.displayName ?? '(unknown)').join(', ')}
+                </li>
+              );
+            })()}
           {detail.varianceFlagState === 'acknowledged' && (
             <li className="text-amber-200">
               ⚠ Variance acknowledged
@@ -1191,7 +1304,9 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
             <button
               onClick={() => submit('approved')}
               disabled={busy || gated}
-              title={gated ? 'Re-confirm and wait out the 30-second pause to self-fulfill' : undefined}
+              title={
+                gated ? 'Re-confirm and wait out the 30-second pause to self-fulfill' : undefined
+              }
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
               Confirm second approval
@@ -1235,8 +1350,7 @@ const isIosWebkit = (): boolean => {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
   return (
-    /iP(hone|od|ad)/.test(ua) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    /iP(hone|od|ad)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   );
 };
 

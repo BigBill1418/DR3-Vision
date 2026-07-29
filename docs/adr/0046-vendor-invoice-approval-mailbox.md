@@ -1150,3 +1150,173 @@ directly in tests.
   used instead.
 - **The authorization RULE is unchanged.** Admin-eligibility was always correct;
   only routing and notification moved.
+
+---
+
+## Amendment 9 — the equipment ESCAPE HATCH (2026-07-29, PR #179 Phase 2 §2)
+
+Amendment 5 (D-M5-6) made equipment linkage **required** to approve. Amendment 7
+opened the picker to the whole fleet. Neither helps the approver holding an
+invoice for an asset the registry does not carry — and per **C-28** that is not a
+corner case: the ADR-0062 seed is a coarse jurisdiction mapping of an SVdP machine
+list with **no "DR3 Eugene" facility at all**.
+
+Their only two options were both lies:
+
+1. pick a wrong-but-plausible asset, or
+2. tick "Not equipment-related".
+
+Either way the invoice is filed against the wrong thing, and **nothing records
+that the registry is incomplete**. The mis-filing is invisible; the gap never gets
+fixed; the next approver does the same thing.
+
+### Decision
+
+A **third, equally explicit disposition** on the Approve panel — _"Equipment not
+in list — describe it"_ — three-way mutually exclusive with the multi-select and
+"Not equipment-related". Choosing it reveals a **REQUIRED** free-text field:
+
+> _"Describe the equipment as specifically as you can — type, make/model if known,
+> unit number or the nickname the crew uses, and which site it lives at. Morena and
+> Rick will add it to the fleet properly."_
+
+**This is not a bypass, and the design is deliberate about that.** The hatch costs
+_more_ than the two lies it replaces, not less: a mandatory description, a tracked
+`ap_equipment_requests` row written **in the same transaction as the decision**, an
+email to the people who maintain the fleet, and an open worklist item with a named
+owner until somebody resolves or rejects it. Every other Amendment 5 requirement
+(vendor, explanation, confirmed amount, variance acknowledgment) still applies —
+the hatch waives nothing.
+
+### Schema (§2.3)
+
+`ap_equipment_requests` (`id`, `ap_request_id`→`ap_requests`, `site_id`,
+`description NOT NULL`, `requested_by`, `requested_at`, `status
+open|resolved|rejected`, `resolved_equipment_id`→`equipment`, `resolved_by`,
+`resolved_at`, `resolution_note`), plus `ap_equipment_links.equipment_request_id`.
+
+Two CHECK constraints, both in the database rather than in app code alone:
+
+- **`ap_equipment_links_exactly_one_disposition`** — exactly one of `equipment_id`
+  / `is_not_equipment_related` / `equipment_request_id` per row. Before this, that
+  invariant was app-enforced (schema.prisma said so in as many words). A **third**
+  option is precisely the change that outgrows a pairwise app check somebody
+  forgets to widen, so the invariant moved down a layer. Note
+  `is_not_equipment_related` is `BOOLEAN NOT NULL DEFAULT false`, so its "set" test
+  is `= true`; an `IS NOT NULL` test would make the whole constraint vacuous.
+- **`ap_equipment_requests_terminal_state_evidence`** — `resolved` must name the
+  asset it produced; `rejected` must carry a non-blank note; `open` carries neither.
+
+**Verification (the house standard, and it earned its keep):** the migration was
+replayed against **live production** inside `BEGIN; … ROLLBACK;`. All 17
+pre-existing `ap_equipment_links` rows satisfy the new CHECK (2 `equipment_id`, 15
+`is_not_equipment_related`, 0 violating). Four negative cases — no disposition, two
+dispositions, resolved-without-asset, rejected-with-blank-note — were each rejected
+by Postgres, and the full happy path including the backfill was exercised and
+rolled back. `src/lib/ap/equipment-escape-hatch-migration.test.ts` is the CI guard
+that the constraints stay in the file, since CI does not run migrations.
+
+All ids are `TEXT` per the repo rule (a `uuid` column passes CI and fails on
+deploy, taking the app down).
+
+### Notification (§2.4)
+
+Its own rollout surface, **`ap_equipment_request`**, per-site, born `pilot` — not a
+rider on `ap_notify`. The audience is different (site managers, not the approver
+roster) and Bill must be able to ramp this to Morena and Rick without also ramping
+the AP queue's new-invoice broadcast.
+
+**EMAIL ONLY. No ntfy.** Hard rule #5 reserves push for Bill and system-level
+events; this is a staff workflow item. ADR-0037's gate agrees on every count — a
+registry gap is not actionable in five minutes, is not customer-visible, and the
+invoice it came from is already approved.
+
+**Framing is part of the contract, not decoration.** The approver did the _right_
+thing: they refused to mis-file and told us the registry is incomplete. If the mail
+reads as an error report, the next approver quietly ticks "Not equipment-related"
+and the amendment is dead on arrival. The copy therefore leads with the ask ("add
+this asset to the fleet"), credits the approver by name, states plainly that the
+invoice needs nothing further, and uses no failure vocabulary anywhere.
+
+Recipients resolve from the `can_resolve_equipment_requests` grant **scoped to the
+site**, with admins CC'd — never a hardcoded address list (which breaks the day
+somebody changes jobs) and never `role = 'manager'` at large (which would put a
+Eugene invoice in front of four people who cannot act on it). If a site has no
+granted manager the mail goes **to** the admins rather than resolving to nobody:
+ADR-0066 §B.5 is the record of what a fail-soft send over an empty recipient set
+costs.
+
+### Resolution surface (§2.5) — and the access exception
+
+`/admin/ap/equipment-requests`, also linked from `/admin/equipment`. Open requests
+show the description, requester, invoice context, and **age in PACIFIC calendar
+days** (ADR-0065 helpers — the container runs UTC, 7–8h ahead, so a naive diff
+reports this afternoon's request as a day old).
+
+- **Resolve** opens the EXISTING ADR-0063 create form, pre-filled from the
+  description, and creates the real asset. The form is reused through an
+  `endpoint`/`extraBody` seam rather than re-implemented — a second copy would fork
+  the validation, the category list, and the site-defaulting rule that ADR-0063 was
+  careful about.
+- **Backfill — the payoff.** On resolution the originating `ap_equipment_links` row
+  is repointed at the new `equipment_id` (default ON), so the historical invoice
+  ends up correctly attributed. Bill: _"any equipment that was entered quickly to
+  be properly formatted in the future."_ Both link columns move together; moving
+  one would trip the CHECK.
+- **Reject** requires a note. **The invoice stays approved** — this is bookkeeping
+  cleanup, never a reversal. The link is deliberately left pointing at the rejected
+  request: clearing it would leave no disposition at all, and flipping it to
+  `is_not_equipment_related` would rewrite what the approver actually said.
+- Create + stamp + backfill run in **one transaction** via a new
+  `createEquipmentInTx()`. Calling `createEquipment()` here would open a second,
+  independent transaction — a later failure would strand an orphan asset and
+  "resolve it again" would then hit the `(site_id, display_name)` unique and be
+  permanently stuck.
+- Nothing is hard-deleted anywhere in this flow.
+
+**ACCESS: admins PLUS site managers.** This is a deliberate, documented exception
+to "`/admin/*` is admin-only", and the reason is the whole point of the feature:
+the people who know whether "the yellow forklift, unit 7" is already on the books
+are the **site managers**, not Bill. Routing every unknown asset through the single
+admin rebuilds exactly the bottleneck the hatch exists to remove, and approvers
+would go back to ticking "Not equipment-related".
+
+It is gated by a narrow `users.can_resolve_equipment_requests` flag in the
+established `can_view_ap_history` / `can_view_billing_verify` shape, and hard rule
+#2's discipline is intact:
+
+- admin **powers** still gate on `role === 'admin'`. This flag unlocks exactly this
+  worklist and its resolve/reject writes and **nothing else** — not `/admin/users`,
+  not `/admin/equipment`'s CRUD screen, not bonus override, no other `/admin` route.
+- read **fresh from Postgres every request**, never carried in the NextAuth JWT.
+- **not** the `ap_approvers` roster. An approver _files_; a site manager _resolves_.
+  Deliberately different sets — the person who could not find the asset is not the
+  person who decides what it is.
+- **site reach still applies.** The worklist is filtered in Postgres, and the API
+  re-derives reach from the ROW (never the payload), so a single-site manager
+  handed an off-site id gets a 403.
+
+Seeded by the migration for **Morena Gomez** and **Janette Tomas** (Woodland) and
+**Rick Albritton** (Eugene), matched on **email, never name** — Bill, Janette and
+Morena each have a second, email-less operator PIN account from the 2026-07-28 iPad
+rollout, and a name-keyed grant lands on the account that can neither reach the
+worklist nor be emailed. Same trap the ADR-0066 seed documented.
+
+### Dashboard (§2.6)
+
+A distinct `Equipment Requests` tile on the ADR-0020 launcher with an open-count
+badge, site-scoped to the caller's reach. Deliberately **not** folded into the AP
+badge: two queues, two owner sets, and merging them would tell an approver they
+have work they cannot do.
+
+### Consequences
+
+- "Not equipment-related" now means what it says. Anything that used it as a
+  workaround has a first-class home, which makes the remaining `not_related` rows
+  trustworthy for the first time.
+- The registry gap becomes **measurable**: the open-request count is a direct read
+  on how incomplete the ADR-0062 seed is at each site, which is the data C-28 has
+  been missing.
+- One more `/admin` surface is reachable by non-admins. Contained by the flag, the
+  per-row reach re-check, and full audit coverage — but it is a real widening and
+  is recorded here rather than buried.

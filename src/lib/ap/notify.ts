@@ -282,6 +282,81 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** USD from cents for the notification body. */
+function dollars(cents: number | null | undefined): string {
+  if (typeof cents !== 'number' || !Number.isFinite(cents)) return '(amount not recorded)';
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+/**
+ * ADR-0046 Amendment 9 (§2.4) — an approver hit the equipment ESCAPE HATCH.
+ *
+ * EMAIL ONLY. No ntfy, deliberately and non-negotiably: CLAUDE.md hard rule #5
+ * reserves push for Bill and SYSTEM-level events, and this is neither — it is a
+ * staff workflow item for the site managers. ADR-0037's gate agrees on every
+ * count: a fleet-registry gap is not actionable in five minutes, not
+ * customer-visible, and the invoice it came from is already approved.
+ *
+ * FRAMING IS PART OF THE CONTRACT. The approver did the RIGHT thing — they
+ * refused to mis-file an invoice against a wrong asset and told us the registry
+ * is incomplete. If this mail reads as an error report, the next approver quietly
+ * ticks "Not equipment-related" instead and the whole amendment is dead. So the
+ * copy leads with the ask ("add this asset to the fleet"), names the approver as
+ * the person who flagged it, and never uses failure vocabulary.
+ *
+ * Its OWN rollout surface (`ap_equipment_request`), per-site, born pilot — so
+ * ramping this to Morena/Rick is independent of the AP queue's new-invoice
+ * broadcast. Per-SITE resolution, not org-wide: a Woodland request is gated on
+ * Woodland's row alone.
+ *
+ * Fail-soft at the caller — the request row is already committed; a mail failure
+ * must never roll back a filed request (it would still be on the worklist).
+ */
+export async function notifyEquipmentRequestCreated(args: {
+  requestId: string;
+  apRequestId: string;
+  description: string;
+  approverName: string | null;
+  vendor: string | null;
+  amountCents: number | null;
+  site: { id: string; code?: string; name?: string };
+  recipients: ReadonlyArray<{ address: string; name: string }>;
+  cc: readonly string[];
+}): Promise<void> {
+  const siteLabel = args.site.name ?? args.site.code ?? 'the site';
+  const who = args.approverName?.trim() || 'An approver';
+  const htmlBody = `<p><b>${escapeHtml(who)}</b> approved a vendor invoice for a piece of equipment that isn’t in the DR3 fleet list yet, and asked for it to be added properly.</p>
+    <p>Here is how they described it:</p>
+    <blockquote style="margin:0 0 12px;padding:10px 14px;border-left:4px solid #00524C;background:#f4f7f2;white-space:pre-wrap">${escapeHtml(
+      args.description,
+    )}</blockquote>
+    <ul>
+      <li>Site: ${escapeHtml(siteLabel)}</li>
+      <li>Vendor: ${escapeHtml(args.vendor?.trim() || '(not recorded)')}</li>
+      <li>Amount: ${escapeHtml(dollars(args.amountCents))}</li>
+      <li>Flagged by: ${escapeHtml(who)}</li>
+    </ul>
+    <p><a href="${equipmentRequestsUrl()}">Open the equipment requests list</a> to add this asset to the fleet. When you do, you can also point the original invoice at the new asset so the history reads correctly.</p>
+    <p style="color:#555">The invoice itself is already approved and needs nothing further — this is only about getting the asset on the books. You can also <a href="${apRequestUrl(
+      args.apRequestId,
+    )}">view the invoice</a> for context.</p>`;
+
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_EQUIPMENT_REQUEST,
+    site: args.site.code ? { id: args.site.id, code: args.site.code } : { id: args.site.id },
+    recipients: args.recipients.map((r) => ({ address: r.address, name: r.name })),
+    subject: `DR3-Vision — new equipment to add to the fleet (${siteLabel})`.slice(0, 200),
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+    ...(args.cc.length > 0 ? { cc: [...args.cc] } : {}),
+  });
+}
+
+/** Tier-1 link to the §2.5 resolution worklist (ADR-0036 click policy). */
+export function equipmentRequestsUrl(): string {
+  return `${baseUrl()}/admin/ap/equipment-requests`;
+}
+
 /**
  * ADR-0066 §B.5 — the routing-misconfiguration alarm.
  *

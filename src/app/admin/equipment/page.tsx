@@ -103,6 +103,19 @@ export default async function AdminEquipmentPage({
               {M.equipment.terexImportLink}
             </Link>
           </p>
+          {/* ADR-0046 Amendment 9 (§2.5) — the sibling worklist. An admin who lands
+              here to add an asset is often here BECAUSE an approver asked for one;
+              the queue of those asks belongs one click away, not only on `/`. */}
+          <p className="text-xs text-dr3-mist-dim">
+            Approvers can flag equipment that isn’t on this list yet.{' '}
+            <Link
+              href="/admin/ap/equipment-requests"
+              className="underline underline-offset-4 hover:text-dr3-cyan"
+              data-testid="admin-equipment-requests-link"
+            >
+              Equipment requests
+            </Link>
+          </p>
         </header>
 
         <Filters

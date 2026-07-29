@@ -1000,6 +1000,7 @@ async function seedRolloutSurfaces(siteIds) {
     'invoice_approval_notify', // ADR-0041 mail path not built yet — registered so it is born gated
     'cor_notify', // ADR-0042 has no mail path today — registered so it is born gated
     'ap_notify',
+    'ap_equipment_request', // ADR-0046 Amendment 9 §2.4 — escape-hatch request → site managers, born pilot
     'board_pack_digest', // ADR-0045 §3 addendum (rollup §1.8) — Bethany's board pack, born pilot
   ];
   const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];

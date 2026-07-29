@@ -434,3 +434,93 @@ export async function checkApHistoryRead(): Promise<ApHistoryResult> {
     throw e;
   }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// AP equipment-request resolution gate (ADR-0046 Amendment 9, §2.5)
+//
+// `/admin/ap/equipment-requests` is a DELIBERATE, documented exception to
+// "/admin/* is admin-only". It is the one `/admin` surface whose whole point is
+// that a NON-admin acts on it: the people who know whether "the yellow forklift
+// unit 7" is already on the books are the SITE MANAGERS, not Bill. Routing every
+// unknown asset through the single admin recreates exactly the bottleneck the
+// escape hatch exists to remove — the requests would queue behind one person and
+// the approvers would go back to ticking "Not equipment-related".
+//
+// It is scoped the same narrow way as `can_view_ap_history` /
+// `can_view_billing_verify`, and the discipline of hard rule #2 is intact:
+//   - admin POWERS still gate on `role === 'admin'` — this flag unlocks exactly
+//     this worklist and its resolve/reject writes, and NOTHING else. It does not
+//     open /admin/users, /admin/equipment's CRUD screen, bonus override, or any
+//     other /admin route.
+//   - it is read FRESH from Postgres on every request, never carried in the JWT.
+//   - it is NOT the `ap_approvers` roster. An approver FILES a request; a site
+//     manager RESOLVES it. Deliberately different sets — the person who could not
+//     find the asset is not the person who decides what it is.
+//   - SITE REACH still applies (hard rule #2's cross-site clause): the context
+//     carries the caller's reach so the page and the writes scope to it. A
+//     single-site manager sees and resolves only their own site's requests; admins
+//     and `all_sites` managers see both.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface EquipmentRequestContext {
+  userId: string;
+  /** How access was granted — for the log line. */
+  via: 'admin' | 'can_resolve_equipment_requests';
+  /** Cross-site reach (admin, or manager with all_sites — ADR-0024). */
+  allSites: boolean;
+  /** The manager's primary site id when reach is single-site; null for admin. */
+  primarySiteId: string | null;
+}
+
+/** Gate for /admin/ap/equipment-requests + its API. no session → 401; ungranted → 403. */
+export async function requireEquipmentRequestAccess(): Promise<EquipmentRequestContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  if (session.user.role === 'admin') {
+    return { userId: session.user.id, via: 'admin', allSites: true, primarySiteId: null };
+  }
+  if (session.user.role === 'manager') {
+    const u = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { can_resolve_equipment_requests: true, all_sites: true, primary_site_id: true },
+    });
+    if (u?.can_resolve_equipment_requests) {
+      return {
+        userId: session.user.id,
+        via: 'can_resolve_equipment_requests',
+        allSites: u.all_sites,
+        primarySiteId: u.primary_site_id,
+      };
+    }
+  }
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type EquipmentRequestResult =
+  | { ok: true; ctx: EquipmentRequestContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkEquipmentRequestAccess(): Promise<EquipmentRequestResult> {
+  try {
+    return { ok: true, ctx: await requireEquipmentRequestAccess() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}
+
+/**
+ * The site-id filter implied by a caller's reach, for
+ * `listEquipmentRequests({ siteIds })`.
+ *
+ * `undefined` = every site. A single-site manager with a null `primary_site_id`
+ * (California-ops shape) gets an EMPTY array — no reach, no rows — rather than
+ * `undefined`, because defaulting a reach-less caller to "all sites" is precisely
+ * the direction that leaks across the Eugene/Woodland boundary.
+ */
+export function siteScopeFor(ctx: EquipmentRequestContext): string[] | undefined {
+  if (ctx.allSites) return undefined;
+  return ctx.primarySiteId ? [ctx.primarySiteId] : [];
+}

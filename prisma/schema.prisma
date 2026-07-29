@@ -244,6 +244,23 @@ model User {
   // grant vehicle for non-admin second approvers.
   can_view_ap_history     Boolean @default(false)
 
+  // ADR-0046 Amendment 9 (§2.5) — SITE-MANAGER access to the AP equipment-request
+  // resolution worklist (`/admin/ap/equipment-requests`) and its resolve/reject
+  // writes, and membership of the per-site notification roster (§2.4). Admin role
+  // grants it implicitly; this column grants it to the named SITE MANAGERS (Morena
+  // Gomez + Janette Tomas, Woodland; Rick Albritton, Eugene) who are not admins.
+  //
+  // This is a DELIBERATE, narrow exception to "/admin/* is admin-only" — the ADR
+  // records why: the people who know the fleet are the site managers, not Bill, and
+  // routing every unknown asset through the one admin is precisely the friction the
+  // hatch exists to remove. It follows the `can_view_ap_history` /
+  // `can_view_billing_verify` precedent exactly — read FRESH from Postgres on every
+  // request, NEVER carried in the NextAuth JWT, consulted NOWHERE ELSE, and it
+  // grants no admin power (no user management, no bonus override, no other
+  // `/admin/*` surface). It is NOT the `ap_approvers` roster: an approver files the
+  // request, a site manager resolves it, and those are deliberately different sets.
+  can_resolve_equipment_requests Boolean @default(false)
+
   // ADR-0030 — super-admin gate for the Bill-only daily-production-report
   // admin tile (`/admin/production-report`). Distinct from `role = admin`:
   // admin-role Kelsey is NOT super-admin. Promotion is a DB UPDATE, not a UI affordance.
@@ -3715,6 +3732,18 @@ enum EquipmentCategory {
   other
 }
 
+/// ADR-0046 Amendment 9 (§2.3) — lifecycle of an escape-hatch equipment request.
+/// `open`: filed by an approver, waiting on a site manager. `resolved`: a real
+/// `equipment` row now exists (`resolved_equipment_id`) and the request is closed.
+/// `rejected`: a site manager determined it was genuinely not equipment; a
+/// `resolution_note` is REQUIRED. NEITHER terminal state ever alters the invoice's
+/// approved decision — this lifecycle is bookkeeping cleanup, never a reversal.
+enum ApEquipmentRequestStatus {
+  open
+  resolved
+  rejected
+}
+
 /// The Graph attachment taxonomy (C10.3). `file` = a downloaded fileAttachment (or
 /// an unwrapped one-level itemAttachment file) stored in R2; `nested_message` = an
 /// itemAttachment forwarded message (subject/marker recorded; deeper nesting kept
@@ -3869,6 +3898,9 @@ model ApRequest {
   // D-M5-6 — equipment/vehicle links selected at Approve time (distinct row per
   // equipment; a single is_not_equipment_related row for the explicit-none case).
   equipment_links ApEquipmentLink[]
+  // Amendment 9 (§2.3) — escape-hatch requests filed from this decision (at most
+  // one in practice: the hatch is a single free-text choice per decision).
+  equipment_requests ApEquipmentRequest[]
 
   @@index([status, received_at])
   @@index([conversation_id])
@@ -4091,6 +4123,11 @@ model Equipment {
 
   links ApEquipmentLink[]
 
+  /// ADR-0046 Amendment 9 (§2.5) — the escape-hatch requests this asset RESOLVED.
+  /// A proper relation (not a bare FK) because both models live wholly inside this
+  /// self-contained block, same as `links` above.
+  resolved_equipment_requests ApEquipmentRequest[]
+
   /// ADR-0063 D3 — `(site_id, display_name)` is the natural key. It is what
   /// `scripts/seed-equipment-master.mjs` (ADR-0062) keys its idempotency on, and
   /// what keeps two indistinguishable options out of the AP approver's picker.
@@ -4107,18 +4144,75 @@ model Equipment {
 /// `is_not_equipment_related=true` (and `equipment_id` null) records the explicit
 /// "Not equipment-related" choice — mutually exclusive with real equipment picks
 /// (app-enforced). At least one row is required to Approve.
+///
+/// ADR-0046 Amendment 9 (§2.2/§2.3) — a THIRD, equally explicit disposition:
+/// `equipment_request_id` points at the free-text escape-hatch request the approver
+/// filed because the asset was not in the picker. EXACTLY ONE of the three is set
+/// per row (`equipment_id` NOT NULL · `is_not_equipment_related` true ·
+/// `equipment_request_id` NOT NULL) — enforced by a CHECK constraint in migration
+/// `20260815_adr0046_a9_ap_equipment_escape_hatch`, not by app code alone. On
+/// resolution the request row's `resolved_equipment_id` may be BACKFILLED onto this
+/// row (`equipment_id` set, `equipment_request_id` cleared) so the historical
+/// invoice ends up correctly attributed.
 model ApEquipmentLink {
-  id                       String     @id @default(uuid())
+  id                       String              @id @default(uuid())
   request_id               String
-  request                  ApRequest  @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  request                  ApRequest           @relation(fields: [request_id], references: [id], onDelete: Cascade)
   equipment_id             String? // FK → equipment.id; null when is_not_equipment_related
-  equipment                Equipment? @relation(fields: [equipment_id], references: [id], onDelete: Restrict)
-  is_not_equipment_related Boolean    @default(false)
-  created_at               DateTime   @default(now())
+  equipment                Equipment?          @relation(fields: [equipment_id], references: [id], onDelete: Restrict)
+  is_not_equipment_related Boolean             @default(false)
+  equipment_request_id     String? // FK → ap_equipment_requests.id (Amendment 9)
+  equipment_request        ApEquipmentRequest? @relation(fields: [equipment_request_id], references: [id], onDelete: Restrict)
+  created_at               DateTime            @default(now())
 
   @@index([request_id])
   @@index([equipment_id])
+  @@index([equipment_request_id])
   @@map("ap_equipment_links")
+}
+
+/// ADR-0046 Amendment 9 (§2.3) — the AP equipment ESCAPE HATCH request.
+///
+/// WHY IT EXISTS: before Amendment 9 an approver facing an asset the registry did
+/// not carry had exactly two lies available — pick the wrong asset, or claim "not
+/// equipment-related". Both file the invoice against the wrong thing and leave no
+/// trace that the fleet registry is incomplete. This table is the honest third
+/// answer: a REQUIRED free-text description that both unblocks the approval AND
+/// creates a tracked request for the site managers to add the asset properly.
+///
+/// It is NOT a bypass. `description` is NOT NULL, the row is always created inside
+/// the SAME transaction as the decision it belongs to, and it stays `open` on a
+/// worklist until a site manager either RESOLVES it (creating the real `equipment`
+/// row and, optionally, repointing the original `ap_equipment_links` row at it —
+/// the backfill that makes the historical invoice correct) or REJECTS it with a
+/// note. Neither outcome ever touches the invoice's approved state: this is
+/// bookkeeping cleanup, never a reversal.
+model ApEquipmentRequest {
+  id            String                   @id @default(uuid())
+  ap_request_id String
+  ap_request    ApRequest                @relation(fields: [ap_request_id], references: [id], onDelete: Cascade)
+  /// The site the decision was filed against. Bare FK → sites.id (constraint in the
+  /// migration). NOT NULL: the hatch is reachable only from a structured real-site
+  /// Approve, where the site tag is already required.
+  site_id       String
+  description   String
+  requested_by  String // bare FK → users.id (the approver who filed it)
+  requested_at  DateTime                 @default(now())
+  status        ApEquipmentRequestStatus @default(open)
+
+  resolved_equipment_id String? // FK → equipment.id, set on resolve
+  resolved_equipment    Equipment? @relation(fields: [resolved_equipment_id], references: [id], onDelete: Restrict)
+  resolved_by           String? // bare FK → users.id
+  resolved_at           DateTime?
+  /// REQUIRED to reject (a rejection must say why); optional on resolve.
+  resolution_note       String?
+
+  links ApEquipmentLink[]
+
+  @@index([status])
+  @@index([site_id, status])
+  @@index([ap_request_id])
+  @@map("ap_equipment_requests")
 }
 
 /// ADR-0046 Amendment 5 (D-M5-3) — the $1,000 second-approval roster, keyed by
