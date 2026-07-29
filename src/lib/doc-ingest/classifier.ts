@@ -282,15 +282,42 @@ function userPrompt(input: ClassifierInput): string {
     `Filename: ${input.filename}\n` +
     `Folder path: ${input.pathHint ?? '(none)'}\n` +
     `Content type: ${input.contentType ?? '(unknown)'}\n` +
-    `Sheets: ${input.summary?.sheets.map((s) => s.name).join(', ') || '(none)'}\n` +
+    contentBlock(input)
+  );
+}
+
+/**
+ * Render the parsed content — and, when there is none, say so in terms that
+ * cannot be mistaken for "the document is empty".
+ *
+ * `Sheets: (none) / Row count: 0` reads identically whether the workbook was
+ * read and found blank or was never read at all. On 2026-07-29 the sweep handed
+ * this function a null summary for a file it had not fetched yet; the model
+ * answered, accurately for its input, "the workbook is completely empty" — about
+ * a workbook holding 40 sheets and 2,117 rows. The model was not wrong. The
+ * input was a lie. Absence of evidence is rendered as absence of evidence.
+ */
+function contentBlock(input: ClassifierInput): string {
+  if (!input.summary) {
+    return (
+      'Parsed content: NOT AVAILABLE.\n' +
+      'This document has not been read — it has not been downloaded yet, or its format could not be ' +
+      'parsed. This does NOT mean the document is empty, and you must not say or imply that it is. ' +
+      'Classify from the filename, folder path and content type alone, and lower your confidence to ' +
+      'reflect that you have not seen the contents.'
+    );
+  }
+  return (
+    'Parsed content: AVAILABLE (the figures below are what the document actually contains).\n' +
+    `Sheets: ${input.summary.sheets.map((s) => s.name).join(', ') || '(the file has no sheets)'}\n` +
     `Column headers: ${
-      input.summary?.sheets
+      input.summary.sheets
         .flatMap((s) => s.headers)
         .slice(0, 80)
-        .join(' | ') || '(none)'
+        .join(' | ') || '(no column headers found)'
     }\n` +
-    `Row count: ${input.summary?.totalRows ?? 0}\n\n` +
-    `Content sample:\n${(input.summary?.textSample ?? '').slice(0, 4000)}`
+    `Row count: ${input.summary.totalRows}\n\n` +
+    `Content sample:\n${input.summary.textSample.slice(0, 4000)}`
   );
 }
 

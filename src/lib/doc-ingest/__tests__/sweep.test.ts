@@ -311,9 +311,7 @@ describe('a NEWLY DISCOVERED source is classified from real content, not from no
     expect(source).toBeDefined();
     // The source was ingested and a version recorded — the precondition the
     // classifier depends on.
-    const versions = prisma._stores.versions.filter(
-      (v: { doc_source_id: string }) => v.doc_source_id === source!.id,
-    );
+    const versions = prisma._stores.versions.filter((v) => v['doc_source_id'] === source!['id']);
     expect(versions.length).toBeGreaterThan(0);
     expect(versions[0]).toHaveProperty('parse_summary');
   });

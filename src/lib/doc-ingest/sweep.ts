@@ -149,45 +149,33 @@ export async function runDocIngestSweep(
 
     for (const source of sources) {
       try {
-        // Classify BEFORE ingesting: the guardrail's condition 4 ("no longer
-        // parses as its registered classification") needs a registered
-        // classification to compare against, and an unconfirmed source is
-        // observed and archived but never applied.
+        // INGEST FIRST, then classify. (Fixed 2026-07-29; ADR-0067 Amendment 4.)
         //
-        // ⚠ BUT that only works when a version ALREADY EXISTS.
-        // `classifySourceIfNeeded` classifies from the latest
-        // `doc_source_version.parse_summary`. A NEWLY DISCOVERED source has no
-        // version yet, so the classifier was handed `summary: null` and could
-        // only answer `unknown`.
+        // The superseded order classified first, justified by the guardrail's
+        // condition 4 — "the document no longer parses as its REGISTERED
+        // classification". That justification was wrong on its own terms:
+        // `classifySourceIfNeeded` only ever writes `proposed_*`, and the
+        // guardrail reads `source.doc_class` (ingest.ts:217), which only Bill's
+        // confirmation can set. Classifying first bought nothing it claimed to.
         //
-        // Observed live 2026-07-29 on the first real document: TEREX.xlsx was
-        // proposed `unknown` (confidence 0.1) with the reasoning "the workbook
-        // is completely empty — no sheets, no column headers, no row data, and
-        // no content sample" — while the stored `parse_summary` for that very
-        // file showed **40 sheets and 2,117 rows**. The classifier was not
-        // wrong; it accurately described the empty input it was given. A model
-        // asked to judge nothing will confidently describe nothing, which is
-        // why this read as a parser failure and was not one.
+        // What it cost was real. `classifySourceIfNeeded` classifies from the
+        // latest `doc_source_version.parse_summary`, and `ingestSource` is what
+        // CREATES that version — so on a source's first sweep the classifier was
+        // handed `summary: null`. Live, on the first real document: TEREX.xlsx
+        // was proposed `unknown` (confidence 0.1) with the reasoning "the
+        // workbook is completely empty — no sheets, no column headers, no row
+        // data, and no content sample", while the stored `parse_summary` for
+        // that same file recorded 40 sheets and 2,117 rows. The classifier was
+        // not wrong; it accurately described the empty input it was given. A
+        // model asked to judge nothing will confidently describe nothing, and it
+        // reads as a parser failure when it is a plumbing failure.
         //
-        // So: classify first only when there is something to classify FROM, and
-        // (re)attempt once the first version lands. Ordering is otherwise
-        // unchanged, so the guardrail rationale above still holds for every
-        // source after its first sweep.
-        const hadVersion =
-          (await prisma.docSourceVersion.count({ where: { doc_source_id: source.id } })) > 0;
-        if (hadVersion) {
-          await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
-        }
-
+        // `classifySourceIfNeeded` now also refuses a file with no version of
+        // its own, so this ordering is belt-and-braces rather than the only
+        // guard.
         const ingested = await ingestSource(prisma, graph, source, { now });
+        await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
 
-        // First version for this source just landed — classify now that there
-        // is real content. Bounded: this runs only on a source's FIRST
-        // successful ingest, never on subsequent sweeps, so it costs one extra
-        // classifier call per document ever, not per sweep.
-        if (!hadVersion && (ingested.outcome === 'applied' || ingested.outcome === 'staged')) {
-          await classifySourceIfNeeded(prisma, source, options.classifyDeps ?? {}, now);
-        }
         result.anomaliesRaised += ingested.anomaliesRaised;
         if (ingested.outcome === 'applied') {
           result.versionsCreated += 1;

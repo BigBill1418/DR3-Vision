@@ -41,8 +41,33 @@ export async function classifySourceIfNeeded(
   const latest = await prisma.docSourceVersion.findFirst({
     where: { doc_source_id: source.id },
     orderBy: { observed_at: 'desc' },
-    select: { parse_summary: true },
+    select: { parse_summary: true, observed_at: true },
   });
+
+  // ── Refuse to classify from nothing (2026-07-29 regression) ───────────────
+  // A `file` source with NO version row has not been fetched yet — the sweep
+  // creates the version, and it used to run AFTER this call. Classifying here
+  // asks the model to judge a document it has not been shown, and a model asked
+  // to judge nothing answers confidently about nothing: TEREX.xlsx came back
+  // `unknown` (0.1) with "the workbook is completely empty" while its own stored
+  // summary recorded 40 sheets and 2,117 rows. Defer instead — the sweep
+  // re-attempts immediately after ingest.
+  //
+  // A FOLDER never has a version row and is classified from its name alone, so
+  // the guard is scoped to files.
+  if (source.kind === 'file' && latest === null) return false;
+
+  // ── Do not re-ask a settled question every 15 minutes ─────────────────────
+  // Without this, every unconfirmed source burns one Claude call per sweep
+  // (~96/day each) and silently overwrites its own proposal with a fresh guess.
+  // A proposal is stale only when NEW CONTENT has landed since it was made.
+  if (
+    source.proposed_class !== null &&
+    source.classification_attempted_at !== null &&
+    (latest === null || latest.observed_at <= source.classification_attempted_at)
+  ) {
+    return false;
+  }
 
   const { classification, error } = await classifyDocument(
     {
@@ -112,6 +137,20 @@ export async function classifySourceIfNeeded(
       context: { confidence: classification.confidence },
       now,
     });
+  } else {
+    // A later pass landed a real kind. The open `unclassified` anomaly is now a
+    // false statement about a document the system HAS classified, and nothing
+    // else resolves it — `confirmClassification` only runs when Bill confirms,
+    // which he will not do while the surface tells him the file is empty. Two
+    // surfaces disagreeing about the same document is the failure mode; close
+    // the stale one here.
+    await resolveAnomaly(
+      prisma,
+      'unclassified',
+      subject,
+      `Re-classified as ${classification.kind} (confidence ${classification.confidence.toFixed(2)}) once the parsed content was available.`,
+      now,
+    );
   }
 
   return true;

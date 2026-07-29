@@ -15,9 +15,10 @@ import {
   mintClientState,
   recordNotificationDelivery,
   verifyNotification,
+  subscriptionRetryDelayMs,
   SUBSCRIPTION_SCOPE_NOTE,
 } from '../subscriptions';
-import type { DocIngestGraph } from '../graph';
+import { DocIngestAccessDeniedError, type DocIngestGraph } from '../graph';
 import {
   makeFakePrisma,
   resetFakeIds,
@@ -207,7 +208,16 @@ describe('ensureSubscriptions', () => {
     expect(String(anomaly?.['detail'])).toContain('sweep');
   });
 
-  it('explains a 403 as the EXPECTED consequence of read-only consent, not a bug', async () => {
+  it('explains a 403 as a STRUCTURAL limit — and never as a permission to grant', async () => {
+    // CORRECTED 2026-07-29. This test previously asserted the note told Bill that
+    // granting Files.ReadWrite.All would buy back push latency, and that the
+    // choice was "a decision for Bill". Both were false: Microsoft documents
+    // delegated **Files.Read.All** for driveItem subscriptions on OneDrive for
+    // Business — which Vision already holds — and states that subscriptions do
+    // not accept write permissions where read permissions suffice. The blocker is
+    // the RESOURCE (root-folder-only, never an individual file), so no grant
+    // fixes it. A test that pins a wrong recommendation in place is worse than no
+    // test: it makes the wrong answer look load-bearing.
     await seedWatchedSource();
     const graph = makeGraph({
       createSubscription: async () => {
@@ -219,11 +229,84 @@ describe('ensureSubscriptions', () => {
 
     const anomaly = prisma._stores.anomalies.find((a) => a['kind'] === 'subscription_renew_failed');
     expect(anomaly).toBeDefined();
-    // Microsoft requires delegated Files.ReadWrite.All to create a driveItem
-    // subscription; this integration deliberately holds Files.Read.All. Saying so
-    // stops an operator hunting a misconfiguration that does not exist.
-    expect(String(anomaly?.['detail'])).toContain('Files.ReadWrite.All');
-    expect(SUBSCRIPTION_SCOPE_NOTE).toContain('decision for Bill');
+    expect(anomaly?.['context']).toMatchObject({ scopeRelated: true });
+    expect(String(anomaly?.['detail'])).toContain('STRUCTURAL limit');
+    expect(SUBSCRIPTION_SCOPE_NOTE).toContain('Files.Read.All');
+    expect(SUBSCRIPTION_SCOPE_NOTE).toContain('DRIVE ROOT');
+    // It must actively warn AGAINST the grant it used to recommend.
+    expect(SUBSCRIPTION_SCOPE_NOTE).toContain('Do not grant Files.ReadWrite.All');
+    // And it must not still be telling him this is his call to make.
+    expect(SUBSCRIPTION_SCOPE_NOTE).not.toContain('decision for Bill');
+  });
+
+  it('detects the scope case from the ERROR TYPE, not from its message text', async () => {
+    // The superseded check was `/403|forbidden|accessDenied/i.test(reason)` where
+    // `reason` is `DocIngestAccessDeniedError.message` — "access denied for POST
+    // /subscriptions". No status code, no "forbidden", and `accessDenied` ≠
+    // `access denied`. It could never match the one error it was written for.
+    await seedWatchedSource();
+    const graph = makeGraph({
+      createSubscription: async () => {
+        throw new DocIngestAccessDeniedError('POST /subscriptions');
+      },
+    });
+
+    await ensureSubscriptions(p(), graph, NOW);
+
+    const anomaly = prisma._stores.anomalies.find((a) => a['kind'] === 'subscription_renew_failed');
+    expect(anomaly?.['context']).toMatchObject({ scopeRelated: true });
+    expect(String(anomaly?.['detail'])).toContain('STRUCTURAL limit');
+  });
+
+  it('keeps ONE subscription row per drive across repeated failures', async () => {
+    // The leak: `findFirst` matched only pending/active, so a `failed` row matched
+    // nothing and every sweep INSERTED another — 96 rows/drive/day, and `sweep.ts`
+    // runs a delta pass per row, so Graph call volume grew with uptime. Found live
+    // with 2 rows for one drive after 2 sweeps.
+    await seedWatchedSource();
+    const graph = makeGraph({
+      createSubscription: async () => {
+        throw new DocIngestAccessDeniedError('POST /subscriptions');
+      },
+    });
+
+    await ensureSubscriptions(p(), graph, NOW);
+    expect(prisma._stores.subscriptions).toHaveLength(1);
+
+    // Far enough past the backoff that the retry is genuinely due.
+    await ensureSubscriptions(p(), graph, new Date(NOW.getTime() + 86_400_000));
+    await ensureSubscriptions(p(), graph, new Date(NOW.getTime() + 2 * 86_400_000));
+    expect(prisma._stores.subscriptions).toHaveLength(1);
+    expect(prisma._stores.subscriptions[0]?.['failure_count']).toBe(3);
+  });
+
+  it('backs off a permanently-refused drive instead of retrying every sweep', async () => {
+    await seedWatchedSource();
+    let attempts = 0;
+    const graph = makeGraph({
+      createSubscription: async () => {
+        attempts += 1;
+        throw new DocIngestAccessDeniedError('POST /subscriptions');
+      },
+    });
+
+    await ensureSubscriptions(p(), graph, NOW);
+    expect(attempts).toBe(1);
+
+    // The next sweep, one interval later, must NOT re-attempt.
+    await ensureSubscriptions(p(), graph, new Date(NOW.getTime() + 60_000));
+    expect(attempts).toBe(1);
+
+    // A day later it does — so the day the share becomes a drive-root grant,
+    // push starts working with no code change and no operator action.
+    await ensureSubscriptions(p(), graph, new Date(NOW.getTime() + 86_400_000));
+    expect(attempts).toBe(2);
+  });
+
+  it('caps the retry backoff at one day', () => {
+    expect(subscriptionRetryDelayMs(1)).toBe(15 * 60_000);
+    expect(subscriptionRetryDelayMs(2)).toBe(30 * 60_000);
+    expect(subscriptionRetryDelayMs(99)).toBe(24 * 60 * 60_000);
   });
 
   it('records a renewal failure without pretending push still works', async () => {

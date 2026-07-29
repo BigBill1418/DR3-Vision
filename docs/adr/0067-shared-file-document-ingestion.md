@@ -199,13 +199,12 @@ Graph change subscriptions, the delta sweep, the document classifier, and the an
 
 **Unverified at time of writing:** nothing in this ADR has executed against the live tenant. The migration is validated against live prod (rolled back); the flow is validated against stubbed Entra/Graph responses. First contact — the real authorize redirect, the real token response body, the real `/me`, the real `/me/drive` — happens when Bill clicks Connect, and remains unproven until then.
 
-
 ---
 
 ## Amendment 1 — 2026-07-29 — the app requires USER ASSIGNMENT (missing from Amendment A)
 
 **Symptom:** Bill clicked **Connect**, signed in as `docs-dr3@svdp.us`, and got
-*"Your Microsoft account isn't authorized for DR3-Vision. Ask an admin to add you."*
+_"Your Microsoft account isn't authorized for DR3-Vision. Ask an admin to add you."_
 
 That string appears **nowhere in this codebase** (grepped). It is **Microsoft's**
 rejection page, which names the application — so it reads as though Vision
@@ -214,8 +213,8 @@ reached.
 
 **Cause, verified live via Graph:** the DR3-Vision service principal
 (`76787659-f9a8-4f48-96c3-d0d77d2719fe`) has **`appRoleAssignmentRequired: true`**,
-and only two principals are assigned — the user *Bill Barnard* and the group
-*DR3-Vision Admin Access*. `docs-dr3@svdp.us` is not among them, so Entra
+and only two principals are assigned — the user _Bill Barnard_ and the group
+_DR3-Vision Admin Access_. `docs-dr3@svdp.us` is not among them, so Entra
 refuses it.
 
 **Amendment A did not mention this.** It documented the granted scopes, the
@@ -225,7 +224,7 @@ account, licensing it and consenting the scopes is **necessary but not
 sufficient**.
 
 **Resolution (operator, admin rights required):** assign `docs-dr3@svdp.us`
-directly to the DR3-Vision enterprise application — *not* via the
+directly to the DR3-Vision enterprise application — _not_ via the
 `DR3-Vision Admin Access` group. The group's name implies privileges a service
 account should not have, and the reason for its membership would not survive
 six months of institutional memory. The `AppRoleId` is the all-zero GUID
@@ -237,10 +236,9 @@ box carries 3 application grants and returns `Authorization_RequestDenied` even
 for `GET /users/{upn}` — it cannot write app role assignments.
 
 **Generalisable lesson:** an Entra app registration has two independent gates —
-*can this identity authenticate to the app at all* (assignment) and *what may it
-then do* (scopes/consent). Amendment A exhaustively documented the second and
+_can this identity authenticate to the app at all_ (assignment) and _what may it
+then do_ (scopes/consent). Amendment A exhaustively documented the second and
 silently assumed the first.
-
 
 ---
 
@@ -258,8 +256,8 @@ Live application logs settle it:
 event: entra_signin_denied   email: docs-dr3@svdp.us   reason: "unknown"
 ```
 
-`reason: 'unknown'` is `evaluateEntraSignIn`'s verdict for *no `users` row with
-this email*. So Microsoft authenticated `docs-dr3` **successfully** — Vision's
+`reason: 'unknown'` is `evaluateEntraSignIn`'s verdict for _no `users` row with
+this email_. So Microsoft authenticated `docs-dr3` **successfully** — Vision's
 own SSO gate then refused it, and the message shown is Vision's own
 `auth_login.error_access_denied` string.
 
@@ -268,7 +266,7 @@ consent prompt.** There are two sign-ins in this flow and they are easy to
 conflate:
 
 1. Sign into **Vision** as a real admin (`bill.barnard@svdp.us`).
-2. *Then* click **Connect document service account**, which starts a **separate**
+2. _Then_ click **Connect document service account**, which starts a **separate**
    OAuth authorize flow where the Microsoft prompt takes `docs-dr3@svdp.us`.
 
 Reaching `/admin/doc-ingest/connect` while logged OUT redirects to `/login`, and
@@ -283,8 +281,8 @@ application user.
 
 The message was searched for with `grep -rn … --include=*.ts --include=*.tsx`.
 The string lives in **`src/i18n/locales/en/operator.json`** — a file class the
-filter excluded. The empty result was then reported as *"this string exists
-nowhere in the codebase, therefore it is Microsoft's page"*, and an Entra
+filter excluded. The empty result was then reported as _"this string exists
+nowhere in the codebase, therefore it is Microsoft's page"_, and an Entra
 `appRoleAssignmentRequired` finding (true, but unrelated) was accepted as the
 cause. **An absence of evidence produced by a filtered search is not evidence of
 absence.** i18n'd user-facing copy will essentially never be found by a
@@ -294,7 +292,7 @@ absence.** i18n'd user-facing copy will essentially never be found by a
 
 - The Entra app assignment change is **unnecessary**. `appRoleAssignmentRequired`
   is genuinely `true`, but the account never got far enough for it to matter.
-  Adding `docs-dr3` to *DR3-Vision Admin Access* should be reverted;
+  Adding `docs-dr3` to _DR3-Vision Admin Access_ should be reverted;
   `docs/runbooks/entra-assign-docs-dr3.ps1` has a conditional removal step.
 - **The real fix is documentation, not configuration**: the connect surface must
   make the two-sign-in sequence unmistakable, and the operator instruction must
@@ -529,22 +527,22 @@ exactly what should test that claim.
 
 `GET /me/drive/sharedWithMe` **and** `GET /me/drive/recent` **and** `/insights/shared`
 all carry the same retirement: degraded until **2026-11**, then no data. That is
-the whole *user-relative aggregation* family, which is why Microsoft's own Q&A
+the whole _user-relative aggregation_ family, which is why Microsoft's own Q&A
 answer is that there is **no one-to-one replacement** — the capability is going,
 not the URL.
 
 Worse, the degradation is **already active**: Microsoft applied a mitigation
 reducing the returned set to **1 item**. Independent reports show Graph Explorer
 listing 6 shares while the API returns 1, and `msgraph-sdk-dotnet#3040` is
-labelled *Won't fix* as a server-side limitation.
+labelled _Won't fix_ as a server-side limitation.
 
-*(Documentation ambiguity: a Microsoft moderator states 2027-11 on the
-replacement thread while the API reference says 2026-11. Plan to 2026-11-01.)*
+_(Documentation ambiguity: a Microsoft moderator states 2027-11 on the
+replacement thread while the API reference says 2026-11. Plan to 2026-11-01.)_
 
 ### B. ⚠ §5.1's "no tenant-wide file access" is FALSE for this registration
 
-§5.1 tells the operator to emphasise to IT: *"read-only, and scoped solely to
-what is explicitly shared with the account. **No tenant-wide file access.**"*
+§5.1 tells the operator to emphasise to IT: _"read-only, and scoped solely to
+what is explicitly shared with the account. **No tenant-wide file access.**"_
 
 **That is not true of app registration `2da92424-…`, and was not true when it was
 written.** Decoding a client-credentials token for that app returns:
@@ -558,12 +556,12 @@ signed-in user — was granted 2026-07-09 for the ADR-0049 workbook bridge, whos
 D6 says as much explicitly. ADR-0067 D5 reuses that same registration.
 
 **The IT conversation therefore cannot honestly be framed as avoiding tenant-wide
-access.** It must be framed as *which token each code path uses*. §5.1 is
+access.** It must be framed as _which token each code path uses_. §5.1 is
 corrected by this amendment; do not quote its original wording to anyone.
 
 **Corollary that must not be lost:** `Sites.Selected` buys **zero** isolation on
 this registration. Microsoft is explicit that a broader grant such as
-`Files.Read.All` *overrides* `Sites.Selected` restrictions. Achieving that
+`Files.Read.All` _overrides_ `Sites.Selected` restrictions. Achieving that
 security story requires a **separate app registration**, which contradicts D5.
 Nobody should propose `Sites.Selected` here as a security win.
 
@@ -574,8 +572,8 @@ immutable `(driveId, itemId)` and re-read live each sweep. **Nothing degrades to
 snapshots** except the email path, which is already labelled `ingest_source='email'`.
 
 **The honest re-scope, in one line: _"share it and Vision finds it"_ becomes
-_"share it and register it once."_** Bill's requirement — *"we will just share it
-to the spec address from various users and owners"* — **survives intact for
+_"share it and register it once."_** Bill's requirement — _"we will just share it
+to the spec address from various users and owners"_ — **survives intact for
 staff**: they still just share. The one-time registration lands on Bill or an
 automation, never on the person sharing.
 
@@ -585,14 +583,14 @@ automation, never on the person sharing.
    shortcut is materialized in `docs-dr3`'s own OneDrive; enumeration becomes
    `GET /users/docs-dr3@svdp.us/drive/root/children` filtered on the `remoteItem`
    facet. **This is not a new API — it is the same facet by a different route**
-   (`sharedWithMe` items *always* carried `remoteItem`). The `projectDriveItem`
+   (`sharedWithMe` items _always_ carried `remoteItem`). The `projectDriveItem`
    unwrap, `(drive_id,item_id)` keying, traversal, dedup and reconciliation are
    **unchanged** — precisely the swap the `SharedItemSource` seam exists for.
    Reads use the already-consented delegated `Files.Read.All`; automating
    shortcut creation needs delegated **`Files.ReadWrite`** (the signed-in
    account's OWN drive — **not** `.All`), so D3 survives literally: the write
    creates a pointer in Vision's own service-account drive.
-   *Caveats:* shortcuts are **folder-only**, pushing the product toward "share a
+   _Caveats:_ shortcuts are **folder-only**, pushing the product toward "share a
    folder"; and `onedrive-api-docs#1427` reports shortcuts missing from `/delta`
    on OneDrive for Business — **discover via `/root/children`, not `/delta`**,
    which is what the mandatory sweep already is.
@@ -601,17 +599,17 @@ automation, never on the person sharing.
    path**: resolve once, capture `(driveId,itemId)`, read normally forever after.
    ⚠ **Permission unverified** — the docs table lists `Files.ReadWrite` as
    least-privileged and omits `Files.Read.All`; must be tested live. Note
-   `Prefer: redeemSharingLink` *grants durable access* — treat it as a write.
+   `Prefer: redeemSharingLink` _grants durable access_ — treat it as a write.
 3. **Group / Teams drive delta — the structural fix, and worth putting to Bill.**
    Add `docs-dr3` to specific Teams; enumerate `/me/memberOf` →
    `/groups/{id}/drive/root/delta`. **Discovery is permanently solved**, no
-   deprecated API anywhere in the path, and the blast radius is *legible to IT*
+   deprecated API anywhere in the path, and the blast radius is _legible to IT_
    ("the service account is a member of these three Teams"). Cost: the document
    must live in a Team rather than personal OneDrive.
 4. **Microsoft Search — cross-check only, never enumeration.** Relevance-ranked,
    capped, eventually-consistent, no delta, no completeness guarantee. **A missing
    document would be silent** — the exact failure class this ADR exists to
-   eliminate. Safe only as a reconciliation pass that *raises* an anomaly when it
+   eliminate. Safe only as a reconciliation pass that _raises_ an anomaly when it
    sees a source `doc_sources` doesn't know; it may add suspicion, never remove a
    source. **P1's refusal to ship a speculative Search implementation was correct
    and stands.**
@@ -619,7 +617,7 @@ automation, never on the person sharing.
    OneDrive for Business.
 6. **Dedicated library + `Sites.Selected`** — re-evaluated honestly rather than
    deferred to D1. Still not primary: highest staff behavioural cost ("save your
-   file *here*"), breaks liveness for files that live elsewhere, and per §B above
+   file _here_"), breaks liveness for files that live elsewhere, and per §B above
    buys no isolation on this registration.
 7. **Email ingestion** — snapshot, already labelled, documented degradation path.
 
@@ -644,3 +642,152 @@ and together they convert this amendment from reasoning into measurement.
 - `docs-dr3`'s drive returns **200** (OneDrive provisioned — D10's concern is
   settled). `dr3-vision@svdp.us` returns **404** for its drive, confirming D1's
   reasoning that a shared mailbox has no drive identity.
+
+## Amendment 4 — 2026-07-29 — the first real document, and four defects it exposed
+
+TEREX.xlsx was the first document to pass through the live pipeline. It was
+proposed **`unknown`, confidence 0.1**, with the reasoning _"the workbook is
+completely empty — no sheets, no column headers, no row data, and no content
+sample."_ The stored `parse_summary` for that same file, written 1.5 seconds
+later, recorded **40 sheets and 2,117 data rows**.
+
+Bill read this as a parser bug and asked for the parser to be fixed. It was not a
+parser bug. `parse.ts` needed no change: the file was downloaded whole (490,671
+bytes, sha256 matching Graph's declared size), parsed correctly, and the
+classifier faithfully described the input it was handed. **The input was empty
+because nothing had put anything in it yet.**
+
+### A — Classification ran before the document was fetched
+
+`sweep.ts` called `classifySourceIfNeeded` before `ingestSource`. But
+`ingestSource` is what CREATES the `doc_source_version` row that holds
+`parse_summary`, so on a source's _first_ sweep the classifier received
+`summary: null`.
+
+The justifying comment claimed the ordering served the guardrail's condition 4
+("no longer parses as its registered classification"). That was wrong on its own
+terms: `classifySourceIfNeeded` writes only `proposed_*`, while the guardrail
+reads `source.doc_class` (`ingest.ts:217`), which only Bill's confirmation sets.
+**The ordering bought nothing it claimed to buy, and cost a fabricated verdict on
+every new document.**
+
+Timestamps, from the live database, are unambiguous:
+
+| Row                                           | `created_at` (UTC) |
+| --------------------------------------------- | ------------------ |
+| `doc_sources` (TEREX)                         | 16:14:02.815       |
+| `doc_ingest_anomalies` — "completely empty"   | **16:14:10.310**   |
+| `doc_source_versions` — 40 sheets, 2,117 rows | 16:14:11.817       |
+
+The anomaly asserting emptiness was written **before the parsed content
+existed**.
+
+Fixed three ways, deliberately redundant because this class of defect is silent:
+ingest now runs first; `classifySourceIfNeeded` **refuses** to classify a `file`
+source that has no version row at all (folders, which never have one, are
+unaffected); and the prompt renders the two states distinctly —
+`Parsed content: NOT AVAILABLE` with an explicit instruction not to infer
+emptiness, versus `Parsed content: AVAILABLE`.
+
+**The general lesson, which is the reason this amendment is long:** a model asked
+to judge nothing will confidently describe nothing, and that description is
+indistinguishable from a finding. Rendering "not measured" and "measured as zero"
+through the same template is how absence of evidence becomes evidence of absence
+— the same failure shape as Amendment 2's filtered `grep`, one layer down.
+
+### B — A stale anomaly outlived its own evidence
+
+The second sweep re-classified correctly (`equipment_inventory`, 0.41). Nothing
+resolved the `unclassified` anomaly, because `resolveAnomaly('unclassified', …)`
+was only ever called from `confirmClassification` — which requires Bill to
+confirm, which he will not do while the surface tells him the file is empty. So
+`doc_sources` said `equipment_inventory` while an open anomaly said "completely
+empty": **two operator surfaces disagreeing about the same document.**
+`classifySourceIfNeeded` now resolves the anomaly when a later pass lands a real
+kind.
+
+### C — Re-classification was ungated
+
+`classifySourceIfNeeded` re-ran on every sweep for every unconfirmed source: one
+Claude call per document per 15 minutes (~96/day each), each silently
+overwriting the previous proposal. Now gated — a proposal is stale only when a
+version newer than `classification_attempted_at` has landed.
+
+### D — P2 above is FALSE, and its recommendation was dangerous
+
+**P2 and `SUBSCRIPTION_SCOPE_NOTE` claimed Microsoft requires delegated
+`Files.ReadWrite.All` to create a `driveItem` subscription, and framed granting
+it as a latency-vs-security trade for Bill to decide (C-44). That is wrong.**
+
+[learn.microsoft.com/graph/api/subscription-post-subscriptions](https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions)
+lists, for `driveItem` on OneDrive for Business, delegated **`Files.Read.All`** —
+with no higher-privileged alternative offered — and states: _"Due to security
+restrictions, Microsoft Graph subscriptions don't support write access
+permissions when only read access permissions are needed."_ **We already hold
+exactly the documented permission.** `GET /subscriptions` returns 200, so the
+token is accepted; the 403 is not a blanket scope rejection.
+
+The real blocker is the **resource**. Same page: _"On OneDrive for Business, you
+can subscribe to only the root folder… You can't subscribe to `drive` or
+`driveItem` instances that aren't folders, such as individual files."_ The
+service account reaches these documents through **item-level** shares — it has no
+effective permission on any drive root, and a per-file subscription is not a
+legal target. **There is nothing to subscribe to, at any permission level.**
+
+This was almost worse than a silent failure: a defect that would have
+recommended a permanent, tenant-wide **write** grant to fix something the grant
+could not fix. It survived because two bugs cancelled — the scope-detection
+regex `/403|forbidden|accessDenied/i` was tested against
+`DocIngestAccessDeniedError.message`, which reads `"access denied for POST
+/subscriptions"`: no status code, no "forbidden", and `accessDenied` ≠
+`access denied` (the space defeats it). It could never match the one error it was
+written for, so `scopeRelated` was always `false` and the wrong explanation was
+never actually shown to anyone. Both are fixed: detection is by error **type**,
+and the note now states the structural cause and explicitly warns **against** the
+grant it used to recommend.
+
+**C-44 is closed, not decided.** There is no decision to make. Push notifications
+are unavailable for individually-shared files as a property of Graph, the delta
+sweep is the mechanism rather than a fallback, and D4 holds by construction.
+
+### E — The subscription table leaked a row every sweep
+
+`ensureSubscriptions` looked for an existing row with
+`state IN ('pending','active')`. A `failed` row matched nothing, so
+`createSubscription` **inserted a fresh row** each cycle: 96 rows/drive/day,
+unbounded. Worse, `sweep.ts` selects rows in `('pending','active','failed','expired')`
+for the delta pass, so Graph call volume grew linearly with uptime. Found live
+with 2 rows for one drive after 2 sweeps — of everything in this amendment, the
+only defect that **degrades without bound**.
+
+Now: one row per drive, always. A dead row is retried **into**, on exponential
+backoff from one sweep interval to a day — so a permanent refusal costs one
+Graph call a day instead of 96, and the day the share becomes a drive-root grant
+push starts working with no code change and no operator action. `delta_link` is
+preserved across retries (it is the sweep's cursor and is valid independently of
+push). Orphan cleanup now covers `failed`/`expired` rows too, which previously
+could not be reached at all.
+
+### F — What is NOT fixed here
+
+- **Discovery is still capped.** `sharedWithMe` returns 1 item in this tenant
+  while at least 2 files are genuinely granted to `docs-dr3` (a Graph search
+  surfaced `DR3 Machine List (2).xlsx`, an Outlook-attachment share that
+  `sharedWithMe` does not index). Amendment 3's `remoteItem` shortcut route is
+  measured **NO-GO**: `/me/drive/root/children` returns zero shortcuts, so
+  switching to it would take discovery from 1 source to 0. Bill's constraint —
+  _"I shared files not folders"_ — is the reason. The `/shares` operator
+  registration path is the answer and is being built.
+- **`owner_upn` is NULL on every source.** The `sharedWithMe` `remoteItem` facet
+  carries `shared.sharedBy` but neither `shared.owner` nor `createdBy`, which are
+  the only two fields `projectDriveItem` reads. A direct
+  `GET /drives/{id}/items/{id}` does return the true owner. Until enrichment
+  lands, P8's "owner left the org" inference is **inert** — it buckets by
+  `owner_upn` and skips nulls.
+- **`Sites.Read.All` is broader than this pipeline needs.** The service account
+  can enumerate 11,403 driveItems across 42 SharePoint sites, including
+  `NSStaff` (Night Shelter case-management files). That is materially wider than
+  §5.1's "no tenant-wide access" and wider than Amendment 3's correction. It is
+  not a bug — it is org-wide site membership — but it deserves an explicit
+  decision rather than a default, and it is why Graph search must not become a
+  discovery source (**C-47**).

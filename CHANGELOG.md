@@ -5,6 +5,48 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-29 (first live document exposed five defects — ADR-0067 Amendment 4)
+
+TEREX.xlsx, the first real document through the pipeline, was proposed `unknown` with the
+reasoning _"the workbook is completely empty"_ — about a workbook whose own stored parse
+summary recorded **40 sheets and 2,117 rows**. Reported as a parser bug. It was not one:
+`parse.ts` needed no change and is unmodified.
+
+- **Classification ran before the document was fetched.** `sweep.ts` called
+  `classifySourceIfNeeded` before `ingestSource`, but ingest is what creates the version
+  row holding `parse_summary` — so every brand-new source was classified from `null`. The
+  anomaly asserting emptiness was written **1.5 s before the parsed content existed**. The
+  comment justifying the order was wrong on its own terms (it cited the guardrail, which
+  reads `doc_class`, a column classification never writes). Ingest now runs first;
+  `classifySourceIfNeeded` **refuses** a file with no version at all; and the prompt now
+  renders `NOT AVAILABLE` distinctly from a parsed-but-empty document, with an explicit
+  instruction not to infer emptiness. A model asked to judge nothing will confidently
+  describe nothing, and that reads exactly like a finding.
+- **A stale anomaly outlived its evidence.** The second sweep classified correctly, but
+  nothing closed the `unclassified` anomaly — only Bill's confirmation did, which he would
+  never give while the surface told him the file was empty. Two operator surfaces
+  disagreeing about one document. Now reconciled automatically.
+- **Re-classification is gated on new content.** It re-ran every sweep for every
+  unconfirmed source: ~96 Claude calls/day per document, each silently overwriting the last
+  proposal.
+- **The subscription table leaked a row per sweep, unbounded.** The existing-row lookup
+  matched only `pending`/`active`, so a `failed` row matched nothing and a fresh row was
+  inserted every cycle — 96/drive/day, each one adding a delta pass to the sweep. Now one
+  row per drive, retried **into** on exponential backoff (one sweep interval → one day),
+  preserving `delta_link`. Of everything here this was the only defect that degraded
+  without bound.
+- **The 403 explanation was FALSE and its advice was dangerous.** `SUBSCRIPTION_SCOPE_NOTE`
+  claimed Microsoft requires delegated `Files.ReadWrite.All` for driveItem subscriptions and
+  invited Bill to trade tenant-wide **write** access for lower latency. Microsoft documents
+  **`Files.Read.All`** — which Vision already holds — and explicitly does not accept write
+  permissions where read permissions suffice. The real blocker is the resource: on OneDrive
+  for Business a subscription may only target a **drive root**, never an individual file,
+  and Vision reaches these documents through item-level shares. No grant fixes it. It went
+  unnoticed because the detection regex (`/403|forbidden|accessDenied/i` against a message
+  reading `access denied for POST /subscriptions`) could never match, so the wrong
+  explanation was never shown. Detection is now by error type; the note warns **against**
+  the grant it used to recommend. **C-44 is closed, not decided.**
+
 ### Added — 2026-07-29 (shared-file document ingestion PIPELINE — ADR-0067 §3.2 D4–D8 / §3.4, PR #179 Phase 3)
 
 The foundation (2026-07-29, same ADR) landed the delegated Entra connection and the five

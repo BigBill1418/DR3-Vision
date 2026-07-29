@@ -32,15 +32,41 @@ beforeEach(() => {
   vi.mocked(writeAudit).mockClear();
 });
 
-async function seedSource(over: Record<string, unknown> = {}) {
-  return (await prisma.docSource.create({
+/**
+ * Seed a source AND the version row that carries its parsed content.
+ *
+ * The version is not incidental: as of 2026-07-29 `classifySourceIfNeeded`
+ * refuses to classify a `file` source that has none, because classifying a
+ * document nobody has read yet is what produced "the workbook is completely
+ * empty" about a 40-sheet, 2,117-row workbook. Pass `{ withVersion: false }` to
+ * exercise that guard.
+ */
+async function seedSource(
+  over: Record<string, unknown> = {},
+  opts: { withVersion?: boolean } = {},
+) {
+  const source = (await prisma.docSource.create({
     data: {
       drive_id: 'drive-A',
       item_id: 'item-1',
       display_name: 'JULY 2026 DAILY LOG.xlsm',
+      kind: 'file',
       ...over,
     },
   })) as unknown as Parameters<typeof classifySourceIfNeeded>[1];
+
+  if (opts.withVersion !== false) {
+    await prisma.docSourceVersion.create({
+      data: {
+        doc_source_id: source.id,
+        ctag: 'ctag-1',
+        content_sha256: 'sha-1',
+        observed_at: new Date(NOW.getTime() - 1_000),
+        parse_summary: null,
+      },
+    });
+  }
+  return source;
 }
 
 const openAnomalies = (kind?: string) =>
@@ -108,6 +134,103 @@ describe('classifySourceIfNeeded', () => {
     await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW);
     expect(prisma._stores.sources[0]?.['proposed_site_id']).toBe('site-eugene');
     expect(prisma._stores.sources[0]?.['proposed_period']).toBe('2026-07');
+  });
+
+  // ── REGRESSION 2026-07-29 — classifying a document nobody has read ────────
+  it('REFUSES to classify a file that has not been fetched yet', async () => {
+    // Live symptom: TEREX.xlsx was proposed `unknown` (0.1) with the reasoning
+    // "the workbook is completely empty", while its own stored parse summary
+    // recorded 40 sheets and 2,117 rows. The classifier was handed nothing and
+    // described nothing, faithfully. Deferring is the only honest answer.
+    const source = await seedSource({}, { withVersion: false });
+    const done = await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW);
+
+    expect(done).toBe(false);
+    expect(prisma._stores.sources[0]?.['proposed_class']).toBeNull();
+    expect(prisma._stores.sources[0]?.['classification_attempted_at']).toBeNull();
+    // And it did not invent an anomaly about an emptiness it never observed.
+    expect(openAnomalies('unclassified')).toHaveLength(0);
+  });
+
+  it('still classifies a FOLDER, which never has a version row', async () => {
+    const source = await seedSource(
+      { kind: 'folder', display_name: 'Daily Logs 2026' },
+      { withVersion: false },
+    );
+    const done = await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW);
+    expect(done).toBe(true);
+  });
+
+  it('does not re-ask a settled proposal every sweep', async () => {
+    // ~96 Claude calls/day per unclassified document, each silently overwriting
+    // the last proposal. A proposal goes stale only when new content lands.
+    const source = await seedSource();
+    expect(await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW)).toBe(
+      true,
+    );
+
+    const again = (await prisma.docSource.findUnique({
+      where: { id: source.id },
+    })) as unknown as Parameters<typeof classifySourceIfNeeded>[1];
+    expect(await classifySourceIfNeeded(p(), again, { fallbackEnabled: () => false }, NOW)).toBe(
+      false,
+    );
+  });
+
+  it('DOES re-classify once new content lands', async () => {
+    const source = await seedSource();
+    await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW);
+
+    await prisma.docSourceVersion.create({
+      data: {
+        doc_source_id: source.id,
+        ctag: 'ctag-2',
+        content_sha256: 'sha-2',
+        observed_at: new Date(NOW.getTime() + 60_000),
+        parse_summary: null,
+      },
+    });
+
+    const again = (await prisma.docSource.findUnique({
+      where: { id: source.id },
+    })) as unknown as Parameters<typeof classifySourceIfNeeded>[1];
+    expect(await classifySourceIfNeeded(p(), again, { fallbackEnabled: () => false }, NOW)).toBe(
+      true,
+    );
+  });
+
+  it('RESOLVES a stale `unclassified` anomaly once a real kind is proposed', async () => {
+    // The live failure: the source said `equipment_inventory` while an open
+    // anomaly still asserted the file was empty. Two surfaces disagreeing about
+    // the same document, with nothing to reconcile them — `confirmClassification`
+    // only fires when Bill confirms, which he will not do while the surface tells
+    // him the file is empty.
+    const source = await seedSource({ display_name: 'random notes.txt' });
+    await classifySourceIfNeeded(p(), source, { fallbackEnabled: () => false }, NOW);
+    expect(openAnomalies('unclassified')).toHaveLength(1);
+
+    await prisma.docSource.update({
+      where: { id: source.id },
+      data: { display_name: 'JULY 2026 DAILY LOG.xlsm' },
+    });
+    await prisma.docSourceVersion.create({
+      data: {
+        doc_source_id: source.id,
+        ctag: 'ctag-2',
+        content_sha256: 'sha-2',
+        observed_at: new Date(NOW.getTime() + 60_000),
+        parse_summary: null,
+      },
+    });
+    const again = (await prisma.docSource.findUnique({
+      where: { id: source.id },
+    })) as unknown as Parameters<typeof classifySourceIfNeeded>[1];
+
+    expect(await classifySourceIfNeeded(p(), again, { fallbackEnabled: () => false }, NOW)).toBe(
+      true,
+    );
+    expect(prisma._stores.sources[0]?.['proposed_class']).toBe('daily_log_workbook');
+    expect(openAnomalies('unclassified')).toHaveLength(0);
   });
 });
 
