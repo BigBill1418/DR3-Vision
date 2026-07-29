@@ -74,6 +74,7 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0064   | Always-visible back bar on the manager surfaces (backfilled; partially superseded by 0065)                                                | Accepted (2026-07-27)                                                                           |
 | 0065   | Per-surface iPad rollout gates, current-Pacific-day floor scoping, and two app chromes                                                    | Accepted (2026-07-28)                                                                           |
 | 0066   | AP second-approval routing becomes person-to-person, with per-user notification scoping                                                   | Accepted (2026-07-28)                                                                           |
+| 0067   | Shared-file document ingestion — delegated auth-code + refresh token (Amendment A supersedes §3.5 ROPC framing)                           | Accepted (2026-07-29)                                                                           |
 
 ## How to write a new ADR
 

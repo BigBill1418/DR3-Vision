@@ -186,6 +186,20 @@ services:
       # here to override the code defaults (claude-sonnet-4-6 / 30000ms).
       - path: /home/bbarnard065/.dr3-vision-secrets/anthropic.env
         required: false
+      # ADR-0067 Amendment A §A.7 — document-ingestion TOKEN ENCRYPTION KEY
+      # (DOC_INGEST_TOKEN_KEY), the AES-256-GCM key protecting the delegated
+      # Microsoft refresh/access tokens at rest in Postgres. Dedicated on purpose:
+      # NOT MYMRC_CRED_KEY and NOT NEXTAUTH_SECRET, so a MyMRC-scrape compromise is
+      # not a document-store compromise. The tokens themselves live encrypted in
+      # Postgres — never in a .env — so this stays compatible with the
+      # no-.env-for-account-credentials rule. The service-account PASSWORD is not a
+      # runtime credential and must never appear in this file.
+      #
+      # Mount is OPTIONAL (fail-soft) so an unprovisioned host still boots. That is
+      # the ONLY softness: with the key absent, /admin/doc-ingest/connect returns a
+      # loud 503 and the ingestion worker throws — it never silently no-ops.
+      - path: /home/bbarnard065/.dr3-vision-secrets/doc-ingest.env
+        required: false
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0

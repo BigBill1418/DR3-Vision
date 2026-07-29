@@ -105,6 +105,10 @@ model Site {
   alert_recipients  AlertRecipient[]
   alert_digest_logs AlertDigestLog[]
 
+  // Shared-file document ingestion (ADR-0067). A source with site_id NULL is
+  // UNCLASSIFIED, not cross-site — see DocSource.
+  doc_sources DocSource[]
+
   @@map("sites")
 }
 
@@ -971,9 +975,340 @@ model FileDrop {
   created_at        DateTime       @default(now())
   updated_at        DateTime       @updatedAt
 
+  // ADR-0067 — provenance. Defaults keep every pre-ADR-0067 row correct with no
+  // backfill: they WERE manual uploads. `doc_source_id` is the coarse
+  // "everything that came from this shared document" link; the exact revision
+  // that produced this drop is on DocSourceVersion.file_drop_id.
+  ingest_source DocIngestSource @default(manual)
+  doc_source_id String?
+  doc_source    DocSource?      @relation(fields: [doc_source_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
+  doc_source_versions DocSourceVersion[]
+
   @@index([status, created_at])
   @@index([created_at])
+  @@index([ingest_source, created_at])
+  @@index([doc_source_id])
   @@map("file_drops")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0067 — shared-file document ingestion
+// ────────────────────────────────────────────────────────────────────────
+//
+// Documents STAY where they live in Microsoft, shared to the `docs-dr3@svdp.us`
+// service account; Vision reads the LIVE document. Email forwarding gives a
+// snapshot, file sharing gives current state — that distinction is the whole
+// point, and it is why this model is version-aware rather than drop-shaped.
+//
+// Auth is delegated authorization-code + refresh token (Amendment A, which
+// supersedes §3.5 entirely). NOT ROPC. The service-account password is used
+// once, by a human, in a browser, and never becomes a runtime credential — so
+// there is deliberately no column for it anywhere below.
+
+/// How a captured file entered Vision. `manual` is the pre-ADR-0067 world and
+/// stays the default forever.
+enum DocIngestSource {
+  manual
+  email
+  shared_file
+}
+
+enum DocSourceKind {
+  file
+  folder
+}
+
+/// `access_denied` is deliberately NOT folded into `disappeared`. A revoked
+/// share and a deleted file look identical from a 404 but need different
+/// operator action; collapsing them is how "the document is gone" silently
+/// becomes "nobody noticed the share lapsed".
+enum DocSourceState {
+  active
+  disappeared
+  access_denied
+}
+
+enum DocIngestSubscriptionState {
+  pending
+  active
+  expired
+  failed
+  revoked
+}
+
+enum DocIngestAnomalyKind {
+  access_denied
+  source_disappeared
+  subscription_expired
+  subscription_renew_failed
+  delta_token_invalid
+  download_failed
+  checksum_mismatch
+  oversize
+  unclassified
+  reauth_required
+}
+
+enum DocIngestAnomalySeverity {
+  info
+  warning
+  critical
+}
+
+enum DocIngestAnomalyStatus {
+  open
+  acknowledged
+  resolved
+}
+
+/// Two states, deliberately. There is no `degraded`: ingestion halts LOUDLY
+/// rather than degrading quietly (Amendment A §A.6), so the only alternative to
+/// `connected` is "a human must sign in again".
+enum DocIngestConnectionState {
+  connected
+  reauth_required
+}
+
+/// The delegated Entra connection (Amendment A §A.7). Singleton row, same
+/// AES-256-GCM-at-rest shape as MymrcAdminCredential (ADR-0057 D1/D9) with a
+/// DEDICATED key from ~/.dr3-vision-secrets/ — never a `.env` credential.
+/// tenant_id / client_id / account_upn / account_object_id are NOT secrets
+/// (§A.1) and may appear in config, logs and API responses; the tokens are, and
+/// the status read path never SELECTs them.
+model DocIngestConnection {
+  id String @id @default("singleton")
+
+  tenant_id         String
+  client_id         String
+  account_upn       String // asserted == docs-dr3@svdp.us before any token is persisted
+  account_object_id String?
+
+  // The only durable credential. Rolled forward on every refresh.
+  refresh_token_ciphertext String
+  refresh_token_iv         String
+  refresh_token_auth_tag   String
+  refresh_token_issued_at  DateTime
+
+  // Access-token cache. Nullable because an expired access token is a HEALTHY
+  // state (the refresh token regenerates it); a missing refresh token is not.
+  access_token_ciphertext String?
+  access_token_iv         String?
+  access_token_auth_tag   String?
+  access_token_expires_at DateTime?
+
+  key_version Int @default(1) // pins KDF+salt+cipher; bump to rotate scheme
+
+  /// Verbatim scope string from the token endpoint, so the connect surface can
+  /// diff granted-vs-required without re-deriving what Entra actually consented.
+  granted_scopes String
+
+  acquired_at        DateTime
+  last_refresh_at    DateTime?
+  last_refresh_error String?
+
+  state           DocIngestConnectionState @default(connected)
+  reauth_reason   String?
+  reauth_since    DateTime?
+  /// Last time reauth_required was PAGED — latches the re-page cooldown
+  /// (ADR-0037) without ever suppressing the transition page itself.
+  reauth_paged_at DateTime?
+
+  /// OneDrive provisions ASYNCHRONOUSLY (§A.5). NULL is a legitimate
+  /// "not provisioned yet", NOT an error — the first interactive sign-in creates
+  /// the drive, so a 404 before that is expected.
+  drive_id             String?
+  drive_provisioned_at DateTime?
+  drive_check_error    String?
+
+  connected_by String // bare audit-actor user id (no FK)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@map("doc_ingest_connections")
+}
+
+/// One shared file or folder Vision watches.
+model DocSource {
+  id String @id @default(uuid())
+
+  /// (drive_id, item_id) is THE natural key — a driveItem id is only unique
+  /// within its drive, so the pair is what makes the sweep's upsert idempotent
+  /// across a shared-with-me set spanning several people's OneDrives.
+  drive_id String
+  item_id  String
+  kind     DocSourceKind @default(file)
+
+  display_name String
+  web_url      String?
+  path_hint    String?
+  owner_upn    String?
+  content_type String?
+  size_bytes   Int? // Int, not BigInt — matches FileDrop.byte_size, no JSON-serialization trap
+
+  /// Site scoping (CLAUDE.md hard rule #2). NULL means UNCLASSIFIED, never
+  /// "both" — read paths must not leak a NULL-site source into a site-scoped
+  /// list. The classifier (next phase) sets it.
+  site_id String?
+  site    Site?   @relation(fields: [site_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
+  /// Classifier output (next phase). Unconstrained TEXT on purpose: the class
+  /// vocabulary is not settled, and an enum would force a migration on every new
+  /// document type discovered in the wild.
+  doc_class        String?
+  doc_class_source String? // 'classifier' | 'operator'
+  classified_at    DateTime?
+
+  /// `ctag` changes on CONTENT change; `etag` on content OR metadata change. The
+  /// sweep compares ctag to decide whether a new version row is warranted.
+  etag             String?
+  ctag             String?
+  last_modified_at DateTime?
+
+  state   DocSourceState @default(active)
+  /// Operator kill switch, independent of `state`. `state` is what Microsoft
+  /// says; `enabled` is what Bill says. Never conflate them.
+  enabled Boolean        @default(true)
+
+  first_seen_at    DateTime  @default(now())
+  last_seen_at     DateTime  @default(now())
+  disappeared_at   DateTime?
+  last_ingested_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  versions   DocSourceVersion[]
+  anomalies  DocIngestAnomaly[]
+  file_drops FileDrop[]
+
+  @@unique([drive_id, item_id])
+  @@index([state, enabled])
+  @@index([site_id, doc_class])
+  @@index([last_seen_at])
+  @@map("doc_sources")
+}
+
+/// Append-only observed history of a source. This is what makes "live document"
+/// real. Bytes go to R2 (CLAUDE.md hard rule #7) — only the key is stored here,
+/// never the blob and never a local path.
+model DocSourceVersion {
+  id            String    @id @default(uuid())
+  doc_source_id String
+  doc_source    DocSource @relation(fields: [doc_source_id], references: [id], onUpdate: Cascade, onDelete: Cascade)
+
+  /// The content-change marker this version was cut on. UNIQUE per source —
+  /// which is exactly what makes a re-delivered Graph notification a no-op
+  /// instead of a duplicate ingest.
+  ctag String
+  etag String?
+
+  size_bytes       Int?
+  last_modified_at DateTime?
+  modified_by      String?
+
+  r2_key         String? // NULL until the bytes are fetched
+  content_sha256 String?
+
+  observed_at DateTime  @default(now())
+  fetched_at  DateTime?
+  ingested_at DateTime?
+
+  /// The precise provenance edge: THIS revision became THAT drop.
+  file_drop_id String?
+  file_drop    FileDrop? @relation(fields: [file_drop_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
+  created_at DateTime @default(now())
+
+  @@unique([doc_source_id, ctag])
+  @@index([doc_source_id, observed_at])
+  @@index([file_drop_id])
+  @@map("doc_source_versions")
+}
+
+/// Graph change-notification + delta state. Built by the NEXT phase; the table
+/// lands now so the sweep/renewal worker has a durable home and anomalies can
+/// reference a subscription from day one.
+model DocIngestSubscription {
+  id String @id @default(uuid())
+
+  drive_id         String
+  resource         String // e.g. /drives/{driveId}/root
+  subscription_id  String? // Graph-assigned; NULL until created
+  notification_url String
+
+  /// HASH of the clientState secret, never the secret. The webhook compares a
+  /// hash of the value Graph echoes back; storing plaintext would put a
+  /// bearer-equivalent value in every DB backup for no gain.
+  client_state_hash String?
+
+  expires_at      DateTime?
+  last_renewed_at DateTime?
+  renew_after     DateTime? // scheduler wake time
+
+  /// Opaque Graph deltaLink. Never parsed, only replayed. An invalidated token
+  /// is a `delta_token_invalid` anomaly + full re-enumeration, never a silent skip.
+  delta_link      String?
+  delta_synced_at DateTime?
+
+  state         DocIngestSubscriptionState @default(pending)
+  failure_count Int                        @default(0)
+  last_error    String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  anomalies DocIngestAnomaly[]
+
+  @@unique([subscription_id])
+  @@index([state, renew_after])
+  @@index([drive_id])
+  @@map("doc_ingest_subscriptions")
+}
+
+/// The guardrail ledger. Detection is the NEXT phase's; the ledger is here so it
+/// has an idempotent target. `fingerprint` + a PARTIAL unique index over OPEN
+/// rows is what makes "raise this anomaly" safe to call on every sweep: a
+/// recurring condition bumps `occurrences`/`last_seen_at` instead of growing a
+/// row-per-poll queue. Resolved rows are RETAINED — they are the evidence that a
+/// thing was wrong and got fixed.
+///
+/// NOTE: the partial index (`WHERE status = 'open'`) is expressed in the
+/// hand-written migration, not here — Prisma cannot model a partial unique
+/// index. `@@unique([fingerprint])` is deliberately ABSENT for that reason;
+/// writers must go through the raiser helper, not a bare `upsert`.
+model DocIngestAnomaly {
+  id String @id @default(uuid())
+
+  doc_source_id String?
+  doc_source    DocSource? @relation(fields: [doc_source_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
+  subscription_id String?
+  subscription    DocIngestSubscription? @relation(fields: [subscription_id], references: [id], onUpdate: Cascade, onDelete: SetNull)
+
+  kind     DocIngestAnomalyKind
+  severity DocIngestAnomalySeverity @default(warning)
+  status   DocIngestAnomalyStatus   @default(open)
+
+  fingerprint String // stable dedup key: kind + the entity it is about
+  detail      String
+  context     Json?
+
+  occurrences   Int      @default(1)
+  first_seen_at DateTime @default(now())
+  last_seen_at  DateTime @default(now())
+
+  resolved_at     DateTime?
+  resolved_by     String? // bare audit-actor user id (no FK)
+  resolution_note String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, severity, last_seen_at])
+  @@index([doc_source_id])
+  @@index([subscription_id])
+  @@map("doc_ingest_anomalies")
 }
 
 // ────────────────────────────────────────────────────────────────────────

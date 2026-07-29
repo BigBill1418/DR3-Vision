@@ -227,6 +227,18 @@ export interface FakeDb {
   notificationPrefs: FakeNotificationPref[];
   // ADR-0066 §1.5 — the weekday clock's holiday source (business-clock.ts).
   siteHolidays: FakeSiteHoliday[];
+  // ADR-0067 Amendment A §A.6 — the singleton document-ingestion connection, read
+  // by the digest's W3 warning. NULL (the default) means "never connected", which
+  // is the correct state for every AP test that does not care about ingestion.
+  docIngestConnection: FakeDocIngestConnection | null;
+}
+
+/** ADR-0067 — only the columns the digest warning selects. */
+export interface FakeDocIngestConnection {
+  state: 'connected' | 'reauth_required';
+  reauth_since: Date | null;
+  reauth_reason: string | null;
+  account_upn: string;
 }
 
 /** ADR-0066 §1.6 — a MISSING row means column defaults, not "notify nobody". */
@@ -271,6 +283,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     approvalRouting: seed.approvalRouting ?? [],
     notificationPrefs: seed.notificationPrefs ?? [],
     siteHolidays: seed.siteHolidays ?? [],
+    docIngestConnection: seed.docIngestConnection ?? null,
   };
 }
 
@@ -291,6 +304,14 @@ function pick<T extends object>(row: T, select?: AnyRecord): T {
 /** Build a fake PrismaClient over `db`. Cast to PrismaClient at the call site. */
 export function makeFakePrisma(db: FakeDb) {
   const client = {
+    // ADR-0067 — singleton; the digest's W3 warning reads it. Read-only here:
+    // no AP path writes it, and a test that needs the reauth state seeds it.
+    docIngestConnection: {
+      async findUnique(args: { select?: AnyRecord }) {
+        if (!db.docIngestConnection) return null;
+        return pick(db.docIngestConnection, args.select);
+      },
+    },
     apRequest: {
       async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
         const w = args.where;
