@@ -60,6 +60,23 @@ export class DocIngestNotFoundError extends Error {
 }
 
 /**
+ * The operator handed us something that is not a usable sharing URL — wrong
+ * host, not https, or a string Graph answered 400 for.
+ *
+ * Deliberately NOT a {@link DocIngestGraphError}: that class means "transient,
+ * retry later", and retrying a malformed link forever produces nothing. This one
+ * is terminal and its message is written to be READ BY BILL, not by a log
+ * scraper — the operator is the only party who can fix it, by pasting a
+ * different link.
+ */
+export class DocIngestSharingUrlError extends Error {
+  override readonly name = 'DocIngestSharingUrlError';
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
  * A delta token Graph will not accept any more (`resyncRequired`). Handled by a
  * FULL re-enumeration, never by a silent skip — a dropped delta window is
  * exactly how a change goes missing forever.
@@ -85,6 +102,21 @@ export interface GraphDriveItem {
   lastModifiedAt: string | null;
   lastModifiedBy: string | null;
   ownerUpn: string | null;
+  /**
+   * `createdBy.user` — the account that CREATED the document, i.e. its true
+   * owner. Split out from {@link ownerUpn} because the two facets carry
+   * different authority and the owner-left inference (discovery.ts) depends on
+   * the distinction: `sharedWithMe`'s `remoteItem` facet carries NEITHER, so
+   * `ownerUpn` is null for every auto-discovered source, while a direct
+   * `GET /drives/{driveId}/items/{itemId}` DOES return `createdBy`.
+   *
+   * Optional rather than required so existing GraphDriveItem literals (fixtures,
+   * hand-built stubs) keep compiling — absent means "this projection had no
+   * createdBy facet", which is exactly what null means too.
+   */
+  createdByUpn?: string | null;
+  /** `shared.owner.user` — the drive owner as Graph reports it on a share facet. */
+  sharedOwnerUpn?: string | null;
   parentItemId: string | null;
   parentPath: string | null;
   /** Present on a delta page when the item was removed. */
@@ -134,6 +166,47 @@ export interface DocIngestGraph {
   }): Promise<GraphSubscription>;
   renewSubscription(subscriptionId: string, expiresAt: Date): Promise<GraphSubscription>;
   deleteSubscription(subscriptionId: string): Promise<void>;
+}
+
+/**
+ * Resolving an operator-supplied document URL.
+ *
+ * Deliberately a SEPARATE interface from {@link DocIngestGraph} rather than one
+ * more method on it. Two reasons, and the second is the load-bearing one:
+ *
+ *   1. Nothing in the automated pipeline calls this. The sweep, the delta walk,
+ *      discovery and ingest all work from identities they already hold; a URL is
+ *      something only a human can supply. Keeping it out of the sweep's Graph
+ *      surface says so in the type.
+ *   2. `DocIngestGraph` is stubbed in four existing test files. Widening it
+ *      would force every one of those stubs to grow a method they will never
+ *      call, which is how an interface quietly becomes a place to put things.
+ *
+ * `docIngestGraph()` returns both, so a caller that needs both just gets them.
+ */
+export interface DocIngestSharingResolver {
+  /**
+   * Resolve a SharePoint / OneDrive document URL to the driveItem behind it via
+   * `GET /shares/u!{token}/driveItem`.
+   *
+   * The operator-driven counterpart to `listSharedWithMe`, and it exists because
+   * that endpoint is both deprecated AND, in this tenant, under-reporting: it
+   * returns one item while more documents are genuinely shared with the service
+   * account. `/shares` reaches the ones it misses — including an
+   * Outlook-attachment share, which never appears in a shared-with-me list at
+   * all.
+   *
+   * READ-ONLY, and that is enforced by an omission: the documented
+   * `Prefer: redeemSharingLink` header would grant the caller DURABLE access to
+   * the item — a permission change — so it is deliberately never sent. Resolving
+   * a link must observe the tenant, never alter it.
+   *
+   * Throws {@link DocIngestSharingUrlError} (unusable link),
+   * {@link DocIngestAccessDeniedError} (403 — not shared with us) or
+   * {@link DocIngestNotFoundError} (404 — gone). Those three stay apart because
+   * they need three different things from the operator.
+   */
+  resolveSharingUrl(webUrl: string): Promise<GraphDriveItem>;
 }
 
 /** The file exceeded the byte cap. Pages; never silently truncates. */
@@ -218,10 +291,77 @@ export function projectDriveItem(raw: unknown, fallbackDriveId?: string): GraphD
     // alert to NAME the previous owner — after the account is gone, this stored
     // value is the only place that name still exists.
     ownerUpn: identityUpn(sharedOwner) ?? identityUpn(createdBy),
+    // Both facets kept SEPARATELY as well, so a caller that needs "who created
+    // this" specifically is not forced to accept `shared.owner` winning. Neither
+    // is ever `shared.sharedBy`: that is who handed the file over, not who owns
+    // it, and conflating them would make the owner-left inference fire on the
+    // wrong person's departure.
+    createdByUpn: identityUpn(createdBy),
+    sharedOwnerUpn: identityUpn(sharedOwner),
     parentItemId: str(parent?.['id']),
     parentPath: str(parent?.['path']),
     deleted: rec(item['deleted']) !== null,
   };
+}
+
+// ── sharing-URL encoding ────────────────────────────────────────────────────
+
+/**
+ * Encode a sharing URL into the `u!` share token `/shares/{id}` expects.
+ *
+ * Microsoft's documented algorithm, verbatim
+ * (https://learn.microsoft.com/graph/api/shares-get?view=graph-rest-1.0#encoding-sharing-urls):
+ *   1. base64-encode the URL (UTF-8 bytes);
+ *   2. convert to UNPADDED base64url — strip trailing `=`, `/`→`_`, `+`→`-`;
+ *   3. prefix `u!`.
+ *
+ * Steps 2 and 3 are the whole reason this is a named function with its own
+ * tests. A plain `encodeURIComponent` looks like it works — most SharePoint URLs
+ * base64-encode to an alphabet with no `+` or `/` in it — and then silently 400s
+ * on the one URL whose query string happens to produce them. The failure is
+ * data-dependent, so it cannot be caught by trying it once by hand.
+ */
+export function encodeSharingUrl(webUrl: string): string {
+  const base64 = Buffer.from(webUrl, 'utf8').toString('base64');
+  return `u!${base64.replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-')}`;
+}
+
+/** Hosts a Microsoft 365 document link can legitimately live on. */
+function isSupportedSharingHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return (
+    h === 'sharepoint.com' ||
+    h.endsWith('.sharepoint.com') ||
+    h === 'onedrive.live.com' ||
+    h === '1drv.ms'
+  );
+}
+
+/**
+ * Refuse a URL that cannot possibly be a Microsoft document link BEFORE spending
+ * a Graph call on it. Not a security boundary — the URL is never fetched by us,
+ * only handed to Graph — but it turns "Graph said 400" into an answer the
+ * operator can act on, and it stops a pasted Google Drive / Dropbox link from
+ * being silently attempted against the tenant.
+ */
+function assertSupportedSharingUrl(webUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(webUrl);
+  } catch {
+    throw new DocIngestSharingUrlError(
+      'That is not a URL. Paste the full web address of the document, starting with https://.',
+    );
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new DocIngestSharingUrlError('The document link must start with https://.');
+  }
+  if (!isSupportedSharingHost(parsed.hostname)) {
+    throw new DocIngestSharingUrlError(
+      `${parsed.hostname} is not a Microsoft 365 document host. Vision can only register ` +
+        'SharePoint or OneDrive links (*.sharepoint.com, onedrive.live.com, 1drv.ms).',
+    );
+  }
 }
 
 // ── the client ──────────────────────────────────────────────────────────────
@@ -229,7 +369,7 @@ export function projectDriveItem(raw: unknown, fallbackDriveId?: string): GraphD
 export function docIngestGraph(
   prisma: PrismaClient,
   options: DocIngestGraphOptions = {},
-): DocIngestGraph {
+): DocIngestGraph & DocIngestSharingResolver {
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
 
   async function request(
@@ -326,6 +466,49 @@ export function docIngestGraph(
       const body = await getJson(url);
       const projected = projectDriveItem(body, driveId);
       if (!projected) throw new DocIngestGraphError(`unreadable driveItem body for ${itemId}`);
+      return projected;
+    },
+
+    async resolveSharingUrl(webUrl) {
+      const trimmed = webUrl.trim();
+      assertSupportedSharingUrl(trimmed);
+
+      // No `Prefer: redeemSharingLink` — see the interface doc. Peeking at a
+      // link's metadata is the entire job; redeeming it would grant durable
+      // access, which is a write this integration has no business performing.
+      const res = await request(`${GRAPH_BASE}/shares/${encodeSharingUrl(trimmed)}/driveItem`);
+
+      // The three failures are kept APART because they need three different
+      // things from the operator, and collapsing them into "couldn't add it"
+      // sends Bill to re-copy a link that was fine.
+      if (res.status === 400) {
+        throw new DocIngestSharingUrlError(
+          'Microsoft did not recognize that link. Open the document and use its own ' +
+            'Share → Copy link (or the browser address bar) — an email preview link or a ' +
+            'shortened redirect will not resolve.',
+        );
+      }
+      if (res.status === 403) {
+        throw new DocIngestAccessDeniedError(
+          'the document behind that link — it is not shared with the Vision service account',
+        );
+      }
+      if (res.status === 404) {
+        throw new DocIngestNotFoundError('the document behind that link');
+      }
+      await assertOk(res, 'GET /shares/{token}/driveItem');
+
+      const projected = projectDriveItem(await res.json());
+      if (!projected) {
+        // Almost always a `parentReference.driveId` Graph declined to include,
+        // which means we have no stable identity to key the source on. Refusing
+        // is correct: a source keyed on a guessed drive is a duplicate waiting
+        // to happen (D8).
+        throw new DocIngestGraphError(
+          'Microsoft resolved that link but did not return the document identity ' +
+            '(drive + item id) Vision needs to watch it.',
+        );
+      }
       return projected;
     },
 

@@ -14,6 +14,7 @@ import { adminMessages as AM } from '@/app/admin/messages';
 import { docIngestMessages as M } from '@/lib/doc-ingest/messages';
 import { listDocSources } from '@/lib/doc-ingest/health';
 import { SourcesClient } from './SourcesClient';
+import { RegisterShareClient } from './RegisterShareClient';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,6 +54,7 @@ export default async function DocIngestSourcesPage() {
             </Link>
           </nav>
         </header>
+        <RegisterShareClient />
         <SourcesClient initialSources={sources} sites={sites} />
       </div>
     </main>

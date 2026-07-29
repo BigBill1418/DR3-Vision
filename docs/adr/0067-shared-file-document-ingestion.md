@@ -791,3 +791,75 @@ could not be reached at all.
   not a bug — it is org-wide site membership — but it deserves an explicit
   decision rather than a default, and it is why Graph search must not become a
   discovery source (**C-47**).
+
+## Amendment 5 — 2026-07-29 — discovery gets a second, operator-driven route
+
+Amendment 3 concluded that discovery must be re-founded and proposed the
+`remoteItem` "Add shortcut to My files" route as the replacement for the
+deprecated `sharedWithMe`. **Measured live, that route is a NO-GO.** Read-only,
+as `docs-dr3@svdp.us`:
+
+| Route                         | Count                                                    |
+| ----------------------------- | -------------------------------------------------------- |
+| `/me/drive/sharedWithMe`      | **1** (no `nextLink`)                                    |
+| `/me/drive/root/children`     | 1 — a real local folder, **zero `remoteItem` shortcuts** |
+| `/me/drive/following`         | 0                                                        |
+| `/me/drive/recent`            | 0                                                        |
+| `/shares/u!{token}/driveItem` | **200**, with `createdBy`                                |
+
+Switching primary discovery to `remoteItem` today would take discovery from one
+source to **zero**. Bill's constraint is the reason and it is decisive: _"I shared
+files not folders."_ Nobody has clicked "Add shortcut to My files", and there is
+no reason they should have to.
+
+`sharedWithMe` is nonetheless under-reporting. A Graph search surfaced
+**`DR3 Machine List (2).xlsx`** in Bill's own OneDrive under `/Attachments/`,
+readable by `docs-dr3` with `effectiveRoles: ["read"]` — a genuine per-user grant
+that appears in **none** of the four enumeration routes above. It is an
+Outlook-attachment share, which the shared-with-me index does not carry. So:
+`sharedWithMe`-visible = 1, actually-granted ≥ 2, and the gap is not something a
+different enumeration endpoint closes.
+
+**Decision: keep `sharedWithMe` as the enumeration seam and add
+`/shares/u!{base64url(webUrl)}/driveItem` as an OPERATOR-DRIVEN registration
+path.** Bill pastes a document URL at `/admin/doc-ingest`; Vision resolves it to
+`(driveId, itemId)` and creates the source through the **same `upsertSource`**
+discovery uses, so classification, the confirm queue, the guardrail, the audit
+trail and the kill switch all behave identically regardless of how a document
+arrived. A second insertion path would be a second set of defaults to drift, and
+that drift would surface only as a document that quietly never got classified.
+
+Three properties worth stating because each was a decision, not a default:
+
+- **It is READ-ONLY, enforced by an omission.** Microsoft's `/shares` docs
+  describe `Prefer: redeemSharingLink`, which grants the caller **durable access**
+  to the item — a permission change. It is never sent, and a test asserts no
+  `Prefer` header goes out.
+- **No scope widening.** The route runs on the `Files.Read.All` the integration
+  already holds.
+- **Four failures, four sentences.** A revoked share (403), a deleted file (404),
+  a mistyped link (400) and a halted connection (503) need four different things
+  from Bill. "Could not add the document" is true of all four and useful for none.
+
+### `owner_upn` enrichment — and the erase that made it inert
+
+`sharedWithMe`'s `remoteItem` facet carries `shared.sharedBy` but neither
+`shared.owner` nor `createdBy`, which are the only fields `projectDriveItem`
+read — so `owner_upn` was NULL on every source, and P8's "owner left the org"
+inference (which buckets by owner and skips nulls) could never fire. A direct
+`GET /drives/{driveId}/items/{itemId}` does return `createdBy`, so discovery now
+spends one extra Graph call when a **file** first appears.
+
+`createdBy` wins over `shared.owner` here — the departure alert names the author
+— and `shared.sharedBy` is consulted at **no depth whatsoever**: the colleague
+who forwarded a workbook is not its owner, and letting them stand in for one
+would fire the alert on the wrong person's departure.
+
+**The first version of this enrichment was inert, and every test of it passed.**
+`upsertSource`'s update branch wrote `owner_upn: item.ownerUpn` unconditionally,
+and that value is NULL for every source `sharedWithMe` returns — so the owner
+resolved at creation was blanked on the next sweep, 15 minutes later, with no
+trace. Sources predating the enrichment (TEREX.xlsx, live now) would also never
+have been filled. A known owner is now only ever replaced by another **known**
+owner, and a null one is backfilled. Both cases are pinned by regression tests;
+the create-path tests that passed throughout are the reason this needed one.

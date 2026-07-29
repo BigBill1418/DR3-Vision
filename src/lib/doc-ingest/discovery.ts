@@ -171,7 +171,7 @@ export async function runDiscovery(
   let discovered = 0;
   let updated = 0;
   for (const entry of seen.values()) {
-    const wasNew = await upsertSource(prisma, entry, now);
+    const wasNew = await upsertSource(prisma, graph, entry, now);
     if (wasNew) discovered += 1;
     else updated += 1;
   }
@@ -215,19 +215,25 @@ async function isDisabled(prisma: PrismaClient, driveId: string, itemId: string)
  * consent to re-enable it. `display_name` and `path_hint` ARE refreshed — a
  * rename must show up, and it is not a new identity (D8).
  */
-async function upsertSource(prisma: PrismaClient, entry: Seen, now: Date): Promise<boolean> {
+async function upsertSource(
+  prisma: PrismaClient,
+  graph: DocIngestGraph,
+  entry: Seen,
+  now: Date,
+): Promise<boolean> {
   const { item } = entry;
   const existing = await prisma.docSource.findUnique({
     where: { drive_id_item_id: { drive_id: item.driveId, item_id: item.id } },
-    select: { id: true, state: true, ctag: true, read_blocked_ctag: true },
+    select: { id: true, state: true, ctag: true, read_blocked_ctag: true, owner_upn: true },
   });
 
+  // `owner_upn` is deliberately NOT in `common` — see the update branch. Writing
+  // it unconditionally is what would silently undo the enrichment below.
   const common = {
     kind: item.isFolder ? ('folder' as const) : ('file' as const),
     display_name: item.name,
     web_url: item.webUrl,
     path_hint: item.parentPath,
-    owner_upn: item.ownerUpn,
     content_type: item.contentType,
     size_bytes: clampInt(item.size),
     etag: item.etag,
@@ -241,7 +247,16 @@ async function upsertSource(prisma: PrismaClient, entry: Seen, now: Date): Promi
 
   if (!existing) {
     await prisma.docSource.create({
-      data: { drive_id: item.driveId, item_id: item.id, ...common, state: 'active' },
+      data: {
+        drive_id: item.driveId,
+        item_id: item.id,
+        ...common,
+        // ONE extra Graph call, once, at the moment a file first appears — see
+        // `resolveOwnerUpn`. Folders are skipped: nothing is ingested from a
+        // folder, so its owner buys nothing.
+        owner_upn: item.isFolder ? item.ownerUpn : await resolveOwnerUpn(graph, item),
+        state: 'active',
+      },
     });
     return true;
   }
@@ -258,10 +273,30 @@ async function upsertSource(prisma: PrismaClient, entry: Seen, now: Date): Promi
     item.ctag !== null &&
     item.ctag !== existing.read_blocked_ctag;
 
+  // ── owner_upn on update: refresh, backfill, but NEVER blank ───────────────
+  // `sharedWithMe` carries no owner facet at all, so `item.ownerUpn` is null for
+  // every auto-discovered source. Writing it unconditionally would (a) erase the
+  // enrichment done at creation on the very next sweep — 15 minutes later, with
+  // no trace — leaving the feature permanently inert, and (b) never backfill the
+  // sources that predate the enrichment. Both were true of the first version of
+  // this code.
+  //
+  // A known owner is only ever replaced by another KNOWN owner. The backfill
+  // costs one `getItem` per sweep for a file whose owner genuinely cannot be
+  // resolved (a 403 on the direct drive-item GET is possible for a link-only
+  // share); that is a plain GET on a handful of documents, and it stops the
+  // moment it succeeds.
+  const ownerUpn =
+    item.ownerUpn ??
+    (existing.owner_upn === null && !item.isFolder
+      ? await resolveOwnerUpn(graph, item)
+      : existing.owner_upn);
+
   await prisma.docSource.update({
     where: { id: existing.id },
     data: {
       ...common,
+      ...(ownerUpn !== existing.owner_upn ? { owner_upn: ownerUpn } : {}),
       ...(recovered ? { state: 'active' as const, disappeared_at: null } : {}),
       ...(contentChanged
         ? { read_blocked_at: null, read_blocked_reason: null, read_blocked_ctag: null }
@@ -276,6 +311,126 @@ async function upsertSource(prisma: PrismaClient, entry: Seen, now: Date): Promi
     await resolveAnomaly(prisma, 'owner_lost', subject, 'Access restored — source seen again.');
   }
   return false;
+}
+
+/**
+ * Find the TRUE owner of a newly-discovered file, best-effort.
+ *
+ * Why this needs its own Graph call: `sharedWithMe`'s `remoteItem` facet carries
+ * `shared.sharedBy` but neither `shared.owner` nor `createdBy`, so every source
+ * discovered that way lands with `owner_upn = NULL`. That is not a cosmetic gap
+ * — the "owner left the org" inference in `reconcileMissing` buckets lost
+ * sources BY OWNER, so a table of NULLs makes the whole path inert: the one
+ * alert that is supposed to say "everything Kelsey shared went dark at once"
+ * can never fire. A direct `GET /drives/{driveId}/items/{itemId}` does return
+ * `createdBy`, so one call at creation buys the column back.
+ *
+ * `createdBy` WINS over `shared.owner` here (the reverse of `projectDriveItem`'s
+ * general-purpose ordering): the alert names the person who will have left, and
+ * that is the author. `shared.sharedBy` is never consulted at any depth — the
+ * colleague who forwarded a workbook is not its owner, and letting them stand in
+ * for one would fire the departure alert on the wrong person.
+ *
+ * BEST-EFFORT BY CONSTRUCTION. A 403 here is entirely expected — a document
+ * reachable through a sharing link is not necessarily reachable by a direct
+ * drive-item GET — and discovering a document must never fail because we could
+ * not learn who owns it. On any failure the projection's own value stands.
+ */
+async function resolveOwnerUpn(
+  graph: DocIngestGraph,
+  item: GraphDriveItem,
+): Promise<string | null> {
+  try {
+    const detail = await graph.getItem(item.driveId, item.id);
+    return detail.createdByUpn ?? detail.sharedOwnerUpn ?? item.ownerUpn;
+  } catch {
+    return item.ownerUpn;
+  }
+}
+
+/** What the operator-registration path reports back about the row it landed on. */
+export interface RegisteredSource {
+  id: string;
+  driveId: string;
+  itemId: string;
+  displayName: string;
+  ownerUpn: string | null;
+  webUrl: string | null;
+  kind: 'file' | 'folder';
+  /** False when the document was ALREADY being watched — registering is idempotent. */
+  created: boolean;
+}
+
+/**
+ * Register one already-resolved driveItem as a source, through the exact path
+ * discovery uses.
+ *
+ * The point of routing an operator-supplied document through `upsertSource`
+ * rather than a bespoke `create` is that everything downstream — classification,
+ * the confirm queue, the guardrail, the ingest audit trail, the kill switch —
+ * then behaves identically whether a document arrived by enumeration or by Bill
+ * pasting a link. A second insertion path would be a second set of defaults to
+ * drift, and the drift would only show up as a document that quietly never got
+ * classified.
+ *
+ * Idempotent: re-registering a known document refreshes it and reports
+ * `created: false` rather than erroring or duplicating (D8 — the (drive, item)
+ * key is the identity, and a second route to the same file is not a second file).
+ */
+export async function registerSharedItem(
+  prisma: PrismaClient,
+  graph: DocIngestGraph,
+  item: GraphDriveItem,
+  options: { now?: Date } = {},
+): Promise<RegisteredSource> {
+  const now = options.now ?? new Date();
+
+  // Carry forward what the TRAVERSAL owns rather than flattening it. A file
+  // already known as a child of a shared folder must not be demoted to a root
+  // with `shared_by_count = 1` just because someone pasted its link: the depth
+  // and the dedup evidence are facts about how the document is reachable, and
+  // the next sweep would only have to put them back.
+  const prior = await prisma.docSource.findUnique({
+    where: { drive_id_item_id: { drive_id: item.driveId, item_id: item.id } },
+    select: { depth: true, parent_item_id: true, shared_by_count: true },
+  });
+
+  const entry: Seen = {
+    item,
+    depth: prior?.depth ?? 0,
+    parentItemId: prior?.parent_item_id ?? null,
+    shareCount: prior?.shared_by_count ?? 1,
+  };
+
+  const created = await upsertSource(prisma, graph, entry, now);
+
+  const row = await prisma.docSource.findUnique({
+    where: { drive_id_item_id: { drive_id: item.driveId, item_id: item.id } },
+    select: {
+      id: true,
+      drive_id: true,
+      item_id: true,
+      display_name: true,
+      owner_upn: true,
+      web_url: true,
+      kind: true,
+    },
+  });
+  if (!row) {
+    // Only reachable if the row vanished between the write and this read.
+    throw new Error(`registration did not persist for ${sourceKey(item.driveId, item.id)}`);
+  }
+
+  return {
+    id: row.id,
+    driveId: row.drive_id,
+    itemId: row.item_id,
+    displayName: row.display_name,
+    ownerUpn: row.owner_upn,
+    webUrl: row.web_url,
+    kind: row.kind,
+    created,
+  };
 }
 
 interface ReconcileResult {

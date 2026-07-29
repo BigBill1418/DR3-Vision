@@ -5,6 +5,35 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Added — 2026-07-29 (register a shared document by URL — ADR-0067 Amendment 5)
+
+`sharedWithMe` returns **one** item in this tenant while at least two documents are
+genuinely shared with the service account — the second is an Outlook-attachment share that
+appears in no enumeration route at all. Amendment 3's proposed replacement (`remoteItem`
+shortcuts under `/me/drive/root/children`) was measured live and is **empty**: switching to
+it would have taken discovery from one source to zero. Bill's constraint is the reason —
+_"I shared files not folders"_ — and nobody should have to click "Add shortcut to My files"
+for a document to be seen.
+
+- **Paste a document URL at `/admin/doc-ingest`** and Vision resolves it through
+  `GET /shares/u!{base64url}/driveItem`, then registers it via the **same `upsertSource`**
+  discovery uses — so classification, the confirm queue, the guardrail, the audit trail and
+  the kill switch behave identically however a document arrived. Admin-only, audited with
+  `registered_via: 'sharing_url'`, idempotent.
+- **Read-only, enforced by an omission.** The documented `Prefer: redeemSharingLink` header
+  would grant durable access to the item — a permission change — so it is never sent, and a
+  test asserts it. No scope widening: this runs on the `Files.Read.All` already held.
+- **Four failures get four sentences.** A revoked share (403), a deleted file (404), a
+  mistyped link (400) and a halted connection (503) need four different things from Bill.
+- **`owner_upn` is finally populated.** `sharedWithMe` carries no owner facet, so every
+  source had NULL and the "owner left the org" alert — which buckets by owner and skips
+  nulls — could never fire. One `getItem` when a file first appears fills it from
+  `createdBy` (never from `sharedBy`: the colleague who forwarded a workbook is not its
+  owner, and the alert names the person who left). The first cut of this was **inert**
+  despite passing every create-path test — the update branch rewrote `owner_upn` from the
+  null-bearing projection on the next sweep, silently erasing it 15 minutes later. Now a
+  known owner is only replaced by another known owner, and existing NULLs are backfilled.
+
 ### Fixed — 2026-07-29 (first live document exposed five defects — ADR-0067 Amendment 4)
 
 TEREX.xlsx, the first real document through the pipeline, was proposed `unknown` with the
