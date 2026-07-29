@@ -240,3 +240,63 @@ for `GET /users/{upn}` — it cannot write app role assignments.
 *can this identity authenticate to the app at all* (assignment) and *what may it
 then do* (scopes/consent). Amendment A exhaustively documented the second and
 silently assumed the first.
+
+
+---
+
+## Amendment 2 — 2026-07-29 — Amendment 1 was WRONG. The real cause is a two-sign-in confusion.
+
+**Amendment 1 above is retained as a record of a misdiagnosis, and is superseded
+by this.** Its conclusion (that Entra's `appRoleAssignmentRequired` blocked the
+service account) is **false**. Do not act on it.
+
+### What actually happened
+
+Live application logs settle it:
+
+```
+event: entra_signin_denied   email: docs-dr3@svdp.us   reason: "unknown"
+```
+
+`reason: 'unknown'` is `evaluateEntraSignIn`'s verdict for *no `users` row with
+this email*. So Microsoft authenticated `docs-dr3` **successfully** — Vision's
+own SSO gate then refused it, and the message shown is Vision's own
+`auth_login.error_access_denied` string.
+
+**The operator was signing into VISION as `docs-dr3`, not into the Microsoft
+consent prompt.** There are two sign-ins in this flow and they are easy to
+conflate:
+
+1. Sign into **Vision** as a real admin (`bill.barnard@svdp.us`).
+2. *Then* click **Connect document service account**, which starts a **separate**
+   OAuth authorize flow where the Microsoft prompt takes `docs-dr3@svdp.us`.
+
+Reaching `/admin/doc-ingest/connect` while logged OUT redirects to `/login`, and
+the first sign-in screen the operator meets is therefore Vision's — which,
+combined with an instruction to "sign in as docs-dr3", produces exactly this.
+
+**`docs-dr3` must never be able to sign into Vision.** It has no `users` row by
+design and should not be given one; it is an identity for reading files, not an
+application user.
+
+### How the misdiagnosis happened, recorded so it is not repeated
+
+The message was searched for with `grep -rn … --include=*.ts --include=*.tsx`.
+The string lives in **`src/i18n/locales/en/operator.json`** — a file class the
+filter excluded. The empty result was then reported as *"this string exists
+nowhere in the codebase, therefore it is Microsoft's page"*, and an Entra
+`appRoleAssignmentRequired` finding (true, but unrelated) was accepted as the
+cause. **An absence of evidence produced by a filtered search is not evidence of
+absence.** i18n'd user-facing copy will essentially never be found by a
+`.ts/.tsx`-only grep.
+
+### Consequences
+
+- The Entra app assignment change is **unnecessary**. `appRoleAssignmentRequired`
+  is genuinely `true`, but the account never got far enough for it to matter.
+  Adding `docs-dr3` to *DR3-Vision Admin Access* should be reverted;
+  `docs/runbooks/entra-assign-docs-dr3.ps1` has a conditional removal step.
+- **The real fix is documentation, not configuration**: the connect surface must
+  make the two-sign-in sequence unmistakable, and the operator instruction must
+  never say "sign in as docs-dr3" without first saying "while signed into Vision
+  as yourself".
