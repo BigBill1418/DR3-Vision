@@ -130,6 +130,16 @@ export default async function SiteDashboardPage({ params }: Props) {
               label="Ops ledger"
               testId="dashboard-ops-link"
             />
+            {/* ADR-0068 — the Employee Reimbursement tile. This is the entry point
+                that retires the paper form: the submitter is authenticated, so
+                Vision knows who ORIGINATED the request as a fact rather than as
+                ink inside a scanned PDF, which is what makes "the submitter
+                cannot approve" a constraint instead of a detection problem. */}
+            <NavLink
+              href={`/dashboard/${site.code}/reimbursements`}
+              label="Employee reimbursement"
+              testId="dashboard-reimbursements-link"
+            />
           </nav>
         </header>
 
