@@ -23,7 +23,7 @@ Shipped on `feat/doc-ingestion-foundation`: the ADR, the additive schema, and th
 are done. See ADR-0067 + CHANGELOG 2026-07-29.
 
 - **C-31 — OPERATOR: provision `~/.dr3-vision-secrets/doc-ingest.env` on svdp-dev**
-  with `DOC_INGEST_TOKEN_KEY=$(openssl rand -hex 32)`, chmod 600. Until it exists,
+| C-31 | ✅ **RESOLVED 2026-07-29 — no secret needed; the requirement was removed, not satisfied.** This originally asked Bill to create `~/.dr3-vision-secrets/doc-ingest.env` with `DOC_INGEST_TOKEN_KEY`. He declined, correctly: the repo rule is no `.env` for credential material, and a second secret bought nothing. The doc-ingest AES key is now DERIVED (scrypt + a doc-ingest-specific salt, giving domain separation) from `MYMRC_CRED_KEY`, already mounted per ADR-0057. The `doc-ingest.env` compose mount and the `.env.example` entry are deleted. **Remaining operator action is now only Bill's one-time sign-in at `/admin/doc-ingest/connect` as `docs-dr3@svdp.us`.** Rotation note: rotating `MYMRC_CRED_KEY` costs one re-click of Connect (a refresh token is re-obtainable), not data loss. |
   `/admin/doc-ingest/connect` returns a loud 503 (by design — ADR-0067 D6; it never
   silently no-ops). The compose mount is already wired `required: false`, so the app
   boots fine without it.

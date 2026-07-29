@@ -22,12 +22,35 @@
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 
-/** Env var holding the dedicated token-encryption secret. */
-const KEY_ENV = 'DOC_INGEST_TOKEN_KEY';
+/**
+ * ── NO NEW SECRET, BY DESIGN ────────────────────────────────────────────────
+ *
+ * An earlier revision required a dedicated `DOC_INGEST_TOKEN_KEY` in a new
+ * `doc-ingest.env`. That was wrong twice over: it contradicts the operator rule
+ * against `.env` files for credential material, and it made the whole feature
+ * wait on a manual provisioning step for no cryptographic benefit.
+ *
+ * The key is now DERIVED from `MYMRC_CRED_KEY` — the dedicated 32-byte
+ * credential-encryption secret ADR-0057 already established and which is
+ * already mounted on the app container. Domain separation comes from the
+ * scrypt salt below, so the two subsystems never share an AES key: recovering
+ * the doc-ingest key does not yield the MyMRC one, and vice versa.
+ *
+ * ROTATION CONSEQUENCE, stated plainly: rotating `MYMRC_CRED_KEY` makes stored
+ * doc-ingest tokens undecryptable. That is CHEAP here and expensive nowhere —
+ * a refresh token is re-obtainable by clicking Connect once. `open()` already
+ * fails closed on a wrong key, and `access-token.ts` latches
+ * `reauth_required` + pages, so the failure is loud and the remedy is a
+ * single re-auth rather than data loss. The MyMRC credentials, by contrast,
+ * would need re-entering — so the coupling costs strictly less than the
+ * separate-secret alternative it replaces.
+ */
+const KEY_ENV = 'MYMRC_CRED_KEY';
 
 /**
  * Fixed, app-specific, NON-secret scrypt salt. Pins the KDF so the same
- * `DOC_INGEST_TOKEN_KEY` always derives the same AES key. Rotating the
+ * root secret always derives the same AES key, AND provides the domain
+ * separation that keeps this key independent of MyMRC's. Rotating the
  * encryption SCHEME means bumping this salt and `CURRENT_KEY_VERSION` together.
  */
 const KEY_SALT = 'dr3-vision.doc-ingest.tokenstore.v1';
@@ -39,7 +62,7 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12; // GCM standard nonce length
 const KEY_BYTES = 32; // AES-256
 
-/** `DOC_INGEST_TOKEN_KEY` is missing/empty — cannot encrypt or decrypt. LOUD. */
+/** The root credential key is missing/empty — cannot encrypt or decrypt. LOUD. */
 export class DocIngestKeyUnavailableError extends Error {
   override readonly name = 'DocIngestKeyUnavailableError';
   constructor(message: string) {
@@ -71,7 +94,10 @@ function deriveKey(): Buffer {
   const secret = process.env[KEY_ENV]?.trim();
   if (!secret) {
     throw new DocIngestKeyUnavailableError(
-      `${KEY_ENV} is not set — cannot encrypt or decrypt document-ingestion tokens`,
+      `${KEY_ENV} is not set — cannot encrypt or decrypt document-ingestion tokens. ` +
+        'It is the ADR-0057 credential key and is mounted from ' +
+        '~/.dr3-vision-secrets/mymrc-cred-key.env; document ingestion derives its own ' +
+        'key from it rather than requiring a second secret.',
     );
   }
   return scryptSync(secret, KEY_SALT, KEY_BYTES);

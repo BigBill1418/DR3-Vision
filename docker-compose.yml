@@ -186,20 +186,22 @@ services:
       # here to override the code defaults (claude-sonnet-4-6 / 30000ms).
       - path: /home/bbarnard065/.dr3-vision-secrets/anthropic.env
         required: false
-      # ADR-0067 Amendment A §A.7 — document-ingestion TOKEN ENCRYPTION KEY
-      # (DOC_INGEST_TOKEN_KEY), the AES-256-GCM key protecting the delegated
-      # Microsoft refresh/access tokens at rest in Postgres. Dedicated on purpose:
-      # NOT MYMRC_CRED_KEY and NOT NEXTAUTH_SECRET, so a MyMRC-scrape compromise is
-      # not a document-store compromise. The tokens themselves live encrypted in
-      # Postgres — never in a .env — so this stays compatible with the
-      # no-.env-for-account-credentials rule. The service-account PASSWORD is not a
-      # runtime credential and must never appear in this file.
+      # ADR-0067 — document ingestion needs NO SECRET OF ITS OWN.
       #
-      # Mount is OPTIONAL (fail-soft) so an unprovisioned host still boots. That is
-      # the ONLY softness: with the key absent, /admin/doc-ingest/connect returns a
-      # loud 503 and the ingestion worker throws — it never silently no-ops.
-      - path: /home/bbarnard065/.dr3-vision-secrets/doc-ingest.env
-        required: false
+      # An earlier revision mounted a dedicated `doc-ingest.env` carrying a
+      # `DOC_INGEST_TOKEN_KEY`. That was removed: it contradicted the operator
+      # rule against .env files for credential material, and it made the whole
+      # feature wait on a manual provisioning step for no cryptographic gain.
+      #
+      # The AES key protecting the delegated Microsoft refresh/access tokens is
+      # DERIVED (scrypt, with a doc-ingest-specific salt) from `MYMRC_CRED_KEY`,
+      # which ADR-0057 already established and which is already mounted above.
+      # The salt provides domain separation, so the two subsystems never share
+      # an AES key. Rotating MYMRC_CRED_KEY costs exactly one re-click of
+      # Connect — a refresh token is re-obtainable, unlike the MyMRC login.
+      #
+      # The tokens themselves live ENCRYPTED IN POSTGRES, never in a file, and
+      # the service-account PASSWORD is not a runtime credential at all.
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0

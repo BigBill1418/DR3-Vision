@@ -311,7 +311,7 @@ export interface DocIngestConnectionStatus {
 
   connectedBy: string | null;
 
-  /** True when `DOC_INGEST_TOKEN_KEY` is mounted. False = connect will fail LOUDLY, so say so up front. */
+  /** True when the ADR-0057 `MYMRC_CRED_KEY` is mounted (the doc-ingest key is derived from it — no second secret). False = connect fails LOUDLY, so say so up front. */
   encryptionKeyConfigured: boolean;
   /** True when a client secret is readable (its own or the shared mail secret). */
   clientSecretConfigured: boolean;

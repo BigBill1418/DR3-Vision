@@ -35,7 +35,7 @@ import {
 } from '../oauth';
 import { DOC_INGEST_CLIENT_ID, DOC_INGEST_SERVICE_UPN } from '../config';
 
-const KEY_ENV = 'DOC_INGEST_TOKEN_KEY';
+const KEY_ENV = 'MYMRC_CRED_KEY'; // ADR-0067: derived, not a second secret
 const SECRET_ENV = 'DOC_INGEST_CLIENT_SECRET';
 const ORIGINAL_KEY = process.env[KEY_ENV];
 const ORIGINAL_SECRET = process.env[SECRET_ENV];
