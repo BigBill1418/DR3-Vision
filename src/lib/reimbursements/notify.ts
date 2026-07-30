@@ -72,6 +72,9 @@ interface FullRow {
   second_approved_at: Date | null;
   decision_note: string | null;
   employee_name_freeform: string | null;
+  /** R2 key of the receipt; NULL means none was ever filed. The decision PDF
+   *  reproduces it, and says so on its face when it cannot. */
+  receipt_file_key: string | null;
   employee_user: { name: string } | null;
   submitter: { name: string; email: string | null };
   second_approver: { name: string } | null;
@@ -97,6 +100,7 @@ async function load(prisma: PrismaClient, id: string): Promise<FullRow | null> {
       second_approved_at: true,
       decision_note: true,
       employee_name_freeform: true,
+      receipt_file_key: true,
       escalation_reason: true,
       employee_user: { select: { name: true } },
       submitter: { select: { name: true, email: true } },
@@ -327,6 +331,17 @@ export async function notifyReimbursementDecided(
     if (res.disabled) {
       problems.push(
         'Approved reimbursement mail could not be sent — the email transport is disabled (M365 unconfigured). Mary has NOT been told to pay it.',
+      );
+    }
+    // The decision PDF caps itself well under the transport ceiling, so this is
+    // a belt-and-braces report rather than an expected outcome. Said out loud
+    // anyway: a refused send leaves `delivered === 0` exactly like a transport
+    // failure, and Mary being untold is the same outcome either way.
+    if (res.oversize) {
+      problems.push(
+        `Approved reimbursement mail was REFUSED before sending: the attachment is ${Math.round(
+          res.oversize.rawAttachmentBytes / 1024,
+        )} KB, over what Microsoft Graph accepts inline. Mary has NOT been told to pay it, and re-sending will not help.`,
       );
     }
     // `sent_to_accounting_at` is an AUDIT field: it must record that accounting

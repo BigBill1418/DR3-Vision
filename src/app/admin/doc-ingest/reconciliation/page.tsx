@@ -44,10 +44,15 @@ function bound(raw: string | string[] | undefined, fallback: string): string {
   return typeof value === 'string' && ISO_DAY.test(value) ? value : fallback;
 }
 
+// Next 15: `searchParams` is a PROMISE. Typing it as a plain record passes
+// `tsc --noEmit` — which does not know about the generated `PageProps`
+// constraint — and then fails `next build`, i.e. only at DEPLOY time, taking the
+// whole image with it. That is exactly what happened on 2026-07-30: the build
+// broke and every subsequent deploy silently shipped the previous image.
 export default async function ReconciliationPage({
   searchParams,
 }: {
-  searchParams: Record<string, string | string[] | undefined>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<JSX.Element> {
   const gate = await checkReconciliationRead();
   if (!gate.ok) {
@@ -55,9 +60,10 @@ export default async function ReconciliationPage({
     redirect('/dashboard');
   }
 
+  const sp = await searchParams;
   const defaults = defaultWindow();
-  const from = bound(searchParams['from'], defaults.from);
-  const to = bound(searchParams['to'], defaults.to);
+  const from = bound(sp['from'], defaults.from);
+  const to = bound(sp['to'], defaults.to);
 
   const siteIds = await reconciliationSiteIds(gate.ctx);
   const result = await reconcileReference({ db: prisma, siteIds, from, to });

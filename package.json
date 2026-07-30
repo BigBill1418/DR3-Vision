@@ -80,6 +80,7 @@
     "react-hook-form": "^7.53.0",
     "sanitize-html": "^2.17.5",
     "serwist": "^9.0.10",
+    "sharp": "^0.34.5",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
     "workbox-background-sync": "^7.1.0",
