@@ -138,6 +138,25 @@ export class FakePrisma {
     findFirst: async () => null,
   };
 
+  /**
+   * ADR-0037 `sources` rows, for the adapter's wrong-workbook cross-check
+   * (`sourceAliasResolver`). Empty by default: no resolvable name ⇒ no evidence
+   * either way ⇒ the check passes and the rest of the engine behaves as before.
+   */
+  sourceRows: {
+    id: string;
+    site_id: string;
+    name: string;
+    is_non_program: boolean;
+    state: string | null;
+    site: { jurisdiction: string } | null;
+    aliases: { alias: string }[];
+  }[] = [];
+
+  source = {
+    findMany: async () => this.sourceRows,
+  };
+
   workbookSyncRun = {
     create: async (args: { data: Record<string, unknown> }) => {
       this.syncRuns.push(args.data);

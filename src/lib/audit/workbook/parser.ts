@@ -24,7 +24,11 @@
 import ExcelJS from 'exceljs';
 import { cellText, cellNumber } from './cells';
 import { classifyWorkbookSheets, type WorksheetSemanticType } from './section-resolver';
-import { extractWorkbook, type WorkbookInventoryLedger } from './section-extractors';
+import {
+  extractWorkbook,
+  type DayInventory,
+  type WorkbookInventoryLedger,
+} from './section-extractors';
 import type { InventoryClose } from '@/lib/inventory/inventory-close';
 
 export type TemplateGeneration =
@@ -116,6 +120,13 @@ export interface ParsedWorkbook {
    */
   inventoryLedger: WorkbookInventoryLedger | null;
   inventoryClose: InventoryClose | null;
+  /**
+   * Per-DAY-sheet summary-box series (Starting/Ending inventory, INBOUND,
+   * Processed, Saved) — the workbook's OWN formula outputs, read by label. The
+   * ADR-0049 daily adapter reads `saved` from here for
+   * `processed_units_daily.saved_units`; empty for legacy synthetic workbooks.
+   */
+  inventorySeries: DayInventory[];
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -201,6 +212,7 @@ export async function parseWorkbook(
       closeBalance: ex.closeBalance,
       inventoryLedger: ex.inventoryLedger,
       inventoryClose: ex.inventoryClose,
+      inventorySeries: ex.inventorySeries,
     };
   }
 
@@ -347,5 +359,6 @@ export async function parseWorkbook(
     closeBalance: null,
     inventoryLedger: null,
     inventoryClose: null,
+    inventorySeries: [],
   };
 }

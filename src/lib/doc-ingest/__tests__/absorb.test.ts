@@ -61,7 +61,14 @@ const layoutStub = async (): Promise<ParsedWorkbook> =>
   }) as unknown as ParsedWorkbook;
 
 function rowsStub(rows: DailyProductionRow[], midEditCount = 0) {
-  return async (): Promise<DailyParseResult> => ({ rows, midEditCount });
+  return async (): Promise<DailyParseResult> => ({
+    rows,
+    midEditCount,
+    skipped: [],
+    templateGeneration: 'woodland_daily',
+    daysSeen: rows.length + midEditCount,
+    failure: null,
+  });
 }
 
 const DAY = (

@@ -43,7 +43,7 @@ Beyond fixing ADR-0030 accuracy, sync enables:
 
 ## Consequences
 
-*Positive:*
+_Positive:_
 
 - The daily production report becomes accurate the day sync goes live
 - ADR-0039 audit gains Leg C during shadow-billing
@@ -51,7 +51,7 @@ Beyond fixing ADR-0030 accuracy, sync enables:
 - Post-cutover archival ensures workbook data survives Kelsey's role transitions
 - Parser finalized once, reused twice
 
-*Negative:*
+_Negative:_
 
 - Tenant-wide `Files.Read.All` is a broader permission than typical
 - Kelsey's OneDrive as source means account issues could break sync — bounded by her staying employed
@@ -108,14 +108,78 @@ prefix sorts after the sibling AP `20260716_*` and the main tip
 
 **LOUD — what remains gated:**
 
-1. **Parser finalization (D12).** The per-day column mapping in
-   `src/lib/workbook-sync/daily-adapter.ts` reads the **Addendum-B fixture** `Daily`
-   sheet layout. When Kelsey's real `JUNE 2026 DAILY LOG WOODLAND.xlsm` lands, that
-   ONE adapter file is where the mapping is finalized — the transport, engine,
-   ledger, cutover, and tests stay put. The shared ADR-0048 `parseWorkbook` runs
-   alongside for staging/provenance (its output is not re-persisted per poll — a
-   10-min WorkbookImport would pollute the retro-audit ledger; the live upsert needs
-   only the derived daily rows).
+1. ~~**Parser finalization (D12).**~~ **CLOSED 2026-07-30 — see Amendment 1 below.**
 2. **Enable flip.** Each `workbook_sources` row is born `is_syncing=false`; a
    deliberate operator enable turns real polling on. The `workbook-sync` compose
    service is profile-gated for the same reason.
+
+---
+
+## Amendment 1 (2026-07-30) — D12 closed: the adapter derives, it no longer guesses
+
+**Status:** Accepted. Closes the D12 parser-finalization gate. Does NOT flip
+`is_syncing` — that remains the operator's call (gate 2 above stands).
+
+### What was wrong
+
+`daily-adapter.ts` matched a sheet named exactly `daily` and read FIXED columns
+A–G. No real Woodland workbook has that sheet. Against Kelsey's file it would have
+produced either zero rows (silent) or **whatever happened to sit in A–G, mapped
+into `processed_units_daily` under workbook-wins semantics** — a guessed column
+overwriting a real production figure.
+
+The machinery to do this correctly already existed _and already ran on the same
+bytes_: `engine.ts` called the layout-aware `parseWorkbook` (ADR-0039/0048) and
+discarded everything except `templateGeneration`, which it printed in a log line.
+
+### Decision
+
+**D12a — the adapter DERIVES from the layout-aware parse.** `deriveDailyRows`
+decodes the `daily_close` staging rows the semantic extractor produces from the
+Processed sheet (resolved by MEANING via `section-resolver.ts`: row-2 section
+label → header signature → prefix-stripped name). The adapter addresses no cell,
+no column letter and no sheet name of its own. The bytes are parsed ONCE per poll
+and the same `ParsedWorkbook` feeds both staging/provenance and the operational
+rows.
+
+**D12b — a missing figure is never a zero.** `stripped_program` and
+`stripped_non_program` are billed production figures. A blank cell for either
+SKIPS that day and counts it (the existing D11 mid-edit concept, extended with a
+per-day reason + provenance), retried next poll, no alert. The extractor
+(`section-extractors.ts`) was emitting `?? 0` for both into the staging payload;
+it now emits only what the sheet carries, so the promotion decode's `reqNum`
+refuses such a day too instead of consuming a manufactured zero.
+
+**D12c — "cannot read" and "no data" are different outcomes.** Refusals return a
+`failure` and the engine turns it into a FAILED run with the reason on
+`workbook_sync_runs.error_text`, writing nothing and NOT advancing the file
+watermark:
+
+| Outcome                                                       | Result                                          |
+| ------------------------------------------------------------- | ----------------------------------------------- |
+| `templateGeneration === 'unknown'`                            | refuse — `unknown_template_generation`          |
+| Processed section never resolved (incl. undeterminable month) | refuse — `daily_section_unresolved`             |
+| Days present, none usable                                     | refuse — `all_days_unusable` (names day + cell) |
+| One date twice with different figures                         | refuse — `conflicting_duplicate_days`           |
+| Every resolvable source name belongs to another site          | refuse — `wrong_site`                           |
+| Processed section resolved, zero day rows                     | **ok**, 0 rows — an empty month                 |
+
+`templateGeneration` is therefore load-bearing, not decorative.
+
+**D12d — the mock fixture mirrors the real shape.** `buildFixtureWorkbookBytes`
+built an invented `Daily` A–G sheet that cannot occur in production, so it proved
+nothing about production — it only made the broken adapter look green. It now
+builds a Processed sheet + DAY sheets in the real shape, and carries **no**
+employees/processors columns, because the real Processed sheet has none.
+
+### Consequence the operator must decide before enabling
+
+`processed_units_daily.employees_count` / `processors_count` are Vision-captured
+fields the workbook does not carry, so the adapter reports them as `null` — the
+honest reading of "the workbook did not state one". But `upsert.ts` treats any
+field difference as a disagreement, so under workbook-wins a sync will **null out
+a Vision-captured headcount** (audited as an overwrite, but destroyed). This is
+pre-existing upsert semantics, not new behaviour, and it is deliberately NOT
+changed here — narrowing workbook-wins to the fields the workbook actually
+carries is an operator decision, not a parser one. It should be settled before
+`is_syncing` is flipped.

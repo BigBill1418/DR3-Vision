@@ -1,22 +1,58 @@
-// ADR-0049 D12 — daily-production adapter (PARSER-FINALIZATION SEAM).
+// ADR-0049 D12 — daily-production adapter, FINALIZED onto the layout-aware parse.
 //
-// ┌──────────────────────────────────────────────────────────────────────────┐
-// │ LOUD NOTE: this reads the Addendum-B FIXTURE `Daily` sheet layout. The real │
-// │ `JUNE 2026 DAILY LOG WOODLAND.xlsm` day layout is finalized once Kelsey's    │
-// │ file is in hand (D12). When it lands, THIS FILE is the single place the      │
-// │ column mapping changes — the engine, upsert, ledger, transport and tests     │
-// │ above/below it stay put. The shared ADR-0048 `parseWorkbook` still runs for  │
-// │ staging/provenance (see engine.ts); this adapter derives the per-day         │
-// │ operational rows the sync upserts into `processed_units_daily` (D3 target).  │
-// └──────────────────────────────────────────────────────────────────────────┘
+// What changed (2026-07-30) and why it mattered
+// ─────────────────────────────────────────────
+// This file used to match a sheet named exactly `daily` and read FIXED columns
+// A–G. No real Woodland workbook has that sheet, so against Kelsey's file it
+// produced either zero rows (silent) or — worse — whatever happened to sit in
+// A–G mapped into `processed_units_daily` under workbook-wins semantics, i.e. a
+// guessed column overwriting a real production figure.
 //
-// Daily sheet columns (fixture): A=production_date B=stripped_program
-//   C=stripped_non_program D=material_ticket E=employees F=processors G=saved_units
-// Required cells (mid-edit guard, D11): production_date + stripped_program. A row
-// missing either is returned with `midEdit=true` — the upsert SKIPS + COUNTS it and
-// it is retried next poll, with NO alert.
+// The layout-aware machinery already existed and already ran on the same bytes:
+// `parseWorkbook` (ADR-0039/0048) classifies every sheet by MEANING via
+// `section-resolver.ts` (row-2 section label → header signature → prefix-stripped
+// name), extracts the Processed sheet's per-day close through
+// `section-extractors.ts`, and tags each row with tab/row/column provenance. The
+// engine called it and threw all of it away except `templateGeneration`, which it
+// printed in a log line. This adapter now DERIVES its rows from that parse and
+// resolves no columns of its own.
+//
+// Column resolution now:
+//   `parseWorkbook` → StagingRow[] where `section === 'daily_close'`, one per
+//   "Day N" row on the semantically-resolved Processed sheet, carrying a JSON
+//   payload with the workbook's own values + provenance. This adapter DECODES
+//   that payload. It never addresses a cell, a column letter or a sheet name.
+//
+// Refusal posture — a zero must never be mistaken for a fact:
+//   - `templateGeneration === 'unknown'`  → refuse (we do not know this shape).
+//   - Processed section never resolved     → refuse (layout unreadable).
+//   - Days present but ALL unusable        → refuse (loud, with per-day reasons).
+//   - Conflicting duplicate day keys       → refuse (picking one would be a guess).
+//   - Processed section resolved, no days  → NOT a failure: an empty month.
+// A refusal returns `failure` — the engine turns it into a FAILED run with the
+// reason on `workbook_sync_runs.error_text` and writes NOTHING. "Cannot read" and
+// "no data" are different outcomes with different messages, by design.
 
-import ExcelJS from 'exceljs';
+import {
+  parseWorkbook,
+  type CellProvenance,
+  type ParsedWorkbook,
+  type StagingRow,
+  type TemplateGeneration,
+} from '@/lib/audit/workbook/parser';
+import type { SiteAliasResolver } from '@/lib/audit/types';
+
+/** The staging section the semantic extractor tags each Processed "Day N" row with. */
+const DAILY_CLOSE_SECTION = 'daily_close';
+
+/**
+ * `sectionCounts` key the extractor bumps for EVERY scanned Processed sheet —
+ * including one that yielded 0 day rows. Its presence is therefore the
+ * discriminator between "no data" (key present, value 0) and "layout unreadable"
+ * (key absent: no Processed sheet resolved, or the workbook month could not be
+ * derived so the day rows were never built).
+ */
+const PROCESSED_SECTION_COUNT_KEY = 'processed_daily_close';
 
 export interface DailyProductionRow {
   /** 'YYYY-MM-DD' (UTC day key) — the (site, production_date) upsert key. */
@@ -29,84 +65,352 @@ export interface DailyProductionRow {
   savedUnits: number | null;
 }
 
+/** Why a day the workbook DOES carry was not turned into a production row. */
+export type DailySkipReason =
+  | 'date_unreadable'
+  | 'stripped_program_unusable'
+  | 'stripped_non_program_unusable';
+
+export interface DailySkippedDay {
+  /** The workbook's own row key ("day_7") — never a fabricated date. */
+  label: string;
+  reason: DailySkipReason;
+  provenance: CellProvenance;
+}
+
+export type DailyFailureKind =
+  | 'unknown_template_generation'
+  | 'daily_section_unresolved'
+  | 'all_days_unusable'
+  | 'conflicting_duplicate_days'
+  | 'wrong_site';
+
+export interface DailyParseFailure {
+  kind: DailyFailureKind;
+  /** Operator-facing; goes verbatim onto `workbook_sync_runs.error_text`. */
+  message: string;
+}
+
 export interface DailyParseResult {
   rows: DailyProductionRow[];
-  /** Rows present on the sheet but skipped this poll because a required cell was empty (D11). */
+  /**
+   * Rows present on the sheet but skipped this poll because a required figure
+   * was missing or unusable (D11) — retried next poll, NO alert. Equals
+   * `skipped.length`; kept as a named field because the run ledger column
+   * (`rows_skipped_midedit`) is this number.
+   */
   midEditCount: number;
+  /** Per-day detail behind `midEditCount` (which day, which figure, which cell). */
+  skipped: DailySkippedDay[];
+  /** Straight from the shared parse — no longer decorative: it gates the refusal. */
+  templateGeneration: TemplateGeneration;
+  /** `daily_close` rows the layout-aware parse resolved (0 with no failure = empty month). */
+  daysSeen: number;
+  /** Non-null ⇒ the workbook was NOT read. The caller must write nothing and fail the run. */
+  failure: DailyParseFailure | null;
 }
 
-const DAILY_SHEET = 'daily';
+/**
+ * Optional wrong-workbook cross-check. The engine binds `site_id` from the
+ * `workbook_sources` row, so a mis-pointed `folder_path` / `naming_pattern` would
+ * write ANOTHER site's figures under this site's key with no complaint. When the
+ * workbook's own source names resolve (via `source_aliases`, so spelling drift is
+ * tolerated) and EVERY resolvable one belongs to a different site, that is
+ * affirmative evidence of the wrong file — refuse.
+ */
+export interface DailySiteScope {
+  siteId: string;
+  resolver: SiteAliasResolver;
+}
 
-function cellText(value: ExcelJS.CellValue): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value.trim() || null;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  if (typeof value === 'object' && 'result' in value && value.result !== undefined) {
-    return cellText(value.result as ExcelJS.CellValue);
+// ── payload decoding (strict — a value is used only if it is unambiguously usable) ──
+
+function payloadOf(row: StagingRow): Record<string, unknown> | null {
+  if (row.rawValue === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(row.rawValue);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
   }
-  if (typeof value === 'object' && 'text' in value && typeof value.text === 'string') {
-    return value.text.trim() || null;
-  }
-  return null;
 }
 
-function cellNumber(value: ExcelJS.CellValue): number | null {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'object' && value !== null && 'result' in value) {
-    const r = (value as { result?: unknown }).result;
-    if (typeof r === 'number') return r;
-  }
-  const t = cellText(value);
-  if (t === null) return null;
-  const n = Number(t.replace(/[$,\s]/g, ''));
-  return Number.isFinite(n) ? n : null;
+/** A real calendar day in 'YYYY-MM-DD' form — rejects '2026-02-31' and friends. */
+function dayKey(payload: Record<string, unknown>): string | null {
+  const raw = payload['date'];
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const d = new Date(`${raw}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === raw ? raw : null;
 }
 
-/** 'YYYY-MM-DD' | ISO | Date → 'YYYY-MM-DD', else null (malformed date = mid-edit). */
-function normalizeDayKey(value: ExcelJS.CellValue): string | null {
-  const t = cellText(value);
-  if (t === null) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+/** A finite, non-negative number, or null. A negative production figure is not usable. */
+function quantity(payload: Record<string, unknown>, key: string): number | null {
+  const raw = payload[key];
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
 }
 
-export async function parseDailyRows(
-  data: Uint8Array | ArrayBuffer | Buffer,
-): Promise<DailyParseResult> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(data as ExcelJS.Buffer);
-  const sheet = wb.worksheets.find((w) => w.name.toLowerCase() === DAILY_SHEET);
-  const rows: DailyProductionRow[] = [];
-  let midEditCount = 0;
-  if (!sheet) return { rows, midEditCount };
+/** A non-negative integer headcount, or null (the column is Int in the schema). */
+function headcount(payload: Record<string, unknown>, key: string): number | null {
+  const raw = payload[key];
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : null;
+}
 
-  sheet.eachRow((row, rowIndex) => {
-    if (rowIndex === 1) return; // header
-    const productionDate = normalizeDayKey(row.getCell(1).value);
-    const strippedProgram = cellNumber(row.getCell(2).value);
-    // A completely blank trailing row is not a record at all — ignore, don't count.
-    if (
-      productionDate === null &&
-      strippedProgram === null &&
-      cellText(row.getCell(4).value) === null
-    )
-      return;
-    // Required cells missing ⇒ mid-edit: skip + count, retried next poll (D11).
-    if (productionDate === null || strippedProgram === null) {
-      midEditCount += 1;
-      return;
+function text(payload: Record<string, unknown>, key: string): string | null {
+  const raw = payload[key];
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
+}
+
+function sameRow(a: DailyProductionRow, b: DailyProductionRow): boolean {
+  return (
+    a.strippedProgram === b.strippedProgram &&
+    a.strippedNonProgram === b.strippedNonProgram &&
+    a.materialTicketNumber === b.materialTicketNumber &&
+    a.employeesCount === b.employeesCount &&
+    a.processorsCount === b.processorsCount &&
+    a.savedUnits === b.savedUnits
+  );
+}
+
+function at(p: CellProvenance): string {
+  return `${p.tab}!${p.col}${p.row}`;
+}
+
+/** The parse flags that explain a Processed-sheet miss, for the refusal message. */
+function processedFlags(parsed: ParsedWorkbook): string {
+  const relevant = parsed.flags.filter((f) => f.startsWith('[processed]'));
+  return relevant.length > 0 ? ` Parser notes: ${relevant.join(' | ')}` : '';
+}
+
+function sheetSummary(parsed: ParsedWorkbook): string {
+  const types = [...parsed.sheetTypes.entries()].map(([name, type]) => `${name}=${type}`);
+  return types.length > 0 ? types.join(', ') : '(no sheets classified)';
+}
+
+/**
+ * Per-day `Saved` units, keyed by day-of-month, read from the DAY sheets' own
+ * labelled "Saved" cell (`inventorySeries`) — the same figure ADR-0037 §A.2
+ * defines as set-aside-not-processed, which is exactly what
+ * `processed_units_daily.saved_units` stores. Days without the label are absent
+ * from the map, never 0.
+ */
+function savedByDayOfMonth(parsed: ParsedWorkbook): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const day of parsed.inventorySeries) {
+    if (day.saved !== null && Number.isFinite(day.saved) && day.saved >= 0) {
+      out.set(day.day, day.saved);
     }
-    rows.push({
+  }
+  return out;
+}
+
+/**
+ * Refuse when every source name the workbook resolves belongs to a DIFFERENT
+ * site. Unresolvable names prove nothing (they are the promotion's problem) and
+ * a single in-site match clears the check — this fires only on affirmative
+ * evidence that the file belongs to another site.
+ */
+function wrongSite(parsed: ParsedWorkbook, scope: DailySiteScope): string | null {
+  const foreign = new Map<string, string>();
+  let matched = 0;
+  for (const row of parsed.stagingRows) {
+    if (row.siteNameRaw === null) continue;
+    const hit = scope.resolver.resolve(row.siteNameRaw);
+    if (hit === null) continue;
+    if (hit.siteId === scope.siteId) matched += 1;
+    else foreign.set(row.siteNameRaw, hit.siteId);
+  }
+  if (matched > 0 || foreign.size === 0) return null;
+  const examples = [...foreign.entries()]
+    .slice(0, 5)
+    .map(([name, siteId]) => `"${name}" → site ${siteId}`)
+    .join(', ');
+  return (
+    `every source name resolved in this workbook belongs to a DIFFERENT site ` +
+    `(configured site is ${scope.siteId}; ${foreign.size} foreign name(s): ${examples}). ` +
+    `Refusing to write another site's figures under this site's key — check the ` +
+    `workbook source's drive_upn / folder_path / naming_pattern. Nothing was written.`
+  );
+}
+
+// ── the adapter ────────────────────────────────────────────────────────────
+
+/**
+ * Derive the per-day production rows from an ALREADY-PARSED workbook.
+ *
+ * Pure and synchronous: the caller owns the (single) `parseWorkbook` call, so the
+ * bytes are parsed once per poll and the same `ParsedWorkbook` drives both the
+ * staging/provenance record and these operational rows.
+ */
+export function deriveDailyRows(
+  parsed: ParsedWorkbook,
+  siteScope?: DailySiteScope,
+): DailyParseResult {
+  const base = {
+    rows: [] as DailyProductionRow[],
+    midEditCount: 0,
+    skipped: [] as DailySkippedDay[],
+    templateGeneration: parsed.templateGeneration,
+    daysSeen: 0,
+  };
+
+  // (1) A shape we do not recognise is never parsed hopefully.
+  if (parsed.templateGeneration === 'unknown') {
+    return {
+      ...base,
+      failure: {
+        kind: 'unknown_template_generation',
+        message:
+          `templateGeneration is "unknown" — no Woodland daily-log section resolved in this ` +
+          `workbook (${parsed.sheetCount} sheet(s): ${sheetSummary(parsed)}). Refusing to parse ` +
+          `a shape the parser does not recognise. Nothing was written.`,
+      },
+    };
+  }
+
+  if (siteScope) {
+    const mismatch = wrongSite(parsed, siteScope);
+    if (mismatch !== null) {
+      return { ...base, failure: { kind: 'wrong_site', message: mismatch } };
+    }
+  }
+
+  const dayRows = parsed.stagingRows.filter((r) => r.section === DAILY_CLOSE_SECTION);
+  const processedSectionResolved = PROCESSED_SECTION_COUNT_KEY in parsed.sectionCounts;
+
+  // (2) No day rows at all: an empty month (section resolved) vs an unreadable
+  //     layout (section never resolved). Two outcomes, two messages.
+  if (dayRows.length === 0) {
+    if (!processedSectionResolved) {
+      return {
+        ...base,
+        failure: {
+          kind: 'daily_section_unresolved',
+          message:
+            `no daily-production section could be resolved (templateGeneration=` +
+            `"${parsed.templateGeneration}", ${parsed.stagingRows.length} staging row(s) from ` +
+            `${parsed.sheetCount} sheet(s): ${sheetSummary(parsed)}). The workbook has content ` +
+            `but its Processed/daily-close layout was not recognised, so zero rows here means ` +
+            `"cannot read", not "no production". Nothing was written.${processedFlags(parsed)}`,
+        },
+      };
+    }
+    return { ...base, failure: null }; // legitimately empty month — not an error
+  }
+
+  // (3) Decode each day. A day missing a required figure is SKIPPED + COUNTED,
+  //     never defaulted.
+  const saved = savedByDayOfMonth(parsed);
+  const byDate = new Map<string, DailyProductionRow>();
+  const skipped: DailySkippedDay[] = [];
+  const conflicts: string[] = [];
+
+  for (const stagingRow of dayRows) {
+    const label = stagingRow.fieldKey ?? `row_${stagingRow.rowIndex}`;
+    const payload = payloadOf(stagingRow);
+    const productionDate = payload === null ? null : dayKey(payload);
+    if (payload === null || productionDate === null) {
+      skipped.push({ label, reason: 'date_unreadable', provenance: stagingRow.provenance });
+      continue;
+    }
+    const strippedProgram = quantity(payload, 'strippedProgram');
+    if (strippedProgram === null) {
+      skipped.push({
+        label,
+        reason: 'stripped_program_unusable',
+        provenance: stagingRow.provenance,
+      });
+      continue;
+    }
+    const strippedNonProgram = quantity(payload, 'strippedNonProgram');
+    if (strippedNonProgram === null) {
+      skipped.push({
+        label,
+        reason: 'stripped_non_program_unusable',
+        provenance: stagingRow.provenance,
+      });
+      continue;
+    }
+
+    const dayOfMonth = Number(productionDate.slice(8, 10));
+    const row: DailyProductionRow = {
       productionDate,
       strippedProgram,
-      strippedNonProgram: cellNumber(row.getCell(3).value) ?? 0,
-      materialTicketNumber: cellText(row.getCell(4).value),
-      employeesCount: cellNumber(row.getCell(5).value),
-      processorsCount: cellNumber(row.getCell(6).value),
-      savedUnits: cellNumber(row.getCell(7).value),
-    });
-  });
+      strippedNonProgram,
+      materialTicketNumber: text(payload, 'materialTicketNumber'),
+      employeesCount: headcount(payload, 'employeesCount'),
+      processorsCount: headcount(payload, 'processorsCount'),
+      savedUnits: quantity(payload, 'savedUnits') ?? saved.get(dayOfMonth) ?? null,
+    };
 
-  return { rows, midEditCount };
+    const prior = byDate.get(productionDate);
+    if (prior && !sameRow(prior, row)) {
+      conflicts.push(`${productionDate} (${at(stagingRow.provenance)})`);
+      continue;
+    }
+    byDate.set(productionDate, row);
+  }
+
+  // (4) Two day rows disagreeing about the same date: picking one is a guess.
+  if (conflicts.length > 0) {
+    return {
+      ...base,
+      daysSeen: dayRows.length,
+      skipped,
+      midEditCount: skipped.length,
+      failure: {
+        kind: 'conflicting_duplicate_days',
+        message:
+          `${conflicts.length} production date(s) appear more than once with DIFFERENT figures: ` +
+          `${conflicts.slice(0, 5).join('; ')}. Choosing one would be a guess. Nothing was written.`,
+      },
+    };
+  }
+
+  const rows = [...byDate.values()].sort((a, b) =>
+    a.productionDate.localeCompare(b.productionDate),
+  );
+
+  // (5) The workbook clearly carries days, yet not one produced a figure. That is
+  //     a read failure, not a clean run of zero.
+  if (rows.length === 0) {
+    const reasons = skipped
+      .slice(0, 5)
+      .map((s) => `${s.label} ${s.reason} @ ${at(s.provenance)}`)
+      .join('; ');
+    return {
+      ...base,
+      daysSeen: dayRows.length,
+      skipped,
+      midEditCount: skipped.length,
+      failure: {
+        kind: 'all_days_unusable',
+        message:
+          `${dayRows.length} daily-close row(s) were found but NONE produced a usable production ` +
+          `figure — first ${Math.min(skipped.length, 5)}: ${reasons}. Zero rows here means ` +
+          `"cannot read", not "no production". Nothing was written.`,
+      },
+    };
+  }
+
+  return {
+    rows,
+    midEditCount: skipped.length,
+    skipped,
+    templateGeneration: parsed.templateGeneration,
+    daysSeen: dayRows.length,
+    failure: null,
+  };
+}
+
+/**
+ * Parse `data` and derive its daily-production rows. Convenience wrapper — the
+ * sync engine calls {@link deriveDailyRows} directly with the `ParsedWorkbook` it
+ * already holds, so production parses the bytes exactly once.
+ */
+export async function parseDailyRows(
+  data: Uint8Array | ArrayBuffer | Buffer,
+  siteScope?: DailySiteScope,
+): Promise<DailyParseResult> {
+  return deriveDailyRows(await parseWorkbook(data), siteScope);
 }

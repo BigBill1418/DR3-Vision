@@ -3,6 +3,28 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-30 — workbook-sync's daily adapter now DERIVES its columns (ADR-0049 Amendment 1)
+
+`workbook-sync` is the system of record for `processed_units_daily`, it is running in production, and its daily adapter was still matching a sheet named exactly `daily` with fixed columns A–G — a layout no real Woodland workbook has. Against Kelsey's file that produces either zero rows (silent) or the wrong columns written into production figures under workbook-wins. Meanwhile the engine already called the layout-aware `parseWorkbook` on the same bytes and threw away everything except `templateGeneration`, which it used in a log line.
+
+### Changed
+
+- **The adapter derives its rows from the layout-aware parse instead of guessing columns.** `deriveDailyRows` decodes the `daily_close` staging rows the semantic extractor produces from the Processed sheet — resolved by MEANING (row-2 section label → header signature → prefix-stripped name), which is what survives Kelsey renaming a tab. The adapter addresses no cell, column letter or sheet name of its own, and the bytes are now parsed once per poll rather than twice.
+- **`templateGeneration` is load-bearing.** An `unknown` generation is refused rather than parsed hopefully.
+- **The mock fixture mirrors the real workbook shape.** It used to build an invented `Daily` A–G sheet that cannot occur in production, so it proved nothing about production — it only made the broken adapter look green. It now builds a Processed sheet + DAY sheets, and deliberately carries no employees/processors columns because the real sheet has none.
+
+### Fixed
+
+- **A missing production figure is no longer written as 0.** `stripped_program` and `stripped_non_program` are billed figures; a blank cell now SKIPS and counts that day (the D11 mid-edit path, extended with a per-day reason and cell provenance) instead of defaulting. The section extractor was coercing both to `?? 0` in the staging payload; it now emits only what the sheet carries, so the ADR-0048 promotion decode refuses such a day too rather than consuming a manufactured zero.
+- **"Cannot read" can no longer be recorded as "nothing to write".** Zero usable rows from a workbook with content now FAILS the run with the reason on `workbook_sync_runs.error_text`, writes nothing, and does not advance the file watermark: `unknown_template_generation`, `daily_section_unresolved`, `all_days_unusable` (names the day and the cell), `conflicting_duplicate_days`. A Processed section that resolved with zero day rows is the one clean zero — an empty month. This is the same silent-zero class as a null ctag read as "unchanged" and a missing baseline read as "no variance".
+- **A workbook belonging to another site is refused.** The engine binds `site_id` from `workbook_sources`, so a mis-pointed `folder_path` would have written another site's figures under this site's key. When every source name the file resolves (via `source_aliases`, so spelling drift is tolerated) belongs to a different site, the sync refuses. A single in-site match or an unresolvable name clears the check — it fires only on affirmative evidence.
+- **`saved_units` is read from the DAY sheets' own labelled "Saved" cell** (ADR-0037 §A.2) instead of being permanently null.
+
+### Still gated
+
+- **`is_syncing` remains `false`.** This change closes ADR-0049's D12 parser gate only; enabling real polling is the operator's flip.
+- **One decision is open before that flip:** the workbook carries no employees/processors columns, so the adapter reports them null — and `upsert.ts`'s workbook-wins comparison will null out a Vision-captured headcount (audited, but destroyed). Narrowing workbook-wins to the fields the workbook actually carries is an operator decision, not a parser one. See ADR-0049 Amendment 1.
+
 ## 2026-07-30 — document ingestion now ABSORBS, and can measure itself (ADR-0069)
 
 Shared-document ingestion captured but did not absorb. A document terminated at one `file_drops` row with `status: 'received'`; no parsed value reached a queryable table, a report, or any comparison against Vision's own numbers. `parse_summary` could not close the gap — it stores shape, not data, and on all three live documents it contains no usable figure at all.

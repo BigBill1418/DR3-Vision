@@ -422,11 +422,16 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
       row: r,
       col: numberToColumnLetter(STRIPPED_PROGRAM),
     };
-    const payload: Record<string, unknown> = {
-      date,
-      strippedProgram: sp ?? 0,
-      strippedNonProgram: snp ?? 0,
-    };
+    // Emit ONLY the figures the sheet actually carries. A blank D or E is NOT a
+    // zero: `stripped_program` / `stripped_non_program` are billed production
+    // figures, so a guessed 0 is worse than a missing day. Consumers refuse the
+    // day instead — the ADR-0049 daily adapter skips + counts it (D11, retried
+    // next poll) and the promotion decode's `reqNum` raises with this row's
+    // provenance. (Before 2026-07-30 both were coerced `?? 0` here, which wrote a
+    // silent zero into a production figure whenever one of the two was blank.)
+    const payload: Record<string, unknown> = { date };
+    if (sp !== null) payload['strippedProgram'] = sp;
+    if (snp !== null) payload['strippedNonProgram'] = snp;
     if (material && /\d/.test(material)) payload['materialTicketNumber'] = material;
     res.stagingRows.push({
       tabName: ws.name,
@@ -435,7 +440,7 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
       section: 'daily_close',
       fieldKey: `day_${day}`,
       rawValue: JSON.stringify(payload),
-      numericValue: sp ?? 0,
+      numericValue: sp,
       siteNameRaw: null,
       provenance: prov,
     });

@@ -93,6 +93,19 @@ export async function buildWoodlandClassificationWorkbook(
   return wb.xlsx.writeBuffer();
 }
 
+/**
+ * A workbook of purely-unrecognized sheets (the Terex-equipment-log shape). Every
+ * sheet classifies as 'unknown' and no Woodland section resolves, so
+ * `templateGeneration` is 'unknown' — the shape consumers must REFUSE rather than
+ * parse hopefully.
+ */
+export async function buildUnrecognizedWorkbook(): Promise<ExcelJS.Buffer> {
+  const wb = new ExcelJS.Workbook();
+  addJunkSheet(wb, 'Equipment Log');
+  addJunkSheet(wb, 'ScratchPad');
+  return wb.xlsx.writeBuffer();
+}
+
 /** Build a single-sheet workbook from one fixture entry (for round-trip reads). */
 export async function buildSingleSheetWorkbook(entry: FixtureEntry): Promise<ExcelJS.Buffer> {
   const wb = new ExcelJS.Workbook();

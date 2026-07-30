@@ -28,7 +28,8 @@ import {
   type FilesTransport,
   type FilesTransportLogger,
 } from '@/lib/msgraph-files';
-import { parseDailyRows } from './daily-adapter';
+import { deriveDailyRows, type DailySiteScope } from './daily-adapter';
+import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
 import { resolveMonthlyFileName } from './naming';
 import { upsertDailyProduction } from './upsert';
 
@@ -41,6 +42,20 @@ export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error';
  */
 export class WorkbookSyncMockWriteRefused extends Error {
   override readonly name = 'WorkbookSyncMockWriteRefused';
+}
+
+/**
+ * Thrown when the daily adapter could not READ the workbook — an unrecognised
+ * template generation, an unresolvable daily-close layout, a file whose every day
+ * is unusable, or a file that belongs to another site.
+ *
+ * This exists so that outcome can never be recorded as a clean `ok` with
+ * `rowsUpserted: 0`. A zero that means "I could not read it" and a zero that
+ * means "there was nothing to write" are different facts, and this codebase has
+ * repeatedly shipped the first one disguised as the second.
+ */
+export class WorkbookDailyLayoutUnreadable extends Error {
+  override readonly name = 'WorkbookDailyLayoutUnreadable';
 }
 export type SyncLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: SyncLogger = () => undefined;
@@ -193,8 +208,11 @@ export async function syncOneSource(
         // Shared ADR-0048/0039 parser runs for staging/provenance + template-drift
         // detection (its output is not re-persisted per poll — see ADR-0049 notes);
         // the daily adapter derives the operational rows.
+        // ONE parse per poll. The layout-aware parse is both the staging/
+        // provenance record AND the source of the operational rows — the daily
+        // adapter derives them from it and resolves no columns of its own (D12).
         const parsed = await parseWorkbook(bytes);
-        const daily = await parseDailyRows(bytes);
+        const daily = deriveDailyRows(parsed, await siteScopeFor(prisma, source.site_id, log));
         rowsSkippedMidedit = daily.midEditCount;
 
         // ── A MOCK TRANSPORT MUST NEVER WRITE PRODUCTION ─────────────────
@@ -219,6 +237,19 @@ export async function syncOneSource(
           throw new WorkbookSyncMockWriteRefused(error);
         }
 
+        // ── A WORKBOOK WE COULD NOT READ MUST NOT LOOK LIKE A CLEAN RUN ──────
+        // The adapter refuses rather than guessing (unknown template generation,
+        // unresolvable daily-close layout, every day unusable, wrong site). Fail
+        // the run with the reason on the ledger so `rowsUpserted: 0` can never be
+        // read as "nothing changed". The file watermark is deliberately NOT
+        // advanced — the next poll re-reads it.
+        if (daily.failure) {
+          status = 'error';
+          error = `${daily.failure.kind}: ${daily.failure.message}`;
+          log('error', `[workbook-sync] run=${runId} site=${source.site_id} ${error}`);
+          throw new WorkbookDailyLayoutUnreadable(error);
+        }
+
         const counts = await prisma.$transaction((tx) =>
           upsertDailyProduction({
             db: tx,
@@ -231,7 +262,7 @@ export async function syncOneSource(
         rowsOverwritten = counts.overwritten;
         log(
           'info',
-          `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" gen=${parsed.templateGeneration} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit}`,
+          `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" gen=${daily.templateGeneration} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit}`,
         );
       }
 
@@ -303,6 +334,30 @@ export async function syncOneSource(
     error,
     runId,
   };
+}
+
+/**
+ * Build the adapter's wrong-workbook cross-check (source names → owning site, via
+ * `source_aliases` so spelling drift resolves).
+ *
+ * Returns `undefined` — check skipped — when the resolver cannot be built. An
+ * unavailable resolver is NOT evidence that the file is wrong, so it must not
+ * fail the run; it is logged and the sync proceeds without the cross-check.
+ */
+async function siteScopeFor(
+  prisma: PrismaClient,
+  siteId: string,
+  log: SyncLogger,
+): Promise<DailySiteScope | undefined> {
+  try {
+    return { siteId, resolver: await sourceAliasResolver(prisma) };
+  } catch (e) {
+    log(
+      'warn',
+      `[workbook-sync] site=${siteId} site-alias resolver unavailable — wrong-site cross-check SKIPPED this poll: ${describe(e)}`,
+    );
+    return undefined;
+  }
 }
 
 async function pageForbidden(siteId: string, message: string): Promise<void> {

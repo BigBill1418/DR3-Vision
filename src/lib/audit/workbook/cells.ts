@@ -4,9 +4,10 @@
 // that landed in only one copy would let the same cell parse in one module and
 // misread in another (a silent audit-number divergence).
 //
-// (src/lib/workbook-sync/daily-adapter.ts carries its own copy by design: it is
-// the ADR-0049 D12 parser-finalization seam, rewritten wholesale when the real
-// file lands — it converges on this module then.)
+// (src/lib/workbook-sync/daily-adapter.ts used to carry its own copy while it was
+// the unfinalized ADR-0049 D12 seam. It no longer coerces cells at all: since
+// D12 closed on 2026-07-30 it derives its rows from this stack's parse output,
+// so this module is the only cell reader again.)
 
 import type ExcelJS from 'exceljs';
 

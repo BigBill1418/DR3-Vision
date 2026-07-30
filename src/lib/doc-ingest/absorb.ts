@@ -30,13 +30,15 @@
 // three template generations, and `parseDailyRows` derives the per-day rows.
 //
 // ── Why exercising `parseDailyRows` here is SAFE, and useful ────────────────
-// `parseDailyRows` is ADR-0049's D12 seam: its column mapping is still the
-// Addendum-B fixture's, pending a real daily-log file. Running it against a real
-// workbook could therefore yield nothing, or yield the wrong columns. In
-// workbook-sync that is dangerous, because the result lands in the operational
-// table. Here the blast radius is a reference row and a loud anomaly — and the
-// reconciliation screen is precisely how a wrong mapping gets DISCOVERED, at zero
-// operational cost, before workbook-sync is ever allowed to write production.
+// `parseDailyRows` derives its rows from the SAME layout-aware parse (ADR-0049
+// D12, finalized 2026-07-30): it decodes the semantic extractor's `daily_close`
+// staging rows and resolves no columns of its own. It still meets real workbooks
+// it cannot read — a template generation the parser does not recognise, a
+// Processed layout that does not resolve — and it reports that as a REFUSAL with
+// a reason rather than as rows. Here the blast radius of such a file is a
+// reference row and a loud anomaly; the reconciliation screen is precisely how a
+// mismatch gets DISCOVERED, at zero operational cost, before workbook-sync is
+// ever allowed to write production.
 //
 // ── Failure is loud, in both directions ────────────────────────────────────
 // - Zero usable rows raises `absorption_empty`. It is never recorded as a
@@ -58,7 +60,11 @@ import {
 import { getFileDropBytes } from '@/lib/r2';
 import { writeAudit } from '@/lib/audit';
 import { parseWorkbook } from '@/lib/audit/workbook/parser';
-import { parseDailyRows, type DailyProductionRow } from '@/lib/workbook-sync/daily-adapter';
+import {
+  parseDailyRows,
+  type DailyParseResult,
+  type DailyProductionRow,
+} from '@/lib/workbook-sync/daily-adapter';
 import { raiseAnomaly, resolveAnomaly } from './anomalies';
 import { sourceKey } from './discovery';
 
@@ -260,7 +266,7 @@ export async function absorbVersion(
   // file. `parseDailyRows` derives the operational per-day rows.
   let templateGeneration = 'unknown';
   let sheetNames: string[] = [];
-  let daily: { rows: DailyProductionRow[]; midEditCount: number };
+  let daily: DailyParseResult;
   try {
     const layout = await parseLayout(bytes);
     templateGeneration = layout.templateGeneration;
@@ -295,21 +301,22 @@ export async function absorbVersion(
   }
 
   // ── THE LOUD ZERO ─────────────────────────────────────────────────────────
-  // Zero rows is not "the document was empty". The overwhelmingly likelier cause
-  // is that the daily-row adapter's layout assumption (ADR-0049 D12, still the
-  // Addendum-B fixture's column mapping) does not match this workbook. The detail
-  // line names what the parser DID see, so the next person does not have to
-  // re-derive it.
+  // Zero rows is not "the document was empty". Either the adapter REFUSED the
+  // file (it says why, and that reason is the operator's answer), or it read the
+  // file and every day was unusable. The detail line names what the parser DID
+  // see, so the next person does not have to re-derive it.
   if (daily.rows.length === 0) {
+    const cause =
+      daily.failure !== null
+        ? `The daily adapter REFUSED this workbook (${daily.failure.kind}): ${daily.failure.message}`
+        : `The daily adapter read this workbook without refusing it and found ${daily.daysSeen} ` +
+          `daily-close row(s), none of which produced a usable figure.`;
     const reason =
       `"${source.display_name}" is confirmed as a ${source.doc_class}, was read successfully, and ` +
-      `produced ZERO usable daily rows. This is NOT evidence the document is empty. The row adapter ` +
-      `expects a sheet named "daily" with production date in column A and stripped-program units in ` +
-      `column B (ADR-0049 D12 — still the fixture layout, pending a real daily-log file). ` +
+      `produced ZERO usable daily rows. This is NOT evidence the document is empty. ${cause} ` +
       `Template generation read as "${templateGeneration}"; sheets present: ` +
       `${sheetNames.length > 0 ? sheetNames.join(', ') : '(none classified)'}. ` +
-      `${daily.midEditCount} row(s) were skipped as mid-edit. Map the real layout in ` +
-      `src/lib/workbook-sync/daily-adapter.ts before trusting any figure from this document.`;
+      `${daily.midEditCount} row(s) were skipped as mid-edit.`;
     const res = await raiseAnomaly(prisma, {
       kind: 'absorption_empty',
       subject,

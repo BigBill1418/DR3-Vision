@@ -92,32 +92,24 @@ describe('runWorkbookSyncPoll', () => {
           strippedProgram: 150,
           strippedNonProgram: 25,
           materialTicket: 'M-000401',
-          employees: 6,
-          processors: 4,
         },
         {
           date: '2026-06-02',
           strippedProgram: 175,
           strippedNonProgram: 12,
           materialTicket: 'M-000402',
-          employees: 6,
-          processors: 4,
         },
         {
           date: '2026-06-03',
           strippedProgram: 160,
           strippedNonProgram: 0,
           materialTicket: 'M-000403',
-          employees: 5,
-          processors: 3,
         },
         {
           date: '2026-06-04',
           strippedProgram: 145,
           strippedNonProgram: 5,
           materialTicket: 'M-000404',
-          employees: 5,
-          processors: 3,
         },
       ],
     });
@@ -259,6 +251,92 @@ describe('runWorkbookSyncPoll', () => {
     });
     expect(res.sourcesPolled).toBe(0);
     expect(transport.downloadCount).toBe(0);
+  });
+});
+
+// ── The guard that stops an UNREADABLE workbook looking like a clean run ────
+
+describe('a workbook the adapter cannot read must FAIL the run, not report ok/0', () => {
+  it('records status=error + the reason on the ledger, writes nothing, and does not advance the watermark', async () => {
+    const db = new FakePrisma();
+    const source = db.seedSource();
+    // The Processed tab is gone: the file has content but no resolvable
+    // daily-close layout. Zero rows here means "cannot read".
+    const bytes = await buildFixtureWorkbookBytes({
+      daily: [{ date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 }],
+      omitProcessedSheet: true,
+    });
+    const transport = mockFilesTransport({
+      files: [{ id: 'f-june', name: JUNE_FILE, ctag: 'ctag-v1', bytes }],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('error');
+    expect(r.error).toMatch(/daily_section_unresolved/);
+    expect(r.rowsUpserted).toBe(0);
+    expect(db.pud).toHaveLength(0);
+    // The ledger carries the reason — this is the whole point of the refusal.
+    expect(db.syncRuns[0]).toMatchObject({ status: 'error' });
+    expect(String(db.syncRuns[0]!['error_text'])).toMatch(/"cannot read", not "no production"/);
+    // NOT marked as processed: the next poll re-reads the same file.
+    expect(source.last_file_ctag).toBeNull();
+    expect(publishNtfy).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a workbook belonging to ANOTHER site (wrong-workbook cross-check)', async () => {
+    const db = new FakePrisma();
+    db.seedSource();
+    db.sourceRows.push({
+      id: 'src-far',
+      site_id: 'site-elsewhere',
+      name: 'Bass Hill Landfill',
+      is_non_program: false,
+      state: null,
+      site: null,
+      aliases: [],
+    });
+    const transport = mockFilesTransport({ files: [await juneFile()] });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('error');
+    expect(r.error).toMatch(/wrong_site/);
+    expect(db.pud).toHaveLength(0);
+  });
+
+  it('an EMPTY month is a clean run of zero rows — not an error', async () => {
+    const db = new FakePrisma();
+    db.seedSource();
+    const bytes = await buildFixtureWorkbookBytes({ daily: [], month: '2026-06' });
+    const transport = mockFilesTransport({
+      files: [{ id: 'f-june', name: JUNE_FILE, ctag: 'ctag-v1', bytes }],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('ok');
+    expect(r.error).toBeNull();
+    expect(r.rowsUpserted).toBe(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
   });
 });
 
