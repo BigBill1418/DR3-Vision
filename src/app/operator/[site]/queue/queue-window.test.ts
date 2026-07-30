@@ -44,11 +44,7 @@ describe('operator queue window — Pacific day boundary', () => {
   it('excludes future days (the window is bounded, not open-ended)', () => {
     const now = new Date('2026-07-28T19:00:00Z'); // noon PDT
     const w = queueWindow(now);
-    for (const future of [
-      '2026-07-29T18:00:00Z',
-      '2026-07-31T18:00:00Z',
-      '2026-08-07T18:00:00Z',
-    ]) {
+    for (const future of ['2026-07-29T18:00:00Z', '2026-07-31T18:00:00Z', '2026-08-07T18:00:00Z']) {
       expect(inWindow(new Date(future), w)).toBe(false);
     }
   });

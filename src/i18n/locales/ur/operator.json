@@ -40,7 +40,19 @@
     "approx_units": "~{{count}} یونٹس",
     "refreshing": "تازہ ہو رہا ہے…",
     "release_to_refresh": "تازہ کرنے کے لیے چھوڑیں",
-    "pull_down": "نیچے کھینچیں"
+    "pull_down": "نیچے کھینچیں",
+    "unknown_source": "نامعلوم ذریعہ",
+    "open_heading": "نامکمل لوڈ",
+    "open_intro": "آپ نے یہ لوڈ شروع کیے تھے اور یہ ابھی جمع نہیں ہوئے۔ پہلے انہیں مکمل کریں۔",
+    "open_resume": "جاری رکھیں",
+    "open_submit_ready": "جمع کریں",
+    "open_units": "{{count}} یونٹ گنے گئے",
+    "open_arrived_at": "پہنچا {{when}}",
+    "open_status_arrived": "ڈاک پر",
+    "open_status_weight_captured": "وزن درج ہوا",
+    "open_status_unload_started": "اتارا جا رہا ہے",
+    "open_status_in_progress": "گنتی ہو رہی ہے",
+    "open_status_finished": "گنی گئی — جمع نہیں ہوئی"
   },
   "pending_banner": {
     "items_pending_one": "پچھلی شفٹ سے {{count}} آئٹم اپ لوڈ کے لیے زیرِ التوا",
@@ -282,6 +294,13 @@
       "total_label": "کل الگ شدہ",
       "submit": "گنتی کی تصدیق",
       "err_closed": "آج بند ہے۔ دوبارہ کھولنے کے لیے ایڈمن سے کہیں۔"
+    },
+    "error": {
+      "heading": "کچھ غلط ہو گیا",
+      "body": "یہ محفوظ نہیں ہوا۔ دوبارہ کوشش کریں — ممکن ہے آپ کا آخری اندراج درج نہ ہوا ہو۔",
+      "retry": "دوبارہ کوشش کریں",
+      "go_hub": "میری اسکرینوں پر واپس",
+      "reference": "حوالہ"
     }
   }
 }

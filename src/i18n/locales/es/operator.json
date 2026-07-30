@@ -40,7 +40,19 @@
     "approx_units": "~{{count}} unidades",
     "refreshing": "Actualizando…",
     "release_to_refresh": "Suelta para actualizar",
-    "pull_down": "Desliza hacia abajo"
+    "pull_down": "Desliza hacia abajo",
+    "unknown_source": "Origen desconocido",
+    "open_heading": "Cargas sin terminar",
+    "open_intro": "Empezaste estas cargas y todavía no se han enviado. Termínalas primero.",
+    "open_resume": "Continuar",
+    "open_submit_ready": "Enviar",
+    "open_units": "{{count}} unidades contadas",
+    "open_arrived_at": "Llegó {{when}}",
+    "open_status_arrived": "En el muelle",
+    "open_status_weight_captured": "Peso registrado",
+    "open_status_unload_started": "Descargando",
+    "open_status_in_progress": "Contando",
+    "open_status_finished": "Contada — sin enviar"
   },
   "pending_banner": {
     "items_pending_one": "{{count}} elemento pendiente de subir desde un turno anterior",
@@ -282,6 +294,13 @@
       "total_label": "Total desarmado",
       "submit": "Confirmar conteo",
       "err_closed": "Hoy está cerrado. Pide a un administrador que lo reabra."
+    },
+    "error": {
+      "heading": "Algo salió mal",
+      "body": "Eso no se guardó. Inténtalo otra vez — es posible que tu última entrada no se haya registrado.",
+      "retry": "Intentar otra vez",
+      "go_hub": "Volver a mis pantallas",
+      "reference": "Referencia"
     }
   }
 }

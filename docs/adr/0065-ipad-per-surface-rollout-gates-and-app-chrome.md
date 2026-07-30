@@ -56,6 +56,12 @@ screens, and the operator header markup had three incompatible shapes.
 Five new `kind='ui'` codes, each read by exactly the screen and the write path
 it governs:
 
+> **See [Amendment 1](#amendment-1--verification-pass-2026-07-30) (2026-07-30).**
+> The `/queue` and `/load/[id]` rows of this table described intent, not shipped
+> code — only the server actions and the hub card read `ipad_queue`. Both pages now
+> read it. Amendment 1 also records why `ipad_queue` at `live` is correct rather
+> than drift against Bill's "disable all except inbound haul processing."
+
 | Code                 | Governs                                           | Seeded  |
 | -------------------- | ------------------------------------------------- | ------- |
 | `ipad_queue`         | `/queue` + `/load/[id]` + the dock server actions | `live`  |
@@ -217,3 +223,164 @@ header markups.
   files. The strings the new chromes consume were fixed (`floor.common.back`
   removed, chevrons now mirror under RTL); the rest is deliberately out of scope
   for this change and tracked in `docs/OPEN-ITEMS.md`.
+
+---
+
+## Amendment 1 — verification pass, 2026-07-30
+
+**Status:** Accepted. Bill: _"DO NOT leave work not completed or features blocked
+or not working push through and finish this and make sure the ipad functions are
+completely repaired."_
+
+A verification pass against production (`dr3_vision` on svdp-dev, measured
+2026-07-30) found **four** defects. Two were claims in this ADR that the code did
+not implement; two were pre-existing and independent of it. All four are repaired.
+
+### A1.1 — The queue's arrival time was rendered in UTC (worst of the four)
+
+`formatTime` / `formatDate` in `src/lib/format.ts` omitted `timeZone`, so `Intl`
+fell back to the runtime default. Measured **inside `dr3-vision-app`**:
+
+```
+Intl.DateTimeFormat().resolvedOptions().timeZone   ->  "UTC"
+format(2026-07-30T17:00:00Z)  as shipped           ->  "5:00 PM"
+format(2026-07-30T17:00:00Z)  timeZone: Pacific    ->  "10:00 AM"
+```
+
+`2026-07-30T17:00:00Z` is Woodland's real docking appointment for that day —
+**10:00 AM PDT, displayed to the operator as 5:00 PM.** The most common MyMRC
+slot, `15:00Z` (8:00 AM PDT), displayed as 3:00 PM. Seven hours wrong, on the one
+field the dock queue exists to communicate: which truck, when.
+
+`expected_arrival_at` is a genuine UTC instant, not a naive wall-clock — MyMRC
+supplies free text (`"2026/07/20 12:00 PT"`) which `mappers.ts` converts via
+`parsePacificDateTime`, and `arrived_at` is written by `new Date()`. So the
+formatter, not the storage, was the defect.
+
+Fixed by pinning both formatters to `PACIFIC_TZ` **inside `format.ts`** rather than
+at each call site, so a future caller cannot reintroduce it. Pacific is correct for
+every caller — both facilities and Bill are Pacific. This also corrected two
+manager pages (`dashboard/[site]/load/[id]`, `dashboard/[site]/loads/load-row`)
+that were lying by the same 7 hours. `pacificDateLabel` remains UTC-rendered for
+`@db.Date` business days — that is the storage invariant in `@/lib/time`, not a
+second bug.
+
+### A1.2 — An operator could not resume a load they had already started
+
+D5 is about **browsing**. It was also, unintentionally, applied to **unfinished
+work**, and that stranded real production data.
+
+The queue lists `expected_loads`; the workflow operates on `inbound_loads`.
+Nothing on the iPad ever listed the latter, so the only route into an unfinished
+load was the redirect `startLoadAction` performs. Lose that tab — iPad sleeps, PWA
+reloads, shift handoff, another operator on the shared device — and the load is
+unreachable, because an operator cannot type a UUID. Three independent filters
+kept the parent queue row from being a fallback: the current-Pacific-day bound,
+`cancelled_at: null`, and the fact that the queue only ever showed the parent.
+
+**Three Woodland loads were stranded, each by a different filter:**
+
+| load       | status     | why unreachable                                              |
+| ---------- | ---------- | ------------------------------------------------------------ |
+| `f1e26906` | `arrived`  | parent expected 2026-07-29 10:00 AM PDT — past day           |
+| `3700cfef` | `finished` | **3 units counted**; parent CANCELLED 2026-07-29 4:00 PM PDT |
+| `d792ed15` | `arrived`  | parent expected 2026-08-05 12:00 PM PDT — future day         |
+
+`3700cfef` is the money case: the units were counted at the dock and never
+submitted, so they never reached inventory or billing.
+
+New `listOperatorOpenLoads` (`src/lib/loads/open-loads.ts`) + an "unfinished
+loads" block at the top of the queue. **Deliberately not day-bounded** — your own
+mid-workflow load is not history, it is current work whose arrival instant happens
+to be in the past, and applying the floor to it protects nothing while stranding
+counted units. Bounded instead by three tighter predicates: your own
+`assigned_operator_id` (matching what `load/[id]/page.tsx` already enforces, so no
+row renders a link that bounces), a non-terminal dock status, and your site. No
+write path changes: `startInboundLoad` was already idempotent and the state machine
+already accepts `finished -> submitted`.
+
+### A1.3 — D1 was not implemented for the two pages it names
+
+D1 says `ipad_queue` governs "`/queue` + `/load/[id]` + the dock server actions."
+Only the **actions** (`[site]/actions.ts` `ctx()`) and the **hub card** read it.
+Both pages were ungated. Flipping `ipad_queue` to `pilot` would therefore have:
+
+- hidden the hub card (correct), and
+- left `/operator/<site>/queue` and `/operator/<site>/load/<id>` fully rendered and
+  bookmarkable, with every button throwing an ungated
+  `LoadsInventoryNotActivatedError`.
+
+Both pages now read the gate and degrade to the shared translated
+`floor.common.not_activated_*` block, which is what the "404 a gated surface"
+alternative was rejected in favor of. The write gate in `actions.ts` stays —
+defense in depth, not a replacement.
+
+### A1.4 — A thrown error discarded the entire chrome this ADR added
+
+`src/app/global-error.tsx` was the app's only error boundary, and it renders its
+own `<html>`/`<body>` — so it **replaces** the operator layout, discarding
+`FloorShell`, the green palette, the locale provider, and the `FloorChrome` band
+carrying Back and Log Out. Any thrown error put a floor operator on a black,
+English-only "Something went wrong" screen with **zero navigation on a shared
+iPad**. That is the same stranding D3/D6 exist to prevent, arriving through the one
+path nobody had gated — and A1.3 was a live route to it.
+
+New `src/app/operator/error.tsx`. A route-group boundary renders **inside**
+`operator/layout.tsx`, so the background, the translations and the Back/Log Out
+band all survive the error. It adds a Retry (`reset()`, which avoids a full reload
+that could serve a stale Serwist shell) and, because the hub has no Back pill by
+design, an explicit "back to my screens" link. Telemetry still goes to GlitchTip.
+`global-error.tsx` remains for a failure in the root layout, which a nested
+boundary cannot catch.
+
+### A1.5 — `ipad_queue` at `live` is CORRECT, not drift
+
+Bill's 2026-07-28 instruction was _"disable all the ipad surfaces except inbound
+haul processing for now."_ `ipad_queue` is `live` at both sites, which reads like
+drift against that. It is not, on two independent grounds:
+
+1. **The dock queue IS inbound haul processing, and it is in active use.** Four
+   `b2b_haul` loads went through the 7-stage dock workflow in the 45 days to
+   2026-07-30, the most recent arriving **2026-07-29 9:49 AM PDT**. Woodland has
+   exactly **1** expected load today (10:00 AM PDT), correctly floored down from 45
+   total `expected_loads` rows spanning 2026-05-06 → 2026-08-07 — D5 is working.
+2. **Turning it off would create a data dead end, not just an inconvenience.** The
+   three A1.2 loads sit in non-terminal states. `ipad_inbound` cannot absorb their
+   day: `confirmFloorInboundDay` refuses a day that has per-load dock captures
+   (409 `per_load_exists`), and `listFloorInboundDays` marks it read-only. So
+   gating the queue off leaves counted units with **no** path into inventory from
+   the floor.
+
+The three surfaces Bill named — `ipad_count`, `ipad_processed`,
+`ipad_today_summary` — are `pilot`, matching both his instruction and the ADR-0047
+default. **No production gate row needs to change.** The correct reading of D1 is
+that `ipad_queue` governs the dock-processing surface, and the table above is
+amended to say so explicitly.
+
+### Consequences of Amendment 1
+
+- The dock queue shows Pacific arrival times. So do the two manager loads surfaces.
+- An operator can always reach a load they started, on any day, even if MyMRC
+  cancelled its parent — and a `finished` load is one tap from submission.
+- Flipping `ipad_queue` to `pilot` is now safe: both pages degrade to the
+  translated block instead of crashing.
+- No thrown error can strand an operator on a shared iPad without Back or Log Out.
+- **Guard added:** `floor-surface-coverage.test.ts` derives its inputs from the
+  filesystem — it enumerates the real `page.tsx` files under `src/app/operator/`
+  rather than a hand-written path list, then asserts (a) every screen has an exit,
+  (b) every screen in the D1 table reads its gate and degrades translated, (c) the
+  hub is never gated, (d) no operator page computes a day with `setHours(0…)` or a
+  UTC ISO slice. A new operator screen is covered automatically. Verified to fail:
+  removing the queue gate turns it red with a named message.
+- `format.pacific.test.ts` locks the zone with the exact production instants,
+  including the DST seam and the evening-shift `2026-07-31T01:30:00Z` → 6:30 PM PDT
+  case.
+- **Residual (unchanged scope):** four MANAGER surfaces still derive a day key with
+  `new Date().toISOString().slice(0, 10)` in the browser
+  (`dashboard/[site]/ops/OpsClient`, `dashboard/[site]/equipment/EquipmentClient`,
+  `dashboard/[site]/loads-inventory/LoadsInventoryClient`,
+  `dashboard/[site]/processed-units-close/ProcessedUnitsEntryClient`, plus
+  `admin/billing-rates/format` and `admin/processed-units/ProcessedUnitsClient`).
+  From 5 PM Pacific onward those default their date input to TOMORROW. No operator
+  surface is affected — the negative control over `src/app/operator/**` is clean —
+  so this is tracked for a manager-side pass rather than fixed here.

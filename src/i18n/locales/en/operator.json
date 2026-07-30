@@ -26,7 +26,19 @@
     "approx_units": "~{{count}} units",
     "refreshing": "Refreshing…",
     "release_to_refresh": "Release to refresh",
-    "pull_down": "Pull down"
+    "pull_down": "Pull down",
+    "unknown_source": "Unknown source",
+    "open_heading": "Unfinished loads",
+    "open_intro": "You started these and they aren't submitted yet. Finish them first.",
+    "open_resume": "Resume",
+    "open_submit_ready": "Submit",
+    "open_units": "{{count}} units counted",
+    "open_arrived_at": "Arrived {{when}}",
+    "open_status_arrived": "On the dock",
+    "open_status_weight_captured": "Weight logged",
+    "open_status_unload_started": "Unloading",
+    "open_status_in_progress": "Counting",
+    "open_status_finished": "Counted — not submitted"
   },
   "pending_banner": {
     "items_pending_one": "{{count}} item pending upload from a previous shift",
@@ -268,6 +280,13 @@
       "total_label": "Total stripped",
       "submit": "Confirm count",
       "err_closed": "Today is closed. Ask an admin to reopen it."
+    },
+    "error": {
+      "heading": "Something went wrong",
+      "body": "That didn't save. Try again — your last entry may not have gone through.",
+      "retry": "Try again",
+      "go_hub": "Back to my screens",
+      "reference": "Reference"
     }
   },
   "nav": {
