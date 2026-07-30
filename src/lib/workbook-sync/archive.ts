@@ -32,7 +32,13 @@ export interface ArchiveArgs {
 export async function archiveWorkbooksToR2(args: ArchiveArgs): Promise<ArchiveResult> {
   const { db, siteId, siteCode } = args;
   const log = args.log ?? (() => undefined);
-  const result: ArchiveResult = { siteId, archivedKeys: [], filesConsidered: 0, skipped: true, error: null };
+  const result: ArchiveResult = {
+    siteId,
+    archivedKeys: [],
+    filesConsidered: 0,
+    skipped: true,
+    error: null,
+  };
 
   const source = await db.workbookSource.findUnique({ where: { site_id: siteId } });
   if (!source) {
@@ -64,7 +70,10 @@ export async function archiveWorkbooksToR2(args: ArchiveArgs): Promise<ArchiveRe
   } catch (e) {
     // Whole-folder failure (403 / transport) — recorded, never rethrown.
     result.error = describe(e);
-    log('error', `[workbook-archive] ${siteCode} listFolder failed (non-fatal for the flip): ${result.error}`);
+    log(
+      'error',
+      `[workbook-archive] ${siteCode} listFolder failed (non-fatal for the flip): ${result.error}`,
+    );
   }
 
   return result;

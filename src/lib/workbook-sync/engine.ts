@@ -33,6 +33,15 @@ import { resolveMonthlyFileName } from './naming';
 import { upsertDailyProduction } from './upsert';
 
 export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error';
+
+/**
+ * Thrown when a non-`graph` transport reaches the write step. Never caught into
+ * a clean run: a fixture write over real production figures is not recoverable,
+ * so this must surface as a FAILED run with the reason on the ledger row.
+ */
+export class WorkbookSyncMockWriteRefused extends Error {
+  override readonly name = 'WorkbookSyncMockWriteRefused';
+}
 export type SyncLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: SyncLogger = () => undefined;
 
@@ -64,6 +73,20 @@ export interface SyncContext {
   log?: SyncLogger;
   /** Limit to one site (tests / a targeted re-poll). */
   siteId?: string;
+  /**
+   * TESTS ONLY — permit a non-`graph` transport to reach the write step.
+   *
+   * `selectFilesTransport` falls back to a FIXTURE-seeded mock whenever the
+   * MSGRAPH_* creds are absent, and the write step used to run regardless. So an
+   * env regression (rotated secret, dropped var) would quietly write the
+   * June-Woodland fixture into `processed_units_daily` under workbook-wins, with
+   * the run ledger saying `ok` — "I am not really connected" recorded as "fine".
+   *
+   * Production NEVER sets this. The cron passes no context, so the default
+   * (`false`) is what runs against real data; only a test that is deliberately
+   * exercising the upsert path through the mock opts in.
+   */
+  allowNonGraphWrites?: boolean;
 }
 
 /** Poll every ACTIVE (`is_syncing`) source. Disabled sources are skipped entirely. */
@@ -95,6 +118,7 @@ export async function syncOneSource(
   source: WorkbookSource,
 ): Promise<SyncOneResult> {
   const { prisma, transport, log } = ctx;
+  const allowNonGraphWrites = ctx.allowNonGraphWrites === true;
   const nowFn = ctx.now ?? ((): Date => new Date());
   const runId = randomUUID();
   const started = nowFn();
@@ -172,6 +196,28 @@ export async function syncOneSource(
         const parsed = await parseWorkbook(bytes);
         const daily = await parseDailyRows(bytes);
         rowsSkippedMidedit = daily.midEditCount;
+
+        // ── A MOCK TRANSPORT MUST NEVER WRITE PRODUCTION ─────────────────
+        // `selectFilesTransport` falls back to a fixture-seeded mock whenever the
+        // MSGRAPH_* creds are absent, and until now nothing checked the mode
+        // before upserting. So an env regression — a rotated secret, a dropped
+        // var — would not fail loudly: it would quietly write the June-Woodland
+        // FIXTURE into `processed_units_daily` under workbook-wins semantics, and
+        // the run ledger would say `ok`. That is the exact shape this codebase
+        // keeps producing: a state meaning "I am not really connected" recorded
+        // as a state meaning "fine".
+        //
+        // Refuse, loudly, and make the run say why. Doing nothing is always
+        // recoverable; writing fixture data over real production figures is not.
+        if (mode !== 'graph' && !allowNonGraphWrites) {
+          status = 'error';
+          error =
+            `transport is "${mode}", not graph — refusing to upsert. The MSGRAPH_* credentials are ` +
+            `absent or invalid, so the bytes just read are a FIXTURE, not the real workbook. ` +
+            `Nothing was written.`;
+          log('error', `[workbook-sync] run=${runId} site=${source.site_id} ${error}`);
+          throw new WorkbookSyncMockWriteRefused(error);
+        }
 
         const counts = await prisma.$transaction((tx) =>
           upsertDailyProduction({

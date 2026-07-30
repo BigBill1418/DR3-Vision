@@ -71,7 +71,9 @@ function normalizeDayKey(value: ExcelJS.CellValue): string | null {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
-export async function parseDailyRows(data: Uint8Array | ArrayBuffer | Buffer): Promise<DailyParseResult> {
+export async function parseDailyRows(
+  data: Uint8Array | ArrayBuffer | Buffer,
+): Promise<DailyParseResult> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(data as ExcelJS.Buffer);
   const sheet = wb.worksheets.find((w) => w.name.toLowerCase() === DAILY_SHEET);
@@ -84,7 +86,12 @@ export async function parseDailyRows(data: Uint8Array | ArrayBuffer | Buffer): P
     const productionDate = normalizeDayKey(row.getCell(1).value);
     const strippedProgram = cellNumber(row.getCell(2).value);
     // A completely blank trailing row is not a record at all — ignore, don't count.
-    if (productionDate === null && strippedProgram === null && cellText(row.getCell(4).value) === null) return;
+    if (
+      productionDate === null &&
+      strippedProgram === null &&
+      cellText(row.getCell(4).value) === null
+    )
+      return;
     // Required cells missing ⇒ mid-edit: skip + count, retried next poll (D11).
     if (productionDate === null || strippedProgram === null) {
       midEditCount += 1;

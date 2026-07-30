@@ -10,7 +10,11 @@ describe('parseDailyRows', () => {
     const { rows, midEditCount } = await parseDailyRows(bytes);
     expect(rows).toHaveLength(3);
     expect(midEditCount).toBe(1);
-    expect(rows[0]).toMatchObject({ productionDate: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 });
+    expect(rows[0]).toMatchObject({
+      productionDate: '2026-06-01',
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+    });
   });
 
   it('a row whose stripped_program is later filled in is no longer mid-edit', async () => {

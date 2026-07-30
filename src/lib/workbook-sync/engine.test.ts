@@ -8,7 +8,11 @@ vi.mock('@/lib/ntfy', () => ({ publishNtfy: vi.fn(async () => undefined) }));
 
 import { publishNtfy } from '@/lib/ntfy';
 import { runWorkbookSyncPoll } from './engine';
-import { mockFilesTransport, buildFixtureWorkbookBytes, type MockFileSpec } from '@/lib/msgraph-files';
+import {
+  mockFilesTransport,
+  buildFixtureWorkbookBytes,
+  type MockFileSpec,
+} from '@/lib/msgraph-files';
 import { FakePrisma, dec } from './__tests__/fake-prisma';
 
 const JUNE = () => new Date('2026-06-15T18:00:00Z'); // June (PDT)
@@ -26,7 +30,12 @@ describe('runWorkbookSyncPoll', () => {
     const source = db.seedSource();
     const transport = mockFilesTransport({ files: [await juneFile()] });
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     expect(res.sourcesPolled).toBe(1);
     const r = res.results[0]!;
     expect(r.status).toBe('ok');
@@ -44,10 +53,20 @@ describe('runWorkbookSyncPoll', () => {
     const db = new FakePrisma();
     db.seedSource();
     const transport = mockFilesTransport({ files: [await juneFile('ctag-v1')] });
-    await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     const afterFirst = transport.downloadCount;
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     const r = res.results[0]!;
     expect(r.changesDetected).toBe(false);
     expect(r.rowsUpserted).toBe(0);
@@ -58,20 +77,58 @@ describe('runWorkbookSyncPoll', () => {
     const db = new FakePrisma();
     db.seedSource();
     const transport = mockFilesTransport({ files: [await juneFile('ctag-v1')] });
-    await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
 
     // Kelsey fills in day 4 (was mid-edit) → new bytes + new ctag.
     const filled = await buildFixtureWorkbookBytes({
       daily: [
-        { date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25, materialTicket: 'M-000401', employees: 6, processors: 4 },
-        { date: '2026-06-02', strippedProgram: 175, strippedNonProgram: 12, materialTicket: 'M-000402', employees: 6, processors: 4 },
-        { date: '2026-06-03', strippedProgram: 160, strippedNonProgram: 0, materialTicket: 'M-000403', employees: 5, processors: 3 },
-        { date: '2026-06-04', strippedProgram: 145, strippedNonProgram: 5, materialTicket: 'M-000404', employees: 5, processors: 3 },
+        {
+          date: '2026-06-01',
+          strippedProgram: 150,
+          strippedNonProgram: 25,
+          materialTicket: 'M-000401',
+          employees: 6,
+          processors: 4,
+        },
+        {
+          date: '2026-06-02',
+          strippedProgram: 175,
+          strippedNonProgram: 12,
+          materialTicket: 'M-000402',
+          employees: 6,
+          processors: 4,
+        },
+        {
+          date: '2026-06-03',
+          strippedProgram: 160,
+          strippedNonProgram: 0,
+          materialTicket: 'M-000403',
+          employees: 5,
+          processors: 3,
+        },
+        {
+          date: '2026-06-04',
+          strippedProgram: 145,
+          strippedNonProgram: 5,
+          materialTicket: 'M-000404',
+          employees: 5,
+          processors: 3,
+        },
       ],
     });
     transport.setFile(JUNE_FILE, filled, 'ctag-v2');
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     const r = res.results[0]!;
     expect(r.changesDetected).toBe(true);
     expect(r.rowsSkippedMidedit).toBe(0);
@@ -84,26 +141,51 @@ describe('runWorkbookSyncPoll', () => {
     const source = db.seedSource();
     // A manual close for 6/1 that disagrees with the workbook (150).
     db.pud.push({
-      id: 'pud-manual', site_id: source.site_id, production_date: new Date('2026-06-01T00:00:00Z'),
-      source: 'manual', stripped_program: dec(999), stripped_non_program: dec(25),
-      material_ticket_number: 'M-000401', employees_count: 6, processors_count: 4, saved_units: null,
-      import_id: null, closed_at: null,
+      id: 'pud-manual',
+      site_id: source.site_id,
+      production_date: new Date('2026-06-01T00:00:00Z'),
+      source: 'manual',
+      stripped_program: dec(999),
+      stripped_non_program: dec(25),
+      material_ticket_number: 'M-000401',
+      employees_count: 6,
+      processors_count: 4,
+      saved_units: null,
+      import_id: null,
+      closed_at: null,
     });
     const transport = mockFilesTransport({ files: [await juneFile()] });
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     expect(res.results[0]!.rowsOverwritten).toBe(1);
-    const overwriteAudit = db.audits.find((a) => (a.before as { vision_overwrite?: boolean })?.vision_overwrite === true);
+    const overwriteAudit = db.audits.find(
+      (a) => (a.before as { vision_overwrite?: boolean })?.vision_overwrite === true,
+    );
     expect(overwriteAudit).toBeDefined();
   });
 
   it('rolls over to the August file on 8/1 without a config change (test-plan line 5)', async () => {
     const db = new FakePrisma();
     db.seedSource();
-    const aug: MockFileSpec = { id: 'f-aug', name: 'AUGUST 2026 DAILY LOG WOODLAND.xlsm', ctag: 'aug-1', bytes: await buildFixtureWorkbookBytes() };
+    const aug: MockFileSpec = {
+      id: 'f-aug',
+      name: 'AUGUST 2026 DAILY LOG WOODLAND.xlsm',
+      ctag: 'aug-1',
+      bytes: await buildFixtureWorkbookBytes(),
+    };
     const transport = mockFilesTransport({ files: [aug] });
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: () => new Date('2026-08-05T18:00:00Z') });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: () => new Date('2026-08-05T18:00:00Z'),
+    });
     const r = res.results[0]!;
     expect(r.fileName).toBe('AUGUST 2026 DAILY LOG WOODLAND.xlsm');
     expect(r.status).toBe('ok');
@@ -113,10 +195,20 @@ describe('runWorkbookSyncPoll', () => {
   it('is a NO-OP after cutover (surface live) — reads its own data, does not download (test-plan lines 6/7)', async () => {
     const db = new FakePrisma();
     const source = db.seedSource();
-    db.surfaces.push({ surface_code: 'workbook_sync', site_id: source.site_id, kind: 'workbook_sync', rollout_state: 'live' });
+    db.surfaces.push({
+      surface_code: 'workbook_sync',
+      site_id: source.site_id,
+      kind: 'workbook_sync',
+      rollout_state: 'live',
+    });
     const transport = mockFilesTransport({ files: [await juneFile()] });
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     const r = res.results[0]!;
     expect(r.cutoverNoop).toBe(true);
     expect(r.status).toBe('ok');
@@ -130,7 +222,12 @@ describe('runWorkbookSyncPoll', () => {
     db.seedSource();
     const transport = mockFilesTransport({ forbidden: true });
 
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     const r = res.results[0]!;
     expect(r.status).toBe('forbidden');
     expect(db.syncRuns[0]).toMatchObject({ status: 'forbidden' });
@@ -141,7 +238,12 @@ describe('runWorkbookSyncPoll', () => {
     const db = new FakePrisma();
     db.seedSource();
     const transport = mockFilesTransport({ files: [] });
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     expect(res.results[0]!.status).toBe('not_found');
   });
 
@@ -149,8 +251,43 @@ describe('runWorkbookSyncPoll', () => {
     const db = new FakePrisma();
     db.seedSource({ is_syncing: false });
     const transport = mockFilesTransport({ files: [await juneFile()] });
-    const res = await runWorkbookSyncPoll({ prisma: db.asClient(), transport, now: JUNE });
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
     expect(res.sourcesPolled).toBe(0);
     expect(transport.downloadCount).toBe(0);
+  });
+});
+
+// ── The guard that stops a fixture reaching production ──────────────────────
+
+describe('a non-graph transport must never write production', () => {
+  it('REFUSES to upsert when the transport is the fixture mock', async () => {
+    // `selectFilesTransport` silently falls back to the fixture mock whenever the
+    // MSGRAPH_* creds are absent. Before this guard the write step ran anyway, so
+    // a rotated secret would have written the June-Woodland FIXTURE over real
+    // production figures under workbook-wins — with the run ledger saying `ok`.
+    //
+    // Note this test does NOT pass `allowNonGraphWrites`, i.e. it runs exactly the
+    // way the production cron does.
+    const db = new FakePrisma();
+    db.seedSource();
+    const transport = mockFilesTransport({ files: [await juneFile()] });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      now: JUNE,
+    });
+
+    const one = res.results[0];
+    expect(one?.status).toBe('error');
+    expect(String(one?.error)).toMatch(/refusing to upsert/i);
+    // The whole point: nothing was written.
+    expect(one?.rowsUpserted ?? 0).toBe(0);
+    expect(one?.rowsOverwritten ?? 0).toBe(0);
   });
 });

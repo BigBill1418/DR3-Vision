@@ -39,14 +39,17 @@ function dec(n: number): Prisma.Decimal {
 }
 
 /** A field-by-field disagreement check between the workbook row and the stored row. */
-function disagrees(row: DailyProductionRow, existing: {
-  stripped_program: Prisma.Decimal;
-  stripped_non_program: Prisma.Decimal;
-  material_ticket_number: string | null;
-  employees_count: number | null;
-  processors_count: number | null;
-  saved_units: Prisma.Decimal | null;
-}): boolean {
+function disagrees(
+  row: DailyProductionRow,
+  existing: {
+    stripped_program: Prisma.Decimal;
+    stripped_non_program: Prisma.Decimal;
+    material_ticket_number: string | null;
+    employees_count: number | null;
+    processors_count: number | null;
+    saved_units: Prisma.Decimal | null;
+  },
+): boolean {
   if (!existing.stripped_program.equals(dec(row.strippedProgram))) return true;
   if (!existing.stripped_non_program.equals(dec(row.strippedNonProgram))) return true;
   if ((existing.material_ticket_number ?? null) !== (row.materialTicketNumber ?? null)) return true;
@@ -54,7 +57,8 @@ function disagrees(row: DailyProductionRow, existing: {
   if ((existing.processors_count ?? null) !== (row.processorsCount ?? null)) return true;
   const savedNow = row.savedUnits === null ? null : dec(row.savedUnits);
   if ((existing.saved_units === null) !== (savedNow === null)) return true;
-  if (existing.saved_units !== null && savedNow !== null && !existing.saved_units.equals(savedNow)) return true;
+  if (existing.saved_units !== null && savedNow !== null && !existing.saved_units.equals(savedNow))
+    return true;
   return false;
 }
 
@@ -103,7 +107,13 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
           table_name: 'processed_units_daily',
           row_id: created.id,
           before: Prisma.JsonNull,
-          after: JSON.parse(JSON.stringify({ site_id: siteId, production_date: row.productionDate, ...serialize(data) })),
+          after: JSON.parse(
+            JSON.stringify({
+              site_id: siteId,
+              production_date: row.productionDate,
+              ...serialize(data),
+            }),
+          ),
         },
       });
       continue;
@@ -123,16 +133,18 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
         action: 'update',
         table_name: 'processed_units_daily',
         row_id: existing.id,
-        before: JSON.parse(JSON.stringify({
-          source: existing.source,
-          vision_overwrite: wasVisionCaptured,
-          stripped_program: existing.stripped_program.toString(),
-          stripped_non_program: existing.stripped_non_program.toString(),
-          material_ticket_number: existing.material_ticket_number,
-          employees_count: existing.employees_count,
-          processors_count: existing.processors_count,
-          saved_units: existing.saved_units?.toString() ?? null,
-        })),
+        before: JSON.parse(
+          JSON.stringify({
+            source: existing.source,
+            vision_overwrite: wasVisionCaptured,
+            stripped_program: existing.stripped_program.toString(),
+            stripped_non_program: existing.stripped_non_program.toString(),
+            material_ticket_number: existing.material_ticket_number,
+            employees_count: existing.employees_count,
+            processors_count: existing.processors_count,
+            saved_units: existing.saved_units?.toString() ?? null,
+          }),
+        ),
         after: JSON.parse(JSON.stringify(serialize(data))),
       },
     });

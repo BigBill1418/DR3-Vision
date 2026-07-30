@@ -12,7 +12,10 @@ import type { PrismaClient } from '@prisma/client';
 const SIGNOFF_TABLE = 'workbook_sync_parity_signoff';
 
 /** True when a parity signoff marker exists for the site (D7 soft-gate READ). */
-export async function hasParitySignoff(siteId: string, db: PrismaClient = prisma): Promise<boolean> {
+export async function hasParitySignoff(
+  siteId: string,
+  db: PrismaClient = prisma,
+): Promise<boolean> {
   const row = await db.auditLog.findFirst({
     where: { table_name: SIGNOFF_TABLE, row_id: siteId, action: 'restore' },
     select: { id: true },

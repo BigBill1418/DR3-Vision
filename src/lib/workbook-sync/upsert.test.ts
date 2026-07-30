@@ -24,7 +24,12 @@ function row(overrides: Partial<DailyProductionRow> = {}): DailyProductionRow {
 describe('upsertDailyProduction (workbook wins, D3)', () => {
   it('inserts a new day with source=import + import_id, and audits the insert', async () => {
     const db = new FakePrisma();
-    const res = await upsertDailyProduction({ db: db.asClient(), siteId: SITE, syncRunId: 'run-1', rows: [row()] });
+    const res = await upsertDailyProduction({
+      db: db.asClient(),
+      siteId: SITE,
+      syncRunId: 'run-1',
+      rows: [row()],
+    });
     expect(res).toEqual({ upserted: 1, overwritten: 0 });
     expect(db.pud).toHaveLength(1);
     expect(db.pud[0]).toMatchObject({ source: 'import', import_id: 'run-1' });
@@ -34,9 +39,19 @@ describe('upsertDailyProduction (workbook wins, D3)', () => {
 
   it('is a no-op when the stored row already agrees', async () => {
     const db = new FakePrisma();
-    await upsertDailyProduction({ db: db.asClient(), siteId: SITE, syncRunId: 'run-1', rows: [row()] });
+    await upsertDailyProduction({
+      db: db.asClient(),
+      siteId: SITE,
+      syncRunId: 'run-1',
+      rows: [row()],
+    });
     const before = db.audits.length;
-    const res = await upsertDailyProduction({ db: db.asClient(), siteId: SITE, syncRunId: 'run-2', rows: [row()] });
+    const res = await upsertDailyProduction({
+      db: db.asClient(),
+      siteId: SITE,
+      syncRunId: 'run-2',
+      rows: [row()],
+    });
     expect(res).toEqual({ upserted: 0, overwritten: 0 });
     expect(db.audits.length).toBe(before); // no new audit
   });
@@ -59,7 +74,12 @@ describe('upsertDailyProduction (workbook wins, D3)', () => {
       closed_at: null,
     });
 
-    const res = await upsertDailyProduction({ db: db.asClient(), siteId: SITE, syncRunId: 'run-9', rows: [row()] });
+    const res = await upsertDailyProduction({
+      db: db.asClient(),
+      siteId: SITE,
+      syncRunId: 'run-9',
+      rows: [row()],
+    });
     expect(res).toEqual({ upserted: 1, overwritten: 1 });
     // The stored row now carries the workbook value + import provenance.
     expect(db.pud[0]).toMatchObject({ source: 'import', import_id: 'run-9' });
@@ -86,7 +106,12 @@ describe('upsertDailyProduction (workbook wins, D3)', () => {
       import_id: 'run-old',
       closed_at: null,
     });
-    const res = await upsertDailyProduction({ db: db.asClient(), siteId: SITE, syncRunId: 'run-10', rows: [row()] });
+    const res = await upsertDailyProduction({
+      db: db.asClient(),
+      siteId: SITE,
+      syncRunId: 'run-10',
+      rows: [row()],
+    });
     expect(res).toEqual({ upserted: 1, overwritten: 0 });
   });
 });

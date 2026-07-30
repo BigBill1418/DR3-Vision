@@ -37,9 +37,22 @@ interface PudRow {
 
 export class FakePrisma {
   sources: FakeSource[] = [];
-  surfaces: { surface_code: string; site_id: string | null; kind: string; rollout_state: string }[] = [];
+  surfaces: {
+    surface_code: string;
+    site_id: string | null;
+    kind: string;
+    rollout_state: string;
+  }[] = [];
   pud: PudRow[] = [];
-  audits: { action: string; table_name: string; row_id: string; before: unknown; after: unknown; actor_label?: string | null; actor_user_id?: string | null }[] = [];
+  audits: {
+    action: string;
+    table_name: string;
+    row_id: string;
+    before: unknown;
+    after: unknown;
+    actor_label?: string | null;
+    actor_user_id?: string | null;
+  }[] = [];
   syncRuns: Record<string, unknown>[] = [];
   private seq = 0;
 
@@ -51,7 +64,9 @@ export class FakePrisma {
     findMany: async (args: { where?: { is_syncing?: boolean; site_id?: string } }) => {
       const w = args?.where ?? {};
       return this.sources.filter(
-        (s) => (w.is_syncing === undefined || s.is_syncing === w.is_syncing) && (w.site_id === undefined || s.site_id === w.site_id),
+        (s) =>
+          (w.is_syncing === undefined || s.is_syncing === w.is_syncing) &&
+          (w.site_id === undefined || s.site_id === w.site_id),
       );
     },
     findUnique: async (args: { where: { site_id: string } }) =>
@@ -64,18 +79,30 @@ export class FakePrisma {
   };
 
   rolloutSurface = {
-    findUnique: async (args: { where: { surface_code_site_id: { surface_code: string; site_id: string } } }) => {
+    findUnique: async (args: {
+      where: { surface_code_site_id: { surface_code: string; site_id: string } };
+    }) => {
       const { surface_code, site_id } = args.where.surface_code_site_id;
-      return this.surfaces.find((s) => s.surface_code === surface_code && s.site_id === site_id) ?? null;
+      return (
+        this.surfaces.find((s) => s.surface_code === surface_code && s.site_id === site_id) ?? null
+      );
     },
     findMany: async (args: { where: { kind: string; surface_code: string } }) =>
-      this.surfaces.filter((s) => s.kind === args.where.kind && s.surface_code === args.where.surface_code),
+      this.surfaces.filter(
+        (s) => s.kind === args.where.kind && s.surface_code === args.where.surface_code,
+      ),
   };
 
   processedUnitsDaily = {
-    findUnique: async (args: { where: { site_id_production_date: { site_id: string; production_date: Date } } }) => {
+    findUnique: async (args: {
+      where: { site_id_production_date: { site_id: string; production_date: Date } };
+    }) => {
       const { site_id, production_date } = args.where.site_id_production_date;
-      return this.pud.find((r) => this.key(r.site_id, r.production_date) === this.key(site_id, production_date)) ?? null;
+      return (
+        this.pud.find(
+          (r) => this.key(r.site_id, r.production_date) === this.key(site_id, production_date),
+        ) ?? null
+      );
     },
     create: async (args: { data: Record<string, unknown> }) => {
       const d = args.data as Record<string, unknown>;
