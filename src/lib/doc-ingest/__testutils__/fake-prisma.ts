@@ -60,6 +60,20 @@ function applyData(row: Row, data: Row): void {
   row['updated_at'] = new Date();
 }
 
+/** Comparable ordinal for a value, or null when it is not comparable. */
+function ordinal(v: unknown): number | null {
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') return Date.parse(v);
+  return null;
+}
+
+function ordinalOrThrow(v: unknown): number {
+  const n = ordinal(v);
+  if (n === null) throw new Error(`fake-prisma: uncomparable range bound ${String(v)}`);
+  return n;
+}
+
 /** Evaluate one Prisma-ish where clause against a row. Supports the subset used. */
 function matches(row: Row, where: Row | undefined): boolean {
   if (!where) return true;
@@ -88,6 +102,20 @@ function matches(row: Row, where: Row | undefined): boolean {
       }
       if ('equals' in c) {
         if (value !== c['equals']) return false;
+        continue;
+      }
+      // Range operators. These MUST be implemented rather than fall through to
+      // "matches anything": a date-window query that silently ignores its bounds
+      // returns every row, and a test asserting "only July rows came back" would
+      // pass against a fake that never filtered. That is the reassuring-direction
+      // failure this file's `detach()` note warns about, in a second place.
+      if ('gte' in c || 'lte' in c || 'gt' in c || 'lt' in c) {
+        const n = ordinal(value);
+        if (n === null) return false;
+        if ('gte' in c && n < ordinalOrThrow(c['gte'])) return false;
+        if ('gt' in c && n <= ordinalOrThrow(c['gt'])) return false;
+        if ('lte' in c && n > ordinalOrThrow(c['lte'])) return false;
+        if ('lt' in c && n >= ordinalOrThrow(c['lt'])) return false;
         continue;
       }
       continue;
@@ -203,6 +231,27 @@ function makeModel(store: Row[], opts: ModelOptions) {
       for (const row of rows) applyData(row, data);
       return { count: rows.length };
     },
+    async createMany({ data }: { data: Row[] }): Promise<{ count: number }> {
+      for (const item of data) {
+        opts.beforeCreate?.(store, item);
+        store.push({
+          id: uid(opts.idPrefix),
+          created_at: new Date(),
+          updated_at: new Date(),
+          ...opts.defaults?.(),
+          ...item,
+        });
+      }
+      return { count: data.length };
+    },
+    async deleteMany({ where }: { where?: Row } = {}): Promise<{ count: number }> {
+      const doomed = store.filter((r) => matches(r, resolveWhere(where)));
+      for (const row of doomed) {
+        const i = store.indexOf(row);
+        if (i >= 0) store.splice(i, 1);
+      }
+      return { count: doomed.length };
+    },
   };
 }
 
@@ -216,6 +265,8 @@ export interface FakeDocIngestPrisma {
   fileDrop: ReturnType<typeof makeModel>;
   site: ReturnType<typeof makeModel>;
   auditLog: ReturnType<typeof makeModel>;
+  docReferenceRow: ReturnType<typeof makeModel>;
+  processedUnitsDaily: ReturnType<typeof makeModel>;
   $transaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
   /** Raw stores, for assertions. */
   _stores: {
@@ -228,6 +279,8 @@ export interface FakeDocIngestPrisma {
     fileDrops: Row[];
     sites: Row[];
     auditLogs: Row[];
+    referenceRows: Row[];
+    processedUnits: Row[];
   };
 }
 
@@ -241,6 +294,8 @@ export function makeFakePrisma(): FakeDocIngestPrisma {
   const fileDrops: Row[] = [];
   const sites: Row[] = [];
   const auditLogs: Row[] = [];
+  const referenceRows: Row[] = [];
+  const processedUnits: Row[] = [];
 
   const fake = {
     docSource: makeModel(sources, {
@@ -389,6 +444,19 @@ export function makeFakePrisma(): FakeDocIngestPrisma {
     }),
     site: makeModel(sites, { idPrefix: 'site' }),
     auditLog: makeModel(auditLogs, { idPrefix: 'audit' }),
+    // ADR-0069 — the absorption bridge's landing table and the operational table
+    // it is compared AGAINST. `processedUnitsDaily` is present here as a READ
+    // fixture only: no doc-ingest code path writes it, and a test that made one
+    // pass would be testing a rule violation.
+    docReferenceRow: makeModel(referenceRows, {
+      idPrefix: 'ref',
+      defaults: () => ({ source_sheet: null, source_row: null, extracted_at: new Date() }),
+    }),
+    processedUnitsDaily: makeModel(processedUnits, {
+      idPrefix: 'pud',
+      compositeKeys: { site_id_production_date: ['site_id', 'production_date'] },
+      defaults: () => ({ saved_units: null, source: 'manual', closed_at: null }),
+    }),
     async $transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
       // No rollback semantics: these tests assert what was written, not that a
       // partial failure unwinds. Modelling rollback would mean modelling a
@@ -405,6 +473,8 @@ export function makeFakePrisma(): FakeDocIngestPrisma {
       fileDrops,
       sites,
       auditLogs,
+      referenceRows,
+      processedUnits,
     },
   };
 

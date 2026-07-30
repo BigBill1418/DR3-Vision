@@ -107,11 +107,17 @@ model Site {
 
   // Shared-file document ingestion (ADR-0067). A source with site_id NULL is
   // UNCLASSIFIED, not cross-site — see DocSource.
-  doc_sources DocSource[]
+  doc_sources          DocSource[]
   // The classifier's PROPOSED site, before a human confirms it. Deliberately a
   // separate edge from `doc_sources`: a proposal must never be readable as a
   // site scoping decision (hard rule #2).
   doc_sources_proposed DocSource[] @relation("DocSourceProposedSite")
+
+  /// ADR-0069 — REFERENCE figures extracted from documents shared for this site.
+  /// Never operational data: nothing computes payroll, billing, bonus or inventory
+  /// from these rows. `site_id` is NOT NULL here (unlike DocSource) because
+  /// absorption REFUSES an unclassified source rather than guessing a site.
+  doc_reference_rows DocReferenceRow[]
 
   /// ADR-0068 — reimbursements filed against this site. Auto-filled from the
   /// submitter, never client-chosen (hard rule #2: site reach is server-decided).
@@ -250,7 +256,7 @@ model User {
   // attached to the general `ap_approvers` roster (avoids leaking historical AP
   // data to shift operators). The `ap_second_approvers` roster is the intended
   // grant vehicle for non-admin second approvers.
-  can_view_ap_history     Boolean @default(false)
+  can_view_ap_history Boolean @default(false)
 
   // ADR-0046 Amendment 9 (§2.5) — SITE-MANAGER access to the AP equipment-request
   // resolution worklist (`/admin/ap/equipment-requests`) and its resolve/reject
@@ -335,10 +341,10 @@ model User {
   // because the control depends on the distinction: the submitter may never
   // approve (D4), and the beneficiary may never approve even when routing points
   // at them (D6). Collapsing any two of these would erase the control.
-  reimbursements_submitted        ReimbursementRequest[] @relation("ReimbursementSubmitter")
-  reimbursements_benefiting       ReimbursementRequest[] @relation("ReimbursementBeneficiary")
-  reimbursements_second_approved  ReimbursementRequest[] @relation("ReimbursementSecondApprover")
-  reimbursements_routed_to        ReimbursementRequest[] @relation("ReimbursementRoutedTo")
+  reimbursements_submitted       ReimbursementRequest[] @relation("ReimbursementSubmitter")
+  reimbursements_benefiting      ReimbursementRequest[] @relation("ReimbursementBeneficiary")
+  reimbursements_second_approved ReimbursementRequest[] @relation("ReimbursementSecondApprover")
+  reimbursements_routed_to       ReimbursementRequest[] @relation("ReimbursementRoutedTo")
 
   @@map("users")
 }
@@ -1113,6 +1119,18 @@ enum DocIngestAnomalyKind {
   /// A shared folder tree is deeper than the traversal limit. The limit bounds
   /// enumeration, but hitting it means files exist that Vision is NOT watching.
   depth_limit_reached
+  // ── Absorption (ADR-0069) ─────────────────────────────────────────────────
+  /// A confirmed absorbable document whose `site_id` is NULL. A NULL site is
+  /// UNCLASSIFIED, never a guess (hard rule #2), so absorption REFUSES — and
+  /// says so, because a document that silently never absorbs looks identical to
+  /// one that absorbed nothing.
+  absorption_refused
+  /// The extractor ran and produced ZERO usable rows. Never treated as "the
+  /// document was empty": far more likely the daily-row adapter's layout
+  /// assumption failed against a real workbook. A silent zero here would look
+  /// exactly like success on every surface — the whole failure history of this
+  /// module in one line.
+  absorption_empty
 }
 
 enum DocIngestAnomalySeverity {
@@ -1281,9 +1299,12 @@ model DocSource {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  versions   DocSourceVersion[]
-  anomalies  DocIngestAnomaly[]
-  file_drops FileDrop[]
+  versions       DocSourceVersion[]
+  anomalies      DocIngestAnomaly[]
+  file_drops     FileDrop[]
+  /// ADR-0069 — reference figures absorbed from this document. Reference data
+  /// only; the operational table has exactly one writer and it is workbook-sync.
+  reference_rows DocReferenceRow[]
 
   @@unique([drive_id, item_id])
   @@index([state, enabled])
@@ -1345,16 +1366,107 @@ model DocSourceVersion {
   parse_summary Json?
   parse_error   String?
 
+  /// ── ADR-0069 absorption ledger ──────────────────────────────────────────
+  /// Set when a TERMINAL absorption attempt completed for this revision
+  /// (absorbed / empty / unreadable / not_absorbable). It is the "do not
+  /// re-download this revision every 15 minutes" latch. Deliberately NOT set on
+  /// a REFUSAL: a refusal is caused by missing operator input (an unconfirmed
+  /// site) and must re-attempt for free the moment that input arrives.
+  absorbed_at       DateTime?
+  /// 'absorbed' | 'refused_unclassified_site' | 'empty' | 'unreadable' |
+  /// 'not_absorbable'. Unconstrained TEXT for the same reason `doc_class` is —
+  /// the outcome vocabulary grows as more document kinds become absorbable.
+  absorption_status String?
+  /// Reference rows this revision produced. The point of the column is that
+  /// "produced nothing" is a NUMBER on a screen, not an absence nobody notices.
+  absorption_rows   Int       @default(0)
+  /// The operator-actionable reason absorption produced no rows. Never
+  /// credentials, never a stack trace.
+  absorption_error  String?
+
   created_at DateTime @default(now())
 
-  anomalies DocIngestAnomaly[]
+  anomalies      DocIngestAnomaly[]
+  reference_rows DocReferenceRow[]
 
   @@unique([doc_source_id, ctag])
   @@index([doc_source_id, observed_at])
   @@index([file_drop_id])
-  // NOTE: the staged-queue index (`observed_at` WHERE staged) is PARTIAL and
-  // lives only in the hand-written migration — Prisma cannot express it.
+  // NOTE: the staged-queue index (`observed_at` WHERE staged) and the absorption
+  // work-queue index (`applied_at` WHERE applied_at IS NOT NULL AND absorbed_at
+  // IS NULL) are PARTIAL and live only in the hand-written migration — Prisma
+  // cannot express them.
   @@map("doc_source_versions")
+}
+
+/// ADR-0069 — the ABSORPTION BRIDGE's landing table: what a shared spreadsheet
+/// CLAIMS about a production day, with full provenance.
+///
+/// ── The one-writer rule ───────────────────────────────────────────────────
+/// `src/lib/workbook-sync/` (ADR-0049) is the system of record for
+/// `processed_units_daily`. Doc-ingest never writes that table. This model is the
+/// separate, explicitly-REFERENCE landing zone that makes the separation real
+/// rather than a convention: there is no source discriminator that would let both
+/// pipelines write one table, and no "upsert when workbook-sync hasn't" fallback.
+///
+/// Nothing computes payroll, billing, bonus or inventory from these rows. The only
+/// consumer is `src/lib/doc-ingest/reconciliation.ts`, which compares them against
+/// `processed_units_daily` and reports agreement, disagreement and coverage — the
+/// measuring device for "has Vision taken this over yet?".
+model DocReferenceRow {
+  id String @id @default(uuid())
+
+  /// Provenance to the document AND the exact revision. Both, so a reference
+  /// figure always traces to the bytes it came from and superseded revisions stay
+  /// readable as history.
+  doc_source_id         String
+  doc_source            DocSource        @relation(fields: [doc_source_id], references: [id], onUpdate: Cascade, onDelete: Cascade)
+  doc_source_version_id String
+  doc_source_version    DocSourceVersion @relation(fields: [doc_source_version_id], references: [id], onUpdate: Cascade, onDelete: Cascade)
+
+  /// NOT NULL, and that is hard rule #2 enforced at the storage layer rather than
+  /// in application code. Absorption refuses an unclassified source; this makes it
+  /// impossible for a later code path to quietly change its mind and write a
+  /// guessed site.
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id], onUpdate: Cascade)
+
+  /// The day the spreadsheet is making a claim about. `@db.Date`, not a timestamp:
+  /// a production day is a day, and storing an instant invites a timezone bug in a
+  /// Pacific-operating org whose servers run UTC.
+  production_date DateTime @db.Date
+
+  metric DocReferenceMetric
+  /// Decimal(12,2) is deliberately WIDER than the operational column's
+  /// Decimal(7,1): reference data records what the spreadsheet said, including a
+  /// figure Vision would reject — which is exactly the discrepancy worth surfacing.
+  value  Decimal            @db.Decimal(12, 2)
+
+  /// Cell-level provenance, so a disagreement can be chased into the workbook
+  /// instead of merely reported.
+  source_sheet String?
+  source_row   Int?
+
+  extracted_at DateTime @default(now())
+  created_at   DateTime @default(now())
+
+  @@unique([doc_source_version_id, production_date, metric])
+  @@index([site_id, production_date])
+  @@index([doc_source_id])
+  @@map("doc_reference_rows")
+}
+
+/// ADR-0069 — the reference metric vocabulary. Deliberately CLOSED, unlike
+/// `doc_sources.doc_class`.
+///
+/// The invariant that makes the reconciliation TOTAL: every value here names a real
+/// column of `processed_units_daily`. A metric with no counterpart column could be
+/// extracted but never compared — reference data unable to answer the only question
+/// the table exists to answer.
+enum DocReferenceMetric {
+  stripped_program
+  stripped_non_program
+  saved_units
 }
 
 /// Graph change-notification + delta state. Built by the NEXT phase; the table
@@ -2146,50 +2258,50 @@ model ConsumerDropoff {
 /// nothing computes from it). Avg-per-bale is derived at read time
 /// (`weight_lbs / bale_count`), NEVER stored — one source of truth.
 model OutboundMaterial {
-  id                String              @id @default(uuid())
-  site_id           String
-  site              Site                @relation(fields: [site_id], references: [id])
-  ship_date         DateTime            @db.Date
-  commodity         OutboundCommodity
-  sub_category      OutboundSubCategory
-  weight_lbs        Int
+  id                        String              @id @default(uuid())
+  site_id                   String
+  site                      Site                @relation(fields: [site_id], references: [id])
+  ship_date                 DateTime            @db.Date
+  commodity                 OutboundCommodity
+  sub_category              OutboundSubCategory
+  weight_lbs                Int
   // Renovation (whole-unit) rows only; null for baled/shredded commodity sales.
   // When `whole_units` is set, `program_units + non_program_units == whole_units`
   // (validated). Program units sold to renovation come out of PROGRAM inventory
   // and can NEVER be billed as processed.
-  whole_units       Int?
-  program_units     Int?
-  non_program_units Int?
-  ticket_number     String?
-  retrac_id         String?
-  bale_count        Int?
-  allocation_pct    Decimal?            @db.Decimal(5, 2) // placeholder; nothing computes from it
-  buyer             String?
+  whole_units               Int?
+  program_units             Int?
+  non_program_units         Int?
+  ticket_number             String?
+  retrac_id                 String?
+  bale_count                Int?
+  allocation_pct            Decimal?            @db.Decimal(5, 2) // placeholder; nothing computes from it
+  buyer                     String?
   // ADR-0055 — first-class recycler (outbound vendor) this load shipped to.
   // Nullable & additive: the free-text `buyer` above stays the legacy/reconciliation
   // field; `vendor_id` is the structured reference the recycling-rate derivation
   // resolves against. Backfilled separately (buyer string → vendor row).
-  vendor_id         String?
-  vendor            OutboundVendor?     @relation(fields: [vendor_id], references: [id])
+  vendor_id                 String?
+  vendor                    OutboundVendor?     @relation(fields: [vendor_id], references: [id])
   // ADR-0055 — CalRecycle stewardship split, DERIVED at entry time from
   // recycling_rates(vendor_id, commodity, ship_date). Reported SEPARATELY for
   // stewardship (O-7); NOT part of the MRC invoice (ADR-0041). Both are null when
   // no rate row covers (vendor, commodity, ship_date) — never silently assumed.
   // Invariant: recycled_lbs + landfilled_lbs == weight_lbs (complement-by-subtraction).
-  recycled_lbs      Int?
-  landfilled_lbs    Int?
+  recycled_lbs              Int?
+  landfilled_lbs            Int?
   // Snapshot of the recycling_percent actually applied (Decimal(5,4), 0..1), plus a
   // provenance FK to the exact rate row that resolved. The snapshot is the DURABLE
   // audit value — it survives later edits/deletes of the rate row.
-  recycling_percent_applied Decimal?    @db.Decimal(5, 4)
-  recycling_rate_id String?
-  recycling_rate    RecyclingRate?      @relation(fields: [recycling_rate_id], references: [id], onDelete: SetNull)
-  source            RecordSource        @default(manual)
-  import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
-  locked_at         DateTime?
-  created_by        String?
-  created_at        DateTime            @default(now())
-  updated_at        DateTime            @updatedAt
+  recycling_percent_applied Decimal?            @db.Decimal(5, 4)
+  recycling_rate_id         String?
+  recycling_rate            RecyclingRate?      @relation(fields: [recycling_rate_id], references: [id], onDelete: SetNull)
+  source                    RecordSource        @default(manual)
+  import_id                 String? // ADR-0048 — workbook_promotions.id when promoted from staging
+  locked_at                 DateTime?
+  created_by                String?
+  created_at                DateTime            @default(now())
+  updated_at                DateTime            @updatedAt
 
   // ADR-0052 — optional payment-tracking companion (financial reconciliation
   // stays out of the operational capture row).
@@ -2217,7 +2329,7 @@ model OutboundVendor {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  recycling_rates   RecyclingRate[]
+  recycling_rates    RecyclingRate[]
   outbound_materials OutboundMaterial[]
 
   @@index([is_active])
@@ -2396,40 +2508,40 @@ enum MymrcSyncStatus {
 }
 
 model MymrcHaulsMirror {
-  id                     String    @id // Salesforce record id (Haul_Request__c, a2K…) — upsert key
+  id                            String    @id // Salesforce record id (Haul_Request__c, a2K…) — upsert key
   // site_id is NULLABLE (ADR-0057 Phase-1): getItems returns record ids only, so the
   // site is unknown at list-upsert time. It is derived on the DETAIL pass from
   // `recycler_name` (Recycling_Center_Lookup__r.Name) → sites.code and stamped then.
   // Nullable FK: NULL rows are simply unresolved-until-detail (never a broken ref).
-  site_id                String?
-  external_haul_id       String?   @unique // Name, portal Haul number e.g. "H-900001" (detail pass)
-  status                 String? // Status__c, e.g. "Confirmed"
-  type                   String? // Type__c — splits docking-appointment vs consumer/illegal drop-off
-  rate_id                String? // Rate_ID__c (landfill - transporter - recycler descriptor)
-  recycler_name          String? // Recycling_Center_Lookup__r.Name — SITE DISCRIMINATOR (→ site_id)
-  recycler_account_id    String? // Recycling_Center_Lookup__c — 18-char Account id (structured join)
-  transporter_name       String? // Transporter__c — account-name string (denormalized, not an FK)
-  collection_site        String? // Collection_Site__c — expected_loads source-name join key
-  collection_source      String? // Collection_Source__c
-  commodity              String? // Commodity__c
-  container_type         String? // Container_Type__c (typographic apostrophe — normalize before compare)
+  site_id                       String?
+  external_haul_id              String?   @unique // Name, portal Haul number e.g. "H-900001" (detail pass)
+  status                        String? // Status__c, e.g. "Confirmed"
+  type                          String? // Type__c — splits docking-appointment vs consumer/illegal drop-off
+  rate_id                       String? // Rate_ID__c (landfill - transporter - recycler descriptor)
+  recycler_name                 String? // Recycling_Center_Lookup__r.Name — SITE DISCRIMINATOR (→ site_id)
+  recycler_account_id           String? // Recycling_Center_Lookup__c — 18-char Account id (structured join)
+  transporter_name              String? // Transporter__c — account-name string (denormalized, not an FK)
+  collection_site               String? // Collection_Site__c — expected_loads source-name join key
+  collection_source             String? // Collection_Source__c
+  commodity                     String? // Commodity__c
+  container_type                String? // Container_Type__c (typographic apostrophe — normalize before compare)
   // Billing-relevant unit counts (read from `value`, not displayValue).
-  program_unit_count     Int? // Recycler_Program_Unit_Count__c
-  non_program_unit_count Int? // Recycler_Non_Program_Unit_Count__c
+  program_unit_count            Int? // Recycler_Program_Unit_Count__c
+  non_program_unit_count        Int? // Recycler_Non_Program_Unit_Count__c
   unpaid_consumer_dropoff_units Int? // Unpaid_Consumer_Drop_Off_Units__c
-  docking_appointment_date DateTime? // Docking_Appointment_Date__c (Date)
-  docking_appointment_at DateTime? // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
-  door                   String? // Docking_Appointment_Dock_Door__c
-  units                  Int? // legacy generic unit count (back-compat; program_unit_count is authoritative)
-  weight_lbs             Decimal?  @db.Decimal(12, 2) // Recycler_Weight__c
-  retrac_id              String? // Re-TRAC id; 1:1 with external_haul_id per ADR post-note (UNVERIFIED)
-  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
-  first_seen_at          DateTime  @default(now())
-  last_seen_at           DateTime  @default(now())
-  disappeared_at         DateTime? // stamped when absent from a full list fetch
-  detail_fetched_at      DateTime? // stamped when the getRecordWithFields detail pass succeeds
-  created_at             DateTime  @default(now())
-  updated_at             DateTime  @updatedAt
+  docking_appointment_date      DateTime? // Docking_Appointment_Date__c (Date)
+  docking_appointment_at        DateTime? // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
+  door                          String? // Docking_Appointment_Dock_Door__c
+  units                         Int? // legacy generic unit count (back-compat; program_unit_count is authoritative)
+  weight_lbs                    Decimal?  @db.Decimal(12, 2) // Recycler_Weight__c
+  retrac_id                     String? // Re-TRAC id; 1:1 with external_haul_id per ADR post-note (UNVERIFIED)
+  payload                       Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
+  first_seen_at                 DateTime  @default(now())
+  last_seen_at                  DateTime  @default(now())
+  disappeared_at                DateTime? // stamped when absent from a full list fetch
+  detail_fetched_at             DateTime? // stamped when the getRecordWithFields detail pass succeeds
+  created_at                    DateTime  @default(now())
+  updated_at                    DateTime  @updatedAt
 
   @@index([site_id])
   @@index([disappeared_at])
@@ -2442,28 +2554,28 @@ model MymrcHaulsMirror {
 // split is by Type__c at ingest (NOT by list view) — both views live in the same
 // a2L id space. `type` records the raw Type__c for traceability.
 model MymrcProcessedMirror {
-  id                    String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
-  site_id               String?   // NULLABLE — derived on detail pass from account_name (see hauls note)
-  external_materials_id String?   @unique // Name, portal Materials number e.g. "M-000300"
-  type                  String? // Type__c (expected 'Processing')
-  account_name          String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
-  account_id            String? // Account__c — 18-char Account id (structured join)
-  materials_status      String? // Materials_Status__c, e.g. "Active"
-  bol_id                String? // BOL_ID__c
-  entry_date            DateTime? // Entry_Date__c
-  processed_date        DateTime? // Processed_Date__c
-  program_unit_count    Int? // Number_of_Program_Units__c (billable count)
+  id                     String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
+  site_id                String? // NULLABLE — derived on detail pass from account_name (see hauls note)
+  external_materials_id  String?   @unique // Name, portal Materials number e.g. "M-000300"
+  type                   String? // Type__c (expected 'Processing')
+  account_name           String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
+  account_id             String? // Account__c — 18-char Account id (structured join)
+  materials_status       String? // Materials_Status__c, e.g. "Active"
+  bol_id                 String? // BOL_ID__c
+  entry_date             DateTime? // Entry_Date__c
+  processed_date         DateTime? // Processed_Date__c
+  program_unit_count     Int? // Number_of_Program_Units__c (billable count)
   non_program_unit_count Int? // Number_of_Non_Program_Units__c
-  units                 Int? // legacy generic unit count (back-compat; program_unit_count authoritative)
-  weight_lbs            Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
-  retrac_id             String?
-  payload               Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
-  first_seen_at         DateTime  @default(now())
-  last_seen_at          DateTime  @default(now())
-  disappeared_at        DateTime?
-  detail_fetched_at     DateTime?
-  created_at            DateTime  @default(now())
-  updated_at            DateTime  @updatedAt
+  units                  Int? // legacy generic unit count (back-compat; program_unit_count authoritative)
+  weight_lbs             Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
+  retrac_id              String?
+  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
+  first_seen_at          DateTime  @default(now())
+  last_seen_at           DateTime  @default(now())
+  disappeared_at         DateTime?
+  detail_fetched_at      DateTime?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
 
   @@index([site_id])
   @@index([disappeared_at])
@@ -2476,28 +2588,28 @@ model MymrcProcessedMirror {
 // the processed mirror — a record whose Type__c flips can appear in both tables;
 // the sync must classify by Type__c, not by which list view produced the id.
 model MymrcOutboundMirror {
-  id                    String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
-  site_id               String?   // NULLABLE — derived on detail pass from account_name (see hauls note)
-  external_materials_id String?   @unique // Name, portal Materials number e.g. "M-000264"
-  type                  String? // Type__c (expected 'Outbound')
-  account_name          String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
-  account_id            String? // Account__c — 18-char Account id (structured join)
-  materials_status      String? // Materials_Status__c
-  bol_id                String? // BOL_ID__c (e.g. "125829"), populated on outbound rows
-  vendor                String? // Outbound_Vendor_Name__c — LIST-ONLY column (captured from getItems, absent from detail)
-  entry_date            DateTime? // Entry_Date__c
-  shipment_date         DateTime? // no real Shipment_Date__c field exists on Materials — stays null (kept, not dropped)
-  program_unit_count    Int? // Number_of_Program_Units__c
+  id                     String    @id // Salesforce record id (Materials__c, a2L…) — upsert key
+  site_id                String? // NULLABLE — derived on detail pass from account_name (see hauls note)
+  external_materials_id  String?   @unique // Name, portal Materials number e.g. "M-000264"
+  type                   String? // Type__c (expected 'Outbound')
+  account_name           String? // Account__r.Name — SITE DISCRIMINATOR (→ site_id)
+  account_id             String? // Account__c — 18-char Account id (structured join)
+  materials_status       String? // Materials_Status__c
+  bol_id                 String? // BOL_ID__c (e.g. "125829"), populated on outbound rows
+  vendor                 String? // Outbound_Vendor_Name__c — LIST-ONLY column (captured from getItems, absent from detail)
+  entry_date             DateTime? // Entry_Date__c
+  shipment_date          DateTime? // no real Shipment_Date__c field exists on Materials — stays null (kept, not dropped)
+  program_unit_count     Int? // Number_of_Program_Units__c
   non_program_unit_count Int? // Number_of_Non_Program_Units__c
-  weight_lbs            Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
-  retrac_id             String?
-  payload               Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
-  first_seen_at         DateTime  @default(now())
-  last_seen_at          DateTime  @default(now())
-  disappeared_at        DateTime?
-  detail_fetched_at     DateTime?
-  created_at            DateTime  @default(now())
-  updated_at            DateTime  @updatedAt
+  weight_lbs             Decimal?  @db.Decimal(12, 2) // Materials__c has NO weight field — stays null
+  retrac_id              String?
+  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
+  first_seen_at          DateTime  @default(now())
+  last_seen_at           DateTime  @default(now())
+  disappeared_at         DateTime?
+  detail_fetched_at      DateTime?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
 
   @@index([site_id])
   @@index([disappeared_at])
@@ -2520,23 +2632,23 @@ model MymrcOutboundMirror {
 // are Salesforce Time values ("07:00:00.000Z") — stored as TEXT (NOT a datetime;
 // never Date.parse). Same list→detail two-pass lifecycle as the other mirrors.
 model MymrcDockAvailabilityMirror {
-  id                     String    @id // Salesforce record id (Dock_Availability_Schedule__c, a1t…)
-  external_schedule_id   String?   @unique // Name, e.g. "DA-900001"
-  status                 String? // Status__c, e.g. "Active"
-  day_of_week            String? // Day_of_Week__c — RAW ";"-joined numeric codes ("1;2;3;4;5")
-  container_type         String? // Container_Type__c — RAW ";"-joined multipicklist
-  dock_door              String? // Dock_Door__c value ("Dock Door 1"), NOT displayValue
-  slot_start_time        String? // Slot_Start_Time__c — SF Time text ("07:00:00.000Z"), NOT a datetime
-  slot_end_time          String? // Slot_End_Time__c — SF Time text
-  available_appointments Int? // Number_of_Available_Appointments__c
+  id                      String    @id // Salesforce record id (Dock_Availability_Schedule__c, a1t…)
+  external_schedule_id    String?   @unique // Name, e.g. "DA-900001"
+  status                  String? // Status__c, e.g. "Active"
+  day_of_week             String? // Day_of_Week__c — RAW ";"-joined numeric codes ("1;2;3;4;5")
+  container_type          String? // Container_Type__c — RAW ";"-joined multipicklist
+  dock_door               String? // Dock_Door__c value ("Dock Door 1"), NOT displayValue
+  slot_start_time         String? // Slot_Start_Time__c — SF Time text ("07:00:00.000Z"), NOT a datetime
+  slot_end_time           String? // Slot_End_Time__c — SF Time text
+  available_appointments  Int? // Number_of_Available_Appointments__c
   availability_start_date DateTime? // Availability_Start_Date__c (Date)
-  payload                Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
-  first_seen_at          DateTime  @default(now())
-  last_seen_at           DateTime  @default(now())
-  disappeared_at         DateTime?
-  detail_fetched_at      DateTime?
-  created_at             DateTime  @default(now())
-  updated_at             DateTime  @updatedAt
+  payload                 Json? // FULL raw record representation (ADR-0038 D2 audit evidence)
+  first_seen_at           DateTime  @default(now())
+  last_seen_at            DateTime  @default(now())
+  disappeared_at          DateTime?
+  detail_fetched_at       DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
 
   @@index([disappeared_at])
   @@index([detail_fetched_at])
@@ -2559,18 +2671,18 @@ model MymrcDockAvailabilityMirror {
 // is stamped when hasMoreData:false is reached (cursor drained). `error` holds the
 // last human failure text (never credentials).
 model MymrcBackfillCursor {
-  id                       String    @id @default(uuid())
-  object_api_name          String // e.g. "Haul_Request__c"
-  list_view_api_name       String    @default("") // which list view is being paged ('' = object-level)
-  last_page_index          Int       @default(0) // 0-based currentPage of the last COMPLETED page
-  last_record_id           String? // last record id seen (audit/debug)
-  total_records_estimated  Int? // floor estimate while windowed; null until known
-  records_completed        Int       @default(0)
-  started_at               DateTime  @default(now())
-  completed_at             DateTime? // set when hasMoreData:false reached (backfill drained)
-  error                    String? // last human failure text (never credentials)
-  created_at               DateTime  @default(now())
-  updated_at               DateTime  @updatedAt
+  id                      String    @id @default(uuid())
+  object_api_name         String // e.g. "Haul_Request__c"
+  list_view_api_name      String    @default("") // which list view is being paged ('' = object-level)
+  last_page_index         Int       @default(0) // 0-based currentPage of the last COMPLETED page
+  last_record_id          String? // last record id seen (audit/debug)
+  total_records_estimated Int? // floor estimate while windowed; null until known
+  records_completed       Int       @default(0)
+  started_at              DateTime  @default(now())
+  completed_at            DateTime? // set when hasMoreData:false reached (backfill drained)
+  error                   String? // last human failure text (never credentials)
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
 
   @@unique([object_api_name, list_view_api_name])
   @@index([object_api_name])
@@ -3184,29 +3296,29 @@ model SourceServiceRate {
 /// wages), never flagged. `mileage` is informational miles; `mileage_cents` is the
 /// billed mileage dollars that feeds the §3.1 B8 formula (see the operator doc).
 model CollectionEvent {
-  id                 String       @id @default(uuid())
-  site_id            String // FK → sites.id (constraint in migration)
-  event_date         DateTime     @db.Date
-  customer           String
-  county             String?
-  slip_number        String?
-  units              Int?
-  freight_cents      Int? // load-level freight charge for the event (CA)
-  driver_hours       Decimal?     @db.Decimal(5, 2)
-  driver_wages_cents Int?
-  labor_hours        Decimal?     @db.Decimal(5, 2)
-  labor_wages_cents  Int?
-  mileage            Int? // miles driven — informational (workbook Events "Mileage" col)
-  mileage_cents      Int? // billed mileage dollars — the value that feeds B8
-  per_diem_cents     Int?
-  misc_cents         Int?
+  id                  String       @id @default(uuid())
+  site_id             String // FK → sites.id (constraint in migration)
+  event_date          DateTime     @db.Date
+  customer            String
+  county              String?
+  slip_number         String?
+  units               Int?
+  freight_cents       Int? // load-level freight charge for the event (CA)
+  driver_hours        Decimal?     @db.Decimal(5, 2)
+  driver_wages_cents  Int?
+  labor_hours         Decimal?     @db.Decimal(5, 2)
+  labor_wages_cents   Int?
+  mileage             Int? // miles driven — informational (workbook Events "Mileage" col)
+  mileage_cents       Int? // billed mileage dollars — the value that feeds B8
+  per_diem_cents      Int?
+  misc_cents          Int?
   // ADR-0056 (rollup §5.3, Rick 2026-07-19) — event-billing component captures.
   // `driver_onsite_hours` = ON-SITE time only (drive time already lives in
   // `labor_hours`; driver wages bill only on-site — §5.3 item 4). `per_diem_days`
   // counts overnight days (§5.3 item 5, rare — Happy Camp); `overnight` flags the
   // rare stay. Per-leg tier pricing lives in `event_legs`; per-vehicle IRS mileage
   // in `event_vehicles`. Amounts stored-as-entered; the generator derives cents.
-  driver_onsite_hours Decimal?    @db.Decimal(5, 2)
+  driver_onsite_hours Decimal?     @db.Decimal(5, 2)
   per_diem_days       Int?
   overnight           Boolean      @default(false)
   // ADR-0056 amendment (Addendum A §A.3) — did DR3 perform the haul for this
@@ -3217,13 +3329,13 @@ model CollectionEvent {
   // behaviour — defaulting true preserves it and avoids a silent revenue drop.
   // `false` is the new, explicitly-flagged exception (customer/third-party haul).
   dr3_hauled          Boolean      @default(true)
-  retrac_id          String?
-  notes              String?
-  source             RecordSource @default(manual)
-  locked_at          DateTime? // edit-before-any-lock guard (CRUD-lite)
-  created_by         String?
-  created_at         DateTime     @default(now())
-  updated_at         DateTime     @updatedAt
+  retrac_id           String?
+  notes               String?
+  source              RecordSource @default(manual)
+  locked_at           DateTime? // edit-before-any-lock guard (CRUD-lite)
+  created_by          String?
+  created_at          DateTime     @default(now())
+  updated_at          DateTime     @updatedAt
 
   @@index([site_id, event_date])
   @@index([retrac_id])
@@ -3551,7 +3663,7 @@ model CorCertificate {
   // (site, cover_month) is scoped BY period: a mid-month and an end-of-month
   // certificate for the same month are independent version chains and never void
   // one another. Default `end_of_month` preserves every existing row and caller.
-  period        CorPeriod        @default(end_of_month)
+  period CorPeriod @default(end_of_month)
 
   // D2.1 — unprocessed inventory at month close = the pool-aware running balance
   // (ADR-0037 D6) as of the month's last day, cross-referenced to the nearest
@@ -4022,32 +4134,32 @@ model ApRequest {
   // path only (Reject/Hold/NOT-DR3 keep `decision_note`/`hold_note`);
   // `confirmed_amount_cents` is the approver-confirmed amount (pre-filled from
   // extraction, always approver-confirmed — never auto-applied, hard rule #5).
-  vendor_freeform            String?
-  explanation                String?
-  confirmed_amount_cents     Int?
+  vendor_freeform        String?
+  explanation            String?
+  confirmed_amount_cents Int?
 
   // D-M5-2 — auto-extraction result computed at intake (hybrid local pdf-parse +
   // Claude API fallback). See src/lib/ap/extraction/types.ts (ExtractionResult):
   // { best_amount_cents, best_vendor, confidence, source, candidates,
   // attempted_at, model?, cost_cents?, error? }. Pre-fills the decide panel; the
   // approver still confirms every field.
-  extraction                 Json?
+  extraction Json?
 
   // D-M5-7 — Phase-2 schema hook ONLY. Ships as an empty text[] (@default([]));
   // NO code populates it in Phase 1. Wire-up (MyMRC haul cross-check against
   // mymrc_hauls_mirror) is gated on ADR-0057 Phase 1 completion (hard rule #2).
-  extracted_haul_numbers     String[]        @default([])
+  extracted_haul_numbers String[] @default([])
 
   // D-M5-3 — dual-approval stamps. On an Approve >= $1,000 the first approver's id
   // + time land here and status → pending_second_approval; the site-appropriate
   // second approver's id + time (and, on an override reject, second_approver_note)
   // land on the terminal decision. Sub-$1K approves leave these null. Bare
   // audit-actor columns (no FK — matches decided_by/held_by).
-  first_approver_id          String?
-  first_approved_at          DateTime?
-  second_approver_id         String?
-  second_approved_at         DateTime?
-  second_approver_note       String?
+  first_approver_id    String?
+  first_approved_at    DateTime?
+  second_approver_id   String?
+  second_approved_at   DateTime?
+  second_approver_note String?
 
   // D-M5-4 — variance detection state + acknowledgment audit. Default
   // not_applicable; acknowledgment columns populate only when the RED banner was
@@ -4061,17 +4173,17 @@ model ApRequest {
   // Bill). Escalation is ADDITIVE, never a transfer: the routed peer stays able to
   // sign and whoever acts first completes it. Set once by the hourly scanner, which
   // is idempotent on `escalated_at IS NULL`.
-  escalated_at               DateTime?
-  escalated_to               String? // bare FK → users.id (constraint in migration)
+  escalated_at DateTime?
+  escalated_to String? // bare FK → users.id (constraint in migration)
 
-  created_at                 DateTime        @default(now())
-  updated_at                 DateTime        @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
-  attachments     ApAttachment[]
-  followups       ApFollowup[]
+  attachments        ApAttachment[]
+  followups          ApFollowup[]
   // D-M5-6 — equipment/vehicle links selected at Approve time (distinct row per
   // equipment; a single is_not_equipment_related row for the explicit-none case).
-  equipment_links ApEquipmentLink[]
+  equipment_links    ApEquipmentLink[]
   // Amendment 9 (§2.3) — escape-hatch requests filed from this decision (at most
   // one in practice: the hatch is a single free-text choice per decision).
   equipment_requests ApEquipmentRequest[]
@@ -4863,27 +4975,27 @@ model ProvenanceAgency {
 /// Bare scalar FKs (site_id → sites.id, store_destination_id → sources.id),
 /// constraints in migration — matches the self-contained collection_events pattern.
 model UnitStatusMovement {
-  id                String            @id @default(uuid())
-  site_id           String // FK → sites.id (constraint in migration)
-  movement_date     DateTime          @db.Date
-  units             Int
-  from_status       UnitStatus? // null = intake into a bucket
-  to_status         UnitStatus
-  status_changed_at DateTime          @default(now())
+  id                   String            @id @default(uuid())
+  site_id              String // FK → sites.id (constraint in migration)
+  movement_date        DateTime          @db.Date
+  units                Int
+  from_status          UnitStatus? // null = intake into a bucket
+  to_status            UnitStatus
+  status_changed_at    DateTime          @default(now())
   // Set ONLY when to_status = landfilled (whole-unit disposal reason, §11).
-  landfilled_reason LandfilledReason?
+  landfilled_reason    LandfilledReason?
   // Set ONLY on a saved → sold store transfer: the destination svdp_internal_store
   // source. Bare scalar FK → sources.id (constraint in migration).
   store_destination_id String?
-  retrac_id         String?
-  slip_number       String?
-  source            RecordSource      @default(manual)
-  import_id         String? // ADR-0048 — workbook_promotions.id when promoted from staging
-  locked_at         DateTime? // edit-before-any-lock guard (CRUD-lite)
-  note              String?
-  created_by        String?
-  created_at        DateTime          @default(now())
-  updated_at        DateTime          @updatedAt
+  retrac_id            String?
+  slip_number          String?
+  source               RecordSource      @default(manual)
+  import_id            String? // ADR-0048 — workbook_promotions.id when promoted from staging
+  locked_at            DateTime? // edit-before-any-lock guard (CRUD-lite)
+  note                 String?
+  created_by           String?
+  created_at           DateTime          @default(now())
+  updated_at           DateTime          @updatedAt
 
   @@index([site_id, movement_date])
   @@index([site_id, to_status])
@@ -4913,14 +5025,14 @@ enum UnitStatus {
 /// per-leg amount (null until the generator resolves it). Bare scalar FK
 /// event_id → collection_events.id (constraint in migration; ON DELETE CASCADE).
 model EventLeg {
-  id                String      @id @default(uuid())
+  id                String       @id @default(uuid())
   event_id          String // FK → collection_events.id (constraint in migration, CASCADE)
   leg_type          EventLegType
   tier_lookup_miles Int?
   rate_cents        Int?
   note              String?
-  created_at        DateTime    @default(now())
-  updated_at        DateTime    @updatedAt
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
 
   @@index([event_id])
   @@map("event_legs")
@@ -4960,20 +5072,20 @@ model EventVehicle {
 /// collection_events.id (constraint in migration; a TONU may reference the event
 /// it was dispatched for).
 model TonuBilling {
-  id              String    @id @default(uuid())
+  id              String       @id @default(uuid())
   event_id        String? // FK → collection_events.id (constraint in migration)
   site_id         String // FK → sites.id (constraint in migration)
   dispatched_at   DateTime?
   cancelled_at    DateTime?
-  diverted        Boolean   @default(false)
+  diverted        Boolean      @default(false)
   haul_rate_cents Int? // Woodland Primary haul rate applied (null until resolved)
   billed_cents    Int? // final billed amount (null until resolved)
   note            String?
   source          RecordSource @default(manual)
   locked_at       DateTime?
   created_by      String?
-  created_at      DateTime  @default(now())
-  updated_at      DateTime  @updatedAt
+  created_at      DateTime     @default(now())
+  updated_at      DateTime     @updatedAt
 
   @@index([event_id])
   @@index([site_id])
@@ -5038,7 +5150,7 @@ model ReimbursementRequest {
 
   // ── Routing / escalation (D5/D6/D9) ──────────────────────────────────────
   routed_to_user_id String
-  routed_to         User                          @relation("ReimbursementRoutedTo", fields: [routed_to_user_id], references: [id], onDelete: Restrict)
+  routed_to         User                           @relation("ReimbursementRoutedTo", fields: [routed_to_user_id], references: [id], onDelete: Restrict)
   escalated_at      DateTime?
   escalated_to      String? // bare FK → users.id
   escalation_reason ReimbursementEscalationReason?

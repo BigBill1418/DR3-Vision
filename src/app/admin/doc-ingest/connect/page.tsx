@@ -67,6 +67,23 @@ export default async function DocIngestConnectPage({
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">{M.pageTitle}</h1>
           <p className="text-sm text-dr3-mist-dim">{M.pageSubtitle}</p>
+          {/* Sub-nav. This page used to be a dead end — its only outbound link
+              was back to /admin — while the sources, anomalies, health and
+              reconciliation pages had no inbound link from anywhere in the app. */}
+          <nav className="mt-2 flex flex-wrap gap-4 text-sm">
+            <Link href="/admin/doc-ingest" className="text-dr3-cyan hover:underline">
+              {M.sources.title}
+            </Link>
+            <Link href="/admin/doc-ingest/anomalies" className="text-dr3-cyan hover:underline">
+              {M.anomalies.title}
+            </Link>
+            <Link href="/admin/doc-ingest/health" className="text-dr3-cyan hover:underline">
+              {M.health.title}
+            </Link>
+            <Link href="/admin/doc-ingest/reconciliation" className="text-dr3-cyan hover:underline">
+              {M.reconciliation.title}
+            </Link>
+          </nav>
         </header>
         <ConnectPanel
           initialStatus={{ ...status, redirectUri: docIngestRedirectUri() }}

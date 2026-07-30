@@ -3,6 +3,27 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-30 — document ingestion now ABSORBS, and can measure itself (ADR-0069)
+
+Shared-document ingestion captured but did not absorb. A document terminated at one `file_drops` row with `status: 'received'`; no parsed value reached a queryable table, a report, or any comparison against Vision's own numbers. `parse_summary` could not close the gap — it stores shape, not data, and on all three live documents it contains no usable figure at all.
+
+### Added
+
+- **`doc_reference_rows` — reference data, never operational data.** A confirmed daily-log workbook is now re-read from its archived R2 object and extracted into typed per-day rows with full provenance: which document, which revision, which sheet, which site. `workbook-sync` (ADR-0049) remains the **only** writer of `processed_units_daily`. There is no source discriminator that would let both pipelines write one table and no "upsert when workbook-sync hasn't" fallback — either would be a second writer wearing a disguise, and the collision would be discovered in payroll.
+- **The reconciliation, at `/admin/doc-ingest/reconciliation`.** Per site and period: where the spreadsheet and Vision agree, where they differ and by how much. This is the instrument the migration was missing — "has Vision taken this over yet?" previously had no answer that was not a guess. Manager-reachable (site reach enforced server-side), because the person who can say which side is right for a given day is the manager who was there.
+- **Extraction uses the layout-aware parser**, not `parse.ts`'s header guess. That guess takes the first non-empty row and is wrong on 3 of 3 live workbooks — every real one opens with a merged title row — so anything built on it would be built on sand.
+
+### Fixed
+
+- **Zero extracted rows now raises an anomaly instead of passing as success.** A zero is not "the document was empty"; far more likely the row adapter's layout assumption failed. The message names the template generation and the sheets actually seen. Every previous defect in this module was a zero or a null read as good news — a null ctag as "unchanged", a missing baseline as "no variance", a failed archive as "applied".
+- **A document with no site REFUSES to absorb, loudly.** A NULL site is unclassified, never a guess. The refusal deliberately does not latch, so confirming the site on the queue is the entire fix — no re-trigger needed.
+- **Every doc-ingest page is reachable by clicking, for the first time.** The single admin tile pointed at the connect page, whose only outbound link was back to `/admin`; the sources list, confirm queue, anomalies and health pages had no inbound link from anywhere in the app. Three documents had been waiting in a queue nobody could navigate to.
+
+### Assessed and deliberately NOT done
+
+- **`workbook-sync` was assessed for enablement and left off.** It is fully wired already — compose profile, cron daemon, internal route, business-hours gate, admin control — so this was never a wiring gap. It is blocked on substance: its daily-row adapter is still the Addendum-B fixture's column mapping by its own declaration (ADR-0049 D12), and the transport silently falls back to a fixture-seeded mock when Graph credentials are absent without the engine gating on it. Enabling it today risks writing fixture or mis-mapped figures over the 976 production rows. Conditions for enabling are in ADR-0069 §4. The absorption bridge is how the extractor gets validated against production first, at zero operational cost.
+- The `parse.ts` header-row defect is real and still open. This change routes around it entirely rather than bundling a fix.
+
 ## 2026-07-30 — documentation: notify.ts coverage and ADR-0068 Amendment 1 corrections
 
 ### Fixed

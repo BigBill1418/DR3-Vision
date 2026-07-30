@@ -40,6 +40,8 @@ const NTFY_TOPIC = 'dr3-vision-system';
 export const ANOMALIES_PAGE_PATH = '/admin/doc-ingest/anomalies';
 export const SOURCES_PAGE_PATH = '/admin/doc-ingest';
 export const HEALTH_PAGE_PATH = '/admin/doc-ingest/health';
+/** ADR-0069 — where an operator sees what absorption produced (or did not). */
+export const RECONCILIATION_PAGE_PATH = '/admin/doc-ingest/reconciliation';
 
 /** How often an UNRESOLVED anomaly re-pages. The transition always pages. */
 export const ANOMALY_REPAGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -115,6 +117,21 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
   column_nulled: { severity: 'critical', priority: 'high', page: ANOMALIES_PAGE_PATH },
   row_count_drop: { severity: 'critical', priority: 'high', page: ANOMALIES_PAGE_PATH },
   parse_broken: { severity: 'critical', priority: 'high', page: ANOMALIES_PAGE_PATH },
+
+  // ── ADR-0069 absorption ───────────────────────────────────────────────────
+  // A confirmed absorbable document with no site. It cannot absorb until a human
+  // picks the site, so the confirm queue is where the fix happens. It does NOT
+  // page: the action is "open the queue and finish confirming", which is exactly
+  // the dashboard-tile case ADR-0037 prescribes over a notification.
+  absorption_refused: { severity: 'warning', priority: null, page: SOURCES_PAGE_PATH },
+  // The extractor ran and produced ZERO rows. This one is graded ABOVE the
+  // guardrail conditions in importance even though it does not page: a silent
+  // zero is the exact failure this whole module keeps re-learning (a null ctag
+  // read as "unchanged", a missing baseline read as "no variance", a failed
+  // archive read as "applied"). It cannot page under the ADR-0037 gate — the fix
+  // is a code change to the row adapter, not a 5-minute operator action — so it
+  // is `default`: same-day, visible, and never silent.
+  absorption_empty: { severity: 'critical', priority: 'default', page: RECONCILIATION_PAGE_PATH },
 };
 
 export function anomalyPolicy(kind: DocIngestAnomalyKind): AnomalyPolicy {

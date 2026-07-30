@@ -191,6 +191,66 @@ export const docIngestMessages = {
       'This API has now stopped returning data. Shared-document discovery is BROKEN until the enumeration is replaced.',
   },
 
+  // ── ADR-0069 reconciliation ────────────────────────────────────────────────
+  // Every string here is checked against what the code actually does. This module
+  // has shipped false UI assertions before (see `confirmQueueBody` above), and an
+  // operator who catches one rightly discounts every claim after it. In
+  // particular: this screen does NOT say the spreadsheet or Vision is correct. It
+  // says where they agree. Deciding which is right is the manager's job and the
+  // copy must not pretend otherwise.
+  reconciliation: {
+    title: 'Spreadsheet vs. Vision',
+    subtitle:
+      'What a shared daily-log workbook says about a day, next to what Vision holds for the same day. Reference only — nothing here changes a Vision figure.',
+    intro:
+      'Absorbed spreadsheet figures are kept as REFERENCE data. They never overwrite production numbers: the workbook sync (ADR-0049) is the only writer of daily production. This screen is the measure of how far apart the two are.',
+    emptyHeading: 'Nothing absorbed yet',
+    emptyBody:
+      'No confirmed daily-log workbook has produced reference rows. Share the monthly daily-log workbook with the document service account and confirm its class and site on the shared-documents queue.',
+    filterHeading: 'Period',
+    from: 'From',
+    to: 'To',
+    apply: 'Show',
+    site: 'Site',
+    allSites: 'All sites',
+    // Summary tiles
+    agree: 'Agree',
+    disagree: 'Disagree',
+    missingInVision: 'Not in Vision',
+    missingInReference: 'Not in spreadsheet',
+    totalAbsDelta: 'Total absolute difference',
+    coverage: 'Spreadsheet covers',
+    coverageNone: 'nothing in this period',
+    daysCovered: 'days',
+    documents: 'From',
+    // Table
+    colDate: 'Day',
+    colSite: 'Site',
+    colMetric: 'Figure',
+    colReference: 'Spreadsheet',
+    colVision: 'Vision',
+    colDelta: 'Difference',
+    colStatus: 'Status',
+    colDocument: 'Document',
+    noRows: 'No days to compare in this period.',
+    // Status labels
+    statusAgree: 'Agrees',
+    statusDisagree: 'Differs',
+    statusMissingInVision: 'Vision has no row',
+    statusMissingInReference: 'Spreadsheet is silent',
+    // Metric labels — these name real processed_units_daily columns.
+    metricStrippedProgram: 'Stripped — program',
+    metricStrippedNonProgram: 'Stripped — non-program',
+    metricSavedUnits: 'Saved units',
+    // The migration question this screen exists to answer.
+    retirableHeading: 'Can this spreadsheet be retired?',
+    retirableYes:
+      'Every compared figure agrees across this period. On this evidence Vision matches the workbook for this site.',
+    retirableNo:
+      'Figures still differ. Each difference is either a Vision gap or a workbook correction — both are findings, and neither is resolved by this screen.',
+    referenceOnlyNote: 'Reference data. Not used for payroll, billing, bonus or inventory.',
+  },
+
   errors: {
     keyMissing:
       'The token encryption key is not mounted on this host. Provision ~/.dr3-vision-secrets/doc-ingest.env before connecting.',

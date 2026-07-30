@@ -88,10 +88,15 @@ const TILES = [
     testid: 'admin-tile-file-drop',
   },
   {
-    href: '/admin/doc-ingest/connect',
+    // Points at the SOURCES + CONFIRM QUEUE, not at /connect. The 2026-07-30
+    // audit found this tile was the only doc-ingest link in the app and it
+    // targeted the connect page, whose only outbound href is back to /admin —
+    // so the queue three documents were waiting in was reachable only by typing
+    // the URL. Connecting is a one-time act; confirming is the recurring one.
+    href: '/admin/doc-ingest',
     label: 'Document ingestion',
     description:
-      'Connect the docs-dr3@svdp.us service account so Vision reads shared documents where they live, instead of emailed snapshots (ADR-0067).',
+      'Shared documents Vision reads where they live, the confirm queue, and the spreadsheet-vs-Vision reconciliation (ADR-0067 / ADR-0069).',
     testid: 'admin-tile-doc-ingest',
   },
 ] as const;

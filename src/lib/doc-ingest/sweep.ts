@@ -31,6 +31,7 @@ import { ensureSubscriptions } from './subscriptions';
 import { ingestSource } from './ingest';
 import { classifySourceIfNeeded } from './classification';
 import { raiseAnomaly, resolveAnomaly } from './anomalies';
+import { runAbsorptionPass } from './absorb';
 import type { ClassifyDeps } from './classifier';
 
 export type SweepTrigger = 'scheduled' | 'notification' | 'manual';
@@ -191,6 +192,34 @@ export async function runDocIngestSweep(
         result.status = 'partial';
         log('error', `source ${source.display_name}: ${describe(e)}`);
       }
+    }
+
+    // ── 5. Absorb (ADR-0069) ──────────────────────────────────────────────
+    // Turn newly-applied revisions of confirmed absorbable documents into
+    // REFERENCE rows. It lives here rather than in its own cron because the work
+    // is event-shaped — a revision just applied — and the sweep is already the
+    // thing that knows one did. A second cron container would be a second thing
+    // that can silently stop.
+    //
+    // Deliberately AFTER the ingest loop and deliberately non-fatal: absorption
+    // writes only reference data, so failing it must never mark a sweep that
+    // correctly captured every document as failed. Its own outcomes are recorded
+    // per revision on `doc_source_versions` and, when they are bad, as anomalies.
+    //
+    // NOTE: this does not, and must not, write `processed_units_daily` —
+    // workbook-sync (ADR-0049) is that table's only writer.
+    try {
+      const absorbed = await runAbsorptionPass(prisma, { now, log });
+      result.anomaliesRaised += absorbed.anomaliesRaised;
+      if (absorbed.versionsConsidered > 0) {
+        log(
+          'info',
+          `absorption: ${absorbed.absorbed} absorbed (${absorbed.rowsWritten} reference rows), ` +
+            `${absorbed.refused} refused, ${absorbed.empty} empty, ${absorbed.unreadable} unreadable`,
+        );
+      }
+    } catch (e) {
+      log('warn', `absorption pass failed: ${describe(e)} — capture is unaffected`);
     }
 
     await finish(prisma, run.id, result, new Date());

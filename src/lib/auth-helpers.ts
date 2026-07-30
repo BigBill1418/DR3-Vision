@@ -524,3 +524,87 @@ export function siteScopeFor(ctx: EquipmentRequestContext): string[] | undefined
   if (ctx.allSites) return undefined;
   return ctx.primarySiteId ? [ctx.primarySiteId] : [];
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0069 — read gate for /admin/doc-ingest/reconciliation
+//
+// Deliberately a MANAGER-reachable surface, unlike the rest of /admin/doc-ingest.
+// Those pages are admin-only for a specific reason: they list sources whose
+// `site_id` is NULL, and an unclassified document must not appear in any
+// site-scoped view. That reason does not apply here. Every row on the
+// reconciliation screen comes from `doc_reference_rows`, whose `site_id` is NOT
+// NULL by schema constraint — absorption refuses an unclassified document rather
+// than guessing a site — so there is nothing unscoped to leak.
+//
+// And the audience is right: the person who can say whether the spreadsheet or
+// Vision is correct for a given day is the site manager who was there, not Bill.
+//
+// Site REACH still applies in full (hard rule #2): admin and `all_sites` managers
+// see both sites; a plain manager sees their own. No admin POWER is granted —
+// this gate unlocks exactly this read and nothing else.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface ReconciliationReadContext {
+  userId: string;
+  /** How access was granted — for the log line. */
+  via: 'admin' | 'manager';
+  /** Cross-site reach (admin, or manager with all_sites — ADR-0024). */
+  allSites: boolean;
+  /** The manager's primary site id when reach is single-site; null for admin. */
+  primarySiteId: string | null;
+}
+
+export async function requireReconciliationRead(): Promise<ReconciliationReadContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+  if (session.user.role === 'admin') {
+    return { userId: session.user.id, via: 'admin', allSites: true, primarySiteId: null };
+  }
+  if (session.user.role === 'manager') {
+    // Read FRESH from Postgres, never from the JWT: a reach change must take
+    // effect on the next request, not on the next sign-in.
+    const u = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { all_sites: true, primary_site_id: true },
+    });
+    if (u) {
+      return {
+        userId: session.user.id,
+        via: 'manager',
+        allSites: u.all_sites,
+        primarySiteId: u.primary_site_id,
+      };
+    }
+  }
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type ReconciliationReadResult =
+  | { ok: true; ctx: ReconciliationReadContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkReconciliationRead(): Promise<ReconciliationReadResult> {
+  try {
+    return { ok: true, ctx: await requireReconciliationRead() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}
+
+/**
+ * Resolve a reconciliation caller's reach to concrete site ids.
+ *
+ * Returns an EMPTY array — not "every site" — for a manager with no primary site.
+ * Defaulting a reach-less caller to all sites is exactly the direction that leaks
+ * across the Eugene/Woodland boundary, so the failure mode is "sees nothing".
+ */
+export async function reconciliationSiteIds(ctx: ReconciliationReadContext): Promise<string[]> {
+  if (ctx.allSites) {
+    const sites = await prisma.site.findMany({ select: { id: true }, orderBy: { name: 'asc' } });
+    return sites.map((s) => s.id);
+  }
+  return ctx.primarySiteId ? [ctx.primarySiteId] : [];
+}
