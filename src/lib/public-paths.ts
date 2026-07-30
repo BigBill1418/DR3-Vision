@@ -61,6 +61,15 @@ export function isPublic(pathname: string): boolean {
   // ADR-0036 regression, made a mandatory day-one case per ADR-0046 D5). The
   // daemon uses `redirect:'manual'` as the second line of defence.
   if (pathname.startsWith('/api/internal/ap/')) return true;
+  // ADR-0068 Amendment 5 — the reimbursement decision-mail re-send
+  // (`/api/internal/reimbursements/resend`). Added after walking into the exact
+  // trap the paragraph above documents: the first live call returned HTTP 200
+  // carrying the LOGIN PAGE, because the middleware 307'd the session-less POST
+  // and fetch followed the redirect. A 200 that is actually a login page is the
+  // most convincing kind of silent no-op — it looks like success at every layer
+  // except the one that matters. Nothing was sent, which is the only reason it
+  // was caught.
+  if (pathname.startsWith('/api/internal/reimbursements/')) return true;
   // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — internal board-pack
   // digest cron endpoint (`/api/internal/board-pack/send`). Same loopback-guarded
   // internal-route pattern as the survey/bonus/audit/ap crons above: without this
