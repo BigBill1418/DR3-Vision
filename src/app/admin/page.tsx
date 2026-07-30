@@ -74,6 +74,18 @@ const TILES = [
     testid: 'admin-tile-terex-import',
   },
   {
+    // ADR-0068 Amendment 4 — operator directive 2026-07-30: "its not a tile on my
+    // admin portal to get to - its need to be there and accessible to me."
+    // Reimbursements are FILED and DECIDED per site, because the authorisation is
+    // site-scoped. Oversight is org-wide, and Bill's account has no primary site,
+    // so without this tile the only route in was to pick a site first.
+    href: '/admin/reimbursements',
+    label: 'Employee reimbursements',
+    description:
+      'Every reimbursement across both sites, with who signed and whether accounting was really told (ADR-0068). Read-only — decisions happen on the site surface.',
+    testid: 'admin-tile-reimbursements',
+  },
+  {
     href: '/admin/ap/routing',
     label: 'AP configuration',
     description:
