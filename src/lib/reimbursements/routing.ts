@@ -1,4 +1,6 @@
-// ADR-0068 D5/D6 — who may fulfil a reimbursement's second approval.
+// ADR-0068 D3/D5 — who may fulfil a reimbursement's second approval.
+// (D3 is the exclusion rule; D5 is the one-routing-table/one-resolver rule. An
+// earlier draft numbering said "D5/D6"; see ADR-0068 Amendment 1 F.3.)
 //
 // ── Why this file is a THIN WRAPPER and not a second resolver ────────────────
 // The reimbursement routing question is the AP routing question plus one extra
@@ -15,7 +17,7 @@
 // So: one routing table (`ap_approval_routing`), one resolver, and this module
 // adds exactly one rule on top.
 //
-// ── The rule this module adds (D6) ──────────────────────────────────────────
+// ── The rule this module adds (D3) ──────────────────────────────────────────
 // Bill's stated rule was "the second cannot be the initiator". That covers the
 // SUBMITTER. It does NOT cover the BENEFICIARY, and that gap reproduces Mary's
 // complaint in mirror image: if Morena submits a reimbursement *for Janette*,
@@ -124,8 +126,8 @@ export function nameIsAmbiguousAgainst(freeform: string, candidateName: string):
  * Resolve who may sign a reimbursement, and who to tell.
  *
  * Layers on top of the shared AP resolver:
- *   1. remove the submitter (D4 — submission IS the first signature);
- *   2. remove the beneficiary (D6);
+ *   1. remove the submitter (D2 — submission IS the first signature);
+ *   2. remove the beneficiary (D3);
  *   3. if that empties the eligible set, escalate to a reachable admin IMMEDIATELY.
  */
 export async function resolveReimbursementApproval(

@@ -1,4 +1,6 @@
-// ADR-0068 D8/D10 — who hears about a reimbursement, and who does not.
+// ADR-0068 D6 — who hears about a reimbursement, and who does not.
+// (This header cited a draft-numbering "D8/D10" that the ADR never had; see
+// ADR-0068 Amendment 1 F.3. The decision of record is D6.)
 //
 // ── The routing rule that is easy to get backwards ──────────────────────────
 // Vendor invoices send the decision back to the SVdP forwarder with Mary CC'd,
@@ -146,7 +148,7 @@ export interface ReimbursementNotifyOutcome {
 
 /**
  * Tell the routed second approver — and ONLY them — that a reimbursement needs
- * their signature. Never a broadcast (D10).
+ * their signature. Never a broadcast (D6).
  */
 export async function notifyReimbursementSubmitted(
   prisma: PrismaClient,
@@ -214,7 +216,7 @@ export async function notifyReimbursementDecided(
   const problems: string[] = [];
 
   if (row.status === 'approved') {
-    // D8 — Mary is the SOLE primary recipient. Deliberately NOT the submitter.
+    // D6 — Mary is the SOLE primary recipient. Deliberately NOT the submitter.
     const res = await notifyStaff({
       surfaceCode: SURFACE,
       site: { id: row.site.id, code: row.site.code },
@@ -233,10 +235,21 @@ export async function notifyReimbursementDecided(
     if (res.intendedRecipients.length === 0) {
       problems.push('Approved reimbursement had no accounting recipient — it will not get paid.');
     }
-    await prisma.reimbursementRequest.update({
-      where: { id },
-      data: { sent_to_accounting_at: new Date() },
-    });
+    if (res.disabled) {
+      problems.push(
+        'Approved reimbursement mail could not be sent — the email transport is disabled (M365 unconfigured). Mary has NOT been told to pay it.',
+      );
+    }
+    // `sent_to_accounting_at` is an AUDIT field: it must record that accounting
+    // was really told, not that we tried. Stamping it unconditionally made an
+    // empty audience and a dead transport both read as a completed hand-off —
+    // the same fail-soft-looks-like-success shape this module exists to refuse.
+    if (res.intendedRecipients.length > 0 && !res.disabled) {
+      await prisma.reimbursementRequest.update({
+        where: { id },
+        data: { sent_to_accounting_at: new Date() },
+      });
+    }
     return { mode: res.mode, intended: res.intendedRecipients, problems };
   }
 
@@ -264,6 +277,12 @@ export async function notifyReimbursementDecided(
     ),
     db: prisma,
   });
+
+  if (res.disabled) {
+    problems.push(
+      `Reimbursement ${row.status} but the mail could not be sent — the email transport is disabled (M365 unconfigured). ${row.submitter.name} has NOT been told.`,
+    );
+  }
 
   return { mode: res.mode, intended: res.intendedRecipients, problems };
 }

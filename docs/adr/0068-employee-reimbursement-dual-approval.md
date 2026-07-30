@@ -155,10 +155,13 @@ were driven at the result:
 Survivor row: `submitted_by=u_jt approved_by=u_mg`. A constraint that rejects
 everything would be useless, so the legitimate case was proven too.
 
-16 unit tests cover both exclusions, the immediate beneficiary escalation, the
+24 unit tests cover both exclusions, the immediate beneficiary escalation, the
 ambiguous-name fail-safe, the common case NOT over-escalating, site reach, and the
 ADR-0066 invariant (authorized-by-someone is never notifiable-by-nobody) swept
-across every submitter.
+across every submitter — 16 in `routing.test.ts` (the exclusion logic) plus 8 in
+`service.test.ts` (that the decision path CONSULTS it). See Amendment 1 §C: this
+line originally read "16 unit tests", which counted only the first file, and
+`notify.ts` had none at all until Amendment 1 §D.
 
 ## Consequences
 
@@ -190,3 +193,142 @@ recorded here rather than discovered later:
 
 None of the four weakens the control. All four are queue-visibility and
 document-format work.
+
+---
+
+## Amendment 1 — 2026-07-30 — rollout state ratified LIVE, and four documentation defects corrected
+
+This amendment exists because the ADR as written **contradicted production**, and
+because three factual claims made in the shipping commits were wrong. None of it
+changes the control; all of it changes what the record says about the control.
+
+### A. Both surfaces are `live` at BOTH sites. This is INTENDED and is now ratified.
+
+The body of this ADR, and the seed comments in
+`prisma/migrations/20260817_adr0068_employee_reimbursements/migration.sql`
+(§"Notification surface (ADR-0047), **born pilot**" and §"The Employee
+Reimbursement tile itself. **Born `pilot`**"), describe a staged ramp: pilot
+first, Woodland before Eugene. **Production is not in that state and is not
+going to be.** Ground truth, read from the production database
+(`dr3_vision` on CHAD-HQ) on 2026-07-30 at 03:13 UTC = 2026-07-29 20:13 PDT:
+
+| surface                | site     | rollout_state | flipped_by | flipped_at |
+| ---------------------- | -------- | ------------- | ---------- | ---------- |
+| `reimbursement_notify` | eugene   | **live**      | _(null)_   | _(null)_   |
+| `reimbursement_notify` | woodland | **live**      | _(null)_   | _(null)_   |
+| `reimbursement_tile`   | eugene   | **live**      | _(null)_   | _(null)_   |
+| `reimbursement_tile`   | woodland | **live**      | _(null)_   | _(null)_   |
+
+All four rows: `created_at` 2026-07-29 21:29:55 UTC (14:29:55 PDT — the moment
+`migrate deploy` applied the migration), `updated_at` 2026-07-29 21:40:49 UTC
+(14:40:49 PDT — eleven minutes later, when they were flipped).
+
+**Operator-ratified 2026-07-30: reimbursements are LIVE at both sites, and
+`mary.scott@svdp.us` is the correct accounting recipient.** Neither is to be
+reverted. The "born pilot" language describes the migration's SEED VALUE, which
+is still `pilot` and still correct as a seed; it does not describe the running
+system. Read it as history, not as current state.
+
+### B. The flip bypassed the audited `/admin/rollout` path — there is no flip record
+
+`flipped_by`, `flipped_at` and `criteria_note` are **all NULL** on all four rows.
+`/admin/rollout` sets those fields; therefore the transition to `live` did not go
+through it. The consequence is narrow but real: **the rollout table cannot say who
+ramped reimbursements, when, or against what criteria.** The directive's
+"record the criteria at the flip" rule produced no evidence here.
+
+The state itself is ratified (§A) — this is not a request to change it. But the
+same pattern is present on other surfaces, so it is not a one-off: `ipad_queue`
+and `ipad_inbound` are also `live` with a NULL `flipped_by` (2 rows each).
+`bonus_signature_chain` and `survey_sends` are also NULL-`flipped_by`, but those
+are the deliberately grandfathered surfaces seeded `live`, so they are expected.
+
+Tracked as follow-up, not fixed here: either backfill `flipped_by`/`criteria_note`
+for the ratified flips, or make out-of-band flips impossible so the audit field
+cannot be empty. Deciding that is an operator call.
+
+### C. The migration comment could NOT be corrected in place — it is checksum-locked
+
+The obvious fix — edit the "born pilot" comment in the migration — **would break
+production deploys and CI**, so it was deliberately not done.
+
+`prisma/migrations/.../migration.sql` is an APPLIED migration. Its checksum is
+recorded in `_prisma_migrations` (`68374a197bf6153c…`, `finished_at`
+2026-07-29 21:29:55 UTC / 14:29:55 PDT). Prisma's schema engine compares that
+checksum on every run; the binary carries the failure string verbatim:
+
+> `` `<migration>` was modified after it was applied. ``
+
+Editing the file would therefore fail (a) the one-shot `prisma migrate deploy`
+init container in `docker-compose.yml` on the next production deploy, and (b) the
+`prisma migrate deploy` + `prisma migrate status` **hard CI gate** in
+`.github/workflows/ci.yml`. An applied migration is immutable in practice, comments
+included. **This ADR is the correction of record for that comment.**
+
+### D. `notify.ts` had ZERO test coverage. It now has 20 tests.
+
+269 lines, fail-soft over an empty recipient set, on the money path — and
+untested, which made it the highest-risk file in the feature. This repo has
+already been bitten by exactly this shape: `resolveSlotSigner` had tests that
+mocked the database into AGREEING with a production-wrong query, and ops signers
+were never emailed while every surface reported success.
+
+`src/lib/reimbursements/__tests__/notify.test.ts` is therefore built to avoid that
+failure mode: the **real** `resolveReimbursementApproval` runs over a fake Prisma,
+and only `notifyStaff` (the email transport) is mocked, echoing its arguments back
+so assertions are made against what the code really asked to send. D6 is asserted
+in both directions and negatively as well as positively:
+
+- approved → Mary is the **sole** primary recipient, and the submitter is **not**
+  in the audience (not as a recipient, not as a cc);
+- rejected / held → the **submitting manager**, and Mary is **never** told;
+- submission → **only** the routed second approver — never the submitter, never Mary;
+- the empty-recipient path is **LOUD**: it returns `not_sent`, names the amount and
+  the beneficiary, states "nobody has been asked to sign it", and does not quietly
+  email anyone.
+
+The suite was mutation-tested rather than trusted for being green. Three
+deliberate defects were injected and each was caught: leaking the approved mail to
+the submitter (2 failures), removing the beneficiary exclusion from `routing.ts`
+(2 failures — proving the real resolver is genuinely in the loop), and silencing
+the empty-audience report (1 failure).
+
+Reimbursement suite total: **44 tests** (16 routing + 8 service + 20 notify).
+
+### E. A fail-soft audit field was recording deliveries that never happened
+
+Found while writing §D. `notifyReimbursementDecided` stamped
+`sent_to_accounting_at = now()` **unconditionally** after the approved-path send —
+including when the resolved audience was empty, and when the mail transport was
+disabled (M365 unconfigured, which `notifyStaff` reports as `disabled: true` and
+fails open as a no-op). Either way the row read as "handed off to accounting" when
+nothing had been sent: the precise fail-soft-looks-like-success shape §D exists to
+refuse, on the field an auditor would trust.
+
+Fixed: the stamp is now written only when `intendedRecipients` is non-empty AND
+the transport is not disabled, and both failure cases push an explicit `problems`
+line naming the consequence ("Mary has NOT been told to pay it"). The disabled
+transport is now reported on the rejected/held path too. `sent_to_accounting_at`
+has no readers anywhere in the codebase (verified with two independent searches),
+so nothing depended on the old unconditional write.
+
+### F. Two wrong counts in the shipping record, and a dangling decision numbering
+
+1. **"FIVE CHECK constraints"** — commit `decad39`'s message says the migration
+   adds five. **There are four:** `reimbursement_second_approver_not_submitter`,
+   `reimbursement_exactly_one_beneficiary`, `reimbursement_amount_positive`, and
+   `reimbursement_refusal_has_note`. The commit message cannot be edited without
+   rewriting pushed history, so this is the correction of record. The Verification
+   table in this ADR is unaffected — it lists four constraint names and was right.
+
+2. **"16 unit tests"** — corrected in the Verification section above to 24.
+
+3. **Dangling `D8` / `D10` references.** `notify.ts` cited "ADR-0068 D8/D10" and
+   `routing.ts` cited "D5/D6" and "D4", but **this ADR only ever had D1–D7** — an
+   earlier, longer draft numbering leaked into the code comments and pointed at
+   decisions that exist in no document. No spec containing a D8 or D10 exists
+   anywhere in the repo (verified with two independent searches). The comments have
+   been renumbered onto the real decisions: Mary-as-sole-primary and
+   never-a-broadcast are **D6**; the beneficiary exclusion is **D3**;
+   submission-is-the-first-signature is **D2**; the thin-wrapper rule is **D5**;
+   the enforcement layers are **D4**.
