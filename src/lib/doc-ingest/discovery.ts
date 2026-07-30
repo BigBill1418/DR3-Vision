@@ -479,9 +479,35 @@ async function reconcileMissing(
     // spending Graph calls on this", not "keep checking quietly".
     if (!source.enabled) continue;
     try {
-      await graph.getItem(source.drive_id, source.item_id);
+      const probe = await graph.getItem(source.drive_id, source.item_id);
       // Reachable but unlisted — a child of a shared folder whose parent was
-      // walked, or an enumeration hiccup. Nothing is wrong.
+      // walked, an operator-registered document `sharedWithMe` does not index, or
+      // an enumeration hiccup. Nothing is wrong with the SOURCE.
+      //
+      // ── But do NOT throw the probe away (fixed 2026-07-30) ─────────────────
+      // This is the authoritative current driveItem, and it is the ONLY place a
+      // fresh `cTag` reliably arrives for a source that enumeration misses:
+      //   • `sharedWithMe`'s `remoteItem` facet carries no cTag/eTag at all;
+      //   • delta on OneDrive for Business OMITS ctag on create/modify.
+      // So a source registered by URL had a ctag that could never advance, and
+      // `ingestSource` short-circuits on a matching ctag — meaning its edits were
+      // NEVER ingested again, while every sweep reported `ok`. Measured live: the
+      // two URL-registered documents had `last_seen_at` frozen ~11 hours while
+      // this very call succeeded on each of 44 subsequent sweeps and discarded
+      // the answer.
+      //
+      // Same defect class as the delta-blanking bug closed on 2026-07-29: that
+      // fix stopped a good marker being OVERWRITTEN with null; this one stops a
+      // STALE marker from never being refreshed. Only ever writes a marker
+      // Graph actually supplied — never blanks one.
+      await prisma.docSource.update({
+        where: { id: source.id },
+        data: {
+          ...(probe.ctag !== null ? { ctag: probe.ctag } : {}),
+          ...(probe.etag !== null ? { etag: probe.etag } : {}),
+          last_seen_at: now,
+        },
+      });
       continue;
     } catch (e) {
       if (e instanceof DocIngestAccessDeniedError) lost.push({ source, reason: 'access_denied' });

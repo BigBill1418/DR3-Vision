@@ -242,11 +242,26 @@ export async function ingestSource(
   // Comparing against a staged revision would let a rejected change silently
   // become the new normal — the next change would be measured from numbers a
   // human explicitly refused.
-  const previous = await prisma.docSourceVersion.findFirst({
+  // ── The guardrail baseline (hardened 2026-07-30) ──────────────────────────
+  // Previously this took the SINGLE most recent applied version. If that one row
+  // happened to carry a null `parse_summary` — which happens for an unsupported
+  // format on an unconfirmed source, and for an operator-applied `parse_broken`
+  // revision — the guardrail received no baseline, returned CLEAN, and auto-applied.
+  // From then on EVERY later revision picked that same summary-less row and did the
+  // same thing: variance detection silently switched off for that document,
+  // permanently, with no anomaly and nothing on any surface saying so.
+  //
+  // Now: walk back to the most recent applied revision that actually HAS a
+  // comparable summary. A baseline that is merely older is vastly better than no
+  // baseline at all, because "no baseline" reads as "nothing changed".
+  const previousCandidates = await prisma.docSourceVersion.findMany({
     where: { doc_source_id: source.id, applied_at: { not: null }, id: { not: version.id } },
     orderBy: { applied_at: 'desc' },
     select: { parse_summary: true },
+    take: 25,
   });
+  const previous =
+    previousCandidates.find((p) => summaryFromJson(p.parse_summary) !== null) ?? null;
 
   const verdict = evaluateGuardrail({
     previous: previous ? summaryFromJson(previous.parse_summary) : null,
@@ -306,6 +321,28 @@ export async function applyVersion(
   now: Date,
   mode: 'auto' | 'operator',
 ): Promise<void> {
+  // ── A missing archive is a missing DOCUMENT, and it must be loud ───────────
+  // `parse_summary` retains no cell values (only shape + per-header sums), so the
+  // R2 object is the ONLY place this revision's content exists. The observation is
+  // still recorded — losing it because the archive blipped would be worse — but
+  // the inbox row that results has nothing behind it, and clicking Download 409s.
+  // Previously that was the only symptom, and only if somebody clicked.
+  if (!version.r2_key) {
+    await raiseAnomaly(prisma, {
+      kind: 'download_failed',
+      subject: sourceKey(source.drive_id, source.item_id),
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail:
+        `"${source.display_name}" was observed and recorded, but its bytes were NOT archived — so the ` +
+        `content of this revision cannot be retrieved. The stored summary keeps only column totals, not ` +
+        `cell values, so there is no other copy. Check the R2 configuration; the document needs to be ` +
+        `re-ingested once storage is available.`,
+      context: { versionId: version.id, ctag: version.ctag },
+      now,
+    });
+  }
+
   const previous = await prisma.docSourceVersion.findFirst({
     where: { doc_source_id: source.id, applied_at: { not: null }, id: { not: version.id } },
     orderBy: { applied_at: 'desc' },
@@ -318,7 +355,13 @@ export async function applyVersion(
         original_filename: source.display_name,
         content_type: source.content_type ?? 'application/octet-stream',
         byte_size: byteSize,
-        r2_key: version.r2_key ?? `pending-r2-doc-source-${version.id}`,
+        // NEVER fabricate a key. This used to write
+        // `pending-r2-doc-source-<id>` when the archive PUT had failed, producing
+        // an inbox row that looks like a normal document and 409s the moment
+        // anyone clicks Download. Since `parse_summary` retains no cell values,
+        // the R2 object is the ONLY copy of the content — so a missing archive is
+        // a missing document, not a missing convenience.
+        r2_key: version.r2_key ?? '',
         status: 'received',
         detected_kind: source.doc_class,
         note:
