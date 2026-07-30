@@ -333,6 +333,15 @@ export function ReimbursementsClient({
               placeholder="Business purpose — e.g. fuel for the Woodland box truck"
               data-testid="reimbursement-purpose"
             />
+            {/* ADR-0068 Amendment 3 — reimbursements now appear in the shared AP
+                queue, which is deliberately NOT site-scoped. Bill's basis for
+                allowing that is a POLICY about content: reimbursements are work
+                materials, tools and equipment only. A policy nobody is told about
+                stops being true, so the submitter is told the audience here. */}
+            <p className="mt-1 text-xs text-dr3-mist-dim">
+              Work materials, tools and equipment only. This is visible to approvers at both sites
+              in the AP queue — don’t put anything personal or medical here.
+            </p>
           </div>
         </div>
 

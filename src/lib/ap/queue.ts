@@ -21,6 +21,19 @@ export type ApStatus =
 
 export interface ApListRow {
   id: string;
+  /**
+   * ADR-0068 Amendment 3 — what KIND of thing this row is.
+   *
+   * The queue is one worklist over two different objects. A discriminant rather
+   * than a nullable field so the client cannot render a reimbursement through the
+   * vendor-invoice panel by forgetting a check: the Amendment 5 structured Approve
+   * panel, baseline variance, equipment linking and amount auto-extraction are all
+   * vendor-invoice constructs and must never be applied to a reimbursement (D7).
+   *
+   * Absent/`'invoice'` on every pre-existing row, so nothing that reads this list
+   * changes behaviour until it opts in.
+   */
+  kind: 'invoice' | 'reimbursement';
   status: ApStatus;
   subject: string | null;
   senderAddress: string;
@@ -33,6 +46,24 @@ export interface ApListRow {
   /** Amendment 3 — hold record (present iff status=pending_review). */
   heldByName: string | null;
   holdNote: string | null;
+  /**
+   * Reimbursement-only. Bill 2026-07-30: reimbursements are work materials, tools
+   * and equipment only — never medical or otherwise sensitive — so the beneficiary
+   * and purpose are safe to show org-wide alongside invoices. That is a POLICY
+   * about what the field contains, so the form tells submitters the audience.
+   */
+  reimbursement: {
+    siteCode: string;
+    siteName: string;
+    beneficiary: string;
+    submitterName: string;
+    routedToName: string;
+    purpose: string;
+    category: string;
+    escalated: boolean;
+    /** Deep link to the site surface where it can actually be decided. */
+    url: string;
+  } | null;
 }
 
 export interface ApAttachmentView {
@@ -193,6 +224,7 @@ export async function listApRequests(
   return {
     rows: rows.map((r) => ({
       id: r.id,
+      kind: 'invoice' as const,
       status: r.status,
       subject: r.subject,
       senderAddress: r.sender_address,
@@ -205,9 +237,87 @@ export async function listApRequests(
       heldByName:
         r.status === 'pending_review' && r.held_by ? (holderNames.get(r.held_by) ?? null) : null,
       holdNote: r.status === 'pending_review' ? r.hold_note : null,
+      reimbursement: null,
     })),
     counts,
   };
+}
+
+/**
+ * ADR-0068 Amendment 3 — reimbursements awaiting a second signature, shaped for
+ * the AP queue.
+ *
+ * ── Why they are visible org-wide, on the record ────────────────────────────
+ * The privacy question was raised BEFORE building this, because the AP queue has
+ * no site filter and gates on roster membership: interleaving means an approver at
+ * one site can read a reimbursement filed at the other. Bill answered it directly
+ * on 2026-07-30: *"the reimbursement are NEVER medical or anything sensitive its
+ * only work related materials and tools or equipment."* That is a policy statement
+ * about what the `purpose` field contains, so it is honoured here AND surfaced to
+ * submitters on the form — a policy that nobody is told about stops being true.
+ *
+ * ── What this does NOT do ──────────────────────────────────────────────────
+ * It does not make the queue a place to DECIDE a reimbursement. Only one person can
+ * act on any given one (`canApproveReimbursement` hard-stops the submitter and the
+ * beneficiary, and confines a non-admin without `all_sites` to their own site), so
+ * every row deep-links to the site surface where the real, server-authorised
+ * decision happens. Adding a second decision path here would put the control in
+ * two places, which is how it drifts.
+ */
+export async function listReimbursementQueueRows(
+  prisma: PrismaClient = defaultPrisma,
+): Promise<ApListRow[]> {
+  const rows = await prisma.reimbursementRequest.findMany({
+    where: { status: 'pending_second_approval' },
+    orderBy: { submitted_at: 'desc' },
+    select: {
+      id: true,
+      amount_cents: true,
+      submitted_at: true,
+      purpose: true,
+      category: true,
+      escalated_at: true,
+      employee_name_freeform: true,
+      employee_user: { select: { name: true } },
+      submitter: { select: { name: true } },
+      routed_to: { select: { name: true } },
+      site: { select: { code: true, name: true } },
+    },
+  });
+
+  return rows.map((r) => {
+    const beneficiary = r.employee_user?.name ?? r.employee_name_freeform ?? '(unnamed)';
+    return {
+      id: r.id,
+      kind: 'reimbursement' as const,
+      status: 'pending_second_approval' as ApStatus,
+      subject: `Reimbursement — ${beneficiary}`,
+      // A reimbursement has no sender: it was FILED in Vision by an authenticated
+      // manager, not forwarded from a mailbox. Naming the submitter here is the
+      // honest analogue, and `senderValidated` is true because an authenticated
+      // submission is the strongest provenance in the queue.
+      senderAddress: `filed by ${r.submitter.name}`,
+      senderValidated: true,
+      receivedAt: r.submitted_at.toISOString(),
+      vendor: null, // there is no vendor — an insider is being repaid
+      amountCents: r.amount_cents,
+      attachmentCount: 1, // the receipt is REQUIRED, so there is always exactly one
+      followupCount: 0,
+      heldByName: null,
+      holdNote: null,
+      reimbursement: {
+        siteCode: r.site.code,
+        siteName: r.site.name,
+        beneficiary,
+        submitterName: r.submitter.name,
+        routedToName: r.routed_to.name,
+        purpose: r.purpose,
+        category: r.category,
+        escalated: r.escalated_at != null,
+        url: `/dashboard/${r.site.code}/reimbursements`,
+      },
+    };
+  });
 }
 
 export async function getApRequestDetail(
@@ -255,6 +365,11 @@ export async function getApRequestDetail(
     : null;
   return {
     id: r.id,
+    // `getApRequestDetail` reads `ap_requests` only, so a detail view is ALWAYS an
+    // invoice. A reimbursement's detail lives on its own site surface, where the
+    // authorisation check that governs it also lives (ADR-0068 Amendment 3).
+    kind: 'invoice' as const,
+    reimbursement: null,
     status: r.status,
     subject: r.subject,
     senderAddress: r.sender_address,

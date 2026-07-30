@@ -1018,3 +1018,107 @@ invisible at the moment a claim is written; a required field is not.
 - **The owner backfill has no failure latch** and the notification path takes no
   lock (a batch of N drives runs N concurrent full discoveries). Neither is
   load-bearing at current volume; both scale badly.
+
+---
+
+## Amendment 7 — 2026-07-30 — the pipeline CAPTURES but does not ABSORB
+
+Full audit: `docs/2026-07-30-document-ingestion-absorption-audit.md` (evidence, live
+inventory, per-kind table, value-ranked gaps). Recorded here because three of its
+findings falsify claims made in this ADR and in the code it describes.
+
+**Verdict.** No parsed value from any ingested document reaches a queryable Vision
+table, report, dashboard tile, or comparison against Vision's own numbers.
+`applyVersion` terminates at one `file_drops` row with `status: 'received'`. **[M]**
+Live at 2026-07-30 00:30 PDT: 3 sources, 0 confirmed, 4 versions, 4 applied, 0
+staged, 4 `shared_file` drops — all `detected_kind` NULL. **[M]** Negative control:
+`grep -rn "parse_summary|parseSummary|summaryFromJson" src` matches 9 files, all
+under `src/lib/doc-ingest/`; the same method surfaced the genuine `health.ts` and
+`sweep.ts` readers, so an external consumer would have appeared.
+
+### A. `parse.ts`'s header claim is FALSIFIED, 3 of 3
+
+`parse.ts:237-245` justifies first-non-empty-row-as-header as _"correct for every
+workbook this pipeline has seen"_. **[M]** All three live workbooks open with a
+merged title row, so `headers[]` holds `["Woodland Trailer List 2025"]`,
+`["TEREX MACHINE MAINTENANCE LOG"]`, `["2026", "Commodity Audit (against Vendor
+Invoices)  WOODLAND"]`. Real column names sit on row 2+ and are never recorded.
+
+The stated degradation ("odd-looking column names, compared consistently") is also
+understated. **[I]** Two mechanisms are disabled: the classifier's `structure` rules
+can never match (they look for `serial`/`make`/`model`/`inbound`/`units`), so
+classification is filename-only; and D7 condition 1 has **zero** monitored columns,
+because no recorded header matches `guardrail.ts:63`'s `AGGREGATE_COLUMN`. Falsified
+by any live source whose `headers[]` holds a genuine column name — none does.
+
+**[M]** Consequence for trust: all four versions auto-applied with a clean guardrail
+verdict. That is not evidence the changes were safe; it is evidence there was
+nothing to compare. Until the header defect is fixed, a clean verdict should read
+"not assessed".
+
+### B. The stored artefact holds no usable numbers
+
+**[M]** `Woodland Data Auditing Tracker (1).xlsx` — a commodity-audit-against-vendor-
+invoices workbook, the highest reconciliation value of the three — stores
+`numericTotals: {}` on **both** sheets. `Woodland Trailer list.xlsx` stores one
+aggregate, `23062327`, across 118 trailers; **[I]** a sum of identifiers, falsified
+by finding a real 23-million-unit column. `textSample` for a workbook is built from
+sheet names and headers only (`parse.ts:266`) — **[D]** no cell value ever enters it.
+`parse_summary` is a guardrail input, not a data layer; **[I]** any real absorption
+must re-read the R2 bytes.
+
+### C. "§3.6 document elimination backlog" is not in this ADR
+
+**[M]** `grep -rniE "elimination|system of record|takes? (this )?over"` over this file
+→ zero matches; `grep -rniE "document elimination"` over `docs/` → zero matches
+anywhere. **[I]** It plausibly lives in the external Phase 3 directive this ADR cites
+for `§3.3`/`§3.5`; falsified by producing that text. Either way: **no phased backlog,
+no per-document retirement criterion, and no acceptance test for "Vision has taken
+this over" exists in this repo.** Aspiration, not plan.
+
+### D. ADR-0049 already implements the absorption — and has never run
+
+**[D]** `src/lib/workbook-sync/engine.ts` parses a daily-log workbook with the shared
+ADR-0039/0048 `parseWorkbook`, upserts `processed_units_daily`, audits every
+Vision-overwrite, and NO-OPs after cutover. That is "absorbed as a reference point
+until Vision takes over", already built. **[M]** `workbook_sources` = 1 row
+(Woodland, `{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm`), `is_syncing = false`,
+`last_polled_at` NULL, `workbook_sync_runs` = **0**.
+
+**[I]** Two pipelines now watch Microsoft files with no code path between them
+(negative control: zero references to `parseWorkbook` / `upsertDailyProduction` /
+`parseDailyRows` / `processed_units_daily` anywhere under `src/lib/doc-ingest/`).
+**[M]** And no daily-log workbook has been shared with `docs-dr3@svdp.us` at all —
+the pattern matches none of the three live documents.
+
+### E. Visibility gaps, distinct from absorption
+
+- **[M][D]** `listDocSources()` does not select `parse_summary`; only `listAnomalies()`
+  exposes it, only for `staged` versions, and `staged = 0`. It is on **zero** screens.
+- **[M][D]** The confirm queue is unreachable by clicking. `src/app/admin/page.tsx:91`
+  is the only doc-ingest tile and targets `/admin/doc-ingest/connect`, whose only
+  `href` is `/admin` (`connect/page.tsx:63`). Negative control:
+  `grep -rn 'href="/admin/doc-ingest"' src --include=*.tsx` → 2 hits, both inside the
+  doc-ingest subtree. Three documents have waited ~15 h; nothing counts them down.
+- **[M][D]** `confirmClassification` does not backfill `file_drops.detected_kind`, so
+  the four inbox rows stay kind-less permanently.
+
+### F. The taxonomy is already too narrow — with live proof
+
+**[M]** Claude declined to force-fit the commodity-audit tracker into any `DOC_KIND`
+and proposed `unknown` at 0.50. `unknown` is excluded from `CONFIRMABLE_KINDS`
+(`sources/route.ts`), so the source is stuck with an open `unclassified` anomaly and
+no path forward. A `commodity_audit` kind is warranted, and `unknown` needs a
+confirmable archive-only terminal state so a document can be triaged rather than
+left ringing.
+
+### G. What is NOT changed here
+
+This amendment records findings only; no code changed. Fix order, by operational
+value: **(1)** header-row detection — extraction built on a mis-headered sheet
+produces confidently wrong reference numbers, so this precedes everything;
+**(2)** a `doc_class` → extractor dispatch at apply time, landing in a reference
+table separate from operational tables; **(3)** a spreadsheet-vs-Vision
+reconciliation view per site/period — without it, nothing can ever say Vision has
+taken over; **(4)** the visibility fixes in §E, which are a dashboard tile and not a
+notification under ADR-0037's 5-minute-actionability gate.

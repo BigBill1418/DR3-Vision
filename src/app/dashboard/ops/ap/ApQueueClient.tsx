@@ -65,6 +65,12 @@ interface EquipmentLinkView {
 
 interface ListRow {
   id: string;
+  /**
+   * ADR-0068 Amendment 3 — the queue is one worklist over two objects. Optional
+   * so a payload from an older deploy (no `kind`) still renders as an invoice
+   * rather than throwing.
+   */
+  kind?: 'invoice' | 'reimbursement';
   status: Status;
   subject: string | null;
   senderAddress: string;
@@ -76,6 +82,18 @@ interface ListRow {
   followupCount: number;
   heldByName: string | null;
   holdNote: string | null;
+  /** Present iff `kind === 'reimbursement'`. */
+  reimbursement?: {
+    siteCode: string;
+    siteName: string;
+    beneficiary: string;
+    submitterName: string;
+    routedToName: string;
+    purpose: string;
+    category: string;
+    escalated: boolean;
+    url: string;
+  } | null;
 }
 interface AttachmentView {
   id: string;
@@ -278,36 +296,74 @@ export function ApQueueClient() {
         <ul className="space-y-2">
           {loading && rows.length === 0 && <li className="text-sm opacity-70">Loading…</li>}
           {!loading && rows.length === 0 && <li className="text-sm opacity-70">No requests.</li>}
-          {rows.map((r) => (
-            <li key={r.id}>
-              <button
-                onClick={() => setSelectedId(r.id)}
-                className={`w-full rounded-lg border px-3 py-2 text-left ${
-                  selectedId === r.id
-                    ? 'border-dr3-cyan bg-white/10'
-                    : 'border-white/10 bg-white/5 hover:bg-white/10'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium">
-                    {r.subject ?? '(no subject)'}
-                  </span>
-                  <StatusBadge status={r.status} />
-                </div>
-                <div className="mt-1 truncate text-xs opacity-70">
-                  {r.senderAddress}
-                  {!r.senderValidated && ' · external'} · {fmt(r.receivedAt)}
-                </div>
-                <div className="mt-1 text-xs opacity-60">
-                  {r.attachmentCount} attachment{r.attachmentCount === 1 ? '' : 's'}
-                  {r.followupCount > 0 &&
-                    ` · ${r.followupCount} follow-up${r.followupCount === 1 ? '' : 's'}`}
-                  {r.vendor && ` · ${r.vendor}`}
-                  {r.amountCents !== null && ` · ${dollars(r.amountCents)}`}
-                </div>
-              </button>
-            </li>
-          ))}
+          {rows.map((r) =>
+            // ── ADR-0068 Amendment 3 — a reimbursement is VISIBLE here, decided
+            // ELSEWHERE. Only one person can act on any given one, and the
+            // authorisation that decides who lives on the site surface, so this
+            // row is a link rather than a selectable detail. Rendering it through
+            // the invoice DetailPanel would offer the Amendment 5 vendor panel
+            // (vendor freeform / confirmed amount / equipment) for something with
+            // no vendor and no equipment — which is exactly what D7 forbids.
+            r.kind === 'reimbursement' && r.reimbursement ? (
+              <li key={r.id}>
+                <a
+                  href={r.reimbursement.url}
+                  className="block w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left hover:bg-white/10"
+                  data-testid="ap-queue-reimbursement-row"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">
+                      {r.subject ?? '(no subject)'}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-teal-400 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-dr3-ink">
+                      Reimbursement
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate text-xs opacity-70">
+                    {r.senderAddress} · {r.reimbursement.siteName} · {fmt(r.receivedAt)}
+                  </div>
+                  <div className="mt-1 text-xs opacity-60">
+                    {r.amountCents !== null && `${dollars(r.amountCents)} · `}
+                    {r.reimbursement.category} · waiting on {r.reimbursement.routedToName}
+                    {r.reimbursement.escalated && ' · ESCALATED'}
+                  </div>
+                  <div className="mt-1 truncate text-xs opacity-60">{r.reimbursement.purpose}</div>
+                  <div className="mt-1 text-xs text-dr3-cyan">
+                    Open {r.reimbursement.siteName} reimbursements →
+                  </div>
+                </a>
+              </li>
+            ) : (
+              <li key={r.id}>
+                <button
+                  onClick={() => setSelectedId(r.id)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left ${
+                    selectedId === r.id
+                      ? 'border-dr3-cyan bg-white/10'
+                      : 'border-white/10 bg-white/5 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">
+                      {r.subject ?? '(no subject)'}
+                    </span>
+                    <StatusBadge status={r.status} />
+                  </div>
+                  <div className="mt-1 truncate text-xs opacity-70">
+                    {r.senderAddress}
+                    {!r.senderValidated && ' · external'} · {fmt(r.receivedAt)}
+                  </div>
+                  <div className="mt-1 text-xs opacity-60">
+                    {r.attachmentCount} attachment{r.attachmentCount === 1 ? '' : 's'}
+                    {r.followupCount > 0 &&
+                      ` · ${r.followupCount} follow-up${r.followupCount === 1 ? '' : 's'}`}
+                    {r.vendor && ` · ${r.vendor}`}
+                    {r.amountCents !== null && ` · ${dollars(r.amountCents)}`}
+                  </div>
+                </button>
+              </li>
+            ),
+          )}
         </ul>
 
         <div>
