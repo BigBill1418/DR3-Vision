@@ -241,6 +241,11 @@ export interface FakeDb {
   notificationPrefs: FakeNotificationPref[];
   // ADR-0066 §1.5 — the weekday clock's holiday source (business-clock.ts).
   siteHolidays: FakeSiteHoliday[];
+  // ADR-0068 — reimbursements awaiting a second signature, read by the 06:00
+  // digest. Defaults to EMPTY, which is the correct state for every AP test that
+  // does not care about reimbursements: the digest's section is then absent and
+  // its suppression logic is unaffected.
+  reimbursements: AnyRecord[];
   // ADR-0067 Amendment A §A.6 — the singleton document-ingestion connection, read
   // by the digest's W3 warning. NULL (the default) means "never connected", which
   // is the correct state for every AP test that does not care about ingestion.
@@ -298,6 +303,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     approvalRouting: seed.approvalRouting ?? [],
     notificationPrefs: seed.notificationPrefs ?? [],
     siteHolidays: seed.siteHolidays ?? [],
+    reimbursements: seed.reimbursements ?? [],
     docIngestConnection: seed.docIngestConnection ?? null,
   };
 }
@@ -325,6 +331,27 @@ export function makeFakePrisma(db: FakeDb) {
       async findUnique(args: { select?: AnyRecord }) {
         if (!db.docIngestConnection) return null;
         return pick(db.docIngestConnection, args.select);
+      },
+    },
+    reimbursementRequest: {
+      // Read-only: nothing in the AP surface writes reimbursements, and a fake
+      // that offers writes it does not model invites tests to assert behaviour
+      // the real client would refuse.
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        let rows = db.reimbursements.slice();
+        if (w['status'] !== undefined) rows = rows.filter((r) => r['status'] === w['status']);
+        return rows.map((r) => pick(r, args.select));
+      },
+      async count(args: { where?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        return db.reimbursements.filter(
+          (r) =>
+            (w['status'] === undefined || r['status'] === w['status']) &&
+            (w['site_id'] === undefined || r['site_id'] === w['site_id']) &&
+            (w['routed_to_user_id'] === undefined ||
+              r['routed_to_user_id'] === w['routed_to_user_id']),
+        ).length;
       },
     },
     apRequest: {

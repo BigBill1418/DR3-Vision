@@ -26,6 +26,7 @@ import type { PrismaClient } from '@prisma/client';
 import { notifyStaff, type NotifyStaffResult } from '@/lib/notify/notify-staff';
 import { resolveReimbursementApproval } from './routing';
 import { beneficiaryLabel } from './service';
+import { reimbursementDecisionAttachment } from './pdf';
 
 const SURFACE = 'reimbursement_notify';
 
@@ -59,6 +60,9 @@ interface FullRow {
   id: string;
   submitted_by: string;
   employee_user_id: string | null;
+  /** Load-bearing, not cosmetic: `assertDualSignature` refuses to PRINT the
+   *  segregation statement unless it can verify it against these ids. */
+  second_approver_id: string | null;
   amount_cents: number;
   expense_date: Date;
   category: string;
@@ -83,6 +87,7 @@ async function load(prisma: PrismaClient, id: string): Promise<FullRow | null> {
       id: true,
       submitted_by: true,
       employee_user_id: true,
+      second_approver_id: true,
       amount_cents: true,
       expense_date: true,
       category: true,
@@ -203,6 +208,74 @@ export async function notifyReimbursementSubmitted(
 }
 
 /**
+ * Tell the ADDED approver that a reimbursement has aged past its weekday clock.
+ *
+ * Escalation is additive (ADR-0068 D5): the originally routed peer is still able
+ * to sign and is deliberately NOT re-emailed here — they already had the request
+ * and re-sending would train them to ignore it. This mail goes to whoever
+ * escalation ADDED.
+ */
+export async function notifyReimbursementEscalated(
+  prisma: PrismaClient,
+  id: string,
+  thresholdHours: number,
+): Promise<ReimbursementNotifyOutcome> {
+  const row = await load(prisma, id);
+  if (!row) return { mode: 'not_sent', intended: [], problems: [`No reimbursement ${id}.`] };
+
+  const routed = await resolveReimbursementApproval(prisma, {
+    submittedBy: row.submitted_by,
+    employeeUserId: row.employee_user_id,
+    employeeNameFreeform: row.employee_name_freeform,
+    escalated: true,
+  });
+
+  const problems = [...routed.problems];
+  // Exclude the peer who was already asked — this mail is for the ADDED approver.
+  const added = routed.recipients.filter((r) => r.email !== row.routed_to.email);
+  const recipients = (added.length > 0 ? added : routed.recipients).map((r) => ({
+    address: r.email,
+    name: r.name,
+  }));
+
+  if (recipients.length === 0) {
+    problems.push(
+      `Reimbursement ${usd(row.amount_cents)} for ${beneficiaryLabel(row)} aged past ${thresholdHours} business hours and there is NOBODY reachable to escalate it to.`,
+    );
+    return { mode: 'not_sent', intended: [], problems };
+  }
+
+  const res = await notifyStaff({
+    surfaceCode: SURFACE,
+    site: { id: row.site.id, code: row.site.code },
+    recipients,
+    subject: `Reimbursement still unsigned after ${thresholdHours}h — ${usd(row.amount_cents)}, ${beneficiaryLabel(row)}`,
+    htmlBody: shell(
+      'A reimbursement has been waiting too long',
+      `This was submitted by ${esc(row.submitter.name)} and routed to ${esc(
+        row.routed_to.name,
+      )}, who has not acted within ${thresholdHours} business hours. You have been added as an approver — ${esc(
+        row.routed_to.name,
+      )} can still sign it, and whoever acts first completes it. ${esc(
+        row.submitter.name,
+      )} cannot sign it at all.`,
+      row,
+      `<a href="${APP_BASE}/dashboard/${esc(row.site.code)}/reimbursements" style="background:#00524C;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block">Review it in Vision</a>`,
+    ),
+    importance: 'high',
+    db: prisma,
+  });
+
+  if (res.disabled) {
+    problems.push(
+      `Reimbursement ${id} was escalated but the mail transport is disabled (M365 unconfigured) — nobody was told.`,
+    );
+  }
+
+  return { mode: res.mode, intended: res.intendedRecipients, problems };
+}
+
+/**
  * Deliver the decision. Approved → Mary, and only Mary. Rejected/held → the
  * submitting manager.
  */
@@ -216,8 +289,24 @@ export async function notifyReimbursementDecided(
   const problems: string[] = [];
 
   if (row.status === 'approved') {
+    // ── The stamped decision document (ADR-0068 Amendment 2) ────────────────
+    // Mary files this, so it is the artefact an auditor eventually reads. It is
+    // deliberately NOT produced by `ap/stamp.ts`: that renderer prints the FIRST
+    // party as "Approved by <name>", and on a reimbursement the first party is
+    // the SUBMITTER — so reusing it would print "Approved by Janette" on the
+    // document, which is the precise manufactured audit evidence this feature
+    // exists to delete.
+    //
+    // Fail-soft, and honest about it: if the PDF cannot be produced or its dual
+    // signature cannot be VERIFIED, the mail still goes (Mary must be able to pay
+    // a properly approved reimbursement even if Chromium is unavailable) and the
+    // reason is reported rather than swallowed.
+    const pdf = await reimbursementDecisionAttachment(row);
+    if (pdf.problem) problems.push(pdf.problem);
+
     // D6 — Mary is the SOLE primary recipient. Deliberately NOT the submitter.
     const res = await notifyStaff({
+      ...(pdf.attachment ? { attachments: [pdf.attachment] } : {}),
       surfaceCode: SURFACE,
       site: { id: row.site.id, code: row.site.code },
       recipients: [{ address: ACCOUNTING_RECIPIENT, name: 'Mary Scott' }],
@@ -247,7 +336,16 @@ export async function notifyReimbursementDecided(
     if (res.intendedRecipients.length > 0 && !res.disabled) {
       await prisma.reimbursementRequest.update({
         where: { id },
-        data: { sent_to_accounting_at: new Date() },
+        data: {
+          sent_to_accounting_at: new Date(),
+          // The digest of the document Mary actually received, so "is the PDF in
+          // her mailbox the one Vision produced?" is answerable later. Recorded
+          // only when a PDF was really attached — `decision_pdf_key` stays NULL
+          // until there is a reimbursement-namespaced R2 helper to archive it
+          // with (reusing `putApDecisionPdf` would file it under `ap/` with a
+          // fabricated attachment id, giving the object a key that lies).
+          ...(pdf.sha256 ? { decision_pdf_sha256: pdf.sha256 } : {}),
+        },
       });
     }
     return { mode: res.mode, intended: res.intendedRecipients, problems };

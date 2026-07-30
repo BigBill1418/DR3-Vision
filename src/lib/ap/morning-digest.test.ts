@@ -566,3 +566,90 @@ describe('coverage', () => {
     expect(html).toContain('A &amp; B &quot;Co&quot;');
   });
 });
+
+// ── ADR-0068 (Amendment 2) — reimbursements in the 06:00 digest ──────────────
+//
+// The digest is a FULL-QUEUE oversight tool (§1.7), and reimbursements were
+// specified for inclusion but shipped without it — so a reimbursement could sit
+// on one person's desk and appear in NO oversight surface Bill reads. These tests
+// make the inclusion structural.
+
+function reimb(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'rb-1',
+    status: 'pending_second_approval',
+    site_id: 's-w',
+    amount_cents: 4000,
+    submitted_at: new Date('2026-07-29T10:00:00.000Z'), // same Pacific day
+    escalated_at: null,
+    employee_name_freeform: 'Diego Ramirez',
+    employee_user: null,
+    submitter: { name: 'Janette Tomas' },
+    routed_to: { name: 'Morena Gomez' },
+    site: { code: 'woodland', name: 'Woodland' },
+    ...over,
+  };
+}
+
+describe('ADR-0068 — pending reimbursements appear in the digest', () => {
+  it('lists a pending reimbursement with who owes the signature', async () => {
+    const db = quietDb({ reimbursements: [reimb()] } as Partial<FakeDb>);
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+
+    expect(payload.pendingReimbursements).toHaveLength(1);
+    const item = payload.pendingReimbursements[0];
+    expect(item?.subject).toContain('Diego Ramirez');
+    expect(item?.amountCents).toBe(4000);
+    // Both facts an approver needs: who filed it, and who it is waiting on.
+    expect(item?.detail).toContain('Janette Tomas');
+    expect(item?.detail).toContain('Morena Gomez');
+    // The link must land on the reimbursement surface, NOT the AP queue — the AP
+    // queue does not contain this row.
+    expect(item?.url).toContain('/dashboard/woodland/reimbursements');
+  });
+
+  it('a pending reimbursement ALONE is enough to send the digest', async () => {
+    // Otherwise the one case that matters — an empty invoice queue and a
+    // reimbursement nobody has signed — would be suppressed as "nothing to report".
+    const db = quietDb({ reimbursements: [reimb()] } as Partial<FakeDb>);
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.empty).toBe(false);
+  });
+
+  it('an aged reimbursement raises the WHOLE digest to high priority', async () => {
+    const db = quietDb({
+      reimbursements: [reimb({ submitted_at: new Date('2026-07-20T10:00:00.000Z') })],
+    } as Partial<FakeDb>);
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+
+    expect(payload.highPriority).toBe(true);
+    // The warning has to say the consequence, not just the count.
+    expect(payload.warnings.join(' ')).toMatch(/Somebody is owed money/i);
+  });
+
+  it('marks an ESCALATED reimbursement as such', async () => {
+    const db = quietDb({
+      reimbursements: [reimb({ escalated_at: new Date('2026-07-29T11:00:00.000Z') })],
+    } as Partial<FakeDb>);
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.pendingReimbursements[0]?.detail).toContain('ESCALATED');
+  });
+
+  it('renders the reimbursement section into the email body', async () => {
+    const db = quietDb({ reimbursements: [reimb()] } as Partial<FakeDb>);
+    await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    expect(notifyStaff).toHaveBeenCalled();
+    const arg = notifyStaff.mock.calls[0]?.[0] as { htmlBody: string };
+    expect(arg.htmlBody).toContain('Reimbursements awaiting a second signature');
+    expect(arg.htmlBody).toContain('Diego Ramirez');
+  });
+
+  it('stays SILENT when there are no reimbursements and nothing else', async () => {
+    // The suppression rule must survive the new section: adding a section that
+    // always renders would turn a quiet day into daily zero-state noise.
+    const payload = await buildApMorningDigest(fp(quietDb()), WED_0600_PT);
+    expect(payload.pendingReimbursements).toHaveLength(0);
+    expect(payload.empty).toBe(true);
+  });
+});

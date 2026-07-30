@@ -337,3 +337,141 @@ so nothing depended on the old unconditional write.
    never-a-broadcast are **D6**; the beneficiary exclusion is **D3**;
    submission-is-the-first-signature is **D2**; the thin-wrapper rule is **D5**;
    the enforcement layers are **D4**.
+
+---
+
+## Amendment 2 — 2026-07-30 — placement corrected, and three of the four deferred items completed
+
+### A. The tile was in the wrong place. **[M]**
+
+Operator directive, verbatim: _"the reimbursement tile is NOT a ipad surface it is
+a manager surface in the primary dashboard."_
+
+**[M]** Measured 2026-07-30 with a minted session for `bill.barnard@svdp.us`:
+`/dashboard` → tile ABSENT; `/dashboard/woodland` and `/dashboard/eugene` → tile
+PRESENT. **[M]** His account is `role='admin'` with `primary_site_id = NULL` and
+`all_sites = false`, so he lands on the picker at `/dashboard` and never on a
+per-site page by default. A plain manager lands on their own site and saw it
+immediately — which is exactly why this passed testing and still failed the person
+who asked for it.
+
+**[I]** No iPad/operator gate was ever involved: the rollout row is
+`kind='ui', surface_code='reimbursement_tile'`, and nothing under
+`src/lib/reimbursements/**` or the reimbursement pages references any `ipad_*`
+surface. The directive is about placement, and the placement was wrong.
+
+**Fixed:** the primary dashboard now carries one entry **per reachable site**
+(the form is site-scoped and the site is auto-filled, so a single org-wide link
+would have to guess), each with a live pending count. `N waiting for your
+signature` — counted from `routed_to_user_id`, the value the shared resolver
+actually wrote — is the number that changes behaviour, so it gets the alerting
+colour; a bare label would not. The per-site nav entry is kept: a manager already
+on their site page should not have to go back out.
+
+### B. Item 3 — the 06:00 digest fold-in. **SHIPPED.**
+
+A **separate section**, not merged into `pendingSecondApproval`: a reimbursement
+has no vendor and no `received_at`, is aged from `submitted_at`, and needs two
+signatures at **every** amount where an invoice only does at ≥ $1,000. Merging
+them would imply a threshold that does not apply and a vendor that does not exist.
+
+An aged reimbursement raises the whole digest to high priority on the same 3-day
+bar as an invoice, with a warning that names the consequence — _"Somebody is owed
+money."_ A pending reimbursement **alone** is enough to send the digest; without
+that, the one case that matters (empty invoice queue, unsigned reimbursement)
+would be suppressed as "nothing to report". Rows deep-link to the reimbursement
+surface via a new `reimbursementUrl()`, **not** `apQueueUrl()` — the AP queue does
+not contain the row the line is about.
+
+### C. Item 4 — the plain 24-hour weekday timeout escalation. **SHIPPED.**
+
+`src/lib/reimbursements/escalation.ts`, riding the **existing** hourly
+`/api/internal/ap/escalation-scan` tick rather than a second cron service: both
+scans answer "has a signature been owed too long?" on the same weekday clock, and
+a second scheduler is a second thing to notice has stopped.
+
+**[D]** `escalated_at IS NULL` is both the candidate filter and the claim
+condition, so a row escalated IMMEDIATELY at submit time (beneficiary conflict,
+ambiguous name, no routing row) is **never a candidate** and can never be
+re-escalated or double-paged. Asserted directly rather than trusted.
+
+Widening never relaxes the control — the submitter and beneficiary stay excluded
+after the fallback is added, and the audit row records `submitter_excluded` so an
+auditor reads it rather than re-deriving it. When nobody reachable is left even
+after widening, `escalated_at` is deliberately left NULL and the problem is
+reported: stamping it would mark an unpayable row "handled" forever.
+
+A reimbursement-scan failure returns non-200 so the daemon logs it, but the AP
+result already earned is still in the body — half-ran-and-looked-fine is the shape
+this ADR series exists to remove.
+
+### D. Item 1 — the stamped decision PDF. **SHIPPED, and NOT via `ap/stamp.ts`.**
+
+**[D]** `stampText()` in `src/lib/ap/stamp.ts` renders the FIRST party as
+`Approved by <name>` and the second as an appended clause. On a reimbursement the
+first party is the **submitter**, so reusing it would print **"Approved by
+Janette"** on the document Mary files — the precise manufactured audit evidence
+this ADR exists to delete, printed on the artefact an auditor reads. Amendment 5's
+dual-approval shape looks superficially correct here and is semantically inverted.
+
+So `src/lib/reimbursements/pdf.ts` is separate, but reuses `PdfRenderer`,
+`defaultPlaywrightRenderer` and `sha256Hex` from `ap/stamp` and keeps the same
+visual family. It carries both signatures with Pacific timestamps, the
+beneficiary, amount, expense date, category, purpose, site, decision and note.
+
+**The audit statement is VERIFIED before it is printed.** `assertDualSignature`
+refuses to render when the row cannot evidence the claim — status ≠ approved,
+missing second approver or instant, `second_approver_id === submitted_by`, or
+`second_approver_id === employee_user_id`. And where the check is impossible it
+says so instead of overclaiming: for a **free-text** beneficiary there is no id to
+compare, so the document states the exclusion was enforced at submission by name
+matching (ambiguity escalates) and **cannot** be re-checked by account id.
+
+`decision_pdf_sha256` is recorded when a PDF was really attached, so "is the
+document in Mary's mailbox the one Vision produced?" stays answerable.
+`decision_pdf_key` stays NULL: `putApDecisionPdf` keys objects under `ap/…` with
+an attachment id, and filing reimbursements there would give the object a key that
+lies. A reimbursement-namespaced R2 helper is the small follow-up.
+
+### E. Item 2 — the AP-queue type badge. **REJECTED on privacy grounds, not deferred.**
+
+ADR-0068 §D7 wanted reimbursements interleaved into the AP queue. **That should
+not be built as specified.**
+
+**[M]** `listApRequests` has no site filter and `ApQueuePage` gates on AP-roster
+membership, not site reach. **[M]** The seeded roster contains Rick Albritton
+(Eugene, `all_sites=false`) and Janette/Morena (Woodland, `all_sites=false`).
+So interleaving puts a named Woodland employee, the amount they are personally
+owed, and a free-text `purpose` — which can carry medical, financial-hardship or
+household detail — in front of a Eugene-only manager.
+
+The decisive point is that the two visibility models point in **opposite
+directions**. The AP queue is org-wide _because_ it is first-action-wins: every
+viewer can act, so seeing everything is the feature. A reimbursement can be acted
+on by **exactly one** person — `canApproveReimbursement` hard-stops the submitter
+and the beneficiary and, for a non-admin without `all_sites`, requires
+`primary_site_id === request.site_id`. Rick could never act on a Woodland
+reimbursement. Interleaving therefore grants four people read access to personal
+financial data so that one person can act: **pure exposure, zero operational
+gain.**
+
+**Recorded as REJECTED so it does not look merely unfinished.** If Bill wants
+queue visibility, the buildable form is a **count only**, scoped to what the
+viewer can actually open — beneficiary, amount and purpose never inline, and
+clicking through lands on a surface that re-enforces `checkManagerForSite`. An
+unscoped count would say 3 where the page shows 1, which is its own species of
+misleading UI.
+
+**This needs Bill's decision, and the honest question is:** does he accept that
+AP-roster approvers at either site can read what a named employee at the _other_
+site is being reimbursed for, and why? Until he says yes, it is not built.
+
+### F. Known test-isolation flake, recorded rather than left to be rediscovered
+
+**[M]** `src/lib/ap/stamp-render-gate.test.ts` passes in isolation (twice,
+confirmed) and can fail with `expected 1 to be 2` when run alongside the new
+`pdf.test.ts`. Both exercise the module-level Chromium semaphore in `ap/stamp.ts`,
+so parallel vitest files contend for it. **[I]** A test-isolation issue, not a
+product defect — the gate is doing its job; the assertion counts slots across
+files that share module state. Not fixed here; recorded so the next person does
+not diagnose it as a rendering bug.

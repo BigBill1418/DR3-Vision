@@ -32,6 +32,16 @@ export function apQueueUrl(): string {
 export function apRequestUrl(requestId: string): string {
   return `${apQueueUrl()}?request=${encodeURIComponent(requestId)}`;
 }
+/**
+ * Tier-1 link for a REIMBURSEMENT (ADR-0068). Deliberately NOT `apQueueUrl()`:
+ * reimbursements live on their own site-scoped surface, so pointing the 06:00
+ * digest at the AP queue would land Bill on a page that does not contain the row
+ * the line is about. Defined here so there is one definition of the click policy
+ * rather than one per caller.
+ */
+export function reimbursementUrl(siteCode: string): string {
+  return `${baseUrl()}/dashboard/${encodeURIComponent(siteCode)}/reimbursements`;
+}
 
 /**
  * Quarantine alert (external sender / unprocessable). ROW ID + sender DOMAIN

@@ -15,6 +15,18 @@ const runApEscalationScan = vi.fn(async () => ({
 vi.mock('@/lib/ap/escalation-scan', () => ({
   runApEscalationScan: () => runApEscalationScan(),
 }));
+// ADR-0068 (Amendment 2) — reimbursements ride the same hourly tick. Mocked here
+// so these tests keep testing the AP route CONTRACT rather than the reimbursement
+// scan; its own behaviour is covered in reimbursements/__tests__/escalation.test.ts.
+const runReimbursementEscalationScan = vi.fn(async () => ({
+  scanned: 0,
+  escalated: 0,
+  requestIds: [] as string[],
+  problems: [] as string[],
+}));
+vi.mock('@/lib/reimbursements/escalation', () => ({
+  runReimbursementEscalationScan: () => runReimbursementEscalationScan(),
+}));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -34,6 +46,13 @@ beforeEach(() => {
     scanned: 2,
     escalated: 1,
     requestIds: ['req-1'],
+    problems: [],
+  });
+  runReimbursementEscalationScan.mockReset();
+  runReimbursementEscalationScan.mockResolvedValue({
+    scanned: 0,
+    escalated: 0,
+    requestIds: [],
     problems: [],
   });
   delete process.env['INTERNAL_CRON_TOKEN'];
@@ -66,5 +85,41 @@ describe('POST /api/internal/ap/escalation-scan', () => {
     // indistinguishable from a healthy empty backlog — the outage's exact shape.
     runApEscalationScan.mockRejectedValue(new Error('connection terminated'));
     await expect(POST(req())).rejects.toThrow(/connection terminated/);
+  });
+});
+
+// ── ADR-0068 (Amendment 2) — the reimbursement pass rides this tick ──────────
+
+describe('reimbursement escalation on the same tick', () => {
+  it('reports the reimbursement summary alongside the AP one', async () => {
+    runReimbursementEscalationScan.mockResolvedValue({
+      scanned: 3,
+      escalated: 1,
+      requestIds: ['rb-1'],
+      problems: [],
+    });
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { escalated: number; reimbursements: { escalated: number } };
+    // BOTH results present — a tick that silently dropped one would be the
+    // half-ran-and-looked-fine shape this ADR series exists to remove.
+    expect(body.escalated).toBe(1);
+    expect(body.reimbursements.escalated).toBe(1);
+  });
+
+  it('does NOT discard the AP result when the reimbursement scan throws', async () => {
+    runReimbursementEscalationScan.mockRejectedValue(new Error('reimbursement boom'));
+    const res = await POST(req());
+    // Non-200 so the daemon logs it — but the AP work it already earned is still
+    // in the body rather than being thrown away.
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as {
+      escalated: number;
+      reimbursementError: string;
+      reimbursements: unknown;
+    };
+    expect(body.escalated).toBe(1);
+    expect(body.reimbursements).toBeNull();
+    expect(body.reimbursementError).toContain('reimbursement boom');
   });
 });

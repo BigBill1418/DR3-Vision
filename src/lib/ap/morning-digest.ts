@@ -69,7 +69,7 @@ import {
 import { docIngestReauthWarning } from '@/lib/doc-ingest/reauth';
 import { dailyDigestRecipients } from './notification-prefs';
 import { resolveSecondApproval } from './second-approval-resolver';
-import { apQueueUrl, apRequestUrl } from './notify';
+import { apQueueUrl, apRequestUrl, reimbursementUrl } from './notify';
 
 /**
  * Age (in Pacific calendar days) at which an item raises the age warning AND
@@ -135,6 +135,17 @@ export interface ApMorningDigestPayload {
   staleHolds: DigestItem[];
   /** Escalations that fired since the previous digest. */
   escalations: DigestItem[];
+  /**
+   * ADR-0068 (Amendment 2) — reimbursements awaiting their SECOND signature.
+   *
+   * A separate section rather than merged into `pendingSecondApproval`, because
+   * the two are not the same object and merging them would misreport both: a
+   * reimbursement has no vendor and no `received_at`, it is aged from
+   * `submitted_at`, and EVERY one needs two signatures where an invoice only does
+   * at >= $1,000. Presenting them as one list would imply a threshold that does
+   * not apply and a vendor that does not exist.
+   */
+  pendingReimbursements: DigestItem[];
   /** Routing-coverage + age warnings (and any resolver `problems`). */
   warnings: string[];
   /** True when any item is >= AGE_WARNING_DAYS old. Drives `importance: high`. */
@@ -487,11 +498,68 @@ export async function buildApMorningDigest(
   const docIngestWarning = await docIngestReauthWarning(db, now);
   if (docIngestWarning) warnings.push(docIngestWarning);
 
+  // ── ADR-0068 (Amendment 2) — reimbursements awaiting a second signature ────
+  //
+  // §1.7's scope rule is that this digest is a FULL-QUEUE oversight tool, so
+  // anything awaiting a signature belongs in it. Reimbursements were specified for
+  // inclusion and shipped without it, which meant a reimbursement could sit on one
+  // person's desk and appear in no oversight surface Bill reads.
+  //
+  // Aged from `submitted_at`, because submission IS the first signature (D2) —
+  // there is no `received_at` and no forwarder. Site is carried in `vendor` (the
+  // renderer's leading fact slot) since a reimbursement has no vendor; the
+  // beneficiary and the person who owes the signature go in `detail`.
+  const pendingReimbursements: DigestItem[] = [];
+  const reimbRows = await db.reimbursementRequest.findMany({
+    where: { status: 'pending_second_approval' },
+    select: {
+      id: true,
+      amount_cents: true,
+      submitted_at: true,
+      escalated_at: true,
+      employee_name_freeform: true,
+      employee_user: { select: { name: true } },
+      submitter: { select: { name: true } },
+      routed_to: { select: { name: true } },
+      site: { select: { code: true, name: true } },
+    },
+    orderBy: { submitted_at: 'asc' },
+  });
+  for (const r of reimbRows) {
+    const beneficiary = r.employee_user?.name ?? r.employee_name_freeform ?? '(unnamed)';
+    const escalated = r.escalated_at ? ' — ESCALATED' : '';
+    pendingReimbursements.push({
+      requestId: r.id,
+      subject: `Reimbursement for ${beneficiary}`,
+      vendor: r.site.name,
+      amountCents: r.amount_cents,
+      ageDays: pacificCalendarDaysBetween(r.submitted_at, now),
+      receivedLabel: `${formatPacificDateTime(r.submitted_at)} PT`,
+      detail: `submitted by ${r.submitter.name}, waiting on ${r.routed_to.name}${escalated}`,
+      url: reimbursementUrl(r.site.code),
+    });
+  }
+
+  // A reimbursement 3+ days old raises the whole digest, same bar as an invoice.
+  const agedReimbursements = pendingReimbursements.filter((i) => i.ageDays >= AGE_WARNING_DAYS);
+  const anyHigh = highPriority || agedReimbursements.length > 0;
+  if (agedReimbursements.length > 0) {
+    const oldestR = agedReimbursements.reduce((a, b) => (b.ageDays > a.ageDays ? b : a));
+    warnings.push(
+      `${agedReimbursements.length} reimbursement${
+        agedReimbursements.length === 1 ? ' has' : 's have'
+      } been waiting ${AGE_WARNING_DAYS}+ days for a second signature (oldest: ${fmtAge(
+        oldestR.ageDays,
+      )}). Somebody is owed money.`,
+    );
+  }
+
   const empty =
     pendingSecondApproval.length === 0 &&
     awaitingFirstApproval.length === 0 &&
     staleHolds.length === 0 &&
     escalations.length === 0 &&
+    pendingReimbursements.length === 0 &&
     warnings.length === 0;
 
   return {
@@ -500,8 +568,9 @@ export async function buildApMorningDigest(
     awaitingFirstApproval,
     staleHolds,
     escalations,
+    pendingReimbursements,
     warnings,
-    highPriority,
+    highPriority: anyHigh,
     empty,
   };
 }
@@ -572,6 +641,7 @@ export function renderApMorningDigestHtml(payload: ApMorningDigestPayload): stri
           ${renderSection('Awaiting first approval', payload.awaitingFirstApproval)}
           ${renderSection(`On hold ${STALE_HOLD_DAYS}+ days`, payload.staleHolds)}
           ${renderSection('Escalated since the last digest', payload.escalations)}
+          ${renderSection('Reimbursements awaiting a second signature', payload.pendingReimbursements)}
           <p style="font:400 12px/1.55 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${MUTED};margin:24px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Oversight only — the team works the live queue at
             <a href="${apQueueUrl()}" style="color:${DR3_GREEN_DEEP}">the AP approval queue</a>.

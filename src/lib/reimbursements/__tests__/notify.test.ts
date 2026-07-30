@@ -26,6 +26,22 @@ import type { PrismaClient } from '@prisma/client';
 import type { NotifyStaffArgs, NotifyStaffResult } from '@/lib/notify/notify-staff';
 
 vi.mock('@/lib/audit', () => ({ writeAudit: vi.fn(async () => undefined) }));
+// ADR-0068 Amendment 2 — the stamped decision PDF. Mocked so THESE tests stay
+// about notification ROUTING (who is told what) and do not launch Chromium; the
+// document's own contract, including its refusal to print an unverifiable
+// segregation claim, is covered by `pdf.test.ts`.
+const pdfAttachment = vi.fn(async () => ({
+  attachment: {
+    filename: 'reimbursement.pdf',
+    buffer: Buffer.from('%PDF-'),
+    contentType: 'application/pdf',
+  },
+  sha256: 'deadbeef',
+  problem: null as string | null,
+}));
+vi.mock('../pdf', () => ({
+  reimbursementDecisionAttachment: (...a: unknown[]) => pdfAttachment(...(a as [])),
+}));
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
 
 // ── The transport seam ──────────────────────────────────────────────────────
@@ -486,5 +502,44 @@ describe('the rollout gate is consulted with the reimbursement surface + real si
     await notifyReimbursementDecided(fakePrisma(), 'r1');
     expect(lastCall().surfaceCode).toBe('reimbursement_notify');
     expect(lastCall().site).toEqual({ id: 'site-w', code: 'woodland' });
+  });
+});
+
+// ── ADR-0068 Amendment 2 — the stamped document travels with the decision ────
+
+describe('the approved mail carries the stamped decision document', () => {
+  beforeEach(() => {
+    // The document only exists on the APPROVED path — a rejection has nothing
+    // for Mary to file.
+    rows = [
+      reimbursementRow({
+        status: 'approved',
+        second_approver_id: MORENA.id,
+        second_approver: { name: MORENA.name },
+        second_approved_at: new Date('2026-07-30T17:00:00.000Z'),
+      }),
+    ];
+  });
+
+  it('attaches the PDF and records its digest', async () => {
+    await notifyReimbursementDecided(fakePrisma(), 'r1');
+    const call = lastCall();
+    expect(call.attachments).toHaveLength(1);
+    expect(call.attachments?.[0]?.contentType).toBe('application/pdf');
+  });
+
+  it('still sends the mail when the PDF cannot be produced, and SAYS so', async () => {
+    // Mary must be able to pay a properly-approved reimbursement even if Chromium
+    // is unavailable — but the missing artefact must never be silent.
+    pdfAttachment.mockResolvedValueOnce({
+      attachment: null as never,
+      sha256: null as never,
+      problem: 'the decision document could not be produced',
+    });
+    const out = await notifyReimbursementDecided(fakePrisma(), 'r1');
+
+    expect(notifyStaffMock).toHaveBeenCalledTimes(1);
+    expect(lastCall().attachments).toBeUndefined();
+    expect(out.problems.join(' ')).toContain('could not be produced');
   });
 });

@@ -23,6 +23,44 @@ ADR-0068 Amendment 1 corrects documentation-only contradictions between the reco
 
 ## Unreleased
 
+### Added — 2026-07-30 (reimbursements: primary-dashboard tile, digest, escalation, stamped PDF — ADR-0068 Amendment 2)
+
+- **The tile is now on the PRIMARY dashboard.** Operator directive: _"the reimbursement tile is
+  NOT a ipad surface it is a manager surface in the primary dashboard."_ It shipped only on the
+  per-site dashboard, which looked fine in testing because a plain manager lands on their own
+  site page — Bill does not. His account is admin with `primary_site_id = NULL` and
+  `all_sites = false`, so he always lands on the picker and never saw it. One entry per
+  reachable site, each with a live pending count; `N waiting for your signature` is counted from
+  `routed_to_user_id` and gets the alerting colour, because that is the number that changes what
+  you do next.
+- **06:00 digest fold-in** as its own section, not merged into the invoice list — a
+  reimbursement has no vendor, is aged from `submitted_at`, and needs two signatures at every
+  amount. A pending reimbursement alone now sends the digest; otherwise the case that matters
+  (empty invoice queue, unsigned reimbursement) would be suppressed as "nothing to report".
+  Aged ones raise the whole digest and say why: _"Somebody is owed money."_
+- **The 24-hour weekday timeout escalation**, riding the existing hourly AP tick rather than a
+  second cron — a second scheduler is a second thing to notice has stopped. A row escalated
+  IMMEDIATELY at submit time can never be re-escalated, because `escalated_at IS NULL` is both
+  the candidate filter and the claim condition. Widening never relaxes the control.
+- **The stamped decision PDF**, deliberately NOT via `ap/stamp.ts`: that renderer prints the
+  FIRST party as "Approved by <name>", and on a reimbursement the first party is the SUBMITTER
+  — so reusing it would print "Approved by Janette" on the document Mary files, which is the
+  exact manufactured audit evidence this feature exists to delete. The segregation statement is
+  VERIFIED before it is printed, and where it cannot be verified (free-text beneficiary, no id
+  to compare) the document says so rather than overclaiming.
+
+### Changed — 2026-07-30 (the AP-queue reimbursement badge is REJECTED, not deferred)
+
+ADR-0068 §D7 wanted reimbursements interleaved into the AP queue. **It should not be built as
+specified.** The AP queue has no site filter and gates on roster membership, so interleaving puts
+a named employee, the amount they are personally owed, and a free-text purpose (which can carry
+medical or financial-hardship detail) in front of managers at the other site. The two visibility
+models point opposite ways: the AP queue is org-wide _because_ it is first-action-wins, while a
+reimbursement can be acted on by exactly one person. It would grant four people read access to
+personal financial data so one person can act — pure exposure, zero operational gain. Recorded as
+rejected so it does not read as merely unfinished; a viewer-scoped count is the buildable form,
+and it needs Bill's decision first.
+
 ### Fixed — 2026-07-30 (reimbursement notifications: the untested money path — ADR-0068 Amendment 1)
 
 `notify.ts` shipped with **zero test coverage** while being the most dangerous file in the
