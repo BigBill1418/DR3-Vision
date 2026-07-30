@@ -43,6 +43,37 @@ const MAX_RETRIES = 5;
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 32_000;
 
+// ────────────────────────────────────────────────────────────────────────
+// Inline-attachment size ceiling
+// ────────────────────────────────────────────────────────────────────────
+//
+// `buildMessage` attaches every file as an inline `#microsoft.graph.fileAttachment`
+// with the bytes base64-encoded into `contentBytes`. Graph accepts that shape only
+// while the whole `sendMail` request stays under 3 MB; a larger message has to be
+// built as a draft plus `createUploadSession`, which this transport does not
+// implement. Base64 costs 4 bytes per 3 raw bytes, so a 2.3 MB PDF already exceeds
+// the ceiling on its own.
+//
+// Before this guard existed there was NO size check on this path, and
+// `sendSystemEmail` does not throw — an oversized attachment produced a rejected
+// request that the caller recorded as an ordinary failed send, or (worse) a
+// delivery the caller never learned had not happened. Both the AP stamped-invoice
+// mail and the reimbursement decision mail carry operator-supplied originals of
+// unbounded size through here, so the exposure was real on both.
+//
+// The check therefore returns a STRUCTURED refusal (`SystemEmailResult.oversize`)
+// naming the ceiling, the measured cost and the files responsible. It never
+// throws: a decision that is already committed must not be rolled back by an
+// attachment that would not fit.
+export const GRAPH_INLINE_SEND_LIMIT_BYTES = 3 * 1024 * 1024;
+
+// The ceiling covers the whole request, not just `contentBytes`. We charge the
+// HTML body at its real byte length and reserve a fixed allowance for the JSON
+// scaffolding (subject, recipients, per-attachment `name`/`contentType`/`@odata.type`
+// keys). Deliberately generous — refusing a message that would have squeaked
+// through is recoverable; posting one that Graph rejects is the failure mode.
+const GRAPH_ENVELOPE_HEADROOM_BYTES = 64 * 1024;
+
 // Status codes that warrant a backoff-retry (transient). 401 is handled
 // separately (refresh + retry once). 400/403 surface immediately.
 const RETRYABLE_STATUS = new Set([429, 503, 504]);
@@ -96,6 +127,26 @@ export interface SystemEmailArgs {
   cc?: string[];
 }
 
+/**
+ * Why a message was refused before it was ever posted to Graph. Present ONLY on
+ * the too-large outcome; `null` on every other result, including ordinary send
+ * failures. Carries the numbers an operator needs to act (shrink the attachment
+ * to at most `limitBytes - overheadBytes` of base64, i.e. roughly three quarters
+ * of that in raw bytes) rather than a bare boolean.
+ */
+export interface OversizeAttachmentReport {
+  /** The Graph inline-send ceiling in bytes. */
+  limitBytes: number;
+  /** What the attachments actually cost on the wire, base64-encoded. */
+  encodedAttachmentBytes: number;
+  /** The same attachments before base64 inflation — what the caller handed us. */
+  rawAttachmentBytes: number;
+  /** HTML body bytes + the reserved envelope allowance, charged against the same ceiling. */
+  overheadBytes: number;
+  /** The attachment filenames that make up `rawAttachmentBytes`, in order. */
+  filenames: string[];
+}
+
 export interface SystemEmailResult {
   delivered: boolean;
   disabled: boolean;
@@ -104,6 +155,14 @@ export interface SystemEmailResult {
   retries: number;
   /** Last error status code observed on a failed send, if any. */
   lastStatus: number | undefined;
+  /**
+   * Set when the message exceeded the Graph inline-attachment ceiling and was
+   * REFUSED without being posted. `delivered` is false and `lastStatus` is
+   * undefined (no request was made, so there is no status to report). Callers
+   * must surface this distinctly from a transport failure: nothing was sent, the
+   * cause is the payload rather than the network, and a retry cannot help.
+   */
+  oversize: OversizeAttachmentReport | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -183,6 +242,46 @@ function backoffDelay(attemptIndex: number): number {
 // Graph send — generalised transport core
 // ────────────────────────────────────────────────────────────────────────
 
+/** `attachment` then `attachments` — the exact order `buildMessage` posts them in. */
+function collectAttachments(
+  args: SystemEmailArgs,
+): Array<{ filename: string; buffer: Buffer; contentType?: string }> {
+  return [...(args.attachment ? [args.attachment] : []), ...(args.attachments ?? [])];
+}
+
+/** Base64 cost of `n` raw bytes: 4 output bytes per 3 input bytes, padded. */
+function base64Cost(n: number): number {
+  return Math.ceil(n / 3) * 4;
+}
+
+/**
+ * Measure a message against {@link GRAPH_INLINE_SEND_LIMIT_BYTES}. Returns null
+ * when it fits, or the report naming why it does not. Pure — no I/O, no env
+ * reads — so the same verdict holds in every environment.
+ */
+export function checkInlineSendBudget(args: SystemEmailArgs): OversizeAttachmentReport | null {
+  const attachments = collectAttachments(args);
+  if (attachments.length === 0) return null;
+
+  const rawAttachmentBytes = attachments.reduce((n, a) => n + a.buffer.byteLength, 0);
+  const encodedAttachmentBytes = attachments.reduce(
+    (n, a) => n + base64Cost(a.buffer.byteLength),
+    0,
+  );
+  const overheadBytes = Buffer.byteLength(args.htmlBody, 'utf8') + GRAPH_ENVELOPE_HEADROOM_BYTES;
+
+  // Strictly under the ceiling — Graph's documented limit is "less than 3 MB".
+  if (encodedAttachmentBytes + overheadBytes < GRAPH_INLINE_SEND_LIMIT_BYTES) return null;
+
+  return {
+    limitBytes: GRAPH_INLINE_SEND_LIMIT_BYTES,
+    encodedAttachmentBytes,
+    rawAttachmentBytes,
+    overheadBytes,
+    filenames: attachments.map((a) => a.filename),
+  };
+}
+
 function buildMessage(args: SystemEmailArgs, requestId: string, senderMailbox: string) {
   const recipient =
     typeof args.to === 'string'
@@ -220,10 +319,7 @@ function buildMessage(args: SystemEmailArgs, requestId: string, senderMailbox: s
     message['ccRecipients'] = args.cc.map((addr) => ({ emailAddress: { address: addr } }));
   }
 
-  const allAttachments = [
-    ...(args.attachment ? [args.attachment] : []),
-    ...(args.attachments ?? []),
-  ];
+  const allAttachments = collectAttachments(args);
   if (allAttachments.length > 0) {
     message['attachments'] = allAttachments.map((a) => ({
       '@odata.type': '#microsoft.graph.fileAttachment',
@@ -258,8 +354,37 @@ async function postOnce(
  * Callers own audit + ntfy + persistence semantics.
  */
 export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmailResult> {
-  const config = readConfig();
   const requestId = newRequestId();
+
+  // Checked BEFORE the config gate on purpose: the budget is a property of the
+  // payload, not of the environment, so an attachment that Graph would reject in
+  // production is reported as too-large in dev and CI too — where M365 is
+  // unconfigured and the send would otherwise return a clean `disabled` that hides
+  // it. Nothing is posted, so ordering costs nothing.
+  const oversize = checkInlineSendBudget(args);
+  if (oversize) {
+    log.error(
+      {
+        requestId,
+        limitBytes: oversize.limitBytes,
+        encodedAttachmentBytes: oversize.encodedAttachmentBytes,
+        rawAttachmentBytes: oversize.rawAttachmentBytes,
+        overheadBytes: oversize.overheadBytes,
+        filenames: oversize.filenames,
+      },
+      '[m365-mail] attachments exceed the Graph inline-send ceiling — REFUSED, nothing was sent',
+    );
+    return {
+      delivered: false,
+      disabled: false,
+      messageId: requestId,
+      retries: 0,
+      lastStatus: undefined,
+      oversize,
+    };
+  }
+
+  const config = readConfig();
 
   if (!config) {
     log.warn('[m365-mail] M365 not configured, mail-send disabled (fail-open)');
@@ -269,6 +394,7 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
       messageId: requestId,
       retries: 0,
       lastStatus: undefined,
+      oversize: null,
     };
   }
 
@@ -283,7 +409,14 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       await postOnce(client, config.fromMailbox, requestPayload, requestId);
-      return { delivered: true, disabled: false, messageId: requestId, retries, lastStatus };
+      return {
+        delivered: true,
+        disabled: false,
+        messageId: requestId,
+        retries,
+        lastStatus,
+        oversize: null,
+      };
     } catch (err) {
       const status = statusOf(err);
       lastStatus = status;
@@ -304,7 +437,14 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
       // 400/403 (and a repeat 401) — surface immediately, do not retry.
       if (status === 400 || status === 403 || status === 401) {
         log.error({ requestId, status }, '[m365-mail] non-retryable Graph error');
-        return { delivered: false, disabled: false, messageId: requestId, retries, lastStatus };
+        return {
+          delivered: false,
+          disabled: false,
+          messageId: requestId,
+          retries,
+          lastStatus,
+          oversize: null,
+        };
       }
 
       // Retryable transient (429/503/504) or network error.
@@ -312,7 +452,14 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
         (status !== undefined && RETRYABLE_STATUS.has(status)) || isNetworkError(err);
       if (!transient) {
         log.error({ requestId, status }, '[m365-mail] unexpected non-retryable Graph error');
-        return { delivered: false, disabled: false, messageId: requestId, retries, lastStatus };
+        return {
+          delivered: false,
+          disabled: false,
+          messageId: requestId,
+          retries,
+          lastStatus,
+          oversize: null,
+        };
       }
 
       if (attempt >= MAX_RETRIES) {
@@ -330,7 +477,14 @@ export async function sendSystemEmail(args: SystemEmailArgs): Promise<SystemEmai
     }
   }
 
-  return { delivered: false, disabled: false, messageId: requestId, retries, lastStatus };
+  return {
+    delivered: false,
+    disabled: false,
+    messageId: requestId,
+    retries,
+    lastStatus,
+    oversize: null,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -372,7 +526,17 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
     graph_request_id: result.messageId,
     retry_count: result.retries,
     response_status: result.lastStatus ?? (result.delivered ? 202 : undefined),
-    status: result.delivered ? 'sent' : 'failed',
+    // `too_large` is deliberately its own status rather than `failed`: nothing was
+    // posted, retrying cannot help, and the operator action is to shrink the PDF —
+    // not to re-send. Recording it as `failed` would send them chasing Graph.
+    status: result.delivered ? 'sent' : result.oversize ? 'too_large' : 'failed',
+    ...(result.oversize
+      ? {
+          oversize_limit_bytes: result.oversize.limitBytes,
+          oversize_encoded_bytes: result.oversize.encodedAttachmentBytes,
+          oversize_raw_bytes: result.oversize.rawAttachmentBytes,
+        }
+      : {}),
   };
 
   if (result.delivered) {
@@ -418,11 +582,23 @@ export async function sendPayrollPdf(args: SendPayrollPdfArgs): Promise<SendPayr
 
   await publishNtfy({
     topic: 'dr3-vision-system',
-    title: 'Bonus payroll mail delivery failed',
-    body: `Graph sendMail to ${config.payrollTo} failed for month ${args.monthId} after ${result.retries} retries (last status ${result.lastStatus ?? 'network'}). PDF generated; month remains signed. Retry from the manager portal.`,
+    title: result.oversize
+      ? 'Bonus payroll mail REFUSED — PDF too large to attach'
+      : 'Bonus payroll mail delivery failed',
+    body: result.oversize
+      ? `The bonus PDF for month ${args.monthId} is ${Math.round(
+          result.oversize.rawAttachmentBytes / 1024,
+        )} KB, which exceeds what Microsoft Graph accepts as an inline attachment (${Math.round(
+          result.oversize.limitBytes / 1024,
+        )} KB of request payload, and base64 inflates the bytes by a third). Nothing was sent to ${
+          config.payrollTo
+        } and retrying will not help. The month remains signed. Shrink the PDF, then re-send from the manager portal.`
+      : `Graph sendMail to ${config.payrollTo} failed for month ${args.monthId} after ${result.retries} retries (last status ${result.lastStatus ?? 'network'}). PDF generated; month remains signed. Retry from the manager portal.`,
     priority: 'high',
     tags: ['error', 'bonus', 'payroll', 'dr3-vision'],
-    fingerprint: `bonus-mail-failed:${args.monthId}`,
+    fingerprint: result.oversize
+      ? `bonus-mail-too-large:${args.monthId}`
+      : `bonus-mail-failed:${args.monthId}`,
   });
 
   payrollDeliverySuccess.inc({ outcome: 'failed' });

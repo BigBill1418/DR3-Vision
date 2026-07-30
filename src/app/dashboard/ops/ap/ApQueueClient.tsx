@@ -667,7 +667,11 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                 ? 'DECIDED, but no decision-recipient configured — email NOT sent (an operator alert was raised). Configure recipients, then Re-send.'
                 : body.mail === 'disabled'
                   ? 'decided (mail disabled — M365 not configured).'
-                  : 'decided, but the decision email failed to send. Use Re-send.';
+                  : body.mail === 'too_large'
+                    ? // Deliberately does NOT offer Re-send: the attachment exceeds what
+                      // Graph accepts inline, so a re-send reproduces the same refusal.
+                      'DECIDED, but the stamped invoice is too large to email — accounting was NOT told. Re-sending will not help; open the request and forward the stamped PDF manually.'
+                    : 'decided, but the decision email failed to send. Use Re-send.';
           setMsg(`Request ${decision}; ${mailNote}`);
         }
       } catch (e) {

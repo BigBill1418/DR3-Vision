@@ -15,7 +15,11 @@
 
 import { prisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
-import { sendSystemEmail, type SystemEmailResult } from '@/lib/m365-mail';
+import {
+  sendSystemEmail,
+  type OversizeAttachmentReport,
+  type SystemEmailResult,
+} from '@/lib/m365-mail';
 import { writeAudit } from '@/lib/audit';
 import { log } from '@/lib/observability/logger';
 import { getNotificationState, activeAdminRecipients } from './rollout';
@@ -62,6 +66,15 @@ export interface NotifyStaffResult {
   delivered: number;
   /** True when M365 is unconfigured (fail-open no-op across all sends). */
   disabled: boolean;
+  /**
+   * Set when the attachments exceeded the Graph inline-send ceiling, so NOTHING
+   * was posted for any recipient. The payload is identical for every recipient,
+   * so this trips for all of them at once and one report describes the whole
+   * send. Distinct from `disabled` (config) and from `delivered === 0` (transport):
+   * this is a size refusal, and it is the caller's job to say so out loud rather
+   * than let an approved document quietly fail to arrive.
+   */
+  oversize: OversizeAttachmentReport | null;
 }
 
 function normalize(r: string | StaffRecipient): StaffRecipient {
@@ -69,22 +82,35 @@ function normalize(r: string | StaffRecipient): StaffRecipient {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 const PILOT_SUBJECT_MAX_NAMES = 6;
 
 function pilotSubjectPrefix(intended: string[]): string {
   const shown = intended.slice(0, PILOT_SUBJECT_MAX_NAMES).join(', ');
-  const extra = intended.length > PILOT_SUBJECT_MAX_NAMES ? `, +${intended.length - PILOT_SUBJECT_MAX_NAMES} more` : '';
+  const extra =
+    intended.length > PILOT_SUBJECT_MAX_NAMES
+      ? `, +${intended.length - PILOT_SUBJECT_MAX_NAMES} more`
+      : '';
   const who = intended.length > 0 ? `${shown}${extra}` : 'no active recipients';
   return `[PILOT — would have sent to: ${who}] `;
 }
 
-function pilotBanner(surfaceCode: string, siteCode: string | undefined, intended: string[]): string {
+function pilotBanner(
+  surfaceCode: string,
+  siteCode: string | undefined,
+  intended: string[],
+): string {
   const siteLabel = siteCode ? ` · site ${escapeHtml(siteCode)}` : ' · org-wide';
   const who =
-    intended.length > 0 ? escapeHtml(intended.join(', ')) : '<em>no active recipients configured</em>';
+    intended.length > 0
+      ? escapeHtml(intended.join(', '))
+      : '<em>no active recipients configured</em>';
   return `<div style="background:#fff3cd;border:2px solid #b8860b;color:#664d03;padding:12px 16px;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5">
     <strong>PILOT MODE — not sent to staff.</strong> The DR3-Vision surface
     <code>${escapeHtml(surfaceCode)}</code>${siteLabel} is in <strong>pilot</strong> rollout (ADR-0047).
@@ -124,7 +150,10 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
   } else {
     actual = await activeAdminRecipients(db);
     subject = `${pilotSubjectPrefix(intendedAddrs)}${args.subject}`;
-    htmlBody = withBanner(args.htmlBody, pilotBanner(args.surfaceCode, args.site?.code, intendedAddrs));
+    htmlBody = withBanner(
+      args.htmlBody,
+      pilotBanner(args.surfaceCode, args.site?.code, intendedAddrs),
+    );
   }
 
   const sends: SystemEmailResult[] = [];
@@ -138,13 +167,16 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
         ...(args.fromDisplayName ? { fromDisplayName: args.fromDisplayName } : {}),
         ...(args.replyTo ? { replyTo: args.replyTo } : {}),
         ...(args.cc ? { cc: args.cc } : {}),
-        ...(args.attachments && args.attachments.length > 0 ? { attachments: args.attachments } : {}),
+        ...(args.attachments && args.attachments.length > 0
+          ? { attachments: args.attachments }
+          : {}),
       }),
     );
   }
 
   const delivered = sends.filter((s) => s.delivered).length;
   const disabled = sends.length > 0 && sends.every((s) => s.disabled);
+  const oversize = sends.find((s) => s.oversize !== null)?.oversize ?? null;
   const actualAddrs = actual.map((r) => r.address);
 
   // Audit every send decision (append-only). Addresses recorded for targeting
@@ -165,6 +197,17 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
       actual: actualAddrs,
       delivered,
       disabled,
+      // Recorded on the audit row so "was this ever actually sent?" is answerable
+      // from the audit trail alone, without correlating application logs.
+      oversize_refused: oversize !== null,
+      ...(oversize
+        ? {
+            oversize_raw_bytes: oversize.rawAttachmentBytes,
+            oversize_encoded_bytes: oversize.encodedAttachmentBytes,
+            oversize_limit_bytes: oversize.limitBytes,
+            oversize_filenames: oversize.filenames,
+          }
+        : {}),
     },
   });
 
@@ -177,6 +220,7 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
       actual: actualAddrs.length,
       delivered,
       disabled,
+      oversizeRefused: oversize !== null,
     },
     '[notify-staff] send decision',
   );
@@ -190,5 +234,6 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
     sends,
     delivered,
     disabled,
+    oversize,
   };
 }

@@ -80,7 +80,13 @@ vi.mock('@/lib/observability/metrics', () => ({
 }));
 
 // Import AFTER mocks are registered.
-import { sendPayrollPdf, sendSystemEmail, __testing } from './m365-mail';
+import {
+  checkInlineSendBudget,
+  GRAPH_INLINE_SEND_LIMIT_BYTES,
+  sendPayrollPdf,
+  sendSystemEmail,
+  __testing,
+} from './m365-mail';
 
 // ── Fake graph client ───────────────────────────────────────────
 //
@@ -409,5 +415,170 @@ describe('sendSystemEmail — ADR-0034 sender overrides', () => {
     expect(msg?.['from']).toBeUndefined();
     expect(msg?.['replyTo']).toBeUndefined();
     expect(msg?.['ccRecipients']).toBeUndefined();
+  });
+});
+
+// ── The inline-attachment size ceiling ─────────────────────────────────────
+//
+// Microsoft Graph rejects a `sendMail` carrying inline fileAttachments once the
+// request passes 3 MB, and base64 inflates the bytes by a third. Before this
+// guard there was no size check on the path at all, and `sendSystemEmail` does
+// not throw — so an oversized attachment produced a rejected request that the
+// caller was free to record as an ordinary failure, or as nothing at all. These
+// tests pin the three properties that make that impossible: nothing is POSTED,
+// the refusal is STRUCTURED (not just `delivered:false`), and no throw escapes
+// to unwind a decision that has already been committed.
+
+/** A buffer of `mb` megabytes — the only thing these tests care about is size. */
+function heavy(mb: number): Buffer {
+  return Buffer.alloc(Math.round(mb * 1024 * 1024), 0x41);
+}
+
+describe('sendSystemEmail — inline-attachment size ceiling', () => {
+  it('REFUSES an oversized attachment without posting anything to Graph', async () => {
+    let posts = 0;
+    const client: FakeClient = {
+      api: () => {
+        const req: FakeRequest = {
+          header: () => req,
+          post: async () => {
+            posts += 1;
+            return undefined;
+          },
+        };
+        return req;
+      },
+    };
+    __testing.setClientFactory(() => client as never);
+
+    const res = await sendSystemEmail({
+      to: 'mary.scott@svdp.us',
+      subject: 'Approved reimbursement',
+      htmlBody: '<p>x</p>',
+      // 2.4 MB raw -> 3.2 MB base64, over the ceiling on its own.
+      attachment: { filename: 'receipt.pdf', buffer: heavy(2.4) },
+    });
+
+    // The whole point: the request is never made.
+    expect(posts).toBe(0);
+    expect(res.delivered).toBe(false);
+    expect(res.oversize).not.toBeNull();
+    expect(res.oversize?.filenames).toEqual(['receipt.pdf']);
+    expect(res.oversize?.limitBytes).toBe(GRAPH_INLINE_SEND_LIMIT_BYTES);
+    // base64 really is the number that matters — the raw bytes alone are under 3 MB.
+    expect(res.oversize?.rawAttachmentBytes).toBeLessThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
+    expect(res.oversize?.encodedAttachmentBytes).toBeGreaterThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
+    // No status: there was no response to have a status.
+    expect(res.lastStatus).toBeUndefined();
+    expect(res.retries).toBe(0);
+  });
+
+  it('is distinguishable from every other non-delivery, so a caller can say WHY', async () => {
+    // A transport failure and a size refusal both leave delivered:false. If the
+    // only signal were that flag, "Mary was not told because the file was too big"
+    // could not be told apart from "Graph was down" — which is how a silent
+    // non-delivery gets recorded as a routine retry.
+    const failing: FakeClient = {
+      api: () => {
+        const req: FakeRequest = {
+          header: () => req,
+          post: async () => {
+            throw Object.assign(new Error('boom'), { statusCode: 403 });
+          },
+        };
+        return req;
+      },
+    };
+    __testing.setClientFactory(() => failing as never);
+
+    const transportFailure = await sendSystemEmail({
+      to: 'a@svdp.us',
+      subject: 's',
+      htmlBody: '<p>x</p>',
+      attachment: { filename: 'small.pdf', buffer: Buffer.alloc(16) },
+    });
+    const sizeRefusal = await sendSystemEmail({
+      to: 'a@svdp.us',
+      subject: 's',
+      htmlBody: '<p>x</p>',
+      attachment: { filename: 'huge.pdf', buffer: heavy(4) },
+    });
+
+    expect(transportFailure.delivered).toBe(false);
+    expect(sizeRefusal.delivered).toBe(false);
+    // …and only one of them is a size problem.
+    expect(transportFailure.oversize).toBeNull();
+    expect(sizeRefusal.oversize).not.toBeNull();
+  });
+
+  it('sums MULTIPLE attachments — the AP path attaches one stamped PDF per original', async () => {
+    __testing.setClientFactory(() => capturingClient().client as never);
+    const res = await sendSystemEmail({
+      to: 'a@svdp.us',
+      subject: 's',
+      htmlBody: '<p>x</p>',
+      // Each is comfortably legal alone; together they are not. A per-file check
+      // would have passed this and produced exactly the silent non-delivery.
+      attachments: [
+        { filename: 'a.pdf', buffer: heavy(1.2) },
+        { filename: 'b.pdf', buffer: heavy(1.2) },
+      ],
+    });
+    expect(res.oversize).not.toBeNull();
+    expect(res.oversize?.filenames).toEqual(['a.pdf', 'b.pdf']);
+  });
+
+  it('lets a normal attachment through untouched', async () => {
+    const { client, lastPayload } = capturingClient();
+    __testing.setClientFactory(() => client as never);
+
+    const res = await sendSystemEmail({
+      to: 'a@svdp.us',
+      subject: 's',
+      htmlBody: '<p>x</p>',
+      attachment: { filename: 'decision.pdf', buffer: heavy(1.6) },
+    });
+
+    expect(res.delivered).toBe(true);
+    expect(res.oversize).toBeNull();
+    // The 1.6 MB composed-PDF budget in @/lib/reimbursements/pdf is chosen to sit
+    // under this ceiling; if this ever fails, that budget must move with it.
+    const atts = lastPayload()?.['attachments'] as Array<Record<string, unknown>> | undefined;
+    expect(atts).toHaveLength(1);
+  });
+
+  it('never throws — a committed decision must not unwind because of an attachment', async () => {
+    __testing.setClientFactory(() => capturingClient().client as never);
+    await expect(
+      sendSystemEmail({
+        to: 'a@svdp.us',
+        subject: 's',
+        htmlBody: '<p>x</p>',
+        attachment: { filename: 'huge.pdf', buffer: heavy(8) },
+      }),
+    ).resolves.toMatchObject({ delivered: false });
+  });
+
+  it('charges the HTML body against the same ceiling', () => {
+    // The limit covers the whole request, so a large body plus a nearly-legal
+    // attachment is over even though the attachment alone is not.
+    const attachment = { filename: 'x.pdf', buffer: heavy(2.1) };
+    expect(
+      checkInlineSendBudget({ to: 'a@b.us', subject: 's', htmlBody: '', attachment }),
+    ).toBeNull();
+    expect(
+      checkInlineSendBudget({
+        to: 'a@b.us',
+        subject: 's',
+        htmlBody: 'z'.repeat(300 * 1024),
+        attachment,
+      }),
+    ).not.toBeNull();
+  });
+
+  it('ignores messages with no attachment at all (the common case pays nothing)', () => {
+    expect(
+      checkInlineSendBudget({ to: 'a@b.us', subject: 's', htmlBody: 'z'.repeat(5 * 1024 * 1024) }),
+    ).toBeNull();
   });
 });

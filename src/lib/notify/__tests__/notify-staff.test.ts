@@ -6,6 +6,7 @@
 //   - an unregistered surface throws UnregisteredSurfaceError (never a silent send).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { OversizeAttachmentReport } from '@/lib/m365-mail';
 
 const sendSystemEmail = vi.fn(async () => ({
   delivered: true,
@@ -13,6 +14,7 @@ const sendSystemEmail = vi.fn(async () => ({
   messageId: 'm-1',
   retries: 0,
   lastStatus: 202 as number | undefined,
+  oversize: null as OversizeAttachmentReport | null,
 }));
 const writeAudit = vi.fn(async () => undefined);
 
@@ -34,9 +36,13 @@ vi.mock('@/lib/prisma', () => ({
     user: { findMany: (...a: unknown[]) => userFindMany(...a) },
   },
 }));
-vi.mock('@/lib/m365-mail', () => ({ sendSystemEmail: (...a: unknown[]) => sendSystemEmail(...(a as [])) }));
+vi.mock('@/lib/m365-mail', () => ({
+  sendSystemEmail: (...a: unknown[]) => sendSystemEmail(...(a as [])),
+}));
 vi.mock('@/lib/audit', () => ({ writeAudit: (...a: unknown[]) => writeAudit(...(a as [])) }));
-vi.mock('@/lib/observability/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@/lib/observability/logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 import { notifyStaff } from '../notify-staff';
 import { UnregisteredSurfaceError } from '../errors';
@@ -46,7 +52,14 @@ const ADMINS = [{ email: 'bill@svdp.us', name: 'Bill' }];
 beforeEach(() => {
   vi.clearAllMocks();
   userFindMany.mockResolvedValue(ADMINS);
-  sendSystemEmail.mockResolvedValue({ delivered: true, disabled: false, messageId: 'm-1', retries: 0, lastStatus: 202 });
+  sendSystemEmail.mockResolvedValue({
+    delivered: true,
+    disabled: false,
+    messageId: 'm-1',
+    retries: 0,
+    lastStatus: 202,
+    oversize: null,
+  });
 });
 
 describe('notifyStaff — rollout gate', () => {
@@ -145,5 +158,66 @@ describe('notifyStaff — rollout gate', () => {
     const arg = callArg<{ after?: { mode?: string; intended?: string[] } }>(writeAudit, 0, 0);
     expect(arg.after?.mode).toBe('live');
     expect(arg.after?.intended).toEqual(['rick@svdp.us']);
+  });
+});
+
+// ── The size refusal has to survive the chokepoint ─────────────────────────
+//
+// notifyStaff is the ONLY sanctioned route to staff mail, so if it flattens the
+// transport's too-large outcome into "delivered: 0", every feature above it loses
+// the ability to say why nothing arrived. These pin that it does not.
+
+describe('notifyStaff — oversized attachments', () => {
+  it('surfaces the transport size refusal instead of flattening it into a failure', async () => {
+    surfaceFindUnique.mockResolvedValue({ rollout_state: 'live' });
+    sendSystemEmail.mockResolvedValue({
+      delivered: false,
+      disabled: false,
+      messageId: 'm-1',
+      retries: 0,
+      lastStatus: undefined,
+      oversize: {
+        limitBytes: 3145728,
+        encodedAttachmentBytes: 4000000,
+        rawAttachmentBytes: 3000000,
+        overheadBytes: 65536,
+        filenames: ['receipt.pdf'],
+      },
+    });
+
+    const res = await notifyStaff({
+      surfaceCode: 'alert_digest',
+      site: { id: 'site-w', code: 'woodland' },
+      recipients: ['mary.scott@svdp.us'],
+      subject: 'Approved reimbursement',
+      htmlBody: '<!DOCTYPE html><html><body>hi</body></html>',
+      attachments: [{ filename: 'receipt.pdf', buffer: Buffer.alloc(4) }],
+    });
+
+    expect(res.delivered).toBe(0);
+    // Not a config problem — M365 is configured, the payload is the problem.
+    expect(res.disabled).toBe(false);
+    expect(res.oversize).not.toBeNull();
+    expect(res.oversize?.filenames).toEqual(['receipt.pdf']);
+
+    // The audit row records it, so "was this ever sent?" is answerable from the
+    // trail alone rather than by correlating application logs.
+    const audited = callArg<{ after: Record<string, unknown> }>(writeAudit, 0, 0);
+    expect(audited.after['oversize_refused']).toBe(true);
+    expect(audited.after['oversize_filenames']).toEqual(['receipt.pdf']);
+  });
+
+  it('reports null on an ordinary send, so the field means what it says', async () => {
+    surfaceFindUnique.mockResolvedValue({ rollout_state: 'live' });
+    const res = await notifyStaff({
+      surfaceCode: 'alert_digest',
+      site: { id: 'site-w', code: 'woodland' },
+      recipients: ['mary.scott@svdp.us'],
+      subject: 'Approved reimbursement',
+      htmlBody: '<!DOCTYPE html><html><body>hi</body></html>',
+    });
+    expect(res.oversize).toBeNull();
+    const audited = callArg<{ after: Record<string, unknown> }>(writeAudit, 0, 0);
+    expect(audited.after['oversize_refused']).toBe(false);
   });
 });

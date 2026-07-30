@@ -139,7 +139,13 @@ export type ApMailOutcome =
   // `pending_second_approval` instead of terminating; NO decision email is sent yet
   // (it fires only on the final approved/rejected state). The second approver was
   // paged/emailed via `notifySecondApprovalNeeded` instead.
-  | 'second_approval_pending';
+  | 'second_approval_pending'
+  // The stamped original(s) exceeded what Microsoft Graph accepts as an inline
+  // attachment, so NOTHING was sent — distinct from `failed`, where a request was
+  // made and rejected. A retry cannot fix it; the invoice has to be shrunk or
+  // fetched from Vision instead. Kept separate precisely so accounting is not told
+  // "we tried" about a mail that was never posted.
+  | 'too_large';
 
 export interface DecideResult {
   requestId: string;
@@ -1233,6 +1239,30 @@ export async function sendDecisionEmail(
   });
 
   if (notified.disabled) return 'disabled'; // M365 not configured — fail-open no-op
+  // Size refusal is reported BEFORE the generic failure branch: both leave
+  // `delivered === 0`, but only this one is caused by the attachment rather than
+  // the transport, and only this one is unfixable by re-sending. Pages so the
+  // decision does not sit looking delivered.
+  if (notified.oversize) {
+    const { rawAttachmentBytes, limitBytes, filenames } = notified.oversize;
+    log.error(
+      { requestId, rawAttachmentBytes, limitBytes, filenames },
+      '[ap-approvals] decision email REFUSED — stamped attachments exceed the Graph inline-send ceiling',
+    );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'AP decision email NOT sent — stamped invoice too large to attach',
+      body: `AP request ${requestId} was decided (${req.status}) but the stamped attachment(s) total ${Math.round(
+        rawAttachmentBytes / 1024,
+      )} KB, above the ${Math.round(
+        limitBytes / 1024,
+      )} KB Microsoft Graph accepts inline. NO email was sent to accounting and re-sending will not help. The decision stands and the stamped original is archived in Vision — open the AP queue for request ${requestId} to retrieve it.`,
+      priority: 'high',
+      tags: ['error', 'ap', 'dr3-vision'],
+      fingerprint: `ap-decision-mail-too-large:${requestId}`,
+    });
+    return 'too_large';
+  }
   if (notified.delivered === 0) {
     log.warn({ requestId }, '[ap-approvals] decision email failed to all recipients');
     return 'failed';
