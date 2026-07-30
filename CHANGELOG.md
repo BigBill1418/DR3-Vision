@@ -5,6 +5,57 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## Unreleased
 
+### Fixed — 2026-07-30 (reimbursement notifications: the untested money path — ADR-0068 Amendment 1)
+
+`notify.ts` shipped with **zero test coverage** while being the most dangerous file in the
+feature: 269 lines, on the money path, fail-soft over an empty recipient set. Fail-soft over an
+EMPTY audience is indistinguishable from success, and this repo has already been bitten by that
+exact shape — `resolveSlotSigner` had tests that mocked the database into AGREEING with a
+production-wrong query, and ops signers were never emailed while every surface reported success.
+
+- **20 tests now cover it**, built to avoid that failure mode: the REAL
+  `resolveReimbursementApproval` runs over a fake Prisma, and only `notifyStaff` (the email
+  transport) is mocked — echoing its arguments back, so assertions are made against what the
+  code really asked to send. Reimbursement suite total: **44 tests** (16 routing + 8 service +
+  20 notify).
+- **D6 is asserted in both directions, negatively as well as positively.** "Mary was emailed" is
+  only half the control; "the submitter was NOT emailed" is the half that fails silently.
+  Approved → Mary as sole primary and never the submitter; rejected/held → the submitting
+  manager and never Mary; submission → only the routed second approver.
+- **The empty-recipient path is asserted LOUD**, not silent: it returns `not_sent`, names the
+  amount and the beneficiary, says "nobody has been asked to sign it", and emails no one.
+- **Mutation-tested rather than trusted for being green.** Three defects were injected and all
+  three were caught: leaking the approved mail to the submitter, removing the beneficiary
+  exclusion from `routing.ts` (proving the real resolver is genuinely in the loop), and
+  silencing the empty-audience report.
+- **An audit field was recording deliveries that never happened.** Found while writing the
+  tests: `sent_to_accounting_at` was stamped unconditionally, so an empty audience OR a disabled
+  mail transport both left the row reading "handed off to accounting" when nothing was sent. It
+  is now stamped only when the mail really had somewhere to go, and both failure cases report an
+  explicit problem naming the consequence. The field has no readers anywhere in the codebase, so
+  nothing depended on the old behaviour.
+
+### Changed — 2026-07-30 (ADR-0068 corrected where it contradicted production)
+
+Documentation-only. The control did not change; what the record says about it did.
+
+- **Reimbursements are LIVE at both sites** — operator-ratified 2026-07-30, and
+  `mary.scott@svdp.us` confirmed correct. The ADR body and the migration's "born pilot" comments
+  described a staged pilot ramp that production is not in and is not going to be. Recorded in
+  ADR-0068 Amendment 1 §A against the live rollout table.
+- **The flip bypassed the audited `/admin/rollout` path**: `flipped_by`, `flipped_at` and
+  `criteria_note` are NULL on all four rows, so the table cannot say who ramped it or on what
+  criteria. Same pattern on `ipad_queue` and `ipad_inbound`. Tracked, not fixed — Amendment 1 §B.
+- **The migration comment could not be corrected in place.** An applied migration is
+  checksum-locked in `_prisma_migrations`; editing it would fail the `prisma migrate deploy` init
+  container on the next deploy and the `migrate status` hard CI gate. The ADR is the correction
+  of record — Amendment 1 §C.
+- **Two wrong counts and a dangling decision numbering fixed.** Commit `decad39` claims FIVE
+  CHECK constraints; there are **four**. This ADR claimed 16 unit tests; there were **24**.
+  `notify.ts` and `routing.ts` cited `D8`/`D10`/`D6`/`D4` from an earlier draft numbering — the
+  ADR only ever had D1–D7, so those comments pointed at decisions that exist in no document.
+  Renumbered onto the real decisions. Amendment 1 §F.
+
 ### Added — 2026-07-29 (employee reimbursements: dual approval — ADR-0068)
 
 Mary Scott escalated a real segregation-of-duties failure: Janette was approving her own

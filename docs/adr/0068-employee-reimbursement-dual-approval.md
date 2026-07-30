@@ -325,9 +325,14 @@ so nothing depended on the old unconditional write.
 
 3. **Dangling `D8` / `D10` references.** `notify.ts` cited "ADR-0068 D8/D10" and
    `routing.ts` cited "D5/D6" and "D4", but **this ADR only ever had D1–D7** — an
-   earlier, longer draft numbering leaked into the code comments and pointed at
-   decisions that exist in no document. No spec containing a D8 or D10 exists
-   anywhere in the repo (verified with two independent searches). The comments have
+   earlier, longer numbering — the pre-ADR handoff's — leaked into the code
+   comments and pointed at decisions no COMMITTED document defines. Searched for
+   and not found: no file in this repo, and no file in the sibling DR3 working
+   directories or `~/Docs`/`~/docs`/`~/lists`, contains a reimbursement `D8` or
+   `D10` (verified with two independent search methods). The handoff itself was
+   never committed, so those citations were unresolvable for any future reader —
+   which is the whole defect, independent of what the handoff once said. The
+   comments have
    been renumbered onto the real decisions: Mary-as-sole-primary and
    never-a-broadcast are **D6**; the beneficiary exclusion is **D3**;
    submission-is-the-first-signature is **D2**; the thin-wrapper rule is **D5**;
