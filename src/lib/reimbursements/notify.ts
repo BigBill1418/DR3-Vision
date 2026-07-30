@@ -283,9 +283,26 @@ export async function notifyReimbursementEscalated(
  * Deliver the decision. Approved → Mary, and only Mary. Rejected/held → the
  * submitting manager.
  */
+export interface NotifyDecidedOptions {
+  /**
+   * Extra addresses for THIS send only (ADR-0068 Amendment 5). The standing rule
+   * is that an approved reimbursement goes to accounting as the SOLE primary
+   * recipient — these name an employee and an amount they are personally owed —
+   * so any widening is per-send, never configured, and is audited by the caller.
+   */
+  additionalRecipients?: string[];
+  /**
+   * Leave `sent_to_accounting_at` alone. Set on a RE-send: that column records
+   * when accounting was FIRST really told, and overwriting it would destroy the
+   * audit answer to "when did Mary learn about this?".
+   */
+  preserveSentAt?: boolean;
+}
+
 export async function notifyReimbursementDecided(
   prisma: PrismaClient,
   id: string,
+  options: NotifyDecidedOptions = {},
 ): Promise<ReimbursementNotifyOutcome> {
   const row = await load(prisma, id);
   if (!row) return { mode: 'not_sent', intended: [], problems: [`No reimbursement ${id}.`] };
@@ -313,7 +330,10 @@ export async function notifyReimbursementDecided(
       ...(pdf.attachment ? { attachments: [pdf.attachment] } : {}),
       surfaceCode: SURFACE,
       site: { id: row.site.id, code: row.site.code },
-      recipients: [{ address: ACCOUNTING_RECIPIENT, name: 'Mary Scott' }],
+      recipients: [
+        { address: ACCOUNTING_RECIPIENT, name: 'Mary Scott' },
+        ...(options.additionalRecipients ?? []).map((address) => ({ address })),
+      ],
       subject: `Approved reimbursement — ${usd(row.amount_cents)}, ${beneficiaryLabel(row)}`,
       htmlBody: shell(
         'Approved reimbursement — ready to pay',
@@ -352,13 +372,19 @@ export async function notifyReimbursementDecided(
       await prisma.reimbursementRequest.update({
         where: { id },
         data: {
-          sent_to_accounting_at: new Date(),
+          // `sent_to_accounting_at` records when accounting was FIRST really
+          // told. A re-send preserves it — overwriting would destroy the audit
+          // answer to "when did Mary learn about this?" — but a re-send that is
+          // filling a gap (never sent at all) still stamps it.
+          ...(options.preserveSentAt ? {} : { sent_to_accounting_at: new Date() }),
           // The digest of the document Mary actually received, so "is the PDF in
-          // her mailbox the one Vision produced?" is answerable later. Recorded
-          // only when a PDF was really attached — `decision_pdf_key` stays NULL
-          // until there is a reimbursement-namespaced R2 helper to archive it
-          // with (reusing `putApDecisionPdf` would file it under `ap/` with a
-          // fabricated attachment id, giving the object a key that lies).
+          // her mailbox the one Vision produced?" is answerable later. ALWAYS
+          // refreshed, including on a re-send: the hash must describe the
+          // document that was last actually delivered, or it describes nothing.
+          // `decision_pdf_key` stays NULL until there is a
+          // reimbursement-namespaced R2 helper (reusing `putApDecisionPdf` would
+          // file it under `ap/` with a fabricated id, giving the object a key
+          // that lies).
           ...(pdf.sha256 ? { decision_pdf_sha256: pdf.sha256 } : {}),
         },
       });
