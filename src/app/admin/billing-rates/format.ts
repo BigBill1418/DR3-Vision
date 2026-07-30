@@ -1,3 +1,4 @@
+import { appTodayISO } from '@/lib/time';
 // ADR-0040 D5 — pure display/parse helpers shared by the billing-rates client
 // components. No React, no I/O — trivially testable and safe to import anywhere.
 
@@ -31,9 +32,17 @@ export function parseIntOrNaN(input: string): number {
   return Number.parseInt(trimmed, 10);
 }
 
-/** Today as `YYYY-MM-DD` (UTC) — matches the `@db.Date` wire format. */
+/**
+ * Today as `YYYY-MM-DD` in PACIFIC — the wire format is `@db.Date`, but WHICH day
+ * matters and both sites are Pacific.
+ *
+ * The superseded version returned the UTC day and its comment said "(UTC)" as if
+ * that were the point. `toISOString()` converts to UTC first, so from 5:00 PM
+ * Pacific it returned TOMORROW and rate effective-dates defaulted to a day that
+ * had not happened yet.
+ */
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return appTodayISO();
 }
 
 /**

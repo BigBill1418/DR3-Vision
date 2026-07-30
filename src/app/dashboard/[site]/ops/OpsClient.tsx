@@ -6,6 +6,7 @@
 // only offered when the caller has org reach (`canWriteOrgWide`).
 
 import { useCallback, useEffect, useState } from 'react';
+import { appTodayISO } from '@/lib/time';
 
 type TaskStatus = 'open' | 'done' | 'dropped';
 
@@ -37,8 +38,17 @@ interface ActionItem {
 function iso(d: string | null): string {
   return d ? d.slice(0, 10) : '—';
 }
+// ADR-0065 Amendment 2 — the Pacific day, not the UTC day.
+//
+// This read `new Date().toISOString().slice(0, 10)`. `toISOString()` converts to
+// UTC first, so from 5:00 PM Pacific (00:00Z the next day) it returned TOMORROW —
+// and every date input on this screen defaulted to a day that had not happened.
+// An evening entry silently landed on the wrong production day.
+//
+// `appTodayISO` already existed for exactly this ("for client default values");
+// six client screens each rolled their own instead. Use the shared one.
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return appTodayISO();
 }
 
 export interface Assignee {

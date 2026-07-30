@@ -10,14 +10,24 @@
 // CLAUDE.md hard rule #10 — no <form>; every handler is onClick/onChange.
 
 import { useCallback, useEffect, useState } from 'react';
+import { appTodayISO } from '@/lib/time';
 import type { ProcessedUnitsView } from '@/lib/loads/processed-units';
 
 const inputCls = 'rounded border border-white/20 bg-black/30 px-2 py-1.5 text-sm text-white';
 const labelCls = 'flex flex-col gap-1 text-sm';
 const btnCls = 'rounded bg-dr3-cyan px-4 py-2 text-sm font-semibold text-black disabled:opacity-40';
 
+// ADR-0065 Amendment 2 — the Pacific day, not the UTC day.
+//
+// This read `new Date().toISOString().slice(0, 10)`. `toISOString()` converts to
+// UTC first, so from 5:00 PM Pacific (00:00Z the next day) it returned TOMORROW —
+// and every date input on this screen defaulted to a day that had not happened.
+// An evening entry silently landed on the wrong production day.
+//
+// `appTodayISO` already existed for exactly this ("for client default values");
+// six client screens each rolled their own instead. Use the shared one.
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return appTodayISO();
 }
 function isoDate(d: Date | string): string {
   return typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10);

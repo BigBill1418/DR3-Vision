@@ -8,6 +8,7 @@
 // entry + soft-void refresh without a full reload.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { appTodayISO } from '@/lib/time';
 import type { EquipmentThroughput, DailyThroughputPoint } from '@/lib/equipment/throughput';
 import type { EquipmentEventView } from '@/lib/equipment/service';
 
@@ -15,8 +16,17 @@ const KINDS = ['downtime', 'maintenance', 'repair', 'cost', 'note'] as const;
 type Kind = (typeof KINDS)[number];
 const DOWNTIME_KINDS: ReadonlySet<Kind> = new Set(['downtime', 'maintenance', 'repair']);
 
+// ADR-0065 Amendment 2 — the Pacific day, not the UTC day.
+//
+// This read `new Date().toISOString().slice(0, 10)`. `toISOString()` converts to
+// UTC first, so from 5:00 PM Pacific (00:00Z the next day) it returned TOMORROW —
+// and every date input on this screen defaulted to a day that had not happened.
+// An evening entry silently landed on the wrong production day.
+//
+// `appTodayISO` already existed for exactly this ("for client default values");
+// six client screens each rolled their own instead. Use the shared one.
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return appTodayISO();
 }
 function isoDate(d: Date | string): string {
   return typeof d === 'string' ? d.slice(0, 10) : new Date(d).toISOString().slice(0, 10);

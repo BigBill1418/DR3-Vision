@@ -8,6 +8,7 @@
 // access-controlled manager surface, but it is NEVER routed to an export.
 
 import { useCallback, useEffect, useState } from 'react';
+import { appTodayISO } from '@/lib/time';
 import { useT } from '@/i18n/provider';
 import type { DropoffView } from '@/lib/dropoffs/service';
 import type { OutboundView } from '@/lib/loads/outbound';
@@ -52,8 +53,17 @@ const SUB_CATEGORIES = ['renovation', 'baled', 'shredded'] as const;
 const DROPOFF_KINDS = ['incentive', 'unpaid', 'illegal'] as const;
 const REASONS = ['bed_bug', 'soiled', 'water_logged', 'other'] as const;
 
+// ADR-0065 Amendment 2 — the Pacific day, not the UTC day.
+//
+// This read `new Date().toISOString().slice(0, 10)`. `toISOString()` converts to
+// UTC first, so from 5:00 PM Pacific (00:00Z the next day) it returned TOMORROW —
+// and every date input on this screen defaulted to a day that had not happened.
+// An evening entry silently landed on the wrong production day.
+//
+// `appTodayISO` already existed for exactly this ("for client default values");
+// six client screens each rolled their own instead. Use the shared one.
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return appTodayISO();
 }
 function isoDate(d: Date | string): string {
   return typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10);
@@ -613,7 +623,11 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
         </label>
         <label className={labelCls}>
           <span className="opacity-70">Recycler</span>
-          <select className={inputCls} value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+          <select
+            className={inputCls}
+            value={vendorId}
+            onChange={(e) => setVendorId(e.target.value)}
+          >
             <option value="">— none —</option>
             {vendors.map((v) => (
               <option key={v.id} value={v.id}>
@@ -705,11 +719,20 @@ function OutboundPanel({ siteCode }: { siteCode: string }) {
       <p className="text-xs opacity-70">
         Renovation = whole-unit sale (program + non-program must equal whole units; counts toward
         the running balance). Baled / shredded = weight-based commodity sales (never subtract
-        units). Recycler split (recycled vs landfilled) is derived for CalRecycle stewardship
-        only — it never affects the MRC invoice.
+        units). Recycler split (recycled vs landfilled) is derived for CalRecycle stewardship only —
+        it never affects the MRC invoice.
       </p>
       <RecordTable
-        head={['Date', 'Commodity', 'Sub-cat', 'Lbs', 'Whole', 'Avg/bale', 'Recycled', 'Landfilled']}
+        head={[
+          'Date',
+          'Commodity',
+          'Sub-cat',
+          'Lbs',
+          'Whole',
+          'Avg/bale',
+          'Recycled',
+          'Landfilled',
+        ]}
         rows={rows.map((r) => [
           isoDate(r.shipDate),
           r.commodity,
@@ -958,9 +981,8 @@ function BulkInboundPanel({ siteCode }: { siteCode: string }) {
     <div className="flex flex-col gap-6">
       <p className="text-xs opacity-70">
         Paper bootstrap: enter the whole day&apos;s inbound as ONE aggregate row (source{' '}
-        <code>paper_bulk</code>). Per-load detail is not required — the day total plus the
-        program / non-program split is what the running balance needs. Re-entering a date amends
-        that day.
+        <code>paper_bulk</code>). Per-load detail is not required — the day total plus the program /
+        non-program split is what the running balance needs. Re-entering a date amends that day.
       </p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <label className={labelCls}>
