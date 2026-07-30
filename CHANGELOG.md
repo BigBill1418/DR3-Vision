@@ -3,6 +3,24 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-30 — documentation: notify.ts coverage and ADR-0068 Amendment 1 corrections
+
+### Fixed
+
+`notify.ts` shipped with zero test coverage on the money path. The absence is now covered by assertions that prove the control works in both directions — approvals route to accounting, rejections and holds route to the manager, submissions route to the second approver, and the submitter is never on any list.
+
+- **Mutation-tested for real.** Three defects were injected into the codebase and all three were caught by the suite: leaking the approved mail to the submitter, removing the beneficiary exclusion from `routing.ts`, and silencing the empty-audience report. The tests run the real `resolveReimbursementApproval` over a fake Prisma, mocking only the email transport itself.
+- **An audit field now records what actually happened.** `sent_to_accounting_at` was stamped unconditionally after send, so an empty audience or disabled mail transport both read as success. It is now stamped only when the mail had a real recipient and the transport was live. Both failure modes push a `problems` entry naming the consequence.
+- **The empty-recipient path is loud, not silent.** It returns `not_sent`, names the amount and beneficiary, says nobody was asked to sign, and sends no mail.
+
+### Changed
+
+ADR-0068 Amendment 1 corrects documentation-only contradictions between the record and production.
+
+- **Production is live at both sites**, not in a staged pilot ramp. The ADR body described a ramp that does not exist and will not happen.
+- **Reimbursement tile is now gated per site** via `UI_SURFACE.REIMBURSEMENT_TILE` in the rollout table. Eugene and Woodland can ramp independently without a deploy. The gate was created by the migration but nothing read it until now.
+- **Proof the gate is wired, not merely present.** Service tests prove the decision path consults the rollout gate — that `canApproveReimbursement` is actually called, not a resolver nobody invokes.
+
 ## Unreleased
 
 ### Fixed — 2026-07-30 (reimbursement notifications: the untested money path — ADR-0068 Amendment 1)
