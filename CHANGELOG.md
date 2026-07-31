@@ -3,6 +3,30 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — processor production quota alert (ADR-0071)
+
+An **exception alert**, not a dashboard. Nobody watches numbers; the system watches and speaks up only when a Woodland processor finishes a Monday–Sunday week with two or more days below the daily quota. It reads the per-processor daily counts the bonus system already captures — the same production data from a different angle, not a new measurement.
+
+### Added
+
+- Weekly digest naming each flagged processor **with their miss days and the actual counts** ("Tuesday — 62, Thursday — 48"), because the numbers are what separate a slow slide from two bad days. Sent through `notifyStaff()`; recipients and quota are settings, not literals.
+- `/admin/processor-quota` — the detail behind the alert: every processor's daily counts for a selectable week, misses highlighted, admin-only. Deliberately **not** merged into the daily production report (that report is a production figure a wide audience reads; this one names individuals) and on **no** operator or iPad surface.
+
+### Guarded
+
+- **A day with no recorded production is never a miss.** PTO, a day off, any non-worked day is skipped entirely. Verified against live data: of 5,733 entries exactly **one** carries a zero, so keying a 0 is not how a day off is recorded and evaluating only days that have a row is safe. Exactly 75 is MET, not missed.
+- **No email when nobody flags.** An "all clear" every Monday trains recipients to archive it unread, and the week it says something real goes with it. But a suppressed week still writes a log row recording that it _was_ evaluated — otherwise "nobody missed twice" and "the cron never ran" are the same observation from an inbox.
+- **Read-only.** Writes nothing to `processed_units_daily` (sole writer: workbook-sync) or any bonus table. It owns three tables of its own and nothing else.
+- **Cannot double-send.** Idempotent per (site, week) via a unique index — which is also why the cron fires _daily_ for a weekly digest: Monday sends, Tue–Sun no-op, and a Monday lost to a redeploy self-heals on Tuesday rather than losing the week silently.
+
+### The number Bill needs before enabling it
+
+**At quota 75, this flags 13 of 18 Woodland processors** — measured against the real week of 2026-07-20. That is a roster, not an exception list, and it defeats the "silence means fine" design. Lowering the quota alone does not fix it: 60 → 10 flagged, 50 → 8, and even at **40** — half the stated quota — 4 still flag. The sensitivity is coming as much from the 2-miss threshold on a 5-day week as from the quota. **So it ships DISABLED**, surface at `pilot`, nothing reaching anyone; the report screen is live and accurate now so thresholds can be tried against real weeks first.
+
+### Caught by checking
+
+The recipient seed initially used `morena.chavez@` and `janette.gonzalez@`. Both wrong — the roster has `morena.gomez@` and `janette.tomas@`. A guessed address doesn't fail loudly; it silently seeds a list missing two of the three people who need the alert. The seed now also guards on `is_active` and a non-empty address, because all three recipients _also_ hold operator accounts with empty emails (PIN-only floor login).
+
 ## 2026-07-31 — the prior month stopped being readable the moment it ended (ADR-0049 Am.4, B1)
 
 Monthly rollover was automatic and total: on the 1st the sync began reading the new file and **nothing ever read the old one again**. A daily-log workbook isn't finished on the last day of its month — Kelsey closes the month in the days after it, filling a missed day, correcting a mis-keyed figure, completing the last day's close the next morning. Every one of those edits was invisible to Vision, permanently, and silently: no error, no ledger row, no alarm. The file just stopped being looked at. Shipped before the 8/1 rollover, which is the last moment it could have helped July.

@@ -1067,6 +1067,50 @@ services:
       com.barnardhq.service: 'ap-morning-digest'
     logging: *logging
 
+  processor-quota-digest:
+    # Processor production quota digest cron (ADR-0071).
+    #
+    # Same shape as board-pack-digest: one long-running Node process under
+    # `unless-stopped`, a THIN Pacific scheduler importing no TS and no
+    # @prisma/client. It sleeps to the next 06:00 America/Los_Angeles instant and
+    # POSTs the app's internal, loopback-guarded route.
+    #
+    # It fires DAILY for a WEEKLY digest on purpose. The route reports the most
+    # recent COMPLETE Mon-Sun week and is idempotent per (site, week) via a unique
+    # index, so Monday sends and Tue-Sun are no-ops on the same week. A weekly
+    # single-shot cron gets exactly one chance: a redeploy or a brief M365 outage
+    # at 06:00 Monday loses the week silently. Daily firing self-heals; the
+    # database — not the clock — is what makes a double-send impossible.
+    #
+    # Ships DISABLED (`processor_quota_config.enabled = false`) and the
+    # notification surface ships PILOT, so nothing reaches staff until Bill ramps
+    # it from the admin rollout panel.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-processor-quota
+    mem_limit: 512m
+    pids_limit: 256
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/processor-quota-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'processor-quota-digest'
+    logging: *logging
+
   board-pack-digest:
     # Board-pack digest cron host (ADR-0045 §3 addendum, planning rollup §1.8).
     #

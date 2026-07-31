@@ -111,6 +111,16 @@ const TILES = [
       'Shared documents Vision reads where they live, the confirm queue, and the spreadsheet-vs-Vision reconciliation (ADR-0067 / ADR-0069).',
     testid: 'admin-tile-doc-ingest',
   },
+  {
+    // ADR-0071. Its own entry, deliberately NOT folded into the daily production
+    // report: that report is a production figure a wide audience reads, this one
+    // names individuals and is admin-only.
+    href: '/admin/processor-quota',
+    label: 'Processor quota',
+    description:
+      'Which Woodland processors finished a week below the daily quota, with the actual counts. The detail behind the weekly exception email (ADR-0071).',
+    testid: 'admin-tile-processor-quota',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {

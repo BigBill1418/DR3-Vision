@@ -85,6 +85,10 @@ model Site {
   bonus_daily_report_config BonusDailyReportConfig?
   bonus_daily_report_logs   BonusDailyReportLog[]
 
+  // Processor production quota alert (ADR-0071)
+  processor_quota_config ProcessorQuotaConfig?
+  processor_quota_logs   ProcessorQuotaLog[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -5236,4 +5240,83 @@ enum ReimbursementEscalationReason {
   beneficiary_conflict
   no_routing_row
   ambiguous_beneficiary
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Processor production quota alert (ADR-0071).
+//
+// An EXCEPTION alert over the bonus system's existing per-processor daily
+// counts. Strictly READ-ONLY against production: `bonus_daily_entries` is
+// written by the bonus entry flow and `processed_units_daily` by workbook-sync
+// (ADR-0049/0058). Nothing in this feature writes either. The only rows it owns
+// are its own config, recipients, and send log.
+// ────────────────────────────────────────────────────────────────────────
+model ProcessorQuotaConfig {
+  id      String @id @default(uuid())
+  site_id String @unique
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  /// Born disabled; an operator turns it on (the workbook-sync D9 discipline).
+  enabled Boolean @default(false)
+
+  /// Daily minimum. Decimal(5,1) to match `bonus_daily_entries.mattress_count`
+  /// exactly — a half-shift entry of 49.9 must compare against the same scale it
+  /// was recorded on. Seeded 75; retunable without a deploy.
+  quota_units Decimal @default(75) @db.Decimal(5, 1)
+
+  /// Misses in one Monday–Sunday week before a processor is flagged. Seeded 2.
+  min_misses Int @default(2)
+
+  /// Pacific wall-clock send time. The week reported on is always the most
+  /// recent COMPLETE Mon–Sun week, so the send day is a delivery choice, not a
+  /// definition of the window.
+  send_time_pt DateTime @db.Time
+  /// ISO weekday to send on (1 = Monday … 7 = Sunday). Seeded 1.
+  send_dow     Int      @default(1)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  recipients ProcessorQuotaRecipient[]
+
+  @@map("processor_quota_config")
+}
+
+model ProcessorQuotaRecipient {
+  id               String               @id @default(uuid())
+  config_id        String
+  config           ProcessorQuotaConfig @relation(fields: [config_id], references: [id], onDelete: Cascade)
+  email            String
+  added_by_user_id String?
+  added_at         DateTime             @default(now())
+
+  @@unique([config_id, email])
+  @@index([config_id])
+  @@map("processor_quota_recipients")
+}
+
+/// One row per (site, week) the digest ACTUALLY decided on — including the weeks
+/// it deliberately stayed silent. `suppressed = true` with `flagged_count = 0` is
+/// the record that the week was evaluated and nobody missed twice; without it,
+/// "no email arrived" and "the cron never ran" are indistinguishable, which is
+/// the exact failure shape this codebase keeps having to amend away.
+model ProcessorQuotaLog {
+  id         String   @id @default(uuid())
+  site_id    String
+  site       Site     @relation(fields: [site_id], references: [id])
+  week_start DateTime @db.Date
+  week_end   DateTime @db.Date
+
+  evaluated_at    DateTime @default(now())
+  processors_seen Int      @default(0)
+  flagged_count   Int      @default(0)
+  /// True when the digest was intentionally NOT sent because nobody flagged.
+  suppressed      Boolean  @default(false)
+  recipient_count Int      @default(0)
+  sent_at         DateTime?
+  error_text      String?
+
+  @@unique([site_id, week_start])
+  @@index([site_id, week_start])
+  @@map("processor_quota_logs")
 }
