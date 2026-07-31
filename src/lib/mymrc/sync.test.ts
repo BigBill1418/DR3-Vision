@@ -257,6 +257,58 @@ describe('syncFeed — happy path', () => {
   });
 });
 
+describe('two haul views, one mirror — "not in this list" is not "gone" (2026-07-31)', () => {
+  // `docking_appointments_rc` lists hauls while SCHEDULED; `completed_hauls`
+  // lists them once DELIVERED. Neither view is the whole set. The active view is
+  // small (~73 rows) so it COMPLETES every hour — and unscoped, that one
+  // completing list would stamp all ~7,190 delivered hauls as disappeared on
+  // every single run.
+  it('the ACTIVE haul view can never declare a DELIVERED haul gone', async () => {
+    const { prisma, model } = fakePrisma({ needDetail: [] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => list(['scheduled-1'], true)),
+    });
+    const { pager } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'hauls',
+      pager,
+      now: NOW,
+    });
+
+    expect(model.updateMany).toHaveBeenCalledTimes(1);
+    const where = model.updateMany.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+    // Scoped AWAY from Delivered — the history view owns those.
+    expect(where).toMatchObject({ status: { notIn: ['Delivered'] } });
+  });
+
+  it('the HISTORY haul view can only declare DELIVERED hauls gone', async () => {
+    const { prisma, model } = fakePrisma({ needDetail: [] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => list(['delivered-1'], true)),
+    });
+    const { pager } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'haulsCompleted',
+      pager,
+      now: NOW,
+    });
+
+    expect(model.updateMany).toHaveBeenCalledTimes(1);
+    const where = model.updateMany.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+    expect(where).toMatchObject({ status: { in: ['Delivered'] } });
+  });
+});
+
 describe('syncFeed — disappeared-detection is gated on list completeness (billing safety)', () => {
   it('runs markDisappeared when the list is COMPLETE (non-windowed)', async () => {
     const { prisma, model } = fakePrisma({ needDetail: [] });

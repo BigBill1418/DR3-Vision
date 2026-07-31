@@ -64,6 +64,11 @@ describe('the freshness contract', () => {
   it('measures each feed on its own BUSINESS date, never a column we write', () => {
     expect(FRESHNESS_COLUMN).toEqual({
       hauls: 'docking_appointment_date',
+      // ADR-0070 follow-up 2026-07-31: `haulsCompleted` reads the same mirror
+      // through the HISTORY list view, so it measures the same business date.
+      // Kept exact rather than loosened — a feed added without a business date
+      // to measure must keep breaking this.
+      haulsCompleted: 'docking_appointment_date',
       processed: 'entry_date',
       outbound: 'entry_date',
     });
@@ -215,5 +220,44 @@ describe('the masking defect this guard shipped with (2026-07-30 → fixed 07-31
     expect(assessed.stale).toBe(true);
     // Ten days, comfortably past the 96h threshold — it would have fired on day 5.
     expect(assessed.ageMs! / 86_400_000).toBeGreaterThan(9);
+  });
+});
+
+describe('the hauls guard must QUERY delivered hauls, not just reason about them', () => {
+  // The pure-arithmetic tests above prove that a stale DELIVERED date would be
+  // flagged. They do NOT prove the code asks the database for delivered hauls —
+  // and on 2026-07-31 that distinction was the whole bug: the arithmetic was
+  // always right, the QUERY was measuring every status. Reverting the filter
+  // must break a test, or the fix can be silently undone.
+  function fakePrisma(captured: Record<string, unknown>[]) {
+    return {
+      mymrcHaulsMirror: {
+        aggregate: async (args: Record<string, unknown>) => {
+          captured.push(args);
+          return { _max: { docking_appointment_date: new Date('2026-07-21T00:00:00.000Z') } };
+        },
+      },
+    } as never;
+  }
+
+  it('filters the aggregate on status=Delivered', async () => {
+    const captured: Record<string, unknown>[] = [];
+    await measureFeedFreshness({
+      prisma: fakePrisma(captured),
+      feed: 'hauls',
+      now: new Date('2026-07-31T18:00:00.000Z'),
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ where: { status: 'Delivered' } });
+  });
+
+  it('and the delivered date it reads back IS reported stale', async () => {
+    const captured: Record<string, unknown>[] = [];
+    const res = await measureFeedFreshness({
+      prisma: fakePrisma(captured),
+      feed: 'hauls',
+      now: new Date('2026-07-31T18:00:00.000Z'),
+    });
+    expect(res.stale).toBe(true);
   });
 });

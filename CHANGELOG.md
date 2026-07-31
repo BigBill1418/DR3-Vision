@@ -3,6 +3,30 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the hourly sync never watched the view that says a haul was delivered
+
+The root cause behind the frozen inbound feed. The hourly sync polled three list views — `docking_appointments_rc`, `processed_active`, `outbound_active`. A haul sits in the _docking appointments_ view while it is **scheduled**, and **leaves it** when MRC marks it Delivered, appearing instead in `completed_hauls`. Nothing polled `completed_hauls`. So the mirror could never observe the transition: `Confirmed` rows refreshed hourly and looked healthy while the delivered half sat frozen since 2026-07-22, and `inbound_loads` is bridged from **delivered** hauls.
+
+### Added
+
+- A **`haulsCompleted`** feed reading `completed_hauls` — same object, same mirror, same page, a different list view. It is the only feed that can see a haul become Delivered.
+
+### The thing that made this more than an additive change
+
+**`markDisappeared` swept the whole haul mirror**, and only runs when a list completes. The active view is ~73 rows, so it _does_ complete — meaning every hourly run already stamped all ~7,190 delivered hauls as disappeared. Pre-existing (ADR-0070), and harmless only because `inbound-bridge.ts` deliberately ignores `disappeared_at`.
+
+With two views over one mirror that stops being harmless: each feed would take turns declaring the other's records vanished. **"Not in this list" no longer means "gone."** Each feed is now scoped to the statuses its own view can contain — the active view can never declare a Delivered haul gone, and the history view can only speak about Delivered ones. A NULL status is excluded by `in`/`notIn` semantics, which is the money-safe direction: a haul we have not detail-fetched is never declared gone on the strength of a list it may not belong to.
+
+### Corrected
+
+The freshness docstring still carried the reasoning that caused yesterday's masking — "a healthy hauls feed reports a negative age and can never be stale… the appointment recedes into the past on its own." That is wrong: the appointment only recedes if the _whole_ feed stops, and what actually happened is that the delivered half froze while the scheduled half kept booking into the future. A false explanation left standing next to fixed code is the same defect as a false assertion in the UI.
+
+### Verification
+
+Guards falsified before being kept: unscoped sweep (the ~7,190-row over-mark) ✅, both feeds sharing the active scope ✅, freshness measuring all statuses again ✅.
+
+That third one **initially failed to fire** — the regression test only exercised the pure arithmetic, so the actual `where: { status: 'Delivered' }` filter was untested and could have been silently reverted. A query-level test was added; the break then goes red. Full suite 4,128 passing.
+
 ## 2026-07-31 — the mirror-freshness guard could not see the outage it was written for
 
 Shipped 2026-07-30 to catch a frozen MyMRC feed. It measured `max(docking_appointment_date)` across the **whole** haul mirror — and a haul is `Confirmed` when it is _scheduled_, with the appointment dated into the future. Measured live mid-outage:

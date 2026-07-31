@@ -140,10 +140,18 @@ function toJson(v: unknown): Prisma.InputJsonValue {
 // `idsNeedingDetail` are therefore global too — a per-site filter would mis-scope
 // against the global id set.
 
-function haulsAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+/**
+ * Both haul feeds share `mymrc_hauls_mirror`. `feed` selects which VIEW this
+ * adapter speaks for, which matters only for disappeared-detection.
+ */
+function haulsAdapter(
+  prisma: PrismaClient,
+  resolveSiteId: SiteIdResolver,
+  feed: 'hauls' | 'haulsCompleted' = 'hauls',
+): FeedAdapter {
   const model = prisma.mymrcHaulsMirror;
   return {
-    feed: 'hauls',
+    feed,
     async upsertListed(ids, seenAt) {
       for (const id of ids) {
         await model.upsert({
@@ -156,8 +164,28 @@ function haulsAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): Feed
       return ids.length;
     },
     async markDisappeared(keepIds, at) {
+      // ── TWO VIEWS, ONE MIRROR: "not in this list" ≠ "gone" ─────────────────
+      // `docking_appointments_rc` lists hauls while they are SCHEDULED;
+      // `completed_hauls` lists them once DELIVERED. Neither view is the whole
+      // set, so an unscoped sweep lets each feed declare the other's records
+      // vanished — and the active view (≈73 rows) completes every hour, so it
+      // would stamp all ~7,190 delivered hauls on every run.
+      //
+      // That over-marking is PRE-EXISTING (ADR-0070) and harmless today only
+      // because `inbound-bridge.ts` deliberately ignores `disappeared_at` — its
+      // header says so. It stops being harmless the moment a second feed reads
+      // the same mirror, so each feed is now scoped to the statuses its own view
+      // can actually contain.
+      //
+      // A NULL status is excluded by `notIn`/`in` semantics, which is the
+      // money-safe direction: a haul we have not detail-fetched yet is never
+      // declared gone on the strength of a list it may not belong to.
+      const scope =
+        feed === 'haulsCompleted'
+          ? { status: { in: ['Delivered'] } }
+          : { status: { notIn: ['Delivered'] } };
       const r = await model.updateMany({
-        where: { disappeared_at: null, id: { notIn: [...keepIds] } },
+        where: { disappeared_at: null, id: { notIn: [...keepIds] }, ...scope },
         data: { disappeared_at: at },
       });
       return r.count;
@@ -326,7 +354,9 @@ function adapterFor(
   prisma: PrismaClient,
   resolveSiteId: SiteIdResolver,
 ): FeedAdapter {
-  if (feed === 'hauls') return haulsAdapter(prisma, resolveSiteId);
+  if (feed === 'hauls' || feed === 'haulsCompleted') {
+    return haulsAdapter(prisma, resolveSiteId, feed);
+  }
   if (feed === 'processed') return processedAdapter(prisma, resolveSiteId);
   return outboundAdapter(prisma, resolveSiteId);
 }

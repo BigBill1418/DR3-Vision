@@ -108,7 +108,10 @@ export const DOCK_OPTIONAL_FIELDS: readonly string[] = [
 
 /** The mapper's field set for a steady-state feed (hauls → HAUL, processed/outbound → MATERIALS). */
 export function optionalFieldsForFeed(feed: FeedName): readonly string[] {
-  return feed === 'hauls' ? HAUL_OPTIONAL_FIELDS : MATERIALS_OPTIONAL_FIELDS;
+  // Both haul feeds read Haul_Request__c, so they share the haul field set.
+  return feed === 'hauls' || feed === 'haulsCompleted'
+    ? HAUL_OPTIONAL_FIELDS
+    : MATERIALS_OPTIONAL_FIELDS;
 }
 
 // ── Pure codec (fixture-tested; no Playwright / no DB) ────────────────────────
@@ -190,10 +193,17 @@ export interface BatchParseResult {
 }
 
 /** A value shaped like a Salesforce RecordRepresentation (has apiName/id/fields). */
-function looksLikeRecord(o: unknown): o is { apiName: string; id: string; fields: Record<string, SfField> } {
+function looksLikeRecord(
+  o: unknown,
+): o is { apiName: string; id: string; fields: Record<string, SfField> } {
   if (!o || typeof o !== 'object') return false;
   const r = o as { apiName?: unknown; id?: unknown; fields?: unknown };
-  return typeof r.apiName === 'string' && typeof r.id === 'string' && !!r.fields && typeof r.fields === 'object';
+  return (
+    typeof r.apiName === 'string' &&
+    typeof r.id === 'string' &&
+    !!r.fields &&
+    typeof r.fields === 'object'
+  );
 }
 
 /** Extract a human message from an Aura action's error payload. */
@@ -369,7 +379,11 @@ export function createRecordFieldsClient(
     let selfHealed = false;
     for (let attempt = 1; ; attempt++) {
       const fw = await ensureEnvelope();
-      const { formFields, correlation } = buildGetRecordWithFieldsFormFields(fw, recordIds, optionalFields);
+      const { formFields, correlation } = buildGetRecordWithFieldsFormFields(
+        fw,
+        recordIds,
+        optionalFields,
+      );
 
       let resp: { status: number; body: string };
       try {
@@ -380,7 +394,10 @@ export function createRecordFieldsClient(
             `record-fields: POST failed after ${attempt} attempt(s): ${describe(err)}`,
           );
         }
-        log('warn', `record-fields: POST threw (attempt ${attempt}/${maxAttempts}), backing off: ${describe(err)}`);
+        log(
+          'warn',
+          `record-fields: POST threw (attempt ${attempt}/${maxAttempts}), backing off: ${describe(err)}`,
+        );
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -391,7 +408,10 @@ export function createRecordFieldsClient(
             `record-fields: HTTP ${resp.status} after ${attempt} attempt(s) (batch of ${recordIds.length})`,
           );
         }
-        log('warn', `record-fields: HTTP ${resp.status} (attempt ${attempt}/${maxAttempts}), backing off`);
+        log(
+          'warn',
+          `record-fields: HTTP ${resp.status} (attempt ${attempt}/${maxAttempts}), backing off`,
+        );
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -411,7 +431,10 @@ export function createRecordFieldsClient(
             );
           }
           selfHealed = true;
-          log('warn', 'record-fields: logged-out envelope — self-healing (rebuild + re-login + re-capture)');
+          log(
+            'warn',
+            'record-fields: logged-out envelope — self-healing (rebuild + re-login + re-capture)',
+          );
           await session.recover(); // throws AuthFailedError if unrecoverable
           envelope = null; // force a fresh envelope capture for the healed session
           continue;
@@ -422,7 +445,10 @@ export function createRecordFieldsClient(
               `(batch of ${recordIds.length}) — not logged out; likely an Aura EXCEPTION`,
           );
         }
-        log('warn', `record-fields: empty/EXCEPTION response (attempt ${attempt}/${maxAttempts}), backing off`);
+        log(
+          'warn',
+          `record-fields: empty/EXCEPTION response (attempt ${attempt}/${maxAttempts}), backing off`,
+        );
         await sleep(backoffMs(attempt));
         continue;
       }
@@ -448,7 +474,10 @@ const AURA_ENDPOINT = `${PORTAL_ORIGIN}/s/sfsites/aura`;
  * manual cookie handling. Self-heal reuses `openAdminSession`'s bounded, clean-
  * rebuild `ensureAuthenticated` (throws AuthFailedError when unrecoverable).
  */
-export function playwrightRecordFieldsSession(admin: AdminSession, log: Logger = noopLog): RecordFieldsSession {
+export function playwrightRecordFieldsSession(
+  admin: AdminSession,
+  log: Logger = noopLog,
+): RecordFieldsSession {
   const capture = playwrightBackfillSession(admin, log);
   return {
     async captureEnvelope() {

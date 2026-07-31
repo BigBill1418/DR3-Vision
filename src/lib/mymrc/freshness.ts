@@ -51,13 +51,26 @@ export const FRESHNESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
  * refresh when we re-read a record we already hold, so they stay green while the
  * mirror rots — that is precisely how this went unnoticed for 9 days).
  *
- * `hauls` is measured on the docking appointment, which is normally FUTURE-dated;
- * a healthy hauls feed therefore reports a negative age and can never be stale.
- * When the feed stops, the newest appointment recedes into the past and crosses
- * the threshold on its own.
+ * CORRECTED 2026-07-31. This block used to read: "`hauls` is measured on the
+ * docking appointment, which is normally FUTURE-dated; a healthy hauls feed
+ * therefore reports a negative age and can never be stale. When the feed stops,
+ * the newest appointment recedes into the past and crosses the threshold on its
+ * own."
+ *
+ * **That reasoning was wrong, and it is why the guard could not see the outage it
+ * was written for.** The appointment only recedes if the whole feed stops. What
+ * actually happened is that the DELIVERED half froze on 2026-07-22 while the
+ * SCHEDULED half kept refreshing — and scheduled appointments are dated into the
+ * future forever. Measured live mid-outage: max over all hauls = 2026-08-10 (age
+ * -9 days, "healthy"); max over DELIVERED = 2026-07-21 (age +10 days, stale).
+ *
+ * The hauls feeds are therefore measured on DELIVERED hauls only. That is also
+ * the status that matters: `inbound_loads` is bridged from delivered hauls, so a
+ * frozen delivered feed is what drives the floor negative.
  */
 export const FRESHNESS_COLUMN: Readonly<Record<FeedName, string>> = {
   hauls: 'docking_appointment_date',
+  haulsCompleted: 'docking_appointment_date',
   processed: 'entry_date',
   outbound: 'entry_date',
 };

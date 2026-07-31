@@ -54,10 +54,29 @@ export interface ScrapedHaul {
 // ADR-0038 — MyMRC JSON transport + mirror types
 // ════════════════════════════════════════════════════════════════════════
 
-/** The three ingestion feeds. Values match `mymrc_sync_runs.feed`. */
-export type FeedName = 'hauls' | 'processed' | 'outbound';
+/**
+ * The ingestion feeds. Values match `mymrc_sync_runs.feed` (a plain String
+ * column, so adding one needs no migration).
+ *
+ * `hauls` and `haulsCompleted` are TWO VIEWS OVER ONE MIRROR
+ * (`mymrc_hauls_mirror`), and that is the whole point of the second one:
+ * `docking_appointments_rc` lists hauls while they are SCHEDULED, and a haul
+ * LEAVES that view when MRC marks it Delivered. Without a second feed reading
+ * `completed_hauls`, the mirror never observes the transition — which is exactly
+ * how the delivered half froze for nine days (2026-07-22 → 07-31) while the
+ * active half refreshed hourly and everything looked healthy.
+ *
+ * Two views over one mirror has a consequence that must never be forgotten:
+ * "not in this list" NO LONGER MEANS "gone". See `markDisappeared` in `sync.ts`.
+ */
+export type FeedName = 'hauls' | 'haulsCompleted' | 'processed' | 'outbound';
 
-export const FEED_NAMES: readonly FeedName[] = ['hauls', 'processed', 'outbound'] as const;
+export const FEED_NAMES: readonly FeedName[] = [
+  'hauls',
+  'haulsCompleted',
+  'processed',
+  'outbound',
+] as const;
 
 /**
  * One field of a Salesforce UI-API RecordRepresentation. `value` is the raw

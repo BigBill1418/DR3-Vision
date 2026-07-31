@@ -84,6 +84,14 @@ const FEED_BINDINGS: Readonly<Record<FeedName, FeedBinding>> = {
     slug: 'docking_appointments_rc',
     listPagePath: '/s/hauls',
   },
+  // The HISTORY view. Same object, same mirror, same page path — a different
+  // list view. A haul leaves `docking_appointments_rc` when it is delivered and
+  // appears here, so this is the only feed that can observe the transition.
+  haulsCompleted: {
+    objectApiName: 'Haul_Request__c',
+    slug: 'completed_hauls',
+    listPagePath: '/s/hauls',
+  },
   processed: {
     objectApiName: 'Materials__c',
     slug: 'processed_active',
