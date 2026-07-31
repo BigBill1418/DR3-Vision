@@ -251,6 +251,17 @@ export const docIngestMessages = {
     referenceOnlyNote: 'Reference data. Not used for payroll, billing, bonus or inventory.',
   },
 
+  // ── ADR-0069 Am.1 absorbed trailer rows ────────────────────────────────────
+  trailers: {
+    title: 'Trailer list (absorbed)',
+    reparse: 'Re-read this file',
+    reparseHint:
+      'Re-derives the stored column headers from the archived copy. It does NOT create a revision and does not touch change detection — the file itself is unchanged.',
+    reparsing: 'Re-reading…',
+    reparsed: 'Re-read. Column headers updated.',
+    reparseFailed: 'Could not re-read this file',
+  },
+
   errors: {
     keyMissing:
       'The token encryption key is not mounted on this host. Provision ~/.dr3-vision-secrets/doc-ingest.env before connecting.',

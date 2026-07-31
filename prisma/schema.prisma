@@ -93,6 +93,9 @@ model Site {
   inventory_anchor_config InventoryAnchorConfig?
   inventory_count_holds   InventoryCountHold[]
 
+  // Absorbed trailer-list rows (ADR-0069 Am.1)
+  doc_trailer_rows DocTrailerRow[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -5400,4 +5403,65 @@ enum InventoryHoldStatus {
   pending
   approved
   discarded
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0069 Amendment 1 — ABSORBED trailer-list rows.
+//
+// The first document kind whose parsed values become typed, queryable Vision
+// data. Real columns, not a JSON blob.
+//
+// SINGLE-WRITER RULE: this table is written ONLY by the doc-ingest absorption
+// bridge. It is reference data — it never overwrites an operational table, and
+// no operational read depends on it. `site_inventory_snapshots`,
+// `processed_units_daily` and the loads tables all keep their existing sole
+// writers.
+//
+// Rows are keyed to the VERSION they came from rather than mutated in place, so
+// a re-ingest appends a new generation and the previous one stays readable. The
+// surface reads the newest absorbed version per source.
+// ────────────────────────────────────────────────────────────────────────
+model DocTrailerRow {
+  id                    String  @id @default(uuid())
+  doc_source_id         String
+  doc_source_version_id String
+  /// From the source. NULL is UNCLASSIFIED, never a guess (hard rule #2) — and
+  /// absorption refuses a NULL-site source before reaching here.
+  site_id               String?
+  site                  Site?   @relation(fields: [site_id], references: [id])
+
+  sheet_name String
+  /// 1-based row number in the sheet — provenance straight back to the cell.
+  row_index  Int
+
+  entry_date   DateTime? @db.Date
+  trailer_no   String
+  /// VERBATIM. The live file mixes "pocket coil"/"Pocketcoil" and uses the column
+  /// for origins ("Recology SF") as often as materials. Normalising here would
+  /// invent a taxonomy nobody agreed to.
+  material_raw String?
+
+  /// NULL when the sheet recorded no weight. NEVER 0 for a blank or a "-":
+  /// 19 of the live file's 96 rows have no weight, and zeroing them would invent
+  /// nineteen trailers weighing nothing.
+  weight_lbs Decimal? @db.Decimal(10, 1)
+  /// What the weight cell actually said, so "-" survives and is recoverable.
+  weight_raw String?
+
+  driver             String?
+  /// The SHEET's own formula result, stored as-is and never recomputed —
+  /// recomputing would show a number the spreadsheet does not.
+  days_in_yard_sheet Int?
+
+  exit_date DateTime? @db.Date
+  /// A non-date exit cell kept verbatim rather than dropped.
+  exit_raw  String?
+  notes     String?
+
+  absorbed_at DateTime @default(now())
+
+  @@unique([doc_source_version_id, sheet_name, row_index])
+  @@index([doc_source_id, absorbed_at])
+  @@index([site_id, entry_date])
+  @@map("doc_trailer_rows")
 }

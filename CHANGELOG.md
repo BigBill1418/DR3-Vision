@@ -3,6 +3,37 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the first document kind actually absorbs, and a parser fix can reach old documents (ADR-0069 Am.1)
+
+Two gaps closed: Fix 3 of the absorption audit (left specified, not shipped, because the recommended target turned out to be the wrong file), and the fact that Am.8's header fix could not reach any document already in the system.
+
+### Added
+
+- **Trailer-list absorption, end to end.** A confirmed trailer workbook's rows become real columns in `doc_trailer_rows` — entry date, trailer #, material, weight, driver, days in yard, exit date, notes — visible at **`/admin/doc-ingest/trailers`**. This is the audit's core finding closed: parsed values now reach a queryable Vision table.
+- **A re-parse action.** `parse_summary` is computed at parse time, and a parse only happens on a NEW revision — so the three documents waiting since 07‑29 would have kept their title-row headers until somebody happened to edit a file. A code fix that reaches the data only by luck isn't a fix. Admin-only, per source.
+
+### Verified against the real file
+
+96 rows, 28 blank spacers skipped, 723,051 lbs total, 19 rows with no weight, 14 with no entry date — every figure reconciling with an independent profile taken before the extractor existed (77 numeric + 11 blank + 6 dash + 2 non-numeric = 96).
+
+### Guarded
+
+- **A blank or `"-"` weight is NULL, never 0.** Nineteen of ninety-six rows have no weight; zeroing them would invent nineteen trailers weighing nothing and drag every average down. The raw cell text is kept so `-` stays recoverable.
+- **Columns resolved by MEANING, never position.** The live sheet has its header on row 2, data starting in column B, a header with a trailing space and another with an embedded newline. Ordinal mapping survives none of that, and a silently-shifted column is a wrong number rather than an error.
+- **Material is stored VERBATIM.** The file mixes `pocket coil`/`Pocketcoil` and uses the column for origins (`Recology SF`) as often as materials. Normalising would invent a taxonomy nobody agreed to; mapping it to program/non-program would invent a billing fact.
+- **`Days in yard` is the sheet's own formula result, never recomputed** — showing a number the spreadsheet doesn't show is how two systems start disagreeing about a figure neither owns.
+- **Zero rows is never a successful absorption of nothing** — each sheet reports why it declined.
+- **The re-parse action creates no revision and touches no `ctag`.** The content didn't change, only our reading of it; minting a revision would claim Kelsey edited a file she didn't touch and drag the whole delta machinery through a change that never happened. It also leaves STAGED revisions alone, and a parse failure never overwrites a good summary with nothing.
+- **Single-writer rule intact.** `doc_trailer_rows` is reference data written only by the absorption bridge; nothing operational reads it, and `processed_units_daily` keeps its sole writer.
+
+### The tripwire fired, as designed
+
+`expect([...ABSORBABLE_KINDS]).toEqual(['daily_log_workbook'])` — written as "widening this set is a deliberate act" — broke on this change. It was updated to the new exact set rather than loosened to `toContain`: adding a kind without its extractor and its typed table must keep breaking a test.
+
+### Still open
+
+TEREX (next, and needs preview-then-confirm because it carries costs) and the commodity tracker (a compliance record of who audited what — worth a decision from Bill on whether it's worth absorbing at all). And no comparison against Vision's own numbers yet: the natural one, material weight against outbound records, needs Rick or Kelsey to confirm the counterpart figures.
+
 ## 2026-07-31 — the header guess was wrong on every real document (ADR-0067 Amendment 8)
 
 `parse.ts` took the first non-empty row as the header, with a comment claiming that was "correct for every workbook this pipeline has seen". The 2026-07-30 audit falsified it 3 of 3. Not cosmetic: the classifier's structure rules match on column names (so classification was **filename-only**), and the aggregate-variance guardrail's monitored-column regex can't match a title string — so a "clean guardrail verdict" meant _there was nothing to compare_, not _the change was safe_.

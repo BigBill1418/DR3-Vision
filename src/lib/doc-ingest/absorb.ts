@@ -74,6 +74,11 @@ import {
 } from '@/lib/workbook-sync/daily-adapter';
 import { raiseAnomaly, resolveAnomaly } from './anomalies';
 import { sourceKey } from './discovery';
+import {
+  describeSheetFailures,
+  extractTrailersFromWorkbook,
+  writeTrailerRows,
+} from './trailer-absorb';
 
 /** Audit actor for absorption writes. Mirrors the ingest pipeline's label. */
 export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
@@ -87,7 +92,7 @@ export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
  * kind here means adding an extractor below and a metric mapping — not loosening a
  * condition.
  */
-export const ABSORBABLE_KINDS = new Set<string>(['daily_log_workbook']);
+export const ABSORBABLE_KINDS = new Set<string>(['daily_log_workbook', 'trailer_list']);
 
 export type AbsorbOutcome =
   /** Reference rows were written. */
@@ -265,6 +270,15 @@ export async function absorbVersion(
       },
       now,
     );
+  }
+
+  // ── Dispatch by kind ──────────────────────────────────────────────────────
+  // ADR-0069 Am.1. Each absorbable kind has its OWN extractor and its OWN typed
+  // table; there is deliberately no shared "generic row" path. A generic
+  // extractor is how a trailer list ends up in a daily-production table with a
+  // plausible-looking shape.
+  if (source.doc_class === 'trailer_list') {
+    return absorbTrailerList(prisma, source, version, bytes, siteId, subject, now);
   }
 
   // ── Extract ───────────────────────────────────────────────────────────────
@@ -552,4 +566,147 @@ async function finishTerminal(
 
 function describe(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * ADR-0069 Am.1 — absorb a confirmed trailer list into `doc_trailer_rows`.
+ *
+ * Reference data, single-writer rule intact: this writes ONE table that nothing
+ * operational reads. It does not touch `processed_units_daily` (workbook-sync),
+ * `site_inventory_snapshots`, or any loads table.
+ *
+ * Money-touching absorption stays preview-then-confirm — this is not
+ * money-touching. A trailer list carries weights and dates, not amounts, so it
+ * lands directly; the moment a kind with costs is added (TEREX carries
+ * `Actual Repair Cost` and `Amount Credited`), it takes the staged path instead.
+ */
+async function absorbTrailerList(
+  prisma: PrismaClient,
+  source: DocSource,
+  version: DocSourceVersion,
+  bytes: Uint8Array,
+  siteId: string,
+  subject: string,
+  now: Date,
+): Promise<AbsorbResult> {
+  let extracted: Awaited<ReturnType<typeof extractTrailersFromWorkbook>>;
+  try {
+    extracted = await extractTrailersFromWorkbook(bytes);
+  } catch (e) {
+    const reason =
+      `"${source.display_name}" is registered as a trailer_list but could not be read as a ` +
+      `workbook: ${describe(e)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'unreadable',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  // ── THE LOUD ZERO ─────────────────────────────────────────────────────────
+  // Zero rows is never "the document was empty". Each sheet says why it declined,
+  // so the operator gets the reason rather than a silent nothing.
+  if (extracted.totalRows === 0) {
+    const reason =
+      `"${source.display_name}" is confirmed as a trailer_list, was read successfully, and produced ` +
+      `ZERO trailer rows. This is NOT evidence the document is empty. ` +
+      `${describeSheetFailures(extracted.perSheet)} ` +
+      `Sheets present: ${extracted.sheetNames.join(', ') || '(none)'}.`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id, sheets: extracted.sheetNames },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'empty',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  const written = await prisma.$transaction((tx) =>
+    writeTrailerRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    }),
+  );
+
+  // Coverage = distinct entry dates the absorbed rows actually state. Rows with
+  // no entry date (14 of the live file's 96) contribute nothing rather than
+  // being counted against an invented day.
+  const dates = new Set<string>();
+  for (const sheet of extracted.perSheet) {
+    for (const r of sheet.rows) if (r.entryDate !== null) dates.add(r.entryDate);
+  }
+
+  await writeAudit({
+    actor_label: ABSORB_ACTOR,
+    action: 'insert',
+    table_name: 'doc_trailer_rows',
+    row_id: version.id,
+    after: {
+      doc_source_id: source.id,
+      doc_class: 'trailer_list',
+      rows_written: written,
+      dates_covered: dates.size,
+      sheets: extracted.sheetNames,
+      // Sheets that declined are recorded even on a SUCCESSFUL absorption — a
+      // partially-read document must not look identical to a fully-read one.
+      sheet_notes: describeSheetFailures(extracted.perSheet),
+    },
+  });
+
+  await resolveAnomaly(
+    prisma,
+    'absorption_empty',
+    subject,
+    `Absorbed ${written} trailer row(s) from revision ${version.id}.`,
+    now,
+  ).catch(() => undefined);
+
+  return finishTerminal(
+    prisma,
+    version,
+    {
+      versionId: version.id,
+      outcome: 'absorbed',
+      rowsWritten: written,
+      datesCovered: dates.size,
+      reason: null,
+      anomaliesRaised: 0,
+    },
+    now,
+  );
 }

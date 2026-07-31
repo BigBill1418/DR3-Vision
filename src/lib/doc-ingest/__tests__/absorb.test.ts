@@ -234,8 +234,17 @@ describe('absorbVersion (ADR-0069)', () => {
     expect(db._stores.referenceRows).toHaveLength(0);
   });
 
-  it('only daily_log_workbook is absorbable — widening this set is a deliberate act', () => {
-    expect([...ABSORBABLE_KINDS]).toEqual(['daily_log_workbook']);
+  it('the absorbable set is exactly the kinds with a real extractor — widening it is a deliberate act', () => {
+    // WIDENED 2026-07-31 (ADR-0069 Am.1) from ['daily_log_workbook'] to add
+    // `trailer_list`. This assertion is a tripwire, and it fired on that change
+    // exactly as intended. It stays exact rather than becoming a `toContain`:
+    // the point is that adding a kind here without adding its extractor and its
+    // typed table has to break a test.
+    //
+    // Each kind has its OWN extractor and its OWN table. There is deliberately no
+    // shared "generic row" path — a generic extractor is how a trailer list ends
+    // up in a daily-production table with a plausible-looking shape.
+    expect([...ABSORBABLE_KINDS]).toEqual(['daily_log_workbook', 'trailer_list']);
   });
 });
 
