@@ -183,3 +183,259 @@ pre-existing upsert semantics, not new behaviour, and it is deliberately NOT
 changed here — narrowing workbook-wins to the fields the workbook actually
 carries is an operator decision, not a parser one. It should be settled before
 `is_syncing` is flipped.
+
+---
+
+## Amendment 2 (2026-07-30) — pre-activation assessment; five gates before `is_syncing`
+
+**Status:** Proposed. Records findings and a recommendation; changes no code and does not
+flip `is_syncing`. Full evidence, with `[M]`/`[D]`/`[I]` labels and file:line, in
+[`docs/2026-07-30-workbook-sync-versatility-and-reliability-assessment.md`](../2026-07-30-workbook-sync-versatility-and-reliability-assessment.md).
+
+### Correction to the record
+
+Amendment 1 and the surrounding notes read as though no real workbook had been seen.
+Production says otherwise: `workbook_imports` holds `JUNE 2026 DAILY LOG WOODLAND.xlsm`
+(47 sheets, 432 rows, `template_generation = woodland_daily`, parsed 2026-07-20 PT), with
+23 `daily_close` staging rows from the tab `June26 Processed`. Measured 2026-07-30, those
+23 days agree with `processed_units_daily` (MyMRC-sourced) at **delta 0.0 on every day**,
+and their `stripped_program` sum (17126) equals the workbook's own Processed SUM-row D
+total. The unit-test fixtures remain synthetic; the parser does not.
+
+### Gates before `is_syncing` is flipped
+
+- **A1** Re-parse the archived June bytes with post-Am.1 code and confirm 23 rows with
+  `failure === null`. The `snp ?? 0` removal means a _blank_ column E now skips the day; the
+  staged rows cannot distinguish blank from zero, so it is currently unknown whether today's
+  code refuses Kelsey's real file in full.
+- **A2** Cross-check the parser's derived month prefix against the file name's month and
+  refuse on mismatch. `deriveMonthPrefix` returns on the **first** dated inbound row and
+  nothing compares it to the file name, so one stale copy-forward row dates a whole month
+  into the previous month — overwriting closed, billed figures under workbook-wins, with the
+  run recorded `ok`.
+- **A3** Header-validate the Processed sheet's `D`/`E`/`J` columns (the DAY inbound grid is
+  already header-resolved; the billed figure is not). A single inserted column yields wrong
+  figures with no refusal.
+- **A4** Alarm the silent paths: `not_found` pages nobody, an unreadable rollout state is
+  recorded as `ok`/`cutover_noop`, and nothing reads `workbook_sync_runs` except an admin
+  page. Add a `last_success_at`, a `skipped` status, and one ADR-0037-graded staleness alert.
+- **A5** Settle the D12 open item below — see the recommendation.
+
+### D13 (proposed) — workbook-wins is narrowed per field
+
+`null` from the adapter means "the workbook did not state one", never "the workbook says
+none":
+
+| Field                                      | Rule                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `stripped_program`, `stripped_non_program` | Workbook wins unconditionally (unchanged)                                           |
+| `material_ticket_number`, `saved_units`    | Workbook wins **when it states a value**; a null leaves the stored value alone      |
+| `employees_count`, `processors_count`      | The sync never touches them — absent from the update payload and from `disagrees()` |
+
+Rationale beyond Am.1's: the headcounts are actively captured by the manager and admin close
+screens and consumed by the COR prefill, and because `disagrees()` fires on a headcount
+difference alone, an unnarrowed sync converts _headcount data entry_ into a permanent
+ownership transfer (rewriting `source` to `import` locks the ADR-0058 MyMRC bridge out of
+that row for good). Accepted cost: a row becomes mixed-provenance — production figures from
+the workbook, headcount from Vision — while `source` remains a single scalar reading
+`import`. `source` therefore describes the production figures, not the row; the per-field
+audit trail remains the record of what changed.
+
+### Cutover criterion
+
+ADR-0069 §4's "matching the paper record for a full period" is undefined and the surface
+implements `disagree === 0` over an operator-typed window with nothing persisted. More
+seriously, `/admin/doc-ingest/reconciliation` sources its reference side from the **same**
+`parseDailyRows` that will write the Vision side once sync is live — so after activation it
+compares the extractor to itself. The durable independent witness is the MyMRC mirror
+(`c2-processed`), and it has produced nothing since 2026-07-20. **Fixing the MyMRC scraper is
+on the critical path for cutover confidence.** The proposed five-part acceptance statement is
+in §4.4 of the assessment note.
+
+---
+
+## Amendment 3 (2026-07-31) — the five activation gates are closed
+
+**Status:** Accepted. Closes A1–A5 from Amendment 2. Does **NOT** flip `is_syncing` —
+that remains the operator's call (post-acceptance gate 2 still stands). The
+`mode !== 'graph'` transport guard is unchanged; `allowNonGraphWrites` is still
+TEST-ONLY. All times Pacific.
+
+### A1 — a blank non-program cell is "none", not "unreadable"
+
+**The measurement that forced this.** Amendment 1's D12b removed the extractor's
+`snp ?? 0`, which was right for `stripped_program`: a manufactured zero on the
+primary billed figure is a fabricated fact. But the same rule applied to
+`stripped_non_program` refuses Kelsey's real workbook **in full**. Re-parsed
+2026-07-31 from the archived June bytes
+(`workbook-imports/ba3beeeb-…/JUNE_2026_DAILY_LOG_WOODLAND.xlsm`, 759 720 bytes,
+sha256 `1eeeccbd…`) with `9800880` code:
+
+```
+templateGeneration : woodland_daily      sheets: 47
+daysSeen           : 23
+ROWS               : 0
+midEditCount       : 23
+failure            : all_days_unusable
+                     day_1 stripped_non_program_unusable @ June26 Processed!D9
+                     … all 23 days, identical reason
+```
+
+Column E is **blank**, not zero — a direct read of the sheet confirms every `Day N`
+row from row 9 to row 39 has an empty E, while D carries the program figure. June
+had no non-program stripping and it was left empty rather than typed as `0`. With
+`is_syncing` on, that is a refusal every 10 minutes and a page ~28×/business-day,
+indefinitely.
+
+**D14 — the rule, narrower than Am.1's.**
+
+| Cell                                                                      | Reading                                                          |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| blank `stripped_program`                                                  | the day is genuinely unusable — SKIP + count (unchanged)         |
+| blank `stripped_non_program` on a row whose `stripped_program` IS present | **none — 0, recorded as INFERRED**                               |
+| `stripped_non_program` PRESENT but unusable (negative, non-numeric)       | still a SKIP — a figure we cannot trust is not a cell left empty |
+
+The inference is marked, not hidden: `DailyProductionRow.strippedNonProgramInferred`
+carries it, and `upsert.ts` writes `stripped_non_program_inferred` into the
+`audit_log` `after` payload. **The provenance never claims the sheet said zero.**
+The distinction is drawn on whether the extractor emitted the KEY, which it does
+only for a cell it actually read — so this cannot be confused with a bad value.
+
+**Why this is a correction and not a convenient loosening.** Those same 23 days
+match the MyMRC mirror at **delta 0.0 on all 23** and their `stripped_program` sum
+cross-foots exactly to the workbook's own Processed SUM-row D total of **17126**
+(`June26 Processed!D40`) — both measured under the pre-Am.1 `?? 0` behaviour. The
+days are real and complete; their non-program value is genuinely none.
+
+**Acceptance, measured against the real file post-change:** 23 rows,
+`failure === null`, `sum(strippedProgram) === 17126`, `midEditCount === 0`, 23 rows
+marked `strippedNonProgramInferred`, dates `2026-06-01 … 2026-06-30`. The file was
+fetched read-only, used, and destroyed; it is not a fixture and is not in the repo.
+
+### A2 — the month is cross-checked against the file name
+
+`deriveMonthPrefix` returned on the **first** dated inbound row and nothing compared
+it to anything, while the file name states the month explicitly and `engine.ts`
+already held it. One July-dated row surviving a copy-forward clear-down dated every
+August close row into July — overwriting a closed, billed month under workbook-wins
+with the run recorded `ok`.
+
+`resolveWorkbookMonth` now settles the month once, from two sources, with three
+distinct outcomes:
+
+| Derived from the workbook | From the file name        | Outcome                                                                    |
+| ------------------------- | ------------------------- | -------------------------------------------------------------------------- |
+| present                   | absent, or agrees         | that month                                                                 |
+| present                   | present and **disagrees** | **refuse — `month_mismatch`**, no rows built                               |
+| absent                    | present                   | that month, with a flag saying the close dates rest on the file name alone |
+| absent                    | absent                    | **`month_undeterminable`** — see below                                     |
+
+Neither source overrules the other on disagreement: picking one is exactly the guess
+that corrupts a billed month. The adapter additionally rejects any individual
+`daily_close` date outside the file's month (`date_outside_file_month`) — defence in
+depth against a future path that dates rows individually.
+
+**The honest edge.** Processing recorded before the month's first inbound load used
+to produce `monthPrefix === null` → no Processed rows → `daily_section_unresolved` →
+a FAILED run that pages. Two changes: the file name now **supplies** the month in
+that case, so the normal early-month shape simply works; and where no month exists
+at all, the failure carries `notEnoughData: true`, which the engine records as
+`skipped` and does **not** page. "Not enough data yet" is not a fault.
+
+### A3 — the Processed columns are header-resolved, not assumed
+
+`STRIPPED_PROGRAM = 4 / STRIPPED_NONPROG = 5 / MATERIAL = 10` were fixed ordinals
+justified by a comment observing stability across June and July (n = 2), while the
+DAY inbound grid in the same file had always resolved by header text. One inserted
+column and both ordinals land on different, still-finite, still-non-negative
+numbers; every downstream check accepts them and the run is recorded `ok`.
+
+`findProcessedColumns` mirrors `findDayInboundHeader`. The real header is a **two-row
+band** (June: row 7 `DAILY Program` over row 8 `STRIPPED UNITS`), so a column's label
+is its two lines joined; the **leftmost** match wins because the "Mid-month totals"
+block repeats those exact labels further right (June: L/M/N). On the real file it
+resolves D/E at header row 7 — the same columns the ordinals named, now for a reason.
+
+A band it cannot recognise **refuses** — `processed_columns_unrecognised` — rather
+than falling back to the ordinals. There is no fallback: an unvalidated ordinal is
+the defect.
+
+The material-ticket column carries **no header** on the real sheet, so it is resolved
+by CONTENT — the leftmost column right of the non-program figure whose day rows carry
+a ticket-shaped value (`M-175506`). Resolving to nothing means the workbook stated no
+ticket: that is `null`, not a refusal, because the ticket is not a billed figure and
+D13 makes a null a no-op at the upsert.
+
+### A4 — the silent paths now speak, once
+
+Three defects, one fix each:
+
+- **`not_found` told nobody, forever.** The ntfy calls lived only in the engine's
+  `catch` block, which `not_found` never reaches, so a rename, a typo, a stray
+  `… (1).xlsm` copy or a moved folder went silent indefinitely.
+- **An unreadable rollout state was recorded `ok` + `cutover_noop: true`** — a row
+  asserting a site was cut over when that is precisely what could not be read. The
+  fail-safe DIRECTION is unchanged and still right; only the recording changes. It
+  is now `skipped` with `cutover_noop: false` and the reason on `error_text`.
+- **`workbook_sources` recorded "we polled" and not "we last got data".**
+
+**Schema (`20260819_adr0049_workbook_sync_activation_guards`, purely additive,
+replayed on an empty PG16 and dropped):** `WorkbookSyncStatus += skipped`;
+`workbook_sources += last_success_at, consecutive_failures, last_alert_at`.
+`last_success_at` is stamped on every poll that READ the workbook — including a
+cTag delta no-op and a legitimately empty month — and never on `not_found` or a
+refusal.
+
+**Alarm grading, against the ADR-0037 five-question gate.** Priority `high`, never
+`urgent` (Q1: a stuck workbook needs Kelsey, not an operator at 02:00). One page per
+**site**, not per poll and not per failing check (Q4). Tier-2 click to
+`/admin/workbook-sync` (Q5). Two conditions page:
+
+1. a **read failure** (`error` / `forbidden`) — on the FIRST poll of the streak, then
+   at most daily;
+2. **staleness** — no successful read for **5 days**, whatever the status. This is
+   the only thing that pages on `not_found` or `skipped`, and it must be: a
+   `not_found` on the 1st of a month, before Kelsey creates the new file, is the
+   correct expected state (D5), and a rename produces an identical per-poll signal.
+   Duration is the only thing that separates them. Five days rather than two because
+   polling is Mon–Fri (D2), so a Friday-evening breakage is legitimately silent until
+   Monday.
+
+**The flood is fixed by moving the cooldown into the database.** The 30-minute
+window lived in `src/lib/ntfy.ts`'s process-local `Map`, which every container
+restart wiped — hence ~28 identical pages per business day. `last_alert_at` is a
+column. Regression-tested: 28 consecutive 10-minute polls against a permanently
+refused workbook publish **one** page.
+
+### A5 — workbook-wins is narrowed per field (D13, accepted)
+
+D13 as proposed in Amendment 2 is accepted and implemented. `null` from the adapter
+means "the workbook did not state one", never "the workbook says none".
+
+The headcount fields are gone from `DailyProductionRow` entirely rather than carried
+as always-null: the real Processed sheet has no such column (Am.1 D12d), the sync
+never writes them, and a field that is always null and never written is an invitation
+to wire it back up. `disagrees()` and the update payload now cover only the fields
+the sync will actually write, which is what stops a headcount difference alone from
+rewriting `source` to `import` and permanently locking the ADR-0058 MyMRC bridge out
+of the row.
+
+**The fidelity cost, recorded plainly rather than left to be discovered:** a row can
+now be **mixed-provenance** — production figures from the workbook, headcount from
+Vision — while `source` remains a single scalar reading `import`. **`source`
+therefore describes the production figures, not the whole row.** The per-field
+`audit_log` before/after remains the record of what actually changed, and the `after`
+payload omits fields the workbook did not state rather than writing them as null (a
+null would read as "we wrote null").
+
+### What Amendment 3 does NOT close
+
+- **`is_syncing` is still `false`.** Unchanged, deliberately.
+- **B1 (prior-month grace window), B2 (backoff on re-DOWNLOAD — the paging flood is
+  fixed, the re-download of an unchanged failing cTag is not), B3 (ledger the date
+  range written)** remain open. B3 is the field that would catch an A2-class failure
+  on the first bad poll rather than at month-end; A2's refusal now prevents that
+  class, but the ledger still records nothing about which dates a run touched.
+- **The MyMRC scraper.** Still the only independent witness to whether the extraction
+  is right, still producing nothing since 2026-07-20, still on the critical path for
+  cutover confidence.

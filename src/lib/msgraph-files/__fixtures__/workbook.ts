@@ -71,6 +71,20 @@ export interface FixtureWorkbookSpec {
    * report an empty month.
    */
   omitDaySheets?: boolean;
+  /**
+   * ADR-0049 Am.3 A3 — insert N blank columns into the Processed sheet between
+   * column B ("Day N") and column C, moving the whole value grid right. This is
+   * Kelsey adding a column, and it is the drift the header resolution exists to
+   * absorb: the header band moves with the data, so the figures must still be read
+   * from the right cells.
+   */
+  processedColumnShift?: number;
+  /**
+   * ADR-0049 Am.3 A3 — replace the Processed header band with labels the resolver
+   * cannot recognise. The value grid is untouched, so a positional reader would
+   * happily return plausible WRONG figures; a header-validating one must refuse.
+   */
+  unrecognisableProcessedHeaders?: boolean;
 }
 
 /** A representative June-Woodland fixture: three clean days + one mid-edit day. */
@@ -183,42 +197,52 @@ function addDaySheet(wb: ExcelJS.Workbook, row: FixtureDailyRow): void {
 /** The Processed sheet: opening-balance band, header band, one row per `Day N`. */
 function addProcessedSheet(wb: ExcelJS.Workbook, spec: FixtureWorkbookSpec, month: string): void {
   const proc = wb.addWorksheet(spec.processedSheetNameOverride ?? processedSheetName(month));
+  // Insert `shift` blank columns after B, moving the whole value grid right — a
+  // real column insert moves the header band with the data it labels.
+  const shift = Math.max(0, spec.processedColumnShift ?? 0);
+  const grid = (values: (string | number | Date | null)[]): (string | number | Date | null)[] => [
+    ...values.slice(0, 2),
+    ...Array<null>(shift).fill(null),
+    ...values.slice(2),
+  ];
   setRow(proc, 1, [null, null, `${month} PROCESSED UNITS`]);
-  setRow(proc, 5, [null, null, null, spec.openingProgram ?? 1500, 'Program', 0, 'NON']);
-  setRow(proc, 7, [
-    null,
-    null,
-    'DAILY TOTAL',
-    'DAILY Program',
-    'Daily Non Program',
-    'PROGRAM',
-    'NON-MRC',
-  ]);
-  setRow(proc, 8, [
-    null,
-    null,
-    'INBOUND UNITS',
-    'STRIPPED UNITS',
-    'Stripped Units',
-    'INBOUND UNITS',
-    'INBOUND UNITS',
-    'Sold Units',
-    'Landfilled',
-  ]);
+  setRow(proc, 5, grid([null, null, null, spec.openingProgram ?? 1500, 'Program', 0, 'NON']));
+  const headerTop = spec.unrecognisableProcessedHeaders
+    ? [null, null, 'col 1', 'col 2', 'col 3', 'col 4', 'col 5']
+    : [null, null, 'DAILY TOTAL', 'DAILY Program', 'Daily Non Program', 'PROGRAM', 'NON-MRC'];
+  const headerBottom = spec.unrecognisableProcessedHeaders
+    ? [null, null, 'a', 'b', 'c', 'd', 'e', 'f', 'g']
+    : [
+        null,
+        null,
+        'INBOUND UNITS',
+        'STRIPPED UNITS',
+        'Stripped Units',
+        'INBOUND UNITS',
+        'INBOUND UNITS',
+        'Sold Units',
+        'Landfilled',
+      ];
+  setRow(proc, 7, grid(headerTop));
+  setRow(proc, 8, grid(headerBottom));
   spec.daily.forEach((r, i) => {
     const inbound = r.inboundUnits ?? 10;
-    setRow(proc, 9 + i, [
-      null,
-      `Day ${Number(r.date.slice(8, 10))}`,
-      inbound, // C daily total
-      r.strippedProgram, // D stripped program
-      r.strippedNonProgram, // E stripped non-program
-      inbound, // F program inbound
-      0, // G non-program inbound
-      null, // H sold
-      null, // I landfilled
-      r.materialTicket ?? null, // J material ticket
-    ]);
+    setRow(
+      proc,
+      9 + i,
+      grid([
+        null,
+        `Day ${Number(r.date.slice(8, 10))}`,
+        inbound, // C daily total
+        r.strippedProgram, // D stripped program
+        r.strippedNonProgram, // E stripped non-program
+        inbound, // F program inbound
+        0, // G non-program inbound
+        null, // H sold
+        null, // I landfilled
+        r.materialTicket ?? null, // J material ticket
+      ]),
+    );
   });
 }
 

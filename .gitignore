@@ -75,3 +75,7 @@ next-env.d.ts
 .real-*
 _resolve-check.ts
 _parse-check.ts
+
+# Real financial workbooks fetched for validation — NEVER commit (ADR-0049 A1)
+.june-real.xlsm
+*.xlsm

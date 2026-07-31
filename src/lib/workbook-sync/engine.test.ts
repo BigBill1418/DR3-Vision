@@ -168,7 +168,15 @@ describe('runWorkbookSyncPoll', () => {
       id: 'f-aug',
       name: 'AUGUST 2026 DAILY LOG WOODLAND.xlsm',
       ctag: 'aug-1',
-      bytes: await buildFixtureWorkbookBytes(),
+      // AUGUST-dated content in the August file. Before ADR-0049 Am.3 A2 this
+      // fixture carried JUNE dates and still passed, which is precisely the hole
+      // A2 closes — see the month-mismatch test below.
+      bytes: await buildFixtureWorkbookBytes({
+        daily: [
+          { date: '2026-08-03', strippedProgram: 150, strippedNonProgram: 25 },
+          { date: '2026-08-04', strippedProgram: 175, strippedNonProgram: 12 },
+        ],
+      }),
     };
     const transport = mockFilesTransport({ files: [aug] });
 
@@ -182,6 +190,8 @@ describe('runWorkbookSyncPoll', () => {
     expect(r.fileName).toBe('AUGUST 2026 DAILY LOG WOODLAND.xlsm');
     expect(r.status).toBe('ok');
     expect(r.changesDetected).toBe(true);
+    expect(r.rowsUpserted).toBe(2);
+    expect(db.pud.every((p) => p.production_date.toISOString().startsWith('2026-08'))).toBe(true);
   });
 
   it('is a NO-OP after cutover (surface live) — reads its own data, does not download (test-plan lines 6/7)', async () => {
@@ -367,5 +377,205 @@ describe('a non-graph transport must never write production', () => {
     // The whole point: nothing was written.
     expect(one?.rowsUpserted ?? 0).toBe(0);
     expect(one?.rowsOverwritten ?? 0).toBe(0);
+  });
+});
+
+// ── ADR-0049 Am.3 A2 — a month the file name contradicts is REFUSED ──────────
+
+describe('the derived month is cross-checked against the file name', () => {
+  it('refuses a JUNE-dated workbook found in the AUGUST file, writing nothing', async () => {
+    // The copy-forward hazard, exactly: August's file is July's/June's cleared
+    // down, and one surviving dated row remains. Before A2 this wrote every
+    // "Day N" into the stale month, over closed billed figures, status `ok`.
+    const db = new FakePrisma();
+    const source = db.seedSource();
+    const transport = mockFilesTransport({
+      files: [
+        {
+          id: 'f-aug',
+          name: 'AUGUST 2026 DAILY LOG WOODLAND.xlsm',
+          ctag: 'aug-1',
+          bytes: await buildFixtureWorkbookBytes(),
+        },
+      ],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: () => new Date('2026-08-05T18:00:00Z'),
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('error');
+    expect(r.error).toMatch(/month_mismatch/);
+    expect(db.pud).toHaveLength(0);
+    // Watermark NOT advanced: the next poll re-reads the same file.
+    expect(source.last_file_ctag).toBeNull();
+  });
+});
+
+// ── ADR-0049 Am.3 A4 — the silent paths ──────────────────────────────────────
+
+describe('a poll that could not run is recorded as SKIPPED, never as ok', () => {
+  it('an unreadable rollout state is `skipped` with the reason — not ok/cutover_noop', async () => {
+    const db = new FakePrisma();
+    const source = db.seedSource();
+    db.rolloutSurface.findUnique = async () => {
+      throw new Error('connection terminated unexpectedly');
+    };
+    const transport = mockFilesTransport({ files: [await juneFile()] });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('skipped');
+    // The whole defect: this used to assert the site was cut over. It is not.
+    expect(r.cutoverNoop).toBe(false);
+    expect(String(r.error)).toMatch(/NOT a cutover no-op/);
+    expect(db.syncRuns[0]).toMatchObject({ status: 'skipped', cutover_noop: false });
+    expect(transport.downloadCount).toBe(0);
+    expect(source.last_success_at).toBeNull();
+  });
+
+  it('"the workbook cannot be dated yet" is `skipped` and pages NOBODY', async () => {
+    const db = new FakePrisma();
+    db.seedSource({
+      naming_pattern: 'WOODLAND DAILY LOG.xlsm', // no month token to fall back on
+      last_success_at: new Date('2026-06-14T18:00:00Z'), // read fine yesterday
+    });
+    const bytes = await buildFixtureWorkbookBytes({
+      daily: [{ date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 }],
+      summary: [{ key: 'processed_units_total', value: 150 }],
+      omitDaySheets: true,
+    });
+    const transport = mockFilesTransport({
+      files: [{ id: 'f-x', name: 'WOODLAND DAILY LOG.xlsm', ctag: 'c1', bytes }],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    const r = res.results[0]!;
+    expect(r.status).toBe('skipped');
+    expect(String(r.error)).toMatch(/month_undeterminable/);
+    // It reads as "not enough data yet", so on its own it pages nobody. If it
+    // PERSISTS past the grace window the staleness alarm still fires — see the
+    // not_found staleness test; the grade is on duration, not on the status.
+    expect(r.paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+});
+
+describe('the health watermark and the graded alarm (ADR-0037)', () => {
+  it('a successful poll stamps last_success_at and clears the failure streak', async () => {
+    const db = new FakePrisma();
+    const source = db.seedSource({ consecutive_failures: 4 });
+    const transport = mockFilesTransport({ files: [await juneFile()] });
+
+    await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    expect(source.last_success_at).toEqual(JUNE());
+    expect(source.consecutive_failures).toBe(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('a NOT_FOUND inside the grace window pages nobody — that is the 1st of a month', async () => {
+    const db = new FakePrisma();
+    db.seedSource({ last_success_at: new Date('2026-06-15T00:00:00Z') });
+    const transport = mockFilesTransport({ files: [] });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    expect(res.results[0]!.status).toBe('not_found');
+    expect(res.results[0]!.paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('a NOT_FOUND past the grace window PAGES — the renamed-file case that was silent forever', async () => {
+    const db = new FakePrisma();
+    const source = db.seedSource({ last_success_at: new Date('2026-06-01T00:00:00Z') });
+    const transport = mockFilesTransport({ files: [] });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE, // 2026-06-15, i.e. 14 days with no successful read
+    });
+
+    expect(res.results[0]!.status).toBe('not_found');
+    expect(res.results[0]!.paged).toBe(true);
+    expect(publishNtfy).toHaveBeenCalledOnce();
+    const call = vi.mocked(publishNtfy).mock.calls[0]![0];
+    expect(call.priority).toBe('high');
+    expect(call.body).toMatch(/rename, a typo, a stray copy/);
+    expect(source.last_alert_at).toEqual(JUNE());
+  });
+
+  it('pages ONCE per site per day, not once per poll — the refusal flood', async () => {
+    // 28 polls across a business day against a permanently-refused workbook. The
+    // old engine paged on its own 30-minute in-process timer, which a container
+    // restart reset — ~28 identical pages per day, indefinitely.
+    const db = new FakePrisma();
+    db.seedSource();
+    const bytes = await buildFixtureWorkbookBytes({
+      daily: [{ date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 }],
+      unrecognisableProcessedHeaders: true,
+    });
+    const transport = mockFilesTransport({
+      files: [{ id: 'f-june', name: JUNE_FILE, ctag: 'c1', bytes }],
+    });
+
+    for (let i = 0; i < 28; i++) {
+      const at = new Date(JUNE().getTime() + i * 10 * 60 * 1000); // every 10 min
+      const res = await runWorkbookSyncPoll({
+        prisma: db.asClient(),
+        transport,
+        allowNonGraphWrites: true,
+        now: () => at,
+      });
+      expect(res.results[0]!.status).toBe('error');
+      expect(String(res.results[0]!.error)).toMatch(/processed_columns_unrecognised/);
+    }
+
+    expect(db.pud).toHaveLength(0);
+    expect(publishNtfy).toHaveBeenCalledOnce();
+  });
+
+  it('pages again once the 24h window has passed and the failure persists', async () => {
+    const db = new FakePrisma();
+    db.seedSource();
+    const transport = mockFilesTransport({ forbidden: true });
+
+    for (const at of [JUNE(), new Date(JUNE().getTime() + 25 * 60 * 60 * 1000)]) {
+      await runWorkbookSyncPoll({
+        prisma: db.asClient(),
+        transport,
+        allowNonGraphWrites: true,
+        now: () => at,
+      });
+    }
+    expect(publishNtfy).toHaveBeenCalledTimes(2);
   });
 });

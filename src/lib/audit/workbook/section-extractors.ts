@@ -151,6 +151,12 @@ export interface ExtractionResult {
   counts: Record<string, number>;
   /** Billing-affecting / ambiguity flags for operator review. */
   flags: string[];
+  /**
+   * ADR-0049 Am.3 A2 — the 'YYYY-MM' month every `daily_close` date was built
+   * from, or null when it could not be settled. This is the value the file name's
+   * own month is cross-checked against.
+   */
+  workbookMonth: string | null;
 }
 
 function emptyResult(): ExtractionResult {
@@ -169,6 +175,7 @@ function emptyResult(): ExtractionResult {
     workbookInboundTotal: null,
     counts: {},
     flags: [],
+    workbookMonth: null,
   };
 }
 
@@ -380,6 +387,123 @@ function extractDayOutbound(ws: ExcelJS.Worksheet, res: ExtractionResult): void 
 }
 
 // ── processed (daily close + opening balance) ──────────────────────────────
+//
+// ADR-0049 Am.3 A3 — the billed columns are RESOLVED BY HEADER, not assumed.
+//
+// Until 2026-07-31 this function read `STRIPPED_PROGRAM = 4` / `STRIPPED_NONPROG
+// = 5` / `MATERIAL = 10` as fixed ordinals, justified by a comment observing the
+// columns were stable across June and July (n = 2). The DAY inbound grid in this
+// same file has always resolved by header text (`findDayInboundHeader`), so the
+// drift-tolerant path guarded the evidence rows and the BILLED production figure
+// was the one thing left riding on an assumption. One column inserted left of E
+// and both ordinals land on different, still-finite, still-non-negative numbers:
+// the daily total in D and the program figure in E. Every downstream consumer
+// accepts them, workbook-wins writes them over the real figures, and the run is
+// recorded `ok`. That was the last silent-wrong-figure path in the sync.
+//
+// The header is a TWO-ROW band on the real sheet (June: row 7 "DAILY Program" /
+// row 8 "STRIPPED UNITS"), so a column's label is the two rows joined. The
+// "Mid-month totals" block repeats those exact labels further right (June: L/M/N),
+// which is why the LEFTMOST match wins rather than any match.
+//
+// The material-ticket column carries NO header on the real sheet, so it cannot be
+// header-resolved. It is resolved by CONTENT instead — the leftmost column right
+// of the non-program figure whose day rows carry a ticket-shaped value ("M-175506").
+// When no such column exists the workbook simply did not state a ticket: that is
+// null, not a refusal, because the ticket is not a billed figure and ADR-0049 D13
+// makes a null a no-op at the upsert. It never falls back to the ordinal — an
+// unvalidated ordinal is the defect this block exists to remove.
+
+/** The Processed sheet's billed columns, resolved from the sheet's own header band. */
+interface ProcessedColumns {
+  /** 1-based row of the first line of the header band (for the operator flag). */
+  headerRow: number;
+  strippedProgram: number;
+  strippedNonProgram: number;
+  /** null ⇒ no ticket-shaped column found; the workbook states no ticket. */
+  material: number | null;
+}
+
+/** A material ticket as Kelsey writes it: a short letter prefix, a dash, digits. */
+const MATERIAL_TICKET = /^[a-z]{1,4}\s*-\s*\d{3,}$/i;
+
+/**
+ * Resolve the Processed sheet's stripped-program / stripped-non-program columns
+ * from its header band, mirroring `findDayInboundHeader`. Returns null when the
+ * band cannot be recognised — the caller REFUSES rather than reading whatever
+ * sits at the historical ordinals.
+ */
+function findProcessedColumns(ws: ExcelJS.Worksheet): ProcessedColumns | null {
+  const cols = widest(ws);
+  for (let r = 1; r <= Math.min(ws.rowCount, 15); r++) {
+    const top = rowTexts(ws, r, cols);
+    const below = rowTexts(ws, r + 1, cols);
+    // A column's label is its two header lines joined ("DAILY Program" +
+    // "STRIPPED UNITS"), so a one-row band still resolves.
+    const labels = top.map((t, i) => norm(`${t ?? ''} ${below[i] ?? ''}`));
+    // Leftmost wins: the "Mid-month totals" block repeats these labels to the right.
+    let strippedProgram: number | null = null;
+    let strippedNonProgram: number | null = null;
+    for (let c = 3; c <= labels.length; c++) {
+      const label = labels[c - 1] ?? '';
+      if (!/strip/.test(label) || !/program/.test(label)) continue;
+      const isNonProgram = /\bnon[\s-]?program\b/.test(label);
+      if (!isNonProgram && strippedProgram === null) strippedProgram = c;
+      if (isNonProgram && strippedNonProgram === null) strippedNonProgram = c;
+    }
+    // The real geometry is D then E. Requiring the order rejects a band where only
+    // a coincidental single label matched.
+    if (strippedProgram === null || strippedNonProgram === null) continue;
+    if (strippedNonProgram <= strippedProgram) continue;
+    return {
+      headerRow: r,
+      strippedProgram,
+      strippedNonProgram,
+      material: findMaterialColumn(ws, cols, strippedNonProgram),
+    };
+  }
+  return null;
+}
+
+/** Leftmost column right of `after` whose "Day N" rows carry a ticket-shaped value. */
+function findMaterialColumn(ws: ExcelJS.Worksheet, cols: number, after: number): number | null {
+  for (let c = after + 1; c <= Math.min(cols, after + 20); c++) {
+    for (let r = 1; r <= ws.rowCount; r++) {
+      if (!isDayLabelRow(ws, r)) continue;
+      const t = cellText(ws.getRow(r).getCell(c).value);
+      if (t !== null && MATERIAL_TICKET.test(t.trim())) return c;
+    }
+  }
+  return null;
+}
+
+/** True when row `r`'s column-B label is a "Day N" (1–31) production-day marker. */
+function isDayLabelRow(ws: ExcelJS.Worksheet, r: number): boolean {
+  return dayLabelOf(ws, r) !== null;
+}
+
+/** The 1–31 day number from row `r`'s column-B "Day N" label, or null. */
+function dayLabelOf(ws: ExcelJS.Worksheet, r: number): number | null {
+  const text = cellText(ws.getRow(r).getCell(2).value);
+  const m = text ? /^day\s*(\d{1,2})$/i.exec(text.trim()) : null;
+  if (!m) return null;
+  const day = parseInt(m[1]!, 10);
+  return day >= 1 && day <= 31 ? day : null;
+}
+
+/** The two-line header label of every column, for a refusal message. */
+function headerBandSummary(ws: ExcelJS.Worksheet): string {
+  const cols = widest(ws);
+  const seen: string[] = [];
+  for (let r = 1; r <= Math.min(ws.rowCount, 15); r++) {
+    const texts = rowTexts(ws, r, cols);
+    const labelled = texts
+      .map((t, i) => (t === null ? null : `${numberToColumnLetter(i + 1)}="${t}"`))
+      .filter((x): x is string => x !== null);
+    if (labelled.length > 0) seen.push(`row ${r}: ${labelled.slice(0, 12).join(' ')}`);
+  }
+  return seen.length > 0 ? seen.join(' | ') : '(no labelled rows in the first 15)';
+}
 
 function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: ExtractionResult): void {
   const cols = widest(ws);
@@ -399,24 +523,35 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
     }
   }
 
-  // Daily rows: col2 = "Day N"; stripped program (col4) / non-program (col5);
-  // material ticket (col10). Columns are stable across June & July.
-  const STRIPPED_PROGRAM = 4;
-  const STRIPPED_NONPROG = 5;
-  const MATERIAL = 10;
+  // Daily rows: col B = "Day N". The stripped program / non-program columns are
+  // RESOLVED FROM THE HEADER BAND (A3) — never assumed. A sheet whose band cannot
+  // be recognised is REFUSED here rather than read at the historical ordinals,
+  // because reading shifted columns produces plausible wrong billed figures and no
+  // downstream check can tell them from right ones.
+  const hdr = findProcessedColumns(ws);
+  if (!hdr) {
+    bump(res.counts, 'processed_columns_unrecognised', 1);
+    res.flags.push(
+      `[processed] ${ws.name}: the stripped program / non-program columns could NOT be resolved ` +
+        `from the sheet's header band, so the daily-close rows were NOT built. Expected a column ` +
+        `labelled like "DAILY Program"+"STRIPPED UNITS" and one like "Daily Non Program"+` +
+        `"Stripped Units" to its right. Header rows seen — ${headerBandSummary(ws)}.`,
+    );
+    return;
+  }
+  const STRIPPED_PROGRAM = hdr.strippedProgram;
+  const STRIPPED_NONPROG = hdr.strippedNonProgram;
+  const MATERIAL = hdr.material;
   let n = 0;
   for (let r = 1; r <= ws.rowCount; r++) {
-    const dayText = cellText(ws.getRow(r).getCell(2).value);
-    const dm = dayText ? /^day\s*(\d{1,2})$/i.exec(dayText.trim()) : null;
-    if (!dm) continue;
-    const day = parseInt(dm[1]!, 10);
-    if (day < 1 || day > 31) continue;
+    const day = dayLabelOf(ws, r);
+    if (day === null) continue;
     const row = ws.getRow(r);
     const sp = cellNumber(row.getCell(STRIPPED_PROGRAM).value);
     const snp = cellNumber(row.getCell(STRIPPED_NONPROG).value);
     if (sp === null && snp === null) continue; // no processing recorded that day
     const date = `${monthPrefix}-${String(day).padStart(2, '0')}`;
-    const material = cellText(row.getCell(MATERIAL).value);
+    const material = MATERIAL === null ? null : cellText(row.getCell(MATERIAL).value);
     const prov: CellProvenance = {
       tab: ws.name,
       row: r,
@@ -449,7 +584,11 @@ function extractProcessed(ws: ExcelJS.Worksheet, monthPrefix: string, res: Extra
   bump(res.counts, 'processed_daily_close', n);
   if (n > 0) {
     res.flags.push(
-      `[processed] ${ws.name}: dates built from "Day N" + workbook month ${monthPrefix} (sheet has no ISO date column). Stripped program=col D, non-program=col E, ticket=col J. CONFIRM month + columns.`,
+      `[processed] ${ws.name}: dates built from "Day N" + workbook month ${monthPrefix} (sheet has ` +
+        `no ISO date column). Columns RESOLVED from the header band at row ${hdr.headerRow}: ` +
+        `stripped program=col ${numberToColumnLetter(STRIPPED_PROGRAM)}, non-program=col ` +
+        `${numberToColumnLetter(STRIPPED_NONPROG)}, ticket=` +
+        `${MATERIAL === null ? 'NOT PRESENT (no ticket-shaped column found)' : `col ${numberToColumnLetter(MATERIAL)}`}.`,
     );
   }
 }
@@ -774,13 +913,71 @@ function deriveMonthPrefix(res: ExtractionResult): string | null {
 }
 
 /**
+ * ADR-0049 Am.3 A2 — settle the month EVERY `daily_close` date will be built from.
+ *
+ * The sheet carries no ISO date: a close row is labelled "Day 7" and the date is
+ * `${month}-07`. Until 2026-07-31 that month came from `deriveMonthPrefix` alone,
+ * which returns on the FIRST dated inbound row it meets and is compared against
+ * nothing. August's workbook is, in normal practice, July's copied and cleared —
+ * so one surviving July-dated inbound row silently dates the whole of August into
+ * July, and workbook-wins overwrites a closed, billed month with the run recorded
+ * `ok`. The file name states the month explicitly and the engine already holds it.
+ *
+ * Three outcomes, and they are deliberately different facts:
+ *   - agree (or only one source available) → that month.
+ *   - both available and DISAGREE          → null + `processed_month_mismatch`.
+ *     Refuse. Neither source is trustworthy enough to overrule the other, and
+ *     picking one is exactly the guess that corrupts a billed month.
+ *   - neither available                    → null + `processed_month_undeterminable`.
+ *     NOT a fault: processing recorded before the month's first inbound load, in a
+ *     file whose name does not carry a month, is "not enough data yet".
+ */
+function resolveWorkbookMonth(res: ExtractionResult, expectedMonth: string | null): string | null {
+  const derived = deriveMonthPrefix(res);
+  if (derived !== null && expectedMonth !== null && derived !== expectedMonth) {
+    bump(res.counts, 'processed_month_mismatch', 1);
+    res.flags.push(
+      `[processed] MONTH MISMATCH — the workbook's first dated inbound row says ${derived}, but ` +
+        `the file name says ${expectedMonth}. Every "Day N" close row would be dated into ` +
+        `${derived}. Daily-close rows were NOT built. A stale copy-forward row left in a ` +
+        `cleared-down file is the usual cause; correct the dated row (or the file name) and the ` +
+        `next poll proceeds.`,
+    );
+    return null;
+  }
+  const month = derived ?? expectedMonth;
+  if (month === null) {
+    bump(res.counts, 'processed_month_undeterminable', 1);
+    res.flags.push(
+      `[processed] the workbook month could not be settled — no dated inbound row, and no month ` +
+        `was supplied from the file name. Daily-close rows were NOT built. This reads as "not ` +
+        `enough data yet", not as a fault.`,
+    );
+    return null;
+  }
+  if (derived === null) {
+    res.flags.push(
+      `[processed] no dated inbound row — the workbook month ${month} was taken from the FILE ` +
+        `NAME. Close-row dates rest on the file name alone until an inbound load is recorded.`,
+    );
+  }
+  return month;
+}
+
+/**
  * Extract every classified sheet into staging rows + structured report data.
  * `classification` is the `classifyWorkbookSheets` output; the caller resolves
  * it once and passes it in so the parser and report share one classification.
+ *
+ * `expectedMonth` ('YYYY-MM') is the month the FILE NAME states. It does two
+ * things (ADR-0049 Am.3 A2): it CROSS-CHECKS the month derived from the first
+ * dated inbound row, and it SUPPLIES the month when no dated inbound row exists.
+ * See {@link resolveWorkbookMonth}.
  */
 export function extractWorkbook(
   wb: ExcelJS.Workbook,
   classification: Map<string, WorksheetSemanticType>,
+  expectedMonth?: string | null,
 ): ExtractionResult {
   const res = emptyResult();
 
@@ -842,13 +1039,10 @@ export function extractWorkbook(
     }
   }
 
-  const monthPrefix = deriveMonthPrefix(res);
+  const monthPrefix = resolveWorkbookMonth(res, expectedMonth ?? null);
+  res.workbookMonth = monthPrefix;
   if (processedSheets.length > 0) {
-    if (monthPrefix === null) {
-      res.flags.push(
-        `[processed] cannot derive workbook month (no dated inbound rows) — processed daily-close rows SKIPPED. CONFIRM.`,
-      );
-    } else {
+    if (monthPrefix !== null) {
       for (const ws of processedSheets) extractProcessed(ws, monthPrefix, res);
     }
     // Authoritative inventory ledger (Processed F/G/D/E/H/I + opening + saved) → §2.3

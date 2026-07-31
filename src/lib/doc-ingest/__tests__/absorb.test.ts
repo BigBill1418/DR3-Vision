@@ -80,9 +80,8 @@ const DAY = (
   productionDate: date,
   strippedProgram: program,
   strippedNonProgram: nonProgram,
+  strippedNonProgramInferred: false,
   materialTicketNumber: 'M-000001',
-  employeesCount: 4,
-  processorsCount: 2,
   savedUnits: saved,
 });
 

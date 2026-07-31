@@ -36,31 +36,32 @@ describe('parseDailyRows — the real Woodland layout', () => {
         productionDate: '2026-06-01',
         strippedProgram: 120,
         strippedNonProgram: 0,
+        strippedNonProgramInferred: false,
         materialTicketNumber: 'M-100001',
-        employeesCount: null,
-        processorsCount: null,
         savedUnits: null,
       },
       {
         productionDate: '2026-06-02',
         strippedProgram: 2,
         strippedNonProgram: 0,
+        strippedNonProgramInferred: false,
         materialTicketNumber: 'M-100002',
-        employeesCount: null,
-        processorsCount: null,
         savedUnits: null,
       },
     ]);
   });
 
-  it('leaves employees/processors NULL — the Processed sheet carries no such column', async () => {
-    // Documented, not incidental: the real workbook has no headcount columns, so
-    // the adapter reports "the workbook did not state one". It never invents a
-    // number for a field it could not resolve.
+  it('emits NO employees/processors field — the Processed sheet carries no such column', async () => {
+    // Documented, not incidental: the real workbook has no headcount columns. The
+    // adapter used to report them as null on every row; under ADR-0049 D13 the
+    // sync never writes them, so carrying an always-null field would be an
+    // invitation to wire it back up. They are absent from the row entirely.
     const res = await parseDailyRows(await buildWoodlandDailyLogWorkbook());
-    expect(res.rows.every((r) => r.employeesCount === null && r.processorsCount === null)).toBe(
-      true,
-    );
+    expect(res.rows.length).toBeGreaterThan(0);
+    for (const r of res.rows) {
+      expect(Object.keys(r)).not.toContain('employeesCount');
+      expect(Object.keys(r)).not.toContain('processorsCount');
+    }
   });
 });
 
@@ -108,9 +109,13 @@ describe('parseDailyRows — the mock fixture (same shape as the real file)', ()
     expect(res.rows[0]!.strippedProgram).toBe(140);
   });
 
-  it('a BLANK stripped_non_program is skipped + counted, not defaulted to 0', async () => {
-    // The old adapter wrote `?? 0` here. A zero non-program figure is a billed
-    // fact; a blank cell is not that fact.
+  // ── ADR-0049 Am.3 A1 ──────────────────────────────────────────────────────
+  // Amendment 1 skipped the day on a blank non-program cell, symmetrically with
+  // stripped_program. Measured against Kelsey's real June workbook that refused
+  // all 23 days and the whole file: column E is BLANK, not 0. The same 23 days
+  // match MyMRC at delta 0.0 and cross-foot to the sheet's own SUM-row total of
+  // 17126, so the days are complete and their non-program value is genuinely none.
+  it('a BLANK stripped_non_program on an otherwise-complete close is 0, MARKED AS INFERRED', async () => {
     const res = await parseDailyRows(
       await buildFixtureWorkbookBytes({
         daily: [
@@ -120,12 +125,36 @@ describe('parseDailyRows — the mock fixture (same shape as the real file)', ()
       }),
     );
     expect(res.failure).toBeNull();
+    expect(res.rows).toHaveLength(2);
+    expect(res.midEditCount).toBe(0);
+    expect(res.rows[1]).toMatchObject({
+      productionDate: '2026-06-02',
+      strippedProgram: 175,
+      strippedNonProgram: 0,
+      strippedNonProgramInferred: true,
+    });
+    // A STATED zero is not an inferred one — the provenance must tell them apart.
+    expect(res.rows[0]!.strippedNonProgramInferred).toBe(false);
+  });
+
+  it('a blank stripped_PROGRAM still skips the day — the primary figure is never inferred', async () => {
+    // Day 2 carries a non-program figure, so the row IS a recorded close; only the
+    // billed program figure is missing. A1 narrows the inference to non-program
+    // ONLY — this day must still be skipped, never written with a zero.
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({
+        daily: [
+          { date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 },
+          { date: '2026-06-02', strippedProgram: null, strippedNonProgram: 12 },
+        ],
+      }),
+    );
+    expect(res.failure).toBeNull();
     expect(res.rows).toHaveLength(1);
-    expect(res.rows[0]!.productionDate).toBe('2026-06-01');
     expect(res.midEditCount).toBe(1);
     expect(res.skipped[0]).toMatchObject({
       label: 'day_2',
-      reason: 'stripped_non_program_unusable',
+      reason: 'stripped_program_unusable',
     });
   });
 
@@ -201,9 +230,11 @@ describe('parseDailyRows — cannot-read vs no-data', () => {
     expect(res.failure?.kind).toBe('daily_section_unresolved');
   });
 
-  it('refuses when the workbook MONTH cannot be derived, and says so', async () => {
+  it('an undeterminable MONTH is "not enough data yet" — refused, but never paged', async () => {
     // The Processed sheet is present and recognised, but "Day N" cannot be dated
-    // without a dated DAY inbound row, so no daily-close row is ever built.
+    // without a dated DAY inbound row AND without a month from the file name.
+    // ADR-0049 Am.3 A2: recording processing before the month's first inbound load
+    // is normal early-month practice, so this must not read as a fault.
     const res = await parseDailyRows(
       await buildFixtureWorkbookBytes({
         daily: [{ date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 }],
@@ -212,9 +243,25 @@ describe('parseDailyRows — cannot-read vs no-data', () => {
       }),
     );
     expect(res.rows).toHaveLength(0);
-    expect(res.failure?.kind).toBe('daily_section_unresolved');
-    // The parser's own note is carried through so the operator gets the cause.
-    expect(res.failure?.message).toMatch(/cannot derive workbook month/i);
+    expect(res.failure?.kind).toBe('month_undeterminable');
+    expect(res.failure?.notEnoughData).toBe(true);
+    expect(res.failure?.message).toMatch(/not enough data yet/i);
+  });
+
+  it('the FILE NAME supplies the month when the workbook has no dated row yet', async () => {
+    // The same workbook, plus the month the file name states — the close rows are
+    // now datable and the poll proceeds instead of refusing.
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({
+        daily: [{ date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 }],
+        omitDaySheets: true,
+      }),
+      undefined,
+      '2026-06',
+    );
+    expect(res.failure).toBeNull();
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0]!.productionDate).toBe('2026-06-01');
   });
 
   it('a legitimately EMPTY month is not an error — it is zero rows and no failure', async () => {
@@ -337,5 +384,103 @@ describe('parseDailyRows — wrong-workbook cross-check (site-alias)', () => {
     );
     expect(res.failure).toBeNull();
     expect(res.rows).toHaveLength(2);
+  });
+});
+
+// ── ADR-0049 Am.3 A2 — the month is cross-checked, not taken on trust ────────
+//
+// August's workbook is normally July's copied and cleared. One surviving
+// July-dated inbound row used to date every August close row into July, silently
+// overwriting a closed, billed month with the run recorded `ok`. The file name
+// states the month; it is now compared.
+
+describe('parseDailyRows — the workbook month is cross-checked against the file name', () => {
+  const JUNE_ROWS = [
+    { date: '2026-06-01', strippedProgram: 150, strippedNonProgram: 25 },
+    { date: '2026-06-02', strippedProgram: 175, strippedNonProgram: 12 },
+  ];
+
+  it('REFUSES when the workbook dates its rows into a different month than the file name', async () => {
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({ daily: JUNE_ROWS }),
+      undefined,
+      '2026-08', // the file is AUGUST … DAILY LOG WOODLAND.xlsm
+    );
+    expect(res.rows).toHaveLength(0);
+    expect(res.failure?.kind).toBe('month_mismatch');
+    expect(res.failure?.notEnoughData).toBe(false);
+    expect(res.failure?.message).toMatch(/2026-08/);
+    expect(res.failure?.message).toMatch(/closed and billed/i);
+  });
+
+  it('proceeds when the two agree', async () => {
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({ daily: JUNE_ROWS }),
+      undefined,
+      '2026-06',
+    );
+    expect(res.failure).toBeNull();
+    expect(res.rows).toHaveLength(2);
+  });
+
+  it('every written date falls inside the file’s own month', async () => {
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({ daily: JUNE_ROWS }),
+      undefined,
+      '2026-06',
+    );
+    expect(res.rows.every((r) => r.productionDate.startsWith('2026-06'))).toBe(true);
+  });
+});
+
+// ── ADR-0049 Am.3 A3 — the billed columns are resolved, not assumed ──────────
+
+describe('parseDailyRows — the Processed columns are header-validated', () => {
+  const ROWS = [
+    {
+      date: '2026-06-01',
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      materialTicket: 'M-000401',
+    },
+    {
+      date: '2026-06-02',
+      strippedProgram: 175,
+      strippedNonProgram: 12,
+      materialTicket: 'M-000402',
+    },
+  ];
+
+  it('absorbs an inserted column — the figures follow the header, not the ordinal', async () => {
+    // Two columns inserted after B. A positional reader would return the daily
+    // total where the program figure belongs; every value is finite and
+    // non-negative, so nothing downstream could tell.
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({ daily: ROWS, processedColumnShift: 2 }),
+      undefined,
+      '2026-06',
+    );
+    expect(res.failure).toBeNull();
+    expect(res.rows).toHaveLength(2);
+    expect(res.rows[0]).toMatchObject({
+      productionDate: '2026-06-01',
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      materialTicketNumber: 'M-000401',
+    });
+  });
+
+  it('REFUSES a header band it cannot recognise rather than reading shifted columns', async () => {
+    const res = await parseDailyRows(
+      await buildFixtureWorkbookBytes({ daily: ROWS, unrecognisableProcessedHeaders: true }),
+      undefined,
+      '2026-06',
+    );
+    expect(res.rows).toHaveLength(0);
+    expect(res.failure?.kind).toBe('processed_columns_unrecognised');
+    expect(res.failure?.notEnoughData).toBe(false);
+    expect(res.failure?.message).toMatch(/Nothing was written/);
+    // The message must let an operator open the sheet on the problem.
+    expect(res.failure?.message).toMatch(/header band/i);
   });
 });

@@ -30,10 +30,50 @@ import {
 } from '@/lib/msgraph-files';
 import { deriveDailyRows, type DailySiteScope } from './daily-adapter';
 import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
-import { resolveMonthlyFileName } from './naming';
+import { resolveMonthlyFileName, yearMonthKeyFromFileName } from './naming';
 import { upsertDailyProduction } from './upsert';
 
-export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error';
+export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error' | 'skipped';
+
+// ── ADR-0049 Am.3 A4 — alarm policy, graded against the ADR-0037 5-question gate ──
+//
+// What was wrong: `not_found` logged at INFO and never reached the catch block
+// that holds the ntfy calls, so a renamed / typo'd / copied file went silent
+// FOREVER. An unreadable rollout state was recorded `ok` + `cutover_noop: true` —
+// asserting a site was cut over when it was not. And a refusal re-fired every 10
+// minutes with a 30-minute cooldown held in PROCESS MEMORY, i.e. ~28 identical
+// pages per business day, reset to zero by every container restart.
+//
+// The gate, applied honestly:
+//   Q1 actionable in 5 min?  A stuck workbook needs Kelsey, not an operator at
+//                            02:00 — so `high`, never `urgent`.
+//   Q2 customer-visible?     Not directly; it silently staleness Vision's billed
+//                            production figures, which is why it must page at all.
+//   Q3 self-heal first?      Yes — the FIRST failure of a streak pages, and a new
+//                            month's not-yet-created file is inside the grace
+//                            window and pages nothing.
+//   Q4 deduplicated?         One page per SITE, not one per poll and not one per
+//                            failing check.
+//   Q5 useful click?         Tier-2 — the operator's own workbook-sync page.
+//
+// Cadence: page on the first failure of a streak, then at most once per 24 h per
+// site, held in `workbook_sources.last_alert_at` so a restart cannot reset it.
+
+/** Page at most this often per site once a failure streak is established. */
+const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long a source may produce NO successful read before it is treated as dead.
+ *
+ * Deliberately longer than a long weekend: polling is Mon–Fri only (D2), so a
+ * Friday-evening breakage is legitimately silent until Monday and a 2-day window
+ * would page every Monday morning for nothing. Also covers the documented, correct
+ * `not_found` on the 1st of a month before Kelsey creates the new file.
+ */
+const STALE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
+
+/** Tier-2 click target (ADR-0036): the page an operator can actually act from. */
+const SYNC_CLICK_URL = 'https://dr3-vision.svdp.us/admin/workbook-sync';
 
 /**
  * Thrown when a non-`graph` transport reaches the write step. Never caught into
@@ -73,6 +113,8 @@ export interface SyncOneResult {
   rowsOverwritten: number;
   error: string | null;
   runId: string;
+  /** Whether this poll fired an ntfy page (A4 — one `high` per site per day). */
+  paged: boolean;
 }
 
 export interface RunPollResult {
@@ -147,6 +189,8 @@ export async function syncOneSource(
   let rowsUpserted = 0;
   let rowsSkippedMidedit = 0;
   let rowsOverwritten = 0;
+  /** True only when the workbook was READ end to end (delta no-op counts). */
+  let workbookRead = false;
 
   try {
     // Post-cutover (surface live) ⇒ sync is a no-op (D7). The ERROR direction
@@ -158,6 +202,7 @@ export async function syncOneSource(
     // pre-cutover or post. Only an explicit 'pilot'/unregistered read keeps
     // syncing.
     let cutoverLive = false;
+    let rolloutUnreadable: string | null = null;
     try {
       cutoverLive =
         (await getRolloutState({
@@ -173,13 +218,25 @@ export async function syncOneSource(
         cutoverLive = false;
       } else {
         cutoverLive = true; // fail SAFE: unknown cutover state ⇒ do not upsert
+        rolloutUnreadable = describe(e);
         log(
           'warn',
-          `[workbook-sync] run=${runId} site=${source.site_id} rollout-state read failed — skipping poll (fail-safe): ${e instanceof Error ? e.message : String(e)}`,
+          `[workbook-sync] run=${runId} site=${source.site_id} rollout-state read failed — skipping poll (fail-safe): ${rolloutUnreadable}`,
         );
       }
     }
-    if (cutoverLive) {
+    if (rolloutUnreadable !== null) {
+      // ADR-0049 Am.3 A4 — the fail-safe DIRECTION is right and unchanged; the
+      // RECORDING was wrong. This used to be written `status: 'ok'` +
+      // `cutover_noop: true`, a row asserting the site is cut over when we do not
+      // know that and the sync has silently stopped feeding Vision. `cutover_noop`
+      // stays FALSE: no cutover was read, so none can be claimed.
+      status = 'skipped';
+      error =
+        `rollout state unreadable — skipping this poll rather than risk overwriting a cut-over ` +
+        `site's Vision-captured rows (fail-safe). This is NOT a cutover no-op: whether ` +
+        `${source.site_id} is cut over is unknown. Underlying error: ${rolloutUnreadable}`;
+    } else if (cutoverLive) {
       cutoverNoop = true;
       log(
         'info',
@@ -196,8 +253,11 @@ export async function syncOneSource(
           `[workbook-sync] run=${runId} site=${source.site_id} file "${fileName}" not found (possibly-empty new month)`,
         );
       } else if (file.id === source.last_file_id && file.ctag === source.last_file_ctag) {
-        // Delta no-op (D2): unchanged cTag ⇒ NO re-download / re-parse.
+        // Delta no-op (D2): unchanged cTag ⇒ NO re-download / re-parse. This still
+        // counts as a healthy read for A4 — the file is present and identical to
+        // the one we last parsed successfully.
         changesDetected = false;
+        workbookRead = true;
         log(
           'info',
           `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" unchanged (ctag) — no re-download`,
@@ -211,8 +271,25 @@ export async function syncOneSource(
         // ONE parse per poll. The layout-aware parse is both the staging/
         // provenance record AND the source of the operational rows — the daily
         // adapter derives them from it and resolves no columns of its own (D12).
-        const parsed = await parseWorkbook(bytes);
-        const daily = deriveDailyRows(parsed, await siteScopeFor(prisma, source.site_id, log));
+        //
+        // ADR-0049 Am.3 A2 — the file name STATES the month, and until now that was
+        // used only to fetch the file and stamp the ledger. The parser derived the
+        // month from the first dated inbound row it met and compared it to nothing,
+        // so one stale copy-forward row in a cleared-down file dated a whole month
+        // into the previous month — overwriting closed, billed figures under
+        // workbook-wins with the run recorded `ok`. The two are now cross-checked,
+        // and the file name also supplies the month when the workbook carries no
+        // dated row yet.
+        const expectedMonth = yearMonthKeyFromFileName(
+          source.naming_pattern,
+          file.name ?? fileName,
+        );
+        const parsed = await parseWorkbook(bytes, { expectedMonth });
+        const daily = deriveDailyRows(
+          parsed,
+          await siteScopeFor(prisma, source.site_id, log),
+          expectedMonth,
+        );
         rowsSkippedMidedit = daily.midEditCount;
 
         // ── A MOCK TRANSPORT MUST NEVER WRITE PRODUCTION ─────────────────
@@ -244,33 +321,47 @@ export async function syncOneSource(
         // read as "nothing changed". The file watermark is deliberately NOT
         // advanced — the next poll re-reads it.
         if (daily.failure) {
-          status = 'error';
           error = `${daily.failure.kind}: ${daily.failure.message}`;
-          log('error', `[workbook-sync] run=${runId} site=${source.site_id} ${error}`);
-          throw new WorkbookDailyLayoutUnreadable(error);
+          if (daily.failure.notEnoughData) {
+            // ADR-0049 Am.3 A2/A4 — "the workbook does not carry enough YET" is not
+            // a read failure. Recording it as one pages an operator over a file
+            // Kelsey simply has not filled in, which fails the ADR-0037 gate on Q1
+            // and Q2. Skipped, on the ledger, with the reason, and no page. The
+            // watermark is still not advanced, so the next poll re-reads.
+            status = 'skipped';
+            log('info', `[workbook-sync] run=${runId} site=${source.site_id} ${error}`);
+          } else {
+            status = 'error';
+            log('error', `[workbook-sync] run=${runId} site=${source.site_id} ${error}`);
+            throw new WorkbookDailyLayoutUnreadable(error);
+          }
+        } else {
+          const counts = await prisma.$transaction((tx) =>
+            upsertDailyProduction({
+              db: tx,
+              siteId: source.site_id,
+              syncRunId: runId,
+              rows: daily.rows,
+            }),
+          );
+          rowsUpserted = counts.upserted;
+          rowsOverwritten = counts.overwritten;
+          workbookRead = true;
+          log(
+            'info',
+            `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" gen=${daily.templateGeneration} month=${parsed.workbookMonth ?? 'n/a'} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit}`,
+          );
         }
-
-        const counts = await prisma.$transaction((tx) =>
-          upsertDailyProduction({
-            db: tx,
-            siteId: source.site_id,
-            syncRunId: runId,
-            rows: daily.rows,
-          }),
-        );
-        rowsUpserted = counts.upserted;
-        rowsOverwritten = counts.overwritten;
-        log(
-          'info',
-          `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" gen=${daily.templateGeneration} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit}`,
-        );
       }
 
+      // The file watermark advances ONLY when the workbook was actually read. A
+      // refusal or a skip leaves the stored cTag alone so the next poll re-reads
+      // the same bytes — the deliberate D12c posture, extended to `skipped`.
       await prisma.workbookSource.update({
         where: { id: source.id },
         data: {
           last_polled_at: nowFn(),
-          ...(file
+          ...(file && workbookRead
             ? { last_file_id: file.id, last_file_name: file.name, last_file_ctag: file.ctag }
             : {}),
         },
@@ -284,14 +375,28 @@ export async function syncOneSource(
         'error',
         `[workbook-sync] run=${runId} site=${source.site_id} FORBIDDEN (Files.Read.All missing) — ${error}`,
       );
-      await pageForbidden(source.site_id, error).catch(() => undefined);
     } else {
       status = 'error';
       error = describe(err);
       log('error', `[workbook-sync] run=${runId} site=${source.site_id} FAILED — ${error}`);
-      await pageError(source.site_id, error).catch(() => undefined);
     }
   }
+
+  // ── ADR-0049 Am.3 A4 — health watermark, then ONE graded alarm decision ─────
+  //
+  // Every page in this engine used to be fired from inside the catch block, which
+  // is why `not_found` — a rename, a typo, a `… (1).xlsm` copy — pages nobody, and
+  // why a stuck refusal paged on its own 30-minute in-process timer. Both
+  // decisions now happen HERE, once, after the outcome is settled, against durable
+  // per-source state.
+  const paged = await recordHealthAndAlarm({
+    prisma,
+    source,
+    status,
+    error,
+    now: nowFn(),
+    log,
+  });
 
   // Ledger row ALWAYS (mymrc_sync_runs discipline), including throw / fail-soft.
   try {
@@ -333,6 +438,7 @@ export async function syncOneSource(
     rowsOverwritten,
     error,
     runId,
+    paged,
   };
 }
 
@@ -360,30 +466,105 @@ async function siteScopeFor(
   }
 }
 
-async function pageForbidden(siteId: string, message: string): Promise<void> {
-  await publishNtfy({
-    topic: 'dr3-vision-system',
-    title: 'Workbook sync forbidden (Files.Read.All)',
-    body: `${message}\n\nThe workbook sync for site ${siteId} got a Graph 403 — the Files.Read.All grant may be missing/unconsented. Sync failed soft; check the workbook-sync page + ledger.`,
-    priority: 'high',
-    tags: ['warning', 'workbook-sync', 'forbidden', 'dr3-vision'],
-    clickUrl: 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision',
-    fingerprint: `workbook-sync-forbidden-${siteId}`,
-    cooldownMs: 30 * 60 * 1000,
-  });
+// ── ADR-0049 Am.3 A4 — the health watermark and the ONE alarm decision ───────
+
+interface HealthArgs {
+  prisma: PrismaClient;
+  source: WorkbookSource;
+  status: SyncStatus;
+  error: string | null;
+  now: Date;
+  log: SyncLogger;
 }
 
-async function pageError(siteId: string, message: string): Promise<void> {
+/**
+ * Record what this poll proved about the source's health, then decide — once —
+ * whether to page. Returns whether a page was published.
+ *
+ * Health is a two-state fact, and the two states are NOT `ok` vs everything else:
+ *
+ *   HEALTHY  — the workbook was read (including a delta no-op and a legitimately
+ *              empty month) or the site is cut over and no-oping by design.
+ *              Stamps `last_success_at`, clears the failure streak.
+ *   NOT YET  — `not_found`, `skipped`, `forbidden`, `error`. Increments the
+ *              streak. NONE of these proves data arrived, and until this
+ *              amendment `not_found` proved nothing AND told nobody.
+ *
+ * Two conditions page, both `high`, both at most once per site per 24 h:
+ *
+ *   1. A READ FAILURE (`error` / `forbidden`) — pages on the FIRST poll of the
+ *      streak, because a 403 or a refused workbook is a real breakage and sitting
+ *      on it for a day helps nobody. Then at most daily while it persists.
+ *   2. STALENESS — no successful read for `STALE_AFTER_MS`, whatever the status.
+ *      This is the only thing that pages on `not_found` and `skipped`, and it must
+ *      be: `not_found` on the 1st of a month, before Kelsey creates the new file,
+ *      is the correct and expected state (D5) and paging on it would be a monthly
+ *      false alarm. A rename, a typo or a `… (1).xlsm` copy produces the SAME
+ *      `not_found` — indistinguishable per-poll, distinguishable only by duration.
+ *      Duration is therefore the signal.
+ *
+ * The 24 h gate lives in `workbook_sources.last_alert_at`, not in `ntfy.ts`'s
+ * process-local cooldown Map, because that Map is wiped by every container restart
+ * — which is how a stuck refusal produced ~28 identical pages per business day.
+ */
+async function recordHealthAndAlarm(args: HealthArgs): Promise<boolean> {
+  const { prisma, source, status, error, now, log } = args;
+  const healthy = status === 'ok';
+  const failures = healthy ? 0 : source.consecutive_failures + 1;
+  const lastSuccessAt = healthy ? now : source.last_success_at;
+
+  const staleFor =
+    lastSuccessAt === null
+      ? now.getTime() - source.created_at.getTime()
+      : now.getTime() - lastSuccessAt.getTime();
+  const stale = !healthy && staleFor >= STALE_AFTER_MS;
+  const readFailure = status === 'error' || status === 'forbidden';
+  const cooledDown =
+    source.last_alert_at === null ||
+    now.getTime() - source.last_alert_at.getTime() >= ALERT_COOLDOWN_MS;
+  const shouldPage = !healthy && ((readFailure && failures === 1) || stale) && cooledDown;
+
+  try {
+    await prisma.workbookSource.update({
+      where: { id: source.id },
+      data: {
+        consecutive_failures: failures,
+        ...(healthy ? { last_success_at: now } : {}),
+        ...(shouldPage ? { last_alert_at: now } : {}),
+      },
+    });
+  } catch (e) {
+    // Never let health bookkeeping fail a poll that otherwise succeeded.
+    log('warn', `[workbook-sync] site=${source.site_id} health update failed — ${describe(e)}`);
+  }
+
+  if (!shouldPage) return false;
+  const days = Math.floor(staleFor / (24 * 60 * 60 * 1000));
+  const headline =
+    status === 'forbidden'
+      ? 'Workbook sync forbidden (Files.Read.All)'
+      : stale
+        ? 'Workbook sync has produced no data'
+        : 'Workbook sync failing';
   await publishNtfy({
     topic: 'dr3-vision-system',
-    title: 'Workbook sync error',
-    body: `${message}\n\nThe workbook sync for site ${siteId} failed. Check the workbook-sync container + the sync ledger.`,
+    title: `${headline} — ${source.site_id}`,
+    body:
+      `${error ?? `status=${status}`}\n\n` +
+      `Site ${source.site_id}, file pattern "${source.naming_pattern}". ` +
+      `${failures} consecutive failed poll(s); last successful read ` +
+      `${lastSuccessAt === null ? 'NEVER' : `${days} day(s) ago`}. ` +
+      `${status === 'not_found' ? 'The file was not found — check for a rename, a typo, a stray copy, or a moved folder. ' : ''}` +
+      `Nothing has been written. Next page for this site in 24h at the earliest.`,
     priority: 'high',
-    tags: ['error', 'workbook-sync', 'dr3-vision'],
-    clickUrl: 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision',
-    fingerprint: `workbook-sync-error-${siteId}`,
-    cooldownMs: 30 * 60 * 1000,
+    tags: ['warning', 'workbook-sync', 'dr3-vision'],
+    clickUrl: SYNC_CLICK_URL,
+    fingerprint: `workbook-sync-${source.site_id}`,
+    cooldownMs: ALERT_COOLDOWN_MS,
+  }).catch((e: unknown) => {
+    log('warn', `[workbook-sync] site=${source.site_id} page failed — ${describe(e)}`);
   });
+  return true;
 }
 
 function describe(err: unknown): string {

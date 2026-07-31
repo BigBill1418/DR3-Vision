@@ -127,6 +127,23 @@ export interface ParsedWorkbook {
    * `processed_units_daily.saved_units`; empty for legacy synthetic workbooks.
    */
   inventorySeries: DayInventory[];
+  /**
+   * ADR-0049 Am.3 A2 — the 'YYYY-MM' every `daily_close` date was built from, or
+   * null when it could not be settled (the file name and the workbook's own dated
+   * rows disagreed, or neither existed). Null ⇒ NO daily-close rows were built;
+   * `sectionCounts` carries which of the two it was.
+   */
+  workbookMonth: string | null;
+}
+
+export interface ParseWorkbookOptions {
+  /**
+   * The 'YYYY-MM' the FILE NAME states (ADR-0049 Am.3 A2). Cross-checked against
+   * the month the workbook's own dated rows imply, and used as the month when the
+   * workbook carries no dated row yet. Omit when the caller has no file name to
+   * read a month from — the pre-A2 behaviour, minus the cross-check.
+   */
+  expectedMonth?: string | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -148,6 +165,7 @@ export function columnLetterToNumber(letter: string): number {
 
 export async function parseWorkbook(
   data: ExcelJS.Buffer | ArrayBuffer | Buffer | Uint8Array,
+  options: ParseWorkbookOptions = {},
 ): Promise<ParsedWorkbook> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(data as ExcelJS.Buffer);
@@ -175,7 +193,7 @@ export async function parseWorkbook(
   if (!isLegacy) {
     // ── Real Woodland workbook: semantic-type-driven extraction (§8.2). ──────
     const classification = classifyWorkbookSheets(wb);
-    const ex = extractWorkbook(wb, classification);
+    const ex = extractWorkbook(wb, classification, options.expectedMonth ?? null);
     stagingRows.push(...ex.stagingRows);
     summaryFigures.push(...ex.summaryFigures);
     inbound.push(...ex.inbound);
@@ -213,6 +231,7 @@ export async function parseWorkbook(
       inventoryLedger: ex.inventoryLedger,
       inventoryClose: ex.inventoryClose,
       inventorySeries: ex.inventorySeries,
+      workbookMonth: ex.workbookMonth,
     };
   }
 
@@ -360,5 +379,6 @@ export async function parseWorkbook(
     inventoryLedger: null,
     inventoryClose: null,
     inventorySeries: [],
+    workbookMonth: null,
   };
 }

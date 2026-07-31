@@ -4756,6 +4756,13 @@ enum WorkbookSyncStatus {
   forbidden
   not_found
   error
+  /// ADR-0049 Am.3 A4 — the poll did NOT run to a conclusion and NOTHING was
+  /// written, and that is not a fault. Two cases: the rollout state could not be
+  /// read (fail-safe: we cannot know whether the site is cut over, so we do not
+  /// upsert), and the workbook does not yet carry enough to date its close rows.
+  /// Both used to be recorded as `ok` — the first with `cutover_noop: true`,
+  /// which asserted a site was cut over when it was not.
+  skipped
 }
 
 /// D9 — one syncing source (a site's monthly workbook location). Woodland ships
@@ -4781,6 +4788,20 @@ model WorkbookSource {
   last_file_id   String? // Graph item id of the last-synced monthly file
   last_file_name String? // resolved file name of the last-synced file
   last_file_ctag String? // D2 change-detection guard (unchanged ⇒ skip re-download)
+
+  /// ADR-0049 Am.3 A4 — "we polled" was recorded and "we last got DATA" was not,
+  /// so a source that had produced nothing for three weeks was indistinguishable
+  /// from a healthy one. Set on every poll that READ the workbook (including a
+  /// delta no-op and a legitimately empty month) — never on not_found, never on a
+  /// refusal.
+  last_success_at       DateTime?
+  /// Consecutive non-success polls. Resets to 0 on any success. Drives the
+  /// escalation ladder so a permanently-failing source pages once and then daily
+  /// rather than ~28 identical times per business day.
+  consecutive_failures  Int       @default(0)
+  /// When this source last PAGED. Durable on purpose: the ntfy cooldown ledger is
+  /// in-process memory, so a container restart reset it and the flood resumed.
+  last_alert_at         DateTime?
   created_by     String? // bare audit-actor column
   updated_by     String? // bare audit-actor column
   created_at     DateTime  @default(now())

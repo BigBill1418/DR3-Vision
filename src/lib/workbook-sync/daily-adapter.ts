@@ -54,22 +54,42 @@ const DAILY_CLOSE_SECTION = 'daily_close';
  */
 const PROCESSED_SECTION_COUNT_KEY = 'processed_daily_close';
 
+/**
+ * `sectionCounts` keys the extractor bumps INSTEAD of building day rows when it
+ * refused for a NAMED reason (ADR-0049 Am.3). Each maps to its own refusal so the
+ * ledger says which one happened — "cannot read" is not one fact, it is four.
+ */
+const COLUMNS_UNRECOGNISED_COUNT_KEY = 'processed_columns_unrecognised';
+const MONTH_MISMATCH_COUNT_KEY = 'processed_month_mismatch';
+const MONTH_UNDETERMINABLE_COUNT_KEY = 'processed_month_undeterminable';
+
 export interface DailyProductionRow {
   /** 'YYYY-MM-DD' (UTC day key) — the (site, production_date) upsert key. */
   productionDate: string;
   strippedProgram: number;
   strippedNonProgram: number;
+  /**
+   * ADR-0049 Am.3 A1 — TRUE when the sheet left the non-program cell BLANK on a
+   * row that is otherwise a complete close, and this 0 is our inference of "none"
+   * rather than a figure the sheet stated. Carried into the audit row so the
+   * provenance never claims the workbook said zero when it said nothing.
+   */
+  strippedNonProgramInferred: boolean;
   materialTicketNumber: string | null;
-  employeesCount: number | null;
-  processorsCount: number | null;
   savedUnits: number | null;
+  // NOTE — there is deliberately no `employeesCount` / `processorsCount` here.
+  // The real Processed sheet carries no such column (Am.1 D12d), so the adapter
+  // could only ever report null, and under ADR-0049 D13 the sync never writes
+  // those fields. Carrying a field that is always null and never written is an
+  // invitation for a future reader to wire it up.
 }
 
 /** Why a day the workbook DOES carry was not turned into a production row. */
 export type DailySkipReason =
   | 'date_unreadable'
   | 'stripped_program_unusable'
-  | 'stripped_non_program_unusable';
+  | 'stripped_non_program_unusable'
+  | 'date_outside_file_month';
 
 export interface DailySkippedDay {
   /** The workbook's own row key ("day_7") — never a fabricated date. */
@@ -81,6 +101,9 @@ export interface DailySkippedDay {
 export type DailyFailureKind =
   | 'unknown_template_generation'
   | 'daily_section_unresolved'
+  | 'processed_columns_unrecognised'
+  | 'month_mismatch'
+  | 'month_undeterminable'
   | 'all_days_unusable'
   | 'conflicting_duplicate_days'
   | 'wrong_site';
@@ -89,6 +112,14 @@ export interface DailyParseFailure {
   kind: DailyFailureKind;
   /** Operator-facing; goes verbatim onto `workbook_sync_runs.error_text`. */
   message: string;
+  /**
+   * TRUE when nothing is WRONG — the workbook simply does not carry enough yet to
+   * date its close rows (ADR-0049 Am.3 A2). The engine records these as `skipped`
+   * and does NOT page: paging an operator because Kelsey has not logged the
+   * month's first inbound load yet fails ADR-0037 Q1 (nothing is actionable) and
+   * Q2 (nothing is customer-visible). A refusal (`false`) is a real read failure.
+   */
+  notEnoughData: boolean;
 }
 
 export interface DailyParseResult {
@@ -150,10 +181,14 @@ function quantity(payload: Record<string, unknown>, key: string): number | null 
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
 }
 
-/** A non-negative integer headcount, or null (the column is Int in the schema). */
-function headcount(payload: Record<string, unknown>, key: string): number | null {
-  const raw = payload[key];
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : null;
+/**
+ * TRUE when the sheet's cell was BLANK — the extractor omits the key entirely
+ * rather than emitting a value it did not read. Distinct from a key that is
+ * present and unusable (a negative, a string, NaN): that is a figure we cannot
+ * trust, and it skips the day. Only a genuine blank can be read as "none".
+ */
+function stated(payload: Record<string, unknown>, key: string): boolean {
+  return key in payload;
 }
 
 function text(payload: Record<string, unknown>, key: string): string | null {
@@ -166,8 +201,6 @@ function sameRow(a: DailyProductionRow, b: DailyProductionRow): boolean {
     a.strippedProgram === b.strippedProgram &&
     a.strippedNonProgram === b.strippedNonProgram &&
     a.materialTicketNumber === b.materialTicketNumber &&
-    a.employeesCount === b.employeesCount &&
-    a.processorsCount === b.processorsCount &&
     a.savedUnits === b.savedUnits
   );
 }
@@ -245,6 +278,7 @@ function wrongSite(parsed: ParsedWorkbook, scope: DailySiteScope): string | null
 export function deriveDailyRows(
   parsed: ParsedWorkbook,
   siteScope?: DailySiteScope,
+  expectedMonth?: string | null,
 ): DailyParseResult {
   const base = {
     rows: [] as DailyProductionRow[],
@@ -253,26 +287,62 @@ export function deriveDailyRows(
     templateGeneration: parsed.templateGeneration,
     daysSeen: 0,
   };
+  const refuse = (kind: DailyFailureKind, message: string): DailyParseResult => ({
+    ...base,
+    failure: { kind, message, notEnoughData: false },
+  });
 
   // (1) A shape we do not recognise is never parsed hopefully.
   if (parsed.templateGeneration === 'unknown') {
-    return {
-      ...base,
-      failure: {
-        kind: 'unknown_template_generation',
-        message:
-          `templateGeneration is "unknown" — no Woodland daily-log section resolved in this ` +
-          `workbook (${parsed.sheetCount} sheet(s): ${sheetSummary(parsed)}). Refusing to parse ` +
-          `a shape the parser does not recognise. Nothing was written.`,
-      },
-    };
+    return refuse(
+      'unknown_template_generation',
+      `templateGeneration is "unknown" — no Woodland daily-log section resolved in this ` +
+        `workbook (${parsed.sheetCount} sheet(s): ${sheetSummary(parsed)}). Refusing to parse ` +
+        `a shape the parser does not recognise. Nothing was written.`,
+    );
   }
 
   if (siteScope) {
     const mismatch = wrongSite(parsed, siteScope);
-    if (mismatch !== null) {
-      return { ...base, failure: { kind: 'wrong_site', message: mismatch } };
-    }
+    if (mismatch !== null) return refuse('wrong_site', mismatch);
+  }
+
+  // (1b) The extractor settled the MONTH and the COLUMNS before it built a single
+  //      close row (ADR-0049 Am.3 A2/A3). When it refused, it bumped a named count
+  //      key instead — so day rows are absent for a reason that is NOT "empty
+  //      month", and each reason gets its own message. These are checked before
+  //      the zero-rows branch precisely because they LOOK like an empty month.
+  if (MONTH_MISMATCH_COUNT_KEY in parsed.sectionCounts) {
+    return refuse(
+      'month_mismatch',
+      `the month the workbook's own dated rows imply does NOT match the month the FILE NAME ` +
+        `states${expectedMonth ? ` (${expectedMonth})` : ''}. Every "Day N" close row would have ` +
+        `been dated into the wrong month, overwriting a month that may already be closed and ` +
+        `billed. Nothing was written.${processedFlags(parsed)}`,
+    );
+  }
+  if (COLUMNS_UNRECOGNISED_COUNT_KEY in parsed.sectionCounts) {
+    return refuse(
+      'processed_columns_unrecognised',
+      `the Processed sheet's stripped program / non-program columns could not be resolved from ` +
+        `its header band, so the billed figures could not be read from named columns. Refusing ` +
+        `to fall back to fixed column positions — a shifted column yields plausible WRONG ` +
+        `figures that nothing downstream can detect. Nothing was written.${processedFlags(parsed)}`,
+    );
+  }
+  if (MONTH_UNDETERMINABLE_COUNT_KEY in parsed.sectionCounts) {
+    return {
+      ...base,
+      failure: {
+        kind: 'month_undeterminable',
+        message:
+          `the workbook month could not be settled — the file carries no dated inbound row yet ` +
+          `and no month was supplied from the file name, so "Day N" cannot be turned into a ` +
+          `date. This is "not enough data yet", not a fault: it clears itself as soon as the ` +
+          `month's first inbound load is recorded. Nothing was written.${processedFlags(parsed)}`,
+        notEnoughData: true,
+      },
+    };
   }
 
   const dayRows = parsed.stagingRows.filter((r) => r.section === DAILY_CLOSE_SECTION);
@@ -292,6 +362,7 @@ export function deriveDailyRows(
             `${parsed.sheetCount} sheet(s): ${sheetSummary(parsed)}). The workbook has content ` +
             `but its Processed/daily-close layout was not recognised, so zero rows here means ` +
             `"cannot read", not "no production". Nothing was written.${processedFlags(parsed)}`,
+          notEnoughData: false,
         },
       };
     }
@@ -322,11 +393,43 @@ export function deriveDailyRows(
       });
       continue;
     }
-    const strippedNonProgram = quantity(payload, 'strippedNonProgram');
+    // ADR-0049 Am.3 A1 — a BLANK non-program cell on a row that is otherwise a
+    // complete close means NONE, and is read as 0.
+    //
+    // Amendment 1 removed the extractor's `snp ?? 0`, which was right: a
+    // manufactured zero on `stripped_program` is a fabricated billed figure. But
+    // applying the same rule to `stripped_non_program` refuses Kelsey's real June
+    // workbook in full — measured 2026-07-31 against the archived bytes, column E
+    // is blank on all 23 days (June had no non-program stripping and it is left
+    // empty rather than typed as 0), which produced 0 rows and `all_days_unusable`.
+    // With `is_syncing` on that is a refusal every 10 minutes, forever.
+    //
+    // Those same 23 days match MyMRC at delta 0.0 on all 23 and cross-foot exactly
+    // to the workbook's own Processed SUM-row D total of 17126. The days are real
+    // and complete; their non-program value is genuinely none. So:
+    //   - blank `strippedProgram`      → the day is genuinely unusable. SKIP.
+    //   - blank `strippedNonProgram` on a row whose `strippedProgram` IS present
+    //                                  → none. 0, MARKED AS INFERRED.
+    //   - PRESENT but unusable (negative, non-numeric) → still a skip. A figure we
+    //     cannot trust is not the same fact as a cell left empty.
+    const nonProgramStated = stated(payload, 'strippedNonProgram');
+    const strippedNonProgram = nonProgramStated ? quantity(payload, 'strippedNonProgram') : 0;
     if (strippedNonProgram === null) {
       skipped.push({
         label,
         reason: 'stripped_non_program_unusable',
+        provenance: stagingRow.provenance,
+      });
+      continue;
+    }
+
+    // ADR-0049 Am.3 A2 — a close row dated outside the file's own month is never
+    // written. The month is settled once for the whole workbook, so this is
+    // defence in depth against a future path that dates rows individually.
+    if (expectedMonth != null && productionDate.slice(0, 7) !== expectedMonth) {
+      skipped.push({
+        label,
+        reason: 'date_outside_file_month',
         provenance: stagingRow.provenance,
       });
       continue;
@@ -337,9 +440,8 @@ export function deriveDailyRows(
       productionDate,
       strippedProgram,
       strippedNonProgram,
+      strippedNonProgramInferred: !nonProgramStated,
       materialTicketNumber: text(payload, 'materialTicketNumber'),
-      employeesCount: headcount(payload, 'employeesCount'),
-      processorsCount: headcount(payload, 'processorsCount'),
       savedUnits: quantity(payload, 'savedUnits') ?? saved.get(dayOfMonth) ?? null,
     };
 
@@ -363,6 +465,7 @@ export function deriveDailyRows(
         message:
           `${conflicts.length} production date(s) appear more than once with DIFFERENT figures: ` +
           `${conflicts.slice(0, 5).join('; ')}. Choosing one would be a guess. Nothing was written.`,
+        notEnoughData: false,
       },
     };
   }
@@ -389,6 +492,7 @@ export function deriveDailyRows(
           `${dayRows.length} daily-close row(s) were found but NONE produced a usable production ` +
           `figure — first ${Math.min(skipped.length, 5)}: ${reasons}. Zero rows here means ` +
           `"cannot read", not "no production". Nothing was written.`,
+        notEnoughData: false,
       },
     };
   }
@@ -411,6 +515,11 @@ export function deriveDailyRows(
 export async function parseDailyRows(
   data: Uint8Array | ArrayBuffer | Buffer,
   siteScope?: DailySiteScope,
+  expectedMonth?: string | null,
 ): Promise<DailyParseResult> {
-  return deriveDailyRows(await parseWorkbook(data), siteScope);
+  return deriveDailyRows(
+    await parseWorkbook(data, { expectedMonth: expectedMonth ?? null }),
+    siteScope,
+    expectedMonth ?? null,
+  );
 }

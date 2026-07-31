@@ -14,6 +14,42 @@
 // `closed_at` is deliberately PRESERVED (never cleared) on overwrite — the sync is
 // the authoritative pre-cutover figure but must not disturb the operational close
 // metadata; the audit row is the record of the change.
+//
+// ── ADR-0049 Am.3 / D13 — workbook-wins is NARROWED, per field ───────────────
+//
+// The rule: a `null` from the adapter means "the workbook did not STATE one". It
+// never means "the workbook says none". Before this amendment every field was
+// treated alike, with two consequences:
+//
+//   1. The Processed sheet has no employees / processors columns, so the adapter
+//      reports them `null` — and the sync would write that null over a headcount a
+//      manager had just entered on the close screen. Audited, but destroyed, and
+//      the COR prefill (`src/lib/cor/prefill.ts`) loses its numbers with it.
+//   2. Worse: `disagrees()` returned true on the HEADCOUNT ALONE, which rewrote
+//      `source` to 'import'. That permanently locks the MyMRC bridge out of the row
+//      (it updates only `WHERE source = 'mymrc'`), so unnarrowed workbook-wins
+//      silently converted headcount data entry into an irreversible ownership
+//      transfer, with no production figure changed.
+//
+// Three classes now:
+//
+//   `stripped_program` / `stripped_non_program` — workbook wins UNCONDITIONALLY.
+//       Unchanged. A blank one never reaches here: the adapter skips the day
+//       (D11/D12b), except for a blank non-program on an otherwise-complete close,
+//       which is 0 and marked `strippedNonProgramInferred` (Am.3 A1).
+//   `material_ticket_number` / `saved_units` — workbook wins WHEN IT STATES A
+//       VALUE; a null leaves the stored value alone. The sync re-reads the same
+//       file every 10 minutes, so a mid-edit blank is a routine every-poll event
+//       while a deliberately retracted ticket is rare and manually correctable.
+//       Getting this backwards means routine blanks chew through real values.
+//   `employees_count` / `processors_count` — the sync NEVER touches them. Out of
+//       the update payload and out of `disagrees()`.
+//
+// The honest cost, recorded rather than left for a future reader to discover: a row
+// can now be MIXED-PROVENANCE — production figures from the workbook, headcount
+// from Vision — while `source` remains a single scalar reading 'import'. `source`
+// therefore describes the PRODUCTION FIGURES, not the whole row. The per-field
+// audit trail remains the record of what actually changed.
 
 import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
@@ -38,27 +74,55 @@ function dec(n: number): Prisma.Decimal {
   return new Prisma.Decimal(n);
 }
 
-/** A field-by-field disagreement check between the workbook row and the stored row. */
-function disagrees(
-  row: DailyProductionRow,
-  existing: {
-    stripped_program: Prisma.Decimal;
-    stripped_non_program: Prisma.Decimal;
-    material_ticket_number: string | null;
-    employees_count: number | null;
-    processors_count: number | null;
-    saved_units: Prisma.Decimal | null;
-  },
-): boolean {
+interface ExistingRow {
+  stripped_program: Prisma.Decimal;
+  stripped_non_program: Prisma.Decimal;
+  material_ticket_number: string | null;
+  saved_units: Prisma.Decimal | null;
+}
+
+/**
+ * The fields this sync will actually WRITE for `row`, per the D13 narrowing.
+ * A field the workbook did not state is simply absent, so Prisma leaves the
+ * stored value untouched. `employees_count` / `processors_count` are absent
+ * unconditionally — the workbook has no such column and never will.
+ */
+function writablePayload(row: DailyProductionRow): {
+  stripped_program: Prisma.Decimal;
+  stripped_non_program: Prisma.Decimal;
+  material_ticket_number?: string;
+  saved_units?: Prisma.Decimal;
+} {
+  return {
+    stripped_program: dec(row.strippedProgram),
+    stripped_non_program: dec(row.strippedNonProgram),
+    ...(row.materialTicketNumber !== null
+      ? { material_ticket_number: row.materialTicketNumber }
+      : {}),
+    ...(row.savedUnits !== null ? { saved_units: dec(row.savedUnits) } : {}),
+  };
+}
+
+/**
+ * A disagreement check over ONLY the fields the sync will write. A field the
+ * workbook did not state cannot disagree with anything — that is the whole point
+ * of the narrowing, and it is why the headcounts are absent here as well as from
+ * the payload: a headcount difference alone must never trigger a write, because
+ * the write is what transfers ownership of the row away from the MyMRC bridge.
+ */
+function disagrees(row: DailyProductionRow, existing: ExistingRow): boolean {
   if (!existing.stripped_program.equals(dec(row.strippedProgram))) return true;
   if (!existing.stripped_non_program.equals(dec(row.strippedNonProgram))) return true;
-  if ((existing.material_ticket_number ?? null) !== (row.materialTicketNumber ?? null)) return true;
-  if ((existing.employees_count ?? null) !== (row.employeesCount ?? null)) return true;
-  if ((existing.processors_count ?? null) !== (row.processorsCount ?? null)) return true;
-  const savedNow = row.savedUnits === null ? null : dec(row.savedUnits);
-  if ((existing.saved_units === null) !== (savedNow === null)) return true;
-  if (existing.saved_units !== null && savedNow !== null && !existing.saved_units.equals(savedNow))
+  if (
+    row.materialTicketNumber !== null &&
+    existing.material_ticket_number !== row.materialTicketNumber
+  ) {
     return true;
+  }
+  if (row.savedUnits !== null) {
+    const savedNow = dec(row.savedUnits);
+    if (existing.saved_units === null || !existing.saved_units.equals(savedNow)) return true;
+  }
   return false;
 }
 
@@ -77,19 +141,12 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
         stripped_program: true,
         stripped_non_program: true,
         material_ticket_number: true,
-        employees_count: true,
-        processors_count: true,
         saved_units: true,
       },
     });
 
     const data = {
-      stripped_program: dec(row.strippedProgram),
-      stripped_non_program: dec(row.strippedNonProgram),
-      material_ticket_number: row.materialTicketNumber,
-      employees_count: row.employeesCount,
-      processors_count: row.processorsCount,
-      saved_units: row.savedUnits === null ? null : dec(row.savedUnits),
+      ...writablePayload(row),
       source: 'import' as const,
       import_id: syncRunId,
     };
@@ -111,7 +168,7 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
             JSON.stringify({
               site_id: siteId,
               production_date: row.productionDate,
-              ...serialize(data),
+              ...serialize(data, row),
             }),
           ),
         },
@@ -140,12 +197,10 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
             stripped_program: existing.stripped_program.toString(),
             stripped_non_program: existing.stripped_non_program.toString(),
             material_ticket_number: existing.material_ticket_number,
-            employees_count: existing.employees_count,
-            processors_count: existing.processors_count,
             saved_units: existing.saved_units?.toString() ?? null,
           }),
         ),
-        after: JSON.parse(JSON.stringify(serialize(data))),
+        after: JSON.parse(JSON.stringify(serialize(data, row))),
       },
     });
   }
@@ -153,23 +208,35 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
   return { upserted, overwritten };
 }
 
-function serialize(data: {
-  stripped_program: Prisma.Decimal;
-  stripped_non_program: Prisma.Decimal;
-  material_ticket_number: string | null;
-  employees_count: number | null;
-  processors_count: number | null;
-  saved_units: Prisma.Decimal | null;
-  source: string;
-  import_id: string;
-}): Record<string, unknown> {
+/**
+ * The audit `after` payload: exactly the fields that were WRITTEN, plus the
+ * provenance qualifier the figures need.
+ *
+ * `stripped_non_program_inferred` is the Am.3 A1 honesty marker. A blank
+ * non-program cell on an otherwise-complete close is read as 0, which is right —
+ * but the sheet did not SAY zero, and an audit row that records a bare 0 claims it
+ * did. Fields the workbook did not state are ABSENT here, not null, because the
+ * stored value was left alone and a null would read as "we wrote null".
+ */
+function serialize(
+  data: {
+    stripped_program: Prisma.Decimal;
+    stripped_non_program: Prisma.Decimal;
+    material_ticket_number?: string;
+    saved_units?: Prisma.Decimal;
+    source: string;
+    import_id: string;
+  },
+  row: DailyProductionRow,
+): Record<string, unknown> {
   return {
     stripped_program: data.stripped_program.toString(),
     stripped_non_program: data.stripped_non_program.toString(),
-    material_ticket_number: data.material_ticket_number,
-    employees_count: data.employees_count,
-    processors_count: data.processors_count,
-    saved_units: data.saved_units?.toString() ?? null,
+    stripped_non_program_inferred: row.strippedNonProgramInferred,
+    ...(data.material_ticket_number !== undefined
+      ? { material_ticket_number: data.material_ticket_number }
+      : {}),
+    ...(data.saved_units !== undefined ? { saved_units: data.saved_units.toString() } : {}),
     source: data.source,
     import_id: data.import_id,
   };

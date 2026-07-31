@@ -17,6 +17,10 @@ export interface FakeSource {
   last_file_id: string | null;
   last_file_name: string | null;
   last_file_ctag: string | null;
+  /** ADR-0049 Am.3 A4 — health watermark + escalation ladder state. */
+  last_success_at: Date | null;
+  consecutive_failures: number;
+  last_alert_at: Date | null;
   created_at: Date;
 }
 
@@ -180,6 +184,9 @@ export class FakePrisma {
       last_file_id: null,
       last_file_name: null,
       last_file_ctag: null,
+      last_success_at: null,
+      consecutive_failures: 0,
+      last_alert_at: null,
       created_at: new Date('2026-06-01T00:00:00Z'),
       ...overrides,
     };
