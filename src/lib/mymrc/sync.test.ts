@@ -282,7 +282,7 @@ describe('syncSite RUNS every feed, not just the ones someone remembered', () =>
       recordFields: RF,
       site: 'woodland',
       pager,
-      now: () => NOW,
+      now: NOW,
     });
 
     expect(seen.sort()).toEqual([...FEED_NAMES].sort());
