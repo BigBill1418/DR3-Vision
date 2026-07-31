@@ -3,6 +3,35 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — TEREX maintenance absorbs, and absorbing it naively would have doubled the money (ADR-0069 Am.2)
+
+The second document kind, and the one the preview-then-confirm rule was written for. `Estimated cost`, `Actual Repair Cost` and `Amount Credited` are real dollars, so rows land **staged** and count only once a human accepts them.
+
+### The finding
+
+The workbook has **40 sheets**. Two are maintenance logs — and they are not two years of data. `Maintenance Log 2025` is a **strict subset** of `Maintenance Log2026`: 55 shared events, **zero** unique to 2025, and both sheets total **$77,067.94**. Absorbing "every sheet that resolves" — which is exactly what the trailer extractor correctly does for a one-sheet workbook — would have reported **$154,135.88, precisely double**.
+
+So this extractor de-duplicates across sheets and says so on the preview screen, because someone looking at two maintenance-log tabs will reasonably expect ~$154k, and the smaller number is only believable if the screen explains itself. Against the real file: 40 sheets scanned, 2 treated as logs, 80 events, 57 duplicates removed, **$77,067.94** actual repair and $4,025.36 credited.
+
+### The other 38 sheets are deliberately untouched
+
+28 monthly operating tabs, two OVERVIEW pivots, three derived rollups, two blank Templates, a duplicate, and `diesel`. The summary tabs are **derived from** the monthly ones — absorbing both double-counts by construction. And the monthly tabs carry per-day processed units, which is `processed_units_daily` territory with workbook-sync as sole writer. A sheet is a maintenance log because its **headers** say so, never because its name mentions Terex.
+
+### What else the real data forced
+
+- **Row 3 is an instructional example** — column A literally reads `example`, describing a Powerscreen call that never happened. Absorbing it manufactures a maintenance record.
+- **132 scaffold rows** carry only a year or a month name. They are section headings, not events.
+- **The date column can't be trusted into a DATE.** Of 81 events: 64 real dates, 6 free text (including `"09/16 or 17"` — the operator genuinely didn't know which day), one **1900-01-14 Excel epoch artefact**, 10 blank. Dates are kept only when plausible; the raw text is always kept. Guessing `"09/16 or 17"` invents a day someone deliberately refused to pick.
+- **A blank cost is NOT RECORDED, never $0** — a repair nobody priced is not a free repair.
+
+### The confirm step
+
+`/admin/doc-ingest/terex` shows the totals, the sheets read, the de-duplication and the undated count; accept or discard per batch, attributed. A `confirmed` row must name who confirmed it — enforced by a CHECK, because money data whose acceptance can't answer "who accepted this?" isn't an audit trail. Re-absorption refreshes only staged rows; it never un-accepts what someone already accepted.
+
+### Verification
+
+12 new tests, full suite 4,122 passing, every guard falsified before being kept — including removing the de-duplication and watching the $77k→$154k defect reappear. The `ABSORBABLE_KINDS` tripwire fired for the second time today and was updated to the new exact set rather than loosened.
+
 ## 2026-07-31 — the first document kind actually absorbs, and a parser fix can reach old documents (ADR-0069 Am.1)
 
 Two gaps closed: Fix 3 of the absorption audit (left specified, not shipped, because the recommended target turned out to be the wrong file), and the fact that Am.8's header fix could not reach any document already in the system.

@@ -262,6 +262,11 @@ export const docIngestMessages = {
     reparseFailed: 'Could not re-read this file',
   },
 
+  // ── ADR-0069 Am.2 TEREX maintenance (staged, money-touching) ──────────────
+  terex: {
+    title: 'TEREX maintenance',
+  },
+
   errors: {
     keyMissing:
       'The token encryption key is not mounted on this host. Provision ~/.dr3-vision-secrets/doc-ingest.env before connecting.',

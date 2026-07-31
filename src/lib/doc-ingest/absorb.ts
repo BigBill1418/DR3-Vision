@@ -79,6 +79,7 @@ import {
   extractTrailersFromWorkbook,
   writeTrailerRows,
 } from './trailer-absorb';
+import { describeTerexSheets, extractTerexFromWorkbook, stageTerexRows } from './terex-absorb';
 
 /** Audit actor for absorption writes. Mirrors the ingest pipeline's label. */
 export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
@@ -92,7 +93,11 @@ export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
  * kind here means adding an extractor below and a metric mapping — not loosening a
  * condition.
  */
-export const ABSORBABLE_KINDS = new Set<string>(['daily_log_workbook', 'trailer_list']);
+export const ABSORBABLE_KINDS = new Set<string>([
+  'daily_log_workbook',
+  'trailer_list',
+  'terex_maintenance_log',
+]);
 
 export type AbsorbOutcome =
   /** Reference rows were written. */
@@ -279,6 +284,9 @@ export async function absorbVersion(
   // plausible-looking shape.
   if (source.doc_class === 'trailer_list') {
     return absorbTrailerList(prisma, source, version, bytes, siteId, subject, now);
+  }
+  if (source.doc_class === 'terex_maintenance_log') {
+    return absorbTerexLog(prisma, source, version, bytes, siteId, subject, now);
   }
 
   // ── Extract ───────────────────────────────────────────────────────────────
@@ -703,6 +711,148 @@ async function absorbTrailerList(
       versionId: version.id,
       outcome: 'absorbed',
       rowsWritten: written,
+      datesCovered: dates.size,
+      reason: null,
+      anomaliesRaised: 0,
+    },
+    now,
+  );
+}
+
+/**
+ * ADR-0069 Am.2 — absorb a confirmed TEREX maintenance log, STAGED.
+ *
+ * The outcome is `absorbed` because the extraction genuinely succeeded, but the
+ * rows are `staged`: nothing counts until a human confirms the batch on
+ * `/admin/doc-ingest/terex`. That is the money-touching rule, and this document
+ * is the reason it exists — its two maintenance-log sheets overlap so heavily
+ * that a naive read doubles the repair spend.
+ */
+async function absorbTerexLog(
+  prisma: PrismaClient,
+  source: DocSource,
+  version: DocSourceVersion,
+  bytes: Uint8Array,
+  siteId: string,
+  subject: string,
+  now: Date,
+): Promise<AbsorbResult> {
+  let extracted: Awaited<ReturnType<typeof extractTerexFromWorkbook>>;
+  try {
+    extracted = await extractTerexFromWorkbook(bytes);
+  } catch (e) {
+    const reason =
+      `"${source.display_name}" is registered as a terex_maintenance_log but could not be read as a ` +
+      `workbook: ${describe(e)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'unreadable',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  // THE LOUD ZERO. A 40-sheet workbook that yields nothing is far more likely to
+  // mean "we did not recognise the log" than "there were no repairs", so the
+  // message names every sheet and why each was passed over.
+  if (extracted.result.rows.length === 0) {
+    const reason =
+      `"${source.display_name}" is confirmed as a terex_maintenance_log, was read successfully, and ` +
+      `produced ZERO maintenance events. This is NOT evidence there were no repairs. ` +
+      `${describeTerexSheets(extracted.result)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id, sheets: extracted.sheetNames },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'empty',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  const staged = await prisma.$transaction((tx) =>
+    stageTerexRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      result: extracted.result,
+      now,
+    }),
+  );
+
+  const dates = new Set<string>();
+  for (const r of extracted.result.rows) if (r.eventDate !== null) dates.add(r.eventDate);
+
+  await writeAudit({
+    actor_label: ABSORB_ACTOR,
+    action: 'insert',
+    table_name: 'doc_terex_maintenance_rows',
+    row_id: version.id,
+    after: {
+      doc_source_id: source.id,
+      doc_class: 'terex_maintenance_log',
+      rows_staged: staged,
+      // Staged, NOT counted. Recorded explicitly so a reader of this audit row
+      // cannot mistake extraction for acceptance.
+      awaiting_confirmation: true,
+      totals_preview: extracted.result.totals,
+      duplicates_removed: extracted.result.duplicatesRemoved,
+      undated_events: extracted.result.undatedEvents,
+      sheets_read: extracted.result.sheets
+        .filter((s) => s.skipped === null)
+        .map((s) => s.sheetName),
+      sheets_skipped: extracted.result.sheets
+        .filter((s) => s.skipped !== null)
+        .map((s) => s.sheetName),
+      note: describeTerexSheets(extracted.result),
+    },
+  });
+
+  await resolveAnomaly(
+    prisma,
+    'absorption_empty',
+    subject,
+    `Staged ${staged} TEREX maintenance row(s) from revision ${version.id}, awaiting confirmation.`,
+    now,
+  ).catch(() => undefined);
+
+  return finishTerminal(
+    prisma,
+    version,
+    {
+      versionId: version.id,
+      outcome: 'absorbed',
+      rowsWritten: staged,
       datesCovered: dates.size,
       reason: null,
       anomaliesRaised: 0,
