@@ -31,8 +31,13 @@
 //   - The summary tabs are DERIVED from the monthly ones. Absorbing both a
 //     source and its rollup double-counts by construction.
 //   - The monthly tabs carry processed units per day, which is
-//     `processed_units_daily` territory — sole writer workbook-sync (ADR-0049).
-//     Extracting them here would be a second source of the same figure.
+//     `processed_units_daily` territory. Extracting them here would be another
+//     source of the same figure.
+//     NOTE (2026-07-31): this comment used to say "sole writer workbook-sync".
+//     That is wrong — three writers exist (super-admin entry route, MyMRC
+//     processed bridge, workbook-sync), governed by a PRECEDENCE rule
+//     (`source='mymrc' AND closed_at IS NULL`). Adding a fourth participant to a
+//     precedence rule is no safer than breaking an exclusive lock.
 // A sheet is a maintenance log because its HEADERS say so, never because of its
 // name.
 

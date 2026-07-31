@@ -149,3 +149,95 @@ unknown, and the run fails loudly with the cause attributed.
   "live/forward path is fully covered" is true today only by timing — undated rows
   appear right up to the newest haul numbers — and should be revisited when
   Delivered rows flow again.
+
+---
+
+## Amendment 1 — the freshness guard was blind, and the freeze had a deeper cause (2026-07-31, ACCEPTED)
+
+The original ADR shipped a mirror-freshness alarm and recorded the over-broad
+hauls disappeared-marking as a known, unfixed defect. Both of those need
+correcting, and the root cause of the nine-day inbound freeze turned out to sit
+one level below either.
+
+### 1. The freshness guard could not detect the outage it was written for
+
+It measured `max(docking_appointment_date)` across the **whole** haul mirror. A
+haul is `Confirmed` when it is **scheduled**, and confirmed appointments are dated
+into the FUTURE. Measured live, mid-outage:
+
+| measured over          | newest     | age          |
+| ---------------------- | ---------- | ------------ |
+| all hauls (as shipped) | 2026-08-10 | **−9 days**  |
+| delivered hauls        | 2026-07-21 | **+10 days** |
+
+Future-dated scheduling **permanently masked** a delivered feed frozen since
+2026-07-22. The guard read healthy throughout and would have gone on reading
+healthy forever — the recede-into-the-past reasoning in the original docstring
+only holds if the WHOLE feed stops, and here half of it kept moving.
+
+It now measures **delivered** hauls only. That is also the half that matters:
+`inbound_loads` is bridged from delivered hauls. Against the same live data it
+reports 10 days stale and fires — it would have fired on **day 5**.
+
+### 2. The root cause: nothing ever polled the view that says "delivered"
+
+The hourly sync bound three list views — `docking_appointments_rc`,
+`processed_active`, `outbound_active`. **A haul LEAVES the docking-appointments
+view when MRC marks it Delivered**, appearing in `completed_hauls`, which only the
+one-shot backfill ever read. So the mirror could not observe the transition at
+all: `Confirmed` rows refreshed hourly and looked healthy while the delivered half
+sat frozen. That is why the freeze was possible, not merely why it went unnoticed.
+
+A `haulsCompleted` feed now reads `completed_hauls` hourly — same object, same
+mirror, same page, a different list view.
+
+### 3. The over-broad disappeared-marking is FIXED, and had to be
+
+ADR-0070 recorded this as known-and-unfixed on the grounds that nothing consumes
+`disappeared_at` for hauls. That was true and is no longer sufficient: with two
+views over one mirror, an unscoped sweep lets each feed declare the other's
+records vanished. The active view is ~73 rows, so it COMPLETES every hour — it was
+stamping all ~7,190 delivered hauls on every single run.
+
+**"Not in this list" stops meaning "gone" the moment one mirror has two partial
+views.** Each feed is now scoped to the statuses its own view can contain. A NULL
+status is excluded by `in`/`notIn` semantics — the money-safe direction: a haul we
+have not detail-fetched is never declared gone on the strength of a list it may
+not belong to.
+
+Measured before/after the deploy: delivered rows carrying `disappeared_at` fell
+from **7,190** (all of them) to **6,447**, and confirmed rows from 56 to **2**.
+
+### 4. A feed can no longer be half-added
+
+`haulsCompleted` was added to the type, the bindings, the adapters and the field
+map — **and did not run**. `syncSite` and `checkDeadman` each carried their own
+hardcoded `['hauls', 'processed', 'outbound']`. The constant said four feeds, the
+runners iterated three, and the sync reported a clean run throughout. A feed that
+exists but is never iterated is indistinguishable from a feed that was never
+added. Both loops now iterate `FEED_NAMES`.
+
+This was caught by RUNNING the sync after deploying, not by reading the diff.
+
+### What this does NOT fix
+
+**The negative floor is not a Vision defect.** As of 2026-07-31 the Woodland floor
+is **−4,243** (program −5,129 / non-program 886, from the app's own probe). Two
+causes, neither of them sync:
+
+1. ~34 hauls dated 07-23→07-31 are still `Confirmed` in MRC's portal and carry
+   **0 units** — units populate on delivery. At July's ~106 units/haul that is
+   ≈3,600 units. Vision is reporting MRC faithfully; the fix is upstream.
+2. **880 units sit in nine `submitted` loads whose pool split is unset.** Only
+   `verified` loads reach `onHand`, because verification is what sets
+   program/non-program. One verified load (150 units) is the only inbound counting
+   since the anchor.
+
+### Verification note
+
+Three guards in this amendment failed to falsify on the first attempt — the
+delivered-only filter (the test exercised the arithmetic, not the query), the
+`FEED_NAMES` loop (the test asserted the constant, not the iteration), and earlier
+the `priorMonthAnchor` case. Each was rewritten to target the defect itself rather
+than the thing beside it. Guards that have never been observed to fail are not
+guards.

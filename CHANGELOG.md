@@ -3,6 +3,36 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — verified live: the completed-hauls feed runs, and the disappeared churn stopped
+
+Proof rather than assertion. After deploying, the sync was run and the ledger checked.
+
+```
+haulsCompleted newest-first list → 800 ids over 4 pages (totalCount=6258, stop=page_cap)
+woodland/haulsCompleted list WINDOWED (800 ids) — disappeared-detection SKIPPED
+woodland/haulsCompleted ok — listed=800 complete=false
+```
+
+`mymrc_sync_runs` now carries **four** feeds where it carried three; the `completed_hauls` list-view id resolved with no `PortalContractDriftError`.
+
+**The scoping is measurable**, comparing against the baseline taken before deploy:
+
+| rows carrying `disappeared_at` | before          | after     |
+| ------------------------------ | --------------- | --------- |
+| Delivered                      | **7,190** (all) | **6,447** |
+| Confirmed                      | 56              | **2**     |
+
+743 delivered hauls un-stamped by the history feed refreshing them, and the active feed can no longer sweep them. The hourly churn over ~7,190 rows has stopped. The bounded walk behaved as designed — newest-first, 800 of 6,258, `stop=page_cap`, `complete=false`, so disappeared-detection correctly skipped rather than over-marking the unseen tail.
+
+`hauls` still reports `stale_mirror`, correctly: `max_appt` for Delivered is still 2026-07-21 because MRC has not marked those hauls delivered.
+
+### Docs reconciled
+
+- **ADR-0070 Amendment 1** records all of it: the masked guard, the root cause, the now-fixed over-broad disappeared-marking, and the half-added feed.
+- **ADR-0073** (manager load corrections) landed as **proposed — design only**.
+- **OPEN-ITEMS 0.AD** captures the end-of-day state and every decision waiting on Bill; **0.AC** carries the ADR-0073 research items L-1…L-9.
+- **Correction:** ADR-0069 Am.1/Am.2 and `terex-extract.ts` asserted `processed_units_daily` has a "sole writer". It does not — three paths write it under a **precedence** rule (`source='mymrc' AND closed_at IS NULL`). Corrected in place. The same overstatement is baked into applied migration `20260825`, which is checksum-locked and must stay as-is; ADR-0069 Am.1 is the correction of record.
+
 ## 2026-07-31 — the new feed was declared but never run
 
 Caught by running the sync instead of trusting the diff. `haulsCompleted` was added to the type, the list-view bindings, the adapters and the field map — and did not run. `syncSite` and the deadman each carried their own hardcoded `['hauls', 'processed', 'outbound']`, so the constant said four feeds and the runner iterated three. The sync reported a clean run throughout.

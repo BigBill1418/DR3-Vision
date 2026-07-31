@@ -59,9 +59,16 @@ Two independent reasons:
   its own rollup double-counts by construction — the same defect as §2, one level
   up.
 - **The monthly tabs carry processed units per day.** That is
-  `processed_units_daily` territory, whose sole writer is workbook-sync
-  (ADR-0049/0058). Extracting them here would create a second source of the same
-  operational figure — precisely what the single-writer rule forbids.
+  `processed_units_daily` territory. Extracting them here would create another
+  source of the same operational figure.
+
+  **Correction (2026-07-31):** this ADR originally said "whose sole writer is
+  workbook-sync". That is wrong. `processed_units_daily` has THREE writers — the
+  super-admin entry route, the MyMRC processed bridge, and workbook-sync —
+  governed by a PRECEDENCE rule (`source = 'mymrc' AND closed_at IS NULL`), not by
+  exclusivity. The reasoning above survives the correction: adding a fourth
+  participant to a precedence rule nobody has re-derived is exactly as unsafe as
+  breaking an exclusive lock, and arguably less obvious.
 
 **A sheet is a maintenance log because its HEADERS say so, never because of its
 name.** `Jan 2026` and `OVERVIEW2026` both say "Terex".
