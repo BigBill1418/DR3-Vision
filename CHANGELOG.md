@@ -3,6 +3,36 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — iPad physical count is live at both sites, behind a tiered guardrail (ADR-0072)
+
+`ipad_count` was the last high-value floor surface still at pilot. It is now **live at both sites**. The reason it needed more than a flag: a physical count becomes the inventory **anchor**, and every downstream number is computed forward from it — so a mistyped digit doesn't produce a wrong count, it silently moves the entire floor. Woodland's anchor is a known-good 2,483; one fat-fingered tap would have replaced it with no trace beyond a snapshot row nobody looks at.
+
+### Added
+
+- **Three tiers, proportional to the damage.** Tier 0 (no anchor yet) writes straight through — that's every Eugene count today and we want it frictionless. Tier 1 (swing ≤ 20%) shows one confirm screen with current-vs-new and the change **in words**, because "2,483 → 2,150" is exactly what reads as fine at a glance. Tier 2 (swing > 20%) is **held for a manager**. Threshold is a setting seeded at 20 — Bill tightened it from a proposed 40, where a single tap could move ~1,000 units.
+- **Two release paths.** A manager approves by PIN on the same iPad, or remotely from their own screen when nobody is on the floor. The path taken is recorded — "a manager approved this" and "a manager approved this while standing at the iPad" are different facts six months later.
+- **`/admin/inventory/anchors`** — anchor history per site, the pending holds (otherwise visible only to the operator at the iPad that produced them), and restoring a prior anchor.
+
+### Guarded
+
+- **The operator who entered a count can never release it** — enforced in the service, in the route, and by a `CHECK` constraint, because the rule that matters most is the one a future code path cannot forget. The self-release check runs _before_ the PIN check, so a refusal can't be used to probe whether a PIN is right. And it binds the person, not the surface: a manager who entered the count on the floor can't release it from their desk either.
+- **Enforced server-side, not in the dialog.** The tier is recomputed from live state on every write. A hand-crafted request that skips the confirm meets the same check and a Tier 2 write without approval is refused with a 422. The UI is a courtesy; the server is the control.
+- **A held count is held, not rejected** — it keeps the entered values until a manager releases it or someone explicitly discards it with a reason. Never silently dropped, never auto-written.
+- **The swing is recomputed at release**, not read from the hold. The anchor may have moved in between, and writing a stale figure against a changed baseline is how a guardrail becomes theatre.
+- **Recovery appends, never erases.** Re-activating a prior anchor writes a _new_ snapshot carrying its figures. Deleting the mistake would leave a history that never contained it, and the next person asking "why did the floor jump 1,200 units?" would find nothing.
+
+### Scope
+
+`ipad_processed` and `ipad_today_summary` are untouched and remain pilot. The migration's UPDATE names `ipad_count` alone — it must not become the one that quietly turned on three surfaces because they were adjacent in a table.
+
+### Divergence from the handoff
+
+The handoff asks to keep `assertCurrentPacificDay()` on the count write. **That function is not on this path and never was.** The count route accepts no date input at all — it pins the anchor server-side to Pacific midnight of today, which is stronger than asserting a client-supplied date, because there is no client-supplied date to assert. Shipped code wins; nothing was reverted.
+
+### Verification
+
+26 new tests, every guard falsified before being kept. Real-number cases: 2,483 → 2,150 is Tier 1 (13%); 2,483 → 1,200 is Tier 2 (52%); a count of **0** against a real anchor is a 100% swing and is held; re-entering the identical figure is a zero swing and is never held; a **zero** prior anchor is Tier 1 rather than an infinite swing, or a site that once counted empty would hold every count forever.
+
 ## 2026-07-31 — processor production quota alert (ADR-0071)
 
 An **exception alert**, not a dashboard. Nobody watches numbers; the system watches and speaks up only when a Woodland processor finishes a Monday–Sunday week with two or more days below the daily quota. It reads the per-processor daily counts the bonus system already captures — the same production data from a different angle, not a new measurement.

@@ -121,6 +121,16 @@ const TILES = [
       'Which Woodland processors finished a week below the daily quota, with the actual counts. The detail behind the weekly exception email (ADR-0071).',
     testid: 'admin-tile-processor-quota',
   },
+  {
+    // ADR-0072. The recovery path for the one write that can move the whole
+    // floor — and the only place a count held for a manager is visible to
+    // anyone other than the operator standing at the iPad.
+    href: '/admin/inventory/anchors',
+    label: 'Inventory anchors',
+    description:
+      'Anchor history per site, counts held for manager approval, and restoring a prior anchor after a bad count (ADR-0072).',
+    testid: 'admin-tile-inventory-anchors',
+  },
 ] as const;
 
 export default async function AdminIndexPage() {
