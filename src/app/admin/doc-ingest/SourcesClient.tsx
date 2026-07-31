@@ -70,6 +70,7 @@ export function SourcesClient({
   const [sources, setSources] = useState(initialSources);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [pending, setPending] = useState<string | null>(null);
+  const [reparsing, setReparsing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -99,6 +100,38 @@ export function SourcesClient({
         setError(M.sources.saveFailed);
       } finally {
         setPending(null);
+      }
+    },
+    [refresh],
+  );
+
+  /**
+   * ADR-0067 Am.8 §2 — re-derive the stored `parse_summary` from the archived
+   * copy. Separate from `post` because it targets a different route and, unlike
+   * every other action here, changes nothing about the DOCUMENT — only about our
+   * reading of it.
+   */
+  const reparse = useCallback(
+    async (sourceId: string) => {
+      setReparsing(sourceId);
+      setError(null);
+      try {
+        const res = await fetch(`/api/admin/doc-ingest/sources/${sourceId}/reparse`, {
+          method: 'POST',
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+            message?: string;
+          } | null;
+          setError(body?.message ?? body?.error ?? M.trailers.reparseFailed);
+          return;
+        }
+        await refresh();
+      } catch {
+        setError(M.trailers.reparseFailed);
+      } finally {
+        setReparsing(null);
       }
     },
     [refresh],
@@ -330,6 +363,20 @@ export function SourcesClient({
                         className="rounded px-2 py-1 text-xs text-dr3-mist-dim ring-1 ring-dr3-steel-light/30 hover:text-dr3-cyan disabled:opacity-40"
                       >
                         {s.enabled ? M.sources.disable : M.sources.enable}
+                      </button>
+                      {/* ADR-0067 Am.8 §2 — re-derive the stored headers from the
+                          archived copy. Needed because a parse only happens on a
+                          NEW revision, so a parser fix would otherwise reach an
+                          existing document only if someone happened to edit it. */}
+                      <button
+                        type="button"
+                        disabled={reparsing === s.id}
+                        title={M.trailers.reparseHint}
+                        onClick={() => void reparse(s.id)}
+                        className="ml-2 rounded px-2 py-1 text-xs text-dr3-mist-dim ring-1 ring-dr3-steel-light/30 hover:text-dr3-cyan disabled:opacity-40"
+                        data-testid="reparse-button"
+                      >
+                        {reparsing === s.id ? M.trailers.reparsing : M.trailers.reparse}
                       </button>
                     </td>
                   </tr>

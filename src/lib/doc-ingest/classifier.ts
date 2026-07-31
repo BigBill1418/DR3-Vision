@@ -42,6 +42,7 @@ import type { ParseSummary } from './parse';
  */
 export const DOC_KINDS = [
   'daily_log_workbook',
+  'trailer_list',
   'ap_history_report',
   'equipment_inventory',
   'rate_table',
@@ -103,6 +104,15 @@ const RULES: Rule[] = [
     kind: 'daily_log_workbook',
     name: [/daily[\s_-]*log/i, /\bdaily\b.*\b(log|sheet|workbook)\b/i],
     structure: [/\binbound\b/i, /\boutbound\b/i, /\bmattress(es)?\b/i, /\bunits\b/i, /\beod\b/i],
+  },
+  {
+    // ADR-0069 Am.1 — the first kind absorbed into a typed table. The structure
+    // signals are taken from the REAL file's row-2 headers (verified 2026-07-31),
+    // not from an assumed shape: `Date of Entry to Yard | Trailer # | Material |
+    // Weight (lbs) | Driver | Days in Yard | Exit Date`.
+    kind: 'trailer_list',
+    name: [/\btrailer\b/i, /\byard\b.*\blist\b/i],
+    structure: [/\btrailer\b/i, /\bdays? in yard\b/i, /\bdate of entry\b/i, /\bexit[\s_]*date\b/i],
   },
   {
     kind: 'ap_history_report',
