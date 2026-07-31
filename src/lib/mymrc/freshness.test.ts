@@ -64,6 +64,11 @@ describe('the freshness contract', () => {
   it('measures each feed on its own BUSINESS date, never a column we write', () => {
     expect(FRESHNESS_COLUMN).toEqual({
       hauls: 'docking_appointment_date',
+      // ADR-0070 follow-up 2026-07-31: `haulsCompleted` reads the same mirror
+      // through the HISTORY list view, so it measures the same business date.
+      // Kept exact rather than loosened — a feed added without a business date
+      // to measure must keep breaking this.
+      haulsCompleted: 'docking_appointment_date',
       processed: 'entry_date',
       outbound: 'entry_date',
     });
@@ -186,5 +191,73 @@ describe('checkMirrorFreshness — the alarm', () => {
     });
     expect(calls[0]?.message).toContain('2026-07-20');
     expect(calls[0]?.message).toContain('entry_date');
+  });
+});
+
+describe('the masking defect this guard shipped with (2026-07-30 → fixed 07-31)', () => {
+  // Measured live on 2026-07-31, mid-outage:
+  //   max(docking_appointment_date) over ALL hauls  = 2026-08-10  (age -9 days)
+  //   max(docking_appointment_date) over DELIVERED  = 2026-07-21  (age +10 days)
+  //
+  // A haul is `Confirmed` when it is SCHEDULED, and confirmed appointments are
+  // dated into the FUTURE. So measuring every status made the feed look
+  // permanently fresh while the delivered half had been frozen for nine days —
+  // and `inbound_loads` is bridged from DELIVERED hauls, so that frozen half is
+  // exactly what drove the floor to -3,493.
+  const NOW = new Date('2026-07-31T18:00:00.000Z');
+
+  it('a FUTURE-dated scheduling record must never be read as freshness', () => {
+    const scheduledAhead = new Date('2026-08-10T00:00:00.000Z');
+    const assessed = assessFreshness('hauls', scheduledAhead, NOW);
+    // This is what the old guard saw: a negative age, i.e. "fresher than now".
+    expect(assessed.ageMs).toBeLessThan(0);
+    expect(assessed.stale).toBe(false);
+  });
+
+  it('the DELIVERED date it should have been measuring IS stale', () => {
+    const newestDelivered = new Date('2026-07-21T00:00:00.000Z');
+    const assessed = assessFreshness('hauls', newestDelivered, NOW);
+    expect(assessed.stale).toBe(true);
+    // Ten days, comfortably past the 96h threshold — it would have fired on day 5.
+    expect(assessed.ageMs! / 86_400_000).toBeGreaterThan(9);
+  });
+});
+
+describe('the hauls guard must QUERY delivered hauls, not just reason about them', () => {
+  // The pure-arithmetic tests above prove that a stale DELIVERED date would be
+  // flagged. They do NOT prove the code asks the database for delivered hauls —
+  // and on 2026-07-31 that distinction was the whole bug: the arithmetic was
+  // always right, the QUERY was measuring every status. Reverting the filter
+  // must break a test, or the fix can be silently undone.
+  function fakePrisma(captured: Record<string, unknown>[]) {
+    return {
+      mymrcHaulsMirror: {
+        aggregate: async (args: Record<string, unknown>) => {
+          captured.push(args);
+          return { _max: { docking_appointment_date: new Date('2026-07-21T00:00:00.000Z') } };
+        },
+      },
+    } as never;
+  }
+
+  it('filters the aggregate on status=Delivered', async () => {
+    const captured: Record<string, unknown>[] = [];
+    await measureFeedFreshness({
+      prisma: fakePrisma(captured),
+      feed: 'hauls',
+      now: new Date('2026-07-31T18:00:00.000Z'),
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ where: { status: 'Delivered' } });
+  });
+
+  it('and the delivered date it reads back IS reported stale', async () => {
+    const captured: Record<string, unknown>[] = [];
+    const res = await measureFeedFreshness({
+      prisma: fakePrisma(captured),
+      feed: 'hauls',
+      now: new Date('2026-07-31T18:00:00.000Z'),
+    });
+    expect(res.stale).toBe(true);
   });
 });

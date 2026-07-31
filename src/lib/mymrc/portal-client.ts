@@ -51,6 +51,8 @@ export class PortalContractDriftError extends Error {
 
 const FEED_LIST_PATH: Record<FeedName, string> = {
   hauls: '/s/hauls',
+  // Same page, different list view — resolved by list-view id, not by path.
+  haulsCompleted: '/s/hauls',
   processed: '/s/processed-materials',
   outbound: '/s/outbound-materials',
 };
@@ -454,13 +456,19 @@ export async function openAdminSession(
   // Bounded-retry navigation. Never throws — a nav that never resolves leaves the
   // page on its prior/blank URL, which `isLoginPage()` reads as logged-out, so
   // the auth/self-heal path (not an unhandled throw) decides what happens next.
-  async function gotoWithRetry(url: string, waitUntil: 'domcontentloaded' | 'networkidle'): Promise<void> {
+  async function gotoWithRetry(
+    url: string,
+    waitUntil: 'domcontentloaded' | 'networkidle',
+  ): Promise<void> {
     for (let attempt = 0; attempt <= navRetries; attempt++) {
       try {
         await page.goto(url, { waitUntil });
         return;
       } catch (e: unknown) {
-        log('warn', `mymrc: goto ${url} attempt ${attempt + 1}/${navRetries + 1} — ${describeError(e)}`);
+        log(
+          'warn',
+          `mymrc: goto ${url} attempt ${attempt + 1}/${navRetries + 1} — ${describeError(e)}`,
+        );
       }
     }
   }
@@ -506,7 +514,9 @@ export async function openAdminSession(
     // Loaded state is logged-out → discard it and log in from a clean context.
     log('warn', 'mymrc: persisted session logged-out — discarding it, fresh login (admin)');
     const authedAfterRelogin = await rebuildAndLogin(AUTHED_HOME_URL);
-    if (planSessionStep({ authedAfterLoad: false, authedAfterRelogin }) === 'purge-state-and-fail') {
+    if (
+      planSessionStep({ authedAfterLoad: false, authedAfterRelogin }) === 'purge-state-and-fail'
+    ) {
       await purgeState(); // never leave the poisoned file behind, never persist
       throw new AuthFailedError('mymrc: still logged out after fresh login (admin)');
     }
@@ -528,12 +538,21 @@ export async function openAdminSession(
       try {
         if (await rebuildAndLogin(targetUrl)) {
           lastKnownAuthenticated = true;
-          log('info', `mymrc: mid-run re-auth recovered on attempt ${attempt}/${reauthAttempts} (admin)`);
+          log(
+            'info',
+            `mymrc: mid-run re-auth recovered on attempt ${attempt}/${reauthAttempts} (admin)`,
+          );
           return;
         }
-        log('warn', `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} still logged out (admin)`);
+        log(
+          'warn',
+          `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} still logged out (admin)`,
+        );
       } catch (e: unknown) {
-        log('warn', `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} threw — ${describeError(e)} (admin)`);
+        log(
+          'warn',
+          `mymrc: mid-run re-auth attempt ${attempt}/${reauthAttempts} threw — ${describeError(e)} (admin)`,
+        );
       }
       if (attempt < reauthAttempts && reauthBackoffMs > 0) {
         await page.waitForTimeout(reauthBackoffMs).catch(() => undefined);
@@ -616,7 +635,10 @@ export async function createPortalClient(
       // sync engine's money-safe guard), and WARN so a truncated list is
       // diagnosable. The backfill worker drains the tail into the mirror.
       if (hasMoreData) {
-        log('warn', `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection is SKIPPED (never over-mark against a partial page)`);
+        log(
+          'warn',
+          `mymrc: ${feed} list is WINDOWED (hasMoreData=true) — ${ids.length} ids on this page; disappeared-detection is SKIPPED (never over-mark against a partial page)`,
+        );
       }
       log('info', `mymrc: ${feed} list → ${ids.length} record ids (complete=${!hasMoreData})`);
       await session.persistIfAuthenticated();
