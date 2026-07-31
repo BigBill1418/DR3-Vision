@@ -188,3 +188,32 @@ describe('checkMirrorFreshness — the alarm', () => {
     expect(calls[0]?.message).toContain('entry_date');
   });
 });
+
+describe('the masking defect this guard shipped with (2026-07-30 → fixed 07-31)', () => {
+  // Measured live on 2026-07-31, mid-outage:
+  //   max(docking_appointment_date) over ALL hauls  = 2026-08-10  (age -9 days)
+  //   max(docking_appointment_date) over DELIVERED  = 2026-07-21  (age +10 days)
+  //
+  // A haul is `Confirmed` when it is SCHEDULED, and confirmed appointments are
+  // dated into the FUTURE. So measuring every status made the feed look
+  // permanently fresh while the delivered half had been frozen for nine days —
+  // and `inbound_loads` is bridged from DELIVERED hauls, so that frozen half is
+  // exactly what drove the floor to -3,493.
+  const NOW = new Date('2026-07-31T18:00:00.000Z');
+
+  it('a FUTURE-dated scheduling record must never be read as freshness', () => {
+    const scheduledAhead = new Date('2026-08-10T00:00:00.000Z');
+    const assessed = assessFreshness('hauls', scheduledAhead, NOW);
+    // This is what the old guard saw: a negative age, i.e. "fresher than now".
+    expect(assessed.ageMs).toBeLessThan(0);
+    expect(assessed.stale).toBe(false);
+  });
+
+  it('the DELIVERED date it should have been measuring IS stale', () => {
+    const newestDelivered = new Date('2026-07-21T00:00:00.000Z');
+    const assessed = assessFreshness('hauls', newestDelivered, NOW);
+    expect(assessed.stale).toBe(true);
+    // Ten days, comfortably past the 96h threshold — it would have fired on day 5.
+    expect(assessed.ageMs! / 86_400_000).toBeGreaterThan(9);
+  });
+});

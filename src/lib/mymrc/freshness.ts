@@ -74,7 +74,23 @@ export interface FeedFreshness {
 /** Newest business date held for one feed. Concrete Prisma types stay in here. */
 async function newestBusinessDate(prisma: PrismaClient, feed: FeedName): Promise<Date | null> {
   if (feed === 'hauls') {
-    const r = await prisma.mymrcHaulsMirror.aggregate({ _max: { docking_appointment_date: true } });
+    // ── 2026-07-31: measure DELIVERED hauls, not every haul ──────────────────
+    // This guard shipped on 2026-07-30 measuring `max(docking_appointment_date)`
+    // across the WHOLE mirror, and it could not have caught the outage it was
+    // written for. A haul is `Confirmed` when it is SCHEDULED, and confirmed
+    // appointments are dated into the FUTURE — on the day this was found the
+    // mirror's overall max was 2026-08-10 while the newest DELIVERED haul was
+    // 2026-07-21, nine days stale. The guard read healthy throughout, and would
+    // have read healthy forever: future-dated scheduling permanently masks a
+    // frozen delivered feed.
+    //
+    // Delivered is also the status that MATTERS: `inbound_loads` is bridged from
+    // delivered hauls, so a frozen delivered feed is exactly what drives the
+    // floor negative. Scheduling activity is not evidence anything arrived.
+    const r = await prisma.mymrcHaulsMirror.aggregate({
+      where: { status: 'Delivered' },
+      _max: { docking_appointment_date: true },
+    });
     return r._max.docking_appointment_date;
   }
   if (feed === 'processed') {
