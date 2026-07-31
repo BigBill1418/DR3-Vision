@@ -72,7 +72,7 @@ the extractor existed (77 numeric + 11 blank + 6 dash + 2 non-numeric = 96).
 
 `doc_trailer_rows` is written **only** by the absorption bridge. It is reference
 data: no operational read depends on it, and it touches neither
-`processed_units_daily` (sole writer: workbook-sync, ADR-0049/0058) nor
+`processed_units_daily` (see the correction below) nor
 `site_inventory_snapshots` nor any loads table.
 
 Rows are keyed to the VERSION they came from rather than mutated in place, so a
@@ -83,6 +83,24 @@ what makes a re-ingest a comparison rather than a destructive overwrite.
 weights and dates, not amounts, so it lands directly. The moment TEREX is added
 it takes the staged path — its columns are `Estimated cost`, `Actual Repair
 Cost`, `Amount Credited`.
+
+### Correction (2026-07-31) — "single writer" was overstated
+
+This ADR shipped saying `processed_units_daily`'s "sole writer" is workbook-sync.
+**That is wrong.** Three code paths write it — the super-admin entry route, the
+MyMRC processed bridge, and workbook-sync — governed by a **precedence** rule
+(`source = 'mymrc' AND closed_at IS NULL`), not by exclusivity.
+
+The decision here is unaffected: `doc_trailer_rows` is its own table and no
+operational read depends on it, so absorption adds no participant to that
+precedence rule at all. But the justification was stated more strongly than the
+code supports, and a rule quoted as absolute when it is conditional is the kind of
+thing a future reader relies on and gets burned by.
+
+The same overstatement is baked into the comment header of applied migration
+`20260825_adr0069_am2_terex_absorption`. Applied migrations are checksum-locked
+and must never be edited, so that comment stays wrong; this paragraph is the
+correction of record.
 
 ## 6. The re-parse action
 

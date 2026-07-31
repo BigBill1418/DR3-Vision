@@ -16,6 +16,140 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AD — 2026-07-31 End-of-day state: what is live, and what is waiting on Bill
+
+Eight builds shipped, deployed and verified live today (see CHANGELOG 2026-07-31).
+Everything below is a DECISION or an OPERATIONAL action, not code.
+
+### Decisions waiting on Bill
+
+- **Q-1 — the processor-quota threshold (ADR-0071).** The feature ships **disabled**
+  on purpose. At the seeded quota of 75, a dry run against the real week of
+  2026-07-20 flags **13 of 18** Woodland processors — a roster, not an exception
+  list. Lowering the quota alone does not fix it: 60 → 10 flagged, 50 → 8, and even
+  at **40** four still flag. The sensitivity is as much the **2-miss threshold on a
+  5-day week** as the quota. `/admin/processor-quota` is live and accurate now, so
+  combinations can be tried against real weeks before any email is enabled. Both
+  numbers are settings; neither needs a deploy.
+- **Q-2 — the commodity-audit tracker: absorb it, or not?** It is NOT what the
+  absorption handoff assumed. Reading the real file: banded layout, and its row-4
+  columns are `Audited | Initials | Date | 2nd Audit | Initials | Date` repeating per
+  commodity band. **No weight, no amount, no invoice number, no variance.** It records
+  _who checked_, not the figures. Absorbing it as-is yields a queryable table of
+  ticked boxes. There IS a legitimate feature in it — "did anyone audit METAL in
+  March, and who" — but that is a compliance-records surface, not
+  absorption-for-reconciliation, and it needs Bill's call before it is built.
+- **Q-3 — ADR-0073 shape** (see 0.AC, L-1).
+
+### Operator actions
+
+- **O-1 — nine submitted loads are holding 880 units out of the floor.** Since the
+  2026-07-22 anchor, Woodland has 12 inbound loads: **9 `submitted` (880 units, pool
+  split UNSET), 1 `arrived`, 1 `in_progress`, 1 `verified` (150 units)**. Only
+  `verified` loads reach `onHand`, because verification is what sets the
+  program/non-program split. **Verifying those nine is the single action that moves
+  the floor today without waiting on anyone.** Includes Pablo's `3700cfef` (07-29,
+  3 units) and Morena's `d792ed15` (07-28, `arrived`, no units) — both flagged at the
+  start of the 07-30/31 session and still open.
+- **O-2 — the three shared documents still need two clicks.** On
+  `/admin/doc-ingest`: **Re-read this file** on each (their stored headers still read
+  `["Woodland Trailer List 2025"]` etc., because a parse only happens on a new
+  revision), then **Confirm** the class + site. Confirming the trailer list absorbs 96
+  rows; confirming TEREX stages 80 maintenance events for review. Deliberately not
+  done on Bill's behalf — `confirmClassification` writes `classified_by` and
+  `doc_class_source='operator'`, and putting his name on a decision he did not make
+  defeats the audit trail.
+- **O-3 — the Woodland floor reads −4,243 and is NOT a Vision defect.** ~34 hauls
+  dated 07-23→07-31 remain `Confirmed` in MRC's own portal carrying 0 units (units
+  populate on delivery); at July's ~106 units/haul that is ≈3,600 units. Vision now
+  watches the right list view and will pick them up within the hour once MRC marks
+  them delivered. **Expect the freshness alarm to fire** (`high`, 24h cooldown, one
+  fingerprint per site+feed) until then — that is the guard working, not a new fault.
+  If it is still firing in a few days, the deliveries genuinely are not being recorded
+  upstream, which is an operational chase.
+- **O-4 — load H-135881 was corrected by hand.** 40 → 95 units, audited, at Bill's
+  instruction. Two caveats on the record: nothing in the DB links that load to the
+  identifier "H-135881" (no BOL, DR3 or haul id — matched as the only Woodland load
+  that day with 40 units), and it is now the only one of nine `b2b_haul` rows where
+  `total_units` ≠ Σ `load_stacks` (4 × 10 = 40). The stacks were left intact
+  deliberately — they record what was actually mis-keyed. It changes no inventory
+  figure today because its pool split is still NULL.
+
+## 0.AC — 2026-07-31 Manager load corrections (ADR-0073, proposed) — design landed, nothing built
+
+Triggered by load **H-135881** (Woodland, arrived 2026-07-31 09:46 PT), keyed as 40
+units, correct figure 95. Corrected by a **direct DB `UPDATE` + hand-written audit row**
+at 11:35 PT — the DBA-shaped tool this ADR exists to retire. ADR-0073 is written and
+**proposed only**; no schema, no route, no UI. Research findings that change other work
+are broken out below because they are not all about corrections.
+
+- **L-1 — DECISION (Bill): approve the ADR-0073 shape before anything is built.**
+  Recommendation is a **tiered, approval-gated restatement of the load row** modelled on
+  ADR-0072, with an append-only `inbound_load_corrections` record — **not** an ADR-0032
+  style additive adjustment layer (that would give `onHand` a second sum, the exact
+  divergence class ADR-0037 D6 was written to kill) and **not** a time-boxed edit (time is
+  a proxy for the wrong thing; the real gate is what has been derived downstream).
+- **L-2 — HIGHEST VALUE, and it is not the per-load route.** `upsertBulkInboundDay`
+  (`bulk-inbound.ts:189`) and `confirmFloorInboundDay` (`floor-inbound.ts:193`) already
+  rewrite `total_units` / `program_unit_count` / `non_program_unit_count` on a **verified**
+  row for an **arbitrary past day** — no date window, no anchor check, no COR check, no
+  lock. `mymrc/inbound-bridge.ts:237-244` absolute-SETs verified rows too. **Managers can
+  already rewrite inventory history with less friction than ADR-0072 requires to change one
+  physical count.** Whatever classifier ADR-0073 defines must land on these paths FIRST, or
+  the new guarded door just adds friction to the safer of the two.
+- **L-3 — BLOCKING for the "never restate what was sent to MRC" constraint: nothing
+  records what was sent.** The MRC Monthly Invoice CSV (Article 10.4,
+  `src/app/api/exports/mrc/route.ts`) reads `total_units` + `weight_lbs` **live on every
+  GET** — `force-dynamic`, no snapshot, no version, no record of prior downloads. Re-pulling
+  last month after any correction silently yields a different file than the one MRC has.
+  Needs an `mrc_export_pulls` ledger (window + `content_sha256` + who + when) before that
+  constraint is enforceable at all. Same exposure on `exports/svdp/route.ts`.
+- **L-4 — DEFECT (live, unfixed): `2026-07-29` at Woodland holds BOTH inbound grains.**
+  One `ipad_floor` **verified** aggregate (150 units) plus two `b2b_haul` **submitted**
+  per-load rows (106 units). The ADR-0060 D5 double-count guard only refuses when per-load
+  rows are **`verified`** (`floor-inbound.ts:146-152`), so it does not fire. **Verifying
+  those two loads double-counts 106 units into `onHand`.** Nine `b2b_haul` loads sit
+  unverified; none has ever reached `verified`. Decide the day's owner before anyone works
+  the verify queue.
+- **L-5 — DEFECT (data): H-135881's header and its evidence disagree.** `total_units = 95`
+  but `load_stacks` still sum to **40** (four multiplier stacks of 10, 17:46:29–17:46:39Z).
+  Every other `b2b_haul` row in prod satisfies `total_units == Σ stacks`. Also
+  `program_unit_count` / `non_program_unit_count` are still NULL (status `submitted`), so
+  **`onHand` is unaffected today** — the divergence bites at verify, where
+  `assertProgramSplit` will hold the split to 95. ADR-0073 proposes recording this as
+  `stacks_sum_at_correction` rather than rewriting the stacks; stacks are the operator's
+  timestamped evidence and are never mutated.
+- **L-6 — The amendment path `processed_units_daily` refuses into DOES NOT EXIST.**
+  `processed-units.ts:178` throws _"corrections follow the amendment path, not in-place
+  edits"_. There is no such route. Related: `BonusReportingAdjustment` (ADR-0032) has **no
+  write API** — all five prod rows were inserted by hand. ADR-0073 deliberately does **not**
+  extend to production rows (it would become a fourth writer against the
+  `source` + `closed_at` precedence rule in `mymrc/processed-bridge.ts:140-143`); finishing
+  the declared amendment path is separate work and needs its own ADR.
+- **L-7 — Correcting a load inside a finalized COR month bricks that certificate's PDF.**
+  `cor_certificates.inventory_units` is snapshotted, so a signed Exhibit 5 never silently
+  changes — but `assertCorInventoryReconciles` gates `generateCorPdf` (`cor/pdf.ts:112`) and
+  **409s on drift**. Result: an immutable, correct-when-signed certificate that can no
+  longer render its own PDF. Recovery is `supersedeCor` → new draft → re-enter FT/PT →
+  re-finalize. Must be a named Tier 2 consequence, never a surprise.
+- **L-8 — Confirmed NOT a hazard (recorded so nobody re-litigates it): no invoice amount
+  can change from an inbound unit-count edit.** Invoice lines derive from
+  `processed_units_daily.stripped_program` and consumer drop-offs; the one invoice query
+  touching `inboundLoad` (freight/fuel, `generation-inputs.ts:269-288`) has an exhaustive
+  `select` with **no unit or weight column** — freight is a per-haul lane rate, fuel is
+  priced off `source.canonical_mileage`. Per `audit/comparators/c4-billing.ts:3`, _"the
+  billing basis is PROCESSED program units, not inbound."_ The edit CAN flip the ADR-0039
+  trust gate (C1/C5 findings `blocksBilling`), changing **whether** an invoice may be
+  approved — never the amount.
+- **L-9 — `inbound_loads` is the only loads/inventory model with no lock.** `ConsumerDropoff`,
+  `OutboundMaterial`, `LandfilledUnit`, `CollectionEvent` all carry `locked_at`;
+  `ProcessedUnitsDaily` carries `closed_at`. Inbound carries neither, and there is no closed
+  period or billed-window immutability anywhere on it. ADR-0073 adds `locked_at` as a column
+  and a guard **with no automatic setter** — which leaves an open policy question: what
+  locks an inbound load, and when? Proposed default is month close; needs Bill's call.
+
+---
+
 ## 0.AA — 2026-07-29 Document ingestion foundation (ADR-0067) — operator actions
 
 Shipped on `feat/doc-ingestion-foundation`: the ADR, the additive schema, and the
