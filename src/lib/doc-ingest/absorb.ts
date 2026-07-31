@@ -23,11 +23,18 @@
 // the layout-aware parsers are the only readers.
 //
 // ── Why the layout-aware parser, not parse.ts ──────────────────────────────
-// `parse.ts` takes the first non-empty row as the header row. That is wrong on 3 of
-// 3 live workbooks — every real one opens with a merged title row — so anything
-// built on its `headers[]` would be built on sand. `parseWorkbook`
+// UPDATED 2026-07-31 (ADR-0067 Am.8). This block used to say that `parse.ts`
+// "takes the first non-empty row as the header row … wrong on 3 of 3 live
+// workbooks". That is no longer true: `parse.ts` now DETECTS the header row and
+// records which one it chose, and it resolves all three live workbooks correctly
+// (verified against the actual R2 objects, not the audit's summary of them).
+//
+// The reason to stay on the layout-aware parser is therefore different, and
+// stronger: `parse.ts` produces a SHAPE projection — headers, row counts,
+// per-column sums — and retains no cell value. `parseWorkbook`
 // (`@/lib/audit/workbook/parser`) has a real layout resolver spanning at least
 // three template generations, and `parseDailyRows` derives the per-day rows.
+// Shape is not enough to absorb from, however good the headers are.
 //
 // ── Why exercising `parseDailyRows` here is SAFE, and useful ────────────────
 // `parseDailyRows` derives its rows from the SAME layout-aware parse (ADR-0049
