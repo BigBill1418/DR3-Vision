@@ -4794,6 +4794,16 @@ model WorkbookSource {
   last_file_name String? // resolved file name of the last-synced file
   last_file_ctag String? // D2 change-detection guard (unchanged ⇒ skip re-download)
 
+  /// ADR-0049 Am.4 B1 — the PRIOR month's watermark, used only while the grace
+  /// window is open. Separate from `last_file_*` on purpose: during the window two
+  /// files are in flight for one source, and a single cTag slot cannot answer
+  /// "unchanged?" for both. Sharing one would make each poll invalidate the other's
+  /// watermark — and, worse, let a grace read mark a genuinely-changed current-month
+  /// file as unchanged, dropping the change silently.
+  grace_file_id   String?
+  grace_file_name String?
+  grace_file_ctag String?
+
   /// ADR-0049 Am.3 A4 — "we polled" was recorded and "we last got DATA" was not,
   /// so a source that had produced nothing for three weeks was indistinguishable
   /// from a healthy one. Set on every poll that READ the workbook (including a
@@ -4836,6 +4846,14 @@ model WorkbookSyncRun {
   rows_upserted        Int                       @default(0)
   rows_skipped_midedit Int                       @default(0)
   rows_overwritten     Int                       @default(0)
+  /// ADR-0049 Am.4 B1 — this run read the PRIOR month's workbook inside the grace
+  /// window. Without it a July-dated run sitting among August runs looks exactly
+  /// like the A2 stale-month defect, which is the opposite of a healthy signal.
+  grace_window         Boolean                   @default(false)
+  /// Days the workbook wanted to change that were left alone because an APPROVED
+  /// invoice already covers them. Non-zero means the spreadsheet and a sent invoice
+  /// disagree and a human must decide — it is never a silent drop.
+  rows_skipped_billed  Int                       @default(0)
   cutover_noop         Boolean                   @default(false) // true when the surface is live (post-cutover): sync no-op'd
   error_text           String? // human error (never credentials)
   run_id               String? // per-run correlation id (crypto.randomUUID)

@@ -3,6 +3,29 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the prior month stopped being readable the moment it ended (ADR-0049 Am.4, B1)
+
+Monthly rollover was automatic and total: on the 1st the sync began reading the new file and **nothing ever read the old one again**. A daily-log workbook isn't finished on the last day of its month — Kelsey closes the month in the days after it, filling a missed day, correcting a mis-keyed figure, completing the last day's close the next morning. Every one of those edits was invisible to Vision, permanently, and silently: no error, no ledger row, no alarm. The file just stopped being looked at. Shipped before the 8/1 rollover, which is the last moment it could have helped July.
+
+### Added
+
+- **A five-business-day grace window.** The prior month's workbook keeps being polled alongside the current one through the 5th business day of the new month, then stops — an unbounded window means an accidental edit to a February file in November silently rewrites February. Business days, not calendar days: a five-calendar-day window opening on a Friday gives one working day. Holidays are deliberately not modelled; the effect is bounded and in the safe direction, and a stale holiday table would make the window silently wrong rather than merely short.
+- **A separate watermark for the prior month** (`grace_file_id/name/ctag`). Two files are in flight during the window and one cTag slot cannot answer "unchanged?" for both — the polls would alternate and re-download every time. The dangerous direction is worse: a grace read advancing the current-month watermark would make a real August change arriving between two grace polls read as `unchanged` and **dropped silently**.
+- **`workbook_sync_runs.grace_window`.** Without it a July-dated run sitting among August runs is indistinguishable from the A2 stale-month defect Amendment 3 was written to catch.
+
+### Guarded
+
+- **A day an approved invoice already covers is never rewritten.** Only the grace path can reach one. When the workbook disagrees with an invoice MRC already has, quietly moving the Vision figure would leave no trace — it would just make Vision stop matching what was sent. The day is left as billed and counted on `rows_skipped_billed`; resolving it is a human decision (the ADR-0041 supersede chain). Draft invoices don't count; a draft has been shown to nobody.
+- **A grace poll never touches health and never pages.** `last_success_at` / `consecutive_failures` / `last_polled_at` answer "is the _live_ feed working?", and a successful read of last month's file is not evidence that this month's is being read — letting it reset the counter would mask a dead current-month feed for the first week of every month. And the prior month's file gets archived or renamed as a matter of routine, so a grace `not_found` is the expected end state; paging on it would fire on every source, every month, on schedule (ADR-0037 Q1/Q2).
+
+### Verification
+
+24 new tests. Every guard was **falsified before being kept** — broken on purpose, observed red, restored. One break (`priorMonthAnchor` = `now − 30 days`) initially _passed_, which was a defect in the test rather than safety in the code: every case tried landed on the 3rd, and the 3rd minus 30 days is inside the prior month for any month length. The separating case is **1 March → 30 January** — the sync would re-poll January while claiming to catch up February. The test now asserts days 1–8 of all twelve months, and the break goes red.
+
+### Known gap
+
+`grace_window` and `rows_skipped_billed` are on the ledger and in the logs but **not yet on any screen**. A non-zero `rows_skipped_billed` means a spreadsheet and a sent invoice disagree, and today that is only discoverable by querying.
+
 ## 2026-07-31 — the MyMRC mirror was frozen for 9 days behind 216 green runs (ADR-0070)
 
 MyMRC is the only **independent** witness for validating `workbook-sync` before cutover — the doc-ingest reconciliation surface can't do it, because both its sides derive from the same extractor. That witness had stopped moving. The processed and outbound mirrors had not gained a row since 2026-07-22 while every hourly run recorded `ok`.

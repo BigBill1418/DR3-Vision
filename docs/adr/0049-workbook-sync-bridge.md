@@ -439,3 +439,112 @@ null would read as "we wrote null").
 - **The MyMRC scraper.** Still the only independent witness to whether the extraction
   is right, still producing nothing since 2026-07-20, still on the critical path for
   cutover confidence.
+
+---
+
+## Amendment 4 — B1, the prior-month grace window (2026-07-31, ACCEPTED)
+
+**Status:** accepted and implemented. Closes B1, which Amendment 3 left open.
+
+### The defect
+
+D5 rollover is automatic and total. On the 1st, `resolveMonthlyFileName` expands the
+naming pattern against the current Pacific month and the sync begins reading the new
+file. **Nothing ever reads the old one again.**
+
+That is wrong about how the workbook is actually used. A monthly daily-log workbook
+is not finished on the last day of its month — Kelsey closes the month in the days
+after it. A missed day gets filled in, a mis-keyed figure gets corrected, the last
+day's close gets completed the following morning. Under pure rollover every one of
+those edits is invisible to Vision, permanently, and the loss is silent: no error, no
+ledger row, no alarm. The file simply stops being looked at.
+
+This is the same shape as every other defect this ADR has had to amend away — **"I
+stopped reading this" and "there is nothing more to read" recorded identically.**
+
+### The decision
+
+For a bounded window into the new month, the **prior month's workbook keeps being
+polled alongside the current one**. `runWorkbookSyncPoll` calls `syncOneSource` a
+second time per source with `target: 'grace'`, ordered after the current-month poll
+so the live month is never delayed by a catch-up read of a month that has ended.
+
+**The window is five business days** (`GRACE_BUSINESS_DAYS`), counted Mon–Fri from
+the 1st. Business days rather than calendar days because the thing being waited for is
+human work: a five-calendar-day window opening on a Friday gives one working day.
+**Holidays are deliberately not modelled** — the effect is bounded and in the safe
+direction (a holiday costs at most one working day of grace and can never extend the
+window), whereas a stale holiday table would make the window silently _wrong_ rather
+than merely short.
+
+The window must close, and once it does the period is closed. An unbounded window
+means an accidental edit to a February file in November silently rewrites February.
+
+### Four things the amendment is careful about
+
+1. **Two files in flight, two watermarks.** `grace_file_id/name/ctag` are separate
+   columns, not a reuse of `last_file_*`. A single cTag slot cannot answer
+   "unchanged?" for two files: the polls would alternate, each seeing the other's
+   cTag, each re-downloading every time. The dangerous direction is worse — a grace
+   read advancing the current-month watermark would make a real August change arriving
+   between two grace polls read as `unchanged` and be **dropped silently**.
+
+2. **A grace poll never touches health, and never pages.** `last_success_at`,
+   `consecutive_failures` and `last_polled_at` answer _"is the live feed working?"_,
+   and a successful read of last month's file is not evidence that this month's is
+   being read — letting it reset the counter would mask a dead current-month feed for
+   the first week of every month. And the prior month's file is archived, renamed or
+   filed into a year folder as a matter of routine, so a grace `not_found` is the
+   **expected** end state. Paging on it would fire on every source, every month, on
+   schedule: the textbook ADR-0037 Q1/Q2 failure. Grace outcomes live on the run
+   ledger, which is where a bounded catch-up read belongs.
+
+3. **A day that has already been invoiced is never rewritten.** Only the grace path
+   can reach one; the current-month path writes days inside a month nobody has closed.
+   When the workbook disagrees with an APPROVED, non-void invoice, moving the Vision
+   figure would leave no trace of the disagreement — it would just make Vision stop
+   matching what MRC was sent. The day is left exactly as billed, the count lands on
+   `workbook_sync_runs.rows_skipped_billed`, and resolving it is a human decision (the
+   ADR-0041 supersede chain exists for precisely this). Draft invoices do not count —
+   a draft has been shown to nobody and is regenerated from current figures.
+
+4. **The A2 month cross-check needs no special case.** `deriveDailyRows` takes
+   `expectedMonth` from the _file name_, so a JULY-named file read on 3 August is
+   expected to contain July rows and validates exactly as it would have in July.
+
+`workbook_sync_runs.grace_window` marks these runs. Without it a July-dated run
+sitting among August runs is indistinguishable from the A2 stale-month defect
+Amendment 3 was written to catch — the opposite of a healthy signal.
+
+### Verification
+
+`grace.test.ts` (17) covers the policy arithmetic; `grace-engine.test.ts` (7) covers
+the engine as it actually runs. Every guard was **falsified before being kept** —
+broken on purpose, observed red, restored:
+
+| Break                                       | Went red       |
+| ------------------------------------------- | -------------- |
+| window never closes                         | ✅ 3 tests     |
+| `priorMonthAnchor` = `now − 30 days`        | ✅ (see below) |
+| read the UTC day instead of the Pacific day | ✅ 1 test      |
+| billed-day guard disabled                   | ✅ 1 test      |
+| grace advances the current-month watermark  | ✅ 2 tests     |
+| grace runs health/alarm                     | ✅ 2 tests     |
+
+**The `now − 30 days` break initially passed, which was a defect in the test, not
+safety in the code.** Every case tried landed on the 3rd of a month, and the 3rd minus
+30 days is inside the prior month for every month length. The case that separates them
+is **1 March: minus 30 days lands on 30 January**, so the sync would re-poll January
+while claiming to catch up February — February is short, and 30 days is not a month.
+The test now asserts the anchor for days 1–8 of all twelve months (every day the
+window can be open), and the break goes red.
+
+### What Amendment 4 does NOT close
+
+- **B2** (backoff on re-download of an unchanged failing cTag) and **B3** (ledger the
+  date range a run wrote) remain open. B3 is still the field that would catch an
+  A2-class failure on the first bad poll rather than at month-end.
+- **The `/admin` surface does not yet show `grace_window` or `rows_skipped_billed`.**
+  Both are on the ledger and in the logs; neither is on a screen. A non-zero
+  `rows_skipped_billed` means a spreadsheet and a sent invoice disagree, and today
+  that fact is only discoverable by querying.

@@ -31,6 +31,7 @@ import {
 import { deriveDailyRows, type DailySiteScope } from './daily-adapter';
 import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
 import { resolveMonthlyFileName, yearMonthKeyFromFileName } from './naming';
+import { billedDaysFor, isGraceWindowOpen, priorMonthAnchor } from './grace';
 import { upsertDailyProduction } from './upsert';
 
 export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error' | 'skipped';
@@ -111,6 +112,10 @@ export interface SyncOneResult {
   rowsUpserted: number;
   rowsSkippedMidedit: number;
   rowsOverwritten: number;
+  /** ADR-0049 Am.4 B1 — this result is a prior-month catch-up read, not the live month. */
+  graceWindow: boolean;
+  /** Days left alone because an approved invoice already covers them (B1). */
+  rowsSkippedBilled: number;
   error: string | null;
   runId: string;
   /** Whether this poll fired an ntfy page (A4 — one `high` per site per day). */
@@ -122,6 +127,15 @@ export interface RunPollResult {
   sourcesPolled: number;
   results: SyncOneResult[];
 }
+
+/**
+ * ADR-0049 Am.4 B1 — which month a poll is reading.
+ *
+ * `current` is the D5 behaviour, unchanged. `grace` re-reads the PRIOR month's
+ * workbook while its close-out window is open, so an edit Kelsey makes on the 3rd
+ * to the month that ended on the 31st still reaches Vision.
+ */
+export type SyncTarget = 'current' | 'grace';
 
 export interface SyncContext {
   prisma?: PrismaClient;
@@ -157,9 +171,18 @@ export async function runWorkbookSyncPoll(ctx: SyncContext = {}): Promise<RunPol
     orderBy: { created_at: 'asc' },
   });
 
+  const nowFn = ctx.now ?? ((): Date => new Date());
   const results: SyncOneResult[] = [];
   for (const source of sources) {
-    results.push(await syncOneSource({ ...ctx, prisma, transport, log }, source));
+    results.push(await syncOneSource({ ...ctx, prisma, transport, log }, source, 'current'));
+
+    // ADR-0049 Am.4 B1 — the prior month stays readable for a bounded window into
+    // the new one. Ordered AFTER the current-month poll deliberately: the live
+    // month is what an operator is watching today, so it must never be delayed or
+    // starved by a catch-up read of a month that has already ended.
+    if (isGraceWindowOpen(nowFn())) {
+      results.push(await syncOneSource({ ...ctx, prisma, transport, log }, source, 'grace'));
+    }
   }
   return { transportMode: transport.mode, sourcesPolled: sources.length, results };
 }
@@ -173,6 +196,7 @@ interface ResolvedCtx extends SyncContext {
 export async function syncOneSource(
   ctx: ResolvedCtx,
   source: WorkbookSource,
+  target: SyncTarget = 'current',
 ): Promise<SyncOneResult> {
   const { prisma, transport, log } = ctx;
   const allowNonGraphWrites = ctx.allowNonGraphWrites === true;
@@ -180,6 +204,11 @@ export async function syncOneSource(
   const runId = randomUUID();
   const started = nowFn();
   const mode = transport.mode;
+  const isGrace = target === 'grace';
+  /** The month this poll reads: now, or an instant inside the prior month (B1). */
+  const monthAnchor = isGrace ? priorMonthAnchor(started) : started;
+  const tag = isGrace ? ' [grace]' : '';
+  let rowsSkippedBilled = 0;
 
   let status: SyncStatus = 'ok';
   let error: string | null = null;
@@ -243,16 +272,25 @@ export async function syncOneSource(
         `[workbook-sync] run=${runId} site=${source.site_id} CUT OVER (surface live) — no-op`,
       );
     } else {
-      fileName = resolveMonthlyFileName(source.naming_pattern, started);
+      fileName = resolveMonthlyFileName(source.naming_pattern, monthAnchor);
       const file = await transport.getFile(source.drive_upn, source.folder_path, fileName);
+      // B1 — two files in flight, two watermarks. Reading the wrong one would make
+      // each poll invalidate the other's cTag (endless re-downloads) and, in the
+      // other direction, let a grace read mark a genuinely-changed current-month
+      // file "unchanged" and drop that change.
+      const watermarkId = isGrace ? source.grace_file_id : source.last_file_id;
+      const watermarkCtag = isGrace ? source.grace_file_ctag : source.last_file_ctag;
 
       if (!file) {
         status = 'not_found';
         log(
           'info',
-          `[workbook-sync] run=${runId} site=${source.site_id} file "${fileName}" not found (possibly-empty new month)`,
+          `[workbook-sync] run=${runId} site=${source.site_id}${tag} file "${fileName}" not found ` +
+            (isGrace
+              ? '(prior month archived or renamed — normal, not a fault)'
+              : '(possibly-empty new month)'),
         );
-      } else if (file.id === source.last_file_id && file.ctag === source.last_file_ctag) {
+      } else if (file.id === watermarkId && file.ctag === watermarkCtag) {
         // Delta no-op (D2): unchanged cTag ⇒ NO re-download / re-parse. This still
         // counts as a healthy read for A4 — the file is present and identical to
         // the one we last parsed successfully.
@@ -260,7 +298,7 @@ export async function syncOneSource(
         workbookRead = true;
         log(
           'info',
-          `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" unchanged (ctag) — no re-download`,
+          `[workbook-sync] run=${runId} site=${source.site_id}${tag} "${fileName}" unchanged (ctag) — no re-download`,
         );
       } else {
         changesDetected = true;
@@ -336,12 +374,41 @@ export async function syncOneSource(
             throw new WorkbookDailyLayoutUnreadable(error);
           }
         } else {
+          // ── B1 — NEVER rewrite a day that has already been invoiced ─────────
+          // Only the grace path can reach a billed day: the current-month path
+          // writes days inside a month nobody has closed yet. When it does happen,
+          // the workbook and an invoice MRC already has now disagree, and quietly
+          // moving the Vision figure would leave no trace of that disagreement —
+          // it would just make Vision stop matching what was sent. The day is left
+          // exactly as billed and the count is put on the ledger, because the fix
+          // is a human decision (a superseding invoice), not a poller's.
+          let rows = daily.rows;
+          if (isGrace && rows.length > 0) {
+            const billed = await billedDaysFor(
+              prisma,
+              source.site_id,
+              rows.map((r) => r.productionDate),
+            );
+            if (billed.size > 0) {
+              const before = rows.length;
+              rows = rows.filter((r) => !billed.has(r.productionDate));
+              rowsSkippedBilled = before - rows.length;
+              log(
+                'warn',
+                `[workbook-sync] run=${runId} site=${source.site_id}${tag} ${rowsSkippedBilled} day(s) ` +
+                  `left alone — already covered by an approved invoice: ${[...billed].sort().join(', ')}. ` +
+                  `The workbook disagrees with an invoice that has already been sent; resolving that is a ` +
+                  `human decision (supersede the invoice), not this sync's.`,
+              );
+            }
+          }
+
           const counts = await prisma.$transaction((tx) =>
             upsertDailyProduction({
               db: tx,
               siteId: source.site_id,
               syncRunId: runId,
-              rows: daily.rows,
+              rows,
             }),
           );
           rowsUpserted = counts.upserted;
@@ -349,7 +416,7 @@ export async function syncOneSource(
           workbookRead = true;
           log(
             'info',
-            `[workbook-sync] run=${runId} site=${source.site_id} "${fileName}" gen=${daily.templateGeneration} month=${parsed.workbookMonth ?? 'n/a'} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit}`,
+            `[workbook-sync] run=${runId} site=${source.site_id}${tag} "${fileName}" gen=${daily.templateGeneration} month=${parsed.workbookMonth ?? 'n/a'} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit} skippedBilled=${rowsSkippedBilled}`,
           );
         }
       }
@@ -357,14 +424,24 @@ export async function syncOneSource(
       // The file watermark advances ONLY when the workbook was actually read. A
       // refusal or a skip leaves the stored cTag alone so the next poll re-reads
       // the same bytes — the deliberate D12c posture, extended to `skipped`.
+      //
+      // B1 — a grace poll advances ONLY the grace watermark, and never
+      // `last_polled_at`: that column feeds the "is this source alive?" health
+      // read, and letting a catch-up read of a finished month refresh it would
+      // make a dead current-month feed look alive for the first week of every
+      // month. Health is the current month's business alone.
       await prisma.workbookSource.update({
         where: { id: source.id },
-        data: {
-          last_polled_at: nowFn(),
-          ...(file && workbookRead
-            ? { last_file_id: file.id, last_file_name: file.name, last_file_ctag: file.ctag }
-            : {}),
-        },
+        data: isGrace
+          ? file && workbookRead
+            ? { grace_file_id: file.id, grace_file_name: file.name, grace_file_ctag: file.ctag }
+            : {}
+          : {
+              last_polled_at: nowFn(),
+              ...(file && workbookRead
+                ? { last_file_id: file.id, last_file_name: file.name, last_file_ctag: file.ctag }
+                : {}),
+            },
       });
     }
   } catch (err) {
@@ -389,14 +466,27 @@ export async function syncOneSource(
   // why a stuck refusal paged on its own 30-minute in-process timer. Both
   // decisions now happen HERE, once, after the outcome is settled, against durable
   // per-source state.
-  const paged = await recordHealthAndAlarm({
-    prisma,
-    source,
-    status,
-    error,
-    now: nowFn(),
-    log,
-  });
+  //
+  // B1 — a GRACE poll is excluded from both. Health first: `last_success_at` and
+  // `consecutive_failures` answer "is the live feed working?", and a successful
+  // read of last month's file is not evidence that this month's is being read —
+  // letting it reset the counter would mask a dead current-month feed for the
+  // first week of every month. And the alarm: the prior month's file gets
+  // archived, renamed, or moved into a year folder as a matter of routine, so a
+  // grace `not_found` is the EXPECTED end state, not a fault. Paging on it would
+  // fire on every source, every month, on schedule — the textbook ADR-0037 Q1/Q2
+  // failure. Grace outcomes live on the run ledger, which is where a bounded
+  // catch-up read belongs.
+  const paged = isGrace
+    ? false
+    : await recordHealthAndAlarm({
+        prisma,
+        source,
+        status,
+        error,
+        now: nowFn(),
+        log,
+      });
 
   // Ledger row ALWAYS (mymrc_sync_runs discipline), including throw / fail-soft.
   try {
@@ -413,6 +503,8 @@ export async function syncOneSource(
         rows_upserted: rowsUpserted,
         rows_skipped_midedit: rowsSkippedMidedit,
         rows_overwritten: rowsOverwritten,
+        grace_window: isGrace,
+        rows_skipped_billed: rowsSkippedBilled,
         cutover_noop: cutoverNoop,
         error_text: error,
         run_id: runId,
@@ -436,6 +528,8 @@ export async function syncOneSource(
     rowsUpserted,
     rowsSkippedMidedit,
     rowsOverwritten,
+    graceWindow: isGrace,
+    rowsSkippedBilled,
     error,
     runId,
     paged,

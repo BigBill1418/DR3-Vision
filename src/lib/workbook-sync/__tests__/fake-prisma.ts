@@ -17,6 +17,10 @@ export interface FakeSource {
   last_file_id: string | null;
   last_file_name: string | null;
   last_file_ctag: string | null;
+  /** ADR-0049 Am.4 B1 — the prior month's separate watermark. */
+  grace_file_id: string | null;
+  grace_file_name: string | null;
+  grace_file_ctag: string | null;
   /** ADR-0049 Am.3 A4 — health watermark + escalation ladder state. */
   last_success_at: Date | null;
   consecutive_failures: number;
@@ -168,6 +172,41 @@ export class FakePrisma {
     },
   };
 
+  /**
+   * ADR-0049 Am.4 B1 — approved invoices, for the grace window's billed-day guard.
+   * Empty by default: nothing is billed, so the guard is inert and every existing
+   * test behaves exactly as it did before the amendment.
+   */
+  invoices: {
+    site_id: string;
+    status: string;
+    voided_at: Date | null;
+    window_start: Date;
+    window_end: Date;
+  }[] = [];
+
+  invoice = {
+    findMany: async (args: {
+      where: {
+        site_id: string;
+        status: string;
+        voided_at: null;
+        window_start: { lte: Date };
+        window_end: { gte: Date };
+      };
+    }) => {
+      const w = args.where;
+      return this.invoices.filter(
+        (i) =>
+          i.site_id === w.site_id &&
+          i.status === w.status &&
+          i.voided_at === null &&
+          i.window_start.getTime() <= w.window_start.lte.getTime() &&
+          i.window_end.getTime() >= w.window_end.gte.getTime(),
+      );
+    },
+  };
+
   async $transaction<T>(fn: (tx: FakePrisma) => Promise<T>): Promise<T> {
     return fn(this);
   }
@@ -184,6 +223,9 @@ export class FakePrisma {
       last_file_id: null,
       last_file_name: null,
       last_file_ctag: null,
+      grace_file_id: null,
+      grace_file_name: null,
+      grace_file_ctag: null,
       last_success_at: null,
       consecutive_failures: 0,
       last_alert_at: null,
