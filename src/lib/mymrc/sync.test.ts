@@ -8,10 +8,12 @@ import {
   makeSiteIdResolver,
   siteCodeFromDiscriminator,
   syncFeed,
+  syncSite,
 } from './sync';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
 import type { BatchActionError, RecordFieldsClient } from './record-fields-client';
 import type { Pager } from './ntfy';
+import { FEED_NAMES } from './types';
 import type { SfRecord, SyncRunStatus } from './types';
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
@@ -254,6 +256,58 @@ describe('syncFeed — happy path', () => {
     const ledger = ledgerCreate.mock.calls[0]?.[0]?.data as { status: string; rows_listed: number };
     expect(ledger.status).toBe('ok');
     expect(ledger.rows_listed).toBe(2);
+  });
+});
+
+describe('syncSite RUNS every feed, not just the ones someone remembered', () => {
+  // The guard above asserts FEED_NAMES contains the right feeds. That is not the
+  // same as syncSite ITERATING it — and on 2026-07-31 the difference was the
+  // whole bug: the constant was correct while syncSite carried its own
+  // hardcoded ['hauls','processed','outbound'] and silently skipped
+  // haulsCompleted. This asserts the loop, not the list.
+  it('calls the list transport once per declared feed', async () => {
+    const { prisma } = fakePrisma({ needDetail: [] });
+    const seen: string[] = [];
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async (feed: string) => {
+        seen.push(feed);
+        return list([], true);
+      }),
+    });
+    const { pager } = spyPager();
+
+    await syncSite({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      pager,
+      now: NOW,
+    });
+
+    expect(seen.sort()).toEqual([...FEED_NAMES].sort());
+  });
+});
+
+describe('every declared feed must actually be RUN (2026-07-31)', () => {
+  // `haulsCompleted` was added to the type, the list-view bindings, the adapters
+  // and the field map — and did not run, because `syncSite` and the deadman each
+  // carried their own hardcoded ['hauls','processed','outbound']. The sync
+  // reported a clean run the whole time.
+  //
+  // A feed that exists but is never iterated is indistinguishable from a feed
+  // that was never added. This asserts the CONSTANT is the source of truth, so
+  // the next feed cannot be half-added.
+  it('FEED_NAMES contains both haul views and both material feeds', () => {
+    expect([...FEED_NAMES]).toEqual(['hauls', 'haulsCompleted', 'processed', 'outbound']);
+  });
+
+  it('the two haul feeds are distinct entries, not one', () => {
+    // The whole point: one view sees a haul while SCHEDULED, the other once
+    // DELIVERED. Collapsing them loses the transition.
+    expect(FEED_NAMES).toContain('hauls');
+    expect(FEED_NAMES).toContain('haulsCompleted');
+    expect(new Set(FEED_NAMES).size).toBe(FEED_NAMES.length);
   });
 });
 
@@ -610,7 +664,10 @@ describe('checkDeadman', () => {
     const { pager, calls } = spyPager();
     await checkDeadman({ prisma: prisma as unknown as P, sites: ['woodland'], pager, now: NOW });
     expect(calls.every((c) => c.kind === 'deadman')).toBe(true);
-    expect(calls.length).toBe(3); // one per feed
+    // One per feed — expressed as FEED_NAMES.length, not a literal. It read `3`
+    // and passed while `haulsCompleted` was silently never checked; a deadman
+    // that skips a feed is exactly as useful as no deadman for that feed.
+    expect(calls.length).toBe(FEED_NAMES.length);
   });
 
   it('does not page a feed that has never succeeded (first-run state)', async () => {

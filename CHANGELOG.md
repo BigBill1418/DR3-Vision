@@ -3,6 +3,23 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the new feed was declared but never run
+
+Caught by running the sync instead of trusting the diff. `haulsCompleted` was added to the type, the list-view bindings, the adapters and the field map — and did not run. `syncSite` and the deadman each carried their own hardcoded `['hauls', 'processed', 'outbound']`, so the constant said four feeds and the runner iterated three. The sync reported a clean run throughout.
+
+**A feed that exists but is never iterated is indistinguishable from a feed that was never added.**
+
+### Fixed
+
+- `syncSite` and `checkDeadman` now iterate `FEED_NAMES`. The constant is the single source of truth, so the next feed cannot be half-added.
+- The deadman's `expect(calls.length).toBe(3)` became `toBe(FEED_NAMES.length)` — it read `3` and passed while a feed was silently unchecked.
+
+### The test lesson, again
+
+The first guard asserted `FEED_NAMES` contained the right entries — and reverting `syncSite` to its hardcoded list **still passed**. Asserting the constant is not asserting the loop. A second test now drives `syncSite` with a fake transport and checks the list call fires once per declared feed; reverting the loop goes red.
+
+That is the third time today a guard failed to falsify on the first attempt — each time by testing the thing adjacent to the defect rather than the defect itself.
+
 ## 2026-07-31 — the hourly sync never watched the view that says a haul was delivered
 
 The root cause behind the frozen inbound feed. The hourly sync polled three list views — `docking_appointments_rc`, `processed_active`, `outbound_active`. A haul sits in the _docking appointments_ view while it is **scheduled**, and **leaves it** when MRC marks it Delivered, appearing instead in `completed_hauls`. Nothing polled `completed_hauls`. So the mirror could never observe the transition: `Confirmed` rows refreshed hourly and looked healthy while the delivered half sat frozen since 2026-07-22, and `inbound_loads` is bridged from **delivered** hauls.
