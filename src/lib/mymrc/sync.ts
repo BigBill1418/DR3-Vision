@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
+import { FEED_NAMES } from './types';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
 import { measureFeedFreshness } from './freshness';
 import { fingerprint, ntfyPager, type Pager } from './ntfy';
@@ -666,10 +667,19 @@ export interface SyncSiteContext {
   now?: () => Date;
 }
 
-/** Run all three feeds for one site, sequentially (shared session). */
+/**
+ * Run EVERY feed for one site, sequentially (shared session).
+ *
+ * Iterates `FEED_NAMES` rather than a literal list. That is load-bearing: on
+ * 2026-07-31 the `haulsCompleted` feed was added to the type, the bindings and
+ * the adapters — and did not run, because this loop and the deadman below both
+ * carried their own hardcoded `['hauls', 'processed', 'outbound']`. A feed that
+ * exists but is never iterated is indistinguishable from a feed that was never
+ * added, and the sync reports a clean run either way.
+ */
 export async function syncSite(ctx: SyncSiteContext): Promise<SyncFeedResult[]> {
   const out: SyncFeedResult[] = [];
-  for (const feed of ['hauls', 'processed', 'outbound'] as const) {
+  for (const feed of FEED_NAMES) {
     out.push(
       await syncFeed({
         prisma: ctx.prisma,
@@ -706,7 +716,10 @@ export async function checkDeadman(args: {
       select: { id: true },
     });
     if (!siteRow) continue;
-    for (const feed of ['hauls', 'processed', 'outbound'] as const) {
+    // FEED_NAMES, not a literal — see syncSite: a feed missing from a hardcoded
+    // list is silently never checked, and a deadman that never checks a feed is
+    // exactly as useful as no deadman.
+    for (const feed of FEED_NAMES) {
       const lastOk = await args.prisma.mymrcSyncRun.findFirst({
         where: { site_id: siteRow.id, feed, status: 'ok' },
         orderBy: { started_at: 'desc' },
