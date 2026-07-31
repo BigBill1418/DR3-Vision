@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { AuthFailedError, PortalContractDriftError, type PortalClient } from './portal-client';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
+import { measureFeedFreshness } from './freshness';
 import { fingerprint, ntfyPager, type Pager } from './ntfy';
 import { optionalFieldsForFeed, type RecordFieldsClient } from './record-fields-client';
 import { upsertScrapedHauls } from './upsert';
@@ -60,7 +61,10 @@ export function decidePage(
 }
 
 /** Active mirror ids no longer present in the latest full list. */
-export function computeDisappearedIds(activeIds: readonly string[], listedIds: readonly string[]): string[] {
+export function computeDisappearedIds(
+  activeIds: readonly string[],
+  listedIds: readonly string[],
+): string[] {
   const listed = new Set(listedIds);
   return activeIds.filter((id) => !listed.has(id));
 }
@@ -317,7 +321,11 @@ function outboundAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): F
   };
 }
 
-function adapterFor(feed: FeedName, prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function adapterFor(
+  feed: FeedName,
+  prisma: PrismaClient,
+  resolveSiteId: SiteIdResolver,
+): FeedAdapter {
   if (feed === 'hauls') return haulsAdapter(prisma, resolveSiteId);
   if (feed === 'processed') return processedAdapter(prisma, resolveSiteId);
   return outboundAdapter(prisma, resolveSiteId);
@@ -340,6 +348,11 @@ export interface SyncFeedContext {
   detailBatchSize?: number;
   /** Per-run correlation id. Defaults to a fresh crypto.randomUUID when omitted. */
   runId?: string;
+  /**
+   * How far the feed's newest business record may lag before the run is recorded
+   * `stale_mirror` instead of `ok` (default: `DEFAULT_MAX_AGE_MS` in freshness.ts).
+   */
+  freshnessMaxAgeMs?: number;
 }
 
 export interface SyncFeedResult {
@@ -368,7 +381,10 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   // ledger row (which persists the same `run_id`) join without timestamp guessing.
   const tag = `run=${runId} ${ctx.site}/${ctx.feed}`;
 
-  const siteRow = await ctx.prisma.site.findUnique({ where: { code: ctx.site }, select: { id: true } });
+  const siteRow = await ctx.prisma.site.findUnique({
+    where: { code: ctx.site },
+    select: { id: true },
+  });
   if (!siteRow) throw new Error(`mymrc-sync: site code "${ctx.site}" not found`);
   const siteId = siteRow.id;
   // Preloaded code→id map for deriving each mirror row's site on the detail pass
@@ -394,9 +410,15 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   let detailsFetched = 0;
   let error: string | null = null;
 
-  async function pageOnce(kind: Parameters<Pager['page']>[0]['kind'], fp: string, message: string): Promise<void> {
+  async function pageOnce(
+    kind: Parameters<Pager['page']>[0]['kind'],
+    fp: string,
+    message: string,
+  ): Promise<void> {
     if (!decidePage(prior, status, nowFn())) return;
-    await pager.page({ kind, site: ctx.site, feed: ctx.feed, message, fingerprint: fp }).catch(() => undefined);
+    await pager
+      .page({ kind, site: ctx.site, feed: ctx.feed, message, fingerprint: fp })
+      .catch(() => undefined);
   }
 
   try {
@@ -439,7 +461,10 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     const needDetail = await adapter.idsNeedingDetail(ids);
     const externalById = new Map(needDetail.map((t) => [t.id, t.externalId]));
     const optionalFields = optionalFieldsForFeed(ctx.feed);
-    for (const group of chunk(needDetail.map((t) => t.id), batchSize)) {
+    for (const group of chunk(
+      needDetail.map((t) => t.id),
+      batchSize,
+    )) {
       const { records, errors } = await ctx.recordFields.fetchRecordFields(group, optionalFields);
       for (const [, record] of records) {
         await adapter.applyDetailRecord(record, started);
@@ -455,10 +480,47 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     }
 
     if (ctx.feed === 'hauls') {
-      await feedExpectedLoads(ctx.prisma, siteId, ctx.site, started, (lvl, msg) => log(lvl, `${tag} ${msg}`));
+      await feedExpectedLoads(ctx.prisma, siteId, ctx.site, started, (lvl, msg) =>
+        log(lvl, `${tag} ${msg}`),
+      );
     }
 
-    log('info', `mymrc-sync: ${tag} ok — listed=${rowsListed} details=${detailsFetched}`);
+    // FRESHNESS GATE — the run did not throw, but did it leave the mirror CURRENT?
+    // `ok` used to answer only the first question, which is how 9 days of frozen
+    // processed/outbound mirrors recorded 216 consecutive successful runs. The
+    // measurement is deliberately independent of anything this run counted:
+    // listed/upserted/detail counts all looked healthy throughout that freeze.
+    // A freshness query that THROWS leaves mirror currency unknown. Unknown is
+    // not `ok` — it fails the run loudly, with the cause attributed so it is not
+    // mistaken for a scrape/transport fault.
+    let freshness;
+    try {
+      freshness = await measureFeedFreshness({
+        prisma: ctx.prisma,
+        feed: ctx.feed,
+        now: started,
+        ...(ctx.freshnessMaxAgeMs === undefined ? {} : { maxAgeMs: ctx.freshnessMaxAgeMs }),
+      });
+    } catch (e: unknown) {
+      throw new Error(
+        `freshness measurement failed (mirror currency UNKNOWN, not assumed ok): ${describe(e)}`,
+      );
+    }
+    if (freshness.stale && freshness.newest && freshness.ageMs !== null) {
+      status = 'stale_mirror';
+      error =
+        `mirror not current: newest ${ctx.feed} record is ` +
+        `${freshness.newest.toISOString().slice(0, 10)} ` +
+        `(${(freshness.ageMs / 86_400_000).toFixed(1)}d behind); ` +
+        `listed=${rowsListed} details=${detailsFetched} complete=${complete}`;
+      log('error', `mymrc-sync: ${tag} ${error}`);
+      return finalize();
+    }
+
+    log(
+      'info',
+      `mymrc-sync: ${tag} ok — listed=${rowsListed} details=${detailsFetched} complete=${complete}`,
+    );
     return finalize();
   } catch (err) {
     if (err instanceof AuthFailedError) {
@@ -503,7 +565,15 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
         `mymrc-sync: ${tag} LEDGER WRITE FAILED (${errorClass(e)}) status=${status} listed=${rowsListed} — ${describe(e)}`,
       );
     }
-    return { site: ctx.site, feed: ctx.feed, status, rowsListed, rowsUpserted, detailsFetched, error };
+    return {
+      site: ctx.site,
+      feed: ctx.feed,
+      status,
+      rowsListed,
+      rowsUpserted,
+      detailsFetched,
+      error,
+    };
   }
 }
 
@@ -601,7 +671,10 @@ export async function checkDeadman(args: {
   const now = (args.now ?? ((): Date => new Date()))();
   const log = args.log ?? noopLog;
   for (const site of args.sites) {
-    const siteRow = await args.prisma.site.findUnique({ where: { code: site }, select: { id: true } });
+    const siteRow = await args.prisma.site.findUnique({
+      where: { code: site },
+      select: { id: true },
+    });
     if (!siteRow) continue;
     for (const feed of ['hauls', 'processed', 'outbound'] as const) {
       const lastOk = await args.prisma.mymrcSyncRun.findFirst({

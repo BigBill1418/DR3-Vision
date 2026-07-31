@@ -1,0 +1,22 @@
+-- MyMRC run ledger — add the `stale_mirror` run status (2026-07-31).
+--
+-- WHY. Between 2026-07-22 and 2026-07-31 every hourly processed/outbound run
+-- wrote `status='ok'` while the mirror those runs maintain did not advance a
+-- single day: the list pass was reading the OLDEST page of an ascending list
+-- view, so it re-read 50 records it already held, fetched 0 details, and
+-- reported success. `ok` meant "the scraper did not throw", not "the mirror is
+-- current". This value lets a run say the second thing.
+--
+-- A run records `stale_mirror` when the feed's newest BUSINESS date
+-- (mymrc_processed_mirror.entry_date / mymrc_outbound_mirror.entry_date /
+-- mymrc_hauls_mirror.docking_appointment_date) is older than the freshness
+-- threshold — see src/lib/mymrc/freshness.ts.
+--
+-- SAFETY. Additive only: no existing row changes, no column is rewritten, and
+-- nothing reads the new label until the application ships. `ADD VALUE` is
+-- transaction-safe on PostgreSQL 12+ (prod is 16.13) provided the new value is
+-- not USED in the same transaction — this migration only declares it.
+-- `BEFORE 'error'` keeps the database enum order identical to schema.prisma so
+-- later drift checks stay quiet.
+
+ALTER TYPE "MymrcSyncStatus" ADD VALUE IF NOT EXISTS 'stale_mirror' BEFORE 'error';

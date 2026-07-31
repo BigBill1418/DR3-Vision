@@ -17,10 +17,7 @@
 // force a refetch; the panel also exposes a manual Refresh control.
 
 import { useCallback, useEffect, useState } from 'react';
-import type {
-  MrcScrapeStatusResponse,
-  MrcLastRun,
-} from '@/app/api/admin/mrc-scrape/status/route';
+import type { MrcScrapeStatusResponse, MrcLastRun } from '@/app/api/admin/mrc-scrape/status/route';
 
 const M = {
   heading: 'Scrape status',
@@ -62,12 +59,16 @@ const RUN_STATUS_LABEL: Record<MrcLastRun['status'], string> = {
   ok: 'OK',
   auth_failed: 'Auth failed',
   contract_drift: 'Contract drift',
+  // The scrape ran clean but the mirror it maintains is not current — see
+  // src/lib/mymrc/freshness.ts. Deliberately NOT green.
+  stale_mirror: 'Mirror stale',
   error: 'Error',
 };
 const RUN_STATUS_STYLE: Record<MrcLastRun['status'], string> = {
   ok: 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/30',
   auth_failed: 'bg-red-500/15 text-red-300 ring-red-500/30',
   contract_drift: 'bg-amber-400/15 text-amber-300 ring-amber-400/30',
+  stale_mirror: 'bg-amber-400/15 text-amber-300 ring-amber-400/30',
   error: 'bg-red-500/15 text-red-300 ring-red-500/30',
 };
 
@@ -155,7 +156,8 @@ export function ScrapeStatus({ refreshKey }: { refreshKey?: number }) {
                   <>
                     {' · '}
                     {M.credUpdated} {fmt(data.credential.updatedAt)}
-                    {data.credential.updatedBy && ` ${M.credUpdatedBy} ${data.credential.updatedBy}`}
+                    {data.credential.updatedBy &&
+                      ` ${M.credUpdatedBy} ${data.credential.updatedBy}`}
                   </>
                 )}
               </p>

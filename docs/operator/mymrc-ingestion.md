@@ -76,20 +76,67 @@ To stop: `docker stop dr3-vision-mymrc-scrape` (or drop the profile).
 
 ## What the pages mean (`dr3-vision-system`, Bill-only)
 
-| Title | Meaning | Action |
-|---|---|---|
-| `MyMRC auth failed — <site>` | Login/session invalid; re-login failed. | Re-enter the MyMRC admin login at `/admin/mrc-scrape` (expired? password change? MFA turned on?). |
-| `MyMRC portal contract drift — <site> [feed]` | The expected Aura action/shape was missing (likely a Salesforce release changed the `fwuid`/envelope, or a feed/URL moved). | Re-run discovery + update `portal-client.ts` / `selectors.ts`; bump `SELECTOR_VERSION`. |
-| `MyMRC zero-row anomaly — <site> [feed]` | Listed 0 rows where the last successful run listed >0. | Verify the feed in the portal by hand; a real emptying is possible but rare. |
-| `MyMRC sync deadman — <site> [feed]` | No successful run in >26h (wedged/stopped container). | Check the container is running and the host is healthy. |
+| Title                                            | Meaning                                                                                                                     | Action                                                                                                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `MyMRC auth failed — <site>`                     | Login/session invalid; re-login failed.                                                                                     | Re-enter the MyMRC admin login at `/admin/mrc-scrape` (expired? password change? MFA turned on?).                                |
+| `MyMRC portal contract drift — <site> [feed]`    | The expected Aura action/shape was missing (likely a Salesforce release changed the `fwuid`/envelope, or a feed/URL moved). | Re-run discovery + update `portal-client.ts` / `selectors.ts`; bump `SELECTOR_VERSION`.                                          |
+| `MyMRC zero-row anomaly — <site> [feed]`         | Listed 0 rows where the last successful run listed >0.                                                                      | Verify the feed in the portal by hand; a real emptying is possible but rare.                                                     |
+| `MyMRC sync deadman — <site> [feed]`             | No successful run in >26h (wedged/stopped container).                                                                       | Check the container is running and the host is healthy.                                                                          |
+| `MyMRC mirror stopped advancing — <site> [feed]` | The scrape is running fine, but the newest record we HOLD for that feed is >96h old (ADR-0070).                             | Run the bounded catch-up below. If it does not clear, check the feed by hand in the portal — a genuinely quiet feed is possible. |
 
 Paging is deduped: a persisting failure pages on its leading edge and then at most
-every 6h (deadman is the >26h backstop). Cooldowns fail-soft when
+every 6h (deadman is the >26h backstop). The staleness page is deduped separately:
+at most **one per site+feed per day**. Cooldowns fail-soft when
 `NTFY_PUBLISHER_TOKEN` is unset.
+
+## When the mirror stops advancing (ADR-0070)
+
+Runs reporting `ok` do **not** mean the mirror is current — that was exactly the
+2026-07-22→31 failure, where 216 consecutive `ok` runs sat over a mirror that had
+not gained a row in nine days. A run whose feed has fallen behind now records
+`stale_mirror` on the ledger instead of `ok`, and the amber **Mirror stale** pill
+shows on `/admin/mrc-scrape`.
+
+Check what we actually hold (times are UTC in the DB; the admin surface renders PT):
+
+```sql
+SELECT 'processed' AS feed, max(entry_date) AS newest FROM mymrc_processed_mirror
+UNION ALL SELECT 'outbound', max(entry_date) FROM mymrc_outbound_mirror
+UNION ALL SELECT 'hauls', max(docking_appointment_date) FROM mymrc_hauls_mirror;
+```
+
+### Bounded catch-up
+
+The hourly walk covers the 800 most-recently-created records per feed. To reach
+further back **once**, widen the walk for a single run — this is bounded by
+construction, not an unbounded re-scrape:
+
+```bash
+# on svdp-dev, in ~/DR3-Vision
+docker compose run --rm \
+  -e MYMRC_LIST_PAGE_SIZE=2000 \
+  -e MYMRC_LIST_MAX_PAGES=2 \
+  mymrc-scrape node scripts/mymrc-scrape.mjs
+```
+
+`2000 × 2` reaches the 4000 most-recently-created records per feed. The portal caps
+`pageSize` at 2000 and the `OFFSET` clause at 2000, so that is the deepest a
+newest-first walk can go; the walk refuses to plan a request past the ceiling and
+warns when the budget is clipped.
+
+**Cost of a catch-up.** It upserts every id it lists (cheap, one row each) but
+fetches detail only for rows still lacking it, so the expensive work is
+proportional to what is genuinely _new_, not to the page budget. Measured at full
+depth on 2026-07-31: 7 new processed, 69 new outbound, 0 new hauls.
+
+For pulling **history** (records older than the newest 4000), the catch-up is the
+wrong tool — use the sort-flip backfill (`scripts/mymrc-backfill.mjs`, ADR-0057 D3),
+whose cursors must be reset first because a drained cursor is a no-op.
 
 ## Run-ledger queries
 
 Feed freshness / last outcomes per site+feed:
+
 ```sql
 SELECT s.code AS site, r.feed, r.status, r.rows_listed, r.details_fetched,
        r.started_at, r.error
@@ -102,6 +149,7 @@ ORDER BY site, feed;
 ```
 
 Recent failures (last 24h):
+
 ```sql
 SELECT s.code, r.feed, r.status, r.error, r.started_at
 FROM mymrc_sync_runs r JOIN sites s ON s.id = r.site_id
@@ -110,6 +158,7 @@ ORDER BY r.started_at DESC;
 ```
 
 Records still awaiting a detail fetch (retry next tick automatically):
+
 ```sql
 SELECT count(*) FROM mymrc_processed_mirror
 WHERE detail_fetched_at IS NULL AND disappeared_at IS NULL;

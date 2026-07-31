@@ -5,7 +5,11 @@
 // dependent transport (`portal-client.ts`) is exported but only the cron
 // worker imports it; the Next.js app process never bundles Playwright.
 
-export { loadAdminCredentials, adminAuthStatePath, CredentialsNotConfiguredError } from './credentials';
+export {
+  loadAdminCredentials,
+  adminAuthStatePath,
+  CredentialsNotConfiguredError,
+} from './credentials';
 export {
   setMymrcCredentials,
   getMymrcCredentials,
@@ -127,6 +131,36 @@ export {
   type CapturedGetItemsRequest,
   type ListViewBinding,
 } from './list-page';
+// Steady-state NEWEST-FIRST list pagination (2026-07-31). The passive
+// interception transport read the list view's DEFAULT (ascending) window, so the
+// hourly sync re-read the OLDEST 50 records forever and the processed/outbound
+// mirrors froze for 9 days while every run reported `ok`. This wraps a
+// PortalClient so its list pass replays `getItems` with `sortBy:'-Id'` over a
+// bounded page budget instead.
+export {
+  withNewestFirstList,
+  fetchNewestFirstListPage,
+  plannedOffsets,
+  paginationFromEnv,
+  OFFSET_CEILING,
+  DEFAULT_SYNC_PAGE_SIZE,
+  DEFAULT_SYNC_MAX_PAGES,
+  type PaginatedListOptions,
+  type PaginatedListResult,
+} from './list-sync-client';
+// Mirror freshness (2026-07-31) — measures whether what we HOLD is current,
+// independent of whether the scraper threw. The guard that would have caught the
+// 9-day freeze; every pre-existing guard was blind to it by construction.
+export {
+  checkMirrorFreshness,
+  measureFeedFreshness,
+  assessFreshness,
+  freshnessFingerprint,
+  FRESHNESS_COLUMN,
+  DEFAULT_MAX_AGE_MS,
+  FRESHNESS_COOLDOWN_MS,
+  type FeedFreshness,
+} from './freshness';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
 export {
   detectProcessedRecordChanges,

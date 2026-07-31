@@ -3,6 +3,27 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the MyMRC mirror was frozen for 9 days behind 216 green runs (ADR-0070)
+
+MyMRC is the only **independent** witness for validating `workbook-sync` before cutover — the doc-ingest reconciliation surface can't do it, because both its sides derive from the same extractor. That witness had stopped moving. The processed and outbound mirrors had not gained a row since 2026-07-22 while every hourly run recorded `ok`.
+
+### Fixed
+
+- **The hourly list pass was reading the OLDEST records in the view, forever.** The steady-state transport is passive — it navigates the list page and reads whichever `getItems` window the portal's own UI fired, which is the view's **default sort**. A read-only probe established that default is **ascending**: `processed_active` returned `M-000300@2024-03-01 … M-000590@2024-03-07` and `outbound_active` `M-000264@2024-03-01 …`, both with `hasMoreData:true` over 985 / 4559 records. So every hour the sync re-read page 0 of an ascending list — 50 ids it already held, `detail:0` because they all had details, `ok` — and a record created after 2026-07-22 could **never** enter the window. Hauls escaped only by size (18 records = one page). The list pass now replays `getItems` with `sortBy:'-Id'` over a bounded offset walk. Verified live through the real code path: processed returned business dates 2026-07-21…2026-07-29 and outbound 2026-07-20…2026-07-30, none of which existed in the mirror.
+- **`hasMoreData:false` could have mass-marked 2559 live records as disappeared.** Found while testing the fix at pageSize 2000: `outbound_active` returns 2000 ids with `hasMoreData:false` while `totalCount` is 4559 — the portal clamps to its 2000 cap and then reports no-more-data. That would have handed the sync `complete:true` for a 44%-complete list, and `markDisappeared` stamps everything unseen. A list is now complete only when `hasMoreData:false` **and** the ids account for `totalCount`; otherwise it reports `short_of_total`, `complete:false`, and warns. Disappeared-detection is strictly more conservative than before, never less.
+- **`ok` stops meaning "nothing happened".** New run status `stale_mirror`: a run that doesn't throw but leaves the feed's newest business record past the freshness threshold records that, with the measured date, instead of `ok`. Every pre-existing guard was blind to this by construction — zero-anomaly fires on 0 listed (we listed 50), the deadman fires when no run _succeeds_ in 26h (216 succeeded), and the windowed-list warning fires on `hasMoreData`, which is normal for a large view. All three measure the scraper; none measured whether what we hold is current.
+
+### Added
+
+- **A mirror-freshness alarm.** Measured on the record's own business date (`entry_date`, `docking_appointment_date`) — never `detail_fetched_at` / `last_seen_at`, which refresh when we re-read a record we already hold and so stayed green through the entire freeze. Threshold 96h clears a weekend plus a holiday Monday and would have fired on **day 5** of the 9-day freeze. Graded per ADR-0037: `high`, one fingerprint per site+feed with a 24h cooldown, tier-2 click to `/admin/mrc-scrape` — deliberately not a per-run page. A freshness query that throws fails the run loudly rather than degrading to `ok`.
+- **A bounded catch-up.** `MYMRC_LIST_PAGE_SIZE` / `MYMRC_LIST_MAX_PAGES` widen the walk for a one-shot catch-up instead of an unbounded re-scrape; an invalid value warns and falls back. Measured outstanding gap at full depth: **7 processed + 69 outbound + 0 hauls = 76 records.**
+- `stale_mirror` is rendered on the `/admin/mrc-scrape` status surface (amber, not green).
+
+### Investigated, not changed
+
+- **`undated:2301` on the inbound bridge is a genuine source gap, not a parse failure.** All 2301 rows carry `Docking_Appointment_Date__c` with a JSON `null` value and the companion time field as the empty template `"// : PT"`; dock door is null on 2301/2301. Across the whole table there are **0** cases of a payload date failing to reach its column (3955 → 3955). 1326 of the 2301 form one contiguous 100%-undated block (`H-060000`–`H-075999`).
+- **Hauls disappeared-marking is over-broad** (pre-existing): the hauls view is a narrow 18-record active view but `markDisappeared` spans the whole table, so every unscheduled haul is stamped `disappeared_at`. The inbound bridge ignores that column, so ADR-0059 is unaffected; `expected_loads` does not. Documented in ADR-0070, not fixed here.
+
 ## 2026-07-31 — workbook-sync's five activation blockers are closed (ADR-0049 Amendment 3)
 
 `workbook-sync` owns `processed_units_daily` and is running in production with Woodland's source `is_syncing = false`. The 2026-07-30 pre-activation assessment found five things that had to close before that flip: one that refused the real workbook outright, two that could write wrong figures silently, one that made the whole sync capable of going quiet with nobody told, and one that would have destroyed Vision-captured data. All five are closed. **`is_syncing` is unchanged — the flip is still the operator's call.**

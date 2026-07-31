@@ -185,4 +185,15 @@ export interface DockAvailabilityMirrorRow {
 export type MirrorRow = HaulMirrorRow | ProcessedMirrorRow | OutboundMirrorRow;
 
 /** Terminal status of one per-site-per-feed sync run — mirrors `MymrcSyncStatus`. */
-export type SyncRunStatus = 'ok' | 'auth_failed' | 'contract_drift' | 'error';
+/**
+ * Run outcomes on the `mymrc_sync_runs` ledger.
+ *
+ * `stale_mirror` (added 2026-07-31) exists because `ok` used to cover a run that
+ * accomplished nothing: for 9 days the processed/outbound runs listed 50 ids,
+ * fetched 0 details, gained 0 rows and recorded `ok`, while the mirror they
+ * maintain did not advance a single day. A run now records `stale_mirror` when
+ * the feed's newest business record is older than the freshness threshold — so
+ * `ok` on this ledger means "the mirror is current", not merely "the scraper
+ * did not throw".
+ */
+export type SyncRunStatus = 'ok' | 'auth_failed' | 'contract_drift' | 'stale_mirror' | 'error';

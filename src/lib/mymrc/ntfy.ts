@@ -16,10 +16,23 @@ const FALLBACK_BASE = 'https://ntfy.sh';
 // Pinned obscured fallback topic for `dr3-vision-system` (ntfy-fallback-topics.yml).
 const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
+// Tier-3 fallback click (ADR-0036): the NOC status page for this service.
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+// Tier-2 click: the MyMRC ingestion admin surface (`src/app/admin/mrc-scrape`),
+// where an operator sees credential + sync state. Preferred over tier-3 for
+// alerts about the INGESTION itself rather than the service being down.
+const INGESTION_CLICK_URL =
+  process.env['MYMRC_ADMIN_SURFACE_URL']?.trim() ||
+  'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
 const TIMEOUT_MS = 5_000;
 
-export type AlertKind = 'auth_failed' | 'contract_drift' | 'zero_anomaly' | 'deadman' | 'error';
+export type AlertKind =
+  | 'auth_failed'
+  | 'contract_drift'
+  | 'zero_anomaly'
+  | 'deadman'
+  | 'stale_mirror'
+  | 'error';
 
 export interface PageAlert {
   kind: AlertKind;
@@ -41,7 +54,22 @@ const TITLE_BY_KIND: Record<AlertKind, string> = {
   contract_drift: 'MyMRC portal contract drift',
   zero_anomaly: 'MyMRC zero-row anomaly',
   deadman: 'MyMRC sync deadman (no success >26h)',
+  stale_mirror: 'MyMRC mirror stopped advancing',
   error: 'MyMRC sync error',
+};
+
+/**
+ * Tier-1 record URLs do not exist for these fleet-level alerts, so the choice is
+ * tier-2 vs tier-3 (ADR-0036). An alert ABOUT THE INGESTION points at the
+ * ingestion admin surface; everything else falls to the NOC status page.
+ */
+const CLICK_BY_KIND: Record<AlertKind, string> = {
+  auth_failed: INGESTION_CLICK_URL,
+  contract_drift: INGESTION_CLICK_URL,
+  zero_anomaly: INGESTION_CLICK_URL,
+  deadman: CLICK_URL,
+  stale_mirror: INGESTION_CLICK_URL,
+  error: CLICK_URL,
 };
 
 const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -87,15 +115,23 @@ export const ntfyPager: Pager = {
     cooldown.set(alert.fingerprint, now + (alert.cooldownMs ?? DEFAULT_COOLDOWN_MS));
 
     const feedSuffix = alert.feed ? ` [${alert.feed}]` : '';
-    const title = `[DR3-Vision] ${TITLE_BY_KIND[alert.kind]} — ${alert.site}${feedSuffix}`.slice(0, 250);
+    const title = `[DR3-Vision] ${TITLE_BY_KIND[alert.kind]} — ${alert.site}${feedSuffix}`.slice(
+      0,
+      250,
+    );
     const body = `${alert.message}\n\nfingerprint=${alert.fingerprint}`;
-    const priority = alert.kind === 'deadman' || alert.kind === 'auth_failed' ? 'high' : 'high';
+    // Every MyMRC alert is graded `high` under ADR-0037: each one is actionable
+    // within the hour, none is customer-visible at the moment it fires, and none
+    // warrants a 3 a.m. wake. (This was previously written as a ternary whose
+    // branches were both 'high', implying a distinction that did not exist.)
+    const priority = 'high';
     const tags = `mymrc,${alert.kind},dr3-vision`;
+    const click = CLICK_BY_KIND[alert.kind];
 
     const ok = await postWithTimeout(`${PRIMARY_BASE}/${TOPIC}`, body, {
       'X-Title': title,
       Priority: priority,
-      Click: CLICK_URL,
+      Click: click,
       Tags: tags,
       Authorization: `Bearer ${token}`,
     });
@@ -103,7 +139,7 @@ export const ntfyPager: Pager = {
     await postWithTimeout(`${FALLBACK_BASE}/${FALLBACK_TOPIC}`, body, {
       'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
       Priority: priority,
-      Click: CLICK_URL,
+      Click: click,
       Tags: tags,
     });
   },

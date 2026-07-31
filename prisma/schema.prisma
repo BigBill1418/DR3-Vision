@@ -2504,6 +2504,11 @@ enum MymrcSyncStatus {
   ok
   auth_failed
   contract_drift
+  // The scrape completed, but the mirror it maintains is not current — the
+  // feed's newest business record is older than the freshness threshold
+  // (src/lib/mymrc/freshness.ts). Added 2026-07-31 so `ok` can no longer mean
+  // "listed rows, learned nothing, mirror frozen".
+  stale_mirror
   error
 }
 

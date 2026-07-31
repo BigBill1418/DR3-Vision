@@ -152,6 +152,40 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
       { log: logFn },
     );
 
+    // NEWEST-FIRST LIST PAGINATION (2026-07-31). The default list transport is
+    // PASSIVE — it reads whichever getItems window the portal UI happened to fire,
+    // which is the list view's ASCENDING page 0, i.e. the OLDEST records. Measured
+    // live: processed/outbound returned entry dates 2024-03-01…2024-05-09 every
+    // hour, so records created after 2026-07-22 could never enter the mirror and
+    // both mirrors froze for 9 days while every run recorded `ok`. Wrapping the
+    // client makes the list pass replay getItems with `sortBy:'-Id'` over a bounded
+    // page budget. The `typeof` guards keep injected-fake test harnesses working.
+    let listClient = client;
+    if (
+      typeof mymrc.withNewestFirstList === 'function' &&
+      typeof mymrc.playwrightBackfillSession === 'function'
+    ) {
+      const budget =
+        typeof mymrc.paginationFromEnv === 'function'
+          ? mymrc.paginationFromEnv(process.env, logFn)
+          : {};
+      listClient = mymrc.withNewestFirstList(
+        client,
+        mymrc.playwrightBackfillSession(client.getSession(), logFn),
+        { ...budget, log: logFn },
+      );
+      logFn(
+        'info',
+        `mymrc: list pass paginates NEWEST-FIRST (pageSize=${budget.pageSize ?? 'default'}, maxPages=${budget.maxPages ?? 'default'})`,
+      );
+    } else {
+      // Never silently fall back to the oldest-first window — that IS the defect.
+      logFn(
+        'warn',
+        'mymrc: newest-first list pagination is unavailable in this build — the list pass will read the portal default (oldest-first) window',
+      );
+    }
+
     // Only the recycler context(s) this session can actually see — never the
     // vestigial second site whose `ok` runs would false-green the deadman (C-21).
     const sites = resolveActiveSites({
@@ -164,7 +198,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     try {
       // One admin session; the per-site passes reuse it (feeds are not login-scoped).
       for (const site of sites) {
-        const results = await mymrc.syncSite({ prisma, client, recordFields, site, log: logFn });
+        const results = await mymrc.syncSite({ prisma, client: listClient, recordFields, site, log: logFn });
         const summary = results
           .map((r) => `${r.feed}=${r.status}(listed:${r.rowsListed},detail:${r.detailsFetched})`)
           .join(' ');
@@ -238,6 +272,33 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
 
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
+
+      // MIRROR FRESHNESS (2026-07-31). The deadman above asks "did a run succeed
+      // recently?" — during the 9-day freeze the answer was yes, 216 times. This
+      // asks the only question that actually matters: is what we HOLD current?
+      // Pages `high`, at most one per site+feed per day (ADR-0037). Best-effort:
+      // a freshness-check failure must not turn a good tick non-zero.
+      if (typeof mymrc.checkMirrorFreshness === 'function') {
+        try {
+          const fresh = await mymrc.checkMirrorFreshness({
+            prisma,
+            sites,
+            pager: mymrc.ntfyPager,
+            log: logFn,
+          });
+          logFn(
+            'info',
+            `mirror-freshness — ${fresh
+              .map(
+                (f) =>
+                  `${f.feed}=${f.newest ? f.newest.toISOString().slice(0, 10) : 'empty'}${f.stale ? ' STALE' : ''}`,
+              )
+              .join(' ')}`,
+          );
+        } catch (err) {
+          logFn('error', `mirror-freshness failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
     } finally {
       await client.close().catch(() => undefined);
     }
