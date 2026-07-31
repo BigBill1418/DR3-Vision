@@ -16,6 +16,14 @@ import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/
 import { requireActivatedOperator, loadsErrorResponse } from '@/lib/loads/route-helpers';
 import { UI_SURFACE } from '@/lib/notify/rollout';
 import { pacificMidnightInstantOfDayISO, pacificDayISO } from '@/lib/time';
+import { prisma } from '@/lib/prisma';
+import {
+  classifyAnchorWrite,
+  describeSwing,
+  loadPriorAnchor,
+  loadSwingThresholdPct,
+} from '@/lib/inventory/anchor-guardrail';
+import { createHold, eligibleApprovers } from '@/lib/inventory/anchor-holds';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +46,53 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     const parsed = Create.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
     const d = parsed.data;
+
+    // ── ADR-0072 — the guardrail, enforced HERE ─────────────────────────────
+    // Recomputed server-side from live state on every write. The client
+    // classifies the same count only to decide what dialog to show; a request
+    // that skips the dialog still meets this. If the UI and this disagree, this
+    // wins — which is the difference between a control and a courtesy.
+    const newTotal = (d.unitsTotal ?? d.unitsIndoor ?? 0) + d.unitsInProcessing;
+    const [prior, thresholdPct] = await Promise.all([
+      loadPriorAnchor(prisma, ctx.siteId),
+      loadSwingThresholdPct(prisma, ctx.siteId),
+    ]);
+    const classification = classifyAnchorWrite({ prior, newTotal, thresholdPct });
+
+    if (classification.requiresManagerApproval) {
+      // Tier 2. NOT rejected and NOT written — held with its values intact so a
+      // manager can release it, and so the operator's work is never lost to a
+      // refusal. A 422 here means "a person must look at this", not "try again".
+      const hold = await createHold(prisma, {
+        siteId: ctx.siteId,
+        createdBy: ctx.userId,
+        input: {
+          unitsIndoor: d.unitsIndoor ?? null,
+          unitsTotal: d.unitsTotal ?? null,
+          unitsInProcessing: d.unitsInProcessing,
+          programUnits: d.programUnits ?? null,
+          nonProgramUnits: d.nonProgramUnits ?? null,
+          poolAttribution: d.poolAttribution ?? 'measured',
+        },
+        classification,
+      });
+      const approvers = await eligibleApprovers(prisma, ctx.siteId);
+      return NextResponse.json(
+        {
+          error: 'manager_approval_required',
+          holdId: hold.id,
+          tier: 2,
+          priorTotal: classification.prior?.total ?? null,
+          newTotal: classification.newTotal,
+          swingPct: classification.swingPct,
+          thresholdPct: classification.thresholdPct,
+          message: describeSwing(classification),
+          approvers,
+        },
+        { status: 422 },
+      );
+    }
+
     const result = await reconcilePhysicalCount({
       siteId: ctx.siteId,
       // D-3: the count anchors at Pacific-midnight of TODAY (the floor counts the current
@@ -53,7 +108,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       poolAttribution: d.poolAttribution ?? 'measured',
       actorUserId: ctx.userId,
     });
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json(
+      {
+        ...result,
+        tier: classification.tier,
+        priorTotal: classification.prior?.total ?? null,
+        swingPct: classification.swingPct,
+        thresholdPct: classification.thresholdPct,
+      },
+      { status: 201 },
+    );
   } catch (e) {
     // A measured split that doesn't sum → 422 with the plain-English reason.
     if (e instanceof PoolSplitMismatchError) {

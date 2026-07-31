@@ -89,6 +89,10 @@ model Site {
   processor_quota_config ProcessorQuotaConfig?
   processor_quota_logs   ProcessorQuotaLog[]
 
+  // Tiered anchor-overwrite guardrail (ADR-0072)
+  inventory_anchor_config InventoryAnchorConfig?
+  inventory_count_holds   InventoryCountHold[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -4813,18 +4817,18 @@ model WorkbookSource {
   /// from a healthy one. Set on every poll that READ the workbook (including a
   /// delta no-op and a legitimately empty month) — never on not_found, never on a
   /// refusal.
-  last_success_at       DateTime?
+  last_success_at      DateTime?
   /// Consecutive non-success polls. Resets to 0 on any success. Drives the
   /// escalation ladder so a permanently-failing source pages once and then daily
   /// rather than ~28 identical times per business day.
-  consecutive_failures  Int       @default(0)
+  consecutive_failures Int       @default(0)
   /// When this source last PAGED. Durable on purpose: the ntfy cooldown ledger is
   /// in-process memory, so a container restart reset it and the flood resumed.
-  last_alert_at         DateTime?
-  created_by     String? // bare audit-actor column
-  updated_by     String? // bare audit-actor column
-  created_at     DateTime  @default(now())
-  updated_at     DateTime  @updatedAt
+  last_alert_at        DateTime?
+  created_by           String? // bare audit-actor column
+  updated_by           String? // bare audit-actor column
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
 
   runs WorkbookSyncRun[]
 
@@ -5307,16 +5311,93 @@ model ProcessorQuotaLog {
   week_start DateTime @db.Date
   week_end   DateTime @db.Date
 
-  evaluated_at    DateTime @default(now())
-  processors_seen Int      @default(0)
-  flagged_count   Int      @default(0)
+  evaluated_at    DateTime  @default(now())
+  processors_seen Int       @default(0)
+  flagged_count   Int       @default(0)
   /// True when the digest was intentionally NOT sent because nobody flagged.
-  suppressed      Boolean  @default(false)
-  recipient_count Int      @default(0)
+  suppressed      Boolean   @default(false)
+  recipient_count Int       @default(0)
   sent_at         DateTime?
   error_text      String?
 
   @@unique([site_id, week_start])
   @@index([site_id, week_start])
   @@map("processor_quota_logs")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tiered anchor-overwrite guardrail (ADR-0072).
+//
+// A physical count becomes the inventory ANCHOR every downstream number is
+// computed forward from, so a mistyped count silently moves the whole floor.
+// These two tables hold the threshold that decides how much friction a given
+// overwrite gets, and the counts that were held because they crossed it.
+// ────────────────────────────────────────────────────────────────────────
+model InventoryAnchorConfig {
+  id      String @id @default(uuid())
+  site_id String @unique
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  /// Swing (|new − prior| / prior, as a percentage) above which a physical count
+  /// requires manager approval. Seeded 20 — Bill tightened this from a proposed
+  /// 40 because on a 2,483 floor 40% lets ~1,000 units through on a tap.
+  /// A setting, not a constant, so it is retunable without a deploy.
+  swing_threshold_pct Decimal @default(20) @db.Decimal(5, 2)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("inventory_anchor_config")
+}
+
+/// A physical count that crossed the threshold and is waiting for a manager.
+///
+/// It is NEVER silently dropped and NEVER auto-writes: it persists with the
+/// entered values until a manager approves it (which writes the snapshot) or
+/// someone explicitly discards it. An operator can do neither — `approved_by`
+/// is always a different person from `created_by`, enforced by a CHECK.
+model InventoryCountHold {
+  id      String @id @default(uuid())
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  // The entered count, held verbatim so approval writes exactly what was counted.
+  units_indoor        Int?
+  units_total         Int?
+  units_in_processing Int      @default(0)
+  program_units       Decimal? @db.Decimal(7, 1)
+  non_program_units   Decimal? @db.Decimal(7, 1)
+  pool_attribution    String   @default("measured")
+
+  // What made it Tier 2, captured at hold time. Recomputed on approval — these
+  // are the record of why it was held, not the authority for writing it.
+  prior_snapshot_id String?
+  prior_total       Int
+  new_total         Int
+  swing_pct         Decimal @db.Decimal(7, 2)
+  threshold_pct     Decimal @db.Decimal(5, 2)
+
+  status     InventoryHoldStatus @default(pending)
+  created_by String
+  created_at DateTime            @default(now())
+
+  approved_by   String?
+  approved_at   DateTime?
+  /// How the release happened: on-device manager PIN, or remote approval.
+  approval_path String?
+
+  discarded_by          String?
+  discarded_at          DateTime?
+  discard_reason        String?
+  /// The snapshot this hold produced once approved.
+  resulting_snapshot_id String?
+
+  @@index([site_id, status, created_at])
+  @@map("inventory_count_holds")
+}
+
+enum InventoryHoldStatus {
+  pending
+  approved
+  discarded
 }

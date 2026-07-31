@@ -148,8 +148,15 @@ export async function runProcessorQuotaDigest(
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
 
+  // `enabled` gates SENDING, not evaluating. A dry run must be able to read a
+  // DISABLED config, because the prescribed workflow is exactly "try a threshold
+  // against real weeks BEFORE turning the email on" — and gating the dry run on
+  // `enabled` makes that impossible without first enabling the thing you are
+  // trying to evaluate. Found in live verification 2026-07-31: the first dry run
+  // against the real week returned `{"outcomes":[]}` and looked like "no data"
+  // when it actually meant "not switched on".
   const configs = await db.processorQuotaConfig.findMany({
-    where: { enabled: true },
+    where: dryRun ? {} : { enabled: true },
     include: { site: true, recipients: true },
   });
 

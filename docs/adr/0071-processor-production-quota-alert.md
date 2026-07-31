@@ -85,16 +85,22 @@ is not a deploy.
 
 ## The finding Bill needs before enabling this
 
-**At a quota of 75, this alert flags 13 of 18 Woodland processors.**
+**At a quota of 75, this alert flags 13 of 18 Woodland processors — 12 of whom
+the email would name.**
+
+(12, not 13, because one flagged processor has left the roster: a departed
+employee appears in the report but is never named in a list of conversations to
+have. Confirmed live through the shipped code path on 2026-07-31 —
+`processorsSeen: 18, flaggedCount: 12`.)
 
 Dry-run against the real week of **2026-07-20 → 2026-07-26**, run read-only
 against the live database:
 
-|                                              |                      |
-| -------------------------------------------- | -------------------- |
-| Woodland processors with recorded production | 18                   |
-| Flagged at quota 75 / 2 misses               | **13 (72%)**         |
-| Entries under 75 across all history          | 2,421 of 5,733 (42%) |
+|                                              |                           |
+| -------------------------------------------- | ------------------------- |
+| Woodland processors with recorded production | 18                        |
+| Flagged at quota 75 / 2 misses               | **13 (72%)** — 12 emailed |
+| Entries under 75 across all history          | 2,421 of 5,733 (42%)      |
 
 Sample of what the first digest would say: Eloi Bikoba 5/5 days (46, 56, 66, 60,
 53); Zach Cassel 5/5 (35, 35, 38.9, 40, 42); Faisal Mehmood 5/5 (60, 60, 66, 60,

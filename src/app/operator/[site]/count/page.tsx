@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
+import { loadPriorAnchor, loadSwingThresholdPct } from '@/lib/inventory/anchor-guardrail';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { FloorPageHeading } from '../../_components/page-heading';
@@ -31,13 +32,22 @@ export default async function FloorCountPage({ params }: Props) {
 
   let expectedTotal = '0';
   let jurisdiction: 'california' | 'oregon' = 'oregon';
+  // ADR-0072 — the anchor this count would REPLACE, and the site's swing
+  // threshold. Both are read here only to decide which screen the operator sees;
+  // the write path recomputes them, so a stale render cannot widen the gate.
+  let priorTotal: number | null = null;
+  let thresholdPct = 20;
   if (live) {
-    const [balance, site] = await Promise.all([
+    const [balance, site, prior, threshold] = await Promise.all([
       onHand(siteId, new Date()),
       prisma.site.findUnique({ where: { id: siteId }, select: { jurisdiction: true } }),
+      loadPriorAnchor(prisma, siteId),
+      loadSwingThresholdPct(prisma, siteId),
     ]);
     expectedTotal = balance.total.toString();
     jurisdiction = site?.jurisdiction === 'california' ? 'california' : 'oregon';
+    priorTotal = prior?.total ?? null;
+    thresholdPct = threshold;
   }
 
   return (
@@ -57,6 +67,8 @@ export default async function FloorCountPage({ params }: Props) {
             siteCode={siteCode}
             expectedTotal={Number(expectedTotal)}
             jurisdiction={jurisdiction}
+            priorTotal={priorTotal}
+            thresholdPct={thresholdPct}
           />
         )}
       </div>
