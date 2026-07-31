@@ -3,6 +3,33 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-07-31 — the header guess was wrong on every real document (ADR-0067 Amendment 8)
+
+`parse.ts` took the first non-empty row as the header, with a comment claiming that was "correct for every workbook this pipeline has seen". The 2026-07-30 audit falsified it 3 of 3. Not cosmetic: the classifier's structure rules match on column names (so classification was **filename-only**), and the aggregate-variance guardrail's monitored-column regex can't match a title string — so a "clean guardrail verdict" meant _there was nothing to compare_, not _the change was safe_.
+
+### Fixed
+
+- **The header row is now detected, not assumed.** Emphatically not "use row 2" — that reproduces the same defect one row lower. It scans the first 12 rows and takes the first that is both **wide** (≥60% of the widest row) and **label-like** (≥60% non-numeric, short cells). Which row it chose, how confident it is, and the skipped title rows are all recorded, because the reason the old behaviour survived is that nothing ever showed what it had picked. Same detection on the CSV path — an exported CSV carries the same merged title line.
+- **The `/admin` doc-ingest tile now carries an awaiting-confirmation badge.** The tile route and the onward links to anomalies/health were already shipped (contrary to the handoff); the badge was what was missing. A tile that looks identical whether or not three documents are waiting is how three documents waited from 2026-07-29 with nothing in the app saying so.
+
+### Verified against the real files, not a summary of them
+
+The three live workbooks were pulled out of R2 and parsed. All resolve `strong`, and the header rows are **2, 2, 3 and 4** across the four sheets — any fixed-row assumption is wrong on at least one. `Weight (lbs)`, `Estimated cost`, `Actual Repair Cost` and `Amount Credited` now reach `headers[]`, so the aggregate guardrail has real signal for the first time.
+
+### The finding that changes Fix 3
+
+The handoff recommends the commodity-audit tracker as the first absorption type, for its reconciliation value against vendor invoices. **Reading the actual file shows it doesn't contain that.** It's banded — title, commodity band (METAL/WOOD/TOPPERS/FOAM/TRASH/XTRACTION), vendor band, then on row 4 a repeating `Audited | Initials | Date | 2nd Audit | Initials | Date` per commodity. No weight, no amount, no invoice number, no variance. It's an audit **checklist** — who ticked which box — not the commodity figures. Absorbing it would produce a queryable table of ticked boxes and the _appearance_ of absorption.
+
+The better first type is the **trailer list** (`Material`, `Weight (lbs)`, `Date of Entry to Yard`, `Exit Date` — real operational data with a natural Vision comparison), with TEREX second and money-touching, so under preview-then-confirm. **Fix 3 is specified against this evidence rather than shipped against the assumption.**
+
+### Corrected
+
+`absorb.ts` asserted in a comment that `parse.ts` "takes the first non-empty row … wrong on 3 of 3 live workbooks". That is now false, and a false assertion in a comment is the same defect as one in the UI. Corrected in place.
+
+### Verification
+
+11 tests, every guard falsified before being kept. The "assume row 2" break initially **passed** — a defect in the test, not safety in the code: on a header-is-row-1 sheet the variant still landed on row 1 via the weak fallback, and the test asserted only the index. It now asserts `confidence === 'strong'`, and the break goes red.
+
 ## 2026-07-31 — iPad physical count is live at both sites, behind a tiered guardrail (ADR-0072)
 
 `ipad_count` was the last high-value floor surface still at pilot. It is now **live at both sites**. The reason it needed more than a flag: a physical count becomes the inventory **anchor**, and every downstream number is computed forward from it — so a mistyped digit doesn't produce a wrong count, it silently moves the entire floor. Woodland's anchor is a known-good 2,483; one fat-fingered tap would have replaced it with no trace beyond a snapshot row nobody looks at.

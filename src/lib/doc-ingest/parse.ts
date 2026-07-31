@@ -27,6 +27,7 @@
 
 import Papa from 'papaparse';
 import type { Prisma } from '@prisma/client';
+import { HEADER_SCAN_ROWS, detectHeaderRow } from './header-detect';
 
 /** Why a document could not be read. Each maps to a different operator action. */
 export type ParseFailureReason =
@@ -40,8 +41,18 @@ export type ParseFailureReason =
 export interface SheetSummary {
   name: string;
   rowCount: number;
-  /** Header labels from the first non-empty row, normalized. */
+  /** Header labels from the DETECTED header row, normalized. */
   headers: string[];
+  /**
+   * ADR-0067 Am.8 — which row the headers came from (1-based), and how sure we
+   * are. Recorded because the previous behaviour ("first non-empty row") was
+   * wrong on 3 of 3 live workbooks and nothing ever showed what it had picked,
+   * which is why it survived. A wrong guess must be visible, not silent.
+   */
+  headerRowIndex: number;
+  headerConfidence: 'strong' | 'weak' | 'none';
+  /** Title/section rows skipped above the header — kept as classifier signal. */
+  titleRows: string[];
   /** Headers with at least one non-empty value below them. */
   populatedColumns: string[];
   /**
@@ -215,34 +226,51 @@ async function readWorkbookWithExcelJs(bytes: Uint8Array): Promise<ParseSummary>
   let totalRows = 0;
 
   workbook.eachSheet((worksheet) => {
-    const headers: string[] = [];
     const populated = new Set<string>();
     const totals: Record<string, number> = {};
     let dataRows = 0;
-    let headerRowFound = false;
 
     const limit = Math.min(worksheet.rowCount, MAX_SCAN_ROWS);
-    for (let r = 1; r <= limit; r += 1) {
+
+    // ── ADR-0067 Am.8 — find the REAL header row ────────────────────────────
+    // Read the top of the sheet first, then decide. The previous code committed
+    // to the first non-empty row on sight, which is a merged TITLE row on every
+    // live workbook — so the recorded "headers" were document titles, and both
+    // the structure half of the classifier and the aggregate guardrail were
+    // silently comparing nothing.
+    //
+    // `maxCellCount` is taken across the whole scan window rather than from the
+    // title row alone: a title row reports a narrow `cellCount`, and measuring
+    // width from it would make the title look full-width and win.
+    const probe: string[][] = [];
+    let maxCellCount = 0;
+    for (let r = 1; r <= Math.min(limit, HEADER_SCAN_ROWS); r += 1) {
+      maxCellCount = Math.max(maxCellCount, worksheet.getRow(r).cellCount);
+    }
+    for (let r = 1; r <= Math.min(limit, HEADER_SCAN_ROWS); r += 1) {
       const row = worksheet.getRow(r);
       const values: string[] = [];
-      let nonEmpty = 0;
+      for (let c = 1; c <= maxCellCount; c += 1) values.push(cellToText(row.getCell(c).value));
+      probe.push(values);
+    }
+    const detected = detectHeaderRow(probe);
+    const headers = detected.headers;
+
+    // Data starts BELOW the detected header. A sheet with no usable header
+    // (confidence 'none') has no columns to attribute values to, so it
+    // contributes no totals rather than attributing them to invented names.
+    const firstDataRow = detected.headerRowIndex === 0 ? limit + 1 : detected.headerRowIndex + 1;
+    for (let r = firstDataRow; r <= limit; r += 1) {
+      const row = worksheet.getRow(r);
       const cellCount = Math.max(row.cellCount, headers.length);
+      const values: string[] = [];
+      let nonEmpty = 0;
       for (let c = 1; c <= cellCount; c += 1) {
         const text = cellToText(row.getCell(c).value);
         values.push(text);
         if (text) nonEmpty += 1;
       }
       if (nonEmpty === 0) continue;
-
-      if (!headerRowFound) {
-        // First non-empty row is the header. Fragile in theory; correct for
-        // every workbook this pipeline has seen, and a wrong guess degrades to
-        // "the guardrail compares odd-looking column names consistently"
-        // rather than to a wrong number.
-        headerRowFound = true;
-        for (const v of values) headers.push(v);
-        continue;
-      }
 
       dataRows += 1;
       for (let i = 0; i < headers.length; i += 1) {
@@ -260,10 +288,20 @@ async function readWorkbookWithExcelJs(bytes: Uint8Array): Promise<ParseSummary>
       name: worksheet.name,
       rowCount: dataRows,
       headers: headers.filter((h) => h.length > 0),
+      headerRowIndex: detected.headerRowIndex,
+      headerConfidence: detected.confidence,
+      titleRows: detected.titleRows,
       populatedColumns: [...populated].sort(),
       numericTotals: totals,
     });
-    textParts.push(`[sheet: ${worksheet.name}] ${headers.filter(Boolean).join(' | ')}`);
+    // Title rows join the text sample: they are useful CLASSIFIER signal (the
+    // commodity tracker announces itself in its title) even though they are not
+    // column names.
+    textParts.push(
+      `[sheet: ${worksheet.name}] ${[...detected.titleRows, headers.filter(Boolean).join(' | ')]
+        .filter(Boolean)
+        .join(' | ')}`,
+    );
   });
 
   return {
@@ -277,14 +315,21 @@ async function readWorkbookWithExcelJs(bytes: Uint8Array): Promise<ParseSummary>
 function summarizeCsv(text: string): ParseSummary {
   const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true });
   const rows = Array.isArray(parsed.data) ? parsed.data : [];
-  const headerRow = rows[0] ?? [];
-  const headers = headerRow.map((h) => String(h ?? '').trim()).filter((h) => h.length > 0);
+
+  // ADR-0067 Am.8 — the same detection as the workbook path. An exported CSV
+  // carries the same merged-title first line as the sheet it came from, so
+  // assuming row 0 here reproduces exactly the defect being fixed above.
+  const detected = detectHeaderRow(
+    rows.slice(0, 12).map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')) : [])),
+  );
+  const headers = detected.headers.filter((h) => h.length > 0);
 
   const populated = new Set<string>();
   const totals: Record<string, number> = {};
   let dataRows = 0;
 
-  for (let r = 1; r < Math.min(rows.length, MAX_SCAN_ROWS); r += 1) {
+  const firstDataRow = detected.headerRowIndex === 0 ? rows.length : detected.headerRowIndex;
+  for (let r = firstDataRow; r < Math.min(rows.length, MAX_SCAN_ROWS); r += 1) {
     const row = rows[r];
     if (!row) continue;
     dataRows += 1;
@@ -305,6 +350,9 @@ function summarizeCsv(text: string): ParseSummary {
         name: 'csv',
         rowCount: dataRows,
         headers,
+        headerRowIndex: detected.headerRowIndex,
+        headerConfidence: detected.confidence,
+        titleRows: detected.titleRows,
         populatedColumns: [...populated].sort(),
         numericTotals: totals,
       },

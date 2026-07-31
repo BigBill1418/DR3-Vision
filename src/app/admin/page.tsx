@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { HOME_ROUTE } from '@/lib/routes';
 import { checkAdmin } from '@/lib/auth-helpers';
+import { prisma } from '@/lib/prisma';
 import { adminMessages as AM } from '@/app/admin/messages';
 
 export const dynamic = 'force-dynamic';
@@ -110,6 +111,11 @@ const TILES = [
     description:
       'Shared documents Vision reads where they live, the confirm queue, and the spreadsheet-vs-Vision reconciliation (ADR-0067 / ADR-0069).',
     testid: 'admin-tile-doc-ingest',
+    // ADR-0067 Am.8 — this tile carries a live count. The 2026-07-30 audit found
+    // three documents had waited for confirmation since 2026-07-29 09:14 PDT with
+    // nothing anywhere in the app saying so. A tile that looks identical whether
+    // there is work waiting or not is how that happens.
+    badge: 'docIngestAwaiting' as const,
   },
   {
     // ADR-0071. Its own entry, deliberately NOT folded into the daily production
@@ -151,6 +157,16 @@ export default async function AdminIndexPage() {
     );
   }
 
+  // Same definition as the confirm queue itself (`listDocSources`): a FILE whose
+  // classification has been attempted and has no registered kind. Counting
+  // anything looser would put a number on the tile that the queue then does not
+  // show, which is worse than no number.
+  const docIngestAwaiting = await prisma.docSource
+    .count({
+      where: { doc_class: null, classification_attempted_at: { not: null }, kind: 'file' },
+    })
+    .catch(() => 0);
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
       <div className="mx-auto flex max-w-6xl flex-col gap-8">
@@ -174,7 +190,17 @@ export default async function AdminIndexPage() {
               data-testid={t.testid}
               className="group flex flex-col gap-2 rounded-2xl border border-dr3-steel-light/25 bg-dr3-space-2/70 p-6 transition-colors hover:border-dr3-cyan/50"
             >
-              <h2 className="text-lg font-semibold text-dr3-mist">{t.label}</h2>
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-dr3-mist">
+                {t.label}
+                {'badge' in t && t.badge === 'docIngestAwaiting' && docIngestAwaiting > 0 && (
+                  <span
+                    data-testid="admin-tile-doc-ingest-badge"
+                    className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-amber-300 ring-1 ring-amber-500/40"
+                  >
+                    {docIngestAwaiting} waiting
+                  </span>
+                )}
+              </h2>
               <p className="text-sm leading-relaxed text-dr3-mist-dim">{t.description}</p>
               <span className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-dr3-cyan">
                 Open
