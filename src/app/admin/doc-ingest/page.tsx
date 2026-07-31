@@ -55,6 +55,9 @@ export default async function DocIngestSourcesPage() {
             <Link href="/admin/doc-ingest/trailers" className="text-dr3-cyan hover:underline">
               {M.trailers.title}
             </Link>
+            <Link href="/admin/doc-ingest/terex" className="text-dr3-cyan hover:underline">
+              {M.terex.title}
+            </Link>
             <Link href="/admin/doc-ingest/connect" className="text-dr3-cyan hover:underline">
               {M.pageTitle}
             </Link>

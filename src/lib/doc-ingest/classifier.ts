@@ -43,6 +43,7 @@ import type { ParseSummary } from './parse';
 export const DOC_KINDS = [
   'daily_log_workbook',
   'trailer_list',
+  'terex_maintenance_log',
   'ap_history_report',
   'equipment_inventory',
   'rate_table',
@@ -113,6 +114,21 @@ const RULES: Rule[] = [
     kind: 'trailer_list',
     name: [/\btrailer\b/i, /\byard\b.*\blist\b/i],
     structure: [/\btrailer\b/i, /\bdays? in yard\b/i, /\bdate of entry\b/i, /\bexit[\s_]*date\b/i],
+  },
+  {
+    // ADR-0069 Am.2. Structure signals from the REAL row-2 headers (verified
+    // 2026-07-31). Deliberately requires the maintenance vocabulary and not just
+    // the machine name: the same workbook has 28 monthly OPERATING tabs and
+    // several derived summary tabs that also say "Terex", and none of them is a
+    // maintenance log.
+    kind: 'terex_maintenance_log',
+    name: [/\bterex\b/i, /maintenance[\s_-]*log/i],
+    structure: [
+      /\bmeasures? taken\b/i,
+      /\bactual repair cost\b/i,
+      /\bamount credited\b/i,
+      /\bestimated repair time\b/i,
+    ],
   },
   {
     kind: 'ap_history_report',

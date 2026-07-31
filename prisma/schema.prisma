@@ -96,6 +96,9 @@ model Site {
   // Absorbed trailer-list rows (ADR-0069 Am.1)
   doc_trailer_rows DocTrailerRow[]
 
+  // Absorbed TEREX maintenance rows (ADR-0069 Am.2)
+  doc_terex_rows DocTerexMaintenanceRow[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -5464,4 +5467,75 @@ model DocTrailerRow {
   @@index([doc_source_id, absorbed_at])
   @@index([site_id, entry_date])
   @@map("doc_trailer_rows")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0069 Amendment 2 — ABSORBED TEREX maintenance rows.
+//
+// MONEY-TOUCHING, therefore STAGED. `Estimated cost`, `Actual Repair Cost` and
+// `Amount Credited` are real dollars, so rows land `staged` and a human confirms
+// the batch before it counts. The trailer list went straight in because it
+// carries weights; this does not.
+//
+// SINGLE-WRITER RULE: reference data, written only by the absorption bridge. It
+// never touches `processed_units_daily` (workbook-sync), the AP tables, or any
+// billing figure — and deliberately does not absorb the workbook's monthly
+// operating tabs, which carry per-day processed units that workbook-sync owns.
+// ────────────────────────────────────────────────────────────────────────
+model DocTerexMaintenanceRow {
+  id                    String  @id @default(uuid())
+  doc_source_id         String
+  doc_source_version_id String
+  site_id               String?
+  site                  Site?   @relation(fields: [site_id], references: [id])
+
+  sheet_name String
+  row_index  Int
+
+  /// Set ONLY when the cell held a real date in a plausible range. The live
+  /// file's date column contains "09/16 or 17" (deliberately ambiguous), "Jan",
+  /// a "1/14/202601" typo and one 1900-01-14 Excel epoch artefact.
+  event_date     DateTime? @db.Date
+  /// ALWAYS what the cell said, so an unparsed date is still readable.
+  event_date_raw String?
+  time_raw       String?
+
+  issue               String?
+  measures_taken      String?
+  /// Free text in the real file ("2 weeks"), so it stays text.
+  estimated_time_cost String?
+  notes               String?
+
+  /// Blank means NOT RECORDED. Never 0 — a repair with no recorded cost is not
+  /// a free repair.
+  estimated_cost     Decimal? @db.Decimal(12, 2)
+  actual_repair_cost Decimal? @db.Decimal(12, 2)
+  amount_credited    Decimal? @db.Decimal(12, 2)
+
+  /// Identity used to drop the same event appearing on two sheets. The live
+  /// workbook's `Maintenance Log 2025` is a strict SUBSET of `Maintenance
+  /// Log2026`, and both total $77,067.94 — absorbing both without this would
+  /// report $154,135.88.
+  dedup_key String
+
+  status         DocAbsorptionStatus @default(staged)
+  confirmed_at   DateTime?
+  confirmed_by   String?
+  discarded_at   DateTime?
+  discarded_by   String?
+  discard_reason String?
+
+  absorbed_at DateTime @default(now())
+
+  @@unique([doc_source_version_id, sheet_name, row_index])
+  @@index([doc_source_id, status])
+  @@index([site_id, event_date])
+  @@map("doc_terex_maintenance_rows")
+}
+
+/// Preview-then-confirm lifecycle for money-touching absorption.
+enum DocAbsorptionStatus {
+  staged
+  confirmed
+  discarded
 }
