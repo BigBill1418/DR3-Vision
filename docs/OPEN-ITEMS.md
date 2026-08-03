@@ -67,6 +67,19 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   fingerprint per site+feed) until then — that is the guard working, not a new fault.
   If it is still firing in a few days, the deliveries genuinely are not being recorded
   upstream, which is an operational chase.
+  **UPDATE 2026-08-03 — measured again under the PR #196 falsification gate: still
+  zero delivered.** Floor now **−6,287 program / −5,401 total** (stripped since anchor
+  8,034 vs 150 verified inbound); ~60 hauls dated 07-22→08-10 still `Confirmed` at 0
+  units; recoverable Delivered General units in the window = **0**, so the recovery
+  script (`scripts/fix-woodland-inbound.sh`, landed today) correctly refused to write.
+  Two consequences now in force: (1) the July Woodland COR is **mechanically blocked**
+  (prefill AND finalize refuse on the stale delivered feed / negative ledger —
+  CHANGELOG 2026-08-03), and (2) **when MRC finally marks the hauls delivered, the
+  floor will NOT fully self-heal**: the hourly scrape only re-bridges a trailing
+  10-day window and every frozen-window day has already slid out of it — run
+  `scripts/fix-woodland-inbound.sh --dry-run` then `--apply` (gate-aware; use
+  `--allow-partial` if MRC marks in batches) to bridge the older days. **This is now
+  purely an operational chase with MRC: get the 07-22→07-31 deliveries marked.**
 - **O-4 — load H-135881 was corrected by hand.** 40 → 95 units, audited, at Bill's
   instruction. Two caveats on the record: nothing in the DB links that load to the
   identifier "H-135881" (no BOL, DR3 or haul id — matched as the only Woodland load

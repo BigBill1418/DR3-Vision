@@ -15,6 +15,7 @@
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
 import { generateCorDraft, loadCorRow, assertCorInventoryReconciles } from './service';
+import { assertCorInboundFresh, assertCorInventoryNotNegative } from './inbound-gate';
 import { generateCorPdf } from './pdf';
 import {
   CorNotFoundError,
@@ -71,6 +72,16 @@ export async function finalizeCor(args: FinalizeArgs): Promise<CorView> {
   // requirement is skipped for `mid_month`. The end-of-month gate is unchanged.
   if (row.period === 'end_of_month' && (row.ft_headcount == null || row.pt_headcount == null)) {
     throw new CorHeadcountRequiredError(row.id);
+  }
+
+  // PR #196 §2.3 — the freeze must also refuse a frozen inbound feed and a
+  // negative stored figure. Prefill already refuses both, but a draft generated
+  // BEFORE the feed froze (or before this gate shipped) could otherwise still be
+  // finalized against a ledger that has since gone one-sided. Mid-month files
+  // inventory blank and is untouched.
+  if (row.period === 'end_of_month') {
+    await assertCorInboundFresh();
+    if (row.inventory_units != null) assertCorInventoryNotNegative(row.inventory_units);
   }
 
   // D2.1/D3 tripwire: the stored inventory figure MUST still reconcile to the

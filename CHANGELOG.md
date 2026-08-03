@@ -3,6 +3,61 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-03 — the Woodland recovery script ran its gates and correctly wrote nothing; the COR can no longer file a frozen-feed figure
+
+The PR #196 Half-A remediation, executed under its own falsification gate — which **tripped at
+zero**. Run against prod (read-only until a gate passes; none did):
+
+| verify block              | measured                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| floor (onHand replicated) | **−6,287 program / +886 non-program / −5,401 total** (was −3,083 on 07-30; stripped since anchor now 8,034 vs 150 verified inbound)                     |
+| delivered-hauls freshness | newest delivered haul still **2026-07-21**; `last_seen_at` refreshing hourly (the `haulsCompleted` feed works; `hauls` honestly reports `stale_mirror`) |
+| the guard trap            | whole-table max 2026-08-10 (future Confirmed) vs delivered-only 2026-07-21 — the 07-31 delivered-only fix measures the right signal                     |
+| `completed_hauls` cursor  | re-armed + re-run 2026-07-31 18:19 (6,000/6,256) — NOT drained-stale                                                                                    |
+| recoverable window        | **0 Delivered General hauls dated ≥ 07-22, 0 program units** (bridge dry-run concurs: `days=0`)                                                         |
+
+**Falsification gate (< ~5,000 recoverable): TRIPPED at 0 — no write.** The drained-cursor theory
+is dead: the missing units are not sitting in the mirror waiting to be bridged; MRC has not marked
+a single Woodland haul Delivered since 07-21 (~60 hauls dated 07-22 → 08-10 sit `Confirmed` at 0
+units — units populate on delivery). This is upstream delivery-marking lag / intake loss
+(OPEN-ITEMS O-3), not a Vision defect, and no DB write can honestly fix it.
+
+### Added
+
+- **`scripts/fix-woodland-inbound.sh`** — the remediation script, corrected against the real
+  schema before first run. The diagnosis-era guesses it replaces: `ingest_cursors` →
+  `mymrc_backfill_cursors`; `program_units`/`non_program_units` → `program_unit_count`/
+  `non_program_unit_count`; a per-haul `ON CONFLICT (mymrc_haul)` writer → **no such column and
+  no such grain**: the ADR-0059 bridge writes one aggregate row per (site, delivery day)
+  arbitrated by the partial unique index `inbound_loads_aggregate_site_day_key`, so the script
+  delegates every write to `dist/mymrc.bridgeInboundHaulsToInventory` (absolute-set, idempotent,
+  precedence-guarded, audited) and ships no SQL writer of its own. `source_note` → not needed:
+  bridge rows are structurally identified by `load_source_type='mymrc_haul'` + the bridge's
+  `audit_log` rows, which is what `--rollback` keys on. Ladder: `--verify-only` (default) →
+  `--dry-run` → gate → `--apply` → `--rollback`; `--allow-partial` waives the gate only once the
+  upstream cause is understood (MRC marking deliveries in batches). It exists precisely because
+  the hourly scrape only re-bridges a trailing **10-day** window — every frozen-window day has
+  now slid out of it, so when MRC late-marks those hauls Delivered, the mirror will update but
+  the floor will NOT self-heal without this script (or a wider manual bridge run).
+- **The COR stale-feed block (PR #196 §2.3)** — `src/lib/cor/inbound-gate.ts`, wired into BOTH
+  `computeCorPrefill` (end-of-month path, before anything is computed) and `finalizeCor` (before
+  the reconcile tripwire). Two refusals: `CorInboundStaleError` (409) when the delivered-hauls
+  feed is stale — measured delivered-only, the same signal the 07-31 guard fix measures — and
+  `CorLedgerNegativeError` (422) on a negative balance, which is never a fileable figure.
+  Mid-month filings (inventory blank) are untouched; an empty mirror stays bootstrap-not-stale.
+  The July Woodland COR is therefore now **mechanically unfileable** until inbound recovers —
+  previously only a warning in a diagnosis document. The incident is the acceptance fixture
+  (`inbound-gate.test.ts` + prefill/service suites): delivered frozen at 07-21 with Confirmed
+  rows dated 08-10 must refuse; a green gate on that fixture is a test failure. 4,143 tests pass.
+
+### Not done here, still PR #196's scope
+
+Half B beyond §2.3 — the per-feed freshness contract generalization, the `onHand`/floor-tile
+stale-inputs + negative-pool banners, and the 06:00 digest wiring — remains open for the
+campaign session. The expected ≈ +1,500 floor is NOT achievable from Vision's side today;
+it lands when MRC marks the ~60 Confirmed hauls Delivered (≈3,600–6,000 units at July's
+~106/haul), at which point `--apply` bridges anything older than the 10-day window.
+
 ## 2026-07-31 — verified live: the completed-hauls feed runs, and the disappeared churn stopped
 
 Proof rather than assertion. After deploying, the sync was run and the ledger checked.

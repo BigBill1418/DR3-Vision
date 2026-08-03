@@ -18,6 +18,7 @@
 // clock (the cover month is the input). No PII (a COR has none by design, D5).
 
 import { onHand, snapshotTotalUnits } from '@/lib/inventory/running-balance';
+import { assertCorInboundFresh, assertCorInventoryNotNegative } from './inbound-gate';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import { resolveCorSigner } from './signer';
 import { prisma } from '@/lib/prisma';
@@ -141,6 +142,12 @@ export async function computeCorPrefill(
     };
   }
 
+  // PR #196 §2.3 — an end-of-month COR derives its filed figure from `onHand`,
+  // whose inbound leg is bridged from delivered hauls. Refuse BEFORE computing
+  // anything when that feed is frozen — a regulatory filing must never be
+  // derivable from a feed known to be stale.
+  await assertCorInboundFresh();
+
   const { monthStart, monthEndDate, monthEndAsOf } = coverMonthBounds(coverMonthISO);
 
   // ── Inventory (D2.1): the ONE balance function + the anchor it used ──────
@@ -167,6 +174,9 @@ export async function computeCorPrefill(
   ]);
 
   const storedUnits = balance.total.toNearest(1).toNumber();
+  // PR #196 §2.3 — a negative balance is a drifted one-sided ledger, never a
+  // fileable inventory figure (throws CorLedgerNegativeError, 422).
+  assertCorInventoryNotNegative(storedUnits);
   const inventorySource: InventorySource = {
     method: 'running_balance_adr0037_d6',
     asOf: monthEndAsOf.toISOString(),

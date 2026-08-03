@@ -39,6 +39,11 @@ vi.mock('@/lib/prisma', () => ({
       },
     },
     auditLog: { create: async ({ data }: { data: unknown }) => void store.audits.push(data) },
+    // PR #196 §2.3 finalize gate — empty mirror = bootstrap (not stale), so the
+    // pre-gate fixtures exercise reconcile/lifecycle behavior unchanged.
+    mymrcHaulsMirror: {
+      aggregate: async () => ({ _max: { docking_appointment_date: null } }),
+    },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
       fn({
         corCertificate: {

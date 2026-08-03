@@ -48,6 +48,9 @@ const store = {
   landfilled: { program_units: 0, non_program_units: 0 } as Record<string, number | null>,
   closes: [] as Record<string, unknown>[],
   signer: null as null | { signer_name: string; signer_title: string },
+  // PR #196 §2.3 gate — newest DELIVERED haul docking date. null = empty mirror
+  // (bootstrap, not stale) so the pre-gate fixtures run unchanged.
+  newestDelivered: null as Date | null,
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -62,6 +65,9 @@ vi.mock('@/lib/prisma', () => ({
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },
     corSiteConfig: { findUnique: async () => store.signer },
+    mymrcHaulsMirror: {
+      aggregate: async () => ({ _max: { docking_appointment_date: store.newestDelivered } }),
+    },
   },
 }));
 
@@ -224,5 +230,70 @@ describe('computeCorPrefill — mid-month filing (ADR-0042 amendment)', () => {
     const p = await computeCorPrefill('site-woodland', '2026-06-01', 'mid_month');
     expect(p.signerName).toBe('Rick Albritton');
     expect(p.signerTitle).toBe('Transportation Manager');
+  });
+});
+
+// ── PR #196 §2.3 — the COR stale-feed / negative-ledger block ──────────────
+// The 2026-07 incident is the acceptance fixture: delivered hauls frozen at
+// 2026-07-21 while Confirmed rows are future-dated. Prefill must REFUSE, not
+// render a confident wrong figure onto a regulatory filing.
+
+describe('computeCorPrefill — inbound-freshness + negative-ledger gate (PR #196 §2.3)', () => {
+  beforeEach(() => {
+    store.anchor = {
+      id: 'snap-july-anchor',
+      snapshot_at: new Date('2026-07-22T07:00:00Z'),
+      units_indoor: 1597,
+      units_total: null,
+      units_in_processing: 0,
+      reconciled_delta: 0,
+    };
+    store.inbound = { program_unit_count: 150, non_program_unit_count: 0 };
+    store.dropoffs = { units: 0 };
+    store.stripped = { stripped_program: D('8034.0'), stripped_non_program: D('0.0') };
+    store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
+    store.landfilled = { program_units: 0, non_program_units: 0 };
+    store.closes = [];
+    store.signer = { signer_name: 'Rick Albritton', signer_title: 'Transportation Manager' };
+    // Incident state: newest DELIVERED haul frozen 12+ days before the filing.
+    store.newestDelivered = new Date('2026-07-21T12:00:00Z');
+  });
+
+  it('REFUSES an end-of-month prefill while the delivered-hauls feed is stale (the incident)', async () => {
+    await expect(computeCorPrefill('site-woodland', '2026-07-01')).rejects.toMatchObject({
+      name: 'CorInboundStaleError',
+      status: 409,
+      context: { newest: '2026-07-21' },
+    });
+  });
+
+  it('mid-month prefill is untouched by the gate (files inventory blank)', async () => {
+    const p = await computeCorPrefill('site-woodland', '2026-07-01', 'mid_month');
+    expect(p.inventoryUnits).toBeNull();
+  });
+
+  it('REFUSES a NEGATIVE balance even when the feed reads fresh (one-sided ledger)', async () => {
+    // Feed fresh (delivered today relative to wall clock) but the ledger is
+    // one-sided: 1597 + 150 − 8034 = −6287 (the measured 2026-08-03 program pool).
+    store.newestDelivered = new Date();
+    await expect(computeCorPrefill('site-woodland', '2026-07-01')).rejects.toMatchObject({
+      name: 'CorLedgerNegativeError',
+      status: 422,
+      context: { totalUnits: -6287 },
+    });
+  });
+
+  it('passes when the feed is fresh and the balance is positive', async () => {
+    store.newestDelivered = new Date();
+    store.stripped = { stripped_program: D('100.0'), stripped_non_program: D('0.0') };
+    const p = await computeCorPrefill('site-woodland', '2026-07-01');
+    expect(p.inventoryUnits).toBe(1597 + 150 - 100);
+  });
+
+  it('an EMPTY mirror is bootstrap, not stale — prefill proceeds (reconcile tripwire still governs)', async () => {
+    store.newestDelivered = null;
+    store.stripped = { stripped_program: D('0.0'), stripped_non_program: D('0.0') };
+    const p = await computeCorPrefill('site-woodland', '2026-07-01');
+    expect(p.inventoryUnits).toBe(1597 + 150);
   });
 });
