@@ -9,7 +9,7 @@ You are working on **DR3-Vision**, a 100% browser-based PWA that replaces paper-
 1. **`PROJECT-CHARTER.md`** — the master spec, ~850 lines. Authoritative for every product question. When you're unsure what to build, the charter has the answer.
 2. **`HANDOFF.md`** — the bootstrapping runbook for Sprint 1.
 3. **`docs/SPRINT-1-PLAN.md`** — the actual task list with acceptance criteria.
-4. **`docs/adr/`** — read all ADRs (currently 27 files, 0001–0025 plus 0019.1/0019.2; see `docs/adr/README.md` for the index). They are short. They lock in technical decisions you should not re-litigate. ADR-0012 in particular bundles seven Sprint-1 clarifications that supplement ADRs 0001/0004/0008/0009; the bonus system spans ADR-0019/0019.1/0019.2/0020/0021/0022/0023/0025 (0025 hardens the ADR-0019.1 escalation tier-4 alert).
+4. **`docs/adr/`** — read all ADRs (78 files as of 2026-08-03: 0001–0073 plus 0019.1/0019.2 and a few split/duplicate numbers; see `docs/adr/README.md` for the index). They are short. They lock in technical decisions you should not re-litigate. ADR-0012 in particular bundles seven Sprint-1 clarifications that supplement ADRs 0001/0004/0008/0009; the bonus system spans ADR-0019/0019.1/0019.2/0020/0021/0022/0023/0025 (0025 hardens the ADR-0019.1 escalation tier-4 alert).
 5. **`prisma/schema.prisma`** — the data model, draft form. Iterate on it during Sprint 1 but preserve the field semantics and table relationships.
 
 ## Hard rules — do not violate
@@ -59,7 +59,7 @@ This project does not have a synchronous human reviewer for every decision. When
 - **Repo:** `BigBill1418/DR3-Vision` on GitHub
 - **Service code:** `dr3-vision`
 - **Public domain:** `dr3-vision.svdp.us`
-- **Fleet host:** CHAD-HQ (joins SVDP-Guardian, SVDP-Intranet, SVDP-Site)
+- **Fleet host:** CHAD-HQ (10.99.0.2 / `svdp-dev`). Co-tenant stacks on the same host today: SVDP-Guardian, SVDP-Intranet, Helix-Hub, CallVault, DroneOpsMap, LodeStar, VLM analytics. (SVDP-Site is **not** on CHAD-HQ — it migrated to BOS-HQ 2026-04-20.) DR3-Vision joins only its own compose bridge network `dr3-vision_dr3net`; there is no `SVDP-Guardian` / `SVDP-Intranet` / `SVDP-Site` shared docker network — verified `docker network ls` on CHAD-HQ 2026-08-03.
 - **Deployment:** Docker container, swarmpilot_deployer auto-deploys from `main`
 - **Stack:** Next.js 15 App Router + TypeScript, Postgres 16 + Prisma, Auth.js v5, Tailwind + shadcn/ui, R2 storage, Playwright for MyMRC scraping
 - **V1 archive:** `legacy/` — V1 PHP code, do not touch, retained for reference only

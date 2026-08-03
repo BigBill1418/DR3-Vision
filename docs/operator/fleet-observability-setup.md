@@ -11,8 +11,13 @@ Operator-side procedure for wiring DR3-Vision into the BarnardHQ fleet observabi
 ## Prerequisites
 
 - SSH access to CHAD-HQ
-- Access to the fleet's GlitchTip web UI (typically `https://glitchtip.barnardhq.com`)
-- Access to the fleet's Grafana (typically `https://grafana.barnardhq.com`)
+- Access to the fleet's GlitchTip web UI at **`http://glitchtip.barnardhq.com:9000`**
+  (GlitchTip on BOS-HQ is **http-only on port 9000** — there is no https listener and
+  no port-80 listener; verified 2026-08-03)
+- Access to the fleet's Grafana — **`https://noc-mastercontrol.barnardhq.com/grafana/`**
+  (InfraWatch Grafana on BOS-HQ, `10.99.0.4:3100`). There is no
+  `grafana.barnardhq.com`, and `noc.barnardhq.com` serves only the InfraWatch
+  `/display` board.
 - Knowledge of the fleet's standard ingest endpoints for Loki, Tempo, Prometheus (documented in FLEET-PRIMER)
 
 ## Step 1 — Create the `dr3-vision` GlitchTip project
@@ -21,15 +26,16 @@ In the GlitchTip web UI:
 
 1. Navigate to **Projects → + Create Project**
 2. Configure:
-    - **Platform:** Node.js
-    - **Project name:** `dr3-vision`
-    - **Slug:** `dr3-vision` (lowercase, no spaces)
-    - **Team:** assign to the team that includes Bill (and any future maintainers)
+   - **Platform:** Node.js
+   - **Project name:** `dr3-vision`
+   - **Slug:** `dr3-vision` (lowercase, no spaces)
+   - **Team:** assign to the team that includes Bill (and any future maintainers)
 3. Click **Create Project**
 4. The DSN appears on the project page. It looks like:
    ```
-   https://<32-char-hex>@glitchtip.barnardhq.com/<project-numeric-id>
+   http://<32-char-hex>@glitchtip.barnardhq.com:9000/<project-numeric-id>
    ```
+   (Scheme is `http` and the `:9000` port is required — see Prerequisites.)
 5. **Copy the DSN** — you'll need it in step 4
 
 For source map upload during production builds, generate an auth token:
@@ -44,12 +50,12 @@ For source map upload during production builds, generate an auth token:
 
 The endpoint URLs depend on your fleet's internal networking. Check FLEET-PRIMER for the canonical values. The defaults assumed by DR3-Vision:
 
-| Subsystem | Default endpoint | What it does |
-|---|---|---|
-| Tempo (traces) | `http://tempo:4318/v1/traces` | OTLP HTTP trace ingest |
-| Loki (logs) | (stdout → Promtail/Alloy sidecar → Loki) | No direct endpoint from DR3-Vision; agent picks up stdout |
-| Prometheus | (Prometheus scrapes `dr3-vision:3000/metrics`) | Pull, not push |
-| Grafana | `https://grafana.barnardhq.com` | UI only; no code-side endpoint needed |
+| Subsystem      | Default endpoint                                                        | What it does                                                                                              |
+| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Tempo (traces) | `http://tempo:4318/v1/traces`                                           | OTLP HTTP trace ingest                                                                                    |
+| Loki (logs)    | (stdout → Promtail/Alloy sidecar → Loki)                                | No direct endpoint from DR3-Vision; agent picks up stdout                                                 |
+| Prometheus     | (Prometheus scrapes `dr3-vision:3000/metrics`)                          | Pull, not push                                                                                            |
+| Grafana        | `https://noc-mastercontrol.barnardhq.com/grafana/` (= `10.99.0.4:3100`) | UI only; no code-side endpoint needed. _Corrected 2026-08-03 — `grafana.barnardhq.com` does not resolve._ |
 
 If your fleet uses different hostnames, override via env vars in step 4.
 

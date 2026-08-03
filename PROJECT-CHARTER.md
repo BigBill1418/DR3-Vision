@@ -4,7 +4,7 @@
 **Service code:** `dr3-vision`
 **Public domain:** `dr3-vision.svdp.us` (CF Access for staff; PWA installable on iPad)
 **Tenant:** SVdP (`*.svdp.us`)
-**Fleet host:** CHAD-HQ (joins SVDP-Guardian, SVDP-Intranet, SVDP-Site)
+**Fleet host:** CHAD-HQ (10.99.0.2 / `svdp-dev`) — co-tenant stacks today: SVDP-Guardian, SVDP-Intranet, Helix-Hub, CallVault, DroneOpsMap, LodeStar, VLM analytics. (SVDP-Site is **not** on CHAD-HQ; it migrated to BOS-HQ 2026-04-20.) Corrected 2026-08-03.
 **Repo:** `BigBill1418/DR3-Vision` (existing — V1 PHP code archives to `legacy/`; V2 scaffolds at root)
 **Operator:** Bill Barnard — Director of Operations, DR3 / SVdP Lane County
 **Charter version:** 0.30 — living document

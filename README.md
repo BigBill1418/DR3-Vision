@@ -52,7 +52,7 @@ DR3-Vision tracks every inbound mattress load at DR3's two operating facilities 
 - **Tests:** full `vitest` suite green; `tsc --noEmit` exits 0; ESLint clean.
 - Pending operator action: enter the MyMRC admin login at `/admin/mrc-scrape` (stored AES-256-GCM encrypted in the DB — there is no `mymrc.env` to drop), and provision the `MYMRC_CRED_KEY` encryption key on both the `app` and `mymrc-scrape` containers (per `docs/operator/mymrc-setup.md`), to flip the hourly MyMRC scrape on; upload a real monthly MyMRC CSV through `/dashboard/<site>/reconciliation` to validate the 95% clean-match acceptance.
 
-See `CHANGELOG.md` for the full ship log; see `docs/SPRINT-1-PLAN.md` / `docs/SPRINT-2-PLAN.md` for ticket-by-ticket state and the ADRs (`docs/adr/`, through 0051) for locked decisions.
+See `CHANGELOG.md` for the full ship log; see `docs/SPRINT-1-PLAN.md` / `docs/SPRINT-2-PLAN.md` for ticket-by-ticket state and the ADRs (`docs/adr/`, through 0073) for locked decisions.
 
 **For developers:** read [`CLAUDE.md`](./CLAUDE.md) and [`HANDOFF.md`](./HANDOFF.md) to begin.
 

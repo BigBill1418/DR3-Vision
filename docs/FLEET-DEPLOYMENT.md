@@ -4,10 +4,16 @@ This document covers everything needed to deploy DR3-Vision to the BarnardHQ fle
 
 ## Target environment
 
-- **Host:** CHAD-HQ
+- **Host:** CHAD-HQ (10.99.0.2 / `svdp-dev`)
 - **Public hostname:** `dr3-vision.svdp.us`
-- **Tunnel:** Cloudflare Tunnel, configured per fleet conventions
-- **Networks:** SVDP-Guardian, SVDP-Intranet, SVDP-Site
+- **Tunnel:** Cloudflare Tunnel — a per-service `cloudflared` sidecar inside this
+  compose project (tunnel `3999bb3b-7f86-4896-8f8c-77ef27f8f2cf`), so it rolls
+  back atomically with the app. Same pattern as Helix-Hub.
+- **Networks:** one compose bridge, `dr3-vision_dr3net` (declared in
+  `docker-compose.yml`). _Corrected 2026-08-03: earlier drafts listed
+  "SVDP-Guardian, SVDP-Intranet, SVDP-Site" as fleet networks — no such docker
+  networks exist on CHAD-HQ (`docker network ls`), and SVDP-Site does not run on
+  CHAD-HQ at all (it migrated to BOS-HQ 2026-04-20)._
 - **Deployment mechanism:** swarmpilot_deployer auto-deploys from `main`. The
   deployer SSHes to CHAD-HQ, `git pull`s this repo, and runs `docker compose up -d`
   from the repo root (this builds the **local** image `dr3-vision-app:local` from
@@ -43,9 +49,19 @@ All env vars are documented in `.env.example`. The following are **required** fo
 
 ### Observability
 
-- `GLITCHTIP_DSN=<dsn for error tracking>`
-- `LOKI_ENDPOINT=http://loki:3100` (fleet-internal)
-- `TEMPO_ENDPOINT=http://tempo:4318/v1/traces`
+- `GLITCHTIP_DSN=<dsn for error tracking>` — GlitchTip lives on BOS-HQ and is
+  **http-only on port 9000**; the DSN form is
+  `http://<key>@glitchtip.barnardhq.com:9000/<project-id>`. There is no https
+  listener and no port-80 listener (verified 2026-08-03).
+- `TEMPO_ENDPOINT` — OTLP/HTTP traces endpoint. Unset ⇒ tracing disabled
+  (fail-open, `src/instrumentation.ts`).
+- **Loki: no DR3-Vision-side endpoint.** The app logs to stdout and the CHAD-HQ
+  Alloy agent (`/opt/observability-agent/`) ships to BOS-HQ Loki
+  (`loki.barnardhq.com:3101` = `10.99.0.4:3101`). _Corrected 2026-08-03: this doc
+  previously listed `LOKI_ENDPOINT=http://loki:3100` as a required production var
+  — no such var is read by `src/`, and ADR-0022 §7 already records the
+  emit-via-stdout decision. Loki also moved HSH-HQ → BOS-HQ on 2026-05-09
+  (noc-master ADR-0050)._
 
 ### ntfy (fleet standard — ADR-0036)
 
@@ -59,17 +75,24 @@ All env vars are documented in `.env.example`. The following are **required** fo
   as a no-op. (Earlier drafts referenced `NTFY_BASE_URL=ntfy.svdp.us`,
   `NTFY_CONTAINER_TOPIC`, and `NTFY_BEARER_TOKEN` — none of those match the code.)
 
-### Email (password reset)
+### Email
 
-- `RESEND_API_KEY=<resend api key>`
-- `EMAIL_FROM=no-reply@dr3-vision.svdp.us`
+_Corrected 2026-08-03: DR3-Vision does **not** use Resend. `RESEND_API_KEY` /
+`EMAIL_FROM` appear nowhere in `src/` or `.env.example` — that pair is a
+pre-Sprint-2 draft residue. All outbound mail goes through Microsoft Graph
+(ADR-0021 for payroll/bonus, ADR-0046 for the AP approvals mailbox):_
+
+- `M365_MAIL_FROM_ADDRESS=dr3-vision@svdp.us`, `M365_PAYROLL_TO_ADDRESS`
+- `MSGRAPH_MAIL_{TENANT_ID,CLIENT_ID,SECRET,MAILBOX}` — see `.env.example`
 
 ## Build pipeline (as actually deployed)
 
 There is **no GHCR registry image and no CI image push**. The image
 `dr3-vision-app:local` is built **on CHAD-HQ** by `docker compose up -d` (the
 `build:` directive in the root `docker-compose.yml`). The swarmpilot_deployer
-polls this repo every ~5s and, on a new `main` commit:
+polls this repo every **30 s** (`POLL_INTERVAL = 30000` in
+`noc-master/api/services/deployer-worker.js` — the `deployer.poll_interval: 5`
+key in `data/config.yml` is not read by the worker) and, on a new `main` commit:
 
 1. **Fetch** — deployer SSHes to CHAD-HQ and `git pull --rebase`s this repo.
 2. **migrate** — the one-shot `dr3-vision-migrate` container runs
@@ -96,7 +119,15 @@ test suite on CHAD).
 
 ## Backups
 
-Postgres: backed up via `barnardhq_backup` per fleet conventions. Retention 30 days locally + offsite.
+Postgres: **`docs/operator/backups.md` is authoritative.** Live since 2026-06-22:
+systemd user timer `dr3-vision-pg-backup.timer` on CHAD-HQ, 03:45 Pacific nightly,
+`pg_dump -Fc` piped straight into `restic backup --stdin` → Cloudflare R2 (repo
+`s3:<R2_ENDPOINT>/dr3-vision-backups/dr3-vision`), retention 7 daily / 4 weekly /
+12 monthly / 5 yearly, `RESTIC_PASSWORD` in 1Password (Fleet vault).
+
+> Corrected 2026-08-03: this section previously claimed "backed up via
+> `barnardhq_backup` per fleet conventions, retention 30 days locally + offsite" —
+> that predates the real implementation and names a mechanism DR3-Vision does not use.
 
 R2 photos: replicated by Cloudflare across regions (default). For disaster recovery, R2 supports point-in-time replication; not configured by default. Decision deferred until first compliance audit reveals whether MRC requires it.
 
@@ -171,7 +202,7 @@ Manager and admin users are seeded as inactive with placeholder passwords; Bill 
 - [ ] swarmpilot_deployer wired to the `main` branch (`enabled: true` in
       `~/noc-master/data/config.yml` `deployer.repos[]` — already done 2026-05-06)
       — the deployer builds `dr3-vision-app:local` on CHAD; no registry image to push
-- [ ] First image pushed and deployed
+- [ ] First deploy landed (image built on CHAD — there is nothing to push)
 - [ ] Healthcheck returning 200
 - [ ] Database migrated and seeded
 - [ ] Bill, Kelsey, Morena, Rick, Janette accounts created and passwords distributed
