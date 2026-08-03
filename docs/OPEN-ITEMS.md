@@ -16,6 +16,53 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AE — 2026-08-03 ADR-0074: the iPad's open portal-haul surface
+
+Shipped tonight (CHANGELOG 2026-08-03 night). Additive and read-only; the check-in
+flow and every write guard are untouched. Two hanging items and two accepted
+residuals.
+
+### Operator action
+
+- **O-6 — Bill flips `ipad_hauls` to `live` at `/admin/rollout`.** The surface is
+  seeded **`pilot`** per ADR-0047 #3, so today only an admin sees it; an operator
+  who reaches `/operator/<site>/hauls` gets the translated "not turned on yet"
+  block with back and Log Out intact — honest, never a dead end, never a 404. Flip
+  **Woodland** (Eugene has no MyMRC portal feed and will render an empty state
+  either way). Do it after the deploy's migrate init container has run — the
+  migration `20260826_adr0074_ipad_hauls_surface` is what creates the row to flip.
+  Nothing else is required; there is no second step and no deploy.
+
+### Decision waiting on Bill
+
+- **Q-4 — should it have shipped `live` instead?** ADR-0047 #3 says new
+  staff-visible surfaces are born `pilot`, and this is genuinely new exposure
+  (7,280 previously invisible rows reaching the floor), so `pilot` was taken as the
+  default with no deviation. But there IS precedent for the other reading: the
+  **ADR-0065 migration deliberately seeded `ipad_queue` / `ipad_inbound` `live`**,
+  on the grounds that born-pilot protects new exposure and must not take working
+  functionality away — and Bill's directive here was explicit and unhedged
+  ("operators must be able to see any pending haul or load"). Seeding `live` and
+  citing the directive would have been defensible on that precedent. It was not
+  done, because unlike ADR-0065 there is nothing working today that `pilot` takes
+  away, and the flip costs one click. **Answering this closes O-6 either way** — if
+  Bill's answer is "it should ship live", the flip is the same action.
+
+### Accepted residuals (recorded, not actions)
+
+- **3,316 undated hauls are now VISIBLE, not FIXED.** They carry
+  `Docking_Appointment_Date__c` as JSON `null` with the companion time field as the
+  empty template — an upstream MyMRC gap first measured in ADR-0070 (`undated:2301`,
+  since grown to 3,316). The new surface sorts them last and reaches them through an
+  `Undated (N)` chip rather than hiding them, so operators will start asking about
+  them. That is the correct outcome of making a gap legible; **closing it is an
+  operational chase with MRC**, not a code change.
+- **Eugene renders an honest empty state.** Zero mirror rows exist for that site
+  because Rick's site has no portal feed at all (the same construction as ADR-0049's
+  workbook finding). Nothing is broken; no special case was added.
+
+---
+
 ## 0.AD — 2026-07-31 End-of-day state: what is live, and what is waiting on Bill
 
 Eight builds shipped, deployed and verified live today (see CHANGELOG 2026-07-31).

@@ -80,6 +80,14 @@ export const UI_SURFACE = {
   /** The F-1 on-hand summary BLOCK inside the hub — not the hub itself. */
   IPAD_TODAY_SUMMARY: 'ipad_today_summary',
 
+  // ADR-0074 — the open, searchable, newest-first READ of every MyMRC portal
+  // haul (`/operator/[site]/hauls`). Its own surface rather than riding
+  // `ipad_queue`: this is a read catalogue with no writes, and Bill must be able
+  // to ramp it at Woodland (the only site with a portal feed) without touching
+  // the actionable dock queue — or to pull it back without taking the queue down
+  // with it. Born `pilot` per ADR-0047 #3.
+  IPAD_HAULS: 'ipad_hauls',
+
   // ADR-0068 — the Employee Reimbursement tile on the site dashboard. Gated per
   // site because spec §6.4 leaves open whether Eugene's reimbursement process
   // runs the same way as Woodland's today; Bill can ramp one without the other

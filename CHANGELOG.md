@@ -3,6 +3,82 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-03 (night) — the iPad stops showing 5 of 7,285 portal hauls (ADR-0074)
+
+Bill's directive today: on-site iPad operators must be able to see **any** pending haul or
+load from the MyMRC portal — searchable, newest to oldest. Measured against production at
+13:17 PT, the floor could see **5 rows out of a 7,285-row mirror — 0.07%**. The iPad's only
+window onto MyMRC was `/queue`, which lists `expected_loads` (718 rows) bounded to the
+current Pacific day. An operator with a truck at the door and a haul number on a BOL had no
+way to look it up.
+
+`/operator/[site]/hauls` is that lookup. **Additive and READ-ONLY** — the check-in flow and
+every write guard are untouched.
+
+### Added
+
+- **`/operator/[site]/hauls`** — every portal haul for the site, newest first, searchable by
+  haul number / carrier / collection site / collection source (case-insensitive), 50 to a
+  page. The 19 `Confirmed` hauls pin to the top in an unpaginated block, labelled with the
+  fact that MyMRC reports **0 units until delivery**. An `Undated (N)` chip reaches the
+  3,316 rows carrying no docking date. View state is entirely URL state (`?q=&page=&undated=`)
+  so a shared iPad handed to the next shift reproduces exactly what is on the screen.
+  Controls are 56px, the palette is the ADR-0008 floor green, offsets are logical (`ms-*`)
+  for the Urdu RTL build, and instants render through the Pacific-pinned `formatTime` /
+  `formatDate` (ADR-0065 Am.1 A1.1).
+- **`src/lib/loads/portal-hauls.ts`** — the read service. `findMany` / `count` only.
+- **`ipad_hauls` rollout surface**, born **`pilot`** per ADR-0047 #3 (migration
+  `20260826_adr0074_ipad_hauls_surface` + `prisma/seed.mjs`, both idempotent). Its own row,
+  so ramping it cannot touch the dock queue, the inbound confirm screen or the manager
+  desktop — and pulling it back cannot take them down.
+- **Hub card** on `/operator/[site]/today`, badged with the pending-haul count. The hub
+  itself stays ungated (Bill: "do not strand anyone").
+- **Index** `mymrc_hauls_mirror_site_docking_idx` on `(site_id, docking_appointment_date DESC)`
+  — additive, `IF NOT EXISTS`. The site-only index left the sort unindexed on a table that
+  grows forever.
+- **`floor.hauls.*` + `floor.hub.card_hauls_*`** in all three locales (en / es / ur).
+
+### Changed
+
+- **ADR-0065 D5 is partially superseded — the READ half only.** Bill's earlier words
+  ("vision on the ipad is only going to show hauls from the current day … no historical or
+  future views") were about the **actionable queue**, and that scoping is fully preserved:
+  `assertCurrentPacificDay`, the ADR-0060 D5 `per_load_exists` refusal, the partial unique
+  index and the day-scoped inbound API are all untouched. D5 now reads: the actionable queue
+  and every write are current-Pacific-day scoped; reading the portal catalogue is not.
+- `'hauls'` added to `WORK_SEGMENTS` in `floor-nav.ts` — without it the route resolves as a
+  user id and renders a black pre-auth page with no back and no Log Out.
+
+### Recorded
+
+- **`disappeared_at` is deliberately NOT a filter, and it is load-bearing.** 5,455 of the
+  6,269 `Delivered`/`General` rows carry the stamp (6,453 of all 7,285). Per ADR-0070 Am.1 §3
+  it means "absent from the last swept LIST VIEW", not "gone" — filtering on it would hide
+  **87% of the delivered hauls**, reproducing in disguise the exact blindness this closes.
+  Guarded by `portal-hauls.test.ts` case (a), which was **falsified by hand before commit**:
+  adding the filter turned that case red and left the other eight green.
+- **Four measured premise corrections**, in ADR-0074's context section: zero NULL-status rows
+  today (tolerance kept anyway), `Inactive` is an **undocumented fifth status**, Eugene has
+  **zero** mirror rows by construction (no portal feed — the honest empty state, not a bug),
+  and the live type string is `Consumer Dropoff`, unhyphenated.
+- **Accepted residual:** the 3,316 undated hauls are now **visible, not fixed**. This surface
+  makes an upstream MyMRC gap legible to the floor for the first time; closing it is an
+  operational chase with MRC. OPEN-ITEMS 0.AE.
+
+### Money safety
+
+Read surface, **zero writes**. Nothing in the new code creates an `ExpectedLoad` or an
+`InboundLoad`. A row offers the existing `QueueRow` / `startLoadAction` check-in **only**
+where a live, non-cancelled `expected_loads` sibling already exists; every other row renders
+read-only with no control at all. Synthesizing a sibling to make a button possible is
+forbidden (ADR-0074 D5) and pinned by test case (f).
+
+### Operator action
+
+- **Bill flips `ipad_hauls` to `live` at `/admin/rollout`** once the deploy's migrate step has
+  run. Until then the surface degrades honestly to the translated "not turned on yet" block,
+  with back and Log Out intact. OPEN-ITEMS **O-6**.
+
 ## 2026-08-03 (evening, second pull) — Rick corrected 07-30 + 07-31 too; 870 units reclassified total; the remaining gap is now a TOTAL-units problem reclassification cannot fix
 
 Re-pulled the processed window on Rick's word: **07-30 → 808/352, 07-31 → 1,063/95**

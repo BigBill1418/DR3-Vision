@@ -118,12 +118,15 @@ describe('ADR-0065 D1/D4 — every gated screen actually reads its gate', () => 
     [join('[site]', 'inbound', 'page.tsx')]: 'IPAD_INBOUND',
     [join('[site]', 'count', 'page.tsx')]: 'IPAD_COUNT',
     [join('[site]', 'processed', 'page.tsx')]: 'IPAD_PROCESSED',
+    // ADR-0074 — the open portal-haul read surface, on its own `ipad_hauls` gate.
+    [join('[site]', 'hauls', 'page.tsx')]: 'IPAD_HAULS',
   };
 
   it('covers every gated surface named in the D1 table', () => {
-    // Negative control on the map itself: five iPad surfaces are gated and the hub
-    // summary block is the sixth (asserted separately, it is a block not a page).
-    expect(Object.keys(REQUIRED_GATE)).toHaveLength(5);
+    // Negative control on the map itself: six gated iPad PAGES (five from
+    // ADR-0065's D1 table plus ADR-0074's hauls list), and the hub summary block
+    // is asserted separately because it is a block, not a page.
+    expect(Object.keys(REQUIRED_GATE)).toHaveLength(6);
   });
 
   it.each(Object.entries(REQUIRED_GATE))('%s reads UI_SURFACE.%s', (relFile, surface) => {

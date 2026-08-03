@@ -5,6 +5,7 @@ import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
 import { countUnconfirmedInboundDays } from '@/lib/loads/floor-inbound';
+import { countPendingPortalHauls } from '@/lib/loads/portal-hauls';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate, translatePlural } from '@/i18n/dictionary';
 import { FloorPageHeading } from '../../_components/page-heading';
@@ -47,13 +48,16 @@ export default async function FloorTodayPage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  const [summaryLive, inboundLive, countLive, processedLive, queueLive] = await Promise.all([
-    isUiSurfaceLive(UI_SURFACE.IPAD_TODAY_SUMMARY, siteId),
-    isUiSurfaceLive(UI_SURFACE.IPAD_INBOUND, siteId),
-    isUiSurfaceLive(UI_SURFACE.IPAD_COUNT, siteId),
-    isUiSurfaceLive(UI_SURFACE.IPAD_PROCESSED, siteId),
-    isUiSurfaceLive(UI_SURFACE.IPAD_QUEUE, siteId),
-  ]);
+  const [summaryLive, inboundLive, countLive, processedLive, queueLive, haulsLive] =
+    await Promise.all([
+      isUiSurfaceLive(UI_SURFACE.IPAD_TODAY_SUMMARY, siteId),
+      isUiSurfaceLive(UI_SURFACE.IPAD_INBOUND, siteId),
+      isUiSurfaceLive(UI_SURFACE.IPAD_COUNT, siteId),
+      isUiSurfaceLive(UI_SURFACE.IPAD_PROCESSED, siteId),
+      isUiSurfaceLive(UI_SURFACE.IPAD_QUEUE, siteId),
+      // ADR-0074 — the open portal-haul read surface, on its own gate.
+      isUiSurfaceLive(UI_SURFACE.IPAD_HAULS, siteId),
+    ]);
 
   const now = new Date();
   const balance = summaryLive ? await onHand(siteId, now) : null;
@@ -93,6 +97,20 @@ export default async function FloorTodayPage({ params }: Props) {
       href: `/operator/${siteCode}/queue`,
       title: t('floor.hub.card_queue_title'),
       body: t('floor.hub.card_queue_body'),
+    });
+  }
+  if (haulsLive) {
+    // ADR-0074 — the badge is the count of hauls MyMRC has scheduled but not yet
+    // marked delivered. Read-only and cheap; omitted entirely at zero rather than
+    // rendering a "0" the operator has to decode.
+    const pendingHauls = await countPendingPortalHauls(siteId);
+    cards.push({
+      href: `/operator/${siteCode}/hauls`,
+      title: t('floor.hub.card_hauls_title'),
+      body: t('floor.hub.card_hauls_body'),
+      ...(pendingHauls > 0
+        ? { badge: translatePlural(dict, 'floor.hub.card_hauls_badge', pendingHauls) }
+        : {}),
     });
   }
 

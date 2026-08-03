@@ -2566,6 +2566,13 @@ model MymrcHaulsMirror {
   @@index([disappeared_at])
   @@index([detail_fetched_at])
   @@index([recycler_account_id]) // structured site/customer join
+  // ADR-0074 — the iPad portal-haul list filters on site and orders by docking
+  // date descending over the whole 7,285-row mirror; the site-only index left the
+  // sort unindexed. `sort: Desc` is NOT decoration: the hand-written migration
+  // creates the column DESC, and expressing it here is what keeps
+  // `prisma migrate diff` clean (a plain `@@index` reports a spurious
+  // drop-and-recreate against the real index forever).
+  @@index([site_id, docking_appointment_date(sort: Desc)])
   @@map("mymrc_hauls_mirror")
 }
 

@@ -20,7 +20,11 @@
 // operator can reach WITH a session, which is the part Bill asked for.
 
 /** Second-level segments that are real working surfaces rather than a user id. */
-const WORK_SEGMENTS = new Set(['today', 'queue', 'inbound', 'count', 'processed', 'load']);
+// ADR-0074 added `hauls`. A working segment MISSING from this set is treated as a
+// user id, so the screen resolves as a pre-PIN auth surface: black chrome, no back,
+// no Log Out — a black page with no way out. Adding the route without adding the
+// segment is the defect this comment exists to prevent.
+const WORK_SEGMENTS = new Set(['today', 'queue', 'inbound', 'count', 'processed', 'load', 'hauls']);
 
 export interface FloorNav {
   /** Site code from the path, or null on `/operator` itself. */

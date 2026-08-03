@@ -39,16 +39,39 @@ const SEEDED: Record<string, RolloutState> = {
   [UI_SURFACE.IPAD_COUNT]: 'pilot',
   [UI_SURFACE.IPAD_PROCESSED]: 'pilot',
   [UI_SURFACE.IPAD_TODAY_SUMMARY]: 'pilot',
+  // ADR-0074 — born pilot per ADR-0047 #3 (genuinely new exposure, so unlike the
+  // ADR-0065 retrofits the default applies unmodified). Bill flips it live.
+  [UI_SURFACE.IPAD_HAULS]: 'pilot',
   [UI_SURFACE.LOADS_INVENTORY]: 'live',
 };
 
 describe('ADR-0065 per-surface iPad gates', () => {
-  it('registers all five iPad surfaces (registry ↔ migration ↔ seed sync)', () => {
+  it('registers every iPad surface (registry ↔ migration ↔ seed sync)', () => {
     expect(UI_SURFACE.IPAD_QUEUE).toBe('ipad_queue');
     expect(UI_SURFACE.IPAD_INBOUND).toBe('ipad_inbound');
     expect(UI_SURFACE.IPAD_COUNT).toBe('ipad_count');
     expect(UI_SURFACE.IPAD_PROCESSED).toBe('ipad_processed');
     expect(UI_SURFACE.IPAD_TODAY_SUMMARY).toBe('ipad_today_summary');
+    // ADR-0074.
+    expect(UI_SURFACE.IPAD_HAULS).toBe('ipad_hauls');
+  });
+
+  it('ADR-0074 — the hauls surface is born PILOT and blocks an operator until flipped', async () => {
+    const db = dbWith(SEEDED);
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_HAULS, SITE, db),
+    ).rejects.toBeInstanceOf(LoadsInventoryNotActivatedError);
+    // …and turning it on later must not disturb any neighbour.
+    const flipped = dbWith({ ...SEEDED, [UI_SURFACE.IPAD_HAULS]: 'live' });
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_HAULS, SITE, flipped),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_COUNT, SITE, flipped),
+    ).rejects.toBeInstanceOf(LoadsInventoryNotActivatedError);
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_QUEUE, SITE, flipped),
+    ).resolves.toBeUndefined();
   });
 
   it('lets an operator through the LIVE surfaces (queue + inbound)', async () => {

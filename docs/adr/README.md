@@ -75,6 +75,13 @@ This directory contains short, dated, immutable records of the technical and arc
 | 0065   | Per-surface iPad rollout gates, current-Pacific-day floor scoping, and two app chromes                                                    | Accepted (2026-07-28)                                                                           |
 | 0066   | AP second-approval routing becomes person-to-person, with per-user notification scoping                                                   | Accepted (2026-07-28)                                                                           |
 | 0067   | Shared-file document ingestion — delegated auth-code + refresh token (Amendment A supersedes §3.5 ROPC framing)                           | Accepted (2026-07-29)                                                                           |
+| 0068   | Employee reimbursements: structured intake + mandatory dual approval                                                                      | Accepted, shipped (2026-07-29)                                                                  |
+| 0069   | The document-ingestion absorption bridge (Am.1 trailer absorption + re-parse; Am.2 TEREX preview-then-confirm)                            | Accepted (2026-07-30; amendments 2026-07-31)                                                    |
+| 0070   | MyMRC list pagination reads newest-first, and mirror freshness is measured (Am.1 fixes the blind guard + over-broad `disappeared_at`)     | Accepted (2026-07-31)                                                                           |
+| 0071   | Processor production quota alert (Woodland exception digest)                                                                              | Accepted, implemented, shipped DISABLED (2026-07-31)                                            |
+| 0072   | iPad physical count go-live + tiered anchor-overwrite guardrail                                                                           | Accepted, implemented (2026-07-31)                                                              |
+| 0073   | Manager corrections to submitted inbound loads                                                                                            | Proposed (2026-07-31) — design only, nothing implemented                                        |
+| 0074   | The iPad floor sees every portal haul: an open, searchable, newest-first read surface (partially supersedes 0065 D5 — read half only)     | Accepted (2026-08-03)                                                                           |
 
 ## How to write a new ADR
 

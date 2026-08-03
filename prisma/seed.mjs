@@ -1017,6 +1017,10 @@ async function seedRolloutSurfaces(siteIds) {
     'ipad_count',
     'ipad_processed',
     'ipad_today_summary',
+    // ADR-0074 — the open portal-haul read surface. Born pilot (ADR-0047 #3):
+    // admin-only until Bill flips it at /admin/rollout. Matches migration
+    // 20260826_adr0074_ipad_hauls_surface.
+    'ipad_hauls',
   ];
   // ADR-0065 — retrofitted gates over surfaces that are ALREADY live to operators.
   // Born-pilot protects new exposure; seeding these `pilot` would take working
