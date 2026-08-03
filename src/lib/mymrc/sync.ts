@@ -192,8 +192,29 @@ function haulsAdapter(
       return r.count;
     },
     async idsNeedingDetail(listedIds) {
+      // ── 2026-08-03: a detail is NOT forever ─────────────────────────────────
+      // Detail used to be fetched once per row (`detail_fetched_at IS NULL`),
+      // which froze status/units at first-detail time. A haul detailed while
+      // SCHEDULED then keeps `status='Confirmed'`, 0 units, permanently — even
+      // after MRC delivers it and the `completed_hauls` view starts listing it.
+      // Measured live 2026-08-03: 34 delivered window hauls (~3,600 units) sat
+      // frozen as Confirmed/0 for up to 12 days; the whole "MRC hasn't marked
+      // them delivered" O-3 diagnosis was this artifact. Membership in the
+      // completed view IS evidence the stored status is stale, so a row listed
+      // here whose status is not yet 'Delivered' (or never detailed, status
+      // NULL included — Prisma `not` excludes NULL) must be re-detailed to
+      // absorb the transition and its unit counts. The ACTIVE view keeps the
+      // null-only filter: re-detailing every scheduled haul hourly would be
+      // pure detail-load with nothing to absorb.
+      const where =
+        feed === 'haulsCompleted'
+          ? {
+              id: { in: [...listedIds] },
+              OR: [{ detail_fetched_at: null }, { status: null }, { status: { not: 'Delivered' } }],
+            }
+          : { id: { in: [...listedIds] }, detail_fetched_at: null };
       const rows = await model.findMany({
-        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
+        where,
         select: { id: true, external_haul_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_haul_id }));

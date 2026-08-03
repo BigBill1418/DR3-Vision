@@ -678,3 +678,63 @@ describe('checkDeadman', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// ── 2026-08-03: a detail is NOT forever (the frozen-status regression) ───────
+// Details used to be fetched once per row, ever. A haul detailed while
+// SCHEDULED kept `status='Confirmed'` and 0 units permanently — even after MRC
+// delivered it and the completed view began listing it. 34 delivered window
+// hauls (~3,600 units) sat frozen that way for up to 12 days and the negative
+// Woodland floor was mis-blamed on MRC. Membership in `completed_hauls` is
+// evidence the stored status is stale — the QUERY must say so (the 07-31
+// lesson: assert the where, not the thing next to it).
+
+describe('syncFeed — a detail is not forever (frozen-status regression, 2026-08-03)', () => {
+  it('haulsCompleted re-details listed rows whose stored status is not yet Delivered', async () => {
+    const { prisma, model } = fakePrisma({ needDetail: [] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => list(['frozen-confirmed-1'], true)),
+    });
+    const { pager } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'haulsCompleted',
+      pager,
+      now: NOW,
+    });
+
+    expect(model.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['frozen-confirmed-1'] },
+        OR: [{ detail_fetched_at: null }, { status: null }, { status: { not: 'Delivered' } }],
+      },
+      select: { id: true, external_haul_id: true },
+    });
+  });
+
+  it('the ACTIVE haul view keeps the null-only filter (no hourly re-detail of every scheduled haul)', async () => {
+    const { prisma, model } = fakePrisma({ needDetail: [] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => list(['scheduled-1'], true)),
+    });
+    const { pager } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'hauls',
+      pager,
+      now: NOW,
+    });
+
+    expect(model.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['scheduled-1'] }, detail_fetched_at: null },
+      select: { id: true, external_haul_id: true },
+    });
+  });
+});

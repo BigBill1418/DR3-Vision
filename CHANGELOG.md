@@ -3,6 +3,61 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-03 (later) — the O-3 verdict was wrong: MRC HAD delivered; OUR mirror froze the transition. Recovered +4,306 units through the gates
+
+**Correction of record.** The morning entry below (and OPEN-ITEMS O-3, and the 07-31 "NOT a
+Vision defect" conclusion) blamed upstream: "MRC has not marked a single Woodland haul
+Delivered since 07-21." **False — a Vision-side artifact.** Bill asked "are you completely
+sure this is on MRC?" and checking killed the premise:
+
+- The hourly ACTIVE view listed only **20** hauls while **83** mirror rows carried
+  `status='Confirmed'` — most "Confirmed" rows were not in the scheduled view at all.
+- **34 window hauls' `last_seen_at` equaled the `haulsCompleted` run's exact instant** —
+  MRC's _delivered_ list was serving them, hourly. MRC had done their paperwork.
+- Root cause: **a detail was fetched once per row, ever** (`idsNeedingDetail` filtered
+  `detail_fetched_at IS NULL`). The list pass records only "I saw this id"; status and unit
+  counts live on the detail. A haul detailed while scheduled kept `Confirmed`/0 units
+  permanently — the 07-31 claim "Vision will pick them up within the hour once MRC marks
+  them delivered" listed the transition but could never absorb it.
+
+**One-haul proof** (Bill-ordered, before any bulk write): H-134015, mirror-frozen
+`Confirmed`/0 since 07-22, re-detailed → **`Delivered` / General / 106 program units /
+5,830 lbs**, docking 07-27.
+
+**Recovery, through the script's gates:** cleared `detail_fetched_at` for all 83 Confirmed
+rows → enrich re-detailed 82/82 reachable (one id errors in every view — portal-side ghost,
+stays null-stamped and inert) → **61 hauls flipped Confirmed→Delivered**; the mirror window
+07-22→08-06 now holds 50 Delivered General hauls / 5,393 program units. `fix-woodland-inbound.sh
+--dry-run`: recoverable **5,022** ≥ 5,000 — **gate PASSED** (07-29's 371 correctly skipped:
+the ipad_floor aggregate owns that day slot). `--apply` bridged 10 day-aggregates
+(idempotent, audited): ledger inbound 150 → 4,456. Floor **−6,287 → −1,981 program
+(−5,401 → −1,095 total)**; the tile shows **−2,439 / −1,553** today because the 08-04/08-06
+deliveries count on their own days.
+
+### Fixed
+
+- **`sync.ts` — a detail is not forever.** `idsNeedingDetail` is now feed-aware: a row
+  listed by `completed_hauls` whose stored status is not yet `Delivered` (NULL included) is
+  re-detailed, absorbing the Confirmed→Delivered transition and its unit counts. The active
+  view keeps the null-only filter (re-detailing every scheduled haul hourly buys nothing).
+  Query-level regression test per the 07-31 lesson — reverting the filter goes red; proven
+  by actually reverting it.
+- `fix-woodland-inbound.sh` floor blocks now bound `arrived_at <= now()` so future-dated
+  bridged days don't inflate the reported floor.
+
+### Still true / still open
+
+- The floor remains negative (**−2,439 program** today). The ledger says stripped 8,034 vs
+  available anchor+inbound ≈ 6,131 — a ~1,900-unit reconciliation gap that no feed currently
+  explains: candidates are further MRC marking lag (22 hauls still Confirmed, dated 08-04+),
+  the 2,319 undated-haul defect, or stripped over-count. A fresh physical count (diagnosis
+  §8 option 3) remains the clean reset if the July COR cannot wait; the COR gates (morning
+  entry) keep it unfileable meanwhile — now via the **negative-ledger** refusal, since the
+  delivered feed measure is fresh again.
+- The frozen-detail class likely also applies to the processed/outbound mirrors
+  (status flips like Active→Inactive) — for the PR #196 Half-B campaign's per-feed
+  freshness contract, not rushed here.
+
 ## 2026-08-03 — the Woodland recovery script ran its gates and correctly wrote nothing; the COR can no longer file a frozen-feed figure
 
 The PR #196 Half-A remediation, executed under its own falsification gate — which **tripped at

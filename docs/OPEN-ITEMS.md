@@ -80,6 +80,20 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   `scripts/fix-woodland-inbound.sh --dry-run` then `--apply` (gate-aware; use
   `--allow-partial` if MRC marks in batches) to bridge the older days. **This is now
   purely an operational chase with MRC: get the 07-22→07-31 deliveries marked.**
+  **CORRECTION + PARTIAL RESOLUTION 2026-08-03 (afternoon) — the verdict above was
+  WRONG; it was us, and the window is recovered.** MRC HAD marked the hauls delivered;
+  Vision's mirror froze them at `Confirmed`/0 because details were fetched once per
+  row, ever (see CHANGELOG 2026-08-03 later entry — `idsNeedingDetail` fix + proof
+  H-134015). Recovery ran through the script's gates (5,022 ≥ 5,000, PASSED): 61 hauls
+  flipped Delivered, +4,306 program units bridged, floor −6,287 → **−2,439 program /
+  −1,553 total** as shown today (−1,981/−1,095 once the 08-04/08-06 deliveries' days
+  arrive). **REMAINING OPEN: a ~1,900-unit reconciliation gap** (stripped 8,034 vs
+  anchor+inbound ≈ 6,131) — candidates: further MRC marking lag (22 hauls still
+  Confirmed dated 08-04+), the 2,319 undated-haul defect, stripped over-count. The
+  COR stays blocked on the negative-ledger refusal; a fresh physical count is the
+  clean reset if the July COR cannot wait for the gap to close. No MRC chase needed
+  for the recovered window; the 08-04+ hauls will absorb automatically now that
+  details refresh on the completed feed.
 - **O-4 — load H-135881 was corrected by hand.** 40 → 95 units, audited, at Bill's
   instruction. Two caveats on the record: nothing in the DB links that load to the
   identifier "H-135881" (no BOL, DR3 or haul id — matched as the only Woodland load

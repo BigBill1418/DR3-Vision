@@ -101,7 +101,9 @@ a AS (SELECT snapshot_at, program_units, non_program_units
 inb AS (SELECT coalesce(sum(program_unit_count),0) p, coalesce(sum(non_program_unit_count),0) n
           FROM inbound_loads WHERE site_id=(SELECT id FROM s)
            AND status IN ('verified','submitted_to_mymrc','processed')
-           AND arrived_at >= '${ANCHOR_INSTANT}'),
+           -- <= now(): onHand windows lte asOf, so a bridged FUTURE delivery day
+           -- (MRC marks ahead) must not inflate the floor shown for today.
+           AND arrived_at >= '${ANCHOR_INSTANT}' AND arrived_at <= now()),
 dr AS (SELECT coalesce(sum(units),0) u FROM consumer_dropoffs
         WHERE site_id=(SELECT id FROM s) AND dropoff_date > '${WINDOW_START}'),
 st AS (SELECT coalesce(sum(stripped_program),0) p, coalesce(sum(stripped_non_program),0) n
