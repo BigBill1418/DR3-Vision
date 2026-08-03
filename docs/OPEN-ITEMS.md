@@ -107,7 +107,12 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   non-program — only 826 program were on the floor); absorbed into Vision same day
   (re-detail M-183347 + processed bridge, audited; billable program −423, nothing had
   been invoiced). THREE follow-ups:
-  1. **RICK/OFFICE: check 07-27, 07-28, 07-30, 07-31 for the same misclassification.**
+  1. **RICK/OFFICE: 07-27 and 07-28 remain to check** (07-30 → 808/352 and 07-31 →
+     1,063/95 corrected + absorbed 2026-08-03 evening; 870 units reclassified total).
+     NOTE the non-program pool is at +16 — further reclassification drives it negative
+     unless the INBOUND split is also revisited (MRC hauls are recorded 100% program).
+     And reclassification is pool-neutral: the −1,525 TOTAL floor needs real inbound
+     or a physical count, never a reclass.
      The running program pool crosses zero on 07-27 and deepens every stripping day —
      those days' all-program entries could not have been satisfied by recorded program
      stock. Correct in the MRC portal; Vision absorbs via re-detail + bridge (ask a

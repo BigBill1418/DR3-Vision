@@ -3,7 +3,25 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
-## 2026-08-03 (evening) — Rick's 07-29 processed correction absorbed: 1,249 → 826 program + 423 non-program; four sibling days flagged
+## 2026-08-03 (evening, second pull) — Rick corrected 07-30 + 07-31 too; 870 units reclassified total; the remaining gap is now a TOTAL-units problem reclassification cannot fix
+
+Re-pulled the processed window on Rick's word: **07-30 → 808/352, 07-31 → 1,063/95**
+(portal-confirmed, re-detailed, bridged, audited; 07-29 was already in). **07-27 and 07-28
+still read all-program (1,163/0, 1,165/0) in the portal** — either pending or judged correct;
+O-5 item 1 stays open for exactly those two days.
+
+Running totals: **870 program units reclassified** to non-program across 07-29/30/31 —
+that is 870 fewer billable program units (nothing invoiced, still zero exposure). Floor:
+**−1,541 program / +16 non-program / −1,525 total.**
+
+**The load-bearing observation:** reclassification is pool-neutral — it can never move the
+TOTAL floor, which sits at −1,525. And the non-program pool is now at +16, nearly drained:
+further reclassification (e.g., 07-27/28) would drive it negative, because MRC's recovered
+inbound hauls are recorded 100% program (5,522/0) while Woodland demonstrably strips
+non-program units daily — the same split-classification problem, mirrored on the INBOUND
+side. The remaining −1,525 total therefore needs real missing inbound (undated hauls,
+unmarked deliveries, the 07-29 iPad-150-vs-MRC-371 day) or a fresh physical count — no
+amount of portal reclassification closes it.
 
 Rick (Transportation Manager, by email via Bill): the 07-29 processed entry was keyed 1,249
 all-program, but only 826 program mattresses were on the floor; he corrected the MRC portal
