@@ -3,6 +3,41 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-03 (evening) — Rick's 07-29 processed correction absorbed: 1,249 → 826 program + 423 non-program; four sibling days flagged
+
+Rick (Transportation Manager, by email via Bill): the 07-29 processed entry was keyed 1,249
+all-program, but only 826 program mattresses were on the floor; he corrected the MRC portal
+record (M-183347) to **826 program / 423 non-program** to prevent overcharging MRC (billing
+bills `stripped_program`).
+
+The correction could not reach Vision on its own — the **processed mirror has the same
+frozen-detail defect** the hauls fix (below) closed: details fetched once per row, ever, so
+a portal edit after first detail is invisible. Absorbed manually through the sanctioned
+path: re-detailed M-183347 (mirror 1,249/0 → **826/423**, portal-confirmed), processed
+bridge re-run for 07-29 (dry-run: exactly 1 update, neighbors unchanged; applied +
+audited). `processed_units_daily` 07-29 now **826.0 / 423.0**. Floor: **−1,988 program /
++463 non-program / −1,525 total** (a pool reclassification — total unchanged; billable
+program units −423). Nothing had been invoiced (0 invoice rows), so no overbilling occurred.
+
+### Flagged, not edited (operator/manager decision — billing consequences)
+
+The same impossible pattern exists on **07-27, 07-28, 07-30, 07-31**: the running program
+pool crosses zero on 07-27 and every stripping day deepens it, meaning those days' all-program
+entries also could not have been satisfied by program stock as recorded. If Rick's 07-29
+observation generalizes, each needs the same portal-side reclassification; once corrected in
+MRC, re-detail + bridge absorbs them (same path as above). Recorded in OPEN-ITEMS O-5.
+
+### Also recorded
+
+- **Rick's standing ask** — "keep track of that daily to prevent overcharging the MRC":
+  the Half-B negative-pool alert (PR #196 §3.3) covers exactly this class (stripping more
+  program than the pool holds must be loud, same-day). Logged as the acceptance shape for
+  that work in OPEN-ITEMS O-5.
+- The processed/outbound frozen-detail class is now **proven live** (M-183347), not
+  hypothesized — the hauls-only fix below needs a sibling for Materials edits (no status
+  transition to key on; needs a design decision, e.g. re-detail a trailing-N-day window).
+  Folded into the Half-B scope note.
+
 ## 2026-08-03 (later) — the O-3 verdict was wrong: MRC HAD delivered; OUR mirror froze the transition. Recovered +4,306 units through the gates
 
 **Correction of record.** The morning entry below (and OPEN-ITEMS O-3, and the 07-31 "NOT a

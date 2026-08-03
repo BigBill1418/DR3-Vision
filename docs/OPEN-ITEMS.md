@@ -101,6 +101,24 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   `total_units` ≠ Σ `load_stacks` (4 × 10 = 40). The stacks were left intact
   deliberately — they record what was actually mis-keyed. It changes no inventory
   figure today because its pool split is still NULL.
+- **O-5 (added 2026-08-03) — processed program/non-program misclassification: 07-29
+  corrected (Rick), FOUR sibling days suspect, and a daily guard is wanted.**
+  Rick corrected 07-29 in the MRC portal (1,249 all-program → 826 program + 423
+  non-program — only 826 program were on the floor); absorbed into Vision same day
+  (re-detail M-183347 + processed bridge, audited; billable program −423, nothing had
+  been invoiced). THREE follow-ups:
+  1. **RICK/OFFICE: check 07-27, 07-28, 07-30, 07-31 for the same misclassification.**
+     The running program pool crosses zero on 07-27 and deepens every stripping day —
+     those days' all-program entries could not have been satisfied by recorded program
+     stock. Correct in the MRC portal; Vision absorbs via re-detail + bridge (ask a
+     session, or wait for the Half-B processed re-detail fix).
+  2. **Rick's standing ask — daily tracking to prevent MRC overcharging.** The Half-B
+     negative-pool alert (PR #196 §3.3) is the vehicle: stripping more program than the
+     pool holds fires same-day. Treat Rick's 07-29 case as the acceptance fixture.
+  3. **Processed/outbound mirrors still have the frozen-detail defect** (proven live on
+     M-183347) — the 2026-08-03 hauls fix does not cover Materials edits (no status
+     transition to key on). Needs a design decision (e.g., re-detail a trailing-N-day
+     window each tick). Half-B scope.
 
 ## 0.AC — 2026-07-31 Manager load corrections (ADR-0073, proposed) — design landed, nothing built
 
