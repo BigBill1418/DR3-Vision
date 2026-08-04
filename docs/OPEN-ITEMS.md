@@ -24,7 +24,11 @@ residuals.
 
 ### Operator action
 
-- **O-6 — Bill flips `ipad_hauls` to `live` at `/admin/rollout`.** The surface is
+- **O-6 — ✅ DONE (2026-08-03 23:57 UTC).** Flipped to `live` for Woodland via the
+  DB write path at Bill's explicit instruction (audit row `system:claude-code (Bill
+instruction)`; criteria note carries the directive). **Woodland operators confirmed
+  they can see everything** (2026-08-03 ~17:09 PT). Eugene deliberately left `pilot`
+  (no MyMRC feed — empty state). Original item:** Bill flips `ipad_hauls` to `live` at `/admin/rollout`.** The surface is
   seeded **`pilot`** per ADR-0047 #3, so today only an admin sees it; an operator
   who reaches `/operator/<site>/hauls` gets the translated "not turned on yet"
   block with back and Log Out intact — honest, never a dead end, never a 404. Flip
@@ -45,8 +49,9 @@ residuals.
   ("operators must be able to see any pending haul or load"). Seeding `live` and
   citing the directive would have been defensible on that precedent. It was not
   done, because unlike ADR-0065 there is nothing working today that `pilot` takes
-  away, and the flip costs one click. **Answering this closes O-6 either way** — if
-  Bill's answer is "it should ship live", the flip is the same action.
+  away, and the flip costs one click. **Answered in effect 2026-08-03: Bill ordered the flip same-day** ("you turn it
+  on and make it live now") — O-6 is done. The pilot-first default stands for future
+  surfaces unless Bill says otherwise.
 
 ### Accepted residuals (recorded, not actions)
 
