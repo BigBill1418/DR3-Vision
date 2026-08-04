@@ -239,10 +239,14 @@ async function main() {
 
   for (const r of rows) {
     const site_id = siteId.get(r.site_code);
-    const existing = await prisma.equipment.findFirst({
-      where: { site_id, display_name: r.display_name },
-      select: { id: true, category: true, is_active: true },
-    });
+    const existing = await resolveSeedTarget(prisma, site_id, r.display_name);
+    if (existing === MERGED_TARGET_MISSING) {
+      console.warn(
+        `skip: "${r.display_name}" (${r.site_code}) is merged into a row that is missing`,
+      );
+      unchanged++;
+      continue;
+    }
 
     if (!existing) {
       created++;
@@ -311,9 +315,59 @@ async function main() {
   if (!apply) console.log('re-run with --apply to write.');
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+/** Sentinel: the name matched a merged row whose survivor is gone. */
+export const MERGED_TARGET_MISSING = Symbol('merged-target-missing');
+
+/**
+ * The row this seed should WRITE for a given `(site_id, display_name)` — which is
+ * not always the row the name matches.
+ *
+ * ADR-0075 D5 — THE RESURRECTION TRAP. This seed keys its idempotency on
+ * `(site_id, display_name)`, and a merged loser KEEPS its name: nothing here is
+ * ever renamed or deleted. So a naive re-run after a merge finds the loser by
+ * name and writes `is_active = true` straight back onto it — silently re-splitting
+ * the rows an admin just joined and putting the duplicate back in front of every
+ * AP approver. That is precisely the failure the 2026-08-04 Terex merge would hit
+ * on the next seed run.
+ *
+ * Following `merged_into_id` to the survivor is what keeps the seed and the merge
+ * tool agreeing about which row IS the asset.
+ *
+ * ONE hop only, deliberately: merging an already-merged row is refused at the API
+ * (`winner_merged` / `loser_merged`), so a chain cannot form, and walking further
+ * would be inventing a traversal for a state that cannot exist. If the survivor
+ * is missing — impossible through the app, since `onDelete: Restrict` forbids
+ * deleting it, so it means data damage — the caller SKIPS rather than falling
+ * back to the loser and resurrecting it.
+ *
+ * Exported for the guard test; `prisma` is a parameter so the test injects a
+ * stand-in and touches no database.
+ */
+export async function resolveSeedTarget(prisma, site_id, display_name) {
+  const SELECT = { id: true, category: true, is_active: true, merged_into_id: true };
+  const matched = await prisma.equipment.findFirst({
+    where: { site_id, display_name },
+    select: SELECT,
+  });
+  if (!matched?.merged_into_id) return matched;
+
+  const winner = await prisma.equipment.findUnique({
+    where: { id: matched.merged_into_id },
+    select: SELECT,
+  });
+  return winner ?? MERGED_TARGET_MISSING;
+}
+
+// Guarded so the test can import `resolveSeedTarget` without the script
+// connecting to a database and running the whole seed (pattern from
+// `mymrc-processed-bridge-backfill.mjs`).
+const isEntrypoint =
+  process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+if (isEntrypoint) {
+  main()
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    })
+    .finally(() => prisma.$disconnect());
+}

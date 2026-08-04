@@ -33,11 +33,13 @@
 import type { Prisma, PrismaClient, EquipmentCategory } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import { writeAudit } from '@/lib/audit';
+import { adminMessages as M } from '@/app/admin/messages';
 import {
   createEquipmentInTx,
   normalizeDisplayName,
   DISPLAY_NAME_MAX,
   type ActorContext,
+  type SimilarEquipment,
 } from '@/lib/admin-equipment';
 
 const TABLE = 'ap_equipment_requests';
@@ -54,11 +56,44 @@ export const EQUIPMENT_REQUEST_DESCRIPTION_MAX = 2000;
 export class ApEquipmentRequestError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 409 = 400,
+    readonly status: 400 | 403 | 404 | 409 = 400,
   ) {
     super(message);
     this.name = 'ApEquipmentRequestError';
   }
+}
+
+/**
+ * ADR-0075 D2 — the name collision, carrying what it collided WITH.
+ *
+ * A subclass rather than a flag on the base error so the route can widen the 409
+ * body without string-matching a message, and so every existing
+ * `instanceof ApEquipmentRequestError` catch keeps working unchanged.
+ */
+export class ApEquipmentNameTakenError extends ApEquipmentRequestError {
+  constructor(
+    message: string,
+    readonly existing: SimilarEquipment[],
+  ) {
+    super(message, 409);
+    this.name = 'ApEquipmentNameTakenError';
+  }
+}
+
+/**
+ * The caller's site reach, re-derived server-side from the SESSION — never from
+ * the request body. Passed as its own argument rather than folded into the input
+ * payload precisely so the two can never be confused at a call site.
+ */
+export interface SiteReach {
+  allSites: boolean;
+  primarySiteId: string | null;
+}
+
+/** True when `reach` (absent = unrestricted, i.e. an internal caller) covers `siteId`. */
+function reaches(reach: SiteReach | undefined, siteId: string): boolean {
+  if (!reach || reach.allSites) return true;
+  return reach.primarySiteId === siteId;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -251,13 +286,10 @@ export async function openEquipmentRequestCount(
 // Resolve (§2.5 — create the real asset, then optionally backfill)
 // ────────────────────────────────────────────────────────────────────
 
-export interface ResolveEquipmentRequestInput {
-  displayName: string;
-  category: EquipmentCategory;
-  /** Site the asset is registered to. Defaults to the request's site. */
-  siteId?: string | undefined;
+/** Shared by both resolve modes. */
+interface ResolveCommon {
   /**
-   * Repoint the ORIGINATING `ap_equipment_links` row at the new asset — the payoff
+   * Repoint the ORIGINATING `ap_equipment_links` row at the asset — the payoff
    * (Bill: "any equipment that was entered quickly to be properly formatted in the
    * future"). Default TRUE: leaving the historical invoice attributed to a
    * free-text blob when the real asset now exists is the outcome nobody wants.
@@ -265,6 +297,40 @@ export interface ResolveEquipmentRequestInput {
   backfillLink?: boolean | undefined;
   note?: string | undefined;
 }
+
+/** Mode 1 (the original, unchanged): register a NEW asset and resolve against it. */
+export interface ResolveByCreateInput extends ResolveCommon {
+  /** Absent is treated as `'create'` — every pre-ADR-0075 caller keeps working. */
+  mode?: 'create' | undefined;
+  displayName: string;
+  category: EquipmentCategory;
+  /** Site the asset is registered to. Defaults to the request's site. */
+  siteId?: string | undefined;
+}
+
+/**
+ * Mode 2 (ADR-0075 D1): resolve against an asset that ALREADY EXISTS.
+ *
+ * This is the mode the 2026-08-04 Terex split needed and did not have. Before
+ * this, `resolveEquipmentRequest` had exactly one verb — create — so an approver
+ * whose asset was already in the registry under a slightly different name had no
+ * legal move at all: creating collided, and there was no way to say "it's that
+ * one". They retyped the name in lower case, and the registry grew a third row.
+ */
+export interface ResolveByExistingInput extends ResolveCommon {
+  mode: 'existing';
+  equipmentId: string;
+  /**
+   * Flip an INACTIVE target back to active as part of resolving against it.
+   * Audited separately as a `restore` on the equipment row, exactly as
+   * `reactivateEquipment` does — reactivation is a money-path write (it puts an
+   * option back in front of every approver at both sites) and must not hide
+   * inside a request-resolution audit row.
+   */
+  reactivate?: boolean | undefined;
+}
+
+export type ResolveEquipmentRequestInput = ResolveByCreateInput | ResolveByExistingInput;
 
 export interface ResolveEquipmentRequestResult {
   equipmentId: string;
@@ -290,11 +356,21 @@ export async function resolveEquipmentRequest(
   requestId: string,
   input: ResolveEquipmentRequestInput,
   actor: ActorContext,
+  reach?: SiteReach,
 ): Promise<ResolveEquipmentRequestResult> {
-  const displayName = normalizeDisplayName(input.displayName);
-  if (!displayName) throw new ApEquipmentRequestError('Enter a name for the asset.');
-  if (displayName.length > DISPLAY_NAME_MAX)
-    throw new ApEquipmentRequestError(`Name must be ${DISPLAY_NAME_MAX} characters or fewer.`);
+  const useExisting = input.mode === 'existing';
+
+  // Mode-1 name validation stays exactly where it was — BEFORE the row lookup —
+  // so an empty name is still a 400 and not a 404 for callers who pass a bad id.
+  let displayName = '';
+  if (!useExisting) {
+    displayName = normalizeDisplayName(input.displayName);
+    if (!displayName) throw new ApEquipmentRequestError('Enter a name for the asset.');
+    if (displayName.length > DISPLAY_NAME_MAX)
+      throw new ApEquipmentRequestError(`Name must be ${DISPLAY_NAME_MAX} characters or fewer.`);
+  } else if (!input.equipmentId) {
+    throw new ApEquipmentRequestError('Choose the asset to resolve this against.');
+  }
 
   const existing = await prismaClient.apEquipmentRequest.findUnique({
     where: { id: requestId },
@@ -304,18 +380,91 @@ export async function resolveEquipmentRequest(
   if (existing.status !== 'open')
     throw new ApEquipmentRequestError(`This request was already ${existing.status}.`, 409);
 
-  const siteId = input.siteId ?? existing.site_id;
   const backfill = input.backfillLink !== false;
   const note = input.note?.trim();
 
   return prismaClient.$transaction(async (tx) => {
-    const created = await createEquipmentInTx(
-      tx,
-      { site_id: siteId, display_name: displayName, category: input.category },
-      actor,
-    );
-    if (!created.ok) throw new ApEquipmentRequestError(createFailureMessage(created.reason), 409);
+    // ── Pick (or create) the asset this request resolves to ──────────────────
+    let equipmentId: string;
+    let equipmentDisplayName: string;
+    let siteId: string;
 
+    if (useExisting) {
+      const target = await tx.equipment.findUnique({ where: { id: input.equipmentId } });
+      if (!target) throw new ApEquipmentRequestError('That asset no longer exists.', 404);
+
+      // A merged loser is not a thing any more — resolving against it would file
+      // the invoice at a row every consumer already hides (ADR-0075 D4/D5).
+      if (target.merged_into_id)
+        throw new ApEquipmentRequestError(
+          'That asset was merged into another one. Pick the surviving asset instead.',
+          409,
+        );
+
+      // SITE REACH re-derived from the TARGET ROW, never from the payload — the
+      // same rule the route applies to the request row (hard rule #2). The route
+      // already proved reach over the REQUEST's site; this is the second half,
+      // because a resolver may legitimately point a request at an asset filed to
+      // another site and must not be able to do so outside their own reach.
+      if (!reaches(reach, target.site_id)) throw new ApEquipmentRequestError('forbidden', 403);
+
+      // Reactivation is its own money-path fact, so it gets its own audit row
+      // (`restore`, matching `reactivateEquipment` in admin-equipment.ts) rather
+      // than hiding inside the request-resolution entry.
+      if (!target.is_active && input.reactivate) {
+        const restored = await tx.equipment.update({
+          where: { id: target.id },
+          data: { is_active: true },
+        });
+        await writeAudit(
+          {
+            actor_user_id: actor.actorUserId,
+            action: 'restore',
+            table_name: 'equipment',
+            row_id: target.id,
+            before: { is_active: false },
+            after: { is_active: true, via: 'ap_equipment_request_resolve' },
+            ip: actor.ip,
+            user_agent: actor.userAgent,
+          },
+          { tx },
+        );
+        equipmentDisplayName = restored.display_name;
+      } else {
+        // An INACTIVE target without `reactivate` is allowed through deliberately.
+        // Attribution is the thing being fixed here, and an approval pointing at a
+        // deactivated asset is already a legitimate state (any asset scrapped
+        // after its invoice was approved is in it). Refusing would leave the
+        // request open with no lawful move — the exact dead end this ADR removes.
+        equipmentDisplayName = target.display_name;
+      }
+      equipmentId = target.id;
+      siteId = target.site_id;
+    } else {
+      siteId = input.siteId ?? existing.site_id;
+      const created = await createEquipmentInTx(
+        tx,
+        { site_id: siteId, display_name: displayName, category: input.category },
+        actor,
+      );
+      if (!created.ok) {
+        // ADR-0075 D2 — a collision is a FORK, not a wall. The error carries the
+        // rows it collided with so the panel can offer "use this one" rather than
+        // leaving the operator to retype around the refusal (which is precisely
+        // how three Terex rows reached production on 2026-08-04).
+        if (created.reason === 'name_taken') {
+          throw new ApEquipmentNameTakenError(
+            createFailureMessage('name_taken'),
+            created.existing ?? [],
+          );
+        }
+        throw new ApEquipmentRequestError(createFailureMessage(created.reason), 409);
+      }
+      equipmentId = created.row.id;
+      equipmentDisplayName = created.row.display_name;
+    }
+
+    // ── Stamp, backfill and audit — IDENTICAL for both modes ─────────────────
     // Conditional stamp: `status: 'open'` in the WHERE makes two managers racing
     // to resolve the same request first-action-wins, exactly like the AP decide
     // path. The loser gets a 409 instead of double-creating an asset.
@@ -323,7 +472,7 @@ export async function resolveEquipmentRequest(
       where: { id: requestId, status: 'open' },
       data: {
         status: 'resolved',
-        resolved_equipment_id: created.row.id,
+        resolved_equipment_id: equipmentId,
         resolved_by: actor.actorUserId,
         resolved_at: new Date(),
         ...(note ? { resolution_note: note } : {}),
@@ -339,7 +488,7 @@ export async function resolveEquipmentRequest(
     if (backfill) {
       const res = await tx.apEquipmentLink.updateMany({
         where: { equipment_request_id: requestId },
-        data: { equipment_id: created.row.id, equipment_request_id: null },
+        data: { equipment_id: equipmentId, equipment_request_id: null },
       });
       backfilledLinks = res.count;
     }
@@ -353,12 +502,16 @@ export async function resolveEquipmentRequest(
         before: { status: 'open' },
         after: {
           status: 'resolved',
-          resolved_equipment_id: created.row.id,
-          equipment_display_name: created.row.display_name,
+          resolved_equipment_id: equipmentId,
+          equipment_display_name: equipmentDisplayName,
           site_id: siteId,
           backfilled_links: backfilledLinks,
           ap_request_id: existing.ap_request_id,
           has_note: !!note,
+          // Which verb resolved it. Without this the audit cannot distinguish a
+          // request that GREW the registry from one that pointed at what was
+          // already there — and that difference is the whole subject of ADR-0075.
+          resolution_mode: useExisting ? 'existing' : 'create',
         },
         ip: actor.ip,
         user_agent: actor.userAgent,
@@ -366,11 +519,7 @@ export async function resolveEquipmentRequest(
       { tx },
     );
 
-    return {
-      equipmentId: created.row.id,
-      equipmentDisplayName: created.row.display_name,
-      backfilledLinks,
-    };
+    return { equipmentId, equipmentDisplayName, backfilledLinks };
   });
 }
 
@@ -502,8 +651,16 @@ export async function equipmentRequestRecipients(
 
 function createFailureMessage(reason: string): string {
   switch (reason) {
+    // ADR-0075 D6 — ONE wording, in `messages.ts`. This used to carry its own
+    // copy that told the reader to "Open /admin/equipment, reactivate or rename
+    // it, then resolve this request against it" — remediation that 403s for most
+    // of the people who saw it. The equipment-request worklist is reachable by a
+    // site manager holding `can_resolve_equipment_requests` (ADR-0046 Am.9), and
+    // `/admin/equipment` is admin-only, so the message sent its main audience to
+    // a door they cannot open. It is now handled in-place: the collision travels
+    // with `existing[]` and the panel offers those rows directly.
     case 'name_taken':
-      return 'An asset with that name already exists at this site. Open /admin/equipment, reactivate or rename it, then resolve this request against it.';
+      return M.equipment.nameTaken;
     case 'site_not_found':
       return 'That site no longer exists.';
     case 'name_required':

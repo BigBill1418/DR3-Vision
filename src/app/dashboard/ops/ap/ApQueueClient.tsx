@@ -38,6 +38,12 @@ interface EquipmentOption {
   id: string;
   displayName: string;
   category: string;
+  /**
+   * ADR-0075 — which yard the asset is filed at. The picker has been fleet-wide
+   * since 2026-07-28, so without this two similarly-named assets from different
+   * sites are indistinguishable in one flat list.
+   */
+  siteCode?: string | null;
 }
 interface VarianceEvaluation {
   tripped: boolean;
@@ -1057,7 +1063,11 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                               onChange={() => toggleEquipment(o.id)}
                             />
                             <span>
-                              {o.displayName} <span className="opacity-50">· {o.category}</span>
+                              {o.displayName}{' '}
+                              <span className="opacity-50">
+                                · {o.category}
+                                {o.siteCode ? ` · ${o.siteCode}` : ''}
+                              </span>
                             </span>
                           </label>
                         ))}

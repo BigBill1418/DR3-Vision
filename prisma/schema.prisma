@@ -4433,6 +4433,34 @@ model Equipment {
   created_at   DateTime          @default(now())
   updated_at   DateTime          @updatedAt
 
+  /// ADR-0075 D5 — the SURVIVOR this row was merged into, or null for a live row.
+  ///
+  /// Three near-duplicates of one Terex machine reached production on 2026-08-04
+  /// because a name collision dead-ended the AP resolve panel and the approver
+  /// retyped around it. Merging repoints their ATTRIBUTION (links + resolved
+  /// requests) onto one survivor and stamps the loser here.
+  ///
+  /// A DEDICATED column rather than overloading `is_active`, because the two facts
+  /// are genuinely different: `is_active=false` means "not selectable right now,
+  /// may come back", and a returning asset is REACTIVATED. `merged_into_id` means
+  /// "this row is not a thing any more — the thing is over there", and it never
+  /// comes back. Collapsing them would also hand `scripts/seed-equipment-master.mjs`
+  /// a resurrection trap: the seed keys on `(site_id, display_name)`, finds the
+  /// loser still carrying its old name, and writes `is_active=true` back onto it —
+  /// re-splitting the very rows a merge just joined. The seed follows this column
+  /// to the winner instead (ADR-0075 D5).
+  ///
+  /// `onDelete: Restrict` matches every other equipment reference: nothing in this
+  /// registry is ever hard-deleted, and a survivor must not be removable out from
+  /// under the rows pointing at it.
+  merged_into_id String?
+  merged_into    Equipment?  @relation("EquipmentMerge", fields: [merged_into_id], references: [id], onDelete: Restrict)
+  merged_from    Equipment[] @relation("EquipmentMerge")
+  /// `users.id` of the admin who merged it — a bare FK, matching `resolved_by` on
+  /// the sibling request model.
+  merged_by      String?
+  merged_at      DateTime?
+
   links ApEquipmentLink[]
 
   /// ADR-0046 Amendment 9 (§2.5) — the escape-hatch requests this asset RESOLVED.
@@ -4446,8 +4474,16 @@ model Equipment {
   /// Deliberately UNCONDITIONAL (covers `is_active=false` rows): equipment has no
   /// `deleted_at`, deactivated rows are retained so historical `ap_equipment_links`
   /// resolve, and a returning asset should be REACTIVATED rather than re-created.
+  ///
+  /// ADR-0075 D3 deliberately did NOT tighten this to a case-insensitive unique.
+  /// Production holds one violating group today ("Terex Machine" / "Terex machine"),
+  /// and migrations run in an init container at deploy — a unique index that cannot
+  /// build would crash-loop the deploy, not fail a review. Case-folded duplicates
+  /// are DETECTED (`canonicalizeName` / `findSimilarEquipment`) and offered as a
+  /// choice; they are not refused by the database.
   @@unique([site_id, display_name])
   @@index([site_id, is_active])
+  @@index([merged_into_id])
   @@map("equipment")
 }
 

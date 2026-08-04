@@ -19,11 +19,48 @@ const fp = (db: FakeDb) => makeFakePrisma(db) as unknown as PrismaClient;
 
 const seed = () =>
   newFakeDb({
+    sites: [
+      { id: 'site-w', code: 'woodland', name: 'DR3 Woodland' },
+      { id: 'site-e', code: 'eugene', name: 'DR3 Eugene' },
+    ],
     equipment: [
-      { id: 'eq-w1', site_id: 'site-w', display_name: 'Box Truck 12', category: 'vehicle', is_active: true },
-      { id: 'eq-w2', site_id: 'site-w', display_name: 'Baler A', category: 'baler', is_active: true },
-      { id: 'eq-w3', site_id: 'site-w', display_name: 'Retired Forklift', category: 'forklift', is_active: false },
-      { id: 'eq-e1', site_id: 'site-e', display_name: 'Terex 900', category: 'terex', is_active: true },
+      {
+        id: 'eq-w1',
+        site_id: 'site-w',
+        display_name: 'Box Truck 12',
+        category: 'vehicle',
+        is_active: true,
+      },
+      {
+        id: 'eq-w2',
+        site_id: 'site-w',
+        display_name: 'Baler A',
+        category: 'baler',
+        is_active: true,
+      },
+      {
+        id: 'eq-w3',
+        site_id: 'site-w',
+        display_name: 'Retired Forklift',
+        category: 'forklift',
+        is_active: false,
+      },
+      {
+        id: 'eq-e1',
+        site_id: 'site-e',
+        display_name: 'Terex 900',
+        category: 'terex',
+        is_active: true,
+      },
+      // ADR-0075 D4 — active, but merged away. Must NOT be offerable.
+      {
+        id: 'eq-w4',
+        site_id: 'site-w',
+        display_name: 'Baler A dup',
+        category: 'baler',
+        is_active: true,
+        merged_into_id: 'eq-w2',
+      },
     ],
   });
 
@@ -44,13 +81,25 @@ describe('listSiteEquipment (fleet-wide as of 2026-07-28)', () => {
     expect(opts.some((o) => o.id === 'eq-e1')).toBe(true);
   });
 
-  it('carries display name and category through', async () => {
+  it('carries display name, category AND the site (ADR-0075) through', async () => {
     const opts = await listSiteEquipment(fp(seed()));
     expect(opts.find((o) => o.id === 'eq-e1')).toEqual({
       id: 'eq-e1',
       displayName: 'Terex 900',
       category: 'terex',
+      // The picker is fleet-wide, so without the site two similarly-named assets
+      // from different yards are indistinguishable in one flat list.
+      siteId: 'site-e',
+      siteCode: 'eugene',
     });
+  });
+
+  it('ADR-0075 D4 — excludes a MERGED row even though it is still active', async () => {
+    const opts = await listSiteEquipment(fp(seed()));
+    // Leaving it selectable would let an approver file today's invoice against
+    // the duplicate a merge just retired, re-creating the split by hand.
+    expect(opts.some((o) => o.id === 'eq-w4')).toBe(false);
+    expect(opts.some((o) => o.id === 'eq-w2')).toBe(true);
   });
 });
 
@@ -81,6 +130,14 @@ describe('assertEquipmentForSite (server trust boundary)', () => {
     );
   });
 
+  it('ADR-0075 D4 — rejects a MERGED id, matching the picker in the OTHER direction', async () => {
+    // The pairing has to hold both ways: a stale tab still holding the option
+    // must not be able to file a new approval against a retired duplicate.
+    await expect(assertEquipmentForSite(fp(seed()), ['eq-w4'])).rejects.toBeInstanceOf(
+      ApEquipmentInvalidError,
+    );
+  });
+
   it('dedupes before validating', async () => {
     await expect(
       assertEquipmentForSite(fp(seed()), ['eq-w1', 'eq-w1', 'eq-w1']),
@@ -96,7 +153,10 @@ describe('picker and validator agree on scope', () => {
     const db = seed();
     const opts = await listSiteEquipment(fp(db));
     await expect(
-      assertEquipmentForSite(fp(db), opts.map((o) => o.id)),
+      assertEquipmentForSite(
+        fp(db),
+        opts.map((o) => o.id),
+      ),
     ).resolves.toBeUndefined();
   });
 });

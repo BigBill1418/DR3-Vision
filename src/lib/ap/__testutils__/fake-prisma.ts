@@ -84,6 +84,12 @@ export interface FakeEquipment {
   display_name: string;
   category: string;
   is_active: boolean;
+  /**
+   * ADR-0075 D5 — the survivor this row was merged into, or null/absent for a
+   * live row. Optional so every existing seed keeps compiling; the `findMany`
+   * stand-in treats absent as null.
+   */
+  merged_into_id?: string | null;
 }
 export interface FakeEquipmentLink {
   id: string;
@@ -757,10 +763,17 @@ export function makeFakePrisma(db: FakeDb) {
           if (idIn && !idIn.includes(e.id)) return false;
           if (w['site_id'] !== undefined && e.site_id !== w['site_id']) return false;
           if (w['is_active'] !== undefined && e.is_active !== w['is_active']) return false;
+          // ADR-0075 D5 — `merged_into_id: null` must actually filter here, or the
+          // picker's merged-row exclusion is silently untested.
+          if (w['merged_into_id'] !== undefined) {
+            if ((e.merged_into_id ?? null) !== w['merged_into_id']) return false;
+          }
           return true;
         });
         rows = rows.sort((a, b) => a.display_name.localeCompare(b.display_name));
-        return rows.map((e) => (args.select ? pick(e, args.select) : { ...e }));
+        return rows.map((e) =>
+          args.select ? pick({ merged_into_id: null, ...e }, args.select) : { ...e },
+        );
       },
     },
     apEquipmentLink: {

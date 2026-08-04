@@ -46,6 +46,8 @@ interface Equip {
   display_name: string;
   category: string;
   is_active: boolean;
+  /** ADR-0075 D5 — non-null means merged away; never a valid resolve target. */
+  merged_into_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -236,6 +238,7 @@ function client(inTx: boolean) {
           display_name: data['display_name'] as string,
           category: data['category'] as string,
           is_active: (data['is_active'] as boolean) ?? true,
+          merged_into_id: null,
           created_at: new Date('2026-07-29T00:00:00Z'),
           updated_at: new Date('2026-07-29T00:00:00Z'),
         };
@@ -248,6 +251,24 @@ function client(inTx: boolean) {
         }
         return null;
       }),
+      // ADR-0075 — the resolve-against-EXISTING branch and `findSimilarEquipment`.
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const e = equipment.get(where.id);
+        return e ? { ...e } : null;
+      }),
+      findMany: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) =>
+        Array.from(equipment.values())
+          .filter((e) => !where?.['site_id'] || e.site_id === where['site_id'])
+          .map((e) => ({ ...e })),
+      ),
+      update: vi.fn(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+          const e = equipment.get(where.id);
+          if (!e) throw new Error('no such equipment');
+          Object.assign(e, data);
+          return { ...e };
+        },
+      ),
     },
     site: {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
@@ -348,6 +369,7 @@ vi.mock('@/lib/prisma', () => ({
 holder.current = fakePrisma as unknown as Record<string, unknown>;
 
 import {
+  ApEquipmentNameTakenError,
   ApEquipmentRequestError,
   createEquipmentRequestInTx,
   equipmentRequestRecipients,
@@ -502,7 +524,213 @@ describe('resolveEquipmentRequest', () => {
     const second = await fileRequest();
     await expect(
       resolveEquipmentRequest(db, second, { displayName: 'F10', category: 'forklift' }, actor),
-    ).rejects.toMatchObject({ status: 409, message: /already exists at this site/ });
+    ).rejects.toMatchObject({ status: 409, message: /already uses that name/ });
+  });
+
+  it('ADR-0075 D2 — a collision arrives with the rows it collided WITH, not a bare message', async () => {
+    const id = await fileRequest();
+    await resolveEquipmentRequest(
+      db,
+      id,
+      { displayName: 'Terex Machine', category: 'terex' },
+      actor,
+    );
+
+    // The exact shape of the 2026-08-04 defect: the SAME name, different case.
+    // The old code answered with prose and no alternative, and the approver
+    // retyped around it — which is how Woodland ended up with three Terex rows.
+    const second = await fileRequest();
+    const err = await resolveEquipmentRequest(
+      db,
+      second,
+      { displayName: 'Terex Machine', category: 'terex' },
+      actor,
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApEquipmentNameTakenError);
+    const taken = err as InstanceType<typeof ApEquipmentNameTakenError>;
+    expect(taken.status).toBe(409);
+    expect(taken.existing.map((x) => x.displayName)).toEqual(['Terex Machine']);
+    expect(taken.existing[0]).toMatchObject({ isActive: true, mergedIntoId: null });
+    // And it does NOT send a site manager to the admin-only /admin/equipment.
+    expect(taken.message).not.toMatch(/\/admin\/equipment/);
+  });
+
+  // ── ADR-0075 D1 — resolve against an asset that already exists ────────────
+
+  describe('mode: existing', () => {
+    /** Register an asset the way the admin surface would, outside any request. */
+    function seedAsset(over: Partial<Equip> = {}): string {
+      const id = `eq-seed-${++seq}`;
+      equipment.set(id, {
+        id,
+        site_id: WOODLAND,
+        display_name: 'Terex Machine',
+        category: 'terex',
+        is_active: true,
+        merged_into_id: null,
+        created_at: new Date('2026-07-01T00:00:00Z'),
+        updated_at: new Date('2026-07-01T00:00:00Z'),
+        ...over,
+      });
+      return id;
+    }
+
+    it('creates NO new equipment row — it points at the one that exists', async () => {
+      const eqId = seedAsset();
+      const id = await fileRequest();
+      const before = equipment.size;
+
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eqId },
+        actor,
+      );
+
+      expect(equipment.size).toBe(before);
+      expect(res.equipmentId).toBe(eqId);
+      expect(res.equipmentDisplayName).toBe('Terex Machine');
+    });
+
+    it('stamps the request and backfills the original link, same as create', async () => {
+      const eqId = seedAsset();
+      const id = await fileRequest();
+
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eqId },
+        actor,
+      );
+
+      expect(res.backfilledLinks).toBe(1);
+      expect(reqs.get(id)).toMatchObject({
+        status: 'resolved',
+        resolved_equipment_id: eqId,
+        resolved_by: 'u-morena',
+      });
+      // Both link columns moved together — a half-move trips the DB CHECK.
+      expect(links[0]).toMatchObject({ equipment_id: eqId, equipment_request_id: null });
+    });
+
+    it('honours backfillLink:false', async () => {
+      const eqId = seedAsset();
+      const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eqId, backfillLink: false },
+        actor,
+      );
+      expect(res.backfilledLinks).toBe(0);
+      expect(links[0]).toMatchObject({ equipment_id: null, equipment_request_id: id });
+    });
+
+    it('records WHICH verb resolved it, so the audit can tell the two apart', async () => {
+      const eqId = seedAsset();
+      const id = await fileRequest();
+      await resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: eqId }, actor);
+      const row = audits.find((a) => a.row_id === id && a.action === 'update');
+      expect(row?.inTx).toBe(true);
+      expect(row?.after).toMatchObject({ resolution_mode: 'existing', backfilled_links: 1 });
+    });
+
+    it('reactivate:true flips an INACTIVE target and audits it as a restore', async () => {
+      const eqId = seedAsset({ is_active: false });
+      const id = await fileRequest();
+
+      await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eqId, reactivate: true },
+        actor,
+      );
+
+      expect(equipment.get(eqId)?.is_active).toBe(true);
+      // Reactivation is a money-path write (it puts an option back in front of
+      // every approver at BOTH sites), so it gets its OWN audit row rather than
+      // hiding inside the resolution entry.
+      const restore = audits.find((a) => a.table_name === 'equipment' && a.row_id === eqId);
+      expect(restore?.action).toBe('restore');
+      expect(restore?.inTx).toBe(true);
+    });
+
+    it('leaves an inactive target alone without reactivate — and writes no restore row', async () => {
+      const eqId = seedAsset({ is_active: false });
+      const id = await fileRequest();
+      await resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: eqId }, actor);
+      expect(equipment.get(eqId)?.is_active).toBe(false);
+      expect(audits.find((a) => a.action === 'restore')).toBeUndefined();
+      expect(reqs.get(id)?.status).toBe('resolved');
+    });
+
+    it('REFUSES a target that was merged away', async () => {
+      const winner = seedAsset({ display_name: 'Terex Machine' });
+      const loser = seedAsset({ display_name: 'Terex machine', merged_into_id: winner });
+      const id = await fileRequest();
+
+      await expect(
+        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: loser }, actor),
+      ).rejects.toMatchObject({ status: 409, message: /merged into another one/ });
+      expect(reqs.get(id)?.status).toBe('open');
+    });
+
+    it('403s when the target sits OUTSIDE the actor site reach (hard rule #2)', async () => {
+      // The target's site is re-derived from the equipment ROW, never the payload.
+      const eugeneAsset = seedAsset({ site_id: EUGENE });
+      const id = await fileRequest();
+
+      await expect(
+        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: eugeneAsset }, actor, {
+          allSites: false,
+          primarySiteId: WOODLAND,
+        }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(reqs.get(id)?.status).toBe('open');
+      expect(links[0]).toMatchObject({ equipment_request_id: id });
+    });
+
+    it('an all_sites actor MAY point a request at the other yard asset', async () => {
+      const eugeneAsset = seedAsset({ site_id: EUGENE });
+      const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eugeneAsset },
+        actor,
+        { allSites: true, primarySiteId: null },
+      );
+      expect(res.equipmentId).toBe(eugeneAsset);
+    });
+
+    it('404s on an unknown asset id', async () => {
+      const id = await fileRequest();
+      await expect(
+        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: 'nope' }, actor),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('is ATOMIC — a failure at the stamp leaves nothing repointed', async () => {
+      const eqId = seedAsset();
+      const id = await fileRequest();
+      stampThrows = true;
+
+      await expect(
+        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: eqId }, actor),
+      ).rejects.toThrow(/injected stamp failure/);
+
+      expect(reqs.get(id)?.status).toBe('open');
+      expect(links[0]).toMatchObject({ equipment_id: null, equipment_request_id: id });
+      expect(equipment.get(eqId)?.is_active).toBe(true);
+    });
+
+    it('refuses a blank equipmentId', async () => {
+      const id = await fileRequest();
+      await expect(
+        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: '' }, actor),
+      ).rejects.toBeInstanceOf(ApEquipmentRequestError);
+    });
   });
 
   it('refuses to resolve a request that is no longer open', async () => {

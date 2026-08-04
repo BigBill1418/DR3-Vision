@@ -16,10 +16,12 @@ import { prisma } from '@/lib/prisma';
 import { requireEquipmentRequestAccess } from '@/lib/auth-helpers';
 import { EQUIPMENT_CATEGORIES } from '@/app/admin/constants';
 import {
+  ApEquipmentNameTakenError,
   ApEquipmentRequestError,
   rejectEquipmentRequest,
   resolveEquipmentRequest,
 } from '@/lib/ap/equipment-requests';
+import { adminMessages as M } from '@/app/admin/messages';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +33,9 @@ interface Body {
   siteId?: string;
   backfillLink?: boolean;
   note?: string;
+  /** ADR-0075 D1 — present means "resolve against THIS existing asset". */
+  equipmentId?: string;
+  reactivate?: boolean;
 }
 
 export async function POST(
@@ -72,6 +77,38 @@ export async function POST(
       return NextResponse.json({ ok: true, status: 'rejected' });
     }
     if (body.action === 'resolve') {
+      const reach = { allSites: ctx.allSites, primarySiteId: ctx.primarySiteId };
+      const common = {
+        ...(typeof body.backfillLink === 'boolean' ? { backfillLink: body.backfillLink } : {}),
+        ...(body.note ? { note: body.note } : {}),
+      };
+
+      // ADR-0075 D1 — `equipmentId` selects the resolve-against-EXISTING mode.
+      // Dispatching on its presence (rather than a client-supplied `mode` string)
+      // keeps the two branches from ever disagreeing about which one is running,
+      // and keeps every pre-ADR-0075 client posting the same body it always did.
+      //
+      // No category is read here: an existing asset already has one, and
+      // accepting one would invite a resolve that silently re-categorises a row
+      // the approver never intended to edit.
+      if (typeof body.equipmentId === 'string' && body.equipmentId) {
+        // Reach over the TARGET's site is re-derived from the equipment row
+        // inside `resolveEquipmentRequest`, not from anything in this payload.
+        const result = await resolveEquipmentRequest(
+          prisma,
+          id,
+          {
+            mode: 'existing',
+            equipmentId: body.equipmentId,
+            ...(typeof body.reactivate === 'boolean' ? { reactivate: body.reactivate } : {}),
+            ...common,
+          },
+          actor,
+          reach,
+        );
+        return NextResponse.json({ ok: true, status: 'resolved', ...result });
+      }
+
       const category = EQUIPMENT_CATEGORIES.find((c) => c === body.category);
       if (!category) {
         return NextResponse.json({ error: 'Choose a category for the asset.' }, { status: 400 });
@@ -86,27 +123,38 @@ export async function POST(
       const result = await resolveEquipmentRequest(
         prisma,
         id,
-        {
-          displayName: body.displayName ?? '',
-          category,
-          siteId,
-          ...(typeof body.backfillLink === 'boolean' ? { backfillLink: body.backfillLink } : {}),
-          ...(body.note ? { note: body.note } : {}),
-        },
+        { displayName: body.displayName ?? '', category, siteId, ...common },
         actor,
+        reach,
       );
       return NextResponse.json({ ok: true, status: 'resolved', ...result });
     }
     return NextResponse.json({ error: "action must be 'resolve' or 'reject'" }, { status: 400 });
   } catch (e) {
+    // ADR-0075 D2 — a collision answers with the rows it collided WITH, so the
+    // panel can offer them. `code` is the machine-readable half; the UI branches
+    // on `existing.length`, never on the prose.
+    if (e instanceof ApEquipmentNameTakenError) {
+      return NextResponse.json(
+        { error: e.message, code: 'name_taken', existing: e.existing },
+        { status: 409 },
+      );
+    }
     if (e instanceof ApEquipmentRequestError)
       return NextResponse.json({ error: e.message }, { status: e.status });
     // The `(site_id, display_name)` unique is the real guard behind the data
     // layer's friendly pre-check; surface a race loss as a readable 409 rather
     // than a 500 (mirrors createEquipment's P2002 backstop).
+    //
+    // Same SHAPE as the checked collision above (ADR-0075 D6) — one wording from
+    // `messages.ts`, and `existing: []` rather than a missing key, so the client
+    // has exactly one branch to write. A race loser has no candidate list to
+    // offer (the winning row was committed by another transaction we cannot read
+    // from here), and an empty list is what makes the UI fall back to the plain
+    // banner instead of rendering an empty suggestion box.
     if (typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'P2002') {
       return NextResponse.json(
-        { error: 'An asset with that name already exists at this site.' },
+        { error: M.equipment.nameTaken, code: 'name_taken', existing: [] },
         { status: 409 },
       );
     }

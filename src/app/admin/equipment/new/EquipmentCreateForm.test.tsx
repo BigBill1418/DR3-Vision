@@ -188,6 +188,116 @@ describe('navigation', () => {
   });
 });
 
+// ── ADR-0075 D2 — a collision is a fork, not a wall ─────────────────────────
+
+describe('name collision', () => {
+  const EXISTING = [
+    {
+      id: 'eq-1',
+      displayName: 'Terex Machine',
+      category: 'terex',
+      siteCode: 'woodland',
+      isActive: true,
+      mergedIntoId: null,
+    },
+  ];
+
+  function collisionFetch(existing: unknown[]) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Another equipment record at this site…', existing }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  async function submitColliding(node: React.ReactElement) {
+    mount(node);
+    setInput('admin-equipment-create-name', 'Terex machine');
+    await act(async () => {
+      click('admin-equipment-create-submit');
+    });
+  }
+
+  it('renders the candidates AND both buttons when the 409 names what it collided with', async () => {
+    collisionFetch(EXISTING);
+    await submitColliding(
+      <EquipmentCreateForm sites={SITES} onUseExisting={vi.fn()} initialSiteCode="woodland" />,
+    );
+
+    expect(container.querySelector('[data-testid="admin-equipment-similar"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="admin-equipment-use-existing-eq-1"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('[data-testid="admin-equipment-rename-mine"]')).not.toBeNull();
+    // Never navigates away from the unsaved work.
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('"Use this one" fires onUseExisting with the candidate id', async () => {
+    collisionFetch(EXISTING);
+    const onUseExisting = vi.fn();
+    await submitColliding(<EquipmentCreateForm sites={SITES} onUseExisting={onUseExisting} />);
+
+    await act(async () => {
+      click('admin-equipment-use-existing-eq-1');
+    });
+    expect(onUseExisting).toHaveBeenCalledWith('eq-1', true);
+  });
+
+  it('labels the button "Reactivate and use" for an INACTIVE candidate', async () => {
+    collisionFetch([{ ...EXISTING[0], isActive: false }]);
+    await submitColliding(<EquipmentCreateForm sites={SITES} onUseExisting={vi.fn()} />);
+
+    const btn = container.querySelector('[data-testid="admin-equipment-use-existing-eq-1"]');
+    expect(btn?.textContent).toContain('Reactivate');
+  });
+
+  it('offers NO button for a merged candidate — it is shown, not offerable', async () => {
+    collisionFetch([{ ...EXISTING[0], mergedIntoId: 'eq-9' }]);
+    await submitColliding(<EquipmentCreateForm sites={SITES} onUseExisting={vi.fn()} />);
+
+    expect(container.querySelector('[data-testid="admin-equipment-similar-eq-1"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="admin-equipment-use-existing-eq-1"]')).toBeNull();
+  });
+
+  it('"Rename mine" clears the field and drops the suggestion block', async () => {
+    collisionFetch(EXISTING);
+    await submitColliding(<EquipmentCreateForm sites={SITES} onUseExisting={vi.fn()} />);
+
+    await act(async () => {
+      click('admin-equipment-rename-mine');
+    });
+    const name = container.querySelector(
+      '[data-testid="admin-equipment-create-name"]',
+    ) as HTMLInputElement;
+    expect(name.value).toBe('');
+    expect(container.querySelector('[data-testid="admin-equipment-similar"]')).toBeNull();
+  });
+
+  it('a 409 with NO candidates falls back to the plain banner', async () => {
+    // The P2002 race backstop has no candidate list to offer.
+    collisionFetch([]);
+    await submitColliding(<EquipmentCreateForm sites={SITES} onUseExisting={vi.fn()} />);
+
+    expect(container.querySelector('[data-testid="admin-equipment-similar"]')).toBeNull();
+    expect(errorText()).toContain('Another equipment record');
+  });
+
+  it('the ADMIN create page passes neither prop — no lookup fires and a 409 is a plain banner', async () => {
+    const fetchMock = collisionFetch(EXISTING);
+    await submitColliding(<EquipmentCreateForm sites={SITES} />);
+
+    // Exactly ONE request: the create POST. No similar-name lookup at all.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Candidates are shown for context, but with nowhere to send the choice
+    // there is no "use this one" button.
+    expect(container.querySelector('[data-testid="admin-equipment-use-existing-eq-1"]')).toBeNull();
+    expect(errorText()).toBeTruthy();
+  });
+});
+
 describe('client-side validation', () => {
   it('refuses an empty name without hitting the API', async () => {
     const fetchMock = okFetch();

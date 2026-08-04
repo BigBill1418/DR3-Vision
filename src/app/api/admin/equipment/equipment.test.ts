@@ -52,6 +52,8 @@ const equipmentStore = new Map<string, MockEquipment>();
 const sitesStore = new Map<string, MockSite>();
 /** equipment_id -> number of ap_equipment_links rows citing it. */
 const linkStore = new Map<string, number>();
+/** ADR-0075 — equipment_id -> ap_equipment_requests resolved to it. */
+const requestStore = new Map<string, number>();
 const auditRows: AuditRow[] = [];
 /** When set, the next equipment.create throws this (P2002 race simulation). */
 let createThrows: unknown = null;
@@ -78,6 +80,7 @@ function resetStores() {
   equipmentStore.clear();
   sitesStore.clear();
   linkStore.clear();
+  requestStore.clear();
   auditRows.length = 0;
   createThrows = null;
   sitesStore.set(EUGENE, { id: EUGENE, code: 'eugene', name: 'DR3 Eugene' });
@@ -98,6 +101,9 @@ function resetStores() {
   });
   // eq-1 is cited by two AP approvals — the "cited asset stays editable" fixture.
   linkStore.set('eq-1', 2);
+  // ADR-0075 — and one escape-hatch request resolved to it, so the merge preview
+  // has both halves of the reference count to show.
+  requestStore.set('eq-1', 1);
 }
 
 function matchesWhere(e: MockEquipment, where: Record<string, unknown>): boolean {
@@ -184,6 +190,19 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
 
+  // ADR-0075 D4 — `ap_equipment_requests` resolved to each asset. The SECOND
+  // thing a merge repoints, so the list carries it for the merge preview.
+  const equipmentRequestClient = {
+    groupBy: vi.fn(async ({ where }: { where: { resolved_equipment_id: { in: string[] } } }) =>
+      where.resolved_equipment_id.in
+        .filter((id) => (requestStore.get(id) ?? 0) > 0)
+        .map((id) => ({
+          resolved_equipment_id: id,
+          _count: { _all: requestStore.get(id) ?? 0 },
+        })),
+    ),
+  };
+
   const siteClient = {
     findUnique: vi.fn(async ({ where }: { where: { id?: string } }) =>
       where.id ? (sitesStore.get(where.id) ?? null) : null,
@@ -208,12 +227,14 @@ vi.mock('@/lib/prisma', () => {
     prisma: {
       equipment: equipmentClient,
       apEquipmentLink: linkClient,
+      apEquipmentRequest: equipmentRequestClient,
       site: siteClient,
       auditLog: auditLogClient,
       $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
         fn({
           equipment: equipmentClient,
           apEquipmentLink: linkClient,
+          apEquipmentRequest: equipmentRequestClient,
           site: siteClient,
           auditLog: auditLogClient,
         }),
@@ -262,6 +283,8 @@ interface EquipmentBody {
     category: Category;
     is_active: boolean;
     link_count: number;
+    /** ADR-0075 — the merge preview's other half. */
+    resolved_request_count: number;
   };
 }
 
@@ -502,6 +525,12 @@ describe('GET /api/admin/equipment', () => {
     const rows = await list('');
     expect(rows.find((r) => r.id === 'eq-1')?.link_count).toBe(2);
     expect(rows.find((r) => r.id === 'eq-2')?.link_count).toBe(0);
+  });
+
+  it('ADR-0075 — also reports resolved-request counts, the merge preview other half', async () => {
+    const rows = await list('');
+    expect(rows.find((r) => r.id === 'eq-1')?.resolved_request_count).toBe(1);
+    expect(rows.find((r) => r.id === 'eq-2')?.resolved_request_count).toBe(0);
   });
 });
 

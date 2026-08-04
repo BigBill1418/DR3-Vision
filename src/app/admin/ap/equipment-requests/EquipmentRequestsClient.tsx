@@ -105,6 +105,43 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
     }
   }, [note, request.id, router]);
 
+  /**
+   * ADR-0075 D1 — resolve against the asset that already exists.
+   *
+   * Posts to the SAME endpoint as the create path, with `equipmentId` in place of
+   * a name+category. `reactivate` rides along only when the target is inactive,
+   * which is also the case the button labels "Reactivate and use" — so the click
+   * does exactly what its label says and never silently flips a live asset.
+   */
+  const useExisting = useCallback(
+    async (equipmentId: string, isActive: boolean) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/admin/ap/equipment-requests/${request.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'resolve',
+            equipmentId,
+            backfillLink: backfill,
+            ...(isActive ? {} : { reactivate: true }),
+          }),
+        });
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          setError(body.error ?? 'Could not resolve this request.');
+          return;
+        }
+        setMode('idle');
+        router.refresh();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [backfill, request.id, router],
+  );
+
   const open = request.status === 'open';
 
   return (
@@ -213,6 +250,8 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
               router.refresh();
             }}
             backHref="/admin/ap/equipment-requests"
+            similarEndpoint="/api/admin/equipment/similar"
+            onUseExisting={useExisting}
           />
           <button
             type="button"
@@ -264,13 +303,43 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
 }
 
 /**
- * First line of the description, capped — a starting point for the asset name,
- * never the name itself. The resolver always edits it; pre-filling the whole
- * multi-sentence description would produce a picker entry nobody can read.
+ * A starting point for the asset name — or NOTHING, which is often the honest
+ * answer.
+ *
+ * ADR-0075 tightened this. The old version took the first 60 characters of the
+ * first line and offered them as a name, and production shows what that
+ * produced: a request reading "Fix and repair trailer: 53489, 5340, 35, 282859
+ * going to Oregon Stores" is a work order covering FOUR trailers, and seeding it
+ * into a `display_name` field puts invoice prose into the AP approver's picker
+ * forever. A pre-filled bad name is worse than an empty field, because the
+ * resolver is being asked to approve a suggestion rather than write an answer.
+ *
+ * So: first line only, leading work-order verbs stripped, and an empty string
+ * whenever the text looks like a JOB rather than a THING — a comma list (several
+ * units in one request) or anything long enough to be a sentence.
  */
-function suggestName(description: string): string {
-  const firstLine = description.split(/[\n.·]/)[0] ?? description;
-  return firstLine.trim().slice(0, 60);
+const SUGGEST_MAX = 40;
+/** Leading work-order verbs, stripped repeatedly ("Fix and repair trailer:"). */
+const LEADING_VERB =
+  /^(?:fix(?:ed|ing)?|repair(?:ed|ing|s)?|replace(?:d|ment)?|service(?:d|ing)?|maintenance|install(?:ed)?|inspect(?:ed|ion)?|check(?:ed)?|and)\b[\s:;,-]*/i;
+
+export function suggestName(description: string): string {
+  const firstLine = (description.split(/[\n·]/)[0] ?? description).trim();
+  // A comma list is several units in one request; there is no single name to
+  // suggest, and picking the first would file the invoice against one trailer
+  // out of four.
+  if (firstLine.includes(',')) return '';
+
+  let name = firstLine;
+  // Bounded — a pathological input must not spin here.
+  for (let i = 0; i < 5; i += 1) {
+    const next = name.replace(LEADING_VERB, '');
+    if (next === name) break;
+    name = next;
+  }
+  name = name.replace(/[\s:;-]+$/, '').trim();
+
+  return name.length > 0 && name.length <= SUGGEST_MAX ? name : '';
 }
 
 function Row({ label, value }: { label: string; value: string }) {

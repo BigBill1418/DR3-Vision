@@ -3,6 +3,91 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-04 — a duplicate name stops being a dead end (ADR-0075)
+
+This morning an approver filed an equipment request reading `Terex machine`, hit
+**"An asset with that name already exists at this site…"**, and 39 seconds later
+inserted a row anyway — resolving the request 34 ms after that. The gap is the
+shape of someone retyping, not deliberating. Woodland now carries **three records
+for one Terex machine** (`Terex`, `Terex Machine`, `Terex machine`), each cited by
+a different approved invoice.
+
+That is not an operator error. `resolveEquipmentRequest` had exactly one verb —
+_create_ — so an approver whose asset was already in the registry under a slightly
+different spelling had no legal move at all. The refusal named no alternative, and
+the one instruction it did give ("Open /admin/equipment…") **403s for site
+managers**, who are most of the people who can ever read it. And the uniqueness is
+case-_sensitive_, so retyping around the wall works and reports success. Given a
+wall, a text box and a job to finish, lower-casing the name is rational.
+
+A collision is now a fork: _use the one that exists_, or _rename yours_.
+
+### Added
+
+- **Resolve against an asset that already exists.** `resolveEquipmentRequest`
+  takes `mode: 'existing'` with an `equipmentId` — stamping the request and
+  backfilling the invoice link without creating anything. The target is loaded
+  inside the transaction and checked for existence, merged-status, and **site
+  reach re-derived from the equipment row, never the payload**. `Reactivate and
+use` flips an inactive target, audited as its own `restore`.
+- **Collisions arrive with the rows they collided with.** A `409` now carries
+  `existing[]`, and the panel renders each candidate as _name · category · site_
+  with **Use this one** / **Rename mine**. Inactive and already-merged rows are
+  included and badged — a merged one is shown but not offerable, so its name
+  never looks lost.
+- **A debounced similar-name lookup** (`GET /api/admin/equipment/similar`) that
+  surfaces the near-miss _before_ the submit that would fork it. Gated by
+  `requireEquipmentRequestAccess()`, not `requireAdmin()` — admin-gating it would
+  have rebuilt the original dead end one layer down.
+- **`mergeEquipment` + `merged_into_id`** (migration
+  `20260827_adr0075_equipment_merge`, purely additive). Repoints
+  `ap_equipment_links` and `ap_equipment_requests.resolved_equipment_id` onto a
+  survivor, deactivates and stamps the loser, and audits it all in one
+  transaction with both repoint counts. **It never writes `ap_requests`** — not
+  the status, not the amounts, not `decided_by`/`decided_at`. The approval already
+  happened and the money already moved. That invariant is held by a test that
+  spies the `apRequest` writers and asserts they are never called at all; the test
+  was **falsified** during development (adding an `ap_requests` write turns it
+  red) rather than merely written. Merge is admin-only, refuses self/cross-site/
+  already-merged, and deletes nothing.
+- **A site code in the approve-time equipment picker.** It has been fleet-wide
+  since 2026-07-28, so two similarly-named assets from different yards were
+  previously indistinguishable in one flat list.
+
+### Changed
+
+- **One collision wording, in `messages.ts`.** Three copies existed and
+  disagreed; the inline literals in `lib/ap/equipment-requests.ts` and the resolve
+  route's P2002 backstop are gone. The "Open /admin/equipment" instruction is
+  deleted — remediation is buttons now, not prose pointing at a 403.
+- **`suggestName` stops seeding invoice prose into asset names.** It used to
+  offer the first 60 characters of the description; production shows what that
+  produces — `Fix and repair trailer: 53489, 5340, 35, 282859 going to Oregon
+Stores` is a work order covering four trailers. It now strips leading work-order
+  verbs and returns **nothing** for a comma list or anything sentence-length. An
+  empty field beats a pre-filled bad name, which only asks the resolver to approve
+  a suggestion instead of writing an answer.
+- **The seed follows `merged_into_id`.** `seed-equipment-master.mjs` keys on
+  `(site_id, display_name)` and a merged loser keeps its name — so a re-run after
+  a merge would have written `is_active = true` back onto it and silently
+  re-split the rows an admin just joined. It now resolves one hop to the
+  survivor, and skips rather than resurrects if the survivor is missing.
+- Merged rows drop out of the admin list (**including the `all` status view**),
+  the AP picker, and its validator.
+
+### Not changed — deliberately
+
+- **The `(site_id, display_name)` unique index stands, unweakened.**
+- **No case-insensitive unique index was added, and none should be.** Production
+  holds a violating group _right now_ (`Terex Machine` / `Terex machine` — exactly
+  one such group fleet-wide, verified today), and migrations run in the deploy's
+  **init container**. A `CREATE UNIQUE INDEX` that cannot build would not fail a
+  review — it would **crash-loop the deploy**. Case-folded duplicates are
+  _detected_ and offered; they are not refused by the database. Merging the live
+  duplicates (O-10) is the prerequisite for anyone revisiting this.
+- **No merge was executed and no request was resolved here.** Both need a human
+  to confirm physical facts — they are O-10 and O-11.
+
 ## 2026-08-03 (night) — the iPad stops showing 5 of 7,285 portal hauls (ADR-0074)
 
 Bill's directive today: on-site iPad operators must be able to see **any** pending haul or

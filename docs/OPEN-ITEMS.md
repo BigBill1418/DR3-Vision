@@ -16,6 +16,56 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AF — 2026-08-04 ADR-0075: a name collision becomes a fork, not a wall
+
+Shipped today. Additive schema (`merged_into_id` + `merged_by` + `merged_at`), a
+second resolve mode, collision suggestions, and an admin merge tool. No invoice,
+amount or approval is touched by any of it. **Two operator actions, both of which
+need a human to confirm a physical fact — neither was performed by the session
+that shipped this.**
+
+### Operator actions
+
+- **O-10 — Bill merges the three Woodland Terex rows.** Production carries
+  **three records for one machine**, each cited by a different approved invoice:
+  `7e35a4aa` (`Terex`), `bee54def` (`Terex Machine`), `1125fb30` (`Terex
+machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
+  — but **a human must confirm they are the same physical machine first.**
+  `Terex` in particular is a bare name that could plausibly be a second unit;
+  canonical detection deliberately does NOT treat it as a match for the other two
+  (ADR-0075 D3), so this is a judgement call, not a lookup.
+  Use `/admin/equipment` → _Merge into…_ on each row to be merged away, pick the
+  survivor, confirm. While there, **fix the survivor's category to `terex`** —
+  all three were created as `vehicle`.
+  **This BLOCKS any future case-insensitive-unique-index ADR.** That index cannot
+  be built while a violating group exists, and migrations run in the deploy's
+  init container — attempting it today would crash-loop the deploy, not fail a
+  review (ADR-0075 D3).
+
+- **O-11 — Bill resolves open request `a2ab144d` ("trailer 540010", Woodland).**
+  This is the acceptance click for the whole ADR. The asset **already exists** —
+  `3c063c8d`, `trailer 540010`, active, Woodland — so the old code path would have
+  hit the same wall that produced the Terex split and manufactured a fourth
+  duplicate. Open `/admin/ap/equipment-requests`, choose _Add to the fleet_, and
+  the existing row should surface as a suggestion: click **Use this one**.
+  **Expected outcome: NO new equipment row.** The request stamps `resolved` against
+  `3c063c8d` and the original invoice link repoints at it. If a new row appears
+  instead, the suggestion path did not fire and that is a defect worth reporting.
+
+### Accepted residuals (recorded, not actions)
+
+- **Detection has a known blind spot.** `canonicalizeName` folds case and strips
+  punctuation, so `Terex Machine` ≡ `terex machine`. It does NOT match `Terex`
+  against `Terex 2` — those are plausibly different machines and conflating them
+  automatically would silently rewrite what approved invoices name. The merge tool
+  plus a human is the answer for that class; there is no plan to widen the matcher.
+- **Merge is an admin escalation.** A site manager who spots a duplicate resolves
+  correctly against the survivor (which they can do) but cannot merge the stray
+  rows themselves — declaring two records to be one machine rewrites financial
+  attribution and is not reversible from the UI. Intended trade.
+
+---
+
 ## 0.AE — 2026-08-03 ADR-0074: the iPad's open portal-haul surface
 
 Shipped tonight (CHANGELOG 2026-08-03 night). Additive and read-only; the check-in

@@ -75,6 +75,15 @@ export interface AdminEquipmentDto {
    * (see {@link updateEquipment}).
    */
   link_count: number;
+  /**
+   * ADR-0075 D4 — `ap_equipment_requests` rows resolved to this asset.
+   *
+   * The SECOND thing a merge repoints, so the merge preview must show it or the
+   * admin judges the direction of the merge on half the evidence.
+   */
+  resolved_request_count: number;
+  /** ADR-0075 D5 — the survivor this row was merged into, or null for a live row. */
+  merged_into_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -94,7 +103,12 @@ async function siteCodeById(): Promise<Map<string, string>> {
   return new Map(sites.map((s) => [s.id, s.code]));
 }
 
-function toDto(row: Equipment, codes: Map<string, string>, linkCount: number): AdminEquipmentDto {
+function toDto(
+  row: Equipment,
+  codes: Map<string, string>,
+  linkCount: number,
+  requestCount = 0,
+): AdminEquipmentDto {
   return {
     id: row.id,
     site_id: row.site_id,
@@ -103,6 +117,8 @@ function toDto(row: Equipment, codes: Map<string, string>, linkCount: number): A
     category: row.category,
     is_active: row.is_active,
     link_count: linkCount,
+    resolved_request_count: requestCount,
+    merged_into_id: row.merged_into_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -126,6 +142,101 @@ export function normalizeDisplayName(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * The COMPARISON form of a display name — case-folded and stripped of everything
+ * that is not `[a-z0-9]`. `"Terex Machine"`, `"terex machine"` and
+ * `"TEREX  MACHINE"` all canonicalise to `terexmachine`; `"EQ43 — Shear"` and
+ * `"eq43 shear"` both to `eq43shear`.
+ *
+ * ADR-0075 D3 — this is a DETECTOR, never a constraint. It is deliberately NOT
+ * backed by a case-insensitive unique index: production holds a violating pair
+ * today ("Terex Machine" / "Terex machine"), migrations run in the deploy's init
+ * container, and a unique index that cannot build would crash-loop the deploy
+ * rather than fail a review. So the database keeps refusing only EXACT
+ * `(site_id, display_name)` collisions, and this function is what lets the
+ * application notice the near-misses and OFFER them, instead of silently letting
+ * an operator retype around the wall.
+ *
+ * Its blindness is the price of that safety and is accepted: `"Terex"` and
+ * `"Terex 2"` canonicalise differently and will never be suggested for each
+ * other. Detection catches the typo-shaped duplicate; the merge tool catches the
+ * rest.
+ */
+export function canonicalizeName(raw: string): string {
+  return normalizeDisplayName(raw)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/** A candidate the operator can pick INSTEAD of creating a near-duplicate. */
+export interface SimilarEquipment {
+  id: string;
+  displayName: string;
+  category: EquipmentCategory;
+  /** Resolved from `sites`; null only if the FK points at a row that vanished. */
+  siteCode: string | null;
+  isActive: boolean;
+  /** Non-null means this row was already merged AWAY — never a valid target. */
+  mergedIntoId: string | null;
+}
+
+/** Cap on suggestions offered. Ten is far more than a real collision produces. */
+const SIMILAR_LIMIT = 10;
+
+/**
+ * Every row at `siteId` whose name canonicalises to the same form as `name` —
+ * INCLUDING inactive rows and rows already merged away.
+ *
+ * Including both is the whole point. An operator who is about to create
+ * "Terex machine" needs to see the INACTIVE "Terex Machine" (so they reactivate
+ * it rather than forking it) and needs to see a MERGED one too (so the suggestion
+ * list explains where the name went instead of appearing to lose it). The caller
+ * decides what to do with each — `resolveEquipmentRequest` refuses a merged
+ * target outright; the UI badges it.
+ *
+ * Canonicalisation happens in JS over the site's rows rather than in SQL, because
+ * `regexp_replace` cannot use an index anyway and the registry is ~554 rows fleet-
+ * wide (ADR-0063 D2 already returns whole filtered sets on this surface). That
+ * keeps one canonicalisation rule in one place — a raw-SQL twin would be a second
+ * definition free to drift from the one the create path checks against.
+ */
+export async function findSimilarEquipment(
+  siteId: string,
+  name: string,
+  client: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<SimilarEquipment[]> {
+  const canon = canonicalizeName(name);
+  if (!canon || !siteId) return [];
+
+  const [rows, sites] = await Promise.all([
+    client.equipment.findMany({
+      where: { site_id: siteId },
+      select: {
+        id: true,
+        display_name: true,
+        category: true,
+        is_active: true,
+        merged_into_id: true,
+      },
+      orderBy: [{ display_name: 'asc' }],
+    }),
+    client.site.findMany({ select: { id: true, code: true } }),
+  ]);
+  const code = new Map(sites.map((s) => [s.id, s.code])).get(siteId) ?? null;
+
+  return rows
+    .filter((r) => canonicalizeName(r.display_name) === canon)
+    .slice(0, SIMILAR_LIMIT)
+    .map((r) => ({
+      id: r.id,
+      displayName: r.display_name,
+      category: r.category,
+      siteCode: code,
+      isActive: r.is_active,
+      mergedIntoId: r.merged_into_id,
+    }));
+}
+
 // ────────────────────────────────────────────────────────────────────
 // List
 // ────────────────────────────────────────────────────────────────────
@@ -136,6 +247,16 @@ export interface EquipmentListFilters {
   status?: 'active' | 'inactive' | 'all' | undefined;
   /** Case-insensitive substring match on `display_name`. */
   q?: string | undefined;
+  /**
+   * ADR-0075 D5 — include rows merged INTO another asset. Default false.
+   *
+   * A merged loser is not a thing any more, so it does not belong in a registry
+   * an admin reads as "the assets we have" — and it must not reappear in the
+   * `status: 'all'` view either, which is exactly where an admin goes hunting for
+   * a name they cannot find. Kept reachable behind this flag so the rows stay
+   * auditable rather than invisible.
+   */
+  includeMerged?: boolean | undefined;
 }
 
 /**
@@ -154,6 +275,9 @@ export async function listEquipment(
   if (!filters.status || filters.status === 'active') where.is_active = true;
   else if (filters.status === 'inactive') where.is_active = false;
   // 'all' adds no status filter.
+  // ADR-0075 D5 — merged losers drop out of EVERY status view by default,
+  // including 'all'. See `EquipmentListFilters.includeMerged`.
+  if (!filters.includeMerged) where.merged_into_id = null;
 
   const q = filters.q?.trim();
   if (q) where.display_name = { contains: q, mode: 'insensitive' };
@@ -163,8 +287,29 @@ export async function listEquipment(
     siteCodeById(),
   ]);
 
-  const counts = await linkCounts(rows.map((r) => r.id));
-  return rows.map((r) => toDto(r, codes, counts.get(r.id) ?? 0));
+  const ids = rows.map((r) => r.id);
+  const [counts, requestCounts] = await Promise.all([linkCounts(ids), resolvedRequestCounts(ids)]);
+  return rows.map((r) => toDto(r, codes, counts.get(r.id) ?? 0, requestCounts.get(r.id) ?? 0));
+}
+
+/**
+ * `ap_equipment_requests` counts per resolved asset, as a map.
+ *
+ * Mirrors {@link linkCounts}: one grouped query for the whole page, and an empty
+ * input short-circuits so an empty list never issues an `IN ()` groupBy.
+ */
+async function resolvedRequestCounts(ids: readonly string[]): Promise<Map<string, number>> {
+  if (ids.length === 0) return new Map();
+  const grouped = await prisma.apEquipmentRequest.groupBy({
+    by: ['resolved_equipment_id'],
+    where: { resolved_equipment_id: { in: [...ids] } },
+    _count: { _all: true },
+  });
+  const out = new Map<string, number>();
+  for (const g of grouped) {
+    if (g.resolved_equipment_id) out.set(g.resolved_equipment_id, g._count._all);
+  }
+  return out;
 }
 
 /**
@@ -210,9 +355,25 @@ export interface CreateEquipmentInput {
 
 export type CreateEquipmentResult =
   | { ok: true; equipment: AdminEquipmentDto }
-  | { ok: false; reason: CreateFailure };
+  | CreateEquipmentFailure;
 
-type CreateFailure = 'name_required' | 'name_too_long' | 'name_taken' | 'site_not_found';
+/**
+ * ADR-0075 D2 — `name_taken` carries the row it collided WITH.
+ *
+ * A refusal that names no alternative is what produced the three-row Terex split:
+ * the operator was told the name was in use, was given nothing to click, and
+ * retyped around it. `existing` is what turns the wall into a fork — the caller
+ * can offer "use this one" instead of only "pick another name". Optional so the
+ * other three reasons keep their shape and every existing consumer that reads
+ * `.reason` is unchanged.
+ */
+export interface CreateEquipmentFailure {
+  ok: false;
+  reason: CreateFailure;
+  existing?: SimilarEquipment[];
+}
+
+export type CreateFailure = 'name_required' | 'name_too_long' | 'name_taken' | 'site_not_found';
 
 export async function createEquipment(
   input: CreateEquipmentInput,
@@ -252,7 +413,7 @@ export async function createEquipmentInTx(
   tx: Prisma.TransactionClient,
   input: CreateEquipmentInput,
   actor: ActorContext,
-): Promise<{ ok: true; row: Equipment } | { ok: false; reason: CreateFailure }> {
+): Promise<{ ok: true; row: Equipment } | CreateEquipmentFailure> {
   const display_name = normalizeDisplayName(input.display_name);
   if (!display_name) return { ok: false, reason: 'name_required' };
   if (display_name.length > DISPLAY_NAME_MAX) return { ok: false, reason: 'name_too_long' };
@@ -267,7 +428,16 @@ export async function createEquipmentInTx(
     where: { site_id: input.site_id, display_name },
     select: { id: true },
   });
-  if (dup) return { ok: false, reason: 'name_taken' };
+  if (dup) {
+    // ADR-0075 D2 — hand back WHAT it collided with, not just THAT it collided.
+    // The canonical lookup is deliberately wider than the exact match that
+    // tripped us: typing "Terex Machine" at a site that holds both "Terex
+    // Machine" and "Terex machine" should surface both, because picking the
+    // wrong one of those is how the split got worse. Reads only; the enclosing
+    // transaction is still clean and the caller is free to roll it back.
+    const existing = await findSimilarEquipment(input.site_id, display_name, tx);
+    return { ok: false, reason: 'name_taken', existing };
+  }
 
   const row = await tx.equipment.create({
     data: {
@@ -454,6 +624,162 @@ export function deactivateEquipment(id: string, actor: ActorContext): Promise<Se
 
 export function reactivateEquipment(id: string, actor: ActorContext): Promise<SetActiveResult> {
   return setActive(id, true, actor);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Merge (ADR-0075 D4) — collapse near-duplicates onto one survivor.
+//
+// WHAT A MERGE MOVES: attribution, and ONLY attribution. Two tables point at an
+// equipment row — `ap_equipment_links.equipment_id` (which invoice cited which
+// asset) and `ap_equipment_requests.resolved_equipment_id` (which escape-hatch
+// request became which asset). Both are repointed at the winner.
+//
+// WHAT A MERGE MUST NEVER TOUCH: `ap_requests`. Not `status`, not the amounts,
+// not `decided_by` / `decided_at`. The money already moved and the approval
+// already happened; a bookkeeping correction to WHICH machine an invoice names
+// cannot be allowed to reach back into the decision itself. That is the same
+// invariant `resolveEquipmentRequest` holds (ADR-0046 Amendment 9 #3), and the
+// merge test asserts it by proving `apRequest.update` / `updateMany` are never
+// called at all — a comment cannot enforce it, so a test does.
+//
+// `equipment_events` is out of the blast radius by construction: it is a
+// Terex-first LOG keyed on a free-text `equipment_code` string with no FK into
+// this registry (ADR-0048 D3), so nothing there references an equipment id and
+// nothing there needs repointing.
+//
+// The loser is KEPT — deactivated and stamped, never deleted. Same rule as the
+// rest of this module: `ap_equipment_links.equipment_id` is `onDelete: Restrict`
+// and those rows are financial-approval evidence.
+// ────────────────────────────────────────────────────────────────────
+
+export type MergeFailure =
+  | 'not_found'
+  | 'same_row'
+  | 'cross_site'
+  | 'winner_merged'
+  | 'loser_merged';
+
+export type MergeEquipmentResult =
+  | {
+      ok: true;
+      winner: AdminEquipmentDto;
+      /** `ap_equipment_links` rows repointed at the winner. */
+      repointedLinks: number;
+      /** `ap_equipment_requests.resolved_equipment_id` values repointed. */
+      repointedRequests: number;
+    }
+  | { ok: false; reason: MergeFailure };
+
+/**
+ * Merge `loserId` into `winnerId`: repoint both attribution tables, deactivate
+ * and stamp the loser, audit the whole thing in ONE transaction.
+ *
+ * Refused outright when the two ids are the same row, when they sit at different
+ * sites (a merge is a de-duplication within a site's registry, never a cross-
+ * jurisdiction move — CLAUDE.md hard rule #2; the admin can transfer the site
+ * first with {@link updateEquipment} if that is really the intent), or when
+ * EITHER side has already been merged away (chaining merges would make
+ * `merged_into_id` a linked list nothing follows correctly, and the seed guard
+ * only walks one hop).
+ *
+ * Every guard re-reads its row INSIDE the transaction. Checking first and acting
+ * later would let two admins merge A→B and B→A concurrently and leave a cycle
+ * that no consumer's `merged_into_id IS NULL` filter can escape.
+ */
+export async function mergeEquipment(
+  winnerId: string,
+  loserId: string,
+  actor: ActorContext,
+): Promise<MergeEquipmentResult> {
+  if (winnerId === loserId) return { ok: false, reason: 'same_row' };
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const [winner, loser] = await Promise.all([
+      tx.equipment.findUnique({ where: { id: winnerId } }),
+      tx.equipment.findUnique({ where: { id: loserId } }),
+    ]);
+    if (!winner || !loser) return { ok: false, reason: 'not_found' } as const;
+    if (winner.site_id !== loser.site_id) return { ok: false, reason: 'cross_site' } as const;
+    if (winner.merged_into_id) return { ok: false, reason: 'winner_merged' } as const;
+    if (loser.merged_into_id) return { ok: false, reason: 'loser_merged' } as const;
+
+    const links = await tx.apEquipmentLink.updateMany({
+      where: { equipment_id: loserId },
+      data: { equipment_id: winnerId },
+    });
+    const requests = await tx.apEquipmentRequest.updateMany({
+      where: { resolved_equipment_id: loserId },
+      data: { resolved_equipment_id: winnerId },
+    });
+
+    const stamped = await tx.equipment.update({
+      where: { id: loserId },
+      data: {
+        is_active: false,
+        merged_into_id: winnerId,
+        merged_by: actor.actorUserId,
+        merged_at: new Date(),
+      },
+    });
+
+    // Audit INSIDE the transaction (CLAUDE.md hard rule #6). Filed against the
+    // LOSER's row id, because the loser is the row whose state changed; the
+    // winner gained references but not a single column. The repoint counts ride
+    // in `after` so the audit alone answers "what moved" without re-deriving it
+    // from tables that have since moved on.
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: actor.actorUserId,
+        action: 'update' satisfies AuditAction,
+        table_name: 'equipment',
+        row_id: loserId,
+        before: serializeForAudit(loser),
+        after: {
+          ...(serializeForAudit(stamped) as Record<string, unknown>),
+          merged_into_display_name: winner.display_name,
+          repointed_links: links.count,
+          repointed_equipment_requests: requests.count,
+        } as Prisma.InputJsonValue,
+        ip: actor.ip,
+        user_agent: actor.userAgent,
+      },
+    });
+
+    return {
+      ok: true,
+      winnerRow: winner,
+      repointedLinks: links.count,
+      repointedRequests: requests.count,
+    } as const;
+  });
+
+  if (!outcome.ok) return outcome;
+
+  const [codes, counts] = await Promise.all([siteCodeById(), linkCounts([winnerId])]);
+  return {
+    ok: true,
+    winner: toDto(outcome.winnerRow, codes, counts.get(winnerId) ?? 0),
+    repointedLinks: outcome.repointedLinks,
+    repointedRequests: outcome.repointedRequests,
+  };
+}
+
+/**
+ * How many rows would move if this asset were merged away — the numbers the
+ * admin sees BEFORE confirming, for each side.
+ *
+ * Two reads, no writes. Shown per-side so the direction of the merge is an
+ * informed choice: the row with the invoices behind it is usually the one that
+ * should survive.
+ */
+export async function equipmentReferenceCounts(
+  id: string,
+): Promise<{ links: number; requests: number }> {
+  const [links, requests] = await Promise.all([
+    prisma.apEquipmentLink.count({ where: { equipment_id: id } }),
+    prisma.apEquipmentRequest.count({ where: { resolved_equipment_id: id } }),
+  ]);
+  return { links, requests };
 }
 
 // ────────────────────────────────────────────────────────────────────

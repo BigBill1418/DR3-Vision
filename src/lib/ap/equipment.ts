@@ -12,11 +12,23 @@
 import type { PrismaClient } from '@prisma/client';
 import type { EquipmentCategory } from './extraction/types';
 
-/// One selectable equipment option (site-filtered, active only).
+/// One selectable equipment option (active, unmerged; fleet-wide since 2026-07-28).
 export interface EquipmentOption {
   id: string;
   displayName: string;
   category: EquipmentCategory;
+  /**
+   * ADR-0075 — the site the asset is registered to.
+   *
+   * The picker has been fleet-wide since 2026-07-28, so an approver sees both
+   * yards' assets in one flat list with nothing to tell them apart. When two
+   * yards carry similar names that is a coin flip, and a wrong pick is filed
+   * against an approved invoice. Carrying the site makes the option honest about
+   * which registry it came from.
+   */
+  siteId: string;
+  /** Human-readable form of {@link siteId} — what the picker actually renders. */
+  siteCode: string | null;
 }
 
 /**
@@ -41,15 +53,27 @@ export interface EquipmentOption {
  * still audited. Only the reference list is fleet-wide.
  */
 export async function listSiteEquipment(prisma: PrismaClient): Promise<EquipmentOption[]> {
-  const rows = await prisma.equipment.findMany({
-    where: { is_active: true },
-    orderBy: { display_name: 'asc' },
-    select: { id: true, display_name: true, category: true },
-  });
+  const [rows, sites] = await Promise.all([
+    prisma.equipment.findMany({
+      // ADR-0075 D4 — a row merged into another asset is not a thing any more.
+      // Leaving it selectable would let an approver file TODAY's invoice against
+      // the duplicate a merge just retired, re-creating the split by hand.
+      where: { is_active: true, merged_into_id: null },
+      orderBy: { display_name: 'asc' },
+      select: { id: true, display_name: true, category: true, site_id: true },
+    }),
+    // Two rows. Resolved here rather than shipped as a bare id because the picker
+    // has to RENDER something a human recognises, and `Equipment` has no Prisma
+    // relation to `Site` (bare FK per the schema comment).
+    prisma.site.findMany({ select: { id: true, code: true } }),
+  ]);
+  const codeById = new Map(sites.map((s) => [s.id, s.code]));
   return rows.map((r) => ({
     id: r.id,
     displayName: r.display_name,
     category: r.category as EquipmentCategory,
+    siteId: r.site_id,
+    siteCode: codeById.get(r.site_id) ?? null,
   }));
 }
 
@@ -82,14 +106,18 @@ export async function assertEquipmentForSite(
   if (equipmentIds.length === 0) return;
   const unique = Array.from(new Set(equipmentIds));
   const rows = await prisma.equipment.findMany({
-    where: { id: { in: unique }, is_active: true },
+    // `merged_into_id: null` tracks `listSiteEquipment` exactly (ADR-0075 D4).
+    // These two MUST agree in BOTH directions: a merged row the picker no longer
+    // offers must also be refused here, or a stale tab still holding the option
+    // would file a NEW approval against a retired duplicate.
+    where: { id: { in: unique }, is_active: true, merged_into_id: null },
     select: { id: true },
   });
   const found = new Set(rows.map((r) => r.id));
   const missing = unique.filter((id) => !found.has(id));
   if (missing.length > 0) {
     throw new ApEquipmentInvalidError(
-      `Selected equipment is not available (unknown or inactive): ${missing.join(', ')}`,
+      `Selected equipment is not available (unknown, inactive or merged): ${missing.join(', ')}`,
     );
   }
 }

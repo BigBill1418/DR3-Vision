@@ -256,8 +256,38 @@ export const adminMessages = {
       'What the approver sees in the picker. Convention from the seeded roster: “<Unit #> — <Make> <Type>”, e.g. “EQ43 — Terex Shear”.',
     nameRequired: 'Display name is required.',
     nameTooLong: 'Display name is too long (200 characters maximum).',
+    // ADR-0075 D6 — THE canonical collision wording. Three copies of this
+    // sentence existed before (here, `lib/ap/equipment-requests.ts`, and the
+    // resolve route's P2002 backstop) and they disagreed; the worst of them told
+    // site managers to go to `/admin/equipment`, which 403s for them. One string,
+    // no route instructions, remediation offered as buttons instead of prose.
     nameTaken:
       'Another equipment record at this site already uses that name. Names must be unique per site — check the inactive rows too.',
+    // ── ADR-0075 — collision suggestions + merge (English only; /admin is not
+    // localised, ADR-0017. The three-locale rule is hard rule #4 for the
+    // OPERATOR-facing app, and this whole surface sits behind the admin gate.)
+    nameTakenSuggest:
+      'That name is already taken here. Use the asset that already exists, or give yours a different name — please do not retype it slightly differently, which is how one machine ends up with three records.',
+    similarHeading: 'Already in the fleet at this site',
+    useExisting: 'Use this one',
+    reactivateAndUse: 'Reactivate and use',
+    renameMine: 'Rename mine',
+    mergedBadge: 'Merged',
+    mergeHeading: 'Merge into another asset',
+    mergeWinner: 'Keep this one (the survivor)',
+    mergeLoser: 'Merge this one away',
+    mergeConfirm:
+      'Merge these two records? Every invoice and equipment request pointing at the merged-away row is repointed at the survivor, and the merged row is deactivated. No invoice, amount or approval is changed, and nothing is deleted. Confirm only if a human has verified these are the same physical machine — this is not reversible from the UI.',
+    mergeSubmit: 'Merge',
+    mergeCancel: 'Never mind',
+    mergePickTarget: 'Merge into…',
+    mergeReferences: (links: number, requests: number) =>
+      `${links} AP link${links === 1 ? '' : 's'} · ${requests} equipment request${requests === 1 ? '' : 's'}`,
+    mergeSuccess: (n: number) =>
+      `Merged. ${n.toLocaleString()} reference${n === 1 ? '' : 's'} now point at the surviving asset.`,
+    mergeSameRow: 'Pick two different records.',
+    mergeCrossSite: 'Those two are filed at different sites. Move one first, then merge.',
+    mergeAlreadyMerged: 'One of those was already merged. Refresh and pick the surviving rows.',
     categoryLabel: 'Category',
     categoryHelp: 'Drives nothing today beyond grouping; shear machines belong under Terex.',
     siteLabel: 'Site',
