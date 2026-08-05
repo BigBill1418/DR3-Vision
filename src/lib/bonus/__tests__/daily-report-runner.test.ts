@@ -91,6 +91,8 @@ function makeReport(over: Partial<Record<string, unknown>> = {}) {
     mtd: { startDate: DAY_KEY, endDate: DAY_KEY, total: 500 },
     priorMonthSamePeriod: { startDate: DAY_KEY, endDate: DAY_KEY, total: null },
     paceDeltaPct: null,
+    // ADR-0076 — headcounts carried by every report.
+    processorCounts: { today: 7, mtd: 11, priorMonthSamePeriod: 5, sameDayLastYear: 4 },
     ...over,
   };
 }
@@ -138,13 +140,31 @@ describe('runDailyReportFire', () => {
     expect(createLog).not.toHaveBeenCalled();
   });
 
+  it('skip_if_zero is UNCHANGED by headcount (ADR-0076): a lone zero-count entry still skips', async () => {
+    // One entry keyed at 0 mattresses: totalToday=0 but processorCounts.today=1.
+    // A single keyed zero is not a report-worthy day; the eod-check ntfy owns
+    // missing-data alerting. Widening the gate would mail on deliberately-quiet days.
+    findManyConfigs.mockResolvedValue([makeConfig({ skip_if_zero: true })]);
+    buildDailyReport.mockResolvedValue(
+      makeReport({
+        totalToday: 0,
+        processorCounts: { today: 1, mtd: 1, priorMonthSamePeriod: 0, sameDayLastYear: 0 },
+      }),
+    );
+    const { outcomes } = await runDailyReportFire(NOW);
+    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'skipped_zero' }]);
+    expect(sendDailyReport).not.toHaveBeenCalled();
+  });
+
   it('skip_if_zero YIELDS to inventory movement — a zero-bonus day with a count/flow still sends', async () => {
     findManyConfigs.mockResolvedValue([makeConfig({ skip_if_zero: true })]);
     buildDailyReport.mockResolvedValue(
       makeReport({ totalToday: 0, eodInventory: { movementToday: true } }),
     );
     const { outcomes } = await runDailyReportFire(NOW);
-    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 }]);
+    expect(outcomes).toEqual([
+      { siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 },
+    ]);
     expect(sendDailyReport).toHaveBeenCalledTimes(1);
   });
 
@@ -172,6 +192,9 @@ describe('runDailyReportFire', () => {
         total_today: 42,
         total_bonus_cents: 1275,
         mtd_total: 500,
+        // ADR-0076 — headcounts persisted in the claim (comparisons are not).
+        processors_today: 7,
+        processors_mtd: 11,
         delivered_count: 0,
         eod_inventory_sig: '', // makeReport carries no eodInventory → empty fingerprint
       },
@@ -236,7 +259,9 @@ describe('runDailyReportFire — backfill', () => {
     findManyConfigs.mockResolvedValue([makeConfig({ send_time_pt: pt(18) })]);
     const { outcomes } = await runDailyReportFire(NOW, { forDate: FOR_DATE });
 
-    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 }]);
+    expect(outcomes).toEqual([
+      { siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 },
+    ]);
     // REAL configured recipients + REAL subject template (no `[TEST]` prefix).
     expect(sendDailyReport).toHaveBeenCalledWith(
       expect.objectContaining({ recipients: ['a@svdp.us'], subjectTemplate: 'DR3 {site} {date}' }),
@@ -245,7 +270,11 @@ describe('runDailyReportFire — backfill', () => {
     expect(buildDailyReport).toHaveBeenCalledWith('site-w', FOR_DATE);
     expect(createLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ site_id: 'site-w', report_date: FOR_DATE, delivered_count: 0 }),
+        data: expect.objectContaining({
+          site_id: 'site-w',
+          report_date: FOR_DATE,
+          delivered_count: 0,
+        }),
       }),
     );
     expect(updateLog).toHaveBeenCalledTimes(1);
@@ -264,7 +293,9 @@ describe('runDailyReportFire — backfill', () => {
     findManyConfigs.mockResolvedValue([makeConfig()]);
     findUniqueLog.mockResolvedValue({ id: 'existing' });
     const { outcomes } = await runDailyReportFire(NOW, { forDate: FOR_DATE, force: true });
-    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 }]);
+    expect(outcomes).toEqual([
+      { siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 },
+    ]);
     expect(sendDailyReport).toHaveBeenCalledTimes(1);
     expect(createLog).not.toHaveBeenCalled(); // unique constraint forbids a 2nd row
     expect(updateLog).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'existing' } }));
@@ -277,7 +308,9 @@ describe('runDailyReportFire — backfill', () => {
       .mockResolvedValueOnce({ id: 'raced' }); // …refetch after the P2002 finds the racer's row
     createLog.mockRejectedValue(p2002());
     const { outcomes } = await runDailyReportFire(NOW, { forDate: FOR_DATE, force: true });
-    expect(outcomes).toEqual([{ siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 }]);
+    expect(outcomes).toEqual([
+      { siteCode: 'woodland', status: 'sent', delivered: 1, attempted: 1 },
+    ]);
     expect(updateLog).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'raced' } }));
   });
 
@@ -317,7 +350,10 @@ describe('runDailyReportFire — backfill', () => {
       site: { id: 'site-e', code: 'eugene', name: 'Eugene' },
     });
     findManyConfigs.mockResolvedValue([cfgW, cfgE]);
-    const { outcomes } = await runDailyReportFire(NOW, { forDate: FOR_DATE, siteCodes: ['eugene'] });
+    const { outcomes } = await runDailyReportFire(NOW, {
+      forDate: FOR_DATE,
+      siteCodes: ['eugene'],
+    });
     expect(outcomes).toEqual([{ siteCode: 'eugene', status: 'sent', delivered: 1, attempted: 1 }]);
     expect(buildDailyReport).toHaveBeenCalledTimes(1);
     expect(buildDailyReport).toHaveBeenCalledWith('site-e', FOR_DATE);

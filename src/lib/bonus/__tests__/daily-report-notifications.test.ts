@@ -83,6 +83,8 @@ function makeReport(overrides: Partial<DailyReport> = {}): DailyReport {
     mtd: makeComparison(10153),
     priorMonthSamePeriod: makeComparison(9252),
     paceDeltaPct: 9.7,
+    // ADR-0076 — headcount defaults for the fixture (today mirrors lines.length).
+    processorCounts: { today: 3, mtd: 5, priorMonthSamePeriod: 4, sameDayLastYear: 2 },
     ...overrides,
   };
 }
@@ -301,7 +303,14 @@ describe('renderHtmlBody — EOD inventory', () => {
     // Regression (finding 4): the manager API writes snapshot_at at UTC midnight. Rendering
     // that @db.Date key in the Pacific zone printed the PREVIOUS day (e.g. "Jul 21").
     const html = bodyWithEod(
-      makeEod({ anchor: { countedAt: new Date('2026-07-22T00:00:00Z'), poolAttribution: 'measured', daysSince: 0, counter: 'Morena' } }),
+      makeEod({
+        anchor: {
+          countedAt: new Date('2026-07-22T00:00:00Z'),
+          poolAttribution: 'measured',
+          daysSince: 0,
+          counter: 'Morena',
+        },
+      }),
     );
     expect(html).toContain('Jul 22, 2026 (today)');
     expect(html).not.toContain('Jul 21, 2026');
@@ -391,7 +400,7 @@ describe('renderHtmlBody — EOD inventory', () => {
 });
 
 // ADR-0058 §3.3 — same-day production vs. inventory reconciliation (mirror-lag).
-describe('renderHtmlBody — Today\'s Production vs. Inventory (ADR-0058 §3.3)', () => {
+describe("renderHtmlBody — Today's Production vs. Inventory (ADR-0058 §3.3)", () => {
   // A fresh measured anchor whose data does NOT yet reflect today's production
   // (movementToday false = the mirror-lag case this section exists for).
   const laggingEod = (over: Partial<EodInventorySnapshot> = {}): EodInventorySnapshot =>
@@ -440,7 +449,10 @@ describe('renderHtmlBody — Today\'s Production vs. Inventory (ADR-0058 §3.3)'
 
   it('renders nothing on a zero-production day', () => {
     const zeroLines = makeReport({ eodInventory: laggingEod(), lines: [], totalToday: 0 });
-    const html = renderHtmlBody(zeroLines, { includeBonusDollars: false, includeComparisons: false });
+    const html = renderHtmlBody(zeroLines, {
+      includeBonusDollars: false,
+      includeComparisons: false,
+    });
     expect(html).not.toContain("Today's Production vs. Inventory");
   });
 
@@ -450,5 +462,47 @@ describe('renderHtmlBody — Today\'s Production vs. Inventory (ADR-0058 §3.3)'
       includeComparisons: false,
     });
     expect(html).not.toContain("Today's Production vs. Inventory");
+  });
+});
+
+// ── ADR-0076 — Processor Headcount panel ────────────────────────────
+
+describe('renderHtmlBody — processor headcount (ADR-0076)', () => {
+  it('renders the panel with today + MTD always, comparisons when enabled', () => {
+    const html = renderHtmlBody(makeReport(), {
+      includeBonusDollars: true,
+      includeComparisons: true,
+    });
+    expect(html).toContain('Processor Headcount — Woodland');
+    expect(html).toContain('Processors today');
+    expect(html).toContain('Distinct processors month-to-date');
+    expect(html).toContain('Same period last month');
+    expect(html).toContain('Same day last year');
+    // The distinct-once + no-adjustment-attribution footnote (the sentence that
+    // prevents a future "reconciliation fix" against the units totals).
+    expect(html).toContain('counts once');
+    expect(html).toContain('no processor attribution');
+  });
+
+  it('comparisons off → today + MTD still render, comparison rows absent', () => {
+    const html = renderHtmlBody(makeReport(), {
+      includeBonusDollars: true,
+      includeComparisons: false,
+    });
+    expect(html).toContain('Processor Headcount — Woodland');
+    expect(html).toContain('Processors today');
+    expect(html).toContain('Distinct processors month-to-date');
+    expect(html).not.toContain('Same period last month (');
+    expect(html).not.toContain('Same day last year (');
+  });
+
+  it('the MTD window label is byte-identical to the Trend MTD label', () => {
+    const html = renderHtmlBody(makeReport(), {
+      includeBonusDollars: true,
+      includeComparisons: true,
+    });
+    const m = html.match(/Month-to-date \(([^)]+)\)/);
+    expect(m).not.toBeNull();
+    expect(html).toContain(`Distinct processors month-to-date (${m?.[1]})`);
   });
 });

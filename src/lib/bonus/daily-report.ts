@@ -31,6 +31,28 @@ export interface ComparisonTotal {
   total: number | null;
 }
 
+/**
+ * ADR-0076 — distinct-processor headcounts, mirroring the units' today → MTD →
+ * comparison structure (Bill 2026-08-05: worked-that-day + MTD + same period
+ * last month + same day last year; all-time explicitly declined).
+ *
+ * Counts are DISTINCT processors with ≥1 recorded entry in the window — a
+ * processor who worked twenty days counts once. They derive from
+ * `bonus_daily_entries` only (the payroll source, unique per employee+day) and
+ * are NOT reconcilable against the units totals: ADR-0032 reporting adjustments
+ * move units with no processor attribution.
+ */
+export interface ProcessorCounts {
+  /** Distinct processors with a recorded entry on the report day (= lines.length). */
+  today: number;
+  /** Distinct processors with ≥1 entry in [firstOfMonth, reportDate]. */
+  mtd: number;
+  /** Distinct processors in [firstOfPriorMonth, sameDomPriorMonth]. */
+  priorMonthSamePeriod: number;
+  /** Distinct processors on the same day last year (single-day window). */
+  sameDayLastYear: number;
+}
+
 export interface DailyReport {
   siteId: string;
   siteCode: string;
@@ -46,6 +68,8 @@ export interface DailyReport {
   priorMonthSamePeriod: ComparisonTotal;
   /** Percentage delta MTD vs prior-month same period. null when prior is 0 or null. */
   paceDeltaPct: number | null;
+  /** ADR-0076 — distinct-processor headcounts for the same windows as the units. */
+  processorCounts: ProcessorCounts;
   /**
    * ADR-0037 Phase 4 (spec §4) — end-of-day inventory for this site/day, carrying
    * its own freshness state (healthy / stale / zero). `undefined` ONLY when the
@@ -152,6 +176,26 @@ async function comparisonOrNull(siteId: string, start: Date, end: Date): Promise
  * Throws if the site does not exist. Never throws on missing comparison data —
  * those fields are `null` when their window contains no entries.
  */
+/**
+ * ADR-0076 — distinct processors with ≥1 entry in [start, end].
+ *
+ * `groupBy`, NOT `findMany({distinct})`: the daily-report test mock discriminates
+ * `bonusDailyEntry.findMany` calls by the shape of `where.entry_date`, so a new
+ * findMany variant would silently collide with an existing branch. `groupBy` is
+ * its own surface. Exactness comes from the `(bonus_employee_id, entry_date)`
+ * unique constraint — no dedupe subtleties exist in the source table.
+ */
+async function distinctProcessors(siteId: string, start: Date, end: Date): Promise<number> {
+  const rows = await prisma.bonusDailyEntry.groupBy({
+    by: ['bonus_employee_id'],
+    where: {
+      bonus_employee: { site_id: siteId },
+      entry_date: { gte: start, lte: end },
+    },
+  });
+  return rows.length;
+}
+
 export async function buildDailyReport(siteId: string, reportDate: Date): Promise<DailyReport> {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -228,6 +272,16 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
       ? null
       : Math.round((mtd.total / priorMonthSamePeriod.total - 1) * 1000) / 10;
 
+  // ADR-0076 — headcounts over the SAME windows the units comparisons use.
+  // `today` is free: the (employee, date) unique constraint makes lines.length
+  // exactly the day's distinct-processor count.
+  const processorCounts: ProcessorCounts = {
+    today: lines.length,
+    mtd: await distinctProcessors(siteId, mtdStart, reportDate),
+    priorMonthSamePeriod: await distinctProcessors(siteId, priorStart, priorEnd),
+    sameDayLastYear: await distinctProcessors(siteId, sdlyDate, sdlyDate),
+  };
+
   return {
     siteId: site.id,
     siteCode: site.code,
@@ -240,6 +294,7 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
     mtd,
     priorMonthSamePeriod,
     paceDeltaPct,
+    processorCounts,
     eodInventory,
   };
 }

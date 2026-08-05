@@ -219,6 +219,10 @@ export async function runDailyReportFire(
               total_today: report.totalToday,
               total_bonus_cents: report.totalBonusCents,
               mtd_total: report.mtd.total ?? 0,
+              // ADR-0076 — headcounts as sent (comparison windows not stored,
+              // matching the units precedent).
+              processors_today: report.processorCounts.today,
+              processors_mtd: report.processorCounts.mtd,
               delivered_count: 0, // finalized post-send
               eod_inventory_sig: eodInventorySignature(report.eodInventory),
             },

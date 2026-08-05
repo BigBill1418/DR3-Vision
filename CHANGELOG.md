@@ -3,6 +3,49 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
+
+On the night of August 4th, nineteen processors worked the Woodland floor. The
+report that went out at 8pm listed all nineteen by name and never once said
+"nineteen."
+
+Two places in the schema claim to hold that number. `processed_units_daily` has
+`employees_count` and `processors_count` columns — **NULL on all 987 rows**, never
+written by any of their four write paths, no Eugene rows in the table at all (the
+COR month-end pre-fill reads them and renders `—`; follow-up logged).
+`bonus_employees.is_active` is the other, and it says Woodland has 40 active
+processors: eight have not produced in 43–537 days, one never has.
+
+The number was always in `bonus_daily_entries`, exactly, for free: unique on
+`(employee, date)`, so a day's row count **is** its headcount.
+
+### Added
+
+- **A Processor Headcount panel** on the daily production report, in the same
+  cream-and-gold shell as Trend: processors today, distinct month-to-date, same
+  period last month, same day last year. Bill picked the windows same-day
+  ("worked that day"; last-month/last-year comparisons yes; **all-time
+  declined**). Comparisons inherit `include_comparisons`; today + MTD always
+  render. Today's figure costs no query — it is the table you are already
+  looking at.
+- **`bonus_daily_report_log` remembers it** — `processors_today` and
+  `processors_mtd`, written in the same claim-before-send that records
+  `total_today` and `mtd_total`. Nullable: the three hundred sends before
+  tonight genuinely did not carry these figures.
+
+### Notes
+
+- A processor who worked twenty days counts **once** per window. The
+  distinct-once guard was falsified before being trusted (group by
+  (employee, date) → red). Along the way the test mock was taught to honor
+  Prisma's `by` argument — the first falsification pass silently proved nothing,
+  which is exactly why the proof step exists.
+- Headcount and units do not reconcile and are not meant to: ADR-0032
+  adjustments move units with no processor attribution. The panel's footnote and
+  a pinned test both say so.
+- `skip_if_zero` unchanged (a lone zero-count entry still skips — pinned).
+  No config flag, no rollout surface: same email, same recipients, same cadence.
+
 ## 2026-08-04 — a duplicate name stops being a dead end (ADR-0075)
 
 This morning an approver filed an equipment request reading `Terex machine`, hit

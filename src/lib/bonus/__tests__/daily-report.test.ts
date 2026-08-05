@@ -46,6 +46,10 @@ interface TodayRow {
 interface HistoryRow {
   entry_date: Date;
   mattress_count: { toNumber(): number };
+  /** ADR-0076 — employee identity for distinct-headcount tests. Optional so the
+   *  pre-existing sum fixtures stay untouched (each anonymous row counts as its
+   *  own synthetic employee). */
+  bonus_employee_id?: string;
 }
 // ADR-0032: reporting-only production adjustments (signed unit deltas keyed by day).
 interface AdjustmentRow {
@@ -99,6 +103,40 @@ vi.mock('@/lib/prisma', () => ({
           }
           // Bare-Date query: today's per-employee lines.
           return todayRows.map((r) => ({ ...r }));
+        },
+      ),
+      // ADR-0076 — distinct-processor counts. Deliberately a SEPARATE surface
+      // from findMany: the findMany mock discriminates on where.entry_date
+      // shape, and a distinct query would collide with an existing branch.
+      // Faithful to Prisma semantics: groups by the REQUESTED `by` keys, so an
+      // implementation that accidentally groups by (employee, date) — counting
+      // entries instead of people — goes red rather than passing by mock fiat.
+      groupBy: vi.fn(
+        async ({
+          by,
+          where,
+        }: {
+          by: string[];
+          where: { entry_date?: { gte: Date; lte: Date } };
+        }) => {
+          const ed = where.entry_date;
+          const inWindow = ed
+            ? historyRows.filter(
+                (r) =>
+                  r.entry_date.getTime() >= ed.gte.getTime() &&
+                  r.entry_date.getTime() <= ed.lte.getTime(),
+              )
+            : historyRows;
+          const keyOf = (r: HistoryRow) =>
+            by
+              .map((k) =>
+                k === 'bonus_employee_id'
+                  ? (r.bonus_employee_id ?? `anon-${historyRows.indexOf(r)}`)
+                  : String(r.entry_date.getTime()),
+              )
+              .join('|');
+          const groups = new Set(inWindow.map(keyOf));
+          return [...groups].map((key) => ({ bonus_employee_id: key.split('|')[0] }));
         },
       ),
     },
@@ -591,5 +629,119 @@ describe('buildDailyReport EOD inventory wiring', () => {
     const report = await build(new Date(Date.UTC(2026, 6, 22)));
     expect(report.totalToday).toBe(60);
     expect(report.eodInventory).toBeUndefined();
+  });
+});
+
+// ── ADR-0076 — processor headcounts ─────────────────────────────────
+
+describe('buildDailyReport — processor headcounts (ADR-0076)', () => {
+  it('today equals lines.length on a multi-line day (no query — the unique constraint)', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(60),
+        entered_at: new Date('2026-06-16T10:00:00Z'),
+        bonus_employee: { id: 'emp-bob', full_name: 'Bob' },
+      },
+      {
+        mattress_count: dec(79),
+        entered_at: new Date('2026-06-16T09:00:00Z'),
+        bonus_employee: { id: 'emp-amy', full_name: 'Amy' },
+      },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.processorCounts.today).toBe(2);
+  });
+
+  it('an employee who worked three separate days in the month counts ONCE in mtd', async () => {
+    historyRows = [
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 2)),
+        mattress_count: dec(50),
+        bonus_employee_id: 'emp-amy',
+      },
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 9)),
+        mattress_count: dec(55),
+        bonus_employee_id: 'emp-amy',
+      },
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 15)),
+        mattress_count: dec(60),
+        bonus_employee_id: 'emp-amy',
+      },
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 10)),
+        mattress_count: dec(40),
+        bonus_employee_id: 'emp-bob',
+      },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.processorCounts.mtd).toBe(2); // Amy once + Bob once — never 4
+  });
+
+  it('windows are scoped: prior-month and SDLY rows never leak into mtd', async () => {
+    historyRows = [
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 3)),
+        mattress_count: dec(50),
+        bonus_employee_id: 'emp-amy',
+      },
+      {
+        entry_date: new Date(Date.UTC(2026, 4, 5)),
+        mattress_count: dec(50),
+        bonus_employee_id: 'emp-may1',
+      },
+      {
+        entry_date: new Date(Date.UTC(2026, 4, 9)),
+        mattress_count: dec(50),
+        bonus_employee_id: 'emp-may2',
+      },
+      {
+        entry_date: new Date(Date.UTC(2025, 5, 16)),
+        mattress_count: dec(50),
+        bonus_employee_id: 'emp-old',
+      },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.processorCounts.mtd).toBe(1);
+    expect(report.processorCounts.priorMonthSamePeriod).toBe(2);
+    expect(report.processorCounts.sameDayLastYear).toBe(1);
+  });
+
+  it('an empty day and empty history yield zeros (0, never null — a count of nobody is 0)', async () => {
+    const report = await build(REPORT_DATE);
+    expect(report.processorCounts).toEqual({
+      today: 0,
+      mtd: 0,
+      priorMonthSamePeriod: 0,
+      sameDayLastYear: 0,
+    });
+  });
+
+  it('a day whose only entry is a zero count still counts the processor (today=1, totalToday=0)', async () => {
+    todayRows = [
+      {
+        mattress_count: dec(0),
+        entered_at: new Date('2026-06-16T10:00:00Z'),
+        bonus_employee: { id: 'emp-zero', full_name: 'Zed' },
+      },
+    ];
+    const report = await build(REPORT_DATE);
+    expect(report.processorCounts.today).toBe(1);
+    expect(report.totalToday).toBe(0);
+  });
+
+  it('an ADR-0032 adjustment moves mtd units but NEVER the mtd headcount', async () => {
+    historyRows = [
+      {
+        entry_date: new Date(Date.UTC(2026, 5, 3)),
+        mattress_count: dec(100),
+        bonus_employee_id: 'emp-amy',
+      },
+    ];
+    adjustmentRows = [{ entry_date: new Date(Date.UTC(2026, 5, 4)), units: 500 }];
+    const report = await build(REPORT_DATE);
+    expect(report.mtd.total).toBe(600); // units include the adjustment
+    expect(report.processorCounts.mtd).toBe(1); // headcount cannot see it
   });
 });

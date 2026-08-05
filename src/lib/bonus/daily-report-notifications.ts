@@ -245,7 +245,11 @@ export function renderProcessedTodayHtml(report: DailyReport): string {
   const inner =
     `<table role="presentation" cellpadding="0" cellspacing="0" width="100%">` +
     line(`Reconciled floor (as of ${anchorDate} count)`, `${fmtUnits(eod.totalOnHand)} units`) +
-    line('Processed today (entered)', `${report.totalToday.toLocaleString('en-US')} units`, '— confirmed in MyMRC in 1–3 days') +
+    line(
+      'Processed today (entered)',
+      `${report.totalToday.toLocaleString('en-US')} units`,
+      '— confirmed in MyMRC in 1–3 days',
+    ) +
     line('Estimated floor after today', `≈ ${fmtUnits(estTotal)} units`, '(estimate)') +
     `</table>` +
     `<div style="font-size:11px;color:${MUTED};line-height:1.5;padding-top:8px">Estimate = reconciled floor − today's entered production (program pool). Today's stripping may not yet be in MyMRC, and today's inbound is provisional from MyMRC haul counts, so the floor above does not yet fully reflect today's movement.</div>`;
@@ -255,6 +259,53 @@ export function renderProcessedTodayHtml(report: DailyReport): string {
     <tr><td style="padding:14px 16px">
       <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">Today's Production vs. Inventory</div>
       ${inner}
+    </td></tr>
+  </table>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ADR-0076 — Processor Headcount panel
+//
+// Distinct-processor counts over the SAME windows as the units Trend block
+// (Bill 2026-08-05: worked-that-day + MTD + same period last month + same day
+// last year; all-time explicitly declined). Same cream/gold shell as Trend and
+// EOD Inventory. The comparison rows (last month / last year) inherit
+// `include_comparisons` because they ARE comparisons; today + MTD always render.
+// ─────────────────────────────────────────────────────────────────────
+
+export function renderProcessorCountsHtml(
+  report: DailyReport,
+  includeComparisons: boolean,
+): string {
+  const pc = report.processorCounts;
+  const n = (v: number) => v.toLocaleString('en-US');
+  const rows: string[] = [
+    eodRowHtml('Processors today', n(pc.today), true),
+    eodRowHtml(
+      `Distinct processors month-to-date (${fmtRange(report.mtd.startDate, report.mtd.endDate)})`,
+      n(pc.mtd),
+    ),
+  ];
+  if (includeComparisons) {
+    rows.push(
+      eodRowHtml(
+        `Same period last month (${fmtRange(report.priorMonthSamePeriod.startDate, report.priorMonthSamePeriod.endDate)})`,
+        n(pc.priorMonthSamePeriod),
+      ),
+      eodRowHtml(
+        `Same day last year (${fmtShort(report.sameDayLastYear.startDate)})`,
+        n(pc.sameDayLastYear),
+      ),
+    );
+  }
+  return `
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:18px 0 0;background:${SVDP_CREAM};border-left:3px solid ${SVDP_GOLD};border-radius:4px">
+    <tr><td style="padding:14px 16px">
+      <div style="font:600 11px/1 -apple-system,'Segoe UI',sans-serif;color:${SVDP_RED};text-transform:uppercase;letter-spacing:0.06em;padding-bottom:6px">Processor Headcount — ${escapeHtml(report.siteName)}</div>
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        ${rows.join('\n        ')}
+      </table>
+      <div style="color:${MUTED};font-size:11px;line-height:1.5;padding-top:8px">Headcount is the number of distinct processors with recorded production in each window — a processor who worked several days counts once. Production adjustments carry no processor attribution and are not reflected here.</div>
     </td></tr>
   </table>`;
 }
@@ -332,6 +383,9 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
   </table>`;
   }
 
+  // ADR-0076 — processor headcount panel, between Trend and EOD Inventory
+  // (people-about-production sits with production, ahead of inventory).
+  const processorBlock = renderProcessorCountsHtml(report, opts.includeComparisons);
   // ADR-0037 Phase 4 — EOD inventory section (healthy / stale / zero, or omitted
   // when the inventory read failed). Always after the trend block.
   const eodBlock = renderEodInventoryHtml(report.eodInventory, report.siteName);
@@ -362,7 +416,7 @@ export function renderHtmlBody(report: DailyReport, opts: RenderOptions): string
             <thead>${headerRow}</thead>
             <tbody>${rows}</tbody>
             <tfoot>${footerRow}</tfoot>
-          </table>${comparisonBlock}${eodBlock}${processedTodayBlock}
+          </table>${comparisonBlock}${processorBlock}${eodBlock}${processedTodayBlock}
           <p style="color:${MUTED};font-size:11px;line-height:1.5;margin:22px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Sent automatically by DR3-Vision — replaces the manual daily processing email.<br>
             St. Vincent de Paul Society of Lane County

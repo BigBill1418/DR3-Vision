@@ -956,6 +956,13 @@ model BonusDailyReportLog {
   // team's last email must reflect current data, not a stale mid-day floor).
   // Null on rows written before this column / when no inventory section shipped.
   eod_inventory_sig String?
+  // ADR-0076 — distinct-processor headcounts as sent (the "harness" half of the
+  // directive: the log is where the report's own numbers become queryable).
+  // Nullable, no default: the ~300 rows before this column genuinely did not
+  // carry these figures; a 0 default would assert a false fact about past sends.
+  // Mirrors the total_today/mtd_total precedent — comparisons are not stored.
+  processors_today  Int?
+  processors_mtd    Int?
   created_at        DateTime  @default(now())
 
   @@unique([site_id, report_date])
