@@ -16,6 +16,16 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AG — 2026-08-05 Processor headcount (ADR-0076) — follow-up
+
+- **F-1 — the COR month-end headcount pre-fill renders `—` and now has an easy fix.**
+  `src/lib/cor/prefill.ts` reads `processed_units_daily.employees_count` /
+  `processors_count`, which are NULL on all 987 prod rows (never written by any of
+  their four write paths). ADR-0076's `distinctProcessors` helper computes the real
+  figure from the payroll source in ~21 ms. Small change + tests when the COR
+  surface next gets touched; deliberately not bundled with ADR-0076 to keep that
+  change email-only.
+
 ## 0.AF — 2026-08-04 ADR-0075: a name collision becomes a fork, not a wall
 
 Shipped today. Additive schema (`merged_into_id` + `merged_by` + `merged_at`), a
