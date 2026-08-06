@@ -78,7 +78,13 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
       <Tile label="7-day units/day" value={fmt(s.last7UnitsPerDay)} accent />
       <Tile label="30-day units/day" value={fmt(s.last30UnitsPerDay)} />
-      <Tile label="Downtime hrs (window)" value={fmt(s.totalDowntimeHours)} />
+      {/* ADR-0077 D4 — "not recorded", never "0.0". `hours_down` has never been
+          written on any Terex event, and a machine nobody measured is not a
+          machine that never stopped. */}
+      <Tile
+        label="Downtime hrs (window)"
+        value={s.totalDowntimeHours == null ? 'not recorded' : s.totalDowntimeHours.toFixed(1)}
+      />
       <Tile label="Cost (window)" value={centsToDollars(s.totalCostCents)} />
     </div>
   );

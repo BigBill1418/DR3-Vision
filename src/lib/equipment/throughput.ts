@@ -74,7 +74,8 @@ export interface EquipmentThroughput {
   summary: {
     last7UnitsPerDay: number | null;
     last30UnitsPerDay: number | null;
-    totalDowntimeHours: number;
+    /** ADR-0077 D4 — NULL means no downtime was ever RECORDED; 0 means a recorded zero. */
+    totalDowntimeHours: number | null;
     totalCostCents: number;
   };
 }
@@ -110,7 +111,10 @@ export function unitsPerRunHour(
  * non-null values in the window. Pure. `values` MUST be in ascending date order.
  * A window with no data yields null (never NaN).
  */
-export function rollingMean(values: readonly (number | null)[], windowDays: number): (number | null)[] {
+export function rollingMean(
+  values: readonly (number | null)[],
+  windowDays: number,
+): (number | null)[] {
   return values.map((_, i) => {
     const from = Math.max(0, i - windowDays + 1);
     let sum = 0;
@@ -169,7 +173,9 @@ export function monthlyCostSeries(
     const m = dayISO(e.eventDate).slice(0, 7);
     byMonth.set(m, (byMonth.get(m) ?? 0) + e.costCents);
   }
-  return [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([monthISO, costCents]) => ({ monthISO, costCents }));
+  return [...byMonth.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([monthISO, costCents]) => ({ monthISO, costCents }));
 }
 
 function num(v: Prisma.Decimal | number | null | undefined): number {
@@ -241,13 +247,32 @@ export async function computeEquipmentThroughput(
   const downtimeBands: DowntimeBand[] = dayInputs
     .filter((d) => d.hoursDown != null && d.hoursDown > 0)
     .map((d) => ({ dateISO: d.dateISO, hoursDown: d.hoursDown! }));
-  const monthlyCost = monthlyCostSeries(events.map((e) => ({ eventDate: e.event_date, costCents: e.cost_cents })));
+  const monthlyCost = monthlyCostSeries(
+    events.map((e) => ({ eventDate: e.event_date, costCents: e.cost_cents })),
+  );
   const pocketcoil: PocketcoilPoint[] = dayInputs
     .filter((d) => d.pocketcoilEstimate != null)
     .map((d) => ({ dateISO: d.dateISO, estimate: d.pocketcoilEstimate! }));
 
   const last = daily[daily.length - 1];
-  const totalDowntimeHours = downtimeBands.reduce((s, b) => s + b.hoursDown, 0);
+  // ADR-0077 D4 — NULL, not 0, when the window recorded no downtime AT ALL.
+  //
+  // `equipment_events.hours_down` is NULL on all 68 production Terex rows: the
+  // column has never once been written. Summing that to `0` and rendering
+  // "0.0 hrs" told Bill the machine never stopped, and the overview card went
+  // one further and painted it GREEN (`tone: hoursDown > 0 ? 'warn' : 'ok'`) —
+  // an unmeasured machine displayed as a perfect one. The distinction the type
+  // has to carry is "nobody recorded any" vs "somebody recorded none", and only
+  // the second of those is a zero.
+  //
+  // Measured off `dayInputs` rather than `downtimeBands`, because the bands
+  // deliberately drop `hoursDown === 0` for the chart — reusing them here would
+  // re-collapse a genuine recorded zero back into "not recorded".
+  const daysWithDowntime = dayInputs.filter((d) => d.hoursDown != null);
+  const totalDowntimeHours =
+    daysWithDowntime.length === 0
+      ? null
+      : daysWithDowntime.reduce((s, d) => s + (d.hoursDown ?? 0), 0);
   const totalCostCents = monthlyCost.reduce((s, m) => s + m.costCents, 0);
 
   return {

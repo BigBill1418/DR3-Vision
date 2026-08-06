@@ -94,6 +94,54 @@ export interface ActorContext {
   userAgent: string | null;
 }
 
+/**
+ * ADR-0077 — an autonomous actor with no `users.id` behind it.
+ *
+ * Mirrors `SystemActor` in `src/lib/survey/types.ts` (ADR-0036) and the
+ * `actor_label` convention already used by the mymrc bridges, the AP poll and
+ * `notifyStaff`: a non-human write NAMES ITSELF in `audit_log.actor_label`
+ * rather than borrowing a person's id. Borrowing one would put a false claim
+ * into an append-only table (CLAUDE.md hard rule #6) — the audit row would read
+ * as though that person clicked Merge.
+ *
+ * `merged_by` / `resolved_by`-style user FKs are left NULL for this actor; the
+ * label is the record of who acted, and it is the only place that record lives.
+ */
+export interface SystemActorContext {
+  /** e.g. `'system:terex-canonical-merge'`. Never a person's name. */
+  actorLabel: string;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+/** Either a signed-in admin or a named autonomous actor. */
+export type AnyActorContext = ActorContext | SystemActorContext;
+
+/** Narrow on the discriminating property, exactly as `survey/campaigns.ts` does. */
+function isSystemActor(actor: AnyActorContext): actor is SystemActorContext {
+  return 'actorLabel' in actor;
+}
+
+/** The four audit columns that describe WHO acted, for either actor shape. */
+function actorAuditFields(actor: AnyActorContext): {
+  actor_user_id: string | null;
+  actor_label: string | null;
+  ip: string | null;
+  user_agent: string | null;
+} {
+  return {
+    actor_user_id: isSystemActor(actor) ? null : actor.actorUserId,
+    actor_label: isSystemActor(actor) ? actor.actorLabel : null,
+    ip: actor.ip,
+    user_agent: actor.userAgent,
+  };
+}
+
+/** The `users.id` to stamp on a row's own actor FK — NULL for a system actor. */
+function actorUserIdOrNull(actor: AnyActorContext): string | null {
+  return isSystemActor(actor) ? null : actor.actorUserId;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Site-code resolution
 // ────────────────────────────────────────────────────────────────────
@@ -508,7 +556,7 @@ type UpdateFailure =
 export async function updateEquipment(
   id: string,
   input: UpdateEquipmentInput,
-  actor: ActorContext,
+  actor: AnyActorContext,
 ): Promise<UpdateEquipmentResult> {
   const existing = await prisma.equipment.findUnique({ where: { id } });
   if (!existing) return { ok: false, reason: 'not_found' };
@@ -552,14 +600,12 @@ export async function updateEquipment(
       const row = await tx.equipment.update({ where: { id }, data });
       await tx.auditLog.create({
         data: {
-          actor_user_id: actor.actorUserId,
+          ...actorAuditFields(actor),
           action: 'update' satisfies AuditAction,
           table_name: 'equipment',
           row_id: id,
           before: serializeForAudit(existing),
           after: serializeForAudit(row),
-          ip: actor.ip,
-          user_agent: actor.userAgent,
         },
       });
       return row;
@@ -689,7 +735,7 @@ export type MergeEquipmentResult =
 export async function mergeEquipment(
   winnerId: string,
   loserId: string,
-  actor: ActorContext,
+  actor: AnyActorContext,
 ): Promise<MergeEquipmentResult> {
   if (winnerId === loserId) return { ok: false, reason: 'same_row' };
 
@@ -717,7 +763,7 @@ export async function mergeEquipment(
       data: {
         is_active: false,
         merged_into_id: winnerId,
-        merged_by: actor.actorUserId,
+        merged_by: actorUserIdOrNull(actor),
         merged_at: new Date(),
       },
     });
@@ -729,7 +775,7 @@ export async function mergeEquipment(
     // from tables that have since moved on.
     await tx.auditLog.create({
       data: {
-        actor_user_id: actor.actorUserId,
+        ...actorAuditFields(actor),
         action: 'update' satisfies AuditAction,
         table_name: 'equipment',
         row_id: loserId,
@@ -740,8 +786,6 @@ export async function mergeEquipment(
           repointed_links: links.count,
           repointed_equipment_requests: requests.count,
         } as Prisma.InputJsonValue,
-        ip: actor.ip,
-        user_agent: actor.userAgent,
       },
     });
 

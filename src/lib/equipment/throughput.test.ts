@@ -13,7 +13,12 @@ const store = {
     stripped_non_program: Prisma.Decimal;
     pocketcoil_estimate: number | null;
   }[],
-  events: [] as { event_date: Date; kind: string; hours_down: Prisma.Decimal | null; cost_cents: number | null }[],
+  events: [] as {
+    event_date: Date;
+    kind: string;
+    hours_down: Prisma.Decimal | null;
+    cost_cents: number | null;
+  }[],
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -133,12 +138,32 @@ describe('computeEquipmentThroughput (aggregator)', () => {
 
   it('joins closes + downtime into a continuous window and derives the summary', async () => {
     store.closes.push(
-      { production_date: new Date('2026-07-04T00:00:00Z'), stripped_program: dec(150), stripped_non_program: dec(10), pocketcoil_estimate: 20 },
-      { production_date: new Date('2026-07-05T00:00:00Z'), stripped_program: dec(120), stripped_non_program: dec(0), pocketcoil_estimate: null },
+      {
+        production_date: new Date('2026-07-04T00:00:00Z'),
+        stripped_program: dec(150),
+        stripped_non_program: dec(10),
+        pocketcoil_estimate: 20,
+      },
+      {
+        production_date: new Date('2026-07-05T00:00:00Z'),
+        stripped_program: dec(120),
+        stripped_non_program: dec(0),
+        pocketcoil_estimate: null,
+      },
     );
     store.events.push(
-      { event_date: new Date('2026-07-05T00:00:00Z'), kind: 'downtime', hours_down: dec(4), cost_cents: null },
-      { event_date: new Date('2026-07-05T00:00:00Z'), kind: 'repair', hours_down: dec(2), cost_cents: 45000 },
+      {
+        event_date: new Date('2026-07-05T00:00:00Z'),
+        kind: 'downtime',
+        hours_down: dec(4),
+        cost_cents: null,
+      },
+      {
+        event_date: new Date('2026-07-05T00:00:00Z'),
+        kind: 'repair',
+        hours_down: dec(2),
+        cost_cents: 45000,
+      },
     );
 
     const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
@@ -170,5 +195,44 @@ describe('computeEquipmentThroughput (aggregator)', () => {
     expect(t.summary.last7UnitsPerDay).toBeNull();
     expect(t.summary.totalCostCents).toBe(0);
     expect(t.downtimeBands).toEqual([]);
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // ADR-0077 D4 — "not recorded" is not zero.
+  //
+  // This is the production shape: `equipment_events.hours_down` is NULL on all
+  // 68 Terex rows, so this aggregate summed to 0 and the UI rendered "0.0 hrs"
+  // — in GREEN on the overview card. The machine had not run flawlessly; nobody
+  // had ever measured it.
+  //
+  // Both directions are pinned, because only one of them is the bug: absence
+  // must be null, and a genuine recorded zero must stay 0.
+  // ────────────────────────────────────────────────────────────────
+  describe('downtime absence (ADR-0077 D4)', () => {
+    it('is NULL when no event ever carried an hours_down', async () => {
+      store.events.push({
+        event_date: new Date('2026-07-04T00:00:00Z'),
+        kind: 'downtime',
+        hours_down: null,
+        cost_cents: 12_000,
+      });
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
+      expect(t.summary.totalDowntimeHours).toBeNull();
+      // …and the cost on that same event still lands, so this is not "no events".
+      expect(t.summary.totalCostCents).toBe(12_000);
+    });
+
+    it('is 0 — not null — when somebody recorded a zero', async () => {
+      store.events.push({
+        event_date: new Date('2026-07-04T00:00:00Z'),
+        kind: 'downtime',
+        hours_down: dec(0),
+        cost_cents: null,
+      });
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
+      expect(t.summary.totalDowntimeHours).toBe(0);
+      // The chart bands still drop it — a zero-height band is not a band.
+      expect(t.downtimeBands).toEqual([]);
+    });
   });
 });
