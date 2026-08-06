@@ -33,6 +33,36 @@ import { prisma } from '@/lib/prisma';
 /** Free-text `equipment_code` the ADR-0048 history importer writes. */
 const TEREX_EVENT_CODE = 'terex';
 
+/**
+ * Is this equipment row THE Terex machine for its site?
+ *
+ * It has to be asked, because two of this ledger's three panels are keyed on the
+ * SITE, not on an equipment id: `doc_terex_maintenance_rows` is scoped by
+ * `site_id` (ADR-0069 Am.2) and `equipment_events` by the free-text
+ * `equipment_code='terex'` with no FK into the registry (ADR-0048 D3). Hand that
+ * pairing a different equipment row and it renders the Terex's maintenance log
+ * and downtime under someone else's name.
+ *
+ * `category` alone is NOT that test, which is the trap this guard exists for.
+ * The ADR-0062 seed uses `terex` as the category for SHEAR MACHINES, so
+ * production carries five `terex`-category rows: `EQ24/EQ43/EQ74 — Shear
+ * Machine` at Woodland, `EQ65 — Sheer Machine Shear Machine` at EUGENE, and the
+ * actual machine. Bill confirmed on 2026-08-06 that the Terex operates
+ * exclusively at Woodland and Eugene has no use for this data at all — so a
+ * ledger offered for that Eugene row would be wrong twice over.
+ *
+ * The second half of the test is that the Terex-tagged invoices resolve HERE.
+ * That is a proxy for identity rather than a declaration of it — the schema has
+ * no "this row is the machine the log describes" marker — but it is an
+ * evidence-based one: it self-corrects if attribution moves, it needs no
+ * hardcoded id or site, and today it selects exactly `7e35a4aa` and nothing
+ * else. Recorded as a residual; the real fix is a link from the absorbed rows
+ * (or `equipment_events`) to an equipment id.
+ */
+function isSiteTerexMachine(category: string, apLinkCount: number): boolean {
+  return category === 'terex' && apLinkCount > 0;
+}
+
 export interface TerexMaintenanceEvent {
   id: string;
   /** ISO day, set ONLY when the sheet cell held a real date in a plausible range. */
@@ -193,6 +223,22 @@ export async function computeTerexLedger(
       select: { hours_down: true },
     }),
   ]);
+
+  // A `terex`-category row with no Terex invoices behind it is a shear machine,
+  // not the machine — refuse it exactly as we refuse a merged-away or off-site id.
+  if (!isSiteTerexMachine(equipment.category, links.length)) {
+    return {
+      equipment: null,
+      maintenance: {
+        events: [],
+        totalRepairCents: null,
+        totalCreditedCents: null,
+        awaitingAbsorption: true,
+      },
+      ap: { invoices: [], totalCents: 0, linkedCents: 0 },
+      downtime: { totalHours: null, eventsWithHours: 0, eventsConsidered: 0 },
+    };
+  }
 
   const maintenanceEvents: TerexMaintenanceEvent[] = rows.map((r) => ({
     id: r.id,

@@ -82,6 +82,12 @@ export default async function EquipmentPage({ params }: Props) {
             category: 'terex',
             is_active: true,
             merged_into_id: null,
+            // …AND the Terex invoices actually resolve here. `category: 'terex'`
+            // alone is the ADR-0062 seed's category for SHEAR MACHINES — four of
+            // the five such rows in production are `EQ## — Shear Machine`, one of
+            // them at Eugene, none with a ledger worth opening. Mirrors
+            // `isSiteTerexMachine` in the ledger, which refuses them outright.
+            links: { some: {} },
           },
           select: { id: true, display_name: true },
           orderBy: { display_name: 'asc' },

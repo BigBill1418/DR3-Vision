@@ -113,10 +113,14 @@ _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table f
   apply staged revision `eed9d4cb` from `/admin/doc-ingest/anomalies` ("Apply this
   revision"), let the sweep absorb, and accept the batch at
   `/admin/doc-ingest/terex`.
-  **Deliberately not done for him** (ADR-0077 D5): Gate 2 exists so absorption
-  refuses to GUESS a document's site, and stating one is the same kind of act O-10
-  was. Evidence points to Woodland (the Terex is a Woodland asset; all four
-  invoices are Woodland) but a $77,067.94 acceptance chain should start with Bill.
+  **The SITE half is now answered.** Bill, 2026-08-06: _"the terex machine
+  operates exclusively at woodland — eugene has no use or need for this data at
+  all."_ So the classification is **`terex_maintenance_log` / Woodland**, on his
+  word, not an inference. What remains is his to click, and deliberately so: the
+  class+site confirmation is one click, and the **acceptance of $77,067.94 is the
+  ADR-0069 Am.2 §5 control** — money whose acceptance cannot answer "who accepted
+  this?" is not an audit trail, and that answer should be a person, at a screen,
+  with the totals in front of them.
   **The guardrail HARD STOP passed** — its ~92 `column_nulled` findings are a parse
   IMPROVEMENT, not a data loss: the prior revision had no `headerRowIndex` and read
   each sheet's title banner as its header row. On the two sheets absorption reads,
@@ -147,6 +151,17 @@ _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table f
   Janette. **No event↔invoice matching in v1** (all four invoices share one vendor
   inside six days; any heuristic would manufacture links) — revisit only when a
   real match need is observed, never speculatively.
+- **The ledger identifies "the Terex machine" by proxy, not by declaration.**
+  `category: 'terex'` is the ADR-0062 seed's category for SHEAR MACHINES —
+  production carries `EQ24/EQ43/EQ74 — Shear Machine` at Woodland and `EQ65 —
+Sheer Machine Shear Machine` at **Eugene**, none of them the machine. Because
+  `doc_terex_maintenance_rows` is keyed by SITE and `equipment_events` by a
+  free-text `equipment_code` with no FK, pointing the ledger at one of those rows
+  would render the Terex's money under a shear machine's name. `isSiteTerexMachine`
+  therefore also requires that the Terex invoices resolve to the row. That is
+  evidence-based and self-correcting, but it is a proxy: **the real fix is a link
+  from the absorbed rows (or `equipment_events`) to an equipment id.** Do that
+  before a second Terex-class machine ever exists.
 - **`can_resolve_equipment_requests` now grants TWO things.** It unlocks the
   equipment-request worklist AND the machine ledger, so granting it to a fourth
   person also shows them one machine's whole invoice history. Correct default

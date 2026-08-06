@@ -65,10 +65,15 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
           </p>
         </header>
         {/* ADR-0077 D6 — the asset master says WHAT this is; the machine ledger
-            says what it has COST. Linked only for a machine that actually has a
-            ledger worth opening (category `terex`, live, with a resolvable site
-            code) so the link never lands on an empty page. */}
-        {equipment.category === 'terex' && equipment.site_code && !equipment.merged_into_id ? (
+            says what it has COST. Linked only for the machine that actually HAS
+            a ledger: `category: 'terex'` alone is the ADR-0062 seed's category
+            for shear machines (four such rows carry no invoices at all, one of
+            them at Eugene), so `link_count` is what separates the machine from
+            the category. Mirrors `isSiteTerexMachine` in the ledger. */}
+        {equipment.category === 'terex' &&
+        equipment.link_count > 0 &&
+        equipment.site_code &&
+        !equipment.merged_into_id ? (
           <Link
             href={`/dashboard/${equipment.site_code}/equipment/${equipment.id}`}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
