@@ -199,6 +199,34 @@ function seedProductionShape(): void {
   }
 }
 
+/**
+ * The machine, minimally: the equipment row PLUS one Terex invoice. The invoice
+ * is not decoration — `isSiteTerexMachine` uses it to tell the machine apart
+ * from the shear machines that share its `terex` category.
+ */
+function seedMachine(): void {
+  store.equipment.push({
+    id: TEREX,
+    site_id: WOODLAND,
+    display_name: 'Terex',
+    category: 'terex',
+    merged_into_id: null,
+  });
+  store.links.push({
+    id: 'link-id',
+    request_id: 'req-id',
+    equipment_id: TEREX,
+    created_at: new Date('2026-07-01T00:00:00Z'),
+    request: {
+      received_at: new Date('2026-07-02T00:00:00Z'),
+      vendor: 'InterState Oil Co',
+      vendor_freeform: null,
+      amount_cents: null,
+      confirmed_amount_cents: 1_000,
+    },
+  });
+}
+
 beforeEach(() => {
   store.equipment.length = 0;
   store.maint.length = 0;
@@ -293,13 +321,7 @@ describe('computeTerexLedger — staged money never reaches the surface', () => 
   });
 
   it('an all-staged log reports awaiting-absorption, not a clean machine', async () => {
-    store.equipment.push({
-      id: TEREX,
-      site_id: WOODLAND,
-      display_name: 'Terex',
-      category: 'terex',
-      merged_into_id: null,
-    });
+    seedMachine();
     store.maint.push(maint('staged', 50000, 4000));
 
     const l = await computeTerexLedger(WOODLAND, TEREX);
@@ -345,13 +367,7 @@ describe('computeTerexLedger — staged money never reaches the surface', () => 
 
 describe('computeTerexLedger — the money rules that are not sums', () => {
   it('a blank cost stays NULL — an unpriced repair is not a free one', async () => {
-    store.equipment.push({
-      id: TEREX,
-      site_id: WOODLAND,
-      display_name: 'Terex',
-      category: 'terex',
-      merged_into_id: null,
-    });
+    seedMachine();
     store.maint.push(maint('confirmed', null, null));
 
     const l = await computeTerexLedger(WOODLAND, TEREX);
@@ -360,13 +376,7 @@ describe('computeTerexLedger — the money rules that are not sums', () => {
   });
 
   it('keeps an unparsed date as raw text and never coerces it', async () => {
-    store.equipment.push({
-      id: TEREX,
-      site_id: WOODLAND,
-      display_name: 'Terex',
-      category: 'terex',
-      merged_into_id: null,
-    });
+    seedMachine();
     store.maint.push(
       maint('confirmed', 100, null, { event_date: null, event_date_raw: '09/16 or 17' }),
     );
@@ -394,6 +404,59 @@ describe('computeTerexLedger — scoping', () => {
     });
     const l = await computeTerexLedger(WOODLAND, 'eq-loser');
     expect(l.equipment).toBeNull();
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Bill, 2026-08-06: "the terex machine operates exclusively at woodland —
+  // eugene has no use or need for this data at all."
+  //
+  // The registry does not say that on its own. `category: 'terex'` is the
+  // ADR-0062 seed's category for SHEAR MACHINES, and production carries five
+  // such rows — `EQ24/EQ43/EQ74 — Shear Machine` at Woodland and `EQ65 — Sheer
+  // Machine Shear Machine` at EUGENE — none of which is the machine. Because the
+  // maintenance log is keyed by SITE and the events by a free-text
+  // `equipment_code`, handing this ledger one of those rows renders the Terex's
+  // money and history under a shear machine's name.
+  // ────────────────────────────────────────────────────────────────
+  it("refuses Eugene's terex-CATEGORY shear machine — the category is not the machine", async () => {
+    store.equipment.push({
+      id: 'eq65-eugene',
+      site_id: EUGENE,
+      display_name: 'EQ65 — Sheer Machine Shear Machine',
+      category: 'terex',
+      merged_into_id: null,
+    });
+    // Eugene's own Terex maintenance rows would be read if the guard let it past.
+    store.maint.push(maint('confirmed', 50000, 4000, { site_id: EUGENE }));
+
+    const l = await computeTerexLedger(EUGENE, 'eq65-eugene');
+    expect(l.equipment).toBeNull();
+    expect(l.maintenance.events).toHaveLength(0);
+    expect(l.maintenance.totalRepairCents).toBeNull();
+  });
+
+  it('refuses a Woodland shear machine that carries no Terex invoices', async () => {
+    seedProductionShape();
+    store.equipment.push({
+      id: 'eq24',
+      site_id: WOODLAND,
+      display_name: 'EQ24 — Shear Machine',
+      category: 'terex',
+      merged_into_id: null,
+    });
+
+    const l = await computeTerexLedger(WOODLAND, 'eq24');
+    // The site HAS confirmed maintenance rows — they must not surface here.
+    expect(l.equipment).toBeNull();
+    expect(l.maintenance.totalRepairCents).toBeNull();
+    expect(l.ap.totalCents).toBe(0);
+  });
+
+  it('still admits the real machine — the guard is narrow, not a blanket refusal', async () => {
+    seedProductionShape();
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.equipment?.displayName).toBe('Terex');
+    expect(l.ap.totalCents).toBe(202_492);
   });
 
   it('refuses an asset from the other site (hard rule #2)', async () => {

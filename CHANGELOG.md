@@ -113,6 +113,16 @@ reds were produced deliberately before the guards were trusted.
 
 - **Read-only.** No new writer to any production table; the API route is GET and
   has no write verb.
+- **"The Terex operates exclusively at Woodland" turned out to be a code fix, not
+  just a fact.** Bill said it; the registry did not agree. `category: 'terex'` is
+  the ADR-0062 seed's category for **shear machines**, so five rows carry it —
+  `EQ24/EQ43/EQ74 — Shear Machine` at Woodland and `EQ65 — Sheer Machine Shear
+Machine` at **Eugene** — and only one is the machine. Since the maintenance log
+  is keyed by SITE and the events by a free-text code, opening the ledger on any
+  of those four would have shown the Terex's money and history under a shear
+  machine's name. The ledger now refuses a row unless the Terex invoices resolve
+  to it, and both cross-links use the same rule. Pinned by tests naming the real
+  Eugene row; falsified by dropping the invoice half of the check.
 
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
