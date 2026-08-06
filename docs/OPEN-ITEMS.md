@@ -99,6 +99,8 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
 
 ## 0.AH — 2026-08-06 ADR-0077: one Terex, and the downtime that was never there
 
+_(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table further down reuses the same numerals.)_
+
 ### Operator actions
 
 - **O-12 — Bill classifies `TEREX.xlsx` (doc-ingest source `8a0246e7`). BLOCKS the
@@ -123,6 +125,13 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
 4,025.36` — NOT $154,135.88; the 2025 sheet is a strict subset of the 2026 sheet
   and `dedup_key` is what keeps it single (ADR-0069 Am.2).
 
+- **O-14 — Bill flips `equipment_terex_ledger` to `live` for Woodland — AFTER O-12.**
+  `/admin/rollout`. The machine ledger is built and deployed but born `pilot`
+  (admin-only, ADR-0047). Flip it once the maintenance log has actually been
+  accepted: before that, Morena and Janette would open a page whose maintenance
+  panel honestly reads "awaiting absorption acceptance", which is not worth their
+  click. Eugene has no Terex — leave its row `pilot`.
+
 - **O-13 — Bill decides whether downtime gets a capture path at all.** It is not
   in the workbook and never was (ADR-0077 D4, four independent checks). Reporting
   it requires COLLECTING it — a `kind='downtime'` event carrying `hours_down`, or a
@@ -131,15 +140,18 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
 
 ### Accepted residuals (recorded, not actions)
 
-- **The blended Terex machine view is deferred, not cancelled.** Its maintenance
-  half is empty until O-12 lands and its two headline totals could only be
-  asserted against fixtures today. Design is recorded in ADR-0077 D6: a detail
-  view at `/dashboard/[site]/equipment/[equipmentId]` under the ADR-0044 tile (not
-  a parallel tile), gated on `admin OR (can_resolve_equipment_requests AND site
-reach)` — which resolves to exactly Bill, Morena and Janette, verified against
-  prod — behind a `pilot`-born `equipment_terex_ledger` rollout surface, with **no
-  event↔invoice matching in v1** (all four invoices share one vendor inside six
-  days; any heuristic would manufacture links).
+- **The Terex machine view SHIPPED, dark** (ADR-0077 D6/D7/D8) — the flip is
+  O-14 above. Detail view at `/dashboard/[site]/equipment/[equipmentId]` under the
+  ADR-0044 tile (not a parallel tile), gated on `admin OR
+(can_resolve_equipment_requests AND site reach)` = exactly Bill, Morena and
+  Janette. **No event↔invoice matching in v1** (all four invoices share one vendor
+  inside six days; any heuristic would manufacture links) — revisit only when a
+  real match need is observed, never speculatively.
+- **`can_resolve_equipment_requests` now grants TWO things.** It unlocks the
+  equipment-request worklist AND the machine ledger, so granting it to a fourth
+  person also shows them one machine's whole invoice history. Correct default
+  (the person who decides what an asset IS should see what it has cost), but it
+  is a second effect of ticking a box that used to have one.
 - **`summary.totalCostCents` has the same shape of defect as downtime had, one
   notch weaker.** It sums to `0` and renders `$0.00` when no event carried a cost.
   Not widened to `number | null` in this pass because the column IS genuinely

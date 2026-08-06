@@ -608,3 +608,112 @@ export async function reconciliationSiteIds(ctx: ReconciliationReadContext): Pro
   }
   return ctx.primarySiteId ? [ctx.primarySiteId] : [];
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0077 D6 — read gate for the Terex machine ledger
+// (`/dashboard/[site]/equipment/[equipmentId]` + its GET-only API).
+//
+// The audience Bill named is himself plus the two Woodland managers. The
+// interesting part is which existing signal actually SELECTS those three, because
+// three plausible ones do not:
+//
+//   - `role === 'manager'` + site reach → admits Daven and Kelsey via `all_sites`
+//     (ADR-0024), neither of whom has anything to do with this machine.
+//   - the `ap_approvers` roster → includes Shannon. An approver FILES an invoice;
+//     that is not the same as being answerable for the asset it names.
+//   - matching people BY NAME → walks straight into the duplicate-account trap.
+//     Production carries a second, email-less "Bill Barnard" row (inactive), so
+//     name equality is not identity here. Every check below is on the FLAG.
+//
+// `can_resolve_equipment_requests` is the one that fits, and not by coincidence:
+// it already means "this person is answerable for what equipment exists at their
+// site" (ADR-0046 Am.9). Combined with site reach it resolves to exactly Bill
+// (admin), Morena and Janette — Rick holds the flag but is Eugene-scoped, so the
+// Woodland machine is out of his reach.
+//
+// The COUPLING is deliberate and is recorded in the ADR: granting that flag to a
+// fourth person also grants them this view. That is the correct behaviour (the
+// person who decides what the asset IS should see what it has cost) but it is a
+// consequence someone must know about before they tick the box.
+//
+// Same three disciplines as the sibling gate above: admin POWERS still key on
+// `role === 'admin'` and this flag unlocks nothing else; the flag is read FRESH
+// from Postgres on every request, never carried in the JWT; and site reach is
+// re-derived from the EQUIPMENT ROW's site, never from a caller-supplied param.
+// ────────────────────────────────────────────────────────────────────────
+
+export interface EquipmentLedgerContext {
+  userId: string;
+  /** How access was granted — for the log line. */
+  via: 'admin' | 'can_resolve_equipment_requests';
+  /** Admin-only affordances (the AP-history deep link, which 403s for managers). */
+  isAdmin: boolean;
+  /** Cross-site reach (admin, or manager with all_sites — ADR-0024). */
+  allSites: boolean;
+  /** The manager's primary site id when reach is single-site; null for admin. */
+  primarySiteId: string | null;
+}
+
+/** Gate for the Terex machine ledger. no session → 401; ungranted → 403. */
+export async function requireEquipmentLedgerAccess(): Promise<EquipmentLedgerContext> {
+  const session = await auth();
+  if (!session?.user?.id) throw new Response('unauthenticated', { status: 401 });
+
+  if (session.user.role === 'admin') {
+    return {
+      userId: session.user.id,
+      via: 'admin',
+      isAdmin: true,
+      allSites: true,
+      primarySiteId: null,
+    };
+  }
+
+  if (session.user.role === 'manager') {
+    // FRESH from Postgres — a flag revoked five minutes ago must not still be
+    // honoured because it was true when the token was minted.
+    const u = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { can_resolve_equipment_requests: true, all_sites: true, primary_site_id: true },
+    });
+    if (u?.can_resolve_equipment_requests) {
+      return {
+        userId: session.user.id,
+        via: 'can_resolve_equipment_requests',
+        isAdmin: false,
+        allSites: u.all_sites,
+        primarySiteId: u.primary_site_id,
+      };
+    }
+  }
+
+  throw new Response('forbidden', { status: 403 });
+}
+
+export type EquipmentLedgerResult =
+  | { ok: true; ctx: EquipmentLedgerContext }
+  | { ok: false; status: 401 | 403 };
+
+export async function checkEquipmentLedgerAccess(): Promise<EquipmentLedgerResult> {
+  try {
+    return { ok: true, ctx: await requireEquipmentLedgerAccess() };
+  } catch (e) {
+    if (e instanceof Response && (e.status === 401 || e.status === 403)) {
+      return { ok: false, status: e.status };
+    }
+    throw e;
+  }
+}
+
+/**
+ * Can this caller reach the machine that lives at `siteId`?
+ *
+ * Takes the site from the EQUIPMENT ROW, never from the URL — a single-site
+ * manager who edits the `[site]` segment must not thereby reach the other
+ * jurisdiction's asset (hard rule #2). A manager with a NULL `primary_site_id`
+ * gets `false`, not "everywhere".
+ */
+export function ledgerReaches(ctx: EquipmentLedgerContext, siteId: string): boolean {
+  if (ctx.allSites) return true;
+  return ctx.primarySiteId === siteId;
+}

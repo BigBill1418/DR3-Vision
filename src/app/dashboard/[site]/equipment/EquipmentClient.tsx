@@ -49,15 +49,32 @@ export function EquipmentClient({
   throughput,
   showTrend = true,
   showEntry = true,
+  machines = [],
 }: {
   siteCode: string;
   throughput: EquipmentThroughput;
   // ADR-0047 UI gate — the trend view and event entry ramp independently per site.
   showTrend?: boolean;
   showEntry?: boolean;
+  /** ADR-0077 D6 — machines with a ledger the CALLER can open. Empty ⇒ no link. */
+  machines?: { id: string; displayName: string }[];
 }) {
   return (
     <div className="mt-8 flex flex-col gap-10">
+      {machines.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span className="opacity-70">Machine ledger:</span>
+          {machines.map((m) => (
+            <a
+              key={m.id}
+              href={`/dashboard/${siteCode}/equipment/${m.id}`}
+              className="underline opacity-90 hover:opacity-100"
+            >
+              {m.displayName} — maintenance, AP spend &amp; downtime →
+            </a>
+          ))}
+        </div>
+      )}
       {showTrend && (
         <>
           <SummaryTiles throughput={throughput} />

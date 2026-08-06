@@ -1,0 +1,247 @@
+// ADR-0077 D6 — the blended machine view: one Terex, one page, three sources
+// that are deliberately NOT blended into a single number.
+//
+// Bill asked for one view of one machine: what it cost, what broke and when, and
+// how long it was down. Those three facts live in three tables with three
+// different provenances, and the whole design problem is refusing to let them
+// look more joined-up than they are:
+//
+//   1. MAINTENANCE — `doc_terex_maintenance_rows`, absorbed from the TEREX
+//      workbook. **`status = 'confirmed'` ONLY.** Staged rows are money nobody
+//      has accepted yet (ADR-0069 Am.2's preview-then-confirm gate); putting
+//      them on a management view would present a proposal as a fact. A test
+//      asserts staged rows never appear, and it was falsified before trusted.
+//   2. AP LEDGER — every approved invoice tagged to the canonical equipment row.
+//      Real money, already decided, already paid.
+//   3. DOWNTIME — `equipment_events.hours_down`, which has never been written
+//      (ADR-0077 D4). Renders "not recorded", never 0.
+//
+// WHAT THIS MODULE DOES NOT DO: match invoices to maintenance events. All four
+// production invoices are the same vendor inside six days, so any date-or-amount
+// heuristic would manufacture links that look authoritative and are guesses. v1
+// shows the two lists side by side and says "not linked" out loud. The
+// linked-spend invariant (`linkedCents <= totalCents`) is still asserted, and
+// holds trivially at 0 — it is there so that the day someone DOES add matching,
+// the guard already exists.
+//
+// READ-ONLY. This module opens no write path of any kind; the surface it feeds
+// adds no writer to any production table.
+
+import { Prisma } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
+
+/** Free-text `equipment_code` the ADR-0048 history importer writes. */
+const TEREX_EVENT_CODE = 'terex';
+
+export interface TerexMaintenanceEvent {
+  id: string;
+  /** ISO day, set ONLY when the sheet cell held a real date in a plausible range. */
+  eventDateISO: string | null;
+  /**
+   * ALWAYS what the cell actually said. The live file carries `"09/16 or 17"`,
+   * a bare `"Jan"`, and a `1/14/202601` typo — rendered as written, never
+   * coerced into a date that would then look authoritative (ADR-0069 Am.2).
+   */
+  eventDateRaw: string | null;
+  issue: string | null;
+  measuresTaken: string | null;
+  /**
+   * Verbatim. The column is called "Estimated repair time/cost" and holds free
+   * text like `"2 weeks"` — its numeric total across ~90 populated rows is 2.
+   * Never parsed, never summed, never used as a duration.
+   */
+  estimatedTimeCost: string | null;
+  /** Integer cents, or NULL = not recorded. Never 0 — an unpriced repair is not free. */
+  actualRepairCostCents: number | null;
+  amountCreditedCents: number | null;
+}
+
+export interface TerexApInvoice {
+  linkId: string;
+  requestId: string;
+  receivedAtISO: string;
+  /** `vendor_freeform` (keyed at decision) falling back to the parsed `vendor`. */
+  vendor: string | null;
+  /**
+   * `COALESCE(confirmed_amount_cents, amount_cents)`. Production carries all
+   * four of these in the CONFIRMED column with `amount_cents` NULL, so reading
+   * `amount_cents` alone reports zero.
+   */
+  amountCents: number | null;
+  /**
+   * The AP decision, for callers who can actually open it — `/admin/ap/history`
+   * is admin-only, and handing a site manager a link that 403s is the exact
+   * defect ADR-0075 opens on ("the one instruction it did give 403s for site
+   * managers"). NULL for non-admins, who get the invoice identity inline instead.
+   */
+  decisionHref: string | null;
+}
+
+export interface TerexDowntime {
+  /**
+   * Σ of non-NULL `hours_down`. **NULL = never recorded**, which is not zero
+   * (ADR-0077 D4). NULL on every production Terex event today.
+   */
+  totalHours: number | null;
+  /** How many live events carried a downtime figure at all. */
+  eventsWithHours: number;
+  /** Live (non-voided) Terex events in scope, recorded downtime or not. */
+  eventsConsidered: number;
+}
+
+export interface TerexLedger {
+  equipment: {
+    id: string;
+    displayName: string;
+    category: string;
+    siteId: string;
+  } | null;
+  maintenance: {
+    events: TerexMaintenanceEvent[];
+    /** NULL when no confirmed row carried a cost — not 0. */
+    totalRepairCents: number | null;
+    totalCreditedCents: number | null;
+    /**
+     * True when the maintenance log has not been absorbed+accepted yet, so the
+     * panel renders an honest "awaiting acceptance" state rather than looking
+     * like a machine that has never needed a repair. See OPEN-ITEMS O-12.
+     */
+    awaitingAbsorption: boolean;
+  };
+  ap: {
+    invoices: TerexApInvoice[];
+    totalCents: number;
+    /** v1 is always 0 — no event↔invoice matching. Invariant: `<= totalCents`. */
+    linkedCents: number;
+  };
+  downtime: TerexDowntime;
+}
+
+export interface ComputeOpts {
+  /** Admins get the `/admin/ap/history` deep link; managers do not (it 403s). */
+  isAdmin?: boolean;
+}
+
+/** Decimal(12,2) dollars → integer cents, exactly (decimal.js, no float). */
+function toCents(d: Prisma.Decimal | null): number | null {
+  return d === null ? null : d.times(100).round().toNumber();
+}
+
+/** Σ of the non-null values, or NULL when there were none. Never 0-for-absent. */
+function sumOrNull(values: (number | null)[]): number | null {
+  const present = values.filter((v): v is number => v !== null);
+  return present.length === 0 ? null : present.reduce((a, b) => a + b, 0);
+}
+
+/**
+ * The whole machine, for one equipment row at one site.
+ *
+ * Returns `equipment: null` when the id does not exist, does not belong to
+ * `siteId`, or has been merged away — a merged loser must never render as a
+ * live machine, because its attribution has moved and its totals would read as
+ * a second machine's. Callers treat null as 404.
+ */
+export async function computeTerexLedger(
+  siteId: string,
+  equipmentId: string,
+  opts: ComputeOpts = {},
+): Promise<TerexLedger> {
+  const equipment = await prisma.equipment.findFirst({
+    where: { id: equipmentId, site_id: siteId, merged_into_id: null },
+    select: { id: true, display_name: true, category: true, site_id: true },
+  });
+
+  if (!equipment) {
+    return {
+      equipment: null,
+      maintenance: {
+        events: [],
+        totalRepairCents: null,
+        totalCreditedCents: null,
+        awaitingAbsorption: true,
+      },
+      ap: { invoices: [], totalCents: 0, linkedCents: 0 },
+      downtime: { totalHours: null, eventsWithHours: 0, eventsConsidered: 0 },
+    };
+  }
+
+  const [rows, links, events] = await Promise.all([
+    prisma.docTerexMaintenanceRow.findMany({
+      // CONFIRMED ONLY. The staged-leak guard depends on this clause.
+      where: { site_id: siteId, status: 'confirmed' },
+      orderBy: [{ event_date: 'asc' }, { sheet_name: 'asc' }, { row_index: 'asc' }],
+    }),
+    prisma.apEquipmentLink.findMany({
+      where: { equipment_id: equipment.id },
+      select: {
+        id: true,
+        request_id: true,
+        request: {
+          select: {
+            received_at: true,
+            vendor: true,
+            vendor_freeform: true,
+            amount_cents: true,
+            confirmed_amount_cents: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    }),
+    prisma.equipmentEvent.findMany({
+      where: { site_id: siteId, equipment_code: TEREX_EVENT_CODE, voided_at: null },
+      select: { hours_down: true },
+    }),
+  ]);
+
+  const maintenanceEvents: TerexMaintenanceEvent[] = rows.map((r) => ({
+    id: r.id,
+    eventDateISO: r.event_date ? r.event_date.toISOString().slice(0, 10) : null,
+    eventDateRaw: r.event_date_raw,
+    issue: r.issue,
+    measuresTaken: r.measures_taken,
+    estimatedTimeCost: r.estimated_time_cost,
+    actualRepairCostCents: toCents(r.actual_repair_cost),
+    amountCreditedCents: toCents(r.amount_credited),
+  }));
+
+  const invoices: TerexApInvoice[] = links.map((l) => ({
+    linkId: l.id,
+    requestId: l.request_id,
+    receivedAtISO: l.request.received_at.toISOString(),
+    vendor: l.request.vendor_freeform ?? l.request.vendor,
+    amountCents: l.request.confirmed_amount_cents ?? l.request.amount_cents,
+    decisionHref: opts.isAdmin ? `/admin/ap/history?request=${l.request_id}` : null,
+  }));
+
+  const hours = events
+    .map((e) => (e.hours_down === null ? null : e.hours_down.toNumber()))
+    .filter((h): h is number => h !== null);
+
+  return {
+    equipment: {
+      id: equipment.id,
+      displayName: equipment.display_name,
+      category: equipment.category,
+      siteId: equipment.site_id,
+    },
+    maintenance: {
+      events: maintenanceEvents,
+      totalRepairCents: sumOrNull(maintenanceEvents.map((e) => e.actualRepairCostCents)),
+      totalCreditedCents: sumOrNull(maintenanceEvents.map((e) => e.amountCreditedCents)),
+      awaitingAbsorption: maintenanceEvents.length === 0,
+    },
+    ap: {
+      invoices,
+      totalCents: invoices.reduce((s, i) => s + (i.amountCents ?? 0), 0),
+      // v1: no matching. Kept explicit so the `linked <= total` guard has
+      // something real to measure the day matching arrives.
+      linkedCents: 0,
+    },
+    downtime: {
+      totalHours: hours.length === 0 ? null : hours.reduce((a, b) => a + b, 0),
+      eventsWithHours: hours.length,
+      eventsConsidered: events.length,
+    },
+  };
+}

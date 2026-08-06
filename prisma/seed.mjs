@@ -1021,6 +1021,10 @@ async function seedRolloutSurfaces(siteIds) {
     // admin-only until Bill flips it at /admin/rollout. Matches migration
     // 20260826_adr0074_ipad_hauls_surface.
     'ipad_hauls',
+    // ADR-0077 D6 — the Terex machine ledger. Born pilot (ADR-0047 #3): ships
+    // dark, admin-only, until Bill flips it at /admin/rollout. Matches migration
+    // 20260829_adr0077_terex_ledger_surface.
+    'equipment_terex_ledger',
   ];
   // ADR-0065 — retrofitted gates over surfaces that are ALREADY live to operators.
   // Born-pilot protects new exposure; seeding these `pilot` would take working

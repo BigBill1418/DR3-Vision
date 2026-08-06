@@ -49,6 +49,12 @@ export const UI_SURFACE = {
   LOADS_EVENTS_OR_TABS: 'loads_events_or_tabs',
   EQUIPMENT_ENTRY: 'equipment_entry',
   EQUIPMENT_TREND: 'equipment_trend',
+  // ADR-0077 D6 — the Terex machine ledger (maintenance log + AP cost ledger +
+  // downtime) at /dashboard/[site]/equipment/[equipmentId]. Born pilot: it ships
+  // DARK, admin-only, until Bill flips it. Its maintenance panel is empty until
+  // the absorption acceptance in OPEN-ITEMS O-12, so pilot is also what keeps a
+  // half-populated surface off a manager's screen.
+  EQUIPMENT_TEREX_LEDGER: 'equipment_terex_ledger',
   // handoff §1.8 — manager-facing Yard view, born pilot (admin-only until flipped).
   YARD_LIST: 'yard_list',
   // ADR-0037 D7 (data-driven) — the master loads/inventory + floor-operator
