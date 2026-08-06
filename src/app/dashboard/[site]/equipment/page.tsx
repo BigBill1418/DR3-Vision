@@ -15,6 +15,7 @@ import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
+import { prisma } from '@/lib/prisma';
 import { EquipmentClient } from './EquipmentClient';
 
 export const dynamic = 'force-dynamic';
@@ -41,9 +42,10 @@ export default async function EquipmentPage({ params }: Props) {
   // admin-only; the trend view stays admin even after event ENTRY goes live (§8
   // Stage 2 separation) until `equipment_trend` is flipped too.
   const isAdmin = result.ctx.role === 'admin';
-  const [entryLive, trendLive] = await Promise.all([
+  const [entryLive, trendLive, ledgerLive] = await Promise.all([
     isUiSurfaceLive(UI_SURFACE.EQUIPMENT_ENTRY, result.ctx.siteId),
     isUiSurfaceLive(UI_SURFACE.EQUIPMENT_TREND, result.ctx.siteId),
+    isUiSurfaceLive(UI_SURFACE.EQUIPMENT_TEREX_LEDGER, result.ctx.siteId),
   ]);
   const showEntry = isAdmin || entryLive;
   const showTrend = isAdmin || trendLive;
@@ -65,6 +67,27 @@ export default async function EquipmentPage({ params }: Props) {
 
   const throughput = await computeEquipmentThroughput(result.ctx.siteId, { windowDays: 90 });
 
+  // ADR-0077 D6 — the machine-ledger entry point. The heading above stays
+  // GENERIC (this is the site's equipment surface; a second machine joins it
+  // tomorrow) and the per-machine story lives one level down.
+  //
+  // Only offered when the caller can actually open it: pilot ⇒ admin-only, so a
+  // manager is never shown a link that lands on "Not yet activated". Merged-away
+  // rows are excluded — their attribution has moved to the survivor.
+  const machines =
+    isAdmin || ledgerLive
+      ? await prisma.equipment.findMany({
+          where: {
+            site_id: result.ctx.siteId,
+            category: 'terex',
+            is_active: true,
+            merged_into_id: null,
+          },
+          select: { id: true, display_name: true },
+          orderBy: { display_name: 'asc' },
+        })
+      : [];
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-5xl">
@@ -84,6 +107,7 @@ export default async function EquipmentPage({ params }: Props) {
           throughput={throughput}
           showTrend={showTrend}
           showEntry={showEntry}
+          machines={machines.map((m) => ({ id: m.id, displayName: m.display_name }))}
         />
       </div>
     </main>

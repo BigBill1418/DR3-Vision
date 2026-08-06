@@ -64,6 +64,18 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
             {equipment.display_name} ({CATEGORY_LABEL[equipment.category]})
           </p>
         </header>
+        {/* ADR-0077 D6 — the asset master says WHAT this is; the machine ledger
+            says what it has COST. Linked only for a machine that actually has a
+            ledger worth opening (category `terex`, live, with a resolvable site
+            code) so the link never lands on an empty page. */}
+        {equipment.category === 'terex' && equipment.site_code && !equipment.merged_into_id ? (
+          <Link
+            href={`/dashboard/${equipment.site_code}/equipment/${equipment.id}`}
+            className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
+          >
+            View machine ledger — maintenance log, AP spend and downtime →
+          </Link>
+        ) : null}
         <EquipmentEditForm equipment={equipment} sites={sites} backHref={backHref} />
       </div>
     </main>

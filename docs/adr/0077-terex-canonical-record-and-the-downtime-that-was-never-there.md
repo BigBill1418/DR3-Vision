@@ -191,27 +191,125 @@ on **both** maintenance-log sheets reads `Actual Repair Cost: 77067.94` and
 **subset** of the 2026 sheet — absorbing both without `dedup_key` reports
 **$154,135.88**, exactly double (ADR-0069 Am.2).
 
-## D6 — The blended machine view is deferred, and why that is the right call
+## D6 — The blended machine view, shipped DARK
 
-Phase 3's ledger blends three sources. One of them — confirmed maintenance
-events — is **empty and will stay empty until D5's classification happens**. Its
-two flagship reconciliation totals ($77,067.94 / $4,025.36) could only be
-asserted against fixtures today, and the surface itself would render blank for
-Bill on the day it shipped.
+Built and shipped, born `pilot` — nobody but an admin can open it until Bill
+flips `equipment_terex_ledger` at `/admin/rollout`.
 
-Shipping a management view whose headline half is empty, gated behind a rollout
-flag nobody can usefully flip, buys nothing and costs a permanent surface. The
-design work stands (detail view under the ADR-0044 tile at
-`/dashboard/[site]/equipment/[equipmentId]`; a `can_resolve_equipment_requests`
+**Why ship it before D5's classification lands.** The view is not empty today.
+Its **AP half is fully live**: four approved invoices, **$2,024.92**, all now
+resolving to the one canonical row this ADR created. Its **downtime half is real
+content** — "not recorded", which is the true and previously-unsaid answer. Only
+the **maintenance half** waits on O-12, and it announces that in words rather
+than rendering blank:
 
-- site-reach gate that resolves to exactly Bill, Morena and Janette; no
-  event↔invoice matching in v1 because all four invoices share one vendor inside
-  six days and any heuristic would manufacture links). It is recorded in
-  OPEN-ITEMS and picks up the moment there is money to show.
+> **Maintenance log awaiting absorption acceptance.** …This is an empty _inbox_,
+> not a machine that has never needed a repair — do not read it as a clean history.
 
-The one piece of Phase 3 that did **not** depend on absorption — the honest
-rendering of absent downtime — shipped here, because it is a live defect on a
-surface Bill already reads.
+Born-pilot is doing two jobs at once here. It is the ADR-0047 default for any new
+staff-visible surface, and it is also what keeps a half-populated view off a
+manager's screen while the code, the gate and the pinned math land and get
+exercised. Shipping dark is the established convention (ADR-0074 did the same for
+`ipad_hauls`), and the alternative — holding the whole feature in a branch until
+an operator action completes — is how work rots.
+
+**Shape.** A DETAIL VIEW under the ADR-0044 tile at
+`/dashboard/[site]/equipment/[equipmentId]`, reached from it. Not a parallel tile:
+the tile is the site's equipment surface and stays generically titled, because a
+second machine joins it tomorrow. `/admin/equipment/[id]` — the asset master,
+which says _what a thing is_ — gains one cross-link to the ledger, which says
+_what it has cost_. The tile's link is rendered only for callers who can actually
+open the target, so a manager is never offered a link to "Not yet activated".
+
+**Three sources, deliberately not blended into one number.** `computeTerexLedger`
+returns them side by side:
+
+| source      | rule                                                                |
+| ----------- | ------------------------------------------------------------------- |
+| maintenance | `doc_terex_maintenance_rows`, **`status='confirmed'` only**         |
+| AP ledger   | links on the canonical id, `confirmed_amount_cents ?? amount_cents` |
+| downtime    | `equipment_events.hours_down`, Σ non-NULL, else "not recorded"      |
+
+**No event↔invoice matching in v1.** All four invoices are the same vendor inside
+six days. A date-or-amount heuristic over that data would not _find_ links, it
+would _manufacture_ them — and manufactured links on a management view are worse
+than none, because they look authoritative. The two lists render side by side
+with the absence stated out loud ("Invoices are not linked to individual
+repairs"). The `linkedCents <= totalCents` invariant is asserted anyway, holding
+trivially at 0, so the guard already exists the day matching arrives.
+
+**No new writers.** The module opens no write path; the API route is GET-only and
+deliberately has no write verb. Absorption remains the sole writer of the
+maintenance rows, the AP decision path of the links, the ADR-0044 service of the
+events.
+
+## D7 — The gate is the equipment-request flag, and that couples two things
+
+Access is `admin OR (can_resolve_equipment_requests AND site reach)`, read
+**fresh from Postgres** on every request, never from the JWT — and reach is
+re-derived from the **equipment row's** site, so editing the `[site]` URL segment
+cannot reach the other jurisdiction's asset.
+
+That resolves to exactly **Bill, Morena and Janette**, verified against the live
+roster. Three more obvious gates were rejected because each selects the wrong
+set, and each is now a pinned negative test:
+
+| candidate gate               | who it wrongly admits                                                    |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `role === 'manager'` + reach | Daven and Kelsey, via `all_sites` (ADR-0024)                             |
+| the `ap_approvers` roster    | Shannon — filing an invoice is not owning the asset                      |
+| matching people by NAME      | the duplicate-account trap: a second, inactive "Bill Barnard" row exists |
+
+`can_resolve_equipment_requests` fits because it already means "this person is
+answerable for what equipment exists at their site" (ADR-0046 Am.9).
+
+**The coupling is the consequence to know about:** granting that flag to a fourth
+person also grants them this view. That is the right default — the person who
+decides what an asset _is_ should see what it has cost — but it is now a second
+effect of ticking a box that used to have one, and whoever ticks it should know.
+
+**One deliberate asymmetry.** The AP-decision deep link goes to
+`/admin/ap/history`, which is admin-only. Rendering it for Morena or Janette would
+hand them a link that 403s — precisely the defect ADR-0075 opens on ("the one
+instruction it did give 403s for site managers"). Non-admins get the invoice
+identity inline instead; `decisionHref` is `null` for them, and a test pins it.
+
+## D8 — The math is pinned, and the pins were made to fail on purpose
+
+Five regression assertions, each with a fixture built so the failure it guards
+against is actually _reachable_:
+
+1. confirmed repairs **$77,067.94**, not $154,135.88
+2. confirmed credited **$4,025.36**
+3. AP total **202,492 cents** across 4 links on one id
+4. downtime = Σ non-NULL `hours_down`; zero recorded rows ⇒ `null`, never `0.0`
+5. `linkedCents <= totalCents` (v1: 0)
+
+The subset-duplication fixture is the interesting one. The staged rows are left
+_in the table_, mirroring the confirmed ones — so deleting the `status:
+'confirmed'` clause does not make the test go red for the boring reason (an empty
+list); it makes the repair total read **exactly 15413588**, the real
+double-count. Proven, not asserted:
+
+```
+× 1. confirmed repairs total $77,067.94 — not $154,135.88
+  → expected 15413588 to be 7706794
+× excludes staged rows entirely — they are a proposal, not a fact
+  → expected [ { id: 'm1', …(7) }, …(3) ] to have a length of 2 but got 4
+```
+
+And the money-column pin, falsified by reading `amount_cents` alone — the column
+that is NULL on all four production rows:
+
+```
+× 3. AP total is 202,492 cents across 4 links on ONE id
+  → expected +0 to be 202492
+```
+
+A first pass at the first falsification went red for the wrong reason (the test
+mock filtered on an undefined status and returned nothing). That is the same
+class of mistake ADR-0076 recorded — a falsification that proves nothing — so the
+mock was corrected until the red output named the real number.
 
 ## Alternatives considered
 
@@ -227,6 +325,14 @@ surface Bill already reads.
   an accident, and the confirm was never reached anyway (D5).
 - **Classify `TEREX.xlsx` to Woodland ourselves and run the chain.** Rejected
   under D5. The evidence is strong; the authority is not ours to assume.
+- **Hold the machine view until the classification lands.** Rejected on the
+  second pass: the AP half is live _today_ and the downtime half is real content,
+  so the only empty panel is one that says it is empty. Born-pilot already keeps
+  it off a manager's screen, which is the protection holding it back was buying —
+  and unmerged work rots.
+- **Match invoices to maintenance events by date proximity + amount.** Rejected
+  for v1 under D6. With one vendor and a six-day spread, the heuristic's output
+  would be indistinguishable from guessing.
 - **Widen `totalCostCents` to `number | null` in the same pass.** Not done. The
   cost column is genuinely populated (7 of 68 events), so `$0.00` is a far
   weaker claim than "0.0 hrs" on a never-written column, and the change ripples
@@ -243,6 +349,11 @@ surface Bill already reads.
   `requireAdmin()`; only server-side callers gain the labelled shape.
 - Any surface reading `summary.totalDowntimeHours` must now handle `null`. Two
   consumers were updated; the type makes a third impossible to miss.
+- The ledger surface exists and is **dark**. Bill flips
+  `equipment_terex_ledger` (Woodland) once O-12 has been accepted; until then only
+  admins see it, and its maintenance panel says why it is empty.
+- `can_resolve_equipment_requests` now grants **two** things. Granting it to a
+  fourth person also shows them one machine's whole invoice history.
 - Downtime remains **uncollected**, not merely unreported. If Bill wants it, it
   needs a capture path — a `kind='downtime'` event with `hours_down`, or a new
   workbook column — not a derivation. No number will be invented from the run-hour

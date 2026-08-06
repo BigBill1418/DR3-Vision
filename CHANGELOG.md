@@ -72,10 +72,47 @@ unchanged — both still require an admin session.
   The figures are pinned and waiting — `77,067.94` repair and `4,025.36`
   credited, identical on both sheets because the 2025 one is a strict subset
   (absorb both without `dedup_key` and it reports $154,135.88, exactly double).
-- **The blended machine view is deferred** to when there is money to show. Its
-  maintenance half is empty until the classification lands, and its two headline
-  totals could only be asserted against fixtures today. Design recorded in
-  ADR-0077 D6.
+
+### One machine, one page — shipped dark
+
+`/dashboard/<site>/equipment/<id>` is the Terex's whole story: every invoice
+tagged to it, its maintenance log, and its downtime. A **detail view under** the
+existing equipment tile, reached from it — not a parallel tile — with one
+cross-link from `/admin/equipment` (which says what a thing _is_) to the ledger
+(which says what it has _cost_).
+
+It ships **born pilot**: admin-only until Bill flips `equipment_terex_ledger`.
+Two of its three panels are live right now — four invoices totalling **$2,024.92**
+on the newly-canonical record, and downtime honestly reading "not recorded". The
+third waits on the classification below and **says so in words** rather than
+rendering blank: _"an empty inbox, not a machine that has never needed a repair."_
+
+**Nothing is joined that is not actually joined.** All four invoices are the same
+vendor within six days, so matching them to individual repairs by date or amount
+would invent connections rather than find them. The two lists sit side by side
+with the absence stated out loud. The `linked <= total` invariant is asserted
+anyway — trivially true at zero — so the guard is already there the day matching
+arrives.
+
+**Who sees it:** admin, or a manager holding `can_resolve_equipment_requests`
+with reach to the machine's site — exactly Bill, Morena and Janette. Three more
+obvious gates were rejected and are now pinned as negative tests: `role ==
+manager` + reach admits Daven and Kelsey through `all_sites`; the `ap_approvers`
+roster admits Shannon; and matching people by **name** walks into the
+duplicate-account trap (a second, inactive "Bill Barnard" row exists). The flag is
+read fresh from Postgres every request, and site reach comes from the **equipment
+row**, not the URL.
+
+**The math is pinned, and the pins were made to fail on purpose.** $77,067.94
+repair / $4,025.36 credited / 202,492 cents AP / downtime-null-not-zero /
+linked ≤ total. The fixture leaves the subset-sheet rows in the table as `staged`,
+so deleting the confirmed-only filter does not fail for the boring reason — it
+makes the total read exactly **15413588**, the real double-count. Reading
+`amount_cents` instead of the confirmed column drops the AP total to **+0**. Both
+reds were produced deliberately before the guards were trusted.
+
+- **Read-only.** No new writer to any production table; the API route is GET and
+  has no write verb.
 
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
