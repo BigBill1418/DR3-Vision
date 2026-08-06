@@ -124,6 +124,62 @@ Machine` at **Eugene** — and only one is the machine. Since the maintenance lo
   to it, and both cross-links use the same rule. Pinned by tests naming the real
   Eugene row; falsified by dropping the invoice half of the check.
 
+### The workbook is absorbed, accepted, and live — and it tried to count itself three times
+
+Bill: _"you need to classify and accept everything."_ Done. `TEREX.xlsx` is
+registered as a `terex_maintenance_log` at Woodland, its newest revision applied
+and absorbed, and **80 maintenance rows accepted at $77,067.94 repair /
+$4,025.36 credited** — matching ADR-0069 Am.2 to the cent.
+
+It did not go as scripted, and that is the useful part. **Registering the source
+made all three applied revisions absorbable at once**, so the sweep took all
+three: 240 staged rows, **$231,203.82** — exactly 3 × $77,067.94.
+
+The absorber was not wrong. Per revision it is perfect, and the subset-sheet
+de-duplication is visibly working inside each one (55 rows from the 2025 sheet
+carry every dollar; the 2026 sheet adds only its 25 non-duplicate rows, all
+costless). That de-duplication is **within** a version — the unique key is
+`(version, sheet, row)`, so two confirmed revisions of one document coexist by
+design. What would have been wrong is the **ledger**, which summed every
+confirmed row for the site.
+
+So the two superseded revisions were **discarded** — through the same audited
+decision path as an accept, each recording the $77,067.94 it was worth — and
+`computeTerexLedger` is now **version-scoped**: newest absorption wins. The
+second fix is the one that matters, and the tests say so by leaving all three
+revisions confirmed in the fixture. A total that is only right when somebody
+remembered to tidy up is not a guarantee. Removing the version filter turns it
+red at `expected 23120382 to be 7706794`.
+
+**The hard stop is why this was caught at all.** The one-off refuses to accept
+anything unless the staged batch reads to the cent, and its read-only `check`
+step must be run and read before `accept`. A wrong number here does not stay a
+wrong number — it becomes accepted money.
+
+**The ledger is LIVE at Woodland.** Eugene stays `pilot` permanently, and its row
+stays: an _unregistered_ surface resolves to admin-only through a caught
+exception, so deleting the row would make a deliberate "no" look like a lookup
+that quietly failed.
+
+### What "Estimated repair time/cost" actually contained
+
+Every distinct value in the column, now that the rows exist:
+
+```
+Unknown - more than a week, less than a month
+unknown
+unknown, but 'soon'
+```
+
+Not one is a duration. The downtime verdict is stronger than it was written: the
+column does not merely fail to be _reliable_ downtime — it holds **no time
+information at all**. The as-written rendering needed no change.
+
+Two more live figures the rendering rules were written for, neither hypothetical:
+**72 of 80 rows carry no cost** (rendered "not recorded", never `$0.00`) and
+**16 carry no parsable date**, one of them the `"09/16 or 17"` the schema comment
+predicted, shown exactly as written.
+
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
 On the night of August 4th, nineteen processors worked the Woodland floor. The
