@@ -179,6 +179,14 @@ export interface ConfirmClassificationArgs {
   siteId: string | null;
   period: string | null;
   actorUserId: string;
+  /**
+   * ADR-0077 — set INSTEAD of a real `users.id` when a named non-human actor
+   * registers the document. `classified_by` is a bare string column (no FK), so
+   * the label lands there and the audit row carries `actor_label` with
+   * `actor_user_id` NULL. Borrowing a person's id would put a false claim into
+   * an append-only table (hard rule #6).
+   */
+  actorLabel?: string | undefined;
   now?: Date;
 }
 
@@ -211,14 +219,15 @@ export async function confirmClassification(
         doc_class: args.kind,
         doc_class_source: 'operator',
         classified_at: now,
-        classified_by: args.actorUserId,
+        classified_by: args.actorLabel ?? args.actorUserId,
         site_id: args.siteId,
         period: args.period,
       },
     });
     await writeAudit(
       {
-        actor_user_id: args.actorUserId,
+        actor_user_id: args.actorLabel ? null : args.actorUserId,
+        actor_label: args.actorLabel ?? null,
         action: 'update',
         table_name: 'doc_sources',
         row_id: args.sourceId,

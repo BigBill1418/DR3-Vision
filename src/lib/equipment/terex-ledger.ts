@@ -59,6 +59,36 @@ const TEREX_EVENT_CODE = 'terex';
  * else. Recorded as a residual; the real fix is a link from the absorbed rows
  * (or `equipment_events`) to an equipment id.
  */
+/**
+ * The version whose confirmed rows ARE the maintenance log right now.
+ *
+ * Absorption stages rows PER REVISION of the workbook, and the unique key is
+ * `(doc_source_version_id, sheet_name, row_index)` — so two confirmed revisions
+ * of the same document coexist happily in the table, each carrying a complete
+ * copy of the log. ADR-0069 Am.2's de-duplication is WITHIN a version (the 2025
+ * sheet is a subset of the 2026 sheet); it was never meant to reach across them.
+ *
+ * This bit on 2026-08-06. Registering the source made all THREE applied
+ * revisions absorbable at once and the backlog sweep took all three: 240 staged
+ * rows, $231,203.82 — exactly 3 × $77,067.94. The per-version totals were each
+ * perfect. Summing every confirmed row for the site is what would have been
+ * wrong, and it is what this function stops.
+ *
+ * Newest absorption wins, which is the right document semantic: a revision
+ * SUPERSEDES its predecessor rather than adding to it. Superseded batches are
+ * discarded through the normal decision path, but this must not DEPEND on that
+ * housekeeping having happened — a management total that is only correct when
+ * someone remembered to tidy up is not a guarantee.
+ */
+async function latestConfirmedVersionId(siteId: string): Promise<string | null> {
+  const newest = await prisma.docTerexMaintenanceRow.findFirst({
+    where: { site_id: siteId, status: 'confirmed' },
+    orderBy: { absorbed_at: 'desc' },
+    select: { doc_source_version_id: true },
+  });
+  return newest?.doc_source_version_id ?? null;
+}
+
 function isSiteTerexMachine(category: string, apLinkCount: number): boolean {
   return category === 'terex' && apLinkCount > 0;
 }
@@ -196,11 +226,16 @@ export async function computeTerexLedger(
   }
 
   const [rows, links, events] = await Promise.all([
-    prisma.docTerexMaintenanceRow.findMany({
-      // CONFIRMED ONLY. The staged-leak guard depends on this clause.
-      where: { site_id: siteId, status: 'confirmed' },
-      orderBy: [{ event_date: 'asc' }, { sheet_name: 'asc' }, { row_index: 'asc' }],
-    }),
+    latestConfirmedVersionId(siteId).then((versionId) =>
+      versionId === null
+        ? []
+        : prisma.docTerexMaintenanceRow.findMany({
+            // CONFIRMED ONLY (the staged-leak guard depends on this clause) and
+            // ONE VERSION ONLY (see `latestConfirmedVersionId`).
+            where: { site_id: siteId, status: 'confirmed', doc_source_version_id: versionId },
+            orderBy: [{ event_date: 'asc' }, { sheet_name: 'asc' }, { row_index: 'asc' }],
+          }),
+    ),
     prisma.apEquipmentLink.findMany({
       where: { equipment_id: equipment.id },
       select: {

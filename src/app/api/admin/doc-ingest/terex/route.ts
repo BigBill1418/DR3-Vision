@@ -10,12 +10,18 @@
 // events individually guarantees they stop reading them; showing the totals and
 // the de-duplication, then taking one decision, is the review that actually
 // happens.
+//
+// ADR-0077 moved the decision itself into `decideTerexBatch` so the one
+// non-HTTP caller (the one-off that accepted the first batch, at Bill's written
+// instruction) drives the SAME audited code rather than a hand-written
+// `updateMany` that would skip the totals capture. THE GATE DID NOT MOVE: this
+// route still requires an admin session, and it is still the only way in from
+// the network.
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { prisma } from '@/lib/prisma';
 import { checkAdmin } from '@/lib/auth-helpers';
-import { writeAudit } from '@/lib/audit';
+import { decideTerexBatch } from '@/lib/doc-ingest/terex-decide';
 import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
@@ -37,69 +43,21 @@ export async function POST(req: Request): Promise<Response> {
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
   const body = parsed.data;
-  const now = new Date();
 
-  const staged = await prisma.docTerexMaintenanceRow.findMany({
-    where: { doc_source_version_id: body.versionId, status: 'staged' },
-    select: { id: true, actual_repair_cost: true, amount_credited: true, estimated_cost: true },
+  const result = await decideTerexBatch(body.action, {
+    versionId: body.versionId,
+    actor: { userId: gate.ctx.userId },
+    ...(body.action === 'discard' ? { reason: body.reason } : {}),
   });
-  if (staged.length === 0) {
-    // Not an error worth a 500 — most likely somebody else just decided it.
-    return NextResponse.json({ error: 'nothing_staged' }, { status: 409 });
-  }
 
-  const sum = (pick: (r: (typeof staged)[number]) => unknown): number =>
-    staged.reduce((a, r) => a + Number(pick(r) ?? 0), 0);
-  const totals = {
-    actual_repair_cost: sum((r) => r.actual_repair_cost),
-    amount_credited: sum((r) => r.amount_credited),
-    estimated_cost: sum((r) => r.estimated_cost),
-  };
+  if (!result.ok) return NextResponse.json({ error: result.reason }, { status: 409 });
 
-  if (body.action === 'confirm') {
-    const res = await prisma.docTerexMaintenanceRow.updateMany({
-      where: { doc_source_version_id: body.versionId, status: 'staged' },
-      data: { status: 'confirmed', confirmed_at: now, confirmed_by: gate.ctx.userId },
-    });
-    await writeAudit({
-      actor_user_id: gate.ctx.userId,
-      action: 'update',
-      table_name: 'doc_terex_maintenance_rows',
-      row_id: body.versionId,
-      after: {
-        confirmed: true,
-        rows: res.count,
-        // The figures AS ACCEPTED. If a later read disagrees, this row says what
-        // the person was actually looking at when they said yes.
-        totals_accepted: totals,
-      },
-    });
-    log.info(
-      { versionId: body.versionId, rows: res.count, actor: gate.ctx.userId },
-      '[terex] staged batch confirmed',
-    );
-    return NextResponse.json({ confirmed: res.count, totals });
-  }
-
-  const res = await prisma.docTerexMaintenanceRow.updateMany({
-    where: { doc_source_version_id: body.versionId, status: 'staged' },
-    data: {
-      status: 'discarded',
-      discarded_at: now,
-      discarded_by: gate.ctx.userId,
-      discard_reason: body.reason,
-    },
-  });
-  await writeAudit({
-    actor_user_id: gate.ctx.userId,
-    action: 'update',
-    table_name: 'doc_terex_maintenance_rows',
-    row_id: body.versionId,
-    after: { discarded: true, rows: res.count, reason: body.reason, totals_rejected: totals },
-  });
   log.info(
-    { versionId: body.versionId, rows: res.count, actor: gate.ctx.userId },
-    '[terex] staged batch discarded',
+    { versionId: body.versionId, rows: result.rows, actor: gate.ctx.userId },
+    `[terex] staged batch ${result.action === 'confirm' ? 'confirmed' : 'discarded'}`,
   );
-  return NextResponse.json({ discarded: res.count });
+
+  return result.action === 'confirm'
+    ? NextResponse.json({ confirmed: result.rows, totals: result.totals })
+    : NextResponse.json({ discarded: result.rows });
 }

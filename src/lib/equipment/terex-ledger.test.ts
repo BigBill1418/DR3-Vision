@@ -39,6 +39,8 @@ interface MaintRow {
   id: string;
   site_id: string;
   status: string;
+  doc_source_version_id: string;
+  absorbed_at: Date;
   sheet_name: string;
   row_index: number;
   event_date: Date | null;
@@ -97,13 +99,31 @@ vi.mock('@/lib/prisma', () => ({
       // module and this mock returns the staged subset rows too, so the repair
       // total reads exactly $154,135.88 — the real double-count — rather than
       // collapsing to an empty list and going red for the wrong reason.
-      findMany: vi.fn(async ({ where }: { where: { site_id: string; status?: string } }) =>
-        store.maint.filter(
-          (r) =>
-            r.site_id === where.site_id &&
-            (where.status === undefined || r.status === where.status),
-        ),
+      findMany: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { site_id: string; status?: string; doc_source_version_id?: string };
+        }) =>
+          store.maint.filter(
+            (r) =>
+              r.site_id === where.site_id &&
+              (where.status === undefined || r.status === where.status) &&
+              (where.doc_source_version_id === undefined ||
+                r.doc_source_version_id === where.doc_source_version_id),
+          ),
       ),
+      // Newest-absorbed first, matching `orderBy: { absorbed_at: 'desc' }`.
+      findFirst: vi.fn(async ({ where }: { where: { site_id: string; status?: string } }) => {
+        const rows = store.maint
+          .filter(
+            (r) =>
+              r.site_id === where.site_id &&
+              (where.status === undefined || r.status === where.status),
+          )
+          .sort((a, b) => b.absorbed_at.getTime() - a.absorbed_at.getTime());
+        return rows[0] ?? null;
+      }),
     },
     apEquipmentLink: {
       findMany: vi.fn(async ({ where }: { where: { equipment_id: string } }) =>
@@ -142,6 +162,8 @@ function maint(
     id: `m${seq}`,
     site_id: WOODLAND,
     status,
+    doc_source_version_id: 'v-current',
+    absorbed_at: new Date('2026-08-06T22:47:00Z'),
     sheet_name: 'Maintenance Log2026',
     row_index: seq,
     event_date: new Date('2026-03-04T00:00:00Z'),
@@ -268,6 +290,69 @@ describe('computeTerexLedger — the pinned totals (ADR-0077 D6)', () => {
     const l = await computeTerexLedger(WOODLAND, TEREX);
     expect(l.ap.linkedCents).toBe(0);
     expect(l.ap.linkedCents).toBeLessThanOrEqual(l.ap.totalCents);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// ADR-0077 D9 — the 2026-08-06 incident, pinned.
+//
+// Registering TEREX.xlsx made all THREE applied revisions absorbable at once and
+// the backlog sweep took all three: 240 staged rows, $231,203.82 — exactly
+// 3 × $77,067.94. Each version's own total was PERFECT; the absorber was not
+// wrong. What would have been wrong is a ledger that sums every confirmed row
+// for the site, because the unique key is (version, sheet, row) and two
+// confirmed revisions of one document coexist by design.
+//
+// The superseded batches were discarded, but these tests deliberately leave them
+// CONFIRMED: a total that is only correct when someone remembered to tidy up is
+// not a guarantee. The ledger has to be right anyway.
+// ────────────────────────────────────────────────────────────────
+describe('computeTerexLedger — one document, many revisions (ADR-0077 D9)', () => {
+  /** Three confirmed revisions, each a complete $77,067.94 copy of the log. */
+  function seedThreeRevisions(): void {
+    seedMachine();
+    const revisions = [
+      { v: 'v-2977', at: '2026-07-29T16:14:00Z' },
+      { v: 'v-2978', at: '2026-07-29T20:02:00Z' },
+      { v: 'v-2979', at: '2026-08-06T22:47:00Z' }, // newest — the document
+    ];
+    for (const { v, at } of revisions) {
+      store.maint.push(
+        maint('confirmed', 50000, 4000, {
+          doc_source_version_id: v,
+          absorbed_at: new Date(at),
+        }),
+        maint('confirmed', 27067.94, 25.36, {
+          doc_source_version_id: v,
+          absorbed_at: new Date(at),
+        }),
+      );
+    }
+  }
+
+  it('reports ONE revision — $77,067.94, not $231,203.82', async () => {
+    seedThreeRevisions();
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.maintenance.totalRepairCents).toBe(7_706_794);
+    expect(l.maintenance.totalRepairCents).not.toBe(23_120_382);
+    expect(l.maintenance.totalCreditedCents).toBe(402_536);
+  });
+
+  it('picks the NEWEST revision — a revision supersedes, it does not add', async () => {
+    seedThreeRevisions();
+    // Only the newest carries this row; if the ledger picked an older revision
+    // or merged them, the count would not be the newest revision's count.
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.maintenance.events).toHaveLength(2);
+  });
+
+  it('does not depend on the superseded batches having been tidied away', async () => {
+    seedThreeRevisions();
+    // The two older revisions are still CONFIRMED here, exactly as they were in
+    // production between absorption and the discard.
+    expect(store.maint.filter((r) => r.status === 'confirmed')).toHaveLength(6);
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.maintenance.totalRepairCents).toBe(7_706_794);
   });
 });
 

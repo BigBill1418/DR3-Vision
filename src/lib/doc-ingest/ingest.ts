@@ -319,7 +319,11 @@ export async function applyVersion(
   byteSize: number,
   actorUserId: string,
   now: Date,
-  mode: 'auto' | 'operator',
+  // ADR-0077 — `system` is a NAMED non-human caller: unlike `auto` (which
+  // credits the sweep's own DOC_INGEST_ACTOR) it audits under the label the
+  // caller passes, so a one-off run says which run it was rather than
+  // impersonating the pipeline. Unlike `operator` it writes no `users.id`.
+  mode: 'auto' | 'operator' | 'system',
 ): Promise<void> {
   // ── A missing archive is a missing DOCUMENT, and it must be loud ───────────
   // `parse_summary` retains no cell values (only shape + per-header sums), so the
@@ -392,8 +396,8 @@ export async function applyVersion(
 
     await writeAudit(
       {
-        actor_label: mode === 'auto' ? DOC_INGEST_ACTOR : null,
-        actor_user_id: mode === 'auto' ? null : actorUserId,
+        actor_label: mode === 'auto' ? DOC_INGEST_ACTOR : mode === 'system' ? actorUserId : null,
+        actor_user_id: mode === 'operator' ? actorUserId : null,
         action: 'insert',
         table_name: 'doc_source_versions',
         row_id: version.id,

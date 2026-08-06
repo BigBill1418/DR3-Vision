@@ -1,6 +1,6 @@
 # ADR-0077 — One Terex, and the downtime that was never there
 
-**Status:** Accepted (2026-08-06)
+**Status:** Accepted, implemented, LIVE at Woodland (2026-08-06)
 **Supersedes:** OPEN-ITEMS **O-10**'s stated merge direction (see D1). Nothing else.
 **Supplements:** ADR-0075 (the merge verb this drives), ADR-0063 (the equipment master), ADR-0044 (the equipment tile), ADR-0036 (the `actor_label` system-actor convention), ADR-0069 Am.2 (TEREX absorption, preview-then-confirm)
 **Does NOT supersede:** ADR-0063 D3 (the `(site_id, display_name)` unique index stands), ADR-0069 Am.2 §5 (money acceptance still answers "who accepted this?")
@@ -310,6 +310,86 @@ A first pass at the first falsification went red for the wrong reason (the test
 mock filtered on an undefined status and returned nothing). That is the same
 class of mistake ADR-0076 recorded — a falsification that proves nothing — so the
 mock was corrected until the red output named the real number.
+
+## D9 — One document, many revisions: the ledger reads ONE
+
+Registering `TEREX.xlsx` (D5) and accepting its batch was ordered by Bill in
+writing on 2026-08-06 and is done. It did not go as scripted, and the way it
+failed is the most useful thing in this ADR.
+
+**What happened.** Registering the source made every APPLIED revision absorbable
+at once, so the backlog sweep absorbed **all three** — ctags `…2977`, `…2978`,
+`…2979`. The table came back with **240 staged rows totalling $231,203.82**:
+exactly **3 × $77,067.94**.
+
+**The absorber was not wrong.** Per revision the arithmetic is perfect — 80 rows,
+$77,067.94 / $4,025.36 each — and the ADR-0069 Am.2 de-duplication is visibly
+doing its job inside each one: `Maintenance Log 2025` contributes 55 rows
+carrying all the money, `Maintenance Log2026` adds only the 25 rows that are not
+already in it, all of them costless. That de-duplication is **within** a version.
+It was never meant to reach across revisions of the same document, and the unique
+key `(doc_source_version_id, sheet_name, row_index)` means two confirmed
+revisions coexist by design.
+
+What would have been wrong is the **ledger**, which summed every confirmed row
+for the site. So:
+
+1. The two superseded revisions were **discarded** — not deleted — through the
+   same audited decision path as an accept, each recording the $77,067.94 it was
+   worth. A revision supersedes its predecessor; it does not add to it.
+2. `computeTerexLedger` is now **version-scoped**: newest absorption wins.
+
+Point 2 matters more than point 1, and the tests say so out loud by leaving all
+three revisions CONFIRMED in the fixture. **A management total that is only
+correct when somebody remembered to tidy up is not a guarantee.** Falsified by
+removing the version filter:
+
+```
+× reports ONE revision — $77,067.94, not $231,203.82
+  → expected 23120382 to be 7706794
+```
+
+**The hard stop is why this was caught.** The one-off refuses to accept anything
+unless the staged batch reads `77067.94` / `4025.36` to the cent, and `check` is
+a separate read-only step that must be run and read before `accept`. A wrong
+number here does not stay a wrong number — it becomes **accepted money**.
+
+**Accepted, verified live:** 80 confirmed rows, **$77,067.94 / $4,025.36**,
+Woodland-scoped, `confirmed_by` carrying the run's label.
+
+### What the free-text column actually held
+
+`estimated_time_cost`, now that rows exist — every distinct value:
+
+```
+Unknown - more than a week, less than a month
+unknown
+unknown, but 'soon'
+```
+
+Not one of them is a duration. D4's verdict is stronger than it was written:
+the column called "Estimated repair time/cost" does not merely fail to be
+_reliable_ downtime, it contains **no time information at all**. The as-written
+rendering needed no change.
+
+Two more figures from the live data, both of which the rendering rules were
+written for and neither of which was hypothetical: **72 of the 80 rows carry no
+cost** (they render "not recorded", never `$0.00`) and **16 carry no parsable
+date** — one of them the `"09/16 or 17"` the schema comment predicted, shown as
+written.
+
+## D10 — Live at Woodland, dark at Eugene
+
+`equipment_terex_ledger` is **live for Woodland** (O-14), flipped through
+`flipRolloutSurface` — the one audited place a rollout state changes — with the
+acceptance figures as its criteria note.
+
+**Eugene stays `pilot`, permanently, and the row stays.** Bill, 2026-08-06: _"the
+terex machine operates exclusively at woodland — eugene has no use or need for
+this data at all."_ Deleting the row would produce the same visible outcome by a
+worse mechanism: an unregistered surface resolves to admin-only through a
+_caught exception_, so a deliberate "no" would be indistinguishable from a
+lookup that quietly failed. A `pilot` row is the decision, written down.
 
 ## Alternatives considered
 

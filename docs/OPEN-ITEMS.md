@@ -103,38 +103,31 @@ _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table f
 
 ### Operator actions
 
-- **O-12 — Bill classifies `TEREX.xlsx` (doc-ingest source `8a0246e7`). BLOCKS the
-  whole Terex maintenance ledger.** The source row carries `doc_class = NULL` and
-  `site_id = NULL`, so `absorbVersion` refuses at Gate 1 (class must be
-  absorbable) and Gate 2 (site must not be NULL). **That — not the guardrail — is
-  why `doc_terex_maintenance_rows` holds 0 rows** even though two revisions were
-  applied on 2026-07-29; they were never queued. Open `/admin/doc-ingest`, confirm
-  the classification as **`terex_maintenance_log`** and site **Woodland**, then
-  apply staged revision `eed9d4cb` from `/admin/doc-ingest/anomalies` ("Apply this
-  revision"), let the sweep absorb, and accept the batch at
-  `/admin/doc-ingest/terex`.
-  **The SITE half is now answered.** Bill, 2026-08-06: _"the terex machine
-  operates exclusively at woodland — eugene has no use or need for this data at
-  all."_ So the classification is **`terex_maintenance_log` / Woodland**, on his
-  word, not an inference. What remains is his to click, and deliberately so: the
-  class+site confirmation is one click, and the **acceptance of $77,067.94 is the
-  ADR-0069 Am.2 §5 control** — money whose acceptance cannot answer "who accepted
-  this?" is not an audit trail, and that answer should be a person, at a screen,
-  with the totals in front of them.
-  **The guardrail HARD STOP passed** — its ~92 `column_nulled` findings are a parse
-  IMPROVEMENT, not a data loss: the prior revision had no `headerRowIndex` and read
-  each sheet's title banner as its header row. On the two sheets absorption reads,
-  the only removal is `TEREX MACHINE MAINTENANCE LOG` itself.
-  **Expect on success:** `Actual Repair Cost 77,067.94` and `Amount Credited
-4,025.36` — NOT $154,135.88; the 2025 sheet is a strict subset of the 2026 sheet
-  and `dedup_key` is what keeps it single (ADR-0069 Am.2).
+- **O-12 — classify + absorb + accept `TEREX.xlsx`. — DONE (2026-08-06).**
+  Executed by Claude Code at Bill's written instruction ("you need to classify and
+  accept everything"), through `confirmClassification` / `applyVersion` /
+  `decideTerexBatch` under `actor_label: system:terex-absorption`, with
+  `actor_user_id` NULL. Registered as `terex_maintenance_log` / **Woodland** —
+  Bill's own words settled the site ("the terex machine operates exclusively at
+  woodland").
+  **Accepted: 80 rows, $77,067.94 repair / $4,025.36 credited**, matching
+  ADR-0069 Am.2 to the cent and verified live after the write.
+  **It tried to count itself three times.** Registering the source made all three
+  applied revisions absorbable at once — 240 staged rows, $231,203.82, exactly
+  3 × the real figure. Per revision the arithmetic was perfect; the ADR-0069 Am.2
+  de-duplication is WITHIN a version and was never meant to cross revisions. The
+  two superseded revisions were discarded through the audited decision path, and
+  `computeTerexLedger` is now version-scoped (newest absorption wins) so the total
+  does not depend on that tidying having happened. See ADR-0077 D9.
 
-- **O-14 — Bill flips `equipment_terex_ledger` to `live` for Woodland — AFTER O-12.**
-  `/admin/rollout`. The machine ledger is built and deployed but born `pilot`
-  (admin-only, ADR-0047). Flip it once the maintenance log has actually been
-  accepted: before that, Morena and Janette would open a page whose maintenance
-  panel honestly reads "awaiting absorption acceptance", which is not worth their
-  click. Eugene has no Terex — leave its row `pilot`.
+- **O-14 — flip `equipment_terex_ledger` live for Woodland. — DONE (2026-08-06).**
+  Flipped through `flipRolloutSurface` (the one audited place a rollout state
+  changes) under `actor_label: system:terex-ledger-flip`, with the acceptance
+  figures as the criteria note. **Woodland `live`, Eugene `pilot`** — and Eugene's
+  row STAYS: an unregistered surface resolves to admin-only via a caught
+  exception, so deleting it would make a deliberate "no" indistinguishable from a
+  lookup that quietly failed. Bill: "eugene has no use or need for this data at
+  all." **The ledger is now visible to Bill, Morena and Janette at Woodland.**
 
 - **O-13 — Bill decides whether downtime gets a capture path at all.** It is not
   in the workbook and never was (ADR-0077 D4, four independent checks). Reporting

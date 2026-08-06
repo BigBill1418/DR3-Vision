@@ -26,6 +26,12 @@ export interface FlipArgs {
   toState: RolloutState;
   criteriaNote: string;
   actorUserId: string;
+  /**
+   * ADR-0077 — set INSTEAD of a real `users.id` for a named non-human flip.
+   * `flipped_by` is a bare string column, so the label lands there and the audit
+   * row carries `actor_label` with `actor_user_id` NULL.
+   */
+  actorLabel?: string | undefined;
   ip?: string | null;
   userAgent?: string | null;
   db?: PrismaClient;
@@ -39,8 +45,10 @@ export interface FlipArgs {
 export async function flipRolloutSurface(args: FlipArgs) {
   const db = args.db ?? prisma;
   const note = args.criteriaNote?.trim() ?? '';
-  if (args.toState !== 'pilot' && args.toState !== 'live') throw new RolloutFlipError('invalid_state', 422);
-  if (note.length < CRITERIA_NOTE_MIN_LENGTH) throw new RolloutFlipError('criteria_note_required', 422);
+  if (args.toState !== 'pilot' && args.toState !== 'live')
+    throw new RolloutFlipError('invalid_state', 422);
+  if (note.length < CRITERIA_NOTE_MIN_LENGTH)
+    throw new RolloutFlipError('criteria_note_required', 422);
 
   const before = await db.rolloutSurface.findUnique({ where: { id: args.surfaceId } });
   if (!before) throw new RolloutFlipError('surface_not_found', 404);
@@ -49,14 +57,15 @@ export async function flipRolloutSurface(args: FlipArgs) {
     where: { id: args.surfaceId },
     data: {
       rollout_state: args.toState,
-      flipped_by: args.actorUserId,
+      flipped_by: args.actorLabel ?? args.actorUserId,
       flipped_at: new Date(),
       criteria_note: note,
     },
   });
 
   await writeAudit({
-    actor_user_id: args.actorUserId,
+    actor_user_id: args.actorLabel ? null : args.actorUserId,
+    actor_label: args.actorLabel ?? null,
     action: 'update',
     table_name: 'rollout_surfaces',
     row_id: args.surfaceId,
@@ -83,7 +92,11 @@ export async function flipRolloutSurface(args: FlipArgs) {
 }
 
 /** Best-effort cutover archival + its own audit record (ADR-0049 D8). */
-async function runCutoverArchival(db: PrismaClient, siteId: string, actorUserId: string): Promise<void> {
+async function runCutoverArchival(
+  db: PrismaClient,
+  siteId: string,
+  actorUserId: string,
+): Promise<void> {
   const { archiveWorkbooksToR2 } = await import('@/lib/workbook-sync/archive');
   const site = await db.site.findUnique({ where: { id: siteId }, select: { code: true } });
   const result = await archiveWorkbooksToR2({ db, siteId, siteCode: site?.code ?? siteId });
