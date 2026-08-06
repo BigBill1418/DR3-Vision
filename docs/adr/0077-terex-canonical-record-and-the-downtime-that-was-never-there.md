@@ -391,6 +391,68 @@ worse mechanism: an unregistered surface resolves to admin-only through a
 _caught exception_, so a deliberate "no" would be indistinguishable from a
 lookup that quietly failed. A `pilot` row is the decision, written down.
 
+## D11 — The downtime capture path did not need building. It needed turning on.
+
+Bill: _"ok build the downtime capture path."_ The honest answer is that it was
+already built, and had been since ADR-0044.
+
+Everything the capture needs exists and is production-grade:
+
+| piece                         | state                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `equipment_events.hours_down` | `Decimal(5,2)`, nullable                                                              |
+| validation                    | `assertEquipmentShape` — bounded `[0, MAX_HOURS_DOWN]`, refused on non-downtime kinds |
+| write                         | `createEquipmentEvent`, audited **in the same transaction** (hard rule #6)            |
+| correction                    | `voidEquipmentEvent` — soft void via `voided_at`/`voided_by`, never a delete          |
+| API                           | `POST /api/manager/[site]/equipment`, zod `.nonnegative().max(999.99)`                |
+| form                          | `EventEntry` reveals the hours input when `DOWNTIME_KINDS.has(kind)`                  |
+
+**What did not exist was a Woodland manager who could reach the form.**
+`equipment_entry` was `pilot`, which means admin-only, so Morena and Janette had
+never seen it. That is the whole of why `hours_down` was NULL on all 68 rows: not
+a missing feature, an unreachable one. The 61 maintenance + 7 repair events in the
+table came from the ADR-0048 importer, not from a person.
+
+So O-13 resolved to a rollout flip, executed under the same written order:
+`equipment_entry` → **live at Woodland**. Eugene stays `pilot` (no Terex there).
+
+**The design choice this ADR is therefore recording is the one ADR-0044 already
+made, and it is the right one:** downtime is a `kind='downtime'` row in
+`equipment_events` carrying `hours_down`, not a new column on some other table.
+The alternative — a dedicated downtime table or a column hung off the maintenance
+rows — was rejected implicitly then and explicitly now, because:
+
+- `equipment_events` is already the machine's event log, already site-scoped,
+  already audited, already voidable, and already what the tile and the ledger
+  read. A second home for the same fact would need all of that again.
+- Downtime is not a property of a _maintenance row_. The workbook has no downtime
+  column (D4), so hanging one off the absorbed rows would mean inventing a field
+  the source document does not have — and absorption is a single-writer path that
+  a human must not be editing.
+- A human enters the hours. **Nothing derives them.** There is no start/end
+  timestamp pair to subtract, and the run-hour columns on the monthly tabs measure
+  the opposite thing (D4). An unmeasured machine stays "not recorded".
+
+**The far end is pinned.** Three new tests: a captured event moves the total off
+"not recorded", a voided one stops counting (and can return the total to "not
+recorded" rather than 0.0), and voiding one of several leaves the rest.
+
+The first falsification of the void guard came back **green** — the test mock
+filtered voided rows out unconditionally, so deleting the `voided_at: null`
+clause from the module changed nothing and the guard was measuring the mock. The
+mock now honours the query, and the red is real:
+
+```
+× a VOIDED event stops counting — and can return the total to "not recorded"
+  → expected 6.5 to be null
+× voiding ONE of several leaves the rest counted
+  → expected 103 to be 4
+```
+
+That is the second time in this ADR's work that a first-pass falsification proved
+nothing. It is worth naming as a pattern: **a guard that cannot be made to fail
+has not been tested, and mocks are where the failure hides.**
+
 ## Alternatives considered
 
 - **Merge into `bee54def` as O-10 said, then rename it `Terex`.** Impossible in

@@ -180,6 +180,33 @@ Two more live figures the rendering rules were written for, neither hypothetical
 **16 carry no parsable date**, one of them the `"09/16 or 17"` the schema comment
 predicted, shown exactly as written.
 
+### The downtime capture path did not need building — it needed turning on
+
+Bill: _"ok build the downtime capture path."_ It was already built, and had been
+since ADR-0044. `hours_down` exists on `equipment_events`, bounded and validated
+(`assertEquipmentShape` refuses it on non-downtime kinds and outside `[0, MAX]`),
+written inside an audited transaction, correctable through a soft void that never
+deletes, exposed by the API with `.nonnegative().max(999.99)`, and surfaced by an
+entry form that reveals the hours input the moment you pick a downtime kind.
+
+**What did not exist was a Woodland manager who could reach it.**
+`equipment_entry` was `pilot` — admin-only — so Morena and Janette had never seen
+the form. That is the entire reason `hours_down` was NULL on all 68 rows: not a
+missing feature, an unreachable one. The 61 maintenance + 7 repair events came
+from the ADR-0048 importer, not from a person.
+
+`equipment_entry` is now **live at Woodland** (Eugene stays pilot — no Terex).
+The ledger's downtime panel flips from "not recorded" to a real number the moment
+someone records one; no code change was needed for that, it was already wired.
+
+Three tests pin the far end: a captured event moves the total, a voided one stops
+counting (and can return it to "not recorded" rather than 0.0), and voiding one of
+several leaves the rest. **The first falsification came back green** — the mock
+filtered voided rows unconditionally, so the guard was measuring the mock, not the
+code. Fixed; the red is now real (`expected 103 to be 4`). Second time in this
+ADR's work that a first-pass falsification proved nothing, which is the pattern
+worth remembering: a guard that cannot be made to fail has not been tested.
+
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
 On the night of August 4th, nineteen processors worked the Woodland floor. The

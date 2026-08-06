@@ -131,17 +131,23 @@ vi.mock('@/lib/prisma', () => ({
       ),
     },
     equipmentEvent: {
+      // Honours `where.voided_at` INSTEAD of hardcoding the exclusion. The first
+      // version of this mock filtered out voided rows unconditionally, so
+      // deleting the `voided_at: null` clause from the module changed nothing and
+      // the guard "passed" while measuring the mock rather than the code. Same
+      // class of mistake ADR-0076 recorded; caught here by falsifying and getting
+      // green.
       findMany: vi.fn(
         async ({
           where,
         }: {
-          where: { site_id: string; equipment_code: string; voided_at: null };
+          where: { site_id: string; equipment_code: string; voided_at?: null };
         }) =>
           store.events.filter(
             (e) =>
               e.site_id === where.site_id &&
               e.equipment_code === where.equipment_code &&
-              e.voided_at === null,
+              (where.voided_at === undefined || e.voided_at === null),
           ),
       ),
     },
@@ -380,6 +386,73 @@ describe('computeTerexLedger — downtime (ADR-0077 D4)', () => {
     const l = await computeTerexLedger(WOODLAND, TEREX);
     expect(l.downtime.totalHours).toBeNull();
     expect(l.downtime.eventsConsidered).toBe(2);
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // ADR-0077 D11 / OPEN-ITEMS O-13 — the capture path made real.
+  //
+  // `hours_down` was NULL on every Terex event ever logged, which is what made
+  // the tile say "0.0 hrs" in green. The column, the validation, the entry form
+  // and the void path all already existed; what did not exist was a Woodland
+  // manager who could REACH the form (`equipment_entry` was pilot, admin-only).
+  //
+  // These pin the far end of that path: the moment Morena or Janette records an
+  // event, this total stops saying "not recorded" and starts saying a number —
+  // and a mistake they void stops counting again.
+  // ────────────────────────────────────────────────────────────────
+  it('a captured event MOVES the total off "not recorded"', async () => {
+    seedProductionShape();
+    // Production today: events exist, none carries hours.
+    store.events.push({
+      site_id: WOODLAND,
+      equipment_code: 'terex',
+      voided_at: null,
+      hours_down: null,
+    });
+    const before = await computeTerexLedger(WOODLAND, TEREX);
+    expect(before.downtime.totalHours).toBeNull();
+
+    // Morena records 6.5 hours down.
+    store.events.push({
+      site_id: WOODLAND,
+      equipment_code: 'terex',
+      voided_at: null,
+      hours_down: dec(6.5),
+    });
+    const after = await computeTerexLedger(WOODLAND, TEREX);
+    expect(after.downtime.totalHours).toBe(6.5);
+    expect(after.downtime.eventsWithHours).toBe(1);
+  });
+
+  it('a VOIDED event stops counting — and can return the total to "not recorded"', async () => {
+    seedProductionShape();
+    store.events.push({
+      site_id: WOODLAND,
+      equipment_code: 'terex',
+      voided_at: new Date('2026-08-07T00:00:00Z'), // recorded, then voided
+      hours_down: dec(6.5),
+    });
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    // Not 6.5, and not 0.0 either — voiding the only record returns the machine
+    // to genuinely unmeasured.
+    expect(l.downtime.totalHours).toBeNull();
+    expect(l.downtime.eventsConsidered).toBe(0);
+  });
+
+  it('voiding ONE of several leaves the rest counted', async () => {
+    seedProductionShape();
+    store.events.push(
+      { site_id: WOODLAND, equipment_code: 'terex', voided_at: null, hours_down: dec(4) },
+      {
+        site_id: WOODLAND,
+        equipment_code: 'terex',
+        voided_at: new Date('2026-08-07T00:00:00Z'),
+        hours_down: dec(99),
+      },
+    );
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.downtime.totalHours).toBe(4);
+    expect(l.downtime.eventsWithHours).toBe(1);
   });
 
   it('4c. a genuine recorded zero stays 0 — absence and zero are different facts', async () => {
