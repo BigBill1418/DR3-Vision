@@ -129,11 +129,19 @@ _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table f
   lookup that quietly failed. Bill: "eugene has no use or need for this data at
   all." **The ledger is now visible to Bill, Morena and Janette at Woodland.**
 
-- **O-13 — Bill decides whether downtime gets a capture path at all.** It is not
-  in the workbook and never was (ADR-0077 D4, four independent checks). Reporting
-  it requires COLLECTING it — a `kind='downtime'` event carrying `hours_down`, or a
-  new workbook column — not a derivation. The tile now says "not recorded" instead
-  of "0.0 hrs"; that is honest, not a fix for the underlying gap.
+- **O-13 — the downtime capture path. — DONE (2026-08-06).** Bill: "ok build the
+  downtime capture path." **It was already built** (ADR-0044): `hours_down` on
+  `equipment_events`, bounded + kind-restricted validation, audited in-transaction
+  write, soft-void correction, API zod guard, and an entry form that reveals the
+  hours input for downtime kinds. What was missing was REACH —
+  `equipment_entry` was `pilot`, so no Woodland manager could see the form, which
+  is why `hours_down` was NULL on all 68 rows (they came from the ADR-0048
+  importer, not a person). **`equipment_entry` flipped live at Woodland**
+  under `actor_label: system:terex-ledger-flip`. Eugene stays `pilot`.
+  Design choice + rejected alternatives recorded in ADR-0077 D11.
+  **Residual:** `equipment_trend` remains `pilot` at Woodland — the chart is not
+  needed to capture, and flipping it is a separate call for Bill whenever he wants
+  managers to see the trend view alongside entry.
 
 ### Accepted residuals (recorded, not actions)
 
