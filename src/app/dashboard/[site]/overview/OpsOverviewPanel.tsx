@@ -152,15 +152,31 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
                 href={`/dashboard/${siteCode}/equipment`}
                 testId="ov-eq-30day"
               />
+              {/* ADR-0077 D4 — an unmeasured machine must not read as a perfect
+                  one. `hours_down` is NULL on every Terex event ever logged, so
+                  this card used to show "0.0 hours" in GREEN. Absence is now
+                  said out loud, and it is NOT an ok tone. */}
               <StatCard
                 label="Downtime · 30-day"
-                value={nf(data.equipment.downtimeHours, 1)}
-                unit="hours"
-                tone={data.equipment.downtimeHours > 0 ? 'warn' : 'ok'}
+                value={
+                  data.equipment.downtimeHours == null
+                    ? 'not recorded'
+                    : nf(data.equipment.downtimeHours, 1)
+                }
+                unit={data.equipment.downtimeHours == null ? '' : 'hours'}
+                tone={
+                  data.equipment.downtimeHours == null
+                    ? 'neutral'
+                    : data.equipment.downtimeHours > 0
+                      ? 'warn'
+                      : 'ok'
+                }
                 sub={
-                  data.equipment.lastEvent
-                    ? `Last event: ${data.equipment.lastEvent.kind} on ${data.equipment.lastEvent.dateISO}`
-                    : 'No events logged'
+                  data.equipment.downtimeHours == null
+                    ? 'No downtime hours have been recorded for this machine'
+                    : data.equipment.lastEvent
+                      ? `Last event: ${data.equipment.lastEvent.kind} on ${data.equipment.lastEvent.dateISO}`
+                      : 'No events logged'
                 }
                 href={`/dashboard/${siteCode}/equipment`}
                 testId="ov-eq-downtime"

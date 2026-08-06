@@ -151,7 +151,8 @@ export interface ProcessedClosePanel {
 export interface EquipmentPanel {
   last7UnitsPerDay: number | null;
   last30UnitsPerDay: number | null;
-  downtimeHours: number;
+  /** ADR-0077 D4 — NULL means never recorded, not "no downtime". */
+  downtimeHours: number | null;
   costUsd: number;
   lastEvent: { dateISO: string; kind: string; hoursDown: number | null } | null;
 }

@@ -36,7 +36,24 @@ that shipped this.**
 
 ### Operator actions
 
-- **O-10 — Bill merges the three Woodland Terex rows.** Production carries
+- **O-10 — Bill merges the three Woodland Terex rows. — DONE (2026-08-06, ADR-0077 D1).**
+  Executed by Claude Code at Bill's written instruction (handoff PR #197), through
+  `mergeEquipment` — the same audited transaction the admin Merge button drives —
+  under `actor_label: system:terex-canonical-merge`, with `actor_user_id` and
+  `merged_by` left NULL rather than borrowing a person's id.
+  **The direction below is WRONG and was corrected.** The survivor is `7e35a4aa`
+  (`Terex`), NOT `bee54def`: a merged-away row keeps its `display_name`, so
+  merging into `bee54def` would have left the survivor permanently called `Terex
+  Machine` with the wanted name frozen on a dead row that `(site_id,
+  display_name)` uniqueness forbids reusing. `7e35a4aa` also already held 2 of
+  the 4 links and 2 of the 4 resolved requests.
+  **Verified:** one active unmerged row (`7e35a4aa`, category `terex`); both
+  losers `is_active=false` + `merged_into_id=7e35a4aa`; 4 of 4 links and 4 of 4
+  resolved requests on the survivor; spend **202,492 cents before and after**
+  (`COALESCE(confirmed_amount_cents, amount_cents)`); three audit rows.
+  **Unblocks** the case-insensitive-unique-index ADR — no violating group remains.
+
+  _Original text, retained for the record:_ Production carries
   **three records for one machine**, each cited by a different approved invoice:
   `7e35a4aa` (`Terex`), `bee54def` (`Terex Machine`), `1125fb30` (`Terex
 machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
@@ -52,7 +69,13 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
   init container — attempting it today would crash-loop the deploy, not fail a
   review (ADR-0075 D3).
 
-- **O-11 — Bill resolves open request `a2ab144d` ("trailer 540010", Woodland).**
+- **O-11 — Bill resolves open request `a2ab144d` ("trailer 540010", Woodland). — DONE (verified 2026-08-06).**
+  Already satisfied in production: the request is `resolved` against `3c063c8d`
+  (`trailer 540010`, the row that already existed), `resolved_at 2026-08-06
+17:15`. **No fourth duplicate was created** — the expected outcome below held,
+  so the ADR-0075 suggestion path fired as designed.
+
+  _Original text, retained for the record:_
   This is the acceptance click for the whole ADR. The asset **already exists** —
   `3c063c8d`, `trailer 540010`, active, Woodland — so the old code path would have
   hit the same wall that produced the Terex split and manufactured a fourth
@@ -73,6 +96,63 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
   correctly against the survivor (which they can do) but cannot merge the stray
   rows themselves — declaring two records to be one machine rewrites financial
   attribution and is not reversible from the UI. Intended trade.
+
+## 0.AH — 2026-08-06 ADR-0077: one Terex, and the downtime that was never there
+
+### Operator actions
+
+- **O-12 — Bill classifies `TEREX.xlsx` (doc-ingest source `8a0246e7`). BLOCKS the
+  whole Terex maintenance ledger.** The source row carries `doc_class = NULL` and
+  `site_id = NULL`, so `absorbVersion` refuses at Gate 1 (class must be
+  absorbable) and Gate 2 (site must not be NULL). **That — not the guardrail — is
+  why `doc_terex_maintenance_rows` holds 0 rows** even though two revisions were
+  applied on 2026-07-29; they were never queued. Open `/admin/doc-ingest`, confirm
+  the classification as **`terex_maintenance_log`** and site **Woodland**, then
+  apply staged revision `eed9d4cb` from `/admin/doc-ingest/anomalies` ("Apply this
+  revision"), let the sweep absorb, and accept the batch at
+  `/admin/doc-ingest/terex`.
+  **Deliberately not done for him** (ADR-0077 D5): Gate 2 exists so absorption
+  refuses to GUESS a document's site, and stating one is the same kind of act O-10
+  was. Evidence points to Woodland (the Terex is a Woodland asset; all four
+  invoices are Woodland) but a $77,067.94 acceptance chain should start with Bill.
+  **The guardrail HARD STOP passed** — its ~92 `column_nulled` findings are a parse
+  IMPROVEMENT, not a data loss: the prior revision had no `headerRowIndex` and read
+  each sheet's title banner as its header row. On the two sheets absorption reads,
+  the only removal is `TEREX MACHINE MAINTENANCE LOG` itself.
+  **Expect on success:** `Actual Repair Cost 77,067.94` and `Amount Credited
+4,025.36` — NOT $154,135.88; the 2025 sheet is a strict subset of the 2026 sheet
+  and `dedup_key` is what keeps it single (ADR-0069 Am.2).
+
+- **O-13 — Bill decides whether downtime gets a capture path at all.** It is not
+  in the workbook and never was (ADR-0077 D4, four independent checks). Reporting
+  it requires COLLECTING it — a `kind='downtime'` event carrying `hours_down`, or a
+  new workbook column — not a derivation. The tile now says "not recorded" instead
+  of "0.0 hrs"; that is honest, not a fix for the underlying gap.
+
+### Accepted residuals (recorded, not actions)
+
+- **The blended Terex machine view is deferred, not cancelled.** Its maintenance
+  half is empty until O-12 lands and its two headline totals could only be
+  asserted against fixtures today. Design is recorded in ADR-0077 D6: a detail
+  view at `/dashboard/[site]/equipment/[equipmentId]` under the ADR-0044 tile (not
+  a parallel tile), gated on `admin OR (can_resolve_equipment_requests AND site
+reach)` — which resolves to exactly Bill, Morena and Janette, verified against
+  prod — behind a `pilot`-born `equipment_terex_ledger` rollout surface, with **no
+  event↔invoice matching in v1** (all four invoices share one vendor inside six
+  days; any heuristic would manufacture links).
+- **`summary.totalCostCents` has the same shape of defect as downtime had, one
+  notch weaker.** It sums to `0` and renders `$0.00` when no event carried a cost.
+  Not widened to `number | null` in this pass because the column IS genuinely
+  populated (7 of 68 Terex events), so `$0.00` is a much weaker claim than "0.0
+  hrs" on a never-written column, and the change ripples into `costUsd` on the
+  overview panel. Fix it when that panel is next opened.
+- **`equipment_events` cost coverage is 7 of 68 rows.** The ADR-0048 import
+  carried costs on a tenth of the history. Decide re-import vs retire when the
+  ledger view is picked back up — it is NOT the AP cost ledger and must never be
+  blended with it as the same money.
+- **The TEREX preview page targets `stagedRows[0].doc_source_version_id`.** With
+  two staged versions live at once, the Confirm button acts on whichever sorts
+  first. Harmless today (one staged version); a trap the day there are two.
 
 ---
 

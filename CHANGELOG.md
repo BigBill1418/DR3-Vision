@@ -3,6 +3,80 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-06 — one Terex, and the downtime that was never there (ADR-0077)
+
+Woodland had three records for one machine. It has one now — `7e35a4aa`,
+`Terex`, category `terex` — and the two duplicates are deactivated, stamped
+with the survivor's id, and kept, because their invoice links are
+financial-approval evidence.
+
+**Four links moved onto one row and the money did not change: 202,492 cents
+before, 202,492 cents after.** Measured with
+`COALESCE(confirmed_amount_cents, amount_cents)` — all four of these invoices
+carry their money in the confirmed column with `amount_cents` NULL, so a ledger
+reading `amount_cents` alone reports zero and proves the conservation of
+nothing. All four resolved equipment requests followed.
+
+OPEN-ITEMS **O-10 had the direction backwards**, and the reason is a property of
+the merge: a merged-away row **keeps its name**. Merging into `Terex Machine`
+would have left the survivor permanently called that, with the name Bill wants
+frozen on a dead row the unique index then forbids anyone from reusing. The
+rename everybody assumed would follow the merge was never on the table.
+
+### The machine nobody ever measured
+
+Bill asked how long the Terex has been down. **The workbook does not record it.**
+All 40 sheets swept: no downtime column, no days-down, no synonym. The
+maintenance-log header is `Date · Time · Issue · Measures taken · Estimated
+repair time/cost · Estimated cost · Notes · Actual Repair Cost · Amount
+Credited`, and `Estimated repair time/cost` sums to **2** across ~90 populated
+rows because it holds things like "2 weeks". The ADR-0048 importer recorded
+`downtime: null`. `equipment_events.hours_down` is NULL on all 68 Terex rows —
+the column has never once been written.
+
+The tile summed that to `0`, showed **"0.0 hrs"**, and the ops-overview card
+painted it **green**. An unmeasured machine was being displayed as a flawless
+one. Absence now says so: `totalDowntimeHours` is `number | null` and renders
+**"not recorded"** in a neutral tone — the same rule the TEREX preview screen
+already states in words about money. A recorded zero is still a zero; both
+directions are pinned, and the null branch was falsified before being trusted.
+
+The monthly tabs do carry `Day Total Hrs Used` — hours the machine **ran**, on
+sheets where workbook-sync is the sole writer. Not downtime, and not going to be
+invented into it.
+
+### A write with no human behind it says so
+
+The merge had no signed-in admin: `requireAdmin()` gates the button, and this
+ran from a script under Bill's written instruction (PR #197). The shortcut was to
+stamp his `users.id`, which writes a false claim into an append-only table that
+hard rule #6 means we can never take back. `mergeEquipment` and `updateEquipment`
+now take `ActorContext | SystemActorContext`, mirroring ADR-0036's `SystemActor`:
+`actor_label` set, `actor_user_id` and `merged_by` NULL. The HTTP routes are
+unchanged — both still require an admin session.
+
+### Notes
+
+- **The TEREX absorption is not blocked by what we thought.** The handoff named
+  "the ADR-0072 guardrail"; ADR-0072 is the iPad anchor guardrail, and the
+  doc-ingest one (ADR-0067 D6/D7) turns out to be flagging a parse _improvement_:
+  the previous revision had no `headerRowIndex` at all and read each sheet's
+  title banner as its header row. The ~92 "removed columns" are those banners
+  disappearing. On the two sheets absorption reads, the only removal is
+  `TEREX MACHINE MAINTENANCE LOG` itself.
+- **The real blocker is that `TEREX.xlsx` was never classified** — `doc_class`
+  and `site_id` are both NULL on the source row, so `absorbVersion` refuses at
+  Gates 1 and 2. That is why `doc_terex_maintenance_rows` holds 0 rows despite
+  two revisions being applied on 2026-07-29. Left for Bill: stating a document's
+  site is the same kind of act O-10 was, and Gate 2 exists to refuse guessing it.
+  The figures are pinned and waiting — `77,067.94` repair and `4,025.36`
+  credited, identical on both sheets because the 2025 one is a strict subset
+  (absorb both without `dedup_key` and it reports $154,135.88, exactly double).
+- **The blended machine view is deferred** to when there is money to show. Its
+  maintenance half is empty until the classification lands, and its two headline
+  totals could only be asserted against fixtures today. Design recorded in
+  ADR-0077 D6.
+
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
 On the night of August 4th, nineteen processors worked the Woodland floor. The

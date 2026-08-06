@@ -45,6 +45,9 @@ interface AuditRow {
   row_id: string;
   before: unknown;
   after: unknown;
+  /** ADR-0077 — exactly one of these is set; which one IS the claim being made. */
+  actor_user_id: string | null;
+  actor_label: string | null;
   /** True when written through a transaction client, not the bare prisma. */
   inTx: boolean;
 }
@@ -179,6 +182,8 @@ function client(inTx: boolean) {
           row_id: data['row_id'] as string,
           before: data['before'],
           after: data['after'],
+          actor_user_id: (data['actor_user_id'] as string | null) ?? null,
+          actor_label: (data['actor_label'] as string | null) ?? null,
           inTx,
         });
       }),
@@ -219,11 +224,69 @@ vi.mock('@/lib/prisma', () => ({
 }));
 holder.current = fakePrisma as unknown as Record<string, unknown>;
 
-import { mergeEquipment, equipmentReferenceCounts } from './admin-equipment';
+import {
+  mergeEquipment,
+  equipmentReferenceCounts,
+  type SystemActorContext,
+} from './admin-equipment';
 
 const actor = { actorUserId: 'u-bill', ip: '10.0.0.1', userAgent: 'vitest' };
 
+/** ADR-0077 — the actor shape the 2026-08-06 one-off ran under. */
+const systemActor: SystemActorContext = {
+  actorLabel: 'system:terex-canonical-merge',
+  ip: null,
+  userAgent: null,
+};
+
 beforeEach(reset);
+
+// ────────────────────────────────────────────────────────────────────
+// ADR-0077 — a merge with no human behind it still says who did it.
+//
+// The one-off that collapsed the three production Terex rows had no signed-in
+// admin: `requireAdmin()` is the HTTP gate on the Merge button, and this run
+// came from a script under a written instruction instead. The tempting shortcut
+// — stamp Bill's `users.id` — writes a FALSE claim into an append-only table
+// (hard rule #6): the audit row would read as though he clicked it.
+//
+// So the merge takes a labelled actor, and these pin the two halves of that:
+// the label lands, and the user FK stays NULL rather than being borrowed.
+// ────────────────────────────────────────────────────────────────────
+describe('mergeEquipment — the labelled actor (ADR-0077)', () => {
+  it('audits under actor_label and leaves actor_user_id NULL', async () => {
+    const res = await mergeEquipment('eq-terex', 'eq-machine', systemActor);
+    expect(res.ok).toBe(true);
+
+    const row = audits.find((a) => a.row_id === 'eq-machine');
+    expect(row?.actor_label).toBe('system:terex-canonical-merge');
+    expect(row?.actor_user_id).toBeNull();
+  });
+
+  it('leaves merged_by NULL — the label is the record, not a borrowed user id', async () => {
+    await mergeEquipment('eq-terex', 'eq-machine', systemActor);
+    expect(equipment.get('eq-machine')?.merged_by).toBeNull();
+  });
+
+  it('still stamps merged_by for a real admin — the human path is unchanged', async () => {
+    await mergeEquipment('eq-terex', 'eq-machine', actor);
+    expect(equipment.get('eq-machine')?.merged_by).toBe('u-bill');
+
+    const row = audits.find((a) => a.row_id === 'eq-machine');
+    expect(row?.actor_user_id).toBe('u-bill');
+    expect(row?.actor_label).toBeNull();
+  });
+
+  it('repoints identically whichever actor drove it — authorship is not behaviour', async () => {
+    const res = await mergeEquipment('eq-terex', 'eq-machine-lc', systemActor);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.repointedLinks).toBe(1);
+    expect(res.repointedRequests).toBe(1);
+    expect(apRequestUpdate).not.toHaveBeenCalled();
+    expect(apRequestUpdateMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('mergeEquipment — the repoint', () => {
   it('repoints BOTH attribution tables onto the winner', async () => {
