@@ -5,13 +5,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const requireOperatorOwnsLoad = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
+const requireOperatorAtLoadSite = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 const mintUploadUrl = vi.fn<
   (...a: unknown[]) => Promise<{ storage_key: string; upload_url: string }>
 >(async () => ({ storage_key: 'k', upload_url: 'https://r2/put' }));
 
 vi.mock('@/lib/load-photo-guard', () => ({
-  requireOperatorOwnsLoad: (...a: unknown[]) => requireOperatorOwnsLoad(...a),
+  requireOperatorAtLoadSite: (...a: unknown[]) => requireOperatorAtLoadSite(...a),
 }));
 vi.mock('@/lib/r2', () => ({ mintUploadUrl: (...a: unknown[]) => mintUploadUrl(...a) }));
 
@@ -26,7 +26,7 @@ function req(body: unknown): Request {
 }
 
 beforeEach(() => {
-  requireOperatorOwnsLoad.mockClear();
+  requireOperatorAtLoadSite.mockClear();
   mintUploadUrl.mockClear();
 });
 
@@ -35,7 +35,7 @@ describe('POST /api/photos/upload-url — content_type allowlist', () => {
     const res = await POST(req({ load_id: 'L1', kind: 'bol', content_type: 'text/html' }));
     expect(res.status).toBe(400);
     expect(mintUploadUrl).not.toHaveBeenCalled();
-    expect(requireOperatorOwnsLoad).not.toHaveBeenCalled();
+    expect(requireOperatorAtLoadSite).not.toHaveBeenCalled();
   });
 
   it('rejects image/svg+xml (scriptable) with 400', async () => {

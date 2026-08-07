@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { mintUploadUrl } from '@/lib/r2';
-import { requireOperatorOwnsLoad } from '@/lib/load-photo-guard';
+import { requireOperatorAtLoadSite } from '@/lib/load-photo-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,7 +39,11 @@ export async function POST(req: Request) {
   }
 
   try {
-    await requireOperatorOwnsLoad(parsed.data.load_id);
+    // ADR-0078 Am.1 — SITE-scoped, not owner-scoped. Mint and confirm must move
+    // together: a relaxed mint with a strict confirm PUTs bytes to R2 and then
+    // refuses to write the row, which is strictly worse than today — orphaned
+    // objects, no record, and a queue row that still cannot drain.
+    await requireOperatorAtLoadSite(parsed.data.load_id);
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

@@ -248,6 +248,81 @@ each other's rows. Every delete is now scoped to the rows its file created, and
 CI runs them with `--no-file-parallelism` — an intermittent, interleaving-
 dependent CI failure is the worst kind to ship.
 
+## Amendment 1 (2026-08-07) — the photo gate is site-scoped, and uploads are attributed
+
+**Status:** Accepted, implemented. Amends the D3 photo path only; nothing else in
+ADR-0078 changes.
+
+### Context
+
+Bill, verbatim, while JT was mid-drain at 47/103:
+
+> _"we need to drain all users regardless of who is signed in... let's just not
+> have this have to be a issue in the future."_
+
+The drain worked — `load_photos` went from 0 rows ever to 47 across 20 loads in
+under two hours. Then it hit the wall this amendment removes.
+`requireOperatorOwnsLoad` required `load.assigned_operator_id === session.user.id`,
+so a photo queued by operator A could not be confirmed while operator B was
+signed in. On a shared floor iPad that is not an edge case, it is the normal end
+of a shift, and ADR-0078's own conflict path then parked those rows permanently.
+
+### Decision
+
+The gate checks the **site**, not the load's assigned operator.
+`requireOperatorOwnsLoad` → **`requireOperatorAtLoadSite`**, returning
+`{ loadId, siteId, actorUserId, loadOwnerUserId }`. Both photo routes — mint AND
+confirm — take the identical change.
+
+**The trade, stated plainly rather than described as a refactor: the gate
+loosened from owner to site; attribution went from none to recorded.**
+
+- **Given up:** an operator can now attach a photo to any load at their own site.
+- **Gained:** the evidence survives. Photo blobs live in ONE iPad's IndexedDB and
+  nowhere else; a row parked forever is evidence that dies when that device is
+  wiped or replaced.
+- **Also gained:** `load_photos.uploaded_by` on every confirm. The table
+  previously had no uploader column at all — the strict gate enforced who was
+  _allowed_ to upload and then kept no record of who _did_. Accountability is
+  strictly better after this change than before it.
+
+Unchanged and not to be "restored": cross-site refusal (Eugene and Woodland are
+separate MRC contracts in separate jurisdictions, hard rule #2), the operator-role
+check, and the 404 for a missing load. The function was **renamed with the
+behaviour** precisely so the next reader cannot mistake the removed check for an
+oversight and put it back.
+
+**Mint and confirm move together, mandatorily.** A relaxed mint with a strict
+confirm is worse than doing nothing: the client gets a presigned URL, PUTs the
+bytes, and is then refused the row — an orphaned R2 object, no record, and a
+queue entry that still cannot drain. Pinned by
+`confirm.accepts-same-principal-as-mint`, falsified by reverting confirm's guard
+alone.
+
+**Audit discipline (ADR-0037):** an audit row is written **only** when the
+uploader is not the load's assigned operator. A row per confirm would add ~100/day
+of "operator did the thing they were assigned to do" and bury the case a person
+would actually search for. `uploaded_by` is the durable record for every upload;
+the audit row marks the exception.
+
+**`uploaded_by` is nullable and NOT backfilled.** The 47 pre-existing rows have a
+genuinely unknown uploader — the session that wrote them was never captured.
+Backfilling from `assigned_operator_id` would look tidy and would be a
+fabrication: asserting that a specific person uploaded a specific photo, into a
+table that feeds MRC billing evidence, on evidence that does not exist. NULL
+means "we do not know", which is true. Same reasoning as ADR-0077's "not
+recorded" over a fake `0.0`.
+
+### Residual, recorded not hidden
+
+The idempotency replay stays pinned to the **uploading** session's `actorUserId`,
+because a key is a bearer string and a replay must belong to the principal that
+claimed it. Consequence: if A queues a photo, B drains it, and B's response is
+lost, A's later retry of the same key is a different actor and earns 409
+`idempotency_key_reused`. The row then parks as a visible conflict rather than
+writing a duplicate — degrading into ADR-0078's conflict path, which is the safe
+direction and exactly what that path is for.
+
 ## Verification
 
 Every guard was falsified by hand before being trusted, and the falsification had to name the **real wrong value**. One did not: the double-tap test, written with a single shared key, passed with the P2002 tolerance deleted — `withIdempotency` short-circuits before the insert, so the assertion was measuring the idempotency path and not the constraint path it named. Rewritten with two keys (which is what a real double-tap mints) it goes red with the actual unique-constraint violation. The green falsification is recorded in the test file, because a guard that cannot go red is worse than no guard.
