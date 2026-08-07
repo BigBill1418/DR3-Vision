@@ -83,6 +83,58 @@ export const BLOCKED_PREFIX = 'blocked:';
 export const BLOCKED_UPLOAD = `${BLOCKED_PREFIX}r2_unreachable`;
 
 /**
+ * ADR-0078 G7 — the operator's SESSION ended. The most recoverable state there
+ * is: somebody types a PIN and everything drains.
+ *
+ * A separate class from `conflict:` on purpose. A conflict needs a decision; an
+ * expired session needs a sign-in, and parking these as conflicts would mean the
+ * ordinary end of a shift silently converted a queue into a pile of items
+ * demanding individual human adjudication.
+ *
+ * It is separate from a plain error too, because it never LOOKED like an error.
+ * Operator sessions idle out after five minutes and `/api/photos/*` is not a
+ * public path, so the middleware used to answer a session-less queue request
+ * with a 307 to /login — which `fetch` follows to a 200 text/html page. `res.ok`
+ * was true, so the mint "succeeded"; parsing the login page as JSON then threw a
+ * SyntaxError that was recorded as a generic retryable error with no label. The
+ * R2 PUT was never reached. The queue retried forever and nothing said why.
+ *
+ * Both halves are fixed: the middleware now answers `/api/*` with 401, and every
+ * queue fetch below uses `redirect: 'manual'` so a redirect can never be
+ * mistaken for a result even from a stale bundle or a cached SW.
+ */
+export const AUTH_PREFIX = 'auth:';
+export const AUTH_EXPIRED = `${AUTH_PREFIX}session_expired`;
+
+/**
+ * True when a response is a sign-in demand rather than an answer: an explicit
+ * 401, an opaque or manual redirect, or a 2xx whose content-type is HTML (the
+ * login page). That last case is why this checks the CONTENT TYPE and not just
+ * the status — a 200 full of HTML is exactly what the old bug looked like.
+ *
+ * 403 is deliberately NOT here. A 403 is authenticated-but-refused — most often
+ * a photo queued against a load that now belongs to another operator's login —
+ * and signing in again does not fix it. Those stay `conflict:`, which is the
+ * screen that can actually resolve them.
+ */
+function isAuthResponse(res: Response): boolean {
+  if (res.status === 401) return true;
+  if (res.type === 'opaqueredirect' || res.redirected) return true;
+  if (res.status >= 300 && res.status < 400) return true;
+  // A 2xx carrying HTML is the login page arriving where JSON was expected.
+  //
+  // Deliberately narrowed to `html` rather than "anything that is not json".
+  // The broader rule looked more defensive and was worse: a legitimate 2xx that
+  // simply omits an explicit JSON content-type would be classified as an expired
+  // session, which parks a perfectly good write behind a sign-in that will not
+  // fix it. Caught by the per-load halting test, which started failing on stack
+  // ONE because its 201 had no content-type header.
+  const ct = res.headers.get('content-type') ?? '';
+  if (res.ok && ct.includes('html')) return true;
+  return false;
+}
+
+/**
  * G4 — a denormalised, INDEXED summary of `last_error`, maintained on every
  * write so the chrome's badge can be counted without reading a single record.
  *
@@ -94,12 +146,14 @@ export const BLOCKED_UPLOAD = `${BLOCKED_PREFIX}r2_unreachable`;
  * nowhere else, purely to render a number. With this scalar indexed,
  * `countFromIndex` answers from the index alone and never touches a value.
  */
-export type QueueState = 'active' | 'conflict' | 'blocked';
+export type QueueState = 'active' | 'conflict' | 'blocked' | 'auth';
 
 /** The single place `last_error` is translated into its indexed summary. */
 export function stateFor(lastError: string | null | undefined): QueueState {
   if (lastError?.startsWith(CONFLICT_PREFIX)) return 'conflict';
   if (lastError?.startsWith(BLOCKED_PREFIX)) return 'blocked';
+  // NOT a conflict: nothing needs adjudicating, somebody needs to sign in.
+  if (lastError?.startsWith(AUTH_PREFIX)) return 'auth';
   return 'active';
 }
 
@@ -292,7 +346,39 @@ export async function enqueueUpload(input: EnqueueUploadInput): Promise<PendingU
     state: 'active',
   };
   await db.put(UPLOADS, row);
+  notifyEnqueued();
   return row;
+}
+
+// ── ADR-0078 G8 — enqueue notifications ───────────────────────────────────
+//
+// The drain engine subscribes so a write that just failed over to the queue is
+// retried IMMEDIATELY rather than up to 30 seconds later. That is the difference
+// between the queue being a retry path and being a waiting room.
+//
+// A plain module-level subscriber set rather than an EventTarget: this module is
+// already the single owner of queue state, the engine is the only subscriber,
+// and a listener that throws must not be able to break the enqueue that
+// triggered it (hence the try/catch below — losing a notification is survivable,
+// losing the write is not).
+type EnqueueListener = () => void;
+const enqueueListeners = new Set<EnqueueListener>();
+
+export function subscribeToEnqueue(fn: EnqueueListener): () => void {
+  enqueueListeners.add(fn);
+  return () => {
+    enqueueListeners.delete(fn);
+  };
+}
+
+function notifyEnqueued(): void {
+  for (const fn of enqueueListeners) {
+    try {
+      fn();
+    } catch {
+      // A subscriber's failure is its own problem. The row is already durable.
+    }
+  }
 }
 
 export type EnqueueActionInput = {
@@ -322,6 +408,7 @@ export async function enqueueAction(input: EnqueueActionInput): Promise<PendingA
     state: 'active',
   };
   await db.put(ACTIONS, row);
+  notifyEnqueued();
   return row;
 }
 
@@ -368,21 +455,38 @@ export async function conflictCount(): Promise<number> {
  * `last_error` is read through a cursor over the keys, not the values, so the
  * blobs stay on disk.
  */
-export type QueueCounts = { pending: number; active: number; conflicts: number; blocked: number };
+export type QueueCounts = {
+  pending: number;
+  active: number;
+  conflicts: number;
+  blocked: number;
+  /** Waiting on a sign-in. Recoverable by a PIN, not by a decision. */
+  auth: number;
+};
 
 export async function queueCounts(): Promise<QueueCounts> {
   const db = await getDb();
-  const [uAll, uConf, uBlock, aAll, aConf, aBlock] = await Promise.all([
+  const [uAll, uConf, uBlock, uAuth, aAll, aConf, aBlock, aAuth] = await Promise.all([
     db.count(UPLOADS),
     db.countFromIndex(UPLOADS, 'by-state', 'conflict'),
     db.countFromIndex(UPLOADS, 'by-state', 'blocked'),
+    db.countFromIndex(UPLOADS, 'by-state', 'auth'),
     db.count(ACTIONS),
     db.countFromIndex(ACTIONS, 'by-state', 'conflict'),
     db.countFromIndex(ACTIONS, 'by-state', 'blocked'),
+    db.countFromIndex(ACTIONS, 'by-state', 'auth'),
   ]);
   const pending = uAll + aAll;
   const conflicts = uConf + aConf;
-  return { pending, conflicts, blocked: uBlock + aBlock, active: pending - conflicts };
+  return {
+    pending,
+    conflicts,
+    blocked: uBlock + aBlock,
+    auth: uAuth + aAuth,
+    // Auth rows ARE still trying — a sign-in resumes them without any decision,
+    // so they belong in the "waiting to send" number and not in the stuck one.
+    active: pending - conflicts,
+  };
 }
 
 export async function pendingCount(): Promise<number> {
@@ -580,6 +684,24 @@ export type ReplayResult = {
   conflicts: number;
   /** Rows blocked on unreachable object storage (see BLOCKED_UPLOAD). */
   blocked: number;
+  /** Rows waiting on a sign-in (see AUTH_EXPIRED). */
+  auth: number;
+  /**
+   * Did this sweep actually REACH the server?
+   *
+   * `true`  — at least one request got an HTTP response back.
+   * `false` — requests were attempted and every one died at the network layer,
+   *           or the device reported itself offline before trying.
+   * `null`  — nothing was attempted (empty queue), so this sweep is no evidence
+   *           either way and the caller must not read it as success.
+   *
+   * Without this, an offline sweep was indistinguishable from a successful one:
+   * `replayAll` early-returns a fully-formed result when `navigator.onLine` is
+   * false, so an observer seeing "a result with no auth and no blocked rows"
+   * would paint the badge GREEN on a device with no network — which is the
+   * connection-visibility guarantee this ADR exists to provide, reversed.
+   */
+  reached: boolean | null;
 };
 
 function classify(status: number): boolean {
@@ -587,6 +709,14 @@ function classify(status: number): boolean {
   // reassigned, wrong day, key reused. 408 is a timeout and IS retryable.
   return status >= 400 && status < 500 && status !== 408;
 }
+
+/**
+ * Set by any fetch that returns an HTTP response during a sweep. Distinguishes
+ * "the server said no" from "nothing reached the server" — the difference
+ * between a conflict and a dead uplink, and the reason the badge can tell them
+ * apart.
+ */
+let sweepReachedServer = false;
 
 async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: string }> {
   // Set once the mint round-trips. From that point a network-layer failure is
@@ -603,12 +733,19 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
       const mint = await fetch('/api/photos/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // `manual` so a redirect surfaces AS a redirect. Following it lands on
+        // the login page, whose 200 would otherwise read as a successful mint.
+        redirect: 'manual',
         body: JSON.stringify({
           load_id: row.load_id,
           kind: row.kind,
           content_type: row.content_type,
         }),
       });
+      sweepReachedServer = true;
+      // Checked BEFORE `mint.ok`, because the whole defect was an auth failure
+      // that arrived wearing a 200.
+      if (isAuthResponse(mint)) return { ok: false, error: AUTH_EXPIRED };
       if (!mint.ok) {
         return {
           ok: false,
@@ -653,6 +790,7 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
     const confirm = await fetch('/api/photos/confirm', {
       method: 'POST',
       headers,
+      redirect: 'manual',
       body: JSON.stringify({
         load_id: row.load_id,
         kind: row.kind,
@@ -660,6 +798,8 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
         byte_size: row.byte_size,
       }),
     });
+    sweepReachedServer = true;
+    if (isAuthResponse(confirm)) return { ok: false, error: AUTH_EXPIRED };
     if (!confirm.ok) {
       return {
         ok: false,
@@ -677,6 +817,7 @@ async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: 
     const res = await fetch('/api/queue/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      redirect: 'manual',
       body: JSON.stringify({
         scope: row.scope,
         site_code: row.site_code,
@@ -685,6 +826,8 @@ async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: 
         payload: JSON.parse(row.args_json) as unknown,
       }),
     });
+    sweepReachedServer = true;
+    if (isAuthResponse(res)) return { ok: false, error: AUTH_EXPIRED };
     if (res.ok) return { ok: true };
 
     // 422 `date_not_today` is the day pin. It is a CONFLICT, deliberately: the
@@ -713,9 +856,21 @@ async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: 
 }
 
 let replayInFlight: Promise<ReplayResult> | null = null;
+/** A sweep was requested while one was already running. See `replayAll`. */
+let replayDirty = false;
 
 export function replayAll(): Promise<ReplayResult> {
-  if (replayInFlight) return replayInFlight;
+  // Concurrent callers share the in-flight sweep — but that sweep has ALREADY
+  // captured its row list, so anything enqueued after it started is invisible to
+  // it. During a long drain (99 photos takes minutes) every capture made while
+  // it runs would otherwise wait for the next 30s tick, which is exactly the
+  // "waiting room" the drain engine exists to eliminate. One trailing re-sweep
+  // picks them up; a flag rather than a loop, so a steady stream of captures
+  // cannot spin this forever.
+  if (replayInFlight) {
+    replayDirty = true;
+    return replayInFlight;
+  }
   replayInFlight = (async () => {
     const result: ReplayResult = {
       uploads_replayed: 0,
@@ -724,14 +879,21 @@ export function replayAll(): Promise<ReplayResult> {
       actions_failed: 0,
       conflicts: 0,
       blocked: 0,
+      auth: 0,
+      reached: null,
     };
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       const c = await queueCounts();
       result.conflicts = c.conflicts;
       result.blocked = c.blocked;
+      result.auth = c.auth;
+      // Explicitly NOT null: the device told us it is offline. That is evidence.
+      result.reached = false;
       return result;
     }
     const { uploads, actions } = await listPending();
+    sweepReachedServer = false;
+    const attempted = uploads.length + actions.length > 0;
 
     // Loads whose remaining steps must NOT be applied this sweep. A load's
     // actions describe a sequence; running step 3 after step 2 was refused
@@ -781,9 +943,17 @@ export function replayAll(): Promise<ReplayResult> {
     const counts = await queueCounts();
     result.conflicts = counts.conflicts;
     result.blocked = counts.blocked;
+    result.auth = counts.auth;
+    // Nothing attempted ⇒ no evidence, and `null` says so rather than claiming
+    // a healthy connection off an empty queue.
+    result.reached = attempted ? sweepReachedServer : null;
     return result;
   })().finally(() => {
     replayInFlight = null;
+    if (replayDirty) {
+      replayDirty = false;
+      void replayAll();
+    }
   });
   return replayInFlight;
 }

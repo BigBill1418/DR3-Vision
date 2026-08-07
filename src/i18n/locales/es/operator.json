@@ -350,7 +350,8 @@
       "last_sync": "Último envío {{time}}",
       "never_synced": "Nada enviado todavía en este turno",
       "uploads_blocked": "Las fotos no se pueden subir — avise a un gerente",
-      "uploads_blocked_detail": "{{count}} fotos en espera. Los conteos se siguen guardando con normalidad."
+      "uploads_blocked_detail": "{{count}} fotos en espera. Los conteos se siguen guardando con normalidad.",
+      "session_expired": "Inicie sesión para enviar {{count}} elementos"
     },
     "conflicts": {
       "heading": "Entradas que necesitan su atención",

@@ -92,6 +92,119 @@ Recorded because the handoff asserted them and shipped code disagreed:
 3. **"ADR-0012 §4 — no new deps."** ADR-0012 §4 is the decision to swap `next-pwa` for Serwist and imposes no dependency freeze. `offline-queue.ts` has cited a constraint that does not exist. (`fake-indexeddb` added as a devDependency.)
 4. **The repo has no ephemeral-Postgres test harness.** The one existing real-DB test self-skips and has therefore **never run in CI**. Since ADR-0078's core claims are claims about Postgres — `ON CONFLICT` returning zero rows, a PK refusing a duplicate, `ORDER BY` breaking a tie — a mocked Prisma would have been enforcing the very rules the tests claim to check. CI's existing `migrations` job (which stood up a real PG16, applied the chain, and asserted nothing) now runs those suites against it.
 
+## The drain engine, and the push-down contract
+
+Bill, during the build: _"drain should happen no matter what page its on and it
+should make sure all data is always pushed down - not as an afterthought."_
+
+That is an architectural statement and it ruled out the shape this code had.
+Replay lived INSIDE screens — `load-workflow` ran a sweep loop, `pending-banner`
+ran a different one, every other screen ran none — so whether an operator's
+queued count went anywhere depended on which page they happened to be looking at.
+
+**The engine is mounted once, in `FloorShell`**, above all nine operator screens,
+for the same reason the chrome is. Trigger matrix:
+
+| Trigger                        | Why it exists                                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| mount                          | anything queued by a previous session drains at once                                                              |
+| `online`                       | the network came back                                                                                             |
+| `visibilitychange` → visible   | a parked iPad wakes — and its timers were suspended precisely while parked, so the interval alone is useless here |
+| `pageshow`                     | Safari BFCache restore, which fires no `visibilitychange` and re-runs no effects                                  |
+| 30s interval (foreground only) | the AP reports online but the server is unreachable                                                               |
+| **after every enqueue**        | a write that just failed over is retried NOW, not up to 30s later                                                 |
+
+The last row is what makes "always pushed down" true rather than eventually true:
+the queue is a retry path, not a waiting room.
+
+**The push-down contract**, as a design principle the feature phases inherit:
+_every_ operator write flows through the queue and the engine — online is an
+immediate pass-through with a server ack, offline or failed is queued and
+retried. So "all data is always pushed" is structural, and P2–P5 get it without
+each re-implementing it.
+
+**`replayAll` has exactly ONE caller in app code** (`drainNow`). The connection
+hook used to call it too; with an always-on engine that meant two sweep owners
+and two un-deduped count refreshes. A test greps the source to keep it at one.
+
+### The honest limit on iOS
+
+Background Sync would let the browser drain with the tab closed. **WebKit has
+never shipped it**, and the DR3 floor runs on iPads. So registration is
+capability-detected and is a silent no-op there — a supported outcome, not an
+error path.
+
+Stated plainly rather than implied: **on an iPad the queue drains whenever the
+app is open on any screen, and resumes the instant it is foregrounded. There is
+no closed-app execution.** We do not fake it and we do not claim it. Where the
+API does exist (Android, desktop) it is registered as a genuine enhancement.
+
+## G7 — the auth redirect that looked like success
+
+The primary blocker of the 99-photo drain, and it never looked like a bug.
+
+Operator sessions idle out after five minutes. `/api/photos/*` is not a public
+path, so a session-less queue request was answered `307 → /login`; `fetch`
+follows redirects, /login returns `200 text/html`, and `res.ok` was **true**. The
+mint "succeeded", parsing the login page as JSON threw a SyntaxError, and that
+was recorded as a generic _retryable, unlabelled_ error. The R2 PUT was never
+reached. The queue retried forever and nothing said why. This is the ADR-0036
+class that bit the reminder-tick on 2026-07-03, arriving through the photo queue.
+
+Both halves are closed. The middleware answers `/api/*` with **401 JSON** instead
+of redirecting (browser navigations keep their redirect — sending a _person_ to
+/login is what it is for). And every queue fetch uses `redirect: 'manual'` and
+treats a redirect, a 401, or a 2xx carrying HTML as `auth:` — a class of its own,
+deliberately **not** a conflict, because nothing needs adjudicating: somebody
+needs to sign in. The badge says "Sign in to send N items" and carries a return
+path, so recovery is one tap and a PIN.
+
+### G8c — signing back in returns you to where you were
+
+The badge links to the name picker with `?next=<current path>`, threaded through
+all three hops of the PIN flow (picker → keypad page → post-PIN push). Without
+it an operator signing in mid-task lands on the hub and navigates back by hand,
+and that friction makes a recovery affordance read as still-broken.
+
+The parameter arrives in a URL and is handed to `router.push`, so it is
+VALIDATED, not trusted — an unchecked push target is an open redirect on a shared
+device in a browser that has just authenticated. `resolveFloorReturnPath` accepts
+only a path under _this_ site's operator surface and refuses absolute URLs, the
+protocol-relative `//host` form (which navigates off-site despite starting with a
+slash, and is the exact bypass a naive `startsWith('/')` check misses), another
+site's paths, and the pre-PIN screens themselves.
+
+### The offline badge nearly went green again
+
+The second review pass caught the G8 refactor reversing the guarantee that is
+half this ADR's purpose. `replayAll` early-returns a fully-formed result when the
+device is offline, and the new observer read "a result with no auth and no
+blocked rows" as a successful sync — so one engine trigger would repaint a red
+offline badge green, and stamp a "last sent" time for a sweep that never left the
+device.
+
+`ReplayResult` now carries `reached: boolean | null` — `false` when requests were
+attempted and nothing got through, `true` when at least one got an HTTP response,
+and `null` when nothing was attempted, because an empty queue is _no evidence_
+and must not be read as health. That last case is also what keeps the dead-uplink
+probe on a schedule now that the hook no longer runs its own sweep: on a `null`
+result it asks `/healthz` directly instead of inferring health from silence.
+
+## Recorded, not built: the capture-time upload grant
+
+The remaining gap is that iOS drain requires a live session. The fix is a
+capture-time grant: `/api/photos/upload-url` additionally returns an
+HMAC-signed `upload_grant` over `{v, load_id, kind, storage_key, actor_user_id,
+site_id, idempotency_key, exp≈14d}`, and both photo routes accept a session **or**
+an `X-Upload-Grant` pinned to that grant's exact fields, moving them to the
+established route-handler-is-the-real-gate pattern.
+
+**Deliberately not in this change.** It needs a new secret (`PHOTO_GRANT_SECRET`)
+with its own provisioning and rotation story, and a bearer credential that
+authorises a write must not ride a money-path PR as a rider. Recorded in
+OPEN-ITEMS as a proposed ADR. Until it lands, G8c makes the session requirement a
+single tap rather than a dead end.
+
 ## What the adversarial review changed
 
 An independent review before merge found three defects of the _same class this

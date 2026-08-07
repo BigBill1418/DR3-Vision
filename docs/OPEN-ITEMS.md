@@ -39,6 +39,29 @@ window her cross-checks are possible.
   Rows whose loads belong to another operator's login will refuse again and say
   so; those need that operator signed in on that device.
 
+### Proposed follow-up (recorded, NOT built in P1)
+
+- **F-3 — capture-time upload grant, so a photo can drain with no live session.**
+  ADR-0078 G7 fixed the auth failure that _looked_ like success, and G8c makes
+  recovery one tap. What remains: on iOS the queue still needs a signed-in
+  session to drain, because there is no closed-app execution to fall back on.
+
+  Design, in full so it does not have to be re-derived:
+  `/api/photos/upload-url` additionally returns `upload_grant`, an HMAC-signed
+  token (`node:crypto`, one new secret `PHOTO_GRANT_SECRET`) over
+  `{v, load_id, kind, storage_key, actor_user_id, site_id, idempotency_key,
+exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
+  whose signature validates and whose fields match the request EXACTLY — the
+  grant authorises one upload of one photo to one load, nothing wider. Both
+  routes move to the established route-handler-is-the-real-gate pattern
+  (`public-paths.ts` precedent) rather than being exempted at the middleware.
+
+  **Deliberately not bundled with ADR-0078.** It introduces a bearer credential
+  that authorises a write, which needs its own secret provisioning and rotation
+  runbook plus falsification tests (forged signature, expired grant, field
+  substitution, cross-load replay) — and a credential like that must not ride
+  along on a money-path PR as a rider. Wants its own ADR.
+
 ### Accepted residuals (recorded, not actions)
 
 - **R2 bucket CORS is HAND-SET INFRASTRUCTURE, not code.** The
@@ -77,6 +100,7 @@ window her cross-checks are possible.
   delete-then-write). The dangerous direction cannot occur. Making them fully
   atomic means threading a transaction through both services and changing their
   lock footprint, which buys nothing today.
+
 ## 0.AI — 2026-08-07 Terex daily throughput (ADR-0079) — follow-up
 
 - **F-2 — the amendment workflow is bonus-specific and could not be reused; equipment

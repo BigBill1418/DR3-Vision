@@ -3,7 +3,6 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
-<<<<<<< HEAD
 ## 2026-08-07 — the history stayed after all (ADR-0079 Amendment 1)
 
 The cutover shipped a few hours earlier applied "entered replaces derived" to
@@ -85,7 +84,6 @@ recorded: labeled backfill into the machine's table (permanent conflation risk +
 would weaken `run_hours NOT NULL`), and a dual-series peer view (filed as the
 future reconciliation view, not built).
 
-=======
 ## 2026-08-07 — the iPad stops losing work, and starts saying when it can't (ADR-0078)
 
 JT asked for one thing: _"make sure the connection isn't dropping … error-free
@@ -225,6 +223,61 @@ sweep also pings the app itself.
   named. Rewritten with two keys — which is what a real double-tap mints — it
   goes red with the actual unique-constraint violation.
 
+### The drain now happens no matter what screen you're on
+
+Bill, mid-build: _"drain should happen no matter what page its on and it should
+make sure all data is always pushed down - not as an afterthought."_ Replay used
+to live inside screens — the load workflow ran a sweep, the queue page ran a
+different one, every other screen ran none — so whether a queued count went
+anywhere depended on which page an operator happened to be looking at. There is
+now ONE engine, mounted above all nine screens, triggered on mount, `online`,
+tab-visible, BFCache `pageshow`, a foreground-only 30s interval, **and
+immediately after every enqueue** — which is what makes the queue a retry path
+instead of a waiting room. `replayAll` has exactly one caller in app code, and a
+test greps the source to keep it that way.
+
+Background Sync is registered where it exists and is a **no-op on iOS**, because
+WebKit has never shipped it. Stated plainly rather than implied: on an iPad the
+queue drains whenever the app is open on any screen and resumes the instant it
+is foregrounded; there is no closed-app execution.
+
+### The auth redirect that looked like success
+
+The primary blocker of the 99-photo drain, and it never looked like a bug.
+Operator sessions idle out after five minutes and `/api/photos/*` is not public,
+so a session-less replay got `307 → /login`; fetch follows redirects, /login
+returns **200 text/html**, and `res.ok` was true. The mint "succeeded", parsing
+the login page as JSON threw a SyntaxError, and that became a generic _retryable,
+unlabelled_ error. The R2 PUT was never reached. This is the ADR-0036 class that
+bit the reminder-tick in July, arriving through the photo queue.
+
+The middleware now answers `/api/*` with **401 JSON** (page navigations keep
+their redirect — sending a person to /login is what it is for), and every queue
+fetch uses `redirect: 'manual'` and treats a redirect, a 401, or a 2xx carrying
+HTML as an expired session. That is its own class, deliberately not a conflict:
+nothing needs adjudicating, somebody needs to sign in. The badge says so and
+carries a return path.
+
+### And a second review caught the fix reversing the fix
+
+The G8 refactor nearly turned the offline badge green again. `replayAll`
+early-returns a fully-formed result when the device is offline, and the new
+observer read "a result with no auth and no blocked rows" as a successful sync —
+so one engine trigger would repaint a red badge green and stamp a "last sent"
+time for a sweep that never left the device. A sweep now reports whether it
+actually **reached** the server: `false` when nothing got through, `true` when
+something answered (a 409 counts — reachability and success are different
+questions), and `null` when nothing was attempted, because an empty queue is no
+evidence and must not be read as health.
+
+Also from that pass: signing back in now RETURNS the operator to the screen they
+were on, validated against an open redirect (`//evil.example` is
+protocol-relative and navigates off-site despite starting with a slash — the
+exact bypass a naive `startsWith('/')` check misses); a capture made _during_ a
+long drain no longer waits for the next tick; and the middleware's 401 was
+verified not to touch `/api/auth/*`, which is how the PIN keypad signs anyone in
+at all.
+
 ### The review caught three of these in the fix itself
 
 An adversarial pass before merge found three defects **of the same class this
@@ -249,7 +302,7 @@ green; and every Retry on a Tier-2 count minted another manager hold.
 - **"ADR-0012 §4 — no new deps."** ADR-0012 §4 is the `next-pwa` → Serwist swap
   and imposes no dependency freeze. `offline-queue.ts` has been citing a
   constraint that does not exist.
->>>>>>> 64b2caa (The iPad stops losing work, and starts saying when it can't (ADR-0078))
+
 ## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0079)
 
 The Terex's throughput has been the **whole floor's output wearing one machine's

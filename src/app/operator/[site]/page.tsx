@@ -12,10 +12,18 @@ export const dynamic = 'force-dynamic';
 // the PIN on the next screen. Ordered last-seen-recent first so the
 // previous-shift operator hits the top.
 
-type Props = { params: Promise<{ site: string }> };
+// ADR-0078 G8c — `?next=` rides through name picker → keypad → post-PIN push, so
+// an operator whose session expired mid-task resumes where they were instead of
+// on the hub. Validated at the point of use (`resolveFloorReturnPath`), never
+// trusted: it arrives in a URL.
+type Props = {
+  params: Promise<{ site: string }>;
+  searchParams: Promise<{ next?: string }>;
+};
 
-export default async function OperatorSitePage({ params }: Props) {
+export default async function OperatorSitePage({ params, searchParams }: Props) {
   const { site: siteCode } = await params;
+  const { next } = await searchParams;
   const site = await prisma.site.findUnique({
     where: { code: siteCode },
     select: { id: true, code: true, name: true },
@@ -72,7 +80,11 @@ export default async function OperatorSitePage({ params }: Props) {
             {operators.map((op) => (
               <li key={op.id}>
                 <Link
-                  href={`/operator/${site.code}/${op.id}`}
+                  href={
+                    next
+                      ? `/operator/${site.code}/${op.id}?next=${encodeURIComponent(next)}`
+                      : `/operator/${site.code}/${op.id}`
+                  }
                   className="block rounded-lg bg-white/5 px-4 py-6 text-center text-lg font-semibold text-white transition-colors hover:bg-white/10"
                 >
                   {op.name}

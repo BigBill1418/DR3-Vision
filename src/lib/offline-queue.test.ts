@@ -224,7 +224,10 @@ describe('ADR-0078 — replay refuses a stale day and holds it for a person', ()
       'fetch',
       vi.fn(async (url: string) => {
         calls.push(url);
-        return new Response(JSON.stringify({ error: 'date_not_today' }), { status: 422 });
+        return new Response(JSON.stringify({ error: 'date_not_today' }), {
+          status: 422,
+          headers: { 'content-type': 'application/json' },
+        });
       }),
     );
 
@@ -253,7 +256,11 @@ describe('ADR-0078 — replay refuses a stale day and holds it for a person', ()
   it('a parked entry is not retried on the next sweep', async () => {
     const q = await loadQueue();
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ error: 'date_not_today' }), { status: 422 }),
+      async () =>
+        new Response(JSON.stringify({ error: 'date_not_today' }), {
+          status: 422,
+          headers: { 'content-type': 'application/json' },
+        }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -288,7 +295,13 @@ describe('ADR-0078 — the badge must not count parked rows as "waiting"', () =>
     const q = await loadQueue();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ error: 'date_not_today' }), { status: 422 })),
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'date_not_today' }), {
+            status: 422,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
     );
 
     for (const day of ['2026-08-06', '2026-08-05']) {
@@ -306,6 +319,212 @@ describe('ADR-0078 — the badge must not count parked rows as "waiting"', () =>
     expect(await q.pendingCount()).toBe(2);
     expect(await q.conflictCount()).toBe(2);
     expect(await q.activeCount(), 'nothing is still trying').toBe(0);
+  });
+});
+
+describe('ADR-0078 G7 — an auth redirect is not a success', () => {
+  // THE PRIMARY BLOCKER of the 99-photo drain, and it never looked like a bug.
+  //
+  // Operator sessions idle out after 5 minutes. `/api/photos/*` is not a public
+  // path, so a session-less queue request was answered 307 → /login; `fetch`
+  // follows redirects by default, /login returns 200 text/html, and `mint.ok`
+  // was TRUE. Parsing that page as JSON threw a SyntaxError, which was recorded
+  // as a generic unlabelled error — retryable, invisible, forever. The R2 PUT
+  // was never reached and nothing anywhere said "your session ended".
+  //
+  // This test reproduces the OLD server behaviour deliberately (200 text/html),
+  // because a stale bundle or a cached service worker can still produce it even
+  // after the middleware fix. Both halves have to hold independently.
+  //
+  // FALSIFIED BY HAND: removing the `isAuthResponse(mint)` check — i.e. going
+  // back to the bare `if (!mint.ok)` — makes the mint "succeed", so the row is
+  // no longer marked `auth:` and the assertion below goes red naming the HTML
+  // body that was accepted as a mint response. That green-wrong state is
+  // precisely today's production bug.
+  it('a 200 text/html login page is treated as AUTH-EXPIRED, not a mint', async () => {
+    const q = await loadQueue();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        // What /login actually returns after fetch follows the 307.
+        return new Response('<!doctype html><html><body>Sign in</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      }),
+    );
+
+    const row = await q.enqueueUpload({
+      load_id: 'L1',
+      kind: 'bol',
+      blob: new Blob(['x']),
+      content_type: 'image/jpeg',
+    });
+
+    const result = await q.replayAll();
+
+    const after = (await q.listPending()).uploads;
+    expect(after, 'an auth failure must NOT delete the operator’s photo').toHaveLength(1);
+    expect(after[0]!.id).toBe(row.id);
+    expect(
+      after[0]!.last_error,
+      'a 200 text/html login page was accepted as a successful mint',
+    ).toBe('auth:session_expired');
+    expect(after[0]!.state).toBe('auth');
+
+    // The confirm must never be reached — the whole point is that the sequence
+    // stops at the sign-in demand rather than proceeding on a fiction.
+    expect(calls).toEqual(['/api/photos/upload-url']);
+    expect(result.auth).toBe(1);
+    // And it is NOT a conflict: nothing needs adjudicating, somebody needs a PIN.
+    expect(result.conflicts).toBe(0);
+    expect(await q.conflictCount()).toBe(0);
+  });
+
+  it('an explicit 401 is classified the same way', async () => {
+    const q = await loadQueue();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'unauthenticated' }), {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+    await q.enqueueAction({
+      scope: 'operator.count.create',
+      site_code: 'eugene',
+      target_day: '2026-08-07',
+      idempotency_key: q.newIdempotencyKey(),
+      payload: { countDate: '2026-08-07' },
+      endpoint: '/x',
+    });
+    const r = await q.replayAll();
+    expect(r.auth).toBe(1);
+    expect(r.conflicts).toBe(0);
+    const { actions } = await q.listPending();
+    expect(actions[0]!.last_error).toBe('auth:session_expired');
+  });
+
+  it('every queue fetch uses redirect: manual', async () => {
+    // Structural: following a redirect is what turned an auth failure into a
+    // 200. Asserted on the request INIT rather than on behaviour, because the
+    // behaviour only differs against a server that redirects.
+    const q = await loadQueue();
+    const inits: RequestInit[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        inits.push(init);
+        return new Response(JSON.stringify({ error: 'nope' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    await q.enqueueAction({
+      scope: 'operator.count.create',
+      site_code: 'eugene',
+      target_day: '2026-08-07',
+      idempotency_key: q.newIdempotencyKey(),
+      payload: { countDate: '2026-08-07' },
+      endpoint: '/x',
+    });
+    await q.replayAll();
+    expect(inits.length).toBeGreaterThan(0);
+    for (const init of inits) expect(init.redirect).toBe('manual');
+  });
+});
+
+describe('ADR-0078 — a sweep reports whether it actually REACHED the server', () => {
+  // The connection badge is driven by this field, so getting it wrong repaints a
+  // red offline state green — reversing the guarantee that is half the point of
+  // this ADR. The three values are three genuinely different facts and the
+  // difference is not cosmetic:
+  //
+  //   false — attempted, nothing got through (offline, or a dead uplink)
+  //   true  — at least one request got an HTTP response
+  //   null  — nothing attempted, so this sweep is NO EVIDENCE either way
+  //
+  // FALSIFIED BY HAND: hardcoding `result.reached = true` makes the first two
+  // cases red naming the wrong value — which is precisely the state in which a
+  // device with no network shows "Connected" and a fresh "last sent" time.
+  const enqueueOne = async (q: Awaited<ReturnType<typeof loadQueue>>) => {
+    await q.enqueueAction({
+      scope: 'operator.count.create',
+      site_code: 'eugene',
+      target_day: '2026-08-07',
+      idempotency_key: q.newIdempotencyKey(),
+      payload: { countDate: '2026-08-07' },
+      endpoint: '/x',
+    });
+  };
+
+  it('reports FALSE when the device says it is offline', async () => {
+    const q = await loadQueue();
+    await enqueueOne(q);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('navigator', { onLine: false });
+
+    const r = await q.replayAll();
+    expect(r.reached).toBe(false);
+    expect(fetchMock, 'an offline sweep must not even try').not.toHaveBeenCalled();
+  });
+
+  // The AP-with-a-dead-uplink case: the OS insists it is online and every
+  // request dies at the network layer.
+  it('reports FALSE when every request dies at the network layer', async () => {
+    const q = await loadQueue();
+    await enqueueOne(q);
+    vi.stubGlobal('navigator', { onLine: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    const r = await q.replayAll();
+    expect(r.reached, 'a dead uplink reported as a healthy sync').toBe(false);
+  });
+
+  it('reports TRUE when the server answered, even to refuse', async () => {
+    const q = await loadQueue();
+    await enqueueOne(q);
+    vi.stubGlobal('navigator', { onLine: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'nope' }), {
+            status: 409,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    const r = await q.replayAll();
+    // A 409 IS the server talking to us. Reachability and success are different
+    // questions, and conflating them would paint the badge red on an ordinary
+    // refusal.
+    expect(r.reached).toBe(true);
+  });
+
+  it('reports NULL when there was nothing to attempt', async () => {
+    const q = await loadQueue();
+    vi.stubGlobal('navigator', { onLine: true });
+    vi.stubGlobal('fetch', vi.fn());
+
+    const r = await q.replayAll();
+    // An empty queue proves nothing about the network. Claiming `true` here is
+    // how a badge goes green on a device that has not spoken to the server in
+    // an hour.
+    expect(r.reached).toBeNull();
   });
 });
 
@@ -401,10 +620,11 @@ describe('ADR-0078 — replay ordering and per-load halting', () => {
         const body = JSON.parse(String(init.body)) as { payload: { stackIndex: number } };
         seen.push(body.payload.stackIndex);
         // Stack 2 is refused hard; stacks 1 and 3 would succeed.
+        const json = { 'content-type': 'application/json' };
         if (body.payload.stackIndex === 2) {
-          return new Response(JSON.stringify({ error: 'nope' }), { status: 409 });
+          return new Response(JSON.stringify({ error: 'nope' }), { status: 409, headers: json });
         }
-        return new Response(JSON.stringify({ ok: true }), { status: 201 });
+        return new Response(JSON.stringify({ ok: true }), { status: 201, headers: json });
       }),
     );
 

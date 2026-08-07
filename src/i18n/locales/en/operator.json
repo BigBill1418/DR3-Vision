@@ -336,7 +336,8 @@
       "last_sync": "Last sent {{time}}",
       "never_synced": "Nothing sent yet this shift",
       "uploads_blocked": "Photos can’t upload — tell a manager",
-      "uploads_blocked_detail": "{{count}} photos are waiting. Counts are still saving normally."
+      "uploads_blocked_detail": "{{count}} photos are waiting. Counts are still saving normally.",
+      "session_expired": "Sign in to send {{count}} items"
     },
     "conflicts": {
       "heading": "Entries that need you",

@@ -20,12 +20,39 @@
 // stops being read, and the thing that must be noticeable is the exception.
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { useConnectionState } from '@/lib/use-connection-state';
 
 export function ConnectionState({ siteCode }: { siteCode: string | null }) {
   const t = useT();
-  const { status, pending, conflicts, blocked, lastSyncAt, sync } = useConnectionState();
+  const pathname = usePathname();
+  const { status, pending, conflicts, blocked, auth, lastSyncAt, sync } = useConnectionState();
+
+  // Session-expired outranks everything, including conflicts: it is one tap to
+  // fix and it BLOCKS the queue, so surfacing anything else first sends the
+  // operator to solve a problem they cannot solve yet.
+  if (status === 'session-expired' && siteCode) {
+    // G8c — sign in, and come BACK here.
+    //
+    // The name picker is the floor's sign-in, and without carrying the return
+    // path an operator signing in mid-task lands on the hub and has to navigate
+    // back to whatever they were doing. That friction is what makes a recovery
+    // badge read as still-broken; with it, recovery is one tap and a PIN, and
+    // the engine drains the moment the session exists.
+    const back = pathname ?? `/operator/${siteCode}/today`;
+    return (
+      <Link
+        href={`/operator/${siteCode}?next=${encodeURIComponent(back)}`}
+        data-testid="connection-state"
+        data-status="session-expired"
+        className="flex min-h-[44px] items-center gap-2 rounded-full bg-sky-500/25 px-3 text-sm font-semibold text-sky-100 ring-1 ring-sky-300/50"
+      >
+        <span aria-hidden="true">🔑</span>
+        {t('floor.connection.session_expired', { count: auth })}
+      </Link>
+    );
+  }
 
   // Conflicts outrank everything: they are the only state that cannot resolve
   // itself, so they get the loudest treatment and a destination rather than a

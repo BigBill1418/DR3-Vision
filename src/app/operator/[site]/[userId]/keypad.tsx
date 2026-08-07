@@ -4,6 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
+import { resolveFloorReturnPath } from '@/lib/floor-return-path';
 
 // Touch-first numeric keypad. Per CLAUDE.md hard rule #10 there is no
 // <form> — the Submit fires implicitly on the 4th digit, and the
@@ -17,9 +18,13 @@ import { useT } from '@/i18n/provider';
 
 const PIN_LEN = 4;
 
-type Props = { userId: string; siteCode: string };
+type Props = {
+  userId: string;
+  siteCode: string; /** ADR-0078 G8c — post-PIN destination from the session-expired badge. */
+  next?: string | undefined;
+};
 
-export function Keypad({ userId, siteCode }: Props) {
+export function Keypad({ userId, siteCode, next }: Props) {
   const router = useRouter();
   const t = useT();
   const [pin, setPin] = useState('');
@@ -58,7 +63,12 @@ export function Keypad({ userId, siteCode }: Props) {
         }
         // ADR-0060 — land on the daily-validation HUB (the shift landing). It links to
         // the per-load queue, which stays reachable there regardless of rollout state.
-        router.push(`/operator/${siteCode}/today`);
+        //
+        // ADR-0078 G8c — UNLESS the operator was sent here by the session-expired
+        // badge, in which case they resume the screen they were on. Validated,
+        // never trusted: `next` arrives in a URL, and an unchecked push target is
+        // an open redirect.
+        router.push(resolveFloorReturnPath(next, siteCode));
         router.refresh();
       })
       .catch(() => {
@@ -67,7 +77,7 @@ export function Keypad({ userId, siteCode }: Props) {
         setBusy(false);
         submittedRef.current = false;
       });
-  }, [pin, userId, siteCode, router, t]);
+  }, [pin, userId, siteCode, next, router, t]);
 
   return (
     <div className="flex w-full flex-col items-center gap-6" dir="ltr">

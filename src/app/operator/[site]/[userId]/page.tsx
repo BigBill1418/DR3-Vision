@@ -14,10 +14,15 @@ export const dynamic = 'force-dynamic';
 // Credentials provider id `pin`); on success it routes to the
 // operator queue placeholder.
 
-type Props = { params: Promise<{ site: string; userId: string }> };
+// ADR-0078 G8c — carries the post-PIN return path through to the keypad.
+type Props = {
+  params: Promise<{ site: string; userId: string }>;
+  searchParams: Promise<{ next?: string }>;
+};
 
-export default async function OperatorPinPage({ params }: Props) {
+export default async function OperatorPinPage({ params, searchParams }: Props) {
   const { site: siteCode, userId } = await params;
+  const { next } = await searchParams;
   const site = await prisma.site.findUnique({
     where: { code: siteCode },
     select: { id: true, code: true, name: true },
@@ -67,7 +72,7 @@ export default async function OperatorPinPage({ params }: Props) {
         <h1 className="text-2xl font-semibold">{operator.name}</h1>
         <p className="text-sm text-white/70">{t('keypad.prompt')}</p>
 
-        <Keypad userId={operator.id} siteCode={site.code} />
+        <Keypad userId={operator.id} siteCode={site.code} next={next} />
 
         {/* ADR-0065 — kept (Bill's "Not you?" exit is the fastest way off a
             wrong name) but restyled to the shared >=44px pill. FloorChrome also

@@ -27,7 +27,10 @@ import OperatorSitePage from './page';
 
 describe('operator name-picker query', () => {
   it('filters out soft-deleted operators (deleted_at: null) while keeping is_active', async () => {
-    await OperatorSitePage({ params: Promise.resolve({ site: 'eugene' }) });
+    await OperatorSitePage({
+      searchParams: Promise.resolve({}),
+      params: Promise.resolve({ site: 'eugene' }),
+    });
 
     expect(findManyMock).toHaveBeenCalledTimes(1);
     const arg = findManyMock.mock.calls[0]![0] as { where: Record<string, unknown> };

@@ -82,6 +82,36 @@ describe('ADR-0078 D9 — connection state reaches every operator screen', () =>
     expect(shell).toMatch(/<FloorChrome\b/);
   });
 
+  // ── ADR-0078 G8: engine-runs-on-every-screen ────────────────────────────
+  //
+  // Bill: "drain should happen no matter what page its on." The engine is
+  // mounted in FloorShell — above all nine screens — for exactly the same reason
+  // the chrome is, and this asserts the mount rather than trusting it.
+  //
+  // FALSIFIED BY HAND: removing `<DrainEngineMount />` from `floor-shell.tsx`
+  // makes this red naming the missing mount; putting the engine back inside a
+  // page component would leave it red, which is the point — the previous design
+  // had replay living in `load-workflow.tsx`, so whether an operator's queued
+  // count went anywhere depended on which screen they were looking at.
+  it('FloorShell mounts the drain engine, so it runs on every screen', () => {
+    const shell = readFileSync(join(COMPONENTS_DIR, 'floor-shell.tsx'), 'utf8');
+    expect(shell, 'floor-shell.tsx does not import the drain engine mount').toContain(
+      "from './drain-engine-mount'",
+    );
+    expect(shell, 'floor-shell.tsx does not render <DrainEngineMount>').toMatch(
+      /<DrainEngineMount\b/,
+    );
+  });
+
+  // The other half: no PAGE may own a drain schedule again. A page-level sweep
+  // is what made the drain a per-screen accident in the first place.
+  it('no operator PAGE starts its own drain loop', () => {
+    for (const { file } of ROUTES) {
+      const src = readFileSync(join(OPERATOR_DIR, file), 'utf8');
+      expect(src, `${file} starts its own drain engine`).not.toMatch(/startDrainEngine\s*\(/);
+    }
+  });
+
   it('the operator layout wraps its pages in FloorShell', () => {
     const layout = readFileSync(join(OPERATOR_DIR, 'layout.tsx'), 'utf8');
     expect(layout).toMatch(/<FloorShell\b/);
