@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useT, useLocale } from '@/i18n/provider';
 import { pacificDateLabel, dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
 import type { FloorInboundDayView } from '@/lib/loads/floor-inbound';
+import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0060 F-2 client — confirm / correct / enter the day's inbound haul counts. Total
@@ -28,22 +29,28 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [busyDay, setBusyDay] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** ADR-0078 — days whose entry is queued locally, NOT server-acked. */
+  const [queuedDays, setQueuedDays] = useState<string[]>([]);
 
   const dateLabel = (iso: string): string => pacificDateLabel(dayKeyUTCFromISO(iso), locale);
 
   async function post(dateISO: string, program: number, nonProgram: number): Promise<void> {
     setBusyDay(dateISO);
     setError(null);
+    // ADR-0078 — one key per submit attempt, reused by the queued entry so a
+    // request that landed but lost its response replays to the same write.
+    const idempotencyKey = newIdempotencyKey();
+    const payload = {
+      inboundDate: dateISO,
+      totalUnits: program + nonProgram,
+      programUnits: program,
+      nonProgramUnits: nonProgram,
+    };
     try {
       const res = await fetch(`/api/operator/${siteCode}/inbound`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          inboundDate: dateISO,
-          totalUnits: program + nonProgram,
-          programUnits: program,
-          nonProgramUnits: nonProgram,
-        }),
+        headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -51,9 +58,27 @@ export function InboundClient({ siteCode, initialRows }: Props) {
         return;
       }
       setEditing(null);
+      setQueuedDays((prev) => prev.filter((d) => d !== dateISO));
       router.refresh();
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      // ADR-0078 D5 — was a bare `catch { setError(…) }`, which discarded the
+      // operator's entry on a mid-submit disconnect and told them to retry from
+      // memory. The entry is queued now; the day is carried with it so a replay
+      // cannot silently re-file it against a different one.
+      if (isOfflineError(e)) {
+        await enqueueAction({
+          scope: 'operator.inbound.confirm',
+          site_code: siteCode,
+          target_day: dateISO,
+          idempotency_key: idempotencyKey,
+          payload,
+          endpoint: `/api/operator/${siteCode}/inbound`,
+        });
+        setQueuedDays((prev) => (prev.includes(dateISO) ? prev : [...prev, dateISO]));
+        setEditing(null);
+      } else {
+        setError(t('floor.common.save_failed'));
+      }
     } finally {
       setBusyDay(null);
     }
@@ -74,8 +99,20 @@ export function InboundClient({ siteCode, initialRows }: Props) {
     <div className="flex flex-col gap-4">
       <p className="text-sm text-dr3-cream/70">{t('floor.inbound.intro')}</p>
       {error && (
-        <p role="alert" className="rounded-lg bg-red-900/60 px-4 py-3 text-sm font-medium text-white">
+        <p
+          role="alert"
+          className="rounded-lg bg-red-900/60 px-4 py-3 text-sm font-medium text-white"
+        >
           {error}
+        </p>
+      )}
+      {queuedDays.length > 0 && (
+        <p
+          className="rounded-lg bg-amber-900/50 px-4 py-3 text-sm font-medium text-dr3-cream ring-1 ring-amber-400/40"
+          data-testid="inbound-queued"
+        >
+          {t('floor.common.queued')} —{' '}
+          {queuedDays.map((d) => t('floor.conflicts.target_day', { day: d })).join(', ')}
         </p>
       )}
       {initialRows.map((row) => (
@@ -233,10 +270,18 @@ function StatusChip({
 }) {
   const t = useT();
   if (row.hasPerLoadCapture) {
-    return <span className={`${chip()} bg-dr3-steel text-dr3-mist`}>{t('floor.inbound.per_load_chip')}</span>;
+    return (
+      <span className={`${chip()} bg-dr3-steel text-dr3-mist`}>
+        {t('floor.inbound.per_load_chip')}
+      </span>
+    );
   }
   if (row.officeOwned) {
-    return <span className={`${chip()} bg-dr3-steel text-dr3-mist`}>{t('floor.inbound.office_chip')}</span>;
+    return (
+      <span className={`${chip()} bg-dr3-steel text-dr3-mist`}>
+        {t('floor.inbound.office_chip')}
+      </span>
+    );
   }
   if (row.confirmedByYou) {
     return (
@@ -246,10 +291,18 @@ function StatusChip({
     );
   }
   if (row.floorConfirmed) {
-    return <span className={`${chip()} bg-dr3-green text-dr3-ink`}>{t('floor.inbound.confirmed_chip')}</span>;
+    return (
+      <span className={`${chip()} bg-dr3-green text-dr3-ink`}>
+        {t('floor.inbound.confirmed_chip')}
+      </span>
+    );
   }
   if (row.provisional) {
-    return <span className={`${chip()} bg-dr3-chartreuse text-dr3-ink`}>{t('floor.inbound.provisional_chip')}</span>;
+    return (
+      <span className={`${chip()} bg-dr3-chartreuse text-dr3-ink`}>
+        {t('floor.inbound.provisional_chip')}
+      </span>
+    );
   }
   return null;
 }

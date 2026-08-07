@@ -1,8 +1,7 @@
 'use client';
 
 import type { CountMode, LoadStatus } from '@prisma/client';
-import { useEffect, useState } from 'react';
-import { pendingCount, replayAll } from '@/lib/offline-queue';
+import { useState } from 'react';
 import { useI18n } from '@/i18n/provider';
 import { StageBol } from './stage-bol';
 import { StageWeight } from './stage-weight';
@@ -33,67 +32,19 @@ type Props = {
 };
 
 export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
-  const { t, tPlural } = useI18n();
+  const { t } = useI18n();
   // `weightDecided` only lives during the `arrived` phase; once the
   // server status moves on, this ref is moot.
   const [weightSkipped, setWeightSkipped] = useState(false);
   const [showReject, setShowReject] = useState(false);
 
-  // T-009 — offline-queue replay tick. Three triggers:
-  //   1. Mount — sweep anything queued from a prior session.
-  //   2. `online` event — Safari fires this when wifi/cell reconnects.
-  //   3. 30s interval while the workflow page is mounted — covers the
-  //      case where the iPad reports "online" but the app server is
-  //      briefly unreachable.
-  // The pill below taps `replayAll()` directly for an operator-driven
-  // retry. `replayAll()` itself dedupes concurrent invocations.
-  const [pending, setPending] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const n = await pendingCount();
-        if (!cancelled) setPending(n);
-      } catch {
-        // SSR / IndexedDB unavailable — non-fatal, the queue is a
-        // progressive-enhancement layer.
-      }
-    };
-    const sweep = async () => {
-      try {
-        await replayAll();
-      } catch {
-        // Swallow — failed rows are persisted with last_error and
-        // surfaced on the next refresh.
-      } finally {
-        await refresh();
-      }
-    };
-    void sweep();
-    const onOnline = () => void sweep();
-    window.addEventListener('online', onOnline);
-    const tick = window.setInterval(() => void sweep(), 30_000);
-    const refreshTick = window.setInterval(() => void refresh(), 5_000);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('online', onOnline);
-      window.clearInterval(tick);
-      window.clearInterval(refreshTick);
-    };
-  }, []);
-
-  const onPillTap = () => {
-    void replayAll().then(() => pendingCount().then(setPending));
-  };
-
-  const pill =
-    pending > 0 ? (
-      <PendingPill
-        count={pending}
-        onTap={onPillTap}
-        label={tPlural('pending_pill.label', pending, { count: pending })}
-      />
-    ) : null;
+  // ADR-0078 — the replay tick and the pending pill that used to live here are
+  // GONE, folded into `ConnectionState` in the floor chrome. This screen ran a
+  // mount sweep + `online` listener + 30s sweep + 5s refresh; `pending-banner.tsx`
+  // ran a near-identical loop with no sweep. Two loops meant the queue drained
+  // on the load workflow and merely displayed on the queue page, and neither
+  // showed whether the iPad could reach anything — the half JT actually asked
+  // for. One loop, in the chrome, on all nine screens.
 
   if (load.status === 'submitted' || load.status === 'rejected') {
     // Defensive — submit/reject server actions sign the operator
@@ -103,7 +54,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
       load.status === 'submitted' ? t('workflow.status_submitted') : t('workflow.status_rejected');
     return (
       <>
-        {pill}
         <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
           {t('workflow.load_done_returning', { status: statusLabel })}
         </p>
@@ -123,7 +73,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     // visual flow with internal client state.
     return (
       <>
-        {pill}
         <FromBol
           siteCode={siteCode}
           load={load}
@@ -137,7 +86,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   if (load.status === 'arrived' && weightSkipped) {
     return (
       <>
-        {pill}
         <StageDoor siteCode={siteCode} loadId={load.id} />
       </>
     );
@@ -146,7 +94,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   if (load.status === 'weight_captured') {
     return (
       <>
-        {pill}
         <StageDoor siteCode={siteCode} loadId={load.id} />
       </>
     );
@@ -156,14 +103,12 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     if (showReject) {
       return (
         <>
-          {pill}
           <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
         </>
       );
     }
     return (
       <>
-        {pill}
         <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
       </>
     );
@@ -172,7 +117,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   if (load.status === 'in_progress') {
     return (
       <>
-        {pill}
         <StageStacks
           siteCode={siteCode}
           loadId={load.id}
@@ -186,7 +130,6 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   if (load.status === 'finished') {
     return (
       <>
-        {pill}
         <StageFinish
           siteCode={siteCode}
           loadId={load.id}
@@ -199,21 +142,8 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
 
   return (
     <>
-      {pill}
       <p>{t('workflow.unhandled_status', { status: load.status })}</p>
     </>
-  );
-}
-
-function PendingPill({ onTap, label }: { count: number; onTap: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={onTap}
-      className="mb-3 flex min-h-[44px] w-full items-center rounded-md bg-dr3-chartreuse/20 px-3 py-2 text-start text-sm font-medium text-dr3-chartreuse hover:bg-dr3-chartreuse/30"
-    >
-      ⏳ {label}
-    </button>
   );
 }
 

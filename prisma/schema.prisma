@@ -199,9 +199,70 @@ model SiteInventorySnapshot {
   non_program_units Decimal? @db.Decimal(7, 1)
   pool_attribution  String   @default("measured")
 
+  // ADR-0078 D1 — the tiebreaker that makes "the latest anchor" a FACT.
+  //
+  // `snapshot_at` is not unique and is not even distinct per count: the floor
+  // count route anchors at Pacific MIDNIGHT of the current day (ADR-0060 D-3),
+  // so two counts taken on the same day carry the byte-identical
+  // `snapshot_at`. Both anchor selectors ordered by `snapshot_at DESC` alone,
+  // and SQL does not promise which of two equal keys comes back — so which
+  // count became the anchor was decided by whatever the planner felt like.
+  // Every downstream number is computed forward from the anchor, so this was
+  // an arbitrary choice about inventory, not about row order.
+  //
+  // Recorded, not inferred: `created_at` is the insertion instant, so
+  // ORDER BY snapshot_at DESC, created_at DESC always names the count that was
+  // ENTERED LAST. Existing rows backfill to `snapshot_at` in the migration —
+  // for the two production rows (different days) that is exact, and it can
+  // never invert an ordering that `snapshot_at` alone already determined.
+  //
+  // No new index. The existing `(site_id, snapshot_kind, snapshot_at)` index
+  // still resolves the range; the tiebreak sorts at most a handful of
+  // same-instant rows, and an index that Postgres would not meaningfully use
+  // is ceremony, not performance.
+  created_at        DateTime @default(now())
+
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
   @@map("site_inventory_snapshots")
+}
+
+// ADR-0078 — exactly-once receipts for floor writes.
+//
+// One row per (client-minted) idempotency key. The row is claimed and completed
+// inside the SAME transaction as the business write it guards, so the key and
+// the write commit or roll back together — see `src/lib/idempotency.ts` for why
+// that is non-negotiable rather than a nicety.
+//
+// `status_code` and `response_body` are nullable ONLY to give the claim a
+// distinguishable "claimed but not completed" state. Because the claim and the
+// completion share a transaction, a committed row with NULL status is
+// unreachable through this module; if one is ever read, something else wrote
+// this table and `withIdempotency` refuses it loudly instead of reading it as an
+// empty success.
+//
+// DELIBERATELY NO FOREIGN KEYS on `actor_user_id` / `site_id`. These rows are
+// ephemeral request receipts swept after 7 days, not domain records — the
+// durable account of who did what is `audit_log`, which does carry the FK. An FK
+// here would let a 7-day-old receipt block a user or site mutation, which is a
+// referential-integrity cost with no integrity benefit.
+model IdempotencyKey {
+  /// Client-minted, `src/lib/ulid.ts` shape. The dedupe identity.
+  key           String   @id
+  /// Write class, e.g. `operator.count.create`. Part of the replay identity.
+  scope         String
+  actor_user_id String?
+  site_id       String?
+  /// sha256 hex of the canonical request payload; a mismatch is a 409.
+  request_hash  String
+  status_code   Int?
+  response_body Json?
+  created_at    DateTime @default(now())
+
+  // Drives the TTL sweep (`/api/internal/idempotency/sweep`), which is the only
+  // writer that ever deletes from this table.
+  @@index([created_at])
+  @@map("idempotency_keys")
 }
 
 // ────────────────────────────────────────────────────────────────────────

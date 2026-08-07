@@ -16,6 +16,67 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AJ — 2026-08-07 iPad reliability (ADR-0078) — residuals
+
+### Operator actions
+
+- **O-12 — the iPads must ACCEPT THE UPDATE PROMPT before any of this reaches
+  them.** The floor devices are kiosks and the service worker does not
+  `skipWaiting`, so a deploy strands every iPad on the bundle it already has —
+  indefinitely, if nobody taps. Until then a device keeps sending the old
+  request shape (no `countDate`), which the server still accepts by design, and
+  keeps running the OLD queue code, which has no conflicts screen and no
+  connection indicator. **Nothing in this ADR is live on a device until its
+  operator accepts the prompt.** Confirm per-device: the chrome shows a
+  connection pill, and `/operator/<site>/queue/conflicts` resolves.
+
+- **O-13 — drain the parked photo queue on JT's iPad (~33 conflict rows).**
+  The ~66 non-conflict rows are expected to drain on their own once CORS was
+  fixed, possibly on the OLD bundle and therefore BEFORE this ships — so
+  `load_photos` may already be partially populated when you look. The remaining
+  conflict-flagged rows cannot drain on the old bundle at all: nothing in it can
+  clear the flag. After O-12, open the conflicts screen and use **Retry all**.
+  Rows whose loads belong to another operator's login will refuse again and say
+  so; those need that operator signed in on that device.
+
+### Accepted residuals (recorded, not actions)
+
+- **R2 bucket CORS is HAND-SET INFRASTRUCTURE, not code.** The
+  `dr3-vision-photos` bucket had no CORS rule from the day the photo feature
+  shipped, so 100% of browser uploads failed the preflight and `load_photos`
+  held zero rows — invisibly, because a request that dies at preflight never
+  reaches the server. Repaired 2026-08-07 via the Cloudflare API
+  (`origins: [https://dr3-vision.svdp.us]`, `methods: [PUT, GET, HEAD]`,
+  `headers: [content-type]`, `maxAge 3600`).
+  **The configuration now exists only in a shell history.** A bucket recreated,
+  a second environment stood up, or an account-level change silently
+  reintroduces the identical outage. Smallest honest codification, in order of
+  preference: (1) a checked-in `infra/r2-cors.json` plus a small apply script,
+  so the intended state is reviewable and re-appliable; (2) failing that, a
+  startup assertion that performs one OPTIONS preflight against the bucket and
+  refuses to report healthy on a non-204. Not bundled with ADR-0078 because it
+  is infrastructure-shaped, not application-shaped, and deserves its own review.
+  ADR-0078's client-side mitigation (`blocked:` / `uploads-blocked`) makes a
+  recurrence VISIBLE within one sweep; it does not prevent one.
+
+- **`src/lib/events/sequences.test.ts` has never run in CI.** It is gated on
+  `DR3_TEST_DATABASE_URL`, which nothing in the repo sets, so it self-skips
+  everywhere — a real-concurrency proof that has proven nothing since it was
+  written. ADR-0078 adds a CI step running `src/**/*.db.test.ts` against the
+  `migrations` job's real Postgres; `sequences.test.ts` does not match that glob
+  (it is `.test.ts`, not `.db.test.ts`). Either rename it or widen the glob —
+  deliberately not done here, because it needs the ADR-0041 migration and a look
+  at whether it still passes, which is not this change's scope.
+
+- **Inbound and processed writes are response-deduped, not atomically claimed.**
+  Both services own their internal transactions, so the idempotency claim and
+  the business write are not in one transaction. The residual failure is
+  one-directional and benign — the write can commit while the claim rolls back,
+  costing the dedupe on a later retry, and that retry converges on the same row
+  because both writes are already convergent (an upsert and a day-keyed
+  delete-then-write). The dangerous direction cannot occur. Making them fully
+  atomic means threading a transaction through both services and changing their
+  lock footprint, which buys nothing today.
 ## 0.AI — 2026-08-07 Terex daily throughput (ADR-0079) — follow-up
 
 - **F-2 — the amendment workflow is bonus-specific and could not be reused; equipment

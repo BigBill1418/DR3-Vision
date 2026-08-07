@@ -697,6 +697,44 @@ services:
       com.barnardhq.service: 'audit-sweep'
     logging: *logging
 
+  # ── ADR-0078 — idempotency-key TTL sweep ─────────────────────────────────
+  #
+  # `idempotency_keys` is a receipt book, not a ledger. A receipt answers "did
+  # this exact write already land?", and that stops being asked once the device
+  # that minted the key has synced. Seven days is generous by an order of
+  # magnitude and exists so an iPad that spends a long weekend switched off in a
+  # locker still replays correctly on Monday instead of double-writing.
+  #
+  # Fires at 03:10 PT, offset from the 02:30 audit sweep so the two are not
+  # contending. The RETENTION FLOOR lives in the route, not here: a sweep whose
+  # horizon the caller picks is one bad argument away from deleting live keys.
+  idempotency-sweep:
+    image: dr3-vision-app:local
+    container_name: dr3-vision-idempotency-sweep
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/idempotency-sweep-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here → false "unhealthy").
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'idempotency-sweep'
+    logging: *logging
+
   doc-ingest-sweep:
     # Shared-file document-ingestion delta sweep (ADR-0067 §3.2 D4).
     #

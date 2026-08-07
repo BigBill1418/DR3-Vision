@@ -3,6 +3,7 @@
 import type { ConcernCategory } from '@prisma/client';
 import { useState, useTransition } from 'react';
 import { useI18n } from '@/i18n/provider';
+import { newIdempotencyKey } from '@/lib/offline-queue';
 import { addConcernAction, submitLoadAction } from '../../actions';
 
 const CONCERN_CATEGORIES: ConcernCategory[] = [
@@ -40,7 +41,15 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
     setError(null);
     startTransition(async () => {
       try {
-        await addConcernAction(siteCode, loadId, category, note.trim() || null);
+        // ADR-0078 — a concern has no natural key, so an unkeyed retry after a
+        // dropped response would file the same concern twice against the load.
+        await addConcernAction(
+          newIdempotencyKey(),
+          siteCode,
+          loadId,
+          category,
+          note.trim() || null,
+        );
         setConcernSaved(true);
         setShowConcern(false);
       } catch (e) {

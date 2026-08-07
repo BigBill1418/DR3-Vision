@@ -128,6 +128,35 @@ jobs:
         # schema up to date. A non-zero exit (drift / failed / pending) fails CI.
         run: npx prisma migrate status
 
+      - name: Generate Prisma client (for the real-DB suites below)
+        run: npx prisma generate
+
+      - name: Real-database guards (ADR-0078)
+        # This job already stands up a REAL Postgres 16 and applies the whole
+        # migration chain to it — and until now it threw that database away
+        # without asserting a single behaviour. The `correctness` job cannot
+        # cover these: it runs with a dummy DATABASE_URL and mocks
+        # `@/lib/prisma`, so a claim about `ON CONFLICT DO NOTHING`, about a
+        # PRIMARY KEY refusing a duplicate, or about `ORDER BY … created_at
+        # DESC` breaking a tie would be measuring the mock that enforces it.
+        #
+        # DR3_TEST_DATABASE_URL and DATABASE_URL are deliberately the SAME
+        # value: the services under test write through the `@/lib/prisma`
+        # singleton (DATABASE_URL) while the assertions read their own client
+        # (DR3_TEST_DATABASE_URL). If those diverged the suites would write to
+        # one database and check the other, and "no duplicate rows" would be
+        # true for the boring reason. `floor-exactly-once.db.test.ts` throws
+        # rather than run if they ever differ.
+        env:
+          DR3_TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/dr3_ci?schema=public
+        # `db.test.ts` is a PATH FILTER, not a glob — vitest CLI positional args
+        # match against file paths. A glob here matches nothing and exits 1.
+        #
+        # `--no-file-parallelism` because these suites share ONE database: run in
+        # parallel they clean up rows the other is still using, which fails
+        # intermittently and by interleaving — the worst shape of CI flake.
+        run: npx vitest run --reporter=basic --no-file-parallelism db.test.ts
+
       - name: Report Prisma schema vs migrated DB drift (advisory — non-blocking)
         # Surfaces a schema.prisma change that was NOT captured in a migration
         # (the "edited schema, forgot to add the migration" class). `migrate

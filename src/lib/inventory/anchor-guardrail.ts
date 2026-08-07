@@ -76,7 +76,21 @@ export interface AnchorClassification {
 export async function loadPriorAnchor(db: Db, siteId: string): Promise<PriorAnchor | null> {
   const row = await db.siteInventorySnapshot.findFirst({
     where: { site_id: siteId, snapshot_kind: 'physical' },
-    orderBy: { snapshot_at: 'desc' },
+    // ADR-0078 D1 — `snapshot_at` alone does not order these rows.
+    //
+    // The floor count route stores every count at Pacific MIDNIGHT of the day it
+    // was taken (ADR-0060 D-3), so two counts on the same day are byte-identical
+    // in this column. `ORDER BY snapshot_at DESC` then leaves the winner to the
+    // planner, and the winner is the number the whole inventory is computed
+    // forward from. `created_at DESC` breaks the tie on the recorded insertion
+    // instant, so the count ENTERED LAST wins — deterministically, and matching
+    // what an operator re-entering a count plainly means.
+    //
+    // This ordering must stay identical to `onHand`'s in running-balance.ts. Two
+    // selectors disagreeing about which row is the anchor is the same defect
+    // wearing a second hat: the guardrail would measure the swing against one
+    // count while the balance computed forward from the other.
+    orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
     select: {
       id: true,
       snapshot_at: true,
