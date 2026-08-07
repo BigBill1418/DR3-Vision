@@ -3,6 +3,7 @@
 import type { CountMode } from '@prisma/client';
 import { useEffect, useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
+import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { addStackAction, finishUnloadAction } from '../../actions';
 
 // Stage 5a — stack counter UI per charter §4.3. Three modes:
@@ -28,40 +29,81 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   const [mode, setMode] = useState<CountMode | null>(existingStacks[0]?.count_mode ?? null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  /** ADR-0078 — stacks held locally, awaiting a server ack. Never shown as saved. */
+  const [queued, setQueued] = useState(0);
 
   const total = stacks.reduce((acc, s) => acc + s.unit_count, 0);
   const nextIndex = (stacks.at(-1)?.stack_index ?? 0) + 1;
 
+  // ADR-0078 D2/D6 — a stack is a BILLED unit: `finishUnload` sums `load_stacks`
+  // into `total_units`. Losing one silently undercounts the load, and reporting a
+  // landed one as failed makes an operator re-enter a count that already exists.
+  // The key is minted per tap and carried into the queue, so a retry — live or
+  // replayed — resolves to the same row rather than a second one.
   const persistStack = (count: number) => {
     if (!mode) return;
     const idx = nextIndex;
+    const idempotencyKey = newIdempotencyKey();
     setError(null);
+    // NOT reset here. Clearing the banner on each new tap meant that queueing
+    // stack 3 offline and then succeeding on stack 4 hid the warning while
+    // stack 3 was still unsent — the list read as fully saved. The count only
+    // goes down when something actually leaves the queue.
+    const payload = { loadId, stackIndex: idx, unitCount: count, countMode: mode };
+    const optimistic = () =>
+      setStacks((prev) => [
+        ...prev,
+        { id: `tmp-${idx}`, stack_index: idx, unit_count: count, count_mode: mode },
+      ]);
     startTransition(async () => {
       try {
-        await addStackAction(siteCode, loadId, idx, count, mode);
-        setStacks((prev) => [
-          ...prev,
-          {
-            id: `tmp-${idx}`,
-            stack_index: idx,
-            unit_count: count,
-            count_mode: mode,
-          },
-        ]);
+        await addStackAction(idempotencyKey, siteCode, loadId, idx, count, mode);
+        optimistic();
       } catch (e) {
-        setError(e instanceof Error ? e.message : t('stage_stacks.save_failed'));
+        if (isOfflineError(e)) {
+          await enqueueAction({
+            scope: 'operator.load.add_stack',
+            site_code: siteCode,
+            target_day: null,
+            idempotency_key: idempotencyKey,
+            payload,
+            endpoint: 'server-action:addStackAction',
+            load_id: loadId,
+          });
+          // The stack IS shown, and the banner says why it is provisional. The
+          // running total has to keep counting or the operator loses their place
+          // mid-trailer — but it is never presented as saved.
+          optimistic();
+          setQueued((n) => n + 1);
+        } else {
+          setError(e instanceof Error ? e.message : t('stage_stacks.save_failed'));
+        }
       }
     });
   };
 
   const finish = () => {
     if (!mode) return;
+    const idempotencyKey = newIdempotencyKey();
     setError(null);
     startTransition(async () => {
       try {
-        await finishUnloadAction(siteCode, loadId, mode);
+        await finishUnloadAction(idempotencyKey, siteCode, loadId, mode);
       } catch (e) {
-        setError(e instanceof Error ? e.message : t('stage_stacks.finish_failed'));
+        if (isOfflineError(e)) {
+          await enqueueAction({
+            scope: 'operator.load.finish_unload',
+            site_code: siteCode,
+            target_day: null,
+            idempotency_key: idempotencyKey,
+            payload: { loadId, countMode: mode },
+            endpoint: 'server-action:finishUnloadAction',
+            load_id: loadId,
+          });
+          setQueued((n) => n + 1);
+        } else {
+          setError(e instanceof Error ? e.message : t('stage_stacks.finish_failed'));
+        }
       }
     });
   };
@@ -119,13 +161,24 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
           {stacks.map((s) => (
             <li key={s.id} className="flex justify-between">
               <span>{t('stage_stacks.stack_index', { n: s.stack_index })}</span>
-              <span className="tabular-nums">{t('stage_stacks.stack_units', { n: s.unit_count })}</span>
+              <span className="tabular-nums">
+                {t('stage_stacks.stack_units', { n: s.unit_count })}
+              </span>
             </li>
           ))}
         </ul>
       )}
 
       {error && <p className="text-sm text-red-300">{error}</p>}
+
+      {queued > 0 && (
+        <p
+          className="rounded-lg bg-amber-900/50 px-4 py-3 text-sm font-medium text-dr3-cream ring-1 ring-amber-400/40"
+          data-testid="stacks-queued"
+        >
+          {t('floor.common.queued')}
+        </p>
+      )}
 
       <button
         type="button"

@@ -6,13 +6,17 @@ import { onHand } from '@/lib/inventory/running-balance';
 import { loadPriorAnchor, loadSwingThresholdPct } from '@/lib/inventory/anchor-guardrail';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
+import { pacificDayISO } from '@/lib/time';
 import { FloorPageHeading } from '../../_components/page-heading';
 import { CountClient } from './count-client';
 
 // ADR-0060 F-3 — floor physical on-hand count. Enters a `measured` physical snapshot as
 // the new anchor via reconcilePhysicalCount. Establishes Eugene's first anchor.
 // Operator-PIN gated + ADR-0065 rollout-gated on its OWN `ipad_count` surface.
-// The count is always of on-hand NOW, so it carries no date affordance.
+// The count is always of on-hand NOW, so it carries no date affordance in the UI —
+// but ADR-0078 D10 makes the DAY explicit in the request. Derived here, server-side
+// and in Pacific: the iPad's own clock is not trustworthy enough to decide which
+// production day a count is filed against.
 
 export const dynamic = 'force-dynamic';
 
@@ -69,6 +73,7 @@ export default async function FloorCountPage({ params }: Props) {
             jurisdiction={jurisdiction}
             priorTotal={priorTotal}
             thresholdPct={thresholdPct}
+            countDate={pacificDayISO(new Date())}
           />
         )}
       </div>

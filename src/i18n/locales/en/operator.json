@@ -40,16 +40,6 @@
     "open_status_in_progress": "Counting",
     "open_status_finished": "Counted — not submitted"
   },
-  "pending_banner": {
-    "items_pending_one": "{{count}} item pending upload from a previous shift",
-    "items_pending_other": "{{count}} items pending upload from a previous shift",
-    "syncing_now": "syncing now…",
-    "tap_to_replay": "tap to replay"
-  },
-  "pending_pill": {
-    "label_one": "{{count}} pending upload — tap to retry now",
-    "label_other": "{{count}} pending uploads — tap to retry now"
-  },
   "load_header": {
     "unknown_source": "Unknown source",
     "unknown_carrier": "Unknown carrier",
@@ -214,7 +204,8 @@
       "save_failed": "Couldn't save. Try again.",
       "not_activated_heading": "Not turned on yet",
       "not_activated_body": "The inventory tools for {{site}} aren't switched on yet. Ask a manager.",
-      "today": "Today"
+      "today": "Today",
+      "queued": "Saved on this iPad — will send when you reconnect"
     },
     "hub": {
       "heading": "Daily check",
@@ -335,6 +326,45 @@
       "retry": "Try again",
       "go_hub": "Back to my screens",
       "reference": "Reference"
+    },
+    "connection": {
+      "online": "Connected",
+      "offline": "Offline — {{count}} waiting",
+      "syncing": "Sending…",
+      "pending": "{{count}} waiting to send",
+      "conflicts": "{{count}} need you",
+      "last_sync": "Last sent {{time}}",
+      "never_synced": "Nothing sent yet this shift",
+      "uploads_blocked": "Photos can’t upload — tell a manager",
+      "uploads_blocked_detail": "{{count}} photos are waiting. Counts are still saving normally.",
+      "session_expired": "Sign in to send {{count}} items"
+    },
+    "conflicts": {
+      "heading": "Entries that need you",
+      "intro": "These could not be sent automatically. Nothing has been lost and nothing has been changed — choose what happens to each one.",
+      "empty": "Nothing is stuck. Everything you entered has been sent.",
+      "target_day": "This was for {{day}}",
+      "discard": "Discard this entry",
+      "discard_reason": "Why are you discarding this entry?",
+      "discard_failed": "Couldn't discard. Try again.",
+      "resubmit_today": "Send it for today ({{day}}) instead",
+      "resubmit_failed": "Couldn't send. Try again.",
+      "why_wrong_day": "It was for a different day, so it was not sent. The iPad only files today.",
+      "why_conflict": "Someone else changed this first.",
+      "why_session": "Your sign-in expired before this was sent.",
+      "why_refused": "The server would not accept this.",
+      "what_count": "On-hand count",
+      "what_inbound": "Inbound haul counts",
+      "what_processed": "Processed counts",
+      "what_photo": "Photo ({{kind}})",
+      "retry": "Try again now",
+      "retry_failed": "Couldn't retry. Try again.",
+      "why_other_operator": "This photo belongs to a load signed in under another operator. Have that operator sign in on this iPad and try again.",
+      "why_upload_blocked": "Photo storage was unreachable. It is safe to try again now.",
+      "queued_at": "Held since {{when}}",
+      "load_ref": "Load {{id}}",
+      "retry_all": "Try all {{count}} again",
+      "why_manager_hold": "This count is large enough to need a manager. It is stored safely and waiting for approval — retrying will not speed it up."
     }
   },
   "nav": {

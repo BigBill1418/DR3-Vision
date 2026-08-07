@@ -253,7 +253,14 @@ export function anchorFlowBounds(anchorAt: Date | null): {
 export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance> {
   const anchor = await prisma.siteInventorySnapshot.findFirst({
     where: { site_id: siteId, snapshot_kind: 'physical', snapshot_at: { lte: asOf } },
-    orderBy: { snapshot_at: 'desc' },
+    // ADR-0078 D1 — MUST match `loadPriorAnchor` in anchor-guardrail.ts exactly.
+    // Counts are stored at Pacific midnight (D-3 below), so same-day counts tie
+    // on `snapshot_at` and the planner picked the anchor. `created_at DESC`
+    // makes the last-entered count the anchor, deterministically. If you change
+    // one of these two orderings, change both — a guardrail measuring a swing
+    // against a different anchor than the balance computes forward from is worse
+    // than either being wrong alone.
+    orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
     select: {
       snapshot_at: true,
       units_indoor: true,
@@ -370,6 +377,18 @@ export async function reconcilePhysicalCount(args: {
   /** `measured` (default) validates the split; `legacy` records the count unsplit. */
   poolAttribution?: 'measured' | 'legacy';
   actorUserId: string | null;
+  /**
+   * ADR-0078 — an OPEN transaction to write the snapshot + audit row on, so a
+   * caller can bind this write to its own (e.g. an idempotency claim). Omit and
+   * this opens its own, as it always did.
+   *
+   * Note what is deliberately NOT moved inside: the `onHand` read above still
+   * runs on the shared client, outside any caller transaction. That is
+   * pre-existing behaviour and is left alone here — pulling a read of six
+   * aggregate tables into a caller's transaction changes the lock footprint of
+   * every count, which is a separate change that deserves its own evidence.
+   */
+  tx?: Prisma.TransactionClient;
 }): Promise<ReconcileResult> {
   const poolAttribution = args.poolAttribution ?? 'measured';
   const physicalTotal = snapshotTotalUnits({
@@ -395,7 +414,13 @@ export async function reconcilePhysicalCount(args: {
   const computed = await onHand(args.siteId, args.countedAt);
   const reconciledDelta = new D(physicalTotal).minus(computed.total).toNearest(1).toNumber();
 
-  const snapshot = await prisma.$transaction(async (tx) => {
+  // ADR-0078 — when the caller supplies a transaction, the snapshot is written on
+  // IT rather than in a private one. The floor count route claims its idempotency
+  // key in the same transaction as this insert, and a claim that commits
+  // separately from the write it guards is not a guard: the two orders of failure
+  // give you either a burned key with no count, or a count with no defence.
+  // Callers that pass nothing keep the previous behaviour exactly.
+  const write = async (tx: Prisma.TransactionClient) => {
     const created = await tx.siteInventorySnapshot.create({
       data: {
         site_id: args.siteId,
@@ -431,7 +456,9 @@ export async function reconcilePhysicalCount(args: {
       },
     });
     return created;
-  });
+  };
+
+  const snapshot = args.tx ? await write(args.tx) : await prisma.$transaction(write);
 
   return {
     snapshotId: snapshot.id,

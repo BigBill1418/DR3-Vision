@@ -4,7 +4,6 @@ import { prisma } from '@/lib/prisma';
 import { formatTime, formatRelative } from '@/lib/format';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
-import { PendingBanner } from './pending-banner';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
 import { OpenLoadsSection } from './open-loads';
@@ -151,7 +150,6 @@ export default async function OperatorQueuePage({ params }: Props) {
         />
 
         <QueueClient lastSyncAt={lastSyncAt?.toISOString() ?? null}>
-          <PendingBanner />
           {/* Wrapper supplies the vertical rhythm the outer page column gives its
               own children — QueueClient renders into a bare `relative` div, so
               without it the resume block sits flush against the list below. */}

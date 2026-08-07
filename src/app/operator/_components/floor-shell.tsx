@@ -18,6 +18,7 @@
 // Pages now render only their own content: `<main className="px-6 pb-8">`.
 
 import { usePathname } from 'next/navigation';
+import { DrainEngineMount } from './drain-engine-mount';
 import { FloorChrome } from './floor-chrome';
 import { resolveFloorNav } from './floor-nav';
 
@@ -29,6 +30,11 @@ export function FloorShell({ children }: { children: React.ReactNode }) {
         nav.isAuthSurface ? 'bg-black text-white' : 'bg-dr3-green-deep text-dr3-cream'
       }`}
     >
+      {/* ADR-0078 G8 — the offline-queue drain engine, mounted ONCE for all nine
+          operator screens. Deliberately here and not in any page: whether an
+          operator's queued count gets pushed must not depend on which screen
+          they happen to be looking at. Renders nothing. */}
+      <DrainEngineMount />
       <FloorChrome nav={nav} />
       {children}
     </div>

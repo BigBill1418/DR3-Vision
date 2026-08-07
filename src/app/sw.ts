@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { defaultCache } from '@serwist/next/worker';
 import type { PrecacheEntry, SerwistGlobalConfig, RuntimeCaching } from 'serwist';
-import { CacheFirst, ExpirationPlugin, NetworkFirst, Serwist } from 'serwist';
+import { CacheFirst, ExpirationPlugin, NetworkFirst, NetworkOnly, Serwist } from 'serwist';
 import { BackgroundSyncPlugin } from '@serwist/background-sync';
 
 // Service Worker entry point for DR3-Vision (T-009 / ADR-0006).
@@ -55,6 +55,28 @@ const serverActionQueue = new BackgroundSyncPlugin('dr3-server-actions', {
 //   - Next.js server actions land at the page route via POST with
 //     `Next-Action` header — those get queued too
 const customCaching: RuntimeCaching[] = [
+  // ADR-0078 — /healthz is NEVER cached, and this entry must stay FIRST.
+  //
+  // `useConnectionState` pings /healthz to answer "can this iPad actually reach
+  // the app?", because `navigator.onLine` on iPadOS reports only that a network
+  // interface exists — an iPad on an access point with a dead uplink says
+  // `true`, which is the exact failure JT reported.
+  //
+  // `defaultCache` ends with an `others` entry matching every same-origin path
+  // that is not under `/api/`, on NetworkFirst. /healthz matches it. So without
+  // this rule, the ping on a dead uplink falls back to a CACHED 200 and the
+  // indicator reports "connected" while every replay fails — the detection
+  // defeated by the app's own service worker. `cache: 'no-store'` on the fetch
+  // does not help: that is an HTTP-cache directive and does not bypass the SW.
+  //
+  // Order is load-bearing: `runtimeCaching` is [...customCaching, ...defaultCache]
+  // and the first matching entry wins. Move this below `defaultCache` and the
+  // catch-all silently reclaims it.
+  {
+    matcher: ({ url, sameOrigin }) => sameOrigin && url.pathname === '/healthz',
+    method: 'GET',
+    handler: new NetworkOnly(),
+  },
   // R2 photo previews — CacheFirst, 200 entries, 7 days
   {
     matcher: ({ url }) =>

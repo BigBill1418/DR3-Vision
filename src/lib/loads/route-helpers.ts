@@ -20,6 +20,7 @@ import {
 import type { UiSurfaceCode } from '@/lib/notify/rollout';
 import { log } from '@/lib/observability/logger';
 import { pacificDayISO } from '@/lib/time';
+import { isQueueId } from '@/lib/ulid';
 
 /**
  * Resolve the manager/site context AND enforce the ADR-0037 D7 activation gate.
@@ -88,6 +89,31 @@ export function assertCurrentPacificDay(dayValue: string, now: Date = new Date()
     // a bare "error" with the reason dropped.
     throw new Response(null, { status: 422, statusText: 'date_not_today' });
   }
+}
+
+/**
+ * ADR-0078 — read the client-minted `Idempotency-Key` header.
+ *
+ * Absent ⇒ `null`, which `withIdempotency` treats as "no dedupe" and runs the
+ * write exactly as it did before this ADR. That is deliberate: the header is
+ * additive, so an older cached iPad bundle keeps working rather than being
+ * locked out by a gate it has never heard of.
+ *
+ * Present-but-malformed ⇒ a thrown 400 rather than a silent `null`. A client
+ * that MEANT to dedupe and sent a key we quietly ignored would believe it was
+ * protected while it was not, and that belief is worse than no key at all.
+ *
+ * The shape check is not an authenticity check — anyone can mint a well-formed
+ * key for themselves, which is the point. Ownership is enforced separately, by
+ * pinning a replay to the actor that first claimed the key.
+ */
+export function readIdempotencyKey(req: Request): string | null {
+  const raw = req.headers.get('idempotency-key');
+  if (raw == null || raw === '') return null;
+  if (!isQueueId(raw)) {
+    throw new Response(null, { status: 400, statusText: 'invalid_idempotency_key' });
+  }
+  return raw;
 }
 
 /**

@@ -84,6 +84,225 @@ recorded: labeled backfill into the machine's table (permanent conflation risk +
 would weaken `run_hours NOT NULL`), and a dual-series peer view (filed as the
 future reconciliation view, not built).
 
+## 2026-08-07 — the iPad stops losing work, and starts saying when it can't (ADR-0078)
+
+JT asked for one thing: _"make sure the connection isn't dropping … error-free
+and bulletproof for the iPad."_ The audit found the reliability layer ADR-0006
+describes was, in several places, **not connected to anything.**
+
+**`enqueueAction` had zero callers, and `replayAll` was POSTing to
+`/api/queue/replay` — a route that did not exist.** Next answered 404, the
+queue's hard-4xx branch classified that as a permanent conflict, and conflicts
+are never retried. Every queued action would have been stuck on its first
+attempt, forever, with nothing surfacing it to anyone. The blast radius was zero
+only because the other end was equally unwired; fixing one without the other
+would have turned a dormant bug into a live one.
+
+**A count typed on a dropping connection was discarded.** `inbound`, `processed`
+and `count` all had a bare `catch { setError(…) }` and no queue import at all.
+The operator's work survived as a sentence telling them to type it again from
+memory. All three now queue, and — this is the part that matters — a queued entry
+shows a state that is visually distinct from Saved. Green means server-acked.
+Always.
+
+### The anchor was chosen by the query planner
+
+`site_inventory_snapshots` had no tiebreaker, and the floor route stores every
+count at **Pacific midnight** — so two counts on the same day are byte-identical
+in `snapshot_at`. Both anchor selectors ordered by that column alone. Which count
+became the inventory anchor, the number every downstream balance is computed
+forward from, was left to whatever the planner felt like.
+
+Production has not been bitten: two physical snapshots exist, on different days,
+and the duplicate-instant query returns zero groups. But **`ipad_count` is LIVE
+at both sites**, so a second count on any single day reached this today. A
+`created_at` column now breaks the tie on the recorded insertion instant — the
+count entered LAST wins — and existing rows backfill to their own `snapshot_at`,
+which makes the tiebreaker a strict no-op for every row that already existed.
+Pinned across 20 runs; reverting the `orderBy` returns **111 where 999 is
+correct**.
+
+### Exactly-once, claimed inside the write's own transaction
+
+Every floor write now carries a client-minted key, claimed with
+`INSERT … ON CONFLICT (key) DO NOTHING` **in the same transaction as the business
+write**. Both failure directions explain why that is not negotiable: a claim that
+commits without its write burns the key and answers the retry with success for a
+count that vanished; a write that commits without its claim simply has no
+defence. Removing the claim's gate produces `[ 'wrote', 'wrote' ]` — two writes,
+the real defect.
+
+A replay is pinned to its original **actor, scope and payload hash**. A key is a
+bearer string, and "unguessable" is a probability where an owner check is a fact.
+
+**A double-tap was a lie in both directions.** The unique index on
+`(load_id, stack_index)` correctly refused the second insert — and the UI
+rendered that refusal as "couldn't save" for a write that had landed, so the
+operator's natural next move is to re-enter a count that already exists. Same for
+Finish: retrying after a successful commit hit an illegal-transition error for
+the one thing that definitely worked.
+
+### Two live incidents, mid-build — the same class this ADR exists to close
+
+**`load_photos` held ZERO rows. Ever.** Every browser upload since the feature
+shipped had failed the CORS preflight against the R2 bucket (403 — no CORS rule
+existed). One iPad had silently accumulated 97 photos. The server could not see
+it, because a request that dies at the preflight never arrives. On the device, a
+blocked preflight is an opaque `TypeError` — **byte-identical** to the one an
+offline device throws — so the queue called it "offline" and retried patiently
+for weeks. Fixed in infrastructure (preflight now 204).
+
+**And the parked rows still would not drain.** Any re-mint 4xx was flagged
+`conflict:` and then skipped by every future sweep, with nothing in the shipped
+app able to see or clear the flag. Photos queued against a load owned by a
+_different_ operator login get 403 on re-mint and park permanently — while still
+being counted as pending. The device read **99-and-not-draining**.
+
+Both now have names. `blocked:` is distinct from offline and is inferred from
+evidence we already have: if the mint (our endpoint) succeeded and the PUT died
+at the network layer, the device demonstrably reaches the app and not storage.
+The badge counts what is still **trying**, separately from what is parked,
+because a number that sits at 99 across shifts teaches operators that the number
+means nothing. And every conflict now has a screen, a plain-language reason, and
+two honest buttons: **Retry** (which also discards the cached presign — a
+weeks-old URL would 403 the entire opening of the drain) and **Discard**, audited
+server-side _before_ the local row is removed, because a refused entry exists
+nowhere else.
+
+### Connection state, on every screen
+
+One hook, one component, mounted once in `FloorChrome` — so it is on all
+operator screens by construction, and a filesystem-enumerated test keeps it that
+way. It replaces two near-identical sweep loops that had grown on separate
+screens (the queue drained on the load workflow and merely _displayed_ on the
+queue page) and neither of which showed connection state at all.
+
+`navigator.onLine` is not trusted on its own: on iPadOS it reports whether an
+interface exists, not whether anything is reachable, so an iPad on an access
+point with a dead uplink reports `true` — which is precisely JT's complaint. Each
+sweep also pings the app itself.
+
+### Notes
+
+- **The day pin refuses; it never retargets and never drops.** A replayed entry
+  for a day that is no longer today is held for a person. Both silent
+  alternatives are money errors: retargeting files a count against the wrong
+  production day, dropping loses the work.
+- **A day-addressed replay carrying NO day is now refused, not exempted.** The
+  earlier `if (day !== null)` shape let an old-format entry skip the pin
+  entirely — through the one path with no operator watching it.
+- **`countDate` is optional in the schema on purpose.** The iPads are kiosks
+  whose service worker does not `skipWaiting`, so the previous bundle persists
+  until someone accepts the update prompt — and it sends no `countDate`.
+  Requiring it would have 422'd every count at **both sites** for the whole
+  update window: an outage caused by the reliability fix. The live route defaults
+  it (behaviour-identical to before) and logs when it did; the replay path
+  refuses instead, because "now" is not a queued entry's day.
+- **Legacy queued photos get a key during the IndexedDB upgrade.** Without that,
+  the duplicate-confirm fix would have had a hole shaped exactly like the bug,
+  for precisely the ~99 rows it was built for. v1 rows are never dropped: uploads
+  keep their blobs, undispatchable v1 actions are flagged rather than deleted.
+- **Badge counts are answered from an indexed `state` scalar.** Counting by
+  scanning records deserialises every queued photo Blob — hundreds of
+  multi-megabyte reads per minute, on the single tab holding data that exists
+  nowhere else, to render a number.
+- **Typed errors.** `assertOwn` / `ctx` threw bare `Error`s that
+  `loadsErrorResponse` cannot map, so "this load isn't yours" was reported as a
+  500 — wrong for the operator, wrong severity in the log, and buried in the 500
+  rate.
+- **R2 bucket CORS is hand-set infrastructure, not code.** Recorded in
+  OPEN-ITEMS; it is currently reproducible only from a shell history.
+- **CI's `migrations` job asserted nothing.** It stood up a real Postgres 16,
+  applied the whole chain, and threw the database away. It now runs the real-DB
+  suites against it — because the core claims here are claims about Postgres, and
+  a mocked Prisma would have been enforcing the very rules the tests check.
+- **One falsification came back GREEN and that was the most useful result.** The
+  double-tap test, written with a single shared key, passed with the P2002
+  tolerance deleted: `withIdempotency` short-circuits before the insert, so the
+  assertion was measuring the idempotency path and not the constraint path it
+  named. Rewritten with two keys — which is what a real double-tap mints — it
+  goes red with the actual unique-constraint violation.
+
+### The drain now happens no matter what screen you're on
+
+Bill, mid-build: _"drain should happen no matter what page its on and it should
+make sure all data is always pushed down - not as an afterthought."_ Replay used
+to live inside screens — the load workflow ran a sweep, the queue page ran a
+different one, every other screen ran none — so whether a queued count went
+anywhere depended on which page an operator happened to be looking at. There is
+now ONE engine, mounted above all nine screens, triggered on mount, `online`,
+tab-visible, BFCache `pageshow`, a foreground-only 30s interval, **and
+immediately after every enqueue** — which is what makes the queue a retry path
+instead of a waiting room. `replayAll` has exactly one caller in app code, and a
+test greps the source to keep it that way.
+
+Background Sync is registered where it exists and is a **no-op on iOS**, because
+WebKit has never shipped it. Stated plainly rather than implied: on an iPad the
+queue drains whenever the app is open on any screen and resumes the instant it
+is foregrounded; there is no closed-app execution.
+
+### The auth redirect that looked like success
+
+The primary blocker of the 99-photo drain, and it never looked like a bug.
+Operator sessions idle out after five minutes and `/api/photos/*` is not public,
+so a session-less replay got `307 → /login`; fetch follows redirects, /login
+returns **200 text/html**, and `res.ok` was true. The mint "succeeded", parsing
+the login page as JSON threw a SyntaxError, and that became a generic _retryable,
+unlabelled_ error. The R2 PUT was never reached. This is the ADR-0036 class that
+bit the reminder-tick in July, arriving through the photo queue.
+
+The middleware now answers `/api/*` with **401 JSON** (page navigations keep
+their redirect — sending a person to /login is what it is for), and every queue
+fetch uses `redirect: 'manual'` and treats a redirect, a 401, or a 2xx carrying
+HTML as an expired session. That is its own class, deliberately not a conflict:
+nothing needs adjudicating, somebody needs to sign in. The badge says so and
+carries a return path.
+
+### And a second review caught the fix reversing the fix
+
+The G8 refactor nearly turned the offline badge green again. `replayAll`
+early-returns a fully-formed result when the device is offline, and the new
+observer read "a result with no auth and no blocked rows" as a successful sync —
+so one engine trigger would repaint a red badge green and stamp a "last sent"
+time for a sweep that never left the device. A sweep now reports whether it
+actually **reached** the server: `false` when nothing got through, `true` when
+something answered (a 409 counts — reachability and success are different
+questions), and `null` when nothing was attempted, because an empty queue is no
+evidence and must not be read as health.
+
+Also from that pass: signing back in now RETURNS the operator to the screen they
+were on, validated against an open redirect (`//evil.example` is
+protocol-relative and navigates off-site despite starting with a slash — the
+exact bypass a naive `startsWith('/')` check misses); a capture made _during_ a
+long drain no longer waits for the next tick; and the middleware's 401 was
+verified not to touch `/api/auth/*`, which is how the PIN keypad signs anyone in
+at all.
+
+### The review caught three of these in the fix itself
+
+An adversarial pass before merge found three defects **of the same class this
+change is about** — a billed count vanishing while the UI says saved — all three
+introduced by the fix. `addStack`'s duplicate-tolerance absorbed a genuinely
+different stack at a colliding index (it keyed off "a key was present", never off
+whether the existing row _is_ this write); a queued stack could land after Finish
+with `total_units` never recomputed; and _Re-submit to today_ would have
+**overwritten** today's confirmed inbound with a stale day's number, because that
+write is an absolute SET on the day key. All three are fixed and pinned. Two more
+would have defeated the feature quietly: the service worker cached `/healthz`, so
+the reachability ping would have returned a cached 200 on a dead uplink and shown
+green; and every Retry on a Tier-2 count minted another manager hold.
+
+### Premises that died on checking
+
+- **"Add `conflicts` to `WORK_SEGMENTS` or the page renders black."** False as
+  built: `resolveFloorNav` keys on the _second_ path segment and the screen nests
+  under `/queue`, so it inherits back and Log Out untouched. Pinned by a test.
+- **"The locale-parity test enforces EN/ES/UR."** Both a runtime test _and_ a
+  compile-time `Widen<T>` do; a missing key fails `tsc` before any test runs.
+- **"ADR-0012 §4 — no new deps."** ADR-0012 §4 is the `next-pwa` → Serwist swap
+  and imposes no dependency freeze. `offline-queue.ts` has been citing a
+  constraint that does not exist.
+
 ## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0079)
 
 The Terex's throughput has been the **whole floor's output wearing one machine's

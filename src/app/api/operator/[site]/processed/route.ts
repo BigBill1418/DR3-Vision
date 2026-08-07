@@ -10,44 +10,33 @@
 // Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator` on the
 // per-surface `ipad_processed` gate (ADR-0065), not the shared `loads_inventory` master gate.
 
+// ADR-0078 — a TRANSPORT over `processedConfirm` (src/lib/operator/floor-writes.ts),
+// which the offline-queue replay endpoint dispatches through as well.
+
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { upsertProcessedUnits } from '@/lib/loads/processed-units';
 import {
   requireActivatedOperator,
   loadsErrorResponse,
   assertCurrentPacificDay,
+  readIdempotencyKey,
 } from '@/lib/loads/route-helpers';
 import { UI_SURFACE } from '@/lib/notify/rollout';
+import { ProcessedConfirm, processedConfirm } from '@/lib/operator/floor-writes';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const Body = z.object({
-  productionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  strippedProgram: z.number().nonnegative(),
-  strippedNonProgram: z.number().nonnegative(),
-  notes: z.string().max(2000).optional(),
-});
 
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
     const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_PROCESSED);
-    const parsed = Body.safeParse(await req.json());
+    const idempotencyKey = readIdempotencyKey(req);
+    const parsed = ProcessedConfirm.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
-    const d = parsed.data;
     // ADR-0065 — current Pacific day only (same floor rule as /inbound).
-    assertCurrentPacificDay(d.productionDate);
-    const row = await upsertProcessedUnits({
-      siteId: ctx.siteId,
-      productionDate: new Date(`${d.productionDate}T00:00:00Z`),
-      strippedProgram: d.strippedProgram,
-      strippedNonProgram: d.strippedNonProgram,
-      actorUserId: ctx.userId,
-      notes: d.notes ?? null,
-    });
-    return NextResponse.json({ row }, { status: 201 });
+    assertCurrentPacificDay(parsed.data.productionDate);
+    const result = await processedConfirm({ ctx, payload: parsed.data, idempotencyKey });
+    return NextResponse.json(result.body, { status: result.status });
   } catch (e) {
     // ProcessedUnitsError carries {status, reason} — a closed day surfaces as 409 `closed`.
     return loadsErrorResponse(e, {

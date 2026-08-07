@@ -3,121 +3,77 @@
 // A floor operator enters the physical on-hand count; it becomes the new inventory
 // anchor via the SAME `reconcilePhysicalCount` money path the manager desktop uses
 // (/api/manager/[site]/snapshots) — no new inventory math, the floor is just a new
-// caller, actor = operator. Highest value on Eugene, which has no physical anchor yet:
-// this establishes its first one. `reconcilePhysicalCount` records the reconciled_delta
-// (physical − computed) and never clobbers an existing snapshot (it appends a new one).
+// caller, actor = operator.
 //
 // Operator-PIN gated + ADR-0047 rollout-gated via `requireActivatedOperator` on the
 // per-surface `ipad_count` gate (ADR-0065), not the shared `loads_inventory` master gate.
+//
+// ADR-0078 — this route is now a TRANSPORT. The guardrail, the idempotency claim
+// and the reconcile all live in `countCreate` (src/lib/operator/floor-writes.ts),
+// which the offline-queue replay endpoint dispatches through as well. Two copies
+// of a money path drift; one copy with two callers cannot.
+//
+// ADR-0078 D10 — the count now carries the DAY it was taken. This route used to
+// take no date at all and derive the day from `new Date()` at write time, which
+// is right for a live submit and silently wrong for a replayed one: an entry
+// queued Tuesday evening and replayed Wednesday morning would have anchored
+// Wednesday's inventory with Tuesday's count. `assertCurrentPacificDay` refuses
+// that instead — the operator resolves it, we never guess.
 
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/running-balance';
-import { requireActivatedOperator, loadsErrorResponse } from '@/lib/loads/route-helpers';
-import { UI_SURFACE } from '@/lib/notify/rollout';
-import { pacificMidnightInstantOfDayISO, pacificDayISO } from '@/lib/time';
-import { prisma } from '@/lib/prisma';
+import { PoolSplitMismatchError } from '@/lib/inventory/running-balance';
 import {
-  classifyAnchorWrite,
-  describeSwing,
-  loadPriorAnchor,
-  loadSwingThresholdPct,
-} from '@/lib/inventory/anchor-guardrail';
-import { createHold, eligibleApprovers } from '@/lib/inventory/anchor-holds';
+  requireActivatedOperator,
+  loadsErrorResponse,
+  assertCurrentPacificDay,
+  readIdempotencyKey,
+} from '@/lib/loads/route-helpers';
+import { UI_SURFACE } from '@/lib/notify/rollout';
+import { CountCreate, countCreate } from '@/lib/operator/floor-writes';
+import { pacificDayISO } from '@/lib/time';
+import { log } from '@/lib/observability/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const Create = z.object({
-  // Jurisdiction-appropriate subset (CA indoor, OR total); blanks are null. Outdoor is
-  // not tracked — ADR-0037 addendum.
-  unitsIndoor: z.number().int().nonnegative().nullable().optional(),
-  unitsTotal: z.number().int().nonnegative().nullable().optional(),
-  unitsInProcessing: z.number().int().nonnegative().default(0),
-  programUnits: z.number().int().nonnegative().nullable().optional(),
-  nonProgramUnits: z.number().int().nonnegative().nullable().optional(),
-  poolAttribution: z.enum(['measured', 'legacy']).optional(),
-});
 
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
     const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
-    const parsed = Create.safeParse(await req.json());
+    const idempotencyKey = readIdempotencyKey(req);
+    const parsed = CountCreate.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
-    const d = parsed.data;
 
-    // ── ADR-0072 — the guardrail, enforced HERE ─────────────────────────────
-    // Recomputed server-side from live state on every write. The client
-    // classifies the same count only to decide what dialog to show; a request
-    // that skips the dialog still meets this. If the UI and this disagree, this
-    // wins — which is the difference between a control and a courtesy.
-    const newTotal = (d.unitsTotal ?? d.unitsIndoor ?? 0) + d.unitsInProcessing;
-    const [prior, thresholdPct] = await Promise.all([
-      loadPriorAnchor(prisma, ctx.siteId),
-      loadSwingThresholdPct(prisma, ctx.siteId),
-    ]);
-    const classification = classifyAnchorWrite({ prior, newTotal, thresholdPct });
-
-    if (classification.requiresManagerApproval) {
-      // Tier 2. NOT rejected and NOT written — held with its values intact so a
-      // manager can release it, and so the operator's work is never lost to a
-      // refusal. A 422 here means "a person must look at this", not "try again".
-      const hold = await createHold(prisma, {
-        siteId: ctx.siteId,
-        createdBy: ctx.userId,
-        input: {
-          unitsIndoor: d.unitsIndoor ?? null,
-          unitsTotal: d.unitsTotal ?? null,
-          unitsInProcessing: d.unitsInProcessing,
-          programUnits: d.programUnits ?? null,
-          nonProgramUnits: d.nonProgramUnits ?? null,
-          poolAttribution: d.poolAttribution ?? 'measured',
-        },
-        classification,
-      });
-      const approvers = await eligibleApprovers(prisma, ctx.siteId);
-      return NextResponse.json(
-        {
-          error: 'manager_approval_required',
-          holdId: hold.id,
-          tier: 2,
-          priorTotal: classification.prior?.total ?? null,
-          newTotal: classification.newTotal,
-          swingPct: classification.swingPct,
-          thresholdPct: classification.thresholdPct,
-          message: describeSwing(classification),
-          approvers,
-        },
-        { status: 422 },
+    // Old-shell compatibility. The floor iPads are kiosks whose service worker
+    // does not `skipWaiting`, so a device keeps serving the PREVIOUS bundle
+    // until an operator accepts the update prompt — and that bundle sends no
+    // `countDate`. Defaulting it here is behaviour-identical to the pre-ADR-0078
+    // route, which derived the same day from the same clock; refusing instead
+    // would 422 every count at both sites for as long as one device stayed on
+    // the old shell.
+    //
+    // Safe ONLY on this path, because a live submit genuinely is happening now.
+    // The replay endpoint refuses a day-addressed entry with no day rather than
+    // defaulting, so a queued entry can never pick up "today" this way.
+    const countDate = parsed.data.countDate ?? pacificDayISO(new Date());
+    if (parsed.data.countDate === undefined) {
+      log.warn(
+        { site, op: 'count.legacy_shell_no_date', assumed_day: countDate },
+        '[floor] count submitted without countDate — device is on a pre-ADR-0078 bundle',
       );
     }
 
-    const result = await reconcilePhysicalCount({
-      siteId: ctx.siteId,
-      // D-3: the count anchors at Pacific-midnight of TODAY (the floor counts the current
-      // day's closing position), never UTC-midnight — see anchorFlowBounds.
-      countedAt: pacificMidnightInstantOfDayISO(pacificDayISO(new Date())),
-      physical: {
-        units_indoor: d.unitsIndoor ?? null,
-        units_total: d.unitsTotal ?? null,
-        units_in_processing: d.unitsInProcessing,
-      },
-      programUnits: d.programUnits ?? null,
-      nonProgramUnits: d.nonProgramUnits ?? null,
-      poolAttribution: d.poolAttribution ?? 'measured',
-      actorUserId: ctx.userId,
+    // ADR-0065 / ADR-0078 D10 — current Pacific day only, pinned BEFORE the
+    // write. Pacific, not server-local: the container runs UTC, so a local
+    // comparison would start refusing the operator's real day at 5 PM.
+    assertCurrentPacificDay(countDate);
+
+    const result = await countCreate({
+      ctx,
+      payload: { ...parsed.data, countDate },
+      idempotencyKey,
     });
-    return NextResponse.json(
-      {
-        ...result,
-        tier: classification.tier,
-        priorTotal: classification.prior?.total ?? null,
-        swingPct: classification.swingPct,
-        thresholdPct: classification.thresholdPct,
-      },
-      { status: 201 },
-    );
+    return NextResponse.json(result.body, { status: result.status });
   } catch (e) {
     // A measured split that doesn't sum → 422 with the plain-English reason.
     if (e instanceof PoolSplitMismatchError) {

@@ -21,18 +21,23 @@ import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/clie
 // `inbound_loads`, which feeds `onHand` and billing — gating the page without
 // gating the action would have been a money-safety hole, not a cosmetic one.
 
+// ADR-0078 D11 — these were bare `Error`s. A server action's throw reaches the
+// client as an opaque digest, and anything that goes through `loadsErrorResponse`
+// hit its 500 branch, so "your session ended" and "the database is down" were
+// indistinguishable to both the operator and the logs. `LoadAccessError` carries
+// the real status and a stable reason code.
 async function ctx(siteCode: string) {
   const session = await auth();
   if (!session?.user || session.user.role !== 'operator') {
-    throw new Error('not authenticated as operator');
+    throw new svc.LoadAccessError(401, 'not_authenticated_as_operator');
   }
   const site = await prisma.site.findUnique({
     where: { code: siteCode },
     select: { id: true, code: true },
   });
-  if (!site) throw new Error('unknown site');
+  if (!site) throw new svc.LoadAccessError(404, 'unknown_site');
   if (session.user.primary_site_id !== site.id) {
-    throw new Error('operator not assigned to this site');
+    throw new svc.LoadAccessError(403, 'operator_not_assigned_to_site');
   }
   // Fail-closed: unregistered / `pilot` / read-error ⇒ not activated.
   await assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_QUEUE, site.id);
@@ -84,7 +89,12 @@ export async function beginUnloadAction(siteCode: string, loadId: string): Promi
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
 }
 
+// ADR-0078 — the idempotency key leads. A server action cannot carry an HTTP
+// header, so the key is the first ARGUMENT; putting it first makes a call site
+// that forgot it a compile error rather than an argument silently shifted into
+// the wrong slot.
 export async function addStackAction(
+  idempotencyKey: string,
   siteCode: string,
   loadId: string,
   stackIndex: number,
@@ -92,28 +102,38 @@ export async function addStackAction(
   countMode: CountMode,
 ): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
-  await svc.addStack({ loadId, operatorUserId, siteId, stackIndex, unitCount, countMode });
+  await svc.addStack({
+    loadId,
+    operatorUserId,
+    siteId,
+    stackIndex,
+    unitCount,
+    countMode,
+    idempotencyKey,
+  });
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
 }
 
 export async function finishUnloadAction(
+  idempotencyKey: string,
   siteCode: string,
   loadId: string,
   countMode: CountMode,
 ): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
-  await svc.finishUnload({ loadId, operatorUserId, siteId, countMode });
+  await svc.finishUnload({ loadId, operatorUserId, siteId, countMode, idempotencyKey });
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
 }
 
 export async function addConcernAction(
+  idempotencyKey: string,
   siteCode: string,
   loadId: string,
   category: ConcernCategory,
   note: string | null,
 ): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
-  await svc.addConcern({ loadId, operatorUserId, siteId, category, note });
+  await svc.addConcern({ loadId, operatorUserId, siteId, category, note, idempotencyKey });
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
 }
 

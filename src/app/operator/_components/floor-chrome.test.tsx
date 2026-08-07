@@ -17,7 +17,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 // the vitest node resolver. Stub the action module and the router hook; neither
 // participates in the markup this suite asserts.
 vi.mock('@/i18n/actions', () => ({ setFloorLocaleAction: async () => undefined }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
+// ADR-0078 G8c — `ConnectionState` (now inside the chrome) reads `usePathname`
+// so the session-expired badge can return the operator to the screen they were
+// on after signing in.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: () => undefined }),
+  usePathname: () => '/operator/eugene/today',
+}));
 
 import { FloorChrome } from './floor-chrome';
 import { LogOutButton } from './log-out-button';

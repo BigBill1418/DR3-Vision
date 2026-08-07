@@ -20,6 +20,7 @@
 // queue. Bringing it into the chrome row removes the overlap class entirely
 // rather than papering over it with per-page top padding.
 
+import { ConnectionState } from './connection-state';
 import { FloorLocaleSwitcher } from './floor-locale-switcher';
 import { LogOutButton } from './log-out-button';
 import { ChevronBackIcon, NavPillLink } from '@/app/_components/nav-pill';
@@ -49,7 +50,13 @@ export function FloorChrome({ nav }: { nav: FloorNav }) {
           )}
           {nav.showLogOut && nav.siteCode && <LogOutButton siteCode={nav.siteCode} />}
         </div>
-        <FloorLocaleSwitcher />
+        <div className="flex items-center gap-2">
+          {/* ADR-0078 D9 — connection state, on every screen, mounted once.
+              Only on post-auth surfaces: the pre-PIN trio has no queued work and
+              no session, so an indicator there would report on nothing. */}
+          {!nav.isAuthSurface && <ConnectionState siteCode={nav.siteCode} />}
+          <FloorLocaleSwitcher />
+        </div>
       </div>
     </nav>
   );

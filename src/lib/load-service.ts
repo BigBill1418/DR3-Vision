@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { writeAudit } from '@/lib/audit';
+import { withIdempotency } from '@/lib/idempotency';
 
 // State-machine moves for the inbound-load workflow per
 // SPRINT-1-PLAN T-006 + ADR-0012 §1 (timer starts on door-open). All
@@ -34,11 +35,37 @@ const ALLOWED_PRIOR: Record<LoadStatus, LoadStatus[]> = {
 };
 
 class TransitionError extends Error {
+  // ADR-0078 D11 — typed. `loadsErrorResponse` maps anything carrying a numeric
+  // `status`; a bare Error fell through to the 500 branch and was re-thrown to
+  // the framework, so an ordinary "you already did this" surfaced to the
+  // operator as a server crash.
+  readonly status = 409;
+  readonly reason = 'illegal_transition';
   constructor(
     public from: LoadStatus,
     public to: LoadStatus,
   ) {
     super(`illegal transition ${from} → ${to}`);
+  }
+}
+
+/**
+ * ADR-0078 D11 — ownership / existence failures, typed so they map to their real
+ * HTTP status instead of a 500.
+ *
+ * These were `throw new Error('load not found')` and friends. Every one of them
+ * is a 404 or a 403 that an operator can act on ("this load isn't yours"), and
+ * every one of them was being reported as an internal server error — which
+ * tells the operator nothing, gives the log the wrong severity, and buries a
+ * routine outcome in the 500 rate.
+ */
+export class LoadAccessError extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = 'LoadAccessError';
   }
 }
 
@@ -54,10 +81,10 @@ async function assertOwn(args: { loadId: string; operatorUserId: string; siteId:
       unload_started_at: true,
     },
   });
-  if (!load) throw new Error('load not found');
-  if (load.site_id !== args.siteId) throw new Error('load not at this site');
+  if (!load) throw new LoadAccessError(404, 'load_not_found');
+  if (load.site_id !== args.siteId) throw new LoadAccessError(403, 'load_not_at_this_site');
   if (load.assigned_operator_id !== args.operatorUserId) {
-    throw new Error('load not assigned to this operator');
+    throw new LoadAccessError(403, 'load_not_assigned_to_operator');
   }
   return load;
 }
@@ -239,19 +266,102 @@ export async function addStack(args: {
   stackIndex: number;
   unitCount: number;
   countMode: CountMode;
+  /** ADR-0078 — client-minted key; makes a re-tap of the same stack a no-op. */
+  idempotencyKey?: string | null;
 }): Promise<void> {
   if (!Number.isInteger(args.unitCount) || args.unitCount < 1) {
-    throw new Error('stack unit count must be ≥ 1');
+    throw new LoadAccessError(422, 'stack_unit_count_must_be_at_least_1');
   }
-  await assertOwn(args);
-  await prisma.loadStack.create({
-    data: {
-      load_id: args.loadId,
-      stack_index: args.stackIndex,
-      unit_count: args.unitCount,
-      count_mode: args.countMode,
-    },
-  });
+  const current = await assertOwn(args);
+
+  // A stack may only be added while the load is UNLOADING.
+  //
+  // `addStack` had no status guard, which was unreachable before ADR-0078
+  // because stacks had no queue — D2 creates exactly that path. A stack
+  // replayed after `finishUnload` inserts a row that `total_units` has already
+  // been computed without, so the load is under-billed by that stack and the
+  // `load_stacks` rows silently contradict the total they are supposed to feed.
+  // Refusing parks the entry as a conflict instead, where a person can see it.
+  if (current.status !== 'in_progress') {
+    throw new LoadAccessError(409, 'load_not_unloading');
+  }
+
+  // ADR-0078 D2/D6. Two defects meet in this one call.
+  //
+  // D2: a lost stack silently UNDERCOUNTS the load — `finishUnload` sums
+  // `load_stacks` into `total_units`, which is billed. The write is now
+  // idempotency-keyed, so a retry after a dropped response cannot add a second
+  // stack, and the client queues it rather than discarding it.
+  //
+  // D6: the double-tap was reported as a failure that had actually SUCCEEDED.
+  // `@@unique(load_id, stack_index)` correctly refuses the second insert with
+  // P2002 — and the UI rendered that as "couldn't save", so the operator taps
+  // again, or worse, re-enters a count that is already recorded. When the caller
+  // carries an idempotency key the row already at this index IS this write, so
+  // P2002 is the desired end state and is reported as success. Without a key we
+  // keep the old strict behaviour: there is then no evidence the two taps are
+  // the same tap.
+  try {
+    await prisma.$transaction((tx) =>
+      withIdempotency(
+        {
+          key: args.idempotencyKey ?? null,
+          scope: 'operator.load.add_stack',
+          actorUserId: args.operatorUserId,
+          siteId: args.siteId,
+          payload: {
+            loadId: args.loadId,
+            stackIndex: args.stackIndex,
+            unitCount: args.unitCount,
+            countMode: args.countMode,
+          },
+          tx,
+          statusCode: 201,
+        },
+        async () => {
+          const created = await tx.loadStack.create({
+            data: {
+              load_id: args.loadId,
+              stack_index: args.stackIndex,
+              unit_count: args.unitCount,
+              count_mode: args.countMode,
+            },
+            select: { id: true },
+          });
+          return { id: created.id };
+        },
+      ),
+    );
+  } catch (e) {
+    const duplicate = e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
+    if (!duplicate || !args.idempotencyKey) throw e;
+
+    // The row at this index EXISTS. Whether that is this write or a different
+    // one is a question, not an assumption — and answering it by assumption
+    // loses mattresses.
+    //
+    // A real double-tap mints two DIFFERENT keys (one per tap), so the
+    // idempotency layer cannot short-circuit and both taps reach this insert.
+    // That is the case we want to absorb. But `nextIndex` is derived from
+    // rendered state, so after a reload — or on a second tab, which `assertOwn`
+    // permits because it checks the operator and not the session — two
+    // GENUINELY DIFFERENT stacks can be computed at the same index. Absorbing
+    // that reports 201 to the replay loop, which then deletes the queued entry,
+    // and a stack of mattresses is gone from a billed total with no record
+    // anywhere that it ever existed.
+    //
+    // So: converged only if the existing row is byte-for-byte this write.
+    // Anything else is a 409, which `classify()` treats as a hard 4xx, so the
+    // entry PARKS as a conflict with its payload intact and a person decides.
+    const existing = await prisma.loadStack.findUnique({
+      where: {
+        load_id_stack_index: { load_id: args.loadId, stack_index: args.stackIndex },
+      },
+      select: { unit_count: true, count_mode: true },
+    });
+    if (existing?.unit_count === args.unitCount && existing.count_mode === args.countMode) return;
+    throw new LoadAccessError(409, 'stack_index_conflict');
+  }
 }
 
 export async function finishUnload(args: {
@@ -259,8 +369,59 @@ export async function finishUnload(args: {
   operatorUserId: string;
   siteId: string;
   countMode: CountMode;
+  /** ADR-0078 — present ⇒ an already-finished load is a replay, not an error. */
+  idempotencyKey?: string | null;
 }): Promise<void> {
   const current = await assertOwn(args);
+
+  // ADR-0078 D7 — the retry-after-commit false failure.
+  //
+  // The operator taps Finish, the write COMMITS, the response is lost to a
+  // dropping connection, and the retry finds the load already `finished`. The
+  // state machine then refuses `finished → finished` and the operator is told
+  // their work failed, when it is the one thing that definitely succeeded. With
+  // an idempotency key in hand — evidence that this is the same action, not a
+  // second one — the target status already being the current status is exactly
+  // what success looks like. Returning here is not skipping the transition; the
+  // transition already happened.
+  //
+  // Deliberately narrow: only when the load is ALREADY in the state we were
+  // asked to move it to, and only when a key says this is a replay. Every other
+  // illegal transition still raises.
+  //
+  // It RECOMPUTES rather than simply returning. A bare early return assumed the
+  // stored `total_units` was still correct, and a queued stack replayed after
+  // the finish had landed would make that false — the row would exist, the
+  // total would not include it, and the load would be under-billed with no
+  // error anywhere. Recomputing makes the replay both idempotent and correct,
+  // and is a no-op in the ordinary case where nothing arrived late.
+  if (args.idempotencyKey && current.status === 'finished') {
+    const late = await prisma.loadStack.findMany({
+      where: { load_id: args.loadId },
+      select: { unit_count: true },
+    });
+    const total = late.reduce((acc, s) => acc + s.unit_count, 0);
+    const row = await prisma.inboundLoad.findUnique({
+      where: { id: args.loadId },
+      select: { total_units: true },
+    });
+    if (row && row.total_units !== total) {
+      await prisma.inboundLoad.update({
+        where: { id: args.loadId },
+        data: { total_units: total },
+      });
+      await writeAudit({
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { total_units: row.total_units },
+        after: { total_units: total, reason: 'stack replayed after finish (ADR-0078)' },
+      });
+    }
+    return;
+  }
+
   const now = new Date();
   const startedAt = current.unload_started_at ?? now;
   const duration = Math.max(0, Math.round((now.getTime() - startedAt.getTime()) / 1000));
@@ -287,16 +448,35 @@ export async function addConcern(args: {
   siteId: string;
   category: ConcernCategory;
   note: string | null;
+  /** ADR-0078 — a concern has no natural key, so a retry would duplicate it. */
+  idempotencyKey?: string | null;
 }): Promise<void> {
   await assertOwn(args);
-  await prisma.loadConcern.create({
-    data: {
-      load_id: args.loadId,
-      category: args.category,
-      note: args.note,
-      raised_by_user_id: args.operatorUserId,
-    },
-  });
+  await prisma.$transaction((tx) =>
+    withIdempotency(
+      {
+        key: args.idempotencyKey ?? null,
+        scope: 'operator.load.add_concern',
+        actorUserId: args.operatorUserId,
+        siteId: args.siteId,
+        payload: { loadId: args.loadId, category: args.category, note: args.note },
+        tx,
+        statusCode: 201,
+      },
+      async () => {
+        const created = await tx.loadConcern.create({
+          data: {
+            load_id: args.loadId,
+            category: args.category,
+            note: args.note,
+            raised_by_user_id: args.operatorUserId,
+          },
+          select: { id: true },
+        });
+        return { id: created.id };
+      },
+    ),
+  );
 }
 
 export async function submitLoad(args: {

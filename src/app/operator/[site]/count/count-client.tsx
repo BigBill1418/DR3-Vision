@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
+import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0060 F-3 client — physical on-hand count.
@@ -32,6 +33,8 @@ type Props = {
   /** Total of the anchor this count would replace; null when there is none. */
   priorTotal: number | null;
   thresholdPct: number;
+  /** ADR-0078 D10 — the Pacific day this count is FOR, rendered server-side. */
+  countDate: string;
 };
 
 type Result = { computedTotal: string; physicalTotal: number; reconciledDelta: number };
@@ -46,7 +49,13 @@ type Hold = {
 
 type Phase = 'entry' | 'confirm' | 'held' | 'discarded';
 
-export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal }: Props) {
+export function CountClient({
+  siteCode,
+  expectedTotal,
+  jurisdiction,
+  priorTotal,
+  countDate,
+}: Props) {
   const t = useT();
   const router = useRouter();
   const [primary, setPrimary] = useState(0); // units_indoor (CA) or units_total (OR)
@@ -58,6 +67,8 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
   const [result, setResult] = useState<Result | null>(null);
   const [phase, setPhase] = useState<Phase>('entry');
   const [hold, setHold] = useState<Hold | null>(null);
+  /** ADR-0078 — queued-but-not-acked. Deliberately NOT `result`; see submit(). */
+  const [queued, setQueued] = useState(false);
   const [approverId, setApproverId] = useState('');
   const [pin, setPin] = useState('');
 
@@ -77,6 +88,7 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
     setProgram(0);
     setSplitOn(false);
     setHold(null);
+    setQueued(false);
     setApproverId('');
     setPin('');
     setError(null);
@@ -85,6 +97,12 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
 
   function bodyForSubmit(): Record<string, unknown> {
     const body: Record<string, unknown> = {
+      // ADR-0078 D10 — the count now SAYS which day it is for. The server used
+      // to derive that from its own clock at write time, which is right for a
+      // live submit and silently wrong for one replayed the next morning.
+      // `countDate` comes from the server-rendered page (Pacific), not from the
+      // iPad's clock, which operators can and do set wrong.
+      countDate,
       unitsInProcessing: inProcessing,
       poolAttribution: 'measured',
     };
@@ -100,11 +118,18 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
   async function submit(): Promise<void> {
     setBusy(true);
     setError(null);
+    // ADR-0078 — minted HERE, once, before the attempt. Reused verbatim by the
+    // queued entry if this request never gets an answer, so a submit that
+    // actually landed and merely lost its response replays to the SAME write
+    // rather than a second anchor. A key minted per attempt would defeat the
+    // entire mechanism.
+    const idempotencyKey = newIdempotencyKey();
+    const payload = bodyForSubmit();
     try {
       const res = await fetch(`/api/operator/${siteCode}/count`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(bodyForSubmit()),
+        headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+        body: JSON.stringify(payload),
       });
       const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
@@ -133,8 +158,29 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
       setResult(b as unknown as Result);
       setPhase('entry');
       router.refresh();
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      // ADR-0078 D5 — this used to be a bare `catch { setError(…) }`. A count
+      // typed on a dropping connection produced an error message and nothing
+      // else: the operator's work was gone, and the only record of it was a
+      // sentence telling them to try again. Now it is queued.
+      //
+      // Note what is NOT set: `result`. Green means server-acked, always. A
+      // queued count shows its own distinct state, because a confirmation the
+      // server never gave is the lie that makes an operator stop checking.
+      if (isOfflineError(e)) {
+        await enqueueAction({
+          scope: 'operator.count.create',
+          site_code: siteCode,
+          target_day: countDate,
+          idempotency_key: idempotencyKey,
+          payload,
+          endpoint: `/api/operator/${siteCode}/count`,
+        });
+        setQueued(true);
+        setPhase('entry');
+      } else {
+        setError(t('floor.common.save_failed'));
+      }
     } finally {
       setBusy(false);
     }
@@ -202,6 +248,34 @@ export function CountClient({ siteCode, expectedTotal, jurisdiction, priorTotal 
     } finally {
       setBusy(false);
     }
+  }
+
+  // ── Queued (ADR-0078) ────────────────────────────────────────────────────
+  // Visually distinct from Saved on purpose. Saved is green and reports the
+  // reconciled delta, because the server computed one. This reports no numbers
+  // at all — the reconciliation has not happened yet and inventing a preview of
+  // it would be the same false confirmation in a quieter font.
+  if (queued) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div
+          className="rounded-xl bg-amber-900/50 p-6 text-center ring-1 ring-amber-400/40"
+          data-testid="count-queued"
+        >
+          <p className="text-lg font-bold">{t('floor.common.queued')}</p>
+          <p className="mt-2 text-sm text-dr3-cream/85">
+            {t('floor.conflicts.target_day', { day: countDate })}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-4 py-3 text-lg font-bold text-dr3-ink"
+        >
+          {t('floor.count.count_again')}
+        </button>
+      </div>
+    );
   }
 
   // ── Saved ────────────────────────────────────────────────────────────────

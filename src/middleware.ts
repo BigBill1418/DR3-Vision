@@ -81,6 +81,23 @@ export default auth((req) => {
     return decorate(NextResponse.next({ request: { headers: forwardHeaders } }));
   }
   if (!req.auth) {
+    // ADR-0078 G7 — an API caller gets a STATUS, not a redirect to a web page.
+    //
+    // A 307 to /login is right for a browser navigation and actively harmful for
+    // `fetch`: fetch follows the redirect, /login answers 200 text/html, and the
+    // caller's `res.ok` is TRUE. The request "succeeded" and did nothing. This is
+    // the ADR-0036 class that bit the reminder-tick on 2026-07-03, and it bit the
+    // photo queue too — operator sessions idle out after 5 minutes, `/api/photos/*`
+    // is not public, so `replayUpload`'s mint saw a 200, tried to parse the login
+    // page as JSON, threw a SyntaxError, and was recorded as a generic (retryable,
+    // unlabelled) error. The R2 PUT was never reached. The queue retried forever
+    // and nothing anywhere said "your session ended".
+    //
+    // 401 is also the honest answer: the caller is unauthenticated, and the client
+    // can act on that — which a 200 full of HTML makes impossible.
+    if (path.startsWith('/api/')) {
+      return decorate(NextResponse.json({ error: 'unauthenticated' }, { status: 401 }));
+    }
     const loginUrl = new URL('/login', req.url);
     loginUrl.searchParams.set('next', path);
     return decorate(NextResponse.redirect(loginUrl));
