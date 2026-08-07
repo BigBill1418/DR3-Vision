@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
+import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { prisma } from '@/lib/prisma';
 import { EquipmentClient } from './EquipmentClient';
@@ -67,6 +68,11 @@ export default async function EquipmentPage({ params }: Props) {
 
   const throughput = await computeEquipmentThroughput(result.ctx.siteId, { windowDays: 90 });
 
+  // ADR-0077 Amendment 1 — the spec asked for this surface to be NAMED for the
+  // machine. Derived, never hardcoded: Woodland reads "Terex", Eugene keeps the
+  // generic name rather than advertising a machine it does not have.
+  const machineLabel = await siteMachineLabel(result.ctx.siteId);
+
   // ADR-0077 D6 — the machine-ledger entry point. The heading above stays
   // GENERIC (this is the site's equipment surface; a second machine joins it
   // tomorrow) and the per-machine story lives one level down.
@@ -101,11 +107,11 @@ export default async function EquipmentPage({ params }: Props) {
           ← Back to {result.ctx.siteName} dashboard
         </Link>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
-          Equipment — {result.ctx.siteName}
+          {machineLabel} — {result.ctx.siteName}
         </h1>
         <p className="mt-1 text-sm opacity-70">
-          Terex throughput, downtime, and cost. Throughput is derived from the daily processed-units
-          close — the same number billing bills from; nothing is entered twice.
+          Throughput, downtime, and cost. Throughput is derived from the daily processed-units close
+          — the same number billing bills from; nothing is entered twice.
         </p>
 
         <EquipmentClient
@@ -114,6 +120,7 @@ export default async function EquipmentPage({ params }: Props) {
           showTrend={showTrend}
           showEntry={showEntry}
           machines={machines.map((m) => ({ id: m.id, displayName: m.display_name }))}
+          machineLabel={machineLabel}
         />
       </div>
     </main>

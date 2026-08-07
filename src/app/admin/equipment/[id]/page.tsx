@@ -78,7 +78,7 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
             href={`/dashboard/${equipment.site_code}/equipment/${equipment.id}`}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
-            View machine ledger — maintenance log, AP spend and downtime →
+            View the {equipment.display_name} ledger — maintenance log, AP spend and downtime →
           </Link>
         ) : null}
         <EquipmentEditForm equipment={equipment} sites={sites} backHref={backHref} />

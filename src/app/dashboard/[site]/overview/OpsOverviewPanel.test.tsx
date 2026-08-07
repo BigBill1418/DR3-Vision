@@ -68,6 +68,7 @@ const full: OpsOverview = {
   equipment: {
     last7UnitsPerDay: 231.4,
     last30UnitsPerDay: 244.8,
+    machineLabel: 'Terex',
     downtimeHours: 6.5,
     costUsd: 1820,
     lastEvent: { dateISO: '2026-07-20', kind: 'downtime', hoursDown: 2 },
@@ -192,7 +193,7 @@ describe('OpsOverviewPanel', () => {
       mirrors: [],
     };
     const html = renderToStaticMarkup(<OpsOverviewPanel data={degraded} />);
-    expect(html).toContain('Equipment throughput is not available');
+    expect(html).toContain('Throughput is not available');
     expect(html).toContain('Contract rate tiles are not available');
     expect(html).toContain('Commodity payments are not available');
     expect(html).toContain('Compliance slate is not available');

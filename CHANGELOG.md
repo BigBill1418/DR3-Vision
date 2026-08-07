@@ -207,6 +207,28 @@ code. Fixed; the red is now real (`expected 103 to be 4`). Second time in this
 ADR's work that a first-pass falsification proved nothing, which is the pattern
 worth remembering: a guard that cannot be made to fail has not been tested.
 
+### The surface is named for the machine now (ADR-0077 Amendment 1)
+
+Bill: _"also the labelling is not updated - check the original spec and make sure
+this is complete."_ He was right. The spec said **rename the tile to Terex**; the
+first pass kept the tile generic and put the name only on the detail page. That
+was a deliberate call and it was outranked — a surface that says "Equipment" when
+the site has one machine everybody calls the Terex is named after a database
+table, not after the thing in the yard.
+
+Nav, tile heading, overview band, cost card, entry form and both ledger
+cross-links now read **Terex** at Woodland. **Eugene stays generic** — the label
+is derived from whether the site actually has the machine (same invoice evidence
+the ledger guard uses), never from a hardcoded site code, so Eugene never
+advertises a machine it does not have and a Terex arriving there tomorrow renames
+that site with no code change. `/admin/equipment` keeps its name: it is the asset
+master for 554 rows across both sites, and "Equipment" is correct there.
+
+The falsification came back green a third time — the mock enforced the
+invoice-evidence rule itself. Fixed; the real red reads
+`expected 'EQ65 — Sheer Machine Shear Machine' to be 'Equipment'`, which is what
+Eugene's nav would have said.
+
 ## 2026-08-05 — the report counted mattresses and never counted people (ADR-0076)
 
 On the night of August 4th, nineteen processors worked the Woodland floor. The
