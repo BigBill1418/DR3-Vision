@@ -97,7 +97,12 @@ machine`). The intended merge is **`7e35a4aa` and `1125fb30` INTO `bee54def`**
   rows themselves — declaring two records to be one machine rewrites financial
   attribution and is not reversible from the UI. Intended trade.
 
-## 0.AH — 2026-08-06 ADR-0077: one Terex, and the downtime that was never there
+## 0.AH — 2026-08-06/07 ADR-0077: one Terex, and the downtime that was never there
+
+**STATUS: every operator action in this section is DONE (2026-08-07).** O-12
+(classify + absorb + accept), O-13 (downtime capture), O-14 (rollout flip) all
+executed at Bill's written instruction; an independent verification pass returned
+CLEAN on all shipped scope. What remains below is residuals only.
 
 _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table further down reuses the same numerals.)_
 
@@ -178,6 +183,29 @@ Sheer Machine Shear Machine` at **Eugene**, none of them the machine. Because
   carried costs on a tenth of the history. Decide re-import vs retire when the
   ledger view is picked back up — it is NOT the AP cost ledger and must never be
   blended with it as the same money.
+- **The rollout flag hides the PAGE, not the API** (audit D4). The ledger's GET
+  route does not consult `equipment_terex_ledger`; the access gate
+  (`requireEquipmentLedgerAccess` + `ledgerReaches`) bounds the audience
+  independently. Intended: a rollout gate is a VISIBILITY ramp, never an
+  authorisation boundary. Recorded in ADR-0077 Amendment 2 so nobody reaches for a
+  flag when they need access control.
+- **`linkedCents <= totalCents` is tautological until matching exists** (audit
+  D2). v1 sets `linkedCents` to a literal 0. Kept deliberately — the guard should
+  predate the feature it guards. Not evidence of a working matcher.
+- **A merge audit row should carry the money, not just the counts** (audit D5).
+  ADR-0075's merge audit records `repointed_links` / `repointed_equipment_requests`
+  but not the cent total, so proving conservation meant re-deriving it from
+  `ap_requests`. A future merge should stamp
+  `COALESCE(confirmed_amount_cents, amount_cents)` into the audit `after` payload.
+- **`equipment_trend` is still `pilot` at BOTH sites.** Entry and the ledger are
+  live at Woodland; the trend CHART is not, so managers see the entry form and the
+  ledger link but no throughput graph. Not a defect — flipping it is a separate
+  call for Bill whenever he wants the chart in front of them.
+- **Shannon's AP second-approval emails disabled 2026-08-07** at Bill's
+  instruction. She now receives **only** the Eugene daily production report.
+  **Routing is unchanged** — requests still route to her, so anything assigned to
+  her will age to escalation **silently**. If that becomes a problem the fix is a
+  routing change, not re-enabling the mail.
 - **The TEREX preview page targets `stagedRows[0].doc_source_version_id`.** With
   two staged versions live at once, the Confirm button acts on whichever sorts
   first. Harmless today (one staged version); a trap the day there are two.

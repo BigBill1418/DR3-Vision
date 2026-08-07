@@ -64,14 +64,15 @@ unchanged — both still require an admin session.
   title banner as its header row. The ~92 "removed columns" are those banners
   disappearing. On the two sheets absorption reads, the only removal is
   `TEREX MACHINE MAINTENANCE LOG` itself.
-- **The real blocker is that `TEREX.xlsx` was never classified** — `doc_class`
-  and `site_id` are both NULL on the source row, so `absorbVersion` refuses at
-  Gates 1 and 2. That is why `doc_terex_maintenance_rows` holds 0 rows despite
-  two revisions being applied on 2026-07-29. Left for Bill: stating a document's
-  site is the same kind of act O-10 was, and Gate 2 exists to refuse guessing it.
-  The figures are pinned and waiting — `77,067.94` repair and `4,025.36`
-  credited, identical on both sheets because the 2025 one is a strict subset
-  (absorb both without `dedup_key` and it reports $154,135.88, exactly double).
+- **The real blocker was that `TEREX.xlsx` had never been classified** —
+  `doc_class` and `site_id` were both NULL on the source row, so `absorbVersion`
+  refused at Gates 1 and 2. That is why `doc_terex_maintenance_rows` held 0 rows
+  despite two revisions having been applied on 2026-07-29. **RESOLVED the same
+  day** — Bill ordered it classified and accepted; see the absorption entry above.
+  The figure that was pinned and waiting is the figure that landed: `77,067.94`
+  repair and `4,025.36` credited, identical on both sheets because the 2025 one is
+  a strict subset (absorb both without `dedup_key` and it reports $154,135.88,
+  exactly double).
 
 ### One machine, one page — shipped dark
 

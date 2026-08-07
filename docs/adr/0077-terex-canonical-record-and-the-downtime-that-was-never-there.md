@@ -498,6 +498,39 @@ changed nothing. Fixed; the real red is
 `expected 'EQ65 — Sheer Machine Shear Machine' to be 'Equipment'` — which is what
 Eugene's nav would have said.
 
+## Amendment 2 (2026-08-07) — three things the independent audit named
+
+An independent verification pass (terry) returned CLEAN on all shipped scope.
+Three observations are recorded here rather than fixed, because each is either
+already honest or a deliberate boundary:
+
+**The rollout flag hides the PAGE, not the API.** `equipment_terex_ledger` is
+consulted by `/dashboard/[site]/equipment/[equipmentId]`; the GET route
+`/api/manager/[site]/equipment/ledger` does **not** consult it. That is the
+intended split and worth stating plainly: a rollout gate is a _visibility ramp_,
+not an authorisation boundary. What bounds the audience is
+`requireEquipmentLedgerAccess` + `ledgerReaches`, which the route enforces
+independently — so a manager who guessed the API path during pilot would still be
+refused unless they held `can_resolve_equipment_requests` AND reach to the
+machine's site. Flipping the flag changes who can _find_ the data, never who is
+_allowed_ it. Do not reach for a rollout flag when the requirement is access
+control.
+
+**`linkedCents <= totalCents` is tautological until matching exists.** v1 sets
+`linkedCents` to a literal 0, so the invariant cannot currently fail. It is kept
+deliberately — the guard should predate the feature it guards, so the day someone
+adds event↔invoice matching the assertion is already in the suite rather than
+being remembered. Disclosed in D6 and again here so nobody reads it as evidence
+of a working matcher.
+
+**A merge audit row should carry the money, not just the counts.** The ADR-0075
+merge audit records `repointed_links` and `repointed_equipment_requests`. Both
+were right, but proving spend was conserved still required re-deriving the cent
+total from `ap_requests` afterwards. A future merge should stamp the
+`COALESCE(confirmed_amount_cents, amount_cents)` total into the audit `after`
+payload, so the audit row alone answers "did this move any money?" — which is the
+question anyone auditing a merge actually has.
+
 ## Alternatives considered
 
 - **Merge into `bee54def` as O-10 said, then rename it `Terex`.** Impossible in
