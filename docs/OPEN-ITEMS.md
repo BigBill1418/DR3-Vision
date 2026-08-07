@@ -132,8 +132,14 @@ correctly and the import ran green.
   `load_photos` may already be partially populated when you look. The remaining
   conflict-flagged rows cannot drain on the old bundle at all: nothing in it can
   clear the flag. After O-12, open the conflicts screen and use **Retry all**.
-  Rows whose loads belong to another operator's login will refuse again and say
-  so; those need that operator signed in on that device.
+
+  **UPDATED 2026-08-07 (ADR-0078 Amendment 1):** the last sentence here — "rows
+  whose loads belong to another operator's login will refuse again; those need
+  that operator signed in on that device" — is **OBSOLETE once Am.1 is live**.
+  The photo gate is site-scoped now, so any operator at the site drains every
+  row. Cross-SITE rows would still refuse, but a floor iPad only ever holds its
+  own site's loads, so in practice Retry-all now drains everything. Until Am.1
+  deploys, the original per-operator caveat still applies.
 
 ### Proposed follow-up (recorded, NOT built in P1)
 

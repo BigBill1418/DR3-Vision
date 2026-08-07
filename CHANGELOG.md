@@ -255,6 +255,52 @@ directions are pinned and both were falsified.
   entries is a real `0`; an uncomputable month stays `null`. `employeesCount`
   deliberately stays not-recorded — bonus entries cover processors only, and
   substituting one for the other would be a fabricated compliance figure.
+## 2026-08-07 — drain regardless of who is signed in (ADR-0078 Amendment 1)
+
+The drain worked. `load_photos` went from **zero rows, ever** to **47 across 20
+loads** in under two hours — and then hit a wall that was ours.
+
+`requireOperatorOwnsLoad` required the signed-in operator to BE the load's
+assigned operator, so a photo queued by one operator could not be confirmed while
+another was signed in. On a shared floor iPad that is not an edge case, it is the
+normal end of a shift. Bill, watching it stall at 47/103: _"we need to drain all
+users regardless of who is signed in... let's just not have this have to be a
+issue in the future."_
+
+**The gate is now the SITE, not the load's owner** — `requireOperatorAtLoadSite`,
+renamed with the behaviour so nobody later mistakes the removed check for an
+oversight and restores it.
+
+**The trade, stated plainly: the gate loosened from owner to site; attribution
+went from none to recorded.** An operator can now attach a photo to any load at
+their own site. In exchange the evidence survives — photo blobs live in ONE
+iPad's IndexedDB and a permanently parked row is evidence that dies when that
+device is wiped. And `load_photos` now carries `uploaded_by` on every confirm,
+where before it had no uploader column at all: the strict gate enforced who was
+_allowed_ to upload and then kept no record of who _did_. Accountability is
+strictly better after this change than before it.
+
+**Cross-site is still refused** — Eugene and Woodland are separate MRC contracts
+in separate jurisdictions, and with the owner check gone that is the only control
+left, so it is the falsification this amendment turns on. Deleting the site check
+by hand: `a Eugene operator reached a Woodland load: expected 200 to be 403`.
+
+**Mint and confirm moved together, mandatorily.** Relaxing the mint alone would
+have been worse than doing nothing: presigned URL granted, bytes PUT to R2, row
+refused — an orphaned object, no record, and a queue entry that still cannot
+drain. Reverting confirm's guard alone: `confirm refused a principal that mint
+accepts: expected 403 to be 200`.
+
+**The audit row marks the exception, not every upload** (ADR-0037). A row per
+confirm would add ~100/day of "operator did the thing they were assigned to do"
+and bury the case a person would actually go looking for. Forcing one on every
+confirm: `an audit row per confirm buries the exceptional case`.
+
+**`uploaded_by` is not backfilled.** The 47 existing rows have a genuinely
+unknown uploader; inferring it from `assigned_operator_id` would look tidy and
+would be a fabrication about a named person in a table that feeds billing
+evidence. NULL means "we do not know" — the same choice as ADR-0077's "not
+recorded" over a fake `0.0`.
 
 ## 2026-08-07 — the history stayed after all (ADR-0079 Amendment 1)
 

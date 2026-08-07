@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { requireOperatorOwnsLoad } from '@/lib/load-photo-guard';
+import { requireOperatorAtLoadSite, type LoadSiteAccess } from '@/lib/load-photo-guard';
 import { withIdempotency } from '@/lib/idempotency';
 import { readIdempotencyKey } from '@/lib/loads/route-helpers';
 
@@ -31,14 +31,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid request' }, { status: 400 });
   }
 
-  let owner: { operatorUserId: string; siteId: string };
+  let access: LoadSiteAccess;
   let idempotencyKey: string | null;
   try {
-    owner = await requireOperatorOwnsLoad(parsed.data.load_id);
+    // ADR-0078 Am.1 — SITE-scoped, matching /api/photos/upload-url exactly.
+    // These two MUST move together; see the note at the mint call site.
+    access = await requireOperatorAtLoadSite(parsed.data.load_id);
     idempotencyKey = readIdempotencyKey(req);
   } catch (e) {
     if (e instanceof Response) {
-      // `requireOperatorOwnsLoad` sets a BODY and no statusText, so reading
+      // The guard sets a BODY and no statusText, so reading
       // statusText alone flattened every refusal to "forbidden" — including the
       // 404, whose body said `load not found`. That distinction is what tells
       // an operator staring at the conflicts screen whether the load moved or
@@ -70,8 +72,19 @@ export async function POST(req: Request) {
       {
         key: idempotencyKey,
         scope: 'operator.photo.confirm',
-        actorUserId: owner.operatorUserId,
-        siteId: owner.siteId,
+        // The UPLOADING session, never the load owner. Two reasons: a replay
+        // must be pinned to the principal that claimed the key (a key is a
+        // bearer string), and pinning to the load owner would let any same-site
+        // operator replay a key they never claimed.
+        //
+        // Residual, stated rather than hidden: if operator A queues a photo, B
+        // drains it and B's response is lost, A's later retry of the SAME key
+        // is a different actor and earns 409 `idempotency_key_reused`. The row
+        // then parks as a visible conflict instead of writing a duplicate —
+        // degrading into the ADR-0078 conflict path, which is the safe
+        // direction and is exactly what that path is for.
+        actorUserId: access.actorUserId,
+        siteId: access.siteId,
         payload: { load_id: parsed.data.load_id, kind: parsed.data.kind },
         tx,
         statusCode: 200,
@@ -86,9 +99,39 @@ export async function POST(req: Request) {
             width: parsed.data.width ?? null,
             height: parsed.data.height ?? null,
             captured_at: new Date(),
+            // ADR-0078 Am.1 — the durable attribution record. Written on EVERY
+            // confirm, self or cross-operator: the audit row below is only for
+            // the exceptional case, and a column that is only sometimes
+            // populated cannot answer "who uploaded this?" for the ordinary
+            // one.
+            uploaded_by: access.actorUserId,
           },
           select: { id: true },
         });
+
+        // ADR-0037 noise discipline: an audit row ONLY when the uploader is not
+        // the load's assigned operator. A row per confirm would add ~100/day of
+        // "operator did the thing they were assigned to do", burying the case a
+        // person would actually want to find. `uploaded_by` above is the
+        // durable record for every upload; this marks the exception.
+        if (access.loadOwnerUserId !== null && access.actorUserId !== access.loadOwnerUserId) {
+          await tx.auditLog.create({
+            data: {
+              actor_user_id: access.actorUserId,
+              action: 'insert',
+              table_name: 'load_photos',
+              row_id: created.id,
+              after: {
+                cross_operator: true,
+                load_id: parsed.data.load_id,
+                kind: parsed.data.kind,
+                uploaded_by: access.actorUserId,
+                load_assigned_to: access.loadOwnerUserId,
+              },
+            },
+          });
+        }
+
         return { id: created.id };
       },
     ),

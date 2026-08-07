@@ -1,0 +1,29 @@
+-- ADR-0078 Amendment 1 — record WHO uploaded each photo.
+--
+-- Additive: one nullable column, no backfill, no drops, no type changes. Safe
+-- to apply with the app running and safe to apply twice.
+--
+-- ORDERING: this directory must sort lexically AFTER the chain tip. At authoring
+-- time main was at `20260831_adr0079_...`, with `20260832` claimed by ADR-0080
+-- (PR #210) and `20260833` reserved for the ADR-0081 build, so this takes
+-- `20260834`. `prisma migrate deploy` applies in directory-name order; the dates
+-- in this chain are sequence numbers, not calendar facts.
+--
+-- WHY THE COLUMN EXISTS: Amendment 1 loosens the photo gate from
+-- owner-scoped to site-scoped, so "who uploaded this" is no longer implied by
+-- "who was allowed to". It has to be recorded. Note the direction of the trade:
+-- before this change the table had NO uploader column at all, so the strict
+-- gate enforced who could upload and then kept no record of who did.
+--
+-- DELIBERATELY NOT BACKFILLED. The rows that predate this column have a
+-- genuinely unknown uploader — the session that wrote them was never captured.
+-- Backfilling from `assigned_operator_id` would look tidy and would be a
+-- fabrication: it would assert that a specific person uploaded a specific photo
+-- on evidence that does not exist, into a table that feeds MRC billing
+-- evidence. NULL means "we do not know", which is the true statement.
+--
+-- No FOREIGN KEY, matching the `idempotency_keys` precedent (ADR-0078): this is
+-- an attribution stamp, not a relational dependency, and an FK here would let a
+-- photo row block a user mutation.
+ALTER TABLE "load_photos"
+    ADD COLUMN IF NOT EXISTS "uploaded_by" TEXT;

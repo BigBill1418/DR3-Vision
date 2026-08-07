@@ -771,6 +771,25 @@ model LoadPhoto {
   uploaded_at            DateTime    @default(now())
   purged_at              DateTime? // set when retention purge removes the R2 object
 
+  // ADR-0078 Amendment 1 — WHO uploaded this photo.
+  //
+  // Before this the table recorded no uploader at all: the strict owner gate
+  // enforced who was ALLOWED to upload and then kept no record of who did. The
+  // gate is now site-scoped (see `load-photo-guard.ts`), so attribution stops
+  // being implied by the gate and has to be written down.
+  //
+  // NULLABLE and NOT backfilled, deliberately. The rows that predate this
+  // column have a genuinely unknown uploader — the session that created them
+  // was never recorded — and inferring it from `assigned_operator_id` would
+  // manufacture a claim about a person from data that does not support it. NULL
+  // reads as "we do not know", which is true. (Same reasoning as ADR-0077's
+  // "not recorded" over a fake 0.0.)
+  //
+  // No FK, matching the `idempotency_keys` precedent and for the same reason:
+  // this is an attribution stamp, not a relational dependency, and it must not
+  // be able to block a user mutation.
+  uploaded_by            String?
+
   @@index([load_id, kind])
   @@map("load_photos")
 }
