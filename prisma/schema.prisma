@@ -3811,6 +3811,98 @@ model EquipmentEvent {
   @@map("equipment_events")
 }
 
+/// ADR-0078 D1 — the manager's DAILY Terex capture: units processed + run hours.
+///
+/// ADR-0044 D2 derived throughput as `stripped_program + stripped_non_program` and
+/// called it the Terex's. That number is the WHOLE FLOOR's output — it cannot tell
+/// the machine from hand-stripping — and production makes the scale of the lie
+/// plain: Woodland's derived "Terex" day runs 1,000–1,250 units. The sheet this
+/// product replaces carried an authoritative manager-entered Terex number, daily,
+/// and Vision has to carry it too. Entered REPLACES derived (D3).
+///
+/// A DEDICATED TABLE, not a sixth `equipment_events` kind (D2). Three reasons, each
+/// verified against the live code rather than assumed:
+///
+///  1. `equipment_events` is many-rows-per-day BY DESIGN (several downtime/repair/
+///     cost rows share a date), so "one entry per machine per day" cannot be a
+///     table-level unique there — only a partial index carving out one kind.
+///  2. Three read paths query `equipment_events` with NO kind filter and would
+///     silently absorb a daily row: `tile.ts` `findFirst` (the daily row, written
+///     every working day, would permanently become "the LAST equipment event" and
+///     bury the downtime the tile exists to surface), `service.ts`
+///     `listEquipmentEvents` (~250 rows/yr flooding the maintenance log), and
+///     `terex-ledger.ts` (selects `hours_down` with no kind filter and sums it into
+///     `downtime.totalHours`). That last one is the sharp edge: carrying RUN hours
+///     in `hours_down` would report the hours the machine RAN as the hours it was
+///     DOWN — ADR-0077's defect class inverted, and worse, because it manufactures
+///     a measurement instead of merely mis-rendering a missing one.
+///  3. `equipment_events` has NO equipment FK at all — `equipment_code` is a free
+///     string (ADR-0044 D1, "a second machine is a data value"). The handoff
+///     requires uniqueness per EQUIPMENT ROW, which a string code cannot express
+///     and which the ADR-0075 merge machinery (`merged_into_id`) depends on.
+///
+/// `run_hours` and `hours_down` are deliberately in DIFFERENT TABLES so no query can
+/// ever confuse the two. They are near-opposites and one of them has already been
+/// mis-rendered once (ADR-0077 D4).
+model EquipmentDailyThroughput {
+  id String @id @default(uuid())
+
+  /// Bare FK → sites.id (constraint in the migration), matching every sibling.
+  site_id String
+  /// A REAL relation to the equipment registry — this is what makes "unique per
+  /// machine per day" mean the machine and not a typed-in string, and what keeps a
+  /// merged-away row (ADR-0075) from quietly collecting its own parallel history.
+  /// `onDelete: Restrict` matches every other equipment reference: nothing in this
+  /// registry is ever hard-deleted.
+  equipment_id String
+  equipment    Equipment @relation(fields: [equipment_id], references: [id], onDelete: Restrict)
+
+  /// The PRODUCTION day, Pacific (`appTodayISO`), stored as a pure `@db.Date`.
+  throughput_date DateTime @db.Date
+
+  /// Units the MACHINE processed. `0` is a legitimate recorded value (the machine
+  /// ran and produced nothing); "nobody entered a number" is the ABSENCE of a row.
+  /// The two are never the same thing — ADR-0077 D4, restated for units.
+  units_processed Int
+
+  /// Hours the machine actually RAN. The whole reason to capture rather than
+  /// derive: units-per-hour was computed against an ASSUMED 8-hour day
+  /// (`ASSUMED_DAY_HOURS`), a guess standing in for a measurement. Decimal(5,2)
+  /// mirrors `equipment_events.hours_down`. Service-enforced `> 0` and `<= 24` —
+  /// a machine cannot run more than 24 hours in a calendar day.
+  run_hours Decimal @db.Decimal(5, 2)
+
+  notes String?
+
+  /// ADR-0036 / ADR-0077 actor discipline. A human entry carries the REAL
+  /// `users.id` in `created_by` and leaves `actor_label` NULL; a write with no
+  /// signed-in human (a script under written instruction) sets `actor_label` and
+  /// leaves `created_by` NULL rather than borrowing a person's id and writing a
+  /// false claim into an append-only trail.
+  created_by  String?
+  actor_label String?
+
+  /// Soft-void (hard rule #6 — no hard delete). A voided row is excluded from every
+  /// series and from the unique index, so a day can be re-entered after a mistaken
+  /// entry is reversed.
+  voided_at DateTime?
+  voided_by String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /// The uniqueness guarantee lives in the MIGRATION as a PARTIAL unique index
+  /// (`WHERE voided_at IS NULL`), which Prisma's schema language cannot express.
+  /// It is declared here as a plain index so the client still has the lookup path;
+  /// the constraint itself is DDL. Note the key columns `equipment_id` and
+  /// `throughput_date` are both NOT NULL — only the PREDICATE reads a nullable
+  /// column, so this genuinely constrains (a unique index whose KEY is nullable
+  /// constrains nothing, which is a trap this repo has been bitten by elsewhere).
+  @@index([equipment_id, throughput_date])
+  @@index([site_id, throughput_date])
+  @@map("equipment_daily_throughput")
+}
+
 // ADR-0045 — ops ledger + intake
 //
 // P5: the weekly meeting-notes / task-follow-up ledger (D1), the DR3 Updates +
@@ -4469,6 +4561,11 @@ model Equipment {
   merged_at      DateTime?
 
   links ApEquipmentLink[]
+
+  /// ADR-0078 D1 — the manager's daily units+run-hours capture for this machine.
+  /// A proper relation (not a bare FK) because, like `links` above, both models
+  /// live wholly inside this self-contained block.
+  daily_throughput EquipmentDailyThroughput[]
 
   /// ADR-0046 Amendment 9 (§2.5) — the escape-hatch requests this asset RESOLVED.
   /// A proper relation (not a bare FK) because both models live wholly inside this

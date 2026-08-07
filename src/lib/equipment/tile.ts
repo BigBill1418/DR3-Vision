@@ -1,14 +1,27 @@
-// ADR-0044 D3 — the small "equipment" tile for the site dashboard.
+// ADR-0044 D3 / ADR-0078 D3 — the small "equipment" tile for the site dashboard.
 //
 // Two numbers only: the LAST equipment event (so downtime/cost stops evaporating
 // into a side spreadsheet — it's visible the moment the office logs it) and the
 // 7-day units/day mean (the throughput pulse). Both site-scoped (hard rule #2).
 // Cheap by construction — one `findFirst` + one small `findMany` — because it
 // renders on the site dashboard for every manager on every load.
+//
+// ADR-0078 D3 — the 7-day mean now reads the MANAGER-ENTERED machine throughput,
+// not `stripped_program + stripped_non_program`. The old number was the whole
+// floor's output (1,000–1,250 units/day at Woodland) displayed as one machine's.
+// Days nobody entered are SKIPPED, not counted as zero, and a window with no
+// entries at all yields `null` — which the tile renders "not recorded", the same
+// discipline ADR-0077 D4 established for downtime.
+//
+// Keeping the daily capture in its OWN table (ADR-0078 D2) is what makes the
+// `lastEvent` query below still correct: a daily row written every working day
+// would otherwise have become "the LAST equipment event" forever and buried the
+// downtime this tile exists to surface.
 
-import { Prisma, type EquipmentEventKind } from '@prisma/client';
+import { type EquipmentEventKind } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appTodayISO, dayISO, dayKeyUTCFromISO } from '@/lib/time';
+import { enteredThroughputByDay } from './daily-throughput';
 
 export interface EquipmentTileData {
   lastEvent: {
@@ -18,14 +31,15 @@ export interface EquipmentTileData {
     costCents: number | null;
     notes: string | null;
   } | null;
-  /** Mean units/day over the trailing 7 calendar days (non-null closes only). */
+  /**
+   * Mean of the machine's ENTERED units/day over the trailing 7 calendar days,
+   * across RECORDED days only. `null` = nothing recorded in the window ("not
+   * recorded"), never 0 and never the floor-wide derived total.
+   */
   last7UnitsPerDay: number | null;
+  /** Recorded days behind the mean — 0 ⇒ the mean is null because nobody entered. */
+  recordedDays: number;
   windowEndISO: string;
-}
-
-function num(v: Prisma.Decimal | number | null | undefined): number {
-  if (v == null) return 0;
-  return typeof v === 'number' ? v : v.toNumber();
 }
 
 export async function computeEquipmentTile(
@@ -36,7 +50,7 @@ export async function computeEquipmentTile(
   const endKey = dayKeyUTCFromISO(endISO);
   const startKey = new Date(endKey.getTime() - 6 * 86_400_000); // trailing 7 days inclusive
 
-  const [last, closes] = await Promise.all([
+  const [last, entered] = await Promise.all([
     prisma.equipmentEvent.findFirst({
       where: {
         site_id: siteId,
@@ -46,16 +60,14 @@ export async function computeEquipmentTile(
       orderBy: [{ event_date: 'desc' }, { created_at: 'desc' }],
       select: { event_date: true, kind: true, hours_down: true, cost_cents: true, notes: true },
     }),
-    prisma.processedUnitsDaily.findMany({
-      where: { site_id: siteId, production_date: { gte: startKey, lte: endKey } },
-      select: { stripped_program: true, stripped_non_program: true },
-    }),
+    enteredThroughputByDay(siteId, startKey, endKey),
   ]);
 
+  const recorded = [...entered.values()];
   const last7UnitsPerDay =
-    closes.length === 0
+    recorded.length === 0
       ? null
-      : closes.reduce((s, c) => s + num(c.stripped_program) + num(c.stripped_non_program), 0) / closes.length;
+      : recorded.reduce((s, e) => s + e.unitsProcessed, 0) / recorded.length;
 
   return {
     lastEvent: last
@@ -68,6 +80,7 @@ export async function computeEquipmentTile(
         }
       : null,
     last7UnitsPerDay,
+    recordedDays: recorded.length,
     windowEndISO: endISO,
   };
 }

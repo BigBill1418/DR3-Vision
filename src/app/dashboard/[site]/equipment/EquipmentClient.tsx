@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { appTodayISO } from '@/lib/time';
 import type { EquipmentThroughput, DailyThroughputPoint } from '@/lib/equipment/throughput';
 import type { EquipmentEventView } from '@/lib/equipment/service';
+import type { DailyThroughputView } from '@/lib/equipment/daily-throughput';
 
 const KINDS = ['downtime', 'maintenance', 'repair', 'cost', 'note'] as const;
 type Kind = (typeof KINDS)[number];
@@ -85,6 +86,20 @@ export function EquipmentClient({
           <CostPanel throughput={throughput} />
         </>
       )}
+      {/* ADR-0078 D6 — the daily capture rides the EXISTING `equipment_entry`
+          surface rather than being born behind a new gate. ADR-0047's born-pilot
+          rule protects an audience from output it has not seen before; this
+          audience is the identical one already entering equipment events on this
+          exact screen, at a site where `equipment_entry` is already live. A new
+          gate would have hidden the replacement for the sheet from the very
+          managers being asked to stop using the sheet. */}
+      {showEntry && (
+        <DailyThroughputEntry
+          siteCode={siteCode}
+          machineLabel={machineLabel}
+          machine={throughput.machine}
+        />
+      )}
       {showEntry && <EventEntry siteCode={siteCode} machineLabel={machineLabel} />}
     </div>
   );
@@ -93,7 +108,11 @@ export function EquipmentClient({
 // ── Summary tiles ────────────────────────────────────────────────────────
 function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   const s = throughput.summary;
-  const fmt = (n: number | null) => (n == null ? '—' : n.toFixed(1));
+  // ADR-0078 D3 — "not recorded", never "0.0" and never the floor-wide derived
+  // total. These two tiles are means of the MANAGER-ENTERED machine numbers; a
+  // window nobody entered has no throughput to report, and saying so plainly is
+  // the point. Same discipline as the downtime tile below (ADR-0077 D4).
+  const fmt = (n: number | null) => (n == null ? 'not recorded' : n.toFixed(1));
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
       <Tile label="7-day units/day" value={fmt(s.last7UnitsPerDay)} accent />
@@ -269,13 +288,17 @@ function Legend() {
   );
   return (
     <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs opacity-75">
-      {chip('#8fbf3f', false, 'Units/day')}
+      {chip('#8fbf3f', false, 'Units/day (entered)')}
       {chip('#d7ff4f', false, '7-day mean')}
       {chip('#ef4444', false, 'Downtime day')}
       {chip('#fbbf24', true, 'Pocket-coil estimate (own scale)')}
+      {/* ADR-0078 D3 — this used to read "units/run-hour uses an assumed 8h
+          working day". It no longer does: run hours are entered with the units,
+          so the rate is measured rather than assumed. A gap in the bars is a day
+          nobody recorded — not a zero. */}
       <span className="opacity-60">
-        Units/run-hour uses an assumed {8}h working day (assumed_day_hours), reduced by that
-        day&apos;s downtime.
+        Units/day and units/run-hour are the manager-entered daily figures for this machine. A
+        missing bar is a day that was not recorded — not a zero.
       </span>
     </div>
   );
@@ -303,6 +326,215 @@ function CostPanel({ throughput }: { throughput: EquipmentThroughput }) {
               <div className="text-xs opacity-70">{m.monthISO}</div>
             </div>
           ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Daily throughput capture (ADR-0078) ────────────────────────────────────
+//
+// The replacement for the sheet's Terex column: units processed + run hours,
+// entered by the manager, once a day. `onClick` only (hard rule #10).
+function DailyThroughputEntry({
+  siteCode,
+  machineLabel,
+  machine,
+}: {
+  siteCode: string;
+  machineLabel: string;
+  machine: { id: string; displayName: string } | null;
+}) {
+  const [rows, setRows] = useState<DailyThroughputView[]>([]);
+  const [date, setDate] = useState(todayIso());
+  const [units, setUnits] = useState('');
+  const [runHours, setRunHours] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<FieldMsg | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { rows: DailyThroughputView[] };
+    setRows(data.rows);
+  }, [siteCode]);
+  useEffect(() => void load(), [load]);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          throughputDate: date,
+          unitsProcessed: Number(units),
+          runHours: Number(runHours),
+          notes: notes || null,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string; today?: string };
+        // ADR-0078 D4 — a prior-day change is REFUSED, and the message says so
+        // honestly and names where to take it. It does not pretend to have
+        // opened a request that does not exist, and it does not quietly accept
+        // the edit. See OPEN-ITEMS F-2 for the generalization that would let
+        // this route into a real approval flow.
+        if (err.error === 'requires_amendment') {
+          setMsg({
+            kind: 'err',
+            text:
+              `Only today (${err.today ?? todayIso()}) can be entered or corrected here. ` +
+              `Changing a past day needs the office — send them the date and the corrected ` +
+              `numbers and they will amend it.`,
+          });
+          return;
+        }
+        setMsg({
+          kind: 'err',
+          text: err.error ? `Save failed: ${err.error}` : `Save failed (${res.status}).`,
+        });
+        return;
+      }
+      setMsg({ kind: 'ok', text: "Today's numbers recorded." });
+      setUnits('');
+      setRunHours('');
+      setNotes('');
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const voidRow = async (id: string) => {
+    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput/${id}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) await load();
+  };
+
+  // Both figures are required — the whole point of capturing is that the hours
+  // arrive WITH the units, so a rate never has to be computed against a guess.
+  const canSave =
+    date !== '' && units.trim() !== '' && runHours.trim() !== '' && Number(runHours) > 0;
+
+  if (!machine) {
+    return (
+      <section>
+        <h2 className="text-lg font-semibold">Daily processing</h2>
+        <p className="mt-2 text-sm opacity-70">
+          This site has no machine registered for daily throughput capture, so there is nothing to
+          record here.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <h2 className="text-lg font-semibold">
+        {machineLabel === 'Equipment' ? 'Daily processing' : `${machineLabel} — daily processing`}
+      </h2>
+      <p className="mt-1 text-sm opacity-70">
+        Enter what the machine processed today and how many hours it ran. This replaces the
+        sheet&apos;s daily column — it is the number the throughput chart reads. Today can be edited
+        freely; a past day has to go through the office.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <label className={labelCls}>
+          <span className="opacity-70">Date</span>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Units processed</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            inputMode="numeric"
+            value={units}
+            onChange={(e) => setUnits(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">Run hours</span>
+          <input
+            type="number"
+            min="0.25"
+            max="24"
+            step="0.25"
+            inputMode="decimal"
+            value={runHours}
+            onChange={(e) => setRunHours(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={`${labelCls} col-span-2`}>
+          <span className="opacity-70">Notes (optional)</span>
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <button type="button" disabled={!canSave || busy} onClick={save} className={btnCls}>
+          {busy ? 'Saving…' : 'Save daily numbers'}
+        </button>
+        <Msg msg={msg} />
+      </div>
+
+      {rows.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left opacity-70">
+              <tr>
+                <th className="py-1 pr-4">Date</th>
+                <th className="py-1 pr-4">Units</th>
+                <th className="py-1 pr-4">Run hrs</th>
+                <th className="py-1 pr-4">Units/hr</th>
+                <th className="py-1 pr-4">Notes</th>
+                <th className="py-1" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const hrs = Number(r.runHours);
+                return (
+                  <tr key={r.id} className="border-t border-white/10">
+                    <td className="py-1 pr-4">{r.throughputDateISO}</td>
+                    <td className="py-1 pr-4">{r.unitsProcessed}</td>
+                    <td className="py-1 pr-4">{r.runHours}</td>
+                    <td className="py-1 pr-4">
+                      {hrs > 0 ? (r.unitsProcessed / hrs).toFixed(1) : '—'}
+                    </td>
+                    <td className="py-1 pr-4 opacity-80">{r.notes ?? ''}</td>
+                    <td className="py-1">
+                      {r.throughputDateISO === todayIso() && (
+                        <button
+                          type="button"
+                          onClick={() => void voidRow(r.id)}
+                          className="text-xs underline opacity-70 hover:opacity-100"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -503,23 +735,31 @@ function Msg({ msg }: { msg: FieldMsg | null }) {
 function buildCsv(daily: readonly DailyThroughputPoint[]): string {
   const head = [
     'date',
-    'units_day',
+    'units_day_entered',
+    'run_hours_entered',
     'hours_down',
     'units_per_run_hour',
     'mean_7d',
     'mean_30d',
     'pocketcoil_estimate',
+    // ADR-0078 D5 — the retained floor-wide total, named for what it actually is.
+    // It is EVERY machine and every hand-stripper that day, not this machine, and
+    // the column name has to say so or the export re-tells the lie the tile used
+    // to tell. Carried so a future reconciliation cross-check has its input.
+    'derived_floor_units_all_sources',
   ];
   const cell = (v: number | null) => (v == null ? '' : String(Math.round(v * 100) / 100));
   const lines = daily.map((d) =>
     [
       d.dateISO,
       cell(d.unitsDay),
+      cell(d.runHours),
       cell(d.hoursDown),
       cell(d.unitsPerRunHour),
       cell(d.mean7),
       cell(d.mean30),
       cell(d.pocketcoilEstimate),
+      cell(d.derivedFloorUnits),
     ].join(','),
   );
   const csv = [head.join(','), ...lines].join('\r\n');

@@ -1,10 +1,27 @@
-// ADR-0044 D2 — derived-throughput provider tests. The pure math (run-hour incl.
-// the labeled 8h assumption, rolling windows over days-without-closes, monthly
-// cost grouping, pocketcoil overlay shape) is exercised directly; the aggregator
-// is exercised against a mocked Prisma to prove it wires the builders correctly.
+// ADR-0078 (supersedes ADR-0044 D2) — throughput provider tests.
+//
+// The pure math (run-hour from ENTERED hours, the retained legacy rate, rolling
+// windows over unrecorded days, monthly cost grouping, pocketcoil overlay shape)
+// is exercised directly; the aggregator runs against a mocked Prisma to prove it
+// reads the manager's entered days and NOT the floor-wide close.
+//
+// The aggregator fixtures use the real production magnitudes — Woodland's floor
+// closed 1,063 units on 2026-08-06 — so a regression to the derived source shows
+// up in a failure message as that exact number rather than as an `undefined`.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Prisma } from '@prisma/client';
+
+const MACHINE = { id: 'eq-terex-1', display_name: 'Terex' };
+
+/** The ADR-0077 identity-rule where-clause the resolver must issue. */
+interface EquipmentWhere {
+  site_id: string;
+  category: string;
+  is_active: boolean;
+  merged_into_id: null;
+  links: { some: Record<string, never> };
+}
 
 const store = {
   closes: [] as {
@@ -19,6 +36,14 @@ const store = {
     hours_down: Prisma.Decimal | null;
     cost_cents: number | null;
   }[],
+  /** ADR-0078 — the manager's ENTERED days. Real `Prisma.Decimal` run hours. */
+  entered: [] as {
+    throughput_date: Date;
+    units_processed: number;
+    run_hours: Prisma.Decimal;
+  }[],
+  /** null ⇒ the site has no registered machine (Eugene's shape). */
+  machine: MACHINE as { id: string; display_name: string } | null,
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -39,12 +64,42 @@ vi.mock('@/lib/prisma', () => ({
             e.event_date.getTime() <= where.event_date.lte.getTime(),
         ),
     },
+    // ADR-0077 identity rule — the resolver must ask for the machine by its
+    // EVIDENCE (terex category + active + not merged away + has AP links), never
+    // by a literal id. Asserted here so a future edit that hardcodes `7e35a4aa`
+    // fails this suite rather than shipping.
+    equipment: {
+      findFirst: async ({ where }: { where: EquipmentWhere }) => {
+        expect(where.category).toBe('terex');
+        expect(where.is_active).toBe(true);
+        expect(where.merged_into_id).toBeNull();
+        expect(where.links).toEqual({ some: {} });
+        return store.machine;
+      },
+    },
+    equipmentDailyThroughput: {
+      findMany: async ({
+        where,
+      }: {
+        where: { equipment_id: string; voided_at: null; throughput_date: { gte: Date; lte: Date } };
+      }) => {
+        // Scoped to the resolved machine row and never to a voided entry.
+        expect(where.equipment_id).toBe(MACHINE.id);
+        expect(where.voided_at).toBeNull();
+        return store.entered.filter(
+          (e) =>
+            e.throughput_date.getTime() >= where.throughput_date.gte.getTime() &&
+            e.throughput_date.getTime() <= where.throughput_date.lte.getTime(),
+        );
+      },
+    },
   },
 }));
 
 import {
   ASSUMED_DAY_HOURS,
   ASSUMED_DAY_HOURS_LABEL,
+  legacyDerivedUnitsPerRunHour,
   unitsPerRunHour,
   rollingMean,
   enumerateDaysISO,
@@ -57,23 +112,48 @@ function dec(n: number): Prisma.Decimal {
   return new Prisma.Decimal(n);
 }
 
-describe('unitsPerRunHour (the labeled 8h assumption)', () => {
-  it('divides units/day by (assumed_day_hours − hoursDown)', () => {
-    // 160 units, 4h down → 160 / (8 − 4) = 40 units/run-hour
-    expect(unitsPerRunHour(160, 4)).toBe(40);
+describe('unitsPerRunHour (ADR-0078 — REAL hours, not the 8h assumption)', () => {
+  it('divides entered units by entered run hours', () => {
+    // 160 units in 5 real hours → 32/hr. Under the superseded ADR-0044 formula
+    // this same day produced NOTHING (no downtime recorded ⇒ null), which is why
+    // the rate was invisible on a machine whose hours_down was never once written.
+    expect(unitsPerRunHour(160, 5)).toBe(32);
+    expect(unitsPerRunHour(150, 7.5)).toBe(20);
+  });
+
+  it('does NOT use the 8h assumption — the rate tracks the hours entered', () => {
+    // The falsification that matters: if the denominator were still
+    // `ASSUMED_DAY_HOURS − hoursDown`, 160 units could never divide by 5 to 32.
+    // Pin it against the constant so a silent reversion is loud.
+    expect(unitsPerRunHour(160, ASSUMED_DAY_HOURS)).toBe(20); // 160/8, only because 8 was ENTERED
+    expect(unitsPerRunHour(160, 4)).toBe(40); // 160/4 — NOT 160/(8−4)=40 by coincidence…
+    expect(unitsPerRunHour(160, 2)).toBe(80); // …so here the two formulas diverge: 8−2=6 ⇒ 26.67
+  });
+
+  it('is null when either figure is missing, or the hours are not positive', () => {
+    expect(unitsPerRunHour(null, 4)).toBeNull();
+    expect(unitsPerRunHour(160, null)).toBeNull();
+    expect(unitsPerRunHour(160, 0)).toBeNull(); // no divide-by-zero / Infinity
+    expect(unitsPerRunHour(160, -1)).toBeNull();
+  });
+
+  it('keeps a recorded ZERO as a real rate of 0 — absence is the null, not the value', () => {
+    expect(unitsPerRunHour(0, 6)).toBe(0);
+  });
+});
+
+describe('legacyDerivedUnitsPerRunHour (ADR-0078 D5 — retained, not live)', () => {
+  it('still computes the superseded ADR-0044 rate for a future cross-check', () => {
+    expect(legacyDerivedUnitsPerRunHour(160, 4)).toBe(40); // 160 / (8 − 4)
     expect(ASSUMED_DAY_HOURS).toBe(8);
     expect(ASSUMED_DAY_HOURS_LABEL).toBe('assumed_day_hours');
   });
 
-  it('is null on a day without downtime hours (metric only meaningful then)', () => {
-    expect(unitsPerRunHour(160, null)).toBeNull();
-    expect(unitsPerRunHour(160, 0)).toBeNull();
-  });
-
-  it('is null when units are unknown or downtime swallows the whole day', () => {
-    expect(unitsPerRunHour(null, 4)).toBeNull();
-    expect(unitsPerRunHour(160, 8)).toBeNull(); // run window 0 → not −Infinity/NaN
-    expect(unitsPerRunHour(160, 9)).toBeNull();
+  it('is null without downtime, and never divides by a non-positive window', () => {
+    expect(legacyDerivedUnitsPerRunHour(160, null)).toBeNull();
+    expect(legacyDerivedUnitsPerRunHour(160, 0)).toBeNull();
+    expect(legacyDerivedUnitsPerRunHour(160, 8)).toBeNull();
+    expect(legacyDerivedUnitsPerRunHour(160, 9)).toBeNull();
   });
 });
 
@@ -100,17 +180,46 @@ describe('enumerateDaysISO', () => {
 });
 
 describe('buildDailySeries', () => {
-  it('layers run-hour + 7/30 means; run-hour only where downtime exists', () => {
+  it('layers run-hour + 7/30 means off the ENTERED figures', () => {
     const s = buildDailySeries([
-      { dateISO: '2026-07-01', unitsDay: 160, hoursDown: null, pocketcoilEstimate: 12 },
-      { dateISO: '2026-07-02', unitsDay: 120, hoursDown: 4, pocketcoilEstimate: null },
-      { dateISO: '2026-07-03', unitsDay: null, hoursDown: null, pocketcoilEstimate: null },
+      {
+        dateISO: '2026-07-01',
+        unitsDay: 160,
+        runHours: 8,
+        derivedFloorUnits: 1063,
+        hoursDown: null,
+        pocketcoilEstimate: 12,
+      },
+      {
+        dateISO: '2026-07-02',
+        unitsDay: 120,
+        runHours: 4,
+        derivedFloorUnits: 1045,
+        hoursDown: 4,
+        pocketcoilEstimate: null,
+      },
+      {
+        dateISO: '2026-07-03',
+        unitsDay: null,
+        runHours: null,
+        derivedFloorUnits: 1108,
+        hoursDown: null,
+        pocketcoilEstimate: null,
+      },
     ]);
-    expect(s[0]!.unitsPerRunHour).toBeNull();
-    expect(s[1]!.unitsPerRunHour).toBe(30); // 120 / (8−4)
-    expect(s[2]!.unitsDay).toBeNull();
-    expect(s[1]!.mean7).toBe(140); // (160+120)/2 — the null day is excluded
+    expect(s[0]!.unitsPerRunHour).toBe(20); // 160 / 8 entered hours
+    expect(s[1]!.unitsPerRunHour).toBe(30); // 120 / 4 entered hours
     expect(s[0]!.pocketcoilEstimate).toBe(12);
+
+    // The unrecorded day is null, and it is NOT the floor number sitting right
+    // beside it on the same input row.
+    expect(s[2]!.unitsDay).toBeNull();
+    expect(s[2]!.unitsPerRunHour).toBeNull();
+    expect(s[2]!.derivedFloorUnits).toBe(1108); // retained, latent, not throughput
+
+    // Rolling means skip the null day rather than counting it as a zero.
+    expect(s[1]!.mean7).toBe(140); // (160+120)/2
+    expect(s[2]!.mean7).toBe(140); // still (160+120)/2 — the gap is skipped, not 0
   });
 });
 
@@ -134,9 +243,185 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   beforeEach(() => {
     store.closes.length = 0;
     store.events.length = 0;
+    store.entered.length = 0;
+    store.machine = MACHINE;
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // ADR-0078 D3 — the entered number IS the throughput.
+  //
+  // These use the real production magnitudes on purpose. Woodland's floor closed
+  // 1,063 units on 2026-08-06 (769 program + 294 non-program) and the old code
+  // called that the Terex's day. A single machine's real day is a small fraction
+  // of it, so if a test ever sees ~1,063 come out of `unitsDay`, the floor-wide
+  // derivation has come back.
+  // ────────────────────────────────────────────────────────────────
+  describe('entered replaces derived (ADR-0078 D3)', () => {
+    it('reads the MANAGER-ENTERED units, not stripped_program + stripped_non_program', async () => {
+      store.closes.push({
+        production_date: new Date('2026-08-06T00:00:00Z'),
+        stripped_program: dec(769),
+        stripped_non_program: dec(294), // ⇒ derived floor = 1063
+        pocketcoil_estimate: null,
+      });
+      store.entered.push({
+        throughput_date: new Date('2026-08-06T00:00:00Z'),
+        units_processed: 212,
+        run_hours: dec(6.5),
+      });
+
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-08-06', windowDays: 1 });
+      const day = t.daily.find((d) => d.dateISO === '2026-08-06')!;
+
+      expect(day.unitsDay).toBe(212);
+      expect(day.unitsDay).not.toBe(1063); // the floor's number is not the machine's
+      expect(day.runHours).toBe(6.5);
+      // Real hours drive the rate: 212 / 6.5. The superseded formula would have
+      // produced null here (no downtime recorded at all).
+      expect(day.unitsPerRunHour).toBeCloseTo(212 / 6.5, 10);
+      // …and the floor number is still computable, just not the throughput.
+      expect(day.derivedFloorUnits).toBe(1063);
+      expect(t.machine).toEqual({ id: MACHINE.id, displayName: 'Terex' });
+      expect(t.summary.recordedDays).toBe(1);
+      expect(t.summary.last7UnitsPerDay).toBe(212);
+    });
+
+    it('a RECORDED ZERO stays 0 — the machine ran and produced nothing', async () => {
+      store.closes.push({
+        production_date: new Date('2026-08-06T00:00:00Z'),
+        stripped_program: dec(769),
+        stripped_non_program: dec(294),
+        pocketcoil_estimate: null,
+      });
+      store.entered.push({
+        throughput_date: new Date('2026-08-06T00:00:00Z'),
+        units_processed: 0,
+        run_hours: dec(3),
+      });
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-08-06', windowDays: 1 });
+      const day = t.daily.find((d) => d.dateISO === '2026-08-06')!;
+      // 0 is a VALUE, not an absence — it must not become null, and it must not
+      // become the floor's 1063 either.
+      expect(day.unitsDay).toBe(0);
+      expect(day.unitsDay).not.toBeNull();
+      expect(day.unitsPerRunHour).toBe(0);
+      expect(t.summary.recordedDays).toBe(1);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // ADR-0078 D3 — a missing day is "not recorded". THE falsification.
+  //
+  // The two failure modes this replaces are both silent, and both would look
+  // perfectly reasonable on the screen: render 0 (the machine looks broken) or
+  // fall back to the derived floor total (the machine looks like a hero and the
+  // office believes a number nobody entered).
+  //
+  // The floor number is deliberately PRESENT in the store on the unrecorded day,
+  // so if the fallback ever returns, these assertions fail naming the real wrong
+  // value — 1063 — rather than an `undefined` that proves nothing.
+  // ────────────────────────────────────────────────────────────────
+  describe('a day with no entry is NOT RECORDED (ADR-0078 D3)', () => {
+    it('is null — never 0, and never the derived floor number', async () => {
+      // The floor closed on BOTH days; the manager only entered the 5th.
+      store.closes.push(
+        {
+          production_date: new Date('2026-08-05T00:00:00Z'),
+          stripped_program: dec(1045),
+          stripped_non_program: dec(0), // ⇒ derived floor = 1045
+          pocketcoil_estimate: null,
+        },
+        {
+          production_date: new Date('2026-08-06T00:00:00Z'),
+          stripped_program: dec(769),
+          stripped_non_program: dec(294), // ⇒ derived floor = 1063
+          pocketcoil_estimate: null,
+        },
+      );
+      store.entered.push({
+        throughput_date: new Date('2026-08-05T00:00:00Z'),
+        units_processed: 190,
+        run_hours: dec(5),
+      });
+
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-08-06', windowDays: 2 });
+      const unrecorded = t.daily.find((d) => d.dateISO === '2026-08-06')!;
+
+      expect(unrecorded.unitsDay).toBeNull();
+      expect(unrecorded.unitsDay).not.toBe(0);
+      expect(unrecorded.unitsDay).not.toBe(1063); // the floor-wide fallback
+      expect(unrecorded.runHours).toBeNull();
+      expect(unrecorded.unitsPerRunHour).toBeNull();
+
+      // The floor number IS available on that day — proving the null above is a
+      // deliberate refusal to use it, not merely missing data.
+      expect(unrecorded.derivedFloorUnits).toBe(1063);
+
+      // The rolling mean skips the unrecorded day rather than averaging in a 0
+      // (which would read 95) or the floor total (which would read 626.5).
+      expect(unrecorded.mean7).toBe(190);
+      expect(t.summary.last7UnitsPerDay).toBe(190);
+      expect(t.summary.recordedDays).toBe(1);
+    });
+
+    it('reports NOTHING when the manager has entered nothing at all', async () => {
+      // The floor closed every day in the window — the derived model would have
+      // shown a full, healthy chart here. Entered is empty, so the machine's
+      // throughput is honestly unknown.
+      for (const [d, p, n] of [
+        ['2026-08-04', 984, 79],
+        ['2026-08-05', 1045, 0],
+        ['2026-08-06', 769, 294],
+      ] as const) {
+        store.closes.push({
+          production_date: new Date(`${d}T00:00:00Z`),
+          stripped_program: dec(p),
+          stripped_non_program: dec(n),
+          pocketcoil_estimate: null,
+        });
+      }
+
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-08-06', windowDays: 3 });
+
+      expect(t.daily.every((d) => d.unitsDay === null)).toBe(true);
+      expect(t.summary.last7UnitsPerDay).toBeNull();
+      expect(t.summary.last30UnitsPerDay).toBeNull();
+      expect(t.summary.recordedDays).toBe(0);
+      // Every one of those floor totals is right there and refused.
+      expect(t.daily.map((d) => d.derivedFloorUnits)).toEqual([1063, 1045, 1063]);
+    });
+
+    it('a site with no registered machine reports not-recorded, not the floor total', async () => {
+      // Eugene's shape: closes may exist, but there is no machine, so there is no
+      // machine throughput. The old code would have relabelled the floor's output.
+      store.machine = null;
+      store.closes.push({
+        production_date: new Date('2026-08-06T00:00:00Z'),
+        stripped_program: dec(769),
+        stripped_non_program: dec(294),
+        pocketcoil_estimate: null,
+      });
+      const t = await computeEquipmentThroughput('S2', { nowISO: '2026-08-06', windowDays: 1 });
+      expect(t.machine).toBeNull();
+      expect(t.daily[0]!.unitsDay).toBeNull();
+      expect(t.daily[0]!.derivedFloorUnits).toBe(1063);
+      expect(t.summary.last7UnitsPerDay).toBeNull();
+    });
   });
 
   it('joins closes + downtime into a continuous window and derives the summary', async () => {
+    store.entered.push(
+      {
+        throughput_date: new Date('2026-07-04T00:00:00Z'),
+        units_processed: 160,
+        run_hours: dec(8),
+      },
+      {
+        throughput_date: new Date('2026-07-05T00:00:00Z'),
+        units_processed: 120,
+        run_hours: dec(4),
+      },
+    );
     store.closes.push(
       {
         production_date: new Date('2026-07-04T00:00:00Z'),
@@ -177,9 +462,9 @@ describe('computeEquipmentThroughput (aggregator)', () => {
     const jul5 = t.daily.find((d) => d.dateISO === '2026-07-05')!;
     expect(jul4.unitsDay).toBe(160);
     expect(jul5.unitsDay).toBe(120);
-    // repair hours are NOT folded into the downtime denominator — only kind=downtime.
+    // repair hours are NOT folded into the downtime bands — only kind=downtime.
     expect(jul5.hoursDown).toBe(4);
-    expect(jul5.unitsPerRunHour).toBe(30); // 120 / (8 − 4)
+    expect(jul5.unitsPerRunHour).toBe(30); // 120 / 4 ENTERED run hours
 
     expect(t.downtimeBands).toEqual([{ dateISO: '2026-07-05', hoursDown: 4 }]);
     expect(t.pocketcoil).toEqual([{ dateISO: '2026-07-04', estimate: 20 }]);
