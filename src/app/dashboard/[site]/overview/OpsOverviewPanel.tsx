@@ -201,7 +201,11 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
               />
               <StatCard
                 label={`${data.equipment.machineLabel} cost · 30-day`}
-                value={usd(data.equipment.costUsd)}
+                value={
+                  // ADR-0077 Amendment 2 — "not recorded" over a fabricated
+                  // $0.00, matching the downtime card immediately above.
+                  data.equipment.costUsd == null ? 'not recorded' : usd(data.equipment.costUsd)
+                }
                 unit=""
                 sub="Logged maintenance + repair"
                 href={`/dashboard/${siteCode}/equipment`}

@@ -23,7 +23,31 @@ function prismaWith(
     account_upn: string;
   } | null,
 ): PrismaClient {
-  return makeFakePrisma(newFakeDb({ docIngestConnection: connection })) as unknown as PrismaClient;
+  // ADR-0080 — seed a CLEAN reachability scan so these cases stay about W3.
+  //
+  // The discovery-gap warning is a second, independent line in the same
+  // `warnings` slot, and it legitimately fires for a CONNECTED system that has
+  // never been scanned. Leaving that unseeded would make every assertion here
+  // depend on ADR-0080 state and stop testing the ADR-0067 contract it is named
+  // for. A clean scan is also the honest steady state: the sweep runs one every
+  // 15 minutes.
+  return makeFakePrisma(
+    newFakeDb({
+      docIngestConnection: connection,
+      reachabilityScans: [
+        {
+          id: 'scan-clean',
+          scanned_at: new Date(NOW.getTime() - 10 * 60_000),
+          scope_query: '(filetype:xlsx) AND path:"https://example-my.sharepoint.com"',
+          reachable_count: 3,
+          watched_count: 3,
+          gap_count: 0,
+          truncated: false,
+          error: null,
+        },
+      ],
+    }),
+  ) as unknown as PrismaClient;
 }
 
 const NOW = new Date('2026-08-05T13:00:00Z'); // a Wednesday

@@ -36,6 +36,13 @@ interface Agg {
   _sum: Record<string, number | Prisma.Decimal | null>;
 }
 
+/** One payroll row, in the shape the arg-honouring `groupBy` mock filters on. */
+interface BonusEntryRow {
+  siteId: string;
+  employeeId: string;
+  entryDate: Date;
+}
+
 const store = {
   anchor: null as null | Record<string, unknown>,
   inbound: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
@@ -51,6 +58,10 @@ const store = {
   // PR #196 §2.3 gate — newest DELIVERED haul docking date. null = empty mirror
   // (bootstrap, not stale) so the pre-gate fixtures run unchanged.
   newestDelivered: null as Date | null,
+  // ADR-0076 follow-up — the payroll source behind the headcount pre-fill.
+  bonusEntries: [] as BonusEntryRow[],
+  /** Non-null makes `bonusDailyEntry.groupBy` REJECT — the uncomputable case. */
+  bonusSourceError: null as Error | null,
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -65,6 +76,45 @@ vi.mock('@/lib/prisma', () => ({
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },
     corSiteConfig: { findUnique: async () => store.signer },
+    // ADR-0076 follow-up — this mock HONOURS its arguments on purpose.
+    //
+    // It filters on BOTH `where.bonus_employee.site_id` and `where.entry_date`, and it
+    // groups by the keys actually requested in `by`. That matters three ways:
+    //   • a month-scoping regression (wrong window, or dropping `entry_date`) changes
+    //     the returned count instead of passing by mock fiat — see the boundary test;
+    //   • a site-scoping regression leaks the other site's processors into the count;
+    //   • grouping by `(employee, date)` instead of `(employee)` would count ENTRIES
+    //     rather than PEOPLE, and the multi-day processor in the fixture turns that red.
+    // A mock that ignored `where` would make all three untestable.
+    bonusDailyEntry: {
+      groupBy: async ({
+        by,
+        where,
+      }: {
+        by: string[];
+        where: {
+          bonus_employee?: { site_id?: string };
+          entry_date?: { gte: Date; lte: Date };
+        };
+      }): Promise<{ bonus_employee_id: string }[]> => {
+        if (store.bonusSourceError) throw store.bonusSourceError;
+        const siteId = where.bonus_employee?.site_id;
+        const ed = where.entry_date;
+        const matched = store.bonusEntries.filter(
+          (r) =>
+            (siteId === undefined || r.siteId === siteId) &&
+            (ed === undefined ||
+              (r.entryDate.getTime() >= ed.gte.getTime() &&
+                r.entryDate.getTime() <= ed.lte.getTime())),
+        );
+        const keyOf = (r: BonusEntryRow) =>
+          by
+            .map((k) => (k === 'bonus_employee_id' ? r.employeeId : String(r.entryDate.getTime())))
+            .join('|');
+        const groups = new Set(matched.map(keyOf));
+        return [...groups].map((k) => ({ bonus_employee_id: k.split('|')[0]! }));
+      },
+    },
     mymrcHaulsMirror: {
       aggregate: async () => ({ _max: { docking_appointment_date: store.newestDelivered } }),
     },
@@ -72,6 +122,49 @@ vi.mock('@/lib/prisma', () => ({
 }));
 
 import { computeCorPrefill, coverMonthBounds } from './prefill';
+
+/** UTC-midnight `@db.Date` day key — the entry_date convention for this table. */
+const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+
+/**
+ * June-2026 Woodland payroll fixture — 20 DISTINCT processors, which is the figure
+ * measured against the production database for woodland 2026-06.
+ *
+ * Deliberately shaped so the count is falsifiable rather than incidental:
+ *   • p01 works 2026-06-01 → the INCLUSIVE lower month boundary
+ *   • p20 works 2026-06-30 → the INCLUSIVE upper month boundary
+ *   • p02 works three separate days → a PEOPLE count must not become an ENTRY count
+ *   • `p-may` / `p-jul` sit one day either side of the cover month, and `e01` is at
+ *     another site — none of the three may be counted
+ */
+function juneWoodlandPayroll(): BonusEntryRow[] {
+  const rows: BonusEntryRow[] = [
+    { siteId: 'site-woodland', employeeId: 'p01', entryDate: day('2026-06-01') },
+    { siteId: 'site-woodland', employeeId: 'p02', entryDate: day('2026-06-02') },
+    { siteId: 'site-woodland', employeeId: 'p02', entryDate: day('2026-06-03') },
+    { siteId: 'site-woodland', employeeId: 'p02', entryDate: day('2026-06-04') },
+    { siteId: 'site-woodland', employeeId: 'p20', entryDate: day('2026-06-30') },
+  ];
+  // p03..p19 — seventeen more distinct processors mid-month → 20 distinct in total.
+  for (let i = 3; i <= 19; i++) {
+    rows.push({
+      siteId: 'site-woodland',
+      employeeId: `p${String(i).padStart(2, '0')}`,
+      entryDate: day('2026-06-15'),
+    });
+  }
+  rows.push({ siteId: 'site-woodland', employeeId: 'p-may', entryDate: day('2026-05-31') });
+  rows.push({ siteId: 'site-woodland', employeeId: 'p-jul', entryDate: day('2026-07-01') });
+  rows.push({ siteId: 'site-eugene', employeeId: 'e01', entryDate: day('2026-06-15') });
+  return rows;
+}
+
+// Root reset — runs BEFORE every nested `beforeEach`, so the payroll store never
+// leaks between describe blocks (each one declares the payroll state it needs).
+beforeEach(() => {
+  store.bonusEntries = [];
+  store.bonusSourceError = null;
+});
 
 describe('coverMonthBounds', () => {
   it('bounds June 2026 to [2026-06-01 .. 2026-06-30] with an end-of-day asOf', () => {
@@ -121,6 +214,7 @@ describe('computeCorPrefill — June 2026 Woodland acceptance fixture (§7-b)', 
       },
     ];
     store.signer = { signer_name: 'Rick Albritton', signer_title: 'Transportation Manager' };
+    store.bonusEntries = juneWoodlandPayroll();
   });
 
   it('reproduces inventory_units == 3977 (3748 program + 229 non-program)', async () => {
@@ -142,17 +236,32 @@ describe('computeCorPrefill — June 2026 Woodland acceptance fixture (§7-b)', 
     expect(src.storedUnits).toBe(3977);
   });
 
-  it('pre-fills headcount from the month-end close and retains the full series', async () => {
+  it('pre-fills processors from the PAYROLL source (20), not the close row (12)', async () => {
     const p = await computeCorPrefill('site-woodland', '2026-06-01');
     const src = p.headcountSource as HeadcountSource;
-    // Month-end close is the LAST row (2026-06-30): 15 employees / 12 processors.
+    // 20 = the measured distinct-processor count for woodland 2026-06. The month-end
+    // close row in this fixture says 12; if 12 comes back, the pre-fill regressed onto
+    // `processed_units_daily.processors_count` — the column that is NULL in production
+    // and made every COR headcount cell render "—".
+    expect(src.processorsCount).toBe(20);
+    // The close record is retained verbatim so the provenance still shows what the
+    // close rows said (and therefore why the old path yielded nothing in production).
     expect(src.monthEndCloseId).toBe('close-06-30');
     expect(src.monthEndDate).toBe('2026-06-30');
-    expect(src.employeesCount).toBe(15);
-    expect(src.processorsCount).toBe(12);
-    // Every consulted close row id is retained (the full month series).
     expect(src.consultedCloseRowIds).toEqual(['close-06-15', 'close-06-30']);
     expect(src.series).toHaveLength(2);
+    expect(src.series.map((s) => s.processorsCount)).toEqual([13, 12]);
+  });
+
+  it('names the derivation honestly and records the window it counted over', async () => {
+    const p = await computeCorPrefill('site-woodland', '2026-06-01');
+    const src = p.headcountSource as HeadcountSource;
+    // A figure that no longer comes from the daily close must not keep claiming it
+    // does. Red here means the provenance label is lying about its own source.
+    expect(src.method).toBe('bonus_distinct_processors_adr0076');
+    expect(src.processorsWindowStart).toBe('2026-06-01');
+    expect(src.processorsWindowEnd).toBe('2026-06-30');
+    expect(src.processorsCountUnavailableReason).toBeNull();
   });
 
   it('resolves the signer from config (D2.3)', async () => {
@@ -168,10 +277,14 @@ describe('computeCorPrefill — June 2026 Woodland acceptance fixture (§7-b)', 
     expect(p.signerTitle).toBe('Transportation Manager');
   });
 
-  it('handles a month with no daily closes (headcount pre-fill is empty, not an error)', async () => {
+  it('still pre-fills processors when the month has NO daily-close rows at all', async () => {
+    // Production reality this reproduces: `processed_units_daily` has zero Eugene rows
+    // (ADR-0076). Under the old close-derived path that site could never pre-fill a
+    // headcount at all. The payroll source does not depend on the close table.
     store.closes = [];
     const p = await computeCorPrefill('site-woodland', '2026-06-01');
     const src = p.headcountSource as HeadcountSource;
+    expect(src.processorsCount).toBe(20);
     expect(src.monthEndCloseId).toBeNull();
     expect(src.employeesCount).toBeNull();
     expect(src.consultedCloseRowIds).toEqual([]);
@@ -194,6 +307,9 @@ describe('computeCorPrefill — mid-month filing (ADR-0042 amendment)', () => {
       reconciled_delta: 0,
     };
     store.inbound = { program_unit_count: 999999, non_program_unit_count: 999999 };
+    // Poison the payroll source too — a mid-month filing must not read it either.
+    // If the mid-month branch ever grew a headcount, this rejection would surface it.
+    store.bonusSourceError = new Error('payroll source must not be read on a mid-month filing');
     store.closes = [
       {
         id: 'close-06-30',
@@ -230,6 +346,162 @@ describe('computeCorPrefill — mid-month filing (ADR-0042 amendment)', () => {
     const p = await computeCorPrefill('site-woodland', '2026-06-01', 'mid_month');
     expect(p.signerName).toBe('Rick Albritton');
     expect(p.signerTitle).toBe('Transportation Manager');
+  });
+});
+
+// ── ADR-0076 follow-up (OPEN-ITEMS 0.AG F-1) — the headcount pre-fill ──────
+// The COR month-end headcount rendered "—" on every certificate because it read
+// `processed_units_daily.employees_count` / `.processors_count`: measured in
+// production, 989 rows, ZERO non-null in either column, never written by any of their
+// four write paths. The processor figure now derives from the payroll source. These
+// tests exist to keep the honest-absence contract from eroding into a fake zero.
+
+describe('computeCorPrefill — headcount from the payroll source (ADR-0076 follow-up)', () => {
+  beforeEach(() => {
+    // A clean, freshly-passing inventory state: the gates are not what is under test
+    // here, and they must stay satisfied so the headcount assertions are reachable.
+    store.anchor = {
+      id: 'snap-june-anchor',
+      snapshot_at: new Date('2026-06-01T00:00:00Z'),
+      units_indoor: 1000,
+      units_total: null,
+      units_in_processing: 0,
+      reconciled_delta: 0,
+    };
+    store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
+    store.dropoffs = { units: 0 };
+    store.stripped = { stripped_program: D('0.0'), stripped_non_program: D('0.0') };
+    store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
+    store.landfilled = { program_units: 0, non_program_units: 0 };
+    store.newestDelivered = null;
+    store.signer = { signer_name: 'Rick Albritton', signer_title: 'Transportation Manager' };
+    // Production shape: close rows exist but BOTH count columns are NULL.
+    store.closes = [
+      {
+        id: 'close-06-30',
+        production_date: new Date('2026-06-30T00:00:00Z'),
+        employees_count: null,
+        processors_count: null,
+      },
+    ];
+    store.bonusEntries = juneWoodlandPayroll();
+  });
+
+  // ── (a) a month with entries yields the REAL distinct count ──────────────
+  it('counts 20 distinct woodland processors for 2026-06 (people, not entries)', async () => {
+    const src = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    // 22 payroll rows are in range for this site/month, from 20 distinct people (p02
+    // worked three days). A red reading 22 means the count degraded from PEOPLE to
+    // ENTRIES; a red reading 21 means the other site's processor leaked in.
+    expect(src.processorsCount).toBe(20);
+  });
+
+  it('scopes to the site — eugene 2026-06 is 1, not woodland 20', async () => {
+    const src = (await computeCorPrefill('site-eugene', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    expect(src.processorsCount).toBe(1);
+  });
+
+  // ── (b) NOT-RECORDED vs ZERO — the whole point of the change ─────────────
+  it('keeps a real 0 (source read, month empty) distinct from null (source unreadable)', async () => {
+    store.bonusEntries = [];
+    const emptyMonth = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+
+    store.bonusSourceError = new Error('payroll source unreachable');
+    const unreadable = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+
+    // Asserted together so a collapse in EITHER direction produces a red diff that
+    // names which case holds the wrong value:
+    //   • `emptyMonth: null` → a genuine zero got downgraded to "—" (understates a
+    //     real, provable measurement on a filed document);
+    //   • `unreadable: 0`    → an absent value got fabricated as a zero (asserts a
+    //     false fact about the world on a filed document — the worse failure).
+    expect({
+      emptyMonth: emptyMonth.processorsCount,
+      emptyMonthReason: emptyMonth.processorsCountUnavailableReason,
+      unreadable: unreadable.processorsCount,
+      unreadableReason: unreadable.processorsCountUnavailableReason,
+    }).toEqual({
+      emptyMonth: 0,
+      emptyMonthReason: null,
+      unreadable: null,
+      unreadableReason: 'payroll_source_unavailable',
+    });
+  });
+
+  it('an unreadable payroll source does not take the inventory figure down with it', async () => {
+    // Degrading the headcount must not degrade — or silently drop — the rest of the
+    // pre-fill. The inventory figure is independently provable and still filed.
+    store.bonusSourceError = new Error('payroll source unreachable');
+    const p = await computeCorPrefill('site-woodland', '2026-06-01');
+    expect(p.inventoryUnits).toBe(1000);
+    expect((p.headcountSource as HeadcountSource).processorsCount).toBeNull();
+  });
+
+  // ── (c) the cover month boundary is respected ────────────────────────────
+  it('excludes an entry one day OUTSIDE the cover month (both edges)', async () => {
+    // `p-may` (2026-05-31) and `p-jul` (2026-07-01) are in the fixture and are the
+    // only two woodland processors outside June. Widening the window by a single day
+    // in either direction turns 20 into 21 — so a red naming 21 or 22 is the window
+    // having slipped, not a fixture accident.
+    const june = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    expect(june.processorsCount).toBe(20);
+
+    // The neighbouring months see exactly the excluded people and nobody else, which
+    // proves the rows are present and merely out of June's window (not absent).
+    store.closes = [];
+    const may = (await computeCorPrefill('site-woodland', '2026-05-01'))
+      .headcountSource as HeadcountSource;
+    const july = (await computeCorPrefill('site-woodland', '2026-07-01'))
+      .headcountSource as HeadcountSource;
+    expect({ may: may.processorsCount, july: july.processorsCount }).toEqual({ may: 1, july: 1 });
+  });
+
+  it('INCLUDES both boundary days — the first and last of the cover month', async () => {
+    // p01 works 06-01 and p20 works 06-30. An exclusive bound at either edge drops one
+    // of them, so the red reads 19 and the assertion below names which edge by count.
+    store.bonusEntries = [
+      { siteId: 'site-woodland', employeeId: 'p01', entryDate: day('2026-06-01') },
+      { siteId: 'site-woodland', employeeId: 'p20', entryDate: day('2026-06-30') },
+    ];
+    const src = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    expect(src.processorsCount).toBe(2);
+  });
+
+  // ── (d) employeesCount is NOT backfilled from the processor count ────────
+  it('leaves employeesCount NULL and never substitutes the processor count', async () => {
+    // Production shape: the close row exists, its employees_count is NULL, and 20
+    // processors worked. `employeesCount: 20` here would be a fabricated FT/PT
+    // compliance figure on a filed document — bonus entries cover processors only,
+    // which is a different population from the FT/PT total.
+    const src = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    expect({ employeesCount: src.employeesCount, processorsCount: src.processorsCount }).toEqual({
+      employeesCount: null,
+      processorsCount: 20,
+    });
+  });
+
+  it('surfaces a REAL employeesCount when the close column is actually written', async () => {
+    // The FT/PT total is not derivable from payroll, so it stays close-derived. If the
+    // column is ever populated, the pre-fill must carry that real value through rather
+    // than hard-coding null — "not recorded" has to remain a measurement, not a stub.
+    store.closes = [
+      {
+        id: 'close-06-30',
+        production_date: new Date('2026-06-30T00:00:00Z'),
+        employees_count: 31,
+        processors_count: null,
+      },
+    ];
+    const src = (await computeCorPrefill('site-woodland', '2026-06-01'))
+      .headcountSource as HeadcountSource;
+    expect(src.employeesCount).toBe(31);
   });
 });
 
@@ -288,6 +560,26 @@ describe('computeCorPrefill — inbound-freshness + negative-ledger gate (PR #19
     store.stripped = { stripped_program: D('100.0'), stripped_non_program: D('0.0') };
     const p = await computeCorPrefill('site-woodland', '2026-07-01');
     expect(p.inventoryUnits).toBe(1597 + 150 - 100);
+  });
+
+  // ADR-0076 follow-up — the headcount degradation is a settle-to-object wrapper
+  // scoped to ONE query. It must never become an escape hatch for these gates.
+  it('an unreadable payroll source does NOT swallow the stale-feed refusal', async () => {
+    store.bonusSourceError = new Error('payroll source unreachable');
+    await expect(computeCorPrefill('site-woodland', '2026-07-01')).rejects.toMatchObject({
+      name: 'CorInboundStaleError',
+      status: 409,
+    });
+  });
+
+  it('an unreadable payroll source does NOT swallow the negative-ledger refusal', async () => {
+    store.newestDelivered = new Date();
+    store.bonusSourceError = new Error('payroll source unreachable');
+    await expect(computeCorPrefill('site-woodland', '2026-07-01')).rejects.toMatchObject({
+      name: 'CorLedgerNegativeError',
+      status: 422,
+      context: { totalUnits: -6287 },
+    });
   });
 
   it('an EMPTY mirror is bootstrap, not stale — prefill proceeds (reconcile tripwire still governs)', async () => {

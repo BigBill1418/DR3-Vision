@@ -100,6 +100,92 @@ exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
   delete-then-write). The dangerous direction cannot occur. Making them fully
   atomic means threading a transaction through both services and changing their
   lock footprint, which buys nothing today.
+## 0.AK — 2026-08-07 ADR-0080: discovery reachability + commodity absorption
+
+### Decisions waiting on Bill
+
+- **O-2/AK-1 — confirm the TRAILER LIST classification.** `Woodland Trailer list.xlsx`
+  has `doc_class = NULL` and is waiting on the confirm click at `/admin/doc-ingest`.
+  The absorption path is **verified end-to-end against the real archived bytes**:
+  the extractor reads the live workbook and yields **96 rows**, 41 distinct entry
+  dates, 19 rows with no recorded weight (correctly `NULL`, never `0`), sheet
+  `Trailer List Woodland 2025`. The read surface at `/admin/doc-ingest/trailers`
+  is already version-scoped (newest revision wins). **Claude Code did not and must
+  not confirm this** — `confirmClassification` writes `classified_by` +
+  `doc_class_source='operator'`, and Vision must not stamp Bill's name on a
+  decision he did not make. Ready to confirm.
+- **AK-2 — confirm the COMMODITY tracker classification** (`commodity_audit_tracker`),
+  same discipline, once the extractor fix below lands.
+- **AK-3 — review the 8 reachable-but-unwatched documents** now listed on
+  `/admin/doc-ingest/health`: `DR3 Machine List (2).xlsx`, `TEREX.xlsx` (Kelsey's
+  copy — a SECOND copy, distinct from the watched one in Janette's drive),
+  `JOURNAL Woodland Facility.xlsx`, `DR3 Data Tracking.xlsx`,
+  `DR3 Meeting Notes Log 2026.xlsx`, `DR3 Task Lists for 2025.xlsx`,
+  `Woodland Invoices tracking.xlsx`, `Woodland Outbound Auditing 2026.xlsx`.
+  Nothing is registered automatically; each is a decision. Until reviewed, the
+  `discovery_gap` anomaly stays open — that is intended, not noise.
+
+### Blocked on a stakeholder
+
+- **AK-4 — Layer B: the commodity RECONCILIATION RULES are NOT built and are
+  blocked.** Layer A (absorb + display) is what shipped. The rules — which
+  discrepancies matter, which source is authoritative per field, ranked by dollar
+  impact — need the audit-method capture from Kelsey (availability ends 8/8) as
+  their requirements document. **Additional finding that changes this item's
+  shape:** the tracker carries no figures at all (ADR-0080 D7), so "reconcile the
+  tracker against Vision" is not a thing that can be specified from this document
+  alone; the rules will need whichever document actually holds the commodity
+  figures. Ask her which one that is. Do not invent thresholds in the meantime.
+
+### Architecture decision required BEFORE November 2026
+
+- **AK-5 (C-43) — the shared-item enumeration has no successor.** `GET /me/drive/sharedWithMe`
+  is deprecated, **already degraded in production** (the 1-item response is the
+  degradation), and stops returning data in **November 2026** — Microsoft published
+  a month, not a day, so our `2026-11-01` is a conservative inference and is now
+  labelled as one in code and on the health page. The whole "owners share, Vision
+  reads in place" model rests on it. Findings that narrow the options:
+  - `/me/insights/shared` (10 items, correctly scoped, carries `sharedBy`) is
+    deprecated **on the same date**, requires `Sites.Read.All`, and can be disabled
+    tenant-wide _or per-user_ via ItemInsights settings — returning an empty 200
+    with no error. Not a successor.
+  - `SharedWithUsersOWSUser:"docs-dr3@svdp.us"` — the documented SharePoint
+    "shared with this person" managed property — **was tested against this tenant
+    and returned total = 0** (it indexes only "Specific people" shares; ours are
+    link shares). Not a usable narrowing. Recorded so nobody re-derives it.
+  - `POST /search/query` works and is now wired as the reachability probe, but it
+    answers "what can this identity READ" (11,442 items tenant-wide) rather than
+    "what was shared with it". Adopting it as the enumeration would widen Vision's
+    intake to case-management and HR material — a security delta, not just a
+    functional one.
+
+  ADR-0080 ships the transport and the scope discipline; **it does not decide
+  this.** Owner: Bill + Claude Code, needs a decision well before November.
+
+### Code follow-ups (accepted residuals, not bugs)
+
+- **AK-6 — `distinctProcessors` now exists twice.** The canonical implementation is
+  `src/lib/bonus/processor-count.ts`; `src/lib/bonus/daily-report.ts` retains a
+  private twin, deliberately untouched this session to keep the bonus daily report
+  byte-identical. Collapse the twin onto the module the next time that file is
+  legitimately opened. The module header says so in place.
+- **AK-7 — `CorClient.tsx` label is now inaccurate.** It reads "Pre-fill from
+  month-end close …: employees …, processors …", but the processors figure is no
+  longer close-derived (ADR-0076 follow-up). The _number_ renders correctly (`??`,
+  so a real `0` shows as `0` and only a genuine null shows `—`); only the sentence
+  is stale. Copy fix, not a correctness fix.
+- **AK-8 — DONE (2026-08-07).** Terex cost `$0.00` → "not recorded" shipped as
+  **ADR-0077 Amendment 3** (not Amendment 2 — that number was already taken by the
+  independent-audit observations). Landed after the ADR-0079 stream merged, on a
+  rebase, in its own commit. Original note retained for the record: ADR-0077 fixed the identical bug for downtime and explicitly left the
+  cost residual, because cost is genuinely partly populated (7 of 68 events) and is
+  therefore the weaker case. **Corrected file target:** it lives in
+  `src/lib/equipment/throughput.ts` plus `EquipmentClient` / `OpsOverviewPanel` /
+  `throughput.test.ts` — **not** `terex-ledger.ts` as the originating handoff
+  stated (verified by reading the code). Those exact files were rewritten on a
+  parallel branch (PR #206), so this lands afterwards, on a rebase, as **ADR-0077
+  Amendment 2** in its own commit. Widen `totalCostCents` to `number | null`,
+  update `costUsd` consumers, and keep a real `$0` distinct from an absent one.
 
 ## 0.AI — 2026-08-07 Terex daily throughput (ADR-0079) — follow-up
 

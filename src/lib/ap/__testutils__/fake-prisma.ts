@@ -256,6 +256,30 @@ export interface FakeDb {
   // by the digest's W3 warning. NULL (the default) means "never connected", which
   // is the correct state for every AP test that does not care about ingestion.
   docIngestConnection: FakeDocIngestConnection | null;
+  // ADR-0080 — the reachability scans the digest's discovery-gap warning reads.
+  // EMPTY (the default) means "no scan has ever run", which is the correct state
+  // for every AP test that does not care about document discovery — and which the
+  // warning deliberately reports rather than passing over in silence.
+  reachabilityScans: FakeReachabilityScan[];
+  reachableItems: FakeReachableItem[];
+}
+
+/** ADR-0080 — only the columns the digest warning selects. */
+export interface FakeReachabilityScan {
+  id: string;
+  scanned_at: Date;
+  scope_query: string;
+  reachable_count: number;
+  watched_count: number;
+  gap_count: number;
+  truncated: boolean;
+  error: string | null;
+}
+
+export interface FakeReachableItem {
+  scan_id: string;
+  name: string;
+  last_modified_at: Date | null;
 }
 
 /** ADR-0067 — only the columns the digest warning selects. */
@@ -311,6 +335,8 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     siteHolidays: seed.siteHolidays ?? [],
     reimbursements: seed.reimbursements ?? [],
     docIngestConnection: seed.docIngestConnection ?? null,
+    reachabilityScans: seed.reachabilityScans ?? [],
+    reachableItems: seed.reachableItems ?? [],
   };
 }
 
@@ -337,6 +363,33 @@ export function makeFakePrisma(db: FakeDb) {
       async findUnique(args: { select?: AnyRecord }) {
         if (!db.docIngestConnection) return null;
         return pick(db.docIngestConnection, args.select);
+      },
+    },
+    // ADR-0080 — read-only, like the connection above. `findFirst` HONOURS
+    // `orderBy` rather than hardcoding newest-first: the warning asks for the
+    // newest scan, and a fake that always returned it regardless would leave that
+    // ordering with no guard at all.
+    docIngestReachabilityScan: {
+      async findFirst(args: { orderBy?: { scanned_at?: 'asc' | 'desc' }; select?: AnyRecord } = {}) {
+        if (db.reachabilityScans.length === 0) return null;
+        const dir = args.orderBy?.scanned_at ?? 'asc';
+        const rows = db.reachabilityScans
+          .slice()
+          .sort((a, b) =>
+            dir === 'desc'
+              ? b.scanned_at.getTime() - a.scanned_at.getTime()
+              : a.scanned_at.getTime() - b.scanned_at.getTime(),
+          );
+        return pick(rows[0]!, args.select);
+      },
+    },
+    docIngestReachableItem: {
+      async findMany(args: { where?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
+        const scanId = (args.where ?? {})['scan_id'];
+        const rows = db.reachableItems.filter(
+          (i) => scanId === undefined || i.scan_id === scanId,
+        );
+        return rows.slice(0, args.take).map((r) => pick(r, args.select));
       },
     },
     reimbursementRequest: {

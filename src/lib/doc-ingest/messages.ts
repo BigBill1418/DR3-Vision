@@ -189,6 +189,24 @@ export const docIngestMessages = {
     discoveryDaysLeft: 'days left',
     discoveryExpired:
       'This API has now stopped returning data. Shared-document discovery is BROKEN until the enumeration is replaced.',
+    // Microsoft published a MONTH, not a day. Saying so is the difference between
+    // reporting a vendor deadline and inventing one.
+    discoverySunsetInferred:
+      'Microsoft published only a month, not a day — Vision assumes the 1st, which can only be early, never late.',
+
+    // ── Reachable vs watched (ADR-0080) ──────────────────────────────────────
+    reachabilityHeading: 'Reachable vs watched',
+    reachabilityNever:
+      'No reachability scan has run yet, so Vision CANNOT say whether it is missing documents. This is not the same as having no gap.',
+    reachabilityClean: 'Every document in scope is being watched.',
+    reachabilityGapLead: 'Vision can READ these documents but is NOT watching them:',
+    reachabilityNoAutoRegister:
+      'Nothing is registered automatically. Vision can reach far more of the tenant than it should ever ingest, so adding a document is your decision — register it from the sources page.',
+    reachabilityTruncated:
+      'The result set hit the scan cap, so the real gap is LARGER than the number shown.',
+    reachabilityFailed: 'The last scan could not run, so this count proves nothing:',
+    reachabilityScope: 'Scope',
+    reachabilityScanned: 'Last scanned',
   },
 
   // ── ADR-0069 reconciliation ────────────────────────────────────────────────

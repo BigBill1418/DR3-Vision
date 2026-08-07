@@ -202,4 +202,32 @@ describe('OpsOverviewPanel', () => {
     expect(html).toContain('data-testid="ops-overview"');
     expect(html).toContain('No entry');
   });
+
+  // ADR-0077 Amendment 2 — an unpriced window must not render as free money.
+  it('renders an ABSENT equipment cost as "not recorded", never $0.00', () => {
+    const unpriced = {
+      ...full,
+      equipment: { ...full.equipment!, costUsd: null },
+    };
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={unpriced} />);
+
+    // Asserted on the RENDERED money, because the whole defect is what an
+    // operator reads on the card. A zero on a maintenance tile says the machine
+    // cost nothing; the truth is that nobody priced it. (This panel's `usd()`
+    // formats whole dollars, so the fabricated figure reads `$0`, not `$0.00` —
+    // the equipment tile, which uses cents, is the `$0.00` surface.)
+    expect(html).not.toContain('>$0<');
+    expect(html).toContain('not recorded');
+  });
+
+  it('still renders a REAL zero cost as $0.00', () => {
+    const freeRepair = {
+      ...full,
+      equipment: { ...full.equipment!, costUsd: 0 },
+    };
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={freeRepair} />);
+    // A warranty repair that genuinely cost nothing is a fact worth keeping.
+    expect(html).toContain('>$0<');
+    expect(html).not.toContain('not recorded');
+  });
 });

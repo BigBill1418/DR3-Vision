@@ -480,7 +480,10 @@ describe('computeEquipmentThroughput (aggregator)', () => {
     const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 3 });
     expect(t.daily.every((d) => d.unitsDay === null && d.unitsPerRunHour === null)).toBe(true);
     expect(t.summary.last7UnitsPerDay).toBeNull();
-    expect(t.summary.totalCostCents).toBe(0);
+    // ADR-0077 Amendment 2 — an empty window has NOT RECORDED a cost of zero. It
+    // has recorded nothing. This assertion previously read `.toBe(0)`, which is
+    // the fabricated figure the amendment removes.
+    expect(t.summary.totalCostCents).toBeNull();
     expect(t.downtimeBands).toEqual([]);
   });
 
@@ -495,6 +498,86 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   // Both directions are pinned, because only one of them is the bug: absence
   // must be null, and a genuine recorded zero must stay 0.
   // ────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
+  // ADR-0077 AMENDMENT 2 — the same rule, finally applied to COST.
+  //
+  // ADR-0077 D4 fixed this for downtime and explicitly LEFT cost, on the grounds
+  // that cost is only partly unpopulated (7 of 68 live events carry one) and was
+  // therefore the weaker case. Partly-populated is precisely when a fake zero is
+  // most convincing: the column looks alive, so nobody questions the total, and
+  // "$0.00" on a maintenance tile reads as "this machine cost us nothing".
+  //
+  // Both directions are pinned, because only one of them is the bug.
+  // ────────────────────────────────────────────────────────────────
+  describe('cost absence (ADR-0077 Amendment 2)', () => {
+    it('is NULL — not $0.00 — when no event in the window carried a cost', async () => {
+      // kind=downtime deliberately: `totalDowntimeHours` only counts downtime
+      // events, and the point of the second assertion below is to prove events
+      // EXIST in this window.
+      store.events.push({
+        event_date: new Date('2026-07-04T00:00:00Z'),
+        kind: 'downtime',
+        hours_down: dec(3),
+        cost_cents: null,
+      });
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
+
+      // Phrased as a rendered VERDICT so the red names the fabricated money the
+      // operator would actually have seen — `expected '$0.00' to be 'not recorded'`
+      // — rather than the uninformative `expected 0 to be null`.
+      const rendered =
+        t.summary.totalCostCents == null
+          ? 'not recorded'
+          : `$${(t.summary.totalCostCents / 100).toFixed(2)}`;
+      expect(rendered).toBe('not recorded');
+      expect(t.summary.totalCostCents).toBeNull();
+
+      // …and the downtime on that same event still lands, so this is provably
+      // "no cost was recorded", not "there were no events".
+      expect(t.summary.totalDowntimeHours).toBe(3);
+    });
+
+    it('is 0 — not null — when somebody recorded a genuine zero cost', async () => {
+      store.events.push({
+        event_date: new Date('2026-07-04T00:00:00Z'),
+        kind: 'repair',
+        hours_down: null,
+        cost_cents: 0,
+      });
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
+
+      const rendered =
+        t.summary.totalCostCents == null
+          ? 'not recorded'
+          : `$${(t.summary.totalCostCents / 100).toFixed(2)}`;
+      // A warranty repair that genuinely cost nothing is a FACT, and collapsing
+      // it into "not recorded" would lose it — the mirror-image error, and the
+      // reason presence is decided on the events rather than on a truthy sum.
+      expect(rendered).toBe('$0.00');
+      expect(t.summary.totalCostCents).toBe(0);
+    });
+
+    it('keeps a recorded zero distinct from an absent cost in the SAME window', async () => {
+      store.events.push(
+        {
+          event_date: new Date('2026-07-03T00:00:00Z'),
+          kind: 'repair',
+          hours_down: null,
+          cost_cents: null,
+        },
+        {
+          event_date: new Date('2026-07-04T00:00:00Z'),
+          kind: 'repair',
+          hours_down: null,
+          cost_cents: 0,
+        },
+      );
+      const t = await computeEquipmentThroughput('S1', { nowISO: '2026-07-05', windowDays: 5 });
+      // One priced event exists, so the window HAS a recorded cost — and it is 0.
+      expect(t.summary.totalCostCents).toBe(0);
+    });
+  });
+
   describe('downtime absence (ADR-0077 D4)', () => {
     it('is NULL when no event ever carried an hours_down', async () => {
       store.events.push({

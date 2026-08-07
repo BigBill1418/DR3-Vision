@@ -99,6 +99,9 @@ model Site {
   // Absorbed TEREX maintenance rows (ADR-0069 Am.2)
   doc_terex_rows DocTerexMaintenanceRow[]
 
+  // Absorbed commodity audit-coverage rows (ADR-0080)
+  doc_commodity_audit_rows DocCommodityAuditRow[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -1213,6 +1216,13 @@ enum DocIngestAnomalyKind {
   /// exactly like success on every surface — the whole failure history of this
   /// module in one line.
   absorption_empty
+  // ── Discovery reachability (ADR-0080) ─────────────────────────────────────
+  /// Vision can READ documents in scope that it is not WATCHING. The one guard
+  /// the discovery layer never had: `sharedWithMe` under-reported for 902
+  /// consecutive sweeps and no surface compared its answer against anything.
+  /// Also raised when the probe itself cannot run — "we could not look" must
+  /// never be recorded as "there is no gap".
+  discovery_gap
 }
 
 enum DocIngestAnomalySeverity {
@@ -3909,7 +3919,7 @@ model EquipmentDailyThroughput {
   id String @id @default(uuid())
 
   /// Bare FK → sites.id (constraint in the migration), matching every sibling.
-  site_id String
+  site_id      String
   /// A REAL relation to the equipment registry — this is what makes "unique per
   /// machine per day" mean the machine and not a typed-in string, and what keeps a
   /// merged-away row (ADR-0075) from quietly collecting its own parallel history.
@@ -5746,4 +5756,152 @@ enum DocAbsorptionStatus {
   staged
   confirmed
   discarded
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0080 — discovery reachability + commodity audit-coverage absorption
+//
+// Appended at the END of this file on purpose: two other builds were editing
+// schema.prisma concurrently on 2026-08-07, and end-appending is the shape that
+// merges without a conflict.
+// ────────────────────────────────────────────────────────────────────────
+
+/// One run of the reachable-vs-watched comparison (ADR-0080 Phase 1).
+///
+/// The COUNTS are kept as history so "the gap opened on Tuesday" is answerable;
+/// the per-document rows are pruned to the newest scans because they are a
+/// snapshot of a question, not a ledger.
+model DocIngestReachabilityScan {
+  id         String   @id @default(uuid())
+  scanned_at DateTime @default(now())
+
+  /// The EXACT KQL issued. Stored rather than re-derived so a historical count
+  /// can never be read under a scope that has since been widened or narrowed —
+  /// a number whose bound is unknown is not evidence of anything.
+  scope_query String
+
+  reachable_count Int
+  watched_count   Int
+  gap_count       Int
+
+  /// Graph still had results when the cap was reached, so `gap_count` is a
+  /// LOWER BOUND. Recorded because an under-stated gap presented as complete is
+  /// the exact failure this table exists to end.
+  truncated Boolean @default(false)
+
+  /// Non-null when the probe could not run. A failed scan is NOT a gap of zero:
+  /// "we could not look" and "there is nothing to see" must never render alike.
+  error String?
+
+  items DocIngestReachableItem[]
+
+  @@index([scanned_at])
+  @@map("doc_ingest_reachability_scans")
+}
+
+/// A document Vision could READ but was not WATCHING, at one scan.
+///
+/// Deliberately NOT a `doc_sources` row and never promoted to one automatically.
+/// The probe runs on tenant search, which returns everything this identity can
+/// reach — auto-adopting it would ingest case-management and HR material. Bill
+/// registers what belongs, through the existing operator path (O-2).
+model DocIngestReachableItem {
+  id      String                    @id @default(uuid())
+  scan_id String
+  scan    DocIngestReachabilityScan @relation(fields: [scan_id], references: [id], onUpdate: Cascade, onDelete: Cascade)
+
+  /// The D8 identity pair — the same key `doc_sources` uses, so the comparison
+  /// is on identity and never on a display name.
+  drive_id String
+  item_id  String
+
+  name       String
+  web_url    String?
+  /// `createdBy` when search supplied it — who to ask about this document.
+  owner_hint String?
+
+  last_modified_at DateTime?
+  size_bytes       Int?
+
+  first_seen_at DateTime @default(now())
+
+  @@unique([scan_id, drive_id, item_id])
+  @@index([scan_id])
+  @@map("doc_ingest_reachable_items")
+}
+
+/// One (commodity stream × month) audit-coverage cell (ADR-0080 Phase 2).
+///
+/// ── What this table is NOT ────────────────────────────────────────────────
+/// It holds NO tonnage and NO money. The "Woodland Data Auditing Tracker" was
+/// expected to carry commodity figures cross-referenced against vendor invoices;
+/// read against the live bytes on 2026-08-07 it carries none. It records WHETHER
+/// a month's audit was performed, by whom, and when. So there is nothing here to
+/// reconcile against `processed_units_daily`, and nothing here writes it.
+///
+/// Version-scoped from the first row (ADR-0077's lesson): the unique key is
+/// `(version, sheet, stream, month)`, so two confirmed revisions of one workbook
+/// coexist, each a COMPLETE copy. Any read that aggregates must first pin the
+/// winning revision — summing every confirmed row across revisions is precisely
+/// how the TEREX ledger reported $231,203.82 for a $77,067.94 document.
+model DocCommodityAuditRow {
+  id String @id @default(uuid())
+
+  /// Plain scalars, matching `doc_trailer_rows` / `doc_terex_maintenance_rows`:
+  /// the absorbed-row tables in this schema carry the source/version ids without
+  /// a Prisma relation, and only `site` is a real relation.
+  doc_source_id         String
+  doc_source_version_id String
+
+  /// NULL is UNCLASSIFIED, never a guess (hard rule #2) — absorption refuses a
+  /// NULL-site source before a row ever reaches here.
+  site_id String?
+  site    Site?   @relation(fields: [site_id], references: [id])
+
+  sheet_name String
+  /// The sheet's own banner year ("2026"). NULL when the banner was unreadable —
+  /// never inferred from the ingest date.
+  sheet_year Int?
+
+  /// Forward-filled row-2 / row-3 banners: "METAL" / "METAL - GreenZone".
+  stream_group String
+  stream_label String
+
+  /// VERBATIM as the sheet wrote it ("Sept", "March") — the labels are
+  /// inconsistent in the real file and normalising them would quietly merge two
+  /// distinct columns.
+  month_label  String
+  /// 1–12, or NULL when the label was not recognised. Never guessed.
+  month_number Int?
+
+  /// NULL = NOT RECORDED (the cell was empty). Never coerced to false: an
+  /// un-filled checkbox and a deliberate "not audited" are different claims.
+  audited        Boolean?
+  initials       String?
+  /// Set ONLY when the cell held a real date in a plausible range.
+  audit_date     DateTime?
+  /// ALWAYS what the cell said. The live file carries the literal "working" in
+  /// three Date cells; rendering that as a date would invent an audit.
+  audit_date_raw String?
+
+  second_audit          Boolean?
+  second_initials       String?
+  second_audit_date     DateTime?
+  second_audit_date_raw String?
+
+  row_index Int
+  status    DocAbsorptionStatus @default(staged)
+
+  confirmed_at   DateTime?
+  confirmed_by   String?
+  discarded_at   DateTime?
+  discarded_by   String?
+  discard_reason String?
+
+  absorbed_at DateTime @default(now())
+
+  @@unique([doc_source_version_id, sheet_name, stream_label, month_label])
+  @@index([doc_source_id, status])
+  @@index([site_id, sheet_year])
+  @@map("doc_commodity_audit_rows")
 }

@@ -115,6 +115,12 @@ export async function POST(req: Request): Promise<Response> {
     void runDocIngestSweep(prisma, {
       trigger: 'notification',
       driveId,
+      // No reachability scan on the push path (ADR-0080). This runs once per
+      // notification — potentially many times a minute while somebody is editing
+      // a workbook — and the scan is a whole-tenant search whose answer changes
+      // on the timescale of somebody sharing a new document, not on the timescale
+      // of a cell edit. The scheduled sweep owns it.
+      search: null,
       log: (level, message) => log[level]({ op: 'doc-ingest-sweep', driveId }, message),
     }).catch(() => undefined);
   }

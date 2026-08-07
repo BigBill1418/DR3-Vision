@@ -24,7 +24,12 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
-import { DocIngestDeltaResyncError, docIngestGraph, type DocIngestGraph } from './graph';
+import {
+  DocIngestDeltaResyncError,
+  docIngestGraph,
+  type DocIngestGraph,
+  type DocIngestSearch,
+} from './graph';
 import { DocIngestHaltedError, DocIngestNotConnectedError } from './access-token';
 import { runDiscovery, sourceKey, type SharedItemSource } from './discovery';
 import { ensureSubscriptions } from './subscriptions';
@@ -32,6 +37,7 @@ import { ingestSource } from './ingest';
 import { classifySourceIfNeeded } from './classification';
 import { raiseAnomaly, resolveAnomaly } from './anomalies';
 import { runAbsorptionPass } from './absorb';
+import { runReachabilityScan } from './reachability';
 import type { ClassifyDeps } from './classifier';
 
 export type SweepTrigger = 'scheduled' | 'notification' | 'manual';
@@ -47,6 +53,12 @@ export interface SweepResult {
   versionsStaged: number;
   anomaliesRaised: number;
   subscriptionsRenewed: number;
+  /**
+   * Reachable-but-unwatched documents at this sweep, or NULL when no scan ran.
+   * NULL and 0 are deliberately different: "we did not look" must never render
+   * as "there is nothing to see" (ADR-0080).
+   */
+  reachabilityGap: number | null;
   error: string | null;
 }
 
@@ -56,6 +68,13 @@ export interface RunSweepOptions {
   graph?: DocIngestGraph;
   sharedItemSource?: SharedItemSource;
   classifyDeps?: ClassifyDeps;
+  /**
+   * The reachability probe's transport (ADR-0080). Injected so tests never hit
+   * tenant search, and so a caller can turn the scan off by passing `null` —
+   * which the notification-triggered path does, because a webhook firing on one
+   * document is no reason to re-scan the tenant.
+   */
+  search?: DocIngestSearch | null;
   /** Restrict ingestion to one drive (the notification-triggered path). */
   driveId?: string;
   log?: (level: 'info' | 'warn' | 'error', message: string) => void;
@@ -95,6 +114,7 @@ export async function runDocIngestSweep(
     versionsStaged: 0,
     anomaliesRaised: 0,
     subscriptionsRenewed: 0,
+    reachabilityGap: null,
     error: null,
   };
 
@@ -118,6 +138,40 @@ export async function runDocIngestSweep(
       'info',
       `discovery: +${discovery.discovered} new, ${discovery.updated} seen, ${discovery.deduped} deduped`,
     );
+
+    // ── 1b. Is discovery telling the truth? (ADR-0080) ────────────────────
+    // Discovery reports what its ENUMERATION returned; until now nothing
+    // compared that against what the tenant actually holds. `sharedWithMe`
+    // returned exactly one item on all 902 sweeps to 2026-08-07 while three
+    // documents were watched and eleven were readable — an under-count no
+    // surface could express.
+    //
+    // Non-fatal by construction: this is an observation, not a capture step, and
+    // a search outage must never fail a sweep that correctly ingested every
+    // document. The scan records its OWN failure loudly instead.
+    // `docIngestGraph()` returns the search seam too, but `options.graph` is
+    // typed as the narrow `DocIngestGraph` — the five existing test stubs do not
+    // implement search and must not be forced to. So the capability is DETECTED
+    // rather than asserted: a cast here would turn a missing method into a
+    // TypeError at runtime inside a try/catch, i.e. a silently skipped scan.
+    const search =
+      options.search === undefined ? (hasSearch(graph) ? graph : null) : options.search;
+    if (search) {
+      try {
+        const reach = await runReachabilityScan(prisma, search, { now });
+        result.reachabilityGap = reach.error === null ? reach.gap.length : null;
+        result.anomaliesRaised += reach.anomaliesRaised;
+        log(
+          reach.gap.length > 0 || reach.error !== null ? 'warn' : 'info',
+          `reachability: ${reach.reachable} readable, ${reach.watched} watched, ` +
+            `${reach.gap.length} unwatched${reach.truncated ? ' (TRUNCATED — gap is larger)' : ''}` +
+            `${reach.error ? ` — probe failed: ${reach.error}` : ''}`,
+        );
+      } catch (e) {
+        // Left as NULL, never 0 — see `reachabilityGap`.
+        log('warn', `reachability scan failed: ${describe(e)} — capture is unaffected`);
+      }
+    }
 
     // ── 2. Subscriptions ──────────────────────────────────────────────────
     // Deliberately AFTER discovery and deliberately non-fatal. Push is an
@@ -423,4 +477,15 @@ async function finish(
 
 function describe(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Does this graph client carry the ADR-0080 search seam?
+ *
+ * A structural check, not an `instanceof`: `docIngestGraph()` returns an object
+ * literal implementing three interfaces, and the sweep's `graph` option is typed
+ * as only one of them.
+ */
+function hasSearch(graph: DocIngestGraph): graph is DocIngestGraph & DocIngestSearch {
+  return typeof (graph as Partial<DocIngestSearch>).searchDriveItems === 'function';
 }

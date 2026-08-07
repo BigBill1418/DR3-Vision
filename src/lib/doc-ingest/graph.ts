@@ -209,6 +209,42 @@ export interface DocIngestSharingResolver {
   resolveSharingUrl(webUrl: string): Promise<GraphDriveItem>;
 }
 
+/**
+ * Tenant SEARCH — the reachability probe (ADR-0080 Phase 1).
+ *
+ * A THIRD interface, for the same reason `DocIngestSharingResolver` is a second
+ * one: nothing in the ingest path calls it, and `DocIngestGraph` is stubbed in
+ * five test files that would otherwise grow a method they never call.
+ *
+ * ── What this answers, and what it does NOT ─────────────────────────────────
+ * `POST /search/query` returns everything the SIGNED-IN IDENTITY CAN READ — not
+ * everything shared WITH it. Microsoft is explicit: "Users cannot access more
+ * items in a search than they can otherwise obtain from a corresponding GET
+ * operation with the same permissions." Vision holds `Sites.Read.All`, so the
+ * unscoped answer is the whole tenant: measured at 11,442 items on 2026-08-07.
+ *
+ * That is why this is NOT wired as the discovery enumeration and must never be.
+ * Watching what Search returns would mean ingesting Night Shelter intake packets
+ * and W-9 lists. It is a COMPARISON input — "what can we see that we are not
+ * watching" — and the gap it finds is surfaced for a human, never auto-adopted.
+ *
+ * READ-ONLY despite being an HTTP POST: `/search/query` takes its query in a
+ * body because it is too big for a query string. It mutates nothing.
+ */
+export interface DocIngestSearch {
+  /**
+   * Run one KQL query over `driveItem`, newest-relevance first.
+   *
+   * `truncated` is returned rather than swallowed: a scan that silently saw only
+   * the first page would UNDER-report the gap, which is the precise failure this
+   * whole feature exists to end.
+   */
+  searchDriveItems(
+    kql: string,
+    limit: number,
+  ): Promise<{ items: GraphDriveItem[]; total: number | null; truncated: boolean }>;
+}
+
 /** The file exceeded the byte cap. Pages; never silently truncates. */
 export class DocIngestOversizeError extends Error {
   override readonly name = 'DocIngestOversizeError';
@@ -369,7 +405,7 @@ function assertSupportedSharingUrl(webUrl: string): void {
 export function docIngestGraph(
   prisma: PrismaClient,
   options: DocIngestGraphOptions = {},
-): DocIngestGraph & DocIngestSharingResolver {
+): DocIngestGraph & DocIngestSharingResolver & DocIngestSearch {
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
 
   async function request(
@@ -613,6 +649,70 @@ export function docIngestGraph(
       // 404 is success for a delete: the goal state is "it is not there".
       if (res.status === 404) return;
       await assertOk(res, `DELETE /subscriptions/${subscriptionId}`);
+    },
+
+    async searchDriveItems(kql, limit) {
+      // Microsoft caps `size` at 1000 per page and currently honours exactly ONE
+      // searchRequest per call, so this pages with `from` and stops on the
+      // container's own `moreResultsAvailable` rather than guessing from counts.
+      const pageSize = Math.min(limit, 200);
+      const items: GraphDriveItem[] = [];
+      let total: number | null = null;
+      let truncated = false;
+
+      for (let from = 0; from < limit; from += pageSize) {
+        const res = await request(`${GRAPH_BASE}/search/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: [
+              {
+                entityTypes: ['driveItem'],
+                query: { queryString: kql },
+                from,
+                size: Math.min(pageSize, limit - from),
+                fields: [
+                  'name',
+                  'id',
+                  'parentReference',
+                  'webUrl',
+                  'lastModifiedDateTime',
+                  'size',
+                  'file',
+                  'createdBy',
+                ],
+              },
+            ],
+          }),
+        });
+        await assertOk(res, 'POST /search/query');
+        const body = (await res.json()) as Record<string, unknown>;
+
+        // The counters live on the HITS CONTAINER, not on the response — reading
+        // them off the response yields `undefined`, which would read as "no more
+        // results" and silently cap every scan at one page.
+        const container = rec(
+          (rec((body['value'] as unknown[])?.[0])?.['hitsContainers'] as unknown[])?.[0],
+        );
+        const hits = container?.['hits'];
+        if (total === null) total = num(container?.['total']);
+
+        if (Array.isArray(hits)) {
+          for (const hit of hits) {
+            const projected = projectDriveItem(rec(hit)?.['resource']);
+            if (projected) items.push(projected);
+          }
+        }
+
+        const more = container?.['moreResultsAvailable'] === true;
+        if (!more) break;
+        // Ran out of budget with Graph still offering more: the scope is wider
+        // than the cap, and the caller must be told rather than shown a number
+        // that looks complete.
+        if (from + pageSize >= limit) truncated = true;
+      }
+
+      return { items, total, truncated };
     },
   };
 }

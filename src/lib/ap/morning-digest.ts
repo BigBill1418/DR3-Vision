@@ -67,6 +67,7 @@ import {
   pacificDayStartInstantPlus,
 } from './business-clock';
 import { docIngestReauthWarning } from '@/lib/doc-ingest/reauth';
+import { docIngestDiscoveryGapWarning } from '@/lib/doc-ingest/reachability';
 import { dailyDigestRecipients } from './notification-prefs';
 import { resolveSecondApproval } from './second-approval-resolver';
 import { apQueueUrl, apRequestUrl, reimbursementUrl } from './notify';
@@ -497,6 +498,14 @@ export async function buildApMorningDigest(
   // line would be invisible exactly when it matters.
   const docIngestWarning = await docIngestReauthWarning(db, now);
   if (docIngestWarning) warnings.push(docIngestWarning);
+
+  // ── ADR-0080 — discovery is not silently under-reporting ──────────────────
+  // Rides the same `warnings` slot, and for the same reason: a discovery gap
+  // produces no AP items, so an items-gated line would be invisible precisely
+  // when documents are going unwatched. It also speaks up when the check has
+  // never run or could not run — "we did not look" is a warning, not silence.
+  const docDiscoveryWarning = await docIngestDiscoveryGapWarning(db, now);
+  if (docDiscoveryWarning) warnings.push(docDiscoveryWarning);
 
   // ── ADR-0068 (Amendment 2) — reimbursements awaiting a second signature ────
   //

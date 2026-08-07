@@ -235,9 +235,10 @@ describe('absorbVersion (ADR-0069)', () => {
   });
 
   it('the absorbable set is exactly the kinds with a real extractor — widening it is a deliberate act', () => {
-    // WIDENED twice on 2026-07-31: Am.1 added `trailer_list`, Am.2 added
-    // `terex_maintenance_log`. This assertion is a tripwire and it fired on BOTH
-    // changes, exactly as intended. It stays exact rather than becoming a `toContain`:
+    // WIDENED three times: Am.1 added `trailer_list`, Am.2 added
+    // `terex_maintenance_log` (both 2026-07-31), and ADR-0080 added
+    // `commodity_audit_tracker` (2026-08-07). This assertion is a tripwire and it
+    // fired on ALL THREE changes, exactly as intended. It stays exact rather than becoming a `toContain`:
     // the point is that adding a kind here without adding its extractor and its
     // typed table has to break a test.
     //
@@ -248,6 +249,7 @@ describe('absorbVersion (ADR-0069)', () => {
       'daily_log_workbook',
       'trailer_list',
       'terex_maintenance_log',
+      'commodity_audit_tracker',
     ]);
   });
 });
