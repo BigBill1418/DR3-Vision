@@ -32,6 +32,33 @@ import type { AnyActorContext } from '@/lib/admin-equipment';
 const TABLE = 'equipment_daily_throughput';
 
 /**
+ * ADR-0081 — the `source` value marking a row as a projection of the TEREX
+ * workbook rather than a person's entry, and its counterpart.
+ *
+ * Declared HERE, in the module that owns this table's reads and writes, and
+ * imported by the importer — not the other way round. The spelling has to exist
+ * exactly once: it is simultaneously a DB CHECK value, the discriminator in the
+ * import's `ON CONFLICT ... WHERE`, and the read path's provenance test, and a
+ * second literal is how those three drift into disagreeing.
+ */
+export const WORKBOOK_IMPORT_SOURCE = 'workbook_import';
+export const MANAGER_SOURCE = 'manager';
+
+/**
+ * ADR-0081 — one RECORDED day of the machine's own figures, with its provenance.
+ *
+ * `isWorkbook` is a boolean rather than the raw `source` string on purpose: the
+ * consumers of this map ask one question ("is this the sheet or a person?") and
+ * a boolean cannot be compared against a mis-spelled literal. The string stays
+ * in the database, where a CHECK constrains it.
+ */
+export interface RecordedDay {
+  unitsProcessed: number;
+  runHours: number;
+  isWorkbook: boolean;
+}
+
+/**
  * Upper bound on a single day's units. Not a business rule — a TYPO CATCH.
  * Woodland's entire floor closes 1,000–1,250 units on a working day, so a single
  * machine cannot plausibly reach 10,000; a fat-fingered `10630` for `1063` is
@@ -475,9 +502,9 @@ export async function enteredThroughputByDay(
   startKey: Date,
   endKey: Date,
   machineId?: string,
-): Promise<Map<string, { unitsProcessed: number; runHours: number }>> {
+): Promise<Map<string, RecordedDay>> {
   const id = machineId ?? (await resolveSiteThroughputMachine(siteId))?.id;
-  const out = new Map<string, { unitsProcessed: number; runHours: number }>();
+  const out = new Map<string, RecordedDay>();
   if (!id) return out;
 
   const rows = await prisma.equipmentDailyThroughput.findMany({
@@ -487,12 +514,26 @@ export async function enteredThroughputByDay(
       voided_at: null,
       throughput_date: { gte: startKey, lte: endKey },
     },
-    select: { throughput_date: true, units_processed: true, run_hours: true },
+    select: {
+      throughput_date: true,
+      units_processed: true,
+      run_hours: true,
+      // ADR-0081 — the row's provenance travels WITH it from the first read.
+      // Re-deriving "is this a manager's figure or the sheet's?" downstream is
+      // how two render sites end up disagreeing about the same day.
+      source: true,
+    },
   });
   for (const r of rows) {
     out.set(dayISO(r.throughput_date), {
       unitsProcessed: r.units_processed,
       runHours: r.run_hours.toNumber(),
+      // Anything that is not the imported sheet is a person's entry. Defaulting
+      // this way (rather than trusting the string) means a row written by a
+      // future path that forgets to set `source` is treated as a MANAGER's —
+      // the conservative direction, because manager rows are the ones the
+      // import must never overwrite.
+      isWorkbook: r.source === WORKBOOK_IMPORT_SOURCE,
     });
   }
   return out;

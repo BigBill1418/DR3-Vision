@@ -9,9 +9,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { appTodayISO } from '@/lib/time';
+import { isRealMachineSource } from '@/lib/equipment/throughput';
 import type { EquipmentThroughput, DailyThroughputPoint } from '@/lib/equipment/throughput';
 import type { EquipmentEventView } from '@/lib/equipment/service';
 import type { DailyThroughputView } from '@/lib/equipment/daily-throughput';
+import type { TerexLedger } from '@/lib/equipment/terex-ledger';
+import { TerexMetricsBand } from './TerexMetricsBand';
+import { Tile } from './Tile';
 
 const KINDS = ['downtime', 'maintenance', 'repair', 'cost', 'note'] as const;
 type Kind = (typeof KINDS)[number];
@@ -52,6 +56,7 @@ export function EquipmentClient({
   showEntry = true,
   machines = [],
   machineLabel = 'Equipment',
+  ledger = null,
 }: {
   siteCode: string;
   throughput: EquipmentThroughput;
@@ -62,10 +67,22 @@ export function EquipmentClient({
   machines?: { id: string; displayName: string }[];
   /** ADR-0077 Am.1 — the machine's name where it exists, else "Equipment". */
   machineLabel?: string;
+  /**
+   * ADR-0081 — the machine's cost/repair/downtime metrics, computed server-side
+   * by `computeTerexLedger` and passed through untouched. `null` (or a ledger
+   * with `equipment: null`) ⇒ no band, never a band of zeros.
+   */
+  ledger?: TerexLedger | null;
 }) {
   return (
     <div className="mt-8 flex flex-col gap-10">
-      {machines.length > 0 && (
+      {/* ADR-0081 — the band SUPERSEDES the bare ledger link: it carries the same
+          link plus the figures the link used to be a promise of. The link row is
+          kept as the fallback for the case the band refuses to render (no Terex
+          at this site), where a machine list may still be non-empty. */}
+      {ledger?.equipment ? (
+        <TerexMetricsBand ledger={ledger} siteCode={siteCode} />
+      ) : machines.length > 0 ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <span className="opacity-70">Machine ledger:</span>
           {machines.map((m) => (
@@ -78,7 +95,7 @@ export function EquipmentClient({
             </a>
           ))}
         </div>
-      )}
+      ) : null}
       {showTrend && (
         <>
           <SummaryTiles throughput={throughput} />
@@ -119,16 +136,22 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   const recorded = s.recordedDays;
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      {/* ADR-0081 D5 — the mean is now BLENDED over the two real sources, so the
+          composition label rides with it. `meanWindowLabel` built that string in
+          the data layer precisely so a blended figure can never reach a screen
+          without saying what it is blended from. */}
       <Tile
         label="7-day units/day"
         value={fmt(s.last7UnitsPerDay)}
         sub={`${Math.min(recorded, 7)} of 7 days recorded`}
+        note={s.last7Label}
         accent
       />
       <Tile
         label="30-day units/day"
         value={fmt(s.last30UnitsPerDay)}
         sub={`${Math.min(recorded, 30)} of 30 days recorded`}
+        note={s.last30Label}
       />
       {/* ADR-0077 D4 — "not recorded", never "0.0". `hours_down` has never been
           written on any Terex event, and a machine nobody measured is not a
@@ -149,28 +172,6 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   );
 }
 
-function Tile({
-  label,
-  value,
-  sub,
-  accent,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  accent?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-lg border p-4 ${accent ? 'border-dr3-cyan/50 bg-black/20' : 'border-white/15 bg-black/10'}`}
-    >
-      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
-      <div className="mt-1 text-2xl font-bold">{value}</div>
-      {sub && <div className="mt-1 text-xs opacity-60">{sub}</div>}
-    </div>
-  );
-}
-
 // ── Trend chart (units/day bars + rolling mean + downtime bands + pocketcoil) ──
 function TrendPanel({
   throughput,
@@ -182,12 +183,17 @@ function TrendPanel({
   const daily = throughput.daily;
   const machineName = throughput.machine?.displayName ?? 'this machine';
 
-  // ADR-0079 Am.1 — the value this day actually DRAWS, chosen off `source` and
-  // nothing else. A post-cutover gap draws nothing even though `derivedFloorUnits`
-  // may well exist for it; substituting that would be the very fallback the
-  // original cutover refused.
+  // ADR-0079 Am.1, extended by ADR-0081 — the value this day actually DRAWS,
+  // chosen off `source` and nothing else.
+  //
+  // `entered` and `workbook` BOTH draw `unitsDay`, because both ARE `unitsDay`:
+  // the machine's own units against the machine's own hours, one typed into
+  // Vision and one read off the sheet Vision replaces (`isRealMachineSource`).
+  // Only `legacy_derived` draws the floor-wide proxy. A post-cutover gap draws
+  // nothing even though `derivedFloorUnits` may well exist for it; substituting
+  // that would be the very fallback the original cutover refused.
   const displayUnits = (d: DailyThroughputPoint): number | null =>
-    d.source === 'entered'
+    isRealMachineSource(d.source)
       ? d.unitsDay
       : d.source === 'legacy_derived'
         ? d.derivedFloorUnits
@@ -195,10 +201,14 @@ function TrendPanel({
 
   // The reported bug, literally: the axis was scaled off `unitsDay` alone, so with
   // zero entered days `maxUnits` collapsed to 1 and every legacy bar would have
-  // been drawn off the top of the chart. It scales to what is DRAWN.
+  // been drawn off the top of the chart. It scales to what is DRAWN — which is
+  // why ADR-0081 needed no change here: `displayUnits` now returns a workbook
+  // day's figure, so the axis already includes it. (Verified, not assumed: a
+  // workbook-only window scales to the workbook maximum.)
   const maxUnits = Math.max(1, ...daily.map((d) => displayUnits(d) ?? 0));
   const maxPocket = Math.max(1, ...daily.map((d) => d.pocketcoilEstimate ?? 0));
   const hasLegacy = daily.some((d) => d.source === 'legacy_derived');
+  const hasWorkbook = daily.some((d) => d.source === 'workbook');
 
   const W = Math.max(640, daily.length * 9);
   const H = 200;
@@ -257,7 +267,16 @@ function TrendPanel({
         >
           {/* ADR-0079 Am.1 — the legacy hatch. Defined once; a legacy bar fills
               with this instead of solid colour, so "hollow and striped" is the
-              shape of a floor-wide figure everywhere it appears. */}
+              shape of a floor-wide figure everywhere it appears.
+
+              ADR-0081 adds `workbookHatch` alongside it in the SAME 45° idiom,
+              deliberately not a new visual language. The two are separated by
+              WEIGHT, not by angle or hue: `legacyHatch` is hollow (no base fill),
+              thin, and sub-opacity because it is the WRONG QUANTITY; while
+              `workbookHatch` lays full-strength stripes over a filled base
+              because it is a REAL machine figure and belongs to the solid family.
+              A reader who learns "the fainter, emptier one is not this machine"
+              has learned the whole rule. */}
           <defs>
             <pattern
               id="legacyHatch"
@@ -267,6 +286,18 @@ function TrendPanel({
               patternTransform="rotate(45)"
             >
               <line x1={0} y1={0} x2={0} y2={4} stroke="#8fbf3f" strokeWidth={1.2} opacity={0.7} />
+            </pattern>
+            <pattern
+              id="workbookHatch"
+              patternUnits="userSpaceOnUse"
+              width={3}
+              height={3}
+              patternTransform="rotate(45)"
+            >
+              {/* The filled base is what makes this read as solid-family rather
+                  than hollow. Darker green so the stripes stay legible on it. */}
+              <rect x={0} y={0} width={3} height={3} fill="#4e6d21" />
+              <line x1={0} y1={0} x2={0} y2={3} stroke="#8fbf3f" strokeWidth={1.6} />
             </pattern>
           </defs>
           {/* downtime red bands (kind=downtime days) */}
@@ -283,19 +314,29 @@ function TrendPanel({
               />
             ) : null,
           )}
-          {/* ADR-0079 Am.1 — units/day bars, drawn STRUCTURALLY by source.
-              An `entered` bar is SOLID. A `legacy_derived` bar is hollow: no
-              fill, a dashed outline over a hatch. The distinction is deliberately
-              structural rather than tonal (a lighter green, a lower opacity),
-              because tone does not survive a projector, a screenshot, a
-              colour-blind reader, or a print-out — and the one thing this must
-              never do is let the floor's number pass as the machine's.
-              Solid ALWAYS means entered. `render.legacy-can-never-appear-as-entered`
-              deletes this branch and proves the red. */}
+          {/* ADR-0079 Am.1, extended by ADR-0081 — units/day bars, drawn
+              STRUCTURALLY by source. The distinction is deliberately structural
+              rather than tonal (a lighter green, a lower opacity), because tone
+              does not survive a projector, a screenshot, a colour-blind reader,
+              or a print-out — and the one thing this must never do is let the
+              floor's number pass as the machine's.
+
+              THE INVARIANT, in three lines, and it must survive every future edit:
+                SOLID              ⇒ ENTERED. Always. Nothing else is ever solid.
+                STRIPED-AND-STRONG ⇒ the machine's OWN sheet history (workbook).
+                HOLLOW-AND-DASHED  ⇒ the floor-wide legacy proxy.
+
+              The first two are the same physical quantity and so share the solid
+              family; the third is a different quantity wearing the machine's name
+              and is the reason any of this exists.
+              `render.legacy-can-never-appear-as-entered` and
+              `display.source-visual-guard` each delete this branch and prove the
+              red. */}
           {daily.map((d, i) => {
             const v = displayUnits(d);
             if (v == null) return null;
             const isLegacy = d.source === 'legacy_derived';
+            const isWorkbook = d.source === 'workbook';
             return (
               <rect
                 key={`u${i}`}
@@ -305,21 +346,32 @@ function TrendPanel({
                 y={yUnits(v)}
                 width={barW}
                 height={PAD_T + plotH - yUnits(v)}
-                fill={isLegacy ? 'url(#legacyHatch)' : '#8fbf3f'}
-                stroke={isLegacy ? '#8fbf3f' : 'none'}
-                strokeWidth={isLegacy ? 1 : 0}
+                fill={
+                  isLegacy ? 'url(#legacyHatch)' : isWorkbook ? 'url(#workbookHatch)' : '#8fbf3f'
+                }
+                stroke={isLegacy || isWorkbook ? '#8fbf3f' : 'none'}
+                strokeWidth={isLegacy || isWorkbook ? 1 : 0}
+                // Dashes are the legacy tell ALONE. A workbook bar's outline is
+                // solid because its number is real.
                 strokeDasharray={isLegacy ? '2 1.5' : undefined}
                 opacity={isLegacy ? 0.75 : 0.85}
               >
                 <title>
                   {isLegacy
                     ? `${d.dateISO}: ${v} units — floor-wide total, not ${machineName}-specific (legacy)`
-                    : `${d.dateISO}: ${v} units${d.hoursDown ? ` · ${d.hoursDown}h down` : ''}`}
+                    : isWorkbook
+                      ? `${d.dateISO}: ${v} units — from the Terex workbook (imported sheet history)`
+                      : `${d.dateISO}: ${v} units${d.hoursDown ? ` · ${d.hoursDown}h down` : ''}`}
                 </title>
               </rect>
             );
           })}
-          {/* 7-day rolling mean — ENTERED days only, never blended (Am.1 §4) */}
+          {/* 7-day rolling mean. ADR-0081 D5 widened this to the COMBINED REAL
+              series (entered + workbook), so the one solid line already covers
+              both and no second line is needed — they are the same measurement.
+              The disclosure of what the window is made of rides the summary tile
+              (`mean7Label`), not a second polyline. `legacy_derived` is still
+              never blended in; that is the dashed line below. */}
           {meanPts((d) => d.mean7) && (
             <polyline
               points={meanPts((d) => d.mean7)}
@@ -364,9 +416,37 @@ function TrendPanel({
           />
         </svg>
       </div>
+      {/* ADR-0081 — ALWAYS VISIBLE whenever a workbook bar is on screen. Same
+          rule as the legacy legend below and for the same reason: a reader who
+          never touches the chart must still be told what a striped bar is. The
+          two legends read together — this one claims the machine, that one
+          disclaims it — which is why neither may be a tooltip. */}
+      {hasWorkbook && (
+        <p
+          data-testid="workbook-legend"
+          className="mt-2 flex items-start gap-2 rounded border border-white/15 bg-black/20 px-3 py-2 text-xs opacity-80"
+        >
+          <svg width="18" height="10" aria-hidden="true" className="mt-0.5 shrink-0">
+            <rect
+              x="0"
+              y="0"
+              width="18"
+              height="10"
+              fill="url(#workbookHatch)"
+              stroke="#8fbf3f"
+              strokeWidth="1"
+            />
+          </svg>
+          <span>
+            Solid-striped bars are <strong>this machine&apos;s own daily numbers</strong>, read off
+            the TEREX workbook — the sheet history that was kept before Vision. Same measurement as
+            a day entered here, so the 7- and 30-day averages include them.
+          </span>
+        </p>
+      )}
       {/* ADR-0079 Am.1 — ALWAYS VISIBLE whenever a legacy bar is on screen. Not a
           tooltip, not a hover: a reader who never touches the chart must still be
-          told that the striped bars are the whole floor. */}
+          told that these bars are the whole floor. */}
       {hasLegacy && (
         <p
           data-testid="legacy-legend"
@@ -384,18 +464,22 @@ function TrendPanel({
               strokeDasharray="2 1.5"
             />
           </svg>
+          {/* ADR-0081 — this read "Striped bars are…". It cannot any more: the
+              workbook bars above are also striped, and the one word that used to
+              mean "not this machine" now describes two opposite things. The tell
+              is HOLLOW AND DASHED, and the sentence has to say the tell. */}
           <span>
-            Striped bars are the <strong>floor-wide processed total</strong> — before daily capture
-            began {throughput.captureCutoverISO}. Not machine-specific.
+            Hollow, dashed-outline bars are the <strong>floor-wide processed total</strong> — before
+            daily capture began {throughput.captureCutoverISO}. Not machine-specific.
           </span>
         </p>
       )}
-      <Legend />
+      <Legend hasWorkbook={hasWorkbook} />
     </section>
   );
 }
 
-function Legend() {
+function Legend({ hasWorkbook }: { hasWorkbook: boolean }) {
   const chip = (color: string, dash: boolean, label: string) => (
     <span className="flex items-center gap-1.5">
       <svg width="18" height="8" aria-hidden="true">
@@ -417,10 +501,16 @@ function Legend() {
       {/* ADR-0079 D3 — this used to read "units/run-hour uses an assumed 8h
           working day". It no longer does: run hours are entered with the units,
           so the rate is measured rather than assumed. A gap in the bars is a day
-          nobody recorded — not a zero. */}
+          nobody recorded — not a zero.
+          ADR-0081 — and the source clause is now conditional, because on a site
+          with no imported history "entered here or read off the workbook" would
+          describe a workbook that is not on the screen. */}
       <span className="opacity-60">
-        Units/day and units/run-hour are the manager-entered daily figures for this machine. A
-        missing bar is a day that was not recorded — not a zero.
+        Units/day and units/run-hour are this machine&apos;s own daily figures
+        {hasWorkbook
+          ? ' — entered here, or read off the TEREX workbook for days before Vision'
+          : ''}
+        . A missing bar is a day that was not recorded — not a zero.
       </span>
     </div>
   );

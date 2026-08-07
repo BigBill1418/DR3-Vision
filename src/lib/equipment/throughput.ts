@@ -31,7 +31,11 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appTodayISO, dayISO, dayKeyUTCFromISO } from '@/lib/time';
-import { enteredThroughputByDay, resolveSiteThroughputMachine } from './daily-throughput';
+import {
+  enteredThroughputByDay,
+  resolveSiteThroughputMachine,
+  type RecordedDay,
+} from './daily-throughput';
 
 /**
  * LEGACY (ADR-0044 D2, superseded by ADR-0079 D3). A Terex working day was assumed
@@ -74,13 +78,31 @@ export const TEREX_CAPTURE_CUTOVER_ISO = '2026-08-07';
  * than being re-inferred (and re-inferred differently) at each render site.
  *
  * - `entered`        — a manager's own figure for the machine. The truth.
+ * - `workbook`       — ADR-0081. The MACHINE'S OWN number, read off the TEREX
+ *                      workbook's monthly operating tabs, with the machine's own
+ *                      run hours beside it. Not a person's entry, and not the
+ *                      floor's total either: it is the same measurement JT now
+ *                      types in, taken from the sheet that is being replaced.
  * - `legacy_derived` — a pre-cutover day showing `derivedFloorUnits`: the whole
  *                      floor's output, NOT machine-specific. MUST be rendered
  *                      with a structural legacy treatment and never as entered.
  * - `not_recorded`   — nothing to show. Post-cutover gaps land here and stay
  *                      loud; `derivedFloorUnits` is NOT substituted for them.
  */
-export type ThroughputSource = 'entered' | 'legacy_derived' | 'not_recorded';
+export type ThroughputSource = 'entered' | 'workbook' | 'legacy_derived' | 'not_recorded';
+
+/**
+ * ADR-0081 — the two sources that are REAL measurements of THIS MACHINE.
+ *
+ * The distinction that matters for every statistic on the page is not
+ * manager-vs-sheet, it is machine-vs-floor. `entered` and `workbook` are the
+ * same physical quantity recorded by the same people about the same machine,
+ * one typed into Vision and one typed into Excel. `legacy_derived` is a
+ * different quantity entirely.
+ */
+export function isRealMachineSource(source: ThroughputSource): boolean {
+  return source === 'entered' || source === 'workbook';
+}
 
 export interface DailyThroughputPoint {
   dateISO: string;
@@ -109,10 +131,21 @@ export interface DailyThroughputPoint {
   /** units/day ÷ entered run_hours; null unless the day was recorded. */
   unitsPerRunHour: number | null;
   pocketcoilEstimate: number | null;
-  /** 7-day trailing mean of unitsDay (ENTERED days only); null when none. */
+  /**
+   * ADR-0081 D5 — 7-day trailing mean over the COMBINED REAL series
+   * (`entered` + `workbook`). Supersedes Am.1 D10's entered-only rule; see
+   * `buildDailySeries` for why blending these two is like-with-like while
+   * blending in `legacy_derived` still is not.
+   */
   mean7: number | null;
-  /** 30-day trailing mean of unitsDay (ENTERED days only); null when none. */
+  /** 30-day trailing mean over the combined real series; null when none. */
   mean30: number | null;
+  /** What the 7-day window is made of. The mean is not shown without it. */
+  mean7Composition: { entered: number; workbook: number };
+  mean30Composition: { entered: number; workbook: number };
+  /** e.g. `"7-day mean — 5 sheet, 2 entered"`. Null when the window is empty. */
+  mean7Label: string | null;
+  mean30Label: string | null;
   /**
    * ADR-0079 Am.1 — 7-day trailing mean over LEGACY days only.
    *
@@ -183,18 +216,30 @@ export interface EquipmentThroughput {
      * convincing: the column looks alive, so nobody questions the total.
      */
     totalCostCents: number | null;
-    /** Days in the window the manager actually recorded. 0 ⇒ nothing entered yet. */
+    /**
+     * ADR-0081 D5 — days in the window carrying a REAL machine figure, from
+     * either real source. This is the denominator every tile discloses.
+     */
     recordedDays: number;
+    /** Of those, how many a person entered. */
+    enteredDays: number;
+    /** Of those, how many came from the imported workbook. */
+    workbookDays: number;
+    /** e.g. `"7-day mean — 5 sheet, 2 entered"`. Null when nothing is recorded. */
+    last7Label: string | null;
+    last30Label: string | null;
   };
 }
 
 /** A single day's raw inputs, before rolling means are layered on. */
 export interface DayInput {
   dateISO: string;
-  /** ENTERED units for the machine; null = not recorded. */
+  /** The RECORDED units for the machine (manager or workbook); null = not recorded. */
   unitsDay: number | null;
-  /** ENTERED run hours; null = not recorded. */
+  /** The RECORDED run hours; null = not recorded. */
   runHours: number | null;
+  /** ADR-0081 — the recorded row is a workbook projection, not a person's entry. */
+  recordedIsWorkbook?: boolean;
   /** ADR-0079 D5 — retained floor-wide total, a latent cross-check. Not throughput. */
   derivedFloorUnits: number | null;
   hoursDown: number | null;
@@ -220,8 +265,22 @@ export function classifyDaySource(
   enteredUnits: number | null,
   derivedFloorUnits: number | null,
   cutoverISO: string = TEREX_CAPTURE_CUTOVER_ISO,
+  /**
+   * ADR-0081 — true when the RECORDED row for this day came from the imported
+   * workbook rather than from a person.
+   *
+   * Note there is no tie-break between `entered` and `workbook`, and there does
+   * not need to be: ADR-0079's partial unique index allows exactly ONE live row
+   * per (machine, day), so a day is recorded by one source or the other and
+   * never both. The precedence `entered → workbook` is enforced by the DATABASE
+   * — the import's `ON CONFLICT ... DO UPDATE ... WHERE source =
+   * 'workbook_import'` cannot overwrite a manager's row, and a manager's entry
+   * overwrites an imported one in place. A tie-break here would be dead code
+   * dressed up as a safeguard.
+   */
+  recordedIsWorkbook = false,
 ): ThroughputSource {
-  if (enteredUnits != null) return 'entered';
+  if (enteredUnits != null) return recordedIsWorkbook ? 'workbook' : 'entered';
   if (dateISO < cutoverISO && derivedFloorUnits != null) return 'legacy_derived';
   return 'not_recorded';
 }
@@ -289,6 +348,52 @@ export function rollingMean(
   });
 }
 
+/**
+ * ADR-0081 D5 — how many days of each REAL source sit inside each trailing
+ * window. Pure. `sources` MUST be in ascending date order.
+ *
+ * The composition is carried rather than recomputed at render time because it
+ * is what makes a blended mean HONEST: a "7-day mean" over five sheet days and
+ * two entered days is a defensible number, but only if the reader is told that
+ * is what it is. A blended figure with no disclosure would be exactly the
+ * silent conflation Am.1 D10 refused.
+ */
+export function rollingComposition(
+  sources: readonly ThroughputSource[],
+  windowDays: number,
+): { entered: number; workbook: number }[] {
+  return sources.map((_, i) => {
+    const from = Math.max(0, i - windowDays + 1);
+    let entered = 0;
+    let workbook = 0;
+    for (let j = from; j <= i; j++) {
+      if (sources[j] === 'entered') entered += 1;
+      else if (sources[j] === 'workbook') workbook += 1;
+    }
+    return { entered, workbook };
+  });
+}
+
+/**
+ * ADR-0081 D5 — the disclosure that rides every blended mean.
+ *
+ * `"7-day mean — 5 sheet, 2 entered"`. Both halves are named only when both are
+ * present; a pure window says `"7-day mean — 7 entered"` rather than
+ * `"7 entered, 0 sheet"`, because a zero-count clause reads as a warning about
+ * something that did not happen. An empty window returns null — there is no
+ * mean to label.
+ */
+export function meanWindowLabel(
+  windowDays: number,
+  comp: { entered: number; workbook: number },
+): string | null {
+  const parts: string[] = [];
+  if (comp.workbook > 0) parts.push(`${comp.workbook} sheet`);
+  if (comp.entered > 0) parts.push(`${comp.entered} entered`);
+  if (parts.length === 0) return null;
+  return `${windowDays}-day mean — ${parts.join(', ')}`;
+}
+
 /** Every calendar day ISO from `startISO`..`endISO` inclusive, ascending. Pure. */
 export function enumerateDaysISO(startISO: string, endISO: string): string[] {
   const start = dayKeyUTCFromISO(startISO);
@@ -309,15 +414,41 @@ export function buildDailySeries(
   cutoverISO: string = TEREX_CAPTURE_CUTOVER_ISO,
 ): DailyThroughputPoint[] {
   const sources = days.map((d) =>
-    classifyDaySource(d.dateISO, d.unitsDay, d.derivedFloorUnits, cutoverISO),
+    classifyDaySource(
+      d.dateISO,
+      d.unitsDay,
+      d.derivedFloorUnits,
+      cutoverISO,
+      d.recordedIsWorkbook === true,
+    ),
   );
 
-  // The rolling means run over the ENTERED units and skip null days rather than
-  // counting them as zero (ADR-0077 D4 / ADR-0079 D3). A machine nobody recorded
-  // on Tuesday must not drag Tuesday's absence into Wednesday's average as a 0.
-  const units = days.map((d) => d.unitsDay);
+  // ── ADR-0081 D5 — the means run over the COMBINED REAL SERIES ─────────────
+  //
+  // This SUPERSEDES ADR-0079 Amendment 1 D10 ("means never blend across the
+  // era") for the entered/workbook pair, and it does so on Bill's directive:
+  // "ALL OF THAT DATA needs to be aggregated and displayed IN THIS PAGE."
+  //
+  // Am.1 was right to refuse blending, and its reason is worth restating
+  // because it is what makes this change safe rather than a reversal: the thing
+  // it refused to blend was the WHOLE FLOOR's output (1,000–1,250 units/day at
+  // Woodland) with ONE MACHINE's (a few hundred). Those measure different
+  // physical quantities, so an average across them describes nothing.
+  //
+  // The workbook figure is not that. It is the machine's own units against the
+  // machine's own hour-meter hours — the identical measurement JT now types
+  // into Vision, taken from the sheet Vision is replacing. Blending it with
+  // `entered` is blending like with like; refusing to would leave a 19-month
+  // history sitting next to a 7-day average that ignores it, which is precisely
+  // the blank-history complaint Am.1 itself was written to fix.
+  //
+  // `legacy_derived` is STILL never blended. `legacyMean7`/`legacyMean30` below
+  // are unchanged and remain a disjoint series over proxy-only days.
+  const units = days.map((d, i) => (isRealMachineSource(sources[i]!) ? d.unitsDay : null));
   const mean7 = rollingMean(units, 7);
   const mean30 = rollingMean(units, 30);
+  const comp7 = rollingComposition(sources, 7);
+  const comp30 = rollingComposition(sources, 30);
 
   // ADR-0079 Am.1 — the legacy means run over a DISJOINT set of days. `units`
   // above is entered-only and `legacyUnits` here is legacy-only, so no window
@@ -344,6 +475,12 @@ export function buildDailySeries(
     pocketcoilEstimate: d.pocketcoilEstimate,
     mean7: mean7[i] ?? null,
     mean30: mean30[i] ?? null,
+    // ADR-0081 D5 — the disclosure travels WITH the blended figure, so no
+    // render site can show the mean without being able to show what is in it.
+    mean7Composition: comp7[i] ?? { entered: 0, workbook: 0 },
+    mean30Composition: comp30[i] ?? { entered: 0, workbook: 0 },
+    mean7Label: meanWindowLabel(7, comp7[i] ?? { entered: 0, workbook: 0 }),
+    mean30Label: meanWindowLabel(30, comp30[i] ?? { entered: 0, workbook: 0 }),
     // Rendered ONLY on legacy days, so the dashed legacy line STOPS at the
     // boundary. The trailing window still contains legacy values for a few days
     // past the cutover, and plotting those over entered days would run a ~1,070
@@ -417,7 +554,7 @@ export async function computeEquipmentThroughput(
     // ADR-0079 D3 — the manager's entered days. Absent day ⇒ absent key, never a 0.
     machine
       ? enteredThroughputByDay(siteId, startKey, endKey, machine.id)
-      : Promise.resolve(new Map<string, { unitsProcessed: number; runHours: number }>()),
+      : Promise.resolve(new Map<string, RecordedDay>()),
   ]);
 
   // ADR-0079 D5 — the floor-wide total is still computed, and is NOT unitsDay.
@@ -446,6 +583,8 @@ export async function computeEquipmentThroughput(
       dateISO,
       unitsDay: e ? e.unitsProcessed : null,
       runHours: e ? e.runHours : null,
+      // ADR-0081 — provenance from the row itself, never re-inferred by date.
+      recordedIsWorkbook: e ? e.isWorkbook : false,
       derivedFloorUnits: derivedFloorByDay.has(dateISO) ? derivedFloorByDay.get(dateISO)! : null,
       hoursDown: downtimeByDay.has(dateISO) ? downtimeByDay.get(dateISO)! : null,
       pocketcoilEstimate: pocketByDay.has(dateISO) ? pocketByDay.get(dateISO)! : null,
@@ -509,7 +648,14 @@ export async function computeEquipmentThroughput(
       last30UnitsPerDay: last?.mean30 ?? null,
       totalDowntimeHours,
       totalCostCents,
-      recordedDays: dayInputs.filter((d) => d.unitsDay != null).length,
+      // ADR-0081 D5 — the combined REAL series. Every stat box on the page
+      // computes over `entered` + `workbook`, because both are this machine's
+      // own units against this machine's own hours.
+      recordedDays: daily.filter((d) => isRealMachineSource(d.source)).length,
+      enteredDays: daily.filter((d) => d.source === 'entered').length,
+      workbookDays: daily.filter((d) => d.source === 'workbook').length,
+      last7Label: last?.mean7Label ?? null,
+      last30Label: last?.mean30Label ?? null,
     },
   };
 }

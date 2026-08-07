@@ -3959,6 +3959,27 @@ model EquipmentDailyThroughput {
   voided_at DateTime?
   voided_by String?
 
+  /// ADR-0081 — WHERE this day came from. `'manager'` | `'workbook_import'`.
+  ///
+  /// The two are drawn differently on the page (solid vs striped) and are
+  /// adjudicated differently in the database: the import's `ON CONFLICT ... DO
+  /// UPDATE` carries `WHERE source = 'workbook_import'`, so a manager's row is
+  /// never overwritten by the sheet, while a manager entry overwrites an
+  /// imported one through the ordinary write path. That asymmetry IS Bill's
+  /// "starting today JT takes over".
+  ///
+  /// Constrained to the two spellings by a DB CHECK — a typo'd third value would
+  /// be silently unprotected by the JT-wins guard and silently undrawn by the UI.
+  source String @default("manager")
+
+  /// ADR-0081 — `doc_source_versions.id` for an imported row; NULL for a
+  /// manager's. Deliberately carries NO foreign key: `doc_source_versions`
+  /// cascade-deletes from `doc_sources`, so a real FK would make removing a
+  /// document either impossible or destructive to production throughput. A DB
+  /// CHECK pairs it with `source` so an imported row can never lose its
+  /// provenance and become invisible to version-scoped supersession.
+  import_version_id String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 

@@ -203,10 +203,9 @@ export const adminMessages = {
 
   // Equipment master (ADR-0063 — the admin surface C-27 was missing)
   equipment: {
-    pageTitle: 'Equipment master',
+    pageTitle: 'Terex & equipment assets',
     pageSubtitle:
-      'The asset registry the AP approver picks from when linking an invoice to equipment. Site-scoped; deactivate to remove from the picker.',
-    navLink: 'Equipment master',
+      'The Terex shear — the machine the equipment dashboard reports throughput for — plus the rest of the fleet the AP approver picks from when linking an invoice to equipment. Site-scoped; deactivate to remove from the picker.',
     terexImportNote:
       'Looking for the Terex downtime spreadsheet? That is a different table — use Terex history import.',
     terexImportLink: 'Terex history import',

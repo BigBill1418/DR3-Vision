@@ -3,6 +3,148 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-07 — nineteen months of the machine's own numbers, off Janette's sheet (ADR-0081)
+
+ADR-0079 Am.1 put the sheet era back on the Terex chart a few hours earlier — as the
+**floor's** number, hatched, because that was the only pre-cutover figure Vision held.
+It was never the only one that existed. Bill:
+
+> _"use the excel sheet to pull in the historical data - then STARTING TODAY you will
+> just take in the data that JT enters here but ALL OF THAT DATA needs to be
+> aggregated and displayed IN THIS PAGE."_
+
+Measured against the real R2 artifact — 490,670 bytes, sha256
+`36308cbc54e6…cc14fa6b`, byte-identical to the stored `content_sha256`, fetched from
+inside the cluster because the workstation has no R2 credentials:
+
+```
+sheets: 40 (2,080 rows)      allowlisted monthly tabs: 24 (Jan25 … Dec26)
+importable rows: 319          duplicate dates: 0
+date range: 2025-01-02 … 2026-07-24
+skipped: 16 — 4 out_of_scope_2024 · 12 not_a_monthly_tab (incl. all three decoys)
+```
+
+### The sheet fights back in five ways
+
+**There is no date column.** The day is a bare number in an *unlabeled* column A; the
+month and year live in the title row (`Terex Operating Data | July | 2026`). The date
+is composed from a **cell**, never a row ordinal — an ordinal survives every tab that
+starts on row 3 with day 1, then mis-dates everything after the first inserted line.
+
+**Three decoy tabs wear byte-identical canonical headers** — `Aug25(1)`, `Template`,
+`Template (2)`. `Aug25(1)` is a half-finished draft with real-looking operator notes,
+an instructional `Example` row, end-hour readings in the day-hours column, and a total
+of **3,683.95 hours in a month that has 744**. So tab selection is an explicit
+24-name **allowlist**, cross-checked against the month and year the tab's own title
+row claims — every pattern that admits the 24 real tabs also admits `Aug25(1)`, and
+all three decoys say `MONTH`/`YEAR` literally.
+
+Also: the 2024 tabs are four bespoke schemas (out of v1, named); units are three
+columns summed (`Pocket coil` + `Springs` + `Wood`); and row counts vary 36–102, so
+the data block is bounded by the day cells rather than by a count.
+
+### Two months refused to reconcile, and the defect was in the workbook
+
+R5 hard-stopped on `March25` and `Dec25`. Both are arithmetic errors in the source
+spreadsheet:
+
+```
+March25  units SUM(B3:B30)/SUM(C3:C30)  ← stops at row 30
+         hours SUM(G3:G33)               ← covers the whole block
+         omits row 31 (day 29, 131.75 coils) + row 33 (day 31, 157 coils)
+         published 1483 + 57 = 1540      extracted 1540 + 288.75 = 1828.75
+
+Dec25    units SUM(B3:B32)  hours SUM(G3:G32)  ← BOTH stop at row 32
+         omits row 33 (day 31) — 182 coils, 7.45 hours
+         1675 + 182 = 1857        67.99 + 7.45 = 75.44
+```
+
+Hours reconciling **to the cent** on `March25` while units were out by exactly 288.75
+is the tell. The fix: reconcile over the row range the workbook's **own SUM formula
+declares**, parsed from the formula text. That is the true like-for-like question —
+*did I read the same rows the same way Excel did?* — and it is strictly **stronger**
+than the whole-tab compare: a cell mis-read *inside* the range still fails, and the
+rows outside it are reported as a `coverageGap` finding rather than silently dropped.
+
+**Rejected:** widening the ±0.5% tolerance until both passed. It would have needed
+roughly **19%** — not a tolerance, a blindfold.
+
+Two more findings, both filed for Bill/Janette: exactly one fractional-unit cell
+exists workbook-wide (`March25` day 29 = **131.75** pocket coils against an INTEGER
+column — skipped, never coerced, because 132 invents a quarter of a mattress and 131
+discards one; that is why 319 rows and not 320), and `OVERVIEW2026` row 12 computes
+July's "High" units/hour with **`MINIFS`**. The OVERVIEW bug is why OVERVIEW-derived
+checks are advisory: a hard gate there would let the workbook's own bug block a
+correct import.
+
+### JT's entry is never overwritten — and the database is what says so
+
+The history lands in `equipment_daily_throughput` behind a new `source` column
+(`'manager' | 'workbook_import'`, DB-CHECKed), **not** a sibling table. A sibling
+table puts the imported day outside ADR-0079's partial unique index
+`(equipment_id, throughput_date) WHERE voided_at IS NULL`; both sources could then hold
+the same day, nothing in the DB would object, and "JT wins" would degrade from a
+constraint into a convention every read path has to remember — the identical failure
+shape ADR-0079 D2 rejected for `equipment_events`.
+
+```sql
+ON CONFLICT ("equipment_id","throughput_date") WHERE "voided_at" IS NULL
+DO UPDATE SET … WHERE "equipment_daily_throughput"."source" = 'workbook_import'
+```
+
+A read-then-write would be a **TOCTOU** — a manager saving that day between the SELECT
+and the UPDATE would have their entry silently replaced by the sheet. The asymmetry is
+the directive: the sheet cannot overwrite a manager, a manager overwrites the sheet.
+History is a floor to build on, not a ceiling.
+
+`import_version_id` carries **no** foreign key deliberately: `doc_source_versions`
+cascades from `doc_sources`, so RESTRICT makes doc removal impossible for unguessable
+reasons, CASCADE lets removing a document **delete production throughput**, and SET
+NULL strips provenance off rows still claiming `source='workbook_import'`. A DB CHECK
+pairs the two columns instead. Re-importing the same revision is a no-op; a newer
+revision deletes and reinserts the import's own rows in one transaction, manager rows
+untouched, never additive — a hard delete because an imported row is a *projection of
+a document revision*, not a person's claim, and the batch is audited so the
+supersession stays append-only. Actor is `system:workbook-import` with `created_by`
+NULL (ADR-0036/0077 discipline). `processed_units_daily` is never written — there is
+no code path, and a client-spy test proves it.
+
+### The means now blend — this supersedes ADR-0079 Am.1 D10
+
+**ADR-0081 supersedes Am.1's D10 era-purity rule ("means never blend across the era")
+for the entered/workbook pair.** Am.1 was **right** to refuse blending: what it
+refused to blend was the whole **floor's** output (1,000–1,250 units/day at Woodland)
+with one **machine's** (a few hundred) — different physical quantities, so an average
+across them describes nothing. The workbook figure is not that. It is the machine's
+own units against the machine's own hour-meter hours, the identical measurement JT now
+types into Vision, taken from the sheet Vision is replacing. **Like blends with like.**
+
+`legacy_derived` is **still never blended**; `legacyMean7`/`legacyMean30` are unchanged
+and remain a disjoint proxy-only series. Every blended mean carries its composition —
+`"7-day mean — 5 sheet, 2 entered"` — so a blended figure is never shown without saying
+what is in it. And units/run-hour is **real** on workbook days, because the sheet
+carries true hour-meter hours; legacy days still get no rate (Am.1 §5 stands).
+
+### The admin tile stops saying "Equipment" — without making a label lie
+
+Bill: _"this tile is only for terex data - and in the admin area the tile STILL say
+'Equipment' can you finally fix all of this please."_ Honoured, but `/admin/equipment`
+is a genuine cross-site asset master — `listEquipment()` queries the whole `equipment`
+table across **both** sites over all five categories (`vehicle forklift baler terex
+other`) and it is the AP approver's fleet picker. So the `/admin` hub tile and the list
+page title became **"Terex & equipment assets"** (leads with Terex, stays truthful
+about the rest); the `/dashboard/[site]/equipment` launcher tile — which *is*
+Terex-only — became simply **"Terex"**; the dead `equipment.navLink` key (zero
+consumers) was deleted rather than renamed. `siteMachineLabel()`'s `'Equipment'`
+fallback was **deliberately left alone**: it is site-derived, so a site with no Terex
+keeps the generic name honestly instead of advertising a machine it does not have, and
+it is load-bearing as a sentinel in three call sites. The dashboard page's description
+(_"Throughput is derived from the daily processed-units close"_) was **false** after
+ADR-0079 and is corrected.
+
+Migration `20260833_adr0081_throughput_source` is purely additive and idempotent
+(ADR-0035): two columns, two CHECKs, one partial index; every existing row becomes
+`'manager'`, which is what all of them are.
 ## 2026-08-07 — discovery was under-reporting, and nothing could say so (ADR-0080)
 
 `sharedWithMe` returned **one item on each of the 902 sweeps** since 2026-07-29.
