@@ -1,4 +1,4 @@
-// ADR-0078 — the manager's DAILY machine capture: units processed + run hours.
+// ADR-0079 — the manager's DAILY machine capture: units processed + run hours.
 //
 // ADR-0044 D2 derived the Terex's throughput from the daily processed-units close
 // (`stripped_program + stripped_non_program`) and reasoned that "throughput needs
@@ -21,7 +21,7 @@
 //
 // DAY DISCIPLINE (D4): today is the PACIFIC day, everywhere. Same-day entry and
 // edit are free and audited; a PRIOR day is REFUSED, not silently accepted — see
-// `DailyThroughputAmendmentRequiredError` and the ADR-0078 D4 note on why this
+// `DailyThroughputAmendmentRequiredError` and the ADR-0079 D4 note on why this
 // refuses rather than reusing the bonus amendment workflow.
 
 import { Prisma } from '@prisma/client';
@@ -73,11 +73,11 @@ export class NoMachineForSiteError extends Error {
 }
 
 /**
- * ADR-0078 D4 — a PRIOR-day change is refused, and says why.
+ * ADR-0079 D4 — a PRIOR-day change is refused, and says why.
  *
  * The handoff asked for prior-day edits to route through "the existing bonus
  * amendment workflow". They cannot, and the reason is structural rather than
- * cosmetic — see ADR-0078 D4 and OPEN-ITEMS F-2. The decisive one:
+ * cosmetic — see ADR-0079 D4 and OPEN-ITEMS F-2. The decisive one:
  * `resolveAmendmentApprover` sources the approver from `bonus_signature_chains`
  * and THROWS `AmendmentWorkflowForbiddenError` for any requester who is not a
  * bonus payroll signer. A Woodland equipment manager is not necessarily one, so
@@ -320,7 +320,7 @@ export async function upsertDailyThroughput(args: {
     where: { equipment_id: machine.id, throughput_date: day, voided_at: null },
   });
 
-  // ADR-0078 D4 — the prior-day refusal. Deliberately AFTER `existing` is loaded
+  // ADR-0079 D4 — the prior-day refusal. Deliberately AFTER `existing` is loaded
   // so the 409 can show the manager what is on record versus what they typed;
   // a refusal that cannot say what it is refusing to change is not actionable.
   if (day.getTime() < today.getTime()) {

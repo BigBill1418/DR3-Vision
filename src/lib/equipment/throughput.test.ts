@@ -1,4 +1,4 @@
-// ADR-0078 (supersedes ADR-0044 D2) — throughput provider tests.
+// ADR-0079 (supersedes ADR-0044 D2) — throughput provider tests.
 //
 // The pure math (run-hour from ENTERED hours, the retained legacy rate, rolling
 // windows over unrecorded days, monthly cost grouping, pocketcoil overlay shape)
@@ -36,7 +36,7 @@ const store = {
     hours_down: Prisma.Decimal | null;
     cost_cents: number | null;
   }[],
-  /** ADR-0078 — the manager's ENTERED days. Real `Prisma.Decimal` run hours. */
+  /** ADR-0079 — the manager's ENTERED days. Real `Prisma.Decimal` run hours. */
   entered: [] as {
     throughput_date: Date;
     units_processed: number;
@@ -112,7 +112,7 @@ function dec(n: number): Prisma.Decimal {
   return new Prisma.Decimal(n);
 }
 
-describe('unitsPerRunHour (ADR-0078 — REAL hours, not the 8h assumption)', () => {
+describe('unitsPerRunHour (ADR-0079 — REAL hours, not the 8h assumption)', () => {
   it('divides entered units by entered run hours', () => {
     // 160 units in 5 real hours → 32/hr. Under the superseded ADR-0044 formula
     // this same day produced NOTHING (no downtime recorded ⇒ null), which is why
@@ -142,7 +142,7 @@ describe('unitsPerRunHour (ADR-0078 — REAL hours, not the 8h assumption)', () 
   });
 });
 
-describe('legacyDerivedUnitsPerRunHour (ADR-0078 D5 — retained, not live)', () => {
+describe('legacyDerivedUnitsPerRunHour (ADR-0079 D5 — retained, not live)', () => {
   it('still computes the superseded ADR-0044 rate for a future cross-check', () => {
     expect(legacyDerivedUnitsPerRunHour(160, 4)).toBe(40); // 160 / (8 − 4)
     expect(ASSUMED_DAY_HOURS).toBe(8);
@@ -248,7 +248,7 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   });
 
   // ────────────────────────────────────────────────────────────────
-  // ADR-0078 D3 — the entered number IS the throughput.
+  // ADR-0079 D3 — the entered number IS the throughput.
   //
   // These use the real production magnitudes on purpose. Woodland's floor closed
   // 1,063 units on 2026-08-06 (769 program + 294 non-program) and the old code
@@ -256,7 +256,7 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   // of it, so if a test ever sees ~1,063 come out of `unitsDay`, the floor-wide
   // derivation has come back.
   // ────────────────────────────────────────────────────────────────
-  describe('entered replaces derived (ADR-0078 D3)', () => {
+  describe('entered replaces derived (ADR-0079 D3)', () => {
     it('reads the MANAGER-ENTERED units, not stripped_program + stripped_non_program', async () => {
       store.closes.push({
         production_date: new Date('2026-08-06T00:00:00Z'),
@@ -310,7 +310,7 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   });
 
   // ────────────────────────────────────────────────────────────────
-  // ADR-0078 D3 — a missing day is "not recorded". THE falsification.
+  // ADR-0079 D3 — a missing day is "not recorded". THE falsification.
   //
   // The two failure modes this replaces are both silent, and both would look
   // perfectly reasonable on the screen: render 0 (the machine looks broken) or
@@ -321,7 +321,7 @@ describe('computeEquipmentThroughput (aggregator)', () => {
   // so if the fallback ever returns, these assertions fail naming the real wrong
   // value — 1063 — rather than an `undefined` that proves nothing.
   // ────────────────────────────────────────────────────────────────
-  describe('a day with no entry is NOT RECORDED (ADR-0078 D3)', () => {
+  describe('a day with no entry is NOT RECORDED (ADR-0079 D3)', () => {
     it('is null — never 0, and never the derived floor number', async () => {
       // The floor closed on BOTH days; the manager only entered the 5th.
       store.closes.push(

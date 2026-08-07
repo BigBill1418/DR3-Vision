@@ -86,7 +86,7 @@ export function EquipmentClient({
           <CostPanel throughput={throughput} />
         </>
       )}
-      {/* ADR-0078 D6 — the daily capture rides the EXISTING `equipment_entry`
+      {/* ADR-0079 D6 — the daily capture rides the EXISTING `equipment_entry`
           surface rather than being born behind a new gate. ADR-0047's born-pilot
           rule protects an audience from output it has not seen before; this
           audience is the identical one already entering equipment events on this
@@ -108,7 +108,7 @@ export function EquipmentClient({
 // ── Summary tiles ────────────────────────────────────────────────────────
 function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   const s = throughput.summary;
-  // ADR-0078 D3 — "not recorded", never "0.0" and never the floor-wide derived
+  // ADR-0079 D3 — "not recorded", never "0.0" and never the floor-wide derived
   // total. These two tiles are means of the MANAGER-ENTERED machine numbers; a
   // window nobody entered has no throughput to report, and saying so plainly is
   // the point. Same discipline as the downtime tile below (ADR-0077 D4).
@@ -292,7 +292,7 @@ function Legend() {
       {chip('#d7ff4f', false, '7-day mean')}
       {chip('#ef4444', false, 'Downtime day')}
       {chip('#fbbf24', true, 'Pocket-coil estimate (own scale)')}
-      {/* ADR-0078 D3 — this used to read "units/run-hour uses an assumed 8h
+      {/* ADR-0079 D3 — this used to read "units/run-hour uses an assumed 8h
           working day". It no longer does: run hours are entered with the units,
           so the rate is measured rather than assumed. A gap in the bars is a day
           nobody recorded — not a zero. */}
@@ -332,7 +332,7 @@ function CostPanel({ throughput }: { throughput: EquipmentThroughput }) {
   );
 }
 
-// ── Daily throughput capture (ADR-0078) ────────────────────────────────────
+// ── Daily throughput capture (ADR-0079) ────────────────────────────────────
 //
 // The replacement for the sheet's Terex column: units processed + run hours,
 // entered by the manager, once a day. `onClick` only (hard rule #10).
@@ -377,7 +377,7 @@ function DailyThroughputEntry({
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string; today?: string };
-        // ADR-0078 D4 — a prior-day change is REFUSED, and the message says so
+        // ADR-0079 D4 — a prior-day change is REFUSED, and the message says so
         // honestly and names where to take it. It does not pretend to have
         // opened a request that does not exist, and it does not quietly accept
         // the edit. See OPEN-ITEMS F-2 for the generalization that would let
@@ -742,7 +742,7 @@ function buildCsv(daily: readonly DailyThroughputPoint[]): string {
     'mean_7d',
     'mean_30d',
     'pocketcoil_estimate',
-    // ADR-0078 D5 — the retained floor-wide total, named for what it actually is.
+    // ADR-0079 D5 — the retained floor-wide total, named for what it actually is.
     // It is EVERY machine and every hand-stripper that day, not this machine, and
     // the column name has to say so or the export re-tells the lie the tile used
     // to tell. Carried so a future reconciliation cross-check has its input.

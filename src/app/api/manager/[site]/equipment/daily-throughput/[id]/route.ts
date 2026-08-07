@@ -1,4 +1,4 @@
-// ADR-0078 D2 — soft-void a daily throughput entry.
+// ADR-0079 D2 — soft-void a daily throughput entry.
 //
 //   DELETE → SOFT-void (sets voided_at; NO hard delete — hard rule #6). The row is
 //            retained and excluded from every series and the tile; the void is

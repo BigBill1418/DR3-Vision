@@ -1,4 +1,4 @@
-// ADR-0078 — the manager's daily machine capture: validation, the Pacific-day
+// ADR-0079 — the manager's daily machine capture: validation, the Pacific-day
 // rule, the prior-day refusal, audit + actor discipline, and soft-void.
 //
 // Real `Prisma.Decimal` throughout — run hours are a Decimal(5,2) in the database
@@ -260,7 +260,7 @@ describe('assertDailyThroughputShape', () => {
   });
 });
 
-describe('upsertDailyThroughput — same-day entry (ADR-0078 D4)', () => {
+describe('upsertDailyThroughput — same-day entry (ADR-0079 D4)', () => {
   it('records today freely, stamping the REAL actor id and auditing the insert', async () => {
     const row = await upsertDailyThroughput({
       siteId: SITE,
@@ -351,7 +351,7 @@ describe('upsertDailyThroughput — same-day entry (ADR-0078 D4)', () => {
   });
 });
 
-describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0078 D4)', () => {
+describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => {
   it('refuses a past day with a 409 requires_amendment and writes NOTHING', async () => {
     const err = await upsertDailyThroughput({
       siteId: SITE,

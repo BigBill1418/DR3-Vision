@@ -1,4 +1,4 @@
-// ADR-0078 D2/D4 — the manager's DAILY machine capture API (list + upsert).
+// ADR-0079 D2/D4 — the manager's DAILY machine capture API (list + upsert).
 //
 // Manager-scoped to the caller's own site (`requireManagerForSite` — the same gate
 // the sibling equipment-event routes use); an operator gets 403. Site-scoped reads
@@ -6,7 +6,7 @@
 //
 //   GET  → the machine's recorded days, newest first
 //   POST → record or edit TODAY (Pacific). A prior day is REFUSED with
-//          409 `requires_amendment` (ADR-0078 D4), never silently accepted.
+//          409 `requires_amendment` (ADR-0079 D4), never silently accepted.
 //
 // There is no PATCH: the (equipment, day) partial unique makes a second same-day
 // POST an EDIT of the same row rather than a duplicate, so one verb covers both.
@@ -82,7 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     });
     return NextResponse.json({ row }, { status: 201 });
   } catch (e) {
-    // ADR-0078 D4 — the prior-day refusal carries CONTEXT (what is on record vs
+    // ADR-0079 D4 — the prior-day refusal carries CONTEXT (what is on record vs
     // what was typed), which the generic mapper would flatten to a bare
     // `{ error }`. Handled here so the UI can tell the manager what it is
     // refusing to change and where to take it.

@@ -1,4 +1,4 @@
-# ADR-0078 — Terex daily throughput is CAPTURED, not derived
+# ADR-0079 — Terex daily throughput is CAPTURED, not derived
 
 **Status:** Accepted, implemented (2026-08-07). Supersedes ADR-0044 D2.
 

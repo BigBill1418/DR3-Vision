@@ -3811,7 +3811,7 @@ model EquipmentEvent {
   @@map("equipment_events")
 }
 
-/// ADR-0078 D1 — the manager's DAILY Terex capture: units processed + run hours.
+/// ADR-0079 D1 — the manager's DAILY Terex capture: units processed + run hours.
 ///
 /// ADR-0044 D2 derived throughput as `stripped_program + stripped_non_program` and
 /// called it the Terex's. That number is the WHOLE FLOOR's output — it cannot tell
@@ -4562,7 +4562,7 @@ model Equipment {
 
   links ApEquipmentLink[]
 
-  /// ADR-0078 D1 — the manager's daily units+run-hours capture for this machine.
+  /// ADR-0079 D1 — the manager's daily units+run-hours capture for this machine.
   /// A proper relation (not a bare FK) because, like `links` above, both models
   /// live wholly inside this self-contained block.
   daily_throughput EquipmentDailyThroughput[]

@@ -16,12 +16,12 @@ window her cross-checks are possible.
 
 ---
 
-## 0.AH — 2026-08-07 Terex daily throughput (ADR-0078) — follow-up
+## 0.AI — 2026-08-07 Terex daily throughput (ADR-0079) — follow-up
 
 - **F-2 — the amendment workflow is bonus-specific and could not be reused; equipment
   prior-day edits are REFUSED until it is generalized.**
 
-  ADR-0078 D4 needed prior-day Terex corrections to route through "the existing
+  ADR-0079 D4 needed prior-day Terex corrections to route through "the existing
   bonus amendment workflow". They could not, and the blocker is structural rather
   than cosmetic. What was found:
   - **`resolveAmendmentApprover` (`src/lib/bonus/amendment-approvers.ts`) throws
@@ -80,8 +80,34 @@ window her cross-checks are possible.
   surface needs prior-day approval, so the generalization is driven by two real
   consumers rather than one plus a guess.
 
+- **F-4 — production carries a STALE `_prisma_migrations` row named
+  `20260830_adr0078_equipment_daily_throughput`. It is ADR-0079's work, not
+  ADR-0078's. Harmless; do not "fix" it by deleting the table.**
+
+  This ADR shipped as 0078 and was merged + deployed before a concurrency ruling
+  reassigned 0078 to the parallel iPad-reliability stream. The ADR, migration
+  directory and all ~30 in-source citations were renumbered to **0079** and the
+  migration directory re-prefixed to `20260831_` so it sorts after the
+  reliability stream's `20260830_`. Production had already applied the old name.
+
+  **The renamed migration therefore re-applies once as a clean no-op** — every
+  statement is `CREATE TABLE / CREATE INDEX ... IF NOT EXISTS`. Verified on an
+  ephemeral PG16 by reproducing prod's exact state (old name applied), renaming,
+  and re-running `prisma migrate deploy`: exit 0, table and all four indexes
+  intact, `migrate status` reports "Database schema is up to date!". Prod ends
+  with **two** applied rows for one table, which Prisma tolerates.
+
+  **Two warnings for anyone reading prod's migration ledger:**
+  1. The `20260830_adr0078_…_equipment_daily_throughput` row does **not** belong
+     to ADR-0078 (iPad reliability). The prefix collision is historical, not
+     semantic. The reliability stream's own
+     `20260830_adr0078_ipad_reliability_idempotency` is a different directory and
+     does not conflict.
+  2. Deleting the stale row is optional cosmetic tidying and is **not** required.
+     Deleting the _table_ would destroy manager-entered production data.
+
 - **F-3 — the derived floor number is retained but has no reconciliation rule.**
-  ADR-0078 D5 keeps `derivedFloorUnits` and `legacyDerivedUnitsPerRunHour`
+  ADR-0079 D5 keeps `derivedFloorUnits` and `legacyDerivedUnitsPerRunHour`
   computable so an entered-vs-derived cross-check is buildable (a manager entering
   40 units on a day the floor stripped 400 is either a light day or a typo).
   **Deliberately no rule in v1** — that is reconciliation-layer work and is blocked

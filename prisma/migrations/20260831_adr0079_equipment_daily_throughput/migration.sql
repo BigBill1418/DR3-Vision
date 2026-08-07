@@ -1,4 +1,4 @@
--- ADR-0078 D1/D2 — the manager's DAILY Terex capture: units processed + run hours.
+-- ADR-0079 D1/D2 — the manager's DAILY Terex capture: units processed + run hours.
 --
 -- ADR-0044 D2 declared "throughput needs NO new capture — it is DERIVED from the
 -- daily processed-units close" and computed the Terex's units/day as
@@ -9,7 +9,7 @@
 -- product replaces carried an authoritative, manager-entered Terex number every
 -- day, and Vision must carry it too.
 --
--- WHY A DEDICATED TABLE rather than a sixth `equipment_events` kind (ADR-0078 D2).
+-- WHY A DEDICATED TABLE rather than a sixth `equipment_events` kind (ADR-0079 D2).
 -- The alternative was considered first and rejected on three findings, each read
 -- out of the live code rather than assumed:
 --

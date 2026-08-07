@@ -134,7 +134,7 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {data.equipment ? (
             <>
-              {/* ADR-0078 D3 — these two used to be the WHOLE FLOOR's stripped
+              {/* ADR-0079 D3 — these two used to be the WHOLE FLOOR's stripped
                   total (1,000–1,250 units/day at Woodland) shown under one
                   machine's name. They now read the manager's entered daily
                   figures, and a window nobody entered says "not recorded" in a
