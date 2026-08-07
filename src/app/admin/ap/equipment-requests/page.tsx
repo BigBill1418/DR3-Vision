@@ -15,6 +15,7 @@ import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { checkEquipmentRequestAccess, siteScopeFor } from '@/lib/auth-helpers';
 import { listEquipmentRequests } from '@/lib/ap/equipment-requests';
+import { adminMessages as M } from '@/app/admin/messages';
 import { HOME_ROUTE } from '@/lib/routes';
 import { EquipmentRequestsClient } from './EquipmentRequestsClient';
 
@@ -56,7 +57,7 @@ export default async function ApEquipmentRequestsPage({
             href="/admin/equipment"
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
-            ← Equipment master
+            ← {M.equipment.pageTitle}
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Equipment requests</h1>
           <p className="max-w-3xl text-sm text-dr3-mist-dim">

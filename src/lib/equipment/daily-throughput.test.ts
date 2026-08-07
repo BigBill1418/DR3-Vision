@@ -562,13 +562,74 @@ describe('enteredThroughputByDay', () => {
       new Date(Date.UTC(2026, 7, 7)),
     );
 
-    expect(map.get('2026-08-05')).toEqual({ unitsProcessed: 190, runHours: 5 });
+    // ADR-0081 — provenance travels WITH the figure from the first read, so no
+    // downstream render site has to re-infer it (and re-infer it differently).
+    expect(map.get('2026-08-05')).toEqual({
+      unitsProcessed: 190,
+      runHours: 5,
+      isWorkbook: false,
+    });
     // A recorded ZERO is PRESENT with value 0…
-    expect(map.get('2026-08-06')).toEqual({ unitsProcessed: 0, runHours: 3 });
+    expect(map.get('2026-08-06')).toEqual({ unitsProcessed: 0, runHours: 3, isWorkbook: false });
     // …and an unrecorded day is ABSENT, which is a different fact entirely.
     expect(map.has('2026-08-04')).toBe(false);
     expect(map.has('2026-08-07')).toBe(false);
     expect(map.size).toBe(2);
+  });
+
+  it('ADR-0081 — reads a workbook row as workbook, and a manager row as manager', async () => {
+    store.rows.push(
+      {
+        id: 'imported',
+        site_id: SITE,
+        equipment_id: MACHINE.id,
+        throughput_date: new Date(Date.UTC(2026, 7, 5)),
+        units_processed: 146,
+        run_hours: new Prisma.Decimal('8.50'),
+        notes: null,
+        // The import names ITSELF — never a borrowed user id.
+        created_by: null,
+        actor_label: 'system:workbook-import',
+        source: 'workbook_import',
+        import_version_id: 'ver-eed9d4cb',
+        voided_at: null,
+        voided_by: null,
+        created_at: new Date(),
+      } as (typeof store.rows)[number],
+      {
+        id: 'typed',
+        site_id: SITE,
+        equipment_id: MACHINE.id,
+        throughput_date: new Date(Date.UTC(2026, 7, 6)),
+        units_processed: 412,
+        run_hours: new Prisma.Decimal('6.25'),
+        notes: null,
+        created_by: 'user-jt',
+        actor_label: null,
+        source: 'manager',
+        import_version_id: null,
+        voided_at: null,
+        voided_by: null,
+        created_at: new Date(),
+      } as (typeof store.rows)[number],
+    );
+
+    const map = await enteredThroughputByDay(
+      SITE,
+      new Date(Date.UTC(2026, 7, 4)),
+      new Date(Date.UTC(2026, 7, 7)),
+    );
+
+    expect(map.get('2026-08-05')).toEqual({
+      unitsProcessed: 146,
+      runHours: 8.5,
+      isWorkbook: true,
+    });
+    expect(map.get('2026-08-06')).toEqual({
+      unitsProcessed: 412,
+      runHours: 6.25,
+      isWorkbook: false,
+    });
   });
 
   it('is empty at a site with no registered machine', async () => {

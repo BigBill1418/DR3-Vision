@@ -219,8 +219,9 @@ const ACTIVE_TILES: readonly DashboardTile[] = [
   // launcher to the caller's own site.
   {
     key: 'equipment',
-    label: 'Equipment',
-    description: 'Terex throughput trend, downtime, and cost — derived from the daily close.',
+    label: 'Terex',
+    description:
+      "Terex throughput trend, downtime, and cost — from the machine's own daily figures and imported sheet history.",
     icon: 'Wrench',
     route: '/dashboard/[site]/equipment',
     status: 'active',

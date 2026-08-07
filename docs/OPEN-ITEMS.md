@@ -16,6 +16,102 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AK — 2026-08-07 TEREX workbook history import (ADR-0081) — residuals
+
+Everything in this section was measured against the real R2 artifact
+(`doc_sources 8a0246e7-dbb0-4de2-a90f-ddc5d4b2de4b`, version
+`eed9d4cb-03c1-47cf-8ea6-081995fac4c4`, 490,670 bytes, sha256
+`36308cbc54e6…cc14fa6b`, 40 sheets / 2,080 rows), not against a fixture.
+
+### Operator actions — three of these are fixes in Bill/Janette's spreadsheet
+
+Vision **reports** these; it does not repair them. Every one is a defect in the
+source workbook, and correcting it there is what makes the workbook's own
+published totals true again. None of them blocks the import — the rows are read
+correctly and the import ran green.
+
+- **O-15 — two monthly tabs total a SHORTER row range than their own data, so
+  the workbook's published totals under-report. Fix the SUM ranges in
+  `TEREX.xlsx`.**
+
+  | Tab       | Formula as written                                | Rows the block actually reaches | Omitted                                          |
+  | --------- | ------------------------------------------------- | ------------------------------- | ------------------------------------------------ |
+  | `March25` | units `SUM(B3:B30)` / `SUM(C3:C30)`; hours `SUM(G3:G33)` | through row 33                  | row 31 (day 29) **131.75 coils**; row 33 (day 31) **157 coils** |
+  | `Dec25`   | units `SUM(B3:B32)`; hours `SUM(G3:G32)`          | through row 33                  | row 33 (day 31) — **182 coils and 7.45 hours**   |
+
+  Arithmetic closes exactly, which is how we know the defect is the formula and
+  not the reading: `March25` publishes 1483 + 57 = **1540** and the extraction
+  reads 1540 + 131.75 + 157 = **1828.75**; `Dec25` publishes **1675** units /
+  **67.99** hours and the extraction reads 1675 + 182 = **1857** and
+  67.99 + 7.45 = **75.44**. On `March25` the hours formula covers the whole block
+  while the units formulas do not, which is exactly why hours reconciled to the
+  cent and units were out by 288.75.
+
+  **The fix is one cell each** — widen the units SUM on `March25` to reach row 33
+  and both SUMs on `Dec25` to reach row 33. Until then, anyone reading the
+  workbook's own monthly totals for March 2025 or December 2025 is reading a
+  figure short by 288.75 units, or by 182 units and 7.45 hours respectively.
+  Vision's imported history already carries the full, correct figures.
+
+- **O-16 — `March25` day 29 reads `131.75` pocket coils. A manager must enter
+  that day deliberately; the import will not guess it.**
+
+  The only fractional-unit cell in the whole workbook. `units_processed` is
+  `INTEGER NOT NULL`, so the row cannot be stored as written and **every way of
+  storing it anyway is a lie**: `132` invents a quarter of a mattress, `131`
+  discards one, and either puts a number nobody wrote into a table whose whole
+  premise is that the figures are the operator's own. The row is skipped,
+  counted, and named in the import report — which is why the import produced
+  **319** rows and not 320.
+
+  Two ways to close it, either is fine: correct the cell in `TEREX.xlsx` to a
+  whole number and re-import (the new revision supersedes cleanly, ADR-0081 R4),
+  or have a Woodland manager enter 2025-03-29 through the ordinary ADR-0079
+  entry path — a manager's row wins over the import by construction, so a later
+  re-import will leave it alone.
+
+- **O-17 — `OVERVIEW2026` row 12 computes July's "High" units/hour with
+  `MINIFS` where it means `MAXIFS`. A formula bug in the workbook.**
+
+  Cosmetic to Vision and consequential to anyone reading the OVERVIEW tab: the
+  cell labelled "High" reports the month's **lowest** qualifying rate. This is
+  the specific reason OVERVIEW-derived reconciliation checks are **advisory**
+  rather than hard gates (ADR-0081 R5) — making every published cell blocking
+  would let the workbook's own bug refuse a correct import. Fix the function
+  name in the sheet; no Vision change follows.
+
+### Proposed follow-up (recorded, NOT built in v1)
+
+- **C-50 — the four 2024 tabs are out of v1. They are four bespoke schemas, and
+  one extractor that "handles" all four is how a wrong number gets a confident
+  label.**
+
+  The imported history therefore starts **2025-01-02**. The four are excluded
+  *by name* rather than merely unmatched (`TABS_2024_OUT_OF_SCOPE`), so the
+  import report says "out of scope for v1 (four bespoke 2024 schemas)" for these
+  and "not a monthly operating tab" for `diesel` — a reader can tell somebody
+  looked. What each one actually is, measured:
+
+  | Tab      | Shape                                                                                     |
+  | -------- | ----------------------------------------------------------------------------------------- |
+  | `Sept24` | header on **row 1**: `Date \| Processed \| Received \| Hrs Used` — a real date column, and `Processed`/`Received` rather than the three commodity columns |
+  | `Oct24`  | doubled per-commodity layout with **three** separate `Hrs Used` columns                    |
+  | `Nov24`  | a distinct shape again — not characterised further in this pass                           |
+  | `Dec24`  | carries `Start Time` / `End Time` **clock times**, not hour-meter readings — so run hours would have to be derived from wall-clock, which is a different measurement from the machine's hour meter |
+
+  `Dec24` is the one that decides this is not a small job: every other tab in the
+  workbook reports hours the machine **ran**, and a clock-time span reports hours
+  a person was **there**. Importing them as the same quantity would put two
+  different measurements on one line with no way to tell them apart afterwards —
+  the exact defect class ADR-0079 D2 and ADR-0077 exist to prevent.
+
+  **Not urgent.** The 2025–2026 history is nineteen months deep and the gap is
+  visible rather than silent. Worth doing as its own pass, per-tab, each measured
+  against the real bytes — or worth declining outright if Bill decides four
+  months of 2024 at four schemas is not worth the surface area.
+
+---
+
 ## 0.AJ — 2026-08-07 iPad reliability (ADR-0078) — residuals
 
 ### Operator actions

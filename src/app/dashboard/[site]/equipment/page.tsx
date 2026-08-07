@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
-import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
+import { computeTerexLedger, siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { prisma } from '@/lib/prisma';
 import { EquipmentClient } from './EquipmentClient';
@@ -100,6 +100,25 @@ export default async function EquipmentPage({ params }: Props) {
         })
       : [];
 
+  // ADR-0081 — the machine metrics band. Bill: "populate this terex page with
+  // relevant data metrics for this equipment."
+  //
+  // REUSES `computeTerexLedger` rather than querying the three tables here. That
+  // module carries the guards the totals depend on — confirmed rows only, ONE
+  // absorbed revision only (the difference between $77,067.94 and $231,203.82),
+  // and the `isSiteTerexMachine` refusal of the four `terex`-CATEGORY shear
+  // machines — and those guards are pinned against exactly one implementation.
+  //
+  // Gated identically to `machines` above, and not by a second rule: the band
+  // renders the ledger surface's own numbers, so offering it wider than the
+  // ledger would ramp that surface past its ADR-0047 gate as a side effect.
+  // Site-scoped on `result.ctx.siteId` (hard rule #2) — the machine id comes from
+  // the site-scoped query above and the ledger re-checks the pairing itself.
+  const terexMachine = machines[0];
+  const ledger = terexMachine
+    ? await computeTerexLedger(result.ctx.siteId, terexMachine.id, { isAdmin })
+    : null;
+
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
       <div className="mx-auto max-w-5xl">
@@ -109,9 +128,15 @@ export default async function EquipmentPage({ params }: Props) {
         <h1 className="mt-2 text-3xl font-bold tracking-tight">
           {machineLabel} — {result.ctx.siteName}
         </h1>
+        {/* ADR-0081 — this sentence used to say throughput was "derived from the
+            daily processed-units close". ADR-0079 removed that derivation (the
+            close is the WHOLE FLOOR's output, not this machine's) and ADR-0081
+            added nineteen months of the machine's own sheet history beside the
+            entered days. Leaving the old copy would have described the one
+            behaviour the last two ADRs exist to remove. */}
         <p className="mt-1 text-sm opacity-70">
-          Throughput, downtime, and cost. Throughput is derived from the daily processed-units close
-          — the same number billing bills from; nothing is entered twice.
+          Throughput, downtime, and cost — this machine&rsquo;s own daily units and run hours, as
+          entered here and as imported from the Terex workbook.
         </p>
 
         <EquipmentClient
@@ -121,6 +146,7 @@ export default async function EquipmentPage({ params }: Props) {
           showEntry={showEntry}
           machines={machines.map((m) => ({ id: m.id, displayName: m.display_name }))}
           machineLabel={machineLabel}
+          ledger={ledger}
         />
       </div>
     </main>

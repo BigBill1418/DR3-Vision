@@ -63,9 +63,9 @@ const TILES = [
   },
   {
     href: '/admin/equipment',
-    label: 'Equipment master',
+    label: 'Terex & equipment assets',
     description:
-      'The asset registry the AP approver picks from (ADR-0063). Site-scoped; deactivate to remove from the picker.',
+      "The Terex shear's asset record, plus the rest of the fleet the AP approver tags invoices against (ADR-0063). Site-scoped; deactivate to remove from the picker.",
     testid: 'admin-tile-equipment',
   },
   {

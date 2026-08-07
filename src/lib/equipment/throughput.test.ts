@@ -758,3 +758,104 @@ describe('ADR-0079 Amendment 1 — cutover boundary', () => {
     expect(s[0]!.unitsPerRunHour).not.toBeCloseTo(1063 / ASSUMED_DAY_HOURS, 6);
   });
 });
+
+// ── ADR-0081 D5 — the combined real series ──────────────────────────────────
+describe('ADR-0081 — entered and workbook blend; legacy still never does', () => {
+  const workbookDay = (dateISO: string, units: number, hours: number): DayInput => ({
+    dateISO,
+    unitsDay: units,
+    runHours: hours,
+    recordedIsWorkbook: true,
+    derivedFloorUnits: null,
+    hoursDown: null,
+    pocketcoilEstimate: null,
+  });
+  const enteredDay = (dateISO: string, units: number, hours: number): DayInput => ({
+    dateISO,
+    unitsDay: units,
+    runHours: hours,
+    recordedIsWorkbook: false,
+    derivedFloorUnits: null,
+    hoursDown: null,
+    pocketcoilEstimate: null,
+  });
+
+  it('classifies a recorded row by its provenance, not by its date', () => {
+    // Both days are POST-cutover. Only the `recordedIsWorkbook` flag differs, so
+    // nothing here can be coming from an era rule.
+    const out = buildDailySeries([
+      workbookDay('2026-08-10', 146, 8.5),
+      enteredDay('2026-08-11', 412, 6.25),
+    ]);
+    expect(out.map((d) => d.source)).toEqual(['workbook', 'entered']);
+  });
+
+  it('display.combined-mean-correctness — the 7-day mean spans BOTH real sources', () => {
+    // 5 sheet days then 2 entered days — the mixed window from the spec.
+    const days: DayInput[] = [
+      workbookDay('2026-08-01', 150, 7),
+      workbookDay('2026-08-02', 160, 7),
+      workbookDay('2026-08-03', 140, 7),
+      workbookDay('2026-08-04', 170, 7),
+      workbookDay('2026-08-05', 130, 7),
+      enteredDay('2026-08-06', 200, 8),
+      enteredDay('2026-08-07', 220, 8),
+    ];
+    const out = buildDailySeries(days);
+    const last = out[out.length - 1]!;
+
+    // (150+160+140+170+130+200+220)/7 = 1170/7
+    expect(last.mean7).toBeCloseTo(1170 / 7, 6);
+    expect(last.mean7Composition).toEqual({ entered: 2, workbook: 5 });
+    // The disclosure that makes a blended figure honest.
+    expect(last.mean7Label).toBe('7-day mean — 5 sheet, 2 entered');
+  });
+
+  it('a pure window is labeled without a zero-count clause', () => {
+    const out = buildDailySeries([
+      enteredDay('2026-08-06', 200, 8),
+      enteredDay('2026-08-07', 220, 8),
+    ]);
+    expect(out[1]!.mean7Label).toBe('7-day mean — 2 entered');
+    const sheet = buildDailySeries([workbookDay('2026-08-06', 200, 8)]);
+    expect(sheet[0]!.mean7Label).toBe('7-day mean — 1 sheet');
+  });
+
+  it('units/run-hour is REAL on a workbook day — the sheet carries true hours', () => {
+    const out = buildDailySeries([workbookDay('2026-07-24', 146, 8)]);
+    // 146 / 8. Not the assumed-8h fabrication Am.1 §5 forbids for LEGACY days —
+    // this denominator is the machine's own hour-meter reading.
+    expect(out[0]!.unitsPerRunHour).toBeCloseTo(18.25, 6);
+  });
+
+  it('the LEGACY figure is still never blended into the real mean', () => {
+    // A window straddling legacy and workbook. The forbidden blend of the
+    // floor-wide 1063 with the machine's 146 is (1063+146)/2 = 604.5.
+    const days: DayInput[] = [
+      {
+        dateISO: '2026-08-05',
+        unitsDay: null,
+        runHours: null,
+        derivedFloorUnits: 1063,
+        hoursDown: null,
+        pocketcoilEstimate: null,
+      },
+      workbookDay('2026-08-06', 146, 8),
+    ];
+    const out = buildDailySeries(days);
+
+    expect(out[0]!.source).toBe('legacy_derived');
+    expect(out[1]!.source).toBe('workbook');
+    // The machine's mean sees only the machine's day.
+    expect(out[1]!.mean7).toBe(146);
+    for (const d of out) {
+      expect(d.mean7).not.toBeCloseTo(604.5, 3);
+      expect(d.mean30).not.toBeCloseTo(604.5, 3);
+    }
+    // And the legacy series stays disjoint, rendered only ON legacy days.
+    expect(out[0]!.legacyMean7).toBe(1063);
+    expect(out[1]!.legacyMean7).toBeNull();
+    // A legacy day contributes to NEITHER composition count.
+    expect(out[0]!.mean7Composition).toEqual({ entered: 0, workbook: 0 });
+  });
+});
