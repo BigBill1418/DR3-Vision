@@ -1,4 +1,4 @@
-// ADR-0078 (supersedes ADR-0044 D2) — the machine's throughput is CAPTURED.
+// ADR-0079 (supersedes ADR-0044 D2) — the machine's throughput is CAPTURED.
 //
 // ADR-0044 D2 derived throughput from `processed_units_daily` and reasoned that a
 // second entry path would recreate the two-artifact drift class. The reasoning was
@@ -9,7 +9,7 @@
 // scale: Woodland's derived "Terex" days run 1,000–1,250 units.
 //
 // units/day        = the MANAGER-ENTERED `units_processed` for the machine that
-//                    day (ADR-0078 D3). NULL on a day nobody entered — rendered
+//                    day (ADR-0079 D3). NULL on a day nobody entered — rendered
 //                    "not recorded", never 0 and never the floor-wide number.
 // units/run-hour   = units/day ÷ the ENTERED `run_hours`. Real hours, not the 8h
 //                    assumption — the primary reason to capture rather than derive.
@@ -19,7 +19,7 @@
 //                    downtime, and the trend view's "downtime" concept must match
 //                    the red bands D3 draws (kind=downtime).
 // derived floor    = RETAINED and still computed, as a LATENT cross-check only
-//                    (ADR-0078 D5). Never rendered as a competing throughput
+//                    (ADR-0079 D5). Never rendered as a competing throughput
 //                    number. A manager entering 40 units on a day the floor
 //                    stripped 400 is either a light Terex day or a data-entry
 //                    error, and telling those apart needs a RULE that does not
@@ -34,7 +34,7 @@ import { appTodayISO, dayISO, dayKeyUTCFromISO } from '@/lib/time';
 import { enteredThroughputByDay, resolveSiteThroughputMachine } from './daily-throughput';
 
 /**
- * LEGACY (ADR-0044 D2, superseded by ADR-0078 D3). A Terex working day was assumed
+ * LEGACY (ADR-0044 D2, superseded by ADR-0079 D3). A Terex working day was assumed
  * to be 8 productive hours because the real figure was not captured anywhere.
  *
  * It is no longer on the live path: `run_hours` is captured with the units, is
@@ -52,13 +52,13 @@ export interface DailyThroughputPoint {
   /**
    * The MACHINE's entered units for the day. `null` = NOT RECORDED — nobody wrote
    * a number down. It is never 0 (a recorded zero is a real 0) and never the
-   * floor-wide derived total (ADR-0078 D3).
+   * floor-wide derived total (ADR-0079 D3).
    */
   unitsDay: number | null;
   /** The ENTERED run hours; null when the day was not recorded. */
   runHours: number | null;
   /**
-   * ADR-0078 D5 — the retained floor-wide `stripped_program + stripped_non_program`.
+   * ADR-0079 D5 — the retained floor-wide `stripped_program + stripped_non_program`.
    * A LATENT cross-check for a future reconciliation rule. This is NOT the
    * machine's throughput and must never be rendered as though it were.
    */
@@ -96,7 +96,7 @@ export interface EquipmentThroughput {
   assumedDayHours: number;
   assumedDayHoursLabel: typeof ASSUMED_DAY_HOURS_LABEL;
   /**
-   * ADR-0078 D1 — the machine these numbers belong to, resolved from the equipment
+   * ADR-0079 D1 — the machine these numbers belong to, resolved from the equipment
    * registry (never hardcoded). `null` at a site with no such machine, which is
    * why every `unitsDay` there is honestly "not recorded" rather than the floor's
    * total relabelled.
@@ -124,7 +124,7 @@ export interface DayInput {
   unitsDay: number | null;
   /** ENTERED run hours; null = not recorded. */
   runHours: number | null;
-  /** ADR-0078 D5 — retained floor-wide total, a latent cross-check. Not throughput. */
+  /** ADR-0079 D5 — retained floor-wide total, a latent cross-check. Not throughput. */
   derivedFloorUnits: number | null;
   hoursDown: number | null;
   pocketcoilEstimate: number | null;
@@ -133,7 +133,7 @@ export interface DayInput {
 /**
  * units/run-hour for one day, from the ENTERED figures. Pure.
  *
- * ADR-0078 D3 — the denominator is now the hours the machine ACTUALLY RAN, not
+ * ADR-0079 D3 — the denominator is now the hours the machine ACTUALLY RAN, not
  * `assumed_day_hours − hours_down`. That old formula answered a question nobody
  * asked ("how many units per hour, if we pretend the day was 8 hours and subtract
  * the downtime somebody happened to log") and it only produced a number at all on
@@ -150,7 +150,7 @@ export function unitsPerRunHour(unitsDay: number | null, runHours: number | null
 }
 
 /**
- * ADR-0078 D5 — the SUPERSEDED ADR-0044 D2 rate, retained and exported so the
+ * ADR-0079 D5 — the SUPERSEDED ADR-0044 D2 rate, retained and exported so the
  * derived series stays fully computable for a future reconciliation cross-check.
  *
  * NOT on the live path and must not be rendered as throughput: its numerator is
@@ -210,7 +210,7 @@ export function enumerateDaysISO(startISO: string, endISO: string): string[] {
  */
 export function buildDailySeries(days: readonly DayInput[]): DailyThroughputPoint[] {
   // The rolling means run over the ENTERED units and skip null days rather than
-  // counting them as zero (ADR-0077 D4 / ADR-0078 D3). A machine nobody recorded
+  // counting them as zero (ADR-0077 D4 / ADR-0079 D3). A machine nobody recorded
   // on Tuesday must not drag Tuesday's absence into Wednesday's average as a 0.
   const units = days.map((d) => d.unitsDay);
   const mean7 = rollingMean(units, 7);
@@ -264,7 +264,7 @@ export async function computeEquipmentThroughput(
   const startKey = new Date(endKey.getTime() - (windowDays - 1) * 86_400_000);
   const startISO = dayISO(startKey);
 
-  // ADR-0078 D1 — resolve the machine from the registry FIRST; every entered read
+  // ADR-0079 D1 — resolve the machine from the registry FIRST; every entered read
   // is scoped to that row, never to a hardcoded id and never to a typed string.
   const machine = await resolveSiteThroughputMachine(siteId);
 
@@ -288,13 +288,13 @@ export async function computeEquipmentThroughput(
       },
       select: { event_date: true, kind: true, hours_down: true, cost_cents: true },
     }),
-    // ADR-0078 D3 — the manager's entered days. Absent day ⇒ absent key, never a 0.
+    // ADR-0079 D3 — the manager's entered days. Absent day ⇒ absent key, never a 0.
     machine
       ? enteredThroughputByDay(siteId, startKey, endKey, machine.id)
       : Promise.resolve(new Map<string, { unitsProcessed: number; runHours: number }>()),
   ]);
 
-  // ADR-0078 D5 — the floor-wide total is still computed, and is NOT unitsDay.
+  // ADR-0079 D5 — the floor-wide total is still computed, and is NOT unitsDay.
   const derivedFloorByDay = new Map<string, number>();
   const pocketByDay = new Map<string, number>();
   for (const c of closes) {

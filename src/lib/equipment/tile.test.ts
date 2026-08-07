@@ -1,4 +1,4 @@
-// ADR-0044 D3 / ADR-0078 D3 — equipment tile provider. Two numbers: last
+// ADR-0044 D3 / ADR-0079 D3 — equipment tile provider. Two numbers: last
 // (non-voided) event + the 7-day ENTERED units/day mean, site-scoped.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -23,7 +23,7 @@ const store = {
     cost_cents: number | null;
     notes: string | null;
   },
-  /** ADR-0078 — the manager's entered days. Real `Prisma.Decimal` run hours. */
+  /** ADR-0079 — the manager's entered days. Real `Prisma.Decimal` run hours. */
   entered: [] as { throughput_date: Date; units_processed: number; run_hours: Prisma.Decimal }[],
   machine: MACHINE as { id: string; display_name: string } | null,
 };
@@ -103,7 +103,7 @@ describe('computeEquipmentTile', () => {
     expect(tile.recordedDays).toBe(2);
   });
 
-  // ADR-0078 D3 — the tile is where Bill actually SEES this number, so the
+  // ADR-0079 D3 — the tile is where Bill actually SEES this number, so the
   // "not recorded ≠ zero" rule has to hold here, not just in the series.
   it('is null — NOT 0 — when the manager has entered nothing', async () => {
     store.lastEvent = {

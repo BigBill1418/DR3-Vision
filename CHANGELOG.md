@@ -3,7 +3,7 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
-## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0078)
+## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0079)
 
 The Terex's throughput has been the **whole floor's output wearing one machine's
 name**. ADR-0044 D2 computed it as `stripped_program + stripped_non_program` and
@@ -108,7 +108,7 @@ generalization proposed.
   already entering equipment events on that screen; a new gate would have hidden
   the sheet's replacement from the managers being asked to stop using the sheet.
 - Eugene is untouched: zero `equipment_events`, zero `processed_units_daily`.
-- Migration `20260830_adr0078_equipment_daily_throughput` is purely additive. **No
+- Migration `20260831_adr0079_equipment_daily_throughput` is purely additive. **No
   history was backfilled from the derived series** — every backfilled day would be
   a fabricated manager entry, indistinguishable from a real one, in the one table
   whose whole point is that the number is authoritative.

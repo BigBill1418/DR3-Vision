@@ -1,4 +1,4 @@
-// ADR-0044 D3 / ADR-0078 D3 — the small "equipment" tile for the site dashboard.
+// ADR-0044 D3 / ADR-0079 D3 — the small "equipment" tile for the site dashboard.
 //
 // Two numbers only: the LAST equipment event (so downtime/cost stops evaporating
 // into a side spreadsheet — it's visible the moment the office logs it) and the
@@ -6,14 +6,14 @@
 // Cheap by construction — one `findFirst` + one small `findMany` — because it
 // renders on the site dashboard for every manager on every load.
 //
-// ADR-0078 D3 — the 7-day mean now reads the MANAGER-ENTERED machine throughput,
+// ADR-0079 D3 — the 7-day mean now reads the MANAGER-ENTERED machine throughput,
 // not `stripped_program + stripped_non_program`. The old number was the whole
 // floor's output (1,000–1,250 units/day at Woodland) displayed as one machine's.
 // Days nobody entered are SKIPPED, not counted as zero, and a window with no
 // entries at all yields `null` — which the tile renders "not recorded", the same
 // discipline ADR-0077 D4 established for downtime.
 //
-// Keeping the daily capture in its OWN table (ADR-0078 D2) is what makes the
+// Keeping the daily capture in its OWN table (ADR-0079 D2) is what makes the
 // `lastEvent` query below still correct: a daily row written every working day
 // would otherwise have become "the LAST equipment event" forever and buried the
 // downtime this tile exists to surface.
