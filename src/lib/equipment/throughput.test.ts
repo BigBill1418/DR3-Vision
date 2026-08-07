@@ -99,6 +99,8 @@ vi.mock('@/lib/prisma', () => ({
 import {
   ASSUMED_DAY_HOURS,
   ASSUMED_DAY_HOURS_LABEL,
+  TEREX_CAPTURE_CUTOVER_ISO,
+  type DayInput,
   legacyDerivedUnitsPerRunHour,
   unitsPerRunHour,
   rollingMean,
@@ -519,5 +521,157 @@ describe('computeEquipmentThroughput (aggregator)', () => {
       // The chart bands still drop it — a zero-height band is not a band.
       expect(t.downtimeBands).toEqual([]);
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0079 Amendment 1 — the cutover boundary.
+//
+// The original cutover applied "entered replaces derived" to ALL of history, so
+// on the day it shipped the chart went blank: 989 close-days at Woodland, 67 of
+// them inside the default 90-day window carrying real figures (415..1249), all
+// rendered "not recorded". Bill's instruction was that the sheet-era history
+// "should have all stayed and just been added to".
+//
+// Amendment 1 restores it WITHOUT letting the floor's number pass as the
+// machine's. Cutover is 2026-08-07, so July days below are legacy by construction.
+// ────────────────────────────────────────────────────────────────────────
+describe('ADR-0079 Amendment 1 — cutover boundary', () => {
+  const legacyDay = (dateISO: string, floor: number): DayInput => ({
+    dateISO,
+    unitsDay: null,
+    runHours: null,
+    derivedFloorUnits: floor,
+    hoursDown: null,
+    pocketcoilEstimate: null,
+  });
+  const enteredDay = (
+    dateISO: string,
+    units: number,
+    hours: number,
+    floor: number | null = null,
+  ): DayInput => ({
+    dateISO,
+    unitsDay: units,
+    runHours: hours,
+    derivedFloorUnits: floor,
+    hoursDown: null,
+    pocketcoilEstimate: null,
+  });
+
+  it('cutover.legacy-day-renders-derived', () => {
+    // 31 July days, every one pre-cutover, every one with a real floor close.
+    const days = Array.from({ length: 31 }, (_, i) =>
+      legacyDay(`2026-07-${String(i + 1).padStart(2, '0')}`, 1000 + i),
+    );
+    const s = buildDailySeries(days);
+
+    expect(s).toHaveLength(31);
+    expect(s.every((d) => d.source === 'legacy_derived')).toBe(true);
+    // The figure is CARRIED, so the chart has something to draw…
+    expect(s[0]!.derivedFloorUnits).toBe(1000);
+    expect(s[30]!.derivedFloorUnits).toBe(1030);
+    // …and it is NOT laundered into unitsDay, which stays the machine's field.
+    expect(s.every((d) => d.unitsDay === null)).toBe(true);
+    expect(TEREX_CAPTURE_CUTOVER_ISO).toBe('2026-08-07');
+  });
+
+  it('cutover.post-cutover-gap-stays-loud', () => {
+    // The floor closed on both days. One is before the cutover, one after.
+    const s = buildDailySeries([
+      legacyDay('2026-08-06', 1063),
+      legacyDay('2026-08-08', 1100), // post-cutover, unentered
+    ]);
+
+    expect(s[0]!.source).toBe('legacy_derived');
+    // The post-cutover day has a derived figure available and REFUSES it.
+    expect(s[1]!.source).toBe('not_recorded');
+    expect(s[1]!.derivedFloorUnits).toBe(1100);
+    expect(s[1]!.unitsDay).toBeNull();
+  });
+
+  it('cutover.entered-wins-pre-cutover', () => {
+    // A manager backfills a July day. Bill's "just be added to": the addition
+    // must BEAT the legacy figure it supersedes, not be ignored for being early.
+    const s = buildDailySeries([enteredDay('2026-07-15', 208, 6.5, 1120)]);
+    expect(s[0]!.source).toBe('entered');
+    expect(s[0]!.unitsDay).toBe(208);
+    expect(s[0]!.unitsPerRunHour).toBeCloseTo(208 / 6.5, 10);
+    // The floor figure is retained but is no longer what this day shows.
+    expect(s[0]!.derivedFloorUnits).toBe(1120);
+  });
+
+  it('cutover.boundary-is-constant-not-data', () => {
+    // THE regression this constant exists to prevent: a first-entered-day
+    // boundary would move when someone backfills, silently re-labelling history.
+    const base: DayInput[] = [
+      legacyDay('2026-07-01', 1001),
+      legacyDay('2026-07-02', 1002),
+      legacyDay('2026-07-03', 1003),
+      legacyDay('2026-08-08', 1100),
+    ];
+    const before = buildDailySeries(base).map((d) => d.source);
+
+    // Now insert an EARLIER entered row — the exact backfill that would move a
+    // data-derived boundary.
+    const withBackfill = [...base];
+    withBackfill[1] = enteredDay('2026-07-02', 190, 5, 1002);
+    const after = buildDailySeries(withBackfill).map((d) => d.source);
+
+    // Only the backfilled day changes. Every OTHER day is byte-identical.
+    expect(after[1]).toBe('entered');
+    expect(before[1]).toBe('legacy_derived');
+    expect([after[0], after[2], after[3]]).toEqual([before[0], before[2], before[3]]);
+    expect([after[0], after[2], after[3]]).toEqual([
+      'legacy_derived',
+      'legacy_derived',
+      'not_recorded',
+    ]);
+  });
+
+  it('means.no-blending-across-era', () => {
+    // One 7-day window straddling the boundary: 4 legacy days then 3 entered.
+    const days: DayInput[] = [
+      legacyDay('2026-08-03', 1108),
+      legacyDay('2026-08-04', 1063),
+      legacyDay('2026-08-05', 1045),
+      legacyDay('2026-08-06', 1063),
+      enteredDay('2026-08-07', 200, 5),
+      enteredDay('2026-08-08', 210, 5),
+      enteredDay('2026-08-09', 220, 5),
+    ];
+    const s = buildDailySeries(days);
+    const last = s[6]!;
+
+    const enteredMean = (200 + 210 + 220) / 3; // 210
+    const legacyMean = (1108 + 1063 + 1045 + 1063) / 4; // 1069.75
+    const blended = (1108 + 1063 + 1045 + 1063 + 200 + 210 + 220) / 7; // 701.28…
+
+    // The machine mean averages ONLY the 3 entered days.
+    expect(last.mean7).toBeCloseTo(enteredMean, 10);
+    // The legacy mean averages ONLY the 4 legacy days.
+    expect(s[3]!.legacyMean7).toBeCloseTo(legacyMean, 10);
+    // The blend appears NOWHERE. Named explicitly so a red says "701.28".
+    for (const d of s) {
+      expect(d.mean7).not.toBeCloseTo(blended, 6);
+      expect(d.mean30).not.toBeCloseTo(blended, 6);
+      expect(d.legacyMean7).not.toBeCloseTo(blended, 6);
+      expect(d.legacyMean30).not.toBeCloseTo(blended, 6);
+    }
+    // Legacy days carry no machine mean, and entered days carry no legacy mean
+    // beyond the trailing window — the two series never occupy the same day/field.
+    expect(s[0]!.mean7).toBeNull();
+    expect(last.legacyMean7).toBeNull();
+  });
+
+  it('rate.legacy-has-no-rate', () => {
+    // A legacy day has a units figure and NO run hours. Reviving the assumed-8h
+    // rate here — even labeled — would publish a fabricated denominator.
+    const s = buildDailySeries([legacyDay('2026-07-20', 1063)]);
+    expect(s[0]!.source).toBe('legacy_derived');
+    expect(s[0]!.unitsPerRunHour).toBeNull();
+    expect(s[0]!.runHours).toBeNull();
+    // 1063/8 = 132.875 — the number that must never appear.
+    expect(s[0]!.unitsPerRunHour).not.toBeCloseTo(1063 / ASSUMED_DAY_HOURS, 6);
   });
 });

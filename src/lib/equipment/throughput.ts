@@ -47,8 +47,49 @@ import { enteredThroughputByDay, resolveSiteThroughputMachine } from './daily-th
 export const ASSUMED_DAY_HOURS = 8;
 export const ASSUMED_DAY_HOURS_LABEL = 'assumed_day_hours' as const;
 
+/**
+ * ADR-0079 Amendment 1 — the day daily capture began. The ERA BOUNDARY.
+ *
+ * Days BEFORE this are the sheet era: no manager entry exists or ever will, and
+ * the honest thing to show is the floor-derived figure, LABELED as floor-wide.
+ * Days FROM this date on are the capture era, where an absent entry is a real
+ * gap and must stay loudly "not recorded".
+ *
+ * A STORED CONSTANT, deliberately never derived from the data. Deriving the
+ * boundary from "the first entered day" would silently RE-LABEL history the
+ * moment anyone backfills an older day: one manager entering 2026-07-15 would
+ * flip every day from mid-July onward out of the legacy era and into "not
+ * recorded", blanking a month of the chart as a side effect of a single entry.
+ * The boundary is a fact about when the process changed, not a fact about the
+ * contents of the table. `cutover.boundary-is-constant-not-data` pins this.
+ */
+export const TEREX_CAPTURE_CUTOVER_ISO = '2026-08-07';
+
+/**
+ * ADR-0079 Amendment 1 — where a day's displayed number CAME FROM.
+ *
+ * The whole point of Amendment 1 is that history stayed visible without the
+ * floor's number ever passing itself off as the machine's. Every consumer must
+ * be able to tell the two apart, so provenance travels WITH the number rather
+ * than being re-inferred (and re-inferred differently) at each render site.
+ *
+ * - `entered`        — a manager's own figure for the machine. The truth.
+ * - `legacy_derived` — a pre-cutover day showing `derivedFloorUnits`: the whole
+ *                      floor's output, NOT machine-specific. MUST be rendered
+ *                      with a structural legacy treatment and never as entered.
+ * - `not_recorded`   — nothing to show. Post-cutover gaps land here and stay
+ *                      loud; `derivedFloorUnits` is NOT substituted for them.
+ */
+export type ThroughputSource = 'entered' | 'legacy_derived' | 'not_recorded';
+
 export interface DailyThroughputPoint {
   dateISO: string;
+  /**
+   * ADR-0079 Am.1 — provenance of this day's displayed figure. Read this BEFORE
+   * deciding how to draw the day; `unitsDay` alone cannot distinguish a machine
+   * number from a floor number.
+   */
+  source: ThroughputSource;
   /**
    * The MACHINE's entered units for the day. `null` = NOT RECORDED — nobody wrote
    * a number down. It is never 0 (a recorded zero is a real 0) and never the
@@ -68,10 +109,24 @@ export interface DailyThroughputPoint {
   /** units/day ÷ entered run_hours; null unless the day was recorded. */
   unitsPerRunHour: number | null;
   pocketcoilEstimate: number | null;
-  /** 7-day trailing mean of unitsDay (recorded days only); null when none. */
+  /** 7-day trailing mean of unitsDay (ENTERED days only); null when none. */
   mean7: number | null;
-  /** 30-day trailing mean of unitsDay (recorded days only); null when none. */
+  /** 30-day trailing mean of unitsDay (ENTERED days only); null when none. */
   mean30: number | null;
+  /**
+   * ADR-0079 Am.1 — 7-day trailing mean over LEGACY days only.
+   *
+   * A SEPARATE field rather than a widened `mean7`, because the two eras measure
+   * different things: legacy days are the whole floor (1,000–1,250 units at
+   * Woodland) and entered days are one machine (a few hundred). A window
+   * straddling the boundary would average those into a figure that describes
+   * nothing and — being plotted on the machine's line — would read as the
+   * machine's. No field in this type ever carries a blended number.
+   * `means.no-blending-across-era` pins this.
+   */
+  legacyMean7: number | null;
+  /** 30-day trailing mean over LEGACY days only. Never blended with `mean30`. */
+  legacyMean30: number | null;
 }
 
 export interface DowntimeBand {
@@ -102,6 +157,11 @@ export interface EquipmentThroughput {
    * total relabelled.
    */
   machine: { id: string; displayName: string } | null;
+  /**
+   * ADR-0079 Am.1 — the era boundary, passed to the UI so the legacy legend names
+   * the real date instead of hardcoding one that could drift from the constant.
+   */
+  captureCutoverISO: string;
   daily: DailyThroughputPoint[];
   downtimeBands: DowntimeBand[];
   monthlyCost: MonthlyCostPoint[];
@@ -128,6 +188,31 @@ export interface DayInput {
   derivedFloorUnits: number | null;
   hoursDown: number | null;
   pocketcoilEstimate: number | null;
+}
+
+/**
+ * ADR-0079 Am.1 — classify one day into its era. Pure; the single place the
+ * boundary rule lives, so no render site can invent its own.
+ *
+ * ENTERED ALWAYS WINS, on either side of the boundary. A manager who fills in an
+ * old day has replaced the floor's guess with the machine's real number, and
+ * Bill's instruction was that history "should have all stayed and just been added
+ * to" — so an addition must beat the legacy figure it supersedes, not be ignored
+ * for being early.
+ *
+ * A pre-cutover day with NO entry and NO close has nothing to show and is
+ * `not_recorded`: `legacy_derived` is a promise that there IS a derived figure to
+ * render, and a source that lies about having a number is worse than none.
+ */
+export function classifyDaySource(
+  dateISO: string,
+  enteredUnits: number | null,
+  derivedFloorUnits: number | null,
+  cutoverISO: string = TEREX_CAPTURE_CUTOVER_ISO,
+): ThroughputSource {
+  if (enteredUnits != null) return 'entered';
+  if (dateISO < cutoverISO && derivedFloorUnits != null) return 'legacy_derived';
+  return 'not_recorded';
 }
 
 /**
@@ -208,23 +293,53 @@ export function enumerateDaysISO(startISO: string, endISO: string): string[] {
  * Layer rolling means + run-hour onto a day-ordered input series. Pure.
  * `days` MUST be ascending by date.
  */
-export function buildDailySeries(days: readonly DayInput[]): DailyThroughputPoint[] {
+export function buildDailySeries(
+  days: readonly DayInput[],
+  cutoverISO: string = TEREX_CAPTURE_CUTOVER_ISO,
+): DailyThroughputPoint[] {
+  const sources = days.map((d) =>
+    classifyDaySource(d.dateISO, d.unitsDay, d.derivedFloorUnits, cutoverISO),
+  );
+
   // The rolling means run over the ENTERED units and skip null days rather than
   // counting them as zero (ADR-0077 D4 / ADR-0079 D3). A machine nobody recorded
   // on Tuesday must not drag Tuesday's absence into Wednesday's average as a 0.
   const units = days.map((d) => d.unitsDay);
   const mean7 = rollingMean(units, 7);
   const mean30 = rollingMean(units, 30);
+
+  // ADR-0079 Am.1 — the legacy means run over a DISJOINT set of days. `units`
+  // above is entered-only and `legacyUnits` here is legacy-only, so no window
+  // can mix a floor-wide figure into a machine average no matter where the
+  // boundary falls inside it. The separation is structural, not a guard.
+  const legacyUnits = days.map((d, i) =>
+    sources[i] === 'legacy_derived' ? d.derivedFloorUnits : null,
+  );
+  const legacyMean7 = rollingMean(legacyUnits, 7);
+  const legacyMean30 = rollingMean(legacyUnits, 30);
+
   return days.map((d, i) => ({
     dateISO: d.dateISO,
+    source: sources[i]!,
     unitsDay: d.unitsDay,
     runHours: d.runHours,
     derivedFloorUnits: d.derivedFloorUnits,
     hoursDown: d.hoursDown,
+    // ADR-0079 Am.1 §5 — a legacy day gets NO rate. Reviving the assumed-8h
+    // figure, even labeled, would publish a number whose denominator was
+    // fabricated. `unitsPerRunHour` is entered-only and already returns null
+    // here; that is the correct answer, not an omission to be fixed.
     unitsPerRunHour: unitsPerRunHour(d.unitsDay, d.runHours),
     pocketcoilEstimate: d.pocketcoilEstimate,
     mean7: mean7[i] ?? null,
     mean30: mean30[i] ?? null,
+    // Rendered ONLY on legacy days, so the dashed legacy line STOPS at the
+    // boundary. The trailing window still contains legacy values for a few days
+    // past the cutover, and plotting those over entered days would run a ~1,070
+    // line across the machine's era — a floor figure sitting on machine days,
+    // which is precisely what this amendment exists to prevent.
+    legacyMean7: sources[i] === 'legacy_derived' ? (legacyMean7[i] ?? null) : null,
+    legacyMean30: sources[i] === 'legacy_derived' ? (legacyMean30[i] ?? null) : null,
   }));
 }
 
@@ -364,6 +479,7 @@ export async function computeEquipmentThroughput(
     assumedDayHours: ASSUMED_DAY_HOURS,
     assumedDayHoursLabel: ASSUMED_DAY_HOURS_LABEL,
     machine,
+    captureCutoverISO: TEREX_CAPTURE_CUTOVER_ISO,
     daily,
     downtimeBands,
     monthlyCost,

@@ -113,10 +113,23 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   // window nobody entered has no throughput to report, and saying so plainly is
   // the point. Same discipline as the downtime tile below (ADR-0077 D4).
   const fmt = (n: number | null) => (n == null ? 'not recorded' : n.toFixed(1));
+  // ADR-0079 Am.1 §4 — disclose how much of the window is actually behind the
+  // mean. "231.4 units/day" over one recorded day out of seven is not a weekly
+  // pace, and the tile should not let it look like one.
+  const recorded = s.recordedDays;
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-      <Tile label="7-day units/day" value={fmt(s.last7UnitsPerDay)} accent />
-      <Tile label="30-day units/day" value={fmt(s.last30UnitsPerDay)} />
+      <Tile
+        label="7-day units/day"
+        value={fmt(s.last7UnitsPerDay)}
+        sub={`${Math.min(recorded, 7)} of 7 days recorded`}
+        accent
+      />
+      <Tile
+        label="30-day units/day"
+        value={fmt(s.last30UnitsPerDay)}
+        sub={`${Math.min(recorded, 30)} of 30 days recorded`}
+      />
       {/* ADR-0077 D4 — "not recorded", never "0.0". `hours_down` has never been
           written on any Terex event, and a machine nobody measured is not a
           machine that never stopped. */}
@@ -129,13 +142,24 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
   );
 }
 
-function Tile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Tile({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: boolean;
+}) {
   return (
     <div
       className={`rounded-lg border p-4 ${accent ? 'border-dr3-cyan/50 bg-black/20' : 'border-white/15 bg-black/10'}`}
     >
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
+      {sub && <div className="mt-1 text-xs opacity-60">{sub}</div>}
     </div>
   );
 }
@@ -149,8 +173,25 @@ function TrendPanel({
   siteCode: string;
 }) {
   const daily = throughput.daily;
-  const maxUnits = Math.max(1, ...daily.map((d) => d.unitsDay ?? 0));
+  const machineName = throughput.machine?.displayName ?? 'this machine';
+
+  // ADR-0079 Am.1 — the value this day actually DRAWS, chosen off `source` and
+  // nothing else. A post-cutover gap draws nothing even though `derivedFloorUnits`
+  // may well exist for it; substituting that would be the very fallback the
+  // original cutover refused.
+  const displayUnits = (d: DailyThroughputPoint): number | null =>
+    d.source === 'entered'
+      ? d.unitsDay
+      : d.source === 'legacy_derived'
+        ? d.derivedFloorUnits
+        : null;
+
+  // The reported bug, literally: the axis was scaled off `unitsDay` alone, so with
+  // zero entered days `maxUnits` collapsed to 1 and every legacy bar would have
+  // been drawn off the top of the chart. It scales to what is DRAWN.
+  const maxUnits = Math.max(1, ...daily.map((d) => displayUnits(d) ?? 0));
   const maxPocket = Math.max(1, ...daily.map((d) => d.pocketcoilEstimate ?? 0));
+  const hasLegacy = daily.some((d) => d.source === 'legacy_derived');
 
   const W = Math.max(640, daily.length * 9);
   const H = 200;
@@ -207,6 +248,20 @@ function TrendPanel({
           role="img"
           aria-label="Daily units per day with rolling mean and downtime overlay"
         >
+          {/* ADR-0079 Am.1 — the legacy hatch. Defined once; a legacy bar fills
+              with this instead of solid colour, so "hollow and striped" is the
+              shape of a floor-wide figure everywhere it appears. */}
+          <defs>
+            <pattern
+              id="legacyHatch"
+              patternUnits="userSpaceOnUse"
+              width={4}
+              height={4}
+              patternTransform="rotate(45)"
+            >
+              <line x1={0} y1={0} x2={0} y2={4} stroke="#8fbf3f" strokeWidth={1.2} opacity={0.7} />
+            </pattern>
+          </defs>
           {/* downtime red bands (kind=downtime days) */}
           {daily.map((d, i) =>
             d.hoursDown != null && d.hoursDown > 0 ? (
@@ -221,29 +276,63 @@ function TrendPanel({
               />
             ) : null,
           )}
-          {/* units/day bars */}
-          {daily.map((d, i) =>
-            d.unitsDay != null ? (
+          {/* ADR-0079 Am.1 — units/day bars, drawn STRUCTURALLY by source.
+              An `entered` bar is SOLID. A `legacy_derived` bar is hollow: no
+              fill, a dashed outline over a hatch. The distinction is deliberately
+              structural rather than tonal (a lighter green, a lower opacity),
+              because tone does not survive a projector, a screenshot, a
+              colour-blind reader, or a print-out — and the one thing this must
+              never do is let the floor's number pass as the machine's.
+              Solid ALWAYS means entered. `render.legacy-can-never-appear-as-entered`
+              deletes this branch and proves the red. */}
+          {daily.map((d, i) => {
+            const v = displayUnits(d);
+            if (v == null) return null;
+            const isLegacy = d.source === 'legacy_derived';
+            return (
               <rect
                 key={`u${i}`}
+                data-testid={`bar-${d.dateISO}`}
+                data-source={d.source}
                 x={i * colW + (colW - barW) / 2}
-                y={yUnits(d.unitsDay)}
+                y={yUnits(v)}
                 width={barW}
-                height={PAD_T + plotH - yUnits(d.unitsDay)}
-                fill="#8fbf3f"
-                opacity={0.85}
+                height={PAD_T + plotH - yUnits(v)}
+                fill={isLegacy ? 'url(#legacyHatch)' : '#8fbf3f'}
+                stroke={isLegacy ? '#8fbf3f' : 'none'}
+                strokeWidth={isLegacy ? 1 : 0}
+                strokeDasharray={isLegacy ? '2 1.5' : undefined}
+                opacity={isLegacy ? 0.75 : 0.85}
               >
-                <title>{`${d.dateISO}: ${d.unitsDay} units${d.hoursDown ? ` · ${d.hoursDown}h down` : ''}`}</title>
+                <title>
+                  {isLegacy
+                    ? `${d.dateISO}: ${v} units — floor-wide total, not ${machineName}-specific (legacy)`
+                    : `${d.dateISO}: ${v} units${d.hoursDown ? ` · ${d.hoursDown}h down` : ''}`}
+                </title>
               </rect>
-            ) : null,
-          )}
-          {/* 7-day rolling mean */}
+            );
+          })}
+          {/* 7-day rolling mean — ENTERED days only, never blended (Am.1 §4) */}
           {meanPts((d) => d.mean7) && (
             <polyline
               points={meanPts((d) => d.mean7)}
               fill="none"
               stroke="#d7ff4f"
               strokeWidth={1.75}
+            />
+          )}
+          {/* ADR-0079 Am.1 — the LEGACY 7-day mean, over legacy days only. A
+              separate dashed line so the eye never reads one continuous average
+              spanning two eras that measure different things. */}
+          {meanPts((d) => d.legacyMean7) && (
+            <polyline
+              data-testid="legacy-mean7"
+              points={meanPts((d) => d.legacyMean7)}
+              fill="none"
+              stroke="#d7ff4f"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+              opacity={0.6}
             />
           )}
           {/* pocketcoil overlay (own scale — shape correlation, Juan Q4) */}
@@ -268,6 +357,32 @@ function TrendPanel({
           />
         </svg>
       </div>
+      {/* ADR-0079 Am.1 — ALWAYS VISIBLE whenever a legacy bar is on screen. Not a
+          tooltip, not a hover: a reader who never touches the chart must still be
+          told that the striped bars are the whole floor. */}
+      {hasLegacy && (
+        <p
+          data-testid="legacy-legend"
+          className="mt-2 flex items-start gap-2 rounded border border-white/15 bg-black/20 px-3 py-2 text-xs opacity-80"
+        >
+          <svg width="18" height="10" aria-hidden="true" className="mt-0.5 shrink-0">
+            <rect
+              x="0"
+              y="0"
+              width="18"
+              height="10"
+              fill="url(#legacyHatch)"
+              stroke="#8fbf3f"
+              strokeWidth="1"
+              strokeDasharray="2 1.5"
+            />
+          </svg>
+          <span>
+            Striped bars are the <strong>floor-wide processed total</strong> — before daily capture
+            began {throughput.captureCutoverISO}. Not machine-specific.
+          </span>
+        </p>
+      )}
       <Legend />
     </section>
   );
@@ -735,12 +850,17 @@ function Msg({ msg }: { msg: FieldMsg | null }) {
 function buildCsv(daily: readonly DailyThroughputPoint[]): string {
   const head = [
     'date',
+    // ADR-0079 Am.1 — provenance travels with the export too. A spreadsheet that
+    // drops the striping keeps the word.
+    'source',
     'units_day_entered',
     'run_hours_entered',
     'hours_down',
     'units_per_run_hour',
     'mean_7d',
     'mean_30d',
+    'legacy_mean_7d',
+    'legacy_mean_30d',
     'pocketcoil_estimate',
     // ADR-0079 D5 — the retained floor-wide total, named for what it actually is.
     // It is EVERY machine and every hand-stripper that day, not this machine, and
@@ -752,12 +872,15 @@ function buildCsv(daily: readonly DailyThroughputPoint[]): string {
   const lines = daily.map((d) =>
     [
       d.dateISO,
+      d.source,
       cell(d.unitsDay),
       cell(d.runHours),
       cell(d.hoursDown),
       cell(d.unitsPerRunHour),
       cell(d.mean7),
       cell(d.mean30),
+      cell(d.legacyMean7),
+      cell(d.legacyMean30),
       cell(d.pocketcoilEstimate),
       cell(d.derivedFloorUnits),
     ].join(','),

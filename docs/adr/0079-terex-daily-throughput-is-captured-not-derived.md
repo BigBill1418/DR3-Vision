@@ -1,6 +1,6 @@
 # ADR-0079 — Terex daily throughput is CAPTURED, not derived
 
-**Status:** Accepted, implemented (2026-08-07). Supersedes ADR-0044 D2.
+**Status:** Accepted, implemented (2026-08-07; Amendment 1 same day). Supersedes ADR-0044 D2.
 
 **Supersedes:** ADR-0044 D2 ("throughput needs NO new capture — it is DERIVED from
 the daily processed-units close"). Builds on ADR-0077 D4 ("not recorded" is not
@@ -259,6 +259,131 @@ Eugene is unaffected either way: it has **zero** `equipment_events` and **zero**
 changes.
 
 ---
+
+## Amendment 1 (2026-08-07) — the cutover has a boundary, and history stays
+
+**D3 was right about the future and wrong about the past.** "Entered replaces
+derived" was applied to _all of history_, so the moment this shipped the Terex
+page went blank. Measured against production the same day:
+
+```
+WINDOW 90d : entered=0/90 days | derived AVAILABLE=67/90 days
+90d window: 67 days carry a derived figure that is currently RENDERED BLANK.
+derived range in window: 415 .. 1249
+```
+
+989 close-days exist at Woodland going back to 2023-01-02. Bill's report:
+_"that should have all stayed and just been added to."_ He is right. The original
+ADR even **predicted** this behaviour and called it "the visible signature of the
+fix" — but predicting a consequence is not the same as validating it, and nobody
+checked whether a blank history was what was wanted. It was not.
+
+No data was lost; `derivedFloorUnits` remained computed throughout (D5). This is
+purely cutover-DISPLAY semantics.
+
+### D7 — the boundary is a stored constant, never derived from the data
+
+`TEREX_CAPTURE_CUTOVER_ISO = '2026-08-07'`. Days before it are the sheet era; days
+from it on are the capture era.
+
+Deriving the boundary from "the first entered day" was rejected: one manager
+backfilling 2026-07-15 would flip every day from mid-July onward out of the legacy
+era into "not recorded", **blanking a month of chart as a side effect of a single
+entry**. The boundary is a fact about when the process changed, not about the
+contents of the table. `cutover.boundary-is-constant-not-data` inserts an earlier
+entered row and asserts every other day's source is byte-identical.
+
+### D8 — per-day source honesty
+
+`source: 'entered' | 'legacy_derived' | 'not_recorded'` travels on every point, so
+provenance is carried rather than re-inferred (and re-inferred differently) at each
+render site.
+
+| Day       | Entry? | Source           | Displays                                                                 |
+| --------- | ------ | ---------------- | ------------------------------------------------------------------------ |
+| ≥ cutover | yes    | `entered`        | the manager's figure                                                     |
+| ≥ cutover | no     | `not_recorded`   | **nothing** — `derivedFloorUnits` is NOT substituted; the gap stays loud |
+| < cutover | no     | `legacy_derived` | `derivedFloorUnits`, **labeled** floor-wide                              |
+| < cutover | yes    | `entered`        | the manager's figure — **entered always wins**                           |
+
+Entered winning on _both_ sides of the boundary is Bill's "just be added to": a
+backfill has replaced the floor's guess with the machine's real number, and must
+beat the legacy figure rather than be ignored for being early.
+
+### D9 — the label is STRUCTURAL, not tonal
+
+A legacy bar is hollow: `fill="url(#legacyHatch)"` over a dashed outline. An
+entered bar is solid `#8fbf3f`. **Solid always means entered.**
+
+Tone was rejected as the carrier — a lighter green or a lower opacity does not
+survive a projector, a screenshot, a colour-blind reader, or a print-out, and the
+one thing this must never do is let the floor's number pass as the machine's.
+Alongside the bars: an always-visible legend whenever any legacy bar renders (not
+a tooltip — a reader who never touches the chart must still be told), and a
+per-bar `<title>`: `2026-07-20: 1063 units — floor-wide total, not Terex-specific
+(legacy)`.
+
+The axis fix is the literal reported bug: `maxUnits` scaled off `unitsDay` alone,
+so with zero entered days it collapsed to `1`. It now scales to what is **drawn**.
+
+### D10 — means never blend across the era
+
+`mean7`/`mean30` and the tile's `last7`/`last30` stay **entered-only, unchanged**.
+`legacyMean7`/`legacyMean30` are separate fields over legacy days only, rendered
+only _on_ legacy days so the dashed legacy line stops at the boundary.
+
+The two eras measure different things — the whole floor (1,000–1,250 units/day)
+versus one machine (a few hundred). A straddling window would average them into a
+figure describing nothing, plotted on the machine's line. In the seven-day
+straddle test the forbidden blend is **701.28**; it is asserted absent from every
+mean field on every day.
+
+The tile was deliberately NOT widened to include legacy days: a single averaged
+number has nowhere to carry the label. "7-day units/day: 1,063" on a tile is a
+bare claim about the machine, wrong by roughly 5×. The chart is where the legacy
+era is shown, because that is where it can be shown honestly. The tiles instead
+disclose coverage — "1 of 7 days recorded".
+
+### D11 — a legacy day still gets no rate
+
+`unitsPerRunHour` stays `null` for legacy days. Reviving the assumed-8h figure,
+even labeled, would publish a number whose denominator was fabricated — the exact
+defect D3 removed. `rate.legacy-has-no-rate` pins that `1063 / 8 = 132.875` never
+appears.
+
+### Rejected in this amendment
+
+- **(c) Labeled backfill of derived figures into `equipment_daily_throughput`.**
+  Putting the floor's number inside the machine's table is a permanent conflation
+  risk — every future reader and query would have to remember the flag — and it
+  would force `run_hours` to become nullable, weakening the NOT NULL constraint
+  that makes units-per-hour trustworthy.
+- **(b) A dual-series view** (entered and derived plotted together as peers).
+  Filed as the future reconciliation view (OPEN-ITEMS F-3), not built: showing
+  them as peers invites exactly the divergence comparison that still has no rule.
+
+### The falsification
+
+The bar renderer's source branch was deleted and the suite re-run. The red shows a
+legacy bar wearing the entered fill:
+
+```
+AssertionError: expected '<rect data-testid="bar-2026-07-20" da…'
+                to contain 'fill="url(#legacyHatch)"'
+Received: "<rect data-testid="bar-2026-07-20" data-source="legacy_derived"
+           x="64" y="8" width="192" height="170" fill="#8fbf3f"
+           stroke="none" stroke-width="0" opacity="0.85">"
+```
+
+`data-source="legacy_derived"` with `fill="#8fbf3f"` — the unlabeled leak, named
+concretely rather than as a missing field.
+
+### Verified against production
+
+67 legacy days restored to the chart; July days draw 1,158–1,249 with `unitsDay`
+still `null` (not laundered) and `rate` still `null` (no fabricated denominator);
+the one post-cutover day stays `not_recorded`; no day carries both means; no
+`not_recorded` day carries a units figure.
 
 ## Alternatives considered
 
