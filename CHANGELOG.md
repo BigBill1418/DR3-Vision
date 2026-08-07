@@ -3,6 +3,117 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-07 — discovery was under-reporting, and nothing could say so (ADR-0080)
+
+`sharedWithMe` returned **one item on each of the 902 sweeps** since 2026-07-29.
+Three documents were being watched. **Eleven were readable.** Every other layer of
+this pipeline has a staleness guard — sweep freshness, subscription expiry, ctag
+comparison, the loud zero — and discovery, the layer that decides what the
+pipeline is even looking at, had none. So "we can see one document" and "one
+document exists" rendered identically, which is the exact ADR-0057 D9 shape.
+
+**Vision now compares what it can reach against what it is watching, every
+scheduled sweep, and says the difference out loud** — on
+`/admin/doc-ingest/health`, as a `discovery_gap` anomaly that NAMES the files, and
+as a line in the 06:00 digest. First run reports a gap of **8**, including
+`DR3 Machine List (2).xlsx` — an Outlook-attachment share that appears in no
+enumeration route at all, yet resolves fine on a direct fetch. It was always
+ingestable. It was never discoverable.
+
+### Search is the probe. It is not, and will never be, the enumeration.
+
+The plan was to move discovery onto the Search API, because search is the one
+route that sees the missing file. Measured against the live tenant, unscoped
+search returns **11,442 items** — the whole tenant, because Vision holds
+`Sites.Read.All`. It answers "what can this identity read", not "what was shared
+with it". Wiring discovery onto it would have Vision downloading and archiving
+Night Shelter case-management packets and HR W-9 lists. That is not a feature
+with a rough edge; it is an incident.
+
+So search informs a human and never feeds the watch list. **Nothing is registered
+automatically.** The probe is scoped to the tenant's personal-OneDrive host and to
+spreadsheets — measured, that returns exactly the 11 documents of DR3's universe
+and nothing else — and the **exact query string is stored with each scan and
+rendered beside the counts**, because a number whose bound is unknown is not
+evidence of anything.
+
+### "We could not look" is not "there is nothing to see"
+
+Three states, and only one is quiet: never scanned, scan failed, scan clean. A
+failed probe recording a gap of zero would rebuild the illusion the whole change
+exists to destroy, so `reachabilityGap` is `number | null` and the digest speaks
+up for the first two. Same rule as ADR-0077's downtime and ADR-0076's headcount:
+**not recorded is not zero.**
+
+### The `sharedWithMe` sunset date was ours, not Microsoft's
+
+Microsoft published "November, 2026" — a month, no day. The constant keeps
+2026-11-01 as the conservative reading and now carries
+`SHARED_WITH_ME_SUNSET_IS_INFERRED`, and the health page says so. Two further
+findings, both load-bearing for the decision due before November: `/me/insights/shared`
+— the obvious successor, and correctly scoped at 10 items — is deprecated on the
+**same date** and can be silently switched off tenant-wide; and
+`SharedWithUsersOWSUser`, the documented "shared with this person" narrowing,
+returns **total = 0** against this tenant. Both legacy paths die together, no
+replacement is announced, and the only survivor answers a wider question.
+
+### The commodity tracker is not the document we thought it was
+
+The "Woodland Data Auditing Tracker" was to be absorbed as commodity figures
+cross-referenced against vendor invoices. Read against the live bytes, **it
+carries no tonnage and no money.** It is an audit-_coverage_ matrix: which
+commodity stream was audited in which month, by whom, when. Its stored
+`parse_summary` had also detected the title banner as the header row, so the
+existing detection does not resolve it.
+
+Three requirements rested on the wrong premise and are recorded rather than
+faked: nothing here touches `processed_units_daily` (workbook-sync remains its one
+writer), the requested side-by-side against Vision's figures **is not buildable**
+from a document with no figures, and preview-then-confirm stays — but because a
+newly-understood layout must not silently become fact, not because of money. What
+the document _does_ answer, and nothing previously could: the 2026
+`DAILY LOG/MYMRC/SPREADSHEETS` stream — the audit of Vision's own numbers — is
+unaudited.
+
+The workbook also turned out to be **stacked** — several header blocks per sheet,
+at different row _and_ column offsets, 12 commodity streams in 2026 and 9 in 2025
+rather than the 7 and 6 the top block advertises. The first extractor read only
+the top block and filed the lower blocks' months under the wrong streams: **60
+duplicate `(stream, month)` pairs on one sheet, 36 on the other**, five streams
+missing outright. Its unit tests were green, and the row TOTAL was identical
+either way, so no count would have caught it. Running it against the real archived
+bytes did. That check is now a permanent guard.
+
+The new table is **version-scoped from its first row**, unique on
+`(version, sheet, stream, month)`, with the double-count falsification pinned in
+tests. ADR-0077's $231,203.82-for-a-$77,067.94-document lesson, applied before the
+incident instead of after.
+
+### The Terex cost residual, closed (ADR-0077 Amendment 3)
+
+ADR-0077 fixed "not recorded ≠ zero" for downtime and **explicitly left cost**,
+because cost is only _partly_ unpopulated — 7 of 68 events carry one — which read
+as the weaker case. It is the stronger one. An all-null column eventually makes
+somebody suspicious; a column that clearly works does not. `totalCostCents` summed
+a series that drops null-cost events, so an unpriced window reduced to `0` and
+rendered **`$0.00`** on the equipment tile and the ops-overview card: a machine
+that had cost the organisation nothing.
+
+It is `number | null` now, decided on the **events** rather than on a truthy sum,
+and an absent cost reads "not recorded". **A real recorded `0` still reads
+`$0.00`** — a warranty repair that genuinely cost nothing is a fact. Both
+directions are pinned and both were falsified.
+
+### Also
+
+- COR month-end headcount showed `—` because it read
+  `processed_units_daily.employees_count`/`processors_count`, **null on all 989
+  production rows** and never written by any of their four write paths. It now
+  derives the real figure from the payroll source (ADR-0076). A month with no
+  entries is a real `0`; an uncomputable month stays `null`. `employeesCount`
+  deliberately stays not-recorded — bonus entries cover processors only, and
+  substituting one for the other would be a fabricated compliance figure.
+
 ## 2026-08-07 — the history stayed after all (ADR-0079 Amendment 1)
 
 The cutover shipped a few hours earlier applied "entered replaces derived" to

@@ -155,16 +155,97 @@ export function docIngestNotificationUrl(): string {
  *   - `/admin/doc-ingest/health` renders a countdown from this date;
  *   - it is logged in docs/OPEN-ITEMS.md as a dated, owner-assigned item.
  *
- * A speculative Search-API implementation is deliberately NOT shipped: it cannot
- * be verified against the live tenant today, and an unverified fallback that
- * silently produces a DIFFERENT set of sources is worse than a loud countdown.
+ * A speculative Search-API implementation is deliberately NOT shipped as the
+ * ENUMERATION: measured against the live tenant on 2026-08-07 it returns 11,442
+ * items — the whole tenant, not the shared set — so swapping discovery onto it
+ * would start watching half of SVdP's SharePoint. See `reachability.ts` for what
+ * Search IS used for, and ADR-0080 for the measurements.
+ *
+ * ── The date is an INFERENCE, not a citation (corrected 2026-08-07) ─────────
+ * Microsoft's reference page says only "November, 2026" — it names no day. This
+ * constant picks the FIRST of that month, which is the conservative reading (it
+ * can only be early, never late). Nothing may present it as Microsoft's stated
+ * date; `SHARED_WITH_ME_SUNSET_IS_INFERRED` exists so surfaces can say so.
+ * https://learn.microsoft.com/en-us/graph/api/drive-sharedwithme?view=graph-rest-1.0
  */
 export const SHARED_WITH_ME_SUNSET = '2026-11-01';
+
+/**
+ * True because Microsoft published a MONTH, not a date. Surfaces that render the
+ * countdown must qualify it — an invented precision would have the fleet trust a
+ * day that no vendor ever promised.
+ */
+export const SHARED_WITH_ME_SUNSET_IS_INFERRED = true;
 
 /** Days until the `sharedWithMe` enumeration stops returning data. May go negative. */
 export function sharedWithMeDaysRemaining(now: Date = new Date()): number {
   const sunset = Date.parse(`${SHARED_WITH_ME_SUNSET}T00:00:00Z`);
   return Math.floor((sunset - now.getTime()) / 86_400_000);
+}
+
+// ── Reachability scanning (ADR-0080 §Phase 1) ───────────────────────────────
+//
+// The question this configuration bounds: "what CAN Vision read that it is not
+// watching?" — deliberately a narrower question than "what can this identity
+// reach", because the identity holds `Sites.Read.All` and can reach the entire
+// tenant, including Night Shelter case-management files that Vision must never
+// touch.
+//
+// The bound is a KQL scope, and it is STATED on the health surface rather than
+// left implicit. That is the same discipline as `depth_limit_reached`: a bounded
+// enumeration is correct, being quiet about what the bound excluded is not.
+//
+// Measured live 2026-08-07 (docs-dr3@svdp.us):
+//   • unscoped `*`                                  → 11,442 items (whole tenant)
+//   • `filetype:xlsx`                               →    593 items
+//   • THIS scope                                    →     11 items, and exactly
+//     the DR3 document universe — no case-management or HR material at all,
+//     because those live on the team-sites host, not the personal-OneDrive host.
+//
+// `SharedWithUsersOWSUser:"<upn>"` — the documented SharePoint managed property
+// for "shared with this person" — was tested against this tenant on the same day
+// and returned **total = 0**. It is NOT a usable narrowing here (Microsoft
+// documents it as indexing only "Specific people" shares; these are link
+// shares). Recorded so nobody re-derives it.
+
+/**
+ * The host that holds personal OneDrive content in this tenant. Every document
+ * shared with Vision so far lives here; team sites (the `-my`-less host) hold
+ * the material Vision has no business reading.
+ */
+export function docIngestReachabilityHost(): string {
+  return process.env['DOC_INGEST_REACHABILITY_HOST'] ?? 'https://svdplanecounty-my.sharepoint.com';
+}
+
+/** File types worth comparing. Vision only ever absorbs spreadsheets. */
+export function docIngestReachabilityFiletypes(): string[] {
+  const raw = process.env['DOC_INGEST_REACHABILITY_FILETYPES'];
+  const parsed = (raw ?? 'xlsx,xlsm,xlsb,csv')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
+  return parsed.length > 0 ? parsed : ['xlsx'];
+}
+
+/**
+ * The KQL the scan actually issues — built here, in one place, so the surface can
+ * render the EXACT string that produced the numbers rather than a description of
+ * it. A scope a human cannot read back is a scope nobody can audit.
+ */
+export function docIngestReachabilityScope(): string {
+  const types = docIngestReachabilityFiletypes()
+    .map((t) => `filetype:${t}`)
+    .join(' OR ');
+  return `(${types}) AND path:"${docIngestReachabilityHost()}"`;
+}
+
+/**
+ * Hard cap on hits pulled per scan. Microsoft caps `size` at 1000 per page; this
+ * is deliberately far below it — the scan is a comparison, not an inventory, and
+ * a scope that returns hundreds is a scope that needs narrowing, not paging.
+ */
+export function docIngestReachabilityLimit(): number {
+  return positiveIntEnv('DOC_INGEST_REACHABILITY_LIMIT', 200);
 }
 
 function positiveIntEnv(name: string, fallback: number): number {

@@ -43,6 +43,7 @@ export default async function DocIngestHealthPage() {
 
   const health = await loadDocIngestHealth(prisma);
   const sunsetPassed = health.discovery.daysRemaining <= 0;
+  const reachability = health.reachability;
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
@@ -181,6 +182,82 @@ export default async function DocIngestHealthPage() {
               </>
             )}
           </p>
+          {health.discovery.sunsetDateIsInferred && (
+            <p className="mt-2 text-xs text-dr3-mist-dim">{M.health.discoverySunsetInferred}</p>
+          )}
+        </section>
+
+        {/*
+          REACHABLE vs WATCHED (ADR-0080). Placed directly under the deprecation
+          because they are one story: the enumeration that is being retired is
+          also the one that has been under-reporting, and this is the number that
+          says by how much.
+
+          The three states are deliberately distinct and none of them is allowed
+          to look like another:
+            • no scan ever    → we CANNOT say. Not "no gap".
+            • scan errored    → we could not look. Not "no gap".
+            • gap === 0       → genuinely nothing unwatched, in the stated scope.
+        */}
+        <section
+          className={`rounded-lg p-4 ring-1 ${
+            reachability === null || reachability.error !== null
+              ? 'bg-dr3-steel/20 ring-dr3-steel-light/30'
+              : reachability.gapCount > 0
+                ? 'bg-amber-400/10 ring-amber-400/30'
+                : 'bg-emerald-500/10 ring-emerald-500/30'
+          }`}
+        >
+          <h2 className="text-xl font-semibold">{M.health.reachabilityHeading}</h2>
+
+          {reachability === null ? (
+            <p className="mt-2 text-sm text-dr3-mist-dim">{M.health.reachabilityNever}</p>
+          ) : (
+            <>
+              {reachability.error !== null ? (
+                <p className="mt-2 text-sm text-amber-200">
+                  {M.health.reachabilityFailed} {reachability.error}
+                </p>
+              ) : reachability.gapCount === 0 ? (
+                <p className="mt-2 text-sm text-emerald-200">{M.health.reachabilityClean}</p>
+              ) : (
+                <>
+                  <div className="mt-3 grid grid-cols-3 gap-3">
+                    <Stat label="Readable" value={reachability.reachable} />
+                    <Stat label="Watched" value={reachability.watched} />
+                    <Stat label="Unwatched" value={reachability.gapCount} />
+                  </div>
+                  <p className="mt-3 text-sm">{M.health.reachabilityGapLead}</p>
+                  <ul className="mt-2 flex flex-col gap-1 text-sm">
+                    {reachability.gap.map((g) => (
+                      <li key={`${g.driveId}:${g.itemId}`} className="flex flex-col">
+                        <span className="font-medium">{g.name}</span>
+                        <span className="text-xs text-dr3-mist-dim">
+                          {g.ownerHint ?? 'owner unknown'}
+                          {g.lastModifiedAt ? ` — modified ${fmt(g.lastModifiedAt)}` : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {reachability.truncated && (
+                    <p className="mt-2 text-sm text-amber-200">{M.health.reachabilityTruncated}</p>
+                  )}
+                  <p className="mt-3 text-xs text-dr3-mist-dim">
+                    {M.health.reachabilityNoAutoRegister}
+                  </p>
+                </>
+              )}
+
+              {/* The BOUND travels with the number. A count whose scope is
+                  unknown is not evidence of anything. */}
+              <p className="mt-3 break-all text-xs text-dr3-mist-dim">
+                {M.health.reachabilityScope}: <code>{reachability.scope}</code>
+              </p>
+              <p className="text-xs text-dr3-mist-dim">
+                {M.health.reachabilityScanned}: {fmt(reachability.scannedAtISO)}
+              </p>
+            </>
+          )}
         </section>
       </div>
     </main>

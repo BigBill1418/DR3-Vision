@@ -44,6 +44,7 @@ export const DOC_KINDS = [
   'daily_log_workbook',
   'trailer_list',
   'terex_maintenance_log',
+  'commodity_audit_tracker',
   'ap_history_report',
   'equipment_inventory',
   'rate_table',
@@ -128,6 +129,29 @@ const RULES: Rule[] = [
       /\bactual repair cost\b/i,
       /\bamount credited\b/i,
       /\bestimated repair time\b/i,
+    ],
+  },
+  {
+    // ADR-0080 Phase 2. Signals taken from the REAL file (verified 2026-08-07):
+    // the filename "Woodland Data Auditing Tracker (1).xlsx", sheet names that
+    // begin "Commodity Audit" ("Commodity Audit 2026" / "Commodity Audit 2025"),
+    // the row-1 title banner "Commodity Audit (against Vendor Invoices)", and the
+    // row-4 header vocabulary Audited / Initials / 2nd Audit.
+    //
+    // Deliberately does NOT include a bare `/\bdate\b/`. "Date" appears in the
+    // header row of nearly every workbook this system sees, so scoring on it
+    // would give this rule points on documents that are nothing like it — which
+    // costs confidence on the RIGHT rule (dominance is a fraction) as well as
+    // manufacturing evidence for this one. Conservative on purpose: this only
+    // ever writes `proposed_*`, and Bill confirms.
+    kind: 'commodity_audit_tracker',
+    name: [/data[\s_-]*auditing[\s_-]*tracker/i, /commodity[\s_-]*audit/i],
+    structure: [
+      /\bcommodity audit\b/i,
+      /\bagainst vendor invoices\b/i,
+      /\baudited\b/i,
+      /\b(2nd|second)[\s_-]*audit\b/i,
+      /\binitials\b/i,
     ],
   },
   {

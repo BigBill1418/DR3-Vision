@@ -13,8 +13,10 @@ import type { PrismaClient } from '@prisma/client';
 import {
   DOC_INGEST_SWEEP_STALE_MS,
   SHARED_WITH_ME_SUNSET,
+  SHARED_WITH_ME_SUNSET_IS_INFERRED,
   sharedWithMeDaysRemaining,
 } from './pipeline-config';
+import { latestReachabilityScan, type ReachabilityGapItem } from './reachability';
 
 export interface SubscriptionHealth {
   id: string;
@@ -61,7 +63,34 @@ export interface DocIngestHealth {
   anomalies: { open: number; critical: number; acknowledged: number };
   staged: { count: number; oldestISO: string | null };
   /** ⚠ The deprecated `sharedWithMe` enumeration's countdown. */
-  discovery: { sunsetDate: string; daysRemaining: number };
+  discovery: {
+    sunsetDate: string;
+    daysRemaining: number;
+    /**
+     * TRUE because Microsoft published a MONTH ("November, 2026"), not a date.
+     * The surface must say so — presenting an invented day as the vendor's
+     * deadline is the same class of false precision as rendering an absent cost
+     * as $0.00.
+     */
+    sunsetDateIsInferred: boolean;
+  };
+  /**
+   * REACHABLE vs WATCHED (ADR-0080) — the guard discovery never had.
+   *
+   * `null` means no scan has ever run, which is NOT the same as a gap of zero
+   * and must not render as one. Likewise a scan carrying `error` proves nothing
+   * about the gap: it means Vision could not look.
+   */
+  reachability: {
+    scannedAtISO: string;
+    scope: string;
+    reachable: number;
+    watched: number;
+    gapCount: number;
+    truncated: boolean;
+    error: string | null;
+    gap: ReachabilityGapItem[];
+  } | null;
 }
 
 export async function loadDocIngestHealth(
@@ -100,6 +129,8 @@ export async function loadDocIngestHealth(
         where: { doc_class: null, classification_attempted_at: { not: null }, kind: 'file' },
       }),
     ]);
+
+  const reachability = await latestReachabilityScan(prisma);
 
   const [openAnomalies, criticalAnomalies, acknowledgedAnomalies] = await Promise.all([
     prisma.docIngestAnomaly.count({ where: { status: 'open' } }),
@@ -163,7 +194,9 @@ export async function loadDocIngestHealth(
     discovery: {
       sunsetDate: SHARED_WITH_ME_SUNSET,
       daysRemaining: sharedWithMeDaysRemaining(now),
+      sunsetDateIsInferred: SHARED_WITH_ME_SUNSET_IS_INFERRED,
     },
+    reachability,
   };
 }
 

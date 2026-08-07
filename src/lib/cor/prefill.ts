@@ -7,11 +7,13 @@
 //      balance (ADR-0037 D6, `onHand`) as of the month's last day, cross-
 //      referenced to the nearest physical snapshot. `inventory_source` records the
 //      anchor snapshot id, the computed figure, and the reconcile delta in between.
-//   2. FT/PT headcount pre-fill (D2.2) = the month-end daily close's
-//      `employees_count`/`processors_count`, WITH the month's full close series in
-//      the provenance. The daily close captures TOTALS, not an FT/PT split — the
-//      preparer enters the split at review; here we only pre-fill the totals + the
-//      consulted close-row ids (the split stays null until finalize).
+//   2. FT/PT headcount pre-fill (D2.2) = the month's DISTINCT-PROCESSOR count from
+//      the payroll source (ADR-0076), WITH the month's full daily-close series
+//      retained in the provenance. The daily close captures TOTALS, not an FT/PT
+//      split — the preparer enters the split at review; here we only pre-fill what
+//      we can prove (the split stays null until finalize). See the ADR-0076
+//      follow-up note on `HeadcountSource` for why the processor figure no longer
+//      comes from the daily close.
 //   3. Signer (D2.3) = standardized from `cor_site_config` (see signer.ts).
 //
 // Pure-ish: reads the DB via the shared `prisma` + the ONE balance function; no
@@ -19,6 +21,8 @@
 
 import { onHand, snapshotTotalUnits } from '@/lib/inventory/running-balance';
 import { assertCorInboundFresh, assertCorInventoryNotNegative } from './inbound-gate';
+import { countDistinctProcessors } from '@/lib/bonus/processor-count';
+import { log } from '@/lib/observability/logger';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import { resolveCorSigner } from './signer';
 import { prisma } from '@/lib/prisma';
@@ -52,15 +56,58 @@ export interface HeadcountSeriesEntry {
   processorsCount: number | null;
 }
 
-/** Provenance for the headcount pre-fill (D2.2). Serialized into `headcount_source`. */
+/**
+ * Provenance for the headcount pre-fill (D2.2). Serialized into `headcount_source`.
+ *
+ * ADR-0076 follow-up (OPEN-ITEMS 0.AG F-1) — `processorsCount` NO LONGER comes from
+ * the daily close. `processed_units_daily.employees_count` / `.processors_count` were
+ * added as workbook close metadata (ADR-0037 Addendum B4) and have never been written
+ * by any of their four write paths: measured in production, 989 rows, 0 non-null in
+ * EITHER column. Every COR headcount cell rendered `—`. The real figure lives in the
+ * payroll source, exactly as ADR-0076 established for the daily report.
+ *
+ * `method` names the derivation honestly. It is NOT still
+ * `'daily_close_month_end_adr0042_d2'`, because a figure that no longer comes from the
+ * daily close must not keep claiming it does — the whole point of a provenance blob is
+ * that a reader can trust the label. The close-row record is retained regardless
+ * (`consultedCloseRowIds` + `series`), so the provenance still shows what the close
+ * rows actually said and therefore why the old path yielded nothing.
+ */
 export interface HeadcountSource {
-  method: 'daily_close_month_end_adr0042_d2';
-  /** The month-end close row the pre-fill totals came from (null if no closes). */
+  method: 'bonus_distinct_processors_adr0076';
+  /** The month-end close row consulted (null if no closes). Retained for the audit. */
   monthEndCloseId: string | null;
   monthEndDate: string | null;
-  /** Month-end totals (NOT an FT/PT split — the split is the human judgment). */
+  /**
+   * FT/PT employee TOTAL — still the month-end close's `employees_count`, and still
+   * null in production because that column has never been written.
+   *
+   * This is DELIBERATELY not backfilled from the processor count. Bonus entries cover
+   * PROCESSORS only; the FT/PT total is a different population (it includes everyone
+   * on site, not just people who stripped a mattress). Substituting one for the other
+   * would put a fabricated compliance figure on a filed regulatory document. Not
+   * recorded stays not recorded.
+   */
   employeesCount: number | null;
+  /**
+   * Distinct processors with ≥1 payroll entry in the cover month (ADR-0076).
+   *
+   * A genuine `0` means the payroll source was read and the month contains no
+   * entries — nobody processed. `null` means the count could NOT be computed at all
+   * (see `processorsCountUnavailableReason`). These are different facts and the UI
+   * must keep rendering them differently: never `0` for an absent value, never `—`
+   * for a real zero.
+   */
   processorsCount: number | null;
+  /**
+   * Non-null ONLY when `processorsCount` is null — the reason the derivation could not
+   * run. Keeps "not recorded" self-explaining in the stored provenance instead of
+   * indistinguishable from a real zero after the fact.
+   */
+  processorsCountUnavailableReason: string | null;
+  /** Inclusive UTC day-key window the distinct-processor count was taken over. */
+  processorsWindowStart: string;
+  processorsWindowEnd: string;
   /** Every daily-close row consulted for this month (the full series). */
   consultedCloseRowIds: string[];
   series: HeadcountSeriesEntry[];
@@ -151,7 +198,18 @@ export async function computeCorPrefill(
   const { monthStart, monthEndDate, monthEndAsOf } = coverMonthBounds(coverMonthISO);
 
   // ── Inventory (D2.1): the ONE balance function + the anchor it used ──────
-  const [balance, anchor, closes, signer] = await Promise.all([
+  // ── Headcount (D2.2): the payroll-derived distinct-processor count ───────
+  //
+  // The distinct-processor query is folded into the same round-trip. It resolves to a
+  // RESULT OBJECT rather than rejecting, because a payroll-source failure must not
+  // take down the inventory figure with it and must NOT be reported as `0` — see the
+  // `count: null` branch below. The mirror of this is `daily-report.ts`, which omits
+  // its EOD-inventory section on the same principle rather than printing a zero.
+  //
+  // Scoping note: this runs strictly AFTER `assertCorInboundFresh()` above and leaves
+  // `assertCorInventoryNotNegative()` below untouched — the settle-to-object wrapper
+  // is scoped to this ONE call and therefore cannot swallow either gate.
+  const [balance, anchor, closes, signer, processors] = await Promise.all([
     onHand(siteId, monthEndAsOf),
     prisma.siteInventorySnapshot.findFirst({
       where: { site_id: siteId, snapshot_kind: 'physical', snapshot_at: { lte: monthEndAsOf } },
@@ -171,6 +229,16 @@ export async function computeCorPrefill(
       select: { id: true, production_date: true, employees_count: true, processors_count: true },
     }),
     resolveCorSigner(siteId),
+    countDistinctProcessors(siteId, monthStart, monthEndDate).then(
+      (count): { count: number | null; reason: string | null } => ({ count, reason: null }),
+      (err: unknown): { count: number | null; reason: string | null } => {
+        log.error(
+          { err, siteId, coverMonthISO },
+          '[cor] distinct-processor count unavailable — headcount pre-filled as not-recorded, NOT zero',
+        );
+        return { count: null, reason: 'payroll_source_unavailable' };
+      },
+    ),
   ]);
 
   const storedUnits = balance.total.toNearest(1).toNumber();
@@ -190,7 +258,10 @@ export async function computeCorPrefill(
     storedUnits,
   };
 
-  // ── Headcount pre-fill (D2.2): month-end close totals + the full series ──
+  // ── Headcount pre-fill (D2.2): payroll processors + the close series ─────
+  // The close series is still recorded verbatim. In production every cell in it is
+  // null; keeping it is what lets an auditor see WHY the pre-fill used to be blank
+  // rather than having to take this comment's word for it.
   const series: HeadcountSeriesEntry[] = closes.map((c) => ({
     id: c.id,
     productionDate: isoDay(c.production_date),
@@ -199,11 +270,18 @@ export async function computeCorPrefill(
   }));
   const monthEnd = closes.length > 0 ? closes[closes.length - 1]! : null;
   const headcountSource: HeadcountSource = {
-    method: 'daily_close_month_end_adr0042_d2',
+    method: 'bonus_distinct_processors_adr0076',
     monthEndCloseId: monthEnd?.id ?? null,
     monthEndDate: monthEnd ? isoDay(monthEnd.production_date) : null,
+    // Close-derived, and left alone. NOT the processor count — see the interface doc:
+    // the FT/PT total is a different population and faking it would be a fabricated
+    // compliance figure.
     employeesCount: monthEnd?.employees_count ?? null,
-    processorsCount: monthEnd?.processors_count ?? null,
+    // Payroll-derived. `0` = read and empty; `null` = could not read. Never conflated.
+    processorsCount: processors.count,
+    processorsCountUnavailableReason: processors.reason,
+    processorsWindowStart: isoDay(monthStart),
+    processorsWindowEnd: isoDay(monthEndDate),
     consultedCloseRowIds: closes.map((c) => c.id),
     series,
   };

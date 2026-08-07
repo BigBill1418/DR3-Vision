@@ -80,6 +80,11 @@ import {
   writeTrailerRows,
 } from './trailer-absorb';
 import { describeTerexSheets, extractTerexFromWorkbook, stageTerexRows } from './terex-absorb';
+import {
+  describeCommoditySheets,
+  extractCommodityFromWorkbook,
+  stageCommodityRows,
+} from './commodity-absorb';
 
 /** Audit actor for absorption writes. Mirrors the ingest pipeline's label. */
 export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
@@ -97,6 +102,10 @@ export const ABSORBABLE_KINDS = new Set<string>([
   'daily_log_workbook',
   'trailer_list',
   'terex_maintenance_log',
+  // ADR-0080 Phase 2. Its extractor is `commodity-extract.ts` and its typed table
+  // is `doc_commodity_audit_rows`; both existed and were tested before this line
+  // was added, which is the only thing that entitles a kind to be here.
+  'commodity_audit_tracker',
 ]);
 
 export type AbsorbOutcome =
@@ -287,6 +296,9 @@ export async function absorbVersion(
   }
   if (source.doc_class === 'terex_maintenance_log') {
     return absorbTerexLog(prisma, source, version, bytes, siteId, subject, now);
+  }
+  if (source.doc_class === 'commodity_audit_tracker') {
+    return absorbCommodityTracker(prisma, source, version, bytes, siteId, subject, now);
   }
 
   // ── Extract ───────────────────────────────────────────────────────────────
@@ -843,6 +855,193 @@ async function absorbTerexLog(
     'absorption_empty',
     subject,
     `Staged ${staged} TEREX maintenance row(s) from revision ${version.id}, awaiting confirmation.`,
+    now,
+  ).catch(() => undefined);
+
+  return finishTerminal(
+    prisma,
+    version,
+    {
+      versionId: version.id,
+      outcome: 'absorbed',
+      rowsWritten: staged,
+      datesCovered: dates.size,
+      reason: null,
+      anomaliesRaised: 0,
+    },
+    now,
+  );
+}
+
+/**
+ * ADR-0080 Phase 2 — absorb a confirmed commodity audit tracker, STAGED.
+ *
+ * ── This document carries NO money and NO tonnage ──────────────────────────
+ * Verified against the live bytes (2026-08-07): the "Woodland Data Auditing
+ * Tracker" holds no amount, no weight, no invoice number. It is an audit-COVERAGE
+ * matrix — per commodity stream × month, was that month's audit against vendor
+ * invoices done, by whom, when. So nothing here compares to or writes
+ * `processed_units_daily` (workbook-sync / ADR-0049 keeps its one writer), and
+ * there is no figure to reconcile.
+ *
+ * ── PREVIEW-THEN-CONFIRM ANYWAY, and the reason is NOT money ───────────────
+ * The trailer list landed directly because it was a known shape with no money.
+ * This one stages, and the justification is different: this is a layout we have
+ * only just understood. Its header row is not the first non-empty row, its stream
+ * banners are merged cells that must be forward-filled, its block count differs
+ * between the two sheets (7 vs 6), and its "not recorded" state is a NULL that
+ * must survive as a third answer rather than collapsing into "not audited".
+ * Every one of those is a place where a plausible-looking wrong read is possible,
+ * and an absorption of a newly-understood layout must not silently become fact on
+ * its own say-so.
+ *
+ * The second reason is who does the confirming. A confirm writes an OPERATOR'S
+ * NAME against the batch (O-2), so it has to be a human's: an agent clicking it
+ * would put a person's attestation on a reading nobody read. Nothing in this
+ * module, and no route this module feeds, can take that decision.
+ */
+async function absorbCommodityTracker(
+  prisma: PrismaClient,
+  source: DocSource,
+  version: DocSourceVersion,
+  bytes: Uint8Array,
+  siteId: string,
+  subject: string,
+  now: Date,
+): Promise<AbsorbResult> {
+  let extracted: Awaited<ReturnType<typeof extractCommodityFromWorkbook>>;
+  try {
+    extracted = await extractCommodityFromWorkbook(bytes);
+  } catch (e) {
+    const reason =
+      `"${source.display_name}" is registered as a commodity_audit_tracker but could not be read as ` +
+      `a workbook: ${describe(e)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'unreadable',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  // ── THE LOUD ZERO ─────────────────────────────────────────────────────────
+  // Zero rows is never "the document was empty", and for THIS document that
+  // sentence would be actively misleading: an unaudited month is a blank cell, so
+  // a real tracker with nothing done yet still has 84 rows. Zero rows means the
+  // MATRIX was not found — the header row, the stream blocks, or the month column
+  // — and the message names what each sheet actually held so the next person does
+  // not have to re-derive it from the bytes.
+  if (extracted.totalRows === 0) {
+    const reason =
+      `"${source.display_name}" is confirmed as a commodity_audit_tracker, was read successfully, and ` +
+      `produced ZERO audit-coverage rows. This is NOT evidence the document is empty, and it is NOT ` +
+      `evidence that no audits were done — an unaudited month is a blank cell inside a row that would ` +
+      `still be here. It means the coverage matrix was not found. ` +
+      `${describeCommoditySheets(extracted.perSheet)} ` +
+      `Sheets present: ${extracted.sheetNames.join(', ') || '(none)'}.`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id, sheets: extracted.sheetNames },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'empty',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  const { staged, collisions } = await prisma.$transaction((tx) =>
+    stageCommodityRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    }),
+  );
+
+  // Coverage here is DAYS AN AUDIT WAS DATED — not months covered. The two are
+  // different questions and only the second one is this document's subject, so
+  // the field the interface calls `datesCovered` is filled with the thing it is
+  // named for and nothing is implied about coverage from it. Cells holding the
+  // literal "working" contribute nothing rather than an invented day.
+  const dates = new Set<string>();
+  for (const sheet of extracted.perSheet) {
+    for (const r of sheet.rows) {
+      if (r.auditDateISO !== null) dates.add(r.auditDateISO);
+      if (r.secondAuditDateISO !== null) dates.add(r.secondAuditDateISO);
+    }
+  }
+
+  // The three-way state, counted at absorption so the audit row records what was
+  // read rather than only how much. `notRecorded` is the finding this document
+  // exists to produce and it is never folded into `notAudited`.
+  const allRows = extracted.perSheet.flatMap((s) => s.rows);
+  const monthsAudited = allRows.filter((r) => r.audited === true).length;
+  const monthsNotAudited = allRows.filter((r) => r.audited === false).length;
+  const monthsNotRecorded = allRows.filter((r) => r.audited === null).length;
+
+  await writeAudit({
+    actor_label: ABSORB_ACTOR,
+    action: 'insert',
+    table_name: 'doc_commodity_audit_rows',
+    row_id: version.id,
+    after: {
+      doc_source_id: source.id,
+      doc_class: 'commodity_audit_tracker',
+      rows_staged: staged,
+      // Staged, NOT accepted. Recorded explicitly so a reader of this audit row
+      // cannot mistake extraction for acceptance.
+      awaiting_confirmation: true,
+      // Stated so nobody has to open the extractor to know what this document is.
+      carries_money: false,
+      carries_tonnage: false,
+      months_audited: monthsAudited,
+      months_not_audited: monthsNotAudited,
+      months_not_recorded: monthsNotRecorded,
+      audit_dates_recorded: dates.size,
+      sheets: extracted.sheetNames,
+      // Dropped rows are recorded even on a SUCCESSFUL absorption — a partially
+      // read document must not look identical to a fully read one.
+      label_collisions: collisions,
+      note: describeCommoditySheets(extracted.perSheet),
+    },
+  });
+
+  await resolveAnomaly(
+    prisma,
+    'absorption_empty',
+    subject,
+    `Staged ${staged} commodity audit-coverage row(s) from revision ${version.id}, awaiting confirmation.`,
     now,
   ).catch(() => undefined);
 

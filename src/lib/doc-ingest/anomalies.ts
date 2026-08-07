@@ -110,6 +110,13 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
   // Files exist below the traversal limit that Vision is NOT watching. Quiet
   // would be the wrong answer; alarming would too.
   depth_limit_reached: { severity: 'warning', priority: 'default', page: SOURCES_PAGE_PATH },
+  // Documents Vision can READ but is not WATCHING (ADR-0080). Graded exactly like
+  // `depth_limit_reached`, and for the same reason: it means files exist that are
+  // not being watched. `default` rather than `high` because nothing is broken and
+  // nothing is degrading — the answer is a human deciding whether a document
+  // belongs in the pipeline, which is a same-day question, not an hour-one one.
+  // It routes to the SOURCES page because that is where registering one happens.
+  discovery_gap: { severity: 'warning', priority: 'default', page: SOURCES_PAGE_PATH },
 
   // ── D7 guardrail. Real money and real inventory counts. These STAGE a change
   // rather than let it flow, so a human must act before the numbers move.
