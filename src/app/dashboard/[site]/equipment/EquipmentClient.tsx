@@ -137,7 +137,14 @@ function SummaryTiles({ throughput }: { throughput: EquipmentThroughput }) {
         label="Downtime hrs (window)"
         value={s.totalDowntimeHours == null ? 'not recorded' : s.totalDowntimeHours.toFixed(1)}
       />
-      <Tile label="Cost (window)" value={centsToDollars(s.totalCostCents)} />
+      {/* ADR-0077 Amendment 2 — an UNPRICED window says "not recorded"; only a
+          genuinely recorded zero shows $0.00. `centsToDollars` renders null as
+          "—", which is right for a single event's missing cost but wrong for a
+          SUMMARY: a dash in a money tile reads as "nothing spent". */}
+      <Tile
+        label="Cost (window)"
+        value={s.totalCostCents == null ? 'not recorded' : centsToDollars(s.totalCostCents)}
+      />
     </div>
   );
 }

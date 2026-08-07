@@ -578,3 +578,44 @@ question anyone auditing a merge actually has.
   needs a capture path — a `kind='downtime'` event with `hours_down`, or a new
   workbook column — not a derivation. No number will be invented from the run-hour
   columns to fill the gap.
+
+## Amendment 3 (2026-08-07) — the cost residual, closed
+
+D4 established "not recorded ≠ zero" and applied it to `hours_down`, which is
+NULL on all 68 Terex events. It **explicitly left `totalCostCents` alone**, on the
+stated grounds that cost is genuinely _partly_ populated (7 of 68 events carry
+one) and was therefore "a weaker case".
+
+That reasoning had it backwards, and this amendment reverses it.
+
+Partly-populated is precisely when a fabricated zero is most convincing. An
+all-NULL column eventually makes somebody suspicious; a column that clearly works
+does not. `totalCostCents` summed `monthlyCostSeries`, which **drops null-cost
+events**, so a window in which nobody priced anything reduced to `0` and rendered
+as **`$0.00`** on the equipment tile and the ops-overview card — a machine that
+had cost the organisation nothing. The identical shape as the downtime figure
+that painted an unmeasured machine as a flawless one, one field over.
+
+**Decision.** `EquipmentThroughput.summary.totalCostCents` and the
+`OpsOverviewEquipment.costUsd` derived from it widen to `number | null`.
+
+- Presence is decided on the **events**, not on the monthly series or on a truthy
+  sum: `events.filter((e) => e.cost_cents != null)`. An empty series is ambiguous
+  (it means "nothing priced" AND "no events" AND "every event priced at zero"),
+  and collapsing those three is what manufactured the free machine.
+- An absent cost renders **"not recorded"**, neutral — matching the downtime tile
+  directly above it on both surfaces.
+- **A real recorded `0` stays `$0.00`.** A warranty repair that genuinely cost
+  nothing is a fact, and losing it would be the mirror-image error. Both
+  directions are pinned in `throughput.test.ts`, and both were falsified: reverting
+  the sum reds with `expected '$0.00' to be 'not recorded'`, and collapsing a real
+  zero reds with `expected 'not recorded' to be '$0.00'`.
+
+One assertion changed rather than being added: the empty-window test previously
+asserted `totalCostCents` `.toBe(0)`. That assertion was pinning the defect.
+
+**Sequencing note.** This landed after the ADR-0079 daily-throughput stream
+merged, because both edit `src/lib/equipment/throughput.ts`. The originating
+handoff named `terex-ledger.ts` as the target; that was wrong — verified by
+reading the code — and the real target is `throughput.ts` plus `EquipmentClient`,
+`OpsOverviewPanel` and `ops-overview.ts`.

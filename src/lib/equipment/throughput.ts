@@ -171,7 +171,18 @@ export interface EquipmentThroughput {
     last30UnitsPerDay: number | null;
     /** ADR-0077 D4 — NULL means no downtime was ever RECORDED; 0 means a recorded zero. */
     totalDowntimeHours: number | null;
-    totalCostCents: number;
+    /**
+     * ADR-0077 Amendment 2 — NULL means no event in the window recorded a cost at
+     * all; 0 means a real, recorded zero.
+     *
+     * This was `number` and summed to `0` when nothing was priced, which painted
+     * an unpriced machine as a free one — the same defect ADR-0077 D4 fixed for
+     * downtime and deliberately left here because cost is only PARTLY unpopulated
+     * (7 of 68 live events carry one), which made it the weaker case rather than
+     * a different one. Partly-populated is exactly when the fake zero is most
+     * convincing: the column looks alive, so nobody questions the total.
+     */
+    totalCostCents: number | null;
     /** Days in the window the manager actually recorded. 0 ⇒ nothing entered yet. */
     recordedDays: number;
   };
@@ -471,7 +482,16 @@ export async function computeEquipmentThroughput(
     daysWithDowntime.length === 0
       ? null
       : daysWithDowntime.reduce((s, d) => s + (d.hoursDown ?? 0), 0);
-  const totalCostCents = monthlyCost.reduce((s, m) => s + m.costCents, 0);
+  // Mirrors `totalDowntimeHours` above, deliberately: presence is decided on the
+  // EVENTS, not on the monthly series. `monthlyCostSeries` drops null-cost events,
+  // so an empty series is ambiguous — it means "nothing priced" AND "no events" AND
+  // "every event priced at zero" — and reducing it to 0 is what manufactured the
+  // free machine. Reading the events keeps a recorded 0 distinct from no record.
+  const pricedEvents = events.filter((e) => e.cost_cents != null);
+  const totalCostCents =
+    pricedEvents.length === 0
+      ? null
+      : pricedEvents.reduce((sum, e) => sum + (e.cost_cents ?? 0), 0);
 
   return {
     windowStartISO: startISO,

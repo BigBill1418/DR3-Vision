@@ -156,7 +156,11 @@ export interface EquipmentPanel {
   last30UnitsPerDay: number | null;
   /** ADR-0077 D4 — NULL means never recorded, not "no downtime". */
   downtimeHours: number | null;
-  costUsd: number;
+  /**
+   * ADR-0077 Amendment 2 — NULL means NOT RECORDED (no event in the window carried
+   * a cost); 0 means a real recorded zero. Never render an absent cost as $0.00.
+   */
+  costUsd: number | null;
   lastEvent: { dateISO: string; kind: string; hoursDown: number | null } | null;
 }
 
@@ -319,7 +323,8 @@ async function computeEquipmentPanel(siteId: string): Promise<EquipmentPanel> {
     last30UnitsPerDay: throughput.summary.last30UnitsPerDay,
     machineLabel,
     downtimeHours: throughput.summary.totalDowntimeHours,
-    costUsd: throughput.summary.totalCostCents / 100,
+    costUsd:
+      throughput.summary.totalCostCents === null ? null : throughput.summary.totalCostCents / 100,
     lastEvent: tile.lastEvent
       ? {
           dateISO: tile.lastEvent.dateISO,
