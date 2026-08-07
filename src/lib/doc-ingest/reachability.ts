@@ -73,8 +73,16 @@ export interface RunReachabilityScanOptions {
   now?: Date;
   scope?: string;
   limit?: number;
-  /** Retained scan history. Older rows and their items are pruned each run. */
+  /**
+   * How many scan rows (the COUNTS) to retain. At four sweeps an hour the default
+   * is roughly seven weeks of "when did the gap open?".
+   */
   keepScans?: number;
+  /**
+   * How many scans keep their per-document ITEM rows. Far smaller: the items are
+   * the same handful of documents re-listed every sweep until somebody acts.
+   */
+  keepItemScans?: number;
 }
 
 /**
@@ -93,7 +101,8 @@ export async function runReachabilityScan(
   const now = options.now ?? new Date();
   const scope = options.scope ?? docIngestReachabilityScope();
   const limit = options.limit ?? docIngestReachabilityLimit();
-  const keepScans = options.keepScans ?? 50;
+  const keepScans = options.keepScans ?? 5_000;
+  const keepItemScans = options.keepItemScans ?? 20;
 
   let found: { items: GraphDriveItem[]; total: number | null; truncated: boolean };
   try {
@@ -198,15 +207,40 @@ export async function runReachabilityScan(
     });
   }
 
-  // Keep the counts as history (cheap) but only the newest scans' ITEM rows.
-  const stale = await prisma.docIngestReachabilityScan.findMany({
+  // ── TWO retentions, because the two tables answer different questions ──────
+  //
+  // The COUNTS are the history: "when did the gap open?" is only answerable if
+  // scan rows outlive the sweep that wrote them, and at four sweeps an hour a
+  // 50-row cap would be twelve hours of memory. They are three integers and a
+  // string; keeping thousands is free.
+  //
+  // The ITEM rows are a snapshot of a question, not a ledger — the same eight
+  // documents re-listed every fifteen minutes until somebody acts. Only the
+  // newest few scans keep theirs.
+  //
+  // These MUST be pruned separately. Deleting the scan row cascades to its items
+  // (`onDelete: Cascade`), so a single combined prune silently throws the counts
+  // away with the snapshots — which is what an earlier version of this function
+  // did while its comment claimed the opposite.
+  const staleItemScans = await prisma.docIngestReachabilityScan.findMany({
+    orderBy: { scanned_at: 'desc' },
+    skip: keepItemScans,
+    select: { id: true },
+  });
+  if (staleItemScans.length > 0) {
+    await prisma.docIngestReachableItem.deleteMany({
+      where: { scan_id: { in: staleItemScans.map((s) => s.id) } },
+    });
+  }
+
+  const staleScans = await prisma.docIngestReachabilityScan.findMany({
     orderBy: { scanned_at: 'desc' },
     skip: keepScans,
     select: { id: true },
   });
-  if (stale.length > 0) {
+  if (staleScans.length > 0) {
     await prisma.docIngestReachabilityScan.deleteMany({
-      where: { id: { in: stale.map((s) => s.id) } },
+      where: { id: { in: staleScans.map((s) => s.id) } },
     });
   }
 

@@ -93,6 +93,23 @@ probe recording `gap_count: 0` would rebuild the exact illusion this ADR exists
 to destroy. This is the same "not recorded ≠ zero" rule ADR-0077 applied to
 downtime and ADR-0076's follow-up applies to headcount.
 
+### D3a — Two retentions, because the two tables answer different questions.
+
+Scan rows (the COUNTS) are the history: "when did the gap open?" is only
+answerable if they outlive the sweep that wrote them, and at four sweeps an hour
+a 50-row cap is twelve hours of memory. They are three integers and a string, so
+thousands are free — the default retains roughly seven weeks.
+
+Item rows are a _snapshot of a question_, not a ledger: the same eight documents
+re-listed every fifteen minutes until somebody acts. Only the newest few scans
+keep theirs.
+
+These must be pruned **separately**, and that is the whole point of writing it
+down: `doc_ingest_reachable_items` cascades on its scan, so one combined prune
+silently discards the counts along with the snapshots. The first version of this
+function did exactly that while its own comment claimed the opposite. Pinned by a
+test whose red is `expected [ { id: 'scan-3', … } ] to have a length of 3 but got 1`.
+
 ### D4 — The gap is surfaced, never adopted.
 
 A `discovery_gap` anomaly is raised naming the documents (a count is not

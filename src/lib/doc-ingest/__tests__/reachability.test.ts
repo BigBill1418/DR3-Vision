@@ -146,26 +146,20 @@ function fakePrisma(): PrismaClient {
       // sorted descending would make the direction untestable: flipping the
       // module to `asc` would read a stale scan, produce a plausible number, and
       // the suite would stay green.
-      findFirst: vi.fn(
-        async ({ orderBy }: { orderBy?: { scanned_at?: 'asc' | 'desc' } } = {}) => {
-          const dir = orderBy?.scanned_at ?? 'asc';
-          const sorted = [...store.scans].sort((a, b) => {
-            const av = (a['scanned_at'] as Date).getTime();
-            const bv = (b['scanned_at'] as Date).getTime();
-            return dir === 'desc' ? bv - av : av - bv;
-          });
-          return sorted[0] ? { ...sorted[0] } : null;
-        },
-      ),
-      findMany: vi.fn(
-        async ({ skip = 0 }: { skip?: number } = {}) =>
-          [...store.scans]
-            .sort(
-              (a, b) =>
-                (b['scanned_at'] as Date).getTime() - (a['scanned_at'] as Date).getTime(),
-            )
-            .slice(skip)
-            .map((s) => ({ id: s['id'] as string })),
+      findFirst: vi.fn(async ({ orderBy }: { orderBy?: { scanned_at?: 'asc' | 'desc' } } = {}) => {
+        const dir = orderBy?.scanned_at ?? 'asc';
+        const sorted = [...store.scans].sort((a, b) => {
+          const av = (a['scanned_at'] as Date).getTime();
+          const bv = (b['scanned_at'] as Date).getTime();
+          return dir === 'desc' ? bv - av : av - bv;
+        });
+        return sorted[0] ? { ...sorted[0] } : null;
+      }),
+      findMany: vi.fn(async ({ skip = 0 }: { skip?: number } = {}) =>
+        [...store.scans]
+          .sort((a, b) => (b['scanned_at'] as Date).getTime() - (a['scanned_at'] as Date).getTime())
+          .slice(skip)
+          .map((s) => ({ id: s['id'] as string })),
       ),
       deleteMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
         store.scans = store.scans.filter((s) => !where.id.in.includes(s['id'] as string));
@@ -176,6 +170,11 @@ function fakePrisma(): PrismaClient {
       createMany: vi.fn(async ({ data }: { data: Record<string, unknown>[] }) => {
         store.items.push(...data);
         return { count: data.length };
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: { scan_id: { in: string[] } } }) => {
+        const before = store.items.length;
+        store.items = store.items.filter((i) => !where.scan_id.in.includes(i['scan_id'] as string));
+        return { count: before - store.items.length };
       }),
       // Honours the scan filter — otherwise the digest would happily read another
       // scan's items and nothing would notice.
@@ -189,10 +188,7 @@ function fakePrisma(): PrismaClient {
   } as unknown as PrismaClient;
 }
 
-function searchReturning(
-  items: GraphDriveItem[],
-  truncated = false,
-): DocIngestSearch {
+function searchReturning(items: GraphDriveItem[], truncated = false): DocIngestSearch {
   return {
     searchDriveItems: vi.fn(async () => ({ items, total: items.length, truncated })),
   };
@@ -324,9 +320,7 @@ describe('runReachabilityScan — the live 2026-08-07 measurement', () => {
     });
     expect(res.gap).toHaveLength(0);
     expect(store.anomalies).toHaveLength(0);
-    expect(store.resolved).toEqual([
-      { kind: 'discovery_gap', subject: REACHABILITY_SUBJECT },
-    ]);
+    expect(store.resolved).toEqual([{ kind: 'discovery_gap', subject: REACHABILITY_SUBJECT }]);
   });
 
   it('records the EXACT scope that produced the numbers', async () => {
@@ -341,11 +335,10 @@ describe('runReachabilityScan — the live 2026-08-07 measurement', () => {
   });
 
   it('propagates truncation — an under-stated gap must not look complete', async () => {
-    const res = await runReachabilityScan(
-      fakePrisma(),
-      searchReturning(liveReachable(), true),
-      { now: NOW, scope: SCOPE },
-    );
+    const res = await runReachabilityScan(fakePrisma(), searchReturning(liveReachable(), true), {
+      now: NOW,
+      scope: SCOPE,
+    });
     expect(res.truncated).toBe(true);
     expect(store.scans[0]?.['truncated']).toBe(true);
     expect(store.anomalies[0]?.detail).toMatch(/TRUNCATED/i);
@@ -464,5 +457,30 @@ describe('docIngestDiscoveryGapWarning — the 06:00 digest line', () => {
     // change collapsing "never ran" or "errored" into silence goes red here by
     // making all three cases behave the same.
     expect(await docIngestDiscoveryGapWarning(prisma, NOW)).toBeNull();
+  });
+});
+
+describe('runReachabilityScan — retention keeps the counts, drops the snapshots', () => {
+  it('prunes ITEM rows without taking the scan history with them', async () => {
+    const prisma = fakePrisma();
+    // Three scans, retaining items for only the newest one.
+    for (let i = 0; i < 3; i += 1) {
+      await runReachabilityScan(prisma, searchReturning(liveReachable()), {
+        now: new Date(NOW.getTime() + i * 900_000),
+        scope: SCOPE,
+        keepItemScans: 1,
+        keepScans: 5_000,
+      });
+    }
+
+    // The COUNTS are the history — "when did the gap open?" is only answerable
+    // if scan rows outlive the sweep that wrote them. Deleting a scan cascades
+    // to its items, so a single combined prune throws these away silently.
+    expect(store.scans).toHaveLength(3);
+
+    // …while only the newest scan keeps its per-document snapshot.
+    const newestId = store.scans[store.scans.length - 1]?.['id'];
+    const scansWithItems = new Set(store.items.map((i) => i['scan_id']));
+    expect([...scansWithItems]).toEqual([newestId]);
   });
 });
