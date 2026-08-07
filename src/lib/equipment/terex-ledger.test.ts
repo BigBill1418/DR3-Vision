@@ -128,17 +128,34 @@ vi.mock('@/lib/prisma', () => ({
                 r.doc_source_version_id === where.doc_source_version_id),
           ),
       ),
-      // Newest-absorbed first, matching `orderBy: { absorbed_at: 'desc' }`.
-      findFirst: vi.fn(async ({ where }: { where: { site_id: string; status?: string } }) => {
-        const rows = store.maint
-          .filter(
-            (r) =>
-              r.site_id === where.site_id &&
-              (where.status === undefined || r.status === where.status),
-          )
-          .sort((a, b) => b.absorbed_at.getTime() - a.absorbed_at.getTime());
-        return rows[0] ?? null;
-      }),
+      // HONOURS `orderBy` rather than hardcoding newest-first. A mock that always
+      // sorted descending made the direction untestable: flipping the module to
+      // `asc` picked a different revision, produced identical totals, and the
+      // suite stayed green — so the newest-revision-wins rule, which is exactly
+      // what the production triple-count turned on, had no guard.
+      findFirst: vi.fn(
+        async ({
+          where,
+          orderBy,
+        }: {
+          where: { site_id: string; status?: string };
+          orderBy?: { absorbed_at?: 'asc' | 'desc' };
+        }) => {
+          const dir = orderBy?.absorbed_at ?? 'asc';
+          const rows = store.maint
+            .filter(
+              (r) =>
+                r.site_id === where.site_id &&
+                (where.status === undefined || r.status === where.status),
+            )
+            .sort((a, b) =>
+              dir === 'desc'
+                ? b.absorbed_at.getTime() - a.absorbed_at.getTime()
+                : a.absorbed_at.getTime() - b.absorbed_at.getTime(),
+            );
+          return rows[0] ?? null;
+        },
+      ),
     },
     apEquipmentLink: {
       findMany: vi.fn(async ({ where }: { where: { equipment_id: string } }) =>
@@ -338,14 +355,22 @@ describe('computeTerexLedger — one document, many revisions (ADR-0077 D9)', ()
       { v: 'v-2979', at: '2026-08-06T22:47:00Z' }, // newest — the document
     ];
     for (const { v, at } of revisions) {
+      // Each revision's rows are IDENTIFIABLE. Byte-identical fixtures would
+      // leave `orderBy: absorbed_at desc` unpinned — flipping it to `asc` would
+      // pick a different revision, produce the same totals, and the suite would
+      // stay green while the newest-revision-wins semantic (the exact thing the
+      // production triple-count turned on) had no guard at all.
+      // The TOTALS stay identical across revisions, faithfully to production.
       store.maint.push(
         maint('confirmed', 50000, 4000, {
           doc_source_version_id: v,
           absorbed_at: new Date(at),
+          issue: `issue-from-${v}`,
         }),
         maint('confirmed', 27067.94, 25.36, {
           doc_source_version_id: v,
           absorbed_at: new Date(at),
+          issue: `issue-from-${v}`,
         }),
       );
     }
@@ -361,10 +386,21 @@ describe('computeTerexLedger — one document, many revisions (ADR-0077 D9)', ()
 
   it('picks the NEWEST revision — a revision supersedes, it does not add', async () => {
     seedThreeRevisions();
-    // Only the newest carries this row; if the ledger picked an older revision
-    // or merged them, the count would not be the newest revision's count.
     const l = await computeTerexLedger(WOODLAND, TEREX);
     expect(l.maintenance.events).toHaveLength(2);
+    // WHICH revision, not just how many. The totals are identical across all
+    // three, so only the row identity can prove `desc` was honoured.
+    expect(l.maintenance.events.map((e) => e.issue)).toEqual([
+      'issue-from-v-2979',
+      'issue-from-v-2979',
+    ]);
+  });
+
+  it('never returns an OLDER revision, whatever the insertion order', async () => {
+    seedThreeRevisions();
+    const l = await computeTerexLedger(WOODLAND, TEREX);
+    expect(l.maintenance.events.some((e) => e.issue === 'issue-from-v-2977')).toBe(false);
+    expect(l.maintenance.events.some((e) => e.issue === 'issue-from-v-2978')).toBe(false);
   });
 
   it('does not depend on the superseded batches having been tidied away', async () => {
@@ -608,17 +644,23 @@ describe('computeTerexLedger — scoping', () => {
     expect(l.maintenance.totalRepairCents).toBeNull();
   });
 
-  it('refuses a Woodland shear machine that carries no Terex invoices', async () => {
+  // All three Woodland shear machines, by name, because "the category is not the
+  // machine" is only convincing if every row that shares the category is refused.
+  it.each([
+    ['eq24', 'EQ24 — Shear Machine'],
+    ['eq43', 'EQ43 — Shear Machine'],
+    ['eq74', 'EQ74 — Shear Machine'],
+  ])('refuses Woodland shear machine %s — no Terex invoices behind it', async (id, name) => {
     seedProductionShape();
     store.equipment.push({
-      id: 'eq24',
+      id,
       site_id: WOODLAND,
-      display_name: 'EQ24 — Shear Machine',
+      display_name: name,
       category: 'terex',
       merged_into_id: null,
     });
 
-    const l = await computeTerexLedger(WOODLAND, 'eq24');
+    const l = await computeTerexLedger(WOODLAND, id);
     // The site HAS confirmed maintenance rows — they must not surface here.
     expect(l.equipment).toBeNull();
     expect(l.maintenance.totalRepairCents).toBeNull();
