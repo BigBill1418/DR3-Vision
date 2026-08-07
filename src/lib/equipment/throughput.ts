@@ -1,48 +1,76 @@
-// ADR-0044 D2 — derived equipment throughput (one source of truth).
+// ADR-0078 (supersedes ADR-0044 D2) — the machine's throughput is CAPTURED.
 //
-// Throughput is NOT captured anywhere in ADR-0044 — it is DERIVED from
-// `processed_units_daily` (ADR-0037 D5, the number billing bills from). A second
-// entry path would recreate the two-artifact drift class (mission §B8), so this
-// module only READS. The pure builders below are unit-tested without a DB; the one
-// aggregator (`computeEquipmentThroughput`) wires them to Prisma, site-scoped
-// (CLAUDE.md hard rule #2).
+// ADR-0044 D2 derived throughput from `processed_units_daily` and reasoned that a
+// second entry path would recreate the two-artifact drift class. The reasoning was
+// sound and the premise was wrong: `stripped_program + stripped_non_program` is the
+// WHOLE FLOOR's output, and calling it the Terex's cannot distinguish the machine
+// from hand-stripping or a second machine. It is not a second artifact of the same
+// fact — it is a DIFFERENT fact wearing the machine's name. Production shows the
+// scale: Woodland's derived "Terex" days run 1,000–1,250 units.
 //
-// units/day        = stripped_program + stripped_non_program for the day.
-// units/run-hour   = units/day ÷ (assumed_day_hours − downtime_hours), computed
-//                    only on days that have downtime hours (D2). The productive
-//                    hours in a day are not captured, so a single ASSUMED constant
-//                    stands in — labeled `assumed_day_hours` and surfaced to the UI
-//                    (a config table would be overkill for one number, D2).
+// units/day        = the MANAGER-ENTERED `units_processed` for the machine that
+//                    day (ADR-0078 D3). NULL on a day nobody entered — rendered
+//                    "not recorded", never 0 and never the floor-wide number.
+// units/run-hour   = units/day ÷ the ENTERED `run_hours`. Real hours, not the 8h
+//                    assumption — the primary reason to capture rather than derive.
 // downtime hours   = Σ hours_down of `kind=downtime` events that day. Maintenance
-//                    and repair hours are captured but NOT folded into the run-hour
-//                    denominator or the red bands: those are planned interventions,
-//                    not line-stopping downtime, and the trend view's "downtime"
-//                    concept must match the red bands D3 draws (kind=downtime).
+//                    and repair hours are captured but NOT folded into the red
+//                    bands: those are planned interventions, not line-stopping
+//                    downtime, and the trend view's "downtime" concept must match
+//                    the red bands D3 draws (kind=downtime).
+// derived floor    = RETAINED and still computed, as a LATENT cross-check only
+//                    (ADR-0078 D5). Never rendered as a competing throughput
+//                    number. A manager entering 40 units on a day the floor
+//                    stripped 400 is either a light Terex day or a data-entry
+//                    error, and telling those apart needs a RULE that does not
+//                    exist yet — so v1 keeps the input and builds no rule.
+//
+// The pure builders below are unit-tested without a DB; the one aggregator
+// (`computeEquipmentThroughput`) wires them to Prisma, site-scoped (hard rule #2).
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appTodayISO, dayISO, dayKeyUTCFromISO } from '@/lib/time';
+import { enteredThroughputByDay, resolveSiteThroughputMachine } from './daily-throughput';
 
 /**
- * The one throughput assumption (D2): a Terex working day is 8 productive hours.
- * The productive-hours figure is not captured, so this constant stands in and is
- * surfaced to the UI as `assumed_day_hours` (never silently baked in).
+ * LEGACY (ADR-0044 D2, superseded by ADR-0078 D3). A Terex working day was assumed
+ * to be 8 productive hours because the real figure was not captured anywhere.
+ *
+ * It is no longer on the live path: `run_hours` is captured with the units, is
+ * `NOT NULL` and DB-checked `> 0`, so an entered day ALWAYS carries real hours and
+ * the assumption can never stand in for one. Retained, exported and still labeled
+ * because the derived series it belongs to is retained as a latent cross-check
+ * (D5) — and because deleting a number the UI has been showing, in the same change
+ * that moves the number it qualifies, would make two changes look like one.
  */
 export const ASSUMED_DAY_HOURS = 8;
 export const ASSUMED_DAY_HOURS_LABEL = 'assumed_day_hours' as const;
 
 export interface DailyThroughputPoint {
   dateISO: string;
-  /** stripped_program + stripped_non_program; null on a day with no close. */
+  /**
+   * The MACHINE's entered units for the day. `null` = NOT RECORDED — nobody wrote
+   * a number down. It is never 0 (a recorded zero is a real 0) and never the
+   * floor-wide derived total (ADR-0078 D3).
+   */
   unitsDay: number | null;
+  /** The ENTERED run hours; null when the day was not recorded. */
+  runHours: number | null;
+  /**
+   * ADR-0078 D5 — the retained floor-wide `stripped_program + stripped_non_program`.
+   * A LATENT cross-check for a future reconciliation rule. This is NOT the
+   * machine's throughput and must never be rendered as though it were.
+   */
+  derivedFloorUnits: number | null;
   /** Σ hours_down of kind=downtime events that day; null when there were none. */
   hoursDown: number | null;
-  /** units/day ÷ (assumed_day_hours − hoursDown); null unless downtime existed. */
+  /** units/day ÷ entered run_hours; null unless the day was recorded. */
   unitsPerRunHour: number | null;
   pocketcoilEstimate: number | null;
-  /** 7-day trailing mean of unitsDay (non-null days only); null when none. */
+  /** 7-day trailing mean of unitsDay (recorded days only); null when none. */
   mean7: number | null;
-  /** 30-day trailing mean of unitsDay (non-null days only); null when none. */
+  /** 30-day trailing mean of unitsDay (recorded days only); null when none. */
   mean30: number | null;
 }
 
@@ -67,6 +95,13 @@ export interface EquipmentThroughput {
   windowEndISO: string;
   assumedDayHours: number;
   assumedDayHoursLabel: typeof ASSUMED_DAY_HOURS_LABEL;
+  /**
+   * ADR-0078 D1 — the machine these numbers belong to, resolved from the equipment
+   * registry (never hardcoded). `null` at a site with no such machine, which is
+   * why every `unitsDay` there is honestly "not recorded" rather than the floor's
+   * total relabelled.
+   */
+  machine: { id: string; displayName: string } | null;
   daily: DailyThroughputPoint[];
   downtimeBands: DowntimeBand[];
   monthlyCost: MonthlyCostPoint[];
@@ -77,33 +112,61 @@ export interface EquipmentThroughput {
     /** ADR-0077 D4 — NULL means no downtime was ever RECORDED; 0 means a recorded zero. */
     totalDowntimeHours: number | null;
     totalCostCents: number;
+    /** Days in the window the manager actually recorded. 0 ⇒ nothing entered yet. */
+    recordedDays: number;
   };
 }
 
 /** A single day's raw inputs, before rolling means are layered on. */
 export interface DayInput {
   dateISO: string;
+  /** ENTERED units for the machine; null = not recorded. */
   unitsDay: number | null;
+  /** ENTERED run hours; null = not recorded. */
+  runHours: number | null;
+  /** ADR-0078 D5 — retained floor-wide total, a latent cross-check. Not throughput. */
+  derivedFloorUnits: number | null;
   hoursDown: number | null;
   pocketcoilEstimate: number | null;
 }
 
 /**
- * units/run-hour for one day. Pure. Returns null unless downtime hours exist
- * (D2 — the metric is only meaningful when the productive window was reduced),
- * unitsDay is known, and the remaining run window is positive. A downtime that
- * meets or exceeds the assumed day (run window ≤ 0) yields null rather than a
- * divide-by-zero or a negative rate.
+ * units/run-hour for one day, from the ENTERED figures. Pure.
+ *
+ * ADR-0078 D3 — the denominator is now the hours the machine ACTUALLY RAN, not
+ * `assumed_day_hours − hours_down`. That old formula answered a question nobody
+ * asked ("how many units per hour, if we pretend the day was 8 hours and subtract
+ * the downtime somebody happened to log") and it only produced a number at all on
+ * days that had downtime recorded — which, on this machine, was never: `hours_down`
+ * is NULL on all 67 production Terex rows.
+ *
+ * Null unless BOTH figures are recorded and the run window is positive, so a
+ * missing day yields null rather than a divide-by-zero, an Infinity, or a rate
+ * computed against a guess.
  */
-export function unitsPerRunHour(
-  unitsDay: number | null,
+export function unitsPerRunHour(unitsDay: number | null, runHours: number | null): number | null {
+  if (unitsDay == null || runHours == null || runHours <= 0) return null;
+  return unitsDay / runHours;
+}
+
+/**
+ * ADR-0078 D5 — the SUPERSEDED ADR-0044 D2 rate, retained and exported so the
+ * derived series stays fully computable for a future reconciliation cross-check.
+ *
+ * NOT on the live path and must not be rendered as throughput: its numerator is
+ * the whole floor's output and its denominator is an assumption. Kept callable
+ * (and tested) rather than deleted so that when the reconciliation rule is
+ * specified, the comparison it needs is already here and already pinned.
+ */
+export function legacyDerivedUnitsPerRunHour(
+  derivedFloorUnits: number | null,
   hoursDown: number | null,
   assumedDayHours: number = ASSUMED_DAY_HOURS,
 ): number | null {
-  if (unitsDay == null || hoursDown == null || hoursDown <= 0) return null;
+  if (derivedFloorUnits == null || hoursDown == null || hoursDown <= 0) return null;
   const runHours = assumedDayHours - hoursDown;
   if (runHours <= 0) return null;
-  return unitsDay / runHours;
+  return derivedFloorUnits / runHours;
 }
 
 /**
@@ -145,18 +208,20 @@ export function enumerateDaysISO(startISO: string, endISO: string): string[] {
  * Layer rolling means + run-hour onto a day-ordered input series. Pure.
  * `days` MUST be ascending by date.
  */
-export function buildDailySeries(
-  days: readonly DayInput[],
-  assumedDayHours: number = ASSUMED_DAY_HOURS,
-): DailyThroughputPoint[] {
+export function buildDailySeries(days: readonly DayInput[]): DailyThroughputPoint[] {
+  // The rolling means run over the ENTERED units and skip null days rather than
+  // counting them as zero (ADR-0077 D4 / ADR-0078 D3). A machine nobody recorded
+  // on Tuesday must not drag Tuesday's absence into Wednesday's average as a 0.
   const units = days.map((d) => d.unitsDay);
   const mean7 = rollingMean(units, 7);
   const mean30 = rollingMean(units, 30);
   return days.map((d, i) => ({
     dateISO: d.dateISO,
     unitsDay: d.unitsDay,
+    runHours: d.runHours,
+    derivedFloorUnits: d.derivedFloorUnits,
     hoursDown: d.hoursDown,
-    unitsPerRunHour: unitsPerRunHour(d.unitsDay, d.hoursDown, assumedDayHours),
+    unitsPerRunHour: unitsPerRunHour(d.unitsDay, d.runHours),
     pocketcoilEstimate: d.pocketcoilEstimate,
     mean7: mean7[i] ?? null,
     mean30: mean30[i] ?? null,
@@ -199,7 +264,11 @@ export async function computeEquipmentThroughput(
   const startKey = new Date(endKey.getTime() - (windowDays - 1) * 86_400_000);
   const startISO = dayISO(startKey);
 
-  const [closes, events] = await Promise.all([
+  // ADR-0078 D1 — resolve the machine from the registry FIRST; every entered read
+  // is scoped to that row, never to a hardcoded id and never to a typed string.
+  const machine = await resolveSiteThroughputMachine(siteId);
+
+  const [closes, events, entered] = await Promise.all([
     prisma.processedUnitsDaily.findMany({
       where: { site_id: siteId, production_date: { gte: startKey, lte: endKey } },
       select: {
@@ -219,13 +288,18 @@ export async function computeEquipmentThroughput(
       },
       select: { event_date: true, kind: true, hours_down: true, cost_cents: true },
     }),
+    // ADR-0078 D3 — the manager's entered days. Absent day ⇒ absent key, never a 0.
+    machine
+      ? enteredThroughputByDay(siteId, startKey, endKey, machine.id)
+      : Promise.resolve(new Map<string, { unitsProcessed: number; runHours: number }>()),
   ]);
 
-  const unitsByDay = new Map<string, number>();
+  // ADR-0078 D5 — the floor-wide total is still computed, and is NOT unitsDay.
+  const derivedFloorByDay = new Map<string, number>();
   const pocketByDay = new Map<string, number>();
   for (const c of closes) {
     const k = dayISO(c.production_date);
-    unitsByDay.set(k, num(c.stripped_program) + num(c.stripped_non_program));
+    derivedFloorByDay.set(k, num(c.stripped_program) + num(c.stripped_non_program));
     if (c.pocketcoil_estimate != null) pocketByDay.set(k, c.pocketcoil_estimate);
   }
 
@@ -236,14 +310,23 @@ export async function computeEquipmentThroughput(
     downtimeByDay.set(k, (downtimeByDay.get(k) ?? 0) + num(e.hours_down));
   }
 
-  const dayInputs: DayInput[] = enumerateDaysISO(startISO, endISO).map((dateISO) => ({
-    dateISO,
-    unitsDay: unitsByDay.has(dateISO) ? unitsByDay.get(dateISO)! : null,
-    hoursDown: downtimeByDay.has(dateISO) ? downtimeByDay.get(dateISO)! : null,
-    pocketcoilEstimate: pocketByDay.has(dateISO) ? pocketByDay.get(dateISO)! : null,
-  }));
+  // `.has()` rather than `?? null`: a RECORDED zero must survive as 0. Reading a
+  // map with `??` would collapse a real "the machine ran and produced nothing"
+  // into "not recorded" — the exact conflation ADR-0077 D4 exists to prevent, and
+  // the reason each lookup below tests presence before reading.
+  const dayInputs: DayInput[] = enumerateDaysISO(startISO, endISO).map((dateISO) => {
+    const e = entered.get(dateISO);
+    return {
+      dateISO,
+      unitsDay: e ? e.unitsProcessed : null,
+      runHours: e ? e.runHours : null,
+      derivedFloorUnits: derivedFloorByDay.has(dateISO) ? derivedFloorByDay.get(dateISO)! : null,
+      hoursDown: downtimeByDay.has(dateISO) ? downtimeByDay.get(dateISO)! : null,
+      pocketcoilEstimate: pocketByDay.has(dateISO) ? pocketByDay.get(dateISO)! : null,
+    };
+  });
 
-  const daily = buildDailySeries(dayInputs, ASSUMED_DAY_HOURS);
+  const daily = buildDailySeries(dayInputs);
   const downtimeBands: DowntimeBand[] = dayInputs
     .filter((d) => d.hoursDown != null && d.hoursDown > 0)
     .map((d) => ({ dateISO: d.dateISO, hoursDown: d.hoursDown! }));
@@ -280,6 +363,7 @@ export async function computeEquipmentThroughput(
     windowEndISO: endISO,
     assumedDayHours: ASSUMED_DAY_HOURS,
     assumedDayHoursLabel: ASSUMED_DAY_HOURS_LABEL,
+    machine,
     daily,
     downtimeBands,
     monthlyCost,
@@ -289,6 +373,7 @@ export async function computeEquipmentThroughput(
       last30UnitsPerDay: last?.mean30 ?? null,
       totalDowntimeHours,
       totalCostCents,
+      recordedDays: dayInputs.filter((d) => d.unitsDay != null).length,
     },
   };
 }

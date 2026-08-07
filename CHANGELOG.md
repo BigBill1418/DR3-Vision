@@ -3,6 +3,116 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0078)
+
+The Terex's throughput has been the **whole floor's output wearing one machine's
+name**. ADR-0044 D2 computed it as `stripped_program + stripped_non_program` and
+reasoned that throughput "needs NO new capture". The reasoning was careful and the
+premise was wrong: that is not a second artifact of the same fact, it is a
+different fact. On 2026-08-06 the "Terex" processed **1,063 units** — 769 program
+plus 294 non-program — which is every machine and every hand-stripper on the
+floor. **A manager now enters the number, daily, and that entry is the throughput.**
+
+**Run hours are entered with it, and that is the half that matters.** Units-per-hour
+divided by `assumed_day_hours − hours_down`, where `assumed_day_hours` is a
+constant equal to 8 and `hours_down` is — per ADR-0077 — `NULL` on all 67
+non-voided Terex events ever written. So the rate was not merely assumed against a
+guess; it returned `null` on every real production day. It means something now.
+
+### A day nobody entered says so
+
+`unitsDay` is `null` on an unrecorded day and renders **"not recorded"** — on the
+equipment tiles and on both ops-overview throughput cards, which previously showed
+`—`. Never `0`, never the floor total. Two of the three possible behaviours here
+look entirely reasonable on screen: a `0` makes a working machine look broken, and
+a silent fall-back to the floor number makes it look like a hero while the office
+believes a figure nobody entered.
+
+The guard was **falsified before being trusted**. The derived fallback was wired
+back in deliberately and the suite re-run; three tests went red naming the real
+wrong value:
+
+```
+AssertionError: expected 1063 to be null
+- Expected:  null
++ Received:  1063
+```
+
+`1063` — the actual Woodland floor total — not an `undefined` that would only have
+proved a field was missing. The fixtures carry production magnitudes for exactly
+this reason.
+
+**On the day this ships, every day reads "not recorded"** until the first manager
+entry. That is the visible signature of the fix, not a regression.
+
+### A dedicated table, because three queries would have swallowed it
+
+The obvious home was a sixth `equipment_events` kind. Three read paths query that
+table with **no kind filter** and would have absorbed a daily row: the tile's
+`findFirst` (a row written every working day becomes "the LAST equipment event"
+forever, burying the downtime the tile exists to show), `listEquipmentEvents`
+(~250 rows/yr flooding the maintenance log), and the Terex ledger — which selects
+`hours_down` with no kind filter and sums it into `downtime.totalHours`.
+
+That last one is the sharp edge. Carrying run hours in `hours_down` — the tempting
+reuse — would report **the hours the machine RAN as the hours it was DOWN**:
+ADR-0077's defect inverted and worse, because it manufactures a measurement rather
+than mis-rendering a missing one. `run_hours` and `hours_down` are now in
+different tables so no query can ever confuse them.
+
+`equipment_events` also has no equipment FK at all (`equipment_code` is free
+text), so "unique per machine per day" was not expressible there. The new table
+takes a real FK and the ADR-0077 identity rule resolves it — category **plus** AP
+links, because the ADR-0062 seed uses `terex` as the category for shear machines
+and production carries five such rows. `7e35a4aa` appears nowhere in the source.
+
+The unique index is **partial** (`WHERE voided_at IS NULL`) so a mistaken entry can
+be voided and the day re-entered. Its key columns are both `NOT NULL` — only the
+predicate is nullable, which is the difference between an index that constrains
+and one that constrains nothing. Proved by insertion against a real PG16, not by
+reading the DDL: the duplicate raised, the void released the day, `run_hours` of
+`0` and `25` were refused, `-1` units was refused, a recorded `0` was accepted, and
+the machine could not be deleted out from under a recorded day.
+
+### The amendment workflow could not be reused, and the handoff's premise was wrong
+
+Same-day entry and edit are free and audited. A **prior day is refused** with
+`409 requires_amendment` and an honest message routing the manager to the office.
+
+The plan was to route prior-day edits through the bonus amendment workflow. It
+cannot be: `resolveAmendmentApprover` sources the approver from
+`bonus_signature_chains` — the payroll signature roster — and **throws a 403 for
+anyone who is not a bonus payroll signer.** A Woodland equipment manager is not
+necessarily one, so reuse would hand the exact audience this feature exists for a
+403 they could do nothing about. The table also carries two `NOT NULL` FKs to
+bonus tables with no polymorphic targeting, and `applyApprovalInTx` writes
+`bonusDailyEntry` literally.
+
+The handoff described this as "the third surface to inherit that pattern". **There
+is exactly one consumer.** `processed_units_daily` — the presumed second — uses a
+_lock_, not a four-eyes gate. The ~40 files mentioning "amendment" are
+overwhelmingly ADR-revision naming. Rather than fork a parallel approval system
+for one field, the gap is reported as OPEN-ITEMS **F-2** with the smallest
+generalization proposed.
+
+### Notes
+
+- The derived number is **retained and still computed** as a latent cross-check
+  (`derivedFloorUnits`, and the exported `legacyDerivedUnitsPerRunHour`). It is
+  never shown as a competing throughput figure; the CSV column is named
+  `derived_floor_units_all_sources`, because a column called `units_day` would
+  re-tell the lie the tile used to tell. **No divergence rules in v1** — that
+  needs a rule, and the rule is reconciliation-layer work.
+- The entry control rides the existing `equipment_entry` surface (live at
+  Woodland), not a new born-pilot gate. The audience is identical to the one
+  already entering equipment events on that screen; a new gate would have hidden
+  the sheet's replacement from the managers being asked to stop using the sheet.
+- Eugene is untouched: zero `equipment_events`, zero `processed_units_daily`.
+- Migration `20260830_adr0078_equipment_daily_throughput` is purely additive. **No
+  history was backfilled from the derived series** — every backfilled day would be
+  a fabricated manager entry, indistinguishable from a real one, in the one table
+  whose whole point is that the number is authoritative.
+
 ## 2026-08-06 — one Terex, and the downtime that was never there (ADR-0077)
 
 Woodland had three records for one machine. It has one now — `7e35a4aa`,

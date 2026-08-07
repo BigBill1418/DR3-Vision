@@ -134,15 +134,26 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {data.equipment ? (
             <>
+              {/* ADR-0078 D3 — these two used to be the WHOLE FLOOR's stripped
+                  total (1,000–1,250 units/day at Woodland) shown under one
+                  machine's name. They now read the manager's entered daily
+                  figures, and a window nobody entered says "not recorded" in a
+                  neutral tone rather than showing "—" or, worse, falling back to
+                  the floor number. Same rule as the downtime card below. */}
               <StatCard
                 label="Throughput · 7-day"
                 value={
                   data.equipment.last7UnitsPerDay == null
-                    ? '—'
+                    ? 'not recorded'
                     : nf(data.equipment.last7UnitsPerDay, 1)
                 }
-                unit="units / day"
-                sub="Mean daily units stripped"
+                unit={data.equipment.last7UnitsPerDay == null ? '' : 'units / day'}
+                {...(data.equipment.last7UnitsPerDay == null ? { tone: 'neutral' as const } : {})}
+                sub={
+                  data.equipment.last7UnitsPerDay == null
+                    ? 'No daily processing has been entered for this machine'
+                    : 'Mean of the daily figures entered for this machine'
+                }
                 href={`/dashboard/${siteCode}/equipment`}
                 testId="ov-eq-7day"
               />
@@ -150,10 +161,11 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
                 label="Throughput · 30-day"
                 value={
                   data.equipment.last30UnitsPerDay == null
-                    ? '—'
+                    ? 'not recorded'
                     : nf(data.equipment.last30UnitsPerDay, 1)
                 }
-                unit="units / day"
+                unit={data.equipment.last30UnitsPerDay == null ? '' : 'units / day'}
+                {...(data.equipment.last30UnitsPerDay == null ? { tone: 'neutral' as const } : {})}
                 sub="Longer-run pace"
                 href={`/dashboard/${siteCode}/equipment`}
                 testId="ov-eq-30day"

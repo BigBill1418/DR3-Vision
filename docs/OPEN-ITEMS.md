@@ -16,6 +16,77 @@ window her cross-checks are possible.
 
 ---
 
+## 0.AH — 2026-08-07 Terex daily throughput (ADR-0078) — follow-up
+
+- **F-2 — the amendment workflow is bonus-specific and could not be reused; equipment
+  prior-day edits are REFUSED until it is generalized.**
+
+  ADR-0078 D4 needed prior-day Terex corrections to route through "the existing
+  bonus amendment workflow". They could not, and the blocker is structural rather
+  than cosmetic. What was found:
+  - **`resolveAmendmentApprover` (`src/lib/bonus/amendment-approvers.ts`) throws
+    `AmendmentWorkflowForbiddenError` for any requester who is not a bonus payroll
+    signer**, because it sources the approver from `bonus_signature_chains` — the
+    payroll PDF dual-signature roster. A Woodland equipment manager is not
+    necessarily one. This alone is disqualifying: reuse would hand _the exact
+    audience the feature is for_ a 403 they could do nothing about.
+  - `bonus_amendment_requests` carries two `NOT NULL` FKs to bonus-specific tables
+    (`bonus_pay_periods`, `bonus_employees`, both `ON DELETE RESTRICT`) and has
+    **no** polymorphic targeting — no `subject_type`, no generic `row_id`.
+  - `applyApprovalInTx` writes `tx.bonusDailyEntry` literally, with no dispatch
+    point, strategy or writer interface.
+  - Four DB-level CHECK constraints (including `char_length(justification) >= 20`)
+    live only in raw SQL, invisible in `schema.prisma`.
+
+  **The handoff's premise that this pattern already had two or three consumers is
+  false — there is exactly one.** `shouldRequireAmendment` has a single non-test
+  importer (`src/lib/bonus/daily-entry.ts`). `processed_units_daily`, the presumed
+  second, uses a _lock_ rather than a four-eyes gate ("That day is already closed
+  and locked — ask Bill to run the amendment path"). The ~40 files mentioning
+  "amendment" are overwhelmingly ADR-revision naming ("ADR-0077 Amendment 1"), and
+  that collision is almost certainly what produced the false premise. **Worth
+  re-checking before any future work assumes a house pattern exists here.**
+
+  **Current behaviour (shipped):** same-day entry/edit is free and audited; a
+  prior-day change returns `409 requires_amendment` with the target date, today,
+  the on-record values and the proposed values, and the UI tells the manager to
+  send the date and corrected numbers to the office. Nothing is written. No
+  parallel amendment system was forked.
+
+  **Smallest generalization proposed** (roughly in dependency order; ~1 focused PR):
+  1. **Lift `shouldRequireAmendment` into a domain-neutral module.** It is already
+     a pure, DB-free function whose only bonus leaks are the literal `'draft'`
+     state check, a `{ mattress_count, note }`-shaped `oldValue`, and its location.
+     Parameterize the value shape and replace `periodState !== 'draft'` with an
+     `isLocked: boolean`. ~15 lines.
+  2. **Add a nullable `subject_type` discriminator + generic target columns to
+     `bonus_amendment_requests`**, and relax the two bonus FKs to nullable _for
+     non-bonus subjects only_ (a CHECK enforcing "bonus rows still carry both").
+     The repo's own `AuditLog` (`table_name` + `row_id`) is the in-house
+     polymorphic precedent. This is the only schema change and the only risk to
+     the live payroll path — it must not weaken bonus-row integrity.
+  3. **Introduce an approver-source interface** so equipment can resolve an
+     approver from something other than `bonus_signature_chains`. This is the
+     genuinely new design work: _who_ countersigns an equipment correction is a
+     product question for Bill, not a code question.
+  4. **Add a writer interface at `applyApprovalInTx`** so approval dispatches to
+     the target table instead of naming `bonusDailyEntry`.
+  5. Generalize `RequestEditBatchModal` (note: `RequestEditModal` singular does not
+     exist; the batch modal superseded it) — its structure and a11y are reusable,
+     its props and hardcoded `/api/bonus/amendments` endpoint are not.
+
+  **Blocked on a product decision at step 3.** Not urgent: the refusal is honest,
+  visible, and routes to a human who can act. Revisit when a second non-bonus
+  surface needs prior-day approval, so the generalization is driven by two real
+  consumers rather than one plus a guess.
+
+- **F-3 — the derived floor number is retained but has no reconciliation rule.**
+  ADR-0078 D5 keeps `derivedFloorUnits` and `legacyDerivedUnitsPerRunHour`
+  computable so an entered-vs-derived cross-check is buildable (a manager entering
+  40 units on a day the floor stripped 400 is either a light day or a typo).
+  **Deliberately no rule in v1** — that is reconciliation-layer work and is blocked
+  on Kelsey's method. The inputs are in place; only the rule is missing.
+
 ## 0.AG — 2026-08-05 Processor headcount (ADR-0076) — follow-up
 
 - **F-1 — the COR month-end headcount pre-fill renders `—` and now has an easy fix.**
