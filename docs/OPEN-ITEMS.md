@@ -198,6 +198,8 @@ Sheer Machine Shear Machine` at **Eugene**, none of them the machine. Because
   `ap_requests`. A future merge should stamp
   `COALESCE(confirmed_amount_cents, amount_cents)` into the audit `after` payload.
 - **`equipment_trend` is still `pilot` at BOTH sites.** Entry and the ledger are
+  **DONE (2026-08-07 15:10 UTC):** flipped `live` for Woodland at Bill\'s
+  instruction (audited, `system:claude-code`). Eugene remains `pilot` by design.
   live at Woodland; the trend CHART is not, so managers see the entry form and the
   ledger link but no throughput graph. Not a defect — flipping it is a separate
   call for Bill whenever he wants the chart in front of them.
