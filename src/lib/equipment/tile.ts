@@ -35,6 +35,13 @@ export interface EquipmentTileData {
    * Mean of the machine's ENTERED units/day over the trailing 7 calendar days,
    * across RECORDED days only. `null` = nothing recorded in the window ("not
    * recorded"), never 0 and never the floor-wide derived total.
+   *
+   * ADR-0079 Amendment 1 deliberately did NOT widen this to include legacy days.
+   * Amendment 1 restored the pre-cutover HISTORY to the chart, where each day is
+   * individually labeled as floor-wide. A single averaged number has nowhere to
+   * carry that label: "7-day units/day: 1,063" on a tile is a bare claim about
+   * the machine, and it would be wrong by roughly 5×. The trend chart is where
+   * the legacy era is shown, because that is where it can be shown honestly.
    */
   last7UnitsPerDay: number | null;
   /** Recorded days behind the mean — 0 ⇒ the mean is null because nobody entered. */

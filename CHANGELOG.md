@@ -3,6 +3,87 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-07 — the history stayed after all (ADR-0079 Amendment 1)
+
+The cutover shipped a few hours earlier applied "entered replaces derived" to
+**all of history**, so the Terex page went blank. Bill: _"that should have all
+stayed and just been added to."_ He is right. Measured against production:
+
+```
+WINDOW 90d : entered=0/90 days | derived AVAILABLE=67/90 days
+90d window: 67 days carry a derived figure that is currently RENDERED BLANK.
+derived range in window: 415 .. 1249
+```
+
+989 close-days exist at Woodland going back to 2023-01-02. **No data was lost** —
+`derivedFloorUnits` was computed throughout; this was display semantics only.
+
+Worth naming: the original ADR _predicted_ this ("on the day this ships, every day
+reads 'not recorded'") and called it the visible signature of the fix. Predicting
+a consequence is not the same as validating it. Nobody checked whether a blank
+history was what Bill wanted.
+
+### The boundary is a constant, and history is labeled rather than hidden
+
+`TEREX_CAPTURE_CUTOVER_ISO = '2026-08-07'`. Before it, the sheet era; from it on,
+the capture era. **Deliberately never derived from the data** — a
+"first-entered-day" boundary would move the moment anyone backfills, so one
+manager entering 2026-07-15 would blank a month of chart as a side effect of a
+single entry.
+
+Every day now carries `source: 'entered' | 'legacy_derived' | 'not_recorded'`.
+Pre-cutover days render the floor figure **labeled**; post-cutover gaps stay
+loudly "not recorded" and are _never_ backfilled from the floor; and **entered
+always wins on both sides of the boundary** — a backfill has replaced the floor's
+guess with the machine's real number, which is exactly "just be added to".
+
+### The label is structural, not tonal
+
+Legacy bars are hollow — hatched fill, dashed outline. Entered bars are solid.
+**Solid always means entered.** Tone was rejected as the carrier: a lighter green
+does not survive a projector, a screenshot, a colour-blind reader, or a print-out.
+Plus an always-visible legend whenever legacy bars render (not a tooltip — a
+reader who never touches the chart must still be told) and a per-bar title reading
+`floor-wide total, not Terex-specific (legacy)`.
+
+The axis fix is the literal bug: `maxUnits` scaled off `unitsDay` alone, so with
+zero entered days it collapsed to `1`. It scales to what is drawn.
+
+### Means never blend across the era
+
+`mean7`/`mean30` and the tile stay **entered-only, unchanged**; `legacyMean7`/
+`legacyMean30` are separate fields over legacy days only, and stop at the
+boundary. The eras measure different things — the whole floor (1,000–1,250/day)
+versus one machine (a few hundred) — so a straddling average describes nothing
+while sitting on the machine's line. In the seven-day straddle test the forbidden
+blend is **701.28**, asserted absent from every mean field on every day.
+
+The tiles were deliberately not widened: a single number has nowhere to carry the
+label, and "7-day units/day: 1,063" would be a bare claim about the machine, wrong
+by ~5×. They disclose coverage instead — "1 of 7 days recorded". Legacy days still
+get **no** units-per-hour: reviving the assumed-8h rate, even labeled, would
+publish a fabricated denominator.
+
+### The falsification
+
+Deleting the source branch in the bar renderer goes red naming the leak:
+
+```
+AssertionError: expected '<rect data-testid="bar-2026-07-20" da…'
+                to contain 'fill="url(#legacyHatch)"'
+Received: "<rect ... data-source="legacy_derived" ... fill="#8fbf3f" ...>"
+```
+
+A bar tagged `legacy_derived` wearing the entered fill — the unlabeled leak, named
+concretely rather than as a missing field.
+
+**Verified against production:** 67 legacy days restored; July days draw
+1,158–1,249 with `unitsDay` still null (not laundered) and rate still null; the
+post-cutover day stays `not_recorded`; no day carries both means. Rejected and
+recorded: labeled backfill into the machine's table (permanent conflation risk +
+would weaken `run_hours NOT NULL`), and a dual-series peer view (filed as the
+future reconciliation view, not built).
+
 ## 2026-08-07 — the Terex number is entered now, not inferred (ADR-0079)
 
 The Terex's throughput has been the **whole floor's output wearing one machine's
