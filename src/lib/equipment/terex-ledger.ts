@@ -326,3 +326,32 @@ export async function computeTerexLedger(
     },
   };
 }
+
+/**
+ * What this site's equipment surface should CALL itself.
+ *
+ * The handoff spec (PR #197) asked for the tile to be renamed to "Terex". The
+ * first pass kept it generic and put the Terex name only on the detail page —
+ * a deliberate call, and the wrong one: Bill asked for the rename explicitly and
+ * noticed it missing (ADR-0077 Amendment 1).
+ *
+ * Site-derived rather than hardcoded, because the surface is parameterised by
+ * site and only Woodland has the machine. Same evidence as
+ * `isSiteTerexMachine` — a `terex`-category row that the Terex invoices actually
+ * resolve to — so Eugene keeps the generic name honestly instead of advertising a
+ * machine it does not have, and a Terex arriving at Eugene tomorrow renames that
+ * site's surface with no code change.
+ */
+export async function siteMachineLabel(siteId: string): Promise<string> {
+  const machine = await prisma.equipment.findFirst({
+    where: {
+      site_id: siteId,
+      category: 'terex',
+      is_active: true,
+      merged_into_id: null,
+      links: { some: {} },
+    },
+    select: { display_name: true },
+  });
+  return machine?.display_name ?? 'Equipment';
+}

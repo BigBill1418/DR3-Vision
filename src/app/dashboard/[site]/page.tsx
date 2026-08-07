@@ -8,6 +8,7 @@ import { OpsOverviewPanel } from './overview/OpsOverviewPanel';
 import { computeOpsOverview } from '@/lib/dashboard/ops-overview';
 import { getLocale } from '@/i18n/get-locale';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
+import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
 
 // Operations Dashboard — per-site surface (ADR-0020 tile re-enable, 2026-07-22).
@@ -74,6 +75,9 @@ export default async function SiteDashboardPage({ params }: Props) {
   // Unregistered/pilot ⇒ hidden, which is the fail-safe direction for a
   // visibility gate.
   const reimbursementTileLive = await isUiSurfaceLive(UI_SURFACE.REIMBURSEMENT_TILE, site.id);
+  // ADR-0077 Am.1 — the nav names the machine where one exists (Woodland reads
+  // "Terex"), and stays generic where it does not. Derived, never hardcoded.
+  const machineLabel = await siteMachineLabel(site.id);
 
   // The full operations picture. Every panel degrades to null on read failure —
   // a site with no data renders cleanly rather than throwing (see ops-overview).
@@ -118,7 +122,7 @@ export default async function SiteDashboardPage({ params }: Props) {
           <nav className="flex flex-wrap gap-2 text-sm">
             <NavLink href={`/dashboard/${site.code}/loads`} label={t('loads.heading')} />
             <NavLink href={`/dashboard/${site.code}/loads-inventory`} label="Loads & inventory" />
-            <NavLink href={`/dashboard/${site.code}/equipment`} label="Equipment" />
+            <NavLink href={`/dashboard/${site.code}/equipment`} label={machineLabel} />
             <NavLink href={`/dashboard/${site.code}/compliance`} label={t('compliance.heading')} />
             <NavLink
               href={`/dashboard/${site.code}/reconciliation`}

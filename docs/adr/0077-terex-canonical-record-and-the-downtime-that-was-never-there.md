@@ -453,6 +453,51 @@ That is the second time in this ADR's work that a first-pass falsification prove
 nothing. It is worth naming as a pattern: **a guard that cannot be made to fail
 has not been tested, and mocks are where the failure hides.**
 
+## Amendment 1 (2026-08-07) — the surface is named for the machine
+
+**Supersedes the D6 sentence "the tile heading stays generic."** That was a
+deliberate call and it was wrong: the handoff spec (PR #197) says _"Rename +
+upgrade the tile to Terex"_ and _"rename its Terex view to 'Terex'"_, and Bill
+noticed it missing — _"also the labelling is not updated - check the original
+spec and make sure this is complete."_
+
+The original reasoning — the tile is the site's equipment surface and a second
+machine could join it tomorrow — is not wrong, it is just outranked. A surface
+that says "Equipment" when the site has exactly one machine, which everybody
+calls the Terex, is a surface named after a database table rather than after the
+thing in the yard.
+
+**Derived, never hardcoded.** `siteMachineLabel(siteId)` returns the machine's
+`display_name` where the site has one and `'Equipment'` where it does not, using
+the same evidence as `isSiteTerexMachine` (a `terex`-category row the Terex
+invoices actually resolve to). So Woodland reads "Terex", Eugene stays generic
+rather than advertising a machine it does not have, and a Terex arriving at
+Eugene tomorrow renames that site's surface with no code change. Hardcoding
+`siteCode === 'woodland'` was rejected for the reason the whole ADR keeps
+running into: the registry is the truth, and it changes.
+
+| where                        | before                                     | after                                                              |
+| ---------------------------- | ------------------------------------------ | ------------------------------------------------------------------ |
+| dashboard nav                | `Equipment`                                | `Terex` (Woodland) · `Equipment` (Eugene)                          |
+| tile `<h1>`                  | `Equipment — DR3 Woodland`                 | `Terex — DR3 Woodland`                                             |
+| tile intro                   | "Terex throughput, downtime, and cost."    | "Throughput, downtime, and cost." (the name is in the heading now) |
+| overview band                | `Throughput & equipment (Terex)`           | `Terex — throughput, downtime & cost`                              |
+| overview cost card           | `Equipment cost · 30-day`                  | `Terex cost · 30-day`                                              |
+| overview empty note          | "Equipment throughput is not available…"   | "Throughput is not available…"                                     |
+| entry form                   | `Log an equipment event`                   | `Log a Terex event`                                                |
+| tile → ledger link           | `Terex — maintenance, AP spend & downtime` | `Terex ledger — maintenance, AP spend & downtime`                  |
+| `/admin/equipment/[id]` link | `View machine ledger — …`                  | `View the Terex ledger — …`                                        |
+
+**`/admin/equipment` is deliberately NOT renamed.** It is the asset master for all
+554 seeded rows across both sites; "Equipment" is its correct name. Only its
+cross-link label changed, and only to name the machine it points at.
+
+The third falsification of this ADR's work also came back green here — the test
+mock enforced the invoice-evidence rule itself, so dropping it from the source
+changed nothing. Fixed; the real red is
+`expected 'EQ65 — Sheer Machine Shear Machine' to be 'Equipment'` — which is what
+Eugene's nav would have said.
+
 ## Alternatives considered
 
 - **Merge into `bee54def` as O-10 said, then rename it `Terex`.** Impossible in

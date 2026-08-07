@@ -86,6 +86,21 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     equipment: {
       findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        // `siteMachineLabel` queries WITHOUT an id, by category + links instead.
+        // The `links` clause is honoured ONLY when the query supplies it — an
+        // earlier version enforced it unconditionally, so dropping it from the
+        // source changed nothing and the guard measured the mock.
+        if (where['id'] === undefined) {
+          const requiresLinks = where['links'] !== undefined;
+          const row = store.equipment.find(
+            (e) =>
+              e.site_id === where['site_id'] &&
+              e.category === where['category'] &&
+              e.merged_into_id === null &&
+              (!requiresLinks || store.links.some((l) => l.equipment_id === e.id)),
+          );
+          return row ?? null;
+        }
         const row = store.equipment.find(
           (e) =>
             e.id === where['id'] && e.site_id === where['site_id'] && e.merged_into_id === null,
@@ -154,7 +169,7 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { computeTerexLedger } from './terex-ledger';
+import { computeTerexLedger, siteMachineLabel } from './terex-ledger';
 
 let seq = 0;
 function maint(
@@ -664,5 +679,36 @@ describe('computeTerexLedger — scoping', () => {
     const asManager = await computeTerexLedger(WOODLAND, TEREX, { isAdmin: false });
     expect(asAdmin.ap.invoices[0]?.decisionHref).toContain('/admin/ap/history');
     expect(asManager.ap.invoices[0]?.decisionHref).toBeNull();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// ADR-0077 Amendment 1 — the surface is NAMED for the machine.
+//
+// The handoff spec asked for the tile to be renamed to "Terex". The first pass
+// kept it generic; Bill asked for the rename explicitly and noticed it missing.
+// The label is DERIVED, so Eugene never advertises a machine it does not have.
+// ────────────────────────────────────────────────────────────────
+describe('siteMachineLabel (ADR-0077 Am.1)', () => {
+  it('names the machine where the site actually has one', async () => {
+    seedProductionShape();
+    expect(await siteMachineLabel(WOODLAND)).toBe('Terex');
+  });
+
+  it('stays generic at a site with no Terex — Eugene is not renamed', async () => {
+    seedProductionShape();
+    expect(await siteMachineLabel(EUGENE)).toBe('Equipment');
+  });
+
+  it('stays generic for a terex-CATEGORY shear machine with no invoices', async () => {
+    store.equipment.push({
+      id: 'eq65-eugene',
+      site_id: EUGENE,
+      display_name: 'EQ65 — Sheer Machine Shear Machine',
+      category: 'terex',
+      merged_into_id: null,
+    });
+    // Same evidence test as the ledger guard: category alone is not the machine.
+    expect(await siteMachineLabel(EUGENE)).toBe('Equipment');
   });
 });

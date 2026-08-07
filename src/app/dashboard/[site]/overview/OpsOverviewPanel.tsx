@@ -123,8 +123,14 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
         </div>
       </SectionBand>
 
-      {/* ── Throughput & equipment ────────────────────────────────── */}
-      <SectionBand title="Throughput & equipment (Terex)">
+      {/* ── Throughput & the machine (ADR-0077 Am.1 — named, not generic) ── */}
+      <SectionBand
+        title={
+          data.equipment
+            ? `${data.equipment.machineLabel} — throughput, downtime & cost`
+            : 'Throughput & equipment'
+        }
+      >
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {data.equipment ? (
             <>
@@ -182,7 +188,7 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
                 testId="ov-eq-downtime"
               />
               <StatCard
-                label="Equipment cost · 30-day"
+                label={`${data.equipment.machineLabel} cost · 30-day`}
                 value={usd(data.equipment.costUsd)}
                 unit=""
                 sub="Logged maintenance + repair"
@@ -192,7 +198,7 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
             </>
           ) : (
             <div className="col-span-full">
-              <EmptyNote>Equipment throughput is not available right now.</EmptyNote>
+              <EmptyNote>Throughput is not available right now.</EmptyNote>
             </div>
           )}
         </div>

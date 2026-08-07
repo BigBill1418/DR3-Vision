@@ -50,6 +50,7 @@ export function EquipmentClient({
   showTrend = true,
   showEntry = true,
   machines = [],
+  machineLabel = 'Equipment',
 }: {
   siteCode: string;
   throughput: EquipmentThroughput;
@@ -58,6 +59,8 @@ export function EquipmentClient({
   showEntry?: boolean;
   /** ADR-0077 D6 — machines with a ledger the CALLER can open. Empty ⇒ no link. */
   machines?: { id: string; displayName: string }[];
+  /** ADR-0077 Am.1 — the machine's name where it exists, else "Equipment". */
+  machineLabel?: string;
 }) {
   return (
     <div className="mt-8 flex flex-col gap-10">
@@ -70,7 +73,7 @@ export function EquipmentClient({
               href={`/dashboard/${siteCode}/equipment/${m.id}`}
               className="underline opacity-90 hover:opacity-100"
             >
-              {m.displayName} — maintenance, AP spend &amp; downtime →
+              {m.displayName} ledger — maintenance, AP spend &amp; downtime →
             </a>
           ))}
         </div>
@@ -82,7 +85,7 @@ export function EquipmentClient({
           <CostPanel throughput={throughput} />
         </>
       )}
-      {showEntry && <EventEntry siteCode={siteCode} />}
+      {showEntry && <EventEntry siteCode={siteCode} machineLabel={machineLabel} />}
     </div>
   );
 }
@@ -307,7 +310,7 @@ function CostPanel({ throughput }: { throughput: EquipmentThroughput }) {
 }
 
 // ── Event entry + list ─────────────────────────────────────────────────────
-function EventEntry({ siteCode }: { siteCode: string }) {
+function EventEntry({ siteCode, machineLabel }: { siteCode: string; machineLabel: string }) {
   const [rows, setRows] = useState<EquipmentEventView[]>([]);
   const [date, setDate] = useState(todayIso());
   const [kind, setKind] = useState<Kind>('downtime');
@@ -372,7 +375,9 @@ function EventEntry({ siteCode }: { siteCode: string }) {
 
   return (
     <section>
-      <h2 className="text-lg font-semibold">Log an equipment event</h2>
+      <h2 className="text-lg font-semibold">
+        {machineLabel === 'Equipment' ? 'Log an equipment event' : `Log a ${machineLabel} event`}
+      </h2>
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <label className={labelCls}>
           <span className="opacity-70">Date</span>

@@ -31,6 +31,7 @@ import type { FloorInventoryTileData } from '@/lib/dashboard/floor-inventory-til
 import { computeSiteRateTiles } from '@/lib/dashboard/rate-tiles';
 import type { SiteRateTiles } from '@/lib/dashboard/rate-tiles';
 import { computeEquipmentTile } from '@/lib/equipment/tile';
+import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
 import { listProcessedUnits } from '@/lib/loads/processed-units';
 import { listCommodityPayments } from '@/lib/commodity-payments/payments';
@@ -149,6 +150,8 @@ export interface ProcessedClosePanel {
 }
 
 export interface EquipmentPanel {
+  /** ADR-0077 Am.1 — the machine's name where it exists, else "Equipment". */
+  machineLabel: string;
   last7UnitsPerDay: number | null;
   last30UnitsPerDay: number | null;
   /** ADR-0077 D4 — NULL means never recorded, not "no downtime". */
@@ -306,13 +309,15 @@ async function computeProcessed(siteId: string, todayISO: string): Promise<Proce
 }
 
 async function computeEquipmentPanel(siteId: string): Promise<EquipmentPanel> {
-  const [tile, throughput] = await Promise.all([
+  const [tile, throughput, machineLabel] = await Promise.all([
     computeEquipmentTile(siteId),
     computeEquipmentThroughput(siteId, { windowDays: 30 }),
+    siteMachineLabel(siteId),
   ]);
   return {
     last7UnitsPerDay: throughput.summary.last7UnitsPerDay,
     last30UnitsPerDay: throughput.summary.last30UnitsPerDay,
+    machineLabel,
     downtimeHours: throughput.summary.totalDowntimeHours,
     costUsd: throughput.summary.totalCostCents / 100,
     lastEvent: tile.lastEvent
