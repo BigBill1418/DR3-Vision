@@ -105,6 +105,135 @@ deliberately **not** part of the healthz verdict, because this feature's first d
 necessarily lands before the secret file does and gating on it would roll that deploy
 back. Which also means it will never announce itself: check it explicitly after
 provisioning.
+## 2026-08-08 — the void gate was wrong on a shared iPad, and the "one funnel" claim was not true (ADR-0084 Am.1 + ADR-0083 Am.1)
+
+Two small items Bill ordered off the 2026-08-08 walkthrough, one branch. Neither
+touches the schema; no migration.
+
+### ADR-0084 Amendment 1 — "Widen to site."
+
+The same-day count void shipped OWNER-scoped: 403 `not_your_count` unless the
+caller was the operator named on the count's original insert audit row. It was
+flagged as an open question the same day rather than decided unilaterally,
+because the precedent was not automatic — ADR-0078 Am.1 had loosened the photo
+gate from load-owner to SITE one week earlier, but **a photo upload is additive
+and a void is destructive**: it withdraws the anchor the entire floor is computed
+from. Given three options — keep owner-only, widen to site, widen with a manager
+confirm — Bill picked the middle one.
+
+The gate is a real loosening and is recorded as one rather than described as a
+refactor. **Given up:** an operator can withdraw any live same-day count at their
+own site. **Gained:** the mistake is correctable on the shift that made it. A
+floor iPad is a shared kiosk with per-operator PIN sign-in; a duplicate keyed at
+14:00 could not be withdrawn by whoever PIN'd in at 15:00, and since a void is
+same-day only there was no next-day path either — the mistyped anchor simply
+stood overnight.
+
+**Attribution went from one id to two.** The audit row now carries
+`actor_user_id` (who withdrew it), `after.entered_by` (whose count it was) and
+`after.cross_operator` — written on **every** void including self-voids, because
+a field present only on the cross-operator case is ambiguous between "the same
+person" and "an older build that did not record it", and this history is read
+years later by someone with neither the code nor the deploy dates. `entered_by`
+is NULL when no insert row exists and is never backfilled from `voided_by` — the
+same "we do not know is true" reasoning as ADR-0078 Am.1's `uploaded_by`.
+
+**The widened gate ships with the disclosure, not before it.** A count somebody
+else entered is labelled with their name, and the confirm step says so and states
+that the withdrawal will be recorded under the signed-in operator's name. Remove
+that sentence and you have to re-narrow the gate.
+
+`SnapshotNotYoursError`, `not_your_count`, the client branch that rendered it and
+`floor.count.void_err_not_yours` in all three locales were **deleted, not
+disabled**, and `listTodaysVoidableCounts` became `listTodaysVoidableCountsAtSite`
+— a disused check reads as one somebody forgot to call, and the next reader puts
+it back. EN/ES/UR copy was re-voiced from second person to neutral ("Counts **you
+entered** today", "before **you** entered it"), which is actively false on a
+colleague's row.
+
+Unchanged and pinned: cross-SITE is still a 404 — falsified with the ORIGINAL
+ENTERER as the actor, so the surviving refusal is demonstrably the site check and
+not a leftover of the ownership one, and the message names both sites. Dropping
+the site check goes red with _"a session at site `site-eugene` was allowed to void
+snapshot `snap-wood`, which belongs to site `site-woodland`"_. Restoring the owner
+gate goes red on the cross-operator case, so the new tests measure the loosening
+rather than passing either way. A cross-operator **prior-day** void is still 409:
+the amendment widened WHO, never WHEN.
+
+### ADR-0083 Amendment 1 — saves in the amended-month editor
+
+`AmendmentPanel` is the ONLY editor that reaches an already-signed period (the
+primary grid refuses a locked month), and it shipped posting
+`{bonus_employee_id, mattress_count, note}`. So a mis-keyed saves figure inside a
+signed period had no correction surface anywhere in the app. Nothing was ever
+lost by that — the service reads an absent `saves` as UNCHANGED, never zero — but
+the deadline was real: no signed period contains a non-zero save yet, and the
+first one closes at the end of the current bi-weekly period.
+
+Fifth column, `saves` in the POST body, modelled on `DailyEntryGrid` down to the
+three semantics that are easy to get subtly wrong: the field is always sent
+(a blank box is an explicit `0`, or clearing a value would be impossible from the
+one screen that reaches a signed period); a row is keyed if EITHER box has a
+value (a resale shift with a zero processed count is a real, paid day); and the
+day total tiers ONCE over `count + saves`.
+
+**Checking the deadline turned up a second defect nobody had reported.**
+`paid-units.ts` opens by claiming the grid, the signed PDF, the sign-time lock,
+the CSV export, the month list, the aggregates and the reconcile tripwire all
+route through `dailyPaidUnits`, so the screen, the PDF and the reconciler cannot
+diverge. `/bonus/months/[id]/page.tsx` did not. Its per-employee monthly totals
+AND its read-only grid totals called `calculateDailyBonusCents(mattress_count, rule)`
+— understating every processor's month by the entire cash value of their saves,
+on the very page an admin unlocks a signed month from and reads the corrected
+total on. The number was well-formed, the page rendered, the suite was green.
+
+So the claim was made structural instead of asserted.
+`paid-units-callers.guard.test.ts` reads the actual source of every
+`calculateDailyBonusCents` call in `src/` and fails the build on any caller
+outside the funnel that is not allowlisted with a written reason and a
+`mustContain` token proving its compensating control survives. It asserts its own
+call-site count (a rename or a broken glob otherwise reports green while matching
+nothing) and strips comments before matching, because every call site in this
+repo documents itself in a comment naming the function — the ADR-0084 guard was
+already burned once reading the prose that explained a token instead of the
+token.
+
+**On four-eyes, the brief's premise was wrong and is recorded as such.** The
+change order described this editor as "the same `shouldRequireAmendment` path".
+It is not: that predicate is reached only from `upsertDailyEntries`, the primary
+grid's path, and `upsertAmendedMonthEntries` has never imported it. That is by
+design — this surface is reachable only after an admin unlocks a signed month
+with a written reason, which CLEARS BOTH SIGNATURES, and the corrected month must
+be re-signed by two signers before it pays. The four eyes are the two
+re-signatures over the whole corrected month. What must not become true is that
+this path moves a signed month without that unlock; that is pinned behaviourally
+(locked month → `month_locked`, nothing written) and structurally (an assertion
+that `amendment.ts` does not reference the predicate, so wiring it in has to be
+deliberate). §6's own gate is re-pinned from the saves angle so widening this
+editor cannot become an argument for relaxing that one.
+
+### Falsifications (every one run, each named by its red)
+
+| Falsification                                                     | Red                                                                                      |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Drop the site check from `voidSnapshot`                           | names both sites and the snapshot id                                                     |
+| Restore the pre-Am.1 owner gate                                   | cross-operator void fails `not_your_count`                                               |
+| Remove `entered_by` from the void audit payload                   | self-void case fails the both-ids assertion                                              |
+| Drop `saves` from the panel's POST body                           | 4 red, incl. `expected undefined to be +0` on clear-to-zero                              |
+| Seed the panel's saves box blank                                  | 3 red; note-only edit posts `saves: 0` for a day that had 9; `$7.50` total reads `$0.00` |
+| Make an absent `saves` mean `0` in the service                    | 2,000¢ → 1,325¢ — **$6.75 under-paid on one day**, silently                              |
+| Restore `calculateDailyBonusCents(count, rule)` on the month page | 3 red in the guard, naming the file, the line and the fix                                |
+| Tier the two columns separately                                   | a 45 + 20 day pays $7.50 summed and **$0.00** tiered twice                               |
+
+### Verified
+
+`tsc --noEmit` clean, `eslint src` clean (0 warnings — warnings are errors here),
+full `vitest run` **4,717 passed / 49 skipped / 1 failed**. The one failure is
+`src/lib/ap/stamp-render-gate.test.ts`, a chromium-semaphore timing test in
+untouched code (`git status` shows no change under `src/lib/ap/`); it passes on
+its own and flakes only under the fully-parallel run. The payroll pre-push gate
+(`vitest run src/lib/bonus`) is **660 passed / 42 files**, up from 643 — the 17
+new tests are this branch's.
 
 ## 2026-08-08 — campaign close-out: the F-3 design was unbuildable, and the Kelsey option is dead (PR #215 + register reconciliation)
 

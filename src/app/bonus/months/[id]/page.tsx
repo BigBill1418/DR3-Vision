@@ -17,7 +17,8 @@ import { notFound, redirect } from 'next/navigation';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
-import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
+import { formatCents } from '@/lib/bonus/calculator';
+import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 import { naturalSlotFor, canOverrideSlot } from '@/lib/bonus/signatures';
 import { resolveSlotSignerNames } from '@/lib/bonus/signer-names';
 import { SignaturePanel, type SignerSlot } from './SignaturePanel';
@@ -152,8 +153,16 @@ export default async function BonusMonthDetailPage({
       totalBonusCents: 0,
     };
     const count = e.mattress_count.toNumber();
+    // PRODUCTION quantity — processed only, deliberately excludes saves
+    // (`paid-units.ts`): a saved mattress was diverted to resale, not torn down.
     acc.totalMattresses += count;
-    acc.totalBonusCents += calculateDailyBonusCents(count, rule);
+    // PAY — processed + saves, tiered ONCE, through the single shared funnel.
+    // ADR-0083 Amendment 1 (2026-08-08): this was `calculateDailyBonusCents(count, rule)`,
+    // the last pay-path read in the app that bypassed `dailyPaidUnits`. It
+    // understated every processor's month total by the whole value of their
+    // saves — on the very page an admin unlocks a signed month from and reads
+    // the corrected total on.
+    acc.totalBonusCents += dailyBonusCentsFor(e, rule);
     byEmployee.set(e.bonus_employee_id, acc);
   }
   const rows = [...byEmployee.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -252,9 +261,11 @@ export default async function BonusMonthDetailPage({
           totalBonusCents: 0,
         } satisfies ReadOnlyGridRow);
       const count = e.mattress_count.toNumber();
+      // The per-day cells and the mattress total stay PROCESSED-only (production
+      // quantity); the money column is paid units. Same split as above.
       acc.countsByDay[isoDay(e.entry_date)] = count;
       acc.totalMattresses += count;
-      acc.totalBonusCents += calculateDailyBonusCents(count, rule);
+      acc.totalBonusCents += dailyBonusCentsFor(e, rule);
       grid.set(id, acc);
     }
     readOnlyRows = [...grid.values()].sort((a, b) => a.name.localeCompare(b.name));

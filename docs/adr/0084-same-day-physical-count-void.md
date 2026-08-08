@@ -223,12 +223,15 @@ _withdrawal_ waits for a connection, and the office path covers everything else.
 - **Site-scoped** (hard rule #2). A snapshot id belonging to another site is a
   **404, not a 403** — the caller learns nothing, so this cannot be used to probe
   ids.
-- **Yours only.** An operator may withdraw a count _they_ entered. Ownership is
-  resolved from the append-only `audit_log` insert row that
+- ~~**Yours only.**~~ **SUPERSEDED by [Amendment 1](#amendment-1-2026-08-08--the-void-is-site-scoped-not-owner-scoped)
+  — the gate is SITE-scoped. Do not implement the paragraph below.** As shipped
+  on 2026-08-08 it read: _an operator may withdraw a count they entered;
+  ownership is resolved from the append-only `audit_log` insert row that
   `reconcilePhysicalCount` writes in the same transaction — the same provenance
-  path `eod-inventory.resolveCounter` uses. Snapshots carry no counter column and
-  none was added: a denormalised copy is a second truth that can disagree with
-  the record.
+  path `eod-inventory.resolveCounter` uses._ The insert row is still read, but
+  for ATTRIBUTION (both ids land in the void's audit row), never to decide the
+  request. Snapshots still carry no counter column and none was added: a
+  denormalised copy is a second truth that can disagree with the record.
 - **Gated** on `requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT)` — the same
   per-surface ADR-0065 flag as the count itself. A site whose count screen is
   dark must not have a live withdrawal endpoint behind it.
@@ -448,7 +451,7 @@ executed locally; that is the honest status.
 | F4  | The missed-reader falsification, run both ways through one evaluator, plus the empirical strip-and-restore quoted above.                                                                                                                                                                                                                                             |
 | F5  | A double-tap is idempotent: same response, not re-stamped with the later clock, exactly one audit row. A _different_ key on an already-voided row is a no-op success.                                                                                                                                                                                                |
 | F6  | The bootstrap gate does not count a voided anchor as evidence — a site whose only count was voided is **not** snapshot-live.                                                                                                                                                                                                                                         |
-| +   | Authorization: another operator's count is 403; another site's snapshot is **404**; the voidable list offers only this operator's live counts and drops one once voided.                                                                                                                                                                                             |
+| +   | Authorization **as originally shipped** — ~~another operator's count is 403~~ (**superseded by Amendment 1**: it now succeeds and is attributed); another site's snapshot is **404** (still true, and re-falsified in Am.1); the voidable list ~~offers only this operator's live counts~~ (**now site-scoped**) and drops one once voided.                          |
 | +   | Guard self-tests: unfiltered snippet flagged, filtered one not; comments above **and inside** the call are not code; a `)` inside a string does not truncate the argument; a call split across lines still matches; every allowlist entry still matches a real call site and still carries its compensating control; the prod remediation SQL filters voided counts. |
 
 ### Not verified
@@ -461,3 +464,125 @@ executed locally; that is the honest status.
   there is something to withdraw, but the visual result is unverified.
 - The Urdu and Spanish strings are machine-authored and have not been reviewed by
   a speaker. The parity test passes; the _quality_ is unchecked.
+
+---
+
+## Amendment 1 (2026-08-08) — the void is SITE-scoped, not OWNER-scoped
+
+**Status:** Accepted, implemented. Amends **D7 §"Yours only"** and the voidable
+list. Everything else in ADR-0084 stands unchanged.
+
+### Context
+
+D7 required the caller to be the operator named on the count's original insert
+audit row, refusing anyone else with 403 `not_your_count`. That was the shape
+this ADR shipped with, and it was recorded as an open question the same day
+(OPEN-ITEMS §"ADR-0084 void is OWNER-scoped on a SHARED iPad") rather than
+decided unilaterally.
+
+Floor iPads are shared kiosks with per-operator PIN sign-in. A duplicate keyed
+at 14:00 by the day operator could not be withdrawn by whoever PIN'd in at
+15:00 — and because a void is **same-day only** (D4), there was no next-day path
+either. The mistyped anchor stood overnight and became an office job the
+following morning, which is precisely the outcome the feature exists to prevent.
+
+This is the same shape ADR-0078 Amendment 1 loosened one week earlier for the
+photo gate ("we need to drain all users regardless of who is signed in"). It was
+**deliberately not** carried over automatically: a photo upload is _additive_, a
+void is _destructive_ — it withdraws the anchor the entire floor is computed
+from — so the risk profile that justified Am.1 there does not transfer here on
+its own.
+
+Bill was given three options — keep owner-only, widen to site, widen to site with
+a manager confirm — and picked: **"Widen to site."**
+
+### Decision
+
+**Any activated operator at the count's own site may withdraw a same-day count.**
+The ownership gate is removed; the site gate is the only authorization check that
+remains in `voidSnapshot`.
+
+**The trade, stated plainly rather than described as a refactor: the gate
+loosened from owner to site; attribution went from one id to two.**
+
+- **Given up:** an operator can now withdraw any live same-day count at their own
+  site, not only one they entered. On a warehouse floor that is frequently the
+  legitimate case (the person still on shift correcting what the last shift
+  mistyped) — but it is a real loosening of an authorization control and is
+  recorded as one.
+- **Gained:** the mistake is correctable on the shift that made it, by whoever is
+  actually standing at the iPad. No overnight-wrong-anchor, no office ticket.
+- **Also gained:** the void audit row now carries **both** ids —
+  `actor_user_id` is who withdrew it, `after.entered_by` is who entered it, plus
+  an explicit `after.cross_operator` boolean. Before this, a void recorded the
+  withdrawer alone, because the gate guaranteed the two were the same person.
+  Accountability is strictly better after the change than before it.
+
+Both ids are written on **every** void, including a self-void. An id present only
+on the cross-operator case would be ambiguous between "the same person" and "an
+older build that did not record it", and this history is read years later by
+someone who has neither the code nor the deploy dates.
+
+`entered_by` is **NULL** when no insert audit row exists (a system-written
+snapshot). NULL means "we do not know", which is true; it is never backfilled
+from `voided_by` or anything else — the same reasoning ADR-0078 Am.1 applied to
+`load_photos.uploaded_by`, and ADR-0077 to "not recorded" over a fake `0.0`.
+
+### Paired with telling the operator whose count it is
+
+The widened gate ships **with** the disclosure, not before it. The iPad list
+labels every count entered by somebody else with that person's name, and the
+confirm step for one of those counts says so explicitly and states that the
+withdrawal will be recorded under the signed-in operator's name. That sentence is
+the trade for the widened gate; removing it means re-narrowing the gate.
+
+Names are resolved on the page, not in `voidSnapshot` — the service stays a pure
+inventory concern with no `users` dependency. Own rows are left unlabelled
+("entered by you" on every one of your own counts is noise), and an enterer that
+cannot be resolved is left unstated rather than filled in with a placeholder.
+
+### Unchanged, and NOT to be "restored"
+
+- **Cross-SITE is still refused, still as a 404** (hard rule #2 — Eugene and
+  Woodland are separate MRC contracts in separate jurisdictions; a 403 would
+  confirm the id exists). Pinned by a falsification in which the actor **is** the
+  original enterer and is still refused, so the remaining refusal is demonstrably
+  the site comparison and not a leftover of the ownership one.
+- Same-day only, in Pacific, from `currentPacificDayWindow` (D4/D5).
+- The confirm step, the soft void (D1), the online-only rule (D6), every reader
+  filter and its guard test (D2), the recovery surfaces (D3), and the
+  idempotency/audit contract (D7).
+
+### Renamed with the behaviour
+
+`SnapshotNotYoursError` and its `not_your_count` reason were **deleted**, not
+left dead — a disused error class reads as a check somebody forgot to call and
+invites its restoration. The `not_your_count` branch in the client and the
+`floor.count.void_err_not_yours` string in all three locales went with it.
+`listTodaysVoidableCounts` → **`listTodaysVoidableCountsAtSite`**, on the same
+ADR-0078 Am.1 precedent: left under the old name, the next reader would
+reasonably conclude the missing ownership filter was an oversight and put it
+back.
+
+Copy in all three locales was re-voiced from second person to neutral
+("Counts **you entered** today" → "Counts entered today"; "before **you**
+entered it" → "before that count was entered"), because the old wording is
+actively false on a colleague's row.
+
+### Falsifications run
+
+| Falsification                                      | Result                                                                                                                                             |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drop the site check from `voidSnapshot`            | **RED**, naming the site: _"a session at site `site-eugene` was allowed to void snapshot `snap-wood`, which belongs to site `site-woodland`"_      |
+| Restore the pre-amendment owner gate               | **RED** — the cross-operator void case fails with `not_your_count`, i.e. the new tests really measure the loosening rather than passing either way |
+| Remove `entered_by` from the audit `after` payload | **RED** on the self-void case — proves the both-ids claim is asserted, not merely commented                                                        |
+| Cross-operator **prior-day** void                  | Still 409 `requires_amendment`, nothing written — the amendment widened WHO, never WHEN                                                            |
+
+### Residuals
+
+- The iPad surface still has no rendering test (ADR-0084 §"Not verified" stands),
+  so the new "Entered by …" row label and cross-operator confirm panel are
+  unverified visually.
+- The new `void_entered_by` / `void_confirm_other` strings in `es` and `ur` are
+  machine-authored. Parity passes; quality is unreviewed — the same open residual
+  as the original ADR-0084 strings.

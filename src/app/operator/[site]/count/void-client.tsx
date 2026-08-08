@@ -3,8 +3,16 @@
 // ADR-0084 — the operator-facing half of the same-day count void.
 //
 // JT's ask, literally: "if we accidentally entered the count twice, we should be
-// able to remove one." So the screen shows the counts THIS operator entered TODAY
-// and offers to remove one, behind a confirm.
+// able to remove one." So the screen shows TODAY's counts at this site and
+// offers to remove one, behind a confirm.
+//
+// Amendment 1 (2026-08-08) — Bill: "Widen to site." The list is no longer
+// filtered to the signed-in operator's own counts, because floor iPads are
+// shared kiosks and the person standing at one at 15:00 is frequently not the
+// person who mistyped at 14:00. A count somebody else entered is LABELLED with
+// their name and the confirm step says so explicitly — the widened gate is
+// paired with telling the operator exactly whose work they are withdrawing.
+// The `not_your_count` branch is gone with the 403 it rendered.
 //
 // Three things this deliberately does NOT do:
 //
@@ -35,6 +43,12 @@ export type VoidableCount = {
   /** Pacific-rendered time-of-day, formatted server-side. */
   countedAtLabel: string;
   physicalTotal: number;
+  /**
+   * The name of the operator who entered it, or null when the signed-in operator
+   * entered it themselves (or the enterer could not be resolved). Null means
+   * "say nothing" — never "you", and never a placeholder.
+   */
+  enteredByLabel: string | null;
 };
 
 type Phase = 'list' | 'confirm' | 'done';
@@ -78,11 +92,13 @@ export function CountVoidClient({
           // must never be wired into one; this branch only renders the sentence.
           code === 'requires_amendment'
             ? t('floor.count.void_err_prior_day', { day: String(b['countedDate'] ?? '') })
-            : code === 'not_your_count'
-              ? t('floor.count.void_err_not_yours')
-              : code === 'snapshot_not_found' || code === 'not_a_physical_count'
-                ? t('floor.count.void_err_gone')
-                : t('floor.common.save_failed'),
+            : // ADR-0084 Amendment 1 — there is no `not_your_count` branch any
+              // more, because the server no longer produces that refusal. A
+              // wrong-SITE id still lands here as `snapshot_not_found` (a 404,
+              // never a 403 — hard rule #2, no id probing).
+              code === 'snapshot_not_found' || code === 'not_a_physical_count'
+              ? t('floor.count.void_err_gone')
+              : t('floor.common.save_failed'),
         );
         setPhase('list');
         return;
@@ -126,6 +142,21 @@ export function CountVoidClient({
             time: target.countedAtLabel,
           })}
         </p>
+
+        {/* ADR-0084 Amendment 1 — the site-scoped half of the confirm. Shown
+            ONLY for somebody else's count: it names them, and it says the
+            withdrawal is recorded under the signed-in operator's name, which is
+            exactly what the audit row now carries (both ids). This sentence is
+            the trade for the widened gate — do not remove it without also
+            re-narrowing the gate. */}
+        {target.enteredByLabel !== null && (
+          <p
+            className="rounded-lg bg-amber-950/50 px-4 py-3 text-sm leading-relaxed text-dr3-cream/90"
+            data-testid="count-void-cross-operator"
+          >
+            {t('floor.count.void_confirm_other', { name: target.enteredByLabel })}
+          </p>
+        )}
 
         {error && (
           <p
@@ -189,6 +220,11 @@ export function CountVoidClient({
           >
             <p className="text-2xl font-bold tabular-nums">{c.physicalTotal.toLocaleString()}</p>
             <p className="text-sm text-dr3-cream/70">{c.countedAtLabel}</p>
+            {c.enteredByLabel !== null && (
+              <p className="text-sm font-medium text-amber-200" data-testid="count-void-row-by">
+                {t('floor.count.void_entered_by', { name: c.enteredByLabel })}
+              </p>
+            )}
             <button
               type="button"
               onClick={() => {
