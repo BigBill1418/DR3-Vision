@@ -87,6 +87,47 @@ export async function mintUploadUrl(args: {
   return { storage_key, upload_url };
 }
 
+/**
+ * The prefix every load photo key for `(loadId, kind)` must start with.
+ *
+ * ADR-0086 D3 — this is the STRUCTURAL replacement for the impossible
+ * `storage_key` equality check the earlier F-3 design specified. A grant cannot
+ * name the object it authorises, because the drain re-mints a fresh key past
+ * eight minutes; it names the load and the kind, and the key is constrained to
+ * live underneath them. It cannot be spoofed into another load's prefix and it
+ * does not care which UUID the mint produced.
+ *
+ * Kept in lockstep with `mintUploadUrl` above by construction — both build the
+ * prefix from the same two components in the same order.
+ */
+export function loadPhotoStorageKeyPrefix(loadId: string, kind: PhotoKind): string {
+  return `loads/${loadId}/${kind}/`;
+}
+
+/**
+ * True when `key` is one this server could have minted for `(loadId, kind)`.
+ *
+ * Mirrors `isValidDropoffStorageKey` exactly, including the `pending-r2-…`
+ * acceptance: `mintUploadUrl` returns `pending-r2-<kind>-<uuid>.<ext>` whenever
+ * R2 is unconfigured (dev, and the pre-provisioning window). Refusing it would
+ * make grant-auth unusable in precisely the environments where the tests run,
+ * and the placeholder is non-fetchable by construction. The placeholder still
+ * carries the KIND, so a `bol` grant cannot confirm a `weight_ticket`
+ * placeholder — the load scoping is what a placeholder cannot express, and it is
+ * the reason a placeholder is only ever reachable with R2 switched off.
+ */
+export function isValidLoadPhotoStorageKey(key: string, loadId: string, kind: PhotoKind): boolean {
+  if (key.startsWith(`pending-r2-${kind}-`)) return true;
+  const prefix = loadPhotoStorageKeyPrefix(loadId, kind);
+  if (!key.startsWith(prefix)) return false;
+  // No traversal, no nesting past the single object segment. `..` in an S3 key
+  // is not filesystem traversal, but a key that walks out of its load prefix
+  // defeats the check above — which is the only thing tying the object to the
+  // load that claimed it.
+  const rest = key.slice(prefix.length);
+  return rest.length > 0 && !rest.includes('/') && !rest.includes('..');
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Walk-up drop-off photos (ADR-0085)
 // ────────────────────────────────────────────────────────────────────────

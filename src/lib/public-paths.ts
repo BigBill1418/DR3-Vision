@@ -133,3 +133,71 @@ export function isPublic(pathname: string): boolean {
   if (pathname.startsWith('/api/intake/')) return true;
   return false;
 }
+
+// ── ADR-0086 D4 — grant-bearing photo requests ───────────────────────────────
+//
+// NEITHER photo route is in `PUBLIC_PATHS` above, and neither gets a
+// `startsWith` exemption. That is D4's decision and it is not stylistic: this
+// file carries TEN `/api/internal/*` exemptions, every one with a comment
+// recording the same shape — a session-less POST 307s to /login, `fetch` follows
+// the redirect, a 200 carrying the LOGIN PAGE comes back, and the caller logs
+// success for work that never happened. ADR-0068 Amendment 5 records walking
+// into it as recently as the reimbursement re-send. Putting a bearer-authorized
+// WRITE on the far side of that mechanism is not a trade worth making.
+//
+// ## Why a predicate is needed at all — the ADR's own prose is stale here
+//
+// ADR-0086 D4 says the routes "are reached by the grant-bearing client because
+// the client sends `redirect: 'manual'` and the route itself performs the grant
+// check." Read against the code, that is no longer true. ADR-0078 G7 changed the
+// middleware: a session-less `/api/*` request now gets a **401 JSON**, not a 307.
+// `redirect: 'manual'` does nothing to a 401 — the request never reaches the
+// route handler, so a route-level grant check could never run and the feature
+// would be inert. D4's second paragraph anticipates exactly this and states the
+// only acceptable shape, which is what this implements:
+//
+//   "If the middleware genuinely must be taught about the header, it should let
+//    through ONLY requests that carry a syntactically well-formed
+//    `X-Upload-Grant`, and the route must still be the thing that verifies it."
+//
+// So this predicate is deliberately as narrow as it can be made:
+//
+//   - the two photo paths and nothing else (exact match, not `startsWith`);
+//   - POST only;
+//   - a header that is syntactically shaped like a grant.
+//
+// It is SEPARATE from `isPublic` on purpose. Folding it in would exempt the
+// routes from every other caller's point of view and would quietly weaken the
+// `public-paths` regression test, which is the thing standing between this file
+// and its own history.
+//
+// This proves NOTHING about authenticity — it cannot: the middleware is edge
+// runtime and `node:crypto` is unavailable there. `@/lib/photo-grant`'s
+// `verifyPhotoGrant`, run inside the route handler, is the real gate. A request
+// that satisfies this predicate and carries garbage gets refused by the route,
+// exactly as an unauthenticated one does.
+
+const GRANT_PHOTO_PATHS = new Set<string>(['/api/photos/upload-url', '/api/photos/confirm']);
+
+/** Syntax only: two non-empty base64url segments, bounded. Never authenticity. */
+export function looksLikePhotoGrant(value: string | null | undefined): boolean {
+  if (!value || value.length > 2048) return false;
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value);
+}
+
+export function isGrantBearingPhotoRequest(
+  pathname: string,
+  method: string | null | undefined,
+  grantHeader: string | null | undefined,
+): boolean {
+  // Path first: it is the narrowest test and it short-circuits every other
+  // request in the app before any string work happens.
+  if (!GRANT_PHOTO_PATHS.has(pathname)) return false;
+  // `method` is always present on a real edge Request. Tolerated as absent, and
+  // FAIL-CLOSED when it is: an unknown method is not POST, so it is refused.
+  // (Reading it bare threw a TypeError under the existing middleware test
+  // doubles, which construct a request without one — a predicate that can throw
+  // inside the auth path is a 500 on every unauthenticated navigation.)
+  if ((method ?? '').toUpperCase() !== 'POST') return false;
+  return looksLikePhotoGrant(grantHeader);
+}

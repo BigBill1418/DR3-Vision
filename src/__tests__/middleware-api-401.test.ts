@@ -26,11 +26,19 @@ vi.mock('@/lib/auth.config', () => ({ authConfig: {} }));
 type FakeReq = any;
 import middleware from '@/middleware';
 
-function req(pathname: string, auth?: unknown): FakeReq {
+function req(
+  pathname: string,
+  auth?: unknown,
+  init?: { method?: string; headers?: Record<string, string> },
+): FakeReq {
   return {
     nextUrl: { pathname },
     url: `https://dr3-vision.svdp.us${pathname}`,
-    headers: new Headers(),
+    headers: new Headers(init?.headers ?? {}),
+    // Deliberately left UNDEFINED unless a test asks for one — the pre-ADR-0086
+    // cases above construct a request with no method, and the grant predicate
+    // must tolerate that rather than throw inside the auth path.
+    ...(init?.method ? { method: init.method } : {}),
     auth,
   };
 }
@@ -93,5 +101,76 @@ describe('ADR-0078 G7 — middleware.api-401-not-307', () => {
     const { isPublic } = await import('@/lib/public-paths');
     expect(isPublic('/api/photos/upload-url')).toBe(false);
     expect(isPublic('/api/queue/replay')).toBe(false);
+  });
+});
+
+// ── ADR-0086 D4 — the grant keyhole, through the REAL middleware ─────────────
+
+describe('ADR-0086 D4 — a grant-bearing photo POST reaches its route handler', () => {
+  // This is the WIRING test, and it is the one that would have caught a feature
+  // that shipped inert.
+  //
+  // ADR-0086 D4 asserts the routes are reached "because the client sends
+  // `redirect: 'manual'`". Held against the block above, that is false: G7 made
+  // `/api/*` answer a **401**, and no redirect mode survives a 401 — the request
+  // dies here and the route's grant check never runs. Testing the predicate and
+  // testing the route handler would BOTH have been green while the two were
+  // never connected, which is exactly the shape of a feature that works in the
+  // suite and does nothing on the floor.
+  //
+  // FALSIFIED BY HAND: removing the `isGrantBearingPhotoRequest` branch from
+  // `middleware.ts` makes both cases below red with 401 — the state in which a
+  // sessionless iPad can never drain, which is the entire residual ADR-0086
+  // exists to close.
+  const GRANT = 'eyJ2IjoxfQ.c2lnbmF0dXJl';
+
+  it.each(['/api/photos/upload-url', '/api/photos/confirm'])(
+    '%s is let through when it carries a grant-shaped header',
+    (path) => {
+      const res = run(
+        req(path, undefined, { method: 'POST', headers: { 'x-upload-grant': GRANT } }),
+      );
+      expect(res.status, `${path} was refused at the edge — the route never ran`).not.toBe(401);
+      expect(res.headers.get('location')).toBeNull();
+    },
+  );
+
+  // The keyhole is a keyhole. Everything that is not exactly the right shape
+  // still gets the 401, so this is not a `PUBLIC_PATHS` exemption wearing a
+  // different hat.
+  it('the same header does NOT open any other route', () => {
+    for (const path of ['/api/queue/replay', '/api/operator/eugene/count', '/api/loads']) {
+      const res = run(
+        req(path, undefined, { method: 'POST', headers: { 'x-upload-grant': GRANT } }),
+      );
+      expect(res.status, `${path} was opened by a photo grant`).toBe(401);
+    }
+  });
+
+  it.each([
+    ['no header', {}],
+    ['an empty header', { 'x-upload-grant': '' }],
+    ['a header that is not grant-shaped', { 'x-upload-grant': 'not-a-grant' }],
+  ])('a photo POST with %s still gets 401', (_name, headers) => {
+    const res = run(req('/api/photos/confirm', undefined, { method: 'POST', headers }));
+    expect(res.status).toBe(401);
+  });
+
+  it('a GET carrying a grant still gets 401', () => {
+    const res = run(
+      req('/api/photos/confirm', undefined, {
+        method: 'GET',
+        headers: { 'x-upload-grant': GRANT },
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  // Same guard-the-guard as above: if the photo paths ever became public, every
+  // assertion in this block would pass for the wrong reason.
+  it('the photo paths are still NOT public — the keyhole is not an exemption', async () => {
+    const { isPublic } = await import('@/lib/public-paths');
+    expect(isPublic('/api/photos/upload-url')).toBe(false);
+    expect(isPublic('/api/photos/confirm')).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { photoGrantsConfigured } from '@/lib/photo-grant';
 
 // Healthcheck endpoint hit by:
 //   - Dockerfile HEALTHCHECK
@@ -48,6 +49,16 @@ export async function GET() {
       version: VERSION,
       uptime_s: Math.round((Date.now() - BOOT_TS) / 1000),
       db_ok,
+      // ADR-0086 §6.5 — "the app must refuse to mint grants and SAY SO on the
+      // health surface", rather than silently degrading to no-grants and
+      // reproducing today's behaviour without telling anyone it did.
+      //
+      // Deliberately NOT part of `ok`/`status`: this feature's first deploy
+      // necessarily lands BEFORE the operator drops photo-grant.env, so gating
+      // the deployer's smoke test on it would roll the deploy back. False here
+      // means "queued photos still need a live session to drain", which is the
+      // pre-ADR-0086 status quo, not an outage.
+      photo_grants_ok: photoGrantsConfigured(),
     },
     { status: ok ? 200 : 503 },
   );
