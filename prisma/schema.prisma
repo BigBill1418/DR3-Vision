@@ -225,6 +225,34 @@ model SiteInventorySnapshot {
   // is ceremony, not performance.
   created_at        DateTime @default(now())
 
+  // ADR-0084 — same-day operator VOID of a physical count.
+  //
+  // The iPad is the only surface that can double-enter a count: the operator
+  // types a number and submits, and before ADR-0078's idempotency key a
+  // double-tap produced two rows. ADR-0078 closed the mechanism; this closes the
+  // genuine-mistake case (wrong number keyed, or a duplicate predating the key).
+  //
+  // Soft-void, never a hard delete: a physical count is the anchor every
+  // downstream floor/COR/billing number is computed forward from, so the value's
+  // history has to survive (CLAUDE.md hard rule #6 in spirit — the audit row is
+  // append-only and the row it describes must still be there to describe).
+  //
+  // `voided_at` non-null means EXCLUDED FROM ANCHOR SELECTION. Every reader
+  // filters it — the filter is centralised in `NOT_VOIDED` /
+  // `notVoidedSnapshotWhere()` (src/lib/inventory/snapshot-void.ts) precisely so
+  // a new reader cannot quietly omit it; `snapshot-void-readers.guard.test.ts`
+  // fails the build if a `siteInventorySnapshot` query appears without it.
+  //
+  // `voided_by` is a bare scalar FK → users.id (ON DELETE SET NULL in the
+  // migration, no Prisma relation field), matching the BonusReportingAdjustment
+  // `created_by` pattern: we never navigate user → voided snapshots.
+  //
+  // No new index. The existing `(site_id, snapshot_kind, snapshot_at)` index
+  // still resolves the range and `voided_at IS NULL` is a residual predicate over
+  // a handful of rows — same reasoning ADR-0078 D1 recorded for the tiebreaker.
+  voided_at         DateTime?
+  voided_by         String?
+
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
   @@map("site_inventory_snapshots")
@@ -1804,6 +1832,25 @@ model BonusDailyEntry {
 
   entry_date     DateTime @db.Date
   mattress_count Decimal  @db.Decimal(5, 1) // 0..999 valid, soft-warn above 200; Decimal(5,1) per ADR-0023 (historical half-shift values + decimal UI going forward)
+  /// ADR-0083 — mattresses SAVED for resale, keyed beside the processed count in
+  /// the same daily entry (JT: "a dedicated saves field beside processed"). A save
+  /// is a PAID unit: the day's bonus is computed on `mattress_count + saves` through
+  /// the one calculator (`dailyPaidUnits`), so the tier thresholds apply ONCE to the
+  /// day's total work rather than twice. It is NOT a processed unit — every
+  /// production-QUANTITY read path (daily report, processor quota, MRC-adjacent
+  /// totals) stays on `mattress_count` alone, which is what makes the two columns
+  /// disjoint quantities and the double-count structurally impossible.
+  ///
+  /// `Decimal(5,1)` mirrors `mattress_count` exactly (same range, same one-decimal
+  /// resolution, same validator) so the two can be summed without a precision seam.
+  ///
+  /// NOT NULL DEFAULT 0, and the backfill is a REAL zero, not a not-recorded: every
+  /// historical row predates the column on a floor where saves were not being
+  /// captured in the bonus entry at all, so "this employee saved 0 mattresses that
+  /// day, for bonus purposes" is the true statement. That truthfulness is what lets
+  /// the sign-time lock and the ADR-0033 reconcile recompute historical signed
+  /// periods with saves in the formula and get byte-identical totals — see ADR-0083.
+  saves          Decimal  @default(0) @db.Decimal(5, 1)
   note           String? // optional HR annotation, does NOT affect math
 
   // Sprint 3 / ADR-0023: provenance for historical imports. NULL for

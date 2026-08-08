@@ -138,7 +138,8 @@ export default async function BonusPdfSourcePage({
   // Employees + entries for this month.
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: month.id },
-    select: { bonus_employee_id: true, entry_date: true, mattress_count: true },
+    // ADR-0083 — `saves` feeds the SIGNED payroll PDF's per-employee bonus.
+    select: { bonus_employee_id: true, entry_date: true, mattress_count: true, saves: true },
   });
   const employees = await prisma.bonusEmployee.findMany({
     where: { site_id: month.site_id },
@@ -169,14 +170,16 @@ export default async function BonusPdfSourcePage({
     },
     site: { code: month.site.code, name: month.site.name },
     employees,
-    // mattress_count is Decimal(5,1) at the Prisma edge; convert to number for
-    // the PdfEntry[] view model so grid rows render (Unit 8 / T-330). This only
-    // types the per-entry count — the displayed grand total is driven by
-    // displayTotalCents below (Unit 7), which is untouched.
+    // mattress_count and (ADR-0083) saves are Decimal(5,1) at the Prisma edge;
+    // convert both to numbers for the PdfEntry[] view model so grid rows render
+    // (Unit 8 / T-330). This only types the per-entry values — the displayed
+    // grand total is driven by displayTotalCents below (Unit 7), which is
+    // untouched.
     entries: entries.map((e) => ({
       bonus_employee_id: e.bonus_employee_id,
       entry_date: e.entry_date,
       mattress_count: e.mattress_count.toNumber(),
+      saves: e.saves.toNumber(),
     })),
     rule,
   });

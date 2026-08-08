@@ -21,7 +21,8 @@
 // processor: daysQualified + daysShort = days they were keyed this period.
 
 import { prisma } from '@/lib/prisma';
-import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import { type BonusRuleParams } from '@/lib/bonus/calculator';
+import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 import { resolveActiveRule } from '@/lib/bonus/daily-entry';
 import { listEmployees } from '@/lib/bonus/employees';
 import type { PreviousName } from '@/lib/bonus/employees';
@@ -106,20 +107,33 @@ export interface CurrentPeriodStandings {
 }
 
 interface Tally {
+  /**
+   * ADR-0083 — PAID units: processed + saves. This drives the standings display
+   * and the "units to threshold" figure an operator reads to know whether the
+   * next mattress earns them anything, so it must be the same total the bonus is
+   * tiered over. A saved mattress that counted for pay but not toward the
+   * displayed progress would make the threshold arithmetic on screen wrong.
+   */
   units: number;
+  /** PROCESSED mattresses only, for displays that mean "torn down". */
+  mattresses: number;
+  /** ADR-0083 — mattresses saved for resale. */
+  saves: number;
   daysQualified: number;
   daysShort: number;
   bonusCents: number;
 }
 
 function emptyTally(): Tally {
-  return { units: 0, daysQualified: 0, daysShort: 0, bonusCents: 0 };
+  return { units: 0, mattresses: 0, saves: 0, daysQualified: 0, daysShort: 0, bonusCents: 0 };
 }
 
 /** Fold one keyed day into a tally, classifying it qualified vs short. */
-function accumulate(acc: Tally, units: number, rule: BonusRuleParams): void {
-  const bonus = calculateDailyBonusCents(units, rule);
-  acc.units += units;
+function accumulate(acc: Tally, mattressCount: number, saves: number, rule: BonusRuleParams): void {
+  const bonus = dailyBonusCentsFor({ mattress_count: mattressCount, saves }, rule);
+  acc.units += mattressCount + saves;
+  acc.mattresses += mattressCount;
+  acc.saves += saves;
   acc.bonusCents += bonus;
   if (bonus > 0) acc.daysQualified += 1;
   else acc.daysShort += 1;
@@ -167,13 +181,13 @@ export async function currentPeriodStandings(
   // site-scoped via resolveOpenPayPeriod), so no cross-site leakage is possible.
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: period.id },
-    select: { bonus_employee_id: true, mattress_count: true },
+    select: { bonus_employee_id: true, mattress_count: true, saves: true },
   });
 
   const tallyByEmployee = new Map<string, Tally>();
   for (const e of entries) {
     const acc = tallyByEmployee.get(e.bonus_employee_id) ?? emptyTally();
-    accumulate(acc, e.mattress_count.toNumber(), rule);
+    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
     tallyByEmployee.set(e.bonus_employee_id, acc);
   }
 
@@ -254,14 +268,14 @@ export async function currentPeriodForEmployee(
 
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: period.id, bonus_employee_id: employeeId },
-    select: { mattress_count: true },
+    select: { mattress_count: true, saves: true },
   });
   if (entries.length === 0) {
     return { period: meta, thresholdLow: rule.threshold_low, standing: null };
   }
 
   const t = emptyTally();
-  for (const e of entries) accumulate(t, e.mattress_count.toNumber(), rule);
+  for (const e of entries) accumulate(t, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
   return {
     period: meta,
     thresholdLow: rule.threshold_low,

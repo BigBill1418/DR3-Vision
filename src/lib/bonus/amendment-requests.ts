@@ -55,7 +55,8 @@ export class AmendmentRequestError extends Error {
 export interface AmendmentItemInput {
   bonusEmployeeId: string;
   changeType: 'update' | 'insert';
-  newValue: { mattress_count: number; note: string | null };
+  /** ADR-0083 — `saves` travels with the count; both are amendable payroll values. */
+  newValue: { mattress_count: number; saves: number; note: string | null };
 }
 
 export interface SubmitAmendmentInput {
@@ -64,7 +65,7 @@ export interface SubmitAmendmentInput {
   targetEntryDate: Date;
   bonusEmployeeId: string;
   changeType: 'update' | 'insert';
-  newValue: { mattress_count: number; note: string | null };
+  newValue: { mattress_count: number; saves: number; note: string | null };
   justification: string;
   requesterUserId: string;
   ip?: string | null;
@@ -152,7 +153,8 @@ async function createOneAmendmentInTx(
         entry_date: ctx.targetEntryDate,
       },
     },
-    select: { id: true, mattress_count: true, note: true },
+    // ADR-0083 — `saves` is part of the old-value snapshot the approver reviews.
+    select: { id: true, mattress_count: true, saves: true, note: true },
   });
 
   if (item.changeType === 'update' && !existing) {
@@ -164,7 +166,11 @@ async function createOneAmendmentInTx(
 
   const oldValueSnapshot =
     item.changeType === 'update' && existing
-      ? { mattress_count: existing.mattress_count.toNumber(), note: existing.note }
+      ? {
+          mattress_count: existing.mattress_count.toNumber(),
+          saves: existing.saves.toNumber(),
+          note: existing.note,
+        }
       : null;
 
   // Auto-cancel any prior PENDING request from this requester for the same target.
@@ -286,6 +292,9 @@ export async function submitAmendmentBatch(input: SubmitAmendmentBatchInput): Pr
   }
   for (const item of input.items) {
     validateCount(item.newValue.mattress_count);
+    // ADR-0083 — same range/precision rule as the count (both Decimal(5,1)),
+    // validated independently of the route's zod schema. Never trust the client.
+    validateCount(item.newValue.saves);
   }
 
   // Resolve approver outside the tx (separate read; throws on Patrick). One
@@ -472,7 +481,16 @@ async function applyApprovalInTx(
   });
   if (claim.count === 0) throw new AmendmentRequestError('request_not_pending', 409);
 
-  const newValue = req.new_value as { mattress_count: number; note: string | null };
+  // ADR-0083 — `saves` is read out of the stored proposal. A request row written
+  // before this column existed has no `saves` key, and the amendment must then be
+  // applied WITHOUT touching the entry's saves value rather than coercing the
+  // missing key to 0 and silently zeroing a real figure on approval. `undefined`
+  // is the honest representation of "this proposal said nothing about saves".
+  const newValue = req.new_value as {
+    mattress_count: number;
+    saves?: number;
+    note: string | null;
+  };
 
   let appliedEntryId: string;
   let beforeAuditPayload: Prisma.InputJsonValue | typeof Prisma.JsonNull;
@@ -492,6 +510,7 @@ async function applyApprovalInTx(
 
     beforeAuditPayload = serializeJson({
       mattress_count: existing.mattress_count.toNumber(),
+      saves: existing.saves.toNumber(),
       note: existing.note,
       entered_by_user_id: existing.entered_by_user_id,
     }) as Prisma.InputJsonValue;
@@ -500,6 +519,7 @@ async function applyApprovalInTx(
       where: { id: existing.id },
       data: {
         mattress_count: newValue.mattress_count,
+        ...(newValue.saves === undefined ? {} : { saves: newValue.saves }),
         note: newValue.note,
         entered_by_user_id: input.reviewerUserId,
         entered_at: now,
@@ -509,6 +529,7 @@ async function applyApprovalInTx(
     appliedEntryId = updated.id;
     afterAuditPayload = serializeJson({
       mattress_count: updated.mattress_count.toNumber(),
+      saves: updated.saves.toNumber(),
       note: updated.note,
       entered_by_user_id: updated.entered_by_user_id,
     }) as Prisma.InputJsonValue;
@@ -530,6 +551,7 @@ async function applyApprovalInTx(
         bonus_pay_period_id: req.bonus_pay_period_id,
         entry_date: req.target_entry_date,
         mattress_count: newValue.mattress_count,
+        saves: newValue.saves ?? 0,
         note: newValue.note,
         entered_by_user_id: input.reviewerUserId,
         entered_at: now,
@@ -540,6 +562,7 @@ async function applyApprovalInTx(
     beforeAuditPayload = Prisma.JsonNull;
     afterAuditPayload = serializeJson({
       mattress_count: inserted.mattress_count.toNumber(),
+      saves: inserted.saves.toNumber(),
       note: inserted.note,
       entered_by_user_id: inserted.entered_by_user_id,
     }) as Prisma.InputJsonValue;
@@ -916,6 +939,14 @@ export interface ShouldRequireAmendmentInput {
   entryDate: Date;
   newCount: number;
   existingCount: number | null;
+  /**
+   * ADR-0083 — the proposed `saves` value. Required alongside `newCount`: both
+   * columns are payroll quantities and the gate must weigh both. See the
+   * four-eyes note on `shouldRequireAmendment`.
+   */
+  newSaves: number;
+  /** Existing stored `saves`, or null when no entry exists for the day yet. */
+  existingSaves: number | null;
   actorIsAdmin: boolean;
 }
 
@@ -924,9 +955,32 @@ export type ShouldRequireAmendmentResult =
   | {
       route: 'amendment';
       changeType: 'update' | 'insert';
-      oldValue: { mattress_count: number; note: string | null } | null;
+      oldValue: { mattress_count: number; saves: number; note: string | null } | null;
     };
 
+/**
+ * Decide whether a proposed daily-entry write may be made DIRECTLY or must go
+ * through the ADR-0028 four-eyes prior-day amendment workflow.
+ *
+ * ADR-0083 — THE FOUR-EYES BYPASS THIS CLOSES:
+ *
+ * This predicate used to compare `mattress_count` alone, because before saves
+ * that single number WAS the payroll value of the row. Adding a second paid
+ * column without touching the comparison would have opened a hole: a non-admin
+ * manager editing a PRIOR day and changing ONLY the saves figure would compute
+ * `countChanged === false`, fall into the `note_only_edit` branch, and be routed
+ * 'direct' — writing an unapproved change to what a processor gets paid, in a
+ * period that is still open, with no approver, no justification, and nothing in
+ * the amendment queue to review. The note-only exemption exists because a note
+ * cannot change anybody's pay; saves can.
+ *
+ * So the gate now weighs BOTH quantities: a prior-day change to either one is an
+ * amendment. Only a genuine note-only edit stays direct.
+ *
+ * Falsified by `__tests__/four-eyes-saves.test.ts`, which reverts this predicate
+ * to the count-only comparison and asserts it goes RED — i.e. proves the test
+ * would actually catch the regression rather than merely passing beside it.
+ */
 export function shouldRequireAmendment(
   input: ShouldRequireAmendmentInput,
   existingNote: string | null = null,
@@ -946,7 +1000,14 @@ export function shouldRequireAmendment(
 
   const isInsert = input.existingCount === null;
   const countChanged = input.existingCount !== null && input.newCount !== input.existingCount;
-  if (!isInsert && !countChanged) {
+  // ADR-0083 — a null `existingSaves` alongside a non-null `existingCount` means
+  // the row predates the column; the stored value is then the column default 0,
+  // so that is what the proposal is compared against. Treating null as "no
+  // change possible" would reopen the bypass for exactly the historical rows
+  // most likely to be corrected.
+  const savesChanged =
+    input.existingCount !== null && input.newSaves !== (input.existingSaves ?? 0);
+  if (!isInsert && !countChanged && !savesChanged) {
     return { route: 'direct', reason: 'note_only_edit' };
   }
 
@@ -956,7 +1017,11 @@ export function shouldRequireAmendment(
     oldValue:
       input.existingCount === null
         ? null
-        : { mattress_count: input.existingCount, note: existingNote },
+        : {
+            mattress_count: input.existingCount,
+            saves: input.existingSaves ?? 0,
+            note: existingNote,
+          },
   };
 }
 

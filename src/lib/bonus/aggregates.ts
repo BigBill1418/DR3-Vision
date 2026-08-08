@@ -20,7 +20,8 @@
 
 import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
-import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import { type BonusRuleParams } from '@/lib/bonus/calculator';
+import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 import { resolveRuleForHistorical } from '@/lib/bonus/daily-entry';
 import { periodLabel, periodShortLabel } from '@/lib/bonus/period-label';
 import { appCurrentYear } from '@/lib/time';
@@ -136,19 +137,35 @@ function ruleResolver(siteId: string): (periodStart: Date) => Promise<BonusRuleP
 }
 
 interface Rollup {
+  /** PROCESSED mattresses only (ADR-0083) — saves are tracked separately below. */
   mattresses: number;
+  /** ADR-0083 — mattresses saved for resale. Paid, but never "processed". */
+  saves: number;
   daysQualified: number;
   bonusCents: number;
 }
 
 function emptyRollup(): Rollup {
-  return { mattresses: 0, daysQualified: 0, bonusCents: 0 };
+  return { mattresses: 0, saves: 0, daysQualified: 0, bonusCents: 0 };
 }
 
 /** Accumulate one day's entry into a rollup using the supplied rule. */
-function accumulate(acc: Rollup, mattressCount: number, rule: BonusRuleParams): void {
-  const bonus = calculateDailyBonusCents(mattressCount, rule);
+/**
+ * ADR-0083 — `mattressCount` is the PROCESSED count and `saves` the saved count.
+ * The bonus is tiered ONCE over their sum (`dailyBonusCentsFor`), while
+ * `acc.mattresses` keeps accumulating PROCESSED units only: that rollup field
+ * feeds "mattresses processed" displays, and a saved mattress was never torn
+ * down. Two disjoint quantities, one paid total — see `paid-units.ts`.
+ */
+function accumulate(
+  acc: Rollup,
+  mattressCount: number,
+  saves: number,
+  rule: BonusRuleParams,
+): void {
+  const bonus = dailyBonusCentsFor({ mattress_count: mattressCount, saves }, rule);
   acc.mattresses += mattressCount;
+  acc.saves += saves;
   acc.bonusCents += bonus;
   if (bonus > 0) acc.daysQualified += 1;
 }
@@ -198,13 +215,25 @@ export async function employeeHistory(
 
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_employee_id: employeeId, bonus_pay_period: { site_id: siteId } },
-    select: { bonus_pay_period_id: true, entry_date: true, mattress_count: true },
+    select: {
+      bonus_pay_period_id: true,
+      entry_date: true,
+      mattress_count: true,
+      saves: true,
+    },
   });
 
-  const entriesByMonth = new Map<string, { entry_date: Date; mattress_count: number }[]>();
+  const entriesByMonth = new Map<
+    string,
+    { entry_date: Date; mattress_count: number; saves: number }[]
+  >();
   for (const e of entries) {
     const list = entriesByMonth.get(e.bonus_pay_period_id) ?? [];
-    list.push({ entry_date: e.entry_date, mattress_count: e.mattress_count.toNumber() });
+    list.push({
+      entry_date: e.entry_date,
+      mattress_count: e.mattress_count.toNumber(),
+      saves: e.saves.toNumber(),
+    });
     entriesByMonth.set(e.bonus_pay_period_id, list);
   }
 
@@ -215,7 +244,7 @@ export async function employeeHistory(
     if (monthEntries.length === 0) continue; // month with no entries for this employee
     const rule = await resolveRule(m.period_start);
     const acc = emptyRollup();
-    for (const e of monthEntries) accumulate(acc, e.mattress_count, rule);
+    for (const e of monthEntries) accumulate(acc, e.mattress_count, e.saves, rule);
     allMonthTotals.push({
       monthId: m.id,
       ym: ym(m.period_start),
@@ -284,7 +313,12 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
 
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: { in: [...monthStartById.keys()] } },
-    select: { bonus_employee_id: true, bonus_pay_period_id: true, mattress_count: true },
+    select: {
+      bonus_employee_id: true,
+      bonus_pay_period_id: true,
+      mattress_count: true,
+      saves: true,
+    },
   });
 
   const resolveRule = ruleResolver(siteId);
@@ -294,7 +328,7 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
     if (!monthStart) continue;
     const rule = await resolveRule(monthStart);
     const acc = byEmployee.get(e.bonus_employee_id) ?? emptyRollup();
-    accumulate(acc, e.mattress_count.toNumber(), rule);
+    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
     byEmployee.set(e.bonus_employee_id, acc);
   }
   if (byEmployee.size === 0) return [];

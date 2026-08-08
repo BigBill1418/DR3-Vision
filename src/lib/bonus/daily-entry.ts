@@ -31,7 +31,9 @@ import {
   type BonusMonthRow,
   type BonusPayPeriodState,
 } from '@/lib/bonus/state-machine';
-import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import { type BonusRuleParams } from '@/lib/bonus/calculator';
+import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
+import { recordSavesMovement } from '@/lib/bonus/saves-inventory';
 import { shouldRequireAmendment } from '@/lib/bonus/amendment-requests';
 
 // ────────────────────────────────────────────────────────────────────
@@ -153,8 +155,17 @@ export interface DailyGridEntryRow {
   full_name: string;
   /** Existing count for `entry_date`, or null if not yet keyed today. */
   mattress_count: number | null;
+  /**
+   * ADR-0083 — mattresses SAVED for resale on `entry_date`. Null iff the row has
+   * not been keyed at all (mirrors `mattress_count`); a keyed row always carries
+   * a number, because the column is NOT NULL DEFAULT 0.
+   */
+  saves: number | null;
   note: string | null;
-  /** Live bonus for the existing count, in integer cents (0 if no count yet). */
+  /**
+   * Live bonus for the existing entry, in integer cents (0 if not yet keyed).
+   * ADR-0083: computed on PAID units — processed + saves — tiered once.
+   */
   bonus_cents: number;
 }
 
@@ -218,12 +229,17 @@ export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGri
   const rows: DailyGridEntryRow[] = employees.map((emp) => {
     const entry = byEmployee.get(emp.id);
     const count = entry ? entry.mattress_count.toNumber() : null;
-    const bonus_cents = count != null ? calculateDailyBonusCents(count, ruleParams) : 0;
+    const saves = entry ? entry.saves.toNumber() : null;
+    // ADR-0083 — the row's bonus is tiered ONCE over processed + saves, through
+    // the shared `paid-units` funnel. Same call the sign-time lock and the PDF
+    // make, so the grid cannot show a number the signature would contradict.
+    const bonus_cents = entry ? dailyBonusCentsFor(entry, ruleParams) : 0;
     totalCents += bonus_cents;
     return {
       bonus_employee_id: emp.id,
       full_name: emp.full_name,
       mattress_count: count,
+      saves,
       note: entry?.note ?? null,
       bonus_cents,
     };
@@ -251,6 +267,22 @@ export async function getDailyGrid(siteId: string, date: Date): Promise<DailyGri
 export interface DailyEntryInput {
   bonus_employee_id: string;
   mattress_count: number;
+  /**
+   * ADR-0083 — mattresses saved for resale.
+   *
+   * Optional on the wire for one reason only: a browser tab opened before this
+   * deploy posts a body without it. ABSENT MEANS UNCHANGED, never zero:
+   *   • insert → 0 (the column default; nothing was keyed, nobody is owed)
+   *   • update → the existing stored value is preserved
+   *
+   * The other reading — absent ⇒ write 0 — is the destructive one and was
+   * rejected: a manager on a stale tab correcting somebody's NOTE would silently
+   * zero that processor's saves for the day and underpay them, with the write
+   * looking entirely routine in the audit log. "Not supplied" and "zero" are
+   * different claims and payroll is where that distinction has to hold. Clearing
+   * saves is still possible — a current client sends an explicit `0`.
+   */
+  saves?: number | undefined;
   note?: string | null;
 }
 
@@ -266,6 +298,7 @@ export interface UpsertedEntry {
   id: string;
   bonus_employee_id: string;
   mattress_count: number;
+  saves: number;
   note: string | null;
   entered_by_user_id: string;
 }
@@ -273,15 +306,22 @@ export interface UpsertedEntry {
 export type UpsertDailyEntriesResult =
   | { ok: true; monthId: string; entries: UpsertedEntry[] }
   | { ok: false; reason: 'month_locked'; state: BonusPayPeriodState }
-  | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' | 'unknown_employee' }
+  | {
+      ok: false;
+      reason:
+        | 'count_out_of_range'
+        | 'saves_out_of_range'
+        | 'employee_not_in_site'
+        | 'unknown_employee';
+    }
   | {
       ok: 'requires_amendment';
       monthId: string;
       pending: Array<{
         bonus_employee_id: string;
         change_type: 'update' | 'insert';
-        existing: { mattress_count: number; note: string | null } | null;
-        proposed: { mattress_count: number; note: string | null };
+        existing: { mattress_count: number; saves: number; note: string | null } | null;
+        proposed: { mattress_count: number; saves: number; note: string | null };
       }>;
     };
 
@@ -363,6 +403,13 @@ export async function upsertDailyEntries(
     if (!isValidMattressCount(i.mattress_count)) {
       return { ok: false, reason: 'count_out_of_range' };
     }
+    // ADR-0083 — `saves` is the same shape as `mattress_count` (Decimal(5,1),
+    // 0..999, one decimal place), so it reuses the same validator rather than a
+    // parallel one that could drift from it. A distinct reason code so the
+    // operator is told WHICH box is wrong.
+    if (i.saves !== undefined && !isValidMattressCount(i.saves)) {
+      return { ok: false, reason: 'saves_out_of_range' };
+    }
   }
 
   // Resolve the seeded pay period covering this day (NEVER fabricated — T-203 /
@@ -396,14 +443,25 @@ export async function upsertDailyEntries(
   // remains for same-day edits, note-only edits, inserts on today, and admin.
   const existingRows = await prisma.bonusDailyEntry.findMany({
     where: { bonus_employee_id: { in: ids }, entry_date: entryDate },
-    select: { bonus_employee_id: true, mattress_count: true, note: true },
+    // ADR-0083 — `saves` is selected because it is an AMENDABLE payroll value:
+    // the four-eyes routing predicate below compares it, and the pending payload
+    // must show the approver the value being changed FROM.
+    select: { bonus_employee_id: true, mattress_count: true, saves: true, note: true },
   });
   const existingByEmployee = new Map(
     existingRows.map((r) => [
       r.bonus_employee_id,
-      { mattress_count: r.mattress_count.toNumber(), note: r.note },
+      { mattress_count: r.mattress_count.toNumber(), saves: r.saves.toNumber(), note: r.note },
     ]),
   );
+
+  // ADR-0083 — `saves` absent on the wire means UNCHANGED, not zero (see
+  // `DailyEntryInput.saves`). Resolve the effective proposed value ONCE here so
+  // the routing predicate, the amendment payload and the write all agree about
+  // what is being proposed. If they disagreed, a change could route 'direct'
+  // against one value and be written as another.
+  const effectiveSaves = (input: DailyEntryInput, existingSaves: number | null): number =>
+    input.saves ?? existingSaves ?? 0;
 
   const routingDecisions = inputs.map((input) => {
     const existing = existingByEmployee.get(input.bonus_employee_id) ?? null;
@@ -413,6 +471,13 @@ export async function upsertDailyEntries(
         entryDate,
         newCount: input.mattress_count,
         existingCount: existing?.mattress_count ?? null,
+        // ADR-0083 — the four-eyes gate must see BOTH payroll quantities.
+        // Before saves existed the predicate compared one number and that was
+        // the whole payroll value of the row; now a prior-day edit that changes
+        // ONLY saves changes what the processor is paid just as much as one that
+        // changes only the processed count, and must be approved identically.
+        newSaves: effectiveSaves(input, existing?.saves ?? null),
+        existingSaves: existing?.saves ?? null,
         actorIsAdmin: actor.isAdmin === true,
       },
       existing?.note ?? null,
@@ -431,7 +496,11 @@ export async function upsertDailyEntries(
           bonus_employee_id: r.input.bonus_employee_id,
           change_type: (r.decision as { changeType: 'update' | 'insert' }).changeType,
           existing: r.existing,
-          proposed: { mattress_count: r.input.mattress_count, note: r.input.note ?? null },
+          proposed: {
+            mattress_count: r.input.mattress_count,
+            saves: effectiveSaves(r.input, r.existing?.saves ?? null),
+            note: r.input.note ?? null,
+          },
         })),
     };
   }
@@ -455,6 +524,11 @@ export async function upsertDailyEntries(
 
       const note = input.note && input.note.trim().length > 0 ? input.note.trim() : null;
 
+      // ADR-0083 — absent `saves` means UNCHANGED (stale-tab safety), so on an
+      // update we omit the field entirely rather than writing a zero over a real
+      // value; on an insert the column default (0) applies.
+      const savesBefore = before ? before.saves.toNumber() : null;
+
       const row = await tx.bonusDailyEntry.upsert({
         where: {
           bonus_employee_id_entry_date: {
@@ -467,16 +541,37 @@ export async function upsertDailyEntries(
           bonus_pay_period_id: month.id,
           entry_date: entryDate,
           mattress_count: input.mattress_count,
+          saves: input.saves ?? 0,
           note,
           entered_by_user_id: actor.actorUserId,
         },
         update: {
           mattress_count: input.mattress_count,
+          // Omitted entirely when not supplied, so an update leaves the stored
+          // value alone. Written as a direct `=== undefined` comparison rather
+          // than via a boolean: TypeScript narrows on the former, and under
+          // `exactOptionalPropertyTypes` a non-narrowed spread would smuggle
+          // `saves: undefined` into the Prisma update input.
+          ...(input.saves === undefined ? {} : { saves: input.saves }),
           note,
           // Re-stamp the keyer: the last person to touch the row owns it
           // (ADR-0019 §4 — Janette/Morena/Bill can each key; audit differentiates).
           entered_by_user_id: actor.actorUserId,
         },
+      });
+
+      // ADR-0083 inventory leg — a save is resale stock. Recorded as an
+      // `on_floor → saved` movement on the aggregate ledger, in THIS transaction
+      // so a paid save can never exist without its inventory movement. It
+      // deliberately does NOT decrement the live floor balance and writes nothing
+      // to `processed_units_daily`; see `saves-inventory.ts` for why.
+      await recordSavesMovement(tx, {
+        siteId,
+        movementDate: entryDate,
+        previousSaves: savesBefore,
+        currentSaves: row.saves.toNumber(),
+        entryId: row.id,
+        actorUserId: actor.actorUserId,
       });
 
       await tx.auditLog.create({
@@ -489,12 +584,14 @@ export async function upsertDailyEntries(
           before: before
             ? serializeForAudit({
                 mattress_count: before.mattress_count,
+                saves: before.saves,
                 note: before.note,
                 entered_by_user_id: before.entered_by_user_id,
               })
             : Prisma.JsonNull,
           after: serializeForAudit({
             mattress_count: row.mattress_count,
+            saves: row.saves,
             note: row.note,
             entered_by_user_id: row.entered_by_user_id,
           }),
@@ -507,6 +604,7 @@ export async function upsertDailyEntries(
         id: row.id,
         bonus_employee_id: row.bonus_employee_id,
         mattress_count: row.mattress_count.toNumber(),
+        saves: row.saves.toNumber(),
         note: row.note,
         entered_by_user_id: row.entered_by_user_id,
       });

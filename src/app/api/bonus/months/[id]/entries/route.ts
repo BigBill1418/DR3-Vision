@@ -36,6 +36,14 @@ const entrySchema = z.object({
   mattress_count: z
     .number()
     .refine(isValidMattressCount, 'Count must be 0–999 with at most one decimal place.'),
+  // ADR-0083 — mattresses saved for resale. OPTIONAL on the wire so a browser tab
+  // opened before this deploy keeps working; the service layer treats absent as
+  // UNCHANGED (never zero), so a stale client cannot wipe a real saves value.
+  // Same Decimal(5,1) contract as the count, so the same validator.
+  saves: z
+    .number()
+    .refine(isValidMattressCount, 'Saves must be 0–999 with at most one decimal place.')
+    .optional(),
   note: z
     .union([z.string().max(2000), z.literal(''), z.null()])
     .optional()
@@ -84,6 +92,7 @@ export async function POST(
   const inputs: AmendmentEntryInput[] = parsed.data.entries.map((e) => ({
     bonus_employee_id: e.bonus_employee_id,
     mattress_count: e.mattress_count,
+    saves: e.saves,
     note: e.note,
   }));
 

@@ -16,13 +16,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
+import { amendmentSummaryLine } from '@/lib/bonus/amendment-display';
 
 export interface BatchItem {
   bonusEmployeeId: string;
   employeeName: string;
   changeType: 'update' | 'insert';
-  oldValue: { mattress_count: number; note: string | null } | null;
-  newValue: { mattress_count: number; note: string | null };
+  oldValue: { mattress_count: number; saves: number; note: string | null } | null;
+  newValue: { mattress_count: number; saves: number; note: string | null };
 }
 
 interface Props {
@@ -73,7 +74,9 @@ export function RequestEditBatchModal({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(amendmentErrorMessage(body?.error, `Could not submit these corrections (${res.status}).`));
+        setError(
+          amendmentErrorMessage(body?.error, `Could not submit these corrections (${res.status}).`),
+        );
         setSubmitting(false);
         return;
       }
@@ -113,10 +116,10 @@ export function RequestEditBatchModal({
               className="flex items-baseline justify-between gap-3 border-b border-dr3-steel-light/10 py-1 last:border-b-0"
             >
               <span className="text-dr3-mist">{i.employeeName}</span>
+              {/* ADR-0083 — shared formatter, so the count AND the saves change
+                  are both named. See `amendment-display.ts`. */}
               <span className="font-mono text-dr3-mist-dim">
-                {i.changeType === 'insert'
-                  ? `NEW ${i.newValue.mattress_count}`
-                  : `${i.oldValue?.mattress_count ?? '?'} → ${i.newValue.mattress_count}`}
+                {amendmentSummaryLine(i.changeType, i.oldValue, i.newValue)}
               </span>
             </li>
           ))}

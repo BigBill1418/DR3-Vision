@@ -28,7 +28,13 @@ const rule = { threshold_low: 50, rate_low: 0.5, threshold_high: 75, rate_high: 
 
 const EMP = 'emp-aamir';
 const rowsWith = (count: number | null): GridRowProps[] => [
-  { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: count, note: null },
+  {
+    bonus_employee_id: EMP,
+    full_name: 'Aamir Mehmood',
+    mattress_count: count,
+    saves: 0,
+    note: null,
+  },
 ];
 
 let container: HTMLDivElement;
@@ -121,8 +127,20 @@ function mattressesCell(): HTMLElement {
 describe('DailyEntryGrid — total processed mattresses footer', () => {
   it('renders the mattress total equal to the sum of the seeded counts', () => {
     const rows: GridRowProps[] = [
-      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40, note: null },
-      { bonus_employee_id: 'emp-bilal', full_name: 'Bilal Khan', mattress_count: 10, note: null },
+      {
+        bonus_employee_id: EMP,
+        full_name: 'Aamir Mehmood',
+        mattress_count: 40,
+        saves: 0,
+        note: null,
+      },
+      {
+        bonus_employee_id: 'emp-bilal',
+        full_name: 'Bilal Khan',
+        mattress_count: 10,
+        saves: 0,
+        note: null,
+      },
     ];
     mount(
       <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,
@@ -165,8 +183,20 @@ describe('DailyEntryGrid — total processed mattresses footer', () => {
 
   it('sums the raw processed count, not the calculator floor (fractional entry)', () => {
     const rows: GridRowProps[] = [
-      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40.5, note: null },
-      { bonus_employee_id: 'emp-bilal', full_name: 'Bilal Khan', mattress_count: 10, note: null },
+      {
+        bonus_employee_id: EMP,
+        full_name: 'Aamir Mehmood',
+        mattress_count: 40.5,
+        saves: 0,
+        note: null,
+      },
+      {
+        bonus_employee_id: 'emp-bilal',
+        full_name: 'Bilal Khan',
+        mattress_count: 10,
+        saves: 0,
+        note: null,
+      },
     ];
     mount(
       <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,
@@ -245,8 +275,8 @@ describe('DailyEntryGrid — ADR-0029 batch amendment modal wiring', () => {
                 {
                   bonus_employee_id: EMP,
                   change_type: 'update',
-                  existing: { mattress_count: 40, note: null },
-                  proposed: { mattress_count: 55, note: null },
+                  existing: { mattress_count: 40, saves: 0, note: null },
+                  proposed: { mattress_count: 55, saves: 0, note: null },
                 },
               ],
             }),
@@ -305,14 +335,14 @@ describe('DailyEntryGrid — ADR-0029 batch amendment modal wiring', () => {
             {
               bonus_employee_id: EMP,
               change_type: 'update',
-              existing: { mattress_count: 40, note: null },
-              proposed: { mattress_count: 55, note: null },
+              existing: { mattress_count: 40, saves: 0, note: null },
+              proposed: { mattress_count: 55, saves: 0, note: null },
             },
             {
               bonus_employee_id: EMP2,
               change_type: 'update',
-              existing: { mattress_count: 10, note: null },
-              proposed: { mattress_count: 22, note: null },
+              existing: { mattress_count: 10, saves: 0, note: null },
+              proposed: { mattress_count: 22, saves: 0, note: null },
             },
           ],
         }),
@@ -322,8 +352,20 @@ describe('DailyEntryGrid — ADR-0029 batch amendment modal wiring', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const rows: GridRowProps[] = [
-      { bonus_employee_id: EMP, full_name: 'Aamir Mehmood', mattress_count: 40, note: null },
-      { bonus_employee_id: EMP2, full_name: 'Bilal Khan', mattress_count: 10, note: null },
+      {
+        bonus_employee_id: EMP,
+        full_name: 'Aamir Mehmood',
+        mattress_count: 40,
+        saves: 0,
+        note: null,
+      },
+      {
+        bonus_employee_id: EMP2,
+        full_name: 'Bilal Khan',
+        mattress_count: 10,
+        saves: 0,
+        note: null,
+      },
     ];
     mount(
       <DailyEntryGrid rule={rule} entryDate="2026-06-12" editable monthState="draft" rows={rows} />,

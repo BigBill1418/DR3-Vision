@@ -97,6 +97,10 @@ export interface AmendmentEntryDb {
     }): Promise<{
       id: string;
       mattress_count: number;
+      // ADR-0083 — declared REQUIRED so a caller cannot hand this path rows
+      // without saves and have the amended month silently write a processed-only
+      // correction. Truthful typing over a convenient optional.
+      saves: number;
       note: string | null;
       entered_by_user_id: string;
     } | null>;
@@ -108,6 +112,7 @@ export interface AmendmentEntryDb {
       id: string;
       bonus_employee_id: string;
       mattress_count: number;
+      saves: number;
       note: string | null;
       entered_by_user_id: string;
     }>;
@@ -336,6 +341,12 @@ export async function resubmitAmendedMonth(opts: ResubmitOpts): Promise<Resubmit
 export interface AmendmentEntryInput {
   bonus_employee_id: string;
   mattress_count: number;
+  /**
+   * ADR-0083 — absent means UNCHANGED, never zero, exactly as on the primary
+   * daily-entry path. A stale tab correcting a count on an amended month must
+   * not silently wipe that day's saves.
+   */
+  saves?: number | undefined;
   note?: string | null;
 }
 
@@ -343,6 +354,7 @@ export interface AmendmentUpsertedEntry {
   id: string;
   bonus_employee_id: string;
   mattress_count: number;
+  saves: number;
   note: string | null;
   entered_by_user_id: string;
 }
@@ -351,7 +363,7 @@ export type AmendmentEntriesResult =
   | { ok: true; monthId: string; entries: AmendmentUpsertedEntry[] }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'month_locked'; state: BonusPayPeriodState }
-  | { ok: false; reason: 'count_out_of_range' | 'employee_not_in_site' };
+  | { ok: false; reason: 'count_out_of_range' | 'saves_out_of_range' | 'employee_not_in_site' };
 
 /**
  * Upsert daily mattress-count entries for a SPECIFIC month (keyed by monthId,
@@ -382,6 +394,10 @@ export async function upsertAmendedMonthEntries(
   for (const i of inputs) {
     if (!isValidMattressCount(i.mattress_count)) {
       return { ok: false, reason: 'count_out_of_range' };
+    }
+    // ADR-0083 — same Decimal(5,1) contract as the count, same validator.
+    if (i.saves !== undefined && !isValidMattressCount(i.saves)) {
+      return { ok: false, reason: 'saves_out_of_range' };
     }
   }
 
@@ -431,11 +447,14 @@ export async function upsertAmendedMonthEntries(
           bonus_pay_period_id: monthId,
           entry_date: entryDate,
           mattress_count: input.mattress_count,
+          saves: input.saves ?? 0,
           note,
           entered_by_user_id: actor.userId,
         },
         update: {
           mattress_count: input.mattress_count,
+          // Omitted entirely when not supplied — see AmendmentEntryInput.saves.
+          ...(input.saves === undefined ? {} : { saves: input.saves }),
           note,
           entered_by_user_id: actor.userId,
         },
@@ -451,12 +470,14 @@ export async function upsertAmendedMonthEntries(
           before: before
             ? serializeForAudit({
                 mattress_count: before.mattress_count,
+                saves: before.saves,
                 note: before.note,
                 entered_by_user_id: before.entered_by_user_id,
               })
             : Prisma.JsonNull,
           after: serializeForAudit({
             mattress_count: row.mattress_count,
+            saves: row.saves,
             note: row.note,
             entered_by_user_id: row.entered_by_user_id,
           }),
@@ -469,6 +490,7 @@ export async function upsertAmendedMonthEntries(
         id: row.id,
         bonus_employee_id: row.bonus_employee_id,
         mattress_count: row.mattress_count,
+        saves: row.saves,
         note: row.note,
         entered_by_user_id: row.entered_by_user_id,
       });

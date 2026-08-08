@@ -14,13 +14,14 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
+import { amendmentSummaryLine } from '@/lib/bonus/amendment-display';
 
 export interface RequestRow {
   id: string;
   target_entry_date: Date | string;
   change_type: 'update' | 'insert';
-  old_value: { mattress_count: number; note: string | null } | null;
-  new_value: { mattress_count: number; note: string | null };
+  old_value: { mattress_count: number; saves?: number | null; note: string | null } | null;
+  new_value: { mattress_count: number; saves?: number | null; note: string | null };
   justification: string;
   bill_pinged_at: Date | string | null;
   submission_group_id: string | null;
@@ -160,7 +161,6 @@ export function AmendmentQueue({ requests }: Props) {
 
             <ul className="mt-3 flex flex-col gap-1 rounded-md border border-dr3-steel-light/20 bg-dr3-space/60 px-3 py-2 text-sm">
               {g.rows.map((r) => {
-                const oldCount = r.old_value?.mattress_count ?? null;
                 return (
                   <li key={r.id} className="flex items-baseline justify-between gap-3">
                     <span className="text-dr3-mist">
@@ -169,10 +169,10 @@ export function AmendmentQueue({ requests }: Props) {
                         ? ` (#${r.bonus_employee.employee_number})`
                         : ''}
                     </span>
+                    {/* ADR-0083 — the approver must see EVERY paid value the
+                        amendment moves, not just the processed count. */}
                     <span className="font-mono text-dr3-mist-dim">
-                      {r.change_type === 'insert' ? 'NEW: ' : ''}
-                      {oldCount !== null ? `${oldCount} → ` : ''}
-                      {r.new_value.mattress_count}
+                      {amendmentSummaryLine(r.change_type, r.old_value, r.new_value)}
                     </span>
                   </li>
                 );

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { requireBonusAccess, siteFromRequest } from '@/lib/bonus/access';
+import { AmendmentNewValue } from '@/lib/bonus/amendment-schemas';
 import {
   submitAmendmentBatch,
   listPendingForApprover,
@@ -15,10 +16,11 @@ import {
 import { prisma } from '@/lib/prisma';
 import { dayKeyUTCFromISO } from '@/lib/time';
 
-const NewValue = z.object({
-  mattress_count: z.number().min(0).max(999),
-  note: z.string().nullable(),
-});
+// ADR-0083 — the proposed-value contract lives in `@/lib/bonus/amendment-schemas`
+// so the route and its tests validate against ONE definition. A copy pasted into
+// a test would stay green through any change here, measuring the copy instead of
+// the endpoint. See that module for why `saves` is required rather than optional.
+const NewValue = AmendmentNewValue;
 
 // ADR-0029: the submit endpoint accepts EITHER a single-item body (back-compat
 // with ADR-0028 clients) OR a batch body sharing one period/date/justification

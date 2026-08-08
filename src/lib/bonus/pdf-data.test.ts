@@ -54,11 +54,11 @@ function baseInput(): PdfMonthInput {
     ],
     entries: [
       // Ana: two qualifying days + one sub-threshold day (no bonus).
-      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 1), mattress_count: 60 },
-      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 2), mattress_count: 80 },
-      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 3), mattress_count: 40 },
+      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 1), mattress_count: 60, saves: 0 },
+      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 2), mattress_count: 80, saves: 0 },
+      { bonus_employee_id: 'e1', entry_date: dayUTC(2026, 4, 3), mattress_count: 40, saves: 0 },
       // Beto: one qualifying day.
-      { bonus_employee_id: 'e2', entry_date: dayUTC(2026, 4, 1), mattress_count: 74 },
+      { bonus_employee_id: 'e2', entry_date: dayUTC(2026, 4, 1), mattress_count: 74, saves: 0 },
     ],
     rule: WOODLAND,
   };

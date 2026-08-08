@@ -9,7 +9,8 @@
 // hardcoded; it always flows from a processor_bonus_rules row).
 
 import { randomUUID } from 'node:crypto';
-import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import { type BonusRuleParams } from '@/lib/bonus/calculator';
+import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 
 export interface PdfMonthRow {
   id: string;
@@ -34,6 +35,13 @@ export interface PdfEntry {
   bonus_employee_id: string;
   entry_date: Date;
   mattress_count: number;
+  /**
+   * ADR-0083 — REQUIRED, not optional. This is the data feed for the SIGNED
+   * payroll PDF. An optional field here would let a caller omit saves and print
+   * a per-employee bonus lower than the one the period locked at signature time,
+   * on the document a human signs. Required makes that a compile error.
+   */
+  saves: number;
 }
 
 export interface PdfMonthInput {
@@ -49,9 +57,11 @@ export interface PdfEmployeeRow {
   name: string;
   /** Count of distinct days this employee earned a positive bonus. */
   daysQualified: number;
-  /** Sum of mattress counts across all the employee's keyed days this month. */
+  /** Sum of PROCESSED mattress counts across the employee's keyed days this month. */
   totalMattresses: number;
-  /** Sum of daily bonuses, in integer cents. */
+  /** ADR-0083 — sum of mattresses SAVED for resale. Paid, but never "processed". */
+  totalSaves: number;
+  /** Sum of daily bonuses, in integer cents — tiered over processed + saves. */
   totalBonusCents: number;
 }
 
@@ -96,7 +106,10 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
 
   interface Acc {
     daysQualified: number;
+    /** PROCESSED mattresses (ADR-0083). */
     totalMattresses: number;
+    /** ADR-0083 — mattresses saved for resale; paid, but never "processed". */
+    totalSaves: number;
     totalBonusCents: number;
   }
   const byEmployee = new Map<string, Acc>();
@@ -107,13 +120,17 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
     if (!nameById.has(entry.bonus_employee_id)) {
       nameById.set(entry.bonus_employee_id, entry.bonus_employee_id);
     }
-    const bonus = calculateDailyBonusCents(entry.mattress_count, input.rule);
+    // ADR-0083 — tiered ONCE over processed + saves, through the shared funnel
+    // the sign-time lock and the on-screen grid also use.
+    const bonus = dailyBonusCentsFor(entry, input.rule);
     const acc = byEmployee.get(entry.bonus_employee_id) ?? {
       daysQualified: 0,
       totalMattresses: 0,
+      totalSaves: 0,
       totalBonusCents: 0,
     };
     acc.totalMattresses += entry.mattress_count;
+    acc.totalSaves += entry.saves;
     acc.totalBonusCents += bonus;
     if (bonus > 0) acc.daysQualified += 1;
     byEmployee.set(entry.bonus_employee_id, acc);
@@ -125,6 +142,7 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
       name: nameById.get(employeeId) ?? employeeId,
       daysQualified: acc.daysQualified,
       totalMattresses: acc.totalMattresses,
+      totalSaves: acc.totalSaves,
       totalBonusCents: acc.totalBonusCents,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

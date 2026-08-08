@@ -67,6 +67,8 @@ interface EntryRow {
   bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: { toNumber(): number };
+  /** ADR-0083 — NOT NULL DEFAULT 0 in the real column, so never optional here. */
+  saves: { toNumber(): number };
   note: string | null;
   entered_by_user_id: string;
   entered_at: Date;
@@ -168,6 +170,10 @@ function makeStore(): Store {
       if (!e) throw new Error(`entry ${where.id} not found`);
       if (data['mattress_count'] !== undefined)
         e.mattress_count = dec(data['mattress_count'] as number);
+      // ADR-0083 — mirrors the real update semantics: an ABSENT saves leaves the
+      // stored value alone (it is not a write of 0), which is the property the
+      // stale-tab guard depends on.
+      if (data['saves'] !== undefined) e.saves = dec(data['saves'] as number);
       if ('note' in data) e.note = data['note'] as string | null;
       if (data['entered_by_user_id']) e.entered_by_user_id = data['entered_by_user_id'] as string;
       if (data['entered_at']) e.entered_at = data['entered_at'] as Date;
@@ -180,6 +186,10 @@ function makeStore(): Store {
         bonus_pay_period_id: data['bonus_pay_period_id'] as string,
         entry_date: data['entry_date'] as Date,
         mattress_count: dec(data['mattress_count'] as number),
+        // The column is NOT NULL DEFAULT 0, so an insert that names no saves
+        // stores a real zero — the double must apply the same default or the
+        // read-back would be `undefined` where production returns a Decimal.
+        saves: dec((data['saves'] as number | undefined) ?? 0),
         note: (data['note'] as string | null) ?? null,
         entered_by_user_id: data['entered_by_user_id'] as string,
         entered_at: (data['entered_at'] as Date) ?? new Date(),
@@ -312,6 +322,7 @@ function seedEntry(empId: string, count: number, note: string | null = null) {
     bonus_pay_period_id: 'p-wo',
     entry_date: PRIOR_DAY,
     mattress_count: dec(count),
+    saves: dec(0),
     note,
     entered_by_user_id: 'janette',
     entered_at: new Date(),
@@ -325,7 +336,7 @@ function submitInput(over: Partial<Parameters<typeof submitAmendmentRequest>[0]>
     targetEntryDate: PRIOR_DAY,
     bonusEmployeeId: 'emp-amy',
     changeType: 'update' as const,
-    newValue: { mattress_count: 67, note: null },
+    newValue: { mattress_count: 67, saves: 0, note: null },
     justification: 'Keyed 76 by mistake, the real count was 67 mattresses.',
     requesterUserId: 'janette',
     ...over,
@@ -346,7 +357,7 @@ describe('submitAmendmentRequest', () => {
     expect(created.state).toBe('pending');
     expect(created.change_type).toBe('update');
     expect(created.expected_approver_user_id).toBe('morena');
-    expect(created.old_value).toEqual({ mattress_count: 76, note: null });
+    expect(created.old_value).toEqual({ mattress_count: 76, saves: 0, note: null });
     // period unchanged; entry unchanged (still 76).
     expect(store.periods[0]!.state).toBe('draft');
     expect(entryByKey(store, 'emp-amy', PRIOR_DAY)!.mattress_count.toNumber()).toBe(76);
@@ -360,7 +371,7 @@ describe('submitAmendmentRequest', () => {
   it('happy path (insert): creates a pending insert request with no existing entry', async () => {
     seedDraftWoodland();
     const created = await submitAmendmentRequest(
-      submitInput({ changeType: 'insert', newValue: { mattress_count: 40, note: null } }),
+      submitInput({ changeType: 'insert', newValue: { mattress_count: 40, saves: 0, note: null } }),
     );
     expect(created.change_type).toBe('insert');
     expect(created.old_value).toBeNull();
@@ -379,7 +390,9 @@ describe('submitAmendmentRequest', () => {
     seedDraftWoodland();
     seedEntry('emp-amy', 76);
     await expect(
-      submitAmendmentRequest(submitInput({ newValue: { mattress_count: 23.55, note: null } })),
+      submitAmendmentRequest(
+        submitInput({ newValue: { mattress_count: 23.55, saves: 0, note: null } }),
+      ),
     ).rejects.toMatchObject({ reason: 'invalid_count', status: 422 });
   });
 
@@ -387,7 +400,9 @@ describe('submitAmendmentRequest', () => {
     seedDraftWoodland();
     seedEntry('emp-amy', 76);
     await expect(
-      submitAmendmentRequest(submitInput({ newValue: { mattress_count: -1, note: null } })),
+      submitAmendmentRequest(
+        submitInput({ newValue: { mattress_count: -1, saves: 0, note: null } }),
+      ),
     ).rejects.toMatchObject({ reason: 'invalid_count' });
   });
 
@@ -419,7 +434,10 @@ describe('submitAmendmentRequest', () => {
     seedEntry('emp-amy', 76);
     await expect(
       submitAmendmentRequest(
-        submitInput({ changeType: 'insert', newValue: { mattress_count: 5, note: null } }),
+        submitInput({
+          changeType: 'insert',
+          newValue: { mattress_count: 5, saves: 0, note: null },
+        }),
       ),
     ).rejects.toMatchObject({ reason: 'entry_exists_for_insert' });
   });
@@ -434,7 +452,7 @@ describe('submitAmendmentRequest', () => {
           bonusPayPeriodId: 'p-eu',
           bonusEmployeeId: 'emp-eu',
           changeType: 'insert',
-          newValue: { mattress_count: 10, note: null },
+          newValue: { mattress_count: 10, saves: 0, note: null },
           requesterUserId: 'patrick',
         }),
       ),
@@ -446,7 +464,7 @@ describe('submitAmendmentRequest', () => {
     seedEntry('emp-amy', 76);
     const first = await submitAmendmentRequest(submitInput());
     const second = await submitAmendmentRequest(
-      submitInput({ newValue: { mattress_count: 70, note: null } }),
+      submitInput({ newValue: { mattress_count: 70, saves: 0, note: null } }),
     );
     expect(second.id).not.toBe(first.id);
     expect(store.amendments.find((a) => a.id === first.id)!.state).toBe('cancelled');
@@ -476,12 +494,12 @@ describe('submitAmendmentBatch (ADR-0029)', () => {
         {
           bonusEmployeeId: 'emp-amy',
           changeType: 'update' as const,
-          newValue: { mattress_count: 67, note: null },
+          newValue: { mattress_count: 67, saves: 0, note: null },
         },
         {
           bonusEmployeeId: 'emp-bob',
           changeType: 'insert' as const,
-          newValue: { mattress_count: 12, note: null },
+          newValue: { mattress_count: 12, saves: 0, note: null },
         },
       ],
     };
@@ -519,7 +537,7 @@ describe('submitAmendmentBatch (ADR-0029)', () => {
     bad.items[1] = {
       bonusEmployeeId: 'emp-bob',
       changeType: 'update',
-      newValue: { mattress_count: 5, note: null },
+      newValue: { mattress_count: 5, saves: 0, note: null },
     };
     await expect(submitAmendmentBatch(bad)).rejects.toMatchObject({
       reason: 'entry_not_found_for_update',
@@ -540,7 +558,7 @@ describe('submitAmendmentBatch (ADR-0029)', () => {
         {
           bonusEmployeeId: 'emp-amy',
           changeType: 'update',
-          newValue: { mattress_count: 67, note: null },
+          newValue: { mattress_count: 67, saves: 0, note: null },
         },
       ],
     });
@@ -578,12 +596,12 @@ describe('approveAmendmentGroup / rejectAmendmentGroup (ADR-0029)', () => {
         {
           bonusEmployeeId: 'emp-amy',
           changeType: 'update',
-          newValue: { mattress_count: 67, note: null },
+          newValue: { mattress_count: 67, saves: 0, note: null },
         },
         {
           bonusEmployeeId: 'emp-bob',
           changeType: 'update',
-          newValue: { mattress_count: 33, note: null },
+          newValue: { mattress_count: 33, saves: 0, note: null },
         },
       ],
     });
@@ -686,7 +704,10 @@ describe('approveAmendmentRequest', () => {
   it('happy path (insert): creates the missing entry on approval', async () => {
     seedDraftWoodland();
     const req = await submitAmendmentRequest(
-      submitInput({ changeType: 'insert', newValue: { mattress_count: 42, note: 'late entry' } }),
+      submitInput({
+        changeType: 'insert',
+        newValue: { mattress_count: 42, saves: 0, note: 'late entry' },
+      }),
     );
     const result = await approveAmendmentRequest({
       requestId: req.id,
@@ -910,6 +931,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
         entryDate: PRIOR,
         newCount: 67,
         existingCount: 76,
+        newSaves: 0,
+        existingSaves: 0,
         actorIsAdmin: false,
       },
       'old note',
@@ -917,7 +940,7 @@ describe('shouldRequireAmendment (routing predicate)', () => {
     expect(r.route).toBe('amendment');
     if (r.route !== 'amendment') throw new Error('unreachable');
     expect(r.changeType).toBe('update');
-    expect(r.oldValue).toEqual({ mattress_count: 76, note: 'old note' });
+    expect(r.oldValue).toEqual({ mattress_count: 76, saves: 0, note: 'old note' });
   });
 
   it('prior day + no existing entry → amendment (insert)', () => {
@@ -926,6 +949,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
       entryDate: PRIOR,
       newCount: 40,
       existingCount: null,
+      newSaves: 0,
+      existingSaves: 0,
       actorIsAdmin: false,
     });
     expect(r.route).toBe('amendment');
@@ -940,6 +965,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
       entryDate: TODAY,
       newCount: 67,
       existingCount: 76,
+      newSaves: 0,
+      existingSaves: 0,
       actorIsAdmin: false,
     });
     expect(r).toEqual({ route: 'direct', reason: 'same_day_or_future' });
@@ -952,6 +979,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
         entryDate: PRIOR,
         newCount: 76,
         existingCount: 76,
+        newSaves: 0,
+        existingSaves: 0,
         actorIsAdmin: false,
       },
       'old note',
@@ -965,6 +994,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
       entryDate: PRIOR,
       newCount: 67,
       existingCount: 76,
+      newSaves: 0,
+      existingSaves: 0,
       actorIsAdmin: true,
     });
     expect(r).toEqual({ route: 'direct', reason: 'admin_direct_path' });
@@ -976,6 +1007,8 @@ describe('shouldRequireAmendment (routing predicate)', () => {
       entryDate: PRIOR,
       newCount: 67,
       existingCount: 76,
+      newSaves: 0,
+      existingSaves: 0,
       actorIsAdmin: false,
     });
     expect(r).toEqual({ route: 'direct', reason: 'period_not_draft_handled_upstream' });

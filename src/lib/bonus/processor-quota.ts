@@ -173,6 +173,13 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
       };
       byEmployee.set(emp.id, row);
     }
+    // ADR-0083 — the ADR-0071 quota measures PROCESSING THROUGHPUT, so `saves`
+    // is deliberately excluded: a processor who spent the day setting units
+    // aside for resale did not process them, and folding saves in here would
+    // silently raise everyone above a quota that was calibrated on processed
+    // units alone. If Bill later wants the quota to measure total handled work,
+    // that is a deliberate re-calibration of the threshold, not a default we
+    // slipped in. See `src/lib/bonus/paid-units.ts`.
     const day: QuotaDay = {
       dayISO: e.entry_date.toISOString().slice(0, 10),
       units: Number(e.mattress_count),
