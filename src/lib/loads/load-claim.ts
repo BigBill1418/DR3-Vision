@@ -20,11 +20,18 @@
 // back, and if they do not come back that day it is stranded until a manager
 // intervenes.
 //
-// Measured in production 2026-08-08 (`dr3_vision` on svdp-dev): **nine open dock
-// loads across five different operators**, the oldest claimed 2026-07-28 —
-// eleven days — and one sitting at `finished`, meaning its units are counted and
-// have never reached billing. Every one of those is reachable ONLY by the
-// operator whose name is on it.
+// Measured in production 2026-08-08 (`dr3_vision` on svdp-dev), query published
+// at `docs/queries/2026-08-08-open-dock-loads.sql`: **nine open dock loads across
+// four operators**, all Woodland, every one claimed on an EARLIER Pacific day
+// than the day of measurement — oldest 2026-07-28, eleven days — and one sitting
+// at `finished` with **148 units** counted and never submitted, so outside
+// inventory and billing. Every one is reachable ONLY by the operator whose name
+// is on it.
+//
+// "Open" is not "stranded", and the query says so rather than the label doing the
+// work: `in_progress` cannot distinguish a truck being unloaded right now from
+// one abandoned at lunch. The age of the claim is what carries that, which is why
+// `days_before_today` is in the output. (Zero of the nine were claimed today.)
 //
 // A second measurement is worth stating because it is the kind of number that
 // lies if you quote it without its cause: across the 40 submitted loads,
@@ -106,16 +113,62 @@ export interface ClaimHolder {
   name: string;
 }
 
-export interface TakeoverResult {
-  loadId: string;
-  /** The operator the claim was taken FROM, or null for an unassigned row. */
-  previousHolder: ClaimHolder | null;
-  /**
-   * False when the caller already held the load and nothing was written. The
-   * caller is not "in an error state" — they are already the closer — but no
-   * audit row was created and `assigned_at` was not moved.
-   */
-  restamped: boolean;
+/**
+ * Every outcome a takeover can reach that a person on the dock can DO something
+ * about — returned, never thrown.
+ *
+ * ## Why this is a return value (ADR-0082 Am.1)
+ *
+ * The first cut threw `LoadAccessError(409, 'load_claim_moved:<name>')` and the
+ * panel recovered the reason by string-matching `e.message`. That was a
+ * self-contradiction with `use-claim-loss-guard.ts`, which exists precisely
+ * because **a Server Action's throw reaches the browser with its message
+ * redacted in production**. Both cannot be true: if the redaction is real — it
+ * is — then the string match never fires in production, `takeover.error_moved`
+ * is dead code in all three locales, and every operator who loses a race is
+ * shown the generic "try again". That drives a retry into a contest that is
+ * already settled, which is the loop D5 refuses to queue.
+ *
+ * Return VALUES are not redacted. So the outcomes an operator can hit come back
+ * as data, carrying the holder's name that `takeOverLoad` was already computing
+ * and discarding.
+ *
+ * `LoadAccessError` is still THROWN for the three cases a person cannot reach
+ * from the button — the load does not exist, it is at another site, or the taker
+ * is not an active operator here. Those are genuinely exceptional, a 500-shaped
+ * answer is the honest one, and giving them named copy would invent a
+ * reassurance for a state that should never occur.
+ */
+export type TakeoverOutcome =
+  /** The claim moved to the caller. `previousHolder` is who it came from. */
+  | { outcome: 'taken'; loadId: string; previousHolder: ClaimHolder | null }
+  /** The caller already held it. Nothing was written; not an error state. */
+  | { outcome: 'already_yours'; loadId: string }
+  /** Somebody else got there first. `currentHolder` is who actually has it. */
+  | { outcome: 'claim_moved'; loadId: string; currentHolder: ClaimHolder | null }
+  /** It left the open-dock set (submitted/verified/…) while the panel was open. */
+  | { outcome: 'not_open'; loadId: string; currentHolder: ClaimHolder | null }
+  /** An aggregate/bridge row — a synthesized record with no dock claim to pass. */
+  | { outcome: 'not_takeable'; loadId: string };
+
+/**
+ * The flattened shape the server action hands the client.
+ *
+ * Declared HERE and not in `actions.ts`, because a `'use server'` module may only
+ * export async functions — a type exported from there is a build error waiting
+ * for whoever next touches it.
+ *
+ * `holderName` means different people by outcome and the copy says so: on
+ * `taken` it is the operator the load came FROM; on `claim_moved` / `not_open`
+ * it is whoever holds it NOW. Null only when the row carries no assignee.
+ *
+ * `failed` is the one outcome the service never produces — the action maps an
+ * unexpected `LoadAccessError` onto it, so the panel always has something honest
+ * to render and never falls through to a blank banner.
+ */
+export interface TakeoverActionResult {
+  outcome: TakeoverOutcome['outcome'] | 'failed';
+  holderName: string | null;
 }
 
 /**
@@ -165,12 +218,12 @@ export async function readClaimHolder(args: {
  * approval step IS the stranding — a load whose operator went to lunch must not
  * wait on someone finding a manager.
  *
+ * Returns a {@link TakeoverOutcome} for everything an operator can act on. Only
+ * the three unreachable-from-the-UI failures throw — see the type's docblock.
+ *
  * @throws LoadAccessError 404 `load_not_found`
  * @throws LoadAccessError 403 `load_not_at_this_site`
  * @throws LoadAccessError 403 `taker_not_active_operator_at_site`
- * @throws LoadAccessError 409 `load_not_a_dock_capture`
- * @throws LoadAccessError 409 `load_not_open_on_the_dock`
- * @throws LoadAccessError 409 `load_claim_moved` — someone else took it first
  */
 export async function takeOverLoad(args: {
   loadId: string;
@@ -181,7 +234,7 @@ export async function takeOverLoad(args: {
   userAgent?: string | null;
   /** Present ⇒ a double-tap re-stamps once and audits once. */
   idempotencyKey?: string | null;
-}): Promise<TakeoverResult> {
+}): Promise<TakeoverOutcome> {
   return prisma.$transaction(async (tx) => {
     // Re-read INSIDE the transaction. Anything read before it opened is a
     // statement about the past (`idempotency.ts`: "a guard that reads outside
@@ -206,6 +259,10 @@ export async function takeOverLoad(args: {
       // here is the same refusal `assertOwn` gives, for the same reason.
       throw new LoadAccessError(403, 'load_not_at_this_site');
     }
+    const holder: ClaimHolder | null = load.assigned_operator
+      ? { userId: load.assigned_operator.id, name: load.assigned_operator.name }
+      : null;
+
     if (load.load_source_type !== 'b2b_haul') {
       // Aggregate rows (`paper_bulk`, `mymrc_haul`, `ipad_floor`, `event`) are
       // synthesized day-level records, not dock captures — nobody stood at a
@@ -213,15 +270,19 @@ export async function takeOverLoad(args: {
       // of them is `verified` and would fail the status gate anyway; this
       // refuses them STRUCTURALLY so a future path that leaves one at `arrived`
       // cannot make an aggregate row takeoverable by accident.
-      throw new LoadAccessError(409, 'load_not_a_dock_capture');
+      return { outcome: 'not_takeable', loadId: load.id };
     }
     if (!TAKEOVER_STATUSES.includes(load.status)) {
-      throw new LoadAccessError(409, 'load_not_open_on_the_dock');
+      // Reachable without any concurrency at all: B is looking at the held-by
+      // panel, A submits the load, B taps Take over. Returned rather than thrown
+      // so B is told the load is closed instead of being handed a redacted
+      // message and an invitation to retry.
+      return { outcome: 'not_open', loadId: load.id, currentHolder: holder };
     }
 
     // Already mine ⇒ nothing to write. See the module header.
     if (load.assigned_operator_id === args.operatorUserId) {
-      return { loadId: load.id, previousHolder: null, restamped: false };
+      return { outcome: 'already_yours', loadId: load.id };
     }
 
     // The taker must be an ACTIVE operator at THIS site. `auth.ts` already
@@ -250,11 +311,7 @@ export async function takeOverLoad(args: {
       throw new LoadAccessError(403, 'taker_not_active_operator_at_site');
     }
 
-    const previousHolder: ClaimHolder | null = load.assigned_operator
-      ? { userId: load.assigned_operator.id, name: load.assigned_operator.name }
-      : null;
-
-    const outcome = await withIdempotency(
+    const outcome = await withIdempotency<TakeoverOutcome>(
       {
         key: args.idempotencyKey ?? null,
         scope: 'operator.load.takeover',
@@ -290,14 +347,26 @@ export async function takeOverLoad(args: {
           // Somebody moved the claim between our read and our write. Name who
           // holds it now: "someone else got there first" with no name is the
           // same dead end this ADR is removing, one level down.
+          //
+          // RETURNED, not thrown (Am.1). A throw is redacted in production, so
+          // the name computed here would never reach the operator and the loser
+          // would be told to "try again" — a retry into a settled contest.
+          //
+          // Returning also COMMITS the idempotency claim with this body, which is
+          // correct: this key names an attempt that definitively did not take the
+          // load, and replaying it must keep saying so. A second, deliberate tap
+          // mints a NEW key and is re-evaluated from scratch.
           const current = await tx.inboundLoad.findUnique({
             where: { id: args.loadId },
-            select: { status: true, assigned_operator: { select: { name: true } } },
+            select: { assigned_operator: { select: { id: true, name: true } } },
           });
-          throw new LoadAccessError(
-            409,
-            `load_claim_moved:${current?.assigned_operator?.name ?? 'unknown'}`,
-          );
+          return {
+            outcome: 'claim_moved',
+            loadId: args.loadId,
+            currentHolder: current?.assigned_operator
+              ? { userId: current.assigned_operator.id, name: current.assigned_operator.name }
+              : null,
+          };
         }
 
         // Audit INSIDE the transaction (`audit.ts` `{ tx }`). `load-service.ts`
@@ -328,7 +397,7 @@ export async function takeOverLoad(args: {
           { tx },
         );
 
-        return { loadId: args.loadId, previousHolder, restamped: true };
+        return { outcome: 'taken', loadId: args.loadId, previousHolder: holder };
       },
     );
 

@@ -236,8 +236,8 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
       ip: '10.0.0.9',
       userAgent: 'iPad',
     });
-    expect(result.restamped).toBe(true);
-    expect(result.previousHolder).toEqual({ userId: A, name: 'Alma Ruiz' });
+    expect(result.outcome).toBe('taken');
+    expect(result).toMatchObject({ previousHolder: { userId: A, name: 'Alma Ruiz' } });
 
     row = await d.inboundLoad.findUnique({ where: { id: started.id } });
     expect(row.assigned_operator_id).toBe(B);
@@ -325,16 +325,22 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
     await lock.done;
     const [first, second] = await bothStarted;
 
-    const won = [first, second].filter((r) => r.status === 'fulfilled');
-    const lost = [first, second].filter((r) => r.status === 'rejected');
+    // Am.1 — BOTH calls now RESOLVE; the loser reports its outcome as DATA
+    // rather than throwing, because a throw is redacted before it reaches the
+    // operator. So the winner is counted by outcome, not by promise state.
+    for (const r of [first, second]) {
+      expect(r.status, `takeover rejected with ${String((r as any).reason)}`).toBe('fulfilled');
+    }
+    const outcomes = [first, second].map((r) => (r as PromiseFulfilledResult<any>).value);
+    const won = outcomes.filter((o) => o.outcome === 'taken');
+    const lost = outcomes.filter((o) => o.outcome === 'claim_moved');
     expect(won, 'exactly one taker may win a simultaneous takeover').toHaveLength(1);
     expect(lost).toHaveLength(1);
     // The loser is told WHO holds it, not merely that they lost — "someone else
     // got there first" with no name is the dead end this ADR removes, one level
-    // down.
-    const reason = (lost[0] as PromiseRejectedResult).reason;
-    expect(reason.status).toBe(409);
-    expect(reason.reason).toMatch(/^load_claim_moved:/);
+    // down. The NAME is the thing the redacted-throw version could never deliver.
+    expect(lost[0].currentHolder?.name, 'the loser must be able to name the winner').toBeTruthy();
+    expect([won[0].loadId, lost[0].loadId]).toEqual([LOAD, LOAD]);
 
     const handovers = takeovers(await auditFor(d, LOAD));
     expect(handovers, 'two audit rows for one handover is a false history').toHaveLength(1);
@@ -438,7 +444,7 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
     const replay = await takeOverLoad(args);
     const row2 = await d.inboundLoad.findUnique({ where: { id: LOAD } });
 
-    expect(first.restamped).toBe(true);
+    expect(first.outcome).toBe('taken');
     expect(takeovers(await auditFor(d, LOAD))).toHaveLength(1);
     // `assigned_at` did not move on the replay — a second re-stamp would rewrite
     // when B took the load over, for an action that changed nothing.
@@ -446,7 +452,7 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
     expect(row2.assigned_operator_id).toBe(B);
     // Second call short-circuits on the holder check rather than the idempotency
     // store, because B already holds it by then — either way, one re-stamp.
-    expect(replay.restamped).toBe(false);
+    expect(replay.outcome).toBe('already_yours');
   });
 
   it('taking over a load you ALREADY hold writes nothing at all', async () => {
@@ -461,7 +467,7 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
       idempotencyKey: key(),
     });
 
-    expect(result.restamped).toBe(false);
+    expect(result.outcome).toBe('already_yours');
     const after = await d.inboundLoad.findUnique({ where: { id: LOAD } });
     expect(after.assigned_at.toISOString()).toBe(before.assigned_at.toISOString());
     // An A→A row in an append-only log reads like a handover that never happened.
@@ -504,18 +510,21 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
       const d = await connect();
       const { takeOverLoad } = await import('./load-claim');
       await d.inboundLoad.update({ where: { id: LOAD }, data: { status: 'submitted' } });
-      await expect(
-        takeOverLoad({ loadId: LOAD, operatorUserId: B, siteId: SITE }),
-      ).rejects.toMatchObject({ status: 409, reason: 'load_not_open_on_the_dock' });
+      // Am.1 — RETURNED, not thrown: reachable without any concurrency (the
+      // holder submits while a second operator reads the panel), so it must be
+      // able to carry named copy to the screen.
+      const r = await takeOverLoad({ loadId: LOAD, operatorUserId: B, siteId: SITE });
+      expect(r).toMatchObject({ outcome: 'not_open' });
+      expect((r as { currentHolder?: { name: string } }).currentHolder?.name).toBe('Alma Ruiz');
     });
 
     it('refuses an AGGREGATE row even when its status would otherwise allow it', async () => {
       const { takeOverLoad } = await import('./load-claim');
       // `tk-load-agg` is `ipad_floor` at `arrived`. Nobody stood at a door and
       // counted it, so there is no claim to hand on.
-      await expect(
-        takeOverLoad({ loadId: AGG, operatorUserId: B, siteId: SITE }),
-      ).rejects.toMatchObject({ status: 409, reason: 'load_not_a_dock_capture' });
+      expect(await takeOverLoad({ loadId: AGG, operatorUserId: B, siteId: SITE })).toMatchObject({
+        outcome: 'not_takeable',
+      });
     });
 
     it('allows takeover at EVERY open dock status, including `finished`', async () => {
@@ -535,7 +544,7 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
           siteId: SITE,
           idempotencyKey: key(),
         });
-        expect(r.restamped, `takeover refused at status ${status}`).toBe(true);
+        expect(r.outcome, `takeover refused at status ${status}`).toBe('taken');
       }
     });
   });

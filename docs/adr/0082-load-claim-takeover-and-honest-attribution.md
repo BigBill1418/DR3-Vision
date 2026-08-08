@@ -35,15 +35,21 @@ What that produced on the floor is a loop with **no message anywhere inside it**
 
 ### What production was actually holding (measured 2026-08-08, `dr3_vision` on svdp-dev)
 
-| Fact                                                                               | Value                                                                           |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Open dock loads (`arrived`…`finished`)                                             | **9**, all Woodland                                                             |
-| Distinct operators holding them                                                    | **5** (Juan Perez, Pablo Ledezma, Janette Tomas, Morena Gomez ×1 each and more) |
-| Oldest claim                                                                       | **2026-07-28** — eleven days                                                    |
-| Of those, at `finished` (counted, never submitted, so not in inventory or billing) | **1** (Pablo Ledezma, 2026-08-05)                                               |
-| Submitted loads where `submitted_by_id <> assigned_operator_id`                    | **0 of 40**                                                                     |
+Query published at **`docs/queries/2026-08-08-open-dock-loads.sql`** — re-runnable, with its definitions and its Pacific-conversion trap written down.
 
-That last row is the one worth reading carefully, because it is the kind of number that lies when quoted without its cause. It is **not** evidence that handovers do not happen on the floor. It is evidence that the software made them **impossible to record**: `assertOwn` refuses the submit, so the closer could only ever be the claimer. The column was a tautology. After this ADR it becomes a measurement.
+| Fact                                                                     | Value                                                          |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| Open dock loads (`arrived`…`finished`, `b2b_haul`)                       | **9**, all Woodland                                            |
+| Distinct operators holding them                                          | **4** (Juan Perez, Pablo Ledezma, Janette Tomas, Morena Gomez) |
+| Claimed on an earlier Pacific day than the measurement day               | **9 of 9** — none was claimed that day                         |
+| Oldest claim                                                             | **2026-07-28** — eleven days                                   |
+| At `finished` (counted, never submitted → outside inventory and billing) | **1**, carrying **148 units**                                  |
+| Parent `expected_loads` row cancelled                                    | **0** (checked, not assumed)                                   |
+| Submitted loads where `submitted_by_id <> assigned_operator_id`          | **0 of 40**                                                    |
+
+**"Open" is not "stranded", and the label must not do work the query cannot.** `in_progress` cannot distinguish a truck being unloaded right now from one abandoned at lunch — only the AGE of the claim suggests it, which is why `days_before_today` is in the published output. On this reading all nine predate the measurement day, so none was an in-flight unload; that is a fact about this reading, not a property of the status set. The query also does NOT filter out loads whose parent expected row was cancelled (filtering on a live parent is one of the three things that stranded loads in the first place, ADR-0065 Am.1) — it REPORTS the flag instead, and here it is zero.
+
+The `submitted_by_id` row is the one worth reading carefully, because it is the kind of number that lies when quoted without its cause. It is **not** evidence that handovers do not happen on the floor. It is evidence that the software made them **impossible to record**: `assertOwn` refuses the submit, so the closer could only ever be the claimer. The column was a tautology. After this ADR it becomes a measurement.
 
 ### The claim was also not atomic
 
@@ -115,7 +121,7 @@ This is the failure the feature itself creates, and it would have shipped as a s
 
 `assertOwn` refuses a non-assignee with 403 `load_not_assigned_to_operator`. Before takeover existed that was effectively unreachable. Making claims movable makes it **routine**: A returns from lunch to an iPad still showing the counting screen and taps +1.
 
-- **Live path.** The stage components render `e.message`, and a Server Action's throw arrives at the browser with its message **redacted in production** — the reason is not unhelpful, it is structurally unavailable. So on any non-offline stage failure the client asks one question it cannot answer locally (`claimStatusAction`) and, only if the claim has moved, refreshes — the page re-renders as the held-by panel and **names the new holder**. A blanket `router.refresh()` was rejected: most stage errors are not claim losses, and refreshing would take the real error banner with it, trading an opaque message for no message.
+- **Live path.** The stage components render `e.message`, and a Server Action's throw arrives at the browser with its message **redacted in production** — the reason is not unhelpful, it is structurally unavailable. (Amendment 1 below had to apply this same fact to the takeover panel itself, which the first cut got wrong.) So on any non-offline stage failure the client asks one question it cannot answer locally (`claimStatusAction`) and, only if the claim has moved, refreshes — the page re-renders as the held-by panel and **names the new holder**. A blanket `router.refresh()` was rejected: most stage errors are not claim losses, and refreshing would take the real error banner with it, trading an opaque message for no message.
 - **Replay path.** `classify(403)` already parked the entry as a conflict, and that retry behaviour is correct and unchanged: no number of attempts gives this operator the load back. What was missing was the reason — and worse, `reasonLabel` fell through to `why_session` ("Your sign-in expired before this was sent"), which is **false** and sends the operator to re-enter a PIN that cannot help. New conflict code `conflict:load_taken_over`, matched **before** the generic 403 branch, with copy that says the work is safe and who can enter it.
 
 ### D7 — The queue lists the site's open loads, not just yours
@@ -166,3 +172,46 @@ The two race tests are **deterministic, not hopeful**: a bare `Promise.all` is n
 | Displaced-claimer conflict reason   | moved the branch after the generic 403              | `the takeover branch is unreachable behind the generic 403: expected 4190 to be less than 4093`   |
 
 Also pinned: A starts → B takes over → B closes with `submitted_by_id = B`; A's original claim row survives in `audit_log`; a double-tap with one key re-stamps once and audits once (and does not move `assigned_at`); taking over a load you already hold writes nothing; cross-site refusal in **both** shapes (wrong `siteId`, and a right `siteId` with a cross-site taker); deactivated operator refused; aggregate row refused; every open dock status takeable.
+
+---
+
+## Amendment 1 (2026-08-08) — the panel contradicted its own neighbour
+
+**Status:** Accepted, implemented. Raised in review of this ADR, not of the code.
+
+### What was wrong
+
+`use-claim-loss-guard.ts` justifies its entire existence with D6's finding: **a Server Action's throw reaches the browser with its message redacted in production.** Two files away, `held-by-panel.tsx` selected its error copy like this:
+
+```ts
+const reason = e instanceof Error ? e.message : '';
+setError(reason.includes('load_claim_moved') ? 'takeover.error_moved' : 'takeover.error');
+```
+
+Both cannot be true. Because the redaction is real, that match could never fire in production. `takeover.error_moved` — translated into English, Spanish and Urdu — was **dead code in all three locales**, and every operator who lost a takeover race was shown the generic _"That did not go through. Try again."_ That is an invitation to retry a contest already settled: the same loop **D5** declines to queue, arriving through the front door instead.
+
+It had **no test**. That is why it survived review of the code and died only on review of the prose — the contradiction was visible only by reading two files' rationales against each other, which a diff-shaped review does not do.
+
+### The fix
+
+`takeOverLoad` and `takeOverLoadAction` now **return a discriminated outcome** rather than throwing for anything an operator can reach: `taken`, `already_yours`, `claim_moved`, `not_open`, `not_takeable`. **Return values are not redacted.** The panel switches on `outcome` and inspects no message.
+
+Three consequences worth stating:
+
+1. **The winner's name now reaches the screen.** `takeOverLoad` was already computing who won the race and discarding it inside an error string. The copy names them: _"Bruno Vega took this load over first — it is theirs now, not yours. Nothing you entered was lost."_
+2. **`not_open` stopped being an exception.** A load submitted by its holder while a second operator reads the panel is reachable with no concurrency at all, so it gets named copy instead of a thrown 409.
+3. **`LoadAccessError` is still thrown** for the three refusals a person cannot reach from the button (load absent, wrong site, taker not an active operator here). Those are genuinely exceptional; giving them reassuring copy would invent a story for a state that should never occur. The panel's `catch` maps any throw to the one generic banner **without inspecting it** — that is the whole difference from the first cut.
+
+A `claim_moved` outcome **commits** its idempotency claim rather than rolling it back, and that is correct: the key names an attempt that definitively did not take the load, so replaying it must keep saying so. A second, deliberate tap mints a new key and is re-evaluated from scratch.
+
+### Also in this amendment
+
+- **The measurement is published** as `docs/queries/2026-08-08-open-dock-loads.sql`. Two figures in the original Context were wrong: **four** distinct holders, not five — the first count summed overlapping per-status distinct counts — and the `finished` load carries **148 units**, which the original omitted entirely. "Stranded" was replaced by "open" plus the age column that actually carries the claim, because `in_progress` cannot tell an abandoned load from a truck being unloaded right now.
+- **A test pins the in-transaction placement of both re-reads** (`load-claim.in-transaction.test.ts`). D1 and D2 rest on reading through the same client that writes, and nothing checked it: changing `tx.` to `prisma.` reads fine in review and leaves every real-DB test green, because the compare-and-swap and the unique index are WRITE-side guards. The prisma double throws on every global-client model call, so an escaped read fails loudly and names itself.
+
+### Verification
+
+| Falsification                                                                    | Observed red                                                                                    |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Restore the string-match, with the action throwing a production-redacted message | `expected 'That did not go through. Try again.' to be 'Bruno Vega took this load over first …'` |
+| Move `takeOverLoad`'s re-read to the global client                               | `ESCAPED TRANSACTION: read inboundLoad through the GLOBAL client`                               |

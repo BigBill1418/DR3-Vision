@@ -92,6 +92,12 @@ re-dated on the assumption of an extension.
   Server Components. Fixing it properly means the stage actions returning typed results
   instead of throwing, which is a broader refactor than this phase. **Accepted residual,
   flagged deliberately rather than expanded into.**
+- **The nine open loads are "open", not proven "stranded".** The published query
+  (`docs/queries/2026-08-08-open-dock-loads.sql`) cannot distinguish a load abandoned at
+  lunch from a truck being unloaded right now — `in_progress` is the same status for
+  both. On the 2026-08-08 reading all nine predated that Pacific day, so none was an
+  in-flight unload, but that is a property of the reading and not of the query. **Re-run
+  it before quoting the number to anyone**, and quote the age column with it.
 - **Migration prefix `20260835` assigned to ADR-0082 and NOT used** — the claim columns,
   their index and the `AuditAction` value all already existed. The gap in the sequence is
   a decision, not a lost file.

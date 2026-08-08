@@ -6,7 +6,7 @@ import { headers } from 'next/headers';
 import { auth, signOut } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import * as svc from '@/lib/load-service';
-import { takeOverLoad, readClaimHolder } from '@/lib/loads/load-claim';
+import { takeOverLoad, readClaimHolder, type TakeoverActionResult } from '@/lib/loads/load-claim';
 import { assertUiSurfaceActivated } from '@/lib/loads/record-guards';
 import { UI_SURFACE } from '@/lib/notify/rollout';
 import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/client';
@@ -75,10 +75,10 @@ export async function takeOverLoadAction(
   idempotencyKey: string,
   siteCode: string,
   loadId: string,
-): Promise<void> {
+): Promise<TakeoverActionResult> {
   const { operatorUserId, siteId } = await ctx(siteCode);
   const h = await headers();
-  await takeOverLoad({
+  const result = await takeOverLoad({
     loadId,
     operatorUserId,
     siteId,
@@ -91,6 +91,20 @@ export async function takeOverLoadAction(
   });
   revalidatePath(`/operator/${siteCode}/queue`);
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+
+  // Flattened to (outcome, holderName) because that is exactly what the panel
+  // renders. The union's two holder fields mean different people — the operator
+  // it came FROM on success, the operator who has it now on a loss — and the
+  // copy differs accordingly, so they are collapsed here rather than in the UI.
+  switch (result.outcome) {
+    case 'taken':
+      return { outcome: 'taken', holderName: result.previousHolder?.name ?? null };
+    case 'claim_moved':
+    case 'not_open':
+      return { outcome: result.outcome, holderName: result.currentHolder?.name ?? null };
+    default:
+      return { outcome: result.outcome, holderName: null };
+  }
 }
 
 /**

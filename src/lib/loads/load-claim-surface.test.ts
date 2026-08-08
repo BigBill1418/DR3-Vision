@@ -107,6 +107,30 @@ describe('ADR-0082 D5 — takeover is ONLINE-ONLY', () => {
     expect(src, 'the takeover panel enqueues an offline action').not.toContain('enqueueAction');
   });
 
+  it('reads the outcome from the RETURN VALUE, never from a thrown message (Am.1)', () => {
+    // THE REVIEWER'S BLOCK, as a structural backstop to the rendering tests in
+    // `held-by-panel.test.tsx`.
+    //
+    // The first cut selected `takeover.error_moved` by
+    // `e.message.includes('load_claim_moved')` — a direct contradiction of
+    // `use-claim-loss-guard.ts`, which exists BECAUSE a Server Action's throw is
+    // redacted in production. Since the redaction is real, that match could never
+    // fire live: the key was dead in three locales and every lost race rendered
+    // the generic retry copy, pushing the operator at a contest already settled.
+    //
+    // A future "helpful" change that re-adds message inspection is asserting
+    // something production cannot supply, and must fail loudly rather than
+    // silently degrade the banner again.
+    const panel = code(HELD_BY_PANEL);
+    expect(panel, 'the panel string-matches a redacted error message').not.toMatch(
+      /\.message\s*\.?\s*(includes|indexOf|match)/,
+    );
+    expect(panel, 'the panel reads e.message').not.toMatch(/instanceof\s+Error\s*\?\s*e\.message/);
+    expect(panel).not.toContain('load_claim_moved');
+    // …and the action must therefore RETURN the outcome.
+    expect(code(ACTIONS)).toMatch(/Promise<TakeoverActionResult>/);
+  });
+
   it('still carries an idempotency key — a live double-tap is real', () => {
     expect(code(HELD_BY_PANEL)).toContain('newIdempotencyKey()');
     expect(code(ACTIONS)).toMatch(/takeOverLoadAction\(\s*\n?\s*idempotencyKey: string/);

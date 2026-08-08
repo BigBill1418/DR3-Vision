@@ -60,7 +60,8 @@
     "confirm_no": "Cancel",
     "working": "Taking over…",
     "error": "That did not go through. Try again.",
-    "error_moved": "Someone else took this load first. Pull down to refresh.",
+    "error_moved": "{{name}} took this load over first — it is theirs now, not yours. Nothing you entered was lost.",
+    "error_not_open": "This load has already been closed out, so there is nothing left to take over.",
     "not_takeable": "This load is no longer open on the dock, so it cannot be taken over here. Ask a manager.",
     "back_to_queue": "Back to the queue",
     "unknown_holder": "another operator"

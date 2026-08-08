@@ -74,7 +74,8 @@
     "confirm_no": "Cancelar",
     "working": "Tomando la carga…",
     "error": "No se pudo completar. Inténtalo de nuevo.",
-    "error_moved": "Otra persona tomó esta carga primero. Desliza hacia abajo para actualizar.",
+    "error_moved": "{{name}} tomó esta carga primero — ahora es de esa persona, no tuya. No se perdió nada de lo que ingresaste.",
+    "error_not_open": "Esta carga ya se cerró, así que no queda nada que tomar.",
     "not_takeable": "Esta carga ya no está abierta en el muelle, así que no se puede tomar aquí. Avisa a un gerente.",
     "back_to_queue": "Volver a la lista",
     "unknown_holder": "otro operador"

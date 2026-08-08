@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import type { LoadStatus } from '@prisma/client';
 import { useI18n } from '@/i18n/provider';
 import type { Locale } from '@/i18n/config';
 import { formatDate, formatTime } from '@/lib/format';
 import { newIdempotencyKey } from '@/lib/offline-queue';
+import type { TakeoverActionResult } from '@/lib/loads/load-claim';
 import { takeOverLoadAction } from '../../actions';
 
 // ADR-0082 — what a second operator sees instead of a silent bounce.
@@ -60,8 +62,9 @@ export function HeldByPanel({
   locale,
 }: Props) {
   const { t } = useI18n();
+  const router = useRouter();
   const [confirming, setConfirming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TakeoverActionResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const holder = holderName ?? t('takeover.unknown_holder');
@@ -71,22 +74,44 @@ export function HeldByPanel({
     setError(null);
     const key = newIdempotencyKey();
     startTransition(async () => {
+      // ADR-0082 Am.1 — the outcome is READ FROM THE RETURN VALUE, never from a
+      // thrown message. The first cut did `e.message.includes('load_claim_moved')`,
+      // which contradicts `use-claim-loss-guard.ts` in the same directory: a
+      // Server Action's throw is REDACTED in production, so that match could
+      // never fire live and every lost race would have rendered the generic
+      // "try again" — a retry into a contest that is already over. Return values
+      // are not redacted.
+      let result: TakeoverActionResult;
       try {
-        await takeOverLoadAction(key, siteCode, loadId);
-        // No client-side navigation: the action revalidates this path, so the
-        // server re-renders it as the workflow. Pushing a route here would race
-        // the revalidation and could paint the held-by panel again from cache.
-        setConfirming(false);
-      } catch (e) {
-        // ADR-0082 — the ONE message this screen must never show is a blank
-        // one. A server action's throw arrives as an opaque digest, so the copy
-        // is resolved locally: "somebody else took it" is the outcome worth
-        // naming, and everything else falls back to "try again".
-        const reason = e instanceof Error ? e.message : '';
-        setError(reason.includes('load_claim_moved') ? 'takeover.error_moved' : 'takeover.error');
-        setConfirming(false);
+        result = await takeOverLoadAction(key, siteCode, loadId);
+      } catch {
+        // Genuinely exceptional (the three unreachable refusals, or a real 500).
+        // The catch no longer INSPECTS anything — it maps any throw to the one
+        // honest generic. That is the whole difference from the first cut.
+        result = { outcome: 'failed', holderName: null };
       }
+      setConfirming(false);
+      if (result.outcome === 'taken' || result.outcome === 'already_yours') {
+        // The action revalidated this path, so the server re-renders it as the
+        // workflow. Pushing a route here would race the revalidation and could
+        // paint the held-by panel again from cache.
+        return;
+      }
+      setError(result);
+      // The header above still names the OLD holder. Refreshing re-renders the
+      // server component with whoever actually has it, so the screen and the
+      // message agree. Client state (this banner) survives a refresh.
+      router.refresh();
     });
+  };
+
+  /** Copy for a non-success outcome. Every branch names something. */
+  const errorCopy = (r: TakeoverActionResult): string => {
+    const name = r.holderName ?? t('takeover.unknown_holder');
+    if (r.outcome === 'claim_moved') return t('takeover.error_moved', { name });
+    if (r.outcome === 'not_open') return t('takeover.error_not_open');
+    if (r.outcome === 'not_takeable') return t('takeover.not_takeable');
+    return t('takeover.error');
   };
 
   return (
@@ -124,7 +149,7 @@ export function HeldByPanel({
 
       {error && (
         <p role="alert" className="rounded-md bg-dr3-ink/60 p-3 text-sm text-dr3-chartreuse">
-          {t(error)}
+          {errorCopy(error)}
         </p>
       )}
 

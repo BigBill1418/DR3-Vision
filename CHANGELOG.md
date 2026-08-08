@@ -226,11 +226,20 @@ own open loads. The only way to find out what was happening was to ask the room.
 `startInboundLoad`'s idempotent branch handed B **A's load id**, so B was redirected
 _into_ the load and immediately bounced back out of it.
 
-**What production was actually holding, measured this morning rather than assumed:**
-**9 open dock loads across 5 operators**, all Woodland, the oldest claimed **2026-07-28
-— eleven days** — and one sitting at `finished`, meaning its units are counted and have
-never reached inventory or billing. Every one of those was reachable only by the person
-who had walked away from it.
+**What production was actually holding, measured this morning rather than assumed —
+query published at `docs/queries/2026-08-08-open-dock-loads.sql` so it can be re-run and
+argued with:** **9 open dock loads across 4 operators**, all Woodland, every one claimed
+on an earlier Pacific day than the day of measurement, the oldest **2026-07-28 — eleven
+days** — and one at `finished` carrying **148 units** counted and never submitted, so
+outside inventory and billing. Every one of those was reachable only by the person who
+had walked away from it.
+
+"Open" is not "stranded", and the label must not do work the query cannot: `in_progress`
+cannot distinguish an abandoned load from a truck being unloaded right now — the AGE of
+the claim is what carries that, which is why the published query reports it. Two figures
+in the first draft of this entry were wrong and are corrected here: it is **four**
+holders, not five (the first count summed overlapping per-status distinct counts), and
+the `finished` load's 148 units were omitted.
 
 **And a number that lies if you quote it without its cause.** Across 40 submitted loads,
 `submitted_by_id <> assigned_operator_id` **zero times**. That is not evidence that
@@ -303,8 +312,25 @@ queue again"_; moving the conflict reason behind the generic 403 reds on the byt
 Prefix `20260835` was assigned to this work and is deliberately unused — recorded so the
 gap looks like a decision rather than a lost file.
 
+**Amendment 1, same day, from review of the ADR rather than the code.** The panel
+contradicted its own neighbour. `use-claim-loss-guard.ts` exists BECAUSE a Server
+Action's throw is redacted in production — and two files away the takeover panel
+recovered its error copy with `e.message.includes('load_claim_moved')`. Both cannot be
+true. Since the redaction is real, that match could never fire live: `takeover.error_moved`
+was **dead code in all three locales**, and every operator who lost a race saw the generic
+"That did not go through. Try again." — a push back into a contest already settled, which
+is the loop D5 declines to queue. It had no test, which is why it survived a review of the
+diff and died on a review of the prose. Fixed structurally: the action now RETURNS a
+discriminated outcome (return values are not redacted), so the panel switches on data and
+the winner's NAME — which the service was already computing and throwing away inside an
+error string — reaches the screen. A second test now pins the in-transaction placement of
+both re-reads, which D1 and D2 assert and nothing checked: moving `tx.` to `prisma.` reads
+fine in review and leaves every real-DB test green, because the compare-and-swap and the
+unique index are write-side guards.
+
 Docs: `docs/adr/0082-load-claim-takeover-and-honest-attribution.md`, `docs/adr/README.md`,
-`README.md`, `CLAUDE.md` (ADR count 86 → 87), `docs/OPEN-ITEMS.md`.
+`README.md`, `CLAUDE.md` (ADR count 86 → 87), `docs/OPEN-ITEMS.md`,
+`docs/queries/2026-08-08-open-dock-loads.sql`.
 
 ---
 
