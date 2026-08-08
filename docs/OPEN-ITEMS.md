@@ -20,6 +20,24 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AN — 2026-08-08 Kelsey departure config + commodity tracker classified
+
+- **Eugene bonus ops signer: Shannon Rockwell replaces Kelsey Ruhland, effective
+  2026-08-08** (Bill's instruction; Kelsey's availability ended 8/8). Executed in
+  `bonus_signature_chains` (ops signer slot + facility override list), audited
+  (`system:approver-swap`). Kelsey held no other approver roles (not on
+  `ap_approvers`; not a second approver; zero pending items routed to her).
+  NOTE: signature-request emails go to the responsible signer directly (not via
+  `ap_notification_prefs`), so Shannon WILL receive Eugene period-close signature
+  requests — consistent with her new duty; her 2026-08-07 "Eugene production report
+  only" mail posture otherwise unchanged.
+- **`Woodland Data Auditing Tracker (1).xlsx` classified**: `commodity_audit_tracker`
+  / Woodland, on the document's own header evidence ("Commodity Audit (against
+  Vendor Invoices) WOODLAND", 2025+2026 sheets), at Bill's written instruction
+  (audited, `system:doc-classification`). AK-2's class question is answered; the
+  ADR-0080 absorption will stage on the next sweep — the absorption CONFIRM
+  (preview → accept) remains the human money-gate.
+
 ## 0.AM — 2026-08-08 post-wave reconciliation (docs only, no code)
 
 Five PRs merged and deployed 2026-08-07 (#210 #211 #212 #213 #214, final live SHA
