@@ -38,6 +38,17 @@ export const NOTIFY_SURFACE = {
   // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — Bethany's board-pack
   // digest. Org-wide surface, born pilot (resolves pilot unless BOTH sites live).
   BOARD_PACK_DIGEST: 'board_pack_digest',
+  // ADR-0088 — the throughput-gap watchdog's morning nudge: yesterday's working
+  // day has no live `equipment_daily_throughput` row for the site's machine.
+  // Its OWN surface rather than riding `alert_digest`: the digest fires at
+  // 18:00 PT off the daily-report tick and is a many-findings rollup that a
+  // manager may reasonably skim, whereas this is a single, specific, morning
+  // ask directed at the one person who types the number. Bill must be able to
+  // ramp the nudge at Woodland (the only site with the machine) without ramping
+  // the digest, and to pull it back without taking the digest down with it.
+  // Born pilot per ADR-0047 #3. CALLED per-site, so it never takes the
+  // conservative org-wide both-sites-must-be-live path.
+  EQUIPMENT_THROUGHPUT_GAP: 'equipment_throughput_gap',
   // Grandfathered — established production surfaces, seeded `live` (§4.4 out-of-scope).
   BONUS_SIGNATURE_CHAIN: 'bonus_signature_chain',
   SURVEY_SENDS: 'survey_sends',

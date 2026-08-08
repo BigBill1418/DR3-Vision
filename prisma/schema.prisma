@@ -4093,6 +4093,65 @@ model EquipmentDailyThroughput {
   @@map("equipment_daily_throughput")
 }
 
+/// ADR-0088 — the idempotency ledger for the throughput-gap watchdog.
+///
+/// The Terex sheet went unfilled for nine working days and no instrument said
+/// so. The absence of a row in `equipment_daily_throughput` was ALREADY the
+/// honest answer ("not recorded", ADR-0079/ADR-0077 D4) — what was missing is
+/// anything that READS that absence and speaks. This table is what stops the
+/// watchdog from speaking twice about the same silence.
+///
+/// The key is the MISSED DAY, not the run day. One row per (site, gap_date)
+/// means a given working day is nudged about exactly once, ever — which is
+/// strictly stronger than the ADR-0037 ≥24h cooldown the policy asks for, and
+/// it survives a container restart, a manual re-fire, and a duplicated cron
+/// container in a way an in-process cooldown cannot. Modelled on
+/// `alert_digest_logs` (ADR-0043 D5), which solves the same problem the same way.
+///
+/// A row is written only after a real send DECISION (see `runThroughputGapScan`):
+/// an M365-disabled no-op and an empty recipient set write nothing, so the nudge
+/// is still owed once the config gap is closed.
+model EquipmentThroughputGapAlert {
+  id String @id @default(uuid())
+
+  /// Bare FK → sites.id (constraint in the migration), matching every sibling.
+  site_id String
+
+  /// The WORKING DAY that had no live throughput row — the thing being reported.
+  /// `@db.Date`, same Pacific calendar-day representation as
+  /// `equipment_daily_throughput.throughput_date`, so the two are directly
+  /// comparable without a zone shift.
+  gap_date DateTime @db.Date
+
+  /// The machine the gap was about, resolved from the registry at scan time
+  /// (`resolveSiteThroughputMachine`) — never a literal id. Recorded so a future
+  /// reader can tell WHICH machine's silence was reported at a site that one day
+  /// has two.
+  equipment_id String
+
+  /// The Pacific day the scan actually ran. Normally `gap_date` + 1 working day;
+  /// it differs after an outage, and the difference is the only evidence that the
+  /// watchdog itself was late.
+  scanned_on DateTime @db.Date
+
+  /// `live` | `pilot` — the ADR-0047 state the nudge resolved to. In pilot the
+  /// mail went to admins with the would-have-sent header, NOT to the roster, and
+  /// this column is how that is answerable later without re-deriving it.
+  notify_mode String
+
+  recipient_count Int
+  delivered_count Int
+  last_status     Int?
+
+  created_at DateTime @default(now())
+
+  /// One nudge per site per missed day. The uniqueness is on two NOT NULL
+  /// columns, so it genuinely constrains.
+  @@unique([site_id, gap_date])
+  @@index([site_id, gap_date])
+  @@map("equipment_throughput_gap_alerts")
+}
+
 // ADR-0045 — ops ledger + intake
 //
 // P5: the weekly meeting-notes / task-follow-up ledger (D1), the DR3 Updates +

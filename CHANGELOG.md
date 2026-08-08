@@ -3,6 +3,110 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — nine days of silence, and the instrument that reads the gap (ADR-0088, born pilot)
+
+Bill asked why the Terex sheet went unfilled for nine working days without anyone
+noticing. The answer is uncomfortable, because **nothing was broken**.
+
+ADR-0079 got the hard part right. It made "nobody wrote a number down" a first-class
+state — the ABSENCE of a row, deliberately never a `0` (ADR-0077 D4) — and every
+consumer honours it. The trend page drew all nine of those days as `not_recorded`,
+faithfully, for nine days running. ADR-0081 then imported the workbook's own history
+into the same table without ever letting the sheet overwrite a manager's row. All of
+that was correct and all of it was **passive**.
+
+The complete list of detectors for a capture gap in this system was: Bill opens the
+chart and notices. That is not an instrument — it is a person doing an instrument's
+job, and it failed for exactly as long as it takes a habit to stop being a habit.
+Post-cutover the manager surface inherits the identical silence: JT types the number
+into Vision instead of Excel, and if he stops, the page keeps drawing "not recorded"
+and keeps telling nobody. **What was missing was never the data model. It was a
+reader.**
+
+**One question, once a working morning, per site.** Did the PREVIOUS WORKING DAY get
+a live throughput row for the machine the registry resolves here? If not, one email.
+That is the whole feature.
+
+- **It asks about ROW EXISTENCE and never about magnitude.** A recorded
+  `units_processed = 0` is a RECORDED day — the machine ran and produced nothing,
+  which is a measurement, and ADR-0077 D4 exists to keep it distinguishable from
+  absence. A `> 0` test would nudge a manager who did exactly what was asked. The
+  query carries **no units predicate at all**, and a test asserts the shape of the
+  where-clause so the right answer cannot be reached for the wrong reason. Falsified
+  RED against a `units_processed: { gt: 0 }` mutation before shipping — and the fake
+  DB was rewritten mid-build to _evaluate_ the where-clause rather than assume its
+  shape, because the first version returned the right answer to a wrong query and
+  the outcome assertion stayed green. A fake that ignores predicates it wasn't told
+  about is a rubber stamp, not a test double.
+- **The mirror case:** a day whose only row was soft-voided counts as MISSING. Not a
+  judgement call — ADR-0079's partial unique index already says a voided row does not
+  hold the day's slot.
+- **Monday looks back to FRIDAY, not Sunday.** A naive "yesterday" makes every Monday
+  scan a Sunday, find nothing (there never is anything), and alert every single week
+  — an alert that fires on schedule regardless of the facts. Falsified RED: replacing
+  the working-day walk with plain "yesterday" reds 12 tests.
+- **Holidays are SITE-scoped**, deliberately unlike `ap/business-clock.ts`'s
+  fleet-wide clock. That module is person-scoped and pauses only when BOTH sites
+  observe a holiday; this watchdog is site-scoped end to end, so Woodland closed for
+  a California holiday did not fail to record anything.
+- **Four hard never-fires:** pre-cutover days (`< 2026-08-07` is the sheet era,
+  ADR-0079 Am.1), pilot sites (`equipment_entry` not live — nobody there can even
+  reach the form), weekends (suppressed as gap days _and_ as run days), and sites with
+  no machine (Eugene resolves to null; site-DERIVED, never hardcoded).
+- **The nine July days are NOT back-alerted.** Opening a new channel with a burst of
+  mail about days nobody can act on is how a channel gets muted in its first week.
+
+**It is a staff nudge, not a page — and the reasoning, not just the conclusion.**
+Hard rule #5 reserves ntfy for Bill and for SYSTEM events; a manager who did not type
+a number is the paradigm operational event that rule excludes. So it rides
+`notifyStaff()` on its **own** registered surface, `equipment_throughput_gap`, born
+pilot — its own rather than `alert_digest` because the digest is an 18:00 PT
+many-findings rollup a manager may reasonably skim, and Bill must be able to ramp the
+morning nudge at Woodland without ramping the digest. The audience is the existing
+`alert_recipients` roster (the site managers — exactly who types this number); a
+second roster table would be a second thing to keep current and get wrong. **The one
+thing that does page** `dr3-vision-system` is the nudge failing to deliver (0 of N),
+the same carve-out `alert-digest.ts` makes, on the **same existing topic** — no new
+ntfy topic, because a topic nobody is subscribed to would be a particularly ironic
+way to ship a watchdog.
+
+**Severity `default`, and the ADR-0037 gate answered honestly.** It fails
+5-minute-actionable and customer-visible, and the sharp edge is _why_: ADR-0079 D4
+REFUSES a prior-day entry, so the missed day **cannot simply be typed in**. An email
+that only said "please enter it" would send the manager to a screen that tells them
+no. The body says three things and stops — which day was missed, that today's numbers
+can still be entered freely, and that the missed day goes through the office. What is
+immediately actionable is the habit, and the habit is what actually failed.
+
+**Idempotency is a database constraint, not a cooldown.** `equipment_throughput_gap_alerts`
+is unique on **(site_id, gap_date)** — keyed on the MISSED day, not the run day — so a
+working day is nudged exactly once, ever, regardless of re-fires, restarts, or a
+duplicated cron container. An in-process cooldown lives in container memory and
+re-arms on restart; this is strictly stronger than the ADR-0037 floor. A ledger row is
+written only after a real send decision, so an M365-disabled no-op or an empty roster
+leaves the nudge still owed.
+
+- **The middleware exemption is load-bearing here more than anywhere.**
+  `/api/internal/equipment/` joins `public-paths.ts` (TEN → ELEVEN). Without it the
+  middleware 307s the session-less POST to `/login`, the daemon logs a 200 for the
+  login page, and the ledger stays empty — **and an empty ledger reads as "no gaps
+  found."** That is the original defect reproduced inside its own fix. The daemon uses
+  `redirect: 'manual'` as the second defence.
+- **Its own cron container at 08:30 PT**, rather than riding the 18:00 PT daily-report
+  tick as ADR-0043 D5 does. That ADR's binding constraint was "no new container" and
+  it paid with a documented deviation from its own timing requirement. Here the fire
+  time IS the feature: a nudge about yesterday arriving at the END of today is
+  useless, because the only action it enables has already expired. Verified
+  DST-correct across both 2026-11-01 (fall back) and 2027-03-14 (spring forward).
+- **Ships DARK.** Until Bill flips `equipment_throughput_gap` to `live` per site at
+  `/admin/rollout`, the mail goes to admins only — which is also what lets him read a
+  week of them before any manager does.
+
+Gates: `tsc --noEmit` clean, ESLint clean, 4,812 unit tests green (30 new for the
+watchdog, 3 for the route), every migration replayed on a clean PG16, and the unique
+
+- CHECK constraints proven live by trying to violate them.
+
 ## 2026-08-08 — a photo captured under login A carries its own right to land (ADR-0086, accepted)
 
 Bill accepted ADR-0086 at the 2026-08-08 walkthrough. It is now built.
@@ -105,6 +209,7 @@ deliberately **not** part of the healthz verdict, because this feature's first d
 necessarily lands before the secret file does and gating on it would roll that deploy
 back. Which also means it will never announce itself: check it explicitly after
 provisioning.
+
 ## 2026-08-08 — the void gate was wrong on a shared iPad, and the "one funnel" claim was not true (ADR-0084 Am.1 + ADR-0083 Am.1)
 
 Two small items Bill ordered off the 2026-08-08 walkthrough, one branch. Neither
