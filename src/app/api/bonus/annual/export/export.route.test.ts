@@ -47,6 +47,8 @@ interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
   mattress_count: Dec;
+  /** ADR-0083 — NOT NULL DEFAULT 0 in the real column, so never optional here. */
+  saves: Dec;
 }
 
 const monthStore = new Map<string, MockMonth>();
@@ -180,6 +182,7 @@ function seed(): void {
     bonus_employee_id: 'emp-amy',
     bonus_pay_period_id: 'm-may',
     mattress_count: toDec(60),
+    saves: toDec(0),
   });
 }
 
