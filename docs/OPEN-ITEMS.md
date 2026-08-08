@@ -20,6 +20,24 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AP — 2026-08-08 VLM equipment decision register opened (ADR-0087, Proposed)
+
+- **DECISION WAITING ON BILL — the register.** ADR-0087 (Proposed) fixes the
+  policy for VLM↔DR3 equipment identity (canonical key preserves `-` AND `#`;
+  merges need VIN/make corroboration; sync keys on a new `vlm_legacy_id`;
+  nightly CDC upsert). The item-level calls live in
+  `docs/plans/2026-08-08-vlm-equipment-decision-register.md`: 7 VIN-verified
+  collision groups (G1–G7), 3 standing questions (`-ACC` meaning, ghost-unit
+  default, optional renumbers), and 5 CSV worksheets (492 ghosts, 146 blank
+  types, 48 aliases, 39 type mappings — 36 prefilled, 6 ACC). Decisions are the
+  CSV `decision` columns + §4 bulk rules; tooling executes only decided rows.
+  Nothing is implemented until decided — sequencing in ADR-0087 §10.
+- **Context worth keeping:** the equipment table drifts TODAY — AP
+  request-resolution created 4 duplicate rows on 2026-08-06 (no similarity
+  check on that path; fix is ADR-0087 D4). The ADR-0075 merge tool has never
+  been exercised (`merged_into_id` NULL on all rows), contra ADR-0075 D5's
+  claim the Terex dupes were merged.
+
 ## 0.AO — 2026-08-08 ADR-0085 iPad walk-up drop-off (born pilot)
 
 - **OPERATOR ACTION — flip `ipad_dropoff` at `/admin/rollout`.** The surface ships

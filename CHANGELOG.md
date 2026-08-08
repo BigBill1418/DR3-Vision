@@ -3,6 +3,23 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — VLM equipment decision register opened (ADR-0087, Proposed)
+
+Docs only, `[skip-deploy]`. Locks the VLM↔DR3 equipment normalization/sync work
+into a durable decision mechanism instead of chat approvals.
+
+- **ADR-0087 (Proposed, NOT accepted)** — VLM equipment identity + normalization
+  policy: `vlm_legacy_id` as the sync key, canonical match key preserving `-`/`#`
+  (both VIN-proven load-bearing), merges require VIN/make corroboration, nightly
+  CDC upsert, AP request-resolution similarity gate. Corrects ADR-0075 D5 (the
+  Terex merges were never executed).
+- **Decision register** — `docs/plans/2026-08-08-vlm-equipment-decision-register.md`
+  + 5 replica-generated CSV worksheets (492 ghost units, 146 blank types, 48
+  alias candidates, 39 type mappings, 6 `-ACC` values) with `decision` columns
+  and bulk-rule support; regeneration SQL committed alongside. Nothing executes
+  until rows are decided (ADR-0087 D7).
+- OPEN-ITEMS §0.AP records the waiting-on-Bill state.
+
 ## 2026-08-08 — campaign close-out: the F-3 design was unbuildable, and the Kelsey option is dead (PR #215 + register reconciliation)
 
 Docs only, `[skip-deploy]`. PR #215 landed two artifacts as files-only (deliberately
