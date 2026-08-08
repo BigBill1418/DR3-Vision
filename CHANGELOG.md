@@ -3,6 +3,122 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — a drop-off is a label, a count and a photo; the money default was the bug (ADR-0085)
+
+JT wanted a button. *"A tile or static button on the iPad; hitting it prompts
+Public Drop Off or Incentive Drop, then asks for total units and a photo."*
+People walk mattresses up to the gate and nothing captured them at the door.
+
+Bill scoped it in one line, and the scoping turned out to be the substance:
+**no money, no PII — including for Incentive.** Its $3/unit is tracked elsewhere,
+deliberately.
+
+**The obvious implementation would have paid out $12 a mattress-load.** Not
+metaphorically. `src/lib/dropoffs/service.ts` read:
+
+```ts
+if (kind === 'incentive') return null;
+return units * UNPAID_DROPOFF_CENTS_PER_UNIT;   // 300¢/unit
+```
+
+An allowlist of **one**, guarding the wrong side of the decision. Read as policy
+it says *every drop-off kind mints $3/unit of Bye-Bye-Mattress check money except
+the single named exception*, so **any** new `ConsumerDropoffKind` fell straight
+through to `units × 300`. Adding two enum values — the whole of the obvious
+change — would have written 1,200¢ on a four-unit walk-up, at both sites, on the
+one flow that had just been specified as recording no money at all. Nothing in
+the types, the tests or the schema would have said a word. It has been in that
+shape for a year and nobody has been paid wrongly only because nobody has added
+a kind.
+
+The predicate now names the kinds that **do** mint and refuses everything else,
+with two independent guards: an exhaustive `switch` that makes the next
+`ConsumerDropoffKind` a **compile error** in that file, and a trailing
+`return false` for the case the compiler cannot see — a migration that ships a
+label before the code that knows about it. `money-minting.test.ts` presents a
+kind the enum does not contain and proves it mints nothing, then runs the OLD
+predicate beside it returning `true` on the same input, so the regression is an
+executed fact rather than a paragraph.
+
+**Then the guarantees were made structural.** Three CHECK constraints, because
+"the current callers are careful" is exactly what was true of the money default
+for a year:
+
+```
+consumer_dropoffs_floor_no_money_or_pii        no cents, no name, no check, no paid_at
+consumer_dropoffs_floor_requires_photo         no floor drop-off without a photo
+consumer_dropoffs_non_floor_requires_person    the manager kinds still need a payee
+```
+
+That third one is the half people skip. Relaxing `person_name` from NOT NULL is
+a **loosening**, and an unscoped loosening is just a hole — so the old invariant
+was pinned back in place for `incentive`/`unpaid`/`illegal` and only the two
+label-only kinds are exempt. Each falsification was run with its constraint
+dropped and each went red naming the actual value: `expected 1200 to be null`,
+`expected 'Jane Doe' to be null`. A falsification that stays green is measuring
+the mock.
+
+**On the anonymous rows and the daily cap** — asked, answered, and written down
+rather than assumed. The per-person cap simply cannot see them: it matches
+`person_name = <string>` and in SQL nothing equals NULL. That is the correct
+direction, not a gap. If floor rows *were* visible, a stranger's walk-up would
+silently consume a named collector's daily allowance and **under-pay them**. And
+the cap cannot be dodged by omitting a name, because reaching that code requires
+`kind = 'incentive'` and a nameless incentive row is refused. NULL is also the
+**compliant** choice, not the convenient one: `person_name` is MRC Personal Data
+(Exhibit I / ADR-0010) carrying breach-notification scope and a 10-business-day
+deletion obligation, and a gate with no payout has no name to attach it to.
+
+**The photo.** Columns on the row rather than a side table — one photo, always
+present, is not a collection, and a CHECK cannot be written against another
+table's absence. `photo_uploaded_by` is populated from row one, which is
+ADR-0078 Am.1's lesson taken early: `load_photos` enforced who *may* upload and
+kept no record of who *did*, so all 85 rows drained yesterday carry
+`uploaded_by IS NULL` and backfilling them would be inventing a name. A new
+site-scoped mint endpoint rather than a widened `/api/photos/upload-url` — that
+path held zero rows for months and was drained yesterday through three stacked
+faults, and widening a hard-won working path is how it acquires a fourth. The
+key it returns is re-checked against the site prefix on submit, because it
+arrives from an iPad's IndexedDB days later and the constraint only cares that
+it is non-null, not *which* object it names.
+
+**Offline, the blob and the units queue as ONE row** (queue schema v2 → v3) and
+replay PUT-then-submit in that order, under the key minted at the operator's tap.
+The photo key is deliberately **excluded** from the idempotency request hash: a
+queued drop-off re-mints a fresh key because the presign expired, and hashing it
+would make that replay look like key reuse and answer 409 — turning the
+exactly-once fix into a louder bug, which is the identical trap
+`/api/photos/confirm` records having hit. Pinned by a real-Postgres test that
+replays with a changed photo key and asserts one row.
+
+**No double-count.** The write touches `consumer_dropoffs` and nothing else — not
+`inbound_loads`, not `processed_units_daily`. `onHand` already sums drop-off
+units into the program pool with no `kind` filter, so the new kinds arrive with
+no aggregation taught about them. The risk was never the enum; it was writing the
+same mattresses into a second leg, since `onHand` adds both with no dedup. A day
+carrying both a walk-up and a MyMRC-sourced **closed** processed row is asserted
+to resolve to one row of each.
+
+Born `pilot` on its own `ipad_dropoff` surface; the flag hides the page and the
+hub card, the API is gated independently, and a bookmarked URL degrades to the
+translated "not turned on yet" block rather than dying. EN/ES/UR.
+
+**Rider, because infrastructure-as-scrollback is a defect.** The R2 bucket's CORS
+policy was repaired by hand yesterday from a shell that has since closed. It is
+now checked in — `infra/r2-cors.dr3-vision-photos.json` plus an idempotent apply
+script with a `--check` diff and no token in it, naming where the credential
+lives (the `cfat_` account-scoped one; the zone-scoped `api_token` 403s on every
+R2 admin call). This ADR adds a second writer to that bucket, which makes "the
+policy is whatever it currently happens to be" an answer that would reproduce
+yesterday's zero-rows outage across two features instead of one.
+
+**Found in passing, deliberately not fixed here:** `upsertProcessedUnits` writes
+`source: 'manual'` on create only, so a human editing a day the MyMRC bridge
+created leaves `source = 'mymrc'` and the next hourly run silently overwrites the
+edit. That is a live defect in someone else's path; folding a fix into a drop-off
+PR would hide it. Filed in `docs/OPEN-ITEMS.md`.
+
+---
 ## 2026-08-08 — a saves column that pays, and a count you can take back (ADR-0083 + ADR-0084)
 
 Phases 3 and 4 of the #205 floor handoff, one branch. Both are JT asks; both turned

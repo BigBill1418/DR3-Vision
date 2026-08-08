@@ -1,0 +1,12 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://dr3-vision.svdp.us",
+      "https://dr3-vision.barnardhq.com"
+    ],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

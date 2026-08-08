@@ -42,6 +42,7 @@ const SEEDED: Record<string, RolloutState> = {
   // ADR-0074 — born pilot per ADR-0047 #3 (genuinely new exposure, so unlike the
   // ADR-0065 retrofits the default applies unmodified). Bill flips it live.
   [UI_SURFACE.IPAD_HAULS]: 'pilot',
+  [UI_SURFACE.IPAD_DROPOFF]: 'pilot', // ADR-0085
   [UI_SURFACE.LOADS_INVENTORY]: 'live',
 };
 
@@ -54,6 +55,25 @@ describe('ADR-0065 per-surface iPad gates', () => {
     expect(UI_SURFACE.IPAD_TODAY_SUMMARY).toBe('ipad_today_summary');
     // ADR-0074.
     expect(UI_SURFACE.IPAD_HAULS).toBe('ipad_hauls');
+    // ADR-0085.
+    expect(UI_SURFACE.IPAD_DROPOFF).toBe('ipad_dropoff');
+  });
+
+  it('ADR-0085 — the drop-off surface is born PILOT and blocks an operator until flipped', async () => {
+    const db = dbWith(SEEDED);
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_DROPOFF, SITE, db),
+    ).rejects.toBeInstanceOf(LoadsInventoryNotActivatedError);
+    // …and turning it on later must not disturb any neighbour. The drop-off
+    // surface is the newest gate on the busiest screen; a flip that also
+    // switched on the count or the queue would be a silent scope expansion.
+    const flipped = dbWith({ ...SEEDED, [UI_SURFACE.IPAD_DROPOFF]: 'live' });
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_DROPOFF, SITE, flipped),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertUiSurfaceActivated('operator', UI_SURFACE.IPAD_COUNT, SITE, flipped),
+    ).rejects.toBeInstanceOf(LoadsInventoryNotActivatedError);
   });
 
   it('ADR-0074 — the hauls surface is born PILOT and blocks an operator until flipped', async () => {

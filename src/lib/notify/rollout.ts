@@ -94,6 +94,15 @@ export const UI_SURFACE = {
   // with it. Born `pilot` per ADR-0047 #3.
   IPAD_HAULS: 'ipad_hauls',
 
+  // ADR-0085 — walk-up Public / Incentive drop-off capture. Born `pilot`.
+  //
+  // The flag hides the PAGE and its hub card. It is NOT the security boundary:
+  // `/api/operator/[site]/dropoff` is gated on auth + site + this surface via
+  // `requireActivatedOperator`, exactly like every other floor write, so a
+  // bookmarked URL or a hand-rolled POST is refused by the API regardless of
+  // what the UI chose to render.
+  IPAD_DROPOFF: 'ipad_dropoff',
+
   // ADR-0068 — the Employee Reimbursement tile on the site dashboard. Gated per
   // site because spec §6.4 leaves open whether Eugene's reimbursement process
   // runs the same way as Woodland's today; Bill can ramp one without the other

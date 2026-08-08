@@ -1021,6 +1021,9 @@ async function seedRolloutSurfaces(siteIds) {
     // admin-only until Bill flips it at /admin/rollout. Matches migration
     // 20260826_adr0074_ipad_hauls_surface.
     'ipad_hauls',
+    // ADR-0085 — walk-up Public / Incentive drop-off capture. Born pilot
+    // (ADR-0047 #3). Matches migration 20260838a_adr0085_ipad_dropoff.
+    'ipad_dropoff',
     // ADR-0077 D6 — the Terex machine ledger. Born pilot (ADR-0047 #3): ships
     // dark, admin-only, until Bill flips it at /admin/rollout. Matches migration
     // 20260829_adr0077_terex_ledger_surface.

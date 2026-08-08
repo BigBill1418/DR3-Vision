@@ -38,6 +38,8 @@ import {
   loadSwingThresholdPct,
 } from '@/lib/inventory/anchor-guardrail';
 import { createHold, eligibleApprovers } from '@/lib/inventory/anchor-holds';
+import { createFloorDropoff, FLOOR_DROPOFF_KINDS } from '@/lib/dropoffs/floor-dropoff';
+import { isValidDropoffStorageKey } from '@/lib/r2';
 import { confirmFloorInboundDay } from '@/lib/loads/floor-inbound';
 import { upsertProcessedUnits } from '@/lib/loads/processed-units';
 import { addStack, finishUnload } from '@/lib/load-service';
@@ -52,6 +54,8 @@ export const FLOOR_SCOPE = {
   PROCESSED_CONFIRM: 'operator.processed.confirm',
   LOAD_ADD_STACK: 'operator.load.add_stack',
   LOAD_FINISH_UNLOAD: 'operator.load.finish_unload',
+  /** ADR-0085 — walk-up Public / Incentive drop-off (units + required photo). */
+  DROPOFF_CREATE: 'operator.dropoff.create',
 } as const;
 
 export type FloorScope = (typeof FLOOR_SCOPE)[keyof typeof FLOOR_SCOPE];
@@ -410,6 +414,99 @@ export async function loadFinishUnload(input: FloorWriteInput): Promise<FloorWri
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// operator.dropoff.create — the walk-up drop-off (ADR-0085)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Day-addressed, and an APPEND with no natural key — two drop-offs of 4 units on
+// the same day are a perfectly ordinary Tuesday, so nothing about the row itself
+// distinguishes a double-tap from a second walk-up. That puts it in the same
+// class as `operator.count.create`: the idempotency claim is the ONLY thing
+// standing between a retry and a second row, and it is claimed in the same
+// transaction as the insert.
+//
+// ## The photo, and why the hash omits its key
+//
+// `photoStorageKey` is REQUIRED by the schema — a payload without one is 422
+// before any write is attempted, and `createFloorDropoff` refuses it again, and
+// `consumer_dropoffs_floor_requires_photo` refuses the INSERT. Three layers,
+// each independently sufficient.
+//
+// But the key is deliberately EXCLUDED from the idempotency payload hash, and
+// that omission is load-bearing rather than lazy. An offline entry that PUTs its
+// blob, loses the response to the submit, and replays will re-mint a FRESH R2
+// key first (the presign expires in 10 minutes; the entry may be days old).
+// Hashing the key would make that replay look like key reuse and answer 409,
+// turning the exactly-once fix into a second, louder bug — the identical trap
+// `/api/photos/confirm` documents at its own `payload:` line. The identity of
+// this write is the day, the label, the count and the site. The photo is
+// evidence attached to it, not part of what makes it that write.
+
+export const DropoffCreate = z.object({
+  dropoffDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  kind: z.enum(FLOOR_DROPOFF_KINDS),
+  units: z.number().int().positive().max(100_000),
+  /**
+   * REQUIRED — `.min(1)`, not `.optional()`. This is the server-side half of
+   * "no drop-off without a photo": strip the client's disabled-submit guard and
+   * the request dies here, before a transaction is opened.
+   */
+  photoStorageKey: z.string().min(1).max(512),
+  photoContentType: z.string().min(1).max(128),
+  photoByteSize: z.number().int().min(0).max(50_000_000).nullable().optional(),
+});
+
+export async function dropoffCreate(input: FloorWriteInput): Promise<FloorWriteResult> {
+  const parsed = DropoffCreate.safeParse(input.payload);
+  if (!parsed.success) return { status: 422, body: { error: 'invalid_input' } };
+  const d = parsed.data;
+  const { ctx } = input;
+
+  // The storage key came from the client — from an iPad's IndexedDB, possibly
+  // days old. The CHECK constraint only requires it to be non-null, so without
+  // this a submitted drop-off could name any string at all, including another
+  // site's object, and the row would record it as its evidence. Checked against
+  // the prefix THIS session's site mints under.
+  if (!isValidDropoffStorageKey(d.photoStorageKey, ctx.siteId)) {
+    return { status: 422, body: { error: 'invalid_photo_key' } };
+  }
+
+  const outcome = await prisma.$transaction((tx) =>
+    withIdempotency(
+      {
+        key: input.idempotencyKey,
+        scope: FLOOR_SCOPE.DROPOFF_CREATE,
+        actorUserId: ctx.userId,
+        siteId: ctx.siteId,
+        // See the header: the photo key is NOT part of the request identity.
+        payload: {
+          dropoffDate: d.dropoffDate,
+          kind: d.kind,
+          units: d.units,
+        },
+        tx,
+        statusCode: 201,
+      },
+      () =>
+        createFloorDropoff({
+          tx,
+          siteId: ctx.siteId,
+          dropoffDate: d.dropoffDate,
+          kind: d.kind,
+          units: d.units,
+          photo: {
+            storageKey: d.photoStorageKey,
+            contentType: d.photoContentType,
+            byteSize: d.photoByteSize ?? null,
+          },
+          actorUserId: ctx.userId,
+        }),
+    ),
+  );
+
+  return { status: outcome.statusCode, body: outcome.body };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // The registry
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -454,6 +551,16 @@ export const FLOOR_SCOPES: Record<FloorScope, ScopeDefinition> = {
     surface: UI_SURFACE.IPAD_QUEUE,
     targetDay: () => null,
     handler: loadFinishUnload,
+  },
+  // ADR-0085. Day-addressed: a drop-off is filed against the day it arrived, and
+  // a queued entry replayed the next morning must be refused (422 `date_not_today`)
+  // and held for a person rather than silently re-filed against today — a
+  // mis-dated drop-off moves the inventory ledger on two days at once.
+  [FLOOR_SCOPE.DROPOFF_CREATE]: {
+    dayAddressed: true,
+    surface: UI_SURFACE.IPAD_DROPOFF,
+    targetDay: (p) => dayFrom(p, 'dropoffDate'),
+    handler: dropoffCreate,
   },
 };
 

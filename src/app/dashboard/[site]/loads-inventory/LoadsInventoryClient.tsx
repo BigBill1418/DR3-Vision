@@ -50,6 +50,11 @@ const COMMODITIES = [
   'cotton',
 ] as const;
 const SUB_CATEGORIES = ['renovation', 'baled', 'shredded'] as const;
+// ADR-0085 — an ALLOWLIST, and load-bearing rather than merely current. The two
+// `floor_*` kinds are deliberately absent: they require a photo
+// (`consumer_dropoffs_floor_requires_photo`) which this desktop form has no way
+// to capture, so offering them here would produce a raw constraint violation
+// instead of a saved record. Walk-up drop-offs are entered on the iPad.
 const DROPOFF_KINDS = ['incentive', 'unpaid', 'illegal'] as const;
 const REASONS = ['bed_bug', 'soiled', 'water_logged', 'other'] as const;
 
@@ -472,7 +477,11 @@ function DropoffsPanel({ siteCode }: { siteCode: string }) {
         rows={rows.map((r) => [
           isoDate(r.dropoffDate),
           r.kind,
-          r.personName,
+          // ADR-0085 — `personName` is nullable now: the iPad walk-up kinds
+          // (`floor_public` / `floor_incentive`) capture no identity at all, by
+          // Bill's explicit call. An em-dash rather than a blank so the column
+          // reads as "not collected" instead of "we lost it".
+          r.personName ?? '—',
           String(r.units),
           r.incentiveCents == null ? '—' : `$${(r.incentiveCents / 100).toFixed(2)}`,
           r.slipNumber ?? '—',

@@ -48,7 +48,7 @@ export default async function FloorTodayPage({ params }: Props) {
   const dict = getDictionary(locale);
   const t = (k: string, vars?: Record<string, string | number>) => translate(dict, k, vars);
 
-  const [summaryLive, inboundLive, countLive, processedLive, queueLive, haulsLive] =
+  const [summaryLive, inboundLive, countLive, processedLive, queueLive, haulsLive, dropoffLive] =
     await Promise.all([
       isUiSurfaceLive(UI_SURFACE.IPAD_TODAY_SUMMARY, siteId),
       isUiSurfaceLive(UI_SURFACE.IPAD_INBOUND, siteId),
@@ -57,6 +57,8 @@ export default async function FloorTodayPage({ params }: Props) {
       isUiSurfaceLive(UI_SURFACE.IPAD_QUEUE, siteId),
       // ADR-0074 — the open portal-haul read surface, on its own gate.
       isUiSurfaceLive(UI_SURFACE.IPAD_HAULS, siteId),
+      // ADR-0085 — walk-up drop-off capture, on its own gate.
+      isUiSurfaceLive(UI_SURFACE.IPAD_DROPOFF, siteId),
     ]);
 
   const now = new Date();
@@ -97,6 +99,16 @@ export default async function FloorTodayPage({ params }: Props) {
       href: `/operator/${siteCode}/queue`,
       title: t('floor.hub.card_queue_title'),
       body: t('floor.hub.card_queue_body'),
+    });
+  }
+  if (dropoffLive) {
+    // ADR-0085 — JT's "tile or static button". No badge: a drop-off is a
+    // walk-up, so there is no pending queue of them to count, and a "0" the
+    // operator has to decode is worse than nothing.
+    cards.push({
+      href: `/operator/${siteCode}/dropoff`,
+      title: t('floor.hub.card_dropoff_title'),
+      body: t('floor.hub.card_dropoff_body'),
     });
   }
   if (haulsLive) {
