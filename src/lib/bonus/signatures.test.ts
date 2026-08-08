@@ -102,7 +102,11 @@ function makeDb(): SignatureDb {
       },
     },
     bonusDailyEntry: {
-      findMany: async () => entries.map((e) => ({ ...e })),
+      // ADR-0083 — the SignatureDb contract requires `saves`. These fixtures
+      // are count-only legacy cases, so saves defaults to 0 unless the fixture
+      // sets it; supplying it here keeps the double HONEST rather than letting
+      // the lock read a shape the real client would never return.
+      findMany: async () => entries.map((e) => ({ saves: 0, ...e })),
     },
     processorBonusRule: {
       findFirst: async () => ({

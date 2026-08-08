@@ -123,7 +123,13 @@ export default async function BonusMonthDetailPage({
       facility_signed_by: { select: { name: true } },
       ops_signed_by: { select: { name: true } },
       daily_entries: {
-        select: { bonus_employee_id: true, mattress_count: true, entry_date: true, note: true },
+        select: {
+          bonus_employee_id: true,
+          mattress_count: true,
+          saves: true,
+          entry_date: true,
+          note: true,
+        },
       },
     },
   });
@@ -184,7 +190,10 @@ export default async function BonusMonthDetailPage({
 
   let amendDays: AmendDayOption[] = [];
   let amendEmployees: AmendEmployeeRow[] = [];
-  let amendEntriesByDay: Record<string, { mattress_count: number; note: string | null }> = {};
+  let amendEntriesByDay: Record<
+    string,
+    { mattress_count: number; saves: number; note: string | null }
+  > = {};
   if (showAmendEditor) {
     const active = await prisma.bonusEmployee.findMany({
       where: { site_id: ctx.siteId, is_active: true },
@@ -195,7 +204,11 @@ export default async function BonusMonthDetailPage({
     amendEntriesByDay = Object.fromEntries(
       month.daily_entries.map((e) => [
         `${isoDay(e.entry_date)}|${e.bonus_employee_id}`,
-        { mattress_count: e.mattress_count.toNumber(), note: e.note ?? null },
+        {
+          mattress_count: e.mattress_count.toNumber(),
+          saves: e.saves.toNumber(),
+          note: e.note ?? null,
+        },
       ]),
     );
     const firstIso = amendDays[0]?.iso ?? '';
@@ -205,6 +218,7 @@ export default async function BonusMonthDetailPage({
         bonus_employee_id: emp.id,
         full_name: emp.full_name,
         mattress_count: keyed ? keyed.mattress_count : null,
+        saves: keyed ? keyed.saves : null,
         note: keyed?.note ?? null,
       };
     });

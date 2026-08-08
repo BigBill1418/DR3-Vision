@@ -309,7 +309,19 @@
       "hold_discarded": "Count thrown away. Nothing was saved.",
       "err_bad_pin": "That PIN is not right.",
       "err_self_release": "You entered this count, so you cannot approve it. A manager has to.",
-      "err_not_manager": "That person cannot approve counts at this site."
+      "err_not_manager": "That person cannot approve counts at this site.",
+      "void_heading": "Counts you entered today",
+      "void_intro": "If you entered a count by mistake, you can remove it here. Only today's counts, and only ones you entered.",
+      "void_none": "You have not entered a count today.",
+      "void_action": "Remove this count",
+      "void_confirm_heading": "Remove this count?",
+      "void_confirm_body": "This removes the count of {{total}} from {{time}}. The floor goes back to what it was before you entered it. Nothing is deleted — the office can still see it.",
+      "void_confirm_yes": "Yes, remove it",
+      "void_confirm_no": "Keep it",
+      "void_done": "Count removed.",
+      "void_err_prior_day": "That count was taken on {{day}}, not today. Ask the office to change it.",
+      "void_err_not_yours": "You did not enter that count, so you cannot remove it.",
+      "void_err_gone": "That count is not there any more."
     },
     "processed": {
       "heading": "Confirm processed",

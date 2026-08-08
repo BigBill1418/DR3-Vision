@@ -33,6 +33,7 @@ import {
   anchorFlowBounds,
   type PoolPair,
 } from '@/lib/inventory/running-balance';
+import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import { aggregateSiteRates, resolveRateThresholds } from '@/lib/rates';
 import {
   c1Inbound,
@@ -373,8 +374,12 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
       where: { site_id: w.siteId, disposal_date: range },
       select: { disposal_date: true, program_units: true, non_program_units: true, units: true },
     }),
+    // ADR-0084 — a voided count is not a reconciliation event. Left in, it
+    // produces a phantom C6 `physical_reconcile` finding for a count that was
+    // withdrawn, and the owner is sent to chase a discrepancy that no longer
+    // exists in the ledger the audit is checking.
     db.siteInventorySnapshot.findMany({
-      where: { site_id: w.siteId, snapshot_kind: 'physical', snapshot_at: range },
+      where: { ...NOT_VOIDED, site_id: w.siteId, snapshot_kind: 'physical', snapshot_at: range },
       select: {
         snapshot_at: true,
         units_indoor: true,
@@ -449,7 +454,20 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
 async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair> {
   const before = rangeDate(w.startISO);
   const anchor = await db.siteInventorySnapshot.findFirst({
-    where: { site_id: w.siteId, snapshot_kind: 'physical', snapshot_at: { lt: before } },
+    // ADR-0084 — an anchor selector, so voided counts are ineligible. This one
+    // mirrors `onHand`; if the two disagreed about eligibility the audit would
+    // roll forward from a different anchor than the balance it is auditing.
+    where: {
+      ...NOT_VOIDED,
+      site_id: w.siteId,
+      snapshot_kind: 'physical',
+      snapshot_at: { lt: before },
+    },
+    // PRE-EXISTING DIVERGENCE (reported, not fixed here): `onHand` and
+    // `loadPriorAnchor` carry the ADR-0078 D1 `created_at DESC` tiebreak and
+    // this does not, so two same-day counts can hand the audit a different
+    // anchor than the balance. Out of ADR-0084's scope — see the ADR's
+    // "What this ADR does not fix" section.
     orderBy: { snapshot_at: 'desc' },
     select: {
       snapshot_at: true,
@@ -706,8 +724,15 @@ async function fetchLastPhysicalSnapshotISO(
   w: AuditWindow,
 ): Promise<string | null> {
   const asOfISO = w.asOfISO ?? w.endISO;
+  // ADR-0084 — this reader FAILS OPEN if the filter is omitted, which is why it
+  // is called out rather than just patched. M2 fires when a site has gone too
+  // long without a physical count. A voided count still visible here reads as a
+  // recent count, so the finding is SUPPRESSED: the audit goes quiet at exactly
+  // the moment the floor lost its anchor. Every other reader in this file fails
+  // toward a visible wrong number; this one fails toward silence.
   const snap = await db.siteInventorySnapshot.findFirst({
     where: {
+      ...NOT_VOIDED,
       site_id: w.siteId,
       snapshot_kind: 'physical',
       snapshot_at: { lt: rangeDate(shiftDaysISO(asOfISO, 1)) },

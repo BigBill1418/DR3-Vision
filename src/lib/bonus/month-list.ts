@@ -19,7 +19,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { resolveActiveRule, NoActiveRuleError } from '@/lib/bonus/daily-entry';
-import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
+import { periodBonusCentsFor } from '@/lib/bonus/paid-units';
 import type { BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { appToday } from '@/lib/time';
 
@@ -161,7 +161,10 @@ async function payoutForMonth(
   }
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: month.id },
-    select: { mattress_count: true },
+    // ADR-0083 — an UNLOCKED period's displayed payout is computed here; it must
+    // include saves or the list would disagree with the month page and with the
+    // total this period will lock at signature time.
+    select: { mattress_count: true, saves: true },
   });
   if (entries.length === 0) return { cents: 0, locked: false };
   let rule;
@@ -171,8 +174,7 @@ async function payoutForMonth(
     if (e instanceof NoActiveRuleError) return { cents: 0, locked: false };
     throw e;
   }
-  let cents = 0;
-  for (const e of entries) cents += calculateDailyBonusCents(e.mattress_count.toNumber(), rule);
+  const cents = periodBonusCentsFor(entries, rule);
   return { cents, locked: false };
 }
 

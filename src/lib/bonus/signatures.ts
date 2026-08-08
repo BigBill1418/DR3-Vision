@@ -41,7 +41,7 @@
 // as not-found.
 
 import type { AuditAction } from '@prisma/client';
-import { calculateMonthlyBonusCents } from '@/lib/bonus/calculator';
+import { periodBonusCentsFor, type DecimalLike } from '@/lib/bonus/paid-units';
 import { transitionMonth, type BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { entryDateUTC, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { bonusPayPeriodsByState } from '@/lib/observability/metrics';
@@ -63,28 +63,19 @@ export { getAutoOverrideActor } from '@/lib/bonus/signature-chain';
 export type SignatureSlot = 'facility' | 'ops';
 
 /**
- * `mattress_count` is a Prisma `Decimal` at runtime (schema `Decimal(5,1)`, ADR-0023).
- * The DB row therefore carries a Decimal object, NOT a JS number — passing it raw to
- * the cents calculator makes `Number.isFinite(Decimal)` false and silently zeros the
- * payout (the 2026-06 Woodland $0-lock incident). We accept "a Decimal or a plain
- * number" structurally and coerce at the lock site via `toCount`.
+ * `mattress_count` and (ADR-0083) `saves` are Prisma `Decimal`s at runtime (both
+ * `Decimal(5,1)`). The DB row therefore carries Decimal objects, NOT JS numbers —
+ * passing one raw to the cents calculator makes `Number.isFinite(Decimal)` false and
+ * silently zeros the payout (the 2026-06 Woodland $0-lock incident). We accept "a
+ * Decimal or a plain number" structurally and coerce at the lock site.
+ *
+ * ADR-0083 moved the canonical definition to `@/lib/bonus/paid-units` so the
+ * coercion and the "what is a paid unit" policy live together, in one place, for
+ * all ~9 pay read paths. Re-exported here because `SignatureDb` is a published
+ * structural type and its consumers (tests, callers) import `DecimalLike` from
+ * this module.
  */
-export type DecimalLike = number | { toNumber(): number };
-
-/**
- * Coerce a `mattress_count` (Prisma Decimal or plain number) to a JS number for the
- * cents calculator. Mirrors the `.toNumber()` coercion used by the on-screen, PDF,
- * and CSV paths (`month-list.ts`, `aggregates.ts`) so the signed total can never
- * diverge from the displayed total. THROWS on an unexpected shape rather than letting
- * a bad value silently become $0 — a payout must never be silently dropped.
- */
-function toCount(value: DecimalLike): number {
-  const n = typeof value === 'number' ? value : value.toNumber();
-  if (!Number.isFinite(n)) {
-    throw new TypeError(`mattress_count did not coerce to a finite number (got ${String(value)})`);
-  }
-  return n;
-}
+export type { DecimalLike };
 
 /** Structural type for the prisma/tx client this layer uses. */
 export interface SignatureDb {
@@ -98,9 +89,18 @@ export interface SignatureDb {
     }): Promise<BonusMonthSignatureRow>;
   };
   bonusDailyEntry: {
+    // ADR-0083 — `saves` is declared REQUIRED here on purpose. This structural
+    // type is the contract the sign-time lock reads through, and the lock is one
+    // of the two independent computations of the payout that the ADR-0033
+    // reconcile compares. If this type let `saves` be optional, a caller (or a
+    // test double) could hand the lock rows without it, the lock would total
+    // processed-only, the reconcile would total processed+saves, and every period
+    // containing a save would page URGENT and refuse its own payroll PDF.
+    // Declaring it required makes that a compile error instead of a 3 a.m. page —
+    // the same truthful-typing discipline that `DecimalLike` itself exists for.
     findMany(args: {
       where: { bonus_pay_period_id: string };
-    }): Promise<{ mattress_count: DecimalLike }[]>;
+    }): Promise<{ mattress_count: DecimalLike; saves: DecimalLike }[]>;
   };
   processorBonusRule: {
     findFirst(args: {
@@ -420,15 +420,17 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
         orderBy: { effective_date: 'desc' },
       });
       if (!ruleRow) throw new NoActiveRuleError(signer.siteId);
-      const total = calculateMonthlyBonusCents(
-        entries.map((e) => toCount(e.mattress_count)),
-        {
-          threshold_low: ruleRow.threshold_low,
-          rate_low: ruleRow.rate_low.toString(),
-          threshold_high: ruleRow.threshold_high,
-          rate_high: ruleRow.rate_high.toString(),
-        },
-      );
+      // ADR-0083 — the lock totals PAID units (processed + saves), tiered once
+      // per day, through the single `paid-units` funnel the grid, the PDF and the
+      // ADR-0033 reconcile all share. The signed total therefore cannot diverge
+      // from the displayed total, which is the property the footer/signature
+      // requirement asks for.
+      const total = periodBonusCentsFor(entries, {
+        threshold_low: ruleRow.threshold_low,
+        rate_low: ruleRow.rate_low.toString(),
+        threshold_high: ruleRow.threshold_high,
+        rate_high: ruleRow.rate_high.toString(),
+      });
       await tx.bonusPayPeriod.update({
         where: { id: monthId },
         data: { total_payout_cents: total },

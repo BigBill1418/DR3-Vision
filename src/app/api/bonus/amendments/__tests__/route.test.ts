@@ -113,7 +113,7 @@ const validBody = {
   targetEntryDate: '2026-06-10',
   bonusEmployeeId: VALID_EMPLOYEE,
   changeType: 'update' as const,
-  newValue: { mattress_count: 67, note: null },
+  newValue: { mattress_count: 67, saves: 0, note: null },
   justification: 'Keyed 76 by mistake, the real count is 67 mattresses.',
 };
 
@@ -125,12 +125,12 @@ const batchBody = {
     {
       bonusEmployeeId: VALID_EMPLOYEE,
       changeType: 'update' as const,
-      newValue: { mattress_count: 67, note: null },
+      newValue: { mattress_count: 67, saves: 0, note: null },
     },
     {
       bonusEmployeeId: '33333333-3333-3333-3333-333333333333',
       changeType: 'update' as const,
-      newValue: { mattress_count: 12, note: null },
+      newValue: { mattress_count: 12, saves: 0, note: null },
     },
   ],
 };

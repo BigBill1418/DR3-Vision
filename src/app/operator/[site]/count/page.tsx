@@ -6,9 +6,11 @@ import { onHand } from '@/lib/inventory/running-balance';
 import { loadPriorAnchor, loadSwingThresholdPct } from '@/lib/inventory/anchor-guardrail';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
-import { pacificDayISO } from '@/lib/time';
+import { formatPacificDateTime, pacificDayISO } from '@/lib/time';
+import { listTodaysVoidableCounts } from '@/lib/inventory/void-count';
 import { FloorPageHeading } from '../../_components/page-heading';
 import { CountClient } from './count-client';
+import { CountVoidClient, type VoidableCount } from './void-client';
 
 // ADR-0060 F-3 — floor physical on-hand count. Enters a `measured` physical snapshot as
 // the new anchor via reconcilePhysicalCount. Establishes Eugene's first anchor.
@@ -41,17 +43,29 @@ export default async function FloorCountPage({ params }: Props) {
   // the write path recomputes them, so a stale render cannot widen the gate.
   let priorTotal: number | null = null;
   let thresholdPct = 20;
+  // ADR-0084 — today's counts THIS operator entered, resolved server-side. Sent
+  // as already-rendered Pacific strings rather than Dates: the prop crosses the
+  // server/client boundary, and a raw Date would be re-formatted in the browser's
+  // zone — the iPad's clock is exactly what the whole day-discipline chain
+  // (ADR-0065, ADR-0078 D10) refuses to trust.
+  let voidable: VoidableCount[] = [];
   if (live) {
-    const [balance, site, prior, threshold] = await Promise.all([
+    const [balance, site, prior, threshold, todays] = await Promise.all([
       onHand(siteId, new Date()),
       prisma.site.findUnique({ where: { id: siteId }, select: { jurisdiction: true } }),
       loadPriorAnchor(prisma, siteId),
       loadSwingThresholdPct(prisma, siteId),
+      listTodaysVoidableCounts(siteId, gate.ctx.userId),
     ]);
     expectedTotal = balance.total.toString();
     jurisdiction = site?.jurisdiction === 'california' ? 'california' : 'oregon';
     priorTotal = prior?.total ?? null;
     thresholdPct = threshold;
+    voidable = todays.map((c) => ({
+      id: c.id,
+      countedAtLabel: formatPacificDateTime(c.enteredAt, locale, { timeStyle: 'short' }),
+      physicalTotal: c.physicalTotal,
+    }));
   }
 
   return (
@@ -67,14 +81,21 @@ export default async function FloorCountPage({ params }: Props) {
             </p>
           </div>
         ) : (
-          <CountClient
-            siteCode={siteCode}
-            expectedTotal={Number(expectedTotal)}
-            jurisdiction={jurisdiction}
-            priorTotal={priorTotal}
-            thresholdPct={thresholdPct}
-            countDate={pacificDayISO(new Date())}
-          />
+          <>
+            <CountClient
+              siteCode={siteCode}
+              expectedTotal={Number(expectedTotal)}
+              jurisdiction={jurisdiction}
+              priorTotal={priorTotal}
+              thresholdPct={thresholdPct}
+              countDate={pacificDayISO(new Date())}
+            />
+            {/* ADR-0084 — rendered only when there IS something to withdraw, so
+                the entry screen is not carrying a permanently-empty panel. The
+                affordance appears the moment a count exists and disappears at
+                the Pacific day roll, which matches what the server will accept. */}
+            {voidable.length > 0 && <CountVoidClient siteCode={siteCode} counts={voidable} />}
+          </>
         )}
       </div>
     </main>

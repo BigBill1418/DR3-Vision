@@ -184,6 +184,7 @@ export default async function BonusDailyEntryPage({
     bonus_employee_id: r.bonus_employee_id,
     full_name: r.full_name,
     mattress_count: r.mattress_count,
+    saves: r.saves,
     note: r.note,
   }));
 

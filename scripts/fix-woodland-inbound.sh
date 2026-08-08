@@ -95,8 +95,20 @@ done
 floor_sql() {
   cat <<SQL
 WITH s AS (SELECT id FROM sites WHERE code='${SITE_CODE}'),
+-- ADR-0084: voided counts are NOT anchors. This hand-written SQL reproduces
+-- onHand()'s anchor selection against the prod database, so it has to reproduce
+-- its WHERE clause too — otherwise this verification script reports a floor
+-- computed from a count the app has already stopped using, and the operator
+-- reads the divergence as a bug in the app.
+--
+-- KNOWN, PRE-EXISTING DIVERGENCE from onHand() (reported in ADR-0084, NOT fixed
+-- here — this script is a one-shot remediation tool and widening it is a
+-- separate change): no `snapshot_kind='physical'` filter, so a `computed`
+-- snapshot could be picked as the anchor, and no `created_at DESC` tiebreak
+-- (ADR-0078 D1), so two same-day counts leave the choice to the planner.
 a AS (SELECT snapshot_at, program_units, non_program_units
         FROM site_inventory_snapshots WHERE site_id=(SELECT id FROM s)
+         AND voided_at IS NULL
        ORDER BY snapshot_at DESC LIMIT 1),
 inb AS (SELECT coalesce(sum(program_unit_count),0) p, coalesce(sum(non_program_unit_count),0) n
           FROM inbound_loads WHERE site_id=(SELECT id FROM s)

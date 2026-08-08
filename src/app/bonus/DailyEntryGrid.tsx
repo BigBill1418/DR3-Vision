@@ -28,8 +28,8 @@ import { RequestEditBatchModal, type BatchItem } from './RequestEditBatchModal';
 interface PendingChange {
   bonus_employee_id: string;
   change_type: 'update' | 'insert';
-  existing: { mattress_count: number; note: string | null } | null;
-  proposed: { mattress_count: number; note: string | null };
+  existing: { mattress_count: number; saves: number; note: string | null } | null;
+  proposed: { mattress_count: number; saves: number; note: string | null };
 }
 interface RequiresAmendmentBody {
   error: 'requires_amendment';
@@ -52,6 +52,8 @@ export interface GridRowProps {
   bonus_employee_id: string;
   full_name: string;
   mattress_count: number | null;
+  /** ADR-0083 — mattresses saved for resale; null iff the row is unkeyed. */
+  saves: number | null;
   note: string | null;
 }
 
@@ -83,6 +85,7 @@ const COUNT_PATTERN = /^\d{1,4}(\.\d)?$/;
 
 interface RowState {
   count: string; // raw input string ('' = not entered)
+  saves: string; // ADR-0083 — raw input string ('' = not entered)
   note: string;
 }
 
@@ -93,6 +96,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     for (const r of rows) {
       init[r.bonus_employee_id] = {
         count: r.mattress_count != null ? String(r.mattress_count) : '',
+        saves: r.saves != null ? String(r.saves) : '',
         note: r.note ?? '',
       };
     }
@@ -129,14 +133,35 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     return n;
   };
 
+  // ADR-0083 — the live day total is tiered ONCE over PAID units (processed +
+  // saves), matching `dailyBonusCentsFor` on the server. A row with no processed
+  // count but a saves figure still earns, so it is included: the guard is on
+  // "nothing keyed at all", not on the count alone.
   const totalCents = useMemo(() => {
     let sum = 0;
     for (const r of rows) {
-      const n = parsedCount(state[r.bonus_employee_id]?.count ?? '');
-      if (n != null) sum += calculateDailyBonusCents(n, rule);
+      const rs = state[r.bonus_employee_id];
+      const n = parsedCount(rs?.count ?? '');
+      const sv = parsedCount(rs?.saves ?? '');
+      if (n != null || sv != null) {
+        sum += calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule);
+      }
     }
     return sum;
   }, [state, rows, rule]);
+
+  // Live sum of the per-employee SAVES column. Reported separately from
+  // processed mattresses because they are disjoint quantities (ADR-0083) — a
+  // combined "units" figure in the footer would invite reading a saved mattress
+  // as a processed one.
+  const totalSaves = useMemo(() => {
+    let sum = 0;
+    for (const r of rows) {
+      const sv = parsedCount(state[r.bonus_employee_id]?.saves ?? '');
+      if (sv != null) sum += sv;
+    }
+    return sum;
+  }, [state, rows]);
 
   // Live sum of the per-employee mattress counts (the "total processed" figure —
   // same reactivity as `totalCents`). Uses the raw parsed count, NOT the calculator
@@ -162,28 +187,44 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
     const entries: Array<{
       bonus_employee_id: string;
       mattress_count: number;
+      saves: number;
       note: string | null;
     }> = [];
     for (const r of rows) {
       const rs = state[r.bonus_employee_id]!;
       const n = parsedCount(rs.count);
-      // Only submit rows that actually have a count; a blank input is "not keyed".
-      if (rs.count.trim() === '') continue;
-      if (n == null) {
+      const sv = parsedCount(rs.saves);
+      // ADR-0083 — a row is "keyed" if EITHER box has a value. Requiring a
+      // processed count would make a saves-only day unsubmittable, and a
+      // processor who spent a shift pulling units for resale has a real, paid
+      // day with a zero processed count.
+      if (rs.count.trim() === '' && rs.saves.trim() === '') continue;
+      if (rs.count.trim() !== '' && n == null) {
         setError(
           `"${r.full_name}" has an invalid count — enter 0 to 999 with at most one decimal place.`,
         );
         return;
       }
+      if (rs.saves.trim() !== '' && sv == null) {
+        setError(
+          `"${r.full_name}" has an invalid saves value — enter 0 to 999 with at most one decimal place.`,
+        );
+        return;
+      }
       entries.push({
         bonus_employee_id: r.bonus_employee_id,
-        mattress_count: n,
+        mattress_count: n ?? 0,
+        // Always sent explicitly, never omitted: the server treats an ABSENT
+        // saves as "leave unchanged" (stale-tab safety), so a blank box on a
+        // current client has to mean an explicit 0 or clearing a value would be
+        // impossible.
+        saves: sv ?? 0,
         note: rs.note.trim() || null,
       });
     }
 
     if (entries.length === 0) {
-      setError('Enter at least one mattress count before saving.');
+      setError('Enter at least one mattress count or saves value before saving.');
       return;
     }
 
@@ -273,6 +314,9 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
             <tr className="bg-dr3-space-2/80 text-xs uppercase tracking-wider text-dr3-cyan">
               <th className="px-4 py-3 font-semibold">Processor</th>
               <th className="px-4 py-3 font-semibold">Mattresses</th>
+              {/* ADR-0083 — saves sits directly beside processed, per JT's ask
+                  ("a dedicated saves field beside processed"). */}
+              <th className="px-4 py-3 font-semibold">Saves</th>
               <th className="px-4 py-3 font-semibold">Note (optional)</th>
               <th className="px-4 py-3 text-right font-semibold">Bonus</th>
             </tr>
@@ -280,7 +324,7 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-dr3-mist-dim">
+                <td colSpan={5} className="px-4 py-6 text-center text-dr3-mist-dim">
                   No active processors. Add employees on the Bonus Employees page first.
                 </td>
               </tr>
@@ -291,8 +335,14 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                 // Soft-warn on the integer FLOOR (T-330): 200.5 floors to 200
                 // (no warn); 201 / 230.5 warn. The calculator floors too, so the
                 // warn tracks the value that actually drives the bonus.
+                const sv = parsedCount(rs.saves);
                 const overWarn = n != null && Math.floor(n) > SOFT_WARN_THRESHOLD;
-                const bonus = n != null ? calculateDailyBonusCents(n, rule) : 0;
+                // ADR-0083 — one tier application over processed + saves, the
+                // same basis the server and the signed PDF use.
+                const bonus =
+                  n != null || sv != null
+                    ? calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule)
+                    : 0;
                 return (
                   <tr
                     key={r.bonus_employee_id}
@@ -333,6 +383,29 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
                     </td>
                     <td className="px-4 py-3">
                       <input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        max={999}
+                        step={0.1}
+                        value={rs.saves}
+                        disabled={!editable}
+                        onChange={(e) => setRow(r.bonus_employee_id, { saves: e.target.value })}
+                        className="w-24 rounded-md border border-dr3-steel-light/25 bg-dr3-space px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan disabled:opacity-60"
+                        aria-label={`Mattresses saved for resale by ${r.full_name}`}
+                        aria-describedby={`grid-saves-hint-${r.bonus_employee_id}`}
+                        data-testid={`grid-saves-${r.bonus_employee_id}`}
+                      />
+                      <span
+                        id={`grid-saves-hint-${r.bonus_employee_id}`}
+                        className="mt-1 block text-xs text-dr3-mist-dim"
+                        data-testid={`grid-saves-hint-${r.bonus_employee_id}`}
+                      >
+                        Saved for resale — paid the same
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
                         type="text"
                         value={rs.note}
                         disabled={!editable}
@@ -367,6 +440,20 @@ export function DailyEntryGrid({ rule, entryDate, editable, monthState, rows }: 
               >
                 {formatMattresses(totalMattresses)}
                 <span className="ml-1 text-xs font-normal text-dr3-mist-dim">mattresses</span>
+              </td>
+              {/* ADR-0083 — saves totalled in its OWN footer cell rather than
+                  folded into the mattresses figure. They are disjoint
+                  quantities: a saved mattress was diverted to resale, not torn
+                  down, and merging the two would invite reading one as the
+                  other. The Bonus total beside it IS the combined figure,
+                  because pay is what the two have in common. */}
+              <td
+                className="whitespace-nowrap px-4 py-3 text-right font-mono text-base font-bold text-dr3-mist"
+                data-testid="grid-total-saves"
+                aria-label={`Total mattresses saved for resale: ${formatMattresses(totalSaves)}`}
+              >
+                {formatMattresses(totalSaves)}
+                <span className="ml-1 text-xs font-normal text-dr3-mist-dim">saved</span>
               </td>
               <td className="px-4 py-3" />
               <td

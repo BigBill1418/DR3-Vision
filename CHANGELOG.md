@@ -3,6 +3,84 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — a saves column that pays, and a count you can take back (ADR-0083 + ADR-0084)
+
+Phases 3 and 4 of the #205 floor handoff, one branch. Both are JT asks; both turned
+out to be sitting on a live defect that did not fail loudly.
+
+**Saves (ADR-0083).** JT: _"add a space for saves — they also get paid for every
+mattress saved to sell — a dedicated saves field beside processed."_ A `saves`
+column now sits next to `mattress_count` on the same bonus daily entry, under the
+same amendment rules.
+
+The pay basis is `mattress_count + saves`, tiered **once**. The alternative
+everyone reaches for first — bonus each column separately — applies the 50-unit
+threshold twice and pays **$0.00** for a 40-processed / 20-saved day. It does not
+throw, does not warn, and would have meant "we added a saves column and nobody was
+ever paid for a save" for every processor whose split straddled the threshold,
+which is most of them. At 60/60 it under-pays by $36.50 in a single day for a
+single person. All nine pay read paths now funnel through one `paid-units.ts`
+definition, so the grid, the signed PDF, the sign-time lock and the reconcile
+cannot disagree about what a paid unit is.
+
+Saves are **paid** units, not **processed** units, and the difference is load-bearing:
+the daily production report and the ADR-0071 throughput quota deliberately still read
+`mattress_count` alone. A saved mattress was diverted to resale, not torn down, and
+those production figures sit next to MRC billing. Two disjoint columns is what makes
+the double-count structurally impossible rather than merely avoided.
+
+**Two live bypasses were closed on the way in, each falsified RED against shipped code.**
+The four-eyes prior-day gate compared `mattress_count` only, so a manager changing
+*only* the saves figure on a prior day computed `countChanged === false`, fell into
+the `note_only_edit` branch, and wrote an unapproved change to somebody's pay — no
+approver, no justification, nothing in the review queue. And the amendments endpoint's
+zod schema listed `mattress_count` and `note`: zod strips unknown keys silently, so a
+correctly-posted saves amendment would have had the field deleted at the edge, the
+approver would have reviewed a change that never mentioned it, and the apply path
+would have left saves untouched — a payroll correction that silently did not happen,
+with a fully green audit trail saying it did.
+
+The second falsification **corrected the test that was meant to catch it**. The first
+draft asserted against a schema pasted into the test file, which would have stayed
+green through any change to the real endpoint. That only came to light by actually
+attempting the falsification. The schema now lives in `src/lib/bonus/amendment-schemas.ts`
+and the route and its tests import the same one.
+
+`NOT NULL DEFAULT 0` is a **true** zero, not a not-recorded modelled as one: no save
+was ever paid before the column existed, so that is what the payroll record already
+means. That truthfulness is what keeps every already-signed period at **zero reconcile
+drift** — had it been nullable, or backfilled with anything else, every signed period
+in the system would have reported drifted on its next PDF render, paged Bill URGENT,
+and refused to produce payroll.
+
+A save also becomes resale stock, as the **first-ever writer of `unit_status_movements`**
+— a table that had sat in the schema with no writers at all. Movements are written as
+**deltas** (10 keyed then corrected to 14 appends `+4`, not a second `+14`), a downward
+correction reverses direction rather than recording negative units, and the row lands on
+the same transaction as the entry. A save deliberately does **not** decrement the live
+floor balance — Rick's model, binding: saved units stay physically on the floor until a
+store transfer — and writes nothing to the three-writer `processed_units_daily`.
+
+**Same-day count void (ADR-0084).** JT: _"if we accidentally entered the count twice, we
+should be able to remove one."_ Re-scoped (G3) away from bonus entries, which was the
+wrong target twice over: operators cannot reach the bonus grid at all, and
+`@@unique(bonus_employee_id, entry_date)` makes a duplicate bonus entry structurally
+impossible — a second write UPDATEs the row it would duplicate. The surface that
+genuinely double-enters is the floor physical count, which is the inventory **anchor**:
+a mistyped count does not produce a wrong count, it silently moves the entire floor.
+
+Voiding is soft, never a delete, and same-day only in Pacific — a prior-day attempt is
+refused and routed to the office. The filter is centralised rather than trusted to
+diligence: a guard test reads the source off disk and fails the build if any
+`siteInventorySnapshot` query appears without it, because a missed reader silently
+anchors the floor on a count somebody took back.
+
+**Verification.** `tsc --noEmit` clean; ESLint clean; the payroll-critical bonus suite
+**658/658** and the inventory/audit suites green — all run **by hand**, because the husky
+pre-push gate does not execute in a git worktree and a clean `git push` is therefore not
+evidence it ran. Three falsifications were executed against shipped code and confirmed
+RED before being restored.
+
 ## 2026-08-08 — the day the photos landed: five merges, and a queue that had never once emptied (docs reconciliation)
 
 No code shipped today. This entry is the capstone on 2026-08-07 — five PRs merged,

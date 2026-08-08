@@ -42,6 +42,7 @@
 import { Prisma, type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
+import { NOT_VOIDED } from './snapshot-void';
 
 const D = Prisma.Decimal;
 type DecimalLike = Prisma.Decimal | number | string;
@@ -252,7 +253,16 @@ export function anchorFlowBounds(anchorAt: Date | null): {
  */
 export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance> {
   const anchor = await prisma.siteInventorySnapshot.findFirst({
-    where: { site_id: siteId, snapshot_kind: 'physical', snapshot_at: { lte: asOf } },
+    // ADR-0084 — `NOT_VOIDED` first, and it is not optional here. This is THE
+    // anchor selector: a voided count reaching this query does not produce a
+    // slightly wrong list, it recomputes the whole floor from a number an
+    // operator has already said was a mistake.
+    where: {
+      ...NOT_VOIDED,
+      site_id: siteId,
+      snapshot_kind: 'physical',
+      snapshot_at: { lte: asOf },
+    },
     // ADR-0078 D1 — MUST match `loadPriorAnchor` in anchor-guardrail.ts exactly.
     // Counts are stored at Pacific midnight (D-3 below), so same-day counts tie
     // on `snapshot_at` and the planner picked the anchor. `created_at DESC`
@@ -260,6 +270,11 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     // one of these two orderings, change both — a guardrail measuring a swing
     // against a different anchor than the balance computes forward from is worse
     // than either being wrong alone.
+    //
+    // ADR-0084 extends that invariant to the WHERE clause: both selectors must
+    // also agree on which rows are eligible at all. A guardrail that can still
+    // see a voided anchor while the balance cannot is the same class of defect —
+    // two selectors disagreeing about which row is the anchor.
     orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
     select: {
       snapshot_at: true,

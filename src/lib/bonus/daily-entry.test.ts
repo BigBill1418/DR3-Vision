@@ -41,6 +41,8 @@ interface MockEntry {
   bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: Dec;
+  /** ADR-0083 — the real column is NOT NULL DEFAULT 0, so the double carries it too. */
+  saves: Dec;
   note: string | null;
   entered_by_user_id: string;
   entered_at: Date;
@@ -69,6 +71,14 @@ const empStore = new Map<string, MockEmployee>();
 const entryStore = new Map<string, MockEntry>();
 const ruleStore = new Map<string, MockRule>();
 const auditRows: AuditRow[] = [];
+// ADR-0083 — the inventory leg written on the SAME transaction as the entry.
+// Before this existed the double had no `unitStatusMovement` at all and every
+// write test still passed, because each fixture keyed saves=0 and
+// `recordSavesMovement` short-circuits on a zero delta BEFORE touching `tx`.
+// The movement call was therefore never executed on the real write path. That is
+// the "the hard case never ran" shape, so the model is doubled here and the
+// non-zero case is asserted below.
+const movementRows: Record<string, unknown>[] = [];
 let idCounter = 0;
 
 const WOODLAND = 'site-woodland';
@@ -84,6 +94,7 @@ function reset() {
   entryStore.clear();
   ruleStore.clear();
   auditRows.length = 0;
+  movementRows.length = 0;
   idCounter = 0;
 
   // Woodland rule (ADR-0019 §1): threshold_low=50 @ $0.50, threshold_high=74 @ $0.25.
@@ -267,10 +278,19 @@ vi.mock('@/lib/prisma', () => {
         };
         const key = entryKey(k.bonus_employee_id, k.entry_date);
         // The Decimal(5,1) column coerces a written number to a Decimal (T-330).
-        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> =>
-          'mattress_count' in d && typeof d.mattress_count === 'number'
-            ? { ...d, mattress_count: toDec(d.mattress_count as unknown as number) }
-            : d;
+        // ADR-0083 — both Decimal(5,1) columns coerce a written number the same
+        // way (T-330); the double must mirror that for saves too or the write
+        // path would read back a raw number where production reads a Decimal.
+        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> => {
+          const out: Partial<MockEntry> = { ...d };
+          if ('mattress_count' in d && typeof d.mattress_count === 'number') {
+            out.mattress_count = toDec(d.mattress_count as unknown as number);
+          }
+          if ('saves' in d && typeof d.saves === 'number') {
+            out.saves = toDec(d.saves as unknown as number);
+          }
+          return out;
+        };
         const existing = entryStore.get(key);
         if (existing) {
           Object.assign(existing, coerce(update));
@@ -330,12 +350,20 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
 
+  const unitStatusMovement = {
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      movementRows.push(data);
+      return { id: `mv-${movementRows.length}` };
+    }),
+  };
+
   const client = {
     bonusPayPeriod,
     bonusEmployee,
     bonusDailyEntry,
     processorBonusRule,
     auditLog,
+    unitStatusMovement,
   };
 
   return {
@@ -643,5 +671,113 @@ describe('upsertDailyEntries — T-330 decimal contract', () => {
     expect(isValidMattressCount(1000)).toBe(false);
     expect(isValidMattressCount(NaN)).toBe(false);
     expect(isValidMattressCount(Infinity)).toBe(false);
+  });
+});
+
+describe('ADR-0083 — saves on the real write path', () => {
+  it('writes saves, audits BOTH columns, and appends the inventory movement in ONE transaction', async () => {
+    const { upsertDailyEntries } = await import('./daily-entry');
+    const res = await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, saves: 20 }],
+      actor('user-janette'),
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok !== true) throw new Error('unreachable');
+    expect(res.entries[0]!.saves).toBe(20);
+
+    // The audit `after` must carry saves — an audit that records only the count
+    // would describe a payroll row it did not fully capture.
+    const entryAudit = auditRows.find((a) => a.table_name === 'bonus_daily_entries');
+    expect(entryAudit).toBeDefined();
+    expect(entryAudit!.after).toMatchObject({ saves: expect.anything() });
+
+    // The inventory leg actually ran (this is what the zero-delta fixtures never
+    // exercised): on_floor → saved, 20 units, on the entry's own day.
+    expect(movementRows).toHaveLength(1);
+    expect(movementRows[0]).toMatchObject({
+      site_id: WOODLAND,
+      units: 20,
+      from_status: 'on_floor',
+      to_status: 'saved',
+    });
+  });
+
+  it('appends NOTHING to the movement ledger when saves is zero or absent', async () => {
+    const { upsertDailyEntries } = await import('./daily-entry');
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 74 }],
+      actor('user-janette'),
+    );
+    expect(movementRows).toHaveLength(0);
+  });
+
+  it('a later correction appends the DELTA, not a restatement', async () => {
+    const { upsertDailyEntries } = await import('./daily-entry');
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, saves: 10 }],
+      actor('user-janette'),
+    );
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, saves: 14 }],
+      actor('user-janette'),
+    );
+
+    expect(movementRows).toHaveLength(2);
+    expect(movementRows[1]).toMatchObject({ units: 4, to_status: 'saved' });
+    // Signed sum reconstructs the stored value — 10 + 4 = 14.
+    const saved = movementRows.reduce(
+      (sum, m) =>
+        sum + (m['to_status'] === 'saved' ? (m['units'] as number) : -(m['units'] as number)),
+      0,
+    );
+    expect(saved).toBe(14);
+  });
+
+  it('an omitted saves on a later save leaves the stored value ALONE (stale-tab guard)', async () => {
+    const { upsertDailyEntries, getDailyGrid } = await import('./daily-entry');
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, saves: 12 }],
+      actor('user-janette'),
+    );
+    // A pre-deploy tab correcting only the note: no `saves` key on the wire.
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, note: 'fixed a typo' }],
+      actor('user-janette'),
+    );
+
+    const grid = await getDailyGrid(WOODLAND, TODAY);
+    const amy = grid.rows.find((r) => r.full_name === 'Amy')!;
+    // Would be 0 under the destructive "absent means zero" reading — which would
+    // have underpaid this processor with an entirely routine-looking audit row.
+    expect(amy.saves).toBe(12);
+    expect(movementRows).toHaveLength(1);
+  });
+
+  it('pays the day on processed + saves, tiered once', async () => {
+    const { upsertDailyEntries, getDailyGrid } = await import('./daily-entry');
+    await upsertDailyEntries(
+      WOODLAND,
+      TODAY,
+      [{ bonus_employee_id: 'emp-amy', mattress_count: 40, saves: 20 }],
+      actor('user-janette'),
+    );
+    const grid = await getDailyGrid(WOODLAND, TODAY);
+    const amy = grid.rows.find((r) => r.full_name === 'Amy')!;
+    // 60 paid units → (60-50) * $0.50 = 500 cents. Processed-only would be 0.
+    expect(amy.bonus_cents).toBe(500);
+    expect(grid.totalCents).toBe(500);
   });
 });

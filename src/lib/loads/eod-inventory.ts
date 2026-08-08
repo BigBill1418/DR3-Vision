@@ -40,6 +40,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { onHand, VERIFIED_INBOUND_STATUSES, anchorFlowBounds } from '@/lib/inventory/running-balance';
+import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
@@ -282,7 +283,16 @@ export async function getEodInventorySnapshot(
     onHand(siteId, endOfDay),
     onHand(siteId, endOfPriorDay),
     prisma.siteInventorySnapshot.findFirst({
-      where: { site_id: siteId, snapshot_kind: 'physical', snapshot_at: { lte: endOfDay } },
+      // ADR-0084 — this row drives the daily report's "counted by X, N days ago"
+      // freshness line. A voided count left visible reports the floor as freshly
+      // counted at the exact moment it stopped being counted at all.
+      where: {
+        ...NOT_VOIDED,
+        site_id: siteId,
+        snapshot_kind: 'physical',
+        snapshot_at: { lte: endOfDay },
+      },
+      // PRE-EXISTING: no ADR-0078 D1 `created_at DESC` tiebreak (see ADR-0084).
       orderBy: { snapshot_at: 'desc' },
       select: { id: true, snapshot_at: true, pool_attribution: true },
     }),

@@ -156,6 +156,14 @@ async function sumRangeOrNull(siteId: string, start: Date, end: Date): Promise<n
   // exact same per-row basis as the per-line units in buildDailyReport. This is
   // what guarantees totalToday === MTD on a single-day month (no round-then-sum
   // vs sum-then-round divergence) and keeps unit figures consistent everywhere.
+  // ADR-0083 — `saves` is DELIBERATELY EXCLUDED here, and this omission is a
+  // decision, not an oversight. This is a production-QUANTITY figure ("how many
+  // mattresses were processed"), it feeds the MTD/annual production totals and
+  // the 8 PM daily report, and those numbers sit adjacent to MRC billing. A
+  // saved mattress is diverted to resale and never torn down, so counting it as
+  // production would inflate a reported throughput with units that were not
+  // processed. Saves are PAID units, not PROCESSED units — see
+  // `src/lib/bonus/paid-units.ts` for the full split.
   let sum = 0;
   for (const r of rows) sum += Math.floor(r.mattress_count.toNumber());
   // Adjustment units are already whole signed integers (+add / -subtract).
@@ -225,6 +233,8 @@ export async function buildDailyReport(siteId: string, reportDate: Date): Promis
       // payroll PDF path (month-list.ts passes raw .toNumber() → the calculator
       // floors), so the displayed unit, the bonus basis, and the payroll PDF
       // never diverge — even on the fractional counts ADR-0023 history allows.
+      // ADR-0083 — processed only; saves are excluded from this production line
+      // for the reason recorded on `sumMattresses` above.
       const mattresses = Math.floor(e.mattress_count.toNumber());
       return {
         employeeId: e.bonus_employee.id,

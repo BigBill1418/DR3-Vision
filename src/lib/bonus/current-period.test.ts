@@ -59,6 +59,8 @@ interface MockEntry {
   bonus_employee_id: string;
   bonus_pay_period_id: string;
   mattress_count: Dec;
+  /** ADR-0083 — the real column is NOT NULL DEFAULT 0, so the double carries it too. */
+  saves: Dec;
 }
 
 const periodStore = new Map<string, MockPeriod>();
@@ -108,6 +110,7 @@ function addEntry(periodId: string, empId: string, count: number): void {
     bonus_employee_id: empId,
     bonus_pay_period_id: periodId,
     mattress_count: toDec(count),
+    saves: toDec(0),
   };
   entryStore.set(e.id, e);
 }

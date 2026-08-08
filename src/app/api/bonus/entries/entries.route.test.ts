@@ -54,6 +54,8 @@ interface MockEntry {
   bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: Dec;
+  /** ADR-0083 — NOT NULL DEFAULT 0 in the real column, so never optional here. */
+  saves: Dec;
   note: string | null;
   entered_by_user_id: string;
 }
@@ -102,9 +104,9 @@ function reset() {
 // ADR-0058 — the on-save daily-report send was REMOVED (the single 20:00 PT
 // scheduled send is now the sole path). Spy the send module so we can prove the
 // entries route no longer triggers ANY report send on save.
-const sendDailyReport = vi.fn<(...a: unknown[]) => Promise<{ attempted: number; delivered_count: number }>>(
-  async () => ({ attempted: 0, delivered_count: 0 }),
-);
+const sendDailyReport = vi.fn<
+  (...a: unknown[]) => Promise<{ attempted: number; delivered_count: number }>
+>(async () => ({ attempted: 0, delivered_count: 0 }));
 vi.mock('@/lib/bonus/daily-report-notifications', () => ({
   sendDailyReport: (...a: unknown[]) => sendDailyReport(...a),
 }));
@@ -202,19 +204,31 @@ vi.mock('@/lib/prisma', () => {
           entry_date: Date;
         };
         const key = entryKey(k.bonus_employee_id, k.entry_date);
-        // The Decimal(5,1) column coerces a written number to a Decimal (T-330).
-        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> =>
-          'mattress_count' in d && typeof d.mattress_count === 'number'
-            ? { ...d, mattress_count: toDec(d.mattress_count as unknown as number) }
-            : d;
+        // Both Decimal(5,1) columns coerce a written number to a Decimal
+        // (T-330 / ADR-0083). `saves` is coerced the same way, and an update that
+        // does NOT name it leaves the stored value alone — mirroring the real
+        // column's semantics, which is what the stale-tab guard depends on.
+        const coerce = (d: Partial<MockEntry>): Partial<MockEntry> => {
+          const out: Partial<MockEntry> = { ...d };
+          if ('mattress_count' in d && typeof d.mattress_count === 'number') {
+            out.mattress_count = toDec(d.mattress_count as unknown as number);
+          }
+          if ('saves' in d && typeof d.saves === 'number') {
+            out.saves = toDec(d.saves as unknown as number);
+          }
+          return out;
+        };
         const existing = entryStore.get(key);
         if (existing) {
           Object.assign(existing, coerce(update));
           return { ...existing };
         }
+        const created = coerce(create as Partial<MockEntry>) as Omit<MockEntry, 'id'>;
         const row: MockEntry = {
           id: `entry-${++idCounter}`,
-          ...(coerce(create as Partial<MockEntry>) as Omit<MockEntry, 'id'>),
+          ...created,
+          // The column default when an insert names no saves.
+          saves: created.saves ?? toDec(0),
         };
         entryStore.set(key, row);
         return { ...row };
@@ -277,11 +291,17 @@ vi.mock('@/lib/prisma', () => {
       async ({ where }: { where: { id: string } }) => userStore.get(where.id) ?? null,
     ),
   };
+  // ADR-0083 — the inventory leg writes on the same transaction as the entry.
+  const unitStatusMovement = {
+    create: vi.fn(async () => ({ id: 'mv-1' })),
+  };
+
   const client = {
     bonusPayPeriod,
     bonusEmployee,
     bonusDailyEntry,
     processorBonusRule,
+    unitStatusMovement,
     site,
     auditLog,
     bonusSignatureChain,
@@ -587,6 +607,7 @@ describe('POST /api/bonus/entries — ADR-0028 amendment routing', () => {
       bonus_pay_period_id: 'p12',
       entry_date: new Date(Date.UTC(2026, 5, 1)),
       mattress_count: toDec(40),
+      saves: toDec(0),
       note: null,
       entered_by_user_id: 'janette',
     });

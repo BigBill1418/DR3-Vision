@@ -13,6 +13,7 @@
 // — visible in the admin audit page, never silent (ADR-0038 lesson).
 
 import type { PrismaClient } from '@prisma/client';
+import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import type { CheckCode } from './types';
 
 export type BootstrapLeg = 'billing' | 'close' | 'snapshot' | 'commodity_payment';
@@ -59,9 +60,14 @@ async function legHasEverHadData(
       return (await db.processedUnitsDaily.count({ where: { site_id: siteId } })) > 0;
     case 'snapshot':
       // The snapshot leg is a PHYSICAL inventory count (m2's premise).
+      //
+      // ADR-0084 — voided counts do not make the leg live. A site whose ONLY
+      // count was voided has never successfully counted, and treating the
+      // withdrawn row as evidence would switch M2 on for a site with no anchor,
+      // which is precisely the bootstrap noise this gate exists to suppress.
       return (
         (await db.siteInventorySnapshot.count({
-          where: { site_id: siteId, snapshot_kind: 'physical' },
+          where: { ...NOT_VOIDED, site_id: siteId, snapshot_kind: 'physical' },
         })) > 0
       );
     case 'commodity_payment':

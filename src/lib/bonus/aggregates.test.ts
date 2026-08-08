@@ -41,6 +41,8 @@ interface MockEntry {
   bonus_pay_period_id: string;
   entry_date: Date;
   mattress_count: Dec;
+  /** ADR-0083 — the real column is NOT NULL DEFAULT 0, so the double carries it too. */
+  saves: Dec;
 }
 interface MockRule {
   id: string;
@@ -131,6 +133,7 @@ function addEntry(monthId: string, empId: string, day: number, count: number): v
     bonus_pay_period_id: monthId,
     entry_date: date,
     mattress_count: toDec(count),
+    saves: toDec(0),
   };
   entryStore.set(e.id, e);
 }

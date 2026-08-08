@@ -31,6 +31,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
   try {
     const ctx = await requireActivatedManager(site);
     const limit = clampLimit(new URL(req.url).searchParams.get('limit'), 50);
+    // ADR-0084 — DELIBERATELY UNFILTERED, and allowlisted as such in
+    // `snapshot-void-readers.guard.test.ts`.
+    //
+    // This is a HISTORY, not an anchor selector. Nothing is computed from what it
+    // returns. Dropping voided rows here would make a count the office knows was
+    // taken simply disappear from the one manager-facing list of counts, which is
+    // the failure mode soft-voiding exists to avoid — the same reasoning as the
+    // /admin/inventory/anchors recovery surface.
+    //
+    // The void state is SURFACED instead: `voided_at` / `voided_by` ride in the
+    // row so a consumer can strike it through. The pre-existing absence of a
+    // `snapshot_kind` filter is left exactly as it was — this ADR does not
+    // change what this endpoint returns, only what it says about each row.
     const rows = await prisma.siteInventorySnapshot.findMany({
       where: { site_id: ctx.siteId },
       orderBy: { snapshot_at: 'desc' },
@@ -46,11 +59,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
         program_units: true,
         non_program_units: true,
         pool_attribution: true,
+        voided_at: true,
+        voided_by: true,
       },
     });
     return NextResponse.json({ rows });
   } catch (e) {
-    return loadsErrorResponse(e, { site, op: 'snapshots.list', requestId: req.headers.get('x-request-id') });
+    return loadsErrorResponse(e, {
+      site,
+      op: 'snapshots.list',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }
 
@@ -84,6 +103,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
     if (e instanceof PoolSplitMismatchError) {
       return NextResponse.json({ error: 'pool_mismatch', message: e.message }, { status: 422 });
     }
-    return loadsErrorResponse(e, { site, op: 'snapshots.create', requestId: req.headers.get('x-request-id') });
+    return loadsErrorResponse(e, {
+      site,
+      op: 'snapshots.create',
+      requestId: req.headers.get('x-request-id'),
+    });
   }
 }
