@@ -1,4 +1,4 @@
--- ADR-0087 — the throughput-gap watchdog: an instrument that reads the silence.
+-- ADR-0088 — the throughput-gap watchdog: an instrument that reads the silence.
 --
 -- ADR-0079 made "nobody wrote a number down" a first-class, honest state: an
 -- ABSENT row in `equipment_daily_throughput`, deliberately never a 0. ADR-0081

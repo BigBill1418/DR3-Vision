@@ -1,4 +1,4 @@
-// ADR-0087 — falsification-grade tests for the throughput-gap watchdog.
+// ADR-0088 — falsification-grade tests for the throughput-gap watchdog.
 //
 // Every test here is written to be capable of going RED against a plausible
 // wrong implementation, not merely to pass against the one that exists. The

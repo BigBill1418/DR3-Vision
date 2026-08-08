@@ -30,7 +30,7 @@ describe('middleware public-path exemptions', () => {
     '/api/internal/workbook-sync/poll', // ADR-0049 D2 — mandatory day-one exemption for the workbook-sync poll cron
     '/api/internal/inventory/floor-probe', // ADR-0058 — anchor-safety floor-probe gate for the MyMRC inventory bridges
     '/api/internal/doc-ingest/sweep', // ADR-0067 §3.2 D4 — the delta sweep IS the correctness path; a silent no-op here reproduces the MyMRC failure
-    // ADR-0087 — the throughput-gap watchdog. A 307 here would make the watchdog
+    // ADR-0088 — the throughput-gap watchdog. A 307 here would make the watchdog
     // itself the second silent instrument: the daemon logs 200, the ledger stays
     // empty, and an empty ledger is indistinguishable from "no gaps".
     '/api/internal/equipment/throughput-gap',

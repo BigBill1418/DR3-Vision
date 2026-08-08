@@ -1,4 +1,4 @@
-// ADR-0087 — the internal watchdog route's guard posture.
+// ADR-0088 — the internal watchdog route's guard posture.
 //
 // The three cases below are the ones that killed OTHER internal crons in this
 // repo (the 2026-07-03 survey 307, the 2026-07-16 unset-token outage), and they

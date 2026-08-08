@@ -659,7 +659,7 @@ services:
     logging: *logging
 
   throughput-gap:
-    # Terex throughput-gap watchdog cron host (ADR-0087).
+    # Terex throughput-gap watchdog cron host (ADR-0088).
     #
     # Same shape as survey-reminder, deliberately and exactly: a single
     # long-running Node process under `unless-stopped` that is a THIN Pacific

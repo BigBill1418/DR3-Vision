@@ -3,7 +3,7 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
-## 2026-08-08 — nine days of silence, and the instrument that reads the gap (ADR-0087, born pilot)
+## 2026-08-08 — nine days of silence, and the instrument that reads the gap (ADR-0088, born pilot)
 
 Bill asked why the Terex sheet went unfilled for nine working days without anyone
 noticing. The answer is uncomfortable, because **nothing was broken**.

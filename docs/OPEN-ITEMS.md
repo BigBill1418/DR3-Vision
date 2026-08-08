@@ -20,7 +20,7 @@ re-dated on the assumption of an extension.
 
 ---
 
-## 0.AQ — 2026-08-08 ADR-0087 throughput-gap watchdog (ships DARK, born pilot)
+## 0.AQ — 2026-08-08 ADR-0088 throughput-gap watchdog (ships DARK, born pilot)
 
 - **OPERATOR ACTION (Bill) — ramp `equipment_throughput_gap` to `live` at Woodland
   once you have read a few.** Until you flip it at `/admin/rollout`, the morning
@@ -54,12 +54,12 @@ re-dated on the assumption of an extension.
   ```
 
   If the container is not started, the watchdog simply never fires — the app is
-  otherwise unaffected. That is the pre-0087 status quo, **not an outage**.
+  otherwise unaffected. That is the pre-0088 status quo, **not an outage**.
 
 - **RESIDUAL (accepted) — this watchdog detects a MISSING entry, never a WRONG one.**
   A manager who types a plausible but incorrect number produces a recorded day and
   the scan stays silent, correctly. Entered-vs-derived cross-checking remains **F-3**
-  (blocked on Kelsey) and ADR-0087 does not touch it. Do not read a quiet watchdog as
+  (blocked on Kelsey) and ADR-0088 does not touch it. Do not read a quiet watchdog as
   evidence the numbers are right — only as evidence they exist.
 
 - **VERIFY AFTER THE FIRST WORKING MORNING (2026-08-10, Monday).** Monday's scan asks

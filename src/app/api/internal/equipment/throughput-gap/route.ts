@@ -1,4 +1,4 @@
-// ADR-0087 — internal throughput-gap watchdog endpoint.
+// ADR-0088 — internal throughput-gap watchdog endpoint.
 //
 // The thin Pacific-aware daemon `scripts/equipment-throughput-gap-cron.mjs` POSTs
 // here once per day at 08:30 America/Los_Angeles. All the real work (working-day

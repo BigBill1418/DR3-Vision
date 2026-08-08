@@ -4093,7 +4093,7 @@ model EquipmentDailyThroughput {
   @@map("equipment_daily_throughput")
 }
 
-/// ADR-0087 — the idempotency ledger for the throughput-gap watchdog.
+/// ADR-0088 — the idempotency ledger for the throughput-gap watchdog.
 ///
 /// The Terex sheet went unfilled for nine working days and no instrument said
 /// so. The absence of a row in `equipment_daily_throughput` was ALREADY the

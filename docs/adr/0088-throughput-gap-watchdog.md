@@ -1,4 +1,4 @@
-# ADR-0087 — Nine days of silence: an instrument that reads the gap
+# ADR-0088 — Nine days of silence: an instrument that reads the gap
 
 **Status:** Accepted, implemented, born PILOT (2026-08-08). `equipment_throughput_gap`
 dark until Bill flips it at `/admin/rollout`.

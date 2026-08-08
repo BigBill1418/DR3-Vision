@@ -106,7 +106,7 @@ export function isPublic(pathname: string): boolean {
   // silent no-op reproduces the exact MyMRC failure (ADR-0057 D9) the sweep was
   // built to prevent. The daemon uses `redirect:'manual'` as the second defence.
   if (pathname.startsWith('/api/internal/doc-ingest/')) return true;
-  // ADR-0087 — the Terex throughput-gap watchdog
+  // ADR-0088 — the Terex throughput-gap watchdog
   // (`/api/internal/equipment/throughput-gap`). Same loopback-guarded
   // internal-route pattern as every cron above: the route itself requires the
   // bearer in prod and 404s any cf-connecting-ip request, so this exemption only

@@ -1,4 +1,4 @@
-// ADR-0087 — the throughput-gap watchdog: an instrument that reads the silence.
+// ADR-0088 — the throughput-gap watchdog: an instrument that reads the silence.
 //
 // ── What went wrong, and why nothing said so ────────────────────────────────
 // Between 2026-07-25 and the 2026-08-07 cutover the Terex sheet went unfilled

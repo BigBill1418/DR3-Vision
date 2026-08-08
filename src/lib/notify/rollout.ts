@@ -38,7 +38,7 @@ export const NOTIFY_SURFACE = {
   // ADR-0045 §3 addendum (planning rollup 2026-07-08 §1.8) — Bethany's board-pack
   // digest. Org-wide surface, born pilot (resolves pilot unless BOTH sites live).
   BOARD_PACK_DIGEST: 'board_pack_digest',
-  // ADR-0087 — the throughput-gap watchdog's morning nudge: yesterday's working
+  // ADR-0088 — the throughput-gap watchdog's morning nudge: yesterday's working
   // day has no live `equipment_daily_throughput` row for the site's machine.
   // Its OWN surface rather than riding `alert_digest`: the digest fires at
   // 18:00 PT off the daily-report tick and is a many-findings rollup that a
