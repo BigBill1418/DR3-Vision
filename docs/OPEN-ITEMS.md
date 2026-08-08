@@ -54,7 +54,11 @@ production on 2026-08-08, not carried forward from a claim.
 | **AK-4** — Layer B commodity reconciliation rules                       | 0.AK                       | Blocked on Kelsey. **Her availability ends today.**                                           |
 | **AK-5 (C-43)** — `sharedWithMe` November sunset                        | 0.AK / 0.AB                | Architecture decision still pending. No successor identified.                                 |
 | **O-16** — `March25` day 29 (131.75) hand-entry                         | 0.AL                       | **Verified absent in prod**: 0 rows for `2025-03-29`. Import is 319 rows, not 320, by design. |
-| **#205 P2–P5** — claim/takeover, saves, snapshot void re-scope, dropoff | §0.AM handoff ledger below | **Pending.** P1 is what shipped as ADR-0078.                                                  |
+| **#205 P2–P5** — claim/takeover, saves, snapshot void re-scope, dropoff | §0.AM handoff ledger below | **P3 + P4 SHIPPED 2026-08-08** as ADR-0083 (saves) + ADR-0084 (snapshot void). P1 = ADR-0078. **P2 (claim/takeover) and P5 (dropoff) still pending.** |
+| **ADR-0078 D1 tiebreak divergence** — 3 anchor selectors lack `created_at DESC` | ADR-0084 §residuals | **Open, reported not fixed.** `leg-fetchers.startBalance()`, `cor/prefill.ts` and `loads/eod-inventory.ts` order by `snapshot_at DESC` alone, so they can name a DIFFERENT anchor than `onHand` — **including on a filed COR**. Marked in-code at all three sites. Deliberately out of ADR-0084's scope: fixing it changes which anchor a filed COR and a sent daily report select, which is a behavioural change to reported numbers and needs its own evidence + ADR. Bundled, ADR-0084's verification could not have told which change moved a number. |
+| **`snapshot-void.db.test.ts` has never executed** | ADR-0084 §residuals | **Open.** No Postgres on the build host (`:5432` refused, `DR3_TEST_DATABASE_URL` unset), so it skips locally exactly like `anchor-tiebreaker.db.test.ts`. It covers the two claims no fake can make — the planner honouring the void filter in the real `SELECT`, and two concurrent voids producing exactly one audit row — plus the `void_pair_chk` CHECK. CI's `migrations` job runs `*.db.test.ts` against an ephemeral Postgres 16 with the full chain applied; **first real execution is that CI run.** |
+| **`scripts/fix-woodland-inbound.sh` hand-reproduces the anchor query** | ADR-0084 §residuals | **Partly open.** The void filter was added; it still lacks a `snapshot_kind` filter and the `created_at` tiebreak, so it can disagree with `onHand`. Noted in the script. It is an operator verification script on the prod host, not app code. |
+| **ADR-0083/0084 iPad + ES/UR strings unreviewed** | ADR-0084 §residuals | **Open.** The `floor.count.void_*` keys in `es`/`ur` are machine-authored; the parity test passes, quality is unreviewed. The iPad void surface has no rendering test. |
 | **O-15 / O-17** — three defects in Bill/Janette's workbook              | 0.AL                       | Reported, not repaired by Vision. Fixes are cell edits in `TEREX.xlsx`.                       |
 | **AK-1 / AK-2** — trailer-list + commodity-tracker confirm clicks       | 0.AK                       | **Both still unconfirmed in prod** (`doc_class IS NULL` on each). Bill's click, never ours.   |
 | **AK-3** — 8 reachable-but-unwatched documents                          | 0.AK                       | Open. Prod watches 3 sources; the `discovery_gap` anomaly stays open by design.               |
@@ -85,6 +89,27 @@ decision for Bill, not a docs sweep.
   stand as the input to that eventual build. ADR-0078 **Amendment 1** (PR #214)
   followed the same day and is not in the handoff at all: Bill ordered the photo
   gate loosened from load-owner to site mid-drain.
+- **#205 P3 + P4 — saves, and the same-day count void.** **Executed 2026-08-08 as
+  ADR-0083 (saves) + ADR-0084 (snapshot void), one branch.** Three things are worth
+  carrying forward beyond the ADRs themselves:
+  (1) **Two live bypasses existed and neither failed loudly.** The four-eyes prior-day
+  gate compared `mattress_count` only, so a saves-only prior-day edit would have written
+  an unapproved change to somebody's pay; and the amendments endpoint's zod schema
+  stripped `saves` silently, which would have produced a green audit trail for a payroll
+  correction that never happened. Both are closed and both were falsified RED against the
+  shipped code, not against a copy.
+  (2) **A falsification measured a copy, and only attempting it revealed that.** The
+  zod test originally asserted against a schema pasted into the test file — it would have
+  stayed green through any change to the real endpoint. The schema now lives in
+  `src/lib/bonus/amendment-schemas.ts` and both the route and its tests import it. Worth
+  remembering the next time a "falsification" passes on the first try.
+  (3) **The G1 and G3 rulings are now implemented, not just recorded.** G1: saves do NOT
+  decrement live on-hand inventory (Kelsey's immediate-subtraction model stays retracted;
+  Rick's model is what the code does), and `unit_status_movements` has its first writer
+  after existing with none. G3: the void target is `site_inventory_snapshots`, NOT bonus
+  entries — operators cannot reach the bonus grid and a duplicate bonus entry is
+  structurally impossible there. **P2 (claim/takeover) and P5 (dropoff) remain unstarted.**
+
 - **#206 — Terex daily processing captured by manager entry, not derived.**
   **Executed 2026-08-07 as ADR-0079 (PR #208), renumbered from 0078 by a
   concurrency ruling (PR #209).** Two deviations worth carrying forward: (1) the
