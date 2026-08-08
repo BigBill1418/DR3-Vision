@@ -42,6 +42,7 @@ import {
   type RunningBalance,
 } from '@/lib/inventory/running-balance';
 import { computeInventoryClose, type InventoryClosePools } from '@/lib/inventory/inventory-close';
+import { notVoidedSnapshotWhere } from '@/lib/inventory/snapshot-void';
 import type { SiteAliasResolver } from './types';
 
 const D = Prisma.Decimal;
@@ -888,17 +889,27 @@ const CONFLICT_TABLES: {
   {
     table: 'site_inventory_snapshots',
     // INSTANT column — same Pacific-day bounds as inbound_loads above.
+    //
+    // ADR-0084 — a VOIDED count must not block a promotion. This scan exists to
+    // refuse importing over hand-entered work; a withdrawn count is not work to
+    // protect, and leaving it here would wedge the workbook import behind a row
+    // the site has already disowned, with the conflict message naming a count
+    // nobody can find on any surface.
+    //
+    // `notVoidedSnapshotWhere` rather than a spread because this clause is BUILT
+    // from `from`/`to` arguments — one greppable way to carry the filter either
+    // way (see snapshot-void.ts).
     find: (tx, siteId, from, to) =>
       tx.siteInventorySnapshot
         .findMany({
-          where: {
+          where: notVoidedSnapshotWhere({
             site_id: siteId,
             snapshot_at: {
               gte: pacificMidnightInstantOfDayISO(isoOf(from)),
               lt: pacificMidnightInstantOfDayISO(isoOf(new Date(to.getTime() + 86_400_000))),
             },
             source: { not: 'import' },
-          },
+          }),
           select: { snapshot_at: true },
         })
         .then((r) => r.map((x) => ({ date: x.snapshot_at }))),

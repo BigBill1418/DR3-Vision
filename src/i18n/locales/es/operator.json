@@ -323,7 +323,19 @@
       "hold_discarded": "Conteo descartado. No se guardó nada.",
       "err_bad_pin": "Ese PIN no es correcto.",
       "err_self_release": "Usted ingresó este conteo, así que no puede aprobarlo. Tiene que hacerlo un gerente.",
-      "err_not_manager": "Esa persona no puede aprobar conteos en este sitio."
+      "err_not_manager": "Esa persona no puede aprobar conteos en este sitio.",
+      "void_heading": "Conteos que registró hoy",
+      "void_intro": "Si registró un conteo por error, puede quitarlo aquí. Solo los conteos de hoy, y solo los que usted registró.",
+      "void_none": "Hoy no ha registrado ningún conteo.",
+      "void_action": "Quitar este conteo",
+      "void_confirm_heading": "¿Quitar este conteo?",
+      "void_confirm_body": "Esto quita el conteo de {{total}} de las {{time}}. El inventario vuelve a como estaba antes de que usted lo registrara. No se borra nada: la oficina todavía puede verlo.",
+      "void_confirm_yes": "Sí, quitarlo",
+      "void_confirm_no": "Conservarlo",
+      "void_done": "Conteo quitado.",
+      "void_err_prior_day": "Ese conteo se tomó el {{day}}, no hoy. Pida a la oficina que lo cambie.",
+      "void_err_not_yours": "Usted no registró ese conteo, así que no puede quitarlo.",
+      "void_err_gone": "Ese conteo ya no está."
     },
     "processed": {
       "heading": "Confirmar procesado",

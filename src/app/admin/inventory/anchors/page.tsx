@@ -50,6 +50,15 @@ export default async function AnchorsPage() {
   }
 
   const [snapshots, holds, sites] = await Promise.all([
+    // ADR-0084 — DELIBERATELY UNFILTERED. Allowlisted in
+    // `snapshot-void-readers.guard.test.ts` with this reasoning.
+    //
+    // This is THE recovery surface. Hiding voided counts here would reproduce
+    // exactly the problem soft-voiding exists to avoid: a number the floor
+    // entered disappears, and the next person asking "why did the floor move on
+    // the 31st?" finds a history that never contained it. Voided rows are shown
+    // STRUCK THROUGH and badged, and `Re-activate` is withdrawn on them (the
+    // route refuses them too — belt and braces, and the route is the control).
     prisma.siteInventorySnapshot.findMany({
       where: { snapshot_kind: 'physical' },
       orderBy: { snapshot_at: 'desc' },
@@ -64,6 +73,7 @@ export default async function AnchorsPage() {
         program_units: true,
         non_program_units: true,
         reconciled_delta: true,
+        voided_at: true,
         site: { select: { code: true, name: true } },
       },
     }),
@@ -94,6 +104,9 @@ export default async function AnchorsPage() {
     programUnits: s.program_units === null ? null : Number(s.program_units),
     nonProgramUnits: s.non_program_units === null ? null : Number(s.non_program_units),
     reconciledDelta: s.reconciled_delta,
+    // ADR-0084 — sent as a rendered Pacific string rather than a Date so the
+    // client component receives a serialisable prop, matching `at` above.
+    voidedAt: s.voided_at === null ? null : pacific(s.voided_at),
   }));
 
   return (

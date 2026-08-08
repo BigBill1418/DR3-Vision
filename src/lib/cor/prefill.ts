@@ -20,6 +20,7 @@
 // clock (the cover month is the input). No PII (a COR has none by design, D5).
 
 import { onHand, snapshotTotalUnits } from '@/lib/inventory/running-balance';
+import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import { assertCorInboundFresh, assertCorInventoryNotNegative } from './inbound-gate';
 import { countDistinctProcessors } from '@/lib/bonus/processor-count';
 import { log } from '@/lib/observability/logger';
@@ -212,7 +213,18 @@ export async function computeCorPrefill(
   const [balance, anchor, closes, signer, processors] = await Promise.all([
     onHand(siteId, monthEndAsOf),
     prisma.siteInventorySnapshot.findFirst({
-      where: { site_id: siteId, snapshot_kind: 'physical', snapshot_at: { lte: monthEndAsOf } },
+      // ADR-0084 — the COR names the anchor it filed against, and that name goes
+      // to MRC. Reporting a count the site voided would put a withdrawn number
+      // on a compliance filing.
+      where: {
+        ...NOT_VOIDED,
+        site_id: siteId,
+        snapshot_kind: 'physical',
+        snapshot_at: { lte: monthEndAsOf },
+      },
+      // PRE-EXISTING: no ADR-0078 D1 `created_at DESC` tiebreak here (unlike
+      // `onHand`, whose figure this row is supposed to describe). Reported in
+      // ADR-0084, deliberately not changed by it.
       orderBy: { snapshot_at: 'desc' },
       select: {
         id: true,

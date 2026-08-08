@@ -35,6 +35,7 @@
 // this is the control.
 
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { NOT_VOIDED } from './snapshot-void';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -75,7 +76,11 @@ export interface AnchorClassification {
  */
 export async function loadPriorAnchor(db: Db, siteId: string): Promise<PriorAnchor | null> {
   const row = await db.siteInventorySnapshot.findFirst({
-    where: { site_id: siteId, snapshot_kind: 'physical' },
+    // ADR-0084 — voided counts are not anchors. This clause must stay eligible
+    // for exactly the same rows as `onHand`'s (see the ordering note below): a
+    // guardrail that can still see a voided anchor while the balance cannot
+    // would measure the swing against a count the floor is no longer built on.
+    where: { ...NOT_VOIDED, site_id: siteId, snapshot_kind: 'physical' },
     // ADR-0078 D1 — `snapshot_at` alone does not order these rows.
     //
     // The floor count route stores every count at Pacific MIDNIGHT of the day it
@@ -89,7 +94,9 @@ export async function loadPriorAnchor(db: Db, siteId: string): Promise<PriorAnch
     // This ordering must stay identical to `onHand`'s in running-balance.ts. Two
     // selectors disagreeing about which row is the anchor is the same defect
     // wearing a second hat: the guardrail would measure the swing against one
-    // count while the balance computed forward from the other.
+    // count while the balance computed forward from the other. ADR-0084 extends
+    // the invariant to the WHERE clause above — same eligible rows, same order,
+    // or the two selectors can still name different anchors.
     orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
     select: {
       id: true,

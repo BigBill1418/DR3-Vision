@@ -18,10 +18,18 @@ export type AnchorRow = {
   programUnits: number | null;
   nonProgramUnits: number | null;
   reconciledDelta: number | null;
+  /** ADR-0084 — Pacific-rendered void instant, or null when the count is live. */
+  voidedAt: string | null;
 };
 
 export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
   const router = useRouter();
+  // ADR-0084 — the `current` badge follows the ANCHOR SELECTOR, which skips
+  // voided rows. Before this it was `i === 0`, so voiding the newest count would
+  // have left this page badging a withdrawn row as current while every server
+  // reader had already moved on to the one below it. The list is already sorted
+  // newest-first by the page, matching `onHand`'s ordering.
+  const currentId = rows.find((r) => r.voidedAt === null)?.id ?? null;
   const [selected, setSelected] = useState<AnchorRow | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -95,19 +103,35 @@ export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
                 </td>
               </tr>
             )}
-            {rows.map((r, i) => (
+            {rows.map((r) => (
               <tr
                 key={r.id}
-                className="border-t border-dr3-steel-light/15"
+                className={`border-t border-dr3-steel-light/15 ${
+                  r.voidedAt === null ? '' : 'opacity-60'
+                }`}
                 data-testid="anchor-row"
+                data-voided={r.voidedAt === null ? 'false' : 'true'}
               >
                 <td className="px-3 py-2">{r.siteName}</td>
                 <td className="px-3 py-2 text-xs text-dr3-mist-dim">{r.at}</td>
                 <td className="px-3 py-2 text-right font-semibold tabular-nums">
-                  {r.total.toLocaleString()}
-                  {i === 0 && (
+                  {/* ADR-0084 — struck through, not hidden. The number stays
+                      readable because the history is the point. */}
+                  <span className={r.voidedAt === null ? '' : 'line-through'}>
+                    {r.total.toLocaleString()}
+                  </span>
+                  {r.id === currentId && (
                     <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
                       current
+                    </span>
+                  )}
+                  {r.voidedAt !== null && (
+                    <span
+                      className="ml-2 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-300"
+                      title={`Voided ${r.voidedAt}`}
+                      data-testid="anchor-voided-badge"
+                    >
+                      voided
                     </span>
                   )}
                 </td>
@@ -125,17 +149,24 @@ export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
                       : String(r.reconciledDelta)}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelected(r);
-                      setDone(null);
-                      setError(null);
-                    }}
-                    className="rounded-md bg-dr3-steel/40 px-3 py-1.5 text-xs font-medium ring-1 ring-dr3-steel-light/25 hover:bg-dr3-steel/60"
-                  >
-                    Re-activate
-                  </button>
+                  {/* ADR-0084 — no Re-activate on a voided count. Re-activation
+                      copies a row's figures forward into a NEW live anchor, so
+                      offering it here would launder a withdrawn number back into
+                      the chain. The route refuses it independently (422
+                      `snapshot_voided`); this only stops the offer being made. */}
+                  {r.voidedAt === null && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(r);
+                        setDone(null);
+                        setError(null);
+                      }}
+                      className="rounded-md bg-dr3-steel/40 px-3 py-1.5 text-xs font-medium ring-1 ring-dr3-steel-light/25 hover:bg-dr3-steel/60"
+                    >
+                      Re-activate
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

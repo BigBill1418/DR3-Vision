@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { checkAdmin } from '@/lib/auth-helpers';
 import { reconcilePhysicalCount } from '@/lib/inventory/running-balance';
+import { isVoidedSnapshot } from '@/lib/inventory/snapshot-void';
 import { pacificDayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
 
@@ -51,12 +52,29 @@ export async function POST(req: Request): Promise<Response> {
       non_program_units: true,
       pool_attribution: true,
       snapshot_kind: true,
+      // ADR-0084 — selected so the refusal below can be made. See the note there.
+      voided_at: true,
     },
   });
   if (!restoreFrom) return NextResponse.json({ error: 'snapshot_not_found' }, { status: 404 });
   // Only a physical count is a meaningful anchor to restore to.
   if (restoreFrom.snapshot_kind !== 'physical') {
     return NextResponse.json({ error: 'not_a_physical_anchor' }, { status: 422 });
+  }
+  // ADR-0084 — refuse to re-anchor FROM a voided count.
+  //
+  // This route is the one action in the app that moves the whole floor without
+  // counting anything, and it works by copying a prior row's figures forward
+  // into a new snapshot. A voided row is a number a human explicitly withdrew;
+  // copying it forward would launder it back into the live anchor chain with an
+  // audit trail that reads like a legitimate recovery.
+  //
+  // The check is post-read, not in the where-clause, because `findUnique` takes
+  // only unique fields. That is exactly why this call site is ALLOWLISTED in
+  // `snapshot-void-readers.guard.test.ts` — and why the allowlist entry requires
+  // this refusal to still be present.
+  if (isVoidedSnapshot(restoreFrom)) {
+    return NextResponse.json({ error: 'snapshot_voided' }, { status: 422 });
   }
 
   try {
