@@ -102,3 +102,75 @@ export function OpenLoadsSection({
     </section>
   );
 }
+
+/**
+ * ADR-0082 — open loads at this site that ANOTHER operator holds.
+ *
+ * This block did not exist, and its absence is half of the stranding. The queue
+ * listed only the signed-in operator's own unfinished loads, so a load whose
+ * holder had gone to lunch — or gone home — appeared on nobody's screen but
+ * theirs. Production 2026-08-08 held nine of them across five operators, the
+ * oldest eleven days old.
+ *
+ * Rendered BELOW the operator's own unfinished work and visually quieter than it:
+ * finishing your own load still outranks taking someone else's, and this is a
+ * "somebody should pick this up" list, not a work queue. Each row names the
+ * holder and links into the load page, which is where the takeover confirm lives
+ * — the list itself takes nothing over, so a mis-tap here costs a page view.
+ */
+export function HeldByOthersSection({
+  siteCode,
+  rows,
+  locale,
+  t,
+}: {
+  siteCode: string;
+  rows: OpenLoadView[];
+  locale: Locale;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl bg-dr3-green-dark/30 p-4 ring-1 ring-dr3-cream/20">
+      <header>
+        <h2 className="text-base font-bold">{t('queue.held_heading')}</h2>
+        <p className="mt-1 text-sm text-dr3-cream/70">{t('queue.held_intro')}</p>
+      </header>
+
+      <ul className="flex flex-col gap-2">
+        {rows.map((r) => (
+          <li key={r.id}>
+            <Link
+              href={`/operator/${siteCode}/load/${r.id}`}
+              className="flex min-h-[56px] items-center justify-between gap-4 rounded-lg bg-dr3-green-dark/50 px-4 py-3 transition-colors hover:bg-dr3-green-dark"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-base font-medium">
+                  {r.sourceName ?? t('queue.unknown_source')}
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-dr3-cream/70">
+                  {t('queue.bol_label')} {r.bolNumber ?? t('queue.bol_dash')}
+                  {' · '}
+                  {t(statusKey(r.status))}
+                  {r.arrivedAt && (
+                    <>
+                      {' · '}
+                      {t('queue.open_arrived_at', {
+                        when: `${formatDate(r.arrivedAt, locale)} ${formatTime(r.arrivedAt, locale)}`,
+                      })}
+                    </>
+                  )}
+                </span>
+              </span>
+              <span className="shrink-0 rounded-full bg-dr3-ink/70 px-3 py-1 text-xs font-bold text-dr3-cream">
+                {/* THE NAME. The single thing the floor could not see before. */}
+                {t('queue.held_by', { name: r.claimedByName ?? t('takeover.unknown_holder') })}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}

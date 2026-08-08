@@ -58,6 +58,23 @@ export const CONFLICT_PREFIX = 'conflict:';
 export const CONFLICT_DATE_NOT_TODAY = `${CONFLICT_PREFIX}date_not_today`;
 /** A Tier-2 count already held for a manager. Retrying only mints another hold. */
 export const CONFLICT_MANAGER_HOLD = `${CONFLICT_PREFIX}manager_hold`;
+/**
+ * ADR-0082 — the load was TAKEN OVER while this entry sat in the queue.
+ *
+ * `assertOwn` refuses a non-assignee with 403 `load_not_assigned_to_operator`.
+ * Before takeover existed that was effectively unreachable from a replay, because
+ * a claim never moved; making claims movable makes it an ordinary end-of-shift
+ * outcome, and one that no amount of retrying can fix — the entry belongs to a
+ * load this operator no longer holds.
+ *
+ * Given its own code rather than falling through to the generic `replay 403`
+ * because the generic branch renders "The server would not accept this", which
+ * is true, useless, and the exact species of silence ADR-0082 exists to remove.
+ * The work is NOT lost: the entry parks intact with its payload, and the operator
+ * who now holds the load can enter it, or a person can adjudicate it on the
+ * conflicts screen.
+ */
+export const CONFLICT_LOAD_TAKEN_OVER = `${CONFLICT_PREFIX}load_taken_over`;
 
 /**
  * Marks a row whose retry is pointless until INFRASTRUCTURE changes — the app
@@ -1135,6 +1152,18 @@ async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: 
         return { ok: false, error: CONFLICT_MANAGER_HOLD };
       }
     }
+
+    // ADR-0082 — the claim moved. Already a conflict by `classify(403)`, so this
+    // branch changes nothing about RETRY behaviour (it stays blocked, correctly:
+    // no number of attempts gives this operator the load back). What it changes
+    // is that the conflicts screen can name the cause instead of shrugging.
+    if (res.status === 403) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (body.error === 'load_not_assigned_to_operator') {
+        return { ok: false, error: CONFLICT_LOAD_TAKEN_OVER };
+      }
+    }
+
     return {
       ok: false,
       error: `${classify(res.status) ? CONFLICT_PREFIX : ''}replay ${res.status}`,

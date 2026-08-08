@@ -96,54 +96,135 @@ function placeholderStorageKey(kind: PhotoKind): string {
   return `pending-r2-${kind}-${crypto.randomUUID()}`;
 }
 
+/**
+ * Prisma's `P2002` raised by the UNIQUE index on `inbound_loads.expected_load_id`,
+ * and only that.
+ *
+ * Deliberately narrower than `code === 'P2002'`: a bare code check would also
+ * absorb a future unique constraint elsewhere on this table and report an
+ * unrelated collision as "someone else claimed it" — a wrong answer wearing a
+ * right one's clothes.
+ */
+function isExpectedLoadClaimCollision(e: unknown): boolean {
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2002') return false;
+  const target = e.meta?.['target'];
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
+  return fields.some((f) => f.includes('expected_load_id'));
+}
+
+/**
+ * Claim an expected haul by starting its dock load.
+ *
+ * ADR-0082 — this is where the CLAIM is made, and until now it was made
+ * non-atomically: a `findUnique` on the parent, then a `create`, with no
+ * transaction between them. Two operators tapping the same queue row within the
+ * same second both saw `inbound_load: null` and both inserted.
+ *
+ * That was not a theoretical race. Loads arrive on a shared floor iPad and a
+ * second device; "two people tapped the same truck" is a Tuesday. The unique
+ * index on `expected_load_id` did stop the duplicate row — by raising a raw
+ * `P2002` out of the server action, which reached the operator as the opaque
+ * digest ADR-0078 D11 spent a whole section removing everywhere else.
+ *
+ * Two windows, two mechanisms, both needed:
+ *
+ *   - SEQUENTIAL (the common one): A committed a moment ago and B's queue page
+ *     has not re-rendered. Closed by re-reading the parent INSIDE the
+ *     transaction — B sees A's committed child and returns it.
+ *   - CONCURRENT (the narrow one): both transactions are open at once, so under
+ *     READ COMMITTED neither re-read can see the other's uncommitted insert. The
+ *     unique index blocks the loser and then refuses it; the `P2002` branch
+ *     turns that refusal into the same graceful outcome as the sequential path.
+ *
+ * A transaction ALONE would fix neither — that is why the re-read and the catch
+ * are both here and neither is redundant.
+ *
+ * @returns the load id, plus whether THIS call created it. `claimed: false` means
+ *          the load already existed and belongs to whoever started it; the page
+ *          the caller redirects to renders the held-by state (ADR-0082), which is
+ *          why this is a return value rather than a throw.
+ */
 export async function startInboundLoad(args: {
   expectedLoadId: string;
   siteId: string;
   operatorUserId: string;
-}): Promise<{ id: string }> {
-  const expected = await prisma.expectedLoad.findUnique({
-    where: { id: args.expectedLoadId },
-    select: {
-      id: true,
-      site_id: true,
-      cancelled_at: true,
-      source_id: true,
-      transporter_id: true,
-      bol_number: true,
-      inbound_load: { select: { id: true } },
-    },
-  });
-  if (!expected) throw new Error('expected load not found');
-  if (expected.site_id !== args.siteId) throw new Error('expected load not at this site');
-  if (expected.cancelled_at) throw new Error('expected load was cancelled');
-  if (expected.inbound_load) {
-    // Idempotent — if the operator taps twice, return the existing
-    // in-progress load rather than minting a duplicate.
-    return { id: expected.inbound_load.id };
-  }
+}): Promise<{ id: string; claimed: boolean }> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const expected = await tx.expectedLoad.findUnique({
+        where: { id: args.expectedLoadId },
+        select: {
+          id: true,
+          site_id: true,
+          cancelled_at: true,
+          source_id: true,
+          transporter_id: true,
+          bol_number: true,
+          inbound_load: { select: { id: true } },
+        },
+      });
+      if (!expected) throw new LoadAccessError(404, 'expected_load_not_found');
+      if (expected.site_id !== args.siteId) {
+        throw new LoadAccessError(403, 'expected_load_not_at_this_site');
+      }
+      if (expected.cancelled_at) throw new LoadAccessError(409, 'expected_load_cancelled');
+      if (expected.inbound_load) {
+        // Already claimed — by this operator on a double-tap, or by another one.
+        // Either way the load exists and minting a second is the one thing that
+        // must not happen.
+        return { id: expected.inbound_load.id, claimed: false };
+      }
 
-  const created = await prisma.inboundLoad.create({
-    data: {
-      site_id: args.siteId,
-      expected_load_id: expected.id,
-      status: 'arrived',
-      arrived_at: new Date(),
-      assigned_operator_id: args.operatorUserId,
-      assigned_at: new Date(),
-      source_id: expected.source_id,
-      transporter_id: expected.transporter_id,
-      bol_number: expected.bol_number,
-    },
-    select: { id: true },
-  });
-  await writeAudit({
-    actor_user_id: args.operatorUserId,
-    action: 'insert',
-    table_name: 'inbound_loads',
-    row_id: created.id,
-    after: { status: 'arrived', expected_load_id: expected.id },
-  });
-  return created;
+      const now = new Date();
+      const created = await tx.inboundLoad.create({
+        data: {
+          site_id: args.siteId,
+          expected_load_id: expected.id,
+          status: 'arrived',
+          arrived_at: now,
+          assigned_operator_id: args.operatorUserId,
+          assigned_at: now,
+          source_id: expected.source_id,
+          transporter_id: expected.transporter_id,
+          bol_number: expected.bol_number,
+        },
+        select: { id: true },
+      });
+      // In-transaction (ADR-0082): the row and the record of who claimed it
+      // commit or roll back together. The previous call wrote this audit row on
+      // the global client AFTER the create, so a failure in between left a
+      // claimed load with nothing saying who claimed it.
+      await writeAudit(
+        {
+          actor_user_id: args.operatorUserId,
+          action: 'insert',
+          table_name: 'inbound_loads',
+          row_id: created.id,
+          after: {
+            status: 'arrived',
+            expected_load_id: expected.id,
+            assigned_operator_id: args.operatorUserId,
+            assigned_at: now,
+          },
+        },
+        { tx },
+      );
+      return { id: created.id, claimed: true };
+    });
+  } catch (e) {
+    if (!isExpectedLoadClaimCollision(e)) throw e;
+    // The concurrent window. The other transaction won the unique index; its
+    // load is now committed, so read it and hand back the same answer the
+    // sequential path gives. Re-raising P2002 here is what used to surface as a
+    // 500 to an operator whose only mistake was tapping at the same time as a
+    // colleague.
+    const existing = await prisma.inboundLoad.findUnique({
+      where: { expected_load_id: args.expectedLoadId },
+      select: { id: true },
+    });
+    if (!existing) throw e; // Not the collision we thought — do not invent an id.
+    return { id: existing.id, claimed: false };
+  }
 }
 
 async function transition(args: {

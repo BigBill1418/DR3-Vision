@@ -5,6 +5,7 @@ import { useState, useTransition } from 'react';
 import { useI18n } from '@/i18n/provider';
 import { newIdempotencyKey } from '@/lib/offline-queue';
 import { addConcernAction, submitLoadAction } from '../../actions';
+import { useClaimLossGuard } from './use-claim-loss-guard';
 
 const CONCERN_CATEGORIES: ConcernCategory[] = [
   'damaged',
@@ -34,6 +35,9 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
   const [category, setCategory] = useState<ConcernCategory | ''>('');
   const [note, setNote] = useState('');
   const [isPending, startTransition] = useTransition();
+  // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
+  // is redacted in production, so the client cannot read why. Asked, not guessed.
+  const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
 
   const saveConcern = () => {
@@ -53,6 +57,10 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
         setConcernSaved(true);
         setShowConcern(false);
       } catch (e) {
+        // The claim may have moved while this iPad sat on the stage screen.
+        // Refresh in that case: the page re-renders as the held-by panel and
+        // NAMES the new holder, instead of a redacted server message.
+        if (await claimLost()) return;
         setError(e instanceof Error ? e.message : t('stage_finish.save_failed'));
       }
     });
@@ -64,6 +72,10 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
       try {
         await submitLoadAction(siteCode, loadId);
       } catch (e) {
+        // The claim may have moved while this iPad sat on the stage screen.
+        // Refresh in that case: the page re-renders as the held-by panel and
+        // NAMES the new holder, instead of a redacted server message.
+        if (await claimLost()) return;
         setError(e instanceof Error ? e.message : t('stage_finish.submit_failed'));
       }
     });

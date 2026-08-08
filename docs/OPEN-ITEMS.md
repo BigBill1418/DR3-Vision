@@ -67,6 +67,34 @@ re-dated on the assumption of an extension.
   `ls docs/adr/*.md | wc -l` minus the README after the last merge.
 
 ---
+## 0.AO — 2026-08-08 load claim + takeover (ADR-0082) residuals
+
+- **The nine stranded loads are now REACHABLE, not resolved.** Production held 9 open
+  dock loads across 5 operators at Woodland when ADR-0082 landed — oldest claimed
+  2026-07-28 (11 days), one at `finished` with its units counted and never submitted, so
+  outside inventory and billing. The ADR removes the reason they were unreachable; it does
+  not close them. **Someone on the floor still has to pick each one up and finish or reject
+  it.** Worth a look on the first shift after deploy, starting with the `finished` one
+  (Pablo Ledezma, 2026-08-05) because its number is already measured and simply missing.
+  Owner: floor (JT), one shift.
+- **`submitted_by_id` can now legitimately differ from `assigned_operator_id`.** It never
+  could before — `assertOwn` made the closer and the claimer the same person by
+  construction, which is why the production figure was 0 of 40. Any consumer that treated
+  those two columns as interchangeable now needs to mean one or the other: "who closed it"
+  vs "who last held it". Nothing is known to be wrong today; this is a flag for whoever
+  next touches load reporting/exports. Not blocking.
+- **Server Action error messages are redacted in production, everywhere on the floor.**
+  ADR-0082 D6 works around this for the claim case specifically (the client re-asks who
+  holds the load rather than trying to read a message it cannot). But every stage
+  component still renders `e.message` in its error banner, which in a production build is
+  Next's redaction text rather than the reason. That is a pre-existing, general defect —
+  an operator hitting a validation refusal or an illegal transition sees a paragraph about
+  Server Components. Fixing it properly means the stage actions returning typed results
+  instead of throwing, which is a broader refactor than this phase. **Accepted residual,
+  flagged deliberately rather than expanded into.**
+- **Migration prefix `20260835` assigned to ADR-0082 and NOT used** — the claim columns,
+  their index and the `AuditAction` value all already existed. The gap in the sequence is
+  a decision, not a lost file.
 
 ## 0.AN — 2026-08-08 Kelsey departure config + commodity tracker classified
 

@@ -2,9 +2,11 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { headers } from 'next/headers';
 import { auth, signOut } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import * as svc from '@/lib/load-service';
+import { takeOverLoad, readClaimHolder } from '@/lib/loads/load-claim';
 import { assertUiSurfaceActivated } from '@/lib/loads/record-guards';
 import { UI_SURFACE } from '@/lib/notify/rollout';
 import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/client';
@@ -46,13 +48,72 @@ async function ctx(siteCode: string) {
 
 export async function startLoadAction(siteCode: string, expectedLoadId: string): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
-  const created = await svc.startInboundLoad({
-    expectedLoadId,
-    siteId,
+  // ADR-0082 — `claimed` is deliberately NOT branched on here. Whether this call
+  // made the claim or lost the race to a colleague, the destination is the same
+  // load page; that page renders the workflow when you hold it and the held-by
+  // panel when you do not. Branching in the action would mean two places that
+  // have to agree about who holds a load, and the one that got it wrong before
+  // was the one that redirected without saying anything.
+  const load = await svc.startInboundLoad({ expectedLoadId, siteId, operatorUserId });
+  revalidatePath(`/operator/${siteCode}/queue`);
+  redirect(`/operator/${siteCode}/load/${load.id}`);
+}
+
+/**
+ * ADR-0082 — take over a still-open dock load held by another operator.
+ *
+ * ONLINE-ONLY, and that is a decision rather than an omission (ADR-0082 D5): this
+ * write is NOT registered in `FLOOR_SCOPES` and is never enqueued to the offline
+ * queue. A takeover is a CONTENTION action — its entire meaning is "I am at this
+ * load now and the other person is not" — so replaying one minutes or hours later
+ * would resolve a contest that has already been settled, against a load whose
+ * state has moved on. It also captures no operator data: refusing it offline
+ * loses nothing but a tap, whereas refusing a count loses a count. The idempotency
+ * key still rides along, because a double-tap on a live connection is real.
+ */
+export async function takeOverLoadAction(
+  idempotencyKey: string,
+  siteCode: string,
+  loadId: string,
+): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  const h = await headers();
+  await takeOverLoad({
+    loadId,
     operatorUserId,
+    siteId,
+    idempotencyKey,
+    // Recorded on the audit row. `admin-equipment.ts` carries the same pair for
+    // the same reason: a claim change is a security-relevant event, and
+    // `load-service.ts` has historically dropped both.
+    ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+    userAgent: h.get('user-agent'),
   });
   revalidatePath(`/operator/${siteCode}/queue`);
-  redirect(`/operator/${siteCode}/load/${created.id}`);
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+}
+
+/**
+ * ADR-0082 — "is this load still mine?", asked by the client after a stage write
+ * failed for a reason it cannot read.
+ *
+ * `mine` is the only field the caller acts on; `holderName` is there so the
+ * refreshed page has a name to show without a second round trip. Deliberately
+ * NOT a bare `string | null`: an UNASSIGNED load and a load you still hold both
+ * have no other holder to name, and collapsing them would tell the operator
+ * their claim is intact when the row says nobody holds it.
+ *
+ * Read-only and session-scoped: the site comes from `ctx()`, so this cannot be
+ * used to reach a load at another site. It reveals one operator's name to another
+ * operator at the same site, who can already read that name off the queue.
+ */
+export async function claimStatusAction(
+  siteCode: string,
+  loadId: string,
+): Promise<{ mine: boolean; holderName: string | null }> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  const holder = await readClaimHolder({ loadId, siteId });
+  return { mine: holder?.userId === operatorUserId, holderName: holder?.name ?? null };
 }
 
 export async function bolCapturedAction(siteCode: string, loadId: string): Promise<void> {

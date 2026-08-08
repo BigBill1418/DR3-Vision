@@ -5,6 +5,7 @@ import { useEffect, useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { addStackAction, finishUnloadAction } from '../../actions';
+import { useClaimLossGuard } from './use-claim-loss-guard';
 
 // Stage 5a — stack counter UI per charter §4.3. Three modes:
 //   ledger     — tap +1 per mattress
@@ -28,6 +29,9 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   const [stacks, setStacks] = useState<Stack[]>(existingStacks);
   const [mode, setMode] = useState<CountMode | null>(existingStacks[0]?.count_mode ?? null);
   const [isPending, startTransition] = useTransition();
+  // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
+  // is redacted in production, so the client cannot read why. Asked, not guessed.
+  const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
   /** ADR-0078 — stacks held locally, awaiting a server ack. Never shown as saved. */
   const [queued, setQueued] = useState(0);
@@ -76,6 +80,10 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
           optimistic();
           setQueued((n) => n + 1);
         } else {
+          // The claim may have moved while this iPad sat on the stage screen.
+          // Refresh in that case: the page re-renders as the held-by panel and
+          // NAMES the new holder, instead of a redacted server message.
+          if (await claimLost()) return;
           setError(e instanceof Error ? e.message : t('stage_stacks.save_failed'));
         }
       }
@@ -102,6 +110,10 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
           });
           setQueued((n) => n + 1);
         } else {
+          // The claim may have moved while this iPad sat on the stage screen.
+          // Refresh in that case: the page re-renders as the held-by panel and
+          // NAMES the new holder, instead of a redacted server message.
+          if (await claimLost()) return;
           setError(e instanceof Error ? e.message : t('stage_stacks.finish_failed'));
         }
       }

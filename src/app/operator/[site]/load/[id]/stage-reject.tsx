@@ -4,6 +4,7 @@ import type { RejectionCategory } from '@prisma/client';
 import { useState, useTransition } from 'react';
 import { useI18n } from '@/i18n/provider';
 import { rejectLoadAction } from '../../actions';
+import { useClaimLossGuard } from './use-claim-loss-guard';
 import { PhotoInput } from './photo-input';
 
 const CATEGORIES: RejectionCategory[] = [
@@ -34,6 +35,9 @@ export function StageReject({
   const [hasPhoto, setHasPhoto] = useState(false);
   const [note, setNote] = useState('');
   const [isPending, startTransition] = useTransition();
+  // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
+  // is redacted in production, so the client cannot read why. Asked, not guessed.
+  const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
@@ -43,6 +47,10 @@ export function StageReject({
       try {
         await rejectLoadAction(siteCode, loadId, category, note.trim() || null);
       } catch (e) {
+        // The claim may have moved while this iPad sat on the stage screen.
+        // Refresh in that case: the page re-renders as the held-by panel and
+        // NAMES the new holder, instead of a redacted server message.
+        if (await claimLost()) return;
         setError(e instanceof Error ? e.message : t('stage_reject.reject_failed'));
       }
     });
