@@ -1002,6 +1002,9 @@ async function seedRolloutSurfaces(siteIds) {
     'ap_notify',
     'ap_equipment_request', // ADR-0046 Amendment 9 §2.4 — escape-hatch request → site managers, born pilot
     'board_pack_digest', // ADR-0045 §3 addendum (rollup §1.8) — Bethany's board pack, born pilot
+    // ADR-0088 — the throughput-gap watchdog's morning nudge, born pilot.
+    // Matches migration 20260839_adr0088_throughput_gap_watchdog.
+    'equipment_throughput_gap',
   ];
   const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];
   const UI_PILOT = [

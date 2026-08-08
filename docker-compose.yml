@@ -133,6 +133,20 @@ services:
       # so the workflow keeps working before R2 creds land.
       - path: /home/bbarnard065/.dr3-vision-secrets/r2.env
         required: false
+      # ADR-0086 D6 — PHOTO_GRANT_SECRET (+ PHOTO_GRANT_KEY_VERSION, and
+      # PHOTO_GRANT_SECRET_PREVIOUS during a rotation window): the HMAC key for
+      # capture-time photo upload grants, which let a queued photo drain with no
+      # live session. Optional / FAIL-CLOSED-BUT-SOFT: absent → the app mints NO
+      # grants and `/api/photos/*` behaves exactly as it did before ADR-0086
+      # (a queued photo still needs a signed-in operator at its site). It never
+      # degrades to unsigned or fixed-key tokens, and it never takes the session
+      # path down with it — this feature's first deploy necessarily lands BEFORE
+      # the operator drops this file. `/healthz` reports `photo_grants_ok` so the
+      # inert state is visible; it is deliberately NOT part of the healthz
+      # `status` verdict, or that first deploy would roll itself back.
+      # Provisioning + the N-1 retirement rule: docs/OPEN-ITEMS.md §0.AP.
+      - path: /home/bbarnard065/.dr3-vision-secrets/photo-grant.env
+        required: false
       # System-level ntfy alerts (ADR-0036 + ADR-0037). Optional so the
       # app boots fail-soft when the secret hasn't been dropped yet —
       # `src/lib/ntfy.ts` treats a missing `NTFY_PUBLISHER_TOKEN` as a
@@ -642,6 +656,69 @@ services:
     labels:
       <<: *barnardhq-labels
       com.barnardhq.service: 'survey-reminder'
+    logging: *logging
+
+  throughput-gap:
+    # Terex throughput-gap watchdog cron host (ADR-0088).
+    #
+    # Same shape as survey-reminder, deliberately and exactly: a single
+    # long-running Node process under `unless-stopped` that is a THIN Pacific
+    # scheduler. It sleeps until the next 08:30 America/Los_Angeles instant
+    # (recomputed each cycle off the Pacific wall clock so it survives the
+    # Mar/Nov DST shifts) and on each fire POSTs the app's internal,
+    # loopback-guarded route (`/api/internal/equipment/throughput-gap`). That
+    # route does all the real work compiled inside the Next app via
+    # `runThroughputGapScan`: per site, was the PREVIOUS WORKING DAY recorded for
+    # the machine the registry resolves? If not, ONE staff nudge through
+    # notifyStaff() on the born-pilot `equipment_throughput_gap` surface. The
+    # daemon imports NO TS and no @prisma/client — the fire time is fixed, so it
+    # reads nothing from the DB (hence NO db.env here).
+    #
+    # WHY ITS OWN CONTAINER rather than riding an existing tick. The alert digest
+    # (ADR-0043 D5) rides the daily-report tick precisely because that ADR's
+    # binding constraint was "no new container". This one has the opposite
+    # requirement: the digest fires at 18:00 PT, and a nudge about yesterday that
+    # arrives at the END of today is useless — the only action it enables (enter
+    # TODAY's numbers) has already expired. The fire time IS the feature, so it
+    # gets a scheduler that owns it.
+    #
+    # Needs only the app's INTERNAL_CRON_TOKEN (cron.env, the defense-in-depth
+    # bearer for the internal route; ADR-0053 addendum cron secret split — cron
+    # containers carry no NEXTAUTH_SECRET). INTERNAL_BASE_URL reaches the app over
+    # the compose network by service name; the route's cf-connecting-ip guard
+    # still rejects any public-tunnel request.
+    #
+    # Idempotent at the DATABASE level: the `equipment_throughput_gap_alerts`
+    # (site_id, gap_date) unique means a slightly-early fire, a restart-triggered
+    # re-POST, or a second copy of this container can never double-send. A weekend
+    # fire is a clean no-op — the scan skips itself.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-throughput-gap
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/equipment-throughput-gap-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here → false "unhealthy"). See bonus-period-close.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env, NOT auth.env (ADR-0053 addendum
+      # 2026-07-21 cron secret split; required — see bonus-period-close).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      # Reach the app over the compose network by service name (not loopback —
+      # this is a separate container). The route's cf-connecting-ip guard still
+      # rejects any public-tunnel request; in-network POSTs carry no such header.
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'throughput-gap'
     logging: *logging
 
   audit-sweep:

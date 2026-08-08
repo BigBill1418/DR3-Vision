@@ -281,9 +281,8 @@ import { resolveLegLiveness } from '@/lib/audit/bootstrap-gate';
 import { NOT_VOIDED } from './snapshot-void';
 import {
   SnapshotNotFoundError,
-  SnapshotNotYoursError,
   SnapshotVoidAmendmentRequiredError,
-  listTodaysVoidableCounts,
+  listTodaysVoidableCountsAtSite,
   voidSnapshot,
 } from './void-count';
 
@@ -480,7 +479,7 @@ describe('F3 — "today" is PACIFIC at the UTC rollover', () => {
 
   it('the voidable list uses the same Pacific window', async () => {
     seedTwoAnchors();
-    const rows = await listTodaysVoidableCounts(SITE, JT, EVENING_OF_JUL28);
+    const rows = await listTodaysVoidableCountsAtSite(SITE, JT, EVENING_OF_JUL28);
     expect(rows.map((r) => r.id)).toEqual(['snap-today']);
   });
 });
@@ -618,18 +617,6 @@ describe('F6 — the bootstrap gate does not count a voided anchor as evidence',
 });
 
 describe('authorization', () => {
-  it('an operator cannot void a count someone else entered (403)', async () => {
-    seedTwoAnchors();
-    const err = await voidSnapshot({
-      snapshotId: 'snap-today',
-      actorUserId: MARIA,
-      siteId: SITE,
-      now: MIDDAY_JUL28,
-    }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(SnapshotNotYoursError);
-    expect(db.snapshots.find((s) => s.id === 'snap-today')?.voided_at).toBeNull();
-  });
-
   it('a snapshot from another site is a 404, not a 403 (hard rule #2, no id probing)', async () => {
     db.snapshots = [snap({ id: 'snap-wood', site_id: OTHER_SITE, units_total: 900 })];
     db.audit = [entered('snap-wood', JT)];
@@ -643,20 +630,175 @@ describe('authorization', () => {
     expect((err as SnapshotNotFoundError).status).toBe(404);
   });
 
-  it('the voidable list offers only counts this operator entered', async () => {
+  it('the voidable list drops a count once it is voided', async () => {
+    db.snapshots = [snap({ id: 'snap-jt', units_total: 100 })];
+    db.audit = [entered('snap-jt', JT)];
+    await voidSnapshot({ snapshotId: 'snap-jt', actorUserId: JT, siteId: SITE, now: MIDDAY_JUL28 });
+    expect(await listTodaysVoidableCountsAtSite(SITE, JT, MIDDAY_JUL28)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// ADR-0084 Amendment 1 — the gate is SITE-scoped, not OWNER-scoped
+//
+// Bill, 2026-08-08: "Widen to site." These replace the deleted
+// `an operator cannot void a count someone else entered (403)` case, which
+// pinned the behaviour this amendment removes.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('Am1 — a cross-operator same-day void at the same site SUCCEEDS', () => {
+  it('voids JT’s count for Maria, moves the anchor, and records BOTH ids', async () => {
+    seedTwoAnchors(); // 'snap-today' (2,483) was entered by JT.
+
+    expect((await onHand(SITE, MIDDAY_JUL28)).total).toStrictEqual(new Prisma.Decimal(2_483));
+
+    // Maria — a DIFFERENT operator at the same site — withdraws it.
+    const result = await voidSnapshot({
+      snapshotId: 'snap-today',
+      actorUserId: MARIA,
+      siteId: SITE,
+      idempotencyKey: null,
+      now: MIDDAY_JUL28,
+    });
+
+    expect(result.alreadyVoided).toBe(false);
+    expect(result.physicalTotal).toBe(2_483);
+    expect(result.enteredByUserId).toBe(JT);
+    expect(result.crossOperator).toBe(true);
+
+    // The floor really moved back to the prior anchor — the void was applied,
+    // not merely accepted.
+    expect((await onHand(SITE, MIDDAY_JUL28)).total).toStrictEqual(new Prisma.Decimal(2_000));
+    expect(db.snapshots.find((s) => s.id === 'snap-today')?.voided_by).toBe(MARIA);
+
+    // THE AMENDMENT'S OWN CLAIM: the audit row carries BOTH ids, so the history
+    // says who withdrew WHOSE count. An audit row naming only Maria would make
+    // a cross-operator void indistinguishable from her withdrawing her own.
+    expect(voidAuditRows()).toHaveLength(1);
+    const audit = voidAuditRows()[0] as AuditRow;
+    expect(audit.actor_user_id).toBe(MARIA); // who withdrew it
+    expect(audit.after).toMatchObject({
+      voided_by: MARIA,
+      entered_by: JT, // whose count it was
+      cross_operator: true,
+      physical_total: 2_483,
+    });
+  });
+
+  it('records both ids on a SELF void too, so an absent field is never ambiguous', async () => {
+    seedTwoAnchors();
+    const result = await voidSnapshot({
+      snapshotId: 'snap-today',
+      actorUserId: JT,
+      siteId: SITE,
+      now: MIDDAY_JUL28,
+    });
+    expect(result.crossOperator).toBe(false);
+    expect(result.enteredByUserId).toBe(JT);
+    expect((voidAuditRows()[0] as AuditRow).after).toMatchObject({
+      voided_by: JT,
+      entered_by: JT,
+      cross_operator: false,
+    });
+  });
+
+  it('FALSIFICATION — the site check is the only thing refusing a cross-SITE void', async () => {
+    // The amendment removed the OWNER check and kept the SITE check. This proves
+    // the remaining refusal is the site comparison and not a leftover of the
+    // ownership one: the actor here ENTERED the count (so an owner check would
+    // have let it through) and is still refused, because the count is Woodland's
+    // and the session is Eugene's.
+    db.snapshots = [snap({ id: 'snap-wood', site_id: OTHER_SITE, units_total: 900 })];
+    db.audit = [entered('snap-wood', JT)];
+
+    const err = await voidSnapshot({
+      snapshotId: 'snap-wood',
+      actorUserId: JT, // the ORIGINAL enterer
+      siteId: SITE, // ...signed in at the other site
+      now: MIDDAY_JUL28,
+    }).catch((e: unknown) => e);
+
+    if (!(err instanceof SnapshotNotFoundError)) {
+      // Name the site, so deleting the site check reads as "Eugene's session
+      // voided Woodland's count" rather than as a bare unresolved promise.
+      throw new Error(
+        `a session at site "${SITE}" was allowed to void snapshot "snap-wood", which belongs to ` +
+          `site "${OTHER_SITE}" — hard rule #2 (separate MRC contracts, separate jurisdictions) ` +
+          `requires a 404 here. ADR-0084 Amendment 1 widened the gate from owner to SITE; it did ` +
+          `not remove the site check.`,
+      );
+    }
+    expect(err.status).toBe(404);
+    expect(db.snapshots.find((s) => s.id === 'snap-wood')?.voided_at).toBeNull();
+    expect(voidAuditRows()).toHaveLength(0);
+  });
+
+  it('a cross-operator PRIOR-day void is still refused 409 (same-day is unchanged)', async () => {
+    seedTwoAnchors();
+    const nextDay = new Date('2026-07-29T17:00:00.000Z');
+    const err = await voidSnapshot({
+      snapshotId: 'snap-today',
+      actorUserId: MARIA,
+      siteId: SITE,
+      now: nextDay,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SnapshotVoidAmendmentRequiredError);
+    expect((err as SnapshotVoidAmendmentRequiredError).status).toBe(409);
+    expect(db.snapshots.find((s) => s.id === 'snap-today')?.voided_at).toBeNull();
+    expect(voidAuditRows()).toHaveLength(0);
+  });
+});
+
+describe('Am1 — the voidable list is site-scoped and labels whose count it is', () => {
+  it("offers a colleague's count, flagged isMine:false with the enterer named", async () => {
     db.snapshots = [
       snap({ id: 'snap-jt', units_total: 100 }),
       snap({ id: 'snap-maria', units_total: 200 }),
     ];
     db.audit = [entered('snap-jt', JT), entered('snap-maria', MARIA)];
-    const rows = await listTodaysVoidableCounts(SITE, JT, MIDDAY_JUL28);
+
+    const rows = await listTodaysVoidableCountsAtSite(SITE, JT, MIDDAY_JUL28);
+
+    // Both, not just JT's — that is the amendment.
+    expect(rows.map((r) => r.id).sort()).toEqual(['snap-jt', 'snap-maria']);
+    const mine = rows.find((r) => r.id === 'snap-jt');
+    const theirs = rows.find((r) => r.id === 'snap-maria');
+    expect(mine).toMatchObject({ isMine: true, enteredByUserId: JT });
+    // The label the confirm screen needs: it must be able to NAME the person
+    // whose count is about to be withdrawn.
+    expect(theirs).toMatchObject({ isMine: false, enteredByUserId: MARIA });
+  });
+
+  it('never offers another SITE’s count', async () => {
+    db.snapshots = [
+      snap({ id: 'snap-jt', units_total: 100 }),
+      snap({ id: 'snap-wood', site_id: OTHER_SITE, units_total: 900 }),
+    ];
+    db.audit = [entered('snap-jt', JT), entered('snap-wood', MARIA)];
+    const rows = await listTodaysVoidableCountsAtSite(SITE, JT, MIDDAY_JUL28);
     expect(rows.map((r) => r.id)).toEqual(['snap-jt']);
   });
 
-  it('the voidable list drops a count once it is voided', async () => {
-    db.snapshots = [snap({ id: 'snap-jt', units_total: 100 })];
-    db.audit = [entered('snap-jt', JT)];
-    await voidSnapshot({ snapshotId: 'snap-jt', actorUserId: JT, siteId: SITE, now: MIDDAY_JUL28 });
-    expect(await listTodaysVoidableCounts(SITE, JT, MIDDAY_JUL28)).toEqual([]);
+  it('leaves the enterer null rather than guessing when no insert row exists', async () => {
+    // A system-written snapshot has no operator insert row. NULL is "we do not
+    // know", which is true — the same reasoning ADR-0078 Am.1 applied to
+    // `uploaded_by` rather than backfilling from the assigned operator.
+    db.snapshots = [snap({ id: 'snap-system', units_total: 300 })];
+    db.audit = [];
+    const rows = await listTodaysVoidableCountsAtSite(SITE, JT, MIDDAY_JUL28);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ enteredByUserId: null, isMine: false });
+
+    // ...and it is still voidable, with the unknown enterer recorded as unknown.
+    const result = await voidSnapshot({
+      snapshotId: 'snap-system',
+      actorUserId: JT,
+      siteId: SITE,
+      now: MIDDAY_JUL28,
+    });
+    expect(result.enteredByUserId).toBeNull();
+    expect(result.crossOperator).toBe(false);
+    expect((voidAuditRows()[0] as AuditRow).after).toMatchObject({ entered_by: null });
   });
 });

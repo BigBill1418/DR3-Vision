@@ -14,11 +14,11 @@ That sounds like one column. It is nine read paths, a four-eyes security gate, a
 
 ### The three defects this work had to close before adding anything
 
-| #  | Sev      | Defect                                                                                                                                                                                                                                                                                                                       | Status |
-| -- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| S1 | CRITICAL | **Four-eyes bypass.** `shouldRequireAmendment` compared `mattress_count` only. A non-admin manager editing a PRIOR day and changing only saves would compute `countChanged === false`, fall into the `note_only_edit` branch, and write an unapproved change to a processor's pay — no approver, no justification, nothing in the review queue. | Closed |
-| S2 | HIGH     | **Silent zod strip.** The amendments endpoint's `NewValue` schema listed `mattress_count` and `note`. Zod strips unknown keys silently, so a correctly-posted saves amendment would have had the field deleted at the edge — and every downstream step would then behave perfectly on the truncated payload.                        | Closed |
-| S3 | HIGH     | **Reconcile drift.** `reconcile-fetch.ts` recomputes each period's total and pages URGENT + refuses the payroll PDF on a mismatch. Adding a term to the payout formula without adding it here would make every period containing a save refuse its own payroll.                                                                    | Closed |
+| #   | Sev      | Defect                                                                                                                                                                                                                                                                                                                                          | Status |
+| --- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| S1  | CRITICAL | **Four-eyes bypass.** `shouldRequireAmendment` compared `mattress_count` only. A non-admin manager editing a PRIOR day and changing only saves would compute `countChanged === false`, fall into the `note_only_edit` branch, and write an unapproved change to a processor's pay — no approver, no justification, nothing in the review queue. | Closed |
+| S2  | HIGH     | **Silent zod strip.** The amendments endpoint's `NewValue` schema listed `mattress_count` and `note`. Zod strips unknown keys silently, so a correctly-posted saves amendment would have had the field deleted at the edge — and every downstream step would then behave perfectly on the truncated payload.                                    | Closed |
+| S3  | HIGH     | **Reconcile drift.** `reconcile-fetch.ts` recomputes each period's total and pages URGENT + refuses the payroll PDF on a mismatch. Adding a term to the payout formula without adding it here would make every period containing a save refuse its own payroll.                                                                                 | Closed |
 
 None of the three fails loudly. S1 writes a valid-looking row. S2 produces a green audit trail asserting a correction happened. S3 would have fired, but only after the change shipped, on a real pay day.
 
@@ -45,6 +45,8 @@ Summing is what "a save is a paid unit" means. Pinned by `__tests__/paid-units.t
 
 `src/lib/bonus/paid-units.ts` holds `dailyPaidUnits` / `dailyBonusCentsFor` / `periodBonusCentsFor`, and **every** bonus-dollar path calls it: the grid, the month page, the month list, the aggregates, the current-period standings, the PDF data, the signed PDF page, the sign-time lock, and the ADR-0033 reconcile.
 
+> **Correction, [Amendment 1](#amendment-1-2026-08-08--the-amended-month-editor-can-set-saves-and-the-last-pay-path-that-bypassed-the-funnel) (2026-08-08):** the sentence above was **not true when it was written**. The **month page** (`src/app/bonus/months/[id]/page.tsx`) computed its per-employee monthly totals and its read-only grid totals with `calculateDailyBonusCents(mattress_count, rule)`, bypassing the funnel and understating every processor by the whole cash value of their saves. Both call sites now use `dailyBonusCentsFor`, and the claim is no longer prose: `paid-units-callers.guard.test.ts` fails the build on any un-allowlisted direct caller. Left in place rather than quietly edited, because "a documented invariant that nothing enforced" is the lesson.
+
 The alternative — each path doing `mattress_count.toNumber() + saves.toNumber()` inline — is nine copies of a payroll policy. The reason ADR-0019 put the tier maths behind one calculator is the reason this needs one funnel: the number on the screen, the number on the signed PDF and the number the reconciler independently recomputes must be incapable of disagreeing.
 
 ### 3. Saves are paid units. They are NOT processed units.
@@ -53,11 +55,11 @@ This is what makes the double-count **structurally impossible** rather than mere
 
 A saved mattress is diverted to resale; a processed mattress is torn down for commodity. They are disjoint quantities in two separate columns, and no mattress is ever in both.
 
-| Path class                                              | Basis                    |
-| ------------------------------------------------------- | ------------------------ |
-| PAY (bonus cents, sign-time lock, reconcile, PDF)       | `mattress_count + saves` |
+| Path class                                                 | Basis                    |
+| ---------------------------------------------------------- | ------------------------ |
+| PAY (bonus cents, sign-time lock, reconcile, PDF)          | `mattress_count + saves` |
 | PRODUCTION QUANTITY (daily report MTD/annual, 8 PM report) | `mattress_count` alone   |
-| THROUGHPUT QUOTA (ADR-0071 processor quota)             | `mattress_count` alone   |
+| THROUGHPUT QUOTA (ADR-0071 processor quota)                | `mattress_count` alone   |
 
 `daily-report.ts` and `processor-quota.ts` are **deliberately unchanged**, and each carries a comment at the call site saying so and pointing at `paid-units.ts`. The reasoning: production figures sit adjacent to MRC billing, and a saved mattress was never torn down — counting it as production would inflate a reported throughput with units that were not processed. Folding saves into the ADR-0071 quota would separately have raised every processor above a threshold calibrated on processed units alone; if Bill later wants the quota to measure total handled work, that is a deliberate re-calibration, not a default we slipped in.
 
@@ -78,7 +80,7 @@ The floor and office run browser tabs that outlive a deploy. A stale tab posts a
 - **insert** → 0 (the column default; nothing keyed, nobody owed)
 - **update** → the stored value is preserved
 
-The other reading — absent ⇒ write 0 — is destructive and was rejected: a manager on a stale tab correcting somebody's *note* would silently zero that processor's saves for the day and underpay them, with the write looking entirely routine in the audit log. "Not supplied" and "zero" are different claims, and payroll is where that distinction has to hold. Clearing saves stays possible: a current client sends an explicit `0`, and the grid always does.
+The other reading — absent ⇒ write 0 — is destructive and was rejected: a manager on a stale tab correcting somebody's _note_ would silently zero that processor's saves for the day and underpay them, with the write looking entirely routine in the audit log. "Not supplied" and "zero" are different claims, and payroll is where that distinction has to hold. Clearing saves stays possible: a current client sends an explicit `0`, and the grid always does.
 
 The amendment **endpoint** takes the opposite line — `saves` is REQUIRED there, not optional. An amendment is a deliberate, justified, approved correction; a client too old to name the field should be rejected loudly rather than have a proposal inferred for it.
 
@@ -122,7 +124,7 @@ A green test proves nothing until you have watched it go red. Both named hazards
 
 The second falsification also **corrected the test itself**. The first draft asserted against a copy of the schema pasted into the test file, which would have stayed green through any change to the real endpoint — measuring the copy instead of the code. The schema was hoisted to `src/lib/bonus/amendment-schemas.ts` so the route and its tests validate against one definition. This is the "a falsification can measure the mock" failure, caught by attempting the falsification rather than assuming it.
 
-**Historical parity** is pinned by `saves-historical-reconcile.test.ts`, which additionally asserts that the recompute *does* see saves — a recompute that simply never read the column would also produce zero drift on historical rows while being catastrophically wrong on new ones, so "correct" had to be distinguished from "accidentally passing".
+**Historical parity** is pinned by `saves-historical-reconcile.test.ts`, which additionally asserts that the recompute _does_ see saves — a recompute that simply never read the column would also produce zero drift on historical rows while being catastrophically wrong on new ones, so "correct" had to be distinguished from "accidentally passing".
 
 ## Consequences
 
@@ -153,3 +155,118 @@ The second falsification also **corrected the test itself**. The first draft ass
 - ADR-0037 — the aggregate inventory ledger and the Rick/Kelsey saved-units ruling
 - ADR-0071 — the processor production quota (deliberately unchanged)
 - ADR-0084 — same-day physical-count void (the sibling phase of this handoff)
+
+---
+
+## Amendment 1 (2026-08-08) — the amended-month editor can set `saves`, and the last pay path that bypassed the funnel
+
+**Status:** Accepted, implemented. Extends §2 (one funnel) and §5 (absent means
+unchanged) to two surfaces this ADR shipped without. Nothing in ADR-0083 is
+reversed.
+
+### Context
+
+ADR-0083 added a fifth paid quantity to the daily entry. `AmendmentPanel`
+(`/bonus/months/[id]`, the admin editor for a re-opened period) shipped with four
+columns and posted `{bonus_employee_id, mattress_count, note}`.
+
+That mattered because it is the **only** editor that reaches an already-signed
+period: the primary `DailyEntryGrid` refuses a locked month, and this panel is
+what an admin uses after unlocking one. So a mis-keyed saves figure inside a
+signed period had no correction surface anywhere in the app.
+
+Nothing was ever lost by the gap — §5's "absent means UNCHANGED, never zero" made
+it non-destructive by construction, so correcting a count there left that day's
+saves alone. But it had a deadline: ADR-0083 shipped 2026-08-08, so **no signed
+period contains a non-zero save yet, and the first one closes at the end of the
+current bi-weekly period.**
+
+### Decision
+
+**A fifth column on the panel grid, plus `saves` in its POST body**, modelled on
+`DailyEntryGrid` down to the three semantics that are easy to get subtly wrong:
+
+1. **`saves` is always sent, never omitted.** The server reads an absent `saves`
+   as "leave unchanged" (§5), so a blank box that omitted the field would make
+   clearing a value back to zero impossible from the one screen that reaches a
+   signed period. A blank box means an explicit `0`.
+2. **A row is "keyed" if EITHER box has a value.** Requiring a processed count
+   would make a saves-only correction unsubmittable, and a processor who spent a
+   shift pulling units for resale has a real, paid day with a zero processed
+   count.
+3. **The day total tiers ONCE over `count + saves`** (§1), and the saves figure
+   gets its own footer cell rather than being folded into the mattress total —
+   they are disjoint quantities; the Bonus total beside them is the combined one.
+
+The panel seeds each row's saves box from the stored entry, so a **note-only**
+correction re-sends the day's existing saves. Seeding it blank instead would post
+`saves: 0` on every note edit — a silent pay cut on exactly this surface.
+
+### The defect this found: §2's "one funnel" claim was not true
+
+`paid-units.ts` opens by asserting that the grid, the signed PDF, the sign-time
+lock, the CSV export, the month list, the aggregates and the ADR-0033 reconcile
+tripwire all route through `dailyPaidUnits`, so the number on the screen, the
+number on the signed PDF and the number the reconciler independently recomputes
+cannot diverge.
+
+**`src/app/bonus/months/[id]/page.tsx` did not.** Its per-employee monthly totals
+and its read-only grid totals called `calculateDailyBonusCents(mattress_count, rule)`
+directly — the last pay-path read in the app that bypassed the funnel. It
+understated every processor's month by the entire cash value of their saves, on
+the very page an admin unlocks a signed month from and reads the corrected total
+on. Nothing surfaced it: the number was well-formed, the page rendered, the suite
+was green. Both call sites now use `dailyBonusCentsFor`. The `totalMattresses`
+figure beside them stays processed-only — that one is a production quantity (§3).
+
+**So the claim was made structural.** `paid-units-callers.guard.test.ts` reads
+the actual source of every `calculateDailyBonusCents` call in `src/` and fails
+the build on any caller outside the funnel that is not allowlisted with a written
+reason and a `mustContain` token proving its compensating control survives. Three
+entries today: `daily-report.ts` (a production path, §3) and the two client grids
+(raw input strings, not DB rows, so they inline the policy — the token pins the
+summed `(n ?? 0) + (sv ?? 0)` shape). The guard asserts its own call-site count,
+so a rename or a broken glob fails loudly instead of reporting green while
+matching nothing, and it strips comments before matching so it cannot read the
+token out of the prose explaining the token (the trap the ADR-0084 guard hit).
+
+### On four-eyes: the brief's premise was wrong, and this is what the control is
+
+The change brief described this editor as "the same `shouldRequireAmendment`
+path". It is not, and that was checked against the code rather than assumed:
+`shouldRequireAmendment` is reached only from `upsertDailyEntries`
+(`daily-entry.ts`), the PRIMARY grid's path. `upsertAmendedMonthEntries` does not
+import it and never has.
+
+That is by design. This surface is reachable only after an admin has explicitly
+unlocked a signed month **with a written reason, which clears both signatures**;
+the corrected month must then be re-submitted and re-signed by two signers before
+it pays. The four eyes here are the two re-signatures applied to the whole
+corrected month, not a per-edit approval request — filing one would queue an
+approval for a change nobody can act on until the re-signing happens anyway.
+
+What must NOT become true is that this path moves a signed month's numbers
+_without_ that unlock. Pinned behaviourally (a locked month is refused
+`month_locked`, nothing written, no audit row) and structurally (an assertion
+that `amendment.ts` does not reference `shouldRequireAmendment`, so wiring it in
+forces a deliberate decision). §6's own gate is separately re-pinned from the
+saves angle, so widening this editor cannot become an argument for relaxing that
+one.
+
+### Falsifications run
+
+| Falsification                                                            | Result                                                                                                           |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Drop `saves` from the panel's POST body                                  | **RED ×4** — including `expected undefined to be +0` on the clear-to-zero case                                   |
+| Seed the panel's saves box blank instead of from the stored entry        | **RED ×3** — the note-only edit posts `saves: 0` for a day that had 9; `$7.50` day total reads `$0.00`           |
+| Make an absent `saves` mean `0` in the service (`input.saves ?? 0`)      | **RED** — a note-only edit zeroes 9 saved mattresses; 2,000¢ → 1,325¢, **$6.75 under-paid on one day**, silently |
+| Restore `calculateDailyBonusCents(count, rule)` on the month detail page | **RED ×3** in the guard, naming the file and line and the fix                                                    |
+| Tier the two columns separately instead of over their sum                | **RED** — a 45 + 20 day pays $7.50 summed and **$0.00** tiered twice                                             |
+
+### Residuals
+
+- The month detail page's totals are corrected but were **not** verified against
+  production data; no signed period contains a non-zero save yet, so there is no
+  live number to compare. The correction is proven by the guard and by
+  `paid-units.test.ts`, not by a prod read.
+- The panel remains English-only (ADR-0017), unchanged by this amendment.

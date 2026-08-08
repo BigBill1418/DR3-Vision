@@ -2,7 +2,12 @@
 
 import type { PhotoKind } from '@prisma/client';
 import { useRef, useState } from 'react';
-import { enqueueUpload, isOfflineError, type UploadKind } from '@/lib/offline-queue';
+import {
+  enqueueUpload,
+  isOfflineError,
+  newIdempotencyKey,
+  type UploadKind,
+} from '@/lib/offline-queue';
 import { useT, useLocale } from '@/i18n/provider';
 
 // Touch-first camera input + R2 upload (T-007), now with offline-queue
@@ -58,30 +63,48 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
 
   const label = t(`photo.label_${labelKey}`);
 
-  const queueAndAdvance = async (
-    file: File,
-    storage_key: string | null,
-    upload_url: string | null,
-  ) => {
-    await enqueueUpload({
-      load_id: loadId,
-      kind: kind as UploadKind,
-      blob: file,
-      content_type: file.type || 'application/octet-stream',
-      storage_key,
-      upload_url,
-    });
-    setStatus('queued');
-    onCaptured(file);
-  };
-
   const handleFile = async (file: File) => {
     setStatus('uploading');
     setError(null);
     setName(file.name);
 
+    // ADR-0078 / ADR-0086 — minted ONCE, here, at the operator's tap. It names
+    // this photo across the live attempt and every later replay, and ADR-0086
+    // binds it INTO the grant, which is what makes the grant single-use: the
+    // confirm it authorises must present this same key.
+    //
+    // Follows the `dropoff-client.tsx` precedent exactly. A key minted per
+    // attempt would make every retry a new write, which is the defect the whole
+    // mechanism exists to close.
+    const idempotencyKey = newIdempotencyKey();
+
     let storage_key: string | null = null;
     let upload_url: string | null = null;
+    // ADR-0086 — the capture-time grant. Issued by the mint below WHILE THIS
+    // SESSION PROVABLY EXISTS, and carried on the queued row so the photo can
+    // drain later with no session at all. Stays null when the deployment has no
+    // `PHOTO_GRANT_SECRET`, in which case everything here behaves exactly as it
+    // did before this feature — the queue just needs a signed-in operator to
+    // drain, which is the status quo, not a regression.
+    let upload_grant: string | null = null;
+
+    const queueAndAdvance = async (
+      queuedStorageKey: string | null,
+      queuedUploadUrl: string | null,
+    ) => {
+      await enqueueUpload({
+        load_id: loadId,
+        kind: kind as UploadKind,
+        blob: file,
+        content_type: file.type || 'application/octet-stream',
+        storage_key: queuedStorageKey,
+        upload_url: queuedUploadUrl,
+        idempotency_key: idempotencyKey,
+        upload_grant,
+      });
+      setStatus('queued');
+      onCaptured(file);
+    };
 
     // Step 2: mint presigned URL.
     try {
@@ -92,18 +115,21 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
           load_id: loadId,
           kind,
           content_type: file.type || 'application/octet-stream',
+          idempotency_key: idempotencyKey,
         }),
       });
       if (!mintRes.ok) throw new Error(`mint failed (${mintRes.status})`);
       const minted = (await mintRes.json()) as {
         storage_key: string;
         upload_url: string | null;
+        upload_grant?: string | null;
       };
       storage_key = minted.storage_key;
       upload_url = minted.upload_url;
+      upload_grant = minted.upload_grant ?? null;
     } catch (e) {
       if (isOfflineError(e)) {
-        await queueAndAdvance(file, null, null);
+        await queueAndAdvance(null, null);
         return;
       }
       setStatus('error');
@@ -122,7 +148,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
         if (!putRes.ok) throw new Error(`R2 PUT failed (${putRes.status})`);
       } catch (e) {
         if (isOfflineError(e)) {
-          await queueAndAdvance(file, storage_key, upload_url);
+          await queueAndAdvance(storage_key, upload_url);
           return;
         }
         setStatus('error');
@@ -135,7 +161,15 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
     try {
       const confirmRes = await fetch('/api/photos/confirm', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // ADR-0078 D3 — the LIVE confirm now carries the key too, not just the
+          // replay. Without it, a confirm that landed and lost its response was
+          // queued under a key the server had never seen, and the replay wrote a
+          // SECOND `load_photos` row — the exact duplicate-confirm defect D3
+          // closed, still open on the one path that hands work to the queue.
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({
           load_id: loadId,
           kind,
@@ -153,7 +187,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
         // bandwidth waste, accepted because partial-progress tracking
         // would balloon the queue schema for a vanishingly rare case
         // (network drops between R2 PUT response and Next.js confirm).
-        await queueAndAdvance(file, null, null);
+        await queueAndAdvance(null, null);
         return;
       }
       setStatus('error');

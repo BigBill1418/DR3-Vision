@@ -3,6 +3,45 @@
 // JT: "if we accidentally entered the count twice, we should be able to remove
 // one." Bill: same-day only on the iPad; prior day is an office job.
 //
+// ## Amendment 1 (2026-08-08) — the gate is SITE-scoped, not OWNER-scoped
+//
+// Bill, asked to pick between owner-only / site / site-with-manager-confirm:
+// **"Widen to site."**
+//
+// This module used to refuse with 403 `not_your_count` unless the caller was the
+// operator named on the count's original insert audit row. Floor iPads are
+// SHARED kiosks with per-operator PIN sign-in, so a duplicate keyed at 14:00 by
+// the day operator could not be withdrawn by whoever PIN'd in at 15:00 — and
+// because a void is same-day only, there was no next-day path either. The
+// mistyped anchor simply stood overnight and became an office job.
+//
+// **The trade, stated plainly rather than described as a refactor: the gate
+// loosened from owner to site; attribution went from one id to two.**
+//
+//   - GIVEN UP: an operator can now withdraw any same-day count at their own
+//     site, not only one they entered.
+//   - GAINED: the mistake is correctable on the shift that made it, by whoever
+//     is actually standing at the iPad.
+//   - ALSO GAINED: the audit row now carries BOTH ids — `actor_user_id` is who
+//     withdrew it, `after.entered_by` is who entered it — so the history shows
+//     who withdrew whose count. Before this, a void recorded the withdrawer
+//     only, because the gate guaranteed they were the same person.
+//
+// This is the ADR-0078 Amendment 1 move applied to a second surface, and the
+// asymmetry with it was the reason this one waited for Bill: a photo upload is
+// ADDITIVE, a void is DESTRUCTIVE — it withdraws the anchor the whole floor is
+// computed from. So the risk that justified Am.1 did not automatically carry
+// over, and this was not loosened unilaterally.
+//
+// Unchanged, and NOT to be "restored":
+//
+//   - Cross-SITE is still refused, still as a 404 rather than a 403 (hard rule
+//     #2; Eugene and Woodland are separate MRC contracts in separate
+//     jurisdictions). Pinned by `a snapshot from another site is a 404`.
+//   - Same-day only, in PACIFIC, from `currentPacificDayWindow`.
+//   - The confirm step, the soft void, the online-only rule, and every reader
+//     filter in `snapshot-void.ts`.
+//
 // ## What this is NOT
 //
 // It is not a delete. `voided_at` is stamped and the row stays, because the row
@@ -69,15 +108,13 @@ export class SnapshotNotPhysicalError extends Error {
   }
 }
 
-/** The caller did not enter this count, so they may not withdraw it. */
-export class SnapshotNotYoursError extends Error {
-  readonly status = 403;
-  readonly reason = 'not_your_count';
-  constructor() {
-    super('not_your_count');
-    this.name = 'SnapshotNotYoursError';
-  }
-}
+// ADR-0084 Amendment 1 (2026-08-08) — `SnapshotNotYoursError` / the
+// `not_your_count` 403 was DELETED, not disabled. The void is site-scoped now:
+// any activated operator at the count's own site may withdraw a SAME-DAY count,
+// and the audit row names both the withdrawer and the original enterer. Leaving
+// a dead error class here would read as a check someone forgot to call and
+// invite its restoration — which is the shared-iPad defect the amendment closes.
+// See `voidSnapshot`'s doc comment and ADR-0084 Amendment 1.
 
 /**
  * ADR-0084 D4 — a PRIOR-day void is refused, and says where to go instead.
@@ -160,6 +197,20 @@ export interface VoidSnapshotResult {
   alreadyVoided: boolean;
   /** The withdrawn count's total, so the UI can name what it removed. */
   physicalTotal: number;
+  /**
+   * ADR-0084 Amendment 1 — the operator who ENTERED the count, resolved from the
+   * append-only insert audit row, or null when that row is missing (a snapshot
+   * written by a system path rather than a floor operator).
+   *
+   * NEVER conflate this with `actorUserId`. It is attribution, not authorization:
+   * since Amendment 1 it no longer decides anything, it is only RECORDED. Same
+   * distinction ADR-0078 Am.1 drew between `loadOwnerUserId` and `actorUserId` —
+   * stamping one as the other writes a claim that a person did something they
+   * did not do, into a table that can never take it back (hard rule #6).
+   */
+  enteredByUserId: string | null;
+  /** True when the withdrawer is not the operator who entered the count. */
+  crossOperator: boolean;
 }
 
 function totalOf(row: {
@@ -171,21 +222,22 @@ function totalOf(row: {
 }
 
 /**
- * Withdraw a physical count taken TODAY (Pacific) by the calling operator.
+ * Withdraw a physical count taken TODAY (Pacific) at the caller's own site.
  *
  * Gates, in order, all before anything is written:
  *
  *   1. Exists, and belongs to `siteId` (hard rule #2 — a snapshot id from
- *      another site is a 404, not a 403: the caller learns nothing).
+ *      another site is a 404, not a 403: the caller learns nothing). Since
+ *      Amendment 1 this is the ONLY authorization check, deliberately.
  *   2. Is a `physical` count. `computed` markers are system-derived.
  *   3. Was counted on the CURRENT PACIFIC day — never the device clock, never
  *      server-local. The container runs UTC, so a server-local "today" flips at
  *      5 PM Pacific and would start refusing an evening-shift operator's real
  *      day while accepting tomorrow's.
- *   4. Was entered by this operator, resolved from the append-only `audit_logs`
- *      insert row (the same provenance path `eod-inventory.resolveCounter` uses
- *      — the audit log IS the record of who, so there is one truth rather than a
- *      denormalised copy that can disagree with it).
+ *
+ * There is no fourth gate any more. The original enterer is still resolved from
+ * the append-only `audit_logs` insert row (the same provenance path
+ * `eod-inventory.resolveCounter` uses) — but to be RECORDED, not to decide.
  *
  * Then: stamp + audit in ONE transaction (hard rule #6), idempotently.
  */
@@ -231,21 +283,28 @@ export async function voidSnapshot(args: VoidSnapshotArgs): Promise<VoidSnapshot
     );
   }
 
-  // ── Yours ────────────────────────────────────────────────────────────────
-  // An operator may withdraw a count THEY entered. Resolved from the audit row
-  // `reconcilePhysicalCount` wrote in the same transaction as the insert;
-  // snapshots carry no counter column, and adding one would create a second
-  // truth that could disagree with the append-only record.
+  // ── Who entered it — ATTRIBUTION, not authorization (Amendment 1) ────────
+  // Resolved from the audit row `reconcilePhysicalCount` wrote in the same
+  // transaction as the insert; snapshots carry no counter column, and adding one
+  // would create a second truth that could disagree with the append-only record.
   //
   // `findFirst` + `orderBy created_at asc`: the ORIGINAL insert row, matching
-  // `resolveCounter`. A later audit row on the same snapshot (this void, an
+  // `resolveCounter`. A later audit row on the same snapshot (a previous void, an
   // anchor reactivation note) must never be mistaken for the entry.
+  //
+  // Before Amendment 1 this read decided the request (403 `not_your_count`). It
+  // now decides nothing — the value is written into the void's audit row so a
+  // cross-operator withdrawal is a recorded fact rather than an inference from
+  // two rows nobody will join. NULL when there is no insert row at all (a
+  // system-written snapshot); that is "we do not know", which is true, and it is
+  // never backfilled from anything else (ADR-0078 Am.1's `uploaded_by` lesson).
   const entry = await prisma.auditLog.findFirst({
     where: { table_name: TABLE, row_id: snapshot.id, action: 'insert' },
     orderBy: { created_at: 'asc' },
     select: { actor_user_id: true },
   });
-  if (entry?.actor_user_id !== args.actorUserId) throw new SnapshotNotYoursError();
+  const enteredByUserId = entry?.actor_user_id ?? null;
+  const crossOperator = enteredByUserId !== null && enteredByUserId !== args.actorUserId;
 
   // ── Idempotent double-tap ────────────────────────────────────────────────
   // Two defences, because they cover different taps.
@@ -267,6 +326,8 @@ export async function voidSnapshot(args: VoidSnapshotArgs): Promise<VoidSnapshot
       voidedAt: snapshot.voided_at.toISOString(),
       alreadyVoided: true,
       physicalTotal,
+      enteredByUserId,
+      crossOperator,
     };
   }
 
@@ -282,7 +343,8 @@ export async function voidSnapshot(args: VoidSnapshotArgs): Promise<VoidSnapshot
           tx,
           statusCode: 200,
         },
-        async () => voidWrite(tx, snapshot.id, args, now, physicalTotal),
+        async () =>
+          voidWrite(tx, snapshot.id, args, now, physicalTotal, enteredByUserId, crossOperator),
       ),
     { timeout: 20_000, maxWait: 10_000 },
   );
@@ -305,6 +367,8 @@ async function voidWrite(
   args: VoidSnapshotArgs,
   now: Date,
   physicalTotal: number,
+  enteredByUserId: string | null,
+  crossOperator: boolean,
 ): Promise<VoidSnapshotResult> {
   const { count } = await tx.siteInventorySnapshot.updateMany({
     where: { ...NOT_VOIDED, id: snapshotId },
@@ -320,6 +384,8 @@ async function voidWrite(
       voidedAt: (row.voided_at ?? now).toISOString(),
       alreadyVoided: true,
       physicalTotal,
+      enteredByUserId,
+      crossOperator,
     };
   }
 
@@ -338,31 +404,67 @@ async function voidWrite(
       after: {
         voided_at: now.toISOString(),
         voided_by: args.actorUserId,
+        // ADR-0084 Amendment 1 — BOTH ids, always, on every void. `actor_user_id`
+        // above is the withdrawer; these two say whose count it was. Written
+        // unconditionally rather than only on the cross-operator case: an
+        // absent field would be ambiguous between "the same person" and "an
+        // older build that did not record it", and the history is read years
+        // later by someone who has neither this file nor the deploy dates.
+        entered_by: enteredByUserId,
+        cross_operator: crossOperator,
         physical_total: physicalTotal,
         reason: 'operator_same_day_void',
       },
     },
   });
 
-  return { snapshotId, voidedAt: now.toISOString(), alreadyVoided: false, physicalTotal };
+  return {
+    snapshotId,
+    voidedAt: now.toISOString(),
+    alreadyVoided: false,
+    physicalTotal,
+    enteredByUserId,
+    crossOperator,
+  };
+}
+
+export interface VoidableCountRow {
+  id: string;
+  enteredAt: Date;
+  physicalTotal: number;
+  /** The operator who entered it, or null when no insert audit row exists. */
+  enteredByUserId: string | null;
+  /** True when `actorUserId` entered it — drives "yours" vs "theirs" labelling. */
+  isMine: boolean;
 }
 
 /**
- * Today's (Pacific) physical counts for a site that THIS operator entered — the
- * set the iPad may offer to void.
+ * Today's (Pacific) live physical counts AT A SITE — the set the iPad may offer
+ * to void.
+ *
+ * ADR-0084 Amendment 1 — this used to filter to the counts the caller had
+ * entered and was named `listTodaysVoidableCounts`. It was RENAMED along with
+ * the behaviour, on the ADR-0078 Am.1 precedent: left under the old name, the
+ * next reader would reasonably conclude the missing ownership filter was an
+ * oversight and put it back, reintroducing the shared-iPad defect.
+ *
+ * `actorUserId` is still taken — but only to mark each row `isMine`, so the
+ * screen can say whose count it is before asking to withdraw it. It no longer
+ * filters anything.
  *
  * Voided rows are excluded (`NOT_VOIDED`): the screen offers an ACTION, and a
  * withdrawn count is not actionable. The recovery surfaces are where a voided
  * count stays visible.
  *
- * Ownership is filtered through the same append-only audit row `voidSnapshot`
- * checks, so the list cannot offer a count the service would then refuse.
+ * The list and the service agree by construction: both accept any live,
+ * same-day, physical count at the site, so the screen cannot offer a count the
+ * service would then refuse.
  */
-export async function listTodaysVoidableCounts(
+export async function listTodaysVoidableCountsAtSite(
   siteId: string,
   actorUserId: string,
   now: Date = new Date(),
-): Promise<Array<{ id: string; enteredAt: Date; physicalTotal: number }>> {
+): Promise<VoidableCountRow[]> {
   const { start, endExclusive } = currentPacificDayWindow(now);
   const rows = await prisma.siteInventorySnapshot.findMany({
     where: {
@@ -388,18 +490,27 @@ export async function listTodaysVoidableCounts(
   });
   if (rows.length === 0) return [];
 
-  const mine = await prisma.auditLog.findMany({
-    where: {
-      table_name: TABLE,
-      action: 'insert',
-      actor_user_id: actorUserId,
-      row_id: { in: rows.map((r) => r.id) },
-    },
-    select: { row_id: true },
+  // Every enterer, not just this one — the query is no longer scoped to
+  // `actor_user_id` because the answer is now a LABEL rather than a filter.
+  const inserts = await prisma.auditLog.findMany({
+    where: { table_name: TABLE, action: 'insert', row_id: { in: rows.map((r) => r.id) } },
+    orderBy: { created_at: 'asc' },
+    select: { row_id: true, actor_user_id: true },
   });
-  const mineIds = new Set(mine.map((m) => m.row_id));
+  // First insert row wins, matching `voidSnapshot`'s `orderBy created_at asc`.
+  const entererByRow = new Map<string, string | null>();
+  for (const i of inserts) {
+    if (!entererByRow.has(i.row_id)) entererByRow.set(i.row_id, i.actor_user_id);
+  }
 
-  return rows
-    .filter((r) => mineIds.has(r.id))
-    .map((r) => ({ id: r.id, enteredAt: r.created_at, physicalTotal: totalOf(r) }));
+  return rows.map((r) => {
+    const enteredByUserId = entererByRow.get(r.id) ?? null;
+    return {
+      id: r.id,
+      enteredAt: r.created_at,
+      physicalTotal: totalOf(r),
+      enteredByUserId,
+      isMine: enteredByUserId === actorUserId,
+    };
+  });
 }

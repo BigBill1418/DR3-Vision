@@ -14,11 +14,348 @@ into a durable decision mechanism instead of chat approvals.
   CDC upsert, AP request-resolution similarity gate. Corrects ADR-0075 D5 (the
   Terex merges were never executed).
 - **Decision register** — `docs/plans/2026-08-08-vlm-equipment-decision-register.md`
-  + 5 replica-generated CSV worksheets (492 ghost units, 146 blank types, 48
-  alias candidates, 39 type mappings, 6 `-ACC` values) with `decision` columns
-  and bulk-rule support; regeneration SQL committed alongside. Nothing executes
-  until rows are decided (ADR-0087 D7).
-- OPEN-ITEMS §0.AP records the waiting-on-Bill state.
+  - 5 replica-generated CSV worksheets (492 ghost units, 146 blank types, 48
+    alias candidates, 39 type mappings, 6 `-ACC` values) with `decision` columns
+    and bulk-rule support; regeneration SQL committed alongside. Nothing executes
+    until rows are decided (ADR-0087 D7).
+- OPEN-ITEMS §0.AR records the waiting-on-Bill state.
+
+## 2026-08-08 — nine days of silence, and the instrument that reads the gap (ADR-0088, born pilot)
+
+Bill asked why the Terex sheet went unfilled for nine working days without anyone
+noticing. The answer is uncomfortable, because **nothing was broken**.
+
+ADR-0079 got the hard part right. It made "nobody wrote a number down" a first-class
+state — the ABSENCE of a row, deliberately never a `0` (ADR-0077 D4) — and every
+consumer honours it. The trend page drew all nine of those days as `not_recorded`,
+faithfully, for nine days running. ADR-0081 then imported the workbook's own history
+into the same table without ever letting the sheet overwrite a manager's row. All of
+that was correct and all of it was **passive**.
+
+The complete list of detectors for a capture gap in this system was: Bill opens the
+chart and notices. That is not an instrument — it is a person doing an instrument's
+job, and it failed for exactly as long as it takes a habit to stop being a habit.
+Post-cutover the manager surface inherits the identical silence: JT types the number
+into Vision instead of Excel, and if he stops, the page keeps drawing "not recorded"
+and keeps telling nobody. **What was missing was never the data model. It was a
+reader.**
+
+**One question, once a working morning, per site.** Did the PREVIOUS WORKING DAY get
+a live throughput row for the machine the registry resolves here? If not, one email.
+That is the whole feature.
+
+- **It asks about ROW EXISTENCE and never about magnitude.** A recorded
+  `units_processed = 0` is a RECORDED day — the machine ran and produced nothing,
+  which is a measurement, and ADR-0077 D4 exists to keep it distinguishable from
+  absence. A `> 0` test would nudge a manager who did exactly what was asked. The
+  query carries **no units predicate at all**, and a test asserts the shape of the
+  where-clause so the right answer cannot be reached for the wrong reason. Falsified
+  RED against a `units_processed: { gt: 0 }` mutation before shipping — and the fake
+  DB was rewritten mid-build to _evaluate_ the where-clause rather than assume its
+  shape, because the first version returned the right answer to a wrong query and
+  the outcome assertion stayed green. A fake that ignores predicates it wasn't told
+  about is a rubber stamp, not a test double.
+- **The mirror case:** a day whose only row was soft-voided counts as MISSING. Not a
+  judgement call — ADR-0079's partial unique index already says a voided row does not
+  hold the day's slot.
+- **Monday looks back to FRIDAY, not Sunday.** A naive "yesterday" makes every Monday
+  scan a Sunday, find nothing (there never is anything), and alert every single week
+  — an alert that fires on schedule regardless of the facts. Falsified RED: replacing
+  the working-day walk with plain "yesterday" reds 12 tests.
+- **Holidays are SITE-scoped**, deliberately unlike `ap/business-clock.ts`'s
+  fleet-wide clock. That module is person-scoped and pauses only when BOTH sites
+  observe a holiday; this watchdog is site-scoped end to end, so Woodland closed for
+  a California holiday did not fail to record anything.
+- **Four hard never-fires:** pre-cutover days (`< 2026-08-07` is the sheet era,
+  ADR-0079 Am.1), pilot sites (`equipment_entry` not live — nobody there can even
+  reach the form), weekends (suppressed as gap days _and_ as run days), and sites with
+  no machine (Eugene resolves to null; site-DERIVED, never hardcoded).
+- **The nine July days are NOT back-alerted.** Opening a new channel with a burst of
+  mail about days nobody can act on is how a channel gets muted in its first week.
+
+**It is a staff nudge, not a page — and the reasoning, not just the conclusion.**
+Hard rule #5 reserves ntfy for Bill and for SYSTEM events; a manager who did not type
+a number is the paradigm operational event that rule excludes. So it rides
+`notifyStaff()` on its **own** registered surface, `equipment_throughput_gap`, born
+pilot — its own rather than `alert_digest` because the digest is an 18:00 PT
+many-findings rollup a manager may reasonably skim, and Bill must be able to ramp the
+morning nudge at Woodland without ramping the digest. The audience is the existing
+`alert_recipients` roster (the site managers — exactly who types this number); a
+second roster table would be a second thing to keep current and get wrong. **The one
+thing that does page** `dr3-vision-system` is the nudge failing to deliver (0 of N),
+the same carve-out `alert-digest.ts` makes, on the **same existing topic** — no new
+ntfy topic, because a topic nobody is subscribed to would be a particularly ironic
+way to ship a watchdog.
+
+**Severity `default`, and the ADR-0037 gate answered honestly.** It fails
+5-minute-actionable and customer-visible, and the sharp edge is _why_: ADR-0079 D4
+REFUSES a prior-day entry, so the missed day **cannot simply be typed in**. An email
+that only said "please enter it" would send the manager to a screen that tells them
+no. The body says three things and stops — which day was missed, that today's numbers
+can still be entered freely, and that the missed day goes through the office. What is
+immediately actionable is the habit, and the habit is what actually failed.
+
+**Idempotency is a database constraint, not a cooldown.** `equipment_throughput_gap_alerts`
+is unique on **(site_id, gap_date)** — keyed on the MISSED day, not the run day — so a
+working day is nudged exactly once, ever, regardless of re-fires, restarts, or a
+duplicated cron container. An in-process cooldown lives in container memory and
+re-arms on restart; this is strictly stronger than the ADR-0037 floor. A ledger row is
+written only after a real send decision, so an M365-disabled no-op or an empty roster
+leaves the nudge still owed.
+
+- **The middleware exemption is load-bearing here more than anywhere.**
+  `/api/internal/equipment/` joins `public-paths.ts` (TEN → ELEVEN). Without it the
+  middleware 307s the session-less POST to `/login`, the daemon logs a 200 for the
+  login page, and the ledger stays empty — **and an empty ledger reads as "no gaps
+  found."** That is the original defect reproduced inside its own fix. The daemon uses
+  `redirect: 'manual'` as the second defence.
+- **Its own cron container at 08:30 PT**, rather than riding the 18:00 PT daily-report
+  tick as ADR-0043 D5 does. That ADR's binding constraint was "no new container" and
+  it paid with a documented deviation from its own timing requirement. Here the fire
+  time IS the feature: a nudge about yesterday arriving at the END of today is
+  useless, because the only action it enables has already expired. Verified
+  DST-correct across both 2026-11-01 (fall back) and 2027-03-14 (spring forward).
+- **Ships DARK.** Until Bill flips `equipment_throughput_gap` to `live` per site at
+  `/admin/rollout`, the mail goes to admins only — which is also what lets him read a
+  week of them before any manager does.
+
+Gates: `tsc --noEmit` clean, ESLint clean, 4,812 unit tests green (30 new for the
+watchdog, 3 for the route), every migration replayed on a clean PG16, and the unique
+
+- CHECK constraints proven live by trying to violate them.
+
+## 2026-08-08 — a photo captured under login A carries its own right to land (ADR-0086, accepted)
+
+Bill accepted ADR-0086 at the 2026-08-08 walkthrough. It is now built.
+
+The residual it closes is narrow and its failure mode is permanent. ADR-0078 G7 fixed
+the auth failure that _looked_ like success and Amendment 1 loosened the photo gate
+from load-owner to site — but a queued photo **still needed a live signed-in session
+at the same site in order to drain**, and on iOS there is no closed-app execution to
+fall back on. If the last operator of a shift signs out while photos are still in the
+device's IndexedDB, they sit there. The bytes exist in exactly one place. A wipe, a
+reset, a replaced iPad, or a device that goes back in the drawer at the end of a
+season, and the evidence is gone. The ADR-0078 build met the 99-photo-parked case
+live; those photos survived only because somebody was still signed in when the CORS
+repair landed.
+
+**The correction that is the substance of the ADR.** The design recorded in
+OPEN-ITEMS §0.AJ signed the grant over `storage_key` and required the request's fields
+to match exactly. That is circular and unbuildable: the client treats a presign as
+stale at 8 minutes, and re-minting produces a brand-new key because `mintUploadUrl`
+embeds a fresh `randomUUID()` — so every photo the feature exists for would fail the
+grant's own field check, and the drain would die one step earlier anyway, because the
+re-mint is itself a call to the session-gated route. The grant **cannot** be a claim
+about one R2 object, because the object is not stable across the queue's lifetime. So
+it is a claim about _the right to attach one photo of one kind to one load_, and object
+identity is constrained **structurally, by key prefix**, instead. The §0.AJ paragraph
+is left in the register unedited, behind a "do not build from this" fence — deleting it
+would leave the correction with nothing to correct.
+
+What the credential is: a 14-day bearer token, minted at capture while a session
+provably exists, authorising exactly one write — one photo, of one declared kind, to
+one named load, under one already-claimed idempotency key. It cannot read, cannot
+enumerate, and cannot write a count, a bonus entry, an inventory row or money.
+
+- **Both photo routes moved together, in the same commit, by the same predicate.** The
+  mint call site has carried the instruction for a year: a relaxed mint with a strict
+  confirm PUTs bytes to R2 and is then refused the row — an orphaned object, no record,
+  and a queue row that still cannot drain, which is strictly worse than doing nothing.
+  A test drives the same five grants through both handlers and fails if their verdicts
+  ever diverge, so that constraint is now structural rather than two files agreeing by
+  habit.
+- **Revocation is a hard requirement, and it is the reason a 14-day bearer token is
+  acceptable at all.** Signature verification does not consult the `users` table, so
+  without a redemption-time read "revoke this person's access" would be untrue for a
+  fortnight — a claim the compliance surface makes. Every redemption re-reads
+  `is_active`, `deleted_at`, `role` and `primary_site_id` **live**. Kelsey Ruhland's
+  availability ended 2026-08-08; a grant minted on 08-07 would otherwise still have
+  authorised a write on 08-21, attributed to her.
+- **Attribution gets MORE truthful, which runs opposite to the usual direction for a
+  bearer credential.** Under a grant `uploaded_by` becomes the capture-time operator —
+  the person who actually took the photo — rather than whoever happened to be signed in
+  when the queue drained.
+- **No middleware exemption.** Neither route is in `PUBLIC_PATHS`. That file carries
+  ten `/api/internal/*` exemptions, each with a comment recording the same shape: a
+  session-less POST 307s to `/login`, `fetch` follows it, a 200 carrying the login page
+  comes back, and the caller logs success for work that never happened. What the
+  feature needed instead is a keyhole — exact path, POST only, a syntactically
+  well-formed header — on the `!req.auth` branch alone, with the route still doing the
+  verifying. **The ADR's own stated mechanism for this was stale:** D4 says the routes
+  are reached because the client sends `redirect: 'manual'`, but ADR-0078 G7 had
+  already replaced the 307 with a **401**, which no redirect mode can survive. Recorded
+  in ADR-0086 §10.2 rather than quietly worked around.
+- **A refused grant never breaks a working upload.** If a grant is presented and
+  refused but a session exists, the request proceeds on the session. A design where a
+  stale credential broke a path that works today would be worse than not shipping.
+- **A refused grant with no session answers 401, not 403**, in the `auth:` family under
+  its own `auth:grant_refused` — because a sign-in genuinely fixes it, and that keeps
+  the ADR-0078 G8c one-tap recovery working. Distinct from `auth:session_expired`, so
+  the queue screen can still say which; never folded into the generic retry, which is
+  the conflation that let 97 photos accumulate invisibly behind a CORS 403.
+- **The grant is bound to one idempotency key**, and a grant-auth confirm presenting a
+  different key — or none — is refused. That is what "single-use by construction" means
+  operationally: without it, one captured grant authorises an unbounded number of rows.
+  Proven against real Postgres: one grant redeemed twice, with a deliberately re-minted
+  storage key, writes ONE `load_photos` row. Falsified there by dropping the claim —
+  two real rows appear.
+- **No migration and no queue-schema bump.** The grant is a stateless HMAC, so nothing
+  is persisted server-side. `upload_grant` on the queue row is additive, nullable and
+  unindexed, and there is **nothing to backfill it with** — a grant can only be minted
+  against a live session. A v4 bump would walk every row in a blob-carrying store to
+  stamp `null`, for no benefit, while re-opening the interleaving hazard that once
+  silently reverted the ADR-0078 G2 key backfill. Guarded by a v1 → current upgrade
+  test that checks the blob, the byte size and the G2 key all survive.
+- **Rotation is survivable by construction (D6).** A single-key swap would invalidate
+  every grant in every iPad at once — turning a routine credential rotation into
+  exactly the evidence-loss event this feature prevents, silently. `v` selects the key;
+  the verifier accepts `N` and `N-1`; the minter only issues `N`; `N-1` retires no
+  sooner than 14 days later. Exercised by a test that rotates two real keys and then
+  retires the old one.
+- **Rider, found while wiring the capture path:** the LIVE `/api/photos/confirm` call
+  sent no `Idempotency-Key` — only the replay did. So a confirm that landed and lost
+  its response was queued under a key the server had never seen, and the replay wrote a
+  second `load_photos` row. That is the ADR-0078 D3 defect, still open on the one path
+  that hands work to the queue. Closed here.
+
+**Ships INERT.** Nothing changes on the floor until the operator provisions
+`PHOTO_GRANT_SECRET` on CHAD-HQ (`docs/OPEN-ITEMS.md` §0.AP). Absent, the app mints no
+grants — never unsigned or fixed-key ones — and the photo flow behaves exactly as it
+did yesterday. `/healthz` gained `photo_grants_ok` so the inert state is visible; it is
+deliberately **not** part of the healthz verdict, because this feature's first deploy
+necessarily lands before the secret file does and gating on it would roll that deploy
+back. Which also means it will never announce itself: check it explicitly after
+provisioning.
+
+## 2026-08-08 — the void gate was wrong on a shared iPad, and the "one funnel" claim was not true (ADR-0084 Am.1 + ADR-0083 Am.1)
+
+Two small items Bill ordered off the 2026-08-08 walkthrough, one branch. Neither
+touches the schema; no migration.
+
+### ADR-0084 Amendment 1 — "Widen to site."
+
+The same-day count void shipped OWNER-scoped: 403 `not_your_count` unless the
+caller was the operator named on the count's original insert audit row. It was
+flagged as an open question the same day rather than decided unilaterally,
+because the precedent was not automatic — ADR-0078 Am.1 had loosened the photo
+gate from load-owner to SITE one week earlier, but **a photo upload is additive
+and a void is destructive**: it withdraws the anchor the entire floor is computed
+from. Given three options — keep owner-only, widen to site, widen with a manager
+confirm — Bill picked the middle one.
+
+The gate is a real loosening and is recorded as one rather than described as a
+refactor. **Given up:** an operator can withdraw any live same-day count at their
+own site. **Gained:** the mistake is correctable on the shift that made it. A
+floor iPad is a shared kiosk with per-operator PIN sign-in; a duplicate keyed at
+14:00 could not be withdrawn by whoever PIN'd in at 15:00, and since a void is
+same-day only there was no next-day path either — the mistyped anchor simply
+stood overnight.
+
+**Attribution went from one id to two.** The audit row now carries
+`actor_user_id` (who withdrew it), `after.entered_by` (whose count it was) and
+`after.cross_operator` — written on **every** void including self-voids, because
+a field present only on the cross-operator case is ambiguous between "the same
+person" and "an older build that did not record it", and this history is read
+years later by someone with neither the code nor the deploy dates. `entered_by`
+is NULL when no insert row exists and is never backfilled from `voided_by` — the
+same "we do not know is true" reasoning as ADR-0078 Am.1's `uploaded_by`.
+
+**The widened gate ships with the disclosure, not before it.** A count somebody
+else entered is labelled with their name, and the confirm step says so and states
+that the withdrawal will be recorded under the signed-in operator's name. Remove
+that sentence and you have to re-narrow the gate.
+
+`SnapshotNotYoursError`, `not_your_count`, the client branch that rendered it and
+`floor.count.void_err_not_yours` in all three locales were **deleted, not
+disabled**, and `listTodaysVoidableCounts` became `listTodaysVoidableCountsAtSite`
+— a disused check reads as one somebody forgot to call, and the next reader puts
+it back. EN/ES/UR copy was re-voiced from second person to neutral ("Counts **you
+entered** today", "before **you** entered it"), which is actively false on a
+colleague's row.
+
+Unchanged and pinned: cross-SITE is still a 404 — falsified with the ORIGINAL
+ENTERER as the actor, so the surviving refusal is demonstrably the site check and
+not a leftover of the ownership one, and the message names both sites. Dropping
+the site check goes red with _"a session at site `site-eugene` was allowed to void
+snapshot `snap-wood`, which belongs to site `site-woodland`"_. Restoring the owner
+gate goes red on the cross-operator case, so the new tests measure the loosening
+rather than passing either way. A cross-operator **prior-day** void is still 409:
+the amendment widened WHO, never WHEN.
+
+### ADR-0083 Amendment 1 — saves in the amended-month editor
+
+`AmendmentPanel` is the ONLY editor that reaches an already-signed period (the
+primary grid refuses a locked month), and it shipped posting
+`{bonus_employee_id, mattress_count, note}`. So a mis-keyed saves figure inside a
+signed period had no correction surface anywhere in the app. Nothing was ever
+lost by that — the service reads an absent `saves` as UNCHANGED, never zero — but
+the deadline was real: no signed period contains a non-zero save yet, and the
+first one closes at the end of the current bi-weekly period.
+
+Fifth column, `saves` in the POST body, modelled on `DailyEntryGrid` down to the
+three semantics that are easy to get subtly wrong: the field is always sent
+(a blank box is an explicit `0`, or clearing a value would be impossible from the
+one screen that reaches a signed period); a row is keyed if EITHER box has a
+value (a resale shift with a zero processed count is a real, paid day); and the
+day total tiers ONCE over `count + saves`.
+
+**Checking the deadline turned up a second defect nobody had reported.**
+`paid-units.ts` opens by claiming the grid, the signed PDF, the sign-time lock,
+the CSV export, the month list, the aggregates and the reconcile tripwire all
+route through `dailyPaidUnits`, so the screen, the PDF and the reconciler cannot
+diverge. `/bonus/months/[id]/page.tsx` did not. Its per-employee monthly totals
+AND its read-only grid totals called `calculateDailyBonusCents(mattress_count, rule)`
+— understating every processor's month by the entire cash value of their saves,
+on the very page an admin unlocks a signed month from and reads the corrected
+total on. The number was well-formed, the page rendered, the suite was green.
+
+So the claim was made structural instead of asserted.
+`paid-units-callers.guard.test.ts` reads the actual source of every
+`calculateDailyBonusCents` call in `src/` and fails the build on any caller
+outside the funnel that is not allowlisted with a written reason and a
+`mustContain` token proving its compensating control survives. It asserts its own
+call-site count (a rename or a broken glob otherwise reports green while matching
+nothing) and strips comments before matching, because every call site in this
+repo documents itself in a comment naming the function — the ADR-0084 guard was
+already burned once reading the prose that explained a token instead of the
+token.
+
+**On four-eyes, the brief's premise was wrong and is recorded as such.** The
+change order described this editor as "the same `shouldRequireAmendment` path".
+It is not: that predicate is reached only from `upsertDailyEntries`, the primary
+grid's path, and `upsertAmendedMonthEntries` has never imported it. That is by
+design — this surface is reachable only after an admin unlocks a signed month
+with a written reason, which CLEARS BOTH SIGNATURES, and the corrected month must
+be re-signed by two signers before it pays. The four eyes are the two
+re-signatures over the whole corrected month. What must not become true is that
+this path moves a signed month without that unlock; that is pinned behaviourally
+(locked month → `month_locked`, nothing written) and structurally (an assertion
+that `amendment.ts` does not reference the predicate, so wiring it in has to be
+deliberate). §6's own gate is re-pinned from the saves angle so widening this
+editor cannot become an argument for relaxing that one.
+
+### Falsifications (every one run, each named by its red)
+
+| Falsification                                                     | Red                                                                                      |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Drop the site check from `voidSnapshot`                           | names both sites and the snapshot id                                                     |
+| Restore the pre-Am.1 owner gate                                   | cross-operator void fails `not_your_count`                                               |
+| Remove `entered_by` from the void audit payload                   | self-void case fails the both-ids assertion                                              |
+| Drop `saves` from the panel's POST body                           | 4 red, incl. `expected undefined to be +0` on clear-to-zero                              |
+| Seed the panel's saves box blank                                  | 3 red; note-only edit posts `saves: 0` for a day that had 9; `$7.50` total reads `$0.00` |
+| Make an absent `saves` mean `0` in the service                    | 2,000¢ → 1,325¢ — **$6.75 under-paid on one day**, silently                              |
+| Restore `calculateDailyBonusCents(count, rule)` on the month page | 3 red in the guard, naming the file, the line and the fix                                |
+| Tier the two columns separately                                   | a 45 + 20 day pays $7.50 summed and **$0.00** tiered twice                               |
+
+### Verified
+
+`tsc --noEmit` clean, `eslint src` clean (0 warnings — warnings are errors here),
+full `vitest run` **4,717 passed / 49 skipped / 1 failed**. The one failure is
+`src/lib/ap/stamp-render-gate.test.ts`, a chromium-semaphore timing test in
+untouched code (`git status` shows no change under `src/lib/ap/`); it passes on
+its own and flakes only under the fully-parallel run. The payroll pre-push gate
+(`vitest run src/lib/bonus`) is **660 passed / 42 files**, up from 643 — the 17
+new tests are this branch's.
 
 ## 2026-08-08 — campaign close-out: the F-3 design was unbuildable, and the Kelsey option is dead (PR #215 + register reconciliation)
 

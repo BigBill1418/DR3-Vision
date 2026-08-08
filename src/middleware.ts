@@ -1,7 +1,7 @@
 import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
 import { authConfig } from '@/lib/auth.config';
-import { isPublic } from '@/lib/public-paths';
+import { isPublic, isGrantBearingPhotoRequest } from '@/lib/public-paths';
 import { buildCsp } from '@/lib/csp';
 
 // Edge-runtime middleware. Imports `authConfig` (the edge-safe base
@@ -95,6 +95,23 @@ export default auth((req) => {
     //
     // 401 is also the honest answer: the caller is unauthenticated, and the client
     // can act on that — which a 200 full of HTML makes impossible.
+    // ADR-0086 D4 — a grant-bearing photo POST is allowed to REACH its route
+    // handler, which is the thing that actually verifies the grant.
+    //
+    // This is not an exemption: the predicate is exact-path + POST + a
+    // syntactically well-formed `X-Upload-Grant`, it lives outside `isPublic`,
+    // and it can only ever get a request as far as a handler that will refuse
+    // it. It is here rather than in `PUBLIC_PATHS` because the ten
+    // `/api/internal/*` comments in `public-paths.ts` record what a real
+    // exemption costs, and because the grant routes are WRITES.
+    //
+    // It is needed at all because of the 401 immediately below: ADR-0078 G7
+    // replaced the 307-to-/login with a 401 for `/api/*`, so a session-less
+    // grant request would otherwise be refused at the edge and the route's own
+    // check could never run. See the long note at `isGrantBearingPhotoRequest`.
+    if (isGrantBearingPhotoRequest(path, req.method, req.headers.get('x-upload-grant'))) {
+      return decorate(NextResponse.next({ request: { headers: forwardHeaders } }));
+    }
     if (path.startsWith('/api/')) {
       return decorate(NextResponse.json({ error: 'unauthenticated' }, { status: 401 }));
     }
