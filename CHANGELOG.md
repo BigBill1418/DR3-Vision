@@ -3,6 +3,72 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — the day the photos landed: five merges, and a queue that had never once emptied (docs reconciliation)
+
+No code shipped today. This entry is the capstone on 2026-08-07 — five PRs merged,
+built, deployed and verified against production, final live SHA `1bbc8c3` — written
+the morning after with the numbers re-measured rather than remembered.
+
+**The arc.** `load_photos` had held **zero rows since the day the photo feature
+shipped**. Not one. As of this morning it holds **85 photos across 34 loads**, and
+nothing about the camera, the queue schema or the storage bucket was rewritten to
+get there. Three separate faults were stacked on top of each other, each one hiding
+the next, and each had to be pulled off in order:
+
+1. **R2 CORS was never set.** Every browser upload died at the preflight — before
+   any request reached the server, which is why nothing anywhere logged a failure.
+   Hand-repaired via the Cloudflare API. `0 → 4`.
+2. **A 307 to the login page counted as success.** `/api/*` answered an expired
+   session with a redirect, and the queue read a 2xx-after-follow as "delivered"
+   and dropped the row. ADR-0078 G7 makes those routes **401**. Silent loss became
+   a visible conflict.
+3. **The sweep was tied to a screen.** Draining only happened while the operator
+   sat on the page that owned the queue. ADR-0078 lifts it to an app-level engine.
+   `4 → 47`.
+
+Then the wall nobody had modelled: JT drained to 47 and stopped, because
+`requireOperatorOwnsLoad` demanded the load's **assigned operator** be the one
+signed in. On a shared floor iPad that is not an edge case — it is the end of every
+shift. Bill, mid-drain: _"we need to drain all users regardless of who is signed
+in."_ ADR-0078 Amendment 1 scoped the gate to the **site** and started recording
+`uploaded_by`, which is the trade stated plainly rather than dressed up as a
+refactor: the gate loosened, and attribution went from none to recorded. `47 → 85`.
+
+**About eighteen rows are still parked** on the device and want one more Retry-all.
+All 85 rows carry `uploaded_by IS NULL` — every one predates the flip, and there is
+no record of who took them. That column starts telling the truth with the next photo,
+and backfilling it would be inventing a name.
+
+**Alongside it, the machine got its history.** ADR-0079 Am.1 put the sheet era back
+on the Terex chart as the floor's number; ADR-0081 replaced the estimate with the
+workbook's own: **319 rows, 2025-01-02 → 2026-07-24, 44,663 units / 2,045.59 run
+hours**, idempotency re-proven live. Two months refused to reconcile and the defect
+turned out to be in the spreadsheet, not the reader — `March25` and `Dec25` publish
+SUM ranges shorter than their own data. Widening the tolerance until they passed
+would have taken roughly 19%; that is not a tolerance, it is a blindfold. And
+`March25` day 29 reads 131.75 pocket coils, so it was **left unimported** — 319 rows
+and not 320 — because 132 invents a quarter of a mattress and 131 discards one.
+ADR-0080 landed the same day: discovery now states what it could and could not see,
+and the commodity tracker was absorbed as audit **coverage**, because it carries no
+money at all.
+
+**On the discipline, since it is the reusable part.** Five PRs, five ADRs or
+amendments, five CHANGELOG entries, one merge at a time with CI green on each — and
+#214 deliberately held merge until the drain it enabled was observed clean rather
+than merged on the strength of a passing suite. Two things that wave produced are
+worth keeping: a renumbering (ADR-0078 → 0079) was accepted as its own PR rather
+than smuggled into a feature branch, and three handoff premises were checked and
+found **false** before being built on — the amendment workflow was never a reusable
+house pattern, the commodity tracker holds no figures, and a tenant search is a
+reachability probe and must never become the enumeration.
+
+Docs reconciled: `docs/OPEN-ITEMS.md` (drain saga closed out, two sections
+mis-numbered `0.AK` split, a spliced residual rewritten, rollout states re-read from
+`rollout_surfaces`), `docs/adr/README.md`, `CLAUDE.md`, `docs/operator/rollout-gate.md`.
+Every figure above was re-measured against production, not carried forward.
+
+---
+
 ## 2026-08-07 — nineteen months of the machine's own numbers, off Janette's sheet (ADR-0081)
 
 ADR-0079 Am.1 put the sheet era back on the Terex chart a few hours earlier — as the
@@ -26,7 +92,7 @@ skipped: 16 — 4 out_of_scope_2024 · 12 not_a_monthly_tab (incl. all three dec
 
 ### The sheet fights back in five ways
 
-**There is no date column.** The day is a bare number in an *unlabeled* column A; the
+**There is no date column.** The day is a bare number in an _unlabeled_ column A; the
 month and year live in the title row (`Terex Operating Data | July | 2026`). The date
 is composed from a **cell**, never a row ordinal — an ordinal survives every tab that
 starts on row 3 with day 1, then mis-dates everything after the first inserted line.
@@ -62,8 +128,8 @@ Dec25    units SUM(B3:B32)  hours SUM(G3:G32)  ← BOTH stop at row 32
 Hours reconciling **to the cent** on `March25` while units were out by exactly 288.75
 is the tell. The fix: reconcile over the row range the workbook's **own SUM formula
 declares**, parsed from the formula text. That is the true like-for-like question —
-*did I read the same rows the same way Excel did?* — and it is strictly **stronger**
-than the whole-tab compare: a cell mis-read *inside* the range still fails, and the
+_did I read the same rows the same way Excel did?_ — and it is strictly **stronger**
+than the whole-tab compare: a cell mis-read _inside_ the range still fails, and the
 rows outside it are reported as a `coverageGap` finding rather than silently dropped.
 
 **Rejected:** widening the ±0.5% tolerance until both passed. It would have needed
@@ -103,8 +169,8 @@ reasons, CASCADE lets removing a document **delete production throughput**, and 
 NULL strips provenance off rows still claiming `source='workbook_import'`. A DB CHECK
 pairs the two columns instead. Re-importing the same revision is a no-op; a newer
 revision deletes and reinserts the import's own rows in one transaction, manager rows
-untouched, never additive — a hard delete because an imported row is a *projection of
-a document revision*, not a person's claim, and the batch is audited so the
+untouched, never additive — a hard delete because an imported row is a _projection of
+a document revision_, not a person's claim, and the batch is audited so the
 supersession stays append-only. Actor is `system:workbook-import` with `created_by`
 NULL (ADR-0036/0077 discipline). `processed_units_daily` is never written — there is
 no code path, and a client-spy test proves it.
@@ -133,7 +199,7 @@ is a genuine cross-site asset master — `listEquipment()` queries the whole `eq
 table across **both** sites over all five categories (`vehicle forklift baler terex
 other`) and it is the AP approver's fleet picker. So the `/admin` hub tile and the list
 page title became **"Terex & equipment assets"** (leads with Terex, stays truthful
-about the rest); the `/dashboard/[site]/equipment` launcher tile — which *is*
+about the rest); the `/dashboard/[site]/equipment` launcher tile — which _is_
 Terex-only — became simply **"Terex"**; the dead `equipment.navLink` key (zero
 consumers) was deleted rather than renamed. `siteMachineLabel()`'s `'Equipment'`
 fallback was **deliberately left alone**: it is site-derived, so a site with no Terex
@@ -145,6 +211,7 @@ ADR-0079 and is corrected.
 Migration `20260833_adr0081_throughput_source` is purely additive and idempotent
 (ADR-0035): two columns, two CHECKs, one partial index; every existing row becomes
 `'manager'`, which is what all of them are.
+
 ## 2026-08-07 — discovery was under-reporting, and nothing could say so (ADR-0080)
 
 `sharedWithMe` returned **one item on each of the 902 sweeps** since 2026-07-29.
@@ -255,6 +322,7 @@ directions are pinned and both were falsified.
   entries is a real `0`; an uncomputable month stays `null`. `employeesCount`
   deliberately stays not-recorded — bonus entries cover processors only, and
   substituting one for the other would be a fabricated compliance figure.
+
 ## 2026-08-07 — drain regardless of who is signed in (ADR-0078 Amendment 1)
 
 The drain worked. `load_photos` went from **zero rows, ever** to **47 across 20

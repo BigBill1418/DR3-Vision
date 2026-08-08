@@ -8,15 +8,97 @@ marks it **DONE (date)** and moves it to the bottom section. Sibling docs:
 `docs/QUESTIONS.md` (design questions), `docs/handoffs/` (session context),
 `CHANGELOG.md` (what shipped).
 
-**Deadline that anchors everything: Kelsey's availability ends 8/8** —
-extended one week from 8/1 by Bill's renegotiated transfer (2026-07-19, rollup
-§ preamble). Stages 1–3 of the go-live plan
+**Deadline that anchors everything: Kelsey's availability ends 8/8 — that is
+TODAY (2026-08-08).** Extended one week from 8/1 by Bill's renegotiated transfer
+(2026-07-19, rollup § preamble). Stages 1–3 of the go-live plan
 (`docs/plans/2026-07-06-staged-golive-activation-and-comms.md`) are the only
-window her cross-checks are possible.
+window her cross-checks are possible. **Everything still blocked on her —
+AK-4 (Layer B commodity reconciliation rules), F-3 in 0.AI (the entered-vs-derived
+cross-check rule), S-10, and her AP routing row (§1 O-13, deactivate rather than
+delete) — becomes blocked with no owner after today.** Nothing below has been
+re-dated on the assumption of an extension.
 
 ---
 
-## 0.AK — 2026-08-07 TEREX workbook history import (ADR-0081) — residuals
+## 0.AM — 2026-08-08 post-wave reconciliation (docs only, no code)
+
+Five PRs merged and deployed 2026-08-07 (#210 #211 #212 #213 #214, final live SHA
+`1bbc8c3`, container up since 23:56 UTC). This section is the **index** of what is
+still open after that wave — every item is stated in full exactly once, in its own
+section below; nothing here is a second copy. Each line was re-measured against
+production on 2026-08-08, not carried forward from a claim.
+
+| Residual                                                                | Lives in                   | State as re-measured 2026-08-08                                                               |
+| ----------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| **F-3** — capture-time upload grant                                     | 0.AJ                       | Proposed, **not built**. Wants its own ADR.                                                   |
+| **R2 bucket CORS is hand-set**                                          | 0.AJ                       | **Open.** Repair holds (85 photos landed); the config still exists only in a shell history.   |
+| **C-50** — the four 2024 TEREX tabs                                     | 0.AL                       | Deferred by decision. History starts 2025-01-02.                                              |
+| **AK-4** — Layer B commodity reconciliation rules                       | 0.AK                       | Blocked on Kelsey. **Her availability ends today.**                                           |
+| **AK-5 (C-43)** — `sharedWithMe` November sunset                        | 0.AK / 0.AB                | Architecture decision still pending. No successor identified.                                 |
+| **O-16** — `March25` day 29 (131.75) hand-entry                         | 0.AL                       | **Verified absent in prod**: 0 rows for `2025-03-29`. Import is 319 rows, not 320, by design. |
+| **#205 P2–P5** — claim/takeover, saves, snapshot void re-scope, dropoff | §0.AM handoff ledger below | **Pending.** P1 is what shipped as ADR-0078.                                                  |
+| **O-15 / O-17** — three defects in Bill/Janette's workbook              | 0.AL                       | Reported, not repaired by Vision. Fixes are cell edits in `TEREX.xlsx`.                       |
+| **AK-1 / AK-2** — trailer-list + commodity-tracker confirm clicks       | 0.AK                       | **Both still unconfirmed in prod** (`doc_class IS NULL` on each). Bill's click, never ours.   |
+| **AK-3** — 8 reachable-but-unwatched documents                          | 0.AK                       | Open. Prod watches 3 sources; the `discovery_gap` anomaly stays open by design.               |
+
+**Rollout state, read from `rollout_surfaces` on 2026-08-08 (not inferred):**
+`equipment_entry`, `equipment_terex_ledger`, `equipment_trend`, `ipad_hauls` are
+all **`live` at Woodland and `pilot` at Eugene** — Eugene by design, and its rows
+stay registered so a deliberate "no" is distinguishable from a lookup that failed.
+`ipad_count`, `ipad_inbound`, `ipad_queue`, `loads_inventory`, `reimbursement_tile`
+are live at both. `workbook_sync` is registered for **Woodland only** and is still
+`pilot` — the ADR-0081 history import was a one-off script run, not a sweep behind
+that surface, so the surface being `pilot` is not a contradiction.
+
+### Handoff execution ledger (2026-08-07 wave)
+
+⚠ **The three handoff documents are NOT on `main`.** PRs **#205**, **#206** and
+**#207** are still **OPEN**; each carries exactly one file under `docs/handoffs/`
+that has never merged. The EXECUTED notes below therefore live here, on main,
+because that is where a future session can actually read them. Attaching them to
+the handoffs themselves means merging or commenting on those three PRs — a
+decision for Bill, not a docs sweep.
+
+- **#205 — floor/iPad bulletproof reliability + four operator features (JT feedback).**
+  **Executed 2026-08-07 as ADR-0078 (PR #212) — P1 ONLY.** Phases **P2** (claim /
+  takeover), **P3** (saves), **P4** (snapshot void re-scope) and **P5** (dropoff)
+  are **still pending and unstarted**. The handoff's premise corrections — the G1–G3
+  answers — are on record in ADR-0078 under "Premises that died on checking" and
+  stand as the input to that eventual build. ADR-0078 **Amendment 1** (PR #214)
+  followed the same day and is not in the handoff at all: Bill ordered the photo
+  gate loosened from load-owner to site mid-drain.
+- **#206 — Terex daily processing captured by manager entry, not derived.**
+  **Executed 2026-08-07 as ADR-0079 (PR #208), renumbered from 0078 by a
+  concurrency ruling (PR #209).** Two deviations worth carrying forward: (1) the
+  handoff's premise that the **bonus amendment workflow was a reusable house
+  pattern with two or three consumers is FALSE** — there is exactly one consumer,
+  and the reuse was structurally impossible (see 0.AI, F-2); prior-day edits are
+  refused rather than forked. (2) The cutover did **not** hide the sheet era —
+  ADR-0079 **Amendment 1** (PR #211) restored it to the chart, structurally
+  labeled floor-wide, the same day.
+- **#207 — doc-ingest: fix under-discovery, absorb the commodity tracker and the
+  trailer list.** **Executed 2026-08-07 as ADR-0080 (PR #210).** Two reversals
+  against the handoff: (1) `POST /search/query` was adopted as a **reachability
+  probe only and explicitly NEVER as the enumeration** — as the enumeration it
+  would widen intake to case-management and HR material, a security delta rather
+  than a functional one; (2) the commodity tracker **carries no money at all**, so
+  it was absorbed as audit **COVERAGE**, not as a reconciliation source — which
+  changes the shape of AK-4 rather than satisfying it. The Terex cost residual
+  (ADR-0077 Am.3) rode the same PR.
+
+---
+
+## 0.AL — 2026-08-07 TEREX workbook history import (ADR-0081) — residuals
+
+_Renumbered 2026-08-08: this section shipped as a second `0.AK` because two
+parallel branches picked the next free letter at the same time. `0.AK` belongs to
+the ADR-0080 section further down, whose items are keyed `AK-1`…`AK-8`; this
+section's items are `O-15`…`O-17` and `C-50`, so no cross-reference moves._
+
+**Live in production, verified 2026-08-08:** 319 rows, `source = 'workbook_import'`,
+2025-01-02 → 2026-07-24, **44,663 units / 2,045.59 run hours**, 0 voided, and
+**0 manager-entered rows so far** — JT's own entries begin whenever he next enters
+a day, and win over the import by construction.
 
 Everything in this section was measured against the real R2 artifact
 (`doc_sources 8a0246e7-dbb0-4de2-a90f-ddc5d4b2de4b`, version
@@ -34,10 +116,10 @@ correctly and the import ran green.
   the workbook's published totals under-report. Fix the SUM ranges in
   `TEREX.xlsx`.**
 
-  | Tab       | Formula as written                                | Rows the block actually reaches | Omitted                                          |
-  | --------- | ------------------------------------------------- | ------------------------------- | ------------------------------------------------ |
+  | Tab       | Formula as written                                       | Rows the block actually reaches | Omitted                                                         |
+  | --------- | -------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------- |
   | `March25` | units `SUM(B3:B30)` / `SUM(C3:C30)`; hours `SUM(G3:G33)` | through row 33                  | row 31 (day 29) **131.75 coils**; row 33 (day 31) **157 coils** |
-  | `Dec25`   | units `SUM(B3:B32)`; hours `SUM(G3:G32)`          | through row 33                  | row 33 (day 31) — **182 coils and 7.45 hours**   |
+  | `Dec25`   | units `SUM(B3:B32)`; hours `SUM(G3:G32)`                 | through row 33                  | row 33 (day 31) — **182 coils and 7.45 hours**                  |
 
   Arithmetic closes exactly, which is how we know the defect is the formula and
   not the reading: `March25` publishes 1483 + 57 = **1540** and the extraction
@@ -87,16 +169,16 @@ correctly and the import ran green.
   label.**
 
   The imported history therefore starts **2025-01-02**. The four are excluded
-  *by name* rather than merely unmatched (`TABS_2024_OUT_OF_SCOPE`), so the
+  _by name_ rather than merely unmatched (`TABS_2024_OUT_OF_SCOPE`), so the
   import report says "out of scope for v1 (four bespoke 2024 schemas)" for these
   and "not a monthly operating tab" for `diesel` — a reader can tell somebody
   looked. What each one actually is, measured:
 
-  | Tab      | Shape                                                                                     |
-  | -------- | ----------------------------------------------------------------------------------------- |
-  | `Sept24` | header on **row 1**: `Date \| Processed \| Received \| Hrs Used` — a real date column, and `Processed`/`Received` rather than the three commodity columns |
-  | `Oct24`  | doubled per-commodity layout with **three** separate `Hrs Used` columns                    |
-  | `Nov24`  | a distinct shape again — not characterised further in this pass                           |
+  | Tab      | Shape                                                                                                                                                                                              |
+  | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `Sept24` | header on **row 1**: `Date \| Processed \| Received \| Hrs Used` — a real date column, and `Processed`/`Received` rather than the three commodity columns                                          |
+  | `Oct24`  | doubled per-commodity layout with **three** separate `Hrs Used` columns                                                                                                                            |
+  | `Nov24`  | a distinct shape again — not characterised further in this pass                                                                                                                                    |
   | `Dec24`  | carries `Start Time` / `End Time` **clock times**, not hour-meter readings — so run hours would have to be derived from wall-clock, which is a different measurement from the machine's hour meter |
 
   `Dec24` is the one that decides this is not a small job: every other tab in the
@@ -126,20 +208,28 @@ correctly and the import ran green.
   operator accepts the prompt.** Confirm per-device: the chrome shows a
   connection pill, and `/operator/<site>/queue/conflicts` resolves.
 
-- **O-13 — drain the parked photo queue on JT's iPad (~33 conflict rows).**
-  The ~66 non-conflict rows are expected to drain on their own once CORS was
-  fixed, possibly on the OLD bundle and therefore BEFORE this ships — so
-  `load_photos` may already be partially populated when you look. The remaining
-  conflict-flagged rows cannot drain on the old bundle at all: nothing in it can
-  clear the flag. After O-12, open the conflicts screen and use **Retry all**.
+- **O-13 — drain the parked photo queue on JT's iPad. — SUBSTANTIALLY DONE; one
+  more Retry-all is wanted.**
 
-  **UPDATED 2026-08-07 (ADR-0078 Amendment 1):** the last sentence here — "rows
-  whose loads belong to another operator's login will refuse again; those need
-  that operator signed in on that device" — is **OBSOLETE once Am.1 is live**.
-  The photo gate is site-scoped now, so any operator at the site drains every
-  row. Cross-SITE rows would still refuse, but a floor iPad only ever holds its
-  own site's loads, so in practice Retry-all now drains everything. Until Am.1
-  deploys, the original per-operator caveat still applies.
+  **Measured in production 2026-08-08: `load_photos` holds 85 photos across 34
+  loads.** The saga in one line: **0 forever → 4** (the R2 CORS repair) **→ 47**
+  (the ADR-0078 app-level drain engine, PR #212) **→ 85** (once ADR-0078 Am.1,
+  PR #214, stopped the gate refusing another operator's rows). Against the ~103
+  the device was known to be holding, **roughly 18 rows are still parked** and
+  should come across on one more **Retry all** from the conflicts screen.
+
+  **The per-operator caveat is now simply GONE, not conditionally gone.** Am.1 is
+  merged and live (`1bbc8c3`), so the photo gate is site-scoped: any operator
+  signed in at the site drains every row on that device. The original wording —
+  "rows whose loads belong to another operator's login will refuse again; those
+  need that operator signed in on that device" — described the pre-Am.1 build and
+  must not be followed. Cross-SITE rows would still refuse, but a floor iPad only
+  ever holds its own site's loads.
+
+  **`uploaded_by` attribution is live and correctly EMPTY.** All 85 rows carry
+  `uploaded_by IS NULL` because every one of them predates Am.1's flip; that is
+  the honest reading, not a defect. The first attributed row will be the next
+  photo uploaded. Do not "backfill" it — there is no record of who took those.
 
 ### Proposed follow-up (recorded, NOT built in P1)
 
@@ -183,6 +273,12 @@ exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
   is infrastructure-shaped, not application-shaped, and deserves its own review.
   ADR-0078's client-side mitigation (`blocked:` / `uploads-blocked`) makes a
   recurrence VISIBLE within one sweep; it does not prevent one.
+  **STILL OPEN 2026-08-08, and it is now the only unclosed piece of the drain
+  saga.** The repair is proven — 85 photos have crossed the preflight since — but
+  proof that it works is not the same as codification, and this is the one item
+  where a silent recurrence would look exactly like the original outage. Option
+  (1), a checked-in `infra/r2-cors.json` plus an apply script, remains the
+  recommendation.
 
 - **`src/lib/events/sequences.test.ts` has never run in CI.** It is gated on
   `DR3_TEST_DATABASE_URL`, which nothing in the repo sets, so it self-skips
@@ -202,6 +298,9 @@ exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
   delete-then-write). The dangerous direction cannot occur. Making them fully
   atomic means threading a transaction through both services and changing their
   lock footprint, which buys nothing today.
+
+---
+
 ## 0.AK — 2026-08-07 ADR-0080: discovery reachability + commodity absorption
 
 ### Decisions waiting on Bill
@@ -216,8 +315,20 @@ exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
   not confirm this** — `confirmClassification` writes `classified_by` +
   `doc_class_source='operator'`, and Vision must not stamp Bill's name on a
   decision he did not make. Ready to confirm.
+  **STILL UNCONFIRMED, verified in prod 2026-08-08:** `Woodland Trailer list.xlsx`
+  has `doc_class IS NULL`, `doc_class_source IS NULL`, `site_id IS NULL`, and a
+  `proposed_class` of `equipment_inventory`. Bill's click is the whole remaining
+  step; nothing else waits on anything.
 - **AK-2 — confirm the COMMODITY tracker classification** (`commodity_audit_tracker`),
   same discipline, once the extractor fix below lands.
+  **STILL UNCONFIRMED, verified in prod 2026-08-08 — and one detail changes what
+  the click is.** The extractor fix landed with ADR-0080 (PR #210), so the stated
+  precondition is met. But the row (`Woodland Data Auditing Tracker (1).xlsx`)
+  carries `proposed_class = 'unknown'`, **not** `commodity_audit_tracker` — the
+  classifier declines to guess it, which is exactly the outcome C-35 predicted for
+  a document with no naming convention behind it. So this is not a one-click accept
+  of a proposal: Bill has to **choose** the class and the site. Correct behaviour,
+  and the reason the click cannot be automated away.
 - **AK-3 — review the 8 reachable-but-unwatched documents** now listed on
   `/admin/doc-ingest/health`: `DR3 Machine List (2).xlsx`, `TEREX.xlsx` (Kelsey's
   copy — a SECOND copy, distinct from the watched one in Janette's drive),
@@ -226,6 +337,9 @@ exp ≈ 14d}`. Both photo routes accept **a session OR** an `X-Upload-Grant`
   `Woodland Invoices tracking.xlsx`, `Woodland Outbound Auditing 2026.xlsx`.
   Nothing is registered automatically; each is a decision. Until reviewed, the
   `discovery_gap` anomaly stays open — that is intended, not noise.
+  **Unchanged 2026-08-08:** `doc_sources` still holds exactly **three** watched
+  rows — `TEREX.xlsx` (confirmed), the trailer list and the commodity tracker
+  (both unconfirmed). None of the eight has been adopted.
 
 ### Blocked on a stakeholder
 
@@ -514,9 +628,10 @@ _(O-numbers below are scoped to this section, as in 0.AF — the 2026-07 table f
   importer, not a person). **`equipment_entry` flipped live at Woodland**
   under `actor_label: system:terex-ledger-flip`. Eugene stays `pilot`.
   Design choice + rejected alternatives recorded in ADR-0077 D11.
-  **Residual:** `equipment_trend` remains `pilot` at Woodland — the chart is not
-  needed to capture, and flipping it is a separate call for Bill whenever he wants
-  managers to see the trend view alongside entry.
+  **Residual — CLOSED 2026-08-07:** `equipment_trend` was `pilot` at Woodland when
+  this was written; Bill ordered the flip and it went `live` at **15:10 UTC**
+  (audited, `system:claude-code`). Eugene stays `pilot` by design. Verified against
+  `rollout_surfaces` 2026-08-08.
 
 ### Accepted residuals (recorded, not actions)
 
@@ -567,12 +682,16 @@ Sheer Machine Shear Machine` at **Eugene**, none of them the machine. Because
   but not the cent total, so proving conservation meant re-deriving it from
   `ap_requests`. A future merge should stamp
   `COALESCE(confirmed_amount_cents, amount_cents)` into the audit `after` payload.
-- **`equipment_trend` is still `pilot` at BOTH sites.** Entry and the ledger are
-  **DONE (2026-08-07 15:10 UTC):** flipped `live` for Woodland at Bill\'s
-  instruction (audited, `system:claude-code`). Eugene remains `pilot` by design.
-  live at Woodland; the trend CHART is not, so managers see the entry form and the
-  ledger link but no throughput graph. Not a defect — flipping it is a separate
-  call for Bill whenever he wants the chart in front of them.
+- **`equipment_trend` — DONE (2026-08-07 15:10 UTC), no longer a residual.**
+  _(This entry was a mangled splice of the original residual and its closing note;
+  rewritten 2026-08-08 against `rollout_surfaces`, which is the authority.)_
+  It was written when entry and the ledger were live at Woodland but the trend
+  CHART was not, so managers saw the entry form and the ledger link with no
+  throughput graph. Bill ordered the flip; `equipment_trend` is **`live` at
+  Woodland** (audited, `system:claude-code`) and **`pilot` at Eugene** by design.
+  With ADR-0079 Am.1 and ADR-0081 both landed, that chart now carries the combined
+  series — nineteen months of imported sheet-era history alongside whatever JT
+  enters from here.
 - **Shannon's AP second-approval emails disabled 2026-08-07** at Bill's
   instruction. She now receives **only** the Eugene daily production report.
   **Routing is unchanged** — requests still route to her, so anything assigned to
@@ -829,8 +948,6 @@ are done. See ADR-0067 + CHANGELOG 2026-07-29.
 - **C-31 — OPERATOR: provision `~/.dr3-vision-secrets/doc-ingest.env` on svdp-dev**
   | O-14 | ❌ **WITHDRAWN 2026-07-29 — misdiagnosis. See ADR-0067 Amendment 2.** This claimed Entra's `appRoleAssignmentRequired` blocked `docs-dr3@svdp.us`. **False.** Live logs show `entra_signin_denied / email=docs-dr3@svdp.us / reason=unknown` — Microsoft authenticated it fine and **VISION's** SSO gate refused it, because `docs-dr3` has no `users` row (and must never have one). The operator was signing into **Vision** as the service account instead of into the **separate** Microsoft consent prompt that the Connect button opens. Root cause of the bad diagnosis: the error string was grepped with `--include=*.ts --include=*.tsx`, but it lives in `src/i18n/locales/en/operator.json`; the empty result was misread as "not our string". **Correct sequence: sign into Vision as `bill.barnard@svdp.us` FIRST, then click Connect, then sign in as `docs-dr3` at the Microsoft prompt.** The Entra group change is unnecessary and should be reverted (the runbook script removes it conditionally). |
   | C-31 | ✅ **RESOLVED 2026-07-29 — no secret needed; the requirement was removed, not satisfied.** This originally asked Bill to create `~/.dr3-vision-secrets/doc-ingest.env` with `DOC_INGEST_TOKEN_KEY`. He declined, correctly: the repo rule is no `.env` for credential material, and a second secret bought nothing. The doc-ingest AES key is now DERIVED (scrypt + a doc-ingest-specific salt, giving domain separation) from `MYMRC_CRED_KEY`, already mounted per ADR-0057. The `doc-ingest.env` compose mount and the `.env.example` entry are deleted. **Remaining operator action is now only Bill's one-time sign-in at `/admin/doc-ingest/connect` as `docs-dr3@svdp.us`.** Rotation note: rotating `MYMRC_CRED_KEY` costs one re-click of Connect (a refresh token is re-obtainable), not data loss. |
-
-  | C-31 | ✅ **RESOLVED 2026-07-29 — no secret needed; the requirement was removed, not satisfied.** This originally asked Bill to create `~/.dr3-vision-secrets/doc-ingest.env` with `DOC_INGEST_TOKEN_KEY`. He declined, correctly: the repo rule is no `.env` for credential material, and a second secret bought nothing. The doc-ingest AES key is now DERIVED (scrypt + a doc-ingest-specific salt, giving domain separation) from `MYMRC_CRED_KEY`, already mounted per ADR-0057. The `doc-ingest.env` compose mount and the `.env.example` entry are deleted. **Remaining operator action is now only Bill's one-time sign-in at `/admin/doc-ingest/connect` as `docs-dr3@svdp.us`.** Rotation note: rotating `MYMRC_CRED_KEY` costs one re-click of Connect (a refresh token is re-obtainable), not data loss. |
   `/admin/doc-ingest/connect` returns a loud 503 (by design — ADR-0067 D6; it never
   silently no-ops). The compose mount is already wired `required: false`, so the app
   boots fine without it.
@@ -959,8 +1076,13 @@ inference that Bill has to confirm one document at a time.
   real validation-token handshake over the Cloudflare tunnel, and real `.xlsm` daily-log
   bytes. The sweep is designed so each of those failing degrades to "slower" or "reported",
   never to "silently wrong" — but that design is exactly what first contact should test.
-- **C-46 — OPERATOR: deploy the `doc-ingest-sweep` container.** A new compose service was
-  added (`docker-compose.yml`, `scripts/doc-ingest-sweep-cron.mjs`). It needs
+- **C-46 — ✅ DONE (verified live 2026-08-08).** `dr3-vision-doc-ingest-sweep` is up on
+  svdp-dev (CHAD-HQ) alongside the other cron daemons, confirmed by `docker ps` rather
+  than by assuming the compose change shipped. The precondition every doc-ingest item
+  below used to carry is satisfied; `/admin/doc-ingest/health` no longer has a standing
+  reason to report the sweep STALE.
+  _Original item:_ **OPERATOR: deploy the `doc-ingest-sweep` container.** A new compose
+  service was added (`docker-compose.yml`, `scripts/doc-ingest-sweep-cron.mjs`). It needs
   `~/.dr3-vision-secrets/cron.env` (already present for the other crons) and a
   `docker compose up -d doc-ingest-sweep` on svdp-dev. **Until it runs, nothing sweeps** —
   and `/admin/doc-ingest/health` will correctly show the sweep as STALE, which is the
