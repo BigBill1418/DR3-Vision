@@ -106,6 +106,17 @@ export function isPublic(pathname: string): boolean {
   // silent no-op reproduces the exact MyMRC failure (ADR-0057 D9) the sweep was
   // built to prevent. The daemon uses `redirect:'manual'` as the second defence.
   if (pathname.startsWith('/api/internal/doc-ingest/')) return true;
+  // ADR-0087 — the Terex throughput-gap watchdog
+  // (`/api/internal/equipment/throughput-gap`). Same loopback-guarded
+  // internal-route pattern as every cron above: the route itself requires the
+  // bearer in prod and 404s any cf-connecting-ip request, so this exemption only
+  // stops the middleware 307'ing the session-less daemon POST to /login. The
+  // failure it prevents is the exact one this feature was built to end — a
+  // watchdog that logs success while reporting nothing is a SECOND silent
+  // instrument layered over the first, and it would be far worse than having no
+  // watchdog, because the ledger would stay empty and look like "no gaps". The
+  // daemon uses `redirect:'manual'` as the second defence.
+  if (pathname.startsWith('/api/internal/equipment/')) return true;
   // ADR-0067 §3.2 — the Graph change-notification webhook
   // (`/api/doc-ingest/notifications`). UNLIKE the loopback-guarded crons above,
   // this endpoint is genuinely internet-reachable: Microsoft Graph POSTs to it
@@ -138,7 +149,7 @@ export function isPublic(pathname: string): boolean {
 //
 // NEITHER photo route is in `PUBLIC_PATHS` above, and neither gets a
 // `startsWith` exemption. That is D4's decision and it is not stylistic: this
-// file carries TEN `/api/internal/*` exemptions, every one with a comment
+// file carries ELEVEN `/api/internal/*` exemptions, every one with a comment
 // recording the same shape — a session-less POST 307s to /login, `fetch` follows
 // the redirect, a 200 carrying the LOGIN PAGE comes back, and the caller logs
 // success for work that never happened. ADR-0068 Amendment 5 records walking
