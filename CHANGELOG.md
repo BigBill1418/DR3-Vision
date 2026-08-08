@@ -3,6 +3,34 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — campaign close-out: the F-3 design was unbuildable, and the Kelsey option is dead (PR #215 + register reconciliation)
+
+Docs only, `[skip-deploy]`. PR #215 landed two artifacts as files-only (deliberately
+touching no shared register while three feature PRs were in flight); this entry is
+the deferred register reconciliation it listed as follow-ups.
+
+- **ADR-0086 (Proposed, NOT accepted)** — capture-time photo upload grants (F-3).
+  Corrects the design recorded in OPEN-ITEMS §0.AJ, which was unbuildable as
+  written: it signed the grant over `storage_key`, but the drain re-mints a fresh
+  random key for any photo older than 8 minutes, so 100% of the population F-3
+  exists for would fail its own field check. The corrected grant binds the right
+  to attach one photo of one kind to one load. Decision-ready for Bill.
+- **Layer-B commodity reconciliation re-scoped**
+  (`docs/plans/2026-08-08-layer-b-commodity-reconciliation-rescope.md`). The
+  Kelsey-method-capture plan is dead (availability ended 2026-08-08, capture
+  never happened) — and checking killed three more premises: the tracker encodes
+  _that_ audits happened, not _how_; Shannon never initialled one (Rick and
+  Janette hold the interviewable evidence); and the vendor-invoice data leg is
+  entirely empty in prod (six tables, 0 rows) — so Kelsey was never the only
+  blocker. New sequence: 4a interviews (~2026-08-22), 4b data leg, 4c rules.
+- **AK-5 (C-43)** given a decision-by date: **2026-10-01**, one month ahead of
+  the `sharedWithMe` 2026-11-01 sunset.
+- **OPEN-ITEMS corrections:** AK-1/AK-2 are operator-classified (no longer
+  "unconfirmed"); #205 reads ALL FIVE PHASES SHIPPED; three new rows — the
+  Kelsey login access review (awaiting Bill), the confirmed-class-with-no-absorber
+  silent gap found via the trailer list (open defect), and the S-7
+  `recycling_rates` seed question.
+
 ## 2026-08-08 — a drop-off is a label, a count and a photo; the money default was the bug (ADR-0085)
 
 JT wanted a button. _"A tile or static button on the iPad; hitting it prompts
