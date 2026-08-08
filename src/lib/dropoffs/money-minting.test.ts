@@ -17,6 +17,7 @@
 // `floor-dropoff.db.test.ts`. Two layers, two suites, neither standing in for
 // the other.
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ConsumerDropoffKind } from '@prisma/client';
 import { __mintsCheckMoneyByDefaultForTest as mints, UNPAID_DROPOFF_CENTS_PER_UNIT } from './service';
@@ -62,6 +63,29 @@ describe('ADR-0085 — which drop-off kinds mint check money', () => {
       `an unclassified drop-off kind was enrolled in the $3/unit payout — 4 units would ` +
         `have written ${wouldHaveMinted}¢ of check money nobody decided to pay`,
     ).toBe(false);
+  });
+
+  it('the source carries the `never` exhaustiveness assertion (the compile-time half)', () => {
+    // A source-text assertion, which is unusual here and deliberate.
+    //
+    // The runtime half is covered by the test above and cannot see this at all:
+    // deleting `const unclassified: never = kind` leaves every test in this file
+    // green, because the trailing `return false` still denies. The compile-time
+    // half's absence is invisible to the suite BY CONSTRUCTION — which is exactly
+    // how it shipped in the first cut of ADR-0085 and had to be caught by a human
+    // reading the diff on PR #217.
+    //
+    // What it buys: with the assertion, adding a `ConsumerDropoffKind` is TS2322
+    // in `service.ts` and the author must classify it. Without it, a new kind
+    // falls silently to the floor — so a kind that SHOULD pay pays NOTHING. That
+    // is the same quiet-money defect as the inversion this function replaced,
+    // pointed the other way, and no runtime test can distinguish the two.
+    const src = readFileSync(new URL('./service.ts', import.meta.url), 'utf8');
+    expect(
+      src,
+      'the `never` exhaustiveness assertion is gone — a new ConsumerDropoffKind ' +
+        'now compiles clean and silently mints nothing',
+    ).toMatch(/const\s+unclassified:\s*never\s*=\s*kind\s*;/);
   });
 
   it('the OLD predicate would have failed the test above — the regression is real', () => {

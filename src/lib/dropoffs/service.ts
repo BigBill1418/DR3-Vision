@@ -89,9 +89,9 @@ export const UNPAID_DROPOFF_CENTS_PER_UNIT = 300;
  * Now the allowlist names the kinds that DO mint, and everything else is refused.
  * Two independent guards, on purpose:
  *
- *   - the exhaustive `switch` makes a new `ConsumerDropoffKind` a COMPILE ERROR
- *     here, so whoever adds one has to state in this file whether it carries
- *     money;
+ *   - the `never` assertion below makes a new `ConsumerDropoffKind` a COMPILE
+ *     ERROR here, so whoever adds one has to state in this file whether it
+ *     carries money;
  *   - the trailing `return false` is the RUNTIME floor for the case the compiler
  *     cannot see — a migration that ships a label before the code that knows
  *     about it, a value that arrives through an `as` cast, a row written by an
@@ -99,6 +99,16 @@ export const UNPAID_DROPOFF_CENTS_PER_UNIT = 300;
  *
  * The compile error is what makes the decision explicit. The runtime deny is what
  * holds when the decision was never made.
+ *
+ * **The `never` assertion is load-bearing and was nearly omitted.** A covered
+ * `switch` followed by `return false` type-checks perfectly happily when a new
+ * enum member appears: every path still returns `boolean`, so the new member just
+ * falls through to the floor and `tsc` exits 0. Reviewed on PR #217 and verified
+ * by compiling the shipped shape against an extra member — it passed. The runtime
+ * deny alone is the WRONG failure for a kind that SHOULD pay: it would silently
+ * pay nothing, which is the same class of quiet-money defect as the inversion
+ * this function was rewritten to fix, pointed the other way. Deleting the
+ * assertion restores that hole while leaving every test green.
  */
 function mintsCheckMoneyByDefault(kind: ConsumerDropoffKind): boolean {
   switch (kind) {
@@ -119,8 +129,20 @@ function mintsCheckMoneyByDefault(kind: ConsumerDropoffKind): boolean {
     case 'floor_incentive':
       return false;
   }
-  // See the header. Unreachable while the switch above is exhaustive; the floor
-  // for when it is not.
+
+  // The compile-time half. With every member covered above, `kind` narrows to
+  // `never` here and this assignment is legal. Add a member without adding a
+  // case and `kind` is that member instead — TS2322, in this file, naming the
+  // kind nobody classified.
+  //
+  // Do NOT "simplify" this away because the switch already looks exhaustive: the
+  // `return false` below means the function still type-checks without it, so its
+  // absence is invisible. See the header.
+  const unclassified: never = kind;
+  void unclassified;
+
+  // The runtime half. Unreachable while the switch above is exhaustive; the
+  // floor for a value that reached us anyway.
   return false;
 }
 

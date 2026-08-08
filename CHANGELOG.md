@@ -32,10 +32,18 @@ shape for a year and nobody has been paid wrongly only because nobody has added
 a kind.
 
 The predicate now names the kinds that **do** mint and refuses everything else,
-with two independent guards: an exhaustive `switch` that makes the next
-`ConsumerDropoffKind` a **compile error** in that file, and a trailing
-`return false` for the case the compiler cannot see — a migration that ships a
-label before the code that knows about it. `money-minting.test.ts` presents a
+with two independent guards: a **`never` exhaustiveness assertion** that makes
+the next `ConsumerDropoffKind` a **compile error** (TS2322) in that file, and a
+trailing `return false` for the case the compiler cannot see — a migration that
+ships a label before the code that knows about it.
+
+That assertion was missing from the first cut and review caught it. A covered
+`switch` followed by `return false` type-checks fine when a new member appears —
+every path still returns `boolean`, so it falls through to the floor and `tsc`
+exits 0. Verified both ways against an extra enum member: without the assertion
+`tsc` passes; with it, `service.ts(141,9): error TS2322`. Money could not have
+leaked either way, but the hole pointed the other direction and cost the same — a
+future kind that SHOULD pay would have **silently paid nothing**. `money-minting.test.ts` presents a
 kind the enum does not contain and proves it mints nothing, then runs the OLD
 predicate beside it returning `true` on the same input, so the regression is an
 executed fact rather than a paragraph.

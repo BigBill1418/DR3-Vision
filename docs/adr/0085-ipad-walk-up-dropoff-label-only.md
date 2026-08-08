@@ -80,15 +80,31 @@ the label is new.
 `mintsCheckMoneyByDefault(kind)` now names the kinds that **do** mint
 (`unpaid`, `illegal`) and refuses everything else. Two independent guards:
 
-- an **exhaustive `switch`** with no `default:`, so the next
-  `ConsumerDropoffKind` is a **compile error** in that file and whoever adds it
-  must state whether it carries money;
+- a **`never` exhaustiveness assertion** (`const unclassified: never = kind`)
+  after the switch, so the next `ConsumerDropoffKind` is a **compile error**
+  (TS2322) in that file and whoever adds it must state whether it carries money;
 - a trailing **`return false`** for the case the compiler cannot see — a
   migration that ships a label before the code that knows about it, a value
   arriving through an `as` cast, a row written by an older deploy.
 
 The compile error makes the decision explicit. The runtime deny holds when the
-decision was never made. `service.money-minting.test.ts` presents a kind the enum
+decision was never made.
+
+**The `never` assertion is load-bearing, and the first version of this ADR
+wrongly claimed the switch alone provided it.** It does not. A covered `switch`
+followed by `return false` type-checks perfectly happily when a new enum member
+appears — every path still returns `boolean`, the new member falls through to the
+floor, and `tsc` exits 0. Caught in review on PR #217 and verified both ways
+against the shipped shape plus an extra member: without the assertion `tsc`
+passes; with it, `service.ts(141,9): error TS2322: Type
+'"temp_falsification_kind"' is not assignable to type 'never'`.
+
+Money could not have leaked either way — the runtime floor denies. The hole was
+the **opposite** direction and just as expensive: a future kind that SHOULD pay
+would have **silently paid nothing**, the same class of quiet-money defect as the
+inversion this function was rewritten to fix, pointed backwards. `dropoffKindToChannel`
+in `pool-routing.ts` already had this property for free (no trailing return, so
+TS2366 fires); this function needed it stated. `service.money-minting.test.ts` presents a kind the enum
 does not contain and proves it mints nothing; it also runs the OLD predicate
 alongside and shows it returning `true` for the same input, so "the old code
 minted money on new kinds" is an executed fact rather than a claim in a document.
