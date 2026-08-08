@@ -173,6 +173,11 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
     // is a shared device where that distinction is the whole point of the PIN.
     // What changes is that the refusal now says what to DO about it.
     if (lastError === 'conflict:manager_hold') return t('floor.conflicts.why_manager_hold');
+    // ADR-0082 — BEFORE the generic 403 branch below, which reads "your sign-in
+    // expired". A claim that moved has nothing to do with the session, and
+    // telling an operator to sign in again for a load somebody else now holds
+    // sends them round a loop that cannot end. Ordering is the fix.
+    if (lastError === 'conflict:load_taken_over') return t('floor.conflicts.why_taken_over');
     if (lastError?.startsWith('conflict:mint 40')) return t('floor.conflicts.why_other_operator');
     if (lastError?.includes('409')) return t('floor.conflicts.why_conflict');
     if (lastError?.includes('401') || lastError?.includes('403'))
@@ -297,9 +302,7 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
               nothing, because it reads as data rather than as absence. */}
           {row.subject === 'dropoff' && row.dropoff ? (
             <>
-              <p className="text-lg font-bold">
-                {t(`floor.dropoff.kind_${row.dropoff.kind}`)}
-              </p>
+              <p className="text-lg font-bold">{t(`floor.dropoff.kind_${row.dropoff.kind}`)}</p>
               <p className="mt-1 text-sm text-dr3-cream/80">
                 {t('floor.conflicts.dropoff_ref', {
                   units: row.dropoff.units,

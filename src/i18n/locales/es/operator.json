@@ -52,13 +52,33 @@
     "open_status_weight_captured": "Peso registrado",
     "open_status_unload_started": "Descargando",
     "open_status_in_progress": "Contando",
-    "open_status_finished": "Contada — sin enviar"
+    "open_status_finished": "Contada — sin enviar",
+    "held_heading": "En manos de otra persona",
+    "held_intro": "Cargas abiertas que empezó otro operador. Toca una para verla y tómala si esa persona no está.",
+    "held_by": "A cargo de {{name}}"
   },
   "load_header": {
     "unknown_source": "Origen desconocido",
     "unknown_carrier": "Transportista desconocido",
     "bol_label": "BOL",
     "bol_dash": "—"
+  },
+  "takeover": {
+    "held_by": "A cargo de {{name}}",
+    "held_since": "desde {{when}}",
+    "explain": "Quien tiene una carga es quien la cierra. Si esa persona no está, puedes tomarla — el cambio queda registrado con tu nombre.",
+    "take_over": "Tomar esta carga",
+    "confirm_question": "¿Tomar esta carga de {{name}}?",
+    "confirm_detail": "Serás el operador que la cierre, y este cambio queda registrado.",
+    "confirm_yes": "Sí, tomarla",
+    "confirm_no": "Cancelar",
+    "working": "Tomando la carga…",
+    "error": "No se pudo completar. Inténtalo de nuevo.",
+    "error_moved": "{{name}} tomó esta carga primero — ahora es de esa persona, no tuya. No se perdió nada de lo que ingresaste.",
+    "error_not_open": "Esta carga ya se cerró, así que no queda nada que tomar.",
+    "not_takeable": "Esta carga ya no está abierta en el muelle, así que no se puede tomar aquí. Avisa a un gerente.",
+    "back_to_queue": "Volver a la lista",
+    "unknown_holder": "otro operador"
   },
   "workflow": {
     "load_done_returning": "Carga {{status}}. Volviendo al selector de nombre…",
@@ -393,6 +413,7 @@
       "load_ref": "Carga {{id}}",
       "retry_all": "Reintentar los {{count}}",
       "why_manager_hold": "Este conteo es lo bastante grande como para requerir un gerente. Está guardado de forma segura y esperando aprobación — reintentar no lo acelerará.",
+      "why_taken_over": "Otro operador tomó esta carga, así que esta entrada no se pudo enviar a tu nombre. Está guardada — quien tenga la carga ahora puede ingresarla, o puedes descartar esta.",
       "dropoff_ref": "Entrega de {{units}} unidades para {{day}}"
     },
     "dropoff": {

@@ -5,8 +5,8 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## 2026-08-08 — a drop-off is a label, a count and a photo; the money default was the bug (ADR-0085)
 
-JT wanted a button. *"A tile or static button on the iPad; hitting it prompts
-Public Drop Off or Incentive Drop, then asks for total units and a photo."*
+JT wanted a button. _"A tile or static button on the iPad; hitting it prompts
+Public Drop Off or Incentive Drop, then asks for total units and a photo."_
 People walk mattresses up to the gate and nothing captured them at the door.
 
 Bill scoped it in one line, and the scoping turned out to be the substance:
@@ -18,12 +18,12 @@ metaphorically. `src/lib/dropoffs/service.ts` read:
 
 ```ts
 if (kind === 'incentive') return null;
-return units * UNPAID_DROPOFF_CENTS_PER_UNIT;   // 300¢/unit
+return units * UNPAID_DROPOFF_CENTS_PER_UNIT; // 300¢/unit
 ```
 
 An allowlist of **one**, guarding the wrong side of the decision. Read as policy
-it says *every drop-off kind mints $3/unit of Bye-Bye-Mattress check money except
-the single named exception*, so **any** new `ConsumerDropoffKind` fell straight
+it says _every drop-off kind mints $3/unit of Bye-Bye-Mattress check money except
+the single named exception_, so **any** new `ConsumerDropoffKind` fell straight
 through to `units × 300`. Adding two enum values — the whole of the obvious
 change — would have written 1,200¢ on a four-unit walk-up, at both sites, on the
 one flow that had just been specified as recording no money at all. Nothing in
@@ -69,7 +69,7 @@ the mock.
 **On the anonymous rows and the daily cap** — asked, answered, and written down
 rather than assumed. The per-person cap simply cannot see them: it matches
 `person_name = <string>` and in SQL nothing equals NULL. That is the correct
-direction, not a gap. If floor rows *were* visible, a stranger's walk-up would
+direction, not a gap. If floor rows _were_ visible, a stranger's walk-up would
 silently consume a named collector's daily allowance and **under-pay them**. And
 the cap cannot be dodged by omitting a name, because reaching that code requires
 `kind = 'incentive'` and a nameless incentive row is refused. NULL is also the
@@ -80,15 +80,15 @@ deletion obligation, and a gate with no payout has no name to attach it to.
 **The photo.** Columns on the row rather than a side table — one photo, always
 present, is not a collection, and a CHECK cannot be written against another
 table's absence. `photo_uploaded_by` is populated from row one, which is
-ADR-0078 Am.1's lesson taken early: `load_photos` enforced who *may* upload and
-kept no record of who *did*, so all 85 rows drained yesterday carry
+ADR-0078 Am.1's lesson taken early: `load_photos` enforced who _may_ upload and
+kept no record of who _did_, so all 85 rows drained yesterday carry
 `uploaded_by IS NULL` and backfilling them would be inventing a name. A new
 site-scoped mint endpoint rather than a widened `/api/photos/upload-url` — that
 path held zero rows for months and was drained yesterday through three stacked
 faults, and widening a hard-won working path is how it acquires a fourth. The
 key it returns is re-checked against the site prefix on submit, because it
 arrives from an iPad's IndexedDB days later and the constraint only cares that
-it is non-null, not *which* object it names.
+it is non-null, not _which_ object it names.
 
 **Offline, the blob and the units queue as ONE row** (queue schema v2 → v3) and
 replay PUT-then-submit in that order, under the key minted at the operator's tap.
@@ -127,6 +127,7 @@ edit. That is a live defect in someone else's path; folding a fix into a drop-of
 PR would hide it. Filed in `docs/OPEN-ITEMS.md`.
 
 ---
+
 ## 2026-08-08 — a saves column that pays, and a count you can take back (ADR-0083 + ADR-0084)
 
 Phases 3 and 4 of the #205 floor handoff, one branch. Both are JT asks; both turned
@@ -155,7 +156,7 @@ the double-count structurally impossible rather than merely avoided.
 
 **Two live bypasses were closed on the way in, each falsified RED against shipped code.**
 The four-eyes prior-day gate compared `mattress_count` only, so a manager changing
-*only* the saves figure on a prior day computed `countChanged === false`, fell into
+_only_ the saves figure on a prior day computed `countChanged === false`, fell into
 the `note_only_edit` branch, and wrote an unapproved change to somebody's pay — no
 approver, no justification, nothing in the review queue. And the amendments endpoint's
 zod schema listed `mattress_count` and `note`: zod strips unknown keys silently, so a
@@ -204,6 +205,136 @@ anchors the floor on a count somebody took back.
 pre-push gate does not execute in a git worktree and a clean `git push` is therefore not
 evidence it ran. Three falsifications were executed against shipped code and confirmed
 RED before being restored.
+
+## 2026-08-08 — the load nobody could reach, and the zero that was a tautology (ADR-0082)
+
+JT, in the floor feedback: _"Whoever started the load has to be the one to close the
+load … need to keep it open to somebody to close it in case 1st driver goes to
+lunch."_
+
+The first half of that sentence had been enforced since the dock workflow shipped,
+**to the letter and past the point of usefulness.** `inbound_loads.assigned_operator_id`
+already existed, already had an index, and was already stamped by `startInboundLoad` —
+starting a load has always claimed it. `assertOwn` then refused every stage action from
+anyone else. So nothing about this entry is a new claim mechanism. It is the three
+things that were missing around one that was already there.
+
+**The defect was silence, not failure.** `load/[id]/page.tsx` handled a second operator
+with `redirect('/operator/<site>/queue')` and a comment saying a manager would sort it
+out. What that produced on the floor is a loop with no message inside it: tap the load,
+land on the queue, tap the load, land on the queue. Nothing errored, nothing logged, and
+the holder's name appeared on **no screen on the device** — the queue listed only your
+own open loads. The only way to find out what was happening was to ask the room.
+`startInboundLoad`'s idempotent branch handed B **A's load id**, so B was redirected
+_into_ the load and immediately bounced back out of it.
+
+**What production was actually holding, measured this morning rather than assumed —
+query published at `docs/queries/2026-08-08-open-dock-loads.sql` so it can be re-run and
+argued with:** **9 open dock loads across 4 operators**, all Woodland, every one claimed
+on an earlier Pacific day than the day of measurement, the oldest **2026-07-28 — eleven
+days** — and one at `finished` carrying **148 units** counted and never submitted, so
+outside inventory and billing. Every one of those was reachable only by the person who
+had walked away from it.
+
+"Open" is not "stranded", and the label must not do work the query cannot: `in_progress`
+cannot distinguish an abandoned load from a truck being unloaded right now — the AGE of
+the claim is what carries that, which is why the published query reports it. Two figures
+in the first draft of this entry were wrong and are corrected here: it is **four**
+holders, not five (the first count summed overlapping per-status distinct counts), and
+the `finished` load's 148 units were omitted.
+
+**And a number that lies if you quote it without its cause.** Across 40 submitted loads,
+`submitted_by_id <> assigned_operator_id` **zero times**. That is not evidence that
+handovers do not happen on this floor. It is evidence that the software made them
+impossible to record: `assertOwn` refuses the submit, so the closer could only ever be
+the claimer. The column was a tautology. It is now a measurement.
+
+**Two atomicity guarantees, and the mechanism named for each — because "we wrapped it in
+a transaction" would have read well and done nothing.** Postgres runs READ COMMITTED, so
+two concurrent transactions both see the pre-state and both proceed; the serialisation
+has to come from somewhere specific. Claiming is serialised by the **unique index** on
+`expected_load_id`: the in-transaction re-read closes the common sequential window (A
+committed seconds ago, B's page has not re-rendered) and a narrow `P2002` branch —
+matched on `e.meta.target`, not a bare code — closes the concurrent one, where the loser
+used to get a raw Prisma error out of a server action and a 500 in the log. Takeover is
+serialised by **Postgres re-evaluating an UPDATE's WHERE after it unblocks**: the
+re-stamp is a compare-and-swap on `assigned_operator_id`. Drop that one predicate and
+two simultaneous takers both "succeed" and write **two audit rows each claiming to have
+taken the load from A** — a false history in an append-only table, which is the exact
+thing hard rule #6 and the `mergeEquipment` actor-context work exist to prevent.
+
+**The audit tells the truth or it is not worth writing.** The actor is the person who
+pressed the button, never a system label. `before` carries the outgoing operator _and_
+their `assigned_at`, so the whole chain of custody survives even though the row only
+holds the current holder. The row is written **inside** the transaction with `ip` and
+`user_agent` — `load-service.ts` has historically written its audits afterwards on the
+global client and dropped both, and that pattern was not copied. Taking over a load you
+already hold writes **nothing at all**: re-stamping your own claim time for an action
+that changed nothing would put an A→A row in the log that reads like a handover.
+
+**One failure this feature created, found by looking for it.** Making claims movable
+makes `assertOwn`'s 403 routine: A comes back from lunch to an iPad still on the counting
+screen and taps +1. On the live path the stage components render `e.message`, and a
+Server Action's throw arrives **redacted in production** — the reason is not unhelpful,
+it is structurally unavailable. So the client now asks the one question it cannot answer
+locally and, only if the claim moved, refreshes into the held-by panel, which names the
+new holder. A blanket refresh was rejected: it would have swallowed genuine save
+failures, trading an opaque message for no message. On the replay path the entry was
+already parked correctly and never retried — but the conflicts screen said **"Your
+sign-in expired before this was sent,"** which is false and sends the operator to
+re-enter a PIN that cannot help. New code `conflict:load_taken_over`, matched _before_
+the generic 403 branch; the ordering is the fix.
+
+**The queue widened from your loads to the site's**, split by holder, which reverses
+ADR-0065 Am.1's operator filter — and that filter existed _because_ the load page
+redirected a non-assignee, so listing someone else's load would have rendered a link
+that bounces. Removing the redirect removes the reason; what the filter did afterwards
+was hide the nine loads that need a taker. The current-Pacific-day window on expected
+hauls is untouched: that rule is about browsing, and an unfinished load is current work
+whose timestamp happens to be in the past.
+
+**Takeover is online-only, and that is a decision (D5).** It is not in `FLOOR_SCOPES` and
+is never enqueued. A takeover is a contention action — replaying one hours later settles
+a contest that is already over — and it captures no operator data, so refusing it offline
+costs a tap where refusing a count costs a count. A test asserts its absence from the
+allowlist, so "let's make this consistent" has to be deliberate.
+
+**On the verification, since it is the reusable part.** Both race guards are falsified
+against **real Postgres**, and both race tests are deterministic rather than hopeful: a
+bare `Promise.all` is not a race test, because if the transactions happen to serialise
+then both takeovers legitimately succeed and the suite passes just as happily with the
+guard deleted. The interleave is forced with a third transaction holding
+`SELECT … FOR UPDATE` on the contested row while both contenders finish reading and block
+on writing. Removing the CAS predicate reds with _"expected […] to have a length of 1 but
+got 2"_; removing the P2002 branch reds with _"Unique constraint failed on the fields:
+(expected_load_id)"_; restoring the redirect reds with _"the load page redirects to the
+queue again"_; moving the conflict reason behind the generic 403 reds on the byte offset.
+
+**No migration.** The columns, the index and the `AuditAction` value all already existed.
+Prefix `20260835` was assigned to this work and is deliberately unused — recorded so the
+gap looks like a decision rather than a lost file.
+
+**Amendment 1, same day, from review of the ADR rather than the code.** The panel
+contradicted its own neighbour. `use-claim-loss-guard.ts` exists BECAUSE a Server
+Action's throw is redacted in production — and two files away the takeover panel
+recovered its error copy with `e.message.includes('load_claim_moved')`. Both cannot be
+true. Since the redaction is real, that match could never fire live: `takeover.error_moved`
+was **dead code in all three locales**, and every operator who lost a race saw the generic
+"That did not go through. Try again." — a push back into a contest already settled, which
+is the loop D5 declines to queue. It had no test, which is why it survived a review of the
+diff and died on a review of the prose. Fixed structurally: the action now RETURNS a
+discriminated outcome (return values are not redacted), so the panel switches on data and
+the winner's NAME — which the service was already computing and throwing away inside an
+error string — reaches the screen. A second test now pins the in-transaction placement of
+both re-reads, which D1 and D2 assert and nothing checked: moving `tx.` to `prisma.` reads
+fine in review and leaves every real-DB test green, because the compare-and-swap and the
+unique index are write-side guards.
+
+Docs: `docs/adr/0082-load-claim-takeover-and-honest-attribution.md`, `docs/adr/README.md`,
+`README.md`, `CLAUDE.md` (ADR count 86 → 87), `docs/OPEN-ITEMS.md`,
+`docs/queries/2026-08-08-open-dock-loads.sql`.
+
+---
 
 ## 2026-08-08 — the day the photos landed: five merges, and a queue that had never once emptied (docs reconciliation)
 

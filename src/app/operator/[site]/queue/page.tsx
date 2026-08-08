@@ -6,11 +6,11 @@ import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { QueueClient } from './queue-client';
 import { QueueRow } from './queue-row';
-import { OpenLoadsSection } from './open-loads';
+import { OpenLoadsSection, HeldByOthersSection } from './open-loads';
 import { HOME_ROUTE } from '@/lib/routes';
 import { currentPacificDayWindow } from '@/lib/time';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
-import { listOperatorOpenLoads } from '@/lib/loads/open-loads';
+import { listSiteOpenLoads } from '@/lib/loads/open-loads';
 import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -107,7 +107,12 @@ export default async function OperatorQueuePage({ params }: Props) {
   const today = currentPacificDayWindow(now);
 
   // Unfinished dock work first — NOT day-bounded (see open-loads.ts).
-  const openLoads = await listOperatorOpenLoads(site.id, session.user.id);
+  //
+  // ADR-0082 widened this from the operator's OWN open loads to the SITE's,
+  // split by holder. The operator-scoped version could not show a stranded load
+  // by construction: the one person who could see it was the one who had walked
+  // away from it.
+  const openLoads = await listSiteOpenLoads(site.id, session.user.id);
 
   const loads = await prisma.expectedLoad.findMany({
     where: {
@@ -154,7 +159,7 @@ export default async function OperatorQueuePage({ params }: Props) {
               own children — QueueClient renders into a bare `relative` div, so
               without it the resume block sits flush against the list below. */}
           <div className="flex flex-col gap-4">
-            <OpenLoadsSection siteCode={site.code} rows={openLoads} locale={locale} t={t} />
+            <OpenLoadsSection siteCode={site.code} rows={openLoads.mine} locale={locale} t={t} />
             {loads.length === 0 ? (
               <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
                 <p className="text-lg font-medium">{t('queue.empty_heading')}</p>
@@ -202,6 +207,15 @@ export default async function OperatorQueuePage({ params }: Props) {
                 })}
               </ul>
             )}
+            {/* ADR-0082 — LAST on the page, and that ordering is the policy: your
+                own unfinished work, then today's expected hauls, then loads
+                somebody else is holding. A takeover is help, not a task. */}
+            <HeldByOthersSection
+              siteCode={site.code}
+              rows={openLoads.heldByOthers}
+              locale={locale}
+              t={t}
+            />
           </div>
         </QueueClient>
       </div>

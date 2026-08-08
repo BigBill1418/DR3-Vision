@@ -4,8 +4,10 @@ import { prisma } from '@/lib/prisma';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { LoadWorkflow } from './load-workflow';
+import { HeldByPanel } from './held-by-panel';
 import { HOME_ROUTE } from '@/lib/routes';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
+import { TAKEOVER_STATUSES } from '@/lib/loads/load-claim';
 import { FloorPageHeading } from '../../../_components/page-heading';
 
 // Workflow shell. The whole 7-stage flow lives in the
@@ -77,6 +79,9 @@ export default async function LoadPage({ params }: Props) {
       unload_finished_at: true,
       total_units: true,
       assigned_operator_id: true,
+      assigned_at: true,
+      load_source_type: true,
+      assigned_operator: { select: { id: true, name: true } },
       source: { select: { name: true } },
       transporter: { select: { name: true } },
       load_stacks: {
@@ -86,10 +91,50 @@ export default async function LoadPage({ params }: Props) {
     },
   });
   if (!load || load.site_id !== site.id) notFound();
-  if (load.assigned_operator_id !== session.user.id) {
-    // Another operator owns this load. T-010 portal lets a manager
-    // reassign it; from the iPad we just bounce back to the queue.
-    redirect(`/operator/${siteCode}/queue`);
+
+  // ── ADR-0082 — the silent redirect loop, and why it is gone ────────────────
+  //
+  // This branch used to be `redirect('/operator/<site>/queue')` with the comment
+  // "T-010 portal lets a manager reassign it; from the iPad we just bounce back
+  // to the queue." What that produced on the floor was a DEAD LOOP with no
+  // message anywhere in it: the second operator taps the load, lands on the
+  // queue, taps the load, lands on the queue. Nothing failed, nothing said the
+  // load was held, and the holder's name appeared on no screen — so the only way
+  // to learn what was happening was to ask the room. JT's lunch case looped
+  // forever.
+  //
+  // Now it renders WHO holds it and offers Take over. The read above is
+  // deliberately unchanged in scope — a load at another SITE is still `notFound`
+  // (CLAUDE.md hard rule #2), because that is not a load this operator may know
+  // about, let alone take.
+  const heldByOther = load.assigned_operator_id !== session.user.id;
+  if (heldByOther) {
+    return (
+      <main className="px-6 pb-6">
+        <div className="mx-auto max-w-2xl pt-6">
+          <HeldByPanel
+            siteCode={site.code}
+            loadId={load.id}
+            holderName={load.assigned_operator?.name ?? null}
+            heldSince={load.assigned_at?.toISOString() ?? null}
+            sourceName={load.source?.name ?? null}
+            transporterName={load.transporter?.name ?? null}
+            bolNumber={load.bol_number}
+            status={load.status}
+            totalUnits={load.total_units}
+            // A load outside the open-dock set, or an aggregate bridge row, has
+            // no claim to hand on — the service refuses both. Deciding it here
+            // as well means the button is not offered for a write that would be
+            // refused: an operator should never be shown a control whose only
+            // outcome is an error.
+            takeable={
+              load.load_source_type === 'b2b_haul' && TAKEOVER_STATUSES.includes(load.status)
+            }
+            locale={locale}
+          />
+        </div>
+      </main>
+    );
   }
 
   return (

@@ -38,13 +38,33 @@
     "open_status_weight_captured": "Weight logged",
     "open_status_unload_started": "Unloading",
     "open_status_in_progress": "Counting",
-    "open_status_finished": "Counted — not submitted"
+    "open_status_finished": "Counted — not submitted",
+    "held_heading": "Held by someone else",
+    "held_intro": "Open loads another operator started. Tap one to see it, and take it over if they've stepped away.",
+    "held_by": "Held by {{name}}"
   },
   "load_header": {
     "unknown_source": "Unknown source",
     "unknown_carrier": "Unknown carrier",
     "bol_label": "BOL",
     "bol_dash": "—"
+  },
+  "takeover": {
+    "held_by": "Held by {{name}}",
+    "held_since": "since {{when}}",
+    "explain": "Whoever holds a load is the one who closes it. If they have stepped away, you can take it over — the handover is recorded with your name.",
+    "take_over": "Take over this load",
+    "confirm_question": "Take this load over from {{name}}?",
+    "confirm_detail": "You become the operator who closes it, and this handover is recorded.",
+    "confirm_yes": "Yes, take it over",
+    "confirm_no": "Cancel",
+    "working": "Taking over…",
+    "error": "That did not go through. Try again.",
+    "error_moved": "{{name}} took this load over first — it is theirs now, not yours. Nothing you entered was lost.",
+    "error_not_open": "This load has already been closed out, so there is nothing left to take over.",
+    "not_takeable": "This load is no longer open on the dock, so it cannot be taken over here. Ask a manager.",
+    "back_to_queue": "Back to the queue",
+    "unknown_holder": "another operator"
   },
   "workflow": {
     "load_done_returning": "Load {{status}}. Returning to the name picker…",
@@ -379,6 +399,7 @@
       "load_ref": "Load {{id}}",
       "retry_all": "Try all {{count}} again",
       "why_manager_hold": "This count is large enough to need a manager. It is stored safely and waiting for approval — retrying will not speed it up.",
+      "why_taken_over": "Another operator took this load over, so this entry could not be sent under your name. It is stored safely — whoever holds the load now can enter it, or discard this.",
       "dropoff_ref": "Drop-off of {{units}} units for {{day}}"
     },
     "dropoff": {

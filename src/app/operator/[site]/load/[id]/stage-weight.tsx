@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
 import { weightCapturedAction, weightSkipAction } from '../../actions';
+import { useClaimLossGuard } from './use-claim-loss-guard';
 import { PhotoInput } from './photo-input';
 
 // Stage 2 — optional weight ticket. Two equal-weight buttons (Add /
@@ -23,6 +24,9 @@ export function StageWeight({
   const [hasPhoto, setHasPhoto] = useState(false);
   const [lbs, setLbs] = useState('');
   const [isPending, startTransition] = useTransition();
+  // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
+  // is redacted in production, so the client cannot read why. Asked, not guessed.
+  const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
 
   if (mode === 'choose') {
@@ -96,6 +100,10 @@ export function StageWeight({
               setError(null);
               await weightCapturedAction(siteCode, loadId, lbsNum);
             } catch (e) {
+              // The claim may have moved while this iPad sat on the stage screen.
+              // Refresh in that case: the page re-renders as the held-by panel and
+              // NAMES the new holder, instead of a redacted server message.
+              if (await claimLost()) return;
               setError(e instanceof Error ? e.message : t('stage_weight.save_failed'));
             }
           })
