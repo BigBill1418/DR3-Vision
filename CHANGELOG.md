@@ -3,6 +3,31 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — evening close-out: registers reconciled, Terex gap diagnosed, all six campaign PRs merged
+
+Docs only. The day's operational record, landed after the final merge so no
+in-flight branch conflicts with it:
+
+- **All six campaign PRs merged + deployed**: #216 (ADR-0082), #217 (ADR-0085),
+  #218 (ADR-0083/0084), #219 (Am.1 pair + the month-page pay-path fix), #220
+  (ADR-0086, `photo_grants_ok: true` verified live), #222 (ADR-0088, renumbered
+  from a 0087 collision with #221, which also merged). Every PR passed
+  adversarial pre-merge review; the campaign's through-line: most defects that
+  mattered were false claims in DOCUMENTATION, not broken code.
+- **Walkthrough decisions executed**: `ipad_dropoff` LIVE both sites; void
+  site-scoped; saves editable in amendments; ADR-0086 accepted+built; trailer
+  list reclassified `trailer_list` (96 rows absorbed on the next sweep); Kelsey
+  login kept active by decision, re-check 2026-08-22.
+- **Terex gap diagnosed** (§0.AT): workbook stopped 7/24, floor never stopped —
+  nine-day paperwork gap; capture era one working day old and un-entered (JT
+  used the downtime form by mistake). Option B chosen: sheet re-fill → final
+  import; instruction email sent via `dr3-vision@svdp.us`.
+- **Email channel rule codified**: NEVER barnardhq.com to @svdp.us recipients;
+  Vision-related mail sends from `dr3-vision@svdp.us` (Graph, app credentials).
+- **Register hygiene**: duplicate `0.AO` renumbered → `0.AS`; VLM section
+  renumbered `0.AP`→`0.AR` at merge; claim-the-number-first rule added to the
+  ADR index after the third numbering collision.
+
 ## 2026-08-08 — VLM equipment decision register opened (ADR-0087, Proposed)
 
 Docs only, `[skip-deploy]`. Locks the VLM↔DR3 equipment normalization/sync work
