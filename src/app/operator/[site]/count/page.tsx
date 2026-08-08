@@ -7,7 +7,7 @@ import { loadPriorAnchor, loadSwingThresholdPct } from '@/lib/inventory/anchor-g
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { formatPacificDateTime, pacificDayISO } from '@/lib/time';
-import { listTodaysVoidableCounts } from '@/lib/inventory/void-count';
+import { listTodaysVoidableCountsAtSite } from '@/lib/inventory/void-count';
 import { FloorPageHeading } from '../../_components/page-heading';
 import { CountClient } from './count-client';
 import { CountVoidClient, type VoidableCount } from './void-client';
@@ -43,11 +43,11 @@ export default async function FloorCountPage({ params }: Props) {
   // the write path recomputes them, so a stale render cannot widen the gate.
   let priorTotal: number | null = null;
   let thresholdPct = 20;
-  // ADR-0084 — today's counts THIS operator entered, resolved server-side. Sent
-  // as already-rendered Pacific strings rather than Dates: the prop crosses the
-  // server/client boundary, and a raw Date would be re-formatted in the browser's
-  // zone — the iPad's clock is exactly what the whole day-discipline chain
-  // (ADR-0065, ADR-0078 D10) refuses to trust.
+  // ADR-0084 (Amendment 1) — today's counts at THIS SITE, whoever entered them,
+  // resolved server-side. Sent as already-rendered Pacific strings rather than
+  // Dates: the prop crosses the server/client boundary, and a raw Date would be
+  // re-formatted in the browser's zone — the iPad's clock is exactly what the
+  // whole day-discipline chain (ADR-0065, ADR-0078 D10) refuses to trust.
   let voidable: VoidableCount[] = [];
   if (live) {
     const [balance, site, prior, threshold, todays] = await Promise.all([
@@ -55,16 +55,40 @@ export default async function FloorCountPage({ params }: Props) {
       prisma.site.findUnique({ where: { id: siteId }, select: { jurisdiction: true } }),
       loadPriorAnchor(prisma, siteId),
       loadSwingThresholdPct(prisma, siteId),
-      listTodaysVoidableCounts(siteId, gate.ctx.userId),
+      listTodaysVoidableCountsAtSite(siteId, gate.ctx.userId),
     ]);
     expectedTotal = balance.total.toString();
     jurisdiction = site?.jurisdiction === 'california' ? 'california' : 'oregon';
     priorTotal = prior?.total ?? null;
     thresholdPct = threshold;
+
+    // Names for the OTHER operators' counts only. A colleague's name is what
+    // turns "remove this count" from a blind action into an informed one — the
+    // operator has to know they are withdrawing somebody else's work. Own rows
+    // stay unlabelled: "entered by you" beside every one of your own counts is
+    // noise. Resolved here rather than in the service so the service stays a
+    // pure inventory concern with no user-table dependency.
+    const otherIds = [
+      ...new Set(
+        todays.filter((c) => !c.isMine && c.enteredByUserId).map((c) => c.enteredByUserId),
+      ),
+    ] as string[];
+    const nameById = new Map<string, string>();
+    if (otherIds.length > 0) {
+      const users = await prisma.user.findMany({
+        where: { id: { in: otherIds } },
+        select: { id: true, name: true },
+      });
+      for (const u of users) nameById.set(u.id, u.name);
+    }
+
     voidable = todays.map((c) => ({
       id: c.id,
       countedAtLabel: formatPacificDateTime(c.enteredAt, locale, { timeStyle: 'short' }),
       physicalTotal: c.physicalTotal,
+      // null for your own counts AND for a count with no resolvable enterer —
+      // an unknown name is left unstated rather than filled in with a guess.
+      enteredByLabel: c.isMine ? null : (nameById.get(c.enteredByUserId ?? '') ?? null),
     }));
   }
 
