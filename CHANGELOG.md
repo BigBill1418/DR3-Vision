@@ -5,8 +5,8 @@ Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
 ## 2026-08-08 — a drop-off is a label, a count and a photo; the money default was the bug (ADR-0085)
 
-JT wanted a button. *"A tile or static button on the iPad; hitting it prompts
-Public Drop Off or Incentive Drop, then asks for total units and a photo."*
+JT wanted a button. _"A tile or static button on the iPad; hitting it prompts
+Public Drop Off or Incentive Drop, then asks for total units and a photo."_
 People walk mattresses up to the gate and nothing captured them at the door.
 
 Bill scoped it in one line, and the scoping turned out to be the substance:
@@ -18,12 +18,12 @@ metaphorically. `src/lib/dropoffs/service.ts` read:
 
 ```ts
 if (kind === 'incentive') return null;
-return units * UNPAID_DROPOFF_CENTS_PER_UNIT;   // 300¢/unit
+return units * UNPAID_DROPOFF_CENTS_PER_UNIT; // 300¢/unit
 ```
 
 An allowlist of **one**, guarding the wrong side of the decision. Read as policy
-it says *every drop-off kind mints $3/unit of Bye-Bye-Mattress check money except
-the single named exception*, so **any** new `ConsumerDropoffKind` fell straight
+it says _every drop-off kind mints $3/unit of Bye-Bye-Mattress check money except
+the single named exception_, so **any** new `ConsumerDropoffKind` fell straight
 through to `units × 300`. Adding two enum values — the whole of the obvious
 change — would have written 1,200¢ on a four-unit walk-up, at both sites, on the
 one flow that had just been specified as recording no money at all. Nothing in
@@ -69,7 +69,7 @@ the mock.
 **On the anonymous rows and the daily cap** — asked, answered, and written down
 rather than assumed. The per-person cap simply cannot see them: it matches
 `person_name = <string>` and in SQL nothing equals NULL. That is the correct
-direction, not a gap. If floor rows *were* visible, a stranger's walk-up would
+direction, not a gap. If floor rows _were_ visible, a stranger's walk-up would
 silently consume a named collector's daily allowance and **under-pay them**. And
 the cap cannot be dodged by omitting a name, because reaching that code requires
 `kind = 'incentive'` and a nameless incentive row is refused. NULL is also the
@@ -80,15 +80,15 @@ deletion obligation, and a gate with no payout has no name to attach it to.
 **The photo.** Columns on the row rather than a side table — one photo, always
 present, is not a collection, and a CHECK cannot be written against another
 table's absence. `photo_uploaded_by` is populated from row one, which is
-ADR-0078 Am.1's lesson taken early: `load_photos` enforced who *may* upload and
-kept no record of who *did*, so all 85 rows drained yesterday carry
+ADR-0078 Am.1's lesson taken early: `load_photos` enforced who _may_ upload and
+kept no record of who _did_, so all 85 rows drained yesterday carry
 `uploaded_by IS NULL` and backfilling them would be inventing a name. A new
 site-scoped mint endpoint rather than a widened `/api/photos/upload-url` — that
 path held zero rows for months and was drained yesterday through three stacked
 faults, and widening a hard-won working path is how it acquires a fourth. The
 key it returns is re-checked against the site prefix on submit, because it
 arrives from an iPad's IndexedDB days later and the constraint only cares that
-it is non-null, not *which* object it names.
+it is non-null, not _which_ object it names.
 
 **Offline, the blob and the units queue as ONE row** (queue schema v2 → v3) and
 replay PUT-then-submit in that order, under the key minted at the operator's tap.
@@ -127,6 +127,7 @@ edit. That is a live defect in someone else's path; folding a fix into a drop-of
 PR would hide it. Filed in `docs/OPEN-ITEMS.md`.
 
 ---
+
 ## 2026-08-08 — a saves column that pays, and a count you can take back (ADR-0083 + ADR-0084)
 
 Phases 3 and 4 of the #205 floor handoff, one branch. Both are JT asks; both turned
@@ -155,7 +156,7 @@ the double-count structurally impossible rather than merely avoided.
 
 **Two live bypasses were closed on the way in, each falsified RED against shipped code.**
 The four-eyes prior-day gate compared `mattress_count` only, so a manager changing
-*only* the saves figure on a prior day computed `countChanged === false`, fell into
+_only_ the saves figure on a prior day computed `countChanged === false`, fell into
 the `note_only_edit` branch, and wrote an unapproved change to somebody's pay — no
 approver, no justification, nothing in the review queue. And the amendments endpoint's
 zod schema listed `mattress_count` and `note`: zod strips unknown keys silently, so a
@@ -204,6 +205,7 @@ anchors the floor on a count somebody took back.
 pre-push gate does not execute in a git worktree and a clean `git push` is therefore not
 evidence it ran. Three falsifications were executed against shipped code and confirmed
 RED before being restored.
+
 ## 2026-08-08 — the load nobody could reach, and the zero that was a tautology (ADR-0082)
 
 JT, in the floor feedback: _"Whoever started the load has to be the one to close the

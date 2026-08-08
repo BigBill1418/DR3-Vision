@@ -108,8 +108,21 @@ describe('ADR-0082 D5 — takeover is ONLINE-ONLY', () => {
   });
 
   it('reads the outcome from the RETURN VALUE, never from a thrown message (Am.1)', () => {
-    // THE REVIEWER'S BLOCK, as a structural backstop to the rendering tests in
-    // `held-by-panel.test.tsx`.
+    // ┌─ LOAD-BEARING ─────────────────────────────────────────────────────────┐
+    // │ THIS is the regression lock for Am.1. Do not delete it as "duplicated  │
+    // │ by held-by-panel.test.tsx" — it is not duplicated, it is the only test │
+    // │ that catches the realistic regression.                                 │
+    // └────────────────────────────────────────────────────────────────────────┘
+    //
+    // MEASURED (2026-08-08), because the distinction is not obvious: re-adding
+    // the string-match ALONGSIDE the return value — the shape a "defensive
+    // cleanup" would actually take — leaves `held-by-panel.test.tsx` **fully
+    // green at 7/7**, because the return path still works and the dead `catch`
+    // branch is simply never reached in the tests. Only this assertion fails.
+    //
+    // The behavioural suite catches the OTHER direction (someone removing the
+    // return path); this one catches dead message-inspection creeping back. Both
+    // are needed, and neither is redundant.
     //
     // The first cut selected `takeover.error_moved` by
     // `e.message.includes('load_claim_moved')` — a direct contradiction of

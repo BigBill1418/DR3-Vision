@@ -83,6 +83,17 @@ async function attemptTakeover() {
   fireEvent.click(screen.getByRole('button', { name: en.takeover.confirm_yes }));
 }
 
+// ┌─ WHAT THIS FILE LOCKS, AND WHAT IT DOES NOT ───────────────────────────────┐
+// │ These tests prove the copy RENDERS today, and they catch a regression that │
+// │ REMOVES the return-value path. They do NOT catch message-inspection being  │
+// │ ADDED BACK: re-adding the string-match alongside the working return value  │
+// │ leaves this file green at 7/7 (measured 2026-08-08), because the dead      │
+// │ `catch` branch is never reached. The regression lock for that direction is │
+// │ the structural assertion in `src/lib/loads/load-claim-surface.test.ts`     │
+// │ ("reads the outcome from the RETURN VALUE, never from a thrown message").  │
+// │ Keep both; they fail on opposite mistakes.                                 │
+// └────────────────────────────────────────────────────────────────────────────┘
+
 describe('ADR-0082 Am.1 — a lost race renders the MOVED copy, naming who won', () => {
   it('renders error_moved with the winner’s name, and never the generic retry copy', async () => {
     takeOverLoadAction.mockResolvedValue({ outcome: 'claim_moved', holderName: 'Bruno Vega' });

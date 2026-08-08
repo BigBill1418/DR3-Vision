@@ -302,9 +302,7 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
               nothing, because it reads as data rather than as absence. */}
           {row.subject === 'dropoff' && row.dropoff ? (
             <>
-              <p className="text-lg font-bold">
-                {t(`floor.dropoff.kind_${row.dropoff.kind}`)}
-              </p>
+              <p className="text-lg font-bold">{t(`floor.dropoff.kind_${row.dropoff.kind}`)}</p>
               <p className="mt-1 text-sm text-dr3-cream/80">
                 {t('floor.conflicts.dropoff_ref', {
                   units: row.dropoff.units,
