@@ -3,6 +3,109 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-08 — a photo captured under login A carries its own right to land (ADR-0086, accepted)
+
+Bill accepted ADR-0086 at the 2026-08-08 walkthrough. It is now built.
+
+The residual it closes is narrow and its failure mode is permanent. ADR-0078 G7 fixed
+the auth failure that _looked_ like success and Amendment 1 loosened the photo gate
+from load-owner to site — but a queued photo **still needed a live signed-in session
+at the same site in order to drain**, and on iOS there is no closed-app execution to
+fall back on. If the last operator of a shift signs out while photos are still in the
+device's IndexedDB, they sit there. The bytes exist in exactly one place. A wipe, a
+reset, a replaced iPad, or a device that goes back in the drawer at the end of a
+season, and the evidence is gone. The ADR-0078 build met the 99-photo-parked case
+live; those photos survived only because somebody was still signed in when the CORS
+repair landed.
+
+**The correction that is the substance of the ADR.** The design recorded in
+OPEN-ITEMS §0.AJ signed the grant over `storage_key` and required the request's fields
+to match exactly. That is circular and unbuildable: the client treats a presign as
+stale at 8 minutes, and re-minting produces a brand-new key because `mintUploadUrl`
+embeds a fresh `randomUUID()` — so every photo the feature exists for would fail the
+grant's own field check, and the drain would die one step earlier anyway, because the
+re-mint is itself a call to the session-gated route. The grant **cannot** be a claim
+about one R2 object, because the object is not stable across the queue's lifetime. So
+it is a claim about _the right to attach one photo of one kind to one load_, and object
+identity is constrained **structurally, by key prefix**, instead. The §0.AJ paragraph
+is left in the register unedited, behind a "do not build from this" fence — deleting it
+would leave the correction with nothing to correct.
+
+What the credential is: a 14-day bearer token, minted at capture while a session
+provably exists, authorising exactly one write — one photo, of one declared kind, to
+one named load, under one already-claimed idempotency key. It cannot read, cannot
+enumerate, and cannot write a count, a bonus entry, an inventory row or money.
+
+- **Both photo routes moved together, in the same commit, by the same predicate.** The
+  mint call site has carried the instruction for a year: a relaxed mint with a strict
+  confirm PUTs bytes to R2 and is then refused the row — an orphaned object, no record,
+  and a queue row that still cannot drain, which is strictly worse than doing nothing.
+  A test drives the same five grants through both handlers and fails if their verdicts
+  ever diverge, so that constraint is now structural rather than two files agreeing by
+  habit.
+- **Revocation is a hard requirement, and it is the reason a 14-day bearer token is
+  acceptable at all.** Signature verification does not consult the `users` table, so
+  without a redemption-time read "revoke this person's access" would be untrue for a
+  fortnight — a claim the compliance surface makes. Every redemption re-reads
+  `is_active`, `deleted_at`, `role` and `primary_site_id` **live**. Kelsey Ruhland's
+  availability ended 2026-08-08; a grant minted on 08-07 would otherwise still have
+  authorised a write on 08-21, attributed to her.
+- **Attribution gets MORE truthful, which runs opposite to the usual direction for a
+  bearer credential.** Under a grant `uploaded_by` becomes the capture-time operator —
+  the person who actually took the photo — rather than whoever happened to be signed in
+  when the queue drained.
+- **No middleware exemption.** Neither route is in `PUBLIC_PATHS`. That file carries
+  ten `/api/internal/*` exemptions, each with a comment recording the same shape: a
+  session-less POST 307s to `/login`, `fetch` follows it, a 200 carrying the login page
+  comes back, and the caller logs success for work that never happened. What the
+  feature needed instead is a keyhole — exact path, POST only, a syntactically
+  well-formed header — on the `!req.auth` branch alone, with the route still doing the
+  verifying. **The ADR's own stated mechanism for this was stale:** D4 says the routes
+  are reached because the client sends `redirect: 'manual'`, but ADR-0078 G7 had
+  already replaced the 307 with a **401**, which no redirect mode can survive. Recorded
+  in ADR-0086 §10.2 rather than quietly worked around.
+- **A refused grant never breaks a working upload.** If a grant is presented and
+  refused but a session exists, the request proceeds on the session. A design where a
+  stale credential broke a path that works today would be worse than not shipping.
+- **A refused grant with no session answers 401, not 403**, in the `auth:` family under
+  its own `auth:grant_refused` — because a sign-in genuinely fixes it, and that keeps
+  the ADR-0078 G8c one-tap recovery working. Distinct from `auth:session_expired`, so
+  the queue screen can still say which; never folded into the generic retry, which is
+  the conflation that let 97 photos accumulate invisibly behind a CORS 403.
+- **The grant is bound to one idempotency key**, and a grant-auth confirm presenting a
+  different key — or none — is refused. That is what "single-use by construction" means
+  operationally: without it, one captured grant authorises an unbounded number of rows.
+  Proven against real Postgres: one grant redeemed twice, with a deliberately re-minted
+  storage key, writes ONE `load_photos` row. Falsified there by dropping the claim —
+  two real rows appear.
+- **No migration and no queue-schema bump.** The grant is a stateless HMAC, so nothing
+  is persisted server-side. `upload_grant` on the queue row is additive, nullable and
+  unindexed, and there is **nothing to backfill it with** — a grant can only be minted
+  against a live session. A v4 bump would walk every row in a blob-carrying store to
+  stamp `null`, for no benefit, while re-opening the interleaving hazard that once
+  silently reverted the ADR-0078 G2 key backfill. Guarded by a v1 → current upgrade
+  test that checks the blob, the byte size and the G2 key all survive.
+- **Rotation is survivable by construction (D6).** A single-key swap would invalidate
+  every grant in every iPad at once — turning a routine credential rotation into
+  exactly the evidence-loss event this feature prevents, silently. `v` selects the key;
+  the verifier accepts `N` and `N-1`; the minter only issues `N`; `N-1` retires no
+  sooner than 14 days later. Exercised by a test that rotates two real keys and then
+  retires the old one.
+- **Rider, found while wiring the capture path:** the LIVE `/api/photos/confirm` call
+  sent no `Idempotency-Key` — only the replay did. So a confirm that landed and lost
+  its response was queued under a key the server had never seen, and the replay wrote a
+  second `load_photos` row. That is the ADR-0078 D3 defect, still open on the one path
+  that hands work to the queue. Closed here.
+
+**Ships INERT.** Nothing changes on the floor until the operator provisions
+`PHOTO_GRANT_SECRET` on CHAD-HQ (`docs/OPEN-ITEMS.md` §0.AP). Absent, the app mints no
+grants — never unsigned or fixed-key ones — and the photo flow behaves exactly as it
+did yesterday. `/healthz` gained `photo_grants_ok` so the inert state is visible; it is
+deliberately **not** part of the healthz verdict, because this feature's first deploy
+necessarily lands before the secret file does and gating on it would roll that deploy
+back. Which also means it will never announce itself: check it explicitly after
+provisioning.
+
 ## 2026-08-08 — campaign close-out: the F-3 design was unbuildable, and the Kelsey option is dead (PR #215 + register reconciliation)
 
 Docs only, `[skip-deploy]`. PR #215 landed two artifacts as files-only (deliberately

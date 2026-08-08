@@ -1,7 +1,9 @@
 # ADR-0086 — Capture-time photo upload grants (F-3)
 
 **Date:** 2026-08-08
-**Status:** **Proposed — NOT accepted, NOT implemented.** Decision-ready for Bill.
+**Status:** **Accepted 2026-08-08 (accepted by Bill, walkthrough 2026-08-08) — implemented.**
+Implementation notes, and the two places the code did not match this document, are in §10.
+The open questions in §9 were resolved at that walkthrough; their answers are recorded in §10.1.
 **Extends:** ADR-0005 (photo storage), ADR-0006 (offline queue), ADR-0078 + Amendment 1 (iPad reliability, site-scoped photo gate).
 **Supersedes:** nothing. It does, however, **correct the design recorded in `docs/OPEN-ITEMS.md` §0.AJ "F-3"** — see §4, which is the reason this document is worth reading before anyone builds it.
 
@@ -37,8 +39,8 @@ F-3 is the remaining case where **there is no session at all**, which none of th
 
 Both photo routes call the same guard, and that symmetry is load-bearing:
 
-| Route                     | File                                    | Guard                                                                                |
-| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------ |
+| Route                         | File                                     | Guard                                |
+| ----------------------------- | ---------------------------------------- | ------------------------------------ |
 | `POST /api/photos/upload-url` | `src/app/api/photos/upload-url/route.ts` | `requireOperatorAtLoadSite(load_id)` |
 | `POST /api/photos/confirm`    | `src/app/api/photos/confirm/route.ts`    | `requireOperatorAtLoadSite(load_id)` |
 
@@ -90,7 +92,7 @@ Held against §3, that design is **circular and unbuildable as written**:
 - The grant therefore fails its own field-match check on every photo older than eight minutes — i.e. on 100% of the population it exists to serve.
 - And the re-mint itself is a call to the session-gated route, so even a grant that _did_ validate on `/confirm` never gets the chance: the drain dies one step earlier.
 
-This is not a detail to be patched during implementation. It changes what the token is: **the grant cannot be a claim about one R2 object, because the R2 object is not stable across the queue's lifetime.** It has to be a claim about *the right to attach one photo of one kind to one load*, with the object identity constrained structurally rather than by equality.
+This is not a detail to be patched during implementation. It changes what the token is: **the grant cannot be a claim about one R2 object, because the R2 object is not stable across the queue's lifetime.** It has to be a claim about _the right to attach one photo of one kind to one load_, with the object identity constrained structurally rather than by equality.
 
 The recorded design is not wrong out of carelessness — it was written from the ADR-0078 confirm-route comment, which correctly notes that `storage_key` legitimately changes between an attempt and its replay. The same fact that makes `storage_key` excluded from the idempotency request hash makes it unusable in the grant payload, and that connection was not drawn at the time.
 
@@ -102,15 +104,15 @@ The recorded design is not wrong out of carelessness — it was written from the
 
 `PHOTO_UPLOAD_GRANT` payload, v1:
 
-| Field            | Purpose                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------- |
-| `v`              | Key/format version. Selects the verification key — see D6.                              |
-| `load_id`        | The one load this grant can write to.                                                    |
-| `kind`           | One of the five `PHOTO_KINDS`. A `bol` grant cannot post a `weight_ticket`.              |
-| `actor_user_id`  | The capture-time operator. Becomes `uploaded_by`.                                        |
-| `site_id`        | The load's site **as read at mint time**. Advisory only — see D3.                        |
-| `idempotency_key`| The client-minted ULID this photo already carries. Single-use by construction.           |
-| `exp`            | Unix seconds. 14 days from mint (see D5 for why 14 and what it costs).                   |
+| Field             | Purpose                                                                        |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `v`               | Key/format version. Selects the verification key — see D6.                     |
+| `load_id`         | The one load this grant can write to.                                          |
+| `kind`            | One of the five `PHOTO_KINDS`. A `bol` grant cannot post a `weight_ticket`.    |
+| `actor_user_id`   | The capture-time operator. Becomes `uploaded_by`.                              |
+| `site_id`         | The load's site **as read at mint time**. Advisory only — see D3.              |
+| `idempotency_key` | The client-minted ULID this photo already carries. Single-use by construction. |
+| `exp`             | Unix seconds. 14 days from mint (see D5 for why 14 and what it costs).         |
 
 **`storage_key` is deliberately NOT in the payload.** Its absence is the correction from §4 and must not be "fixed" by a later reader.
 
@@ -137,7 +139,7 @@ That is the structural replacement for the impossible equality check. It cannot 
 
 Neither photo path is added to `PUBLIC_PATHS` or given a `startsWith` exemption in `src/lib/public-paths.ts`. The middleware keeps 307ing session-less requests, and the routes are reached by the grant-bearing client because the client sends `redirect: 'manual'` and the route itself performs the grant check.
 
-This is not stylistic. `public-paths.ts` carries **ten** `/api/internal/*` exemptions (bonus, survey, audit, billing, ap, reimbursements, board-pack, workbook-sync, inventory, doc-ingest), each with a comment recording the same shape: a session-less POST 307s to `/login`, `fetch` follows the redirect, a **200 carrying the login page HTML** comes back, and the caller logs success for work that never happened. ADR-0068 Amendment 5 records walking into it as recently as the reimbursement re-send, where the first live call returned HTTP 200 carrying the login page and sent nothing. Adding a public exemption to make grants work would put a bearer-authorized *write* on the far side of the exact mechanism that has produced ten documented instances of that trap.
+This is not stylistic. `public-paths.ts` carries **ten** `/api/internal/*` exemptions (bonus, survey, audit, billing, ap, reimbursements, board-pack, workbook-sync, inventory, doc-ingest), each with a comment recording the same shape: a session-less POST 307s to `/login`, `fetch` follows the redirect, a **200 carrying the login page HTML** comes back, and the caller logs success for work that never happened. ADR-0068 Amendment 5 records walking into it as recently as the reimbursement re-send, where the first live call returned HTTP 200 carrying the login page and sent nothing. Adding a public exemption to make grants work would put a bearer-authorized _write_ on the far side of the exact mechanism that has produced ten documented instances of that trap.
 
 If the middleware genuinely must be taught about the header, it should let through **only** requests that carry a syntactically well-formed `X-Upload-Grant`, and the route must still be the thing that verifies it.
 
@@ -168,21 +170,21 @@ Therefore: **`v` selects the key**, the verifier accepts `v=N` and `v=N-1`, the 
 
 The mock-measuring-itself failure has been caught six times on the current campaign. Each test below is specified by **the property it falsifies**, not by the assertion it makes:
 
-| Test                      | Must prove                                                                                                                                              |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| forged signature          | A payload signed with a **different key** is refused. Must run the real verifier over real HMAC bytes — a stubbed `verify()` returning false proves nothing. |
-| expired grant             | `exp` in the past is refused. Must drive a real clock/injected `now`, not a mocked verifier branch.                                                        |
-| field substitution        | A validly-signed grant for load A is refused on a request for load B; likewise `kind`. Must re-sign a **mutated payload with the real key**, so it fails on field mismatch rather than on signature. |
-| cross-load key prefix     | A grant for load A cannot confirm a `storage_key` under `loads/B/…`. Must exercise D3's real prefix check.                                                |
-| replay                    | The **second** redemption of the same `idempotency_key` returns the stored response and creates no second `load_photos` row. Must run against a real Postgres (`*.db.test.ts`, per the ADR-0078 CI step) — the whole point is the `ON CONFLICT` behaviour, which no in-memory fake reproduces. |
-| revoked actor             | D5(a): a grant whose `actor_user_id` is now inactive is refused. Must flip a real `users` row.                                                            |
-| key rotation window       | A `v=N-1` grant verifies while `N-1` is live and is refused after retirement. Must exercise two real keys.                                                |
-| middleware not weakened   | An unauthenticated request with **no** grant still 307s, and the route still refuses. Guards D4 against a later "simplification". |
-| symmetry                  | `/upload-url` and `/confirm` accept and refuse **the same** grants. Guards §2's mint-and-confirm-move-together constraint structurally, rather than by two files agreeing by habit. |
+| Test                    | Must prove                                                                                                                                                                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| forged signature        | A payload signed with a **different key** is refused. Must run the real verifier over real HMAC bytes — a stubbed `verify()` returning false proves nothing.                                                                                                                                   |
+| expired grant           | `exp` in the past is refused. Must drive a real clock/injected `now`, not a mocked verifier branch.                                                                                                                                                                                            |
+| field substitution      | A validly-signed grant for load A is refused on a request for load B; likewise `kind`. Must re-sign a **mutated payload with the real key**, so it fails on field mismatch rather than on signature.                                                                                           |
+| cross-load key prefix   | A grant for load A cannot confirm a `storage_key` under `loads/B/…`. Must exercise D3's real prefix check.                                                                                                                                                                                     |
+| replay                  | The **second** redemption of the same `idempotency_key` returns the stored response and creates no second `load_photos` row. Must run against a real Postgres (`*.db.test.ts`, per the ADR-0078 CI step) — the whole point is the `ON CONFLICT` behaviour, which no in-memory fake reproduces. |
+| revoked actor           | D5(a): a grant whose `actor_user_id` is now inactive is refused. Must flip a real `users` row.                                                                                                                                                                                                 |
+| key rotation window     | A `v=N-1` grant verifies while `N-1` is live and is refused after retirement. Must exercise two real keys.                                                                                                                                                                                     |
+| middleware not weakened | An unauthenticated request with **no** grant still 307s, and the route still refuses. Guards D4 against a later "simplification".                                                                                                                                                              |
+| symmetry                | `/upload-url` and `/confirm` accept and refuse **the same** grants. Guards §2's mint-and-confirm-move-together constraint structurally, rather than by two files agreeing by habit.                                                                                                            |
 
 ### D8 — Attribution improves, and that is worth saying
 
-Under a grant, `uploaded_by` becomes the **capture-time** operator, which is the person who actually took the photo. Under the current site-scoped session path it is whoever happened to be signed in when the queue drained. So this change makes attribution *more* truthful, not less — a point that runs opposite to the usual direction for a bearer credential and should be weighed in its favour.
+Under a grant, `uploaded_by` becomes the **capture-time** operator, which is the person who actually took the photo. Under the current site-scoped session path it is whoever happened to be signed in when the queue drained. So this change makes attribution _more_ truthful, not less — a point that runs opposite to the usual direction for a bearer credential and should be weighed in its favour.
 
 ---
 
@@ -229,37 +231,171 @@ This is a smaller loosening than ADR-0078 Amendment 1 was, and that one was acce
 
 ## 7. Alternatives considered
 
-| Option                                                              | Why not                                                                                                                                                                    |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Do nothing** (status quo)                                          | The residual is real and its failure mode is permanent evidence loss. But it is genuinely rare post-Am.1, so "do nothing" is a defensible decision for Bill to take — it is the reason this ADR is Proposed rather than pre-approved. |
-| **Longer-lived sessions on floor iPads**                             | Trades a narrow one-write credential for a broad all-routes one, on a shared device. Strictly worse.                                                                        |
-| **A device-scoped service credential** (TitanForge ADR-0040 pattern) | Also a bearer credential, but scoped to a *device* rather than to *one write* — much wider blast radius, plus a provisioning/revocation surface that does not exist here.  |
-| **Background sync / service-worker drain**                           | Not available on iOS. This is the constraint that creates F-3.                                                                                                              |
-| **Upload directly to R2 with a long-lived presign, confirm later**   | Moves the credential to R2 with no idempotency binding and no server-side kind check, and orphans objects with no row. Worse on every axis.                                 |
-| **Server-side pull from the device**                                 | There is no addressable path to an iPad's IndexedDB. Not a real option; recorded so it is not re-proposed.                                                                  |
+| Option                                                               | Why not                                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Do nothing** (status quo)                                          | The residual is real and its failure mode is permanent evidence loss. But it is genuinely rare post-Am.1, so "do nothing" was a defensible decision for Bill to take — which is why this shipped as Proposed rather than pre-approved. **Not taken** (accepted 2026-08-08). |
+| **Longer-lived sessions on floor iPads**                             | Trades a narrow one-write credential for a broad all-routes one, on a shared device. Strictly worse.                                                                                                                                                                        |
+| **A device-scoped service credential** (TitanForge ADR-0040 pattern) | Also a bearer credential, but scoped to a _device_ rather than to _one write_ — much wider blast radius, plus a provisioning/revocation surface that does not exist here.                                                                                                   |
+| **Background sync / service-worker drain**                           | Not available on iOS. This is the constraint that creates F-3.                                                                                                                                                                                                              |
+| **Upload directly to R2 with a long-lived presign, confirm later**   | Moves the credential to R2 with no idempotency binding and no server-side kind check, and orphans objects with no row. Worse on every axis.                                                                                                                                 |
+| **Server-side pull from the device**                                 | There is no addressable path to an iPad's IndexedDB. Not a real option; recorded so it is not re-proposed.                                                                                                                                                                  |
 
 ---
 
 ## 8. Consequences
 
-**If accepted:**
+**Accepted 2026-08-08. What that costs, as forecast and as built:**
 
 - One new secret to provision, plus a rotation runbook with a **calendared** N-1 retirement (D6). This is the largest ongoing operational cost.
 - `load-photo-guard.ts` grows a second entry point; the guard's return type (`LoadSiteAccess`) already carries exactly the fields a grant would supply, so the shape does not change.
 - The `uploaded_by` column starts carrying capture-time actors, which is a **semantic** change to an existing column's meaning. It should be noted in `COMPLIANCE.md` rather than discovered later by whoever audits attribution.
 - The revocation re-check (D5a) puts one indexed user read on the drain path. Negligible.
 
-**If rejected or deferred:**
+**Had it been rejected or deferred** (recorded because it remains the fallback whenever
+`photo_grants_ok` is `false` — i.e. on any deployment where the secret is not yet
+provisioned, which is every deployment until the operator step in §10 is done):
 
 - The residual stands and should be stated on the operator-facing surface, not just in this register: an iPad with queued photos **must** be signed in at its site before it goes back in the drawer. That is an operational instruction JT can act on today, at zero engineering cost, and it closes most of the real-world exposure.
 
-**Either way:** §4 must not be lost. The recorded F-3 design in `docs/OPEN-ITEMS.md` is unbuildable, and a future session reading that register without this ADR would implement it, watch every grant fail its field match, and conclude the approach itself was wrong.
+**Either way:** §4 must not be lost — and it is now load-bearing in the code, where
+`photo-grant.ts` carries the same warning at the payload definition. The recorded F-3 design in `docs/OPEN-ITEMS.md` is unbuildable, and a future session reading that register without this ADR would implement it, watch every grant fail its field match, and conclude the approach itself was wrong.
 
 ---
 
 ## 9. Open questions for Bill
 
-1. **Is the residual worth a bearer credential at all?** Post-Amendment 1 the stuck case requires *nobody* to sign in at that site before the device is wiped or retired. How often is that real?
+1. **Is the residual worth a bearer credential at all?** Post-Amendment 1 the stuck case requires _nobody_ to sign in at that site before the device is wiped or retired. How often is that real?
 2. **Revocation (D5a) — confirm it is mandatory.** The recommendation is that it is. Accepting the ADR without it means "access revoked" is untrue for up to 14 days.
 3. **14 days, or shorter?** 14 covers a holiday shutdown. 3 covers a weekend and cuts the exposure window by ~80%.
 4. **Who owns the rotation calendar entry?** A rotation runbook nobody is scheduled to execute is a rotation that will happen once, in an emergency, on the day it destroys 40 queued photos.
+
+---
+
+## 10. Implementation notes (2026-08-08)
+
+Built as specified in §5, with two documented departures — §10.2 and §10.3. Both are
+places where **this document disagreed with the live code**, and in both the code won,
+because §5 was written against a codebase that had already moved.
+
+### 10.1 The §9 questions, as resolved at the walkthrough
+
+1. **Worth a bearer credential** — yes; accepted and built.
+2. **Revocation (D5a)** — **mandatory**, as recommended. Implemented as a live
+   `users` read at redemption (`is_active`, `deleted_at`, `role`, and
+   `primary_site_id` against the load's live site). Falsified by removing the read:
+   every revoked-actor test then returns 200.
+3. **Expiry** — **14 days**, as proposed.
+4. **Rotation calendar** — the operator step is registered in `docs/OPEN-ITEMS.md`;
+   `N-1` retirement is a calendared action, never "when someone remembers" (D6).
+
+### 10.2 D4's stated mechanism was stale — the middleware needed a keyhole
+
+D4 says the routes "are reached by the grant-bearing client because the client sends
+`redirect: 'manual'` and the route itself performs the grant check."
+
+**That is no longer true, and the feature is inert without a change.** ADR-0078 G7
+replaced the middleware's 307-to-`/login` with a **401 JSON** for `/api/*`.
+`redirect: 'manual'` does nothing to a 401 — a session-less grant-bearing request is
+refused at the edge and the route handler never runs, so the route-level grant check
+could never fire.
+
+D4's second paragraph anticipates exactly this and states the only acceptable shape,
+which is what was built: `isGrantBearingPhotoRequest` in `src/lib/public-paths.ts`,
+called from `src/middleware.ts` **only on the `!req.auth` branch**, admitting a
+request when _all three_ hold — exact match on one of the two photo paths, method
+`POST`, and a syntactically well-formed `X-Upload-Grant`.
+
+It is deliberately **not** part of `isPublic`: folding it in would exempt the routes
+from every caller's point of view and would weaken the `public-paths` regression test.
+It proves nothing about authenticity and cannot — the middleware is edge runtime and
+`node:crypto` is unavailable there. The route's `verifyPhotoGrant` remains the gate;
+a forged-but-well-formed header reaches the handler and is refused there (test:
+"a syntactically valid but FORGED header still gets refused by the route").
+
+A missing `method` fails **closed**. Reading it bare threw a `TypeError` under the
+existing middleware test doubles, and a predicate that can throw inside the auth path
+is a 500 on every unauthenticated navigation in the app.
+
+### 10.3 A refused grant answers 401, not 403 — and the client gets its own state
+
+§6.5 requires a verification failure to be "a distinct, visible client state
+(`blocked:` in the ADR-0078 taxonomy), never folded into the generic offline retry".
+Built as a **401** in the `auth:` family instead, under a new
+`AUTH_GRANT_REFUSED = 'auth:grant_refused'`, for a reason §6.5 did not weigh:
+
+- A refused grant is genuinely fixed by **a sign-in** — the session path then takes
+  over and the photo drains. 401 is therefore the honest status, and it keeps the
+  ADR-0078 G7/G8c recovery affordance working end to end (the chrome already says
+  "sign in and everything drains"; one PIN entry resolves it).
+- `blocked:` means "retry is pointless until INFRASTRUCTURE changes", which is not
+  what happened, and `conflict:` would convert the ordinary expiry of a fortnight-old
+  credential into a pile of items demanding individual human adjudication.
+- The distinctness §6.5 actually asks for is preserved: the 401 body carries a
+  `grant` reason field, and the client maps that to its own `last_error`, separate
+  from `auth:session_expired`. It is never folded into the generic retry.
+
+### 10.4 Decisions made inside the design that the ADR left open
+
+- **Grant-FIRST, session as fallback.** §5 does not state precedence. A valid grant
+  is the narrower credential and names the true capturer (D8), so it is preferred —
+  which also means the path is exercised by ordinary drains rather than only during
+  the emergency it was built for. Code that runs only in an emergency is code you
+  find out is broken during one.
+- **A refused grant NEVER breaks a working session upload.** If a grant is presented
+  and refused but a session exists, the request proceeds on the session. A design
+  where presenting a stale credential broke a working path would be strictly worse
+  than not shipping the feature. Pinned by a test.
+- **The confirm's `Idempotency-Key` MUST equal the grant's** under grant-auth, and a
+  grant-auth confirm carrying no key at all is refused. This is what D1's "single-use
+  by construction" means operationally: without it, one grant authorises an unbounded
+  number of rows. Nothing on the session path was tightened.
+- **`storage_key` prefix acceptance mirrors `isValidDropoffStorageKey`**, including
+  the `pending-r2-<kind>-…` placeholder, which `mintUploadUrl` returns whenever R2 is
+  unconfigured. Refusing it would make grant-auth unusable in dev and in the
+  pre-provisioning window.
+- **The live confirm now sends the idempotency key too**, not just the replay. Without
+  it a confirm that landed and lost its response was queued under a key the server had
+  never seen, and the replay wrote a second `load_photos` row — the ADR-0078 D3 defect,
+  still open on the one path that hands work to the queue.
+- **No migration.** The grant is a stateless HMAC; nothing is persisted server-side.
+  The clean-DB replay was re-verified against an ephemeral `postgres:16-alpine`.
+- **No queue schema version bump.** `upload_grant` is additive, nullable, unindexed,
+  and there is **nothing to backfill it with** — a grant can only be minted
+  server-side against a live session. A v4 bump would walk every row in a
+  blob-carrying store to stamp `null`, for zero benefit, while re-opening the
+  interleaving hazard that silently reverted the ADR-0078 G2 backfill (one cursor walk
+  per store per version step). Every read site defaults instead, exactly as `subject`
+  does. Guarded by a v1 → current upgrade test.
+- **Key rotation is two env vars and an integer.** `PHOTO_GRANT_KEY_VERSION` is `N`,
+  `PHOTO_GRANT_SECRET` is its key, `PHOTO_GRANT_SECRET_PREVIOUS` is `N-1`'s and exists
+  only during the window. Exercised by a test that rotates two real keys and then
+  retires the old one.
+- **`/healthz` gains `photo_grants_ok`** (§6.5) and it is deliberately **not** part of
+  the `ok`/`status` verdict. This feature's first deploy necessarily lands before the
+  operator drops the secret file, so gating the deployer's smoke test on it would roll
+  the deploy back. `false` means "queued photos still need a live session to drain" —
+  the pre-ADR-0086 status quo, not an outage.
+
+### 10.5 What was NOT adopted
+
+- **`sessions_invalidated_at` is not consulted by the grant path.** ADR-0053 D2 bumps
+  it on deactivation and on auth-relevant claim changes, and D5(a) names `is_active`
+  and "no longer an operator at the load's site" — all three of which _are_ re-read
+  live. Adding the timestamp as well would kill a departing-shift operator's queued
+  photos on an unrelated role edit, which is the failure direction this repo refuses.
+  Recorded so the omission is a decision rather than an oversight.
+
+### 10.6 Files
+
+| File                                                | Change                                                                                                                 |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/photo-grant.ts`                            | **New.** Mint/verify/fingerprint, key-version selection, TTL.                                                          |
+| `src/lib/load-photo-guard.ts`                       | `requireOperatorOrGrantAtLoadSite` — grant-first, session fallback, D3 + D5(a). `requireOperatorAtLoadSite` unchanged. |
+| `src/lib/r2.ts`                                     | `loadPhotoStorageKeyPrefix` / `isValidLoadPhotoStorageKey` (D3).                                                       |
+| `src/lib/public-paths.ts`                           | `isGrantBearingPhotoRequest` + `looksLikePhotoGrant` — edge-safe, outside `isPublic`.                                  |
+| `src/middleware.ts`                                 | The keyhole, on the `!req.auth` branch only.                                                                           |
+| `src/app/api/photos/upload-url/route.ts`            | Session-or-grant; issues/re-issues the grant with the original `exp`.                                                  |
+| `src/app/api/photos/confirm/route.ts`               | Session-or-grant; enforces the grant↔key binding.                                                                      |
+| `src/app/healthz/route.ts`                          | `photo_grants_ok` (non-gating).                                                                                        |
+| `src/lib/offline-queue.ts`                          | `upload_grant` on the row, sent on both calls, re-issue persisted, `AUTH_GRANT_REFUSED`.                               |
+| `src/app/operator/[site]/load/[id]/photo-input.tsx` | Mints the key at the tap, carries the grant onto the queued row, sends the key on the live confirm.                    |

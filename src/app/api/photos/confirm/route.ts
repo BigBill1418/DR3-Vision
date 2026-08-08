@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { requireOperatorAtLoadSite, type LoadSiteAccess } from '@/lib/load-photo-guard';
+import { requireOperatorOrGrantAtLoadSite, type LoadPhotoAccess } from '@/lib/load-photo-guard';
 import { withIdempotency } from '@/lib/idempotency';
 import { readIdempotencyKey } from '@/lib/loads/route-helpers';
 
@@ -31,12 +31,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid request' }, { status: 400 });
   }
 
-  let access: LoadSiteAccess;
+  let access: LoadPhotoAccess;
   let idempotencyKey: string | null;
   try {
     // ADR-0078 Am.1 — SITE-scoped, matching /api/photos/upload-url exactly.
+    // ADR-0086 D2 — session OR grant, again matching the mint exactly.
     // These two MUST move together; see the note at the mint call site.
-    access = await requireOperatorAtLoadSite(parsed.data.load_id);
+    //
+    // `storage_key` is handed to the guard so D3's PREFIX check runs here and
+    // only here: this is the route that writes the row naming the object, and
+    // the mint has not produced a key yet when it runs.
+    access = await requireOperatorOrGrantAtLoadSite(req, {
+      loadId: parsed.data.load_id,
+      kind: parsed.data.kind,
+      storageKey: parsed.data.storage_key,
+    });
     idempotencyKey = readIdempotencyKey(req);
   } catch (e) {
     if (e instanceof Response) {
@@ -48,6 +57,21 @@ export async function POST(req: Request) {
       return e;
     }
     throw e;
+  }
+
+  // ADR-0086 D1 — under grant-auth the presented key MUST be the one the grant
+  // was minted over. This is what "single-use by construction" actually means:
+  // the grant names a key, that key is claimed in the same transaction as the
+  // insert below, and a second redemption of the same grant therefore returns
+  // the stored response instead of writing a second `load_photos` row.
+  //
+  // Refused rather than defaulted when absent. A grant-auth confirm carrying no
+  // key would be an UNBOUNDED write — the same bearer string could land an
+  // unlimited number of photos — which is the one property the design has to
+  // hold. Under session-auth nothing changes: the key stays optional exactly as
+  // it is today.
+  if (access.via === 'grant' && idempotencyKey !== access.grantIdempotencyKey) {
+    return NextResponse.json({ error: 'grant_idempotency_key_mismatch' }, { status: 403 });
   }
 
   // ADR-0078 D3 — the create was UNCONDITIONAL, and the offline queue replays

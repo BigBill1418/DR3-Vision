@@ -125,6 +125,32 @@ export const AUTH_PREFIX = 'auth:';
 export const AUTH_EXPIRED = `${AUTH_PREFIX}session_expired`;
 
 /**
+ * ADR-0086 §6.5 — the capture-time grant was presented and REFUSED, and there
+ * was no session to fall back on.
+ *
+ * In the `auth:` family rather than `conflict:` or `blocked:`, and each of those
+ * three is a deliberate choice:
+ *
+ *   - NOT `conflict:` — a conflict is never retried and needs a person to
+ *     adjudicate. This needs nobody to decide anything; it needs somebody to
+ *     sign in, after which the session path drains the row unchanged. Parking it
+ *     as a conflict would convert the ordinary expiry of a fortnight-old
+ *     credential into a pile of items demanding individual human judgement.
+ *   - NOT `blocked:` — nothing about the infrastructure is wrong.
+ *   - NOT folded into `AUTH_EXPIRED` — §6.5 requires a grant verification
+ *     failure to be a DISTINCT, visible state. Conflating a refused grant with
+ *     a lapsed session is the same species of conflation that let 97 photos
+ *     accumulate invisibly behind a CORS 403.
+ *
+ * The server's 401 body carries a `grant` reason naming the field that failed
+ * (expired / revoked actor / wrong load); it is deliberately NOT appended here.
+ * `last_error` is rendered to an operator, and "this photo's permission slip
+ * expired — sign in and it will send" is the whole actionable content. The
+ * specific reason is a diagnostic and belongs in a log, not on a floor screen.
+ */
+export const AUTH_GRANT_REFUSED = `${AUTH_PREFIX}grant_refused`;
+
+/**
  * True when a response is a sign-in demand rather than an answer: an explicit
  * 401, an opaque or manual redirect, or a 2xx whose content-type is HTML (the
  * login page). That last case is why this checks the CONTENT TYPE and not just
@@ -240,6 +266,25 @@ export type PendingUpload = {
   // a v1 row (which has none) still reads; those replay without dedupe exactly
   // as they did before.
   idempotency_key: string | null;
+  /**
+   * ADR-0086 — the capture-time upload grant, if one was issued.
+   *
+   * ## Why this did NOT bump the database version
+   *
+   * It is a purely additive, nullable field with no index and — this is the part
+   * that decides it — **nothing to backfill it with**. A grant can only be minted
+   * server-side against a live session; there is no value an upgrade could write
+   * into an existing row that would be true. A v4 bump would therefore walk every
+   * row in a blob-carrying store to stamp `null`, for zero benefit, while
+   * re-opening the interleaving hazard that silently reverted the ADR-0078 G2
+   * backfill (one cursor walk per store per version step — see the v1→v3 test).
+   *
+   * So the schema stays at v3 and every read site defaults instead: a row written
+   * before this shipped reads `null` and replays down the SESSION path exactly as
+   * it does today. That is the correct outcome — those photos genuinely have no
+   * grant — and it is the same belt-and-braces pattern `subject` uses.
+   */
+  upload_grant: string | null;
   queued_at: number;
   attempts: number;
   last_error: string | null;
@@ -437,6 +482,16 @@ export type EnqueueUploadInput = {
   storage_key?: string | null;
   upload_url?: string | null;
   idempotency_key?: string | null;
+  /**
+   * ADR-0086 — the grant `/api/photos/upload-url` returned at CAPTURE, while a
+   * session provably existed. It rides the row so the drain does not need one.
+   *
+   * MUST have been minted over `idempotency_key`: the confirm it authorises
+   * presents that key, and the server refuses a grant-auth confirm whose key
+   * disagrees. Passing one without the other is a row that cannot drain by
+   * grant.
+   */
+  upload_grant?: string | null;
 };
 
 export async function enqueueUpload(input: EnqueueUploadInput): Promise<PendingUpload> {
@@ -453,6 +508,7 @@ export async function enqueueUpload(input: EnqueueUploadInput): Promise<PendingU
     storage_key: input.storage_key ?? null,
     upload_url: input.upload_url ?? null,
     idempotency_key: input.idempotency_key ?? newQueueId(),
+    upload_grant: input.upload_grant ?? null,
     queued_at: Date.now(),
     attempts: 0,
     last_error: null,
@@ -545,6 +601,11 @@ export async function enqueueDropoff(input: EnqueueDropoffInput): Promise<Pendin
     storage_key: input.storage_key ?? null,
     upload_url: input.upload_url ?? null,
     idempotency_key: input.idempotency_key,
+    // A walk-up drop-off never carries a grant. ADR-0086 scopes grants to the
+    // LOAD photo routes; the drop-off submit goes through `/api/queue/replay`,
+    // which is the allowlisted scope path and has its own gates. Widening the
+    // grant to cover it would be a second credential design, not a smaller one.
+    upload_grant: null,
     queued_at: Date.now(),
     attempts: 0,
     last_error: null,
@@ -749,6 +810,13 @@ export async function retryRow(id: string, kind: 'action' | 'upload'): Promise<v
     // failure — which is the shape of thing that gets a good deploy rolled
     // back. Clearing the key and URL forces a fresh mint on the next attempt,
     // which is what a human pressing "try again" means.
+    //
+    // ADR-0086 — `upload_grant` is deliberately CARRIED THROUGH the spread. The
+    // presign is discarded because it is stale; the grant is the credential that
+    // lets the re-mint happen at all, and clearing it would turn "try again"
+    // into "try again, but only if somebody is signed in" — removing the one
+    // property this feature exists to add, on the exact screen an operator
+    // reaches when the queue is stuck.
     await db.put(UPLOADS, {
       ...row,
       last_error: null,
@@ -892,6 +960,25 @@ function classify(status: number): boolean {
  */
 let sweepReachedServer = false;
 
+/**
+ * ADR-0086 — read a 401's body to tell a refused GRANT from a lapsed session.
+ *
+ * Both are `auth:` and both are fixed by the same action (sign in), so this
+ * changes no retry behaviour — it changes what the queue screen can SAY. The
+ * body is read defensively: a 401 from the middleware carries
+ * `{error:'unauthenticated'}` with no `grant` field, and a 401 from anywhere
+ * else may carry no JSON at all.
+ */
+async function authErrorFor(res: Response): Promise<string> {
+  try {
+    const body = (await res.clone().json()) as { grant?: unknown };
+    if (typeof body.grant === 'string' && body.grant.length > 0) return AUTH_GRANT_REFUSED;
+  } catch {
+    // Not JSON — a redirect, or the login page. Plain session expiry.
+  }
+  return AUTH_EXPIRED;
+}
+
 async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: string }> {
   // Set once the mint round-trips. From that point a network-layer failure is
   // proof that the APP is reachable and storage is not — see BLOCKED_UPLOAD.
@@ -903,10 +990,21 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
     const PRESIGN_TTL_MS = 8 * 60 * 1000;
     const stale = !upload_url || Date.now() - row.queued_at > PRESIGN_TTL_MS;
 
+    // ADR-0086 — the capture-time grant, sent on BOTH calls below.
+    //
+    // Header-only, never a URL parameter: a grant in a URL lands in access logs,
+    // `Referer` and browser history. Omitted entirely when the row has none (a
+    // pre-ADR-0086 row, or a capture made while no secret was provisioned), in
+    // which case both calls are byte-identical to what they are today and drain
+    // down the session path unchanged.
+    const grantHeaders: Record<string, string> = row.upload_grant
+      ? { 'X-Upload-Grant': row.upload_grant }
+      : {};
+
     if (!storage_key || stale) {
       const mint = await fetch('/api/photos/upload-url', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...grantHeaders },
         // `manual` so a redirect surfaces AS a redirect. Following it lands on
         // the login page, whose 200 would otherwise read as a successful mint.
         redirect: 'manual',
@@ -914,12 +1012,16 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
           load_id: row.load_id,
           kind: row.kind,
           content_type: row.content_type,
+          // Bound INTO the re-issued grant, and it must be the key this row has
+          // carried since capture — the confirm below presents the same one, and
+          // the server refuses a grant-auth confirm whose key disagrees.
+          ...(row.idempotency_key ? { idempotency_key: row.idempotency_key } : {}),
         }),
       });
       sweepReachedServer = true;
       // Checked BEFORE `mint.ok`, because the whole defect was an auth failure
       // that arrived wearing a 200.
-      if (isAuthResponse(mint)) return { ok: false, error: AUTH_EXPIRED };
+      if (isAuthResponse(mint)) return { ok: false, error: await authErrorFor(mint) };
       if (!mint.ok) {
         return {
           ok: false,
@@ -927,11 +1029,24 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
         };
       }
       appReachable = true;
-      const minted = (await mint.json()) as { storage_key: string; upload_url: string | null };
+      const minted = (await mint.json()) as {
+        storage_key: string;
+        upload_url: string | null;
+        upload_grant?: string | null;
+      };
       storage_key = minted.storage_key;
       upload_url = minted.upload_url;
       row.storage_key = storage_key;
       row.upload_url = upload_url;
+      // D2 — persist the RE-ISSUED grant. It carries the original expiry
+      // forward (the server enforces that, not us), so this refreshes the
+      // credential's binding to the freshly-minted object generation without
+      // extending its life. Guarded so a server that issues none — no secret
+      // provisioned — cannot erase a grant the row already holds.
+      if (minted.upload_grant) {
+        row.upload_grant = minted.upload_grant;
+        grantHeaders['X-Upload-Grant'] = minted.upload_grant;
+      }
       row.queued_at = Date.now();
       await updateUpload(row);
     }
@@ -958,7 +1073,10 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
     // landed returns its original row id instead of writing a second one. Note
     // the re-mint above deliberately does NOT invalidate it: the server hashes
     // load_id + kind, not the storage_key, for exactly this reason.
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...grantHeaders,
+    };
     if (row.idempotency_key) headers['Idempotency-Key'] = row.idempotency_key;
 
     const confirm = await fetch('/api/photos/confirm', {
@@ -973,7 +1091,7 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
       }),
     });
     sweepReachedServer = true;
-    if (isAuthResponse(confirm)) return { ok: false, error: AUTH_EXPIRED };
+    if (isAuthResponse(confirm)) return { ok: false, error: await authErrorFor(confirm) };
     if (!confirm.ok) {
       return {
         ok: false,

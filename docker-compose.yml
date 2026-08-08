@@ -133,6 +133,20 @@ services:
       # so the workflow keeps working before R2 creds land.
       - path: /home/bbarnard065/.dr3-vision-secrets/r2.env
         required: false
+      # ADR-0086 D6 — PHOTO_GRANT_SECRET (+ PHOTO_GRANT_KEY_VERSION, and
+      # PHOTO_GRANT_SECRET_PREVIOUS during a rotation window): the HMAC key for
+      # capture-time photo upload grants, which let a queued photo drain with no
+      # live session. Optional / FAIL-CLOSED-BUT-SOFT: absent → the app mints NO
+      # grants and `/api/photos/*` behaves exactly as it did before ADR-0086
+      # (a queued photo still needs a signed-in operator at its site). It never
+      # degrades to unsigned or fixed-key tokens, and it never takes the session
+      # path down with it — this feature's first deploy necessarily lands BEFORE
+      # the operator drops this file. `/healthz` reports `photo_grants_ok` so the
+      # inert state is visible; it is deliberately NOT part of the healthz
+      # `status` verdict, or that first deploy would roll itself back.
+      # Provisioning + the N-1 retirement rule: docs/OPEN-ITEMS.md §0.AP.
+      - path: /home/bbarnard065/.dr3-vision-secrets/photo-grant.env
+        required: false
       # System-level ntfy alerts (ADR-0036 + ADR-0037). Optional so the
       # app boots fail-soft when the secret hasn't been dropped yet —
       # `src/lib/ntfy.ts` treats a missing `NTFY_PUBLISHER_TOKEN` as a

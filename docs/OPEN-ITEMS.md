@@ -20,6 +20,57 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AP — 2026-08-08 ADR-0086 capture-time photo upload grants (ships INERT)
+
+- **OPERATOR ACTION — provision `PHOTO_GRANT_SECRET` on CHAD-HQ.** Until this exists
+  the feature does nothing at all: the app mints no grants, `/api/photos/*` behaves
+  exactly as it did before ADR-0086, and a queued photo still needs a live signed-in
+  session at its site in order to drain. That is the pre-0086 status quo, **not an
+  outage** — the deploy is safe to land before this step and must be, because the
+  image ships before the secret file does.
+
+  ```
+  ssh -F ~/noc-master/config/swarm-auto-update.sshconfig chad-hq
+  umask 077
+  printf 'PHOTO_GRANT_SECRET=%s\nPHOTO_GRANT_KEY_VERSION=1\n' "$(openssl rand -base64 48)" \
+    > ~/.dr3-vision-secrets/photo-grant.env
+  chmod 600 ~/.dr3-vision-secrets/photo-grant.env
+  # then recreate the app container so env_file is re-read
+  cd ~/DR3-Vision && docker compose up -d --force-recreate app
+  ```
+
+  `docker-compose.yml` already mounts the file with `required: false`, so a missing
+  file is not a boot failure — it is the inert state above.
+
+  **Verify (do not skip — a secret that did not reach the process is invisible
+  otherwise):** `curl -s https://dr3-vision.svdp.us/healthz | jq .photo_grants_ok`
+  must return `true`. It is deliberately NOT part of the `status`/`ok` verdict, so a
+  missing secret will never fail the deployer's smoke test or trigger a rollback —
+  which means it will also never announce itself. Check it explicitly.
+
+  Never in the repo, never in a commit message, never in a log. Generated ONLY on
+  CHAD-HQ by the operator; no session has ever held this value.
+
+- **OPEN — the `N-1` key-retirement calendar entry has no owner.** ADR-0086 D6:
+  rotation is destructive here. `PHOTO_GRANT_KEY_VERSION` selects the key, the
+  verifier accepts `N` and `N-1`, the minter only issues `N`, and
+  `PHOTO_GRANT_SECRET_PREVIOUS` (i.e. `N-1`) **may not be retired sooner than 14
+  days** after a rotation — `max(exp)`. Retiring it early invalidates every grant
+  sitting in every iPad's IndexedDB at once, silently, which is precisely the
+  evidence-loss event this ADR exists to prevent. There is no rotation scheduled
+  today, so nothing is due; the item is that **a runbook nobody is scheduled to
+  execute is a rotation that will happen once, in an emergency, on the day it
+  destroys 40 queued photos** (ADR-0086 §9 Q4 — the one open question the walkthrough
+  did not assign). Bill to name an owner.
+
+- **Accepted residual — `uploaded_by` changes MEANING for grant-drained photos.**
+  ADR-0086 D8: under a grant the column records the **capture-time** operator rather
+  than whoever was signed in when the queue drained. This is _more_ truthful, not
+  less, and it is the direction that runs opposite to the usual one for a bearer
+  credential — but it is a semantic change to an existing column and it should be
+  read that way by whoever audits attribution. To be noted in `COMPLIANCE.md` at the
+  next pass on that document rather than discovered from the data.
+
 ## 0.AO — 2026-08-08 ADR-0085 iPad walk-up drop-off (born pilot)
 
 - **OPERATOR ACTION — flip `ipad_dropoff` at `/admin/rollout`.** The surface ships
@@ -131,7 +182,7 @@ production on 2026-08-08, not carried forward from a claim.
 
 | Residual                                                                        | Lives in                              | State as re-measured 2026-08-08                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **F-3** — capture-time upload grant                                             | 0.AJ / **ADR-0086 (Proposed)**        | **ADR written 2026-08-08 (PR #215), decision-ready for Bill.** The §0.AJ design was found unbuildable as written (grant signed over `storage_key`, but the drain re-mints a fresh key past 8 min — 100% of the target population fails its own check); ADR-0086 corrects it to a right-to-attach grant. Not accepted, not built.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **F-3** — capture-time upload grant                                             | 0.AJ / **ADR-0086 (Accepted)**        | **DONE — accepted by Bill (walkthrough 2026-08-08) and built 2026-08-08.** The §0.AJ design was unbuildable as written (grant signed over `storage_key`, but the drain re-mints a fresh key past 8 min — 100% of the target population fails its own check); ADR-0086 corrects it to a right-to-attach grant, prefix-bound object identity, revocation re-read live at redemption. **One operator step remains before the feature does anything: provision `PHOTO_GRANT_SECRET` on CHAD-HQ — see 0.AP.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **R2 bucket CORS is hand-set**                                                  | 0.AJ / ADR-0085                       | **Codified 2026-08-08** (PR #217): spec + idempotent apply script at `infra/apply-r2-cors.sh`. Residual operator step: run `./infra/apply-r2-cors.sh --check` against `dr3-vision-photos` to confirm live config matches the checked-in spec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **C-50** — the four 2024 TEREX tabs                                             | 0.AL                                  | Deferred by decision. History starts 2025-01-02.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **AK-4** — Layer B commodity reconciliation rules                               | 0.AK                                  | **Re-scoped 2026-08-08 (PR #215, `docs/plans/2026-08-08-layer-b-commodity-reconciliation-rescope.md`) — the Kelsey option is dead** (availability ended 2026-08-08; method never captured). Four premises died on checking: the tracker has no formulas (records _that_, not _how_); Shannon never initialled a commodity audit (evidence holders: Kelsey 82 / Rick 17+1 / **Janette 15**); the vendor-invoice data leg (`outbound_materials`, `outbound_material_payments`, `outbound_vendors`, `recycling_rates`, `landfilled_units`, `invoices`) is **all 0 rows in prod** — Kelsey was never the only blocker. New plan: 4a interview Rick + Janette (proposed ~2026-08-22), 4b stand up the data leg (gates everything), 4c rules. Side-finding for Rick: the two-pass audit discipline collapsed — 2025 = 76% coverage / 27 second audits; 2026 = 25% / zero.                                                                                                                                                                                                                                                                                               |
@@ -362,7 +413,16 @@ correctly and the import ran green.
   the honest reading, not a defect. The first attributed row will be the next
   photo uploaded. Do not "backfill" it — there is no record of who took those.
 
-### Proposed follow-up (recorded, NOT built in P1)
+### Proposed follow-up (recorded, NOT built in P1) — **BUILT 2026-08-08 as ADR-0086**
+
+> **The design recorded below is the ORIGINAL and it does not work.** It is left in
+> place unedited because ADR-0086 §4 is a correction _of this text_, and deleting it
+> would leave that correction with nothing to correct. **Do not build from this
+> paragraph.** The grant is signed over `storage_key`, but the drain re-mints a fresh
+> key past eight minutes — so the field-match check fails on 100% of the population the
+> feature exists for. `docs/adr/0086-capture-time-photo-upload-grants.md` is the
+> authority; the shipped grant binds the load + kind + idempotency key and constrains
+> object identity by PREFIX instead.
 
 - **F-3 — capture-time upload grant, so a photo can drain with no live session.**
   ADR-0078 G7 fixed the auth failure that _looked_ like success, and G8c makes

@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const requireOperatorAtLoadSite = vi.hoisted(() => vi.fn());
+const requireOperatorOrGrantAtLoadSite = vi.hoisted(() => vi.fn());
 type CreateArgs = { data: Record<string, unknown> };
 const loadPhotoCreate = vi.hoisted(() => vi.fn(async () => ({ id: 'photo-1' })));
 const auditCreate = vi.hoisted(() => vi.fn(async () => ({ id: 'audit-1' })));
@@ -30,7 +30,7 @@ function firstData<T = Record<string, unknown>>(spy: { mock: { calls: unknown[][
   return first.data as T;
 }
 
-vi.mock('@/lib/load-photo-guard', () => ({ requireOperatorAtLoadSite }));
+vi.mock('@/lib/load-photo-guard', () => ({ requireOperatorOrGrantAtLoadSite }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
@@ -80,11 +80,13 @@ describe('ADR-0078 Am.1 — confirm.accepts-same-principal-as-mint', () => {
   //   AssertionError: confirm refused a principal that mint accepts:
   //   expected 403 to be 200
   it('accepts a same-site operator who does not own the load', async () => {
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-b',
       loadOwnerUserId: 'op-a',
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     const res = await post(VALID);
     expect(res.status, 'confirm refused a principal that mint accepts').toBe(200);
@@ -92,14 +94,16 @@ describe('ADR-0078 Am.1 — confirm.accepts-same-principal-as-mint', () => {
   });
 
   it('propagates the guard refusal verbatim (cross-site stays 403)', async () => {
-    requireOperatorAtLoadSite.mockRejectedValue(new Response('forbidden', { status: 403 }));
+    requireOperatorOrGrantAtLoadSite.mockRejectedValue(new Response('forbidden', { status: 403 }));
     const res = await post(VALID);
     expect(res.status).toBe(403);
     expect(loadPhotoCreate).not.toHaveBeenCalled();
   });
 
   it('keeps 404 distinguishable from 403', async () => {
-    requireOperatorAtLoadSite.mockRejectedValue(new Response('load not found', { status: 404 }));
+    requireOperatorOrGrantAtLoadSite.mockRejectedValue(
+      new Response('load not found', { status: 404 }),
+    );
     expect((await post(VALID)).status).toBe(404);
   });
 });
@@ -109,11 +113,13 @@ describe('ADR-0078 Am.1 — attribution is written on EVERY confirm', () => {
   // with `undefined`, i.e. the amendment loosens the gate and records nothing —
   // which is the trade going one way only.
   it('stamps uploaded_by with the ACTOR, not the load owner', async () => {
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-b',
       loadOwnerUserId: 'op-a',
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     await post(VALID);
     const data = firstData<{ uploaded_by: string }>(loadPhotoCreate);
@@ -122,11 +128,13 @@ describe('ADR-0078 Am.1 — attribution is written on EVERY confirm', () => {
   });
 
   it('stamps uploaded_by on a self-upload too', async () => {
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-a',
       loadOwnerUserId: 'op-a',
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     await post(VALID);
     // A column populated only on the exceptional path cannot answer "who
@@ -137,11 +145,13 @@ describe('ADR-0078 Am.1 — attribution is written on EVERY confirm', () => {
 
 describe('ADR-0078 Am.1 — the audit row marks the EXCEPTION, not every upload', () => {
   it('writes one audit row when the uploader is not the assigned operator', async () => {
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-b',
       loadOwnerUserId: 'op-a',
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     await post(VALID);
     expect(auditCreate).toHaveBeenCalledTimes(1);
@@ -160,11 +170,13 @@ describe('ADR-0078 Am.1 — the audit row marks the EXCEPTION, not every upload'
   // "operator did the thing they were assigned to do" and bury the case a
   // person would actually go looking for.
   it('writes NO audit row on a self-upload', async () => {
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-a',
       loadOwnerUserId: 'op-a',
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     await post(VALID);
     expect(
@@ -176,11 +188,13 @@ describe('ADR-0078 Am.1 — the audit row marks the EXCEPTION, not every upload'
   it('writes NO audit row when the load is unassigned', async () => {
     // Nobody was displaced, so there is no exception to record — and comparing
     // an actor against NULL would otherwise flag every unassigned load.
-    requireOperatorAtLoadSite.mockResolvedValue({
+    requireOperatorOrGrantAtLoadSite.mockResolvedValue({
       loadId: 'load-1',
       siteId: EUGENE,
       actorUserId: 'op-a',
       loadOwnerUserId: null,
+      via: 'session',
+      grantIdempotencyKey: null,
     });
     await post(VALID);
     expect(auditCreate).not.toHaveBeenCalled();
