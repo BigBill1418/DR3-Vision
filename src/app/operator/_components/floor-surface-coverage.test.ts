@@ -126,6 +126,7 @@ describe('ADR-0065 D1/D4 — every gated screen actually reads its gate', () => 
     // could be switched off separately would leave stuck entries with nowhere
     // to surface.
     [join('[site]', 'queue', 'conflicts', 'page.tsx')]: 'IPAD_QUEUE',
+    [join('[site]', 'dropoff', 'page.tsx')]: 'IPAD_DROPOFF', // ADR-0085
   };
 
   it('covers every gated surface named in the D1 table', () => {
@@ -133,7 +134,7 @@ describe('ADR-0065 D1/D4 — every gated screen actually reads its gate', () => 
     // ADR-0065's D1 table, ADR-0074's hauls list, and ADR-0078's conflicts
     // screen), and the hub summary block is asserted separately because it is a
     // block, not a page.
-    expect(Object.keys(REQUIRED_GATE)).toHaveLength(7);
+    expect(Object.keys(REQUIRED_GATE)).toHaveLength(8);
   });
 
   it.each(Object.entries(REQUIRED_GATE))('%s reads UI_SURFACE.%s', (relFile, surface) => {

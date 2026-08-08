@@ -46,8 +46,9 @@ import { newQueueId } from '@/lib/ulid';
 // the operator's steps out of order against a state that never existed.
 
 const DB_NAME = 'dr3-vision-queue';
-// v2 — ADR-0078. v1 rows are preserved and flagged, never dropped; see `upgrade`.
-const DB_VERSION = 2;
+// v3 — ADR-0085. v1 rows are preserved and flagged, v2 rows are backfilled in
+// place; nothing is ever dropped. See `upgrade`.
+const DB_VERSION = 3;
 const UPLOADS = 'pending_uploads';
 const ACTIONS = 'pending_actions';
 
@@ -159,10 +160,59 @@ export function stateFor(lastError: string | null | undefined): QueueState {
 
 export type UploadKind = 'bol' | 'weight_ticket' | 'door_open' | 'concern' | 'rejection';
 
+/**
+ * ADR-0085 — what a blob-carrying row is FOR.
+ *
+ * `load`     — a load photo. Mint at `/api/photos/upload-url`, PUT, then confirm
+ *              at `/api/photos/confirm`. The pre-existing behaviour, unchanged.
+ * `dropoff`  — a walk-up drop-off. Mint at the site-scoped drop-off endpoint,
+ *              PUT, then submit the WHOLE drop-off through `/api/queue/replay`.
+ *
+ * ## Why a drop-off rides the UPLOAD store and not the ACTION store
+ *
+ * A drop-off cannot exist without its photo — `consumer_dropoffs_floor_requires_photo`
+ * refuses the row outright — so the R2 PUT has to succeed BEFORE the submit can
+ * be attempted. Offline, neither can happen, so the blob and the units have to
+ * survive together in one durable row or the operator loses half of a capture
+ * they were told was saved.
+ *
+ * Splitting them across the two stores was the other option and it is worse in
+ * every direction: two rows, two idempotency keys, an ordering dependency the
+ * queue has no way to express between stores, and a window where the photo has
+ * drained and the drop-off has not — which reads to everyone downstream as a
+ * photo of nothing. One row, one key, one atomic outcome.
+ *
+ * Riding the existing store rather than adding a third also means drop-offs
+ * inherit, for free and already proven in the field: the badge counts, the
+ * conflicts screen, Retry-all, the `blocked:`/`auth:` classification, and the
+ * backoff. A third store would have needed every one of those re-implemented,
+ * and the ones that were re-implemented wrong would have been invisible.
+ */
+export type UploadSubject = 'load' | 'dropoff';
+
+/** ADR-0085 — the drop-off's own data, carried alongside its blob. */
+export type DropoffQueuePayload = {
+  site_code: string;
+  /** Pacific day (YYYY-MM-DD) the drop-off was FOR. Pinned on replay. */
+  dropoff_date: string;
+  kind: 'floor_public' | 'floor_incentive';
+  units: number;
+};
+
 export type PendingUpload = {
   id: string;
-  load_id: string;
+  /**
+   * ADR-0085. Absent on rows written by v2 and earlier; the v2→v3 upgrade
+   * backfills `'load'`, and every read below defaults to `'load'` as well so a
+   * row that somehow escapes the backfill still replays down the path it was
+   * written for rather than being reinterpreted as a drop-off.
+   */
+  subject: UploadSubject;
+  /** Null for `subject: 'dropoff'` — a walk-up drop-off has no load. */
+  load_id: string | null;
   kind: UploadKind;
+  /** Set iff `subject === 'dropoff'`. */
+  dropoff: DropoffQueuePayload | null;
   blob: Blob;
   content_type: string;
   byte_size: number;
@@ -269,10 +319,22 @@ function getDb(): Promise<IDBPDatabase<QueueDB>> {
           void uploadStore.openCursor().then(function walkUploads(cursor): Promise<void> | void {
             if (!cursor) return;
             const row = cursor.value as Partial<PendingUpload>;
-            if (!row.idempotency_key || !row.state) {
+            if (!row.idempotency_key || !row.state || !row.subject) {
               void cursor.update({
                 ...(row as PendingUpload),
                 idempotency_key: row.idempotency_key ?? newQueueId(),
+                // ADR-0085 — stamped HERE as well as in the v2→v3 block below.
+                //
+                // A v1 database runs BOTH upgrade blocks, and two cursor walks
+                // over the same store in one upgrade transaction interleave: the
+                // second walk reads a row the first has already queued an update
+                // for, then writes its own copy over the top. That is not
+                // hypothetical — it silently reverted the G2 idempotency-key
+                // backfill for all 99 legacy rows, and `offline-queue.test.ts`
+                // caught it. One walk per store per version step; a v1 row gets
+                // everything it needs in this single update.
+                subject: row.subject ?? 'load',
+                dropoff: row.dropoff ?? null,
                 // Derived from the row's OWN existing `last_error`, so a legacy
                 // row already parked as `conflict:mint 403` stays a conflict and
                 // shows up on the conflicts screen rather than silently
@@ -283,8 +345,8 @@ function getDb(): Promise<IDBPDatabase<QueueDB>> {
             return cursor.continue().then(walkUploads);
           });
 
-          const store = tx.objectStore(ACTIONS);
-          void store.openCursor().then(function walk(cursor): Promise<void> | void {
+          const legacyActions = tx.objectStore(ACTIONS);
+          void legacyActions.openCursor().then(function walk(cursor): Promise<void> | void {
             if (!cursor) return;
             const row = cursor.value as Partial<PendingAction>;
             if (!row.scope) {
@@ -301,6 +363,38 @@ function getDb(): Promise<IDBPDatabase<QueueDB>> {
               });
             }
             return cursor.continue().then(walk);
+          });
+        }
+
+        // v2 → v3. ADR-0085 gave upload rows a `subject` discriminator. A v2 row
+        // has none, and `replayUpload` dispatches on it — an undefined subject
+        // must resolve to `'load'`, which is the only thing a v2 row could ever
+        // have been.
+        //
+        // Backfilled here AND defaulted at every read site. Belt and braces on
+        // purpose: this upgrade runs once per device and an interrupted refresh
+        // during it is a real thing on a floor iPad, so a row that misses the
+        // backfill must still replay correctly rather than being reinterpreted
+        // as a drop-off with no payload. The device holding these rows is the
+        // only place the photos exist.
+        //
+        // `oldVersion === 2` EXACTLY, not `< 3`. A v1 database already got its
+        // `subject` in the block above, and running a second cursor over the same
+        // store inside the same upgrade transaction is what broke the G2 backfill:
+        // the two walks interleave and the later write wins.
+        if (oldVersion === 2) {
+          const uploads = tx.objectStore(UPLOADS);
+          void uploads.openCursor().then(function walkV3(cursor): Promise<void> | void {
+            if (!cursor) return;
+            const row = cursor.value as Partial<PendingUpload>;
+            if (!row.subject) {
+              void cursor.update({
+                ...(row as PendingUpload),
+                subject: 'load',
+                dropoff: null,
+              });
+            }
+            return cursor.continue().then(walkV3);
           });
         }
       },
@@ -332,8 +426,10 @@ export async function enqueueUpload(input: EnqueueUploadInput): Promise<PendingU
   const db = await getDb();
   const row: PendingUpload = {
     id: newQueueId(),
+    subject: 'load',
     load_id: input.load_id,
     kind: input.kind,
+    dropoff: null,
     blob: input.blob,
     content_type: input.content_type,
     byte_size: input.blob.size,
@@ -379,6 +475,67 @@ function notifyEnqueued(): void {
       // A subscriber's failure is its own problem. The row is already durable.
     }
   }
+}
+
+export type EnqueueDropoffInput = {
+  site_code: string;
+  dropoff_date: string;
+  kind: 'floor_public' | 'floor_incentive';
+  units: number;
+  blob: Blob;
+  content_type: string;
+  /** Present when the mint already succeeded before the connection died. */
+  storage_key?: string | null;
+  upload_url?: string | null;
+  /**
+   * Minted ONCE, at the operator's tap — the SAME key the live attempt used. If
+   * that attempt actually landed and only its response was lost, the replay
+   * returns the original response and writes nothing. A key minted per attempt
+   * would make every retry a new drop-off, which is the whole defect this
+   * mechanism exists to close.
+   */
+  idempotency_key: string;
+};
+
+/**
+ * ADR-0085 — queue a walk-up drop-off: the photo blob AND the units, in one row.
+ *
+ * `kind` on the stored row is set to `'concern'` and is INERT for a drop-off —
+ * `replayDropoff` never reads it. It carries a value only because the field is
+ * non-optional on `PendingUpload` and widening it to `UploadKind | null` would
+ * force a null check into every load-photo path that has one today. The drop-off's
+ * real label lives in `dropoff.kind`, which is the one the server is sent.
+ */
+export async function enqueueDropoff(input: EnqueueDropoffInput): Promise<PendingUpload> {
+  const db = await getDb();
+  const row: PendingUpload = {
+    id: newQueueId(),
+    subject: 'dropoff',
+    // A walk-up drop-off has no load. Null, not a placeholder id: the halting
+    // logic in `replayAll` keys on `load_id`, and a synthetic value would make
+    // every drop-off halt behind every other one that failed.
+    load_id: null,
+    kind: 'concern',
+    dropoff: {
+      site_code: input.site_code,
+      dropoff_date: input.dropoff_date,
+      kind: input.kind,
+      units: input.units,
+    },
+    blob: input.blob,
+    content_type: input.content_type,
+    byte_size: input.blob.size,
+    storage_key: input.storage_key ?? null,
+    upload_url: input.upload_url ?? null,
+    idempotency_key: input.idempotency_key,
+    queued_at: Date.now(),
+    attempts: 0,
+    last_error: null,
+    state: 'active',
+  };
+  await db.put(UPLOADS, row);
+  notifyEnqueued();
+  return row;
 }
 
 export type EnqueueActionInput = {
@@ -812,6 +969,138 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
   }
 }
 
+/**
+ * ADR-0085 — replay a walk-up drop-off: PUT the photo, then submit the drop-off.
+ *
+ * Same three-step shape as `replayUpload` (mint → PUT → tell the server), with
+ * two differences that matter:
+ *
+ *   1. The final step is `/api/queue/replay`, not `/api/photos/confirm`. It
+ *      submits the WHOLE drop-off — day, label, units, photo key — through the
+ *      allowlisted scope, so it is subject to the identical auth, rollout and
+ *      day-pin gates a live submit gets. There is no drop-off-shaped bypass.
+ *   2. The order is load-bearing rather than incidental. The row cannot exist
+ *      without its photo key (`consumer_dropoffs_floor_requires_photo`), so a
+ *      failed PUT must abort before the submit. Reversing these would mean a
+ *      submit that 422s on a key the bucket never received.
+ *
+ * Exactly-once across the pair: the idempotency key was minted at the operator's
+ * tap and rides the submit. A re-mint gives a FRESH storage key, and the server
+ * deliberately excludes that key from the request hash (see `dropoffCreate`), so
+ * a replay of a drop-off that already landed returns the original row instead of
+ * earning a spurious 409. The re-minted R2 object is left orphaned — the same
+ * accepted trade `/api/photos/confirm` documents: an unreferenced object costs
+ * bytes, a duplicate row costs the floor's inventory being wrong.
+ */
+async function replayDropoff(row: PendingUpload): Promise<{ ok: boolean; error?: string }> {
+  const d = row.dropoff;
+  if (!d) {
+    // A row marked `subject: 'dropoff'` with no payload cannot be reconstructed
+    // and never will be. Parked as a conflict rather than retried forever or
+    // silently dropped — the blob is still on the device and a person can see it.
+    return { ok: false, error: `${CONFLICT_PREFIX}dropoff_payload_missing` };
+  }
+  let appReachable = false;
+  try {
+    let storage_key = row.storage_key;
+    let upload_url = row.upload_url;
+
+    const PRESIGN_TTL_MS = 8 * 60 * 1000;
+    const stale = !upload_url || Date.now() - row.queued_at > PRESIGN_TTL_MS;
+
+    if (!storage_key || stale) {
+      const mint = await fetch(`/api/operator/${d.site_code}/dropoff/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // `manual` so a redirect surfaces AS a redirect. Following it lands on
+        // the login page, whose 200 would otherwise read as a successful mint —
+        // the exact fault that hid 97 photos for months.
+        redirect: 'manual',
+        body: JSON.stringify({ content_type: row.content_type }),
+      });
+      sweepReachedServer = true;
+      if (isAuthResponse(mint)) return { ok: false, error: AUTH_EXPIRED };
+      if (!mint.ok) {
+        return {
+          ok: false,
+          error: `${classify(mint.status) ? CONFLICT_PREFIX : ''}mint ${mint.status}`,
+        };
+      }
+      appReachable = true;
+      const minted = (await mint.json()) as { storage_key: string; upload_url: string | null };
+      storage_key = minted.storage_key;
+      upload_url = minted.upload_url;
+      row.storage_key = storage_key;
+      row.upload_url = upload_url;
+      row.queued_at = Date.now();
+      await updateUpload(row);
+    }
+
+    if (upload_url) {
+      // Isolated try/catch: a network-layer throw HERE is the CORS/preflight
+      // class and must be distinguishable from the device being offline. The
+      // mint round-tripped, so the app is demonstrably reachable and storage is
+      // not — that is `blocked:`, not `offline`.
+      try {
+        const put = await fetch(upload_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': row.content_type },
+          body: row.blob,
+        });
+        if (!put.ok) return { ok: false, error: `R2 PUT ${put.status}` };
+      } catch (e) {
+        if (appReachable) return { ok: false, error: BLOCKED_UPLOAD };
+        throw e;
+      }
+    }
+
+    if (!storage_key) {
+      // Only reachable if a mint returned an empty key. Refusing here keeps the
+      // photo-required guarantee on the CLIENT side of the network too, rather
+      // than submitting something the server will (correctly) refuse.
+      return { ok: false, error: `${CONFLICT_PREFIX}dropoff_no_storage_key` };
+    }
+
+    const res = await fetch('/api/queue/replay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      redirect: 'manual',
+      body: JSON.stringify({
+        scope: 'operator.dropoff.create',
+        site_code: d.site_code,
+        idempotency_key: row.idempotency_key || null,
+        target_day: d.dropoff_date,
+        payload: {
+          dropoffDate: d.dropoff_date,
+          kind: d.kind,
+          units: d.units,
+          photoStorageKey: storage_key,
+          photoContentType: row.content_type,
+          photoByteSize: row.byte_size,
+        },
+      }),
+    });
+    sweepReachedServer = true;
+    if (isAuthResponse(res)) return { ok: false, error: AUTH_EXPIRED };
+    if (res.ok) return { ok: true };
+
+    // The day pin. The entry is intact and the server refused to guess; a person
+    // decides whether it is re-filed against today or discarded. Never
+    // retargeted automatically — a drop-off on the wrong day moves the inventory
+    // ledger on two days at once.
+    if (res.status === 422) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (body.error === 'date_not_today') return { ok: false, error: CONFLICT_DATE_NOT_TODAY };
+    }
+    return {
+      ok: false,
+      error: `${classify(res.status) ? CONFLICT_PREFIX : ''}dropoff ${res.status}`,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'network' };
+  }
+}
+
 async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch('/api/queue/replay', {
@@ -904,7 +1193,12 @@ export function replayAll(): Promise<ReplayResult> {
       if (isConflict(row)) continue;
       if (!isReady(row)) continue;
       if (row.load_id && halted.has(row.load_id)) continue;
-      const r = await replayUpload(row);
+      // ADR-0085 — dispatch on the subject. Defaulted to `'load'` rather than
+      // read bare: a v2 row that missed the upgrade backfill has no `subject`,
+      // and it must replay down the path it was WRITTEN for. Falling to
+      // `replayDropoff` with no payload would park a perfectly good load photo
+      // as a conflict.
+      const r = row.subject === 'dropoff' ? await replayDropoff(row) : await replayUpload(row);
       if (r.ok) {
         await removeUpload(row.id);
         result.uploads_replayed += 1;

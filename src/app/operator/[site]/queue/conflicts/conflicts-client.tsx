@@ -290,10 +290,33 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
           className="rounded-xl bg-dr3-green-dark/40 p-5"
           data-testid="conflict-row"
         >
-          <p className="text-lg font-bold">{t('floor.conflicts.what_photo', { kind: row.kind })}</p>
-          <p className="mt-1 text-sm text-dr3-cream/80">
-            {t('floor.conflicts.load_ref', { id: row.load_id })}
-          </p>
+          {/* ADR-0085 — a blob-carrying row is now either a load photo or a whole
+              walk-up drop-off, and a parked one has to say WHICH. A drop-off has
+              no load to reference; rendering the load line with an empty id would
+              tell a manager the photo belongs to load "" — worse than saying
+              nothing, because it reads as data rather than as absence. */}
+          {row.subject === 'dropoff' && row.dropoff ? (
+            <>
+              <p className="text-lg font-bold">
+                {t(`floor.dropoff.kind_${row.dropoff.kind}`)}
+              </p>
+              <p className="mt-1 text-sm text-dr3-cream/80">
+                {t('floor.conflicts.dropoff_ref', {
+                  units: row.dropoff.units,
+                  day: row.dropoff.dropoff_date,
+                })}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-bold">
+                {t('floor.conflicts.what_photo', { kind: row.kind })}
+              </p>
+              <p className="mt-1 text-sm text-dr3-cream/80">
+                {t('floor.conflicts.load_ref', { id: row.load_id ?? '—' })}
+              </p>
+            </>
+          )}
           <p className="mt-1 text-sm text-dr3-cream/70">
             {t('floor.conflicts.queued_at', { when: whenLabel(row.queued_at) })}
           </p>

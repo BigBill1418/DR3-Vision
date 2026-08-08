@@ -224,7 +224,9 @@
       "card_hauls_title": "All portal hauls",
       "card_hauls_body": "Search every haul MyMRC has for this site",
       "card_hauls_badge_one": "{{count}} coming up",
-      "card_hauls_badge_other": "{{count}} coming up"
+      "card_hauls_badge_other": "{{count}} coming up",
+      "card_dropoff_title": "Log a drop-off",
+      "card_dropoff_body": "Someone dropped mattresses at the door"
     },
     "hauls": {
       "heading": "All portal hauls",
@@ -376,7 +378,22 @@
       "queued_at": "Held since {{when}}",
       "load_ref": "Load {{id}}",
       "retry_all": "Try all {{count}} again",
-      "why_manager_hold": "This count is large enough to need a manager. It is stored safely and waiting for approval — retrying will not speed it up."
+      "why_manager_hold": "This count is large enough to need a manager. It is stored safely and waiting for approval — retrying will not speed it up.",
+      "dropoff_ref": "Drop-off of {{units}} units for {{day}}"
+    },
+    "dropoff": {
+      "heading": "Drop-off",
+      "caption": "Walk-up drop-off at {{site}}",
+      "intro": "Pick the type, count the mattresses, take one photo, then send.",
+      "kind_label": "Type of drop-off",
+      "kind_floor_public": "Public drop-off",
+      "kind_floor_incentive": "Incentive drop-off",
+      "units_label": "Total units",
+      "photo_label": "Photo",
+      "photo_take": "Take a photo",
+      "photo_taken": "✓ Photo taken — tap to retake",
+      "photo_required": "A photo is required for every drop-off.",
+      "send": "Send drop-off"
     }
   },
   "nav": {

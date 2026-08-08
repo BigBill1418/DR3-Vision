@@ -24,7 +24,16 @@
 // user id, so the screen resolves as a pre-PIN auth surface: black chrome, no back,
 // no Log Out — a black page with no way out. Adding the route without adding the
 // segment is the defect this comment exists to prevent.
-const WORK_SEGMENTS = new Set(['today', 'queue', 'inbound', 'count', 'processed', 'load', 'hauls']);
+const WORK_SEGMENTS = new Set([
+  'today',
+  'queue',
+  'inbound',
+  'count',
+  'processed',
+  'load',
+  'hauls',
+  'dropoff', // ADR-0085
+]);
 
 export interface FloorNav {
   /** Site code from the path, or null on `/operator` itself. */

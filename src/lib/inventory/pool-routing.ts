@@ -34,6 +34,7 @@ export type InboundChannel =
   | 'incentive_dropoff' // ConsumerDropoffKind.incentive (CIP paid)
   | 'unpaid_dropoff' // ConsumerDropoffKind.unpaid
   | 'illegal_dropoff' // ConsumerDropoffKind.illegal
+  | 'floor_dropoff' // ADR-0085 — ConsumerDropoffKind.floor_public | floor_incentive
   | 'event'; // LoadSourceType.event
 
 /**
@@ -54,6 +55,14 @@ export function dropoffKindToChannel(kind: ConsumerDropoffKind): InboundChannel 
       return 'unpaid_dropoff';
     case 'illegal':
       return 'illegal_dropoff';
+    // ADR-0085 — both walk-up kinds share ONE channel. They differ only in the
+    // word the operator tapped; for inventory and for billing they are the same
+    // thing, and inventing two identical channels would imply a split that does
+    // not exist. The Public/Incentive distinction survives on `kind`, which is
+    // what the audit workbench groups by.
+    case 'floor_public':
+    case 'floor_incentive':
+      return 'floor_dropoff';
   }
 }
 

@@ -47,7 +47,7 @@ function dropoffDateUTC(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-function assertWholeUnits(units: number): void {
+export function assertWholeUnits(units: number): void {
   if (!Number.isInteger(units) || units <= 0 || units > 100000) {
     throw new RecordValidationError(
       `units must be a whole number in [1, 100000] (got ${String(units)})`,
@@ -72,17 +72,115 @@ function dailyCapUnits(params: Record<string, unknown> | null): number {
  */
 export const UNPAID_DROPOFF_CENTS_PER_UNIT = 300;
 
-/** §1.3 — the default `incentive_amount_cents` for a kind, or `null` (incentive kind). */
+/**
+ * ADR-0085 — does this kind mint a Bye-Bye-Mattress check amount by DEFAULT?
+ *
+ * This function exists because the predicate it replaces was inverted, and the
+ * inversion was invisible for a year.
+ *
+ * The old shape was `if (kind === 'incentive') return null; return units × 300`.
+ * Read as a policy that is: *every kind mints $3/unit of check money except the
+ * one named exception* — an allowlist of one, guarding the wrong side. Adding
+ * ANY enum value silently enrolled it in a payout. That is not hypothetical: this
+ * ADR adds two kinds to a flow Bill specified as carrying no money whatsoever,
+ * and a version of it that only added enum values would have written 300¢/unit
+ * on every walk-up drop-off at both sites with nothing anywhere objecting.
+ *
+ * Now the allowlist names the kinds that DO mint, and everything else is refused.
+ * Two independent guards, on purpose:
+ *
+ *   - the `never` assertion below makes a new `ConsumerDropoffKind` a COMPILE
+ *     ERROR here, so whoever adds one has to state in this file whether it
+ *     carries money;
+ *   - the trailing `return false` is the RUNTIME floor for the case the compiler
+ *     cannot see — a migration that ships a label before the code that knows
+ *     about it, a value that arrives through an `as` cast, a row written by an
+ *     older deploy. An unclassified kind mints NOTHING.
+ *
+ * The compile error is what makes the decision explicit. The runtime deny is what
+ * holds when the decision was never made.
+ *
+ * **The `never` assertion is load-bearing and was nearly omitted.** A covered
+ * `switch` followed by `return false` type-checks perfectly happily when a new
+ * enum member appears: every path still returns `boolean`, so the new member just
+ * falls through to the floor and `tsc` exits 0. Reviewed on PR #217 and verified
+ * by compiling the shipped shape against an extra member — it passed. The runtime
+ * deny alone is the WRONG failure for a kind that SHOULD pay: it would silently
+ * pay nothing, which is the same class of quiet-money defect as the inversion
+ * this function was rewritten to fix, pointed the other way. Deleting the
+ * assertion restores that hole while leaving every test green.
+ */
+function mintsCheckMoneyByDefault(kind: ConsumerDropoffKind): boolean {
+  switch (kind) {
+    // §1.3 — the explicit-amount field is for the un-incentivized (unpaid /
+    // illegal) Bye-Bye-Mattress check. These two, and only these two.
+    case 'unpaid':
+    case 'illegal':
+      return true;
+    // Incentive drop-offs carry the rule-capped `incentive_cents` instead; the
+    // explicit-amount field is not theirs.
+    case 'incentive':
+      return false;
+    // Label-only. No money, ever — not even the Incentive programme's $3/unit,
+    // which is tracked elsewhere (Bill, 2026-08-07). Also enforced below the
+    // application by `consumer_dropoffs_floor_no_money_or_pii`, so a caller that
+    // routed around this function still cannot write a cents value.
+    case 'floor_public':
+    case 'floor_incentive':
+      return false;
+  }
+
+  // The compile-time half. With every member covered above, `kind` narrows to
+  // `never` here and this assignment is legal. Add a member without adding a
+  // case and `kind` is that member instead — TS2322, in this file, naming the
+  // kind nobody classified.
+  //
+  // Do NOT "simplify" this away because the switch already looks exhaustive: the
+  // `return false` below means the function still type-checks without it, so its
+  // absence is invisible. See the header.
+  const unclassified: never = kind;
+  void unclassified;
+
+  // The runtime half. Unreachable while the switch above is exhaustive; the
+  // floor for a value that reached us anyway.
+  return false;
+}
+
+/** §1.3 — the default `incentive_amount_cents` for a kind. */
 function defaultIncentiveAmountCents(
   kind: ConsumerDropoffKind,
   units: number,
   override: number | null | undefined,
 ): number | null {
   if (override !== undefined && override !== null) return override;
-  // Incentive drop-offs carry the rule-capped `incentive_cents`; the explicit-amount field
-  // is for the un-incentivized (unpaid / illegal) Bye-Bye-Mattress check.
-  if (kind === 'incentive') return null;
+  if (!mintsCheckMoneyByDefault(kind)) return null;
   return units * UNPAID_DROPOFF_CENTS_PER_UNIT;
+}
+
+/**
+ * Test seam for the deny-by-default floor above.
+ *
+ * Exported ONLY so `service.money-minting.test.ts` can present a kind the enum
+ * does not contain — the "a migration shipped a label before the code" case,
+ * which is unreachable through `createDropoff` because zod rejects the value at
+ * the route and TypeScript rejects it at the call site. A guard whose failure
+ * mode cannot be exercised is a guard nobody has checked.
+ */
+export const __mintsCheckMoneyByDefaultForTest = mintsCheckMoneyByDefault;
+
+/**
+ * An `incentive` row with a NULL `person_name` — impossible while the
+ * `consumer_dropoffs_non_floor_requires_person` CHECK holds, so reaching this
+ * means the constraint was dropped or the row predates it. Throws rather than
+ * substituting a placeholder: the name is the aggregation key for the per-person
+ * daily incentive cap, and a stand-in would pool strangers into one person's cap
+ * and under-pay them. Loud beats plausible where money is involved.
+ */
+function assertPersonName(rowId: string): never {
+  throw new RecordValidationError(
+    `drop-off ${rowId} is an incentive row with no person_name — the per-person daily cap ` +
+      'cannot be computed without one; fix the row before editing it',
+  );
 }
 
 export interface DropoffView {
@@ -90,7 +188,8 @@ export interface DropoffView {
   siteId: string;
   dropoffDate: Date;
   kind: ConsumerDropoffKind;
-  personName: string;
+  /** ADR-0085 — null for the `floor_*` kinds, which capture no identity at all. */
+  personName: string | null;
   consumerName: string | null;
   slipNumber: string | null;
   units: number;
@@ -108,7 +207,7 @@ function toView(r: {
   site_id: string;
   dropoff_date: Date;
   kind: ConsumerDropoffKind;
-  person_name: string;
+  person_name: string | null;
   consumer_name: string | null;
   slip_number: string | null;
   units: number;
@@ -142,6 +241,39 @@ function toView(r: {
 /**
  * Compute the incentive for a (person, day) at a site, honoring the running
  * per-person daily cap. `excludeId` omits a row being edited from the prior sum.
+ *
+ * ## ADR-0085 — how the cap treats the anonymous `floor_*` rows
+ *
+ * It does not see them, and that is the correct answer rather than a gap.
+ *
+ * The cap is a MONEY control: it bounds how many units one person can be PAID
+ * for in a day. `floor_public` / `floor_incentive` rows are never paid — no rule
+ * is resolved, no `incentive_cents` is computed, and the
+ * `consumer_dropoffs_floor_no_money_or_pii` CHECK refuses a row that carries a
+ * cents value at all. A cap on an unpaid row would be a cap on nothing.
+ *
+ * Two mechanical consequences of `person_name` now being nullable, both benign:
+ *
+ *   - **The anonymous rows cannot be pooled into someone's cap.** The `priors`
+ *     query below matches `person_name = <string>`. In SQL a comparison against
+ *     NULL is never true, so a floor row is invisible to every person's running
+ *     total. If it were not, a stranger's walk-up would silently consume a named
+ *     collector's daily allowance and under-pay them.
+ *   - **The cap cannot be bypassed by omitting a name.** Reaching this function
+ *     at all requires `kind === 'incentive'`, and an `incentive` row with a NULL
+ *     `person_name` is refused by `consumer_dropoffs_non_floor_requires_person`.
+ *     There is no path that pays money to nobody.
+ *
+ * The `@@index([site_id, person_name, dropoff_date])` that serves this query is
+ * unaffected — a Postgres btree indexes NULLs, and they simply never satisfy the
+ * equality predicate.
+ *
+ * NULL is also the COMPLIANT choice, not merely the convenient one. `person_name`
+ * is MRC Personal Data (charter Exhibit I / ADR-0010): it carries breach-
+ * notification scope and a 10-business-day deletion-on-termination obligation.
+ * A walk-up at the door has no payout to attach a name to, so collecting one
+ * would extend that obligation over people the programme has no reason to hold
+ * records about. Not collecting it is the smaller footprint and the smaller duty.
  */
 async function computeIncentiveCents(
   siteId: string,
@@ -297,11 +429,36 @@ export async function updateDropoff(args: {
   const units = args.units ?? existing.units;
   assertWholeUnits(units);
   const kind = args.kind ?? existing.kind;
+
+  // ADR-0085 — the two families do not convert into one another.
+  //
+  // A floor row has no name by construction and a manager row is required to
+  // have one, so either direction of this transition would leave the row on the
+  // wrong side of `consumer_dropoffs_non_floor_requires_person` (or, going the
+  // other way, on the wrong side of `..._floor_no_money_or_pii`). Without this
+  // the write reaches Postgres and comes back as a raw constraint violation —
+  // a 500 with a constraint name in it, which tells the office nothing. Refused
+  // here, in the language of the thing the manager was trying to do.
+  const isFloor = (k: ConsumerDropoffKind): boolean =>
+    k === 'floor_public' || k === 'floor_incentive';
+  if (isFloor(kind) !== isFloor(existing.kind)) {
+    throw new RecordValidationError(
+      'an iPad drop-off cannot be converted to a manager drop-off (or back): the two carry ' +
+        'different required fields — money and a payee name on one, neither on the other',
+    );
+  }
+
   const incentiveCents =
     kind === 'incentive'
       ? await computeIncentiveCents(
           args.siteId,
-          existing.person_name,
+          // Non-floor kinds are guaranteed a name by the
+          // `consumer_dropoffs_non_floor_requires_person` CHECK; the `??` satisfies
+          // the compiler for the nullable column and is unreachable in practice.
+          // NOT defaulted to a placeholder: `computeIncentiveCents` aggregates the
+          // per-person daily cap BY this string, so a stand-in would silently pool
+          // unrelated people's units into one cap.
+          existing.person_name ?? assertPersonName(args.id),
           existing.dropoff_date,
           units,
           args.id,

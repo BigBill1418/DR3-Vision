@@ -2316,6 +2316,16 @@ enum ConsumerDropoffKind {
   incentive
   unpaid
   illegal
+
+  /// ADR-0085 — the iPad walk-up flow's two LABEL-ONLY kinds. Identical to each
+  /// other in every respect except the word the operator tapped; neither carries
+  /// money, a name, or a check. They are separate enum values (rather than a
+  /// reuse of `unpaid`) precisely because `defaultIncentiveAmountCents` stamps
+  /// units × 300¢ on every kind that is not `incentive` — the label is what
+  /// keeps the money off. Enforced by the `consumer_dropoffs_floor_no_money_or_pii`
+  /// CHECK constraint, which is in the migration and not expressible here.
+  floor_public
+  floor_incentive
 }
 
 /// ADR-0037 D4 — landfilled whole-unit disposal reasons (workbook block).
@@ -2371,7 +2381,15 @@ model ConsumerDropoff {
   // ADR-0037 Addendum B1 — drop-off kind drives incentive: only `incentive` rows
   // are ever paid; `unpaid`/`illegal` rows never carry an incentive_cents.
   kind                   ConsumerDropoffKind
-  person_name            String // CIP PII — Exhibit I / ADR-0010; never exported
+  /// CIP PII — Exhibit I / ADR-0010; never exported.
+  ///
+  /// ADR-0085 relaxed this to NULLABLE for the two `floor_*` kinds only, which
+  /// deliberately capture no identity. The old NOT NULL invariant still holds
+  /// for `incentive`/`unpaid`/`illegal` — enforced by the
+  /// `consumer_dropoffs_non_floor_requires_person` CHECK constraint, because an
+  /// unscoped loosening is just a hole. Both constraints live in
+  /// `20260838a_adr0085_ipad_dropoff`; Prisma cannot express a CHECK.
+  person_name            String?
   // ADR-0037 amendment (rollup §1.3, Kelsey Q4) — optional traceable consumer name on
   // UNPAID records. Distinct from the required incentive-payee `person_name`; also CIP PII.
   consumer_name          String?
@@ -2387,6 +2405,20 @@ model ConsumerDropoff {
   retrac_id              String?
   source                 RecordSource        @default(manual)
   import_id              String? // ADR-0048 — workbook_promotions.id when promoted from staging
+
+  /// ADR-0085 — the required drop-off photo, mirroring `load_photos` (including
+  /// `uploaded_by`). Columns rather than a side table: exactly one photo, always
+  /// present, and a CHECK constraint can enforce "no floor drop-off without a
+  /// photo" against a column in a way it cannot against another table's absence.
+  /// Null for the manager-entered kinds, which have never carried a photo.
+  photo_storage_key      String?
+  photo_content_type     String?
+  photo_byte_size        Int?
+  /// The operator whose SESSION submitted the row — never a name typed by
+  /// anyone, never the consumer. ADR-0078 Am.1's lesson, applied from row one.
+  photo_uploaded_by      String?
+  photo_captured_at      DateTime?
+
   locked_at              DateTime? // edit-before-any-lock guard (CRUD-lite)
   created_by             String?
   created_at             DateTime            @default(now())

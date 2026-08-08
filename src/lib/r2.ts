@@ -88,6 +88,75 @@ export async function mintUploadUrl(args: {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Walk-up drop-off photos (ADR-0085)
+// ────────────────────────────────────────────────────────────────────────
+
+// The same browser-PUT-to-R2 shape as `mintUploadUrl`, generalised off the LOAD.
+// A walk-up drop-off has no load — that is the whole point of the flow — so the
+// key is scoped to the SITE instead.
+//
+// A separate function rather than an optional `loadId` on `mintUploadUrl`: that
+// path is the one that held zero rows in production for months and was finally
+// drained on 2026-08-07 across three stacked faults. Widening its signature to
+// serve a second caller is how a hard-won working path acquires a new failure
+// mode. This one is additive and cannot regress it.
+
+/**
+ * The prefix every drop-off photo key for a site must start with.
+ *
+ * Exported because the submit handler VALIDATES the key it is handed against it.
+ * `storage_key` arrives from the client — from an iPad's IndexedDB, possibly
+ * days later — and the CHECK constraint only requires it to be non-null. Without
+ * this check a submitted drop-off could name any string at all, including
+ * another site's object key, and the row would happily record it as its evidence.
+ */
+export function dropoffStorageKeyPrefix(siteId: string): string {
+  return `dropoffs/${siteId}/`;
+}
+
+/**
+ * True when `key` is one this server could have minted for `siteId`.
+ *
+ * Accepts the `pending-r2-dropoff-…` placeholder too, because `mintDropoffUploadUrl`
+ * returns one whenever R2 is unconfigured (dev, and the pre-provisioning window).
+ * Rejecting it would make the flow unusable in exactly the environments where the
+ * tests run, and the placeholder is non-fetchable by construction.
+ */
+export function isValidDropoffStorageKey(key: string, siteId: string): boolean {
+  if (key.startsWith('pending-r2-dropoff-')) return true;
+  const prefix = dropoffStorageKeyPrefix(siteId);
+  if (!key.startsWith(prefix)) return false;
+  // No traversal, no nesting past the single object segment. `..` in an S3 key is
+  // not path traversal in the filesystem sense, but a key that walks out of its
+  // site prefix defeats the check above, which is the only thing tying the object
+  // to the site that claimed it.
+  const rest = key.slice(prefix.length);
+  return rest.length > 0 && !rest.includes('/') && !rest.includes('..');
+}
+
+export async function mintDropoffUploadUrl(args: {
+  siteId: string;
+  contentType: string;
+}): Promise<MintedUpload> {
+  const ext = extFor(args.contentType);
+  if (!isConfigured()) {
+    return {
+      storage_key: `pending-r2-dropoff-${randomUUID()}.${ext}`,
+      upload_url: null,
+    };
+  }
+  const bucket = process.env['R2_BUCKET']!;
+  const storage_key = `${dropoffStorageKeyPrefix(args.siteId)}${randomUUID()}.${ext}`;
+  const cmd = new PutObjectCommand({
+    Bucket: bucket,
+    Key: storage_key,
+    ContentType: args.contentType,
+  });
+  const upload_url = await getSignedUrl(getClient(), cmd, { expiresIn: 600 });
+  return { storage_key, upload_url };
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Workbook-import evidence (ADR-0039 D4)
 // ────────────────────────────────────────────────────────────────────────
 

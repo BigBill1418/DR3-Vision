@@ -238,7 +238,9 @@
       "card_hauls_title": "Todas las cargas del portal",
       "card_hauls_body": "Busca cualquier carga que MyMRC tenga para este sitio",
       "card_hauls_badge_one": "{{count}} próxima",
-      "card_hauls_badge_other": "{{count}} próximas"
+      "card_hauls_badge_other": "{{count}} próximas",
+      "card_dropoff_title": "Registrar una entrega",
+      "card_dropoff_body": "Alguien dejó colchones en la puerta"
     },
     "hauls": {
       "heading": "Todas las cargas del portal",
@@ -390,7 +392,22 @@
       "queued_at": "En espera desde {{when}}",
       "load_ref": "Carga {{id}}",
       "retry_all": "Reintentar los {{count}}",
-      "why_manager_hold": "Este conteo es lo bastante grande como para requerir un gerente. Está guardado de forma segura y esperando aprobación — reintentar no lo acelerará."
+      "why_manager_hold": "Este conteo es lo bastante grande como para requerir un gerente. Está guardado de forma segura y esperando aprobación — reintentar no lo acelerará.",
+      "dropoff_ref": "Entrega de {{units}} unidades para {{day}}"
+    },
+    "dropoff": {
+      "heading": "Entrega",
+      "caption": "Entrega sin cita en {{site}}",
+      "intro": "Elige el tipo, cuenta los colchones, toma una foto y envía.",
+      "kind_label": "Tipo de entrega",
+      "kind_floor_public": "Entrega pública",
+      "kind_floor_incentive": "Entrega de incentivo",
+      "units_label": "Unidades totales",
+      "photo_label": "Foto",
+      "photo_take": "Tomar una foto",
+      "photo_taken": "✓ Foto tomada — toca para repetir",
+      "photo_required": "Se requiere una foto para cada entrega.",
+      "send": "Enviar entrega"
     }
   }
 }

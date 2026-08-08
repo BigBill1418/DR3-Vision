@@ -20,6 +20,54 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AO — 2026-08-08 ADR-0085 iPad walk-up drop-off (born pilot)
+
+- **OPERATOR ACTION — flip `ipad_dropoff` at `/admin/rollout`.** The surface ships
+  `pilot` at BOTH sites per ADR-0047 #3, so the button is invisible to operators
+  and the API refuses them until Bill flips it. Nothing about the feature is
+  observable on the floor before that. Recommend flipping ONE site first and
+  watching a real walk-up land before the second — this is the first floor surface
+  that writes inventory from a photo-gated capture.
+- **OPERATOR ACTION — confirm the R2 CORS policy is actually applied.** Run
+  `R2_ACCOUNT_ID=… ./infra/apply-r2-cors.sh --check` against `dr3-vision-photos`.
+  The rule was hand-repaired 2026-08-07 and the shell that did it has closed;
+  the declared policy is now in git but nothing has verified the LIVE bucket
+  against it. A bucket with no rule 404s on that call rather than returning an
+  empty list — which is precisely the state the months-long zero-rows outage was
+  in, so the script reports it as a finding, not an error. **Do not assume it is
+  configured because photos drained yesterday** — that proves the policy existed
+  yesterday, not that it exists now.
+- **RESIDUAL (someone else's path, deliberately not fixed here) —
+  `upsertProcessedUnits` leaves `source` unchanged on update.** `src/lib/loads/
+  processed-units.ts` writes `source: 'manual'` in the `create` branch only, so a
+  manager or operator editing a day the MyMRC bridge already created leaves
+  `source = 'mymrc'` and `closed_at = NULL`. The next hourly bridge run then sees
+  a `mymrc`, non-closed row whose values differ and **silently overwrites the
+  human edit**. Found while tracing the `processed_units_daily` precedence rule
+  for ADR-0085 D9. Folding a fix into a drop-off PR would have hidden it; it wants
+  its own change and its own test. Note the contrast: `workbook-sync/upsert.ts`
+  documents the OPPOSITE hazard at its line 30 (writing `source='import'` on a
+  headcount-only disagreement permanently locks the bridge out), so the fix is a
+  judgement about which way that trade should fall, not a one-liner.
+- **RESIDUAL — the audit workbench will label the new kinds with their raw enum
+  names.** `workbench-providers.ts` emits `dropoff_<kind>` rows and falls through
+  `INBOUND_SOURCE_LABELS[sourceType] ?? sourceType`, so `dropoff_floor_public` /
+  `dropoff_floor_incentive` render un-prettified until someone adds labels. Display
+  only; no figure is affected. Left open rather than guessed at — the wording is
+  Kelsey's/the office's call and this session had no basis for inventing it.
+- **RESIDUAL — no same-day correction for drop-offs.** ADR-0083/Phase 4 gives the
+  iPad a same-day void for COUNTS. A mistyped drop-off is a manager job through
+  the existing CRUD-lite path (`/api/manager/[site]/dropoffs/[id]`). Named so it
+  reads as a scope decision rather than an omission; revisit if the floor asks.
+- **NOTE for whoever merges the 2026-08-07 handoff wave** — ADR-0085 bumps the ADR
+  count in `CLAUDE.md` (86 → 87) and the `docs/adr/README.md` index. Phases 2 and 3
+  (ADR-0082 / ADR-0083) touch the same two lines, so expect a textual conflict
+  there. That is the desired failure mode: a visible conflict beats three branches
+  each silently claiming a different count. Re-derive it with
+  `ls docs/adr/*.md | wc -l` minus the README after the last merge.
+
+---
+
 ## 0.AN — 2026-08-08 Kelsey departure config + commodity tracker classified
 
 - **Eugene bonus ops signer: Shannon Rockwell replaces Kelsey Ruhland, effective
