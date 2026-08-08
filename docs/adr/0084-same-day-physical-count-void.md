@@ -223,12 +223,15 @@ _withdrawal_ waits for a connection, and the office path covers everything else.
 - **Site-scoped** (hard rule #2). A snapshot id belonging to another site is a
   **404, not a 403** — the caller learns nothing, so this cannot be used to probe
   ids.
-- **Yours only.** An operator may withdraw a count _they_ entered. Ownership is
-  resolved from the append-only `audit_log` insert row that
+- ~~**Yours only.**~~ **SUPERSEDED by [Amendment 1](#amendment-1-2026-08-08--the-void-is-site-scoped-not-owner-scoped)
+  — the gate is SITE-scoped. Do not implement the paragraph below.** As shipped
+  on 2026-08-08 it read: _an operator may withdraw a count they entered;
+  ownership is resolved from the append-only `audit_log` insert row that
   `reconcilePhysicalCount` writes in the same transaction — the same provenance
-  path `eod-inventory.resolveCounter` uses. Snapshots carry no counter column and
-  none was added: a denormalised copy is a second truth that can disagree with
-  the record.
+  path `eod-inventory.resolveCounter` uses._ The insert row is still read, but
+  for ATTRIBUTION (both ids land in the void's audit row), never to decide the
+  request. Snapshots still carry no counter column and none was added: a
+  denormalised copy is a second truth that can disagree with the record.
 - **Gated** on `requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT)` — the same
   per-surface ADR-0065 flag as the count itself. A site whose count screen is
   dark must not have a live withdrawal endpoint behind it.
@@ -448,7 +451,7 @@ executed locally; that is the honest status.
 | F4  | The missed-reader falsification, run both ways through one evaluator, plus the empirical strip-and-restore quoted above.                                                                                                                                                                                                                                             |
 | F5  | A double-tap is idempotent: same response, not re-stamped with the later clock, exactly one audit row. A _different_ key on an already-voided row is a no-op success.                                                                                                                                                                                                |
 | F6  | The bootstrap gate does not count a voided anchor as evidence — a site whose only count was voided is **not** snapshot-live.                                                                                                                                                                                                                                         |
-| +   | Authorization: another operator's count is 403; another site's snapshot is **404**; the voidable list offers only this operator's live counts and drops one once voided.                                                                                                                                                                                             |
+| +   | Authorization **as originally shipped** — ~~another operator's count is 403~~ (**superseded by Amendment 1**: it now succeeds and is attributed); another site's snapshot is **404** (still true, and re-falsified in Am.1); the voidable list ~~offers only this operator's live counts~~ (**now site-scoped**) and drops one once voided.                          |
 | +   | Guard self-tests: unfiltered snippet flagged, filtered one not; comments above **and inside** the call are not code; a `)` inside a string does not truncate the argument; a call split across lines still matches; every allowlist entry still matches a real call site and still carries its compensating control; the prod remediation SQL filters voided counts. |
 
 ### Not verified

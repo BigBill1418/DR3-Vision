@@ -45,6 +45,8 @@ Summing is what "a save is a paid unit" means. Pinned by `__tests__/paid-units.t
 
 `src/lib/bonus/paid-units.ts` holds `dailyPaidUnits` / `dailyBonusCentsFor` / `periodBonusCentsFor`, and **every** bonus-dollar path calls it: the grid, the month page, the month list, the aggregates, the current-period standings, the PDF data, the signed PDF page, the sign-time lock, and the ADR-0033 reconcile.
 
+> **Correction, [Amendment 1](#amendment-1-2026-08-08--the-amended-month-editor-can-set-saves-and-the-last-pay-path-that-bypassed-the-funnel) (2026-08-08):** the sentence above was **not true when it was written**. The **month page** (`src/app/bonus/months/[id]/page.tsx`) computed its per-employee monthly totals and its read-only grid totals with `calculateDailyBonusCents(mattress_count, rule)`, bypassing the funnel and understating every processor by the whole cash value of their saves. Both call sites now use `dailyBonusCentsFor`, and the claim is no longer prose: `paid-units-callers.guard.test.ts` fails the build on any un-allowlisted direct caller. Left in place rather than quietly edited, because "a documented invariant that nothing enforced" is the lesson.
+
 The alternative — each path doing `mattress_count.toNumber() + saves.toNumber()` inline — is nine copies of a payroll policy. The reason ADR-0019 put the tier maths behind one calculator is the reason this needs one funnel: the number on the screen, the number on the signed PDF and the number the reconciler independently recomputes must be incapable of disagreeing.
 
 ### 3. Saves are paid units. They are NOT processed units.
