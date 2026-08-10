@@ -399,3 +399,130 @@ Built as a **401** in the `auth:` family instead, under a new
 | `src/app/healthz/route.ts`                          | `photo_grants_ok` (non-gating).                                                                                        |
 | `src/lib/offline-queue.ts`                          | `upload_grant` on the row, sent on both calls, re-issue persisted, `AUTH_GRANT_REFUSED`.                               |
 | `src/app/operator/[site]/load/[id]/photo-input.tsx` | Mints the key at the tap, carries the grant onto the queued row, sends the key on the live confirm.                    |
+
+---
+
+## Amendment 1 (2026-08-10) — the session that ends mid-capture answers 401, and the screen says so
+
+**Status:** Accepted · **Trigger:** Woodland's first-ever load rejection failed on the floor.
+
+### A1.1 What happened
+
+Bill, ~13:11 PT: _"Kept telling us to retry rejection evidence after taking a picture.
+Underneath it says mint failed (403). This is an iPad issue when we tried our first
+reject."_
+
+An operator opened the reject stage, chose a category, walked to the trailer and
+photographed the contamination. The mint that followed the shutter answered **403**.
+The screen painted `Retry rejection evidence` with `mint failed (403)` beneath it, and
+no number of taps could clear it. The photo bytes were never handed to the offline
+queue, so when the floor gave up, the evidence was gone: the load stranded at
+`unload_started` carrying three photos and no rejection evidence.
+
+### A1.2 What it was NOT
+
+Not a per-kind rule, and this is worth recording because it is the obvious first guess.
+`kind='rejection'` minted successfully through the same route the same morning (a
+Woodland load moved to `rejected` at 15:34 UTC). `PHOTO_KINDS` has always contained
+`rejection`, the route carries no rollout-surface gate, and ADR-0086's grant path was
+not involved at all — the live capture sends no `X-Upload-Grant`.
+
+Nor was it the ADR-0078 CORS-403 class: the request reached the app and the app
+answered it.
+
+### A1.3 Root cause — the session husk
+
+Auth.js answers the operator idle window (**five minutes**, `IDLE_TIMEOUT_OPERATOR_S`)
+and the ADR-0053 D2 kill-switch with `return {} as typeof token` — an **empty** token,
+not a null one. `@auth/core` builds a session from any non-null token, and `next-auth`'s
+server wrapper returns `{ user, ...session }`. What a guard is handed is a **husk**:
+`session.user` is a truthy object carrying no `id` and no `role`.
+
+`load-photo-guard.ts` tested `if (!session?.user || session.user.role !== 'operator')`.
+The husk is not falsy, so the check fell through to `undefined !== 'operator'` and threw
+**403 forbidden** — for a request that was simply unauthenticated. It was the only one of
+fifteen identity guards in the repo that did this; the other fourteen
+(`requireOperatorForSite` and siblings in `auth-helpers.ts`) test `!session?.user?.id`
+and answer 401. The line predates both ADR-0078 and ADR-0086 (`a98d2f37`, 2026-05-06);
+it was simply never reachable before, because nothing else made an operator sit still
+for five minutes mid-write. **iOS suspends the page while the camera sheet is up**, so a
+capture that involves walking anywhere trivially outlives the window — and a first
+rejection is exactly that capture.
+
+The status is not cosmetic. `offline-queue.ts`'s `isAuthResponse` classifies **401** as
+`auth:` — the state the floor chrome renders as "sign in and this will send" — and
+deliberately excludes 403, which is authenticated-but-refused and parks as a conflict no
+sign-in can clear (see §6.5 and the ADR-0078 G7/G8c recovery). The guard was pointing
+the operator at the one action that could not work.
+
+### A1.4 The second, independent defect — the live path had no auth classification
+
+Fixing the status alone would have changed the screen from `mint failed (403)` to
+`mint failed (401)` and nothing else. `photo-input.tsx` treated every non-ok mint the
+same (`throw new Error(...)` → generic retry). The **drain** path has understood 401
+since ADR-0078 G7; the **live** path — the one an operator is standing in front of —
+never learned it. Bill's symptom required both halves.
+
+### A1.5 Decision
+
+1. **`requireOperatorAtLoadSite` splits its predicate.** No `session.user.id` ⇒ **401
+   `unauthenticated`**. A real signed-in non-operator ⇒ **403**, unchanged. Cross-site ⇒
+   **403**, unchanged (CLAUDE.md hard rule #2 is untouched). Both photo routes move
+   together, per the contract already stated in both route files.
+2. **The live capture path classifies 401 as sign-in.** The photo is **queued** (the
+   bytes exist in one place on earth; the drain engine's immediate sweep then marks the
+   row `auth:session_expired` and the chrome's badge says "Sign in to send 1 item"), and
+   the button reads _"✓ rejection evidence saved — sign in to send"_ instead of _Retry_.
+   403 is deliberately **not** given this treatment, mirroring `isAuthResponse`.
+3. **The stage does NOT advance** on the auth path, unlike the offline path. Arming
+   Submit would hand the operator a Server Action behind the same dead session, whose
+   throw reaches the browser redacted in production — one honest failure buying a second,
+   unreadable one. One instruction, once.
+4. **Two floor pages corrected** (`load/[id]/page.tsx`, `queue/page.tsx`): they tested
+   `!session?.user`, so a husk passed the sign-in check, hit the role check and was sent
+   to `HOME_ROUTE` → the **manager** Microsoft sign-in. A person on a forklift cannot
+   complete that. They now route to the PIN screen.
+5. **`operator/[site]/actions.ts` splits the same predicate.** Its status was already
+   401 for the husk — but it reached that by way of the role comparison, so it also gave
+   401 to a signed-in non-operator, for whom a sign-in changes nothing. Now 401/403.
+
+### A1.6 Not decided here — the five-minute window
+
+The 5-minute operator idle (ADR-0004) and iOS camera suspension are in **structural
+tension**: any capture longer than the window kills the session mid-write. This
+amendment makes that failure honest and non-destructive; it does **not** change the
+window, because shared-forklift-iPad idle timeout is a security-posture call that
+belongs to Bill. Options if he wants it addressed: a keep-alive ping while a capture
+sheet is open, a capture-scoped session extension, or a longer window. Recorded in
+OPEN-ITEMS.
+
+### A1.7 Tests
+
+- `src/lib/session-husk.test.ts` — **new.** Proves the husk against the repo's REAL
+  Auth.js callbacks: the idle branch returns `{}` (not null), and the session built from
+  it has a truthy `user` with no `id`/`role`. Written because the mechanism had to be
+  established rather than assumed.
+- `src/lib/load-photo-guard.test.ts` — husk ⇒ 401; role and cross-site still 403; the
+  load is not read for an identity-less request. The pre-existing "no session" case
+  asserted **403** and is corrected: it was agreeing with the bug, and `null` alone would
+  not have caught it because `null` 403'd too.
+- `src/app/api/photos/grant-routes.test.ts` — both routes answer 401 for the husk (mint
+  and confirm do not split), `kind='rejection'` is not special, and a valid grant on the
+  same identity-less request still returns 200.
+- `src/app/operator/[site]/load/[id]/photo-input.auth.test.tsx` — **new.** No "mint
+  failed" text, a sign-in affordance, the bytes reach the queue, the stage does not
+  advance; 500 and 403 keep their old behaviour; the offline path still queues AND
+  advances.
+- `src/app/operator/_components/floor-session-husk-coverage.test.ts` — **new.** Source
+  scan: no floor surface may test `!session?.user` without reading a field.
+
+**FALSIFIED BY HAND:** restoring the original predicate reds the guard and both route
+suites with `expected 403 to be 401`; leaving `photo-input.tsx` unchanged reds the client
+suite with `expected 'Retry rejection evidence' to match /sign in/i` — the literal string
+from the floor.
+
+### A1.8 Data residual
+
+Load `54ad7a11-7066-4d6b-b064-8c57483fa067` (Woodland, `unload_started`, 3 photos, no
+rejection evidence) must be **re-captured by the floor** after deploy. The bytes were
+never queued and are not recoverable. Tracked in OPEN-ITEMS.

@@ -3,6 +3,52 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (late) — FIX: an expired session on the iPad answered 403, and the reject stage said "retry" forever (ADR-0086 Amendment 1)
+
+Woodland's first-ever load rejection failed on the floor. Bill: _"Kept telling us to
+retry rejection evidence after taking a picture. Underneath it says mint failed (403)."_
+The photo bytes were never queued and load `54ad7a11` stranded at `unload_started` with
+no rejection evidence.
+
+**Not a rejection-specific rule** — `kind='rejection'` minted successfully through the
+same route the same morning, and the ADR-0086 grant path was never involved (the live
+capture sends no `X-Upload-Grant`).
+
+- **Root cause — the session husk.** Auth.js answers the 5-minute operator idle window
+  (and the ADR-0053 D2 kill-switch) with an EMPTY token, not a null one, so a guard is
+  handed a session whose `user` is truthy and whose `id`/`role` are undefined.
+  `load-photo-guard.ts` tested `!session?.user`, fell through to
+  `undefined !== 'operator'`, and threw **403** for an unauthenticated request — the only
+  one of fifteen identity guards in the repo that did. iOS suspends the page while the
+  camera sheet is up, so a capture involving a walk outlives the window; a first
+  rejection is exactly that capture. Line unchanged since `a98d2f37` (2026-05-06) —
+  latent for three months because nothing else made an operator sit still mid-write.
+- **Fix 1 — `src/lib/load-photo-guard.ts`.** Predicate split: no `session.user.id` ⇒
+  **401 `unauthenticated`**; wrong role ⇒ 403 (unchanged); cross-site ⇒ 403 (unchanged,
+  hard rule #2 untouched). Both photo routes move together. 401 is what
+  `offline-queue.ts`'s `isAuthResponse` classifies as `auth:` — the ADR-0078 G7/G8c
+  "sign in and everything drains" recovery, which a 403 can never reach.
+- **Fix 2 — `photo-input.tsx`.** The LIVE capture path had no auth classification at all
+  (the drain path has had one since ADR-0078 G7), so a corrected 401 would still have
+  read `mint failed (401)` + bare retry. A 401 now **queues the photo** (nothing is lost)
+  and says _"✓ rejection evidence saved — sign in to send"_; it does **not** advance the
+  stage, because Submit behind a dead session is a second, redacted failure. 403 and 500
+  keep their old behaviour. Copy added in en/es/ur (hard rule #4).
+- **Fix 3 — the recovery destination.** `operator/[site]/load/[id]/page.tsx` and
+  `queue/page.tsx` were husk-blind too and sent an idled-out operator to the MANAGER
+  Microsoft sign-in via `HOME_ROUTE`; they now route to the PIN screen.
+  `operator/[site]/actions.ts` splits the same predicate (it already answered 401 for the
+  husk, but reached it via the role check, so a non-operator got 401 too).
+- **Tests.** New `session-husk.test.ts` proves the husk against the REAL Auth.js
+  callbacks; new `photo-input.auth.test.tsx` and a floor-wide source scan
+  (`floor-session-husk-coverage.test.ts`). The pre-existing "no session" guard case
+  asserted 403 and is **corrected** — it was agreeing with the bug, and mocking `null`
+  alone could never have caught it because `null` 403'd too.
+- **NOT changed: the 5-minute idle window.** Camera suspension vs operator idle timeout
+  are in structural tension; that is a security-posture decision for Bill (OPEN-ITEMS).
+- **Operator action:** the floor must **re-capture** the rejection evidence for load
+  `54ad7a11` after deploy — those bytes are not recoverable.
+
 ## 2026-08-10 (night) — ADR-0089 RECOVERY EXECUTED: the Woodland floor is positive again
 
 Operational run + docs; no code changed. PR #223 merged (`b3d552c`), deployed,

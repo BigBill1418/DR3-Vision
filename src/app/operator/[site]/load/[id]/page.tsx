@@ -36,7 +36,12 @@ type Props = { params: Promise<{ site: string; id: string }> };
 export default async function LoadPage({ params }: Props) {
   const { site: siteCode, id: loadId } = await params;
   const session = await auth();
-  if (!session?.user) redirect(`/operator/${siteCode}`);
+  // `?.id`, not `?.user` (2026-08-10). An expired operator session is a HUSK —
+  // a truthy `user` carrying no id and no role (see `src/lib/session-husk.test.ts`).
+  // The bare check waved it through to the role line below, which sent an idled-out
+  // floor operator to HOME_ROUTE and from there to the MANAGER sign-in page. The
+  // PIN screen is the only sign-in a person on a forklift can complete.
+  if (!session?.user?.id) redirect(`/operator/${siteCode}`);
   if (session.user.role !== 'operator') redirect(HOME_ROUTE);
 
   const site = await prisma.site.findUnique({

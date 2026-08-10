@@ -51,7 +51,28 @@ type Props = {
   onCaptured: (file: File) => void;
 };
 
-type Status = 'idle' | 'uploading' | 'done' | 'queued' | 'error';
+type Status = 'idle' | 'uploading' | 'done' | 'queued' | 'signed_out' | 'error';
+
+/**
+ * The session ended — not a network failure, and not a refusal a retry can
+ * clear (2026-08-10).
+ *
+ * `/api/photos/*` answers **401** for a request carrying no identity, including
+ * the husk Auth.js leaves after the five-minute operator idle window. iOS
+ * suspends the page while the camera sheet is up, so a capture that involves
+ * walking anywhere — the first-ever load rejection at Woodland did — routinely
+ * outlives that window and comes back to a dead session.
+ *
+ * This is the classification the DRAIN path has had since ADR-0078 G7
+ * (`isAuthResponse` in `offline-queue.ts`); the live path never learned it and
+ * painted "Retry {{label}}" instead, which is an invitation to tap a button
+ * that cannot work. 403 is deliberately NOT here, for the same reason it is not
+ * there: a 403 is authenticated-but-refused (cross-site, wrong role) and a
+ * sign-in does not fix it.
+ */
+function isSignedOut(res: Response): boolean {
+  return res.status === 401;
+}
 
 export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
   const t = useT();
@@ -106,6 +127,34 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
       onCaptured(file);
     };
 
+    // The session ended mid-capture. Keep the bytes, and stop.
+    //
+    // KEEP: this blob exists in exactly one place on earth. Discarding it is
+    // how the 2026-08-10 reject ended with a load stranded at `unload_started`
+    // and no rejection evidence. Queued, the drain engine's immediate sweep
+    // (`subscribeToEnqueue`) marks the row `auth:session_expired` within a
+    // second and the floor chrome's badge starts saying "Sign in to send 1
+    // item" — the recovery ADR-0078 G8c already built.
+    //
+    // STOP: unlike the offline path this does NOT call `onCaptured`. Arming
+    // Continue/Submit would hand the operator a Server Action sitting behind
+    // the same expired session, whose throw reaches the browser REDACTED in
+    // production (see `use-claim-loss-guard.ts`) — buying one honest failure a
+    // second, unreadable one. One instruction, once: sign in.
+    const queueForSignIn = async () => {
+      await enqueueUpload({
+        load_id: loadId,
+        kind: kind as UploadKind,
+        blob: file,
+        content_type: file.type || 'application/octet-stream',
+        storage_key: null,
+        upload_url: null,
+        idempotency_key: idempotencyKey,
+        upload_grant,
+      });
+      setStatus('signed_out');
+    };
+
     // Step 2: mint presigned URL.
     try {
       const mintRes = await fetch('/api/photos/upload-url', {
@@ -118,6 +167,10 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
           idempotency_key: idempotencyKey,
         }),
       });
+      if (isSignedOut(mintRes)) {
+        await queueForSignIn();
+        return;
+      }
       if (!mintRes.ok) throw new Error(`mint failed (${mintRes.status})`);
       const minted = (await mintRes.json()) as {
         storage_key: string;
@@ -177,6 +230,14 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
           byte_size: file.size,
         }),
       });
+      // Same treatment as the mint. The bytes reached R2 but no `load_photos`
+      // row exists, so the photo is not evidence yet — queue it and let the
+      // replay re-PUT to a fresh key, which is exactly what the offline branch
+      // below already does for this step.
+      if (isSignedOut(confirmRes)) {
+        await queueForSignIn();
+        return;
+      }
       if (!confirmRes.ok) throw new Error(`confirm failed (${confirmRes.status})`);
     } catch (e) {
       if (isOfflineError(e)) {
@@ -203,6 +264,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
     if (status === 'uploading') return t('photo.uploading', { label });
     if (status === 'done') return t('photo.captured', { label });
     if (status === 'queued') return t('photo.queued', { label });
+    if (status === 'signed_out') return t('photo.signed_out', { label });
     if (status === 'error') return t('photo.retry', { label });
     return t('photo.default', { label });
   })();
@@ -234,6 +296,9 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
       {name && status !== 'error' && <p className="text-xs text-dr3-cream/60">{name}</p>}
       {status === 'queued' && (
         <p className="text-xs text-dr3-chartreuse/80">{t('photo.queued_caption')}</p>
+      )}
+      {status === 'signed_out' && (
+        <p className="text-sm text-dr3-chartreuse">{t('photo.signed_out_caption')}</p>
       )}
       {error && <p className="text-sm text-red-300">{error}</p>}
     </div>

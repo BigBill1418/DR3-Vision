@@ -195,6 +195,8 @@
     "retry": "Reintentar {{label}}",
     "default": "📸 {{label}}",
     "queued_caption": "Guardado en el iPad — se subirá cuando haya conexión",
+    "signed_out": "✓ {{label}} guardada — inicie sesión para enviar",
+    "signed_out_caption": "Su sesión expiró. Inicie sesión en este iPad y esta foto se enviará sola.",
     "label_bol": "BOL",
     "label_weight_ticket": "boleta de peso",
     "label_door_open": "puerta abierta",

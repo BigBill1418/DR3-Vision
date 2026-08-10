@@ -20,6 +20,39 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AU — 2026-08-10 iPad reject-evidence 403 (ADR-0086 Amendment 1) — one re-capture + one decision for Bill
+
+Fix branch: `fix/ipad-rejection-evidence-mint-403`. Root cause and reasoning:
+ADR-0086 **Amendment 1**; shipped state: `CHANGELOG.md` 2026-08-10 (late).
+
+- **O — FLOOR RE-CAPTURE (after the fix deploys).** Load
+  `54ad7a11-7066-4d6b-b064-8c57483fa067` (Woodland) is stranded at `unload_started`
+  with 3 photos and **no rejection evidence**. The bytes were never handed to the
+  offline queue and are **not recoverable** — the floor has to photograph the
+  rejection again and re-run the reject stage. Nothing to run server-side.
+- **D — DECISION FOR BILL: the 5-minute operator idle window vs iOS camera
+  suspension.** These are in structural tension. iPadOS suspends the page while the
+  camera sheet is up, so any capture that involves walking to a trailer can outlive
+  `IDLE_TIMEOUT_OPERATOR_S` (5 min, ADR-0004) and come back to a dead session. The
+  fix makes that outcome **honest and non-destructive** (401 → "sign in to send",
+  photo queued, nothing lost) but does not remove it — the operator still has to
+  re-enter a PIN mid-reject. Deliberately NOT changed here: shared-forklift-iPad
+  idle timeout is a security-posture call. Options, cheapest first:
+  1. keep-alive ping while a capture sheet is open (narrow; only extends during an
+     actual capture),
+  2. capture-scoped session extension (a bounded bump on the capture screens),
+  3. a longer operator window outright (widest blast radius — it is the control
+     that limits who can pick up an unattended iPad).
+- **N — note for whoever touches auth next.** The husk (`session.user` truthy,
+  `id`/`role` undefined) is what Auth.js hands every guard after idle expiry or an
+  ADR-0053 D2 revocation. `src/lib/session-husk.test.ts` pins the shape and
+  `src/app/operator/_components/floor-session-husk-coverage.test.ts` keeps floor
+  surfaces from re-introducing `!session?.user`. **Manager/admin surfaces under
+  `src/app/dashboard/**`still test`!session?.user`** — not swept here because they
+run a 12h window and redirect to `/login`, which is the right destination for them,
+  so the husk costs at most one extra hop. Flagged rather than fixed: a sweep of
+  those is its own change.
+
 ## 0.AT — 2026-08-08 evening close-out: Terex gap follow-through + operational sends
 
 - **Terex page gap (Bill's question, ~13:10 PT) — DIAGNOSED, nothing broken.** The
