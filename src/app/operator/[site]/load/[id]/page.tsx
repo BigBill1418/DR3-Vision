@@ -8,6 +8,7 @@ import { HeldByPanel } from './held-by-panel';
 import { HOME_ROUTE } from '@/lib/routes';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { TAKEOVER_STATUSES } from '@/lib/loads/load-claim';
+import { HAUL_NUMBER_SELECT, haulNumberOf } from '@/lib/loads/haul-number';
 import { FloorPageHeading } from '../../../_components/page-heading';
 
 // Workflow shell. The whole 7-stage flow lives in the
@@ -89,6 +90,8 @@ export default async function LoadPage({ params }: Props) {
       assigned_operator: { select: { id: true, name: true } },
       source: { select: { name: true } },
       transporter: { select: { name: true } },
+      // ADR-0090 A — the haul number, for the header and the held-by panel.
+      ...HAUL_NUMBER_SELECT,
       load_stacks: {
         select: { id: true, stack_index: true, unit_count: true, count_mode: true },
         orderBy: { stack_index: 'asc' },
@@ -112,6 +115,7 @@ export default async function LoadPage({ params }: Props) {
   // deliberately unchanged in scope — a load at another SITE is still `notFound`
   // (CLAUDE.md hard rule #2), because that is not a load this operator may know
   // about, let alone take.
+  const haulNumber = haulNumberOf(load);
   const heldByOther = load.assigned_operator_id !== session.user.id;
   if (heldByOther) {
     return (
@@ -125,6 +129,7 @@ export default async function LoadPage({ params }: Props) {
             sourceName={load.source?.name ?? null}
             transporterName={load.transporter?.name ?? null}
             bolNumber={load.bol_number}
+            haulNumber={haulNumber}
             status={load.status}
             totalUnits={load.total_units}
             // A load outside the open-dock set, or an aggregate bridge row, has
@@ -146,6 +151,14 @@ export default async function LoadPage({ params }: Props) {
     <main className="px-6 pb-6">
       <div className="mx-auto max-w-2xl pt-6">
         <header className="mb-4">
+          {/* ADR-0090 A — the haul number above the source, so an operator who
+              suspects they tapped the wrong truck can confirm it without leaving
+              the workflow. Bare mono, matching the hauls screen. */}
+          {haulNumber && (
+            <p className="font-mono text-sm font-bold tracking-wide text-dr3-cream/80">
+              {haulNumber}
+            </p>
+          )}
           <h1 className="text-xl font-semibold">
             {load.source?.name ?? t('load_header.unknown_source')}
           </h1>

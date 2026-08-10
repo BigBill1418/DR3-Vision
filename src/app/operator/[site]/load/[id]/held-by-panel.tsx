@@ -73,6 +73,13 @@ type Props = {
   sourceName: string | null;
   transporterName: string | null;
   bolNumber: string | null;
+  /**
+   * ADR-0090 A — the MyMRC haul number, or null when the load has no haul
+   * linkage. On a takeover the question being answered is "is this the truck I
+   * actually meant?", and source + carrier + BOL cannot answer it when one site
+   * sent two trucks today.
+   */
+  haulNumber: string | null;
   status: LoadStatus;
   totalUnits: number | null;
   /** False for a load the service would refuse — the button is not offered. */
@@ -88,6 +95,7 @@ export function HeldByPanel({
   sourceName,
   transporterName,
   bolNumber,
+  haulNumber,
   status,
   totalUnits,
   takeable,
@@ -149,6 +157,11 @@ export function HeldByPanel({
   return (
     <section className="flex flex-col gap-5">
       <header>
+        {haulNumber && (
+          <p className="font-mono text-sm font-bold tracking-wide text-dr3-cream/80">
+            {haulNumber}
+          </p>
+        )}
         <h1 className="text-xl font-semibold">{sourceName ?? t('load_header.unknown_source')}</h1>
         <p className="text-sm text-dr3-cream/70">
           {transporterName ?? t('load_header.unknown_carrier')} · {t('load_header.bol_label')}{' '}

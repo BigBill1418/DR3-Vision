@@ -63,7 +63,20 @@ export function OpenLoadsSection({
               className="flex min-h-[56px] items-center justify-between gap-4 rounded-lg bg-dr3-green px-4 py-3 text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream active:bg-dr3-green-dark"
             >
               <span className="min-w-0">
+                {/* ADR-0090 A — the haul number LEADS, because it is the only
+                    field that separates two trucks from one collection site on
+                    one day, which is what left three loads unidentifiable under
+                    Janette's name on 2026-08-10. Rendered bare and mono, exactly
+                    as the hauls screen already renders it, so no label string is
+                    invented in three locales for an identifier that reads as
+                    itself. Null (a walk-up drop-off) simply omits it. */}
                 <span className="block truncate text-base font-bold">
+                  {r.haulNumber && (
+                    <>
+                      <span className="font-mono">{r.haulNumber}</span>
+                      {' · '}
+                    </>
+                  )}
                   {r.sourceName ?? t('queue.unknown_source')}
                 </span>
                 <span className="mt-0.5 block truncate text-xs opacity-80">

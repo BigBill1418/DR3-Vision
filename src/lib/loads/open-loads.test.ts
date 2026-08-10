@@ -216,3 +216,50 @@ describe('listSiteOpenLoads — projection', () => {
     expect(r?.arrivedAt?.toISOString()).toBe(instant.toISOString());
   });
 });
+
+// ADR-0090 A — the unfinished-loads list and the held-by list are the two
+// surfaces JT named ("the loads that were pending and need attention to be
+// closed don't show the Haul number"). Both are rendered from THIS query, so the
+// haul number has to be selected here or neither can show it.
+describe('haul number on the open-loads view (ADR-0090 A)', () => {
+  it('selects the expected-load haul id so the surfaces can render it', async () => {
+    await listSiteOpenLoads(SITE, OP);
+    const select = findMany.mock.calls[0]?.[0]?.select;
+    expect(select?.expected_load).toEqual({ select: { external_mymrc_haul_id: true } });
+    expect(select?.external_mymrc_haul_id).toBe(true);
+  });
+
+  it('exposes the haul number of the slot the operator tapped', async () => {
+    findMany.mockResolvedValue([
+      row({
+        external_mymrc_haul_id: null,
+        expected_load: { external_mymrc_haul_id: 'H-136796' },
+      }),
+    ]);
+    const [r] = (await listSiteOpenLoads(SITE, OP)).mine;
+    expect(r?.haulNumber).toBe('H-136796');
+  });
+
+  it('is null for a load with no haul linkage, rather than a placeholder', async () => {
+    // A walk-up drop-off (ADR-0085) has no haul. The row still renders; it just
+    // has no haul chip.
+    findMany.mockResolvedValue([row({ external_mymrc_haul_id: null, expected_load: null })]);
+    const [r] = (await listSiteOpenLoads(SITE, OP)).mine;
+    expect(r?.haulNumber).toBeNull();
+  });
+
+  it('carries the haul number onto another operator’s held load too', async () => {
+    // The takeover decision ("is this the truck I actually want?") needs the
+    // identifier just as much as resuming your own does.
+    findMany.mockResolvedValue([
+      row({
+        assigned_operator_id: OTHER,
+        assigned_operator: { id: OTHER, name: 'Juan Perez' },
+        external_mymrc_haul_id: null,
+        expected_load: { external_mymrc_haul_id: 'H-135311' },
+      }),
+    ]);
+    const [r] = (await listSiteOpenLoads(SITE, OP)).heldByOthers;
+    expect(r?.haulNumber).toBe('H-135311');
+  });
+});
