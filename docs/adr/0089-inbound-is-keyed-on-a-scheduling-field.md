@@ -1,6 +1,10 @@
 # ADR-0089 — The delivery date we never asked for: inbound is keyed on a scheduling field
 
-**Status:** Proposed (diagnosis complete, no code shipped) — 2026-08-10.
+**Status:** Accepted — D1/D2/D3 implemented + D4 tooling built 2026-08-10 (same
+day, Bill: "go ahead and start the build"); the D4 recovery RUN remains
+operator-sequenced (re-detail sweep → delta report → Bill reads → gated
+re-bridge, see OPEN-ITEMS). Originally Proposed (diagnosis) earlier the same
+day.
 **Am.1 (2026-08-10, same day):** the §"one discriminating fact" is now PROVEN —
 see the amendment section at the end. `Recycler_Reported_Delivery_Date__c` is
 populated on 12/12 Delivered hauls probed (including all 7 undated
@@ -292,6 +296,38 @@ mirror program=0, unload=121; H-136855: 0 vs 114). It looks like the physical
 receipt count where the program/non-program split is bookkeeping. It is the
 natural cross-check input for OPEN-ITEMS F-3 (entered-vs-derived) — out of
 scope here, worth requesting in D1's field set while we are touching it.
+
+### Am.1 §5 — implementation record (built 2026-08-10, PR branch `feat/adr-0089-delivery-date-rekey`)
+
+- **D1** — migration `20260840_adr0089_recycler_delivery_date` (3 nullable columns);
+  `HAUL_OPTIONAL_FIELDS` +3; `mapHaulRecord` + `HaulMirrorRow` + both detail write
+  paths (`sync.ts` `applyDetailRecord`, `backfill-targets.ts` `writeDetail`).
+  Every pre-deploy row stays NULL until the D4 re-detail — and COALESCE makes a
+  not-yet-re-detailed row behave exactly as before, so the deploy itself moves
+  nothing.
+- **D2** — `inbound-bridge.ts` keys on
+  `recycler_reported_delivery_date ?? docking_appointment_date`; `haulsUndated`
+  now means genuinely dateless; new `findDatelessDeliveredHauls` (narrowed to
+  detailed + recently-seen rows so the pre-deploy backlog cannot storm) wired
+  into the hourly scrape with pager kind `dateless_hauls` (per-site fingerprint,
+  24 h cooldown, `dr3-vision-system` — an integration data-quality event, hard
+  rule #5 compliant).
+- **D3** — `freshness.ts` hauls measure is a raw
+  `max(COALESCE(recycler_reported_delivery_date, docking_appointment_date))`
+  over Delivered (raw because `max(COALESCE)` ≠ `GREATEST(max, max)` — a haul
+  delivered early against a late appointment must count as its real day). The
+  COR inbound gate inherits via `measureFeedFreshness` with no code change.
+  Test fakes now pin the SQL text: dropping the Delivered filter OR the COALESCE
+  throws in the fake itself.
+- **D4 tooling** — `scripts/one-off/2026-08-10-adr0089-redetail-sweep.sh`
+  (dry-run default; clears only the `detail_fetched_at` scraper cursor, audited)
+  and `scripts/one-off/2026-08-10-adr0089-rekey-delta-report.sh` (read-only;
+  separates ADDED days from RE-ATTRIBUTED days per Am.1 §3).
+  `fix-woodland-inbound.sh`'s read-side SQL re-keyed to the same COALESCE so its
+  plan/falsification gate cannot diverge from what the bridge writes.
+- Gates at build time: 4,823 tests green, `tsc` zero errors, eslint zero warnings,
+  full migration replay against a scratch PG16 clean (one pre-existing
+  `yard_trailers` FK drift on main, untouched by this change, noted for the record).
 
 ### Am.1 consequences for the decision set
 

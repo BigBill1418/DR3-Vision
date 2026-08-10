@@ -76,6 +76,40 @@ describe('mapHaulRecord', () => {
   });
 });
 
+describe('mapHaulRecord — ADR-0089 Am.1 delivery-date fields', () => {
+  // The live fixture predates the Am.1 field request, so a synthetic record
+  // carries the new fields; the fixture doubles as the absent-field case below.
+  const withDelivery: SfRecord = {
+    apiName: 'Haul_Request__c',
+    id: 'a2KUJ00000Gq5IX2AZ',
+    fields: {
+      Name: { value: 'H-137017', displayValue: null },
+      Status__c: { value: 'Delivered', displayValue: null },
+      Recycler_Reported_Delivery_Date__c: { value: '2026-08-10', displayValue: '8/10/2026' },
+      Transporter_Reported_Delivery_Date__c: { value: '2026-08-09', displayValue: '8/9/2026' },
+      Unit_Count_at_Unload__c: { value: 110, displayValue: null },
+    },
+  };
+
+  it('maps the recycler-reported delivery date (noon UTC, same convention as the dock date)', () => {
+    const r = mapHaulRecord(withDelivery);
+    expect(r.recycler_reported_delivery_date?.toISOString()).toBe('2026-08-10T12:00:00.000Z');
+  });
+
+  it('maps the transporter-reported delivery date and the unload count', () => {
+    const r = mapHaulRecord(withDelivery);
+    expect(r.transporter_reported_delivery_date?.toISOString()).toBe('2026-08-09T12:00:00.000Z');
+    expect(r.unit_count_at_unload).toBe(110);
+  });
+
+  it('leaves all three null when absent (a pre-Am.1 detail fetch)', () => {
+    const preAm1 = mapHaulRecord(haul); // live fixture, captured before the field request
+    expect(preAm1.recycler_reported_delivery_date).toBeNull();
+    expect(preAm1.transporter_reported_delivery_date).toBeNull();
+    expect(preAm1.unit_count_at_unload).toBeNull();
+  });
+});
+
 describe('mapProcessedRecord', () => {
   const row = mapProcessedRecord(processed);
 

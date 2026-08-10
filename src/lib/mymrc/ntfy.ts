@@ -32,6 +32,9 @@ export type AlertKind =
   | 'zero_anomaly'
   | 'deadman'
   | 'stale_mirror'
+  // ADR-0089 D2 — a Delivered haul was detailed and carries NO date on any field;
+  // the one residual where "ask MRC" is the right move.
+  | 'dateless_hauls'
   | 'error';
 
 export interface PageAlert {
@@ -55,6 +58,7 @@ const TITLE_BY_KIND: Record<AlertKind, string> = {
   zero_anomaly: 'MyMRC zero-row anomaly',
   deadman: 'MyMRC sync deadman (no success >26h)',
   stale_mirror: 'MyMRC mirror stopped advancing',
+  dateless_hauls: 'MyMRC Delivered haul(s) with no delivery date',
   error: 'MyMRC sync error',
 };
 
@@ -69,6 +73,7 @@ const CLICK_BY_KIND: Record<AlertKind, string> = {
   zero_anomaly: INGESTION_CLICK_URL,
   deadman: CLICK_URL,
   stale_mirror: INGESTION_CLICK_URL,
+  dateless_hauls: INGESTION_CLICK_URL,
   error: CLICK_URL,
 };
 

@@ -63,12 +63,16 @@ describe('assessFreshness — the pure staleness decision', () => {
 describe('the freshness contract', () => {
   it('measures each feed on its own BUSINESS date, never a column we write', () => {
     expect(FRESHNESS_COLUMN).toEqual({
-      hauls: 'docking_appointment_date',
+      // ADR-0089 D3 (2026-08-10): the hauls key is the same COALESCE the inbound
+      // bridge aggregates on — the recycler's reported delivery date, appointment
+      // fallback. Measuring a different column than the bridge keys on is how the
+      // guard certified a feed while 45% of the mirror was invisible to it.
+      hauls: 'coalesce(recycler_reported_delivery_date, docking_appointment_date)',
       // ADR-0070 follow-up 2026-07-31: `haulsCompleted` reads the same mirror
       // through the HISTORY list view, so it measures the same business date.
       // Kept exact rather than loosened — a feed added without a business date
       // to measure must keep breaking this.
-      haulsCompleted: 'docking_appointment_date',
+      haulsCompleted: 'coalesce(recycler_reported_delivery_date, docking_appointment_date)',
       processed: 'entry_date',
       outbound: 'entry_date',
     });
@@ -97,9 +101,10 @@ function fakePrisma(maxes: {
   outbound?: Date | null;
 }): PrismaClient {
   return {
-    mymrcHaulsMirror: {
-      aggregate: vi.fn(async () => ({ _max: { docking_appointment_date: maxes.hauls ?? null } })),
-    },
+    // ADR-0089 D3 — the hauls measurement is a raw max(COALESCE(delivery, appointment));
+    // aggregate() is deliberately ABSENT on the hauls mirror so a revert to the
+    // appointment-only aggregate breaks loudly here.
+    $queryRaw: vi.fn(async () => [{ newest: maxes.hauls ?? null }]),
     mymrcProcessedMirror: {
       aggregate: vi.fn(async () => ({ _max: { entry_date: maxes.processed ?? null } })),
     },
@@ -223,36 +228,37 @@ describe('the masking defect this guard shipped with (2026-07-30 → fixed 07-31
   });
 });
 
-describe('the hauls guard must QUERY delivered hauls, not just reason about them', () => {
+describe('the hauls guard must QUERY delivered hauls on the COALESCE key, not just reason about them', () => {
   // The pure-arithmetic tests above prove that a stale DELIVERED date would be
-  // flagged. They do NOT prove the code asks the database for delivered hauls —
-  // and on 2026-07-31 that distinction was the whole bug: the arithmetic was
-  // always right, the QUERY was measuring every status. Reverting the filter
-  // must break a test, or the fix can be silently undone.
-  function fakePrisma(captured: Record<string, unknown>[]) {
+  // flagged. They do NOT prove the code asks the database the right question —
+  // and that distinction was the whole bug TWICE: on 2026-07-31 the query
+  // measured every status; ADR-0089 found it then measured the wrong COLUMN
+  // (appointment date — null for the whole collection network, so 45% of the
+  // mirror was invisible to the guard). Reverting either fix must break a test.
+  function fakePrisma(captured: string[]) {
     return {
-      mymrcHaulsMirror: {
-        aggregate: async (args: Record<string, unknown>) => {
-          captured.push(args);
-          return { _max: { docking_appointment_date: new Date('2026-07-21T00:00:00.000Z') } };
-        },
+      $queryRaw: async (strings: TemplateStringsArray) => {
+        captured.push(strings.join('?'));
+        return [{ newest: new Date('2026-07-21T00:00:00.000Z') }];
       },
     } as never;
   }
 
-  it('filters the aggregate on status=Delivered', async () => {
-    const captured: Record<string, unknown>[] = [];
+  it('measures max(COALESCE(recycler delivery date, docking appointment date)) over Delivered', async () => {
+    const captured: string[] = [];
     await measureFeedFreshness({
       prisma: fakePrisma(captured),
       feed: 'hauls',
       now: new Date('2026-07-31T18:00:00.000Z'),
     });
     expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({ where: { status: 'Delivered' } });
+    const sql = captured[0]!.replace(/\s+/g, ' ');
+    expect(sql).toContain('COALESCE(recycler_reported_delivery_date, docking_appointment_date)');
+    expect(sql).toContain("status = 'Delivered'");
   });
 
   it('and the delivered date it reads back IS reported stale', async () => {
-    const captured: Record<string, unknown>[] = [];
+    const captured: string[] = [];
     const res = await measureFeedFreshness({
       prisma: fakePrisma(captured),
       feed: 'hauls',

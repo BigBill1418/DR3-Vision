@@ -209,6 +209,14 @@ export function mapHaulRecord(rec: SfRecord): HaulMirrorRow {
       parsePacificDateTime(strVal(rec, 'Docking_Appointment_Time__c')) ??
       parseIsoDate(strVal(rec, 'Docking_Appointment_Date__c')),
     door: strVal(rec, 'Docking_Appointment_Dock_Door__c'),
+    // ADR-0089 Am.1 — the true delivery date + defensive secondary + unload count.
+    recycler_reported_delivery_date: parseIsoDate(
+      strVal(rec, 'Recycler_Reported_Delivery_Date__c'),
+    ),
+    transporter_reported_delivery_date: parseIsoDate(
+      strVal(rec, 'Transporter_Reported_Delivery_Date__c'),
+    ),
+    unit_count_at_unload: intVal(rec, 'Unit_Count_at_Unload__c'),
     units: programUnits,
     weight_lbs: numVal(rec, 'Recycler_Weight__c'),
     payload: rec,
@@ -253,8 +261,7 @@ export interface OutboundMapOptions {
 export function mapOutboundRecord(rec: SfRecord, opts: OutboundMapOptions = {}): OutboundMirrorRow {
   const name = strVal(rec, 'Name');
   const programUnits = intVal(rec, 'Number_of_Program_Units__c');
-  const vendor =
-    opts.vendor !== undefined ? opts.vendor : strVal(rec, 'Outbound_Vendor_Name__c');
+  const vendor = opts.vendor !== undefined ? opts.vendor : strVal(rec, 'Outbound_Vendor_Name__c');
   return {
     id: rec.id,
     external_id: name, // → external_materials_id

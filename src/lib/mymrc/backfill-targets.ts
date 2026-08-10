@@ -58,7 +58,10 @@ const noopLog: Logger = () => undefined;
 /** "DR3 Woodland" → "woodland", "DR3 Eugene" → "eugene"; unrecognized → null. */
 function siteCodeFromMymrcName(name: string | null): 'eugene' | 'woodland' | null {
   if (!name) return null;
-  const stripped = name.trim().toLowerCase().replace(/^dr3\s+/, '');
+  const stripped = name
+    .trim()
+    .toLowerCase()
+    .replace(/^dr3\s+/, '');
   if (stripped === 'woodland' || stripped === 'eugene') return stripped;
   return null;
 }
@@ -109,7 +112,10 @@ function haulsTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget 
       return ids.length;
     },
     async idsNeedingDetail() {
-      const rows = await model.findMany({ where: { detail_fetched_at: null }, select: { id: true } });
+      const rows = await model.findMany({
+        where: { detail_fetched_at: null },
+        select: { id: true },
+      });
       return rows.map((r) => r.id);
     },
     async writeDetail(record, at) {
@@ -136,6 +142,9 @@ function haulsTarget(deps: TargetDeps, listViewApiName: string): BackfillTarget 
           docking_appointment_date: row.docking_appointment_date,
           docking_appointment_at: row.docking_appointment_at,
           door: row.door,
+          recycler_reported_delivery_date: row.recycler_reported_delivery_date,
+          transporter_reported_delivery_date: row.transporter_reported_delivery_date,
+          unit_count_at_unload: row.unit_count_at_unload,
           units: row.units,
           weight_lbs: row.weight_lbs,
           retrac_id: row.retrac_id,
@@ -164,7 +173,10 @@ function processedTarget(deps: TargetDeps, listViewApiName: string): BackfillTar
       return ids.length;
     },
     async idsNeedingDetail() {
-      const rows = await model.findMany({ where: { detail_fetched_at: null }, select: { id: true } });
+      const rows = await model.findMany({
+        where: { detail_fetched_at: null },
+        select: { id: true },
+      });
       return rows.map((r) => r.id);
     },
     async writeDetail(record, at) {
@@ -213,7 +225,10 @@ function outboundTarget(deps: TargetDeps, listViewApiName: string): BackfillTarg
       return ids.length;
     },
     async idsNeedingDetail() {
-      const rows = await model.findMany({ where: { detail_fetched_at: null }, select: { id: true } });
+      const rows = await model.findMany({
+        where: { detail_fetched_at: null },
+        select: { id: true },
+      });
       return rows.map((r) => r.id);
     },
     async writeDetail(record, at) {
@@ -263,7 +278,10 @@ function dockTarget(deps: TargetDeps): BackfillTarget {
       return ids.length;
     },
     async idsNeedingDetail() {
-      const rows = await model.findMany({ where: { detail_fetched_at: null }, select: { id: true } });
+      const rows = await model.findMany({
+        where: { detail_fetched_at: null },
+        select: { id: true },
+      });
       return rows.map((r) => r.id);
     },
     async writeDetail(record, at) {
@@ -294,10 +312,17 @@ function dockTarget(deps: TargetDeps): BackfillTarget {
  * portal drift — warn (traceable) but still persist to the bound mirror with its
  * raw Type__c recorded, never silently drop.
  */
-function warnOnTypeMismatch(record: SfRecord, expected: 'Processing' | 'Outbound', log: Logger): void {
+function warnOnTypeMismatch(
+  record: SfRecord,
+  expected: 'Processing' | 'Outbound',
+  log: Logger,
+): void {
   const actual = classifyMaterialsType(record);
   if (actual !== null && actual !== expected) {
-    log('warn', `mymrc-backfill: Materials ${record.id} Type__c=${actual} under ${expected} view (persisting anyway)`);
+    log(
+      'warn',
+      `mymrc-backfill: Materials ${record.id} Type__c=${actual} under ${expected} view (persisting anyway)`,
+    );
   }
 }
 

@@ -68,9 +68,16 @@ export const FRESHNESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
  * the status that matters: `inbound_loads` is bridged from delivered hauls, so a
  * frozen delivered feed is what drives the floor negative.
  */
+// ADR-0089 D3 (2026-08-10) — the hauls feeds moved off the bare appointment date.
+// The appointment is a SCHEDULING field: null on every collection-network haul
+// (45% of the mirror) and up to a week from the true delivery even when present.
+// The bridge keys inbound on COALESCE(recycler_reported_delivery_date,
+// docking_appointment_date); a guard that measures a different column than the
+// bridge keys on certifies a feed it cannot see — the ADR-0070 lesson one level
+// down (we fixed which ROWS we measure, then had to fix which COLUMN).
 export const FRESHNESS_COLUMN: Readonly<Record<FeedName, string>> = {
-  hauls: 'docking_appointment_date',
-  haulsCompleted: 'docking_appointment_date',
+  hauls: 'coalesce(recycler_reported_delivery_date, docking_appointment_date)',
+  haulsCompleted: 'coalesce(recycler_reported_delivery_date, docking_appointment_date)',
   processed: 'entry_date',
   outbound: 'entry_date',
 };
@@ -100,11 +107,15 @@ async function newestBusinessDate(prisma: PrismaClient, feed: FeedName): Promise
     // Delivered is also the status that MATTERS: `inbound_loads` is bridged from
     // delivered hauls, so a frozen delivered feed is exactly what drives the
     // floor negative. Scheduling activity is not evidence anything arrived.
-    const r = await prisma.mymrcHaulsMirror.aggregate({
-      where: { status: 'Delivered' },
-      _max: { docking_appointment_date: true },
-    });
-    return r._max.docking_appointment_date;
+    // ADR-0089 D3 — the SAME key the inbound bridge aggregates on. A raw query
+    // because Prisma cannot aggregate a COALESCE; max(COALESCE(a,b)) is NOT
+    // GREATEST(max(a), max(b)) — a haul delivered early against a late appointment
+    // must count as its COALESCEd (real) day, not its appointment.
+    const rows = await prisma.$queryRaw<Array<{ newest: Date | null }>>`
+      SELECT max(COALESCE(recycler_reported_delivery_date, docking_appointment_date)) AS newest
+        FROM mymrc_hauls_mirror
+       WHERE status = 'Delivered'`;
+    return rows[0]?.newest ?? null;
   }
   if (feed === 'processed') {
     const r = await prisma.mymrcProcessedMirror.aggregate({ _max: { entry_date: true } });

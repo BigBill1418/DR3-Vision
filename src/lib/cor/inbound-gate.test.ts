@@ -10,15 +10,19 @@ const store = { newestDelivered: null as Date | null };
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
-    mymrcHaulsMirror: {
-      aggregate: async (args: { where?: { status?: string } }) => {
-        // The gate must measure DELIVERED rows only — a whole-table max is
-        // permanently masked by future-dated Confirmed appointments.
-        if (args?.where?.status !== 'Delivered') {
-          throw new Error('gate measured the whole mirror — the original 2026-07-30 guard bug');
-        }
-        return { _max: { docking_appointment_date: store.newestDelivered } };
-      },
+    // ADR-0089 D3 — the freshness measure is a raw max(COALESCE(delivery,
+    // appointment)) over Delivered rows. The fake pins BOTH guard properties in
+    // the SQL text: measuring the whole mirror (the 2026-07-30 bug) or measuring
+    // the bare appointment column (the ADR-0089 blind spot) throws here.
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      const sql = strings.join('?').replace(/\s+/g, ' ');
+      if (!sql.includes("status = 'Delivered'")) {
+        throw new Error('gate measured the whole mirror — the original 2026-07-30 guard bug');
+      }
+      if (!sql.includes('COALESCE(recycler_reported_delivery_date, docking_appointment_date)')) {
+        throw new Error('gate measured the bare appointment column — the ADR-0089 blind spot');
+      }
+      return [{ newest: store.newestDelivered }];
     },
   },
 }));

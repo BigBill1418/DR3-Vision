@@ -46,11 +46,15 @@
 //     row (`actor_label='mymrc-inbound-bridge'`) in the SAME transaction; a
 //     guard-blocked no-op writes none.
 //
-// COMPLETENESS (honest partial backfill, ADR-0059 §0/§8): only Delivered General hauls
-// carrying a `docking_appointment_date` (the delivery-day key) are bridged. Undated
-// list-only hauls are SKIPPED and counted in `haulsUndated`; every undated haul is
-// historical (pre-anchor) and inert for the live floor, so the historical inbound
-// backfill is partial by design and the live/forward path is fully covered.
+// DELIVERY-DAY KEY (ADR-0089 Am.1, superseding the ADR-0059 §0/§8 tradeoff): the key is
+// `recycler_reported_delivery_date ?? docking_appointment_date`. The appointment date is
+// a SCHEDULING field — null on every collection-network haul (886/886 with a
+// Collection_Source__c) and up to a week off the true delivery even when present
+// (proven live 2026-08-10). ADR-0059's claim that "every undated haul is historical
+// (pre-anchor) and inert" was FALSE: 35 post-anchor deliveries (2,429 units / 67 tons)
+// carried no appointment and never reached the floor. Only a haul with NO date on
+// either field is skipped now — counted in `haulsUndated` (genuinely dateless) and
+// surfaced by `findDatelessDeliveredHauls` so the residual is ALERTABLE, not silent.
 //
 // SITE-AGNOSTIC: Woodland-only today (Eugene has 0 haul-mirror rows — ADR-0057 C-21
 // Switch-Account not built); the code simply writes nothing for a site with no rows.
@@ -96,7 +100,11 @@ export interface InboundBridgeResult {
   skippedGuarded: number;
   /** mymrc_haul days already holding the exact aggregated values (no write). */
   unchanged: number;
-  /** Delivered General hauls skipped for a NULL docking_appointment_date (§0/§8). */
+  /**
+   * Delivered General hauls with NO date on either field (ADR-0089 Am.1:
+   * `recycler_reported_delivery_date ?? docking_appointment_date` both null) —
+   * genuinely dateless. Surfaced to the pager via {@link findDatelessDeliveredHauls}.
+   */
   haulsUndated: number;
   /**
    * ADR-0060 D5 — days skipped because a VERIFIED per-load (b2b_haul / non-aggregate)
@@ -172,6 +180,8 @@ const VERIFIED_INBOUND_STATUSES = ['verified', 'submitted_to_mymrc', 'processed'
 interface HaulMirrorRow {
   site_id: string | null;
   docking_appointment_date: Date | null;
+  /** ADR-0089 Am.1 — the true delivery date; the primary key when present. */
+  recycler_reported_delivery_date: Date | null;
   program_unit_count: number | null;
   non_program_unit_count: number | null;
 }
@@ -283,6 +293,7 @@ export async function bridgeInboundHaulsToInventory(
     select: {
       site_id: true,
       docking_appointment_date: true,
+      recycler_reported_delivery_date: true,
       program_unit_count: true,
       non_program_unit_count: true,
     },
@@ -293,11 +304,14 @@ export async function bridgeInboundHaulsToInventory(
   const byKey = new Map<string, DayAggregate>();
   for (const r of mirrorRows) {
     if (r.site_id == null) continue; // belt-and-suspenders (query already excludes null)
-    if (r.docking_appointment_date == null) {
+    // ADR-0089 Am.1 — the recycler-reported delivery date is the key; the appointment
+    // date is the fallback. Only a haul with NEITHER is dateless.
+    const deliveryDate = r.recycler_reported_delivery_date ?? r.docking_appointment_date;
+    if (deliveryDate == null) {
       result.haulsUndated += 1;
       continue;
     }
-    const iso = deliveryDayIso(r.docking_appointment_date);
+    const iso = deliveryDayIso(deliveryDate);
     if (sinceIso != null && iso < sinceIso) continue;
     const key = `${r.site_id}|${iso}`;
     const agg =
@@ -331,7 +345,9 @@ export async function bridgeInboundHaulsToInventory(
   //    authoritative race backstop). Per-load (b2b_haul) rows are NOT aggregate rows and
   //    do not participate in the day-slot uniqueness, so they are excluded here.
   const siteIds = [...new Set(aggregates.map((a) => a.siteId))];
-  const arrivedAts = [...new Map(aggregates.map((a) => [a.arrivedAt.getTime(), a.arrivedAt])).values()];
+  const arrivedAts = [
+    ...new Map(aggregates.map((a) => [a.arrivedAt.getTime(), a.arrivedAt])).values(),
+  ];
   const existingRows = (await prisma.inboundLoad.findMany({
     where: {
       site_id: { in: siteIds },
@@ -459,4 +475,56 @@ export async function bridgeInboundHaulsToInventory(
       `perload=${result.skippedPerLoad} same=${result.unchanged} undated=${result.haulsUndated}`,
   );
   return result;
+}
+
+// ── ADR-0089 D2 — the genuinely-dateless residual is ALERTABLE, not just counted ──
+
+/** A Delivered haul carrying units but no date on any field — a data-quality question for MRC. */
+export interface DatelessDeliveredHaul {
+  id: string;
+  external_haul_id: string | null;
+  site_id: string | null;
+  program_unit_count: number | null;
+  non_program_unit_count: number | null;
+  first_seen_at: Date;
+}
+
+/**
+ * Find Delivered General hauls with NO date on either key field. Two deliberate
+ * narrowings keep this from storming:
+ *   - `detail_fetched_at NOT NULL` — a row not yet detailed simply hasn't been
+ *     ASKED for its delivery date; the pre-Am.1 backlog awaiting the D4 re-detail
+ *     sweep is work-in-progress, not an anomaly.
+ *   - `first_seen_at >= seenSince` — the alert covers the live/forward path (new
+ *     arrivals are detailed within the hour); history is D4's job.
+ * A haul that passes BOTH filters was asked and MRC had no date on any field —
+ * the one remaining case where "ask MRC" is the right move (ADR-0089 D2).
+ */
+export async function findDatelessDeliveredHauls(args: {
+  prisma: PrismaClient;
+  seenSince: Date;
+  siteIds?: string[];
+}): Promise<DatelessDeliveredHaul[]> {
+  const rows = await args.prisma.mymrcHaulsMirror.findMany({
+    where: {
+      status: 'Delivered',
+      type: 'General',
+      docking_appointment_date: null,
+      recycler_reported_delivery_date: null,
+      detail_fetched_at: { not: null },
+      first_seen_at: { gte: args.seenSince },
+      ...(args.siteIds && args.siteIds.length > 0
+        ? { site_id: { in: args.siteIds } }
+        : { site_id: { not: null } }),
+    },
+    select: {
+      id: true,
+      external_haul_id: true,
+      site_id: true,
+      program_unit_count: true,
+      non_program_unit_count: true,
+      first_seen_at: true,
+    },
+  });
+  return rows as DatelessDeliveredHaul[];
 }

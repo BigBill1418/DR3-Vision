@@ -270,6 +270,62 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
         }
       }
 
+      // ADR-0089 D2 — the genuinely-dateless residual is ALERTABLE. A Delivered
+      // General haul that has been DETAILED (so it was asked) and carries no date
+      // on either key field is a data-quality question for MRC — the one case
+      // where "ask MRC" is the right move. Windowed to the same trailing floor as
+      // the bridge so the pre-Am.1 backlog (D4's job) can never storm the topic.
+      // Best-effort, non-fatal; per-site fingerprint, 24h cooldown (ADR-0037 Q4).
+      if (typeof mymrc.findDatelessDeliveredHauls === 'function') {
+        try {
+          const dateless = await mymrc.findDatelessDeliveredHauls({
+            prisma,
+            seenSince: recentProcessedFloor(),
+          });
+          if (dateless.length > 0) {
+            // mirror.site_id is a sites.id — resolve codes for the alert envelope.
+            const siteRows = await prisma.site.findMany({ select: { id: true, code: true } });
+            const siteCodeById = new Map(siteRows.map((s) => [s.id, s.code]));
+            const bySite = new Map();
+            for (const h of dateless) {
+              const k = h.site_id ?? 'unknown';
+              if (!bySite.has(k)) bySite.set(k, []);
+              bySite.get(k).push(h);
+            }
+            for (const [siteId, hauls] of bySite) {
+              const site = siteCodeById.get(siteId) ?? siteId;
+              const names = hauls
+                .map((h) => h.external_haul_id ?? h.id)
+                .slice(0, 5)
+                .join(', ');
+              const units = hauls.reduce(
+                (n, h) => n + (h.program_unit_count ?? 0) + (h.non_program_unit_count ?? 0),
+                0,
+              );
+              logFn(
+                'warn',
+                `dateless Delivered haul(s) at ${site}: ${hauls.length} (${units} units) — ${names}`,
+              );
+              await mymrc.ntfyPager
+                .page({
+                  kind: 'dateless_hauls',
+                  site,
+                  message:
+                    `${hauls.length} Delivered haul(s) at ${site} carry units but NO delivery date on ` +
+                    `any MyMRC field (${units} units: ${names}). The inbound bridge cannot place them ` +
+                    `on a floor day. This is an MRC data-quality question — ask MRC to set ` +
+                    `Recycler_Reported_Delivery_Date on these hauls.`,
+                  fingerprint: `mymrc-dateless-hauls:${site}`,
+                  cooldownMs: 24 * 60 * 60 * 1000,
+                })
+                .catch(() => undefined);
+            }
+          }
+        } catch (err) {
+          logFn('error', `dateless-haul check failed (non-fatal): ${describeErr(err)}`);
+        }
+      }
+
       // Deadman: page once (deduped via ledger) for any feed with no success in >26h.
       await mymrc.checkDeadman({ prisma, sites, log: logFn });
 

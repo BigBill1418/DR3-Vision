@@ -71,9 +71,11 @@ export function assertInboundFreshnessForCor(f: FeedFreshness): void {
 
 /** Measure the delivered-hauls feed live and refuse when stale. */
 export async function assertCorInboundFresh(now: Date = new Date()): Promise<void> {
-  // Feed 'hauls' measures max(docking_appointment_date) over DELIVERED rows only
-  // (src/lib/mymrc/freshness.ts, corrected 2026-07-31) — exactly the signal that
-  // feeds the COR's inventory figure.
+  // Feed 'hauls' measures max(COALESCE(recycler_reported_delivery_date,
+  // docking_appointment_date)) over DELIVERED rows only (src/lib/mymrc/freshness.ts,
+  // corrected 2026-07-31 for rows, re-keyed 2026-08-10 per ADR-0089 D3) — the SAME
+  // key the inbound bridge aggregates on, which is exactly the signal that feeds
+  // the COR's inventory figure. This gate inherits both fixes with no code here.
   const f = await measureFeedFreshness({
     prisma,
     feed: 'hauls',

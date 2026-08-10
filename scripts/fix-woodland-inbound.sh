@@ -143,14 +143,16 @@ plan_sql() {
   cat <<SQL
 WITH s AS (SELECT id FROM sites WHERE code='${SITE_CODE}'),
 mirror AS (
-  SELECT docking_appointment_date::date AS day,
+  -- ADR-0089 Am.1: the delivery-day key is COALESCE(recycler delivery, appointment)
+  -- — MUST match dist/mymrc.bridgeInboundHaulsToInventory or this plan lies.
+  SELECT COALESCE(recycler_reported_delivery_date, docking_appointment_date)::date AS day,
          count(*) AS hauls,
          coalesce(sum(program_unit_count),0)     AS prog,
          coalesce(sum(non_program_unit_count),0) AS nonprog
     FROM mymrc_hauls_mirror
    WHERE status='Delivered' AND type='General'
      AND site_id=(SELECT id FROM s)
-     AND docking_appointment_date >= '${WINDOW_START}'
+     AND COALESCE(recycler_reported_delivery_date, docking_appointment_date) >= '${WINDOW_START}'
    GROUP BY 1),
 guards AS (
   SELECT (arrived_at AT TIME ZONE 'America/Los_Angeles')::date AS day,
@@ -183,10 +185,11 @@ guards AS (
    GROUP BY 1)
 SELECT coalesce(sum(m.program_unit_count),0)
   FROM mymrc_hauls_mirror m
-  LEFT JOIN guards g ON g.day = m.docking_appointment_date::date
+  LEFT JOIN guards g
+    ON g.day = COALESCE(m.recycler_reported_delivery_date, m.docking_appointment_date)::date
  WHERE m.status='Delivered' AND m.type='General'
    AND m.site_id=(SELECT id FROM s)
-   AND m.docking_appointment_date >= '${WINDOW_START}'
+   AND COALESCE(m.recycler_reported_delivery_date, m.docking_appointment_date) >= '${WINDOW_START}'
    AND coalesce(g.slot_owned,false)=false
    AND coalesce(g.per_load_verified,false)=false
 ) TO STDOUT;
