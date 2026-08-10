@@ -115,9 +115,8 @@ vi.mock('@/lib/prisma', () => ({
         return [...groups].map((k) => ({ bonus_employee_id: k.split('|')[0]! }));
       },
     },
-    mymrcHaulsMirror: {
-      aggregate: async () => ({ _max: { docking_appointment_date: store.newestDelivered } }),
-    },
+    // ADR-0089 D3 — the freshness measure is a raw max(COALESCE(...)) query.
+    $queryRaw: async () => [{ newest: store.newestDelivered }],
   },
 }));
 

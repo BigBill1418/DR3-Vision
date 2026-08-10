@@ -74,6 +74,13 @@ export const HAUL_OPTIONAL_FIELDS: readonly string[] = [
   'Haul_Request__c.Docking_Appointment_Time__c',
   'Haul_Request__c.Docking_Appointment_Dock_Door__c',
   'Haul_Request__c.Recycler_Weight__c',
+  // ADR-0089 Am.1 — the TRUE delivery date (primary inbound key; proven populated
+  // live 2026-08-10 on 12/12 Delivered probes), its defensive secondary (null in
+  // practice, requested so a future population is captured without a deploy), and
+  // the physical unload count (OPEN-ITEMS F-3 cross-check groundwork).
+  'Haul_Request__c.Recycler_Reported_Delivery_Date__c',
+  'Haul_Request__c.Transporter_Reported_Delivery_Date__c',
+  'Haul_Request__c.Unit_Count_at_Unload__c',
 ] as const;
 
 /** Fields `mapProcessedRecord` + `mapOutboundRecord` read from a `Materials__c` record (union). */

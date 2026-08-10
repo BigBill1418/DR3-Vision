@@ -30,12 +30,18 @@ const FRAMEWORK: AuraFrameworkParams = {
 };
 
 /** Build a live-shaped SUCCESS action returnValue (a record rep) for an id. */
-function sfRecord(id: string, fields: Record<string, { value: unknown; displayValue?: string | null }> = {}) {
+function sfRecord(
+  id: string,
+  fields: Record<string, { value: unknown; displayValue?: string | null }> = {},
+) {
   return {
     apiName: 'Haul_Request__c',
     id,
     fields: Object.fromEntries(
-      Object.entries(fields).map(([k, v]) => [k, { displayValue: v.displayValue ?? null, value: v.value }]),
+      Object.entries(fields).map(([k, v]) => [
+        k,
+        { displayValue: v.displayValue ?? null, value: v.value },
+      ]),
     ),
   };
 }
@@ -64,10 +70,17 @@ describe('buildGetRecordWithFieldsMessage', () => {
       ['Haul_Request__c.Name', 'Haul_Request__c.Recycler_Program_Unit_Count__c'],
     );
     const parsed = JSON.parse(message) as {
-      actions: Array<{ id: string; descriptor: string; callingDescriptor: string; params: { recordId: string; optionalFields: string[] } }>;
+      actions: Array<{
+        id: string;
+        descriptor: string;
+        callingDescriptor: string;
+        params: { recordId: string; optionalFields: string[] };
+      }>;
     };
     expect(parsed.actions).toHaveLength(3);
-    expect(parsed.actions.every((a) => a.descriptor === GETRECORD_WITH_FIELDS_DESCRIPTOR)).toBe(true);
+    expect(parsed.actions.every((a) => a.descriptor === GETRECORD_WITH_FIELDS_DESCRIPTOR)).toBe(
+      true,
+    );
     // action.id is the batch index and maps back to the recordId.
     expect(parsed.actions.map((a) => [a.id, a.params.recordId])).toEqual([
       ['0', 'a2K1'],
@@ -86,7 +99,11 @@ describe('buildGetRecordWithFieldsMessage', () => {
 
 describe('buildGetRecordWithFieldsFormFields', () => {
   it('reuses the captured framework envelope verbatim (fwuid-drift-immune)', () => {
-    const { formFields } = buildGetRecordWithFieldsFormFields(FRAMEWORK, ['a2K1'], ['Haul_Request__c.Name']);
+    const { formFields } = buildGetRecordWithFieldsFormFields(
+      FRAMEWORK,
+      ['a2K1'],
+      ['Haul_Request__c.Name'],
+    );
     expect(formFields['aura.context']).toBe(FRAMEWORK.auraContext);
     expect(formFields['aura.token']).toBe(FRAMEWORK.auraToken);
     expect(formFields['aura.pageURI']).toBe(FRAMEWORK.auraPageUri);
@@ -105,6 +122,12 @@ describe('optionalFieldsForFeed — the mapper field set per feed', () => {
     expect(HAUL_OPTIONAL_FIELDS).toContain('Haul_Request__c.Recycler_Weight__c');
     // Fully-qualified relationship field (FLS-safe, resolves the site discriminator).
     expect(HAUL_OPTIONAL_FIELDS).toContain('Haul_Request__c.Recycling_Center_Lookup__r.Name');
+    // ADR-0089 Am.1 — the true delivery date (primary inbound key), its defensive
+    // secondary, and the physical unload count (F-3 groundwork). Proven populated
+    // live 2026-08-10; requesting them is D1.
+    expect(HAUL_OPTIONAL_FIELDS).toContain('Haul_Request__c.Recycler_Reported_Delivery_Date__c');
+    expect(HAUL_OPTIONAL_FIELDS).toContain('Haul_Request__c.Transporter_Reported_Delivery_Date__c');
+    expect(HAUL_OPTIONAL_FIELDS).toContain('Haul_Request__c.Unit_Count_at_Unload__c');
     // Materials billing counts.
     expect(MATERIALS_OPTIONAL_FIELDS).toContain('Materials__c.Number_of_Program_Units__c');
     expect(MATERIALS_OPTIONAL_FIELDS).toContain('Materials__c.Account__r.Name');
@@ -157,7 +180,11 @@ describe('parseGetRecordWithFieldsResponse', () => {
     const res = parseGetRecordWithFieldsResponse(body, correlation);
     expect([...res.records.keys()].sort()).toEqual(['good1', 'good3']);
     expect(res.errors).toEqual([
-      { recordId: 'bad2', state: 'ERROR', message: 'INSUFFICIENT_ACCESS: entity is not accessible' },
+      {
+        recordId: 'bad2',
+        state: 'ERROR',
+        message: 'INSUFFICIENT_ACCESS: entity is not accessible',
+      },
     ]);
   });
 
@@ -175,7 +202,11 @@ describe('parseGetRecordWithFieldsResponse', () => {
     const body = JSON.stringify({
       actions: [
         { id: '0', state: 'SUCCESS', returnValue: sfRecord('a2K1') },
-        { id: 'aura://ComponentController', state: 'SUCCESS', returnValue: { some: 'framework thing' } },
+        {
+          id: 'aura://ComponentController',
+          state: 'SUCCESS',
+          returnValue: { some: 'framework thing' },
+        },
       ],
     });
     const res = parseGetRecordWithFieldsResponse(body, correlation);
@@ -243,10 +274,12 @@ function makeSession(opts: FakeSessionOpts): {
 describe('createRecordFieldsClient — happy path', () => {
   it('captures the envelope once, POSTs the batch, returns the record map', async () => {
     const { session, captureCount } = makeSession({
-      responses: [auraBody([
-        { id: '0', record: sfRecord('a2K1', { Recycler_Program_Unit_Count__c: { value: 42 } }) },
-        { id: '1', record: sfRecord('a2K2', { Recycler_Program_Unit_Count__c: { value: 9 } }) },
-      ])],
+      responses: [
+        auraBody([
+          { id: '0', record: sfRecord('a2K1', { Recycler_Program_Unit_Count__c: { value: 42 } }) },
+          { id: '1', record: sfRecord('a2K2', { Recycler_Program_Unit_Count__c: { value: 9 } }) },
+        ]),
+      ],
     });
     const client = createRecordFieldsClient(session, { sleep: async () => undefined });
 
@@ -294,7 +327,10 @@ describe('createRecordFieldsClient — retry / backoff', () => {
 
   it('throws PortalContractDriftError after exhausting attempts on persistent non-200', async () => {
     const { session } = makeSession({ responses: [{ status: 500, body: 'boom' }] });
-    const client = createRecordFieldsClient(session, { sleep: async () => undefined, maxAttempts: 3 });
+    const client = createRecordFieldsClient(session, {
+      sleep: async () => undefined,
+      maxAttempts: 3,
+    });
     await expect(client.fetchRecordFields(['a'], ['Haul_Request__c.Name'])).rejects.toBeInstanceOf(
       PortalContractDriftError,
     );

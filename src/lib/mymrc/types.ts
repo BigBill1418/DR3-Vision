@@ -151,6 +151,12 @@ export interface HaulMirrorRow extends MirrorBase {
   docking_appointment_date: Date | null; // Docking_Appointment_Date__c (Date, noon-UTC)
   docking_appointment_at: Date | null; // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
   door: string | null; // Docking_Appointment_Dock_Door__c
+  // ADR-0089 Am.1 — the TRUE delivery date (primary inbound key; the dock date is
+  // a scheduling field, null on all 886 collection-network hauls and wrong by up
+  // to a week even when present). Proven populated live 2026-08-10.
+  recycler_reported_delivery_date: Date | null; // Recycler_Reported_Delivery_Date__c (Date, noon-UTC)
+  transporter_reported_delivery_date: Date | null; // Transporter_Reported_Delivery_Date__c — defensive; null in practice
+  unit_count_at_unload: number | null; // Unit_Count_at_Unload__c — physical receipt count (F-3 groundwork)
   units: number | null; // legacy back-compat mirror of program_unit_count (program_unit_count is authoritative)
 }
 

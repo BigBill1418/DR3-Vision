@@ -197,8 +197,10 @@ export {
 // `disappeared_at` — the inverse of the processed bridge.
 export {
   bridgeInboundHaulsToInventory,
+  findDatelessDeliveredHauls,
   type InboundBridgeContext,
   type InboundBridgeResult,
+  type DatelessDeliveredHaul,
 } from './inbound-bridge';
 export {
   SELECTORS,

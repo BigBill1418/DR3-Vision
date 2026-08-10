@@ -2727,6 +2727,13 @@ model MymrcHaulsMirror {
   docking_appointment_date      DateTime? // Docking_Appointment_Date__c (Date)
   docking_appointment_at        DateTime? // parsed from free-text Docking_Appointment_Time__c ("2026/07/20 12:00 PT")
   door                          String? // Docking_Appointment_Dock_Door__c
+  // ADR-0089 Am.1 — the TRUE delivery date (primary inbound key; the dock date is a
+  // scheduling field, null on the whole collection network and up to a week wrong even
+  // when present). Proven populated live 2026-08-10. Transporter date is defensive
+  // (null in practice); unload count is the F-3 physical-receipt cross-check input.
+  recycler_reported_delivery_date    DateTime? // Recycler_Reported_Delivery_Date__c (Date)
+  transporter_reported_delivery_date DateTime? // Transporter_Reported_Delivery_Date__c (Date)
+  unit_count_at_unload               Int? // Unit_Count_at_Unload__c
   units                         Int? // legacy generic unit count (back-compat; program_unit_count is authoritative)
   weight_lbs                    Decimal?  @db.Decimal(12, 2) // Recycler_Weight__c
   retrac_id                     String? // Re-TRAC id; 1:1 with external_haul_id per ADR post-note (UNVERIFIED)

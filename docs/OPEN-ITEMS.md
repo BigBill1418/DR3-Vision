@@ -1187,6 +1187,25 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
     nowhere in the codebase. `freshness.ts` keys on the same wrong column, so the
     COR inbound gate would report the feed fresh while 100% of collection-network
     intake went unbridged.
+  - **BUILD LANDED 2026-08-10 evening (ADR-0089 D1–D3 + D4 tooling, branch
+    `feat/adr-0089-delivery-date-rekey`).** Deploying it moves nothing by itself
+    (all pre-deploy rows NULL → COALESCE falls back to the appointment date).
+    **OPERATOR SEQUENCE for the recovery (each step gates the next):**
+    1. Merge + deploy the branch (migration runs in the init container).
+    2. On CHAD-HQ: `scripts/one-off/2026-08-10-adr0089-redetail-sweep.sh`
+       (dry-run first, then `--apply`), then the enrich run it prints
+       (~74 batched POSTs, a few minutes).
+    3. `scripts/one-off/2026-08-10-adr0089-rekey-delta-report.sh` (read-only) —
+       **Bill reads this**: it separates NEW days (collection network, was
+       invisible) from RE-ATTRIBUTED days (units moving between floor days
+       managers have seen — the Am.1 §3 decision).
+    4. Only after the deltas are accepted:
+       `scripts/fix-woodland-inbound.sh --dry-run` then `--apply` (gated,
+       audited, precedence-guarded). Expect ≈ +639 program / +1,790 non-program
+       post-anchor from the added hauls, plus the re-attribution movement the
+       report shows.
+    5. Then re-check the O-3 gap arithmetic and the July COR negative-ledger
+       block (expected to clear or shrink to the stripped-over-count candidate).
   - ~~Still unproven: that MRC populates `Recycler_Reported_Delivery_Date__c`~~
     **PROVEN 2026-08-10 ~11:04 AM PT (ADR-0089 Am.1)** — read-only probe
     (`scripts/one-off/2026-08-10-adr0089-field-probe.mjs`, one-shot scrape

@@ -41,9 +41,9 @@ vi.mock('@/lib/prisma', () => ({
     auditLog: { create: async ({ data }: { data: unknown }) => void store.audits.push(data) },
     // PR #196 §2.3 finalize gate — empty mirror = bootstrap (not stale), so the
     // pre-gate fixtures exercise reconcile/lifecycle behavior unchanged.
-    mymrcHaulsMirror: {
-      aggregate: async () => ({ _max: { docking_appointment_date: null } }),
-    },
+    // ADR-0089 D3 — the freshness measure is a raw max(COALESCE(...)) query;
+    // null = empty mirror = bootstrap-not-stale (assessFreshness contract).
+    $queryRaw: async () => [{ newest: null }],
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
       fn({
         corCertificate: {

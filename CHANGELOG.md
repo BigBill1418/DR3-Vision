@@ -3,6 +3,42 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (evening) — ADR-0089 BUILT: inbound re-keyed on the true delivery date (D1–D3 + D4 tooling)
+
+Bill: "go ahead and start the build." D1–D3 implemented TDD-first, D4 tooling
+built; the D4 recovery RUN stays operator-sequenced (see OPEN-ITEMS). Deploying
+this build moves NO business figure by itself: every pre-deploy mirror row has a
+NULL delivery date and the COALESCE falls back to the appointment date, so
+behavior is byte-identical until the re-detail sweep runs.
+
+- **D1 — the field is requested and stored.** Migration
+  `20260840_adr0089_recycler_delivery_date` adds `recycler_reported_delivery_date`,
+  `transporter_reported_delivery_date` (defensive; null in practice) and
+  `unit_count_at_unload` (F-3 groundwork) to `mymrc_hauls_mirror`;
+  `HAUL_OPTIONAL_FIELDS` +3; `mapHaulRecord` (noon-UTC date convention) + both
+  detail write paths.
+- **D2 — the bridge keys on `recycler_reported_delivery_date ?? docking_appointment_date`.**
+  `haulsUndated` now means GENUINELY dateless (both fields null), and that
+  residual is ALERTABLE: new `findDatelessDeliveredHauls` — narrowed to
+  detailed + recently-seen rows so the pre-deploy backlog can never storm —
+  wired into the hourly scrape, pager kind `dateless_hauls`, per-site
+  fingerprint, 24 h cooldown, `dr3-vision-system` (hard rule #5: an integration
+  data-quality event, not an operational staff signal).
+- **D3 — freshness measures the SAME key**: raw
+  `max(COALESCE(delivery, appointment))` over Delivered (`max(COALESCE)` ≠
+  `GREATEST(max,max)` — an early delivery against a late appointment must count
+  as its real day). The COR inbound gate inherits through `measureFeedFreshness`
+  unchanged; its test fake now pins BOTH guard properties in the SQL text.
+- **D4 tooling (build only; the run is Bill-gated):**
+  `2026-08-10-adr0089-redetail-sweep.sh` (clears only the `detail_fetched_at`
+  scraper cursor, audited, dry-run default) and
+  `2026-08-10-adr0089-rekey-delta-report.sh` (read-only; separates NEW days
+  from RE-ATTRIBUTED days per Am.1 §3 — Bill reads this before any re-bridge).
+  `fix-woodland-inbound.sh` read-side SQL re-keyed to the same COALESCE so its
+  falsification gate cannot diverge from the bridge.
+- Tests: 4,823 passed / 0 failed; tsc + eslint clean; migration replay against a
+  scratch PG16 clean (`yard_trailers` FK drift pre-exists on main, not touched).
+
 ## 2026-08-10 (later still) — ADR-0089 Am.1: the delivery-date field is PROVEN, the fallbacks are dead, and the appointment date lies even when present
 
 Field-proof executed same day at Bill's instruction ("deep dive and make sure
