@@ -40,6 +40,23 @@ interface ExpectedRow {
   site_id: string;
   external_mymrc_haul_id: string;
   cancelled_at: Date | null;
+  /**
+   * The bridged appointment instant. The check-in affordance is bounded to the
+   * CURRENT PACIFIC DAY on this field — the same column, window and helper the
+   * queue page already used (ADR-0065 D5). See ADR-0074 Amendment 1.
+   */
+  expected_arrival_at: Date | null;
+  /**
+   * The `inbound_loads` child, when the slot has already been consumed. A
+   * non-null value means this expected load has been WORKED — there is nothing
+   * left to start, and offering a button routes the tap into the existing load.
+   */
+  inbound_load: {
+    id: string;
+    status: string;
+    total_units: number | null;
+    submitted_at: Date | null;
+  } | null;
 }
 
 const store = { mirror: [] as MirrorRow[], expected: [] as ExpectedRow[] };
@@ -203,6 +220,27 @@ function mirrorRow(over: Partial<MirrorRow> = {}): MirrorRow {
   };
 }
 
+/**
+ * The instant the 2026-08-10 Santa Rita incident was diagnosed: 3:00 PM PDT,
+ * which is H-134743's own appointment time. Every day-bound case below is
+ * anchored here so "today", "tomorrow" and "a week ago" are literal.
+ */
+const NOW = new Date('2026-08-10T22:00:00Z'); // 2026-08-10 15:00 PT
+const TODAY_APPT = new Date('2026-08-10T22:00:00Z'); // 2026-08-10 15:00 PT
+const TOMORROW_APPT = new Date('2026-08-11T17:00:00Z'); // 2026-08-11 10:00 PT
+
+function expectedRow(over: Partial<ExpectedRow> = {}): ExpectedRow {
+  return {
+    id: 'exp-default',
+    site_id: WOODLAND,
+    external_mymrc_haul_id: 'H-100001',
+    cancelled_at: null,
+    expected_arrival_at: TODAY_APPT,
+    inbound_load: null,
+    ...over,
+  };
+}
+
 beforeEach(() => {
   seq = 0;
   store.mirror = [];
@@ -316,16 +354,18 @@ describe('listPortalHauls — what comes back', () => {
       mirrorRow({ external_haul_id: 'H-UNBRIDGED' }),
       mirrorRow({ external_haul_id: 'H-CANCELLED' }),
     ];
+    // Both siblings are pinned to TODAY and left unconsumed on purpose: this
+    // case is about sibling EXISTENCE, and after ADR-0074 Amendment 1 the other
+    // two conditions (no child, appointment today) would otherwise confound it.
     store.expected = [
-      { id: 'exp-1', site_id: WOODLAND, external_mymrc_haul_id: 'H-BRIDGED', cancelled_at: null },
-      {
+      expectedRow({ id: 'exp-1', external_mymrc_haul_id: 'H-BRIDGED' }),
+      expectedRow({
         id: 'exp-2',
-        site_id: WOODLAND,
         external_mymrc_haul_id: 'H-CANCELLED',
         cancelled_at: new Date('2026-07-29T23:00:00Z'),
-      },
+      }),
     ];
-    const page = await listPortalHauls({ siteId: WOODLAND });
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
     const byId = new Map(page.rows.map((r) => [r.externalHaulId, r.expectedLoadId]));
     expect(byId.get('H-BRIDGED')).toBe('exp-1');
     expect(byId.get('H-UNBRIDGED')).toBeNull();
@@ -380,5 +420,195 @@ describe('listPortalHauls — pending block and pagination', () => {
     expect(page.total).toBe(0);
     // `totalPages: 0` would make the pagination control render "Page 1 of 0".
     expect(page.totalPages).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-0074 Amendment 1 — the CONSUMED-SLOT defect (production, 2026-08-10)
+//
+// ## What happened, in the order it happened
+//
+// 1. 2026-08-03 16:57 PT — `ipad_hauls` went live for Woodland.
+// 2. 2026-08-03 17:01 PT — four minutes later, an operator tapped the pinned
+//    "Coming up" card for H-134743 (Santa Rita Jail, appointment 2026-08-10
+//    15:00 PT) and STARTED it. Seven days early. Nothing refused the tap: the
+//    block is deliberately unbounded in time (D3), and the check-in affordance
+//    tested only "a non-cancelled `expected_loads` sibling exists" (D5).
+// 3. That load was then worked as if it were the truck on the dock and
+//    `submitted` on 2026-08-05 with **159 units** — billed against the wrong
+//    haul number.
+// 4. 2026-08-10 — the REAL Santa Rita truck arrived. `startInboundLoad` is
+//    idempotent on `expected_load_id` (correctly — it is what stops a double-tap
+//    minting two billing records), so every tap returned the Aug-3 child. The
+//    card became a dead button: the load page rendered the `submitted` terminal
+//    branch, which had no controls and no navigation, and the held-by panel
+//    showed takeover disabled under the label "Counting".
+// 5. The floor was unblocked only by an audited manual DB detach
+//    (`audit_log.actor_label = 'system:santa-rita-detach'`, 2026-08-10 15:42 PT),
+//    which left load `2b60d7ba` orphaned with its 159 units.
+//
+// ## Why the idempotency is NOT the bug
+//
+// `startInboundLoad` returning the existing child is the correct, ADR-0082
+// behaviour and is untouched by this fix. The bug is upstream of it: a surface
+// that offers a control whose only possible outcome is to land on a corpse. The
+// read layer must not produce a check-in target that the write layer will
+// refuse to act on — the same rule ADR-0082 applied to `takeable`.
+//
+// ## Three conditions, not one
+//
+// The affordance now requires ALL of: a live sibling, NO `inbound_loads` child,
+// and an appointment on the current Pacific day. Each case below removes exactly
+// one and asserts the button is gone but the ROW is not — a vanished row is the
+// silence this repo keeps paying for.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ADR-0074 Am.1 — a CONSUMED expected load is never check-in-able', () => {
+  it('THE INCIDENT: a submitted child kills the button and reports what was worked', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-134743', status: 'Confirmed' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-santa-rita',
+        external_mymrc_haul_id: 'H-134743',
+        expected_arrival_at: TODAY_APPT,
+        inbound_load: {
+          id: '2b60d7ba-efb4-46de-ba27-8801bbf0be5a',
+          status: 'submitted',
+          total_units: 159,
+          submitted_at: new Date('2026-08-05T23:48:00Z'),
+        },
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    const row = page.pending[0];
+
+    // The button is gone…
+    expect(row?.expectedLoadId).toBeNull();
+    // …and is replaced by something that SAYS what happened, rather than by a
+    // silent gap. "Nothing here" was the state that cost the floor a morning.
+    expect(row?.consumedLoad).toEqual({
+      status: 'submitted',
+      // `open` is decided HERE, not in the client. `OPEN_DOCK_STATUSES` lives
+      // next to `prisma` in `open-loads.ts`, so a client component cannot import
+      // it — and a client-side copy of the status set is precisely the drift
+      // that produced the "Counting" mislabel in `held-by-panel.tsx`.
+      open: false,
+      totalUnits: 159,
+      workedAt: new Date('2026-08-05T23:48:00Z'),
+    });
+    // The haul itself is still listed. Hiding it would mean an operator whose
+    // truck is on the dock sees an empty screen and learns nothing.
+    expect(ids(page.pending)).toEqual(['H-134743']);
+  });
+
+  it('an OPEN child also consumes the slot — the tap would land on someone else’s load', async () => {
+    // H-135311 in production: started 2026-07-28, still `in_progress` on
+    // 2026-08-10. Its appointment day arrived while the load was open; without
+    // this the queue would have offered a second start for a load already held.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-135311' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-open',
+        external_mymrc_haul_id: 'H-135311',
+        inbound_load: {
+          id: 'd792ed15',
+          status: 'in_progress',
+          total_units: null,
+          submitted_at: null,
+        },
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    expect(page.rows[0]?.expectedLoadId).toBeNull();
+    expect(page.rows[0]?.consumedLoad?.status).toBe('in_progress');
+    expect(page.rows[0]?.consumedLoad?.open).toBe(true);
+    // Not submitted ⇒ no instant to show. The copy must not invent one.
+    expect(page.rows[0]?.consumedLoad?.workedAt).toBeNull();
+  });
+
+  it('an UNCONSUMED sibling whose appointment is today still gets the button', async () => {
+    // The control case. If this ever goes red the fix has blocked the floor,
+    // which is a worse defect than the one it closes.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-134743', status: 'Confirmed' })];
+    store.expected = [expectedRow({ id: 'exp-live', external_mymrc_haul_id: 'H-134743' })];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    expect(page.pending[0]?.expectedLoadId).toBe('exp-live');
+    expect(page.pending[0]?.consumedLoad).toBeNull();
+  });
+});
+
+describe('ADR-0074 Am.1 — "Coming up" check-in is bounded to the current Pacific day', () => {
+  it('THE ORIGIN OF THE INCIDENT: a future appointment offers no check-in', async () => {
+    // On 2026-08-03 this is exactly what H-134743 was: a live, unconsumed
+    // sibling seven days out. The consumed-check alone would NOT have stopped
+    // the Aug-3 tap — only the day bound does.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-136912', status: 'Confirmed' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-tomorrow',
+        external_mymrc_haul_id: 'H-136912',
+        expected_arrival_at: TOMORROW_APPT,
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    expect(page.pending[0]?.expectedLoadId).toBeNull();
+    // Not consumed either — it is simply not yet startable. The UI must be able
+    // to tell "already worked" from "not today", so both fields are null.
+    expect(page.pending[0]?.consumedLoad).toBeNull();
+    // Still LISTED: seeing tomorrow's schedule is the whole point of D3.
+    expect(ids(page.pending)).toEqual(['H-136912']);
+  });
+
+  it('the bound is PACIFIC, not the container’s UTC — 6 PM PT is still today', async () => {
+    // 2026-08-10 18:00 PDT === 2026-08-11 01:00 UTC. A UTC bound would have
+    // rolled to the 11th and taken the evening crew's check-in with it — the
+    // ADR-0065 Amendment 1 defect, reintroduced one surface over.
+    const evening = new Date('2026-08-11T01:00:00Z');
+    store.mirror = [mirrorRow({ external_haul_id: 'H-EVENING', status: 'Confirmed' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-evening',
+        external_mymrc_haul_id: 'H-EVENING',
+        expected_arrival_at: new Date('2026-08-11T02:00:00Z'), // 19:00 PT, the 10th
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: evening });
+    expect(page.pending[0]?.expectedLoadId).toBe('exp-evening');
+  });
+
+  it('a sibling with NO appointment instant is not startable from this surface', async () => {
+    // 3,316 undated hauls (ADR-0074 D3). "Unknown day" cannot be proven to be
+    // today, and the queue — bounded on the same column — never offered them.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-UNDATED', docking_appointment_date: null })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-undated',
+        external_mymrc_haul_id: 'H-UNDATED',
+        expected_arrival_at: null,
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    expect(page.rows[0]?.expectedLoadId).toBeNull();
+    expect(ids(page.rows)).toEqual(['H-UNDATED']);
+  });
+
+  it('a PAST appointment offers no check-in either (no writing against a closed day)', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-YESTERDAY' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-past',
+        external_mymrc_haul_id: 'H-YESTERDAY',
+        expected_arrival_at: new Date('2026-08-09T22:00:00Z'),
+      }),
+    ];
+
+    const page = await listPortalHauls({ siteId: WOODLAND, now: NOW });
+    expect(page.rows[0]?.expectedLoadId).toBeNull();
   });
 });

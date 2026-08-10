@@ -55,7 +55,14 @@
     "open_status_finished": "گنی گئی — جمع نہیں ہوئی",
     "held_heading": "کسی اور کے پاس",
     "held_intro": "دوسرے آپریٹر کے شروع کیے ہوئے کھلے لوڈ۔ دیکھنے کے لیے کسی ایک کو دبائیں، اور اگر وہ موجود نہ ہوں تو اسے سنبھال لیں۔",
-    "held_by": "{{name}} کے پاس"
+    "held_by": "{{name}} کے پاس",
+    "open_status_expected": "شروع نہیں ہوئی",
+    "open_status_submitted": "جمع کرا دی گئی",
+    "open_status_verified": "مینیجر نے تصدیق کر دی",
+    "open_status_rejected": "ڈاک پر مسترد",
+    "open_status_submitted_to_mymrc": "MyMRC کو بھیج دی گئی",
+    "open_status_processed": "پروسیس ہو گئی",
+    "open_status_unknown": "حالت معلوم نہیں"
   },
   "load_header": {
     "unknown_source": "نامعلوم ذریعہ",
@@ -81,10 +88,11 @@
     "unknown_holder": "کوئی اور آپریٹر"
   },
   "workflow": {
-    "load_done_returning": "لوڈ {{status}}۔ نام منتخب کرنے والی اسکرین پر واپس جا رہا ہے…",
     "unhandled_status": "غیر متوقع حالت: {{status}}",
     "status_submitted": "جمع شدہ",
-    "status_rejected": "مسترد"
+    "status_rejected": "مسترد",
+    "load_done": "لوڈ {{status}}۔",
+    "back_to_queue": "قطار پر واپس جائیں"
   },
   "stage_bol": {
     "heading": "1۔ بل آف لیڈنگ (BOL)",
@@ -241,7 +249,10 @@
       "not_activated_heading": "ابھی فعال نہیں",
       "not_activated_body": "{{site}} کے انوینٹری ٹولز ابھی آن نہیں ہیں۔ کسی مینیجر سے کہیں۔",
       "today": "آج",
-      "queued": "اس آئی پیڈ پر محفوظ — دوبارہ منسلک ہونے پر بھیجا جائے گا"
+      "queued": "اس آئی پیڈ پر محفوظ — دوبارہ منسلک ہونے پر بھیجا جائے گا",
+      "already_worked": "پہلے ہی مکمل ہو چکی",
+      "already_worked_detail": "پہلے ہی مکمل — {{units}} یونٹ، {{date}} کو جمع کرائی گئی",
+      "already_started": "ایک اور آپریٹر پہلے ہی شروع کر چکا ہے"
     },
     "hub": {
       "heading": "روزانہ جانچ",

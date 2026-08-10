@@ -3,6 +3,66 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (later) — FIX: the floor could START a haul days early, and once it had, the card was a dead button forever (ADR-0074 Amendment 1)
+
+The Woodland floor was blocked on the morning of 2026-08-10. The Santa Rita Jail truck
+was on the dock, its card would not open, and no screen anywhere said why.
+
+**Root cause — two conditions were never checked, and a third surface lied about it.**
+The check-in affordance was offered on ONE test: "a non-cancelled `expected_loads`
+sibling exists." It never asked whether that slot had already been worked, and the
+pinned "Coming up" block (ADR-0074 D3) is deliberately unbounded in time. So on
+2026-08-03 at 17:01 PT — **four minutes after `ipad_hauls` went live** — an operator
+started **H-134743**, whose appointment was **seven days out** (2026-08-10 15:00 PT).
+It was worked as if it were the truck on the dock and `submitted` on 08-05 with
+**159 units**, against the wrong haul number. When the real truck arrived,
+`startInboundLoad`'s idempotency on `expected_load_id` — **correct, and untouched** —
+routed every tap into that five-day-old load. Floor unblocked by an audited manual DB
+detach (`audit_log.actor_label = 'system:santa-rita-detach'`, 15:42 PT), leaving load
+`2b60d7ba` orphaned with its 159 units.
+
+- **Fix 1 — `src/lib/loads/consumed-slot.ts` (new).** The "has this slot been worked?"
+  question, answered once. BOTH check-in surfaces were independently blind to it and
+  the code was not shared, so fixing one would have left the other. A structural test
+  asserts every surface selects the `inbound_load` child and routes through the helper.
+- **Fix 2 — `src/lib/loads/portal-hauls.ts`.** `expectedLoadId` is now a **decision**,
+  not a raw id: non-null only when the sibling is live, **unconsumed**, and due on the
+  **current Pacific day**. New `consumedLoad` carries what was worked. The day bound is
+  the same column, window and helper (`currentPacificDayWindow`) the queue already used
+  — see the ADR for why bounding was chosen and what the alternative was.
+- **Fix 3 — `src/app/operator/[site]/queue/page.tsx`.** Its `where` was
+  `{site_id, cancelled_at: null, expected_arrival_at in today}` and nothing else, so on
+  the day an appointment finally came round it could not tell a waiting slot from a
+  worked one. Now selects the child and renders consumed rows **read-only**. Rows are
+  NOT filtered out — a vanished row tells an operator standing next to a truck nothing,
+  which is the silence ADR-0065 Am.1 and ADR-0082 both exist to end.
+- **Fix 4 — `src/app/operator/[site]/load/[id]/load-workflow.tsx`.** The
+  `submitted`/`rejected` branch rendered `"Load {{status}}. Returning to the name
+picker…"` and returned **nowhere** — no link, no button, no redirect, no timer, in
+  three locales. It was justified as "rare because the submit action redirects"; it is
+  reachable **without submitting anything**, which is how the Santa Rita operator hit it
+  on every tap. Now a real link to the queue. Key `workflow.load_done_returning`
+  **deleted**, not merely unused.
+- **Fix 5 — `src/app/operator/[site]/load/[id]/held-by-panel.tsx`.** `STATUS_KEY` held
+  only the five open dock statuses and fell back to "Counting", so a `submitted` load
+  was shown as being counted **right now** beside a disabled takeover — reading as
+  "a colleague has this and I am locked out" when the load had been finished for five
+  days. All eleven `LoadStatus` values now have distinct labels; the fallback is
+  `queue.open_status_unknown`.
+- **i18n (hard rule #4):** three new `floor.common.*` keys and seven new
+  `queue.open_status_*` labels across en/es/ur; one key removed. Parity test green.
+- **No migration, no schema change.** `expected_loads.inbound_load` is an existing
+  relation on an existing unique key.
+- **Tests:** 28 new, all written failing first. Includes an explicit **control** case —
+  "an UNCONSUMED sibling whose appointment is today still gets the button" — because a
+  fix that removed every button would have replaced one outage with another. Full suite
+  **4,878 passed / 51 skipped across 432 files**; `tsc --noEmit` 0 errors;
+  `next lint --max-warnings 0` clean.
+- **Data deliberately untouched.** The four other early-started loads are not modified
+  in code or data. Two have appointments still ahead (H-136912, H-136583) and are
+  recorded as watch items; the 159-unit reconciliation is an open decision for Bill.
+  See `docs/OPEN-ITEMS.md` §0.AV.
+
 ## 2026-08-10 (late) — FIX: an expired session on the iPad answered 403, and the reject stage said "retry" forever (ADR-0086 Amendment 1)
 
 Woodland's first-ever load rejection failed on the floor. Bill: _"Kept telling us to

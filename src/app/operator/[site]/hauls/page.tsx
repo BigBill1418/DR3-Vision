@@ -58,6 +58,14 @@ function toView(r: PortalHaulRow): HaulRowView {
     nonProgramUnits: r.nonProgramUnits,
     consumerDropoffUnits: r.consumerDropoffUnits,
     expectedLoadId: r.expectedLoadId,
+    consumedLoad: r.consumedLoad
+      ? {
+          status: r.consumedLoad.status,
+          open: r.consumedLoad.open,
+          totalUnits: r.consumedLoad.totalUnits,
+          workedAtISO: r.consumedLoad.workedAt?.toISOString() ?? null,
+        }
+      : null,
   };
 }
 
