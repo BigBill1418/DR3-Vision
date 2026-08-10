@@ -20,6 +20,67 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AV — 2026-08-10 consumed-slot check-in (ADR-0074 Amendment 1) — one reconciliation decision, two watch items, one hardening call
+
+Fix branch: `fix/consumed-expected-load-checkin`. Root cause, timeline, the
+time-bounding decision and the alternative considered: **ADR-0074 Amendment 1**.
+Shipped state: `CHANGELOG.md` 2026-08-10 (later). Every figure below was read from
+`dr3_vision` on CHAD-HQ on 2026-08-10; all times Pacific.
+
+- **D — DECISION FOR BILL: the 159-unit mis-attribution.** Load
+  `2b60d7ba-efb4-46de-ba27-8801bbf0be5a` was started 2026-08-03 17:01 against
+  H-134743's slot (appointment 2026-08-10 15:00, **seven days later**), worked, and
+  `submitted` 2026-08-05 16:48 with **159 units**. It is real physical work — a truck
+  was unloaded and counted — booked against **the wrong haul number**. The
+  2026-08-10 detach set its `expected_load_id` to NULL to free the slot, so it is now
+  an **orphan**: 159 units with no haul attribution at all, carrying
+  `external_mymrc_haul_id = NULL`. Nothing has been reconciled and nothing further has
+  been touched. The open question is **which haul those 159 units belong to** — the
+  operator who started it on 08-03 is the only person who knows which truck was on the
+  dock that afternoon. Options: (a) identify the real haul and re-attribute; (b) leave
+  it orphaned and adjust inventory by hand; (c) void it and re-enter. **All three
+  change billing figures, so none was taken by this fix.**
+- **W — WATCH: two early-started loads whose appointments have not yet arrived.**
+  Both are consumed slots today. **They have NOT been detached — not in code, not in
+  data — and must not be, without a decision.** After this fix their cards render
+  read-only ("already worked — N units, submitted <date>") instead of dead buttons, so
+  neither can block the floor the way H-134743 did; but if the physical truck DOES
+  arrive there is still no way to check it in without a detach.
+  - **H-136912** — appointment **2026-08-11 10:00** (tomorrow). Child load
+    `9e7c1cf4`, started 2026-08-07 13:36, submitted 14:19, **95 units**.
+  - **H-136583** — appointment **2026-08-12 07:00**. Child load `b57eeeb3`, started
+    and submitted 2026-08-06 17:48, **104 units**. **MRC records this haul as
+    delivered EARLY on 8/6**, so its truck may never come and the early start may in
+    fact be the correct one. Do not act on it before that is confirmed.
+- **W — the other two of the four, for completeness.** Same class, appointments
+  already past, no floor block possible:
+  - **H-135311** — appointment 2026-08-05 12:00; child `d792ed15` started
+    **2026-07-28 12:55** and is **still `in_progress` after 13 days**, with no units
+    recorded. This is also an ADR-0082 stranded-load case, reachable from the queue's
+    held-by-others block.
+  - **H-135615** — appointment 2026-08-07 12:00; child `30c98815` started 2026-08-05
+    09:55, submitted **2026-08-10 08:43** (the morning of the incident), 148 units.
+- **D — DECISION FOR BILL: should the day bound also be asserted in the WRITE path?**
+  The check-in bound added by ADR-0074 Am.1 lives in the read/render layer of both
+  surfaces. It was deliberately NOT added to `startLoadAction` / `startInboundLoad`,
+  because that path is shared with the **offline queue** — a check-in captured at
+  23:58 and replayed at 00:02 would be refused by a naive server-side day check,
+  turning a legitimate captured tap into a lost one (ADR-0078 replay semantics would
+  need settling first). The residual, stated plainly: an authenticated operator issuing
+  a crafted server-action invocation for their own site could still start a
+  future-dated load. No surface offers it and no ordinary path reaches it, but
+  ADR-0065 Am.1's "defense in depth, not a replacement" principle argues the write
+  should assert it too. Not shipped unilaterally — it is a behaviour change, not a
+  hardening.
+- **R — ACCEPTED RESIDUAL: a genuinely early truck cannot be checked in from the
+  iPad.** By design, and it restores the behaviour the queue always had. The fix is
+  upstream — correct the appointment in MyMRC and let the ADR-0059 bridge re-sync. If
+  the floor hits this in practice, the answer is a **manager-scoped override**, not
+  re-widening the floor surface. Reasoning: ADR-0074 Amendment 1, "The alternative, and
+  why it was rejected".
+
+---
+
 ## 0.AU — 2026-08-10 iPad reject-evidence 403 (ADR-0086 Amendment 1) — one re-capture + one decision for Bill
 
 Fix branch: `fix/ipad-rejection-evidence-mint-403`. Root cause and reasoning:

@@ -24,13 +24,45 @@ import { takeOverLoadAction } from '../../actions';
 // would like. Two taps, in-component, per CLAUDE.md hard rule #10 (onClick, never
 // a `<form>`).
 
-const STATUS_KEY: Record<string, string> = {
+// ADR-0074 Amendment 1 — EVERY `LoadStatus`, not just the open five.
+//
+// This map carried the five OPEN dock statuses and nothing else, and the lookup
+// below fell back to `queue.open_status_in_progress` — the label "Counting". So
+// a `submitted`, `verified`, `rejected`, `submitted_to_mymrc`, `processed` or
+// `expected` load was described to the operator as being counted right now.
+//
+// That is not a cosmetic slip, because `takeable` is computed from
+// `TAKEOVER_STATUSES`, which correctly EXCLUDES all of them. The panel therefore
+// showed, together: a holder's name, the word "Counting", and a disabled
+// takeover. The only available reading was "a colleague is working this and I am
+// locked out". On 2026-08-10 the truth was "this was finished five days ago",
+// and the Santa Rita operator waited on someone who was not working.
+//
+// Exported for the test that walks the enum: a status added to the schema
+// without a label here is how this got in, so the guard is over the whole set
+// rather than over the cases someone remembered.
+export const STATUS_KEY: Record<string, string> = {
+  expected: 'queue.open_status_expected',
   arrived: 'queue.open_status_arrived',
   weight_captured: 'queue.open_status_weight_captured',
   unload_started: 'queue.open_status_unload_started',
   in_progress: 'queue.open_status_in_progress',
   finished: 'queue.open_status_finished',
+  submitted: 'queue.open_status_submitted',
+  verified: 'queue.open_status_verified',
+  rejected: 'queue.open_status_rejected',
+  submitted_to_mymrc: 'queue.open_status_submitted_to_mymrc',
+  processed: 'queue.open_status_processed',
 };
+
+/**
+ * The label for a status this build has never heard of.
+ *
+ * "Status unknown" rather than any real stage: the failure mode being closed
+ * here is a CONFIDENT WRONG ANSWER, and a fallback that names a specific live
+ * activity is exactly that. Admitting ignorance is the honest floor.
+ */
+export const STATUS_FALLBACK_KEY = 'queue.open_status_unknown';
 
 type Props = {
   siteCode: string;
@@ -128,7 +160,7 @@ export function HeldByPanel({
         {/* The name is the headline. Everything else on this panel is detail. */}
         <p className="text-lg font-bold">{t('takeover.held_by', { name: holder })}</p>
         <p className="mt-1 text-sm text-dr3-cream/70">
-          {t(STATUS_KEY[status] ?? 'queue.open_status_in_progress')}
+          {t(STATUS_KEY[status] ?? STATUS_FALLBACK_KEY)}
           {heldSinceAt && (
             <>
               {' · '}

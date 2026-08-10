@@ -1,7 +1,7 @@
 import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
-import { formatTime, formatRelative } from '@/lib/format';
+import { formatDate, formatTime, formatRelative } from '@/lib/format';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
 import { QueueClient } from './queue-client';
@@ -11,6 +11,7 @@ import { HOME_ROUTE } from '@/lib/routes';
 import { currentPacificDayWindow } from '@/lib/time';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { listSiteOpenLoads } from '@/lib/loads/open-loads';
+import { CONSUMED_SLOT_SELECT, toConsumedLoad } from '@/lib/loads/consumed-slot';
 import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -136,6 +137,21 @@ export default async function OperatorQueuePage({ params }: Props) {
       bol_number: true,
       expected_unit_count: true,
       last_synced_at: true,
+      // ADR-0074 Amendment 1 — THE FIELD WHOSE ABSENCE BLOCKED THE FLOOR.
+      //
+      // This query had `{site_id, cancelled_at: null, expected_arrival_at in
+      // today}` and nothing else, so on the day an appointment finally came
+      // round it could not tell a slot waiting for a truck from one that had
+      // been worked days earlier. H-134743's appointment was 2026-08-10 15:00 PT
+      // and its slot had been consumed on 2026-08-03; the queue rendered a
+      // check-in row anyway, and every tap on it routed into the submitted load.
+      //
+      // The row is deliberately still SELECTED rather than filtered out with an
+      // `inbound_load: null` predicate. A vanished row tells the operator
+      // standing next to the truck nothing at all — the identical silence that
+      // ADR-0065 Am.1 and ADR-0082 were both written to end. It renders
+      // read-only, saying what happened.
+      inbound_load: { select: CONSUMED_SLOT_SELECT },
     },
     orderBy: { expected_arrival_at: 'asc' },
   });
@@ -181,32 +197,57 @@ export default async function OperatorQueuePage({ params }: Props) {
                   const transporterName =
                     l.transporter?.name ?? l.transporter_name_at_sync ?? t('queue.unknown_carrier');
                   const arrival = l.expected_arrival_at;
+                  const consumed = toConsumedLoad(l.inbound_load);
+                  const body = (
+                    <>
+                      {/* No date shown: the queue is current-Pacific-day only
+                          (ADR-0065), so every row is today by construction.
+                          The TIME is Pacific-pinned as of Amendment 1 — it was
+                          rendering in the container's UTC zone, 7 hours ahead. */}
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-xl font-semibold tabular-nums">
+                          {formatTime(arrival, locale)}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-base font-medium">{sourceName}</p>
+                      <p className="text-sm text-dr3-cream/70">{transporterName}</p>
+                      <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
+                        {t('queue.bol_label')}{' '}
+                        <span className="font-mono normal-case text-dr3-cream">
+                          {l.bol_number ?? t('queue.bol_dash')}
+                        </span>
+                        {l.expected_unit_count != null && (
+                          <span className="ms-3">
+                            {t('queue.approx_units', { count: l.expected_unit_count })}
+                          </span>
+                        )}
+                      </p>
+                    </>
+                  );
                   return (
                     <li key={l.id}>
-                      <QueueRow siteCode={site.code} expectedLoadId={l.id}>
-                        {/* No date shown: the queue is current-Pacific-day only
-                            (ADR-0065), so every row is today by construction.
-                            The TIME is Pacific-pinned as of Amendment 1 — it was
-                            rendering in the container's UTC zone, 7 hours ahead. */}
-                        <div className="flex items-baseline justify-between gap-3">
-                          <span className="text-xl font-semibold tabular-nums">
-                            {formatTime(arrival, locale)}
-                          </span>
+                      {consumed ? (
+                        // ADR-0074 Am.1 — the slot is spent. No control, and a
+                        // line that answers "where did my truck go" rather than
+                        // leaving the operator to ask the room.
+                        <div className="rounded-lg bg-dr3-green-dark/40 p-4">
+                          {body}
+                          <p className="mt-2 text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
+                            {consumed.open
+                              ? t('floor.common.already_started')
+                              : consumed.totalUnits != null && consumed.workedAt
+                                ? t('floor.common.already_worked_detail', {
+                                    units: consumed.totalUnits,
+                                    date: formatDate(consumed.workedAt, locale),
+                                  })
+                                : t('floor.common.already_worked')}
+                          </p>
                         </div>
-                        <p className="mt-2 text-base font-medium">{sourceName}</p>
-                        <p className="text-sm text-dr3-cream/70">{transporterName}</p>
-                        <p className="mt-2 text-xs uppercase tracking-wide text-dr3-cream/60">
-                          {t('queue.bol_label')}{' '}
-                          <span className="font-mono normal-case text-dr3-cream">
-                            {l.bol_number ?? t('queue.bol_dash')}
-                          </span>
-                          {l.expected_unit_count != null && (
-                            <span className="ms-3">
-                              {t('queue.approx_units', { count: l.expected_unit_count })}
-                            </span>
-                          )}
-                        </p>
-                      </QueueRow>
+                      ) : (
+                        <QueueRow siteCode={site.code} expectedLoadId={l.id}>
+                          {body}
+                        </QueueRow>
+                      )}
                     </li>
                   );
                 })}

@@ -41,7 +41,14 @@
     "open_status_finished": "Counted — not submitted",
     "held_heading": "Held by someone else",
     "held_intro": "Open loads another operator started. Tap one to see it, and take it over if they've stepped away.",
-    "held_by": "Held by {{name}}"
+    "held_by": "Held by {{name}}",
+    "open_status_expected": "Not started",
+    "open_status_submitted": "Submitted",
+    "open_status_verified": "Verified by a manager",
+    "open_status_rejected": "Rejected at the dock",
+    "open_status_submitted_to_mymrc": "Sent to MyMRC",
+    "open_status_processed": "Processed",
+    "open_status_unknown": "Status unknown"
   },
   "load_header": {
     "unknown_source": "Unknown source",
@@ -67,10 +74,11 @@
     "unknown_holder": "another operator"
   },
   "workflow": {
-    "load_done_returning": "Load {{status}}. Returning to the name picker…",
     "unhandled_status": "Unhandled status: {{status}}",
     "status_submitted": "submitted",
-    "status_rejected": "rejected"
+    "status_rejected": "rejected",
+    "load_done": "Load {{status}}.",
+    "back_to_queue": "Back to the queue"
   },
   "stage_bol": {
     "heading": "1. Bill of Lading",
@@ -227,7 +235,10 @@
       "not_activated_heading": "Not turned on yet",
       "not_activated_body": "The inventory tools for {{site}} aren't switched on yet. Ask a manager.",
       "today": "Today",
-      "queued": "Saved on this iPad — will send when you reconnect"
+      "queued": "Saved on this iPad — will send when you reconnect",
+      "already_worked": "Already worked",
+      "already_worked_detail": "Already worked — {{units}} units, submitted {{date}}",
+      "already_started": "Already started by another operator"
     },
     "hub": {
       "heading": "Daily check",

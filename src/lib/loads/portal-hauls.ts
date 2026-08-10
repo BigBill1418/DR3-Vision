@@ -33,8 +33,44 @@
 // tolerance is for the ingestion window, where a list-pass row exists before its
 // detail pass lands.)
 
+// ── ADR-0074 Amendment 1 (2026-08-10) — THE CONSUMED-SLOT DEFECT ────────────
+// The check-in affordance below used to be offered on ONE test: "a non-cancelled
+// `expected_loads` sibling exists". That is not the same question as "is there
+// work here to start", and the gap cost the floor a morning.
+//
+// H-134743 (Santa Rita Jail, appointment 2026-08-10 15:00 PT) was STARTED on
+// 2026-08-03 17:01 PT — four minutes after `ipad_hauls` went live, and seven days
+// early — from the pinned "Coming up" block, which is deliberately unbounded in
+// time (D3). It was then worked as if it were the truck on the dock and
+// `submitted` on 2026-08-05 with 159 units, against the wrong haul number. When
+// the REAL truck arrived on 2026-08-10, `startInboundLoad`'s idempotency on
+// `expected_load_id` — correct, and untouched — routed every tap into that
+// five-day-old corpse. The floor was unblocked only by an audited manual DB
+// detach (`audit_log.actor_label = 'system:santa-rita-detach'`, 15:42 PT).
+//
+// The affordance now requires THREE conditions, not one: a live sibling, NO
+// `inbound_loads` child, and an appointment on the current Pacific day. The
+// second closes the dead button; the THIRD closes the mechanism that created the
+// mis-attribution in the first place — a consumed-check alone would have left the
+// 2026-08-03 tap just as acceptable as it was on the day.
+//
+// A row that fails any of the three is still LISTED, carrying the reason. The
+// alternative — dropping it — reproduces the silence this repo keeps paying for:
+// an operator whose truck is on the dock would see an empty screen.
+
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
+import { currentPacificDayWindow } from '@/lib/time';
+import {
+  CONSUMED_SLOT_SELECT,
+  toConsumedLoad,
+  type ConsumedLoadRef,
+} from '@/lib/loads/consumed-slot';
+
+// Re-exported so callers of this surface keep one import. The TYPE is shared
+// with the queue on purpose — both surfaces answer the same question and must
+// not drift into two shapes of "already worked".
+export type { ConsumedLoadRef };
 
 /**
  * Statuses the portal itself has retired. Everything else — including the
@@ -73,11 +109,25 @@ export interface PortalHaulRow {
   nonProgramUnits: number | null;
   consumerDropoffUnits: number | null;
   /**
-   * The `expected_loads` sibling this haul was bridged into, when one exists and
-   * is not cancelled. NULL means read-only: there is nothing to check in against,
-   * and the UI MUST NOT offer a check-in affordance for such a row (D5).
+   * The `expected_loads` sibling this haul can be CHECKED IN against — non-null
+   * only when the sibling is live, UNCONSUMED, and due on the current Pacific
+   * day (D5 + Amendment 1). NULL means read-only: the UI MUST NOT offer a
+   * check-in affordance for such a row.
+   *
+   * This field is the single decision, not a raw id. A caller that wants "does a
+   * sibling exist" must not read it — that conflation is the defect Amendment 1
+   * closes.
    */
   expectedLoadId: string | null;
+  /**
+   * Set when the sibling's slot has ALREADY BEEN WORKED. Non-null and
+   * `expectedLoadId` non-null are mutually exclusive by construction.
+   *
+   * Its whole purpose is to let the row say what happened instead of merely
+   * going quiet: "already worked — 159 units, submitted 5 Aug" is the answer the
+   * dock needed on 2026-08-10 and could not get from any screen.
+   */
+  consumedLoad: ConsumedLoadRef | null;
 }
 
 export interface PortalHaulsPage {
@@ -111,6 +161,12 @@ export interface ListPortalHaulsArgs {
   page?: number | undefined;
   perPage?: number | undefined;
   undatedOnly?: boolean | undefined;
+  /**
+   * The instant "today" is computed from. Injected so the Pacific-day boundary
+   * is testable at 6 PM PT — the hour the equivalent bound broke on the queue
+   * (ADR-0065 Amendment 1). Production never passes it.
+   */
+  now?: Date | undefined;
 }
 
 /**
@@ -202,7 +258,19 @@ const ORDER_BY: Prisma.MymrcHaulsMirrorOrderByWithRelationInput[] = [
   { external_haul_id: 'desc' },
 ];
 
-function toRow(r: MirrorSelection, expectedByHaulId: Map<string, string>): PortalHaulRow {
+/**
+ * What the sibling lookup resolves to for one haul number. Deliberately NOT an
+ * id: the caller needs the whole decision, and handing back a bare id is what
+ * let the UI ask the wrong question for a week.
+ */
+interface SiblingVerdict {
+  /** Non-null only when the row is genuinely startable right now. */
+  startableExpectedLoadId: string | null;
+  consumedLoad: ConsumedLoadRef | null;
+}
+
+function toRow(r: MirrorSelection, expectedByHaulId: Map<string, SiblingVerdict>): PortalHaulRow {
+  const verdict = r.external_haul_id ? expectedByHaulId.get(r.external_haul_id) : undefined;
   return {
     id: r.id,
     externalHaulId: r.external_haul_id,
@@ -216,7 +284,8 @@ function toRow(r: MirrorSelection, expectedByHaulId: Map<string, string>): Porta
     programUnits: r.program_unit_count,
     nonProgramUnits: r.non_program_unit_count,
     consumerDropoffUnits: r.unpaid_consumer_dropoff_units,
-    expectedLoadId: r.external_haul_id ? (expectedByHaulId.get(r.external_haul_id) ?? null) : null,
+    expectedLoadId: verdict?.startableExpectedLoadId ?? null,
+    consumedLoad: verdict?.consumedLoad ?? null,
   };
 }
 
@@ -269,16 +338,52 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
     .map((r) => r.external_haul_id)
     .filter((v): v is string => v !== null);
 
-  const expectedByHaulId = new Map<string, string>();
+  // The check-in window: the CURRENT PACIFIC DAY, from the same helper and on the
+  // same column the queue page bounds on. Computed once per call so every row on
+  // a page is judged against one instant.
+  const today = currentPacificDayWindow(args.now ?? new Date());
+
+  const expectedByHaulId = new Map<string, SiblingVerdict>();
   if (haulIds.length > 0) {
     const siblings = await prisma.expectedLoad.findMany({
       where: { site_id: args.siteId, external_mymrc_haul_id: { in: haulIds } },
-      select: { id: true, external_mymrc_haul_id: true, cancelled_at: true },
+      select: {
+        id: true,
+        external_mymrc_haul_id: true,
+        cancelled_at: true,
+        expected_arrival_at: true,
+        // THE FIELD WHOSE ABSENCE WAS THE BUG. Without it this join could not
+        // tell a slot waiting for a truck from one worked five days ago.
+        inbound_load: { select: CONSUMED_SLOT_SELECT },
+      },
     });
     for (const s of siblings) {
       // A CANCELLED expected load is not check-in-able. Mapping it would render a
       // button whose server action refuses — worse than no button at all.
-      if (s.cancelled_at === null) expectedByHaulId.set(s.external_mymrc_haul_id, s.id);
+      if (s.cancelled_at !== null) continue;
+
+      if (s.inbound_load) {
+        // CONSUMED. `startInboundLoad` would hand back this existing child, so a
+        // button here can only ever land the operator on somebody's finished
+        // work. Report it instead.
+        expectedByHaulId.set(s.external_mymrc_haul_id, {
+          startableExpectedLoadId: null,
+          consumedLoad: toConsumedLoad(s.inbound_load),
+        });
+        continue;
+      }
+
+      // NOT TODAY (or undated). A NULL appointment cannot be PROVEN to be today,
+      // and 3,316 mirror rows carry no date at all (D3) — so the null must fall
+      // on the refusing side. This is the condition that would have stopped the
+      // 2026-08-03 tap; the consumed-check above would not have.
+      const at = s.expected_arrival_at;
+      const startableToday = at !== null && at >= today.start && at < today.endExclusive;
+
+      expectedByHaulId.set(s.external_mymrc_haul_id, {
+        startableExpectedLoadId: startableToday ? s.id : null,
+        consumedLoad: null,
+      });
     }
   }
 

@@ -55,7 +55,14 @@
     "open_status_finished": "Contada — sin enviar",
     "held_heading": "En manos de otra persona",
     "held_intro": "Cargas abiertas que empezó otro operador. Toca una para verla y tómala si esa persona no está.",
-    "held_by": "A cargo de {{name}}"
+    "held_by": "A cargo de {{name}}",
+    "open_status_expected": "Sin empezar",
+    "open_status_submitted": "Enviada",
+    "open_status_verified": "Verificada por un gerente",
+    "open_status_rejected": "Rechazada en el muelle",
+    "open_status_submitted_to_mymrc": "Enviada a MyMRC",
+    "open_status_processed": "Procesada",
+    "open_status_unknown": "Estado desconocido"
   },
   "load_header": {
     "unknown_source": "Origen desconocido",
@@ -81,10 +88,11 @@
     "unknown_holder": "otro operador"
   },
   "workflow": {
-    "load_done_returning": "Carga {{status}}. Volviendo al selector de nombre…",
     "unhandled_status": "Estado no manejado: {{status}}",
     "status_submitted": "enviada",
-    "status_rejected": "rechazada"
+    "status_rejected": "rechazada",
+    "load_done": "Carga {{status}}.",
+    "back_to_queue": "Volver a la cola"
   },
   "stage_bol": {
     "heading": "1. Bill of Lading (BOL)",
@@ -241,7 +249,10 @@
       "not_activated_heading": "Aún no activado",
       "not_activated_body": "Las herramientas de inventario de {{site}} aún no están activadas. Pídeselo a un gerente.",
       "today": "Hoy",
-      "queued": "Guardado en este iPad — se enviará al reconectar"
+      "queued": "Guardado en este iPad — se enviará al reconectar",
+      "already_worked": "Ya trabajada",
+      "already_worked_detail": "Ya trabajada — {{units}} unidades, enviada el {{date}}",
+      "already_started": "Ya iniciada por otro operador"
     },
     "hub": {
       "heading": "Revisión diaria",

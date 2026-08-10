@@ -45,7 +45,15 @@ export interface HaulRowView {
   programUnits: number | null;
   nonProgramUnits: number | null;
   consumerDropoffUnits: number | null;
+  /** Non-null ⇒ startable RIGHT NOW (live, unconsumed, due today). */
   expectedLoadId: string | null;
+  /** Non-null ⇒ the slot has already been worked. See `portal-hauls.ts`. */
+  consumedLoad: {
+    status: string;
+    open: boolean;
+    totalUnits: number | null;
+    workedAtISO: string | null;
+  } | null;
 }
 
 type Props = {
@@ -115,12 +123,46 @@ export function HaulsClient({ siteCode, view, rows, pending, undatedCount, hasAn
     );
   };
 
+  /**
+   * ADR-0074 Amendment 1 — what a CONSUMED slot says instead of nothing.
+   *
+   * The read layer already refuses to hand back a check-in target for a worked
+   * slot, so this text is the whole remaining job: telling the operator where
+   * their truck went. On 2026-08-10 no screen anywhere could answer that, which
+   * is why the floor stopped rather than adapted.
+   */
+  const consumedNote = (c: NonNullable<HaulRowView['consumedLoad']>) => {
+    if (c.open) return t('floor.common.already_started');
+    const workedAt = c.workedAtISO ? new Date(c.workedAtISO) : null;
+    // Units AND a date, or neither — an "already worked — null units" line reads
+    // as a bug and invites the operator to distrust the rest of the screen.
+    if (c.totalUnits != null && workedAt) {
+      return t('floor.common.already_worked_detail', {
+        units: c.totalUnits,
+        date: formatDate(workedAt, locale),
+      });
+    }
+    return t('floor.common.already_worked');
+  };
+
   const renderRow = (r: HaulRowView) => (
     <li key={r.id}>
-      {r.expectedLoadId ? (
-        // A LIVE `expected_loads` sibling exists — this haul is real dock work, so
-        // it gets the same tap-to-start affordance the queue uses. Nothing new is
-        // written here; `startLoadAction` is the existing, gated path.
+      {/* THREE states, and the order of these branches is the safety property:
+          `consumedLoad` is tested FIRST, so even if a future read-layer change
+          hands back both fields — the exact prod state on 2026-08-10 — this
+          component still refuses to render a button onto a worked slot. Two
+          independent reasons the dead card cannot come back. */}
+      {r.consumedLoad ? (
+        <div className="rounded-lg bg-dr3-green-dark/40 p-4">
+          {renderBody(r)}
+          <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
+            {consumedNote(r.consumedLoad)}
+          </p>
+        </div>
+      ) : r.expectedLoadId ? (
+        // Live sibling, unconsumed, and due TODAY — this haul is real dock work,
+        // so it gets the same tap-to-start affordance the queue uses. Nothing new
+        // is written here; `startLoadAction` is the existing, gated path.
         <QueueRow siteCode={siteCode} expectedLoadId={r.expectedLoadId}>
           {renderBody(r)}
           <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-chartreuse">
@@ -128,8 +170,10 @@ export function HaulsClient({ siteCode, view, rows, pending, undatedCount, hasAn
           </p>
         </QueueRow>
       ) : (
-        // No sibling: information, not work. ADR-0074 D5 forbids synthesizing one
-        // to make a button possible, so the row renders read-only with NO control.
+        // No sibling, or one that is not due today: information, not work.
+        // ADR-0074 D5 forbids synthesizing one to make a button possible, so the
+        // row renders read-only with NO control. The appointment date is already
+        // on the body, which is what "not yet" looks like to an operator.
         <div className="rounded-lg bg-dr3-green-dark/40 p-4">
           {renderBody(r)}
           <p className="mt-2 text-start text-xs uppercase tracking-wide text-dr3-cream/50">

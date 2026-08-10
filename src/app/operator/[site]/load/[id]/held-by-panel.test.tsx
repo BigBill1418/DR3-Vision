@@ -52,7 +52,7 @@ vi.mock('@/i18n/provider', async () => {
   };
 });
 
-import { HeldByPanel } from './held-by-panel';
+import { HeldByPanel, STATUS_KEY, STATUS_FALLBACK_KEY } from './held-by-panel';
 
 afterEach(() => {
   cleanup();
@@ -170,5 +170,108 @@ describe('ADR-0082 Am.1 — the other outcomes each say something specific', () 
       expect(screen.getByRole('button', { name: en.takeover.take_over })).toBeTruthy(),
     );
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-0074 Amendment 1 — the panel must not LABEL a closed load as open.
+//
+// `STATUS_KEY` carried entries for the five OPEN dock statuses only, and every
+// other `LoadStatus` — `submitted`, `verified`, `rejected`, `submitted_to_mymrc`,
+// `processed`, `expected` — fell through `?? 'queue.open_status_in_progress'` to
+// the label **"Counting"**.
+//
+// That fallback is not a cosmetic slip; it is the panel actively contradicting
+// itself. On 2026-08-10 the Santa Rita operator was shown, on one screen: a load
+// held by a colleague, the word "Counting", and a takeover control that was
+// disabled — because `takeable` reads `TAKEOVER_STATUSES`, which correctly
+// excludes `submitted`. The only reading available to the person on the dock was
+// "someone is counting this right now and I am locked out", when the truth was
+// "this was finished five days ago". They waited on a colleague who was not
+// working.
+//
+// The panel already refuses to be silent (ADR-0082). This closes the other half:
+// it must also refuse to be WRONG. Two changes, both asserted below — every
+// status gets its own key, and the fallback stops naming a specific live
+// activity.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The panel as it stood on 2026-08-10: terminal load, held by someone else. */
+function terminalPanel(status: 'submitted' | 'rejected' | 'verified') {
+  return render(
+    <HeldByPanel
+      siteCode="woodland"
+      loadId="load-1"
+      holderName="Alma Ruiz"
+      heldSince="2026-08-03T00:01:00.000Z"
+      sourceName="Santa Rita Jail"
+      transporterName="Ron Lawrence & Son"
+      bolNumber="B-1"
+      status={status}
+      totalUnits={159}
+      takeable={false}
+      locale="en"
+    />,
+  );
+}
+
+describe('ADR-0074 Am.1 — terminal statuses are labelled honestly, never "Counting"', () => {
+  it('THE MISLABEL: a `submitted` load is not described as being counted', () => {
+    terminalPanel('submitted');
+
+    // "Counting" alongside a disabled takeover is the reading that stalled the
+    // floor. It must not appear for a load that is finished.
+    expect(screen.queryByText(new RegExp(en.queue.open_status_in_progress, 'i'))).toBeNull();
+    expect(screen.getByText(new RegExp(en.queue.open_status_submitted, 'i'))).toBeTruthy();
+  });
+
+  it('`rejected` and `verified` each say what they are', () => {
+    // Asserted BEFORE the regex is built: `new RegExp(undefined)` is `/(?:)/`,
+    // which matches every node on the page, so a missing key would otherwise
+    // fail with "found multiple elements" — a message that hides the real cause.
+    expect(en.queue.open_status_rejected).toBeTruthy();
+    expect(en.queue.open_status_verified).toBeTruthy();
+
+    terminalPanel('rejected');
+    expect(screen.getByText(new RegExp(en.queue.open_status_rejected, 'i'))).toBeTruthy();
+
+    cleanup();
+    terminalPanel('verified');
+    expect(screen.getByText(new RegExp(en.queue.open_status_verified, 'i'))).toBeTruthy();
+  });
+
+  it('every LoadStatus has its own label — no status falls back to another one', () => {
+    // The structural half. Adding a status to the schema without a label here is
+    // how the defect got in, so the guard is over the enum, not over a list a
+    // future edit would forget to extend.
+    const statuses = [
+      'expected',
+      'arrived',
+      'weight_captured',
+      'unload_started',
+      'in_progress',
+      'finished',
+      'submitted',
+      'verified',
+      'rejected',
+      'submitted_to_mymrc',
+      'processed',
+    ] as const;
+
+    const labels = statuses.map((s) => {
+      const key = STATUS_KEY[s];
+      expect(key, `LoadStatus "${s}" has no STATUS_KEY entry`).toBeTruthy();
+      return key;
+    });
+    // Distinct keys: two statuses sharing one is the mislabel by another route.
+    expect(new Set(labels).size).toBe(statuses.length);
+  });
+
+  it('the fallback for an unknown status names no specific activity', () => {
+    // A status this build has never heard of must read as "unknown", not as
+    // "Counting" — the whole failure mode was a confident wrong answer.
+    const key = STATUS_KEY['some_future_status' as keyof typeof STATUS_KEY] ?? STATUS_FALLBACK_KEY;
+    expect(key).not.toBe('queue.open_status_in_progress');
+    expect(key).toBe(STATUS_FALLBACK_KEY);
   });
 });

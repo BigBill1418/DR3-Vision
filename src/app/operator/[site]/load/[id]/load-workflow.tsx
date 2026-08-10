@@ -1,6 +1,7 @@
 'use client';
 
 import type { CountMode, LoadStatus } from '@prisma/client';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useI18n } from '@/i18n/provider';
 import { StageBol } from './stage-bol';
@@ -47,17 +48,39 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   // for. One loop, in the chrome, on all nine screens.
 
   if (load.status === 'submitted' || load.status === 'rejected') {
-    // Defensive — submit/reject server actions sign the operator
-    // out and redirect, so reaching here is rare. Render a soft
-    // message rather than nothing.
+    // ADR-0074 Amendment 1 — this branch used to render ONE paragraph:
+    // "Load {{status}}. Returning to the name picker…" — and then return
+    // nowhere. No link, no button, no redirect, no timer. The copy promised a
+    // navigation the component never performed, in three locales.
+    //
+    // It was justified as "defensive — the submit/reject actions sign the
+    // operator out and redirect, so reaching here is rare". The premise was
+    // false in the way that mattered: this screen is reachable WITHOUT
+    // submitting anything. Tapping a check-in card whose `expected_loads` slot
+    // was already consumed routes — correctly, through the idempotent
+    // `startInboundLoad` — to the existing child load, and a terminal child
+    // lands you exactly here. On 2026-08-10 the Santa Rita operator hit this on
+    // every tap, and the screen's only offer was a sentence claiming it was
+    // taking them somewhere.
+    //
+    // A dead end with reassuring copy is worse than a bare dead end: it tells
+    // the operator to WAIT rather than to act. Same class as the ADR-0065 Am.1
+    // "Something went wrong" page and the ADR-0082 silent redirect loop, and the
+    // fix is the same one — a named destination the thumb can reach.
     const statusLabel =
       load.status === 'submitted' ? t('workflow.status_submitted') : t('workflow.status_rejected');
     return (
-      <>
+      <div className="flex flex-col gap-4">
         <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
-          {t('workflow.load_done_returning', { status: statusLabel })}
+          {t('workflow.load_done', { status: statusLabel })}
         </p>
-      </>
+        <Link
+          href={`/operator/${siteCode}/queue`}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-4 py-3 text-center text-base font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream"
+        >
+          {t('workflow.back_to_queue')}
+        </Link>
+      </div>
     );
   }
 
