@@ -43,9 +43,9 @@ re-dated on the assumption of an extension.
     WRONG channel, corrected; the barnardhq identity must never touch @svdp.us
     recipients). 9 loads / 4 holders; the `finished` 148-unit load flagged first.
     Floor action; re-run `docs/queries/2026-08-08-open-dock-loads.sql` to track.
-- **`equipment_throughput_gap` surface (ADR-0088) ships PILOT** — Bill ramps at
-  `/admin/rollout` when he wants the morning nudge going to managers; until then
-  admins-only would-have-sent.
+- ~~`equipment_throughput_gap` surface (ADR-0088) ships PILOT~~ **RAMPED LIVE at
+  Woodland 2026-08-10** (audited one-off at Bill's written instruction; Eugene
+  stays pilot — no machine). See 0.AQ.
 - **Fleet finding — `[skip-deploy]` is DECORATIVE on this repo's deployer:** the
   2026-08-08 docs-only merges each triggered a full ~20-min rebuild. Harmless
   but wasteful; fix belongs in the deployer repo (honor a commit-message tag or
@@ -79,8 +79,19 @@ re-dated on the assumption of an extension.
 
 ## 0.AQ — 2026-08-08 ADR-0088 throughput-gap watchdog (ships DARK, born pilot)
 
-- **OPERATOR ACTION (Bill) — ramp `equipment_throughput_gap` to `live` at Woodland
-  once you have read a few.** Until you flip it at `/admin/rollout`, the morning
+- ~~OPERATOR ACTION (Bill) — ramp `equipment_throughput_gap` to `live` at Woodland~~
+  **DONE 2026-08-10 17:04 UTC** — flipped `pilot → live` at Woodland through the
+  audited `flipRolloutSurface` path (one-off
+  `scripts/one-off/2026-08-10-throughput-gap-flip-live.ts`, actor
+  `system:throughput-gap-flip`, criteria note carries the pilot evidence), at
+  Bill's written instruction ("flip live the no terex numbers alert - that
+  should be good to go"). Verified live post-flip: `rollout_surfaces` row
+  `live`/attributed/stamped + matching `audit_log` row. Eugene left `pilot` as a
+  recorded "no". From the next fire (a working morning that finds a gap), the
+  nudge goes to the Woodland `alert_recipients` roster (Morena + Janette), not
+  admins. Original text kept below.
+
+  Until you flip it at `/admin/rollout`, the morning
   nudge goes to ADMINS ONLY, with the `[PILOT — would have sent to: …]` header
   naming the real audience (the `alert_recipients` roster: Morena + Janette at
   Woodland). That is the ADR-0047 default and it is deliberate — it lets you read a
@@ -119,7 +130,17 @@ re-dated on the assumption of an extension.
   (blocked on Kelsey) and ADR-0088 does not touch it. Do not read a quiet watchdog as
   evidence the numbers are right — only as evidence they exist.
 
-- **VERIFY AFTER THE FIRST WORKING MORNING (2026-08-10, Monday).** Monday's scan asks
+- ~~VERIFY AFTER THE FIRST WORKING MORNING (2026-08-10, Monday)~~ **DONE
+  2026-08-10** — the scan ran on schedule (ledger `created_at` 15:30:01 UTC =
+  08:30 PT) and found **Friday 2026-08-07 unrecorded**: one ledger row
+  (woodland, gap_date 2026-08-07, `notify_mode = pilot`, delivered 1/1). So the
+  watchdog's very first pass caught a real gap — the cutover day itself has no
+  live throughput row. That day is prior-day-refused on the entry form (ADR-0079
+  D4), so if Woodland's 8/7 number is wanted it goes through the office
+  amendment path; the ledger row means it will never be re-nudged either way.
+  Original verify text kept below.
+
+  Monday's scan asks
   about **Friday 2026-08-07** — the cutover day itself, and the first day a gap is a
   gap. Confirm it did the right thing:
 

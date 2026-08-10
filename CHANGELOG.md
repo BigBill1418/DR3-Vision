@@ -3,6 +3,31 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 — ADR-0088 throughput-gap nudge ramped LIVE at Woodland
+
+Operational flip + docs; no code deployed.
+
+- **`equipment_throughput_gap` flipped `pilot → live` at Woodland** at Bill's
+  written instruction ("flip live the no terex numbers alert - that should be
+  good to go"), through the audited `flipRolloutSurface` path — one-off
+  `scripts/one-off/2026-08-10-throughput-gap-flip-live.ts` (dry-run-first,
+  `--apply`), actor label `system:throughput-gap-flip`, criteria note carrying
+  the pilot evidence. Verified live post-flip: `rollout_surfaces` row
+  `live`/attributed/stamped, matching `audit_log` row. **Eugene stays `pilot`**
+  as a recorded "no" (no machine; ADR-0088 D3 row 4), per the terex-ledger
+  precedent.
+- **The ramp decision had real evidence behind it**: the watchdog's first
+  scheduled pass (2026-08-10 08:30 PT — the first working morning after the
+  #222 deploy) found **Friday 2026-08-07 unrecorded** and delivered the
+  pilot-mode nudge 1/1 to admins. Instrument proven end to end: cron fired on
+  time, D2 walked Monday back to Friday, the ledger row landed
+  (woodland, 2026-08-07, `notify_mode = pilot`), mail delivered. The 0.AQ
+  first-morning verify is closed by the same query.
+- **Effect from the next gap found**: the morning nudge goes to Woodland's
+  `alert_recipients` roster (Morena + Janette) instead of admins. No
+  back-alerting; days already nudged in pilot are ledger-blocked from re-send.
+- Docs: ADR-0088 status updated; OPEN-ITEMS 0.AQ ramp + verify items closed.
+
 ## 2026-08-08 — evening close-out: registers reconciled, Terex gap diagnosed, all six campaign PRs merged
 
 Docs only. The day's operational record, landed after the final merge so no

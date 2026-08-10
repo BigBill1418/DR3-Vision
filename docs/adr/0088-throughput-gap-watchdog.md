@@ -1,7 +1,11 @@
 # ADR-0088 — Nine days of silence: an instrument that reads the gap
 
-**Status:** Accepted, implemented, born PILOT (2026-08-08). `equipment_throughput_gap`
-dark until Bill flips it at `/admin/rollout`.
+**Status:** Accepted, implemented, born PILOT (2026-08-08). **Ramped LIVE at
+Woodland 2026-08-10** (audited flip via `flipRolloutSurface`, actor
+`system:throughput-gap-flip`, at Bill's written instruction) after the first
+scheduled pass — 2026-08-10 08:30 PT, which found Friday 2026-08-07 unrecorded
+and delivered the pilot nudge 1/1 to admins — proved the instrument end to end.
+Eugene stays `pilot` by design (no machine; D3 row 4).
 
 **Builds on:** ADR-0079 (throughput is CAPTURED, not derived; D4's prior-day
 refusal), ADR-0079 Am.1 (the capture cutover boundary), ADR-0077 D1/D4 (the
