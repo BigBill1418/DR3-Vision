@@ -1206,8 +1206,16 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
       precedence held) / 0 dateless; 15 audit rows in-transaction.
     - **Floor: −1,166 program / −505 non-program (−1,671 total) → +479 / +903
       (+1,382 total). The negative Woodland floor is GONE.** Freshness business
-      day = 2026-08-10 on the COALESCE key. The July COR negative-ledger block
-      should now clear — re-run the COR flow to confirm.
+      day = 2026-08-10 on the COALESCE key. ~~The July COR negative-ledger block
+      should now clear — re-run the COR flow to confirm.~~ **CONFIRMED CLEAR
+      2026-08-10 ~13:20 PT** (read-only probe
+      `scripts/one-off/2026-08-10-adr0089-july-cor-verify.ts`, driving the COR
+      service's own gate + prefill functions against prod): GATE 1 inbound
+      freshness PASS; **July EOM inventory computes to 512 units (151 program +
+      361 non-program)**, anchored on the 07-22 physical count (2,483), running
+      balance to 07-31 23:59:59 PT; GATE 2 non-negative ledger PASS. The July
+      Woodland COR is mechanically unblocked — Bill can generate/file it from
+      the app whenever ready.
     - Residuals: the ~1,900-unit O-3 gap is now largely explained + recovered;
       remaining candidate (stripped over-count) shrinks to the current +479
       floor arithmetic. Cosmetic: `fix-woodland-inbound.sh` emits two harmless
