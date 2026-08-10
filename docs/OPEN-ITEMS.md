@@ -1159,6 +1159,40 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   clean reset if the July COR cannot wait for the gap to close. No MRC chase needed
   for the recovered window; the 08-04+ hauls will absorb automatically now that
   details refresh on the completed feed.
+  **DIAGNOSED 2026-08-10 (ADR-0089) — MRC confirmed no delay; the gap is ours, and
+  the mechanism is found. Candidate 1 is dead; the undated-haul candidate is the
+  prime suspect and was mis-scoped as "historical."** Bill spoke to MRC directly
+  (~10:26 PT): they HAVE haul data entered after 07-21 and report no issues or
+  delays. Re-measured on prod the same morning:
+  - **The mirror is NOT stale.** 7,334 rows, newest delivered dock date 2026-08-12,
+    newest `first_seen_at` 2026-08-10 10:00 PT, detail coverage 7,333/7,334, hourly
+    cron `ok` on all four feeds. Delivered hauls 07-22→08-12 = 93 hauls / 10,134
+    program units, every weekday populated. The 07-21 cliff is gone and stayed gone.
+  - **Candidate 1 (further MRC marking lag, "22 hauls Confirmed dated 08-04+") is
+    FALSIFIED.** Only 16 Confirmed hauls remain mirror-wide; 12 are dated 08-10 or
+    later (today/future, legitimately undelivered). Just four carry a past dock date.
+    Twenty-two became four with no MRC chase, and MRC reports no backlog.
+  - **Candidate 2 (the "2,319 undated-haul defect") is the prime suspect and is
+    NOT historical.** 3,330 of 7,334 rows (45%) have a NULL `docking_appointment_date`;
+    3,328 are Delivered carrying 206,684 program units, all skipped by the ADR-0059
+    bridge. ADR-0059 and `inbound-bridge.ts` both assert every undated haul is
+    "pre-anchor and inert" and that "the live/forward path is fully covered" —
+    **false.** 35 undated Delivered hauls arrived 07-31→08-10 carrying \*\*639 program
+    - 1,790 non-program units / 133,595 lb\*\* and never reached the floor ledger.
+  - **Root cause:** the bridge keys the delivery day on `Docking_Appointment_Date__c`,
+    a _scheduling_ field MyMRC leaves null for route collections that book no dock
+    slot (verified in H-137017's raw payload). Every haul with a `Collection_Source__c`
+    set is undated — 886/886. The real field, `Recycler_Reported_Delivery_Date__c`,
+    is enumerated in our own `docs/mymrc-discovery-2026-07-22.md` and is requested
+    nowhere in the codebase. `freshness.ts` keys on the same wrong column, so the
+    COR inbound gate would report the feed fresh while 100% of collection-network
+    intake went unbridged.
+  - **Still unproven (first step of any build session):** that MRC populates
+    `Recycler_Reported_Delivery_Date__c`. Prove it on one haul (H-137017) before
+    committing to the fix — see ADR-0089 "the one discriminating fact still unproven".
+  - Remaining gap candidate after this lands: stripped over-count. The COR stays
+    blocked on the negative-ledger refusal; billing exposure is in the safe direction
+    (unbridged inbound understates receipts, so MRC was not overbilled).
 - **O-4 — load H-135881 was corrected by hand.** 40 → 95 units, audited, at Bill's
   instruction. Two caveats on the record: nothing in the DB links that load to the
   identifier "H-135881" (no BOL, DR3 or haul id — matched as the only Woodland load

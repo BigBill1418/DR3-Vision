@@ -3,6 +3,99 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (later) — MRC confirmed no delay: the inbound gap is ours, and inbound is keyed on a scheduling field (ADR-0089, Proposed)
+
+Diagnosis only. **No pipeline code changed; docs only.**
+
+Bill spoke to MRC directly (~10:26 PT): MRC **has** haul data entered after
+2026-07-21 and reports **no issues or delays**. That retires the last upstream
+explanation this project was carrying, and a re-measurement on prod the same
+morning found the mechanism.
+
+### The mirror is not stale — that part is fixed and stayed fixed
+
+7,334 haul rows; newest delivered dock date **2026-08-12**; newest `first_seen_at`
+**2026-08-10 10:00 PT** (17:00 UTC); detail coverage **7,333/7,334** (one portal-side
+ghost, inert); hourly cron `status='ok'` on all four feeds. Delivered hauls dated
+07-22→08-12 = **93 hauls / 10,134 program units**, every weekday populated. The
+07-21 cliff closed on 2026-08-03 and has not reopened.
+
+### What MRC's confirmation falsifies
+
+- **OPEN-ITEMS O-3 candidate 1 — "further MRC marking lag (22 hauls still Confirmed,
+  dated 08-04+)" — is DEAD.** Only **16** Confirmed hauls remain mirror-wide, and
+  **12 are dated 2026-08-10 or later** (today/future, legitimately undelivered). Four
+  carry a past dock date. Twenty-two became four with no MRC chase; MRC reports no
+  backlog. It cannot account for ~1,900 units.
+
+### The real leak: we key inbound on the wrong field
+
+**3,330 of 7,334 rows (45%) carry a NULL `docking_appointment_date`** — 3,328
+Delivered, **206,684 program units**, every one skipped by the ADR-0059 bridge.
+
+ADR-0059 and `src/lib/mymrc/inbound-bridge.ts` both assert that "every undated haul
+is historical (pre-anchor) and inert for the live floor" and that "the live/forward
+path is fully covered." **Both are false.** Undated Delivered hauls keep arriving:
+
+| First seen (PT)       | Hauls  | Program | Non-program | Weight         |
+| --------------------- | ------ | ------- | ----------- | -------------- |
+| 2026-07-31            | 16     | 228     | 727         | 52,525 lb      |
+| 2026-08-01 → 08-07    | 18     | 301     | 1,063       | 75,020 lb      |
+| 2026-08-10            | 1      | 110     | 0           | 6,050 lb       |
+| **Post-anchor total** | **35** | **639** | **1,790**   | **133,595 lb** |
+
+Thirty-five real deliveries — 2,429 units, 67 tons — reached DR3 Woodland since the
+anchor and never touched the floor ledger. Not lag, not upstream: mirrored correctly
+with correct unit counts, then dropped by our own bridge. They are the CA collection
+network (Ikea Emeryville/West Sac/Palo Alto, Recology ×4, Golden Bear, Vasco
+Republic, MT Diablo, Sonoma Transfer Station, Outlaw Hauling, CRDN), each payload
+naming `Recycling_Center_Lookup__r.Name = "DR3 Woodland"`.
+
+**Root cause.** `Docking_Appointment_Date__c` is a **scheduling** field, populated
+only when a haul books a dock slot. Route collections book none, so MyMRC leaves it
+null — verified in H-137017's raw payload (Delivered, 110 program units, 6,050 lb,
+Golden Bear): `"Docking_Appointment_Date__c": {"value": null}`. The bridge calls that
+field "the delivery-day key." It is not a delivery date. The correlation is exact:
+**every haul with a `Collection_Source__c` set is undated — 886/886.**
+
+MyMRC has the field we need. Our own Phase-0 deliverable
+`docs/mymrc-discovery-2026-07-22.md` enumerates **`Recycler_Reported_Delivery_Date__c`**
+as both a list column and one of the 52 detail fields (alongside
+`Transporter_Reported_Delivery_Date__c`, `Actual_Pickup_Date__c`,
+`Unit_Count_at_Unload__c`). `HAUL_OPTIONAL_FIELDS` requests **none** of them;
+`grep -rn "Recycler_Reported_Delivery_Date" src/ scripts/ prisma/` returns nothing.
+We enumerated the delivery date on 2026-07-22, wrote it down, and never asked for it.
+
+**The guard shares the blind spot.** `FRESHNESS_COLUMN` keys _both_ haul feeds on
+`docking_appointment_date`, so the COR inbound gate would report the delivered feed
+**fresh** while 100% of collection-network intake went unbridged. ADR-0070 fixed
+_which rows_ we measure; it did not fix _which column_.
+
+### Recorded
+
+- **`docs/adr/0089-inbound-is-keyed-on-a-scheduling-field.md` (Proposed)** — the
+  diagnosis, the five proposed decisions (request the delivery date; key inbound on
+  `COALESCE(delivery, appointment)`; move freshness to the same key; re-detail +
+  backfill the recovered window; leave pre-anchor units alone), and the alternatives
+  rejected.
+- **OPEN-ITEMS O-3 updated** with the falsified candidate and the new prime suspect.
+
+### Still unproven — do this first
+
+We have **not** observed a populated value in `Recycler_Reported_Delivery_Date__c`.
+Enumeration proves the field exists, not that MRC fills it, and the captured fixtures
+predate it. Prove it on one haul (H-137017) — add the field, clear `detail_fetched_at`,
+run `scripts/mymrc-enrich-details.mjs`, read the value — before committing to the fix.
+Committing first would repeat the exact error this ADR exists to correct.
+
+### Note for the record
+
+2026-07-31, 2026-08-03 and today all opened with "it's upstream" and closed with a
+Vision-side cause. On this integration the upstream hypothesis is **0-for-3** and
+should carry the burden of proof, not the presumption of it. Billing exposure from
+this defect is in the safe direction: unbridged inbound understates what DR3
+received, so MRC was not overbilled.
+
 ## 2026-08-10 — ADR-0088 throughput-gap nudge ramped LIVE at Woodland
 
 Operational flip + docs; no code deployed.
