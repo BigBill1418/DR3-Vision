@@ -1187,9 +1187,21 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
     nowhere in the codebase. `freshness.ts` keys on the same wrong column, so the
     COR inbound gate would report the feed fresh while 100% of collection-network
     intake went unbridged.
-  - **Still unproven (first step of any build session):** that MRC populates
-    `Recycler_Reported_Delivery_Date__c`. Prove it on one haul (H-137017) before
-    committing to the fix — see ADR-0089 "the one discriminating fact still unproven".
+  - ~~Still unproven: that MRC populates `Recycler_Reported_Delivery_Date__c`~~
+    **PROVEN 2026-08-10 ~11:04 AM PT (ADR-0089 Am.1)** — read-only probe
+    (`scripts/one-off/2026-08-10-adr0089-field-probe.mjs`, one-shot scrape
+    container, 14 hauls / 5 classes, 14/14 fetched, 0 errors): populated on
+    **12/12 Delivered** including all 7 undated collection-network hauls AND
+    both pre-anchor rows (2023/2024 — D4 will recover real dates); null on both
+    Confirmed controls (correct). Both fallback candidates
+    (`Transporter_Reported_Delivery_Date__c`, `Actual_Pickup_Date__c`) are
+    **null on all 14** — dead in practice. **NEW finding:** the appointment
+    date disagrees with the true delivery date on 2 of 3 dated comparators (−6
+    and −7 days), so D2's re-key also RE-ATTRIBUTES some already-bridged dated
+    hauls to earlier days — re-attribution scope is an explicit build-session
+    decision with a before/after per-day delta report (ADR-0089 Am.1 §3).
+    Bonus: `Unit_Count_at_Unload__c` populated on all Delivered rows — natural
+    F-3 cross-check input, request it in D1.
   - Remaining gap candidate after this lands: stripped over-count. The COR stays
     blocked on the negative-ledger refusal; billing exposure is in the safe direction
     (unbridged inbound understates receipts, so MRC was not overbilled).

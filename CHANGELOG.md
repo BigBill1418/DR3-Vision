@@ -3,6 +3,39 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (later still) — ADR-0089 Am.1: the delivery-date field is PROVEN, the fallbacks are dead, and the appointment date lies even when present
+
+Field-proof executed same day at Bill's instruction ("deep dive and make sure
+this is our path forward"). **No pipeline code changed; a read-only probe +
+docs only.**
+
+- **Probe:** `scripts/one-off/2026-08-10-adr0089-field-probe.mjs` — drives the
+  same batched `getRecordWithFields` transport as the enrichment engine but
+  never touches the upsert; run once in the one-shot scrape container
+  (~11:04 AM PT, between hourly ticks). Sampled 14 hauls across 5 classes
+  (canonical undated / collection-network undated / dated comparators /
+  Confirmed controls / pre-anchor). **14/14 fetched, 0 errors.**
+- **`Recycler_Reported_Delivery_Date__c` is populated on 12/12 Delivered
+  hauls** — every undated collection-network haul (Golden Bear, Vasco,
+  Petaluma, Ikea ×2, Solano) and both pre-anchor rows from 2023/2024 (so the
+  D4 re-detail recovers real dates on the whole 3,330-row backlog). Null on
+  both Confirmed controls, correctly. Bare `YYYY-MM-DD`, same shape as the
+  appointment date.
+- **Both fallback candidates are dead in practice**:
+  `Transporter_Reported_Delivery_Date__c` and `Actual_Pickup_Date__c` are null
+  on all 14 — the COALESCE leans on the recycler date alone.
+- **NEW finding (Am.1 §3):** 2 of 3 dated comparators were delivered up to a
+  week BEFORE their appointment date (H-136583 dock 08-12 / delivered 08-06;
+  H-136271 dock 08-10 / delivered 08-03). D2's re-key therefore also
+  re-attributes some already-bridged dated hauls to earlier days —
+  re-attribution scope is now an explicit build-session decision, with a
+  gated re-bridge + before/after per-day delta report required.
+- Bonus: `Unit_Count_at_Unload__c` populated on all Delivered rows and
+  diverges from the program count on collection hauls — the natural F-3
+  cross-check input; added to D1's request set.
+- **Path forward CONFIRMED: D1–D5 stand** (D1 gains two fields; D2/D4 gain the
+  re-attribution decision). Docs: ADR-0089 Am.1 + OPEN-ITEMS O-3 updated.
+
 ## 2026-08-10 (later) — MRC confirmed no delay: the inbound gap is ours, and inbound is keyed on a scheduling field (ADR-0089, Proposed)
 
 Diagnosis only. **No pipeline code changed; docs only.**

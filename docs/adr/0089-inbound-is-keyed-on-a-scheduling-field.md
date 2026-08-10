@@ -1,6 +1,13 @@
 # ADR-0089 — The delivery date we never asked for: inbound is keyed on a scheduling field
 
-**Status:** Proposed (diagnosis complete, no code shipped) — 2026-08-10
+**Status:** Proposed (diagnosis complete, no code shipped) — 2026-08-10.
+**Am.1 (2026-08-10, same day):** the §"one discriminating fact" is now PROVEN —
+see the amendment section at the end. `Recycler_Reported_Delivery_Date__c` is
+populated on 12/12 Delivered hauls probed (including all 7 undated
+collection-network hauls and both pre-anchor rows), null on both Confirmed
+controls. The fallback candidates are empty in practice. One NEW fact: the
+appointment date disagrees with the true delivery date on 2 of 3 dated
+comparators (by up to 6 days), which widens D2's blast radius — see Am.1 §3.
 **Site:** Woodland (the only site with a MyMRC portal feed)
 **Builds on:** ADR-0059 (the inbound bridge and its undated-haul tradeoff), ADR-0057
 (full-object ingestion + the Phase-0 discovery deliverable), ADR-0070 (newest-first
@@ -156,7 +163,7 @@ floor by ADR-0059's anchor design. D4's recovery is scoped to post-anchor days o
 
 ---
 
-## The one discriminating fact still unproven
+## The one discriminating fact still unproven — RESOLVED, see Amendment 1
 
 **We have not yet observed a populated value in `Recycler_Reported_Delivery_Date__c`.**
 The field is enumerated in our discovery doc as both a list column and a detail field,
@@ -208,3 +215,92 @@ its contents.
 - **Treat the collection network as out of scope for the floor.** Rejected: 67 tons of
   mattresses arrived at Woodland and were physically processed. Excluding them would make
   the floor permanently and knowingly wrong.
+
+---
+
+## Amendment 1 (2026-08-10) — the field is proven, the fallbacks are dead, and the appointment date lies even when present
+
+Executed the §"one discriminating fact" probe the same day, at Bill's
+instruction ("go ahead and start with the field-proof step — deep dive and make
+sure this is our path forward"). Probe:
+`scripts/one-off/2026-08-10-adr0089-field-probe.mjs` — READ-ONLY (drives the
+same batched `getRecordWithFields` transport as the enrichment engine, never
+calls the upsert; no mirror/business write), run once in the one-shot scrape
+container at ~11:04 AM PT. **14/14 records fetched, 0 errors.** Instead of the
+single-haul re-detail proposed in the ADR body, the probe sampled five classes
+so one POST would answer every open question at once. Raw output:
+CHAD-HQ `/tmp/mymrc-field-probe-out.txt` (transient); the findings tables below
+are the durable record.
+
+### 1 — `Recycler_Reported_Delivery_Date__c` is populated, everywhere it should be
+
+| Class                                          | n   | Recycler_Reported_Delivery_Date\_\_c                    |
+| ---------------------------------------------- | --- | ------------------------------------------------------- |
+| A+B — undated Delivered (collection network)   | 7   | **7/7 populated** (08-05 … 08-10; every vendor sampled) |
+| C — dated Delivered comparators                | 3   | **3/3 populated**                                       |
+| D — Confirmed, future dock date (neg. control) | 2   | 2/2 **null** — correct, not yet delivered               |
+| E — pre-anchor undated Delivered (2023/2024)   | 2   | **2/2 populated** (2023-09-14, 2024-03-05)              |
+
+The exact population the bridge drops — Golden Bear, Vasco, Petaluma, Ikea
+West Sac / Emeryville, Solano County — carries a real delivery date on every
+row. The E-class result matters for D4: the field is populated on YEARS-old
+rows, so the full 3,330-row re-detail will recover real dates, not nulls.
+Values are bare `YYYY-MM-DD` dates, the same shape as
+`Docking_Appointment_Date__c` — the existing mapper date-handling applies.
+
+### 2 — both fallback candidates are DEAD in practice
+
+`Transporter_Reported_Delivery_Date__c`: **null on all 14** (even dated,
+delivered, recycler-confirmed hauls). `Actual_Pickup_Date__c`: **null on all
+14**. D2's key therefore leans on the recycler date alone;
+`COALESCE(recycler_reported_delivery_date, docking_appointment_date)` stands,
+with the transporter field kept in the request set defensively but assigned no
+load-bearing role. The `first_seen_at` last resort stays retired unless the
+full D4 re-detail surfaces a Delivered population with neither date — none is
+expected, and if one appears it is the D2 "genuinely dateless" alertable case.
+
+### 3 — NEW: the appointment date disagrees with reality even when present
+
+The dated comparators were meant as a sanity check and instead widened the
+finding:
+
+| Haul     | Dock (appointment) | Recycler delivered | Delta   |
+| -------- | ------------------ | ------------------ | ------- |
+| H-136583 | 2026-08-12         | **2026-08-06**     | −6 days |
+| H-136271 | 2026-08-10         | **2026-08-03**     | −7 days |
+| H-136699 | 2026-08-10         | 2026-08-10         | 0       |
+
+2 of 3 dated hauls were physically delivered up to a WEEK before their
+appointment date (dock slots get rebooked/slid after the fact; the delivery
+happened when it happened). Consequence: D2's COALESCE does not merely ADD the
+undated hauls — it will RE-ATTRIBUTE some already-bridged dated hauls to
+different (earlier) days. That is the accuracy fix working, but it moves units
+between floor days that managers have already seen, and it can touch
+COR-relevant months. **The build session must treat re-attribution scope as an
+explicit decision, not a side effect**: recommended posture is to re-key
+everything on the true date (a floor ledger keyed on when trucks actually
+arrived), re-bridge through the gated `fix-woodland-inbound.sh` path with a
+before/after per-day delta report, and hold the July COR reconciliation until
+that report is read. The sample rate (2/3) is not a population estimate — the
+D4 re-detail will produce the real mismatch count before any re-bridge runs.
+
+### 4 — bonus observation, recorded not actioned
+
+`Unit_Count_at_Unload__c` is populated on all 12 Delivered rows and diverges
+from the mirror's `program_unit_count` on collection hauls (e.g. H-136896:
+mirror program=0, unload=121; H-136855: 0 vs 114). It looks like the physical
+receipt count where the program/non-program split is bookkeeping. It is the
+natural cross-check input for OPEN-ITEMS F-3 (entered-vs-derived) — out of
+scope here, worth requesting in D1's field set while we are touching it.
+
+### Am.1 consequences for the decision set
+
+- **D1 CONFIRMED** — add `Recycler_Reported_Delivery_Date__c` (primary) +
+  `Transporter_Reported_Delivery_Date__c` (defensive) + `Unit_Count_at_Unload__c`
+  (F-3 groundwork) to `HAUL_OPTIONAL_FIELDS` and the mirror.
+- **D2/D3 CONFIRMED** as written, with the §3 re-attribution decision added to
+  the build scope.
+- **D4 CONFIRMED and de-risked** — pre-anchor rows carry real dates, so the
+  re-detail yields a fully-dated mirror; the re-bridge must emit the §3
+  before/after delta report and stay behind the gated script.
+- **D5 unchanged.**
