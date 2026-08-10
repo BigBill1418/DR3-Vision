@@ -30,8 +30,18 @@ import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/clie
 // the real status and a stable reason code.
 async function ctx(siteCode: string) {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'operator') {
+  // Split 2026-08-10, same reasoning as `load-photo-guard.ts`. The 401 was
+  // already the right answer for the case that actually happens on the floor —
+  // an expired session, which arrives as a HUSK whose `user` is truthy and
+  // whose `role` is undefined (`src/lib/session-husk.test.ts`) — but the single
+  // predicate reached it by accident, via the role comparison, and gave the
+  // same 401 to a signed-in NON-operator, for whom signing in again changes
+  // nothing. Read the id for identity; read the role for authorization.
+  if (!session?.user?.id) {
     throw new svc.LoadAccessError(401, 'not_authenticated_as_operator');
+  }
+  if (session.user.role !== 'operator') {
+    throw new svc.LoadAccessError(403, 'not_an_operator');
   }
   const site = await prisma.site.findUnique({
     where: { code: siteCode },

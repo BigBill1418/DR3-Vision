@@ -381,9 +381,17 @@ describe('ADR-0086 — a refused grant NEVER makes a working upload fail', () =>
     expect(access.via, 'an unconfigured deployment stopped accepting photos').toBe('session');
   });
 
-  // With no grant header at all nothing about the guard changes — the refusal is
-  // the session guard's own `Response`, not a grant-shaped 401.
-  it('a sessionless request with NO grant is refused exactly as before', async () => {
+  // With no grant header at all the refusal is the SESSION guard's own
+  // `Response` and not a grant-shaped one — which is what this case exists to
+  // discriminate, and it still does.
+  //
+  // The status moved 403 → 401 on 2026-08-10: the session guard now separates
+  // "no identity" (401) from "signed in and refused" (403), because a husk left
+  // by an expired session used to land in the second bucket and offered the
+  // floor a retry that no retry could clear. The distinction asserted here is
+  // the BODY: a plain `unauthenticated` string, carrying no `grant` field, is
+  // how `authErrorFor` tells a lapsed session from a refused grant.
+  it('a sessionless request with NO grant is refused by the session guard, not the grant path', async () => {
     let status = 0;
     let body = '';
     try {
@@ -393,8 +401,8 @@ describe('ADR-0086 — a refused grant NEVER makes a working upload fail', () =>
       status = e.status;
       body = await e.text();
     }
-    expect(status).toBe(403);
-    expect(body).toBe('forbidden');
+    expect(status).toBe(401);
+    expect(body, 'a `grant` field here would misreport a lapsed session').toBe('unauthenticated');
   });
 });
 

@@ -411,3 +411,76 @@ describe('ADR-0086 D4 — the middleware exemption is a keyhole, not a door', ()
     expect(loadPhotoCreate).not.toHaveBeenCalled();
   });
 });
+
+// ── 2026-08-10 — the expired session, through BOTH real routes ───────────────
+//
+// The Woodland rejection defect, asserted where the floor actually met it: the
+// route's HTTP status. The guard's own suite pins the predicate; this pins that
+// both handlers propagate it, because a mint that says 401 and a confirm that
+// says 403 would leave the queue classifying the two halves of one photo into
+// two different states.
+//
+// "Mint and confirm must move together" is already the stated contract of both
+// route files (a relaxed mint with a strict confirm PUTs bytes to R2 and then
+// refuses to write the row). It holds for refusals too.
+describe('an expired operator session answers 401 on BOTH photo routes', () => {
+  /**
+   * The husk Auth.js hands a guard after the 5-minute operator idle window —
+   * a truthy `user` with nothing in it. Proved against the real callbacks in
+   * `src/lib/session-husk.test.ts`; reproduced here so the routes are driven
+   * by the production shape rather than by `null`, which the old code ALSO
+   * answered 403 and which is why the pre-existing suites agreed with the bug.
+   */
+  beforeEach(() => {
+    auth.mockResolvedValue({
+      user: { name: undefined, email: undefined, image: undefined, all_sites: false },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    });
+  });
+
+  it('the mint answers 401 — the status the queue can act on', async () => {
+    const res = await MINT(post('/api/photos/upload-url', { ...MINT_BODY, idempotency_key: KEY }));
+    expect(res.status, 'a lapsed session was called FORBIDDEN at the mint').toBe(401);
+  });
+
+  it('the confirm answers 401 too — the pair does not split', async () => {
+    const res = await CONFIRM(
+      post('/api/photos/confirm', {
+        load_id: 'load-1',
+        kind: 'bol',
+        storage_key: 'loads/load-1/bol/a.jpg',
+      }),
+    );
+    expect(res.status, 'mint and confirm disagreed about the same expired session').toBe(401);
+    expect(loadPhotoCreate, 'an identity-less request wrote a photo row').not.toHaveBeenCalled();
+  });
+
+  // A rejection photo is the kind the defect was reported against, and it is
+  // NOT special — same route, same guard, same status. Pinned so nobody
+  // re-litigates a per-kind rule that never existed.
+  it('does the same for kind=rejection, which is not a special case', async () => {
+    const res = await MINT(
+      post('/api/photos/upload-url', {
+        load_id: 'load-1',
+        kind: 'rejection',
+        content_type: 'image/jpeg',
+        idempotency_key: KEY,
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  // The husk must not become a way IN. With a valid grant on the same request
+  // the grant path still authorises it — that is ADR-0086's whole point, and
+  // widening the session refusal must not have disturbed it.
+  it('still lets a VALID grant through on the same identity-less request', async () => {
+    const res = await MINT(
+      post(
+        '/api/photos/upload-url',
+        { ...MINT_BODY, idempotency_key: KEY },
+        { [PHOTO_GRANT_HEADER]: grant() },
+      ),
+    );
+    expect(res.status, 'the grant path was collateral damage of the 401 split').toBe(200);
+  });
+});

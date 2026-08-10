@@ -195,6 +195,8 @@
     "retry": "{{label}} دوبارہ کوشش کریں",
     "default": "📸 {{label}}",
     "queued_caption": "iPad پر محفوظ — آن لائن ہونے پر اپ لوڈ ہو گا",
+    "signed_out": "✓ {{label}} محفوظ — بھیجنے کے لیے سائن ان کریں",
+    "signed_out_caption": "آپ کی سائن ان کی میعاد ختم ہو گئی۔ اس iPad پر سائن ان کریں، یہ تصویر خود بھیج دی جائے گی۔",
     "label_bol": "BOL",
     "label_weight_ticket": "وزن کی پرچی",
     "label_door_open": "دروازہ کھلا",

@@ -181,6 +181,8 @@
     "retry": "Retry {{label}}",
     "default": "📸 {{label}}",
     "queued_caption": "Saved on iPad — will upload when online",
+    "signed_out": "✓ {{label}} saved — sign in to send",
+    "signed_out_caption": "Your sign-in expired. Sign in on this iPad and this photo sends by itself.",
     "label_bol": "BOL",
     "label_weight_ticket": "weight ticket",
     "label_door_open": "door-open",

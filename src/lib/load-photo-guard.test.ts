@@ -125,9 +125,13 @@ describe('ADR-0078 Am.1 — the checks that did NOT change', () => {
     expect(await statusOf(requireOperatorAtLoadSite('load-1'))).toBe(403);
   });
 
-  it('refuses when there is no session', async () => {
+  // CORRECTED 2026-08-10 — this used to assert 403 and that is the bug it was
+  // agreeing with. "There is no session" is not "you are forbidden"; a sign-in
+  // fixes it, and the whole ADR-0078 G7/G8c recovery affordance keys on 401.
+  // See the `session husk` block below.
+  it('answers 401 — not 403 — when there is no session', async () => {
     auth.mockResolvedValue(null);
-    expect(await statusOf(requireOperatorAtLoadSite('load-1'))).toBe(403);
+    expect(await statusOf(requireOperatorAtLoadSite('load-1'))).toBe(401);
   });
 
   it('404s a load that does not exist', async () => {
@@ -144,5 +148,120 @@ describe('ADR-0078 Am.1 — the checks that did NOT change', () => {
     const session = await auth();
     expect(session.user.primary_site_id).toBe(EUGENE);
     await expect(requireOperatorAtLoadSite('load-1')).resolves.toBeTruthy();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-08-10 — the session HUSK, and the 403 that could never be retried away
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ## What happened on the floor
+//
+// Woodland's first-ever load rejection. The operator opened the reject stage,
+// picked a category, walked to the trailer and photographed the contamination.
+// iOS suspends the page while the camera sheet is up; the operator idle window
+// is FIVE MINUTES. The mint that followed the shutter answered **403** and the
+// screen said "Retry rejection evidence · mint failed (403)" — over and over,
+// because a retry cannot fix an expired session. The bytes were never queued
+// and the load stranded at `unload_started` with no rejection evidence.
+//
+// It was not a rejection-specific rule: `kind='rejection'` had minted
+// successfully through this exact route earlier the same morning. It was the
+// predicate below.
+//
+// ## The shape
+//
+// Auth.js answers idle expiry (and the ADR-0053 D2 kill-switch) with an EMPTY
+// token, not a null one, and `@auth/core` builds a session from anything that
+// is not null. What reaches a guard is a HUSK: `session.user` is a truthy
+// object with no `id` and no `role`. `session-husk.test.ts` proves that shape
+// against the real callbacks; these tests pin what this guard must do with it.
+//
+// `!session?.user` is husk-blind, so the check fell through to
+// `undefined !== 'operator'` and threw 403 — the one guard of fifteen in this
+// codebase that collapsed "unauthenticated" into "forbidden". Every sibling
+// (`requireOperatorForSite` in `auth-helpers.ts` and twelve others) tests
+// `!session?.user?.id` and answers 401.
+//
+// The status is not cosmetic. `offline-queue.ts`'s `isAuthResponse` classifies
+// 401 as `auth:` — a state the floor chrome renders as "sign in and this will
+// send" — and deliberately excludes 403, which is authenticated-but-refused and
+// parks as a conflict no sign-in can clear. A 403 here therefore pointed the
+// operator at the one action that could not work.
+//
+// FALSIFIED BY HAND: restoring `if (!session?.user || session.user.role !== …)`
+// reds every case in this block with `expected 403 to be 401`.
+
+describe('an EXPIRED session is 401, not 403 (the 2026-08-10 rejection-evidence defect)', () => {
+  /** Exactly what `session-husk.test.ts` proves Auth.js hands a guard. */
+  function idledOut() {
+    auth.mockResolvedValue({
+      user: {
+        name: undefined,
+        email: undefined,
+        image: undefined,
+        all_sites: false,
+        is_super_admin: false,
+      },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    });
+  }
+
+  it('answers 401 for the husk an idled-out operator produces', async () => {
+    idledOut();
+    loadAt(WOODLAND, 'op-juan');
+    const status = await statusOf(requireOperatorAtLoadSite('load-1'));
+    expect(status, 'an expired session was called FORBIDDEN, which no sign-in clears').toBe(401);
+  });
+
+  // Guard-the-guard. If the fixture ever grew an `id`, the case above would go
+  // green for the wrong reason — it would be asserting the ordinary allow path.
+  it('the husk fixture really is truthy-but-empty', async () => {
+    idledOut();
+    const session = (await auth()) as { user: Record<string, unknown> };
+    expect(session.user, 'a falsy user would make the whole block vacuous').toBeTruthy();
+    expect(session.user['id']).toBeUndefined();
+    expect(session.user['role']).toBeUndefined();
+  });
+
+  // The refusal must still be readable by the queue: `isAuthResponse` keys on
+  // the STATUS, and the floor chrome's sign-in affordance keys on that.
+  it('the 401 body names the condition rather than saying "forbidden"', async () => {
+    idledOut();
+    loadAt(WOODLAND, 'op-juan');
+    try {
+      await requireOperatorAtLoadSite('load-1');
+      expect.unreachable('the husk was allowed through');
+    } catch (e) {
+      if (!(e instanceof Response)) throw e;
+      expect(e.status).toBe(401);
+      expect(await e.text()).toBe('unauthenticated');
+    }
+  });
+
+  // ── What must NOT move ────────────────────────────────────────────────────
+  //
+  // Widening 403 → 401 for "no identity" must not soften either authorization
+  // check. A signed-in person who is refused is still refused, and 401 would
+  // invite the client to offer a sign-in that changes nothing.
+
+  it('a REAL signed-in non-operator is still 403 — not downgraded to 401', async () => {
+    signedInAs('mgr-1', WOODLAND, 'manager');
+    loadAt(WOODLAND, null);
+    expect(await statusOf(requireOperatorAtLoadSite('load-1'))).toBe(403);
+  });
+
+  it('a REAL cross-site operator is still 403 — the compliance boundary is untouched', async () => {
+    signedInAs('op-eugene', EUGENE);
+    loadAt(WOODLAND, 'op-woodland');
+    expect(await statusOf(requireOperatorAtLoadSite('load-1'))).toBe(403);
+  });
+
+  // The load read must not happen for a request that carries no identity at
+  // all: refusing before the query is both cheaper and the honest ordering.
+  it('does not read the load at all for an identity-less request', async () => {
+    idledOut();
+    await statusOf(requireOperatorAtLoadSite('load-1'));
+    expect(findUnique).not.toHaveBeenCalled();
   });
 });

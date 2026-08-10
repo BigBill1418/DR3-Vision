@@ -86,7 +86,34 @@ export interface LoadSiteAccess {
  */
 export async function requireOperatorAtLoadSite(loadId: string): Promise<LoadSiteAccess> {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'operator') {
+  // NO IDENTITY ⇒ 401, and the split from the role check below is the whole
+  // point (2026-08-10). These were one predicate answering 403 for both.
+  //
+  // `!session?.user` cannot see an expired session. Auth.js answers idle expiry
+  // — five minutes for an operator — and the ADR-0053 D2 kill-switch with an
+  // EMPTY token rather than a null one, and `@auth/core` builds a session from
+  // any non-null token. What arrives here is a HUSK: `session.user` is a truthy
+  // object carrying no `id` and no `role`. So the old check fell through to
+  // `undefined !== 'operator'` and called an unauthenticated request FORBIDDEN.
+  //
+  // That is not a wording quibble. `offline-queue.ts`'s `isAuthResponse`
+  // classifies 401 as `auth:` — the state the floor chrome renders as "sign in
+  // and this will send" — and deliberately excludes 403, which is
+  // authenticated-but-refused and parks as a conflict no sign-in can clear. On
+  // 2026-08-10 Woodland's first load rejection sat behind a camera sheet longer
+  // than the idle window; the mint that followed the shutter answered 403 and
+  // the iPad offered a retry that could never work, while the evidence was
+  // never queued.
+  //
+  // `!session?.user?.id` is the predicate the other fourteen identity guards in
+  // this codebase already use (`requireOperatorForSite` in `auth-helpers.ts`
+  // and its siblings). This one was the outlier; it is no longer.
+  if (!session?.user?.id) {
+    throw new Response('unauthenticated', { status: 401 });
+  }
+  // A REAL signed-in person who is not an operator stays 403. Widening this to
+  // 401 would invite the client to offer a sign-in that changes nothing.
+  if (session.user.role !== 'operator') {
     throw new Response('forbidden', { status: 403 });
   }
   const load = await prisma.inboundLoad.findUnique({
