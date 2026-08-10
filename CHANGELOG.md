@@ -3,6 +3,28 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-10 (night) — ADR-0089 RECOVERY EXECUTED: the Woodland floor is positive again
+
+Operational run + docs; no code changed. PR #223 merged (`b3d552c`), deployed,
+and the full D4 recovery sequence executed at Bill's instruction, 12:45–12:55 PT:
+
+- **Re-detail**: cursor cleared (7,335 rows, audited) → enrich swept 74 batched
+  POSTs → **7,314/7,314 Delivered hauls carry `recycler_reported_delivery_date`
+  — zero dateless** (sole error: the known portal ghost).
+- **Delta report** (read before bridging): 35 hauls ADDED (+639 program /
+  +1,790 non-program — ADR-0089's exact prediction) and 30 hauls RE-ATTRIBUTED
+  (3,087 program units to their true delivery days, max 9 days earlier than the
+  appointment; the phantom future day 2026-08-12 emptied onto 08-06).
+- **Re-bridge** (gate passed at 11,437 ≥ 5,000): 16 days → 2 inserted /
+  13 updated / 1 skippedGuarded (manager-owned day; precedence held) /
+  0 dateless; 15 in-transaction audit rows.
+- **Floor before → after: −1,166 program / −505 non-program (−1,671 total) →
+  +479 / +903 (+1,382 total).** Freshness reads business day 2026-08-10 on the
+  COALESCE key. July COR negative-ledger block expected to clear (verify by
+  running the COR flow).
+- Residual (cosmetic): `fix-woodland-inbound.sh` heredoc emits two harmless
+  `command not found` lines from backticks in a SQL comment — pre-existing.
+
 ## 2026-08-10 (evening) — ADR-0089 BUILT: inbound re-keyed on the true delivery date (D1–D3 + D4 tooling)
 
 Bill: "go ahead and start the build." D1–D3 implemented TDD-first, D4 tooling

@@ -1190,7 +1190,31 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   - **BUILD LANDED 2026-08-10 evening (ADR-0089 D1–D3 + D4 tooling, branch
     `feat/adr-0089-delivery-date-rekey`).** Deploying it moves nothing by itself
     (all pre-deploy rows NULL → COALESCE falls back to the appointment date).
-    **OPERATOR SEQUENCE for the recovery (each step gates the next):**
+    **RECOVERY EXECUTED 2026-08-10 19:45–19:55 UTC (12:45–12:55 PT), at Bill's
+    instruction ("merge the PR and run the recovery sequence"). All five steps
+    ran and verified:**
+    - Deploy: PR #223 squash-merged (`b3d552c`), migration `20260840` applied,
+      app + scrape containers healthy on the new build.
+    - Re-detail: cursor cleared (7,335 rows, audited), enrich swept 74 batches →
+      **7,314/7,314 Delivered hauls now carry a recycler delivery date — ZERO
+      dateless** (the only error is the known portal ghost `a2KUJ00000GXZ2b2AH`).
+    - Delta report (read before the re-bridge): **35 hauls added (+639 program /
+      +1,790 non-program — the ADR's exact prediction) + 30 hauls re-attributed
+      (3,087 program units moved, max 9 days earlier than their appointment)**.
+    - Re-bridge: falsification gate passed (11,437 recoverable ≥ 5,000);
+      16 days → 2 inserted / 13 updated / 1 skippedGuarded (manager-owned day,
+      precedence held) / 0 dateless; 15 audit rows in-transaction.
+    - **Floor: −1,166 program / −505 non-program (−1,671 total) → +479 / +903
+      (+1,382 total). The negative Woodland floor is GONE.** Freshness business
+      day = 2026-08-10 on the COALESCE key. The July COR negative-ledger block
+      should now clear — re-run the COR flow to confirm.
+    - Residuals: the ~1,900-unit O-3 gap is now largely explained + recovered;
+      remaining candidate (stripped over-count) shrinks to the current +479
+      floor arithmetic. Cosmetic: `fix-woodland-inbound.sh` emits two harmless
+      `command not found` lines (backticks inside the floor_sql heredoc comment
+      undergo command substitution — pre-existing, SQL unaffected).
+
+    ~~OPERATOR SEQUENCE for the recovery (each step gates the next):~~
     1. Merge + deploy the branch (migration runs in the init container).
     2. On CHAD-HQ: `scripts/one-off/2026-08-10-adr0089-redetail-sweep.sh`
        (dry-run first, then `--apply`), then the enrich run it prints
@@ -1206,6 +1230,7 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
        report shows.
     5. Then re-check the O-3 gap arithmetic and the July COR negative-ledger
        block (expected to clear or shrink to the stripped-over-count candidate).
+
   - ~~Still unproven: that MRC populates `Recycler_Reported_Delivery_Date__c`~~
     **PROVEN 2026-08-10 ~11:04 AM PT (ADR-0089 Am.1)** — read-only probe
     (`scripts/one-off/2026-08-10-adr0089-field-probe.mjs`, one-shot scrape
@@ -1224,6 +1249,7 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   - Remaining gap candidate after this lands: stripped over-count. The COR stays
     blocked on the negative-ledger refusal; billing exposure is in the safe direction
     (unbridged inbound understates receipts, so MRC was not overbilled).
+
 - **O-4 — load H-135881 was corrected by hand.** 40 → 95 units, audited, at Bill's
   instruction. Two caveats on the record: nothing in the DB links that load to the
   identifier "H-135881" (no BOL, DR3 or haul id — matched as the only Woodland load
