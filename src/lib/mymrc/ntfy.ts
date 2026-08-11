@@ -11,7 +11,7 @@
 
 // ADR-0019.5 — the ONE header sanitizer, at a relative path precisely so this
 // alias-less bundle can share it instead of growing a fifth copy of the fix.
-import { toHeaderSafe } from '../ntfy-header-safe';
+import { toHeaderSafe } from './header-safe';
 import type { FeedName } from './types';
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
