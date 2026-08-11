@@ -22,7 +22,9 @@
 // PM" when it is 8:00 AM — the single field this screen exists to communicate.
 
 import { useCallback, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
 import { QueueRow } from '../queue/queue-row';
@@ -53,6 +55,10 @@ export interface HaulRowView {
     open: boolean;
     totalUnits: number | null;
     workedAtISO: string | null;
+    /** ADR-0091 — the route back in, and who holds it. */
+    loadId: string;
+    holderUserId: string | null;
+    holderName: string | null;
   } | null;
 }
 
@@ -64,9 +70,24 @@ type Props = {
   undatedCount: number;
   /** True when the site has hauls at all — separates "no matches" from "no data". */
   hasAnyHauls: boolean;
+  /**
+   * ADR-0091 — the signed-in operator, resolved from the SESSION on the server
+   * (`page.tsx`), never from the `[site]` path segment. Used only to compare
+   * against `consumedLoad.holderUserId`, so a tampered value could at worst
+   * mislabel a card the load page then re-authorises from the session anyway.
+   */
+  viewerUserId: string;
 };
 
-export function HaulsClient({ siteCode, view, rows, pending, undatedCount, hasAnyHauls }: Props) {
+export function HaulsClient({
+  siteCode,
+  view,
+  rows,
+  pending,
+  undatedCount,
+  hasAnyHauls,
+  viewerUserId,
+}: Props) {
   const t = useT();
   const locale = useLocale();
   const router = useRouter();
@@ -132,7 +153,15 @@ export function HaulsClient({ siteCode, view, rows, pending, undatedCount, hasAn
    * is why the floor stopped rather than adapted.
    */
   const consumedNote = (c: NonNullable<HaulRowView['consumedLoad']>) => {
-    if (c.open) return t('floor.common.already_started');
+    // ADR-0091 — an OPEN child is no longer described by guesswork. The three
+    // cases are decided once, in `describeConsumedSlot`, shared with the queue.
+    const v = describeConsumedSlot(c, viewerUserId);
+    if (v.kind === 'resume') return t('floor.common.resume_yours');
+    if (v.kind === 'held') {
+      return t('floor.common.started_by', {
+        name: v.holderName ?? t('takeover.unknown_holder'),
+      });
+    }
     const workedAt = c.workedAtISO ? new Date(c.workedAtISO) : null;
     // Units AND a date, or neither — an "already worked — null units" line reads
     // as a bug and invites the operator to distrust the rest of the screen.
@@ -152,7 +181,26 @@ export function HaulsClient({ siteCode, view, rows, pending, undatedCount, hasAn
           hands back both fields — the exact prod state on 2026-08-10 — this
           component still refuses to render a button onto a worked slot. Two
           independent reasons the dead card cannot come back. */}
-      {r.consumedLoad ? (
+      {r.consumedLoad && r.consumedLoad.open ? (
+        // ADR-0091 — an OPEN child is LIVE FLOOR WORK, so the card is a route
+        // into it, not an epitaph. `/load/<id>` renders the workflow to its
+        // holder and the ADR-0082 held-by + Take over panel to anyone else, and
+        // is site-scoped on the server, so one link serves both cases safely.
+        //
+        // This does NOT reintroduce the dead card Amendment 1 killed: that was a
+        // control onto WORKED (`submitted`) slots, which still fall to the
+        // read-only branch below. `open` is the whole difference.
+        <Link
+          href={`/operator/${siteCode}/load/${r.consumedLoad.loadId}`}
+          // ADR-0060 gloved-hand sizing — a dock control is never under 56px.
+          className="block min-h-[56px] rounded-lg bg-dr3-green-dark/40 p-4 text-start transition-colors hover:bg-dr3-green-dark/80 active:bg-dr3-green-dark"
+        >
+          {renderBody(r)}
+          <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-chartreuse">
+            {consumedNote(r.consumedLoad)}
+          </p>
+        </Link>
+      ) : r.consumedLoad ? (
         <div className="rounded-lg bg-dr3-green-dark/40 p-4">
           {renderBody(r)}
           <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-cream/70">

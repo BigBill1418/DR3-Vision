@@ -65,7 +65,10 @@ function rowList() {
   return within(screen.getByRole('list'));
 }
 
-function list(r: HaulRowView) {
+/** The signed-in operator, unless a test is specifically about somebody else. */
+const VIEWER = 'op-pablo';
+
+function list(r: HaulRowView, viewerUserId: string = VIEWER) {
   return render(
     <HaulsClient
       siteCode="woodland"
@@ -74,6 +77,7 @@ function list(r: HaulRowView) {
       pending={[]}
       undatedCount={0}
       hasAnyHauls
+      viewerUserId={viewerUserId}
     />,
   );
 }
@@ -99,6 +103,9 @@ describe('ADR-0074 Am.1 — a consumed haul renders read-only, never a button', 
           open: false,
           totalUnits: 159,
           workedAtISO: '2026-08-05T23:48:00.000Z',
+          loadId: 'load-santa-rita',
+          holderUserId: 'op-nate',
+          holderName: 'Nate Cullison',
         },
       }),
     );
@@ -117,6 +124,9 @@ describe('ADR-0074 Am.1 — a consumed haul renders read-only, never a button', 
           open: false,
           totalUnits: 159,
           workedAtISO: '2026-08-05T23:48:00.000Z',
+          loadId: 'load-santa-rita',
+          holderUserId: 'op-nate',
+          holderName: 'Nate Cullison',
         },
       }),
     );
@@ -126,17 +136,107 @@ describe('ADR-0074 Am.1 — a consumed haul renders read-only, never a button', 
     expect(screen.getByText(/Aug 5/)).toBeTruthy();
   });
 
-  it('an OPEN child says it is already started, not that it was submitted', () => {
+  it('an OPEN child never renders the dead check-in BUTTON', () => {
+    // Amendment 1's property, unchanged by ADR-0091: the check-in affordance
+    // (`QueueRow`, a <button>) must never appear over a consumed slot. ADR-0091
+    // adds a LINK into the existing load, which is a different control with a
+    // different destination — `queryByRole('button')` still has to be null.
     list(
       row({
         externalHaulId: 'H-135311',
         expectedLoadId: 'exp-open',
-        consumedLoad: { status: 'in_progress', open: true, totalUnits: null, workedAtISO: null },
+        consumedLoad: {
+          status: 'in_progress',
+          open: true,
+          totalUnits: null,
+          workedAtISO: null,
+          loadId: 'load-open',
+          holderUserId: VIEWER,
+          holderName: 'Pablo Ledezma',
+        },
       }),
     );
 
     expect(rowList().queryByRole('button')).toBeNull();
-    expect(screen.getByText(new RegExp(en.floor.common.already_started, 'i'))).toBeTruthy();
+    expect(screen.queryByText(en.floor.hauls.check_in)).toBeNull();
+  });
+});
+
+describe('ADR-0091 — an OPEN child is a route back in, not a dead end', () => {
+  /** The state that stranded Pablo Ledezma on H-136311, 2026-08-11 06:46 PDT. */
+  function openHeldBy(holderUserId: string | null, holderName: string | null) {
+    return row({
+      externalHaulId: 'H-136311',
+      collectionSource: 'Costco-Innovel -Sacramento',
+      consumedLoad: {
+        status: 'in_progress',
+        open: true,
+        totalUnits: null,
+        workedAtISO: null,
+        loadId: 'load-costco',
+        holderUserId,
+        holderName,
+      },
+    });
+  }
+
+  it('THE INCIDENT: your OWN open load stops claiming another operator has it', () => {
+    // The literal defect. Pablo started this load, came back to the hauls screen
+    // to re-enter it, and was told a colleague held it — a sentence that is false
+    // exactly when the reader is the holder.
+    list(openHeldBy(VIEWER, 'Pablo Ledezma'));
+
+    expect(screen.queryByText(new RegExp(en.floor.common.already_started, 'i'))).toBeNull();
+    expect(screen.getByText(new RegExp(en.floor.common.resume_yours, 'i'))).toBeTruthy();
+  });
+
+  it('and it offers a link INTO the load, which is what "cannot finish it" meant', () => {
+    list(openHeldBy(VIEWER, 'Pablo Ledezma'));
+
+    expect(rowList().getByRole('link').getAttribute('href')).toBe(
+      '/operator/woodland/load/load-costco',
+    );
+  });
+
+  it("a colleague's open load names them and routes to the ADR-0082 takeover", () => {
+    list(openHeldBy('op-janette', 'Janette Tomas'));
+
+    expect(screen.getByText(/Janette Tomas/)).toBeTruthy();
+    expect(rowList().getByRole('link').getAttribute('href')).toBe(
+      '/operator/woodland/load/load-costco',
+    );
+  });
+
+  it('an UNASSIGNED open load falls back to "another operator" — never to "yours"', () => {
+    // `holderUserId === viewerUserId` must not be reached by two nulls. Telling
+    // an operator an ownerless load is theirs is the same class of confident
+    // falsehood this ADR deletes.
+    list(openHeldBy(null, null));
+
+    expect(screen.queryByText(new RegExp(en.floor.common.resume_yours, 'i'))).toBeNull();
+    expect(screen.getByText(new RegExp(en.takeover.unknown_holder, 'i'))).toBeTruthy();
+  });
+
+  it('a WORKED slot is still read-only — Amendment 1 is not reverted', () => {
+    // The regression guard in the other direction. `submitted` has left the
+    // floor's hands; there is nothing to route back into.
+    list(
+      row({
+        consumedLoad: {
+          status: 'submitted',
+          open: false,
+          totalUnits: 159,
+          workedAtISO: '2026-08-05T23:48:00.000Z',
+          loadId: 'load-worked',
+          holderUserId: VIEWER,
+          holderName: 'Pablo Ledezma',
+        },
+      }),
+    );
+
+    expect(rowList().queryByRole('link')).toBeNull();
+    expect(rowList().queryByRole('button')).toBeNull();
+    expect(screen.getByText(/159/)).toBeTruthy();
   });
 
   it('a startable haul still renders the tap-to-check-in button', () => {

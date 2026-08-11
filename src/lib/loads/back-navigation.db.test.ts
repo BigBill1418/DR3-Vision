@@ -263,9 +263,12 @@ describe.skipIf(!SAME_DB)('ADR-0090 Am.1 — the duration is frozen at the FIRST
     expect(OPEN_DOCK_STATUSES).toContain(row.status);
     expect(
       toConsumedLoad({
+        id: row.id,
         status: row.status,
         total_units: row.total_units,
         submitted_at: row.submitted_at,
+        assigned_operator_id: row.assigned_operator_id,
+        assigned_operator: null,
       })?.open,
     ).toBe(true);
   });

@@ -64,6 +64,10 @@ function toView(r: PortalHaulRow): HaulRowView {
           open: r.consumedLoad.open,
           totalUnits: r.consumedLoad.totalUnits,
           workedAtISO: r.consumedLoad.workedAt?.toISOString() ?? null,
+          // ADR-0091 — the route back in, and who holds it.
+          loadId: r.consumedLoad.loadId,
+          holderUserId: r.consumedLoad.holderUserId,
+          holderName: r.consumedLoad.holderName,
         }
       : null,
   };
@@ -73,7 +77,10 @@ export default async function FloorHaulsPage({ params, searchParams }: Props) {
   const { site: siteCode } = await params;
   const gate = await checkOperatorForSite(siteCode);
   if (!gate.ok) redirect(`/operator/${siteCode}`);
-  const { siteId, siteName } = gate.ctx;
+  // ADR-0091 — the viewer's identity comes from the SESSION guard, never the
+  // `[site]` path segment, and is threaded to the list so a consumed card can
+  // tell the operator's own open load from a colleague's.
+  const { siteId, siteName, userId } = gate.ctx;
 
   const locale = await getLocale();
   const dict = getDictionary(locale);
@@ -100,7 +107,7 @@ export default async function FloorHaulsPage({ params, searchParams }: Props) {
             </p>
           </div>
         ) : (
-          await renderList(siteCode, siteId, view)
+          await renderList(siteCode, siteId, view, userId)
         )}
       </div>
     </main>
@@ -111,6 +118,7 @@ async function renderList(
   siteCode: string,
   siteId: string,
   view: ReturnType<typeof pickHaulsListParams>,
+  viewerUserId: string,
 ) {
   const page = await listPortalHauls({
     siteId,
@@ -133,6 +141,7 @@ async function renderList(
         pending={page.pending.map(toView)}
         undatedCount={page.undatedCount}
         hasAnyHauls={hasAnyHauls}
+        viewerUserId={viewerUserId}
       />
       {page.totalPages > 1 && <HaulsPagination page={page.page} totalPages={page.totalPages} />}
     </>

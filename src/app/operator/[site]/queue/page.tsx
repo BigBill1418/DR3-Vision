@@ -1,4 +1,5 @@
 import { auth } from '@/lib/auth';
+import Link from 'next/link';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { formatDate, formatTime, formatRelative } from '@/lib/format';
@@ -12,6 +13,7 @@ import { currentPacificDayWindow } from '@/lib/time';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { listSiteOpenLoads } from '@/lib/loads/open-loads';
 import { CONSUMED_SLOT_SELECT, toConsumedLoad } from '@/lib/loads/consumed-slot';
+import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
 import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -236,22 +238,48 @@ export default async function OperatorQueuePage({ params }: Props) {
                   return (
                     <li key={l.id}>
                       {consumed ? (
-                        // ADR-0074 Am.1 — the slot is spent. No control, and a
-                        // line that answers "where did my truck go" rather than
-                        // leaving the operator to ask the room.
-                        <div className="rounded-lg bg-dr3-green-dark/40 p-4">
-                          {body}
-                          <p className="mt-2 text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
-                            {consumed.open
-                              ? t('floor.common.already_started')
-                              : consumed.totalUnits != null && consumed.workedAt
-                                ? t('floor.common.already_worked_detail', {
-                                    units: consumed.totalUnits,
-                                    date: formatDate(consumed.workedAt, locale),
-                                  })
-                                : t('floor.common.already_worked')}
-                          </p>
-                        </div>
+                        // ADR-0074 Am.1 — the slot is spent, and the line answers
+                        // "where did my truck go" rather than leaving the operator
+                        // to ask the room.
+                        //
+                        // ADR-0091 — but "spent" is two different things. A WORKED
+                        // slot keeps Amendment 1's read-only card; an OPEN one is
+                        // live floor work and now routes into it, through the same
+                        // `describeConsumedSlot` the hauls screen reads, so the two
+                        // surfaces cannot drift apart again.
+                        (() => {
+                          const v = describeConsumedSlot(consumed, session.user.id);
+                          if (v.kind === 'worked') {
+                            return (
+                              <div className="rounded-lg bg-dr3-green-dark/40 p-4">
+                                {body}
+                                <p className="mt-2 text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
+                                  {consumed.totalUnits != null && consumed.workedAt
+                                    ? t('floor.common.already_worked_detail', {
+                                        units: consumed.totalUnits,
+                                        date: formatDate(consumed.workedAt, locale),
+                                      })
+                                    : t('floor.common.already_worked')}
+                                </p>
+                              </div>
+                            );
+                          }
+                          return (
+                            <Link
+                              href={`/operator/${site.code}/load/${v.loadId}`}
+                              className="block min-h-[56px] rounded-lg bg-dr3-green-dark/40 p-4 transition-colors hover:bg-dr3-green-dark/80 active:bg-dr3-green-dark"
+                            >
+                              {body}
+                              <p className="mt-2 text-xs font-bold uppercase tracking-wide text-dr3-chartreuse">
+                                {v.kind === 'resume'
+                                  ? t('floor.common.resume_yours')
+                                  : t('floor.common.started_by', {
+                                      name: v.holderName ?? t('takeover.unknown_holder'),
+                                    })}
+                              </p>
+                            </Link>
+                          );
+                        })()
                       ) : (
                         <QueueRow siteCode={site.code} expectedLoadId={l.id}>
                           {body}

@@ -290,7 +290,9 @@
       "queued": "Saved on this iPad — will send when you reconnect",
       "already_worked": "Already worked",
       "already_worked_detail": "Already worked — {{units}} units, submitted {{date}}",
-      "already_started": "Already started by another operator"
+      "already_started": "Already started by another operator",
+      "resume_yours": "You started this — tap to open it",
+      "started_by": "Started by {{name}} — tap to take it over"
     },
     "hub": {
       "heading": "Daily check",

@@ -9,6 +9,42 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (8:00 AM PT) — INCIDENT: the hauls screen called your own load somebody else's (ADR-0091)
+
+Woodland operator Pablo Ledezma could not finish the Costco-Innovel-Sacramento
+load (**H-136311**). The hauls screen told him it was *"Already started by another
+operator."* He had started it himself at **06:46 AM PT**, and the row said so:
+`assigned_operator_id` was his.
+
+- **Root cause — a missing field, not a failing guard.** ADR-0074 Am.1 (shipped
+  the previous evening) gave the consumed-slot card a sentence and no control,
+  and hard-coded that sentence for every open child. `ConsumedLoadRef` carried no
+  holder identity, so the card could not have said anything else. Nothing
+  rejected Pablo — `audit_log` and `idempotency_keys` show no 4xx/5xx after his
+  06:48 AM PT write, just silence. The claim model and `assertOwn` were fine
+  throughout; ADR-0082 takeover was fine (he had used it himself the day before).
+  What was wrong is that the **queue** had a route back into an open load and the
+  **hauls screen** did not, and the hauls screen is the one you use when you know
+  the truck's name.
+
+- **Fixed.** `ConsumedLoadRef` gains `loadId` + `holderUserId` + `holderName`. A
+  new client-safe `consumed-slot-view.ts` owns the offer decision for both
+  surfaces: `resume` (yours) and `held` (a colleague's, routing to the ADR-0082
+  Take over panel) both link into `/operator/<site>/load/<id>`; `worked`
+  (submitted and beyond) stays the read-only card Am.1 made it. New copy in en /
+  es / ur.
+
+- **Guarded.** A second source-level chokepoint test asserts every *rendering*
+  surface calls `describeConsumedSlot`, alongside the existing one for
+  `toConsumedLoad`. The two file lists differ — which is the argument for a
+  shared function rather than a convention, and the reason these two screens
+  broke identically twice.
+
+- **Not fixed, and worth saying:** this makes an open load reachable; it does not
+  stop one being claimed and abandoned. The survey run during triage found a
+  **15-hour** stranded `in_progress` claim (H-136796, HWMA, held since 8/10
+  5:12 PM PT) that nothing watches. No stale-claim watchdog is in this change.
+
 ## 2026-08-10 (8:45 PM PT) — CLOSE-OUT: four hand-audited data corrections, a drained queue, and one question sent
 
 No code. The end of the day's operational tail, all executed under Bill's user id
