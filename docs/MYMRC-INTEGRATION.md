@@ -8,12 +8,33 @@ MyMRC is the [Mattress Recycling Council](https://mattressrecyclingcouncil.org)'
 
 ## Credentials
 
-Stored in environment variables, **separately per site**:
+> ⚠ **Superseded by ADR-0057.** The four env vars below **do not exist anywhere in this
+> repo** and there are no per-site service accounts. The MyMRC login is entered once in the
+> UI at **`/admin/mrc-scrape`** and stored **AES-256-GCM encrypted in Postgres**
+> (`src/lib/mymrc/credential-store.ts`). The only MyMRC secret on the host is the wrapping
+> key `MYMRC_CRED_KEY`, mounted on the `app` and `mymrc-scrape` containers. **One admin
+> identity** covers the whole portal. Authoritative runbook:
+> `docs/operator/mymrc-setup.md`.
 
-- `MYMRC_CA_USERNAME` / `MYMRC_CA_PASSWORD` — Woodland account
-- `MYMRC_OR_USERNAME` / `MYMRC_OR_PASSWORD` — Eugene account
+_Historical (pre-ADR-0057):_ stored in environment variables, **separately per site** —
+`MYMRC_CA_USERNAME` / `MYMRC_CA_PASSWORD` (Woodland) and `MYMRC_OR_USERNAME` /
+`MYMRC_OR_PASSWORD` (Eugene). These were meant to be SVdP service accounts; they were never
+actually created, which is why the hourly sync took its fail-soft "creds not configured,
+skipping" path and never pulled a record.
 
-These are SVdP service accounts, not personal accounts. Do not commit them. Rotate per fleet conventions (90-day rotation; see FLEET-PRIMER).
+## ⚠ The delivery-date key (ADR-0089, 2026-08-10) — read before writing any date logic
+
+Ingestion keys inbound on **`COALESCE(Recycler_Reported_Delivery_Date__c,
+Docking_Appointment_Date__c)`**.
+
+`Docking_Appointment_Date__c` is a **SCHEDULING** field — populated only when a haul books a
+dock slot. It is **null on every route-collection haul** (886/886 carrying a
+`Collection_Source__c`, ~45% of the mirror at the time of discovery) and, when it _is_
+present, disagrees with the true delivery by up to **6 days**. **Never key delivery on it
+alone.** Doing so silently dropped 886 hauls from the live path — 35 of them post-anchor
+Delivered — and drove the Woodland floor to −1,671. `freshness.ts` must key on the same
+expression as the bridge, scoped to `status = 'Delivered'`; a guard measuring a different
+column than the bridge aggregates on is not a guard.
 
 ## Two-direction integration
 
@@ -24,6 +45,7 @@ These are SVdP service accounts, not personal accounts. Do not commit them. Rota
 **Cadence:** hourly cron job per site
 
 **Flow:**
+
 1. Restore Playwright storage state from `~/.dr3-vision/mymrc-{site}/auth.json`
 2. Navigate to `https://mrc-us.my.site.com/s/scheduled-hauls?recycler=DR3+{site}`
 3. Detect login redirect; if present, re-authenticate and re-save storage state
@@ -33,6 +55,7 @@ These are SVdP service accounts, not personal accounts. Do not commit them. Rota
 7. Log success or failure to Loki; on failure, fire ntfy `dr3-vision-system` to Bill
 
 **Output schema:**
+
 ```
 expected_loads
   id, site_id, external_mymrc_haul_id, expected_arrival_at,
@@ -55,6 +78,7 @@ expected_loads
 **Purpose:** monthly bulk reconciliation against MyMRC's CSV export.
 
 **Flow:**
+
 1. Manager downloads the monthly CSV from MyMRC manually
 2. Manager uploads to `/portal/reconciliation/upload`
 3. System parses and matches each row against DR3-Vision loads by `(external_mymrc_haul_id, date, source)`
@@ -84,6 +108,7 @@ Commodity                             # "Whole Mattresses and Foundations"
 ```
 
 The exports come in three formats:
+
 - **HTML-as-XLS** (`report*.xls` files) — actually HTML tables; parse with an HTML parser, not openpyxl
 - **CSV** (`report*.csv`) — daily aggregate per site, used for processed-units reconciliation
 - **PDF** — billing artifacts, not for ingestion
@@ -106,6 +131,7 @@ export const SELECTORS = {
 ```
 
 When MRC redesigns the portal:
+
 1. Confirm via manual inspection that the page changed
 2. Update selectors with new identifiers
 3. Bump the integration version comment at the top of `selectors.ts`
@@ -113,13 +139,13 @@ When MRC redesigns the portal:
 
 ## Failure modes and recovery
 
-| Failure | Detection | Recovery |
-|---|---|---|
-| Login redirect (auth expired) | Playwright sees `/login` instead of `/scheduled-hauls` | Re-authenticate, re-save storage state, retry |
-| Selectors broken (page redesign) | Element not found errors in Playwright | Manual inspection, update `selectors.ts`, redeploy |
-| MRC adds CAPTCHA / 2FA | Login flow fails with new challenge | Pause Playwright job, fall back to manual CSV reconciliation, escalate to MRC contact |
-| MyMRC site outage | All requests return 5xx or timeout | Backoff and retry; ntfy if outage > 1 hour |
-| Network outage on CHAD-HQ | Playwright cannot reach MyMRC | Job retries on next cron tick; no alert needed |
+| Failure                          | Detection                                              | Recovery                                                                              |
+| -------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Login redirect (auth expired)    | Playwright sees `/login` instead of `/scheduled-hauls` | Re-authenticate, re-save storage state, retry                                         |
+| Selectors broken (page redesign) | Element not found errors in Playwright                 | Manual inspection, update `selectors.ts`, redeploy                                    |
+| MRC adds CAPTCHA / 2FA           | Login flow fails with new challenge                    | Pause Playwright job, fall back to manual CSV reconciliation, escalate to MRC contact |
+| MyMRC site outage                | All requests return 5xx or timeout                     | Backoff and retry; ntfy if outage > 1 hour                                            |
+| Network outage on CHAD-HQ        | Playwright cannot reach MyMRC                          | Job retries on next cron tick; no alert needed                                        |
 
 ## Pending work
 

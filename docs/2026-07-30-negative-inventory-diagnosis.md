@@ -1,7 +1,11 @@
 # Why Woodland's inventory is negative
 
 **Date:** 2026-07-30 (evening PT) · **Branch:** `main` @ `552e21c` · **Access:** read-only against prod
-**Status:** diagnosed — data-integrity problem, not a display bug
+**Status:** **SUPERSEDED 2026-08-10 by ADR-0089.** §6 below _disproves_ the undated-haul
+hypothesis, and that disproof is **wrong** — see the §6 banner. The floor is now positive
+(+1,382) and the July Woodland COR is unblocked (512 units EOM). Every "currently" and
+"today" in this document means **2026-07-30**. Kept unedited below the corrections as the
+record of what was measured and concluded that night.
 
 ---
 
@@ -148,7 +152,23 @@ over-bill MRC if those months were ever invoiced. The processed bridge filters `
 
 ---
 
-## 6. On the undated-haul hypothesis — disproven as the cause
+## 6. On the undated-haul hypothesis — ⚠ THIS SECTION'S CONCLUSION IS WRONG
+
+> **Superseded by ADR-0089 (2026-08-10). The undated hauls WERE a cause, not a cleared
+> hypothesis.**
+>
+> The reasoning below runs "no date ⇒ pre-anchor ⇒ inert". Every step after the first is
+> sound; the first is false. **"No docking date" is not "no delivery date."** These hauls
+> are undated only on `Docking_Appointment_Date__c`, a SCHEDULING field populated only
+> when a haul books a dock slot — and route collections never book one. They carry
+> `Recycler_Reported_Delivery_Date__c`, which was in the same payload, was catalogued in
+> our own 2026-07-22 discovery doc, and was measured by nobody: the re-measurement in §9's
+> negative control corrected the JSON _path_ but still only ever looked at the appointment
+> field. That omission is what produced this conclusion.
+>
+> 886 route-collection hauls were silently skipped by the ADR-0059 bridge, **35 of them
+> post-anchor Delivered** (639 program + 1,790 non-program units, 133,595 lb), and never
+> reached the floor. Read ADR-0089 for what is true.
 
 The 2,301 undated inbound hauls are **real**, and the figure is confirmed: 2,301 `Delivered`+`General`
 hauls with no docking date, carrying **190,616 units**. `[M]`
@@ -197,9 +217,30 @@ will report the hauls feed healthy indefinitely, while the feed that actually dr
 
 **The guard is blind to the exact feed causing the negative.**
 
+> **FIXED, in two steps.** 2026-07-31 (ADR-0070 Am.1): the guard was scoped to
+> `status = 'Delivered'` rows only, so future-dated `Confirmed` appointments can no longer
+> hold the maximum ahead of `now()`. 2026-08-10 (ADR-0089 D3): the column moved to
+> `COALESCE(recycler_reported_delivery_date, docking_appointment_date)` — the same key the
+> bridge aggregates on, which is the property that was actually missing. A guard that
+> measures a different column than the bridge is not a guard.
+
 ---
 
 ## 8. The fix, ranked
+
+> **ALL of the "stop the bleeding" items below are DONE as of 2026-08-10, and item 4's
+> stated dependency was false.**
+>
+> 1. **DONE** — the July Woodland COR is unblocked and verified clear at **512 units EOM**.
+> 2. **DONE** — executed as the ADR-0089 D4 recovery (re-detail 7,314/7,314 → delta report
+>    → gated re-bridge). Actual result **+1,382**, against the ~+1,500 predicted here.
+> 3. Not needed — no fresh physical count was required.
+> 4. **DONE, and no MRC action was ever needed.** This item said the backfill "requires MRC
+>    to populate `Docking_Appointment_Date__c`, or an agreed dated fallback" — that would
+>    have parked the fix on a third party indefinitely. The hauls already carried
+>    `Recycler_Reported_Delivery_Date__c`; the bridge now keys on COALESCE and the
+>    re-bridge landed them.
+> 5. **DONE** — see the §7 banner above.
 
 ### Stop the bleeding — today
 

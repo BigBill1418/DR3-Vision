@@ -1,8 +1,10 @@
 # Loads & Inventory Foundations (ADR-0037) — operator/office guide
 
-_Last updated: 2026-07-23. Audience: office staff, managers, super-admin (Bill).
-These are **desktop office/manager surfaces**, not operator iPad surfaces — the
-iPad inbound flow is untouched by this work._
+_Last updated: 2026-08-10. Audience: office staff, managers, super-admin (Bill).
+These are **desktop office/manager surfaces**. The iPad floor flow is a separate
+surface and is not documented here — but two things about it now reach this page and
+are called out below: **Woodland's inbound comes from the iPads, not the paper Bulk
+tab**, and a floor **void** removes a load from the running balance shown here._
 
 This is the P1 groundwork that takes the loads / inventory / commodity layer from
 built-but-dormant to production, CA-first. Every rate and program rule is **data**

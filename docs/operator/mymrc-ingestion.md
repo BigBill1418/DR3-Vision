@@ -35,11 +35,17 @@ hour. Each tick logs into both sites (Eugene + Woodland) sequentially and, per
 site, runs all four feeds. **A healthy run is silent.** Failures page Bill on
 `dr3-vision-system` (see "What the pages mean").
 
-## Enabling the service (deliberate operator action)
+## Enabling the service — ⚠ OBSOLETE, retained for the credential steps only
 
-The service is **profile-gated** (`mymrc`): it is never started by
-`docker compose up -d` or the swarmpilot deployer. To turn it on (ADR-0057 model —
-see `mymrc-setup.md` for the authoritative, step-by-step version):
+> **The profile gate described in this section no longer exists and must not be
+> reintroduced.** `mymrc-scrape` carries no `profiles:` key: it joins the default
+> `docker compose up -d` set and the deployer keeps it up. `profiles: ['mymrc']` is
+> the exact configuration that kept the hourly sync from ever running in prod —
+> step 3 below would be a no-op at best. Steps 1 and 4 (the encryption key, the
+> credential entry, the NOC registry row) are still correct. Authoritative version:
+> `mymrc-setup.md` §3.
+
+Historical text (ADR-0057 model):
 
 1. **Provision the encryption key** `MYMRC_CRED_KEY` (a dedicated 32-byte random
    secret) into a mode-`600` file on the fleet host (e.g.

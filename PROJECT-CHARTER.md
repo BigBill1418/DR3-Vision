@@ -7,8 +7,8 @@
 **Fleet host:** CHAD-HQ (10.99.0.2 / `svdp-dev`) — co-tenant stacks today: SVDP-Guardian, SVDP-Intranet, Helix-Hub, CallVault, DroneOpsMap, LodeStar, VLM analytics. (SVDP-Site is **not** on CHAD-HQ; it migrated to BOS-HQ 2026-04-20.) Corrected 2026-08-03.
 **Repo:** `BigBill1418/DR3-Vision` (existing — V1 PHP code archives to `legacy/`; V2 scaffolds at root)
 **Operator:** Bill Barnard — Director of Operations, DR3 / SVdP Lane County
-**Charter version:** 0.30 — living document
-**Last reviewed:** 2026-05-04
+**Charter version:** 0.30 — living document. **Product decisions made after 2026-06-16 live in `docs/adr/` (0001–0090) and `CHANGELOG.md`, not here** — this charter is authoritative for original scope and intent, not for current behaviour.
+**Last reviewed:** 2026-08-10 (reconciliation pass — stamps and the load-status DDL only; no scope change)
 **Build target:** Claude Code (this charter is the briefing doc; implementation happens in a Claude Code session against `BigBill1418/DR3-Vision`)
 
 ### Changelog
@@ -474,7 +474,10 @@ inbound_loads
   expected_arrival_at,
   arrived_at,                           -- when the truck physically pulled up (operator marks)
   assigned_operator_id (nullable until claimed),
-  status enum(expected|claimed|receiving|received|rejected|verified|submitted_to_mymrc|processed|closed),
+  status enum — SEE `prisma/schema.prisma` `enum LoadStatus` (authoritative). This first-draft
+  list never matched what shipped and now also omits ADR-0090's terminal `voided`.
+  Shipped: expected|arrived|weight_captured|unload_started|in_progress|finished|
+           submitted|verified|rejected|submitted_to_mymrc|processed|voided,
   unload_started_at, unload_ended_at, unload_duration_seconds (computed),
   time_to_unload_start_seconds (computed: arrived_at → unload_started_at; Contract Art 11.3),
   total_units,                                       -- combined count; mattresses+box springs not split (Q7)

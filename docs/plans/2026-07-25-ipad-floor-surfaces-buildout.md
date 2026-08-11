@@ -4,7 +4,7 @@
 **Author:** Terry (research + architecture)
 **Builder:** aegis (implement in one pass; DESIGN here is complete and unambiguous)
 **ADR:** `docs/adr/0060-ipad-floor-inventory-validation-surfaces.md`
-**Status:** Built 2026-07-25 (aegis) — on branch `feat/adr-0060-ipad-floor-surfaces`, PR pending review + merge + prod deploy by Bill. Ready for testing is the acceptance bar (met on the branch; verify on the live URL after deploy).
+**Status:** Shipped. **Partially superseded — read the newer ADRs before changing floor UX:** ADR-0074 + Am.1 (open-portal haul visibility; the consumed-card dead end and the day-bound check-in), ADR-0082 (claim + takeover), ADR-0086 + Am.1 (capture-time photo grants; the 403→401 session husk), ADR-0088 (throughput-gap watchdog, LIVE at Woodland 2026-08-10), ADR-0089 (inbound re-keyed on the true delivery date — every `mymrc_haul` row referenced below was re-keyed and re-bridged on 2026-08-10), and ADR-0090 A/B/C (haul numbers on five floor surfaces, load VOID, back navigation). Production figures quoted below are **as measured 2026-07-25** and are not current.
 **Depends on:** ADR-0037 (running balance / `inbound_loads` / `paper_bulk`), ADR-0047 (rollout gate),
 ADR-0058 (processed bridge + floor-probe), ADR-0059 (inbound bridge + the confirmation contract this
 surface completes), `#166` (manager `paper_bulk` path).
@@ -41,17 +41,17 @@ confirmation day-to-day") has **zero floor UI and zero floor endpoint**.
 
 **Prod evidence of the gap:**
 
-| Signal | Value | Meaning |
-|---|---|---|
-| `inbound_loads` by source | 610 `mymrc_haul`; **0 `paper_bulk`; 0 `b2b_haul`** | 100% of inbound is unconfirmed provisional. No confirmation — floor or manager — has ever happened. No per-load dock capture has ever produced a row. |
-| operator API routes | **none exist** (`src/app/api/operator/**` absent) | The floor has no write endpoint of any kind. |
-| operators provisioned | 2 (both test users: "Test Operator"/woodland, "Nehemiah Niles"/eugene) | Floor is not yet staffed with real operators. |
-| Woodland physical anchor | 2026-07-22 = 2,483 (prior 2026-06-30 = 3,977) | Live floor keyed to a manager desktop count. |
-| Eugene physical anchor | **none** | Eugene on-hand cannot be computed — no floor count path to establish one. |
-| Eugene `mymrc_haul` rows | **0** (ADR-0057 C-21 not built) | Eugene inbound leg empty; floor must be able to ENTER, not only confirm. |
+| Signal                    | Value                                                                  | Meaning                                                                                                                                               |
+| ------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inbound_loads` by source | 610 `mymrc_haul`; **0 `paper_bulk`; 0 `b2b_haul`**                     | 100% of inbound is unconfirmed provisional. No confirmation — floor or manager — has ever happened. No per-load dock capture has ever produced a row. |
+| operator API routes       | **none exist** (`src/app/api/operator/**` absent)                      | The floor has no write endpoint of any kind.                                                                                                          |
+| operators provisioned     | 2 (both test users: "Test Operator"/woodland, "Nehemiah Niles"/eugene) | Floor is not yet staffed with real operators.                                                                                                         |
+| Woodland physical anchor  | 2026-07-22 = 2,483 (prior 2026-06-30 = 3,977)                          | Live floor keyed to a manager desktop count.                                                                                                          |
+| Eugene physical anchor    | **none**                                                               | Eugene on-hand cannot be computed — no floor count path to establish one.                                                                             |
+| Eugene `mymrc_haul` rows  | **0** (ADR-0057 C-21 not built)                                        | Eugene inbound leg empty; floor must be able to ENTER, not only confirm.                                                                              |
 
-**Conclusion:** the iPad has a per-load dock workflow (built, unused, 0 rows) but not the *day-to-day
-inventory-validation layer* Bill means. This buildout adds that layer: confirm inbound, confirm/log
+**Conclusion:** the iPad has a per-load dock workflow (built, unused, 0 rows) but not the _day-to-day
+inventory-validation layer_ Bill means. This buildout adds that layer: confirm inbound, confirm/log
 processed, confirm on-hand — the floor's daily validation loop — on top of the ADR-0059 contract.
 
 ---
@@ -125,6 +125,7 @@ All pages: `export const dynamic = 'force-dynamic'`, green palette (`bg-dr3-gree
 number entry via a large on-screen stepper/keypad (operators work outdoors, often gloved).
 
 ### F-1 — Floor home / daily hub — `/operator/[site]/today`
+
 - **Files:** `src/app/operator/[site]/today/page.tsx` (server), `today-client.tsx` (cards).
 - **Reads:** `onHand(siteId, now)` for a headline on-hand tile (program / non-program / total);
   count of unconfirmed `mymrc_haul` days in the recent window (badge on the Inbound card).
@@ -133,6 +134,7 @@ number entry via a large on-screen stepper/keypad (operators work outdoors, ofte
 - Header: site name, signed-in operator, sign-out (reuse `SignOutButton`).
 
 ### F-2 — Inbound haul-count confirmation — `/operator/[site]/inbound`
+
 - **Files:** `src/app/operator/[site]/inbound/page.tsx` (server), `inbound-client.tsx`.
 - **Reads (GET `/api/operator/[site]/inbound`):** recent aggregate inbound days (last ~14) with, per day:
   `arrived_at` (Pacific day), `total_units`, `program_unit_count`, `non_program_unit_count`,
@@ -149,6 +151,7 @@ number entry via a large on-screen stepper/keypad (operators work outdoors, ofte
   chip (precedence, §7-A1).
 
 ### F-3 — On-hand count — `/operator/[site]/count`
+
 - **Files:** `src/app/operator/[site]/count/page.tsx` (server), `count-client.tsx`.
 - **Reads:** `onHand(siteId, now)` — show the COMPUTED on-hand prominently so the operator sees what the
   system expects before entering the physical count.
@@ -160,6 +163,7 @@ number entry via a large on-screen stepper/keypad (operators work outdoors, ofte
   than expected" so the operator understands the drift. Delta is recorded, never silently absorbed.
 
 ### F-4 — Processed / stripped count confirmation — `/operator/[site]/processed` (P2, see §7-A2)
+
 - **Files:** `src/app/operator/[site]/processed/page.tsx` (server), `processed-client.tsx`.
 - **Reads:** today's `processed_units_daily` row (may already exist from the ADR-0058 bridge or manager
   Option-B entry) with `stripped_program` / `stripped_non_program`; recent days.
@@ -183,7 +187,7 @@ actorUserId, correctionNote?: string | null }): Promise<BulkInboundView>`
   re-implement the Pacific-midnight instant — it must byte-match what `onHand` windows on).
 - New provenance constant `FLOOR_SOURCE_TYPE = 'ipad_floor'` (see migration §5 and decision §7-A1).
 - In ONE `prisma.$transaction`:
-  1. **Money-safety guard (§4-C):** if any *non-aggregate* verified inbound row exists for
+  1. **Money-safety guard (§4-C):** if any _non-aggregate_ verified inbound row exists for
      (site, that Pacific day) — i.e. a `b2b_haul` / per-load `inbound_loads` row with
      `status IN VERIFIED_INBOUND_STATUSES` and `arrived_at` in the day — **refuse** with a typed 409
      (`FloorInboundConflictError`, "per-load captures already exist for this day; confirm on the
@@ -200,30 +204,33 @@ actorUserId, correctionNote?: string | null }): Promise<BulkInboundView>`
   5. Audit the insert/update (`actor_user_id`=operator, before/after counts) in the same tx (hard rule #6).
 
 **Route:** `src/app/api/operator/[site]/inbound/route.ts`
+
 - `GET` — `requireOperatorForSite` → list recent aggregate days + `hasPerLoadCapture` per day.
 - `POST` — `requireOperatorForSite` → Zod-validate `{ inboundDate: /^\d{4}-\d{2}-\d{2}$/, totalUnits int>0,
-  programUnits int≥0, nonProgramUnits int≥0, correctionNote?: string≤120 }` → `confirmFloorInboundDay`.
+programUnits int≥0, nonProgramUnits int≥0, correctionNote?: string≤120 }` → `confirmFloorInboundDay`.
   Map `FloorInboundConflictError`→409, split mismatch→422 via a floor error helper mirroring
   `loadsErrorResponse`.
 - `runtime='nodejs'`, `dynamic='force-dynamic'`.
 
 ### F-3 route — `src/app/api/operator/[site]/count/route.ts`
+
 - `POST` — `requireOperatorForSite` → Zod `{ unitsIndoor?: int≥0, unitsInProcessing?: int≥0,
-  programUnits?: int≥0|null, nonProgramUnits?: int≥0|null, poolAttribution?: 'measured'|'legacy' }` →
+programUnits?: int≥0|null, nonProgramUnits?: int≥0|null, poolAttribution?: 'measured'|'legacy' }` →
   `reconcilePhysicalCount({ siteId, countedAt: Pacific-midnight of today, physical, programUnits,
-  nonProgramUnits, poolAttribution, actorUserId: operator })`. Return `{ computedTotal, physicalTotal,
-  reconciledDelta }`. `countedAt` uses `pacificMidnightInstantOfDayISO(dayISO(now))` so the new anchor
+nonProgramUnits, poolAttribution, actorUserId: operator })`. Return `{ computedTotal, physicalTotal,
+reconciledDelta }`. `countedAt` uses `pacificMidnightInstantOfDayISO(dayISO(now))` so the new anchor
   stamps at Pacific-midnight (the convention `anchorFlowBounds` requires — never UTC midnight).
 - Reuse the existing `PoolSplitMismatchError`→422 mapping.
 
 ### F-4 route — `src/app/api/operator/[site]/processed/route.ts` (P2)
+
 - `POST` — `requireOperatorForSite` → Zod `{ productionDate, strippedProgram≥0, strippedNonProgram≥0,
-  notes?≤2000 }` → `upsertProcessedUnits({ ..., actorUserId: operator })`. Closed-day 409 propagates.
+notes?≤2000 }` → `upsertProcessedUnits({ ..., actorUserId: operator })`. Closed-day 409 propagates.
 
 ### §4-C — Aggregate vs per-load double-count (money-safety finding)
 
 `onHand` sums **every** verified `inbound_loads` row for the window regardless of `load_source_type`. The
-partial unique index prevents two *aggregate* rows per day, but does **not** prevent an aggregate row
+partial unique index prevents two _aggregate_ rows per day, but does **not** prevent an aggregate row
 (`mymrc_haul`/`paper_bulk`/`ipad_floor`) from coexisting with per-load `b2b_haul` rows on the same day —
 that would double-count. This is latent-safe today (0 `b2b_haul` rows in prod) but becomes live the moment
 the floor uses both grains. The F-2 confirm guard (§4-A step 1) closes it on the write path this buildout
@@ -244,7 +251,7 @@ verified per-load rows). Out of scope for the UI buildout; documented in ADR-006
 2. Widen the partial unique index to include the new value:
    `DROP INDEX IF EXISTS "<paper_bulk_mymrc_haul_unique_idx name from 20260810>";`
    `CREATE UNIQUE INDEX ... ON "inbound_loads" (site_id, arrived_at) WHERE load_source_type IN
-   ('paper_bulk','mymrc_haul','ipad_floor');`
+('paper_bulk','mymrc_haul','ipad_floor');`
    (Read the exact index name from `20260810_adr0059_mymrc_haul_inbound_source/migration.sql` and reuse it.)
 3. Update the `@@index` comment block on `InboundLoad` in `schema.prisma` to note the three-value predicate
    (Prisma has no partial-index syntax; the migration is authoritative, the `@@index` mirrors lookup shape).
@@ -258,6 +265,7 @@ verified per-load rows). Out of scope for the UI buildout; documented in ADR-006
 ## §6 — Test plan (unit + the iPad-viewport visual gate)
 
 **Unit — `src/lib/loads/floor-inbound.test.ts`:**
+
 - Split invariant enforced (program+nonProgram==total, else 422). Reuses the `bulk-inbound` invariant.
 - Confirm retires the `mymrc_haul` provisional (delete audited) and installs exactly ONE `ipad_floor` row.
 - Idempotent re-confirm UPDATEs in place (absolute SET; no second row; no double-count).
@@ -275,10 +283,11 @@ verified per-load rows). Out of scope for the UI buildout; documented in ADR-006
 
 **Playwright iPad-viewport visual verification — HARD ACCEPTANCE GATE (per the fleet UI visual-verification
 gate):** capture and review BY EYE, per surface (F-1..F-4), at:
+
 - iPad Mini 768×1024, iPad 10th 820×1180, iPad Pro 12.9 1024×1366 — **portrait AND landscape**.
-Assert by eye: tap targets ≥44px, green outdoor-legible palette, no horizontal scroll, number entry works
-without a hardware keyboard, no desktop-only interaction. Screenshots go in the PR. "Tests pass / no
-overflow" alone is NOT done — eyes on the screenshots, and then verify on the LIVE URL after deploy.
+  Assert by eye: tap targets ≥44px, green outdoor-legible palette, no horizontal scroll, number entry works
+  without a hardware keyboard, no desktop-only interaction. Screenshots go in the PR. "Tests pass / no
+  overflow" alone is NOT done — eyes on the screenshots, and then verify on the LIVE URL after deploy.
 - **Verify against the CONTAINER, not git HEAD** (`docker exec dr3-vision-app` — CHAD deployer can build
   from a pre-pull tree; confirm the running container has the new routes before declaring ready).
 
@@ -286,19 +295,19 @@ overflow" alone is NOT done — eyes on the screenshots, and then verify on the 
 
 ## §7 — Flagged decisions for Bill (default = the recommended option; all resolvable, none block build)
 
-- **A1 — Floor-confirmed provenance tier.** *Recommended:* new `load_source_type='ipad_floor'` +
+- **A1 — Floor-confirmed provenance tier.** _Recommended:_ new `load_source_type='ipad_floor'` +
   widened index, precedence `ipad_floor > paper_bulk > mymrc_haul` (honors ADR-0059 D4 literally; clean
-  report/audit labeling; trivial additive migration mirroring ADR-0059's own). *Fallback (zero-migration):*
+  report/audit labeling; trivial additive migration mirroring ADR-0059's own). _Fallback (zero-migration):_
   floor writes `paper_bulk` via the existing `upsertBulkInboundDay` — simplest, but collapses D4's
   three-tier precedence to two and loses source-type-level floor-vs-office distinction (still visible in
   `audit_log`). **Sub-question:** should a floor confirm be allowed to OVERRIDE an office `paper_bulk` day,
   or refuse it? Recommended: **refuse** (office amends via manager) — matches the read-only chip in F-2.
-- **A2 — Does the floor own processed-count entry (F-4)?** *Recommended:* build it as a confirm-only
+- **A2 — Does the floor own processed-count entry (F-4)?** _Recommended:_ build it as a confirm-only
   surface (P2, after F-2/F-3) since processed already has a MyMRC bridge + manager Option-B + bonus-module
   capture. If Bill wants processed to stay manager-entered, drop F-4 and its route; F-1 hides the card.
 - **A3 — Eugene rollout.** Eugene has no `mymrc_haul` provisional (C-21 not built) and no physical anchor.
   F-2 supports enter-from-scratch and F-3 establishes the first anchor, so Eugene benefits from F-3 (and
-  F-2 manual entry) even before C-21. *Recommended:* flip Woodland `loads_inventory` live for testing now;
+  F-2 manual entry) even before C-21. _Recommended:_ flip Woodland `loads_inventory` live for testing now;
   enable Eugene's F-3 (count) ahead of its F-2 data. Confirm whether Eugene floor should manually enter
   inbound pre-C-21 or wait.
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-23
 **Author:** Terry (research/architecture) — for implementation by aegis
-**Status:** Ready to build
+**Status:** Shipped 2026-07-23. **§0's date-key caveat is FALSIFIED and the key itself is SUPERSEDED by [ADR-0089](../adr/0089-inbound-is-keyed-on-a-scheduling-field.md) (2026-08-10)** — the bridge now keys on `COALESCE(recycler_reported_delivery_date, docking_appointment_date)`. See the banner in §0 before using any date logic, filter, counter or test contract from this spec.
 **ADR:** [ADR-0059](../adr/0059-mymrc-inbound-inventory-bridge.md)
 **Sibling leg:** [ADR-0058](../adr/0058-mymrc-processed-inventory-bridge-and-single-8pm-report.md) + `docs/plans/2026-07-23-mymrc-processed-inventory-bridge.md` — the PROCESSED (`Stripped`) leg. This spec mirrors it exactly; read it first.
 **Relates to:** ADR-0037 (loads & inventory / running balance — the `Inbound` term), ADR-0038 + ADR-0057 (MyMRC ingestion, mirror tables, reconcile-queue write gate), ADR-0048 (workbook `import` source), `#166` (paper_bulk manager inbound path, `src/lib/loads/bulk-inbound.ts`).
@@ -11,7 +11,7 @@
 
 ## 0. The critical question, answered with live-DB evidence (CHAD-HQ prod, 2026-07-23)
 
-**Question:** MyMRC hauls — are they a *schedule* (appointments, no real counts) or a *receipt* (actual delivered/received counts)? This determines whether bridged inbound is a genuine (if provisional) receipt or merely a scheduled figure.
+**Question:** MyMRC hauls — are they a _schedule_ (appointments, no real counts) or a _receipt_ (actual delivered/received counts)? This determines whether bridged inbound is a genuine (if provisional) receipt or merely a scheduled figure.
 
 **Answer: MyMRC records BOTH, and distinguishes them cleanly by `Status__c`. The `Delivered` state carries the ACTUAL recycler-received count.** My earlier "hauls = a schedule, not a receipt" caution is **refuted for `Status='Delivered'` rows** — those are real receipts. Bridge only `Delivered` hauls.
 
@@ -19,13 +19,13 @@
 
 **1. Status lifecycle is explicit — scheduled vs received is a first-class field:**
 
-| `status` (Status__c) | rows | rows with `program_unit_count > 0` | Σ program | Σ non-program |
-|---|---|---|---|---|
-| **Delivered** | 7,174 | 6,956 | 645,402 | 15,356 |
-| Confirmed | 35 | **0** | 0 | 0 |
-| Rejected | 3 | 0 | 0 | 0 |
-| Inactive | 1 | 1 | 14 | 0 |
-| (null) | 2 | 0 | 0 | 0 |
+| `status` (Status\_\_c) | rows  | rows with `program_unit_count > 0` | Σ program | Σ non-program |
+| ---------------------- | ----- | ---------------------------------- | --------- | ------------- |
+| **Delivered**          | 7,174 | 6,956                              | 645,402   | 15,356        |
+| Confirmed              | 35    | **0**                              | 0         | 0             |
+| Rejected               | 3     | 0                                  | 0         | 0             |
+| Inactive               | 1     | 1                                  | 14        | 0             |
+| (null)                 | 2     | 0                                  | 0         | 0             |
 
 `Confirmed` = a scheduled/upcoming dock appointment; its `Recycler_Program_Unit_Count__c` is **0** (not yet received/counted). `Delivered` = received; the recycler's actual count is filled in. The count field is literally named `Recycler_Program_Unit_Count__c` — the recycler's own received tally, populated on delivery.
 
@@ -35,10 +35,10 @@
 
 **3. Two haul types — only General is inbound:**
 
-| `type` (among `Delivered`) | rows | Σ program | Σ non-program | Σ consumer-dropoff units |
-|---|---|---|---|---|
-| **General** (B2B truck delivery) | 6,182 | 629,973 | 15,356 | 57 |
-| Consumer Dropoff | 992 | 15,429 | 0 | 15,022 |
+| `type` (among `Delivered`)       | rows  | Σ program | Σ non-program | Σ consumer-dropoff units |
+| -------------------------------- | ----- | --------- | ------------- | ------------------------ |
+| **General** (B2B truck delivery) | 6,182 | 629,973   | 15,356        | 57                       |
+| Consumer Dropoff                 | 992   | 15,429    | 0             | 15,022                   |
 
 `type='General'` is the B2B inbound truck delivery → **this bridge's source.** `type='Consumer Dropoff'` carries `unpaid_consumer_dropoff_units` and belongs to the SEPARATE consumer-dropoff leg (`onHand`'s `dropoffUnits`, `consumer_dropoffs` table) — **excluded here to avoid double-counting that leg** (see §5.4).
 
@@ -54,7 +54,31 @@
 
 Bridge `Delivered` `General` hauls as **inbound receipts** — higher confidence than a mere schedule (they carry the recycler's actual received count), but still labeled **PROVISIONAL / unconfirmed** in the report until iPad floor-confirmation, per Bill's directive. The provisional flag is honest for two independent reasons: (a) the recycler's count is an external system's figure not yet floor-verified against physical intake, and (b) the bridged count is only as complete as the mirror's `Delivered`-capture (see §5.1 completeness watch).
 
-### One honesty caveat you MUST carry into the design (date coverage)
+### ⚠ One honesty caveat you MUST carry into the design (date coverage) — FALSIFIED 2026-08-10
+
+> **This is the caveat that was wrong, and it is the reason ADR-0089 exists.** Both bullets
+> below are false, for one shared reason: **"no usable delivery date anywhere in the record"
+> was never checked.** `Recycler_Reported_Delivery_Date__c` was in the same payload and in
+> our own 2026-07-22 discovery catalogue; this spec keyed on
+> `Docking_Appointment_Date__c`, which is a **SCHEDULING** field — written only when a haul
+> books a dock slot.
+>
+> - "All historical (pre-anchor) and inert" — **no.** 886 route-collection hauls never book
+>   a slot, so they were skipped on the **LIVE** path, and **35 were post-anchor Delivered**
+>   (639 program + 1,790 non-program units, 133,595 lb). The skip drove the Woodland floor
+>   to **−1,671**, not to "exactly 0".
+> - "The live/forward path is fully covered" — **no.** It missed every route collection.
+>
+> The §3 invariance proof ("backfilling changes the current floor by exactly 0") held only
+> under the appointment-date key. Under the COALESCE key, post-anchor hauls DO land after
+> the anchor — which is the entire point of the recovery, and why the re-bridge is gated on
+> a reviewed delta report rather than on a zero-drift assertion.
+>
+> **Current shipped behaviour** (`src/lib/mymrc/inbound-bridge.ts`): the filter is
+> `COALESCE(recycler_reported_delivery_date, docking_appointment_date) IS NOT NULL`;
+> `haulsUndated` counts only hauls missing BOTH keys and is currently **0/7,314**; a haul
+> carrying both is keyed on the **true delivery date**, not the appointment. Any date logic,
+> filter, counter or test contract below is superseded accordingly.
 
 Only **3,881 of 6,182** Delivered General hauls carry a `docking_appointment_date`; **2,301 have none** (their payload was list-only — `payload->'fields'` holds just `Name`; no usable delivery date anywhere in the record). **All dated Delivered General hauls fall in 2024-03-01 → 2026-07-21 — every one ≤ the 2026-07-22 anchor.** So:
 
@@ -179,8 +203,8 @@ export interface InboundBridgeResult {
   inserted: number;
   updated: number;
   skippedGuarded: number; // paper_bulk-owned days left untouched
-  unchanged: number;      // mymrc_haul days already equal
-  haulsUndated: number;   // Delivered General hauls skipped for no docking_appointment_date
+  unchanged: number; // mymrc_haul days already equal
+  haulsUndated: number; // Delivered General hauls skipped for no docking_appointment_date
 }
 
 export async function bridgeInboundHaulsToInventory(
@@ -195,8 +219,15 @@ Implementation shape: one `GROUP BY` `$queryRaw` over the mirror (§1.2 filter, 
 ```js
 if (typeof mymrc.bridgeInboundHaulsToInventory === 'function') {
   try {
-    const ir = await mymrc.bridgeInboundHaulsToInventory({ prisma, sinceDeliveryDate: recentFloor, log: logFn });
-    logFn('info', `inbound-bridge — ins:${ir.inserted} upd:${ir.updated} skip:${ir.skippedGuarded} same:${ir.unchanged} undated:${ir.haulsUndated}`);
+    const ir = await mymrc.bridgeInboundHaulsToInventory({
+      prisma,
+      sinceDeliveryDate: recentFloor,
+      log: logFn,
+    });
+    logFn(
+      'info',
+      `inbound-bridge — ins:${ir.inserted} upd:${ir.updated} skip:${ir.skippedGuarded} same:${ir.unchanged} undated:${ir.haulsUndated}`,
+    );
   } catch (err) {
     logFn('error', `inbound-bridge failed (non-fatal): ${describeErr(err)}`);
   }
@@ -215,11 +246,11 @@ Add `scripts/mymrc-inbound-bridge-backfill.mjs` (mirrors `scripts/mymrc-processe
 
 The provisional→confirmed lifecycle is carried by `load_source_type`, **no extra column**:
 
-| Tier | `load_source_type` | Meaning | Written by |
-|---|---|---|---|
-| 3 — provisional | `mymrc_haul` | MyMRC Delivered-haul counts, unconfirmed | this bridge (auto) |
-| 2 — manual | `paper_bulk` | Manager entered the day from the paper log | `upsertBulkInboundDay` (`#166`) |
-| 1 — confirmed | per-load dock capture (`b2b_haul` / `cip_consumer`) | iPad floor capture (future) | not built |
+| Tier            | `load_source_type`                                  | Meaning                                    | Written by                      |
+| --------------- | --------------------------------------------------- | ------------------------------------------ | ------------------------------- |
+| 3 — provisional | `mymrc_haul`                                        | MyMRC Delivered-haul counts, unconfirmed   | this bridge (auto)              |
+| 2 — manual      | `paper_bulk`                                        | Manager entered the day from the paper log | `upsertBulkInboundDay` (`#166`) |
+| 1 — confirmed   | per-load dock capture (`b2b_haul` / `cip_consumer`) | iPad floor capture (future)                | not built                       |
 
 **Transitions:**
 
@@ -244,7 +275,7 @@ Read `src/lib/inventory/running-balance.ts` — `onHand`, `anchorFlowBounds`; an
 
 Woodland's latest anchor is **2026-07-22**, so `inboundSince = 2026-07-23 00:00 PT`. Every bridged inbound row's `arrived_at` = Pacific-midnight of a `docking_appointment_date` **≤ 2026-07-21 < 2026-07-23**, so **every backfilled row is excluded** by `{ gte: 2026-07-23-PT }`. The live `onHand(now)` reads **zero** bridged inbound. Backfilling all dated Delivered General history changes the current floor by **exactly 0.**
 
-Only hauls delivered **strictly after 2026-07-22** (2026-07-23+) will ever add to the live floor — which is correct: post-anchor inbound *should* increase on-hand. The structural guarantee holds for every future anchor (each physical count re-baselines and excludes all prior inbound). Historical as-of windows between two anchors gain the previously-empty inbound leg (the intended data becoming available); each bracketing physical count already reconciles the drift.
+Only hauls delivered **strictly after 2026-07-22** (2026-07-23+) will ever add to the live floor — which is correct: post-anchor inbound _should_ increase on-hand. The structural guarantee holds for every future anchor (each physical count re-baselines and excludes all prior inbound). Historical as-of windows between two anchors gain the previously-empty inbound leg (the intended data becoming available); each bracketing physical count already reconciles the drift.
 
 ### 3.3 The inbound date boundary matches the processed leg
 
@@ -273,7 +304,7 @@ The backfill script MUST prove live-floor invariance in practice, reusing the **
 
 ## 4. Report integration (provisional inbound must be visibly labeled)
 
-The Daily Production Report's EOD inventory panel (`src/lib/bonus/daily-report-notifications.ts` `renderEodInventoryHtml`, fed by `getEodInventorySnapshot` in `src/lib/loads/eod-inventory.ts`) already renders healthy/stale/zero bands and a "Change from yesterday (net inbound/net outbound)" line. Inbound is already *in* the `onHand` math it shows; this leg must make the **provisional** nature visible.
+The Daily Production Report's EOD inventory panel (`src/lib/bonus/daily-report-notifications.ts` `renderEodInventoryHtml`, fed by `getEodInventorySnapshot` in `src/lib/loads/eod-inventory.ts`) already renders healthy/stale/zero bands and a "Change from yesterday (net inbound/net outbound)" line. Inbound is already _in_ the `onHand` math it shows; this leg must make the **provisional** nature visible.
 
 ### 4.1 Surface a provisional-inbound flag (no new column, no balance-math change)
 
@@ -292,7 +323,7 @@ Derive it with one aggregate already available in the module's query pattern: do
 In `renderEodInventoryHtml`'s **healthy** band (and, where inbound is the only recent flow, the stale band's context), when `inboundProvisional`:
 
 - Add a row / caption: **"Inbound: provisional — from MyMRC haul counts, pending floor confirmation."** Style it in the muted/`WARN_INK` tone already defined, NOT as confirmed truth. It sits alongside the existing "Latest physical count" and delta rows.
-- Keep the existing footer honesty line (ADR-0058 §3.3): "On-hand is the reconciled floor from the last physical count plus confirmed movement since." Amend to: "…plus movement since (inbound marked *provisional* is from MyMRC haul counts, not yet floor-confirmed)."
+- Keep the existing footer honesty line (ADR-0058 §3.3): "On-hand is the reconciled floor from the last physical count plus confirmed movement since." Amend to: "…plus movement since (inbound marked _provisional_ is from MyMRC haul counts, not yet floor-confirmed)."
 
 All times Pacific-labeled (the report already does this). Once a day is confirmed (paper_bulk / iPad), its inbound is no longer `mymrc_haul` → `inboundProvisional` goes false for that day and the label drops automatically.
 
