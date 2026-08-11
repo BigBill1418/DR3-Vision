@@ -56,6 +56,9 @@ interface ExpectedRow {
     status: string;
     total_units: number | null;
     submitted_at: Date | null;
+    /** ADR-0091 — who holds the claim, so the card can tell yours from theirs. */
+    assigned_operator_id: string | null;
+    assigned_operator: { name: string } | null;
   } | null;
 }
 
@@ -476,6 +479,8 @@ describe('ADR-0074 Am.1 — a CONSUMED expected load is never check-in-able', ()
           status: 'submitted',
           total_units: 159,
           submitted_at: new Date('2026-08-05T23:48:00Z'),
+          assigned_operator_id: 'user-nate',
+          assigned_operator: { name: 'Nate Cullison' },
         },
       }),
     ];
@@ -488,6 +493,9 @@ describe('ADR-0074 Am.1 — a CONSUMED expected load is never check-in-able', ()
     // …and is replaced by something that SAYS what happened, rather than by a
     // silent gap. "Nothing here" was the state that cost the floor a morning.
     expect(row?.consumedLoad).toEqual({
+      // ADR-0091 — the child's id travels with the verdict, because an OPEN slot
+      // has to be able to route back into the load it already has.
+      loadId: '2b60d7ba-efb4-46de-ba27-8801bbf0be5a',
       status: 'submitted',
       // `open` is decided HERE, not in the client. `OPEN_DOCK_STATUSES` lives
       // next to `prisma` in `open-loads.ts`, so a client component cannot import
@@ -496,6 +504,9 @@ describe('ADR-0074 Am.1 — a CONSUMED expected load is never check-in-able', ()
       open: false,
       totalUnits: 159,
       workedAt: new Date('2026-08-05T23:48:00Z'),
+      // ADR-0091 — WHO, so the card stops calling your own load somebody else's.
+      holderUserId: 'user-nate',
+      holderName: 'Nate Cullison',
     });
     // The haul itself is still listed. Hiding it would mean an operator whose
     // truck is on the dock sees an empty screen and learns nothing.
@@ -516,6 +527,8 @@ describe('ADR-0074 Am.1 — a CONSUMED expected load is never check-in-able', ()
           status: 'in_progress',
           total_units: null,
           submitted_at: null,
+          assigned_operator_id: 'user-janette',
+          assigned_operator: { name: 'Janette Tomas' },
         },
       }),
     ];

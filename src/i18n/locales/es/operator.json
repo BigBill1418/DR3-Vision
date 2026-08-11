@@ -304,7 +304,9 @@
       "queued": "Guardado en este iPad — se enviará al reconectar",
       "already_worked": "Ya trabajada",
       "already_worked_detail": "Ya trabajada — {{units}} unidades, enviada el {{date}}",
-      "already_started": "Ya iniciada por otro operador"
+      "already_started": "Ya iniciada por otro operador",
+      "resume_yours": "Usted la inició — toque para abrirla",
+      "started_by": "Iniciada por {{name}} — toque para tomarla"
     },
     "hub": {
       "heading": "Revisión diaria",

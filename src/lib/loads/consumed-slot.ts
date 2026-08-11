@@ -25,6 +25,17 @@ import { OPEN_DOCK_STATUSES } from '@/lib/loads/open-loads';
 
 /** What became of an expected load's slot, in the terms the floor cares about. */
 export interface ConsumedLoadRef {
+  /**
+   * ADR-0091 — the child load's id, i.e. THE ROUTE BACK INTO THE WORK.
+   *
+   * Amendment 1 deliberately gave the consumed card no control, and for a
+   * `submitted` slot that is still right: there is nothing to go back to. But
+   * the same card is shown for an OPEN child, where a route absolutely exists
+   * (`/operator/<site>/load/<id>` renders the workflow to its holder and the
+   * ADR-0082 held-by panel to anyone else) and withholding it is what stranded
+   * Pablo Ledezma on H-136311 for ~70 minutes on 2026-08-11.
+   */
+  loadId: string;
   status: string;
   /**
    * True while the child is still on the floor (an operator has it open), false
@@ -40,19 +51,36 @@ export interface ConsumedLoadRef {
   totalUnits: number | null;
   /** `submitted_at`. NULL while the load is open, or if it never got there. */
   workedAt: Date | null;
+  /**
+   * ADR-0091 — WHO holds the claim, so the card can stop guessing.
+   *
+   * Without this the card had no way to tell your own load from a colleague's,
+   * so it called every open child "Already started by another operator" — a
+   * sentence that is false exactly when the reader is the holder, which is the
+   * common case (you started it, the iPad slept, you came back). Null only for a
+   * legacy row with no assignee; the column is nullable, so the type says so.
+   */
+  holderUserId: string | null;
+  holderName: string | null;
 }
 
 /** The child row every caller must select to be able to answer the question. */
 export const CONSUMED_SLOT_SELECT = {
+  id: true,
   status: true,
   total_units: true,
   submitted_at: true,
+  assigned_operator_id: true,
+  assigned_operator: { select: { name: true } },
 } as const;
 
 export interface InboundChildRow {
+  id: string;
   status: LoadStatus;
   total_units: number | null;
   submitted_at: Date | null;
+  assigned_operator_id: string | null;
+  assigned_operator: { name: string } | null;
 }
 
 /**
@@ -73,9 +101,12 @@ export function toConsumedLoad(child: InboundChildRow | null | undefined): Consu
   // slot instead of a dead end.
   if (child.status === 'voided') return null;
   return {
+    loadId: child.id,
     status: child.status,
     open: OPEN_DOCK_STATUSES.includes(child.status),
     totalUnits: child.total_units,
     workedAt: child.submitted_at,
+    holderUserId: child.assigned_operator_id,
+    holderName: child.assigned_operator?.name ?? null,
   };
 }
