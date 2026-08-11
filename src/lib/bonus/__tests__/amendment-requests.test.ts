@@ -27,9 +27,10 @@ const CHAINS: Record<
     ops_signer_user_id: 'morena',
     auto_override_actor_user_id: 'bill',
   },
+  // Eugene ops = Patrick since 2026-08-11 (ADR-0019.3); Kelsey holds no slot.
   [EUGENE]: {
     facility_signer_user_id: 'rick',
-    ops_signer_user_id: 'kelsey',
+    ops_signer_user_id: 'patrick',
     auto_override_actor_user_id: 'bill',
   },
 };
@@ -442,7 +443,11 @@ describe('submitAmendmentRequest', () => {
     ).rejects.toMatchObject({ reason: 'entry_exists_for_insert' });
   });
 
-  it('Patrick (non-chain manager) → propagates AmendmentWorkflowForbiddenError', async () => {
+  // Persona note: 'kelsey' is the non-chain Eugene manager as of 2026-08-11 —
+  // Patrick took the ops slot (ADR-0019.3), so he is no longer the forbidden
+  // one. resolveAmendmentApprover is NOT mocked here; it runs for real against
+  // the CHAINS fixture above, so this genuinely exercises the membership guard.
+  it('a non-chain manager → propagates AmendmentWorkflowForbiddenError', async () => {
     store.periods.push({ id: 'p-eu', site_id: EUGENE, state: 'draft' });
     store.employees.push({ id: 'emp-eu', site_id: EUGENE });
     await expect(
@@ -453,7 +458,7 @@ describe('submitAmendmentRequest', () => {
           bonusEmployeeId: 'emp-eu',
           changeType: 'insert',
           newValue: { mattress_count: 10, saves: 0, note: null },
-          requesterUserId: 'patrick',
+          requesterUserId: 'kelsey',
         }),
       ),
     ).rejects.toBeInstanceOf(AmendmentWorkflowForbiddenError);

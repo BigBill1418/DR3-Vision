@@ -28,10 +28,14 @@ const WOODLAND_CHAIN: FakeChain = {
   ops_override_actor_user_ids: ['bill'],
   auto_override_actor_user_id: 'bill',
 };
+// Eugene chain mirroring the seed as of 2026-08-11: ops signer is Patrick Dills
+// (he replaced Shannon Rockwell, who had covered for Kelsey Ruhland). Kelsey is
+// still an active Eugene manager but now holds NO slot — which makes her the
+// natural fixture for the "non-chain manager is forbidden" path below.
 const EUGENE_CHAIN: FakeChain = {
   facility_signer_user_id: 'rick',
-  facility_override_actor_user_ids: ['bill'],
-  ops_signer_user_id: 'kelsey',
+  facility_override_actor_user_ids: ['bill', 'patrick'],
+  ops_signer_user_id: 'patrick',
   ops_override_actor_user_ids: ['bill'],
   auto_override_actor_user_id: 'bill',
 };
@@ -71,21 +75,26 @@ describe('resolveAmendmentApprover', () => {
     expect(r.pingBillUserId).toBe('bill');
   });
 
-  it('Rick (Eugene facility) → Kelsey (ops counterpart)', async () => {
+  it('Rick (Eugene facility) → Patrick (ops counterpart)', async () => {
     const r = await resolveAmendmentApprover(db, EUGENE, 'rick');
-    expect(r.expectedApproverUserId).toBe('kelsey');
+    expect(r.expectedApproverUserId).toBe('patrick');
   });
 
-  it('Kelsey (Eugene ops) → Rick (facility counterpart)', async () => {
-    const r = await resolveAmendmentApprover(db, EUGENE, 'kelsey');
+  it('Patrick (Eugene ops) → Rick (facility counterpart)', async () => {
+    const r = await resolveAmendmentApprover(db, EUGENE, 'patrick');
     expect(r.expectedApproverUserId).toBe('rick');
   });
 
-  it('Patrick (Eugene Lead processor, not a chain signer) → forbidden', async () => {
-    await expect(resolveAmendmentApprover(db, EUGENE, 'patrick')).rejects.toBeInstanceOf(
+  // Patrick used to be THE canonical forbidden actor here. Since 2026-08-11 he
+  // holds the Eugene ops slot, so the forbidden path is asserted with Kelsey —
+  // an active Eugene manager who now occupies no slot. The guard is membership-
+  // driven, so the persona is interchangeable; what must not regress is that a
+  // manager outside the chain cannot route an amendment.
+  it('Kelsey (Eugene manager, no longer a chain signer) → forbidden', async () => {
+    await expect(resolveAmendmentApprover(db, EUGENE, 'kelsey')).rejects.toBeInstanceOf(
       AmendmentWorkflowForbiddenError,
     );
-    await expect(resolveAmendmentApprover(db, EUGENE, 'patrick')).rejects.toMatchObject({
+    await expect(resolveAmendmentApprover(db, EUGENE, 'kelsey')).rejects.toMatchObject({
       forbiddenReason: 'patrick_or_other_non_chain_manager',
       status: 403,
     });

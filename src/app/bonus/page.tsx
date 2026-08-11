@@ -61,9 +61,11 @@ import { getSignatureChain } from '@/lib/bonus/signature-chain';
 /**
  * ADR-0029: the "Pending Amendments" nav link is shown only to users who can
  * actually approve — admins (all-site), or a manager who is a signer (facility
- * or ops slot) in their site's signature chain. Patrick (a manager but not a
- * chain signer) and any non-signer manager never see it. Returns the count of
- * items pending the caller's review (0 = show with no badge), or null = hide.
+ * or ops slot) in their site's signature chain. Any manager holding neither
+ * slot never sees it. Membership is read live from the chain, so a signer swap
+ * changes who sees this link within the 30s chain-cache TTL and needs no
+ * deploy. Returns the count of items pending the caller's review (0 = show with
+ * no badge), or null = hide.
  */
 async function pendingAmendmentsForNav(ctx: {
   userId: string;

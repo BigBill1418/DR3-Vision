@@ -159,9 +159,9 @@ export async function POST(req: Request) {
   // the signature chain) so the modal can show "sent to X for approval". One
   // approver per requester/site, so it lives top-level on the payload — the
   // client never sees or trusts the requester/approver ids. If the requester is
-  // structurally outside the workflow (Patrick / non-chain manager), the
-  // amendment submit would itself 403; we surface that here rather than dangling
-  // the client on a modal it could never submit.
+  // structurally outside the workflow (a manager holding neither slot at the
+  // site), the amendment submit would itself 403; we surface that here rather
+  // than dangling the client on a modal it could never submit.
   if (result.ok === 'requires_amendment') {
     let approverName: string | null = null;
     try {

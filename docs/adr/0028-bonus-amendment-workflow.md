@@ -43,18 +43,39 @@ A daily-entry write goes through the workflow iff ALL of these are true:
 2. The `entry_date < today` (Pacific calendar day).
 3. The requested change touches `mattress_count` (an `update` to count, or an
    `insert` of a new row for a prior day).
-4. The actor is a manager who is NOT excluded (Patrick carve-out below).
+4. The actor is a manager who occupies a slot in their site's signature chain.
 5. The actor is not the Director (admin path is direct).
 
 Otherwise the write is direct (existing path).
 
-### Patrick carve-out
+### Patrick carve-out — REVERSED 2026-08-11 (see ADR-0019.3)
 
-Patrick Dills is an Eugene manager AND a `BonusEmployee` (Lead processor) at
-Eugene. By the same separation-of-duties principle that excludes him from the
-Eugene signature chain, the amendment workflow is not available to him. The
-prior-day grid renders his rows read-only; any correction must be verbally
-escalated to Rick or Bill.
+> **This carve-out is no longer in force.** Patrick Dills holds the Eugene
+> ops-signer slot as of 2026-08-11 (Bill instruction), so he is a first-class
+> participant in this workflow: he approves Rick's requests and Rick approves
+> his. The text below is retained as the original reasoning.
+
+Historical position: Patrick Dills is an Eugene manager AND a `BonusEmployee`
+(Lead processor) at Eugene. By the same separation-of-duties principle that
+excluded him from the Eugene signature chain, the amendment workflow was not
+available to him; the prior-day grid rendered his rows read-only and corrections
+were escalated verbally to Rick or Bill.
+
+Two things are worth being precise about, because the mechanism is easy to
+misread:
+
+- **The carve-out was never code.** There is no per-person branch in
+  `src/lib/bonus/amendment-approvers.ts`. The exclusion was emergent from chain
+  membership — `resolveAmendmentApprover` throws for anyone who is neither the
+  facility nor the ops signer. Patrick was blocked because he was outside the
+  chain, not because he was Patrick. Adding him to the chain removed the block
+  with no code change, which is also why the `patrick_or_other_non_chain_manager`
+  reason string is now a misnomer. It is retained deliberately: it is part of the
+  HTTP contract returned by `/api/bonus/amendments`.
+- **The underlying conflict was accepted, not resolved.** Patrick can now be the
+  default approver for amendments touching his own historical bonus rows. The DB
+  CHECK enforces requester ≠ approver; it does not and cannot enforce
+  approver-has-no-interest. Bill owns this trade-off; ADR-0019.3 §2 records it.
 
 ### Change types
 
