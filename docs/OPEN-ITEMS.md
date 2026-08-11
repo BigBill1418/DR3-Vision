@@ -55,7 +55,8 @@ executed ~7:20 PM PT, audited under Bill's user id:
   double-entry with a haul?) — then `mymrc-inbound-bridge-backfill.mjs --since
 2026-07-29` once the slot conflict is resolved. **Second design gap: no
   defined semantics for ipad_floor vs mymrc_haul aggregate-slot contention.**
-- **WATCH — six loads carry exactly 2.000× MRC's unit count** (H-135978/135313/
+- ~~WATCH — six loads carry exactly 2.000× MRC's unit count~~ **RESOLVED 2026-08-10 ~8:30 PM PT** — PR #227's replay tests falsified the replay-double-add theory; the load_stacks rows proved plain DOUBLE-ENTRY (two identical rows per load). At Bill's instruction all six were corrected: duplicate stack soft-voided (ADR-0090 semantics), total_units set to the true count, audited per load; verified total_units == MRC unit_count_at_unload == live stack sum on all six. The live-total display + stack void shipped in #227 prevent recurrence. Original text kept below.
+- **(original)** six loads carry exactly 2.000× MRC's unit count (H-135978/135313/
   136226/136232/136250/136664; two operators; MRC's independent
   unit_count_at_unload agrees with MRC each time). Exact doubling across six
   loads smells like the AW-1 finishUnload/replay double-add, not counting
