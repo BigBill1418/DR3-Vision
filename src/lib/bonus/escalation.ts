@@ -30,7 +30,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { recordSignature, type SignatureSlot } from '@/lib/bonus/signatures';
 import { getSignatureChain } from '@/lib/bonus/signature-chain';
 import { triggerPayrollDelivery } from '@/lib/bonus/payroll-delivery';
-import { publishNtfy } from '@/lib/ntfy';
+import { publishNtfy, lastPublishFailureReason } from '@/lib/ntfy';
 import { log } from '@/lib/observability/logger';
 
 // ────────────────────────────────────────────────────────────────────
@@ -99,8 +99,19 @@ export interface RunEscalationResult {
   tier: EscalationTier;
   /** Yesterday's-close periods examined for this tier. */
   periodsExamined: number;
-  /** Count of ntfy publishes attempted (warning / urgent / deadline-missed). */
+  /**
+   * Count of ntfy publishes that were DELIVERED (`sent` / `fallback-sent`) or
+   * deliberately suppressed by cooldown.
+   *
+   * This used to count publishes ATTEMPTED, which made it a lie: on 2026-08-04
+   * the t3 fire logged `ntfyPublished:1` for a page that was thrown away on the
+   * header encoding (ADR-0019.5) and never left the process. A counter that
+   * increments on the CALL rather than the OUTCOME reports that someone was
+   * told when nobody was.
+   */
   ntfyPublished: number;
+  /** Count of ntfy publishes that were DROPPED — see the accompanying log line. */
+  ntfyDropped: number;
   /** Count of slots auto-signed at t3. */
   autoSigned: number;
   /** Count of periods that fired the t4 deadline-missed alert. */
@@ -129,9 +140,7 @@ function slotUnsigned(row: EscalationPeriodRow, slot: SignatureSlot): boolean {
 export function yesterdayKey(now: Date): Date {
   // `now` is UTC-midnight of the Pacific calendar day; stepping one @db.Date day
   // back is a pure UTC-day subtraction (no DST seam — these are date-only keys).
-  return new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1),
-  );
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
 }
 
 /** `YYYY-MM-DD` of a @db.Date-shaped key (UTC-midnight; no DST seam). */
@@ -156,6 +165,7 @@ export async function runEscalationTier(opts: RunEscalationOpts): Promise<RunEsc
     tier,
     periodsExamined: 0,
     ntfyPublished: 0,
+    ntfyDropped: 0,
     autoSigned: 0,
     deadlineMissed: 0,
     stranded: 0,
@@ -191,6 +201,32 @@ export async function runEscalationTier(opts: RunEscalationOpts): Promise<RunEsc
   }
 
   return result;
+}
+
+/**
+ * Record a publish outcome honestly and, on a drop, say WHY.
+ *
+ * Every escalation page routes through here so no tier can quietly regress to
+ * counting attempts. The `reason` comes from the publisher's captured error —
+ * before ADR-0019.5 that error was swallowed by an empty catch, which is how a
+ * `TypeError` about header encoding presented for weeks as an unexplained
+ * "primary+fallback failed".
+ */
+function recordPublish(
+  res: { outcome: string },
+  result: RunEscalationResult,
+  ctx: Record<string, unknown>,
+  what: string,
+): void {
+  if (res.outcome === 'dropped') {
+    result.ntfyDropped += 1;
+    log.error(
+      { ...ctx, outcome: res.outcome, reason: lastPublishFailureReason() },
+      `[escalation] ${what} ntfy DROPPED — nobody was paged`,
+    );
+    return;
+  }
+  result.ntfyPublished += 1;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -237,13 +273,7 @@ async function tierWarning(
     // day's run.
     cooldownMs: 6 * 60 * 60 * 1000,
   });
-  result.ntfyPublished += 1;
-  if (res.outcome === 'dropped') {
-    log.warn(
-      { periodId: period.id, tier },
-      '[escalation] warning ntfy dropped (primary+fallback failed)',
-    );
-  }
+  recordPublish(res, result, { periodId: period.id, tier }, `${tier} warning`);
 }
 
 /** The names of users authorized to override either slot at a site (t2 body). */
@@ -285,7 +315,7 @@ async function tierAutoOverride(
   });
   if (!actor || !actor.is_active) {
     result.actorUnavailable += 1;
-    await publishNtfy({
+    const res = await publishNtfy({
       topic: 'dr3-vision-system',
       title: `URGENT: auto-override actor unavailable — ${period.site.name} Period ${period.period_number}`,
       body:
@@ -298,7 +328,7 @@ async function tierAutoOverride(
       fingerprint: `bonus-auto-override-actor-unavailable:${period.site.code}:${period.id}`,
       cooldownMs: 6 * 60 * 60 * 1000,
     });
-    result.ntfyPublished += 1;
+    recordPublish(res, result, { periodId: period.id, actorId }, 'auto-override actor-unavailable');
     return;
   }
 
@@ -345,7 +375,7 @@ async function tierAutoOverride(
     // runs after a 2nd signature. If only one slot was auto-signed and the other
     // was already manually signed, the period is now fully `signed`; if both
     // were unsigned, this single delivery covers them.
-    await publishNtfy({
+    const res = await publishNtfy({
       topic: 'dr3-vision-system',
       title: `Bonus auto-override applied — ${period.site.name} Period ${period.period_number}`,
       body:
@@ -357,7 +387,7 @@ async function tierAutoOverride(
       fingerprint: `bonus-auto-override:${period.site.code}:${period.id}`,
       cooldownMs: 6 * 60 * 60 * 1000,
     });
-    result.ntfyPublished += 1;
+    recordPublish(res, result, { periodId: period.id }, 'auto-override confirmation');
     triggerPayrollDelivery(period.id);
   }
 }
@@ -446,14 +476,13 @@ async function runDeadlineMissed(
         fingerprint: `bonus-period-stranded:${period.site.code}:${period.id}`,
         cooldownMs: 6 * 60 * 60 * 1000,
       });
-      result.ntfyPublished += 1;
+      recordPublish(
+        res,
+        result,
+        { periodId: period.id, periodEnd: isoDate(period.period_end) },
+        'stranded',
+      );
       result.stranded += 1;
-      if (res.outcome === 'dropped') {
-        log.warn(
-          { periodId: period.id, periodEnd: isoDate(period.period_end) },
-          '[escalation] stranded ntfy dropped (primary+fallback failed)',
-        );
-      }
       continue;
     }
 
@@ -472,14 +501,8 @@ async function runDeadlineMissed(
       // the same payroll window.
       cooldownMs: 6 * 60 * 60 * 1000,
     });
-    result.ntfyPublished += 1;
+    recordPublish(res, result, { periodId: period.id }, 'deadline-missed');
     result.deadlineMissed += 1;
-    if (res.outcome === 'dropped') {
-      log.warn(
-        { periodId: period.id },
-        '[escalation] deadline-missed ntfy dropped (primary+fallback failed)',
-      );
-    }
   }
 }
 
