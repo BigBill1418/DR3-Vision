@@ -20,6 +20,7 @@
     "submitted": "جمع شدہ",
     "verified": "تصدیق شدہ",
     "rejected": "مسترد",
+    "voided": "منسوخ شدہ",
     "submitted_to_mymrc": "MyMRC کو بھیجی گئی",
     "processed": "پراسیس شدہ"
   },
@@ -33,6 +34,7 @@
     "submitted": "جمع شدہ",
     "verified": "تصدیق شدہ",
     "rejected": "مسترد",
+    "voided": "منسوخ شدہ",
     "submitted_to_mymrc": "MyMRC میں",
     "processed": "پراسیس شدہ"
   },

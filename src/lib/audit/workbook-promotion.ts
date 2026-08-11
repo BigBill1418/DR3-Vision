@@ -43,6 +43,7 @@ import {
 } from '@/lib/inventory/running-balance';
 import { computeInventoryClose, type InventoryClosePools } from '@/lib/inventory/inventory-close';
 import { notVoidedSnapshotWhere } from '@/lib/inventory/snapshot-void';
+import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import type { SiteAliasResolver } from './types';
 
 const D = Prisma.Decimal;
@@ -755,7 +756,10 @@ export function computeCloseFromCandidates(c: PromotionCandidates): RunningBalan
 export function assertPromotedInboundReconciles(c: PromotionCandidates): void {
   if (!c.inventoryLedger) return;
   const grid = c.inbound.reduce(
-    (a, i) => ({ program: a.program.plus(i.programUnits), nonProgram: a.nonProgram.plus(i.nonProgramUnits) }),
+    (a, i) => ({
+      program: a.program.plus(i.programUnits),
+      nonProgram: a.nonProgram.plus(i.nonProgramUnits),
+    }),
     { program: new D(0), nonProgram: new D(0) },
   );
   const ledProgram = new D(c.inventoryLedger.programInbound);
@@ -836,14 +840,17 @@ const CONFLICT_TABLES: {
     find: (tx, siteId, from, to) =>
       tx.inboundLoad
         .findMany({
-          where: {
+          // ADR-0090 C — a voided load is not a live row, so it must not be
+          // reported as a conflict that blocks a workbook import. The snapshot
+          // leg below already does the equivalent via `notVoidedSnapshotWhere`.
+          where: notVoidedLoadWhere({
             site_id: siteId,
             arrived_at: {
               gte: pacificMidnightInstantOfDayISO(isoOf(from)),
               lt: pacificMidnightInstantOfDayISO(isoOf(new Date(to.getTime() + 86_400_000))),
             },
             import_id: null,
-          },
+          }),
           select: { arrived_at: true },
         })
         .then((r) => r.map((x) => ({ date: x.arrived_at as Date }))),

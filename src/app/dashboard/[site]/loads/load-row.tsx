@@ -33,6 +33,13 @@ function statusBadgeClass(status: LoadStatus): string {
   if (status === LoadStatus.rejected) {
     return 'bg-rose-500 text-white';
   }
+  // ADR-0090 C — a voided load must not look like a submitted one. Without this
+  // branch it fell to the same neutral grey as `submitted`, so a disowned load
+  // and a load awaiting verification were visually identical in the list a
+  // manager triages from.
+  if (status === LoadStatus.voided) {
+    return 'bg-dr3-steel/30 text-dr3-mist-dim line-through';
+  }
   return 'bg-dr3-steel/60 text-dr3-mist';
 }
 

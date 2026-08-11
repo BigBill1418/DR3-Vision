@@ -60,6 +60,7 @@
     "open_status_submitted": "Enviada",
     "open_status_verified": "Verificada por un gerente",
     "open_status_rejected": "Rechazada en el muelle",
+    "open_status_voided": "Cerrada por error",
     "open_status_submitted_to_mymrc": "Enviada a MyMRC",
     "open_status_processed": "Procesada",
     "open_status_unknown": "Estado desconocido"
@@ -172,6 +173,23 @@
     "rejecting": "Rechazando…",
     "submit": "Rechazar carga",
     "reject_failed": "Error al rechazar"
+  },
+  "load_void": {
+    "open": "¿No puedes terminar esta carga?",
+    "heading": "Cerrar esta carga",
+    "subheading": "Usa esto cuando la carga nunca se trabajó realmente: tocaste el viaje equivocado o el camión nunca llegó. No contará como entrega y el viaje vuelve a la lista para poder empezarlo de nuevo.",
+    "reason_label": "¿Qué pasó?",
+    "reason_select": "Elige una opción",
+    "reason_wrong_haul": "Toqué el viaje equivocado",
+    "reason_truck_never_arrived": "El camión nunca llegó",
+    "reason_other": "Otra cosa",
+    "note_label": "Cuéntanos qué pasó",
+    "note_placeholder": "Con unas palabras basta",
+    "note_required": "Agrega una nota corta para que tenga sentido después.",
+    "cancel": "Mejor no",
+    "confirm": "Sí, cerrarla",
+    "closing": "Cerrando…",
+    "failed": "No se pudo cerrar esta carga. Inténtalo de nuevo."
   },
   "stage_finish": {
     "heading": "6. Finalizar",

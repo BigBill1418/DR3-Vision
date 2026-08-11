@@ -3,6 +3,73 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-11 — FEATURE: the floor can tell two trucks apart, and can close a load it never worked (ADR-0090 A + C)
+
+Three things from the floor on 2026-08-10, all verified against production the same
+night, all describing the same three loads — every open load at Woodland held by one
+person, and on every operator surface all three read as "a load, from a site, with a
+BOL":
+
+| Haul     | Source     | Status        | What it actually was                                             |
+| -------- | ---------- | ------------- | ---------------------------------------------------------------- |
+| H-136796 | HWMA       | `arrived`     | tapped **19 seconds** before the Santa Rita check-in — a mis-tap |
+| H-136917 | Pleasanton | `in_progress` | genuinely open                                                   |
+| H-135311 | Wexler     | `in_progress` | a 13-day zombie from the pre-#225 early-start era                |
+
+- **A — the haul number, everywhere a load is identified.** `haulNumberOf()`
+  (`src/lib/loads/haul-number.ts`) is the single read, because the number lives in two
+  columns (`expected_loads.external_mymrc_haul_id`, authoritative for dock work, and the
+  nullable `inbound_loads` column the MyMRC bridge stamps). Now on the queue cards, the
+  unfinished-loads rows, the held-by-others rows, the held-by panel and the load header —
+  the five surfaces that lacked it. The "Coming up" hauls screen already had it, because
+  it reads the MyMRC mirror rather than `expected_loads`. Rendered bare and mono, matching
+  that screen: an identifier reads as itself, so no label was invented in three locales.
+
+- **C — a load that should never have been started can be closed by the floor.** JT:
+  _"I'm not able to fix the pending one under my name, it doesn't let me 0 it out."_ She
+  was right, and it was not a missing button: `addStack` refuses `unitCount < 1` so a load
+  cannot be zeroed, and no abandon path existed at any of the seven stages. Every such
+  load to date has been closed by hand-audited DB surgery. Now: a two-tap void with a
+  **required reason** (`wrong_haul` / `truck_never_arrived` / `other` + note), audited in
+  the same transaction as the write, by the holder only (a manager voids by taking over
+  first — ADR-0082 — so no second authorization path exists).
+
+  **A void is not a zero.** A truck that arrived carrying nothing is a real delivery and
+  belongs in `submitted`; a load that was never a truck must not appear in a delivery
+  record at all (ADR-0077 D4's line between "not recorded" and zero). The reason picker is
+  what keeps a UI problem distinguishable from a carrier problem.
+
+  **The haul goes back on the queue.** `inbound_loads.expected_load_id` is UNIQUE and
+  `startInboundLoad` is idempotent on it, so a voided child that kept its parent would hand
+  every future tap back the dead load — the ADR-0074 Am.1 dead end, rebuilt. The void
+  severs the link and records it in `voided_from_expected_load_id`.
+
+  Implemented as a new **`LoadStatus` member**, deliberately inverting ADR-0084's column
+  pair: every money path on this model already filters through a status ALLOW-list, so a
+  new member is excluded by construction (opt-in), where a `voided_at` column would have
+  required every one of those queries to add a predicate (opt-out). It also made
+  `ALLOWED_PRIOR` a compile error until the transition was declared — the only automatic
+  tripwire in the codebase for a forgotten status, and it fired on the first `tsc`.
+
+  All 23 `inboundLoad` query sites were audited. The five status-BLIND readers a floor void
+  can actually reach are patched through one greppable helper (`notVoidedLoadWhere`):
+  compliance metrics 1/3/7 (a truck that never came would have degraded a **contractual**
+  compliance grade forever), `loadsArrivedToday`, the workbook-promotion conflict scan and
+  the MyMRC reconciliation matcher. The aggregate-row lookups are unreachable by a
+  `b2b_haul` dock void and are documented as such rather than left silent.
+
+- **B (the back button) is designed in ADR-0090 §D3 and NOT built.** The read-only review
+  and the in-place weight correction are straightforward; the stack correction is a schema
+  change plus two billing-sum edits plus a replay-convergence fix, and a half-tested
+  version of that is how a load gets under-billed. With C shipped, a wrong count now has a
+  floor-side remedy that needs no DBA. Two product calls are open for Bill (ADR-0090 "Open
+  questions"), the load-bearing one being whether `finished → in_progress` may reopen at
+  all given that it inflates `unload_duration_seconds`.
+
+- Migration `20260841_adr0090_load_void` — purely additive, guarded, idempotent.
+- No new ADR-0047 rollout surface: every surface touched is an existing operator screen
+  already gated on `ipad_queue`, and the void inherits that gate.
+
 ## 2026-08-10 (later) — FIX: the floor could START a haul days early, and once it had, the card was a dead button forever (ADR-0074 Amendment 1)
 
 The Woodland floor was blocked on the morning of 2026-08-10. The Santa Rita Jail truck

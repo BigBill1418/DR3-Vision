@@ -24,6 +24,10 @@ const STATUS_KEY: Record<string, string> = {
   unload_started: 'queue.open_status_unload_started',
   in_progress: 'queue.open_status_in_progress',
   finished: 'queue.open_status_finished',
+  // ADR-0090 C — unreachable through `listSiteOpenLoads` (voided is outside
+  // OPEN_DOCK_STATUSES), but the fallback below says "Counting", and a confident
+  // wrong answer is the defect ADR-0074 Am.1 fixed in held-by-panel.tsx.
+  voided: 'queue.open_status_voided',
 };
 
 function statusKey(status: LoadStatus): string {
@@ -159,7 +163,16 @@ export function HeldByOthersSection({
               className="flex min-h-[56px] items-center justify-between gap-4 rounded-lg bg-dr3-green-dark/50 px-4 py-3 transition-colors hover:bg-dr3-green-dark"
             >
               <span className="min-w-0">
+                {/* ADR-0090 A — same identifier on the takeover candidates. The
+                    question here is "is this the truck I actually meant?", and
+                    source + BOL cannot answer it for two trucks from one site. */}
                 <span className="block truncate text-base font-medium">
+                  {r.haulNumber && (
+                    <>
+                      <span className="font-mono">{r.haulNumber}</span>
+                      {' · '}
+                    </>
+                  )}
                   {r.sourceName ?? t('queue.unknown_source')}
                 </span>
                 <span className="mt-0.5 block truncate text-xs text-dr3-cream/70">

@@ -628,6 +628,29 @@ enum LoadStatus {
   rejected // terminal: rejected at dock
   submitted_to_mymrc // entered into MyMRC (V2.1)
   processed // line crew finished deconstruction (V2.1)
+  // ADR-0090 C — terminal: the load should never have been started. A mis-tapped
+  // haul or a truck that never came. NOT a zero-unit delivery (that is a real
+  // truck with a real count of nothing, and it goes through `submitted`).
+  //
+  // A new ENUM MEMBER rather than ADR-0084's `voided_at` column pair, and the
+  // divergence is deliberate: every money path on this model already filters
+  // through a status ALLOW-list (INVOICE_STATUSES, VERIFIED_INBOUND_STATUSES,
+  // OPEN_DOCK_STATUSES, TAKEOVER_STATUSES, VERIFIABLE_FROM), so a new member is
+  // excluded from all of them by construction. A nullable column would have been
+  // opt-OUT — every one of those queries would need a new predicate and missing
+  // one would be silent. Snapshots had no such allow-list (they are selected by
+  // recency), which is why ADR-0084 answered the same question the other way.
+  voided
+}
+
+/// ADR-0090 C — what the operator ASSERTS happened. A mis-click and a truck that
+/// never arrived are different facts about the world, and collapsing them into
+/// one "voided" would destroy the only signal that distinguishes a UI problem
+/// from a carrier problem. Mirrors ADR-0077 D4's "not recorded" vs zero.
+enum LoadVoidReason {
+  wrong_haul // tapped the wrong card; another haul is the real one
+  truck_never_arrived // the appointment existed, the truck did not
+  other // requires a note
 }
 
 enum CountMode {
@@ -699,6 +722,24 @@ model InboundLoad {
   // Rejection
   rejection_category RejectionCategory?
   rejection_note     String?
+
+  // ADR-0090 C — the void (a load that should never have been started).
+  //
+  // `status = 'voided'` is what every reader filters on; these columns carry the
+  // FACTS, so "it was voided" and "why, by whom, when" cannot drift apart.
+  voided_at   DateTime?
+  voided_by   String? // bare scalar FK -> users.id, ON DELETE SET NULL (ADR-0084 pattern)
+  void_reason LoadVoidReason?
+  void_note   String? // required when void_reason = other
+  /// The `expected_loads` slot this load was severed FROM.
+  ///
+  /// `expected_load_id` is UNIQUE, so a voided child would otherwise hold its
+  /// parent slot forever and the real truck could never check in — the exact
+  /// dead end ADR-0074 Am.1 closed from the other direction. The void NULLs
+  /// `expected_load_id` (freeing the slot for `startInboundLoad`) and records
+  /// the original here, so "which haul did they mis-tap?" stays answerable.
+  /// Deliberately NOT a relation field: it is provenance, never navigated.
+  voided_from_expected_load_id String?
 
   // Integration
   external_mymrc_haul_id      String?   @unique

@@ -21,6 +21,7 @@
 // tile lands on a pre-filtered list of the loads behind the number.
 
 import { prisma } from '@/lib/prisma';
+import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import { LoadStatus, type Site } from '@prisma/client';
 
 // ────────────────────────────────────────────────────────────────────────
@@ -223,10 +224,13 @@ function isoDate(d: Date): string {
  */
 async function metric1MyMrcSubmissionTimeliness(input: MetricInput): Promise<MetricResult> {
   const target = 95;
-  const where = {
+  // ADR-0090 C — a voided load is not a late submission. Without this, a truck
+  // that never came would count as `late` forever and permanently degrade a
+  // contractual compliance grade.
+  const where = notVoidedLoadWhere({
     site_id: input.siteId,
     arrived_at: { gte: input.periodStart, lt: input.periodEnd },
-  } as const;
+  });
 
   // Denominator: loads in the window that are eligible for grading
   // (passed deadline OR already advanced past submitted).
@@ -387,11 +391,12 @@ async function metric3DockSla(input: MetricInput): Promise<MetricResult> {
   const slaSeconds = input.site.dock_sla_minutes * 60;
 
   const rows = await prisma.inboundLoad.findMany({
-    where: {
+    // ADR-0090 C — a voided load's dock time is not dock performance.
+    where: notVoidedLoadWhere({
       site_id: input.siteId,
       arrived_at: { gte: input.periodStart, lt: input.periodEnd, not: null },
       unload_started_at: { not: null },
-    },
+    }),
     select: { time_to_unload_start_seconds: true },
   });
 
@@ -690,7 +695,8 @@ async function metric6StorageInventory(input: MetricInput): Promise<MetricResult
 async function metric7RecordsRetention(input: MetricInput): Promise<MetricResult> {
   const years = input.site.records_retention_years;
   const oldest = await prisma.inboundLoad.findFirst({
-    where: { site_id: input.siteId, arrived_at: { not: null } },
+    // ADR-0090 C — retention counts from real records, not from a mis-tap.
+    where: notVoidedLoadWhere({ site_id: input.siteId, arrived_at: { not: null } }),
     select: { arrived_at: true },
     orderBy: { arrived_at: 'asc' },
   });

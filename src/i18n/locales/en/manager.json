@@ -19,6 +19,7 @@
     "submitted": "Submitted",
     "verified": "Verified",
     "rejected": "Rejected",
+    "voided": "Voided",
     "submitted_to_mymrc": "Sent to MyMRC",
     "processed": "Processed"
   },
@@ -32,6 +33,7 @@
     "submitted": "Submitted",
     "verified": "Verified",
     "rejected": "Rejected",
+    "voided": "Voided",
     "submitted_to_mymrc": "In MyMRC",
     "processed": "Processed"
   },

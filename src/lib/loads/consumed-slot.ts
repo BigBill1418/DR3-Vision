@@ -61,6 +61,17 @@ export interface InboundChildRow {
  */
 export function toConsumedLoad(child: InboundChildRow | null | undefined): ConsumedLoadRef | null {
   if (!child) return null;
+  // ADR-0090 C — a VOIDED child does not consume its slot.
+  //
+  // In practice this branch is unreachable: `voidLoad` NULLs `expected_load_id`,
+  // so a voided load is no longer any slot's `inbound_load` and callers pass
+  // `null` here. It is kept because the cost of being wrong is asymmetric and
+  // measured — on 2026-08-10 a consumed-slot misread blocked the Woodland floor
+  // for a morning — and because it states the invariant at the boundary that
+  // enforces it, rather than leaving it implicit in a `data:` clause two modules
+  // away. A future void path that forgets to sever degrades to a re-checkable
+  // slot instead of a dead end.
+  if (child.status === 'voided') return null;
   return {
     status: child.status,
     open: OPEN_DOCK_STATUSES.includes(child.status),

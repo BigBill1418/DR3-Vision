@@ -19,6 +19,7 @@
 // UTC-components rule (`dayISO`). See `@/lib/time`.
 
 import { prisma } from '@/lib/prisma';
+import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import {
   appTodayISO,
   dayISO,
@@ -440,7 +441,8 @@ export async function computeSiteSummary(args: {
         .count({ where: { site_id: siteId, status: { in: [...OPERATOR_ACTIVE_STATUSES] } } })
         .catch(() => 0),
       prisma.inboundLoad
-        .count({ where: { site_id: siteId, arrived_at: { gte: dayStart } } })
+        // ADR-0090 C — a mis-tapped load is not a truck that arrived today.
+        .count({ where: notVoidedLoadWhere({ site_id: siteId, arrived_at: { gte: dayStart } }) })
         .catch(() => 0),
       computeFloorInventoryTile(siteId, { now }).catch(() => null),
       computeProcessed(siteId, todayISO).catch(() => null),
@@ -516,7 +518,8 @@ export async function computeOpsOverview(args: {
       .count({ where: { site_id: siteId, status: { in: [...OPERATOR_ACTIVE_STATUSES] } } })
       .catch(() => 0),
     prisma.inboundLoad
-      .count({ where: { site_id: siteId, arrived_at: { gte: dayStart } } })
+      // ADR-0090 C — a mis-tapped load is not a truck that arrived today.
+      .count({ where: notVoidedLoadWhere({ site_id: siteId, arrived_at: { gte: dayStart } }) })
       .catch(() => 0),
     computeFloorInventoryTile(siteId, { now }).catch(() => null),
     computeSiteRateTiles(siteId, jurisdiction).catch(() => null),

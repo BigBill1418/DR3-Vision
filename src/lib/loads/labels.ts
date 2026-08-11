@@ -34,6 +34,9 @@ export const ALL_LOAD_STATUSES: readonly LoadStatus[] = [
   LoadStatus.submitted,
   LoadStatus.verified,
   LoadStatus.rejected,
+  // ADR-0090 C — a load the floor disowned. Listed so the manager filter bar can
+  // find one; deliberately NOT in the manager DEFAULT view (see loads/page.tsx).
+  LoadStatus.voided,
   LoadStatus.submitted_to_mymrc,
   LoadStatus.processed,
 ] as const;

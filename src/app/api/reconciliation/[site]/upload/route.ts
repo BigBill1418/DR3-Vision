@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireManagerForSite } from '@/lib/auth-helpers';
 import { prisma } from '@/lib/prisma';
+import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import {
   DEFAULT_WEIGHT_TOLERANCE_PCT,
   categorizeRows,
@@ -71,7 +72,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
         error: 'malformed multipart body',
         detail: formErr instanceof Error ? formErr.message : String(formErr),
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -82,7 +83,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
   if (file.size > MAX_UPLOAD_BYTES) {
     return NextResponse.json(
       { error: `file exceeds ${MAX_UPLOAD_BYTES} byte ceiling` },
-      { status: 413 }
+      { status: 413 },
     );
   }
 
@@ -93,7 +94,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
     if (!t.success) {
       return NextResponse.json(
         { error: 'tolerance_pct must be a number between 0 and 100' },
-        { status: 422 }
+        { status: 422 },
       );
     }
     tolerancePct = t.data;
@@ -103,10 +104,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
   const parseResult = parseReconciliationCsv(text);
   if (!parseResult.ok) {
     const status = parseResult.reason === 'missing_columns' ? 422 : 400;
-    return NextResponse.json(
-      { error: parseResult.reason, detail: parseResult.detail },
-      { status }
-    );
+    return NextResponse.json({ error: parseResult.reason, detail: parseResult.detail }, { status });
   }
 
   // Categorizer wants every DR3 load with a haul_id at THIS site
@@ -119,14 +117,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
   periodEnd.setUTCDate(periodEnd.getUTCDate() + 8); // +1 to make exclusive, +7 fuzz
 
   const dr3Loads = await prisma.inboundLoad.findMany({
-    where: {
+    // ADR-0090 C — a voided load must never be offered as the DR3-side match for
+    // an external haul row. It carries `total_units` and `weight_lbs` from before
+    // it was disowned, and a reconciliation match is how those reach a filing.
+    where: notVoidedLoadWhere({
       site_id: auth.siteId,
       external_mymrc_haul_id: { not: null },
       OR: [
         { unload_finished_at: { gte: periodStart, lt: periodEnd } },
         { arrived_at: { gte: periodStart, lt: periodEnd } },
       ],
-    },
+    }),
     select: {
       id: true,
       external_mymrc_haul_id: true,
@@ -138,7 +139,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
   const categorization = categorizeRows(
     parseResult.parsed.rows,
     dr3Loads as Dr3LoadForReconcile[],
-    tolerancePct
+    tolerancePct,
   );
 
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
@@ -158,7 +159,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
   if (!persisted.ok) {
     return NextResponse.json(
       { error: persisted.reason, detail: persisted.detail },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -169,6 +170,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ site: string }
       counts: categorization.counts,
       sha256: parseResult.parsed.sha256,
     },
-    { status: persisted.created ? 201 : 200 }
+    { status: persisted.created ? 201 : 200 },
   );
 }

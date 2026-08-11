@@ -3,6 +3,7 @@ import {
   type CountMode,
   type ConcernCategory,
   type LoadStatus,
+  type LoadVoidReason,
   type PhotoKind,
   type RejectionCategory,
 } from '@prisma/client';
@@ -32,6 +33,19 @@ const ALLOWED_PRIOR: Record<LoadStatus, LoadStatus[]> = {
   rejected: ['arrived', 'weight_captured', 'unload_started'],
   submitted_to_mymrc: ['verified'],
   processed: ['submitted_to_mymrc'],
+  // ADR-0090 C — voidable from every state the FLOOR can be stuck in, and no
+  // further. `finished` is included deliberately: H-135311 sat counted-but-
+  // unsubmitted for thirteen days, and refusing the void there would leave the
+  // single most-stranded shape without a remedy.
+  //
+  // Past `submitted` the load has left the floor's hands and may already sit on
+  // an MRC invoice; correcting THAT is ADR-0073's manager territory, and a
+  // floor-side void would silently restate a filed number.
+  //
+  // Nothing lists `voided` as a legal PRIOR: the state is terminal, and a load
+  // that could be un-voided would let a mis-tap re-enter billing by a second
+  // mis-tap.
+  voided: ['arrived', 'weight_captured', 'unload_started', 'in_progress', 'finished'],
 };
 
 class TransitionError extends Error {
@@ -79,6 +93,8 @@ async function assertOwn(args: { loadId: string; operatorUserId: string; siteId:
       status: true,
       arrived_at: true,
       unload_started_at: true,
+      // ADR-0090 C — the slot the void severs.
+      expected_load_id: true,
     },
   });
   if (!load) throw new LoadAccessError(404, 'load_not_found');
@@ -520,6 +536,110 @@ export async function finishUnload(args: {
       total_units: totalUnits,
       count_mode: args.countMode,
     },
+  });
+}
+
+/**
+ * ADR-0090 C — close a load that should never have been started.
+ *
+ * JT, 2026-08-10: _"I'm not able to fix the pending one under my name, it
+ * doesn't let me 0 it out."_ She was right. `addStack` refuses `unitCount < 1`,
+ * so a load cannot be zeroed, and no abandon path existed — a mis-tapped haul
+ * stayed "pending, needs attention" forever. Three were fixed by hand-audited DB
+ * surgery in August; this is the floor-side answer.
+ *
+ * ## A void is not a zero
+ *
+ * Deliberately NOT modelled as a 0-unit submit. A truck that arrived carrying
+ * nothing is a real delivery with a real count, and it belongs in `submitted`
+ * where the exports can see it. A load that was never a truck must not appear in
+ * a delivery record at all. ADR-0077 D4 drew the same line between "not
+ * recorded" and zero, and collapsing them is how a phantom haul reaches MyMRC.
+ *
+ * ## Why the slot is severed
+ *
+ * `inbound_loads.expected_load_id` is UNIQUE and `startInboundLoad` is
+ * idempotent on it: a tap on a consumed slot returns the EXISTING child. So a
+ * voided child that kept its parent would hand every future tap back the dead
+ * load, and the real truck could never check in — precisely the dead end
+ * ADR-0074 Am.1 closed from the other side. The void NULLs `expected_load_id`
+ * and records it in `voided_from_expected_load_id`, which frees the slot for
+ * both check-in surfaces (they read it through `toConsumedLoad`) without losing
+ * the answer to "which haul did they mis-tap?".
+ *
+ * ## Authorization
+ *
+ * The holder only. Becoming the holder is the existing ADR-0082 takeover, which
+ * is audited and names both parties — so a manager voids by taking over first,
+ * and no second authorization path is invented. Two places that have to agree
+ * about who holds a load is the defect ADR-0082 spent a whole section removing.
+ */
+export async function voidLoad(args: {
+  loadId: string;
+  operatorUserId: string;
+  siteId: string;
+  reason: LoadVoidReason;
+  note: string | null;
+}): Promise<void> {
+  const note = args.note?.trim() || null;
+  // Checked BEFORE the ownership read so a malformed request cannot be used to
+  // probe which loads exist at a site.
+  if (args.reason === 'other' && !note) {
+    throw new LoadAccessError(422, 'void_note_required');
+  }
+
+  const current = await assertOwn({
+    loadId: args.loadId,
+    operatorUserId: args.operatorUserId,
+    siteId: args.siteId,
+  });
+
+  // Replay, not an error. The void is offered from a queue row that may be a
+  // stale tab, and a second void must not overwrite the first one's reason,
+  // actor or instant — the FIRST void is the one that happened. Same shape as
+  // `finishUnload`'s ADR-0078 D7 branch, minus the recompute: there is nothing
+  // to recompute, a voided load carries no units anywhere.
+  if (current.status === 'voided') return;
+
+  if (!ALLOWED_PRIOR.voided.includes(current.status)) {
+    throw new TransitionError(current.status, 'voided');
+  }
+
+  const now = new Date();
+  const severed = current.expected_load_id;
+  await prisma.$transaction(async (tx) => {
+    await tx.inboundLoad.update({
+      where: { id: args.loadId },
+      data: {
+        status: 'voided',
+        voided_at: now,
+        voided_by: args.operatorUserId,
+        void_reason: args.reason,
+        void_note: note,
+        expected_load_id: null,
+        voided_from_expected_load_id: severed,
+      },
+    });
+    // In-transaction (ADR-0082): the void and the record of who made it commit
+    // or roll back together. `before` carries the severed slot so the void is
+    // reconstructible from the append-only log rather than merely asserted.
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { status: current.status, expected_load_id: severed },
+        after: {
+          status: 'voided',
+          void_reason: args.reason,
+          void_note: note,
+          voided_at: now,
+          voided_from_expected_load_id: severed,
+        },
+      },
+      { tx },
+    );
   });
 }
 

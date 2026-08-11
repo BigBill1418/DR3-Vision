@@ -51,6 +51,7 @@ export const STATUS_KEY: Record<string, string> = {
   submitted: 'queue.open_status_submitted',
   verified: 'queue.open_status_verified',
   rejected: 'queue.open_status_rejected',
+  voided: 'queue.open_status_voided',
   submitted_to_mymrc: 'queue.open_status_submitted_to_mymrc',
   processed: 'queue.open_status_processed',
 };
