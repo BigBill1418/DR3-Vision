@@ -15,6 +15,31 @@ vi.mock('@/lib/mymrc/credential-store', () => ({
   }),
 }));
 
+// ADR-0019.4 — the signature-chain subsystem. `chainStatus` flips the
+// healthy/broken cases; the route consumes loadChainHealth's report shape.
+let chainStatus: 'green' | 'amber' | 'red' = 'green';
+let chainThrows = false;
+vi.mock('@/lib/bonus/chain-health', () => ({
+  loadChainHealth: async () => {
+    if (chainThrows) throw new Error('db down');
+    return {
+      overall: chainStatus,
+      sites: [
+        {
+          siteCode: 'eugene',
+          siteName: 'Eugene',
+          status: chainStatus,
+          autoOverrideActorName: 'Bill Barnard',
+          findings:
+            chainStatus === 'green'
+              ? []
+              : [{ slot: 'auto_override', reason: 'inactive', userId: 'x', detail: 'dead actor' }],
+        },
+      ],
+    };
+  },
+}));
+
 // audit 2026-07-16 · HEALTH — the route now requires a manager/admin role. Mock
 // auth() so the config-presence assertions run as a manager by default; the
 // operator-403 case flips it.
@@ -47,6 +72,8 @@ beforeEach(() => {
   queryRaw.mockClear();
   queryRaw.mockResolvedValue([{ ok: 1 }]);
   sessionRole = 'manager';
+  chainStatus = 'green';
+  chainThrows = false;
   mymrcConfigured = false;
   clearEnv();
 });
@@ -110,5 +137,50 @@ describe('GET /api/health/subsystems', () => {
     const mymrc = get(body.subsystems, 'mymrc');
     expect(mymrc.status).toBe('green');
     expect(mymrc.detail).toBe('Credentials configured');
+  });
+});
+
+// ── ADR-0019.4: the chain subsystem ──────────────────────────────────
+describe('signature-chain subsystem (ADR-0019.4)', () => {
+  async function subsystems() {
+    const res = await GET();
+    const body = (await res.json()) as {
+      overall: string;
+      subsystems: { key: string; status: string; detail: string }[];
+    };
+    return body;
+  }
+
+  it('is present in the subsystem list at all — the T-120 gap this closes', async () => {
+    const body = await subsystems();
+    expect(body.subsystems.map((s) => s.key)).toContain('signature-chain');
+  });
+
+  it('green names the resolved override actor, so the pill answers WHO would sign', async () => {
+    const body = await subsystems();
+    const chain = body.subsystems.find((s) => s.key === 'signature-chain');
+    expect(chain?.status).toBe('green');
+    expect(chain?.detail).toContain('Bill Barnard');
+  });
+
+  it('a RED chain turns the whole pill red — this must not be a quiet sub-status', async () => {
+    chainStatus = 'red';
+    const body = await subsystems();
+    expect(body.subsystems.find((s) => s.key === 'signature-chain')?.status).toBe('red');
+    expect(body.overall).toBe('red');
+  });
+
+  it('an AMBER chain degrades but does not turn the pill red', async () => {
+    chainStatus = 'amber';
+    const body = await subsystems();
+    expect(body.subsystems.find((s) => s.key === 'signature-chain')?.status).toBe('amber');
+  });
+
+  it('a thrown probe degrades to amber, not red — probeDb owns the DB-down signal', async () => {
+    chainThrows = true;
+    const body = await subsystems();
+    const chain = body.subsystems.find((s) => s.key === 'signature-chain');
+    expect(chain?.status).toBe('amber');
+    expect(chain?.detail).toBe('Unknown');
   });
 });

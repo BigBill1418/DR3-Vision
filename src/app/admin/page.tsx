@@ -128,6 +128,19 @@ const TILES = [
     testid: 'admin-tile-processor-quota',
   },
   {
+    // ADR-0019.4. Its own tile rather than a line on the bonus surface: the
+    // thing being watched is the CONFIGURATION that lets payroll be signed at
+    // all, and it is only load-bearing at 08:30 AM PT on a payroll morning —
+    // which is exactly why it needs a standing place someone can look at on any
+    // other morning. Twice (2026-07-07, 2026-08-04) the first anyone knew of a
+    // dead override actor was the deadline.
+    href: '/admin/bonus-chain-health',
+    label: 'Bonus signature chain health',
+    description:
+      'Whether every signer and override actor still resolves to a live account, and whether the 06:30 AM PT check is still running (ADR-0019.4).',
+    testid: 'admin-tile-bonus-chain-health',
+  },
+  {
     // ADR-0072. The recovery path for the one write that can move the whole
     // floor — and the only place a count held for a manager is visible to
     // anyone other than the operator standing at the iPad.

@@ -847,6 +847,44 @@ services:
   # Fires at 03:10 PT, offset from the 02:30 audit sweep so the two are not
   # contending. The RETENTION FLOOR lives in the route, not here: a sweep whose
   # horizon the caller picks is one bad argument away from deleting live keys.
+  # ADR-0019.4 — bonus signature-chain health check.
+  #
+  # Fires 06:30 PT daily, forty minutes ahead of the 07:10 escalation t1 and two
+  # hours ahead of the 08:30 auto-override, so a broken chain is discoverable
+  # while there is still time to fix it by hand before the 09:00 payroll
+  # deadline. Twice (2026-07-07, 2026-08-04) the chain's auto-override actor was
+  # a deactivated account and the ONLY thing that noticed was the auto-override
+  # itself, at the moment it declined to run.
+  #
+  # Same env shape as the other loopback crons: cron.env for INTERNAL_CRON_TOKEN
+  # (ADR-0053 addendum secret split), INTERNAL_BASE_URL to the app service. The
+  # daemon imports no TS and no @prisma/client — the route does the work — so no
+  # db.env here. ntfy is published by the APP, not this container.
+  bonus-chain-health:
+    image: dr3-vision-app:local
+    container_name: dr3-vision-bonus-chain-health
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/bonus-chain-health-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz
+    # HEALTHCHECK (would always fail here -> false "unhealthy").
+    healthcheck:
+      disable: true
+    env_file:
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'bonus-chain-health'
+    logging: *logging
+
   idempotency-sweep:
     image: dr3-vision-app:local
     container_name: dr3-vision-idempotency-sweep

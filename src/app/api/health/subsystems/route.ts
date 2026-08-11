@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { getMymrcCredentialStatus } from '@/lib/mymrc/credential-store';
+import { loadChainHealth } from '@/lib/bonus/chain-health';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,47 @@ async function probeMymrc(): Promise<Subsystem> {
   }
 }
 
+// ADR-0019.4 — the check ADR-0019.1 §4 promised and T-120 never added.
+//
+// This is the ONE subsystem here that is a live correctness probe rather than a
+// config-presence check, and it earns the exception: the thing it watches broke
+// payroll twice (2026-07-07, 2026-08-04) and was invisible both times until the
+// 08:30 PT auto-override declined to run. It is two indexed reads plus one
+// `user.findMany` over ~4 ids, which is cheaper than the `SELECT 1` above.
+//
+// A DB error degrades to amber rather than red: probeDb already owns the
+// DB-down signal, and duplicating it here would double-count one outage.
+async function probeSignatureChain(): Promise<Subsystem> {
+  try {
+    const report = await loadChainHealth(prisma);
+    const broken = report.sites.filter((s) => s.status !== 'green');
+    if (broken.length === 0) {
+      const actors = [...new Set(report.sites.map((s) => s.autoOverrideActorName))].join(', ');
+      return {
+        key: 'signature-chain',
+        label: 'Bonus signature chain',
+        status: 'green',
+        detail: `Override actor available (${actors})`,
+      };
+    }
+    return {
+      key: 'signature-chain',
+      label: 'Bonus signature chain',
+      // report.overall already applies worst-wins across sites, including the
+      // empty-set → red rule.
+      status: report.overall === 'red' ? 'red' : 'amber',
+      detail: broken.map((s) => `${s.siteName}: ${s.findings[0]?.reason ?? 'unknown'}`).join('; '),
+    };
+  } catch {
+    return {
+      key: 'signature-chain',
+      label: 'Bonus signature chain',
+      status: 'amber',
+      detail: 'Unknown',
+    };
+  }
+}
+
 function worst(subs: Subsystem[]): Status {
   if (subs.some((s) => s.status === 'red')) return 'red';
   if (subs.some((s) => s.status === 'amber')) return 'amber';
@@ -76,7 +118,7 @@ export async function GET(): Promise<Response> {
   );
   const glitchtip = present('GLITCHTIP_DSN');
 
-  const [db, mymrc] = await Promise.all([probeDb(), probeMymrc()]);
+  const [db, mymrc, chain] = await Promise.all([probeDb(), probeMymrc(), probeSignatureChain()]);
 
   const subsystems: Subsystem[] = [
     db,
@@ -105,6 +147,7 @@ export async function GET(): Promise<Response> {
       status: glitchtip ? 'green' : 'amber',
       detail: glitchtip ? 'DSN configured' : 'Not configured',
     },
+    chain,
   ];
 
   return NextResponse.json(

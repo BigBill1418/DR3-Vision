@@ -9,6 +9,74 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (1:00 PM PT) — the auto-override safety net is now visible before it is needed (ADR-0019.4)
+
+Bill asked whether the "auto sign as me if nobody does" path actually works — he
+felt Eugene was late last period. It was: Period 16's ops slot was signed **25
+hours** after its deadline. Here is what the logs say, and what now exists.
+
+- **The escalation ladder was never the problem.** Loki, 2026-08-04, the payroll
+  morning: t1 07:10 fired, t2 07:30 fired, t3 08:30 fired
+  `{"autoSigned":0,"actorUnavailable":1}`, t4 09:00 fired `{"deadlineMissed":1}`.
+  Every tier ran on time. The auto-sign refused because the chain's override actor
+  was the deactivated `operations@svdp.us` alias — correctly refusing, since
+  signing payroll as a dead identity is worse than missing a deadline.
+
+- **The auto-sign WRITE path is proven working.** Period 14 carries a real
+  `ops_auto_override_at` with the ADR-0019.1 system-override reason, and the
+  T-213 end-to-end test drives the real orchestration: signs both slots, moves the
+  period to `signed`, stamps the override timestamps, audits as
+  `system:bonus-escalation`, triggers the PDF. It was the actor that was dead, not
+  the mechanism.
+
+- **Then the last alarm was lost.** The next morning t4 correctly re-detected the
+  stranded period and tried to page. The app logged
+  `[escalation] stranded ntfy dropped (primary+fallback failed)`. The ntfy server
+  was healthy — VLM, CallSign and InfraWatch all delivered in the same three
+  minutes. That page simply vanished, so nobody was told.
+
+- **Which is the actual lesson.** Every safeguard on this path was an _event_
+  delivered through one channel, and the channel can swallow it. So the fix is not
+  another alert: a `signature-chain` subsystem now reads as STANDING STATE on the
+  health pill and at `/admin/bonus-chain-health`, true whether or not any page was
+  received. Green names who would sign ("Override actor available (Bill Barnard)")
+  rather than just asserting things are fine.
+
+- **It validates what the database cannot.** The override-actor lists are
+  comma-separated UUID strings, so nothing constrains them; the signer columns are
+  real FKs, which prove existence and say nothing about `is_active`. Neither
+  constraint would have caught either incident. Red = a reference that cannot sign;
+  amber = the chain works but has lost four-eyes or a backstop; empty = red, never
+  green.
+
+- **Deliberately stricter than the guard it watches.** `escalation.ts` checks only
+  `is_active`, so a soft-deleted-but-active account would pass it and sign payroll.
+  This check applies the repo's canonical `{is_active, deleted_at: null}`. A test
+  pins the divergence, because a monitor exactly as strict as its subject cannot
+  warn you about its subject.
+
+- **Runs at 06:30 PT daily** — forty minutes before t1, two hours before the
+  auto-override, so a broken chain is still fixable by hand before 09:00. Daily
+  rather than payroll-mornings-only because the 2026-08-04 break was introduced by
+  a `db:seed` days earlier and nothing looked until the moment it mattered.
+
+- **Pages `high` on transition, not `urgent` per poll.** A broken chain is real but
+  slow-moving — it only bites at 08:30 on a payroll Tuesday, so it does not warrant
+  a 3am wake-up (ADR-0037). Prior state lives in a Postgres ledger, not the
+  in-process ntfy cooldown map, so a deploy cannot cause a re-page. And a dropped
+  page is recorded as `paged=false` — after 2026-08-05, a ledger that claimed
+  someone was told when nobody was would launder exactly the failure being fixed.
+
+- **Verdict for Aug 18:** the auto-sign will fire if nobody signs. The actor is now
+  the active `bill.barnard@svdp.us`, the seed can no longer revert it (ADR-0019.3),
+  the ladder is demonstrably firing on schedule, and a new test asserts that a green
+  chain and a working auto-override are the same condition.
+
+- **Left open, honestly:** why that 2026-08-05 publish failed on both primary and
+  fallback is unexplained and deserves its own look. And `tierAutoOverride` still
+  counts `ntfyPublished` without checking the outcome, so a dropped "actor
+  unavailable" page reads as sent — the new sweep checks its own, the escalation
+  path was left alone to keep this reviewable.
 ## 2026-08-11 (12:50 PM PT) — Stale-claim watchdog ramped PILOT → LIVE at both sites (ADR-0092)
 
 Bill received the pilot-mode nudge — `[PILOT — would have sent to:
