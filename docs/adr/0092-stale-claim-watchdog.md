@@ -307,8 +307,37 @@ ADR-0092 — and each entry was added by someone who had just been bitten. So
 asserts each is reachable by its session-less caller. That sweep immediately
 found a **second, pre-existing** break: `/api/internal/idempotency/sweep`
 (ADR-0078's nightly TTL sweep) has been 401ing since it shipped, so
-`idempotency_keys` has never been pruned. Both are fixed; only the first was
-caused by this work.
+`idempotency_keys` has never been successfully pruned.
+
+**That second one is worth stating precisely, because the obvious phrasing
+overstates it.** Measured after the fix (2026-08-11 12:33 PM PT): the table held
+**141 rows, oldest 4 days old, and zero past the 7-day retention floor** — the
+first successful sweep deleted 0. So the break was real but had cost nothing
+yet; it was latent, and would have begun mattering the first time a key aged
+past the TTL. "Never pruned" is true; "the table is bloated" would not have
+been. Both defects are fixed; only the first was caused by this work.
+
+### Verified live, 2026-08-11 12:32–12:33 PM PT
+
+After the exemption shipped, the scan was fired by hand against the running
+container. It is recorded here because "deployed" and "works" are different
+claims, and this ADR is partly about the distance between them.
+
+```
+POST /api/internal/loads/stale-claim  ->  HTTP 200
+{"outcomes":[{"siteCode":"eugene","status":"skipped_none","staleCount":0},
+             {"siteCode":"woodland","status":"alerted","staleCount":1,
+              "delivered":1,"attempted":1}]}
+```
+
+It found the real load: **H-136147** (Kiefer Landfill), held by Janette Tomas at
+`arrived`, **277 minutes** silent. Ledger row written with `notify_mode = pilot`,
+`recipient_count = 1`, `delivered_count = 1` — so the nudge reached an admin with
+the would-have-sent header, exactly as ADR-0047 intends for a born-pilot surface.
+
+A **second** hand fire one minute later returned `skipped_none` for both sites
+and the ledger still held one row. That is the D5 guarantee demonstrated rather
+than asserted: the report is keyed on the load, so re-firing reports nothing.
 
 The general lesson, which is the one worth carrying: **fire a new scheduled job
 by hand once, on the deployed system, before trusting its schedule.** A cron that
