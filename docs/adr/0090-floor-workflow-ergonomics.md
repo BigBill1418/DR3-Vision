@@ -216,7 +216,7 @@ become reachable** — which is why this is written down rather than left silent
 ### D3 — B: going back — what ships, what does not, and why
 
 > **Superseded by [Amendment 1](#amendment-1--b-shipped-and-the-duration-freezes-at-the-first-finish)
-> (2026-08-11).** B is now built, to this design. The section is kept as written
+> (2026-08-10, PR #227).** B is now **BUILT**, to this design. The section is kept as written
 > so the amendment's deviations are readable as deviations.
 
 **Nothing for B ships in this change.** The design is recorded here because the
@@ -319,8 +319,8 @@ activated the iPad queue cannot reach the void either.
 
 ## Amendment 1 — B shipped, and the duration freezes at the first finish
 
-**Accepted 2026-08-11.** Bill made the blocking product call (Open question 1) on
-2026-08-10 at ~6:56 PM PT:
+**Accepted 2026-08-10 (Pacific); shipped in PR #227, merged 7:54 PM PT.** Bill made the
+blocking product call (Open question 1) on 2026-08-10 at ~6:56 PM PT:
 
 > **Freeze the duration at the first finish.** When a finished load is reopened
 > to correct entries, `unload_duration_seconds` keeps the value computed at the

@@ -566,8 +566,8 @@ Alias coverage is locked by `src/lib/audit/workbook/addendum-b-alias-resolution.
 
 ### Addendum — outdoor storage removed from Vision (2026-07-22)
 
-Per Bill's directive on 2026-07-22 — *"we will also remove the units outdoor we are
-never allowed to store units outside. this can't be in the system."* — the outdoor
+Per Bill's directive on 2026-07-22 — _"we will also remove the units outdoor we are
+never allowed to store units outside. this can't be in the system."_ — the outdoor
 storage concept is removed from Vision entirely: `site_inventory_snapshots.units_outdoor`
 and `sites.max_units_outdoor` are dropped, the physical-count UI no longer offers an
 outdoor field, and the running balance / audit legs / COR prefill sum
@@ -593,7 +593,7 @@ The three thresholds were classified against code, not contract prose:
 - **OR 6,000 — TOTAL-based** (`sites.max_units_total_on_site`, off-site prohibited).
   **Preserved.**
 
-Consequence to note: metric 6 previously graded Woodland against the *sum* of the
+Consequence to note: metric 6 previously graded Woodland against the _sum_ of the
 indoor and outdoor caps (8,500). It now grades against the indoor cap alone (3,500),
 so a real on-site count near the June close (3,977) grades **red**. That is the honest
 reading of DR3's actual operating constraint — indoor capacity — and is surfaced for
@@ -605,11 +605,11 @@ Bill confirmed the storage-limit warning split. This is the FINAL disposition fo
 three thresholds Phase 5's investigation classified; it closes the "surface for Bill's
 confirmation" item above.
 
-| Site | Threshold | Keyed on | Kind | Disposition |
-|---|---|---|---|---|
-| Woodland (CA) | **3,500** | `sites.max_units_indoor` | INDOOR | **PRESERVED** — real indoor capacity; drives compliance metric 6 (CA) and the COR capacity banner's 90 % warn (3,150). |
-| Woodland (CA) | **5,000** | `sites.max_units_outdoor` | OUTDOOR | **REMOVED** — DR3 is never allowed to store units outside (Bill, 2026-07-22). Column dropped by migration `20260806_remove_outdoor_from_site_inventory_snapshots`; the only warning consumer was the metric-6 capacity sum, so no outdoor-keyed warning survives. |
-| Eugene (OR) | **6,000** | `sites.max_units_total_on_site` | TOTAL | **PRESERVED** — real total on-site capacity (off-site prohibited); drives compliance metric 6 (OR). |
+| Site          | Threshold | Keyed on                        | Kind    | Disposition                                                                                                                                                                                                                                                       |
+| ------------- | --------- | ------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Woodland (CA) | **3,500** | `sites.max_units_indoor`        | INDOOR  | **PRESERVED** — real indoor capacity; drives compliance metric 6 (CA) and the COR capacity banner's 90 % warn (3,150).                                                                                                                                            |
+| Woodland (CA) | **5,000** | `sites.max_units_outdoor`       | OUTDOOR | **REMOVED** — DR3 is never allowed to store units outside (Bill, 2026-07-22). Column dropped by migration `20260806_remove_outdoor_from_site_inventory_snapshots`; the only warning consumer was the metric-6 capacity sum, so no outdoor-keyed warning survives. |
+| Eugene (OR)   | **6,000** | `sites.max_units_total_on_site` | TOTAL   | **PRESERVED** — real total on-site capacity (off-site prohibited); drives compliance metric 6 (OR).                                                                                                                                                               |
 
 Verified live (2026-07-23, `dr3-vision-postgres`): `sites` holds `woodland.max_units_indoor = 3500`,
 `eugene.max_units_total_on_site = 6000`, and `woodland.max_units_outdoor = 5000` (the
@@ -666,6 +666,14 @@ is no dup-insert risk, but it should be reconciled (`inCatalog:true`) when that 
 is wired.
 
 ## Phase 3 amendment — paper-bootstrap bulk inbound (`paper_bulk`, 2026-07-22, commit d6fd8b6)
+
+> **Status note added 2026-08-10:** the bridge described here HAS landed at one site.
+> **Woodland has been on the iPads since 2026-08-08** (`ipad_hauls` live) and writes
+> per-load inbound from the dock; **Eugene is still on paper.** The `paper_bulk` path
+> below is unchanged and remains correct for Eugene, for any Woodland day the iPads were
+> not used, and for backfill — but a Woodland manager entering a bulk day for a day the
+> floor worked double-counts the inflow. Operator guidance:
+> `docs/operator/loads-inventory-foundations.md`.
 
 Woodland and Eugene run the floor on paper daily logs — there are no operator iPads on
 the dock yet, so nothing writes per-load inbound and the daily close bottlenecked on

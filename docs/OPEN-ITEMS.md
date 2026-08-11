@@ -202,6 +202,15 @@ Shipped state: `CHANGELOG.md` 2026-08-10 (later). Every figure below was read fr
   dock that afternoon. Options: (a) identify the real haul and re-attribute; (b) leave
   it orphaned and adjust inventory by hand; (c) void it and re-enter. **All three
   change billing figures, so none was taken by this fix.**
+
+  **UPDATE 2026-08-10 — "only the operator knows" is FALSIFIED for this class (see
+  §0.AX).** H-136912's twin was identified from data alone by matching carrier +
+  commodity + trailer type + unit count + MRC status, with no operator recall
+  involved. **Try that method on this 159-unit orphan before treating (b) or (c) as
+  the only remaining routes** — option (a) may well be reachable. Note this one is
+  harder: the detach already NULLed its `expected_load_id`, so there is no slot to
+  work back from, only the 08-03 17:01 start and the 159-unit count.
+
 - **W — WATCH: two early-started loads whose appointments have not yet arrived.**
   Both are consumed slots today. **They have NOT been detached — not in code, not in
   data — and must not be, without a decision.** After this fix their cards render
