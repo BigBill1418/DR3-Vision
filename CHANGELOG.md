@@ -3,6 +3,89 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
+## 2026-08-11 — FEATURE: the floor can go BACK (ADR-0090 B, Amendment 1)
+
+JT, Woodland, 2026-08-10:
+
+> "You can't click the back button after clicking next... when you click a haul, take a
+> pic, then enter weight, click enter or next, start unload, enter units received — if you
+> want to go back to fix or check what you entered is correct, vision doesn't let you."
+
+She was describing something structural. Stage dispatch was `load.status` plus three
+ONE-WAY client latches, all seven stages rendered at one url, and the floor chrome's Back
+pill goes to the hub by an explicit ADR-0065 decision never to use `router.back()`. There
+was no back-edge anywhere in the state machine.
+
+**Bill's product call, 2026-08-10, is what unblocked it: the unload duration FREEZES at
+the first finish.** `unload_duration_seconds` ran `unload_started_at → now`, so a
+re-finish after a reopen would have added the whole correction gap — and that figure feeds
+throughput and productivity surfaces, where it reads as _how long the truck took_. An
+operator who went back to fix a number would have shown up as an operator who unloaded
+slowly, and would have stopped going back. The button's explainer copy says so out loud,
+in all three locales.
+
+- **Check what I entered — from every stage, always.** A read-only review of the BOL /
+  weight-ticket / door-open photos, the weight, the stack list and the running total.
+  Never gated on anything: it is the half of the ask that is always safe.
+
+- **Fix the weight, in place.** An overwrite before `submitted` with NO status transition
+  (routing it through the capture would push a counting load back to `weight_captured` and
+  re-offer the door-open stage). The change **appends** a second audit row rather than
+  editing the first — a manager reconciling against a scale ticket needs "it was 12,000 and
+  then it was 21,000", and CLAUDE.md hard rule #6 makes the log append-only.
+
+- **Take back a stack you counted wrong.** A SOFT void while `in_progress`: the row
+  survives as evidence (struck through, still shown, so the total stays explainable) and
+  leaves the billed sum. **Both** `finishUnload` sum sites filter through one shared
+  constant — the ADR-0078 D7 late recompute runs on an already-finished load, so filtering
+  one and not the other would let any keyed retry silently RESTORE voided units into a
+  billed total. Stack indexes are monotonic over voided rows, which is what makes a P2002
+  at a voided index provably a replay of the voided write — so `addStack` answers 409 there
+  and the queue entry parks for a person, instead of reporting a false 201 and deleting a
+  stack of mattresses out of a billed total with no record anywhere.
+
+- **Go back to counting from Finish.** `finished → in_progress`, holder-only, audited
+  (`reason: 'reopened_for_correction'`). The reopened load still CONSUMES its haul slot —
+  it is live work again and the real truck must not check in underneath it, which is the
+  exact opposite of the void. The count recomputes on the re-finish; the duration does not.
+
+**The freeze is a WHERE clause, not a branch.** The timing columns are written by a
+conditional `UPDATE ... WHERE unload_duration_seconds IS NULL`, so the freeze holds however
+a second finish is reached — reopen, replayed queue entry, hand-crafted POST — and holds
+under concurrency, where a read-then-write would not. `unload_finished_at` is frozen with
+it so the pair cannot disagree; the instant of a re-finish is the audit row.
+
+**Corrections are online-only and wait for this load's queue to drain.** Replaying a
+correction hours later would apply it to a state that has moved on (ADR-0082 D5 / ADR-0090
+D2.4). The reverse direction is the silent one — a stack or a finish queued BEFORE the
+correction replays afterwards and lands on top of it — so the review panel withholds all
+three corrections while `pendingActionsForLoad` is non-zero and SAYS WHY, re-reading on a
+3 s tick so the controls return as the queue drains. It fails closed: an unreadable
+IndexedDB is not an empty queue.
+
+**The stage is hidden, not unmounted, while reviewing.** Every stage holds operator work
+in local state that exists nowhere else — the optimistic `tmp-` stacks queued offline, the
+running total, the chosen count mode, a typed weight, a captured photo. Swapping it out
+would have discarded all of it, which is a worse dead end than the one this removes.
+
+Schema: `load_stacks` gains `voided_at` / `voided_by` (migration
+`20260842_adr0090_back_navigation` — purely additive, idempotent, FK `ON DELETE SET NULL`
+plus a pair CHECK, mirroring ADR-0084). Every existing stack is `voided_at IS NULL`, which
+is what the new filters select, so no load already in the database changes its billed
+total. `ALLOWED_PRIOR.in_progress` gains `finished` for the reopen edge, and
+`transition()` gained an `allowedFrom` INTERSECTION so `beginUnload` cannot inherit it —
+otherwise a hand-crafted `beginUnloadAction` POST would reopen a finished load with no
+reopen reason on the audit row.
+
+No new `LoadStatus` member, so the six hand-maintained allow-lists (OPEN-ITEMS AW-4) are
+untouched and AW-4 stays open — bundling that six-file refactor with two billing-sum edits
+was not a trade worth making. No new ADR-0047 rollout surface: every surface touched is
+already gated on `ipad_queue`, re-checked rather than assumed.
+
+Full reasoning, the deviations from the ADR-0090 §D3 design, and the one accepted residual
+(an offline-queued `tmp-` stack cannot be voided — there is no server row to name):
+`docs/adr/0090-floor-workflow-ergonomics.md` Amendment 1.
+
 ## 2026-08-11 — FEATURE: the floor can tell two trucks apart, and can close a load it never worked (ADR-0090 A + C)
 
 Three things from the floor on 2026-08-10, all verified against production the same

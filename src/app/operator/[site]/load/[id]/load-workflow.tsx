@@ -1,6 +1,6 @@
 'use client';
 
-import type { CountMode, LoadStatus } from '@prisma/client';
+import type { LoadStatus, PhotoKind } from '@prisma/client';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useI18n } from '@/i18n/provider';
@@ -12,6 +12,7 @@ import { StageStacks } from './stage-stacks';
 import { StageReject } from './stage-reject';
 import { StageFinish } from './stage-finish';
 import { VoidLoadPanel } from './void-load-panel';
+import { ReviewPanel, type ReviewStack } from './review-panel';
 
 // Stage dispatch. The visible "stage" is a function of `load.status`
 // plus a tiny client-only flag for the weight sub-stage (whether the
@@ -24,8 +25,29 @@ type LoadView = {
   status: LoadStatus;
   unload_started_at: string | null;
   total_units: number | null;
-  stacks: Array<{ id: string; stack_index: number; unit_count: number; count_mode: CountMode }>;
+  /** ADR-0090 Am.1 — read by the review panel; null when no ticket was taken. */
+  weight_lbs: number | null;
+  /** ADR-0090 Am.1 — which photo kinds exist, so the review can say what is missing. */
+  photo_kinds: PhotoKind[];
+  stacks: ReviewStack[];
 };
+
+/**
+ * The seven stages — the statuses at which an operator is still WORKING the
+ * load, and therefore the statuses that offer a way back.
+ *
+ * Same set as the void's (`OPEN_DOCK_STATUSES`), and for the same reason: past
+ * `submitted` the load has left the floor's hands. It is restated here rather
+ * than imported because `open-loads.ts` sits beside `prisma` and cannot enter
+ * the browser bundle — the identical constraint `consumed-slot.ts` documents.
+ */
+const STAGE_STATUSES: readonly LoadStatus[] = [
+  'arrived',
+  'weight_captured',
+  'unload_started',
+  'in_progress',
+  'finished',
+] as const;
 
 type Props = {
   siteCode: string;
@@ -39,6 +61,16 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   // server status moves on, this ref is moot.
   const [weightSkipped, setWeightSkipped] = useState(false);
   const [showReject, setShowReject] = useState(false);
+  // ADR-0090 Am.1 B — the review view. The FIRST back-edge in this component:
+  // `weightSkipped` and `bolDone` are one-way latches, and only `showReject` had
+  // a control that reset it.
+  const [review, setReview] = useState(false);
+  // ADR-0090 Am.1 B — lifted out of the old `FromBol` wrapper. It has to survive
+  // the review being opened and closed: unmounting the BOL/weight sub-flow would
+  // reset this latch and send an operator who tapped "check what I entered"
+  // straight back to the BOL photo they already took. (The wrapper's `onBolDone`
+  // prop was also declared and never used.)
+  const [bolDone, setBolDone] = useState(false);
 
   // ADR-0078 — the replay tick and the pending pill that used to live here are
   // GONE, folded into `ConnectionState` in the floor chrome. This screen ran a
@@ -85,111 +117,108 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     );
   }
 
-  if (load.status === 'arrived' && !weightSkipped) {
-    // BOL captured? We track it via the photo-row presence rather
-    // than client state, but for T-006 the simplest thing is to
-    // surface BOL first and require the operator to confirm capture
-    // before showing weight. Since BOL doesn't change `load.status`
-    // (it stays `arrived`), we show BOL until the operator confirms,
-    // then fall through to weight.
-    //
-    // For minimum-tap UX we just chain BOL → weight in a single
-    // visual flow with internal client state.
+  // The reject sub-stage is a decision screen mid-commitment and already carries
+  // its OWN back control (`onCancel`). It is deliberately left out of the review
+  // frame below: two differently-worded "back" controls on one screen are two
+  // things that have to agree about what back means.
+  if (load.status === 'unload_started' && showReject) {
     return (
-      <>
-        <FromBol
+      <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
+    );
+  }
+
+  if (!STAGE_STATUSES.includes(load.status)) {
+    return <p>{t('workflow.unhandled_status', { status: load.status })}</p>;
+  }
+
+  const stage = (() => {
+    if (load.status === 'arrived' && !weightSkipped) {
+      // BOL captured? We track it via the photo-row presence rather
+      // than client state, but for T-006 the simplest thing is to
+      // surface BOL first and require the operator to confirm capture
+      // before showing weight. Since BOL doesn't change `load.status`
+      // (it stays `arrived`), we show BOL until the operator confirms,
+      // then fall through to weight.
+      //
+      // For minimum-tap UX we just chain BOL → weight in a single
+      // visual flow with internal client state.
+      return bolDone ? (
+        <StageWeight
           siteCode={siteCode}
-          load={load}
-          onBolDone={() => setWeightSkipped(false)}
-          onWeightSkipped={() => setWeightSkipped(true)}
+          loadId={load.id}
+          onSkipped={() => setWeightSkipped(true)}
         />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
-    );
-  }
-
-  if (load.status === 'arrived' && weightSkipped) {
-    return (
-      <>
-        <StageDoor siteCode={siteCode} loadId={load.id} />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
-    );
-  }
-
-  if (load.status === 'weight_captured') {
-    return (
-      <>
-        <StageDoor siteCode={siteCode} loadId={load.id} />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
-    );
-  }
-
-  if (load.status === 'unload_started') {
-    if (showReject) {
-      return (
-        <>
-          <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
-        </>
+      ) : (
+        <StageBol siteCode={siteCode} loadId={load.id} onCaptured={() => setBolDone(true)} />
       );
     }
-    return (
-      <>
+    if (load.status === 'arrived' || load.status === 'weight_captured') {
+      return <StageDoor siteCode={siteCode} loadId={load.id} />;
+    }
+    if (load.status === 'unload_started') {
+      return (
         <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
-    );
-  }
-
-  if (load.status === 'in_progress') {
-    return (
-      <>
+      );
+    }
+    if (load.status === 'in_progress') {
+      return (
         <StageStacks
           siteCode={siteCode}
           loadId={load.id}
           unloadStartedAt={load.unload_started_at}
           existingStacks={load.stacks}
         />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
-    );
-  }
-
-  if (load.status === 'finished') {
+      );
+    }
     return (
-      <>
-        <StageFinish
-          siteCode={siteCode}
-          loadId={load.id}
-          operatorName={operatorName}
-          totalUnits={load.total_units}
-        />
-        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
-      </>
+      <StageFinish
+        siteCode={siteCode}
+        loadId={load.id}
+        operatorName={operatorName}
+        totalUnits={load.total_units}
+      />
     );
-  }
+  })();
 
   return (
     <>
-      <p>{t('workflow.unhandled_status', { status: load.status })}</p>
+      {/* ADR-0090 Am.1 B — HIDDEN, not unmounted, while the review is open.
+          Every stage holds operator work in local state that exists nowhere
+          else: `StageStacks` carries the optimistic `tmp-` stacks queued while
+          offline plus the running total and the chosen count mode, `StageWeight`
+          carries a typed weight and a captured photo. Unmounting to show the
+          review would throw all of it away and drop the operator back at the top
+          of the stage — which is a worse dead end than the one this panel exists
+          to remove. */}
+      <div hidden={review}>{stage}</div>
+      {review ? (
+        <ReviewPanel
+          siteCode={siteCode}
+          load={{
+            id: load.id,
+            status: load.status,
+            weightLbs: load.weight_lbs,
+            photoKinds: load.photo_kinds,
+            stacks: load.stacks,
+          }}
+          onClose={() => setReview(false)}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            data-testid="review-open"
+            onClick={() => setReview(true)}
+            // Quiet, and ABOVE the void. Going back to look is the common
+            // correction; closing the load is the rare one, and the two must not
+            // read as equally weighted.
+            className="min-h-[44px] rounded-lg px-4 py-2 text-sm font-semibold text-dr3-cream/80 underline-offset-4 transition-colors hover:text-dr3-cream hover:underline"
+          >
+            {t('load_review.open')}
+          </button>
+          <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
+        </>
+      )}
     </>
   );
-}
-
-function FromBol({
-  siteCode,
-  load,
-  onWeightSkipped,
-}: {
-  siteCode: string;
-  load: LoadView;
-  onBolDone: () => void;
-  onWeightSkipped: () => void;
-}) {
-  const [bolDone, setBolDone] = useState(false);
-  if (!bolDone) {
-    return <StageBol siteCode={siteCode} loadId={load.id} onCaptured={() => setBolDone(true)} />;
-  }
-  return <StageWeight siteCode={siteCode} loadId={load.id} onSkipped={onWeightSkipped} />;
 }

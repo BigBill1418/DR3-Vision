@@ -15,7 +15,14 @@ import { useClaimLossGuard } from './use-claim-loss-guard';
 // and stays there for the duration. The visible timer ticks since
 // `unload_started_at` in the bottom bar.
 
-type Stack = { id: string; stack_index: number; unit_count: number; count_mode: CountMode };
+type Stack = {
+  id: string;
+  stack_index: number;
+  unit_count: number;
+  count_mode: CountMode;
+  /** ADR-0090 Am.1 — ISO instant, or null while the stack still counts. */
+  voided_at: string | null;
+};
 
 type Props = {
   siteCode: string;
@@ -36,8 +43,26 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   /** ADR-0078 — stacks held locally, awaiting a server ack. Never shown as saved. */
   const [queued, setQueued] = useState(0);
 
-  const total = stacks.reduce((acc, s) => acc + s.unit_count, 0);
-  const nextIndex = (stacks.at(-1)?.stack_index ?? 0) + 1;
+  // ADR-0090 Am.1 — a voided stack still SHOWS but never counts. Hiding it would
+  // make the running total unexplainable to the person who counted it ("it says
+  // 20, I counted 29"), and the row is the evidence the count happened.
+  const live = stacks.filter((s) => s.voided_at === null);
+  const total = live.reduce((acc, s) => acc + s.unit_count, 0);
+
+  // ADR-0090 Am.1 — MONOTONIC, over every stack including the voided ones.
+  //
+  // `@@unique(load_id, stack_index)` is a full unique index and stays that way,
+  // so reusing a voided index would collide and refuse the operator's next
+  // count. It also has a second, quieter consequence: `addStack` answers 409 on
+  // a keyed replay onto a VOIDED index precisely because monotonicity means the
+  // only way to reach one is a replay of the write that was voided. Reuse would
+  // turn that guard into a false refusal of an honest count.
+  //
+  // Computed from the MAXIMUM rather than `at(-1)`. The old expression read the
+  // last element and called it the highest index — true today, because the page
+  // selects `orderBy: stack_index asc`, but a silent assumption whose failure
+  // mode is a lost or refused count.
+  const nextIndex = stacks.reduce((max, s) => Math.max(max, s.stack_index), 0) + 1;
 
   // ADR-0078 D2/D6 — a stack is a BILLED unit: `finishUnload` sums `load_stacks`
   // into `total_units`. Losing one silently undercounts the load, and reporting a
@@ -57,7 +82,13 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
     const optimistic = () =>
       setStacks((prev) => [
         ...prev,
-        { id: `tmp-${idx}`, stack_index: idx, unit_count: count, count_mode: mode },
+        {
+          id: `tmp-${idx}`,
+          stack_index: idx,
+          unit_count: count,
+          count_mode: mode,
+          voided_at: null,
+        },
       ]);
     startTransition(async () => {
       try {
@@ -152,7 +183,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
             {t('stage_stacks.heading_counting', { mode: t(`stage_stacks.mode_label_${mode}`) })}
           </h2>
           <p className="text-sm text-dr3-cream/70">
-            {t('stage_stacks.stacks_units_summary', { stacks: stacks.length, units: total })}
+            {t('stage_stacks.stacks_units_summary', { stacks: live.length, units: total })}
           </p>
         </div>
         <button
@@ -170,14 +201,22 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
 
       {stacks.length > 0 && (
         <ul className="flex flex-col gap-1 text-sm text-dr3-cream/80">
-          {stacks.map((s) => (
-            <li key={s.id} className="flex justify-between">
-              <span>{t('stage_stacks.stack_index', { n: s.stack_index })}</span>
-              <span className="tabular-nums">
-                {t('stage_stacks.stack_units', { n: s.unit_count })}
-              </span>
-            </li>
-          ))}
+          {stacks.map((s) => {
+            const voided = s.voided_at !== null;
+            return (
+              <li
+                key={s.id}
+                data-testid={`stage-stack-${s.id}`}
+                data-voided={String(voided)}
+                className={`flex justify-between ${voided ? 'text-dr3-cream/40 line-through' : ''}`}
+              >
+                <span>{t('stage_stacks.stack_index', { n: s.stack_index })}</span>
+                <span className="tabular-nums">
+                  {t('stage_stacks.stack_units', { n: s.unit_count })}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -194,7 +233,13 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
 
       <button
         type="button"
-        disabled={isPending || stacks.length === 0}
+        // ADR-0090 Am.1 — LIVE stacks, not all of them. Voiding every stack
+        // returns this screen to its pre-count state rather than offering a
+        // 0-unit finish: ADR-0090 D2.1 keeps "a truck that carried nothing"
+        // (a real `submitted` delivery) separate from "this was never a truck"
+        // (the void, one control below). Collapsing them is how a phantom haul
+        // reaches MyMRC.
+        disabled={isPending || live.length === 0}
         onClick={finish}
         className="rounded-lg bg-dr3-chartreuse px-6 py-4 text-lg font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"
       >

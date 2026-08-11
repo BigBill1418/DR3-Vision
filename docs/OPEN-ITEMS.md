@@ -78,30 +78,44 @@ executed ~7:20 PM PT, audited under Bill's user id:
 
 ---
 
-## 0.AW — 2026-08-11 floor workflow ergonomics (ADR-0090) — one feature deferred, four decisions for Bill
+## 0.AW — 2026-08-11 floor workflow ergonomics (ADR-0090) — all three features shipped, three decisions for Bill
 
-Branch: `feat/floor-workflow-ergonomics`. A (haul number) and C (the void) shipped;
-B (back navigation) is designed in ADR-0090 §D3 and deliberately not built.
+Branches: `feat/floor-workflow-ergonomics` (A + C) and
+`feat/adr0090-back-navigation` (B). All three of JT's items are now built.
 
-- **AW-1 — B (back navigation) is NOT implemented.** Owner: next session. The design
-  is complete in ADR-0090 §D3 and should not be re-derived. Three parts: (a) a
-  read-only review reachable from every stage — always safe, needs `weight_lbs` and
-  the photo kinds added to the load page `select`; (b) weight correctable in place
-  before `submitted`, appending a second audit row rather than mutating the first;
-  (c) individual stack soft-void while `in_progress`. (c) carries the risk: BOTH
-  `finishUnload` sum sites must filter identically or the ADR-0078 D7 replay path
-  silently restores voided units into a billed total, `nextIndex` must be computed
-  over voided rows too so an index is never reused, and the `addStack` P2002
-  convergence check must require `voided_at IS NULL` or a lost-response replay
-  resurrects a voided stack as a false 201.
+- **AW-1 — DONE (2026-08-11).** B (back navigation) shipped on
+  `feat/adr0090-back-navigation`, built to the ADR-0090 §D3 design with the
+  deviations recorded in ADR-0090 Amendment 1. All three §D3 stack findings were
+  implemented as written and each is pinned by a real-Postgres test in
+  `src/lib/loads/back-navigation.db.test.ts`: both `finishUnload` sums filter
+  through one shared `NOT_VOIDED_STACK` constant, `nextIndex` is computed over the
+  MAXIMUM index including voided rows, and the `addStack` P2002 convergence check
+  refuses a voided row with a 409.
 
-- **AW-2 — DECISION for Bill: may `finished → in_progress` reopen?** An operator at
-  the Finish stage who sees 47 and knows it should be 42 has no route back.
-  Blocked because `finishUnload` computes `unload_duration_seconds` from
-  `unload_started_at` to _now_, so a re-finish inflates it by the whole reopen gap,
-  and that figure feeds throughput/productivity surfaces. Either the duration
-  measures to the FIRST finish or the reopen becomes its own recorded event. Product
-  call, not an engineering one.
+  **Bears on 0.AX's 2.000x watch item, which attributes the doubling to "the AW-1
+  finishUnload/replay double-add".** That half is falsified by a real-Postgres
+  test on this branch (`back-navigation.db.test.ts`, "a replay cannot DOUBLE a
+  total"): a queued `add_stack` carries its ORIGINAL `stackIndex` in the payload,
+  so a replay always targets the row it was for and either converges on it or
+  409s — it can never land at a fresh index — and the ADR-0078 D7 branch
+  RECOMPUTES `total_units` from a fresh sum rather than accumulating. Neither
+  route can double a total. The live hypothesis that survives is a genuine
+  DOUBLE-ENTRY: two taps minting two keys at two indexes, which in `total` count
+  mode (re-typing a total the operator believes did not save) produces exactly
+  2.000x and nothing else. Until this branch the floor had no way to take one
+  back, which is consistent with six of them shipping. **Still needs the six
+  loads' `load_stacks` rows to confirm** — one row of 2N is a mis-count, two rows
+  of N is the double-entry. Not verifiable from a test.
+
+- **AW-2 — DECIDED by Bill 2026-08-10 ~6:56 PM PT; DONE (2026-08-11).** Yes,
+  `finished → in_progress` reopen is allowed, and **the duration freezes at the
+  first finish** — a re-finish keeps the value computed then. Built that way, and
+  the freeze is structural rather than a UI branch: the timing columns are written
+  by a conditional `UPDATE ... WHERE unload_duration_seconds IS NULL`, so it holds
+  however a second finish is reached and holds under concurrency.
+  `unload_finished_at` is frozen alongside it so the documented pair cannot
+  disagree; the instant of a re-finish lives in the audit row. Reasoning and the
+  alternatives: ADR-0090 Am1.1–Am1.2.
 
 - **AW-3 — DECISION for Bill: should a `truck_never_arrived` void notify anyone?**
   It is the signal that a carrier no-showed and currently lands in a column nobody
@@ -119,6 +133,13 @@ B (back navigation) is designed in ADR-0090 §D3 and deliberately not built.
   NEXT enum addition gets missed. Consolidate behind
   `satisfies readonly LoadStatus[]` in one module.
 
+  Re-checked 2026-08-11 on `feat/adr0090-back-navigation` and deliberately NOT folded
+  in: that branch adds a state-machine EDGE (`finished → in_progress`) and no new
+  `LoadStatus` member, so none of the six lists needed an edit. The consolidation
+  spans six files across the export, inventory and audit paths, and bundling a
+  refactor with no test of its own into the diff that carries two billing-sum edits
+  and a schema change was not a trade worth making. Still open, still unowned.
+
 - **AW-5 — WATCH: the void is unreachable for aggregate rows, by construction.**
   The status-blind precedence lookups in `floor-inbound.ts`, `bulk-inbound.ts` and
   `inbound-bridge.ts` are scoped to `load_source_type in AGGREGATE_SOURCE_TYPES` /
@@ -129,6 +150,14 @@ B (back navigation) is designed in ADR-0090 §D3 and deliberately not built.
 - **AW-6 — REFERENCE, not an action: the three stuck Woodland loads.** H-136796
   (HWMA, mis-tap), H-136917 (Pleasanton) and H-135311 (Wexler, 13-day zombie) are
   being resolved separately by the orchestrator. This branch changed no data.
+
+- **AW-7 — ACCEPTED RESIDUAL: an offline-queued stack cannot be taken back.** A stack
+  added while offline renders with a client-minted `tmp-` id and has no server row to
+  void, so the Remove control is not offered on it (ADR-0090 §D3's own guard: an
+  affordance whose only outcome is a 404 is a dead end). The operator's route is to
+  wait for the queue to drain and then correct — the same wait the ordering guard
+  already imposes on every correction while this load has unsent work. No owner; open
+  it only if the floor reports hitting it.
 
 ---
 

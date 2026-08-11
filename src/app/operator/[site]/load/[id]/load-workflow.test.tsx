@@ -33,7 +33,7 @@
 
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { LoadStatus } from '@prisma/client';
 
 // The stage components are never rendered on a terminal status, but they are
@@ -51,6 +51,17 @@ vi.mock('./stage-finish', () => ({ StageFinish: () => null }));
 // under the test runner. This suite exercises the dispatch branch only.
 vi.mock('./void-load-panel', () => ({
   VoidLoadPanel: () => React.createElement('div', { 'data-testid': 'void-panel' }),
+}));
+// ADR-0090 Am.1 B — same reason again: the review panel reaches for
+// `../../actions` and `@/lib/offline-queue` at module load. Its own behaviour is
+// pinned in `review-panel.test.tsx`; this suite exercises the dispatch branch.
+vi.mock('./review-panel', () => ({
+  ReviewPanel: ({ onClose }: { onClose: () => void }) =>
+    React.createElement(
+      'div',
+      { 'data-testid': 'review-panel' },
+      React.createElement('button', { 'data-testid': 'review-close', onClick: onClose }, 'close'),
+    ),
 }));
 
 vi.mock('@/i18n/provider', async () => {
@@ -72,11 +83,28 @@ function renderAt(status: LoadStatus) {
   return render(
     <LoadWorkflow
       siteCode={SITE}
-      load={{ id: 'load-1', status, unload_started_at: null, total_units: 159, stacks: [] }}
+      load={{
+        id: 'load-1',
+        status,
+        unload_started_at: null,
+        total_units: 159,
+        weight_lbs: 21000,
+        photo_kinds: ['bol'],
+        stacks: [],
+      }}
       operatorName="Marisol"
     />,
   );
 }
+
+/** The stage set — the seven stages, not the terminal screens. */
+const OPEN_STAGES = [
+  'arrived',
+  'weight_captured',
+  'unload_started',
+  'in_progress',
+  'finished',
+] as const;
 
 afterEach(() => {
   cleanup();
@@ -144,4 +172,64 @@ describe('ADR-0090 C — where the void is offered', () => {
       expect(screen.queryByTestId('void-panel')).toBeNull();
     },
   );
+});
+
+// ADR-0090 Amendment 1 (B) — the back control, and where it goes.
+//
+// JT: "if you want to go back to fix or check what you entered is correct,
+// vision doesn't let you." The workflow is forward-only and structurally so —
+// stage dispatch is `load.status` plus three ONE-WAY client latches (`bolDone`,
+// `weightSkipped`, `showReject`), of which only `showReject` had a control that
+// reset it. There was no back-edge anywhere in the state machine.
+//
+// These tests assert the rendered CONTROL and the swap it performs, not a state
+// flag: a component that merely *decided* to offer a way back is what shipped.
+describe('ADR-0090 Am.1 — every stage offers a way to check what was entered', () => {
+  it.each(OPEN_STAGES)('offers the review control on the stage %s', (status) => {
+    renderAt(status);
+    expect(screen.getByTestId('review-open')).toBeTruthy();
+  });
+
+  it.each(['submitted', 'rejected'] as const)(
+    'does NOT offer it on the terminal screen %s',
+    (status) => {
+      // Not a stage. The load has left the floor's hands; the only offer there
+      // is the route back to the queue (ADR-0074 Am.1, above).
+      renderAt(status);
+      expect(screen.queryByTestId('review-open')).toBeNull();
+    },
+  );
+
+  it.each(OPEN_STAGES)('opening the review REPLACES the stage on %s', (status) => {
+    // Replaces rather than stacks below it. The panel is a full read of the load
+    // and the stage's primary action is a forward move — showing both at once is
+    // how an operator taps Finish while reading a total they came here to doubt.
+    renderAt(status);
+    fireEvent.click(screen.getByTestId('review-open'));
+
+    expect(screen.getByTestId('review-panel')).toBeTruthy();
+    expect(screen.queryByTestId('review-open')).toBeNull();
+    // The void stays out of reach while reviewing: it is the loudest control on
+    // the screen and this is the one view where the operator is reading rather
+    // than deciding.
+    expect(screen.queryByTestId('void-panel')).toBeNull();
+  });
+
+  it('closing the review puts the operator back on the stage they left', () => {
+    renderAt('in_progress');
+    fireEvent.click(screen.getByTestId('review-open'));
+    fireEvent.click(screen.getByTestId('review-close'));
+
+    expect(screen.queryByTestId('review-panel')).toBeNull();
+    expect(screen.getByTestId('review-open')).toBeTruthy();
+    expect(screen.getByTestId('void-panel')).toBeTruthy();
+  });
+
+  it('the reject sub-stage is left alone — it has its OWN back control', () => {
+    // `StageReject` already resets `showReject`, and it is a decision screen
+    // mid-commitment. Offering a second, differently-worded back from inside it
+    // is two controls that have to agree about what "back" means.
+    renderAt('unload_started');
+    expect(screen.getByTestId('review-open')).toBeTruthy();
+  });
 });

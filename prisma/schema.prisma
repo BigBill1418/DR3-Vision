@@ -809,10 +809,26 @@ model LoadStack {
   id          String      @id @default(uuid())
   load_id     String
   load        InboundLoad @relation(fields: [load_id], references: [id], onDelete: Cascade)
-  stack_index Int // 1, 2, 3, ...
+  stack_index Int // 1, 2, 3, ... MONOTONIC — never reused, see below
   unit_count  Int
   count_mode  CountMode // duplicate of parent's mode for debugging
   created_at  DateTime    @default(now())
+
+  // ADR-0090 Amendment 1 (B) — a miscounted stack is SOFT-voided, never deleted.
+  //
+  // A stack is a BILLED unit: `finishUnload` sums `load_stacks` into
+  // `total_units`. Deleting one would destroy the only record that the operator
+  // ever counted it, and the audit log would point at a row that no longer
+  // exists. So the row stays and both sum sites filter `voided_at IS NULL`.
+  //
+  // `@@unique(load_id, stack_index)` is deliberately left FULL rather than made
+  // partial: `stack_index` is MONOTONIC (the client computes the next index over
+  // every stack including voided ones), so an index is never reused, and the
+  // positional meaning of the audit trail is preserved. A P2002 at an index that
+  // holds a VOIDED row is therefore never a converged replay — it is a conflict,
+  // and `addStack` answers 409 rather than resurrecting the void as a false 201.
+  voided_at DateTime?
+  voided_by String? // bare scalar FK -> users.id, ON DELETE SET NULL (ADR-0084 pattern)
 
   @@unique([load_id, stack_index])
   @@map("load_stacks")
