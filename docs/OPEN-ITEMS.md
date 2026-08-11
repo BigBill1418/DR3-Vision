@@ -8,15 +8,14 @@ marks it **DONE (date)** and moves it to the bottom section. Sibling docs:
 `docs/QUESTIONS.md` (design questions), `docs/handoffs/` (session context),
 `CHANGELOG.md` (what shipped).
 
-**Deadline that anchors everything: Kelsey's availability ends 8/8 — that is
-TODAY (2026-08-08).** Extended one week from 8/1 by Bill's renegotiated transfer
-(2026-07-19, rollup § preamble). Stages 1–3 of the go-live plan
-(`docs/plans/2026-07-06-staged-golive-activation-and-comms.md`) are the only
-window her cross-checks are possible. **Everything still blocked on her —
-AK-4 (Layer B commodity reconciliation rules), F-3 in 0.AI (the entered-vs-derived
-cross-check rule), S-10, and her AP routing row (§1 O-13, deactivate rather than
-delete) — becomes blocked with no owner after today.** Nothing below has been
-re-dated on the assumption of an extension.
+**Kelsey's availability ENDED 2026-08-08. That deadline has passed.** It was
+extended one week from 8/1 by Bill's renegotiated transfer (2026-07-19, rollup §
+preamble); no further extension was taken. **Everything that was blocked on her
+is now blocked with NO OWNER** — AK-4 (Layer B commodity reconciliation rules),
+F-3 in 0.AI (the entered-vs-derived cross-check rule), S-10, and her AP routing
+row (§1 O-13, deactivate rather than delete). Each of those needs a new owner or
+an explicit decision to drop it; none has been re-dated or re-assigned. Read any
+item below that names Kelsey as a dependency in that light.
 
 ---
 
@@ -55,6 +54,20 @@ executed ~7:20 PM PT, audited under Bill's user id:
   double-entry with a haul?) — then `mymrc-inbound-bridge-backfill.mjs --since
 2026-07-29` once the slot conflict is resolved. **Second design gap: no
   defined semantics for ipad_floor vs mymrc_haul aggregate-slot contention.**
+
+  **ASKED — email SENT 2026-08-10 (evening PT) to `morena.gomez@svdp.us` from
+  `dr3-vision@svdp.us`, CC Bill**, asking what the 150-unit iPad entry from
+  2026-07-29 (entered 8:34 AM PT under Pablo) actually represented. **Waiting on
+  her reply — this is now a stakeholder block, not a Bill decision.** Nothing
+  will be backfilled for 7/29 until she answers, because the two plausible
+  readings point opposite ways: a partial manual count means the MyMRC aggregate
+  should REPLACE it, while a double-entry against a real haul means the 150 units
+  are already counted somewhere and adding the day's 439/382 would over-credit.
+  Per the fleet rule this went from the SVdP mailbox, never a BarnardHQ identity.
+
+  **Do not publish or act on the −52 program floor while this is open.**
+  Correcting 7/29 moves it to +237 / +1,398.
+
 - ~~WATCH — six loads carry exactly 2.000× MRC's unit count~~ **RESOLVED 2026-08-10 ~8:30 PM PT** — PR #227's replay tests falsified the replay-double-add theory; the load_stacks rows proved plain DOUBLE-ENTRY (two identical rows per load). At Bill's instruction all six were corrected: duplicate stack soft-voided (ADR-0090 semantics), total_units set to the true count, audited per load; verified total_units == MRC unit_count_at_unload == live stack sum on all six. The live-total display + stack void shipped in #227 prevent recurrence. Original text kept below.
 - **(original)** six loads carry exactly 2.000× MRC's unit count (H-135978/135313/
   136226/136232/136250/136664; two operators; MRC's independent
@@ -79,12 +92,16 @@ executed ~7:20 PM PT, audited under Bill's user id:
 
 ---
 
-## 0.AW — 2026-08-11 floor workflow ergonomics (ADR-0090) — all three features shipped, three decisions for Bill
+## 0.AW — 2026-08-10 floor workflow ergonomics (ADR-0090) — all three features shipped, three decisions for Bill
+
+_All times and dates Pacific. Both merge commits carry 2026-08-11 UTC stamps; the
+work happened Monday 2026-08-10. A + C = PR #226 (5:34 PM PT), B = PR #227
+(7:54 PM PT)._
 
 Branches: `feat/floor-workflow-ergonomics` (A + C) and
 `feat/adr0090-back-navigation` (B). All three of JT's items are now built.
 
-- **AW-1 — DONE (2026-08-11).** B (back navigation) shipped on
+- **AW-1 — DONE (2026-08-10, PR #227).** B (back navigation) shipped on
   `feat/adr0090-back-navigation`, built to the ADR-0090 §D3 design with the
   deviations recorded in ADR-0090 Amendment 1. All three §D3 stack findings were
   implemented as written and each is pinned by a real-Postgres test in
@@ -108,7 +125,7 @@ Branches: `feat/floor-workflow-ergonomics` (A + C) and
   loads' `load_stacks` rows to confirm** — one row of 2N is a mis-count, two rows
   of N is the double-entry. Not verifiable from a test.
 
-- **AW-2 — DECIDED by Bill 2026-08-10 ~6:56 PM PT; DONE (2026-08-11).** Yes,
+- **AW-2 — DECIDED by Bill 2026-08-10 ~6:56 PM PT; DONE (2026-08-10, PR #227).** Yes,
   `finished → in_progress` reopen is allowed, and **the duration freezes at the
   first finish** — a re-finish keeps the value computed then. Built that way, and
   the freeze is structural rather than a UI branch: the timing columns are written
@@ -134,7 +151,7 @@ Branches: `feat/floor-workflow-ergonomics` (A + C) and
   NEXT enum addition gets missed. Consolidate behind
   `satisfies readonly LoadStatus[]` in one module.
 
-  Re-checked 2026-08-11 on `feat/adr0090-back-navigation` and deliberately NOT folded
+  Re-checked 2026-08-10 on `feat/adr0090-back-navigation` and deliberately NOT folded
   in: that branch adds a state-machine EDGE (`finished → in_progress`) and no new
   `LoadStatus` member, so none of the six lists needed an edit. The consolidation
   spans six files across the export, inventory and audit paths, and bundling a
@@ -148,9 +165,12 @@ Branches: `feat/floor-workflow-ergonomics` (A + C) and
   If a void is ever offered on an aggregate row those queries become reachable and
   each needs `notVoidedLoadWhere`.
 
-- **AW-6 — REFERENCE, not an action: the three stuck Woodland loads.** H-136796
-  (HWMA, mis-tap), H-136917 (Pleasanton) and H-135311 (Wexler, 13-day zombie) are
-  being resolved separately by the orchestrator. This branch changed no data.
+- **AW-6 — REFERENCE, not an action: the three stuck Woodland loads. ALL THREE
+  RESOLVED 2026-08-10 — see §0.AX.** H-136796 (HWMA, mis-tap) was zeroed and
+  detached 4:58 PM PT and the real truck checked in on the freed slot 5:13 PM PT;
+  H-135311 (Wexler, 13-day zombie) was zeroed and submitted 4:58 PM PT; H-136917
+  (Pleasanton) was genuinely open and was worked. This branch changed no data —
+  the resolutions were hand-audited under Bill's user id, recorded in §0.AX.
 
 - **AW-7 — ACCEPTED RESIDUAL: an offline-queued stack cannot be taken back.** A stack
   added while offline renders with a client-minted `tmp-` id and has no server row to

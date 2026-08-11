@@ -3,7 +3,78 @@
 All notable changes to DR3-Vision are recorded here.
 Format follows Keep a Changelog (semver-ish, sprint-tagged).
 
-## 2026-08-11 — FEATURE: the floor can go BACK (ADR-0090 B, Amendment 1)
+**Dates here are PACIFIC, always.** The fleet hosts and git both stamp UTC, which
+is 7 hours ahead — so an evening merge lands on the NEXT UTC day. Date an entry by
+the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
+entries were briefly headed 2026-08-11 for exactly this reason; corrected
+2026-08-10.)
+
+## 2026-08-10 (8:45 PM PT) — CLOSE-OUT: four hand-audited data corrections, a drained queue, and one question sent
+
+No code. The end of the day's operational tail, all executed under Bill's user id
+with an audit row each, all recorded in `docs/OPEN-ITEMS.md` §0.AX.
+
+- **H-136912's slot freed by RE-ATTRIBUTION, not a detach.** The 95-unit load
+  worked 8/7 (13:38–14:19 PT) matches **H-136736** exactly — same transporter
+  (Titan Concepts), same commodity, same 53' trailer, same 95-unit count, MRC
+  **Delivered** 95, worked 68 minutes after H-136736's appointment — while
+  H-136912 is MRC Confirmed/0. Moving `9e7c1cf4.expected_load_id` onto H-136736's
+  empty slot closes the consumed slot AND H-136736's missing-work gap in one
+  move. **This falsifies the 0.AV claim that "only the operator knows which truck
+  it was" for this class:** carrier + commodity + trailer + unit-count + MRC-status
+  matching identified the truck from data alone. The 159-unit orphan
+  (`2b60d7ba`) is still unattributed — try the same method on it.
+
+- **A stale future-dated aggregate deleted.** `2b460bb7`, 104 program units keyed
+  to 2026-08-12 — H-136583's _pre_-ADR-0089 appointment day. The Am.1 re-key moved
+  that haul's real units into the 8/6 aggregate, but the bridge never removes a
+  day-row whose hauls migrate away. Left alone it would have phantom-added 104
+  program units to the floor at Wed 00:00 PT. **The design gap is real and
+  unbuilt: the bridge has no cleanup path for aggregate rows whose mirror
+  day-group becomes empty.**
+
+- **Six double-entered loads corrected — totals now match MRC exactly on all
+  six.** H-135978 / 135313 / 136226 / 136232 / 136250 / 136664 each carried
+  exactly 2.000× MRC's count. The replay-double-add theory was **falsified** by
+  PR #227's real-Postgres tests (a queued `add_stack` carries its ORIGINAL
+  `stackIndex`, so a replay converges or 409s — it can never land at a fresh
+  index; and the ADR-0078 D7 branch recomputes rather than accumulates). The
+  `load_stacks` rows proved plain DOUBLE-ENTRY: two identical rows per load, the
+  signature of re-typing a total the operator believed had not saved. At Bill's
+  instruction each duplicate stack was soft-voided (ADR-0090 semantics),
+  `total_units` set to the true count, and verified `total_units ==
+unit_count_at_unload == live stack sum` on all six. **The live-total display and
+  the stack void that shipped in #227 are what prevent recurrence** — until that
+  PR the floor had no way to take a stack back, which is consistent with six of
+  these shipping.
+
+- **The source reconcile queue drained, with curation** —
+  36 approved / 13 aliased / **1 artifact rejected**, plus a corrected "Oakland
+  Housing" entry (`scripts/one-off/2026-08-10-source-queue-curation.ts`). Approve
+  is still the only write; nothing was auto-written to `sources`. One NEW pending
+  item arrived at 7:01 PM PT ("Mt Diablo Pittsburg") — the queue working as
+  designed; decide it with the next batch.
+
+- **One question SENT, not answered.** Email to `morena.gomez@svdp.us` from
+  `dr3-vision@svdp.us`, CC Bill, asking what the 2026-07-29 150-unit `ipad_floor`
+  entry represented. That row occupies the unique (site, day) aggregate slot, so
+  the MyMRC bridge could never land 7/29's real aggregate (10 delivered hauls,
+  439 program / 382 non-program) — a **671-unit hole the hourly bridge can never
+  fix**, and 7/29 has since slid out of the 10-day trailing window. **Do not treat
+  the current −52 program floor as a physical deficit:** correcting 7/29 moves it
+  to +237 / +1,398. **Second design gap, also unbuilt: there are no defined
+  semantics for `ipad_floor` vs `mymrc_haul` contention over the aggregate slot.**
+
+## 2026-08-10 (1:15 PM PT) — VERIFIED: the July Woodland COR clears both gates
+
+The ADR-0089 recovery entry below predicted this and left it to be checked. It
+was checked (`scripts/one-off/2026-08-10-adr0089-july-cor-verify.ts`): the July
+Woodland Certificate of Recycling passes **both** the freshness gate and the
+negative-ledger gate, at **512 units** end-of-month inventory. The block that had
+stood since the floor went negative is gone. Nothing was filed — this was a
+gate check, and a human still signs every COR (ADR-0042).
+
+## 2026-08-10 (7:54 PM PT) — FEATURE: the floor can go BACK (ADR-0090 B, Amendment 1)
 
 JT, Woodland, 2026-08-10:
 
@@ -86,7 +157,7 @@ Full reasoning, the deviations from the ADR-0090 §D3 design, and the one accept
 (an offline-queued `tmp-` stack cannot be voided — there is no server row to name):
 `docs/adr/0090-floor-workflow-ergonomics.md` Amendment 1.
 
-## 2026-08-11 — FEATURE: the floor can tell two trucks apart, and can close a load it never worked (ADR-0090 A + C)
+## 2026-08-10 (5:34 PM PT) — FEATURE: the floor can tell two trucks apart, and can close a load it never worked (ADR-0090 A + C)
 
 Three things from the floor on 2026-08-10, all verified against production the same
 night, all describing the same three loads — every open load at Woodland held by one
@@ -276,8 +347,8 @@ and the full D4 recovery sequence executed at Bill's instruction, 12:45–12:55 
   0 dateless; 15 in-transaction audit rows.
 - **Floor before → after: −1,166 program / −505 non-program (−1,671 total) →
   +479 / +903 (+1,382 total).** Freshness reads business day 2026-08-10 on the
-  COALESCE key. July COR negative-ledger block expected to clear (verify by
-  running the COR flow).
+  COALESCE key. July COR negative-ledger block expected to clear — **VERIFIED
+  clear the same afternoon at 512 units EOM; see the 1:15 PM PT entry above.**
 - Residual (cosmetic): `fix-woodland-inbound.sh` heredoc emits two harmless
   `command not found` lines from backticks in a SQL comment — pre-existing.
 
