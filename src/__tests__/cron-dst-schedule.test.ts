@@ -24,6 +24,13 @@ import { nextFireInstantAt as boardPackNextFire } from '../../scripts/board-pack
 import { nextFireInstantAt as dailyReportNextFire } from '../../scripts/bonus-daily-report.mjs';
 import { nextFireInstant as eodNextFire } from '../../scripts/bonus-eod-check.mjs';
 import { nextWeeklyFireInstant as fuelNextWeeklyFire } from '../../scripts/fuel-price-cron.mjs';
+// ADR-0092 — the stale-claim watchdog (16:45 PT), and the throughput-gap watchdog
+// (08:30 PT) it was copied from. The latter shipped under ADR-0088 carrying its
+// own copy of the offset-reprobe helper and was never added here; both are pinned
+// now, because an untested copy of this function is exactly how the original
+// seven-daemon defect happened.
+import { nextFireInstantAt as throughputGapNextFire } from '../../scripts/equipment-throughput-gap-cron.mjs';
+import { nextFireInstantAt as staleClaimNextFire } from '../../scripts/stale-claim-cron.mjs';
 
 /** The Pacific wall-clock "HH:MM" an absolute UTC instant lands on. */
 function pacificHHMM(at: Date): string {
@@ -54,6 +61,8 @@ const DAILY: ReadonlyArray<[string, (from: Date, h: number, m: number) => Date]>
   ['ap-morning-digest', apMorningDigestNextFire as never],
   ['board-pack-digest-cron', boardPackNextFire as never],
   ['bonus-daily-report', dailyReportNextFire as never],
+  ['equipment-throughput-gap-cron', throughputGapNextFire as never],
+  ['stale-claim-cron', staleClaimNextFire as never],
 ];
 
 describe.each(DAILY)('%s — DST transition days', (_name, nextFire) => {

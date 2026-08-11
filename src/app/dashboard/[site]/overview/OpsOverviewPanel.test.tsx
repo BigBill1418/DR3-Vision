@@ -132,6 +132,20 @@ const full: OpsOverview = {
     employeeCount: 6,
     totalUsd: 1240,
   },
+  // ADR-0092 — one quiet load, past the mail threshold.
+  staleClaims: {
+    rows: [
+      {
+        loadId: 'load-costco',
+        haulNumber: 'H-136796',
+        sourceName: 'HWMA',
+        holderName: 'Janette Tomas',
+        status: 'in_progress',
+        idleMinutes: 918,
+        level: 'nudge',
+      },
+    ],
+  },
 };
 
 describe('OpsOverviewPanel', () => {
@@ -191,6 +205,7 @@ describe('OpsOverviewPanel', () => {
       compliance: null,
       bonus: null,
       mirrors: [],
+      staleClaims: null,
     };
     const html = renderToStaticMarkup(<OpsOverviewPanel data={degraded} />);
     expect(html).toContain('Throughput is not available');
@@ -229,5 +244,41 @@ describe('OpsOverviewPanel', () => {
     // A warranty repair that genuinely cost nothing is a fact worth keeping.
     expect(html).toContain('>$0<');
     expect(html).not.toContain('not recorded');
+  });
+});
+
+describe('ADR-0092 — the stale-claim panel', () => {
+  it('names WHICH loads are quiet, not just how many', () => {
+    // A count alone sends the reader hunting; the row has to carry the haul, the
+    // holder and the age, or the manager still has to go ask the room — which is
+    // the thing this whole feature exists to stop.
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={full} />);
+    expect(html).toContain('H-136796');
+    expect(html).toContain('Janette Tomas');
+    expect(html).toContain('ov-stale-claims-table');
+  });
+
+  it('links each row to the LOAD itself — tier-1 per ADR-0036', () => {
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={full} />);
+    expect(html).toContain('/operator/eugene/load/load-costco');
+  });
+
+  it('hides the table when nothing is quiet, and says so on the card instead', () => {
+    // An always-present zero-row table is noise on an iPad. The StatCard still
+    // reports the healthy state, so "nothing quiet" stays distinguishable from
+    // "panel failed to load" (the ADR-0020 degraded-vs-empty contract).
+    const quiet: OpsOverview = { ...full, staleClaims: { rows: [] } };
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={quiet} />);
+    expect(html).not.toContain('ov-stale-claims-table');
+    expect(html).toContain('Every open load is moving');
+  });
+
+  it('renders an explicit not-available card when the read FAILED', () => {
+    // `null` is not zero. A failed read must never render as a clean dock.
+    const broken: OpsOverview = { ...full, staleClaims: null };
+    const html = renderToStaticMarkup(<OpsOverviewPanel data={broken} />);
+    expect(html).toContain('ov-stale-claims');
+    expect(html).toContain('Not available');
+    expect(html).not.toContain('Every open load is moving');
   });
 });

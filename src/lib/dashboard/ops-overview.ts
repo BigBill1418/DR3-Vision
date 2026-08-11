@@ -19,6 +19,8 @@
 // UTC-components rule (`dayISO`). See `@/lib/time`.
 
 import { prisma } from '@/lib/prisma';
+import { OPEN_DOCK_STATUSES } from '@/lib/loads/open-loads';
+import { listOpenClaimsWithStaleness } from '@/lib/loads/stale-claim-query';
 import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import {
   appTodayISO,
@@ -200,15 +202,39 @@ export interface OpsOverview {
   commodity: CommodityAging | null;
   compliance: CompliancePanel | null;
   bonus: BonusPanel | null;
+  /**
+   * ADR-0092 — claimed dock loads that have gone quiet. `null` only when the
+   * read failed; an empty `rows` array is the healthy answer and the panel says
+   * so rather than disappearing.
+   */
+  staleClaims: StaleClaimsPanel | null;
 }
 
-const OPERATOR_ACTIVE_STATUSES = [
-  'arrived',
-  'weight_captured',
-  'unload_started',
-  'in_progress',
-  'finished',
-] as const;
+/**
+ * ADR-0092 — the in-app half of the stale-claim watchdog, and the PRIMARY half.
+ *
+ * CLAUDE.md hard rule #5 keeps operational events off ntfy ("long unloads, SLA
+ * breaches" are its own examples) and ADR-0037 says below-default belongs on a
+ * dashboard rather than in a notification. So this panel is where a stranded
+ * load is normally noticed; the 16:45 PT mail is only the backstop for the day
+ * nobody opened the dashboard.
+ *
+ * It shows the `badge` band too (2h+), which never mails anyone — a manager
+ * seeing a load go quiet at 2h can walk over and ask, which is the cheapest
+ * possible resolution and the one that never becomes an alert at all.
+ */
+export interface StaleClaimsPanel {
+  rows: Array<{
+    loadId: string;
+    haulNumber: string | null;
+    sourceName: string | null;
+    holderName: string | null;
+    status: string;
+    idleMinutes: number;
+    /** `badge` = quiet 2h+, `nudge` = quiet 4h+ and mailed at 16:45 PT. */
+    level: 'badge' | 'nudge';
+  }>;
+}
 
 const COMPLIANCE_LABELS: Record<string, string> = {
   mymrcSubmission: 'MyMRC submission',
@@ -438,7 +464,7 @@ export async function computeSiteSummary(args: {
   const [loadsActive, loadsArrivedToday, floor, processed, commodity, mirrorMax] =
     await Promise.all([
       prisma.inboundLoad
-        .count({ where: { site_id: siteId, status: { in: [...OPERATOR_ACTIVE_STATUSES] } } })
+        .count({ where: { site_id: siteId, status: { in: [...OPEN_DOCK_STATUSES] } } })
         .catch(() => 0),
       prisma.inboundLoad
         // ADR-0090 C — a mis-tapped load is not a truck that arrived today.
@@ -513,9 +539,10 @@ export async function computeOpsOverview(args: {
     commodity,
     compliance,
     bonus,
+    staleClaims,
   ] = await Promise.all([
     prisma.inboundLoad
-      .count({ where: { site_id: siteId, status: { in: [...OPERATOR_ACTIVE_STATUSES] } } })
+      .count({ where: { site_id: siteId, status: { in: [...OPEN_DOCK_STATUSES] } } })
       .catch(() => 0),
     prisma.inboundLoad
       // ADR-0090 C — a mis-tapped load is not a truck that arrived today.
@@ -531,6 +558,24 @@ export async function computeOpsOverview(args: {
       .catch(() => null),
     computeCompliancePanel(siteId).catch(() => null),
     computeBonusPanel(siteId).catch(() => null),
+    // Degrades to `null` like every sibling panel: a dashboard that throws
+    // because one reader failed is worse than one that says it cannot answer.
+    listOpenClaimsWithStaleness(siteId, now)
+      .then((all) => ({
+        rows: all
+          .filter((c) => c.level !== 'ok')
+          .sort((a, b) => b.idleMs - a.idleMs)
+          .map((c) => ({
+            loadId: c.loadId,
+            haulNumber: c.haulNumber,
+            sourceName: c.sourceName,
+            holderName: c.holderName,
+            status: c.status,
+            idleMinutes: Math.round(c.idleMs / 60_000),
+            level: c.level as 'badge' | 'nudge',
+          })),
+      }))
+      .catch(() => null),
   ]);
 
   return {
@@ -549,5 +594,6 @@ export async function computeOpsOverview(args: {
     commodity,
     compliance,
     bonus,
+    staleClaims,
   };
 }

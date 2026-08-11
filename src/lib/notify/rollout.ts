@@ -49,6 +49,14 @@ export const NOTIFY_SURFACE = {
   // Born pilot per ADR-0047 #3. CALLED per-site, so it never takes the
   // conservative org-wide both-sites-must-be-live path.
   EQUIPMENT_THROUGHPUT_GAP: 'equipment_throughput_gap',
+  // ADR-0092 — the stale-claim watchdog's end-of-shift nudge. Its OWN surface,
+  // not `alert_digest`: the digest fires at 18:00 PT as a many-findings rollup a
+  // manager may reasonably skim, whereas this is a specific, time-critical ask
+  // ("close these before you leave") that Bill must be able to ramp at Woodland
+  // — the only site with a live iPad dock — without ramping the digest, and pull
+  // back without taking the digest down with it. Born pilot per ADR-0047 #3.
+  // CALLED per-site, so it never takes the conservative org-wide path.
+  LOAD_STALE_CLAIM: 'load_stale_claim',
   // Grandfathered — established production surfaces, seeded `live` (§4.4 out-of-scope).
   BONUS_SIGNATURE_CHAIN: 'bonus_signature_chain',
   SURVEY_SENDS: 'survey_sends',
