@@ -1,10 +1,23 @@
 # ADR-0089 — The delivery date we never asked for: inbound is keyed on a scheduling field
 
 **Status:** Accepted — D1/D2/D3 implemented + D4 tooling built 2026-08-10 (same
-day, Bill: "go ahead and start the build"); the D4 recovery RUN remains
-operator-sequenced (re-detail sweep → delta report → Bill reads → gated
-re-bridge, see OPEN-ITEMS). Originally Proposed (diagnosis) earlier the same
-day.
+day, Bill: "go ahead and start the build"). Originally Proposed (diagnosis)
+earlier the same day.
+**The D4 recovery RAN on 2026-08-10 (evening PT)** through its full operator
+sequence — re-detail sweep → delta report → Bill read it → gated re-bridge.
+Result: **7,314/7,314** Delivered hauls dated, **35 added + 30 re-attributed**,
+and the Woodland program floor moved **−1,671 → +1,382**. The July Woodland COR
+then cleared both gates at **512 units EOM** (verified separately the same
+evening). The `dateless_hauls` residual is **0/7,314**, so any future fire of
+that alert is a genuinely new record rather than backlog.
+**Two design gaps the recovery exposed, both still OPEN** (recorded in
+OPEN-ITEMS §0.AX, neither built here): (1) the bridge has **no cleanup path for
+aggregate rows whose mirror day-group becomes empty** — a haul that migrates to
+its true delivery day leaves its old appointment-day aggregate behind, which one
+stale 8/12 row proved by nearly phantom-adding 104 program units; (2) there are
+**no defined semantics for `ipad_floor` vs `mymrc_haul` contention** over the
+unique (site, day) aggregate slot — the 2026-07-29 671-unit hole is that
+collision, and it is a decision for Bill, not a bug to patch.
 **Am.1 (2026-08-10, same day):** the §"one discriminating fact" is now PROVEN —
 see the amendment section at the end. `Recycler_Reported_Delivery_Date__c` is
 populated on 12/12 Delivered hauls probed (including all 7 undated

@@ -6,6 +6,37 @@
 **Relates to:** ADR-0037 (loads & inventory / running balance — the `Inbound` term, `inbound_loads`, `paper_bulk`), ADR-0038 + ADR-0057 (MyMRC ingestion, mirror tables, reconcile-queue write gate), ADR-0048 (workbook `import` source), `#166` (paper_bulk manager inbound path)
 **Build spec:** `docs/plans/2026-07-23-mymrc-inbound-inventory-bridge.md`
 
+> ## ⚠ SUPERSEDED ON ONE POINT BY ADR-0089 (2026-08-10)
+>
+> **The decision this ADR made stands. One factual premise underneath it did not.**
+>
+> This document keys inbound on `docking_appointment_date` and accepts a tradeoff
+> (§0, §4 D4, §Consequences) that the 2,301 undated Delivered General hauls are
+> "all pre-anchor and inert for the live floor", and that "the live/forward path
+> is fully covered". **Both claims are false, and ADR-0089 shows why:**
+>
+> - `Docking_Appointment_Date__c` is a **SCHEDULING** field — populated only when
+>   a haul books a dock slot. Route collections never book one, so all 886 hauls
+>   carrying a `Collection_Source__c` were undated and silently skipped on the
+>   LIVE path, not the historical one.
+> - Those hauls were never dateless. They carry
+>   `Recycler_Reported_Delivery_Date__c`, which was catalogued in our own
+>   2026-07-22 Phase-0 discovery doc and requested nowhere in the code. Am.1
+>   proves it populated on 12/12 Delivered hauls probed.
+> - 35 **post-anchor** Delivered hauls (639 program + 1,790 non-program units,
+>   133,595 lb) never reached the floor. The skip was not inert: it drove the
+>   Woodland floor to −1,671.
+> - `freshness.ts` keyed on the same wrong column, so the COR gate would have
+>   certified a feed it could not see.
+>
+> **Current behaviour:** the bridge and the freshness guard both key on
+> `COALESCE(recycler_reported_delivery_date, docking_appointment_date)` per
+> ADR-0089 D1–D3. The appointment date is a fallback only — and per ADR-0089
+> Am.1 §3 it disagrees with the true delivery by up to 6 days even when present.
+>
+> Nothing below is rewritten; read it as the record of what was decided on
+> 2026-07-23 and why, then read ADR-0089 for what is true now.
+
 ## Context
 
 `onHand` (`src/lib/inventory/running-balance.ts`) computes inventory as
@@ -14,9 +45,9 @@
 `paper_bulk` manager entries (`#166`) and (future) iPad per-load dock captures — neither
 running yet at scale — so on-hand does not rise from real intake, only fall from processing.
 
-Bill's directive (verbatim intent): *"Inbound needs to be entered somewhere — can't you get
+Bill's directive (verbatim intent): _"Inbound needs to be entered somewhere — can't you get
 that from the haul count on the MyMRC portal today? I believe we already have this data on
-hand. THEN when the iPads come online we verify that data for confirmation day-to-day."* So:
+hand. THEN when the iPads come online we verify that data for confirmation day-to-day."_ So:
 **MyMRC haul counts become PROVISIONAL inbound now; iPad floor-confirmation upgrades them to
 confirmed later; manual `paper_bulk` stays as fallback/override.**
 

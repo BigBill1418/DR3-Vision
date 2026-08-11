@@ -101,6 +101,18 @@ feed's newest business record older than the freshness threshold records
 **4. Freshness is measured on the record's own business date.**
 `src/lib/mymrc/freshness.ts` reads `entry_date` (processed/outbound) and
 `docking_appointment_date` (hauls) — never `detail_fetched_at` or `last_seen_at`,
+
+> **Column superseded by ADR-0089 D3 (2026-08-10).** The hauls column is now
+> `COALESCE(recycler_reported_delivery_date, docking_appointment_date)`, scoped to
+> `status = 'Delivered'` (the row scoping came from Amendment 1 below, the column
+> from ADR-0089). The appointment date is a SCHEDULING field: null on every
+> route-collection haul, so a guard keyed on it alone measured a different column
+> than the bridge aggregated on — and would have reported healthy a feed the
+> bridge could not see. The COALESCE stays INSIDE `max()`, not
+> `GREATEST(max(a), max(b))`. The principle in this section — measure the
+> record's own business date, never our read timestamps — is unchanged and was
+> right; only the column naming that date was wrong.
+
 which refresh whenever we re-read a record we already hold and therefore stayed
 green throughout the freeze. Threshold 96h: clears a weekend plus a holiday Monday,
 and would have fired on day 5 of a 9-day freeze rather than never.

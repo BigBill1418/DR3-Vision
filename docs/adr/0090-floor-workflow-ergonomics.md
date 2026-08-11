@@ -1,6 +1,7 @@
 # ADR-0090 — the floor could not tell two trucks apart, could not go back, and could not close a load it never worked
 
-**Status:** Accepted, fully implemented — A and C shipped 2026-08-11; **B shipped 2026-08-11 under [Amendment 1](#amendment-1--b-shipped-and-the-duration-freezes-at-the-first-finish)**, which also records Bill's `unload_duration_seconds` decision that unblocked it
+**Status:** Accepted, fully implemented — **all three shipped 2026-08-10 Pacific**. A and C in PR **#226** (merged 5:34 PM PT); **B in PR #227 (merged 7:54 PM PT) under [Amendment 1](#amendment-1--b-shipped-and-the-duration-freezes-at-the-first-finish)**, which also records Bill's `unload_duration_seconds` freeze decision (~6:56 PM PT) that unblocked it. §D3 below is superseded by that amendment and is marked BUILT there.
+**A note on dates:** the merge commits carry `2026-08-11` UTC timestamps. Every event in this ADR — JT's three reports, Bill's decision, both merges — happened on **Monday 2026-08-10 Pacific**. Times in this document are Pacific.
 **Builds on:** ADR-0065 Am.1 (the unfinished-loads list), ADR-0074 + Am.1 (open-portal haul visibility; the consumed-slot dead end), ADR-0077 D4 ("not recorded" is not zero), ADR-0078 (idempotent floor writes, the honest queue), ADR-0082 (claim takeover and honest attribution), ADR-0084 (the soft-void pattern — and the one decision this ADR deliberately inverts), ADR-0085 (the walk-up drop-off), ADR-0073 (manager load corrections — design-only, and the boundary this respects)
 
 ---
