@@ -76,10 +76,7 @@ export type ConsumedSlotView =
  * a null name renders the honest "another operator" fallback and still offers
  * the takeover that makes it theirs for real.
  */
-export function describeConsumedSlot(
-  c: ConsumedSlotFacts,
-  viewerUserId: string,
-): ConsumedSlotView {
+export function describeConsumedSlot(c: ConsumedSlotFacts, viewerUserId: string): ConsumedSlotView {
   if (!c.open) return { kind: 'worked' };
   if (c.holderUserId !== null && c.holderUserId === viewerUserId) {
     return { kind: 'resume', loadId: c.loadId };
