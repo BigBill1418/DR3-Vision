@@ -40,10 +40,12 @@ redirect to refuse.
   `/api/internal/idempotency/sweep` (ADR-0078, the `idempotency_keys` TTL sweep,
   03:10 PT nightly) was never exempted either — verified by a bearer-carrying
   POST from inside the compose network returning 401. Every nightly fire since it
-  shipped has been refused, so the receipt-book table has never been pruned. Not
-  a regression from this work; found by it. The symptom of a failing TTL sweep is
-  a table that quietly grows forever rather than anything that pages, which is
-  why it went unnoticed.
+  shipped has been refused, so the receipt book has never been successfully
+  pruned. **Impact measured, not assumed:** the table held 141 rows, oldest 4
+  days, **zero past the 7-day retention floor** — the first successful sweep
+  deleted 0. The break was real but had cost nothing yet; it was latent and
+  would have begun mattering the first time a key aged past the TTL. Not a
+  regression from this work; found by it.
 
 ## 2026-08-11 (11:00 AM PT) — Stale-claim watchdog: a stranded load stops needing a person to notice it (ADR-0092)
 

@@ -144,7 +144,12 @@ export function isPublic(pathname: string): boolean {
   // on-disk sweep test added alongside this entry, not by anyone noticing —
   // which is exactly the point of that test, because the symptom of a failing
   // TTL sweep is a table that quietly grows forever rather than anything that
-  // pages. The receipt book has simply never been pruned.
+  // pages.
+  //
+  // Impact, measured rather than assumed (2026-08-11): the table held 141 rows,
+  // oldest 4 days, and ZERO past the 7-day retention floor — so the sweep had
+  // nothing to delete and the break cost nothing yet. It was a LATENT defect
+  // that would have started mattering the first time a key aged past the TTL.
   if (pathname.startsWith('/api/internal/idempotency/')) return true;
   // ADR-0067 §3.2 — the Graph change-notification webhook
   // (`/api/doc-ingest/notifications`). UNLIKE the loopback-guarded crons above,
