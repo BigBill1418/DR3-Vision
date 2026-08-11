@@ -297,8 +297,9 @@ export async function submitAmendmentBatch(input: SubmitAmendmentBatchInput): Pr
     validateCount(item.newValue.saves);
   }
 
-  // Resolve approver outside the tx (separate read; throws on Patrick). One
-  // requester + one site → one approver for the whole batch.
+  // Resolve approver outside the tx (separate read; throws for any requester
+  // who holds neither slot at the site). One requester + one site → one
+  // approver for the whole batch.
   const { expectedApproverUserId } = await resolveAmendmentApprover(
     prisma,
     input.siteId,

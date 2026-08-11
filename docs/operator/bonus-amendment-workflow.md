@@ -106,5 +106,6 @@ Expect: amendment insert (Janette), entry update (Morena, `actor_label='system:a
 ## Known limitations
 
 - "Ping Bill" appears immediately on submit — a requester in a hurry can shortcut by pinging Bill in the same breath. This is by design (soft control); the audit log records the time-from-submit-to-ping so abuse patterns are observable.
-- Patrick Dills cannot use the workflow at all (separation of duties — he's also an Eugene processor). His prior-day grid is read-only; corrections must be made verbally to Rick or Bill.
+- ~~Patrick Dills cannot use the workflow at all (separation of duties — he's also an Eugene processor). His prior-day grid is read-only; corrections must be made verbally to Rick or Bill.~~ **No longer true as of 2026-08-11 (ADR-0019.3).** Patrick holds the Eugene ops-signer slot: he uses the workflow normally, approves Rick's requests, and Rick approves his. Do not tell Eugene staff their corrections have to go through Rick or Bill verbally — that guidance is retired.
+- Any manager who occupies neither slot in their site's signature chain cannot use the workflow (403). At Eugene that is currently Kelsey Ruhland and Shannon Rockwell; their prior-day grid is read-only and corrections go to Rick, Patrick, or Bill.
 - Notes-only edits on prior days are direct (audit-log only, no workflow). Only `mattress_count` changes go through the four-eyes path.

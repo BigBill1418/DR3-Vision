@@ -9,11 +9,68 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (10:48 AM PT) — Eugene bonus approver is Patrick; the 08:30 auto-override was dead at both sites (ADR-0019.3)
+
+Bill directed that Patrick Dills become the Eugene bonus approver. The instruction
+was phrased "remove Kelsey, install Patrick" — but Kelsey had held no slot since
+**2026-08-08**, when Shannon Rockwell was installed as cover on Bill's own prior
+instruction. Applying the words literally would have evicted Shannon, who was
+never mentioned. The change was held, re-confirmed against `audit_log`, and
+applied to the seat as it actually stood.
+
+- **Eugene ops signer: Shannon → Patrick Dills.** Rick Albritton keeps facility;
+  `ops_override` stays Bill-only; Patrick replaces Shannon in `facility_override`.
+  No code change — approver identity is data (`bonus_signature_chains`), and the
+  chain cache TTL is 30s, so it went live without a deploy.
+
+- **This reverses the ADR-0023 / T-312 separation-of-duties exclusion, knowingly.**
+  Patrick is also a Eugene `BonusEmployee` (119 entries, 2025-01-07 → 2026-01-14;
+  now `is_active=false`), so he can be the default approver for amendments
+  touching his own historical rows. The DB CHECK stops requester == approver, not
+  approver-has-an-interest. Bill owns the trade-off; it is recorded, not absorbed.
+
+- **Found while verifying: the 08:30 PT auto-override was dead at BOTH sites.**
+  `auto_override_actor_user_id` pointed at `45a9d1d0…` (`operations@svdp.us`), an
+  account seeded `is_active=false` _on purpose_. The `actorUnavailable` guard in
+  `escalation.ts` refuses to sign as an inactive actor — so ADR-0019.1's
+  "load-bearing mechanism for hitting the 9:00 AM deadline" had been a no-op since
+  at least the 2026-07-07 incident. Woodland was carrying it too, one payroll
+  morning from the same failure.
+
+- **Root cause of the recurrence — the seed, not the operator.** The 2026-07-07
+  audit row correctly records repointing the chain at the active admin. It did not
+  stick because `prisma/seed.mjs` aliased `bill.barnard@svdp.us → operations@svdp.us`
+  (added because `bill.barnard@` was never seeded), so **every `db:seed` re-broke
+  it**. Fixed at the root: `bill.barnard@svdp.us` is now seeded as an active admin
+  mirroring the live row (`is_super_admin=true`, so a re-seed cannot downgrade
+  him), and the alias is removed with a do-not-reintroduce note.
+
+- **The seed would also have reverted the approver change.** `bonus_signature_chains.csv`
+  still named Kelsey; it now names Patrick. A re-seed now reinforces the
+  configuration instead of silently rolling back a payroll approver.
+
+- **Docs corrected where they were actively wrong.** ADR-0019.1 §3's timeline table
+  had drifted from the schedulers on three times (close 07:00 not Mon 17:30, t1
+  07:10 not 06:00, EOD 20:00 not 17:00) — annotated inline and reconciled in
+  Amendment 2. The operator runbook told Eugene staff Patrick's corrections must go
+  verbally to Rick or Bill; retired. ADR-0028's Patrick carve-out marked reversed.
+
+- **Also confirmed unimplemented:** the ADR-0019.1 §4 "override actor available"
+  health pill does not exist. The health pill shipped with a hardcoded six-subsystem
+  list that never touches the chain. So a dead override actor is only detectable at
+  08:30 PT on payroll morning, 30 minutes before the deadline — which is how this
+  defect class has now escaped twice. Not built here; flagged in ADR-0019.1 Am. 2.
+
+- **Verified.** Both chains re-queried; all 12 user references across both sites now
+  resolve to `is_active=true` accounts (postcondition enforced inside the
+  transaction). Three `audit_log` rows written with full before/after. No Eugene
+  amendment requests were pending, so nothing stranded. 663 bonus tests green.
+
 ## 2026-08-11 (8:00 AM PT) — INCIDENT: the hauls screen called your own load somebody else's (ADR-0091)
 
 Woodland operator Pablo Ledezma could not finish the Costco-Innovel-Sacramento
-load (**H-136311**). The hauls screen told him it was *"Already started by another
-operator."* He had started it himself at **06:46 AM PT**, and the row said so:
+load (**H-136311**). The hauls screen told him it was _"Already started by another
+operator."_ He had started it himself at **06:46 AM PT**, and the row said so:
 `assigned_operator_id` was his.
 
 - **Root cause — a missing field, not a failing guard.** ADR-0074 Am.1 (shipped
@@ -34,7 +91,7 @@ operator."* He had started it himself at **06:46 AM PT**, and the row said so:
   (submitted and beyond) stays the read-only card Am.1 made it. New copy in en /
   es / ur.
 
-- **Guarded.** A second source-level chokepoint test asserts every *rendering*
+- **Guarded.** A second source-level chokepoint test asserts every _rendering_
   surface calls `describeConsumedSlot`, alongside the existing one for
   `toConsumedLoad`. The two file lists differ — which is the argument for a
   shared function rather than a convention, and the reason these two screens

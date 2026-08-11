@@ -30,7 +30,7 @@
 // CREATE UNIQUE INDEX IF NOT EXISTS).
 //
 // Verification: at the end the script asserts the row counts documented
-// in `prisma/seed/README.md` (sites=2, users=5, site_holidays=24,
+// in `prisma/seed/README.md` (sites=2, users>=7, site_holidays=24,
 // processor_bonus_rules=2, sources=111, transporters=11,
 // bonus_pay_periods=52, bonus_signature_chains=2). Mismatches throw and
 // abort the seed — investigate the CSV before proceeding.
@@ -116,16 +116,24 @@ function dateOnly(v) {
 //      itself was corrected to the canonical form when copied into
 //      prisma/seed/; this map is defense-in-depth in case a future CSV
 //      regresses to the short form.
-//   2. Bill is seeded in users.csv as `operations@svdp.us`, but the chain
-//      CSV + runbook refer to him as `bill.barnard@svdp.us`. Until users.csv
-//      adopts bill.barnard@ (out of scope for T-201 — it would change an
-//      existing seeded identity), we resolve bill.barnard@ → operations@.
+//   2. RESOLVED 2026-08-11 — was: `bill.barnard@svdp.us` → `operations@svdp.us`.
+//      This alias was the root cause of a recurring payroll defect and has been
+//      REMOVED. `operations@svdp.us` is seeded `is_active=false` on purpose (it
+//      is an import/automation alias, not a login identity), and the t3 08:30 PT
+//      auto-override refuses to sign as an inactive actor — see the
+//      `actorUnavailable` guard in src/lib/bonus/escalation.ts. So every
+//      `db:seed` run silently repointed BOTH sites' auto_override_actor at a
+//      dead account and killed the auto-override safety net. That is what caused
+//      the 2026-07-07 missed Eugene deadline, and it is why the manual repair
+//      recorded in the audit log that day did not stick.
+//      The fix is upstream: `bill.barnard@svdp.us` is now seeded directly in
+//      users.csv (active admin, mirroring the live prod row), so it resolves on
+//      its own and no alias is required. Do NOT reintroduce this mapping.
 //
 // If a referenced email cannot be resolved to a seeded user, the seed throws
 // loudly (matching the runbook's "deploy will fail if a referenced user can't
 // be found" contract) rather than silently dropping a signer.
 const SIGNATURE_CHAIN_EMAIL_ALIASES = {
-  'bill.barnard@svdp.us': 'operations@svdp.us',
   'janette@svdp.us': 'janette.tomas@svdp.us',
   'morena@svdp.us': 'morena.gomez@svdp.us',
   'rick@svdp.us': 'rick.albritton@svdp.us',
@@ -1432,7 +1440,7 @@ async function assertCounts() {
   // adds rows (users via the admin UI; sources/transporters may be extended).
   // Assert a FLOOR, not equality — otherwise prod (e.g. 7 users) fails the seed.
   const expectedMin = {
-    users: 6, // Bill, Kelsey, Morena, Rick, Janette, Patrick (ADR-0023)
+    users: 7, // Bill (operations@ alias + bill.barnard@ login), Kelsey, Morena, Rick, Janette, Patrick (ADR-0023)
     sources: 111,
     transporters: 11,
     bonus_employees: 94, // historical import (ADR-0023)

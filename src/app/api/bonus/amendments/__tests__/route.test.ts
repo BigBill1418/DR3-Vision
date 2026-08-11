@@ -155,7 +155,9 @@ describe('POST /api/bonus/amendments', () => {
     expect(submitAmendmentBatch).not.toHaveBeenCalled();
   });
 
-  it('Patrick (forbidden) → 403 patrick_or_other_non_chain_manager', async () => {
+  // The reason string is a frozen HTTP contract, not a claim about Patrick — he
+  // holds the Eugene ops slot as of 2026-08-11. See amendment-approvers.ts.
+  it('a non-chain manager (forbidden) → 403 patrick_or_other_non_chain_manager', async () => {
     submitAmendmentBatch.mockRejectedValueOnce(
       new AmendmentWorkflowForbiddenError('patrick_or_other_non_chain_manager'),
     );

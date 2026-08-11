@@ -2,11 +2,28 @@
 //
 // The approver matrix is sourced from `bonus_signature_chains` (per-site row).
 // The requester is matched to a slot (facility OR ops) at their site; the OTHER
-// slot's signer is the approver. Special carve-outs:
-//   - Patrick Dills (Eugene Lead processor) is BLOCKED — the workflow is not
-//     available to him.
+// slot's signer is the approver. Carve-outs:
+//   - Any manager who occupies NEITHER slot at their site is blocked — the
+//     workflow is not available to them. This is emergent from chain membership,
+//     not an allowlist: there is no per-person branch anywhere in this file.
 //   - The Director (admin) bypasses the workflow entirely; this function is
 //     never called for admin actors.
+//
+// HISTORICAL NOTE (2026-08-11): this file used to name Patrick Dills as the
+// blocked party, because at the time he was the one Eugene manager outside the
+// chain. That is no longer true — Patrick now HOLDS the Eugene ops slot (Bill
+// instruction, replacing Shannon Rockwell who covered for Kelsey Ruhland), so
+// he is a first-class approver and Rick Albritton is his counterpart. Nothing
+// in the code changed to make that so; repointing the chain row was sufficient.
+// The `patrick_or_other_non_chain_manager` reason string below is now a
+// misnomer, but it is part of the HTTP contract (returned as the `error` field
+// by /api/bonus/amendments), so renaming it is a breaking change and is
+// deliberately deferred rather than done as a drive-by.
+//
+// Standing conflict to be aware of: Patrick is also a Eugene BonusEmployee, so
+// he can now be the default approver for amendments to entries that include his
+// own historical bonus rows. The DB CHECK only prevents requester == approver.
+// Bill accepted this trade-off explicitly; see ADR-0028.
 
 import { getSignatureChain } from '@/lib/bonus/signature-chain';
 import type { PrismaClient } from '@prisma/client';
@@ -33,8 +50,8 @@ export interface ResolvedApprover {
 /**
  * Resolve the default expected approver for an amendment request from
  * `requesterUserId` at `siteId`. Throws AmendmentWorkflowForbiddenError when
- * the requester is structurally outside the workflow (Patrick / any user who
- * is neither facility nor ops signer at the site).
+ * the requester is structurally outside the workflow — i.e. any user who is
+ * neither the facility nor the ops signer at that site.
  */
 export async function resolveAmendmentApprover(
   db: PrismaClient,

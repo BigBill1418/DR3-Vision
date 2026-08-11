@@ -32,12 +32,18 @@ const WOODLAND = 'site-woodland';
 const EUGENE = 'site-eugene';
 
 const bill: UserPrincipal = { id: 'bill', role: 'admin' };
+// NOTE: this fixture models Kelsey as `admin` per ADR-0019.2 §3. The seed and
+// the live prod row both have her as `manager`. The mismatch predates the
+// 2026-08-11 chain change and is left alone here deliberately: the tests below
+// that use her exercise the "an ADMIN can override any slot" rule, for which
+// this fixture is the vehicle. Do not read it as a claim about her real role.
 const kelsey: UserPrincipal = { id: 'kelsey', role: 'admin' };
 const janette: UserPrincipal = { id: 'janette', role: 'manager' };
 const morena: UserPrincipal = { id: 'morena', role: 'manager' };
 const rick: UserPrincipal = { id: 'rick', role: 'manager' };
-// T-312 (ADR-0023): Patrick Dills — Eugene manager who is ALSO a BonusEmployee at
-// Eugene. Separation of duties: he must occupy NO Eugene signature-chain slot.
+// Patrick Dills — Eugene manager who is ALSO a BonusEmployee at Eugene. T-312
+// (ADR-0023) originally kept him out of every chain slot for separation of
+// duties; Bill reversed that on 2026-08-11 and he now holds the Eugene ops slot.
 const patrick: UserPrincipal = { id: 'patrick', role: 'manager' };
 
 // ── Chain rows mirroring the T-201 seed (emails resolved → uuids, lists
@@ -52,8 +58,8 @@ const ROWS: Record<string, SignatureChainRow> = {
   },
   [EUGENE]: {
     facility_signer_user_id: 'rick',
-    facility_override_actor_ids: 'bill,kelsey',
-    ops_signer_user_id: 'kelsey',
+    facility_override_actor_ids: 'bill,patrick',
+    ops_signer_user_id: 'patrick',
     ops_override_actor_ids: 'bill',
     auto_override_actor_user_id: 'bill',
   },
@@ -97,8 +103,8 @@ describe('getSignatureChain', () => {
   it('returns the resolved Eugene chain', async () => {
     const c = await getSignatureChain(EUGENE, chainDb);
     expect(c.facility_signer_user_id).toBe('rick');
-    expect(c.facility_override_actor_user_ids).toEqual(['bill', 'kelsey']);
-    expect(c.ops_signer_user_id).toBe('kelsey');
+    expect(c.facility_override_actor_user_ids).toEqual(['bill', 'patrick']);
+    expect(c.ops_signer_user_id).toBe('patrick');
     expect(c.ops_override_actor_user_ids).toEqual(['bill']);
   });
 
@@ -180,9 +186,12 @@ describe('canSignSlot — primary signer per site (chain-sourced)', () => {
   it('Rick canNOT sign ops for Eugene', async () => {
     expect(await canSignSlot(rick, 'ops', EUGENE, chainDb)).toBe(false);
   });
-  // Eugene ops = Kelsey
-  it('Kelsey can sign ops for Eugene (admin configured as the ops signer)', async () => {
-    expect(await canSignSlot(kelsey, 'ops', EUGENE, chainDb)).toBe(true);
+  // Eugene ops = Patrick (2026-08-11; was Kelsey, then Shannon as cover)
+  it('Patrick can sign ops for Eugene (configured as the ops signer)', async () => {
+    expect(await canSignSlot(patrick, 'ops', EUGENE, chainDb)).toBe(true);
+  });
+  it('Kelsey can no longer sign ops for Eugene (slot reassigned)', async () => {
+    expect(await canSignSlot(kelsey, 'ops', EUGENE, chainDb)).toBe(false);
   });
   it('Kelsey is NOT the primary ops signer for Woodland (that is Morena)', async () => {
     // Kelsey signing Woodland ops is an OVERRIDE (she is admin), not primary.
@@ -250,31 +259,45 @@ describe('canOverrideSlot — override authority per site (chain-sourced + admin
 });
 
 // ────────────────────────────────────────────────────────────────────
-// T-312 (ADR-0023) — Patrick Dills: separation of duties at Eugene
+// Eugene ops slot — Patrick Dills (2026-08-11), superseding T-312
 // ────────────────────────────────────────────────────────────────────
 //
-// Patrick is a NEW Eugene manager who is also a BonusEmployee at Eugene, so he
-// must occupy NO Eugene signature-chain slot (facility signer, ops signer, or
-// either override-actor list — including the auto-override actor). He gets bonus
-// VIEW access (asserted in access.test.ts) but never SIGNING authority.
+// T-312 (ADR-0023) originally asserted the INVERSE of this block: Patrick was
+// kept out of every Eugene slot on separation-of-duties grounds, because he is
+// also a BonusEmployee at Eugene. Bill reversed that on 2026-08-11 — Patrick now
+// holds the ops slot (replacing Shannon Rockwell, who covered after Kelsey
+// Ruhland's availability ended on 2026-08-08).
+//
+// The separation-of-duties concern did not evaporate; it was accepted. These
+// tests pin the new reality so the reversal is visible in the suite rather than
+// silently diverging from the seed and from production.
 
-describe('Patrick Dills (T-312) — absent from every Eugene signature-chain slot', () => {
-  it('is not a member of any slot or override list on the resolved Eugene chain', async () => {
+describe('Eugene signature chain — Patrick Dills holds the ops slot (2026-08-11)', () => {
+  it('resolves Patrick as the ops signer and a facility override actor', async () => {
     const c = await getSignatureChain(EUGENE, chainDb);
-    expect(c.facility_signer_user_id).not.toBe('patrick');
-    expect(c.ops_signer_user_id).not.toBe('patrick');
-    expect(c.auto_override_actor_user_id).not.toBe('patrick');
-    expect(c.facility_override_actor_user_ids).not.toContain('patrick');
-    expect(c.ops_override_actor_user_ids).not.toContain('patrick');
+    expect(c.ops_signer_user_id).toBe('patrick');
+    expect(c.facility_override_actor_user_ids).toContain('patrick');
+    // Rick keeps the facility slot; Bill remains the universal auto-override.
+    expect(c.facility_signer_user_id).toBe('rick');
+    expect(c.auto_override_actor_user_id).toBe('bill');
   });
 
-  it('cannot sign either slot at Eugene (not the configured primary signer)', async () => {
+  it('can sign the ops slot at Eugene, but not the facility slot', async () => {
+    expect(await canSignSlot(patrick, 'ops', EUGENE, chainDb)).toBe(true);
     expect(await canSignSlot(patrick, 'facility', EUGENE, chainDb)).toBe(false);
-    expect(await canSignSlot(patrick, 'ops', EUGENE, chainDb)).toBe(false);
   });
 
-  it('cannot override either slot at Eugene (manager, in no override list)', async () => {
-    expect(await canOverrideSlot(patrick, 'facility', EUGENE, chainDb)).toBe(false);
+  it('can override the facility slot (listed), but not the ops slot (Bill only)', async () => {
+    expect(await canOverrideSlot(patrick, 'facility', EUGENE, chainDb)).toBe(true);
     expect(await canOverrideSlot(patrick, 'ops', EUGENE, chainDb)).toBe(false);
+  });
+
+  it('Kelsey, the previous ops signer, now occupies no Eugene slot', async () => {
+    const c = await getSignatureChain(EUGENE, chainDb);
+    expect(c.facility_signer_user_id).not.toBe('kelsey');
+    expect(c.ops_signer_user_id).not.toBe('kelsey');
+    expect(c.auto_override_actor_user_id).not.toBe('kelsey');
+    expect(c.facility_override_actor_user_ids).not.toContain('kelsey');
+    expect(c.ops_override_actor_user_ids).not.toContain('kelsey');
   });
 });

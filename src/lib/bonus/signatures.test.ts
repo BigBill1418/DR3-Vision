@@ -51,10 +51,11 @@ const chainDb = makeChainDb();
 
 const EUGENE = 'site-eugene';
 
-// T-312 (ADR-0023): Eugene chain double mirroring the T-201 seed —
-// facility=Rick, ops=Kelsey, facility-override=[bill,kelsey], ops-override=[bill],
-// auto=Bill. Patrick is in NONE of these slots, so the signature guard must
-// reject any Patrick-as-signer attempt at Eugene.
+// Eugene chain double mirroring the seed as of 2026-08-11 — facility=Rick,
+// ops=Patrick, facility-override=[bill,patrick], ops-override=[bill], auto=Bill.
+// Patrick took the ops slot from Shannon Rockwell (who covered for Kelsey
+// Ruhland), reversing the T-312 / ADR-0023 separation-of-duties exclusion.
+// Kelsey now occupies NO slot, so she is the fixture for the rejection path.
 function makeEugeneChainDb(): SignatureChainDb {
   return {
     bonusSignatureChain: {
@@ -62,8 +63,8 @@ function makeEugeneChainDb(): SignatureChainDb {
         where.site_id === EUGENE
           ? {
               facility_signer_user_id: 'rick',
-              facility_override_actor_ids: 'bill,kelsey',
-              ops_signer_user_id: 'kelsey',
+              facility_override_actor_ids: 'bill,patrick',
+              ops_signer_user_id: 'patrick',
               ops_override_actor_ids: 'bill',
               auto_override_actor_user_id: 'bill',
             }
@@ -150,9 +151,18 @@ const bill: SignerContext = {
   primarySiteId: null,
   siteId: WOODLAND,
 };
-// T-312 (ADR-0023): Patrick Dills — Eugene manager, in NO Eugene chain slot.
+// Patrick Dills — Eugene manager, holder of the Eugene OPS slot since 2026-08-11.
 const patrick: SignerContext = {
   userId: 'patrick',
+  role: 'manager',
+  primarySiteId: EUGENE,
+  siteId: EUGENE,
+};
+// Kelsey Ruhland — active Eugene manager who held the ops slot until 2026-08-08
+// and now occupies none. She is the current stand-in for "a manager the chain
+// does not know about", the role Patrick used to play in these tests.
+const kelsey: SignerContext = {
+  userId: 'kelsey',
   role: 'manager',
   primarySiteId: EUGENE,
   siteId: EUGENE,
@@ -332,17 +342,20 @@ describe('recordSignature', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// T-312 (ADR-0023) — Patrick Dills rejected when he attempts to sign Eugene
+// A manager outside the Eugene chain is rejected by the signature guard
 // ────────────────────────────────────────────────────────────────────
 //
-// Patrick has Eugene bonus VIEW access (access.test.ts) but is in NO Eugene
-// signature-chain slot (signature-chain.test.ts). The SAME recordSignature guard
-// that gates every other signer must reject any Patrick-as-signer attempt:
+// This block used to be "Patrick Dills (T-312) rejected at Eugene". Since
+// 2026-08-11 Patrick HOLDS the Eugene ops slot, so the non-member persona is now
+// Kelsey Ruhland — an active Eugene manager with bonus VIEW access who occupies
+// no slot. The rule under test is unchanged and is membership-driven, not
+// person-specific: the SAME recordSignature guard that gates every other signer
+// must reject any non-member attempt:
 //   - a natural attempt (no onBehalfOf) has no slot      → no_slot
 //   - an explicit override attempt at the facility slot  → not_authorized
 // The Eugene month exists and is in a signable state, so the rejection is the
 // AUTHORIZATION guard firing, not the cross-site not-found path.
-describe('Patrick Dills (T-312) — rejected by the signature guard at Eugene', () => {
+describe('a non-chain Eugene manager — rejected by the signature guard', () => {
   function makeEugeneDb(): SignatureDb {
     const erow: Row = {
       id: 'me1',
@@ -397,16 +410,16 @@ describe('Patrick Dills (T-312) — rejected by the signature guard at Eugene', 
     return db;
   }
 
-  it('Patrick is not the configured facility signer at Eugene', async () => {
-    expect(await naturalSlotFor(p(patrick), EUGENE, eugeneChainDb)).toBeNull();
+  it('Kelsey holds no Eugene slot', async () => {
+    expect(await naturalSlotFor(p(kelsey), EUGENE, eugeneChainDb)).toBeNull();
   });
 
-  it('natural attempt → no_slot (Patrick signs no Eugene slot)', async () => {
+  it('natural attempt → no_slot (Kelsey signs no Eugene slot)', async () => {
     const res = await recordSignature({
       db: makeEugeneDb(),
       chainDb: eugeneChainDb,
       monthId: 'me1',
-      signer: patrick,
+      signer: kelsey,
     });
     expect(res).toEqual({ ok: false, reason: 'no_slot' });
   });
@@ -416,9 +429,9 @@ describe('Patrick Dills (T-312) — rejected by the signature guard at Eugene', 
       db: makeEugeneDb(),
       chainDb: eugeneChainDb,
       monthId: 'me1',
-      signer: patrick,
+      signer: kelsey,
       onBehalfOf: 'facility',
-      overrideReason: 'attempting to self-sign',
+      overrideReason: 'attempting to sign a slot she no longer holds',
     });
     expect(res).toEqual({ ok: false, reason: 'not_authorized', slot: 'facility' });
   });
@@ -430,12 +443,25 @@ describe('Patrick Dills (T-312) — rejected by the signature guard at Eugene', 
       db,
       chainDb: eugeneChainDb,
       monthId: 'me1',
-      signer: patrick,
+      signer: kelsey,
       onBehalfOf: 'facility',
-      overrideReason: 'attempting to self-sign',
+      overrideReason: 'attempting to sign a slot she no longer holds',
     });
     const after = await db.bonusPayPeriod.findFirst({ where: { id: 'me1', site_id: EUGENE } });
     expect(after?.facility_signed_by_user_id).toBeNull();
     expect(audit.length).toBe(0);
+  });
+
+  // The positive counterpart: the guard must ADMIT the new ops signer. Without
+  // this, the block above would still pass if the Eugene chain were empty.
+  it('Patrick, the configured ops signer, resolves to the ops slot and signs', async () => {
+    expect(await naturalSlotFor(p(patrick), EUGENE, eugeneChainDb)).toBe('ops');
+    const res = await recordSignature({
+      db: makeEugeneDb(),
+      chainDb: eugeneChainDb,
+      monthId: 'me1',
+      signer: patrick,
+    });
+    expect(res).toMatchObject({ ok: true, slot: 'ops' });
   });
 });
