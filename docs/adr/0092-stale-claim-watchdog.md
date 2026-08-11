@@ -279,6 +279,41 @@ behaviour-changed here. The question asked was whether this design survives them
   `equipment-throughput-gap-cron` (ADR-0088, which shipped carrying its own
   untested copy of the offset-reprobe helper) and this one.
 
+### Post-deploy addendum (2026-08-11, 12:15 PM PT) — the route was unreachable
+
+The first hand-fired scan after deploy returned `HTTP 401
+{"error":"unauthenticated"}`. `/api/internal/loads/` had never been added to the
+middleware exemption list in `public-paths.ts`, so the route was refused at the
+edge with a token that was byte-identical across all three containers.
+
+This is worth recording rather than quietly fixing, for three reasons.
+
+**It would not have surfaced on its own.** The daemon would have logged one
+failure a day into its own container log and reported nothing. The ledger would
+have stayed empty, and an empty ledger is indistinguishable from "no stranded
+loads" — the second silent instrument this ADR exists to prevent, layered over
+the first.
+
+**The existing guard could not have caught it.** `runFireOnce` uses
+`redirect: 'manual'` precisely because of the 2026-07-03 incident (a 307 to
+/login, followed into a 200 HTML page, logged as success). ADR-0078 G7 replaced
+that 307 with a flat 401 for `/api/*`, so there is no redirect to refuse. The old
+defence was pointed at a failure mode that no longer exists.
+
+**The list is the problem, not the entry.** `public-paths.ts` has grown one
+production incident at a time — ADR-0036, ADR-0058, ADR-0067, ADR-0088, now
+ADR-0092 — and each entry was added by someone who had just been bitten. So
+`public-paths.test.ts` now sweeps every `/api/internal/**/route.ts` on disk and
+asserts each is reachable by its session-less caller. That sweep immediately
+found a **second, pre-existing** break: `/api/internal/idempotency/sweep`
+(ADR-0078's nightly TTL sweep) has been 401ing since it shipped, so
+`idempotency_keys` has never been pruned. Both are fixed; only the first was
+caused by this work.
+
+The general lesson, which is the one worth carrying: **fire a new scheduled job
+by hand once, on the deployed system, before trusting its schedule.** A cron that
+has never been observed succeeding is a hypothesis.
+
 ### Residual risk
 
 - **The late-photo miss (D1)** is real and unbounded: a trickled offline upload
