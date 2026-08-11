@@ -141,6 +141,9 @@ model Site {
   reimbursement_requests ReimbursementRequest[]
 
   @@map("sites")
+
+  // ADR-0019.4 signature-chain health ledger
+  bonus_chain_health_runs BonusChainHealthRun[]
 }
 
 model SiteHoliday {
@@ -1778,6 +1781,38 @@ model DocIngestAnomaly {
 /// has not run in three weeks" is invisible — which is exactly how MyMRC
 /// ingested nothing for months (ADR-0057 D9). The health surface reads
 /// `last sweep` from here, and a stale ledger is itself the alarm.
+/// ADR-0019.4 — one row per signature-chain health poll (per site).
+///
+/// A LEDGER, not a mutable state row. The previous row's `status` IS the
+/// last-known state that `decideChainPage` compares against, so paging survives
+/// a container restart — `publishNtfy`'s cooldown ledger is per-process and
+/// every deploy recreates the cron, which would otherwise re-page on each
+/// deploy. Keeping the history also makes "the chain check has not run since
+/// Tuesday" visible instead of silent, the same reason doc_ingest_sweep_runs
+/// always writes a row.
+model BonusChainHealthRun {
+  id         String   @id @default(uuid())
+  observed_at DateTime @default(now())
+
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  /// 'green' | 'amber' | 'red'. TEXT not an enum so a new tier never needs a
+  /// migration; values are asserted in code.
+  status String
+
+  /// Full ChainFinding[] as returned by evaluateChainHealth — the evidence for
+  /// the status, kept so a past red can be explained after the chain is fixed.
+  findings Json
+
+  /// True when this observation fired an ntfy (leading edge or re-page).
+  paged Boolean @default(false)
+
+  @@index([site_id, observed_at])
+  @@index([observed_at])
+  @@map("bonus_chain_health_runs")
+}
+
 model DocIngestSweepRun {
   id          String    @id @default(uuid())
   started_at  DateTime  @default(now())

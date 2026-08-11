@@ -31,6 +31,11 @@ import { nextWeeklyFireInstant as fuelNextWeeklyFire } from '../../scripts/fuel-
 // seven-daemon defect happened.
 import { nextFireInstantAt as throughputGapNextFire } from '../../scripts/equipment-throughput-gap-cron.mjs';
 import { nextFireInstantAt as staleClaimNextFire } from '../../scripts/stale-claim-cron.mjs';
+// ADR-0019.4 — the signature-chain health check (06:30 PT). Pinned from the day
+// it ships rather than after a DST miss: this daemon exists to be trustworthy at
+// 06:30 on a payroll morning, and an hour of drift would land it AFTER the 07:10
+// escalation tier it is supposed to precede.
+import { nextFireInstantAt as chainHealthNextFire } from '../../scripts/bonus-chain-health-cron.mjs';
 
 /** The Pacific wall-clock "HH:MM" an absolute UTC instant lands on. */
 function pacificHHMM(at: Date): string {
@@ -63,6 +68,7 @@ const DAILY: ReadonlyArray<[string, (from: Date, h: number, m: number) => Date]>
   ['bonus-daily-report', dailyReportNextFire as never],
   ['equipment-throughput-gap-cron', throughputGapNextFire as never],
   ['stale-claim-cron', staleClaimNextFire as never],
+  ['bonus-chain-health-cron', chainHealthNextFire as never],
 ];
 
 describe.each(DAILY)('%s — DST transition days', (_name, nextFire) => {
