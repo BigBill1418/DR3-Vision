@@ -9,6 +9,42 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (12:15 PM PT) — The watchdog could not be reached, and neither could the TTL sweep (ADR-0092 follow-up)
+
+Firing the new stale-claim scan by hand after deploy — rather than leaving it for
+its first 16:45 PT run — returned `HTTP 401 {"error":"unauthenticated"}` with a
+token byte-identical across all three containers. `/api/internal/loads/` was
+never added to the middleware exemption list in `public-paths.ts`, so the route
+was refused at the edge. Left alone, the daemon would have logged one failure a
+day into its own container log and reported nothing, forever: **a watchdog that
+does not watch, which is worse than no watchdog, because an empty ledger reads
+as "no stranded loads."**
+
+Note the daemon's `redirect:'manual'` guard could not have caught this. That
+guard exists for the 2026-07-03 shape (a 307 to /login followed into a 200 HTML
+page); ADR-0078 G7 replaced that with a flat 401 for `/api/*`, so there is no
+redirect to refuse.
+
+- **Fixed:** `/api/internal/loads/` exempted, with the route's own
+  `guardInternalCron` (constant-time bearer + 404 on `cf-connecting-ip`) still
+  the actual authorization.
+
+- **The class, not the instance.** The exemption list has grown one production
+  incident at a time (ADR-0036, ADR-0058, ADR-0067, ADR-0088, now this). A
+  hand-maintained list of things-you-must-not-forget forgets, so
+  `public-paths.test.ts` now **sweeps every `/api/internal/**/route.ts` on disk\*\*
+  and asserts each is reachable. A new internal route that nobody exempts fails
+  at the moment it is written.
+
+- **That sweep immediately found a SECOND, PRE-EXISTING break.**
+  `/api/internal/idempotency/sweep` (ADR-0078, the `idempotency_keys` TTL sweep,
+  03:10 PT nightly) was never exempted either — verified by a bearer-carrying
+  POST from inside the compose network returning 401. Every nightly fire since it
+  shipped has been refused, so the receipt-book table has never been pruned. Not
+  a regression from this work; found by it. The symptom of a failing TTL sweep is
+  a table that quietly grows forever rather than anything that pages, which is
+  why it went unnoticed.
+
 ## 2026-08-11 (11:00 AM PT) — Stale-claim watchdog: a stranded load stops needing a person to notice it (ADR-0092)
 
 The ADR-0091 incident investigation found, next to the bug, a load nobody was

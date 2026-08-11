@@ -117,6 +117,35 @@ export function isPublic(pathname: string): boolean {
   // watchdog, because the ledger would stay empty and look like "no gaps". The
   // daemon uses `redirect:'manual'` as the second defence.
   if (pathname.startsWith('/api/internal/equipment/')) return true;
+  // ADR-0092 — the stale-claim watchdog (`/api/internal/loads/stale-claim`).
+  // Same loopback-guarded internal-route pattern as every cron above: the route
+  // requires the bearer in prod and 404s any cf-connecting-ip request, so this
+  // exemption only stops the middleware refusing the session-less daemon POST at
+  // the edge.
+  //
+  // This one was found the hard way, and the way it was found is the point.
+  // ADR-0078 G7 turned the old 307-to-/login into a flat 401 for `/api/*`, so the
+  // symptom is no longer a silent 200-full-of-HTML — the daemon's `redirect:
+  // 'manual'` guard would not have caught it either way, because there is no
+  // redirect to catch. The first hand-fired scan after deploy returned
+  // `HTTP 401 {"error":"unauthenticated"}` with a token that was byte-identical
+  // across all three containers. Had nobody fired it, the 16:45 PT daemon would
+  // have logged a failure into its own container log once a day and reported
+  // nothing, forever: a watchdog that does not watch, which is strictly worse
+  // than no watchdog because the empty ledger reads as "no stranded loads".
+  if (pathname.startsWith('/api/internal/loads/')) return true;
+  // ADR-0078 — the `idempotency_keys` TTL sweep
+  // (`/api/internal/idempotency/sweep`), 03:10 PT nightly.
+  //
+  // THIS ONE WAS ALREADY BROKEN IN PRODUCTION and nobody knew. It was never
+  // added to this list, so every nightly fire since it shipped was refused at the
+  // edge (verified 2026-08-11: a bearer-carrying POST from inside the compose
+  // network returned `HTTP 401 {"error":"unauthenticated"}`). It was found by the
+  // on-disk sweep test added alongside this entry, not by anyone noticing —
+  // which is exactly the point of that test, because the symptom of a failing
+  // TTL sweep is a table that quietly grows forever rather than anything that
+  // pages. The receipt book has simply never been pruned.
+  if (pathname.startsWith('/api/internal/idempotency/')) return true;
   // ADR-0067 §3.2 — the Graph change-notification webhook
   // (`/api/doc-ingest/notifications`). UNLIKE the loopback-guarded crons above,
   // this endpoint is genuinely internet-reachable: Microsoft Graph POSTs to it

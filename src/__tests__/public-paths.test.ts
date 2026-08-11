@@ -8,6 +8,9 @@
 // (2026-07-03) — the daemon logged the login page as a successful tick.
 
 import { describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { isPublic } from '@/lib/public-paths';
 
 describe('middleware public-path exemptions', () => {
@@ -34,6 +37,11 @@ describe('middleware public-path exemptions', () => {
     // itself the second silent instrument: the daemon logs 200, the ledger stays
     // empty, and an empty ledger is indistinguishable from "no gaps".
     '/api/internal/equipment/throughput-gap',
+    // ADR-0092 — the stale-claim watchdog. Same failure mode, and it actually
+    // happened: the first hand-fired scan after deploy returned a flat 401
+    // (ADR-0078 G7 replaced the 307-to-/login for `/api/*`), which the daemon's
+    // `redirect:'manual'` guard cannot catch because there is no redirect.
+    '/api/internal/loads/stale-claim',
     '/api/doc-ingest/notifications', // ADR-0067 §3.2 — genuinely internet-facing; clientState is the protection, not a network boundary
     '/api/intake/contact', // ADR-0045 D3 — public token-guarded contact intake
     '/operator',
@@ -58,5 +66,45 @@ describe('middleware public-path exemptions', () => {
     '/metricsx',
   ])('does NOT exempt %s', (path) => {
     expect(isPublic(path)).toBe(false);
+  });
+});
+
+// ── The class, not just the instances ────────────────────────────────────────
+//
+// Every entry above is a route somebody remembered to add by hand, and the list
+// grew one production incident at a time: ADR-0036 (2026-07-03, the survey tick
+// logging a login page as success), then ADR-0058, ADR-0067, ADR-0088, and
+// ADR-0092 — whose 401 was found only because the scan was fired by hand after
+// deploy rather than left for its first scheduled run.
+//
+// A hand-maintained list of things-you-must-not-forget forgets. This sweep is
+// the property behind all of those tests: EVERY internal API route on disk must
+// be reachable by its session-less caller. A new `/api/internal/**/route.ts`
+// that nobody exempts fails here, at the moment it is written, instead of
+// silently no-op'ing in production until somebody notices the ledger is empty.
+describe('every /api/internal route on disk is exempt (the class, not the instance)', () => {
+  const INTERNAL_API_DIR = fileURLToPath(new URL('../app/api/internal', import.meta.url));
+
+  /** Every `route.ts` under app/api/internal, as its URL path. */
+  function internalRoutePaths(dir: string, prefix = '/api/internal'): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        out.push(...internalRoutePaths(join(dir, entry.name), `${prefix}/${entry.name}`));
+      } else if (/^route\.tsx?$/.test(entry.name)) {
+        out.push(prefix);
+      }
+    }
+    return out;
+  }
+
+  const routes = internalRoutePaths(INTERNAL_API_DIR);
+
+  it('found some routes to check (a zero-length sweep would pass vacuously)', () => {
+    expect(routes.length).toBeGreaterThan(5);
+  });
+
+  it.each(routes)('%s is reachable by its session-less caller', (path) => {
+    expect(isPublic(path)).toBe(true);
   });
 });
