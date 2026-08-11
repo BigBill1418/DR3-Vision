@@ -32,6 +32,10 @@
 // slot (a slot signed manually by 08:25, or a re-POST after a restart, is NOT
 // re-overridden). A second fire of any tier on the same day is safe.
 
+// ADR-0019.5 — the shared header sanitizer. A raw em dash in X-Title throws
+// in undici before a socket opens, killing primary AND fallback identically.
+import { toHeaderSafe } from './ntfy-header-safe.mjs';
+
 const BASE = process.env.INTERNAL_BASE_URL ?? 'http://127.0.0.1:3000';
 const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 
@@ -249,7 +253,7 @@ async function publishFireFailure(tier, now = new Date()) {
   if (token) {
     const ok = await postWithTimeout(`${NTFY_PRIMARY_BASE}/${NTFY_TOPIC}`, body, {
       ...baseHeaders,
-      'X-Title': title,
+      'X-Title': toHeaderSafe(title),
       Authorization: `Bearer ${token}`,
     });
     if (ok) {
@@ -264,7 +268,7 @@ async function publishFireFailure(tier, now = new Date()) {
   }
   const fbOk = await postWithTimeout(`${NTFY_FALLBACK_BASE}/${NTFY_FALLBACK_TOPIC}`, body, {
     ...baseHeaders,
-    'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
+    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
   });
   logTs(
     fbOk

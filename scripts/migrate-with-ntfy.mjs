@@ -23,6 +23,10 @@
 // already-bundled `@prisma/client` for the snapshot reads (no new
 // dependency footprint vs. the bare invocation).
 
+// ADR-0019.5 — the shared header sanitizer. A raw em dash in X-Title throws
+// in undici before a socket opens, killing primary AND fallback identically.
+import { toHeaderSafe } from './ntfy-header-safe.mjs';
+
 import { spawnSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
@@ -56,7 +60,7 @@ async function publishMigrationApplied(name) {
   const title = `[DR3-Vision] Migration applied ${name}`.slice(0, 250);
   const body = `Prisma migration "${name}" was applied to the production database.`;
   const headers = {
-    'X-Title': title,
+    'X-Title': toHeaderSafe(title),
     Priority: 'default',
     Click: CLICK_URL,
     Tags: 'migration,dr3-vision',
@@ -66,7 +70,7 @@ async function publishMigrationApplied(name) {
   if (ok) return;
   // Fallback — strip Authorization, prefix [FALLBACK].
   const fbHeaders = {
-    'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
+    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
     Priority: 'default',
     Click: CLICK_URL,
     Tags: 'migration,dr3-vision',

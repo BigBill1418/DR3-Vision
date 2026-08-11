@@ -113,7 +113,7 @@ describe('publishNtfy — successful primary publish', () => {
       body: 'y',
       clickUrl: 'https://dr3-vision.svdp.us/admin/audit',
     });
-    const headers = (fetchCalls[0]!.init.headers as Record<string, string>);
+    const headers = fetchCalls[0]!.init.headers as Record<string, string>;
     expect(headers['Click']).toBe('https://dr3-vision.svdp.us/admin/audit');
   });
 });
@@ -187,9 +187,9 @@ describe('publishNtfy — fallback on primary failure', () => {
     });
     expect(result).toEqual({ ok: false, outcome: 'dropped' });
     expect(fetchCalls).toHaveLength(5);
-    expect(fetchCalls.slice(0, 3).every((c) => c.url.startsWith('https://ntfy.barnardhq.com'))).toBe(
-      true,
-    );
+    expect(
+      fetchCalls.slice(0, 3).every((c) => c.url.startsWith('https://ntfy.barnardhq.com')),
+    ).toBe(true);
     expect(fetchCalls.slice(3).every((c) => c.url.startsWith('https://ntfy.sh'))).toBe(true);
   });
 
@@ -324,5 +324,176 @@ describe('convenience wrappers', () => {
     expect(headers['X-Title']).toBe(
       '[DR3-Vision] Unhandled error: Error: database connection lost',
     );
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0019.5 — header-encoding safety (the 2026-08-05 dropped page)
+// ────────────────────────────────────────────────────────────────────────
+//
+// ROOT CAUSE, reproduced: HTTP header values are ByteStrings (latin-1). Node's
+// undici throws
+//   TypeError: Cannot convert argument to a ByteString because the character at
+//   index 43 has a value of 8212 which is greater than 255
+// when a header holds a codepoint > 255. Every DR3 alert title uses an em dash
+// (U+2014 = 8212), so `X-Title` threw — on the primary AND, with identical
+// headers, on the ntfy.sh fallback. Both "failed" in the same millisecond
+// WITHOUT EVER OPENING A SOCKET, which is why the ntfy server looked perfectly
+// healthy while the page vanished:
+//
+//   {"level":40,"time":"2026-08-05T16:00:01.621Z","periodEnd":"2026-08-03",
+//    "msg":"[escalation] stranded ntfy dropped (primary+fallback failed)"}
+//
+// This is the FOURTH re-discovery of this class on the fleet: the bash/Python
+// helpers were fixed 2026-05-06, noc-master's Node publisher by ADR-0063
+// (2026-05-22), whose own open question asked whether the fix should be lifted
+// to a shared utility "to prevent a fourth re-discovery". DR3-Vision's helper
+// was never patched.
+//
+// CRITICAL TEST-DESIGN NOTE: the suite above mocks `globalThis.fetch`, which
+// accepts any object as headers and therefore CANNOT observe this bug — a mock
+// is exactly why it shipped. The mock below constructs a real `Request` from the
+// headers, so it validates them the way undici does. If the sanitizer regresses,
+// these tests throw with the production error rather than passing quietly.
+
+/**
+ * Replace the whole fetch double with one that enforces real ByteString header
+ * validation on EVERY attempt.
+ *
+ * Covering every attempt is the point. An earlier draft of this helper pushed a
+ * single validating impl onto `fetchImpls`; the publisher's first attempt threw,
+ * the RETRY fell through to the harness's default 200 mock, and the test passed
+ * green against unsanitized code. A test that survives the bug it exists to
+ * catch is worse than no test, so this overrides the mock outright.
+ */
+function bytestringValidatingFetch(): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(((url: string, init: RequestInit = {}) => {
+    fetchCalls.push({ url, init });
+    const impl = fetchImpls.shift();
+    // Throws TypeError on any header codepoint > 255, exactly like undici.
+    new Request('https://example.invalid/', {
+      method: 'POST',
+      body: 'x',
+      headers: init.headers as HeadersInit,
+    });
+    if (impl) return impl(url, init);
+    return Promise.resolve(new Response('ok', { status: 200 }));
+  }) as typeof fetch);
+}
+
+describe('header encoding safety (ADR-0019.5)', () => {
+  beforeEach(() => {
+    process.env['NTFY_PUBLISHER_TOKEN'] = 'tok';
+    __testing.clearCooldownLedger();
+  });
+
+  // The exact payload the 2026-08-05 09:00:01 PT stranded page built.
+  const AUG5_TITLE = 'URGENT: bonus period STRANDED — DR3 Eugene Period 16';
+
+  it('publishes the EXACT 2026-08-05 stranded payload successfully', async () => {
+    bytestringValidatingFetch();
+    const res = await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: AUG5_TITLE,
+      body: 'DR3 Eugene Period 16 (2026) is still in state ‘partially_signed’ — MISSED its payroll window 1 day ago.',
+      priority: 'urgent',
+      tags: ['rotating_light', 'bonus', 'stranded'],
+      fingerprint: 'bonus-period-stranded:eugene:f7f33bac',
+    });
+    expect(res).toEqual({ ok: true, outcome: 'sent' });
+  });
+
+  it('transliterates the em dash rather than mangling the sentence', async () => {
+    bytestringValidatingFetch();
+    await publishNtfy({ topic: 'dr3-vision-system', title: AUG5_TITLE, body: 'b' });
+    const title = String((fetchCalls[0]!.init.headers as Record<string, string>)['X-Title']);
+    expect(title).toContain('STRANDED - DR3 Eugene Period 16');
+    expect(title).not.toContain('—');
+    // A readable dash, not a '?' — the operator still gets a sentence.
+    expect(title).not.toContain('?');
+  });
+
+  it('every header value is latin-1 clean, not just the title', async () => {
+    bytestringValidatingFetch();
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'Quota ≥ 90% — “Woodland” … done',
+      body: 'b',
+      tags: ['warning', 'café→x'],
+      clickUrl: 'https://dr3-vision.svdp.us/bonus?q=—',
+    });
+    for (const [k, v] of Object.entries(fetchCalls[0]!.init.headers as Record<string, string>)) {
+      for (const ch of String(v)) {
+        expect(
+          ch.codePointAt(0)! <= 255,
+          `header ${k} holds U+${ch.codePointAt(0)!.toString(16)} (${ch})`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('transliterates the punctuation fleet titles actually use (ADR-0063 §1 set)', async () => {
+    bytestringValidatingFetch();
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: '—–− ‘’ “” … × ≥ ≤ →',
+      body: 'b',
+    });
+    const title = String((fetchCalls[0]!.init.headers as Record<string, string>)['X-Title']);
+    expect(title).toContain('--- ');
+    expect(title).toContain("'' ");
+    expect(title).toContain('"" ');
+    expect(title).toContain('... ');
+    expect(title).toContain('x ');
+    expect(title).toContain('>= <= ->');
+  });
+
+  it('a codepoint with no transliteration becomes ? rather than throwing', async () => {
+    // The backstop matters more than the mapping: an unmapped glyph (an emoji in
+    // a vendor name, say) must degrade to a sendable page, never a lost one.
+    bytestringValidatingFetch();
+    const res = await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'vendor \u{1F600} down',
+      body: 'b',
+    });
+    expect(res.outcome).toBe('sent');
+    expect(String((fetchCalls[0]!.init.headers as Record<string, string>)['X-Title'])).toContain(
+      'vendor ?',
+    );
+  });
+
+  it('the BODY keeps its Unicode — only headers are constrained', async () => {
+    // Bodies are UTF-8 and may hold anything; sanitizing them would degrade
+    // every alert's readability for no reason.
+    bytestringValidatingFetch();
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'ascii only',
+      body: 'period 2026-07-21→08-03 — stranded',
+    });
+    expect(String(fetchCalls[0]!.init.body)).toContain('→');
+    expect(String(fetchCalls[0]!.init.body)).toContain('—');
+  });
+
+  it('the FALLBACK leg is sanitized too — it failed identically on 2026-08-05', async () => {
+    // Primary rejects; fallback must still deliver. Before the fix both threw on
+    // the same header, which is why the failure looked like a total outage.
+    // The primary makes up to 3 attempts (PRIMARY_RETRY_BACKOFF_MS has 2 entries),
+    // so all three must fail before the fallback leg is reached.
+    __testing.setSleep(async () => undefined);
+    bytestringValidatingFetch();
+    for (let i = 0; i < 3; i++) {
+      fetchImpls.push(async () => new Response('nope', { status: 500 }));
+    }
+    const res = await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: AUG5_TITLE,
+      body: 'b',
+    });
+    expect(res).toEqual({ ok: true, outcome: 'fallback-sent' });
+    const fbTitle = String((fetchCalls.at(-1)!.init.headers as Record<string, string>)['X-Title']);
+    expect(fbTitle).toContain('[FALLBACK]');
+    expect(fbTitle).not.toContain('—');
   });
 });

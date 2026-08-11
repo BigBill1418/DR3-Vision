@@ -16,6 +16,10 @@
 // (the earlier shift's end-of-day). Nothing else about the decision changed —
 // only the fire hour moved 17 → 20.
 
+// ADR-0019.5 — the shared header sanitizer. A raw em dash in X-Title throws
+// in undici before a socket opens, killing primary AND fallback identically.
+import { toHeaderSafe } from './ntfy-header-safe.mjs';
+
 import { PrismaClient } from '@prisma/client';
 
 const PACIFIC_TZ = 'America/Los_Angeles';
@@ -157,7 +161,7 @@ async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
   }
 
   const headers = {
-    'X-Title': title,
+    'X-Title': toHeaderSafe(title),
     Priority: 'high',
     Click: CLICK_URL,
     Tags: 'warning,bonus,dr3-vision',
@@ -170,7 +174,7 @@ async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
     return;
   }
   const fbHeaders = {
-    'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
+    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
     Priority: 'high',
     Click: CLICK_URL,
     Tags: 'warning,bonus,dr3-vision',

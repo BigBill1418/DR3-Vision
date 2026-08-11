@@ -42,6 +42,8 @@
 // Constants — never change without re-reading ADR-0036 / ADR-0037
 // ────────────────────────────────────────────────────────────────────────
 
+import { toHeaderSafe } from './ntfy-header-safe';
+
 const PRIMARY_BASE_DEFAULT = 'https://ntfy.barnardhq.com';
 const FALLBACK_BASE = 'https://ntfy.sh';
 
@@ -224,7 +226,8 @@ function buildHeaders(args: {
   publisherToken: string | undefined;
   isFallback: boolean;
 }): Record<string, string> {
-  const fullTitle = (args.isFallback ? `[FALLBACK] ${TITLE_PREFIX} ` : `${TITLE_PREFIX} `) + args.title;
+  const fullTitle =
+    (args.isFallback ? `[FALLBACK] ${TITLE_PREFIX} ` : `${TITLE_PREFIX} `) + args.title;
   const headers: Record<string, string> = {
     // ntfy accepts both `Title` and `X-Title`; we use `X-Title` per the
     // canonical fleet spelling in CLAUDE.md.
@@ -239,12 +242,61 @@ function buildHeaders(args: {
   if (!args.isFallback && args.publisherToken) {
     headers['Authorization'] = `Bearer ${args.publisherToken}`;
   }
+
+  // Sanitize at this SINGLE choke point, after every header is assembled, so it
+  // covers every call site and both transports. Applying it per-field at the
+  // call sites is what let the defect survive three previous fixes.
+  // Authorization is excluded: a token is ASCII by construction, and mangling
+  // it would turn an encoding bug into an auth bug.
+  for (const key of Object.keys(headers)) {
+    if (key === 'Authorization') continue;
+    headers[key] = toHeaderSafe(headers[key]!);
+  }
   return headers;
 }
 
 // ────────────────────────────────────────────────────────────────────────
 // HTTP POST helpers — primary + fallback
 // ────────────────────────────────────────────────────────────────────────
+
+/**
+ * The reason a single publish attempt failed. Recorded so a caller's log line
+ * can say WHY rather than a bare "dropped".
+ *
+ * Before 2026-08-11 this function ended in `catch { return false; }`. That empty
+ * catch is the reason a `TypeError` about header encoding — thrown identically
+ * on every attempt and both transports — presented to operators as an
+ * indistinguishable "primary+fallback failed", and why the defect survived from
+ * whenever it was introduced until someone read the source. A swallowed error is
+ * not a smaller failure; it is the same failure with the evidence removed.
+ */
+/**
+ * Structured drop record.
+ *
+ * `console.error`, not the pino logger: this module's header contract keeps it
+ * free of `node:crypto` so it bundles into edge/browser targets, and
+ * `@/lib/observability/logger` imports both pino and node:crypto and documents
+ * that it must not be reached from edge code. The line is JSON so Alloy still
+ * ships it to Loki in a queryable shape.
+ *
+ * `reason` is the whole point: a drop with no reason is what turned a header
+ * encoding bug into a month of invisible failures.
+ */
+function logDrop(fields: {
+  topic: string;
+  fallbackTopic: string | null;
+  reason: string | null;
+  msg: string;
+}): void {
+  console.error(JSON.stringify({ level: 50, op: 'ntfy', ...fields }));
+}
+
+let lastFailureReason: string | null = null;
+
+/** Why the most recent failed publish attempt failed (for the caller's log). */
+export function lastPublishFailureReason(): string | null {
+  return lastFailureReason;
+}
 
 async function postWithTimeout(
   url: string,
@@ -265,10 +317,15 @@ async function postWithTimeout(
       // Drain the body so the connection can be reused, but never log
       // it at warn — error messages can leak token state.
       await resp.text().catch(() => '');
+      lastFailureReason = `http_${resp.status}`;
       return false;
     }
+    lastFailureReason = null;
     return true;
-  } catch {
+  } catch (err) {
+    // Record the CLASS and message, never the headers — they carry the bearer.
+    const e = err as { name?: string; message?: string };
+    lastFailureReason = `${e?.name ?? 'Error'}: ${(e?.message ?? String(err)).slice(0, 200)}`;
     return false;
   } finally {
     clearTimeout(timer);
@@ -399,6 +456,12 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
   // double-page. Drops a redundant alert is preferable to spam.
   const fbTopic = fallbackTopicFor(args.topic);
   if (!fbTopic) {
+    logDrop({
+      topic: args.topic,
+      fallbackTopic: null,
+      reason: lastFailureReason,
+      msg: '[ntfy] primary failed and NO fallback topic is registered - page dropped',
+    });
     return { ok: false, outcome: 'dropped' };
   }
   const fallbackHeaders = buildHeaders({
@@ -421,6 +484,12 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     recordCooldown(fp, now, cooldownMs);
     return { ok: true, outcome: 'fallback-sent' };
   }
+  logDrop({
+    topic: args.topic,
+    fallbackTopic: fbTopic,
+    reason: lastFailureReason,
+    msg: '[ntfy] primary AND fallback both failed - page dropped',
+  });
   return { ok: false, outcome: 'dropped' };
 }
 
@@ -493,7 +562,8 @@ function summariseError(err: unknown): { title: string; body: string } {
 function fingerprintFromError(err: unknown): string {
   if (err instanceof Error) {
     const name = err.name || 'Error';
-    const firstStackLine = (err.stack ?? '').split('\n').find((line) => line.trim().startsWith('at ')) ?? '';
+    const firstStackLine =
+      (err.stack ?? '').split('\n').find((line) => line.trim().startsWith('at ')) ?? '';
     return fnv1a32(`${name}\n${firstStackLine}`);
   }
   return fnv1a32(typeof err === 'string' ? err : JSON.stringify(err));

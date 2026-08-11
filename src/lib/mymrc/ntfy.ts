@@ -9,6 +9,9 @@
 // MyMRC sync failures are explicitly Bill-only SYSTEM events (charter Q16 /
 // CLAUDE.md hard rule #5) → topic `dr3-vision-system`. A healthy run is silent.
 
+// ADR-0019.5 — the ONE header sanitizer, at a relative path precisely so this
+// alias-less bundle can share it instead of growing a fifth copy of the fix.
+import { toHeaderSafe } from '../ntfy-header-safe';
 import type { FeedName } from './types';
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
@@ -92,7 +95,23 @@ async function postWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const resp = await fetch(url, { method: 'POST', body, headers, signal: controller.signal });
+    // ADR-0019.5 — sanitize at the single choke point both legs share. A raw
+    // em dash in `X-Title` throws in undici BEFORE any socket opens, so the
+    // primary and the fallback fail identically in the same millisecond and the
+    // page is lost while the ntfy server is perfectly healthy. Every MyMRC
+    // alert title carried one (`${kind} — ${site}`), so every MyMRC page was
+    // being dropped. Authorization is left alone: a bearer is ASCII by
+    // construction and mangling it would turn an encoding bug into an auth bug.
+    const safeHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+      safeHeaders[k] = k === 'Authorization' ? v : toHeaderSafe(v);
+    }
+    const resp = await fetch(url, {
+      method: 'POST',
+      body,
+      headers: safeHeaders,
+      signal: controller.signal,
+    });
     if (!resp.ok) {
       await resp.text().catch(() => '');
       return false;
@@ -120,7 +139,7 @@ export const ntfyPager: Pager = {
     cooldown.set(alert.fingerprint, now + (alert.cooldownMs ?? DEFAULT_COOLDOWN_MS));
 
     const feedSuffix = alert.feed ? ` [${alert.feed}]` : '';
-    const title = `[DR3-Vision] ${TITLE_BY_KIND[alert.kind]} — ${alert.site}${feedSuffix}`.slice(
+    const title = `[DR3-Vision] ${TITLE_BY_KIND[alert.kind]} - ${alert.site}${feedSuffix}`.slice(
       0,
       250,
     );

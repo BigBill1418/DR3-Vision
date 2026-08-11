@@ -9,6 +9,68 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (2:25 PM PT) — the em dash that ate the payroll alert (ADR-0019.5)
+
+Bill asked why the 2026-08-05 page got dropped. It was an em dash.
+
+- **Root cause.** HTTP header values are ByteStrings (latin-1). Node's undici
+  throws `Cannot convert argument to a ByteString because the character at index
+43 has a value of 8212` for any codepoint above 255. 8212 is U+2014, and the
+  stranded page's title was `URGENT: bonus period STRANDED — DR3 Eugene Period 16`.
+  `buildHeaders()` put it into `X-Title` unencoded.
+
+- **Why it looked like a total outage.** The throw happens at `Request`
+  construction — **before any socket opens**. No DNS, no TLS, no auth, no rate
+  limit. The fallback builds the same header, so it threw identically. "Primary
+  and fallback both failed" was one deterministic failure counted twice, which is
+  why the ntfy server looked perfectly healthy: VLM, CallSign and InfraWatch all
+  delivered inside the same three minutes.
+
+- **Why nobody noticed for weeks.** `postWithTimeout` ended in
+  `catch { return false; }`. The `TypeError` was discarded, so the caller could
+  only say "dropped". A swallowed error is not a smaller failure; it is the same
+  failure with the evidence removed.
+
+- **It was never one alert.** A repo sweep found TWO publishers broken and three
+  more one character away: `src/lib/ntfy.ts` (~18 call sites, essentially every
+  app alert), `src/lib/mymrc/ntfy.ts` (hardcoded `${kind} — ${site}` — **every
+  MyMRC page has been dropping**), and the three `.mjs` daemons, including the one
+  that publishes the app-INDEPENDENT backstop pages. The retained 7-day ntfy
+  cache corroborates it: only ASCII-titled DR3 messages are present.
+
+- **This is the fleet's FOURTH re-discovery.** bash/Python fixed 2026-05-06;
+  noc-master's Node publisher by ADR-0063 on 2026-05-22, after an em dash in
+  `— cordoning` swallowed a real host-saturation alert. ADR-0063 closed asking
+  whether the fix should become a shared utility "to prevent a fourth
+  re-discovery". It was not lifted. Here is the fourth. The bug is not the em
+  dash — it is that every publisher owns its own header construction and nothing
+  structurally connects them.
+
+- **Fixed.** One dependency-free `toHeaderSafe()` (`src/lib/ntfy-header-safe.ts`
+  plus a plain-JS twin for the daemons, pinned equal by test), applied at each
+  publisher's single choke point — never per-field, which is the shape that
+  failed three times. Transliterates the punctuation these titles use, then
+  hard-replaces any residual codepoint > 255 with `?`: an unmapped glyph must
+  degrade to a sendable page, never a lost one. `Authorization` is excluded so an
+  encoding fix cannot become an auth bug. Bodies keep their Unicode.
+
+- **A drop now says why.** The failure class and message are captured and logged
+  with the topic and fallback topic. Had that line existed on 2026-08-05 this
+  would have been a ten-minute diagnosis.
+
+- **The counters stop lying** (closes ADR-0019.4 residual #2). `ntfyPublished`
+  counted attempts — on 2026-08-04 t3 logged `ntfyPublished:1` for a page thrown
+  away inside the process. Every escalation publish now routes through
+  `recordPublish()`: delivered outcomes only, a new `ntfyDropped` beside it, and
+  the reason in the log.
+
+- **No fifth re-discovery.** A sweep test walks `src/` and `scripts/`, finds every
+  file setting `X-Title`, and fails if any bypasses the shared sanitizer — with a
+  floor assertion so an empty sweep cannot pass while checking nothing.
+
+- **Expect new MyMRC alerts.** They are not new failures; they were always
+  happening and the pages were being discarded.
+
 ## 2026-08-11 (1:00 PM PT) — the auto-override safety net is now visible before it is needed (ADR-0019.4)
 
 Bill asked whether the "auto sign as me if nobody does" path actually works — he
@@ -77,6 +139,7 @@ hours** after its deadline. Here is what the logs say, and what now exists.
   counts `ntfyPublished` without checking the outcome, so a dropped "actor
   unavailable" page reads as sent — the new sweep checks its own, the escalation
   path was left alone to keep this reviewable.
+
 ## 2026-08-11 (12:50 PM PT) — Stale-claim watchdog ramped PILOT → LIVE at both sites (ADR-0092)
 
 Bill received the pilot-mode nudge — `[PILOT — would have sent to:
