@@ -20,6 +20,64 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AX — 2026-08-10 late-night solidity sweep ("confirm we are solid") — two fixes executed, one decision for Bill, two watch items
+
+Bill ordered a full verification sweep (~6:56 PM PT). All six of the day's PRs
+verified LIVE and behaving; the sweep also found four untracked issues. Fixes
+executed ~7:20 PM PT, audited under Bill's user id:
+
+- **FIXED — H-136912 (Costco-Innovel, appt Tue 8/11 10:00 PT) slot freed by
+  RE-ATTRIBUTION, not just detach.** The 95-unit load worked 8/7 (13:38–14:19
+  PT) matches **H-136736** exactly — same transporter (Titan Concepts), same
+  commodity, same 53' trailer, same 95-unit count, MRC **Delivered** 95, worked
+  68 minutes after H-136736's appointment — while H-136912 is MRC Confirmed/0.
+  `9e7c1cf4.expected_load_id` → H-136736's slot (which had no child). One move
+  closes both the consumed slot AND H-136736's missing-work gap. **The 0.AV
+  item-D claim that "only the operator knows which truck it was" is FALSIFIED
+  for this class — carrier+commodity+trailer+unit-count+MRC-status matching
+  identified the truck from data alone; try that method on the 159-unit orphan.**
+- **FIXED — stale future-dated aggregate deleted (audited).** `2b460bb7`,
+  104 program units keyed to 2026-08-12 = H-136583's pre-ADR-0089 appointment
+  day; the Am.1 re-key moved the haul's real units into the 8/6 aggregate but
+  the bridge never removes day-rows whose hauls migrate away. Left alone it
+  would have phantom-added 104 program units to the floor at Wed 00:00 PT.
+  **Design gap for the build list: the bridge has no cleanup path for aggregate
+  rows whose mirror day-group becomes empty** (one-line ADR-0089 amendment).
+- **DECISION FOR BILL — 2026-07-29 has a 671-unit hole the hourly bridge can
+  never fix.** An `ipad_floor` aggregate (150 units, entered 8:34 AM that day —
+  the only non-MyMRC aggregate in the table) occupies the unique
+  (site, day)-slot, so the MyMRC bridge could never land that day's real
+  aggregate (mirror: 10 delivered hauls, 439 program / 382 non-program), and
+  7/29 has since slid out of the 10-day trailing window. **Consequence: the
+  current program floor reads −52, but correcting 7/29 moves it to +237 /
+  +1,398 — do NOT treat −52 as a physical deficit until 7/29 is decided.**
+  Needed: what does the iPad 150-unit row represent (partial manual count?
+  double-entry with a haul?) — then `mymrc-inbound-bridge-backfill.mjs --since
+2026-07-29` once the slot conflict is resolved. **Second design gap: no
+  defined semantics for ipad_floor vs mymrc_haul aggregate-slot contention.**
+- **WATCH — six loads carry exactly 2.000× MRC's unit count** (H-135978/135313/
+  136226/136232/136250/136664; two operators; MRC's independent
+  unit_count_at_unload agrees with MRC each time). Exact doubling across six
+  loads smells like the AW-1 finishUnload/replay double-add, not counting
+  habits. `b2b_haul` rows never reach inventory (all sit `submitted`; only
+  `verified|submitted_to_mymrc|processed` feed onHand), so this is a floor-record
+  /attribution issue, not an inventory one — but investigate before any
+  haul-count-driven figure is published. Build, this week.
+- **WATCH — `19bfc591` (H-136796 HWMA, late truck)** started 5:13 PM PT on the
+  freed slot, `in_progress` — genuinely being worked. If still open at start of
+  shift Tue, chase it (the void now exists for exactly this).
+- **Corrections to earlier entries:** 0.AV W "H-135311 still in_progress" —
+  zeroed+submitted 4:58 PM PT; 0.AW-6 "H-136796 being resolved" — resolved
+  (mis-click zeroed+detached 4:58 PM PT, real truck checked in 5:13 PM PT).
+- Also verified: Woodland DID enter today's Terex number (69 units / 6.15 h,
+  5:26 PM PT) — the 08:30 watchdog stays correctly silent Tue morning. Source
+  queue: one NEW pending item ("Mt Diablo Pittsburg", arrived 7:01 PM PT) — the
+  queue working as designed, decide it with the next batch. Nine stale git
+  worktrees exist on this box, six carrying unmerged commits from earlier
+  sessions — deliberate prune needed, not auto-cleanup.
+
+---
+
 ## 0.AW — 2026-08-11 floor workflow ergonomics (ADR-0090) — one feature deferred, four decisions for Bill
 
 Branch: `feat/floor-workflow-ergonomics`. A (haul number) and C (the void) shipped;
