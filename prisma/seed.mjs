@@ -1013,6 +1013,9 @@ async function seedRolloutSurfaces(siteIds) {
     // ADR-0088 — the throughput-gap watchdog's morning nudge, born pilot.
     // Matches migration 20260839_adr0088_throughput_gap_watchdog.
     'equipment_throughput_gap',
+    // ADR-0092 — the stale-claim watchdog's end-of-shift nudge, born pilot.
+    // Matches migration 20260843_adr0092_stale_claim_watchdog.
+    'load_stale_claim',
   ];
   const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];
   const UI_PILOT = [

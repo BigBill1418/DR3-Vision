@@ -9,6 +9,50 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (11:00 AM PT) — Stale-claim watchdog: a stranded load stops needing a person to notice it (ADR-0092)
+
+The ADR-0091 incident investigation found, next to the bug, a load nobody was
+looking for: **H-136796** (HWMA, 117 expected units) held since 8/10 5:12 PM PT
+and still `in_progress` **15.3 hours** later. The takeover history says that is
+routine — 11 takeovers exist in production and **8 of them fired in one
+eight-minute window** on 8/10 morning, one operator sweeping up after two others.
+ADR-0082 built the mechanism to fix a stranded load and ADR-0091 made it
+discoverable; neither built the thing that says a load _is_ stranded.
+
+- **Detection is SILENCE, not claim age.** ADR-0082 said claim age carries
+  strandedness; production falsifies that in both directions (a 07:55 PT claim
+  against a 15:00 PT appointment is not abandoned; a load claimed 20 min ago and
+  dropped 19 min ago is). The signal is time since the last evidence of work —
+  `GREATEST(updated_at, newest stack, newest photo)`. **All three are required:**
+  `addStack` never touches the parent row, so `updated_at` freezes for the whole
+  count and a naive detector would report operators as abandoned mid-count.
+
+- **Thresholds sit in a gap the data actually has.** Of 58 operator-claimed loads
+  that reached `submitted`, the 52 healthy ones were all submitted the SAME
+  Pacific day (p90 73 min, max 8.5 h); the 6 that crossed a day took 2–4 DAYS.
+  Badge at **2 h** (in-app only), mail at **4 h**.
+
+- **In-app first, and no page.** Hard rule #5 keeps operational events off ntfy
+  ("long unloads, SLA breaches" are its own examples) and ADR-0037 puts
+  below-default findings on a dashboard. So the primary surface is a new
+  Operations Dashboard panel naming which loads are quiet, each linking tier-1 to
+  the load; the 16:45 PT `notifyStaff()` nudge (born **pilot**) is the backstop
+  for the day nobody looked. ntfy fires only when the nudge reaches 0 recipients.
+
+- **No auto-release, at any threshold.** An auto-release that fires while an
+  operator is mid-count on a slept iPad is this week's incident with a worse
+  blast radius. The watchdog points; a person presses ADR-0082's Take over.
+
+- **Idempotency is the database.** `stale_claim_alerts` unique on `load_id` — one
+  report per load ever, so a re-fire, a restart, or a hand-run curl cannot
+  double-report. Safe to invoke by hand.
+
+- **Also fixed while in here:** `ops-overview.ts` carried a byte-for-byte copy of
+  `OPEN_DOCK_STATUSES` under a local name, never imported — now the shared
+  constant. And two cron daemons that were never covered by the DST regression
+  test now are: this one and `equipment-throughput-gap-cron` (ADR-0088), which
+  shipped carrying its own untested copy of the offset-reprobe helper.
+
 ## 2026-08-11 (10:48 AM PT) — Eugene bonus approver is Patrick; the 08:30 auto-override was dead at both sites (ADR-0019.3)
 
 Bill directed that Patrick Dills become the Eugene bonus approver. The instruction

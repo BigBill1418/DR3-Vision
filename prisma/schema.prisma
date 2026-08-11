@@ -4216,6 +4216,62 @@ model EquipmentThroughputGapAlert {
   @@map("equipment_throughput_gap_alerts")
 }
 
+/// ADR-0092 — one row per load this watchdog has reported, ever.
+///
+/// The idempotency key is the LOAD, not the run day, and that choice is the
+/// whole guarantee: a given stranded load is reported exactly once no matter how
+/// many times the cron fires, whether a second cron container exists, or what
+/// restarted in between. An in-process cooldown could not deliver that — it
+/// lives in the app container's memory and is keyed on wall time rather than on
+/// the fact being reported (the ADR-0088 D6 argument, restated because it is the
+/// reason this table exists at all rather than a `setTimeout`).
+///
+/// The deliberate consequence: a load reported, then worked, then abandoned
+/// AGAIN is not reported a second time. That is accepted rather than overlooked
+/// — the in-app badge is continuous and always current, so the second strand is
+/// visible even though it is not mailed, and the alternative (re-nudging on a
+/// load somebody already knows about) is the nagging that gets a sender filtered.
+model StaleClaimAlert {
+  id String @id @default(uuid())
+
+  /// Bare FK -> inbound_loads.id (constraint in the migration), matching the
+  /// newer sibling convention. ONE row per load, ever.
+  load_id String
+
+  /// Bare FK -> sites.id. Denormalised so a per-site report never has to join
+  /// back through the load, which may since have been voided.
+  site_id String
+
+  /// The holder's NAME as it stood when the nudge went out, not a user FK.
+  /// A takeover (ADR-0082) moves the claim, and this column is a record of what
+  /// the mail said — re-deriving it later through the FK would silently rewrite
+  /// history to name whoever holds the load now.
+  holder_name String?
+
+  /// The dock stage the load was stuck at. Text, not the enum: this is a
+  /// historical record of a message that was sent, and it must not become
+  /// unreadable if a future migration renames a `LoadStatus` member.
+  load_status String
+
+  /// How long the load had been silent when it was reported. Minutes, because
+  /// the threshold is hours and storing millis would invite false precision.
+  idle_minutes Int
+
+  /// `live` | `pilot` — the ADR-0047 state the nudge resolved to.
+  notify_mode String
+
+  recipient_count Int
+  delivered_count Int
+  last_status     Int?
+
+  created_at DateTime @default(now())
+
+  /// One nudge per load, ever. Single NOT NULL column, so it genuinely constrains.
+  @@unique([load_id])
+  @@index([site_id, created_at])
+  @@map("stale_claim_alerts")
+}
+
 // ADR-0045 — ops ledger + intake
 //
 // P5: the weekly meeting-notes / task-follow-up ledger (D1), the DR3 Updates +

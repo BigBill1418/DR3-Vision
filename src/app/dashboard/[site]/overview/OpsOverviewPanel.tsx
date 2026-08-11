@@ -10,6 +10,7 @@
 // the operator can tell "zero" from "not loaded".
 
 import * as React from 'react';
+import Link from 'next/link';
 import type { OpsOverview, MirrorFreshnessPanel } from '@/lib/dashboard/ops-overview';
 import { SectionBand, StatCard, ScrollTable, FreshnessBadge, EmptyNote, StatusPill } from './ui';
 import type { Tone } from './ui';
@@ -108,6 +109,39 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
               testId="ov-processed-close"
             />
           )}
+          {/* ADR-0092 — the in-app half of the stale-claim watchdog, and the
+              PRIMARY half. Hard rule #5 keeps operational events off ntfy, and
+              ADR-0037 puts below-default findings on a dashboard rather than in
+              a notification, so this card is where a stranded load is normally
+              noticed. The 16:45 PT mail only exists for the day nobody looked. */}
+          {data.staleClaims ? (
+            <StatCard
+              label="Quiet on the dock"
+              value={nf(data.staleClaims.rows.length)}
+              unit={data.staleClaims.rows.length === 1 ? 'claimed load' : 'claimed loads'}
+              tone={
+                data.staleClaims.rows.some((r) => r.level === 'nudge')
+                  ? 'warn'
+                  : data.staleClaims.rows.length > 0
+                    ? 'info'
+                    : 'ok'
+              }
+              sub={
+                data.staleClaims.rows.length === 0
+                  ? 'Every open load is moving'
+                  : 'No activity for 2h+ — anyone can take these over'
+              }
+              href={`/dashboard/${siteCode}/loads`}
+              testId="ov-stale-claims"
+            />
+          ) : (
+            <StatCard
+              label="Quiet on the dock"
+              value="—"
+              sub="Not available"
+              testId="ov-stale-claims"
+            />
+          )}
           {data.floor ? (
             <StatCard
               label="On the floor"
@@ -122,6 +156,62 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
           )}
         </div>
       </SectionBand>
+
+      {/* ── ADR-0092 — WHICH loads have gone quiet, not just how many ─────
+          A count alone sends the reader hunting. Each row names the haul, the
+          holder and how long it has been silent, and links to the load itself
+          (tier-1), where ADR-0082's Take over is one tap away. Rendered only
+          when there is something to say — a zero-row table is noise, and the
+          StatCard above already says "every open load is moving". */}
+      {data.staleClaims && data.staleClaims.rows.length > 0 && (
+        <SectionBand
+          title="Loads that have gone quiet"
+          hint={
+            <span>
+              Claimed but with no photo, stack or stage change for 2h or more. Anyone on the floor
+              can open one and use <strong>Take over</strong> — nothing counted is lost.
+            </span>
+          }
+        >
+          {/* Reuses the shared ScrollTable rather than hand-rolling one: it
+              already carries the ADR-0051 office palette (space / steel / mist —
+              the floor's green is banned here and swept for) and the ADR-0014
+              iPad-legibility contract (its own scroll container, no sub-12px
+              real data). A bespoke table would have to restate both, and would
+              eventually restate one of them wrong. */}
+          <ScrollTable
+            ariaLabel="Claimed dock loads with no recent activity"
+            testId="ov-stale-claims-table"
+            columns={[
+              { key: 'load', label: 'Load' },
+              { key: 'holder', label: 'Held by' },
+              { key: 'stage', label: 'Stage' },
+              { key: 'idle', label: 'Quiet for', align: 'right' },
+            ]}
+          >
+            {data.staleClaims.rows.map((r) => (
+              <tr key={r.loadId} data-testid={`ov-stale-${r.loadId}`}>
+                <td className="px-3 py-2.5 text-dr3-mist">
+                  <Link
+                    className="font-semibold underline underline-offset-4"
+                    href={`/operator/${siteCode}/load/${r.loadId}`}
+                  >
+                    {[r.haulNumber, r.sourceName].filter(Boolean).join(' · ') || 'Load'}
+                  </Link>
+                </td>
+                <td className="px-3 py-2.5 text-dr3-mist">{r.holderName ?? 'an operator'}</td>
+                <td className="px-3 py-2.5 text-dr3-mist-dim">{r.status}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-dr3-mist">
+                  {r.idleMinutes < 120
+                    ? `${r.idleMinutes} min`
+                    : `${Math.floor(r.idleMinutes / 60)} h`}
+                  {r.level === 'nudge' && <StatusPill tone="alert" label="reported" />}
+                </td>
+              </tr>
+            ))}
+          </ScrollTable>
+        </SectionBand>
+      )}
 
       {/* ── Throughput & the machine (ADR-0077 Am.1 — named, not generic) ── */}
       <SectionBand
