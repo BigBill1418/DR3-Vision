@@ -59,6 +59,7 @@
 
 import { prisma } from '@/lib/prisma';
 import type { LoadStatus } from '@prisma/client';
+import { HAUL_NUMBER_SELECT, haulNumberOf } from '@/lib/loads/haul-number';
 
 /**
  * Dock statuses that are still the FLOOR's work. Anything outside this set has
@@ -97,6 +98,13 @@ export interface OpenLoadView {
    */
   claimedByUserId: string | null;
   claimedByName: string | null;
+  /**
+   * ADR-0090 A — the MyMRC haul number ("H-136796"), or null when the load has
+   * no haul linkage at all (a walk-up drop-off). Source + carrier + BOL do not
+   * separate two trucks from one collection site on one day, which is the
+   * ordinary case JT described; the haul number does.
+   */
+  haulNumber: string | null;
 }
 
 /** ADR-0082 — the site's open dock work, split by who holds each claim. */
@@ -158,6 +166,7 @@ export async function listSiteOpenLoads(
       source: { select: { name: true } },
       transporter: { select: { name: true } },
       assigned_operator: { select: { id: true, name: true } },
+      ...HAUL_NUMBER_SELECT,
     },
     // `arrived_at` is nullable on the model; `nulls: 'last'` keeps a row with no
     // arrival instant visible rather than sorting it into an unpredictable slot.
@@ -175,6 +184,7 @@ export async function listSiteOpenLoads(
     readyToSubmit: r.status === 'finished',
     claimedByUserId: r.assigned_operator?.id ?? null,
     claimedByName: r.assigned_operator?.name ?? null,
+    haulNumber: haulNumberOf(r),
   }));
 
   // Split in memory rather than issuing two queries: one index scan over

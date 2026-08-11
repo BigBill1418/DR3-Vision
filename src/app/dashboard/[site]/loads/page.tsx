@@ -43,6 +43,10 @@ const ALL_STATUSES: LoadStatus[] = [
   LoadStatus.submitted,
   LoadStatus.verified,
   LoadStatus.rejected,
+  // ADR-0090 C — filterable so a manager can FIND a voided load, which is half
+  // the point of a soft void. Absent from DEFAULT_STATUSES below on purpose: the
+  // default view is live work, and a disowned load is not that.
+  LoadStatus.voided,
   LoadStatus.submitted_to_mymrc,
   LoadStatus.processed,
 ];

@@ -20,6 +20,7 @@
     "submitted": "Enviada",
     "verified": "Verificada",
     "rejected": "Rechazada",
+    "voided": "Anulada",
     "submitted_to_mymrc": "Enviada a MyMRC",
     "processed": "Procesada"
   },
@@ -33,6 +34,7 @@
     "submitted": "Enviada",
     "verified": "Verificada",
     "rejected": "Rechazada",
+    "voided": "Anulada",
     "submitted_to_mymrc": "En MyMRC",
     "processed": "Procesada"
   },

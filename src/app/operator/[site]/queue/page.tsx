@@ -130,6 +130,9 @@ export default async function OperatorQueuePage({ params }: Props) {
     select: {
       id: true,
       expected_arrival_at: true,
+      // ADR-0090 A — the haul number. NOT NULL on this model, and the only
+      // field that separates two of one site's trucks on one day.
+      external_mymrc_haul_id: true,
       source_name_at_sync: true,
       source: { select: { name: true } },
       transporter_name_at_sync: true,
@@ -207,6 +210,12 @@ export default async function OperatorQueuePage({ params }: Props) {
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-xl font-semibold tabular-nums">
                           {formatTime(arrival, locale)}
+                        </span>
+                        {/* ADR-0090 A — bare and mono, exactly as the hauls
+                            screen renders it. An identifier reads as itself, so
+                            no label string is invented in three locales. */}
+                        <span className="font-mono text-sm font-bold text-dr3-cream/80">
+                          {l.external_mymrc_haul_id}
                         </span>
                       </div>
                       <p className="mt-2 text-base font-medium">{sourceName}</p>

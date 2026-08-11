@@ -60,6 +60,7 @@
     "open_status_submitted": "جمع کرا دی گئی",
     "open_status_verified": "مینیجر نے تصدیق کر دی",
     "open_status_rejected": "ڈاک پر مسترد",
+    "open_status_voided": "غلطی کے طور پر بند",
     "open_status_submitted_to_mymrc": "MyMRC کو بھیج دی گئی",
     "open_status_processed": "پروسیس ہو گئی",
     "open_status_unknown": "حالت معلوم نہیں"
@@ -172,6 +173,23 @@
     "rejecting": "مسترد ہو رہا ہے…",
     "submit": "لوڈ مسترد کریں",
     "reject_failed": "مسترد کرنے میں ناکامی"
+  },
+  "load_void": {
+    "open": "کیا آپ یہ لوڈ مکمل نہیں کر سکتے؟",
+    "heading": "یہ لوڈ بند کریں",
+    "subheading": "یہ تب استعمال کریں جب لوڈ پر دراصل کام ہوا ہی نہیں — آپ نے غلط ہول دبایا، یا ٹرک آیا ہی نہیں۔ یہ ڈلیوری کے طور پر شمار نہیں ہوگا، اور ہول دوبارہ فہرست میں آ جائے گا۔",
+    "reason_label": "کیا ہوا؟",
+    "reason_select": "ایک منتخب کریں",
+    "reason_wrong_haul": "میں نے غلط ہول دبایا",
+    "reason_truck_never_arrived": "ٹرک آیا ہی نہیں",
+    "reason_other": "کوئی اور بات",
+    "note_label": "بتائیں کیا ہوا",
+    "note_placeholder": "چند الفاظ کافی ہیں",
+    "note_required": "ایک مختصر نوٹ لکھیں تاکہ بعد میں سمجھ آ سکے۔",
+    "cancel": "رہنے دیں",
+    "confirm": "ہاں، اسے بند کریں",
+    "closing": "بند کیا جا رہا ہے…",
+    "failed": "یہ لوڈ بند نہیں ہو سکا۔ دوبارہ کوشش کریں۔"
   },
   "stage_finish": {
     "heading": "6۔ ختم کریں",

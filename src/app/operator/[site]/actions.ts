@@ -9,7 +9,7 @@ import * as svc from '@/lib/load-service';
 import { takeOverLoad, readClaimHolder, type TakeoverActionResult } from '@/lib/loads/load-claim';
 import { assertUiSurfaceActivated } from '@/lib/loads/record-guards';
 import { UI_SURFACE } from '@/lib/notify/rollout';
-import type { CountMode, ConcernCategory, RejectionCategory } from '@prisma/client';
+import type { CountMode, ConcernCategory, LoadVoidReason, RejectionCategory } from '@prisma/client';
 
 // Server-action wrappers for the operator workflow. Every action
 // re-derives operator + site from the active session (no client-trusted
@@ -228,6 +228,39 @@ export async function submitLoadAction(siteCode: string, loadId: string): Promis
   await signOut({ redirect: false });
   revalidatePath(`/operator/${siteCode}/queue`);
   redirect(`/operator/${siteCode}`);
+}
+
+/**
+ * ADR-0090 C — close a load that should never have been started.
+ *
+ * ONLINE-ONLY, and that is a decision rather than an omission — the same one
+ * ADR-0082 D5 recorded for the takeover, for the same reason. A void is a
+ * CONTENTION-shaped act ("this load is not real"), and replaying one hours later
+ * would disown a load whose state has moved on — possibly one a colleague picked
+ * up and legitimately worked in the meantime. It also captures no operator data:
+ * refusing it offline costs a tap, whereas refusing a count loses a count. So it
+ * is deliberately NOT in `FLOOR_SCOPES` and is never enqueued.
+ *
+ * Redirects to the QUEUE rather than signing out, which is where this differs
+ * from `submitLoadAction` / `rejectLoadAction` and their ADR-0004 auto-logout.
+ * Those end a piece of real work. A void is nearly always followed by "now tap
+ * the RIGHT haul" — the freed slot is back on the queue this redirect lands on —
+ * and forcing a PIN re-entry between the mistake and its correction is friction
+ * with no safety value.
+ */
+export async function voidLoadAction(
+  siteCode: string,
+  loadId: string,
+  reason: LoadVoidReason,
+  note: string | null,
+): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  await svc.voidLoad({ loadId, operatorUserId, siteId, reason, note });
+  revalidatePath(`/operator/${siteCode}/queue`);
+  // The hauls screen reads the same freed slot through `toConsumedLoad`.
+  revalidatePath(`/operator/${siteCode}/hauls`);
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+  redirect(`/operator/${siteCode}/queue`);
 }
 
 export async function rejectLoadAction(

@@ -11,6 +11,7 @@ import { StageDecision } from './stage-decision';
 import { StageStacks } from './stage-stacks';
 import { StageReject } from './stage-reject';
 import { StageFinish } from './stage-finish';
+import { VoidLoadPanel } from './void-load-panel';
 
 // Stage dispatch. The visible "stage" is a function of `load.status`
 // plus a tiny client-only flag for the weight sub-stage (whether the
@@ -102,6 +103,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           onBolDone={() => setWeightSkipped(false)}
           onWeightSkipped={() => setWeightSkipped(true)}
         />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }
@@ -110,6 +112,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     return (
       <>
         <StageDoor siteCode={siteCode} loadId={load.id} />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }
@@ -118,6 +121,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     return (
       <>
         <StageDoor siteCode={siteCode} loadId={load.id} />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }
@@ -133,6 +137,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     return (
       <>
         <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }
@@ -146,6 +151,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           unloadStartedAt={load.unload_started_at}
           existingStacks={load.stacks}
         />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }
@@ -159,6 +165,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           operatorName={operatorName}
           totalUnits={load.total_units}
         />
+        <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
       </>
     );
   }

@@ -46,6 +46,7 @@
     "open_status_submitted": "Submitted",
     "open_status_verified": "Verified by a manager",
     "open_status_rejected": "Rejected at the dock",
+    "open_status_voided": "Closed as a mistake",
     "open_status_submitted_to_mymrc": "Sent to MyMRC",
     "open_status_processed": "Processed",
     "open_status_unknown": "Status unknown"
@@ -158,6 +159,23 @@
     "rejecting": "Rejecting…",
     "submit": "Reject load",
     "reject_failed": "Reject failed"
+  },
+  "load_void": {
+    "open": "Can't finish this load?",
+    "heading": "Close this load",
+    "subheading": "Use this when the load was never really worked — you tapped the wrong haul, or the truck never came. It will not count as a delivery, and the haul goes back on the list so it can be started again.",
+    "reason_label": "What happened?",
+    "reason_select": "Choose one",
+    "reason_wrong_haul": "I tapped the wrong haul",
+    "reason_truck_never_arrived": "The truck never came",
+    "reason_other": "Something else",
+    "note_label": "Tell us what happened",
+    "note_placeholder": "A few words is enough",
+    "note_required": "Add a short note so this makes sense later.",
+    "cancel": "Never mind",
+    "confirm": "Yes, close it",
+    "closing": "Closing…",
+    "failed": "Couldn't close this load. Try again."
   },
   "stage_finish": {
     "heading": "6. Finish",

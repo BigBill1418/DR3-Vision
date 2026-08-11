@@ -69,6 +69,7 @@ function panel() {
       sourceName="Kiefer Landfill"
       transporterName="Yellow Freight"
       bolNumber="B-1"
+      haulNumber="H-136917"
       status="in_progress"
       totalUnits={null}
       takeable
@@ -207,6 +208,7 @@ function terminalPanel(status: 'submitted' | 'rejected' | 'verified') {
       sourceName="Santa Rita Jail"
       transporterName="Ron Lawrence & Son"
       bolNumber="B-1"
+      haulNumber="H-136796"
       status={status}
       totalUnits={159}
       takeable={false}
@@ -273,5 +275,40 @@ describe('ADR-0074 Am.1 — terminal statuses are labelled honestly, never "Coun
     const key = STATUS_KEY['some_future_status' as keyof typeof STATUS_KEY] ?? STATUS_FALLBACK_KEY;
     expect(key).not.toBe('queue.open_status_in_progress');
     expect(key).toBe(STATUS_FALLBACK_KEY);
+  });
+});
+
+// ADR-0090 A — a takeover decision needs the identifier.
+//
+// H-136796 (Santa Rita, 3:49:16 PM) and the Pleasanton load Janette also held
+// were, on every operator surface, "a load from a site, with a BOL". The panel
+// that asks "do you want to take this over?" could not say WHICH truck.
+describe('haul number on the held-by panel (ADR-0090 A)', () => {
+  it('names the haul so the taker knows which truck they are claiming', () => {
+    panel();
+    expect(screen.getByText('H-136917')).toBeTruthy();
+  });
+
+  it('renders without a haul number for a load that has no haul linkage', () => {
+    // A walk-up drop-off (ADR-0085). The panel must still render its holder and
+    // its source — the identifier is additive, never a precondition.
+    render(
+      <HeldByPanel
+        siteCode="woodland"
+        loadId="load-2"
+        holderName="Alma Ruiz"
+        heldSince="2026-08-06T18:00:00.000Z"
+        sourceName="Walk-up"
+        transporterName={null}
+        bolNumber={null}
+        haulNumber={null}
+        status="in_progress"
+        totalUnits={null}
+        takeable
+        locale="en"
+      />,
+    );
+    expect(screen.getByText('Walk-up')).toBeTruthy();
+    expect(screen.queryByText(/^H-/)).toBeNull();
   });
 });

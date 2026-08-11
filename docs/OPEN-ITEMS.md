@@ -20,6 +20,60 @@ re-dated on the assumption of an extension.
 
 ---
 
+## 0.AW — 2026-08-11 floor workflow ergonomics (ADR-0090) — one feature deferred, four decisions for Bill
+
+Branch: `feat/floor-workflow-ergonomics`. A (haul number) and C (the void) shipped;
+B (back navigation) is designed in ADR-0090 §D3 and deliberately not built.
+
+- **AW-1 — B (back navigation) is NOT implemented.** Owner: next session. The design
+  is complete in ADR-0090 §D3 and should not be re-derived. Three parts: (a) a
+  read-only review reachable from every stage — always safe, needs `weight_lbs` and
+  the photo kinds added to the load page `select`; (b) weight correctable in place
+  before `submitted`, appending a second audit row rather than mutating the first;
+  (c) individual stack soft-void while `in_progress`. (c) carries the risk: BOTH
+  `finishUnload` sum sites must filter identically or the ADR-0078 D7 replay path
+  silently restores voided units into a billed total, `nextIndex` must be computed
+  over voided rows too so an index is never reused, and the `addStack` P2002
+  convergence check must require `voided_at IS NULL` or a lost-response replay
+  resurrects a voided stack as a false 201.
+
+- **AW-2 — DECISION for Bill: may `finished → in_progress` reopen?** An operator at
+  the Finish stage who sees 47 and knows it should be 42 has no route back.
+  Blocked because `finishUnload` computes `unload_duration_seconds` from
+  `unload_started_at` to _now_, so a re-finish inflates it by the whole reopen gap,
+  and that figure feeds throughput/productivity surfaces. Either the duration
+  measures to the FIRST finish or the reopen becomes its own recorded event. Product
+  call, not an engineering one.
+
+- **AW-3 — DECISION for Bill: should a `truck_never_arrived` void notify anyone?**
+  It is the signal that a carrier no-showed and currently lands in a column nobody
+  watches. Graded against ADR-0037 it is not a page; it may be a daily-digest line
+  or a dashboard tile.
+
+- **AW-4 — HARDENING: six hand-maintained duplicates of the `LoadStatus` allow-lists.**
+  `INVOICE_STATUSES`, `VERIFIED_INBOUND_STATUSES` (plus two byte-identical local
+  copies in `audit/leg-fetchers.ts` and `mymrc/inbound-bridge.ts`, both documented as
+  such), an inline literal in `audit/workbench-providers.ts`, `OPEN_DOCK_STATUSES`,
+  `OPERATOR_ACTIVE_STATUSES` (two separate copies), and the unsynced pair
+  `labels.ts ALL_LOAD_STATUSES` / `dashboard/[site]/loads/page.tsx ALL_STATUSES`
+  (`ALL_LOAD_STATUSES` is currently imported by nothing — a dead export). Adding
+  `voided` was safe because they are all allow-lists, but this duplication is how the
+  NEXT enum addition gets missed. Consolidate behind
+  `satisfies readonly LoadStatus[]` in one module.
+
+- **AW-5 — WATCH: the void is unreachable for aggregate rows, by construction.**
+  The status-blind precedence lookups in `floor-inbound.ts`, `bulk-inbound.ts` and
+  `inbound-bridge.ts` are scoped to `load_source_type in AGGREGATE_SOURCE_TYPES` /
+  `mymrc_haul` / `paper_bulk`, and a dock void only ever produces a `b2b_haul` row.
+  If a void is ever offered on an aggregate row those queries become reachable and
+  each needs `notVoidedLoadWhere`.
+
+- **AW-6 — REFERENCE, not an action: the three stuck Woodland loads.** H-136796
+  (HWMA, mis-tap), H-136917 (Pleasanton) and H-135311 (Wexler, 13-day zombie) are
+  being resolved separately by the orchestrator. This branch changed no data.
+
+---
+
 ## 0.AV — 2026-08-10 consumed-slot check-in (ADR-0074 Amendment 1) — one reconciliation decision, two watch items, one hardening call
 
 Fix branch: `fix/consumed-expected-load-checkin`. Root cause, timeline, the

@@ -99,3 +99,26 @@ describe('every check-in surface asks whether the slot is already consumed', () 
     ]);
   });
 });
+
+// ADR-0090 C — a voided load must not hold its haul hostage.
+//
+// The whole point of the void is that the REAL truck can still check in. If a
+// voided child kept its slot marked consumed, the floor would trade one dead end
+// (a load that cannot be closed) for a worse one (a haul that can never be
+// worked) — and the second is the exact failure ADR-0074 Am.1 was written about.
+describe('a voided child does not consume the slot (ADR-0090 C)', () => {
+  it('frees the slot when the child was voided', () => {
+    expect(toConsumedLoad({ status: 'voided', total_units: null, submitted_at: null })).toBeNull();
+  });
+
+  it('still reports a genuinely worked slot as consumed', () => {
+    // The guard must be narrow: `submitted` is real work and must stay consumed.
+    expect(
+      toConsumedLoad({
+        status: 'submitted',
+        total_units: 159,
+        submitted_at: new Date('2026-08-10T22:49:35.000Z'),
+      }),
+    ).not.toBeNull();
+  });
+});

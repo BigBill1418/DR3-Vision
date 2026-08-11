@@ -46,6 +46,12 @@ vi.mock('./stage-decision', () => ({ StageDecision: () => null }));
 vi.mock('./stage-stacks', () => ({ StageStacks: () => null }));
 vi.mock('./stage-reject', () => ({ StageReject: () => null }));
 vi.mock('./stage-finish', () => ({ StageFinish: () => null }));
+// ADR-0090 C — same reason as the stages above: the void panel reaches for
+// `../../actions` at module load, which pulls in next-auth and fails to resolve
+// under the test runner. This suite exercises the dispatch branch only.
+vi.mock('./void-load-panel', () => ({
+  VoidLoadPanel: () => React.createElement('div', { 'data-testid': 'void-panel' }),
+}));
 
 vi.mock('@/i18n/provider', async () => {
   const { getDictionary, translate } = await import('@/i18n/dictionary');
@@ -112,4 +118,30 @@ describe('ADR-0074 Am.1 — a terminal load offers a way back to the queue', () 
     renderAt('rejected');
     expect(screen.getByText(/rejected/i)).toBeTruthy();
   });
+});
+
+// ADR-0090 C — the void is offered exactly where it is legal.
+//
+// `voidLoad` accepts only the OPEN_DOCK_STATUSES set, and an affordance offered
+// where the server would refuse it is the ADR-0065 Am.1 dead-end shape: the
+// operator taps, gets an opaque refusal, and learns nothing. The guard has to be
+// at the OFFER, not only at the write.
+describe('ADR-0090 C — where the void is offered', () => {
+  it.each(['arrived', 'weight_captured', 'unload_started', 'in_progress', 'finished'] as const)(
+    'offers the void on the open-dock status %s',
+    (status) => {
+      renderAt(status);
+      expect(screen.getByTestId('void-panel')).toBeTruthy();
+    },
+  );
+
+  it.each(['submitted', 'rejected'] as const)(
+    'does NOT offer the void on the terminal status %s',
+    (status) => {
+      // Past `submitted` the load has left the floor's hands and may already sit
+      // on an MRC invoice. Correcting that is ADR-0073's manager territory.
+      renderAt(status);
+      expect(screen.queryByTestId('void-panel')).toBeNull();
+    },
+  );
 });
