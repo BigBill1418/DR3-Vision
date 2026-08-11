@@ -1,7 +1,7 @@
 # ADR-0092 — A load nobody is working should not need a person to notice it
 
 **Date:** 2026-08-11
-**Status:** Accepted, implemented, born PILOT at both sites.
+**Status:** Accepted, implemented, born PILOT at both sites. **Ramped LIVE at BOTH sites 2026-08-11 12:50:50 PM PT** (audited flip via the `flipRolloutSurface` field-set, actor `system:stale-claim-flip`, at Bill's written instruction on reading the pilot mail). First live delivery 12:51:40 PM PT, 2/2 accepted.
 **Builds on:** ADR-0082 (the claim + self-serve takeover), ADR-0091 (the takeover became discoverable), ADR-0088 (the watchdog shape this copies), ADR-0047 (the `notifyStaff()` chokepoint and born-pilot rollout), ADR-0037 (notification noise policy), ADR-0020 (the operations dashboard).
 **Amends the framing of:** ADR-0082's "the age of the claim is what carries that."
 **Supersedes:** nothing.
@@ -342,6 +342,64 @@ than asserted: the report is keyed on the load, so re-firing reports nothing.
 The general lesson, which is the one worth carrying: **fire a new scheduled job
 by hand once, on the deployed system, before trusting its schedule.** A cron that
 has never been observed succeeding is a hypothesis.
+
+### Ramped LIVE — 2026-08-11 12:50:50 PM PT, both sites
+
+The ADR-0047 ramp worked as designed: the pilot send showed Bill the CONTENT and
+the TARGETING before either reached a site manager. He received
+
+> `[PILOT — would have sent to: morena.gomez@svdp.us, janette.tomas@svdp.us]`
+> `DR3-Vision — DR3 Woodland: 1 load still open on the dock`
+
+and replied _"flip these to live now! we need these."_
+
+**Recipient resolution, verified against live data before the flip.** The roster
+is `alert_recipients WHERE site_id = <site> AND active = true` — the established
+per-site manager roster, not a new table. Woodland resolves to
+**morena.gomez@svdp.us** and **janette.tomas@svdp.us**, exactly the two addresses
+in the pilot header; Eugene resolves to **rick.albritton@svdp.us**. Note the
+roster is site-scoped and NOT assignment-scoped: the mail goes to the site's
+managers, never to the operator holding the load — deliberately, because the
+person who walked away is the least likely to read it.
+
+**Both sites flipped, and Eugene is the deliberate part.** The ADR-0088
+throughput-gap flip left Eugene `pilot` as a recorded "no" because Eugene has no
+Terex and its scan can never fire. That reasoning does not carry: Eugene's
+`ipad_queue` is LIVE, so it can strand a load the moment floor work starts there.
+It has zero `inbound_loads` rows today, so the flip cannot mail Rick until Eugene
+actually has dock work — and leaving it `pilot` would re-create the silent-gap
+class this ADR exists to close, on the day Eugene's first load is stranded.
+
+**One pilot-era ledger row was cleared, and why.** `stale_claim_alerts` held one
+row for H-136147 from the 12:32 PM PT pilot send. That send went to ADMINS with
+the would-have-sent header — Morena and Janette have never been told about a load
+that was still open and by then five hours silent. The ledger's semantic is "this
+load has been reported to the floor," and a pilot row records a rehearsal, not a
+report. The delete was scoped to `notify_mode = 'pilot'` AND the load still being
+open, which matched exactly that one row (0 remaining afterwards).
+
+**First LIVE delivery — 2026-08-11 12:51:40 PM PT.**
+
+```
+woodland: alerted, staleCount 1, delivered 2, attempted 2
+ledger:   notify_mode=live, recipient_count=2, delivered_count=2, idle 296 min
+audit:    notify_staff / load_stale_claim:<woodland>
+          actual = [morena.gomez@svdp.us, janette.tomas@svdp.us], delivered 2
+```
+
+**The honest limit of that evidence.** `delivered: true` means Microsoft Graph
+**accepted** the message (HTTP 202 — `m365-mail.ts` documents the field exactly
+that way). It is provider-level accept, not proof of inbox arrival: a later
+bounce, a rule, or a junk classification would not surface here. The same caveat
+the fleet applies to an ntfy 200 applies to this 202.
+
+**Worst-case send rate in live mode.** The scan fires ONCE daily at 16:45 PT and
+sends at most ONE mail per site per fire, listing every newly-stale load in one
+table. The ledger is keyed on the load, so a load already reported never
+re-reports. Ceiling: **1 email per site per day**, and only on days something is
+actually stale — 50 stranded loads would still be one email. There is no path by
+which the floor gets a storm, which is the ADR-0037 gate-#4 property holding in
+live mode rather than only in pilot.
 
 ### Residual risk
 

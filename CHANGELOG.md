@@ -9,6 +9,49 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (12:50 PM PT) — Stale-claim watchdog ramped PILOT → LIVE at both sites (ADR-0092)
+
+Bill received the pilot-mode nudge — `[PILOT — would have sent to:
+morena.gomez@svdp.us, janette.tomas@svdp.us] DR3-Vision — DR3 Woodland: 1 load
+still open on the dock` — and replied _"flip these to live now! we need these."_
+That is the ADR-0047 ramp doing its job: the pilot send showed him the content
+AND the targeting before either reached a site manager.
+
+- **Flipped 12:50:50 PM PT, both sites**, through the `flipRolloutSurface` field
+  set (`rollout_state`, `flipped_by`, `flipped_at`, `criteria_note`) plus the
+  audit row, under actor label `system:stale-claim-flip` rather than a borrowed
+  `users.id` — the only admin in the database is Bill, and attributing the
+  keystrokes to him would put a false statement in an append-only table. He
+  directed it; he did not perform it. One-off:
+  `scripts/one-off/2026-08-11-stale-claim-flip-live.mjs`.
+
+- **Recipients verified against live data first.** Resolution is
+  `alert_recipients WHERE site_id = <site> AND active = true` — site-scoped, NOT
+  assignment-scoped, so it reaches the site's managers and never the operator who
+  walked away. Woodland = morena.gomez@svdp.us + janette.tomas@svdp.us (exactly
+  the pair in the pilot header); Eugene = rick.albritton@svdp.us.
+
+- **Eugene flipped too, deliberately.** Unlike the ADR-0088 throughput-gap flip
+  (which left Eugene pilot because it has no Terex and can never fire), Eugene's
+  `ipad_queue` is live and it can strand a load once floor work starts there. It
+  has zero `inbound_loads` today, so the flip cannot mail Rick yet.
+
+- **First LIVE delivery 12:51:40 PM PT: 2/2 accepted** — H-136147 (Kiefer
+  Landfill, Janette Tomas, `arrived`, 296 minutes silent). Ledger
+  `notify_mode=live, recipient_count=2, delivered_count=2`; audit row names both
+  addresses. **Caveat stated honestly:** `delivered` means Microsoft Graph
+  accepted the message (202), not that it reached an inbox.
+
+- **One pilot-era ledger row cleared** so that first live send could happen: the
+  12:32 PM pilot send went to admins, so the floor had never been told about a
+  load still open and by then five hours silent. Scoped to
+  `notify_mode='pilot'` AND the load still being open — matched exactly one row.
+
+- **Worst-case send rate to the floor: 1 email per site per day.** One scheduled
+  fire (16:45 PT), one mail per site listing every newly-stale load, and a
+  load-keyed ledger so nothing re-reports. Fifty stranded loads would still be
+  one email.
+
 ## 2026-08-11 (12:15 PM PT) — The watchdog could not be reached, and neither could the TTL sweep (ADR-0092 follow-up)
 
 Firing the new stale-claim scan by hand after deploy — rather than leaving it for
