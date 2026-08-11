@@ -20,9 +20,10 @@ no deploy).
 ## Seeded state (post-deploy)
 
 > ⚠ **This section is the state each surface was BORN in, not the state it is in
-> now.** Several have since been ramped — as of 2026-08-08, `equipment_entry`,
-> `equipment_terex_ledger`, `equipment_trend` and `ipad_hauls` are all **live at
-> Woodland / pilot at Eugene**, and `ap_notify`, `ap_equipment_request`,
+> now.** Several have since been ramped — as of **2026-08-10**, `equipment_entry`,
+> `equipment_terex_ledger`, `equipment_trend`, `ipad_hauls` and
+> `equipment_throughput_gap` are all **live at Woodland / pilot at Eugene**, and
+> `ap_notify`, `ap_equipment_request`,
 > `loads_inventory`, `reimbursement_tile` are live at both. The authority is the
 > `rollout_surfaces` table and `/admin/rollout` — never this list. Read it for
 > what the seed intended, not for what is switched on.
@@ -71,7 +72,7 @@ evidence. Examples:
 
 - **Workbench manager read** (`workbench_manager_read`) → Stage 2 (Woodland
   managers get Workbench READ).
-- **Equipment** — ✅ **all three are done for Woodland (2026-08-06/07); this
+- **Equipment** — ✅ **all four are done for Woodland (2026-08-06 → 08-10); this
   guidance is now history, not an instruction.** `equipment_entry` flipped live at Woodland
   2026-08-06 (ADR-0077 D11 — the downtime capture path did not need building, it
   needed reach), `equipment_terex_ledger` the same day, and `equipment_trend`
@@ -81,9 +82,19 @@ evidence. Examples:
   registered, because an unregistered surface resolves to admin-only through a
   caught exception, which would make a deliberate "no" indistinguishable from a
   lookup that quietly failed.
+
+  `equipment_throughput_gap` (ADR-0088) followed on **2026-08-10**, at Bill's written
+  instruction, after its first scheduled pass found Friday 2026-08-07 unrecorded and
+  delivered the pilot nudge 1/1 to admins. **Its precondition was `equipment_entry`
+  being live at the same site** — a nudge may not point a manager at a form they
+  cannot open (D3 row 2). Eugene stays `pilot` here for a stronger reason than
+  preference: there is no machine at Eugene, so the scan cannot fire whatever the
+  flag says.
+
   _Original guidance, retained for the reasoning:_ flip `equipment_entry` when
   Terex capture ramps (Stage 2); keep `equipment_trend` in pilot until the trend
   has data (trend stays admin even when entry is live).
+
 - **Alert digest** (`alert_digest`) → Stage 4 (staff-facing comms ramp).
 
 Every stage's exit criteria gate its flips — schedule pressure changes the

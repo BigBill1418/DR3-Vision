@@ -128,21 +128,43 @@ data can be joined.
 > all — the `submitted → verified` transition existed only in a state table with
 > no implementation. This build is that action + its enforcement.
 
+### Voided loads (ADR-0090 C, 2026-08-10)
+
+A load can now be **voided** from the floor. `voided` is a real `LoadStatus` — the
+disposition for a load that was never actually worked: a mis-tapped haul, or a truck
+that turned around. It requires a reason (`wrong_haul` / `truck_never_arrived` /
+`other` + note) and is audited in the same transaction as the write.
+
+- **A void is not a zero.** A truck that arrived carrying nothing is a real delivery
+  and belongs in `submitted`. A load that was never a truck must not appear in a
+  delivery record at all. The reason picker is what keeps a UI problem
+  distinguishable from a carrier problem.
+- **Voided loads are excluded from every production reader by status**, so they never
+  reach the running balance on this page, the daily report, a compliance metric or a
+  filing. This works because `inbound_loads` is read through status ALLOW-lists — a
+  new enum member is excluded by construction, where a `voided_at` column would have
+  needed a predicate added to every query.
+- **Voiding severs the `expected_loads` slot**, so the real haul returns to the queue
+  for whoever works it. Voiding a mis-tap does not strand the truck.
+- Only the holder can void; a manager voids by taking the load over first
+  (ADR-0082). This is distinct from the manager correction path for a `submitted`
+  load.
+
 ## Rates & rules are data (`state_program_rules`)
 
 Seeded rules (resolved by `src/lib/program-rules/resolver.ts`):
 
-| Site | Rule | Value |
-|---|---|---|
-| Woodland (CA) | processing_rate | $16.00 (2025) → $16.50 (2026) → $17.00 (2027) / unit (effective-dated) |
-| Eugene (OR) | processing_rate | $17.00 / unit |
-| Eugene (OR) | satellite_collection_rate | $2.25 / unit |
-| Woodland (CA) | collector_incentive | $3.00 / unit, cap 5 units/person/day |
-| Woodland (CA) | fuel_surcharge | formula-driven, trigger $5.05/gal (see below) |
-| Woodland (CA) | driver_hourly | $125.00 / hr |
-| Woodland (CA) | general_labor_hourly | $90.00 / hr |
-| Woodland (CA) | per_diem_nightly | $275.00 / night |
-| Both | unit_weight_estimate | 55 lbs / unit — **estimate only** (MRC reporting uses actual scale weights) |
+| Site          | Rule                      | Value                                                                       |
+| ------------- | ------------------------- | --------------------------------------------------------------------------- |
+| Woodland (CA) | processing_rate           | $16.00 (2025) → $16.50 (2026) → $17.00 (2027) / unit (effective-dated)      |
+| Eugene (OR)   | processing_rate           | $17.00 / unit                                                               |
+| Eugene (OR)   | satellite_collection_rate | $2.25 / unit                                                                |
+| Woodland (CA) | collector_incentive       | $3.00 / unit, cap 5 units/person/day                                        |
+| Woodland (CA) | fuel_surcharge            | formula-driven, trigger $5.05/gal (see below)                               |
+| Woodland (CA) | driver_hourly             | $125.00 / hr                                                                |
+| Woodland (CA) | general_labor_hourly      | $90.00 / hr                                                                 |
+| Woodland (CA) | per_diem_nightly          | $275.00 / night                                                             |
+| Both          | unit_weight_estimate      | 55 lbs / unit — **estimate only** (MRC reporting uses actual scale weights) |
 
 **OR fuel surcharge is structurally impossible.** No `fuel_surcharge` rule is ever
 seeded for Eugene, **and** the resolver throws if asked for one against an
@@ -185,26 +207,31 @@ with the split is stored as `pool_attribution = 'measured'`.
   physical count is `'measured'`; otherwise it uses legacy attribution. Either way
   `program + non-program = total`.
 
-
 ---
 
 ## The paper daily workflow (pre-iPad bootstrap) — ADR-0037 Phase 3
 
-Woodland and Eugene run the floor on **paper daily logs**. There are no operator
-iPads on the dock yet, so nothing writes per-load inbound records. Phase 3 makes the
-whole Loads & Inventory surface operable from those paper logs — a manager types the
-day's aggregates, and the running balance stays arithmetically honest.
+This is the **paper path**, and it is now **site-dependent**. Phase 3 makes the whole
+Loads & Inventory surface operable from paper daily logs — a manager types the day's
+aggregates, and the running balance stays arithmetically honest.
+
+> ⚠ **Woodland is on the iPads (`ipad_hauls` live since 2026-08-08).** Operators
+> capture per-load inbound on the dock and a manager verifies. **A Woodland manager
+> should NOT be entering Bulk daily inbound for a day the floor worked** — see the
+> double-count warning in §5 below. **Eugene still runs the floor on paper daily
+> logs.** Everything in this section stays exactly correct for Eugene, for any
+> Woodland day the iPads were not used, and for backfilling history.
 
 ### The six input streams, and who enters what
 
-| # | Stream | Where | Who |
-|---|---|---|---|
-| 1 | Physical count (program / non-program split) | Loads & Inventory → **Physical count** | Site manager |
-| 2 | Consumer drop-offs (incentive / unpaid / illegal) | Loads & Inventory → **Consumer drop-offs** | Site manager |
-| 3 | Outbound materials (renovation whole units; baled / shredded weight) | Loads & Inventory → **Outbound materials** | Site manager |
-| 4 | Landfilled units (bed-bug / soiled / water-logged / other) | Loads & Inventory → **Landfilled units** | Site manager |
-| 5 | Inbound loads | Loads & Inventory → **Bulk daily inbound** (paper) *or* the iPad dock flow (later) | Site manager (paper) / operator + manager verify (iPad) |
-| 6 | Daily close — processed (stripped) units | **/dashboard/&lt;site&gt;/processed-units-close** to enter/amend · **/admin/processed-units** to close + lock | Manager enters · **Bill closes** |
+| #   | Stream                                                               | Where                                                                                                         | Who                                                     |
+| --- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 1   | Physical count (program / non-program split)                         | Loads & Inventory → **Physical count**                                                                        | Site manager                                            |
+| 2   | Consumer drop-offs (incentive / unpaid / illegal)                    | Loads & Inventory → **Consumer drop-offs**                                                                    | Site manager                                            |
+| 3   | Outbound materials (renovation whole units; baled / shredded weight) | Loads & Inventory → **Outbound materials**                                                                    | Site manager                                            |
+| 4   | Landfilled units (bed-bug / soiled / water-logged / other)           | Loads & Inventory → **Landfilled units**                                                                      | Site manager                                            |
+| 5   | Inbound loads                                                        | **Woodland:** the iPad dock flow (live). **Eugene:** Loads & Inventory → **Bulk daily inbound** (paper)       | operator + manager verify (iPad) / site manager (paper) |
+| 6   | Daily close — processed (stripped) units                             | **/dashboard/&lt;site&gt;/processed-units-close** to enter/amend · **/admin/processed-units** to close + lock | Manager enters · **Bill closes**                        |
 
 ### 5. Bulk daily inbound — the paper substitute for per-load capture
 
@@ -224,9 +251,15 @@ paper daily-log slip / page number.
   here before the write.
 - **Re-entering a date amends that day** — it never stacks a second row. Fix a
   miscount by typing the day again.
-- When the iPads come online, simply stop entering bulk days: per-load rows take over,
-  the historical `paper_bulk` rows stay queryable as-is, and no data migration is
-  needed. Never enter both for the same day — that would double-count the inflow.
+- **Woodland: the iPads are online — stop entering bulk days.** Per-load rows have
+  taken over; the historical `paper_bulk` rows stay queryable as-is and no data
+  migration was needed. **Never enter both for the same day — that double-counts the
+  inflow.** The partial unique index stops a _second aggregate_ row for a day, but an
+  aggregate sitting alongside per-load dock rows is a discipline boundary, not a
+  database one. (It is also not hypothetical: a lone `ipad_floor` aggregate on
+  2026-07-29 took the unique (site, day) slot and locked the MyMRC bridge out of that
+  day entirely — a 671-unit hole the hourly bridge cannot fix. See OPEN-ITEMS §0.AX.)
+  **Eugene keeps entering bulk days** until its iPads land.
 
 ### 6. Daily close — managers enter, Bill closes (§3.3 Option B)
 

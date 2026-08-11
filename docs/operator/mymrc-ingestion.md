@@ -23,7 +23,8 @@
 > hourly worker.
 
 The ADR-0038 rebuild replaces the old DOM scraper (ADR-0009 / `mymrc-setup.md`).
-DR3-Vision now pulls the three MyMRC feeds — **Hauls** (inbound), **Processed**,
+DR3-Vision now pulls the four MyMRC feeds — **Hauls** and **Hauls (completed)**
+(inbound; two status-scoped views over the same mirror), **Processed**,
 and **Outbound** — from the Salesforce portal's own **Aura/JSON** endpoints over
 an authenticated browser session, and mirrors them into audit-evidence tables.
 There is no MyMRC API (formally denied: `401 INVALID_SESSION_ID`), so ingestion
@@ -31,7 +32,7 @@ rides the logged-in session.
 
 The `mymrc-scrape` container runs once on boot and once at the top of every UTC
 hour. Each tick logs into both sites (Eugene + Woodland) sequentially and, per
-site, runs all three feeds. **A healthy run is silent.** Failures page Bill on
+site, runs all four feeds. **A healthy run is silent.** Failures page Bill on
 `dr3-vision-system` (see "What the pages mean").
 
 ## Enabling the service (deliberate operator action)
@@ -72,17 +73,26 @@ To stop: `docker stop dr3-vision-mymrc-scrape` (or drop the profile).
 - **`expected_loads`** — Hauls (only) also feed the operator queue here, via the
   existing upsert. Manually-entered rows (any id not starting with `H-`) are
   **never** auto-cancelled by the sync.
+- **`inbound_loads`** — Delivered `type='General'` hauls are also bridged to the
+  floor's inbound leg, aggregated per (site, delivery day). **The delivery day is
+  `recycler_reported_delivery_date`, falling back to `docking_appointment_date` only
+  when the recycler-reported date is absent** (ADR-0089 D2). The appointment date is
+  a SCHEDULING field: null on every route-collection haul (886/886 carrying a
+  `Collection_Source__c`) and off by up to 9 days when present. The bridge writes only
+  rows it owns (`load_source_type='mymrc_haul'`) and never a day the office
+  (`paper_bulk`) or the floor (`ipad_floor`) already confirmed.
 - **`mymrc_sync_runs`** — one ledger row per site per feed per tick (see queries).
 
 ## What the pages mean (`dr3-vision-system`, Bill-only)
 
-| Title                                            | Meaning                                                                                                                     | Action                                                                                                                           |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `MyMRC auth failed — <site>`                     | Login/session invalid; re-login failed.                                                                                     | Re-enter the MyMRC admin login at `/admin/mrc-scrape` (expired? password change? MFA turned on?).                                |
-| `MyMRC portal contract drift — <site> [feed]`    | The expected Aura action/shape was missing (likely a Salesforce release changed the `fwuid`/envelope, or a feed/URL moved). | Re-run discovery + update `portal-client.ts` / `selectors.ts`; bump `SELECTOR_VERSION`.                                          |
-| `MyMRC zero-row anomaly — <site> [feed]`         | Listed 0 rows where the last successful run listed >0.                                                                      | Verify the feed in the portal by hand; a real emptying is possible but rare.                                                     |
-| `MyMRC sync deadman — <site> [feed]`             | No successful run in >26h (wedged/stopped container).                                                                       | Check the container is running and the host is healthy.                                                                          |
-| `MyMRC mirror stopped advancing — <site> [feed]` | The scrape is running fine, but the newest record we HOLD for that feed is >96h old (ADR-0070).                             | Run the bounded catch-up below. If it does not clear, check the feed by hand in the portal — a genuinely quiet feed is possible. |
+| Title                                            | Meaning                                                                                                                                                                                                                                                                                              | Action                                                                                                                                                                                                              |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MyMRC auth failed — <site>`                     | Login/session invalid; re-login failed.                                                                                                                                                                                                                                                              | Re-enter the MyMRC admin login at `/admin/mrc-scrape` (expired? password change? MFA turned on?).                                                                                                                   |
+| `MyMRC portal contract drift — <site> [feed]`    | The expected Aura action/shape was missing (likely a Salesforce release changed the `fwuid`/envelope, or a feed/URL moved).                                                                                                                                                                          | Re-run discovery + update `portal-client.ts` / `selectors.ts`; bump `SELECTOR_VERSION`.                                                                                                                             |
+| `MyMRC zero-row anomaly — <site> [feed]`         | Listed 0 rows where the last successful run listed >0.                                                                                                                                                                                                                                               | Verify the feed in the portal by hand; a real emptying is possible but rare.                                                                                                                                        |
+| `MyMRC sync deadman — <site> [feed]`             | No successful run in >26h (wedged/stopped container).                                                                                                                                                                                                                                                | Check the container is running and the host is healthy.                                                                                                                                                             |
+| `MyMRC mirror stopped advancing — <site> [feed]` | The scrape is running fine, but the newest record we HOLD for that feed is >96h old (ADR-0070).                                                                                                                                                                                                      | Run the bounded catch-up below. If it does not clear, check the feed by hand in the portal — a genuinely quiet feed is possible.                                                                                    |
+| `MyMRC Delivered haul(s) with no delivery date`  | A haul is `Delivered` and its detail has been fetched, but BOTH `recycler_reported_delivery_date` and `docking_appointment_date` are null, so the bridge cannot place it on a day (ADR-0089 D2). It is counted, skipped and **named** — never silently dropped, which was the whole ADR-0089 defect. | Ask MRC to date the named hauls in the portal, then re-run the bridge for the affected days. After the 2026-08-10 recovery this residual is **0/7,314**, so any fire is a genuinely new record rather than backlog. |
 
 Paging is deduped: a persisting failure pages on its leading edge and then at most
 every 6h (deadman is the >26h backstop). The staleness page is deduped separately:
@@ -102,8 +112,19 @@ Check what we actually hold (times are UTC in the DB; the admin surface renders 
 ```sql
 SELECT 'processed' AS feed, max(entry_date) AS newest FROM mymrc_processed_mirror
 UNION ALL SELECT 'outbound', max(entry_date) FROM mymrc_outbound_mirror
-UNION ALL SELECT 'hauls', max(docking_appointment_date) FROM mymrc_hauls_mirror;
+UNION ALL SELECT 'hauls',
+       max(COALESCE(recycler_reported_delivery_date, docking_appointment_date))
+  FROM mymrc_hauls_mirror WHERE status = 'Delivered';
 ```
+
+> The hauls row must match the guard in `src/lib/mymrc/freshness.ts` **exactly**, or
+> you get a healthier answer than the guard would give. Two things are load-bearing:
+> the COALESCE stays **inside** `max()` (not `GREATEST(max(a), max(b))`), and only
+> **`Delivered`** rows count — a scheduled appointment is dated into the future and
+> will report a frozen delivered feed as fresh. Keying on
+> `docking_appointment_date` alone is the ADR-0089 defect: it is a SCHEDULING field,
+> null on every route-collection haul and up to 9 days off the true delivery when
+> present.
 
 ### Bounded catch-up
 

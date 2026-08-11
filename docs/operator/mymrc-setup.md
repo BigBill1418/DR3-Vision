@@ -1,12 +1,15 @@
 # MyMRC scrape setup — DR3-Vision operator runbook
 
-**This is Vision's FIRST-EVER MyMRC sync.** Despite the pipeline shipping under
-ADR-0009/ADR-0038, Vision has never pulled a single record from MyMRC — the DR3
-service accounts the old env-var scheme referenced were never created, so the
-worker ran its fail-soft "creds not configured, skipping" path every hour and
-exited 0. ADR-0057 fixes the auth model (single admin identity) and the failure
-posture (fail loud, no silent skip). Follow this runbook to make the first pull
-happen.
+> **Read this as the provisioning / rotation / troubleshooting reference — NOT as a
+> first-run checklist.** The sync has run hourly since 2026-07-22. As of 2026-08-10
+> the mirror holds ~7,334 hauls with 7,333 detailed, across all four feeds.
+
+**Historical note — this runbook was written before Vision's first-ever MyMRC pull.**
+Despite the pipeline shipping under ADR-0009/ADR-0038, Vision had never pulled a
+single record from MyMRC: the DR3 service accounts the old env-var scheme referenced
+were never created, so the worker took its fail-soft "creds not configured, skipping"
+path every hour and exited 0. ADR-0057 fixed the auth model (single admin identity)
+and the failure posture (fail loud, no silent skip). **That is long done.**
 
 Per ADR-0009, DR3-Vision pulls from MyMRC by browser automation (Playwright) —
 there is no API path until MRC enables one. The `mymrc-scrape` cron container in
@@ -75,23 +78,30 @@ password with a stray space appended and returns only "Invalid username or
 password" with no further detail. The UI stores exactly what is typed (no
 trimming of the password body), so paste carefully.
 
-## 3. Activate the worker
+## 3. The worker (always-on — nothing to activate)
 
-The `mymrc-scrape` service is **profile-gated** (`mymrc`) — it is not started by a
-plain `docker compose up -d` or the deployer. Activation is a deliberate action:
+The `mymrc-scrape` service is **always-on and un-gated** since 2026-07-22. It is part
+of the default compose set: `docker compose up -d` and the swarmpilot deployer both
+start it and keep it up (`restart: unless-stopped`). Once the admin credential is
+entered at `/admin/mrc-scrape` there is nothing to activate.
+
+> ⚠ **Do not reintroduce a profile gate here.** This service was previously
+> `profiles: ['mymrc']`, which excluded it from the deployer's default up — and that
+> is precisely why the hourly sync never ran in prod at all. The compose file records
+> the same warning at the service block.
+
+One-time host prep, only if the auth-state volume predates uid 1001 ownership:
 
 ```bash
-cd /home/bbarnard065/DR3-Vision
-# Ensure the auth-state volume is owned by the container uid (first activation):
 docker run --rm -v dr3-vision_mymrc-auth-state:/v alpine chown -R 1001:1001 /v
-docker compose --profile mymrc up -d mymrc-scrape
 ```
 
 Then re-add `mymrc-scrape` to the noc-master service-registry `containers[]` so
 NOC watches its health.
 
-**Order matters.** If you activate the worker *before* entering credentials in the
-UI, that is fine and expected under D9 — the worker will page
+**On a fresh host the worker starts before any credential exists** — that is fine and
+expected under D9, and there is no ordering choice to make now that the service is
+un-gated. The worker will page
 `dr3-vision-system` ("MyMRC admin credentials not configured — enter them at
 /admin/mrc-scrape") each tick and report unhealthy until the credential lands.
 That interim noise is the intended, self-limiting nudge, not a bug. (See the

@@ -4,8 +4,10 @@ ADR-0044 (P4). The Terex is the throughput bottleneck, and until now its
 operational record lived in a side spreadsheet plus hallway conversation
 ("Terex is down" was once found handwritten in a numeric cell of the daily log).
 This module gives the office one place to log downtime, cost, maintenance, repair,
-and notes — and a trend view that DERIVES throughput from the number you already
-close every day. Nothing about throughput is entered twice.
+and notes — plus a trend view over the daily throughput number the floor now
+**CAPTURES** directly (ADR-0079: entered units + real run hours in
+`equipment_daily_throughput`, which superseded ADR-0044 D2's floor-wide derivation).
+It is entered once, in one place, by the manager who runs the machine.
 
 ## Where it lives
 
@@ -39,9 +41,11 @@ planned interventions, not line-stopping downtime.
 
 ## Reading the trend
 
-- **Green bars** — units/day (stripped program + non-program from the daily
-  close). This is the SAME number billing bills from; there is no separate
-  throughput entry.
+- **Green bars** — units/day, from the captured `equipment_daily_throughput` row for
+  that day (ADR-0079; sheet-era history imported by ADR-0081 is structurally labelled
+  and never blended with entered rows). A day with **no row draws as "not recorded"**,
+  never as zero (ADR-0077 D4) — and that absence is exactly what the ADR-0088
+  throughput-gap watchdog reads.
 - **Bright line** — the 7-day rolling mean (null days without a close are skipped,
   not counted as zero).
 - **Red bands** — days with `kind=downtime` hours logged.
@@ -72,7 +76,20 @@ the UI filter — it's a data value, never a schema change.
 
 ## Deliberately out of scope (D4)
 
-No work-order workflow, no maintenance scheduling, no alerting, and no
-depreciation/asset accounting — `cost_cents` is operational spend context, not
-bookkeeping (GP remains the ledger of record). A chronic-downtime alert can become
-an audit-engine check later if the data shows a pattern worth paging on.
+No work-order workflow, no maintenance scheduling, and no depreciation/asset
+accounting — `cost_cents` is operational spend context, not bookkeeping (GP remains
+the ledger of record).
+
+**Alerting is no longer out of scope (ADR-0088).** The throughput-gap watchdog is a
+scheduled morning pass that asks whether the PREVIOUS WORKING DAY got a live
+throughput row for the site's machine, and says so once if it did not. It reads **row
+existence, never magnitude** — a recorded zero is recorded; a voided-only day is
+missing — and Monday looks back to Friday. It ramped **live at Woodland on
+2026-08-10** (`equipment_throughput_gap`), after its first scheduled pass at 08:30 PT
+correctly caught Friday 2026-08-07 unrecorded. **Eugene stays `pilot` by design:**
+there is no machine there, so its scan cannot fire regardless of state. It routes
+through `notifyStaff()`, not ntfy — Bill's phone is reserved for the nudge itself
+failing to deliver.
+
+That is a capture-gap reader only. **Chronic-downtime alerting is still unbuilt** and
+can become an audit-engine check later if the data shows a pattern worth paging on.
