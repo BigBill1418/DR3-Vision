@@ -731,6 +731,34 @@ export async function pendingCount(): Promise<number> {
 }
 
 /**
+ * ADR-0090 Amendment 1 (B) — how many unsent WRITES this load still has.
+ *
+ * The back-navigation corrections (reopen, stack void, weight fix) are
+ * online-only, for ADR-0090 D2.4's reasons. That leaves one ordering hazard, and
+ * it is silent: a queued `add_stack` or `finish_unload` for this load replays
+ * LATER, so a correction made now can be landed on top of by a write the
+ * operator made minutes ago and has forgotten about. The panel asks this before
+ * offering any correction and says why when the answer is non-zero.
+ *
+ * ACTIONS only, deliberately, and for two independent reasons:
+ *
+ *   - A queued PHOTO changes no number. Photos are already-committed evidence
+ *     (ADR-0090 §D3 item 1 makes them review-only), so a pending upload is not a
+ *     reason to withhold a count correction.
+ *   - `pending_actions` rows carry no Blob, so `getAll` over them is cheap. The
+ *     uploads store holds the photos, and reading it materialises every one —
+ *     the exact cost the G4 note on `queueCounts` exists to avoid. There is no
+ *     `by-load` index on ACTIONS (only UPLOADS has one) and adding it would mean
+ *     a DB version bump on live iPads for a filter over a store that is normally
+ *     a handful of rows.
+ */
+export async function pendingActionsForLoad(loadId: string): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAll(ACTIONS);
+  return rows.filter((r) => r.load_id === loadId).length;
+}
+
+/**
  * Rows that are actually still trying — total MINUS conflicts.
  *
  * The chrome shows this, not `pendingCount`. A badge that folds permanently

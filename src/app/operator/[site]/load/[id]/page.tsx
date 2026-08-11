@@ -84,6 +84,11 @@ export default async function LoadPage({ params }: Props) {
       unload_started_at: true,
       unload_finished_at: true,
       total_units: true,
+      // ADR-0090 Am.1 B — the review panel reads both. JT asked to "go back to
+      // fix or CHECK what you entered", and neither the weight nor which photos
+      // exist was on any operator screen after its own stage had passed.
+      weight_lbs: true,
+      load_photos: { select: { kind: true } },
       assigned_operator_id: true,
       assigned_at: true,
       load_source_type: true,
@@ -93,7 +98,18 @@ export default async function LoadPage({ params }: Props) {
       // ADR-0090 A — the haul number, for the header and the held-by panel.
       ...HAUL_NUMBER_SELECT,
       load_stacks: {
-        select: { id: true, stack_index: true, unit_count: true, count_mode: true },
+        // ADR-0090 Am.1 B — voided stacks are SELECTED, not filtered out. They
+        // are struck through and excluded from the running total, and the next
+        // stack index is computed over them so an index is never reused. A
+        // `where` here would break the monotonic index the `addStack` 409 guard
+        // depends on, and would hide the row that explains the total.
+        select: {
+          id: true,
+          stack_index: true,
+          unit_count: true,
+          count_mode: true,
+          voided_at: true,
+        },
         orderBy: { stack_index: 'asc' },
       },
     },
@@ -175,7 +191,14 @@ export default async function LoadPage({ params }: Props) {
             status: load.status,
             unload_started_at: load.unload_started_at?.toISOString() ?? null,
             total_units: load.total_units,
-            stacks: load.load_stacks,
+            weight_lbs: load.weight_lbs,
+            // Deduped: several rows of one kind (a retaken photo) is one answer
+            // to "was the BOL captured".
+            photo_kinds: [...new Set(load.load_photos.map((p) => p.kind))],
+            stacks: load.load_stacks.map((s) => ({
+              ...s,
+              voided_at: s.voided_at?.toISOString() ?? null,
+            })),
           }}
           operatorName={session.user.name}
         />

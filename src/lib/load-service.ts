@@ -26,7 +26,19 @@ const ALLOWED_PRIOR: Record<LoadStatus, LoadStatus[]> = {
   arrived: ['expected'],
   weight_captured: ['arrived'],
   unload_started: ['arrived', 'weight_captured'],
-  in_progress: ['unload_started'],
+  // ADR-0090 Am.1 B — `finished` is the REOPEN edge, and it is the only back-edge
+  // in this machine. It is declared here rather than bypassing `ALLOWED_PRIOR`
+  // because this table is the single statement of which edges exist; a
+  // transition that guarded itself elsewhere would make the table a partial
+  // truth, and the table's completeness is what makes it a compile-time
+  // tripwire (ADR-0090 D2).
+  //
+  // Declaring the edge here does NOT hand it to every caller: `beginUnload`
+  // passes `allowedFrom: ['unload_started']` and `reopenLoad` passes
+  // `allowedFrom: ['finished']`, so each write can still only make the move it
+  // is named for. Without that narrowing, a hand-crafted `beginUnloadAction`
+  // POST would silently reopen a finished load with no reopen audit reason.
+  in_progress: ['unload_started', 'finished'],
   finished: ['in_progress'],
   submitted: ['finished'],
   verified: ['submitted'],
@@ -47,6 +59,23 @@ const ALLOWED_PRIOR: Record<LoadStatus, LoadStatus[]> = {
   // mis-tap.
   voided: ['arrived', 'weight_captured', 'unload_started', 'in_progress', 'finished'],
 };
+
+/**
+ * ADR-0090 Amendment 1 (B) — "this stack was taken back", said ONCE.
+ *
+ * `total_units` is billed, and it is computed from `load_stacks` at TWO places
+ * in `finishUnload`: the primary sum, and the ADR-0078 D7 late-stack recompute
+ * that runs on an already-`finished` load. Filtering one and not the other makes
+ * the replay path silently RESTORE voided units into a billed total — a
+ * money error with no error message anywhere.
+ *
+ * One exported constant so the two filters cannot drift, and so a third sum site
+ * added later has an obvious thing to reach for. Mirrors `NOT_VOIDED_LOAD` in
+ * `src/lib/loads/not-voided.ts`, which does the same job for the load itself.
+ */
+export const NOT_VOIDED_STACK = {
+  voided_at: null,
+} as const satisfies Prisma.LoadStackWhereInput;
 
 class TransitionError extends Error {
   // ADR-0078 D11 — typed. `loadsErrorResponse` maps anything carrying a numeric
@@ -93,6 +122,8 @@ async function assertOwn(args: { loadId: string; operatorUserId: string; siteId:
       status: true,
       arrived_at: true,
       unload_started_at: true,
+      // ADR-0090 Am.1 — the `before` value for an audited weight correction.
+      weight_lbs: true,
       // ADR-0090 C — the slot the void severs.
       expected_load_id: true,
     },
@@ -249,13 +280,31 @@ async function transition(args: {
   siteId: string;
   to: LoadStatus;
   data?: Prisma.InboundLoadUpdateInput;
+  /**
+   * ADR-0090 Am.1 — narrow this particular write to a SUBSET of the edges
+   * `ALLOWED_PRIOR[to]` declares.
+   *
+   * Two writes now arrive at `in_progress` from different priors and mean
+   * different things: `beginUnload` (from `unload_started`) starts the count,
+   * `reopenLoad` (from `finished`) goes back to correct it. `ALLOWED_PRIOR` is
+   * the union — it has to be, or it stops being a complete statement of the
+   * machine — so the narrowing lives at the call site. The intersection is taken
+   * rather than the override trusted: a caller can only ever restrict, never
+   * widen past the table.
+   */
+  allowedFrom?: readonly LoadStatus[];
+  /** Recorded on the audit row's `after`, so two edges to one status are legible. */
+  reason?: string;
 }): Promise<void> {
   const current = await assertOwn({
     loadId: args.loadId,
     operatorUserId: args.operatorUserId,
     siteId: args.siteId,
   });
-  const allowed = ALLOWED_PRIOR[args.to];
+  const declared = ALLOWED_PRIOR[args.to];
+  const allowed = args.allowedFrom
+    ? declared.filter((s) => args.allowedFrom!.includes(s))
+    : declared;
   if (!allowed.includes(current.status)) throw new TransitionError(current.status, args.to);
   await prisma.inboundLoad.update({
     where: { id: args.loadId },
@@ -267,7 +316,7 @@ async function transition(args: {
     table_name: 'inbound_loads',
     row_id: args.loadId,
     before: { status: current.status },
-    after: { status: args.to },
+    after: { status: args.to, ...(args.reason ? { reason: args.reason } : {}) },
   });
 }
 
@@ -353,7 +402,60 @@ export async function beginUnload(args: {
   operatorUserId: string;
   siteId: string;
 }): Promise<void> {
-  await transition({ ...args, to: 'in_progress' });
+  // `allowedFrom` is not decoration. ADR-0090 Am.1 added `finished` to
+  // `ALLOWED_PRIOR.in_progress` for the reopen; without this narrowing, a
+  // hand-crafted POST to `beginUnloadAction` would reopen a finished load
+  // through the door-open path, with no reopen reason on the audit row and no
+  // operator intent behind it.
+  await transition({ ...args, to: 'in_progress', allowedFrom: ['unload_started'] });
+}
+
+/**
+ * ADR-0090 Amendment 1 (B) — go back from Finish to correct the count.
+ *
+ * JT, 2026-08-10: _"if you want to go back to fix or check what you entered is
+ * correct, vision doesn't let you."_ The Finish stage was the hardest wall: an
+ * operator who sees 47 and knows it should be 42 had no route back, and the only
+ * remedy was to void the whole load and re-walk the truck.
+ *
+ * ## The one thing a reopen must not do
+ *
+ * Bill, 2026-08-10: the duration FREEZES at the first finish. `finishUnload`
+ * computed `unload_duration_seconds` from `unload_started_at` to _now_, so a
+ * re-finish would add the entire reopen gap — and that figure feeds throughput
+ * and productivity surfaces, where it reads as "how long the truck took". An
+ * operator who went back to correct a number would show up as an operator who
+ * unloaded slowly. See `finishUnload`, where the freeze is a WHERE clause rather
+ * than a branch.
+ *
+ * ## What a reopen deliberately does NOT change
+ *
+ * The slot. `expected_load_id` is untouched, and `in_progress` is inside
+ * `OPEN_DOCK_STATUSES`, so a reopened load still consumes its haul — it is live
+ * work again, and the real truck must not be able to check in underneath it.
+ * That is the opposite of the void, which severs the slot precisely because the
+ * load was never real.
+ *
+ * The void also stays reachable: `ALLOWED_PRIOR.voided` already lists both
+ * `in_progress` and `finished`, so a reopen moves the load between two states
+ * that are equally voidable and changes nothing about that set.
+ *
+ * Terminal-by-construction cases are refused rather than absorbed: unlike the
+ * void's replay branch, a second reopen has no "the first one is the one that
+ * happened" reading — the load is already `in_progress`, so the operator is
+ * looking at the count and the honest answer is the 409.
+ */
+export async function reopenLoad(args: {
+  loadId: string;
+  operatorUserId: string;
+  siteId: string;
+}): Promise<void> {
+  await transition({
+    ...args,
+    to: 'in_progress',
+    allowedFrom: ['finished'],
+    reason: 'reopened_for_correction',
+  });
 }
 
 export async function addStack(args: {
@@ -450,15 +552,179 @@ export async function addStack(args: {
     // So: converged only if the existing row is byte-for-byte this write.
     // Anything else is a 409, which `classify()` treats as a hard 4xx, so the
     // entry PARKS as a conflict with its payload intact and a person decides.
+    //
+    // ── ADR-0090 Am.1 — and only if it is not VOIDED ──────────────────────────
+    //
+    // The sequence this closes: a stack lands, its response is lost so the queue
+    // entry is retained, the operator notices the count was wrong and voids the
+    // stack, and then the queue replays. Without the `voided_at` requirement the
+    // replay finds a byte-for-byte match, reports 201, and the replay loop
+    // deletes the entry — a stack of mattresses is gone from a billed total,
+    // with no error and no record anywhere that the replay happened.
+    //
+    // `stack_index` is monotonic (the client counts over voided rows too), so an
+    // index holding a voided row can ONLY be reached by a replay of the write
+    // that was voided. There is no honest 201 here, so this is always a 409 and
+    // the entry parks for a person.
     const existing = await prisma.loadStack.findUnique({
       where: {
         load_id_stack_index: { load_id: args.loadId, stack_index: args.stackIndex },
       },
-      select: { unit_count: true, count_mode: true },
+      select: { unit_count: true, count_mode: true, voided_at: true },
     });
-    if (existing?.unit_count === args.unitCount && existing.count_mode === args.countMode) return;
+    if (
+      existing?.voided_at == null &&
+      existing?.unit_count === args.unitCount &&
+      existing.count_mode === args.countMode
+    ) {
+      return;
+    }
     throw new LoadAccessError(409, 'stack_index_conflict');
   }
+}
+
+/**
+ * The statuses in which the floor may still CORRECT what it entered.
+ *
+ * Deliberately not `OPEN_DOCK_STATUSES`: `arrived` is excluded because at
+ * `arrived` the operator is still standing on the weight stage — there is
+ * nothing to go back to, and a weight written without the stage's
+ * `arrived → weight_captured` move would leave the workflow re-offering a stage
+ * the operator has already completed. Past `submitted` the load has left the
+ * floor's hands and may already sit on an MRC invoice; correcting THAT is
+ * ADR-0073's manager territory.
+ */
+const CORRECTABLE_STATUSES: readonly LoadStatus[] = [
+  'weight_captured',
+  'unload_started',
+  'in_progress',
+  'finished',
+] as const;
+
+/**
+ * ADR-0090 Amendment 1 (B) — fix a weight that was entered wrong.
+ *
+ * An OVERWRITE of `weight_lbs` with NO status transition, and the record of the
+ * change is a NEW audit row rather than an edit of the old one (CLAUDE.md hard
+ * rule #6 — the log is append-only). Both halves matter:
+ *
+ *   - No transition, because a correction is not a stage move. Routing it
+ *     through `recordWeightCapture` would push a load at `in_progress` back to
+ *     `weight_captured` and re-offer the door-open stage it has already passed.
+ *   - A second audit row, because "the weight was 12,000 and then it was 21,000"
+ *     is the fact a manager reconciling against a scale ticket needs. Mutating
+ *     the first row would leave the load asserting it had always said 21,000.
+ *
+ * Same 1..100,000 lb range as the capture, restated here rather than shared with
+ * `recordWeightCapture` only because that one throws a bare `Error`; this raises
+ * a typed 422 so the client gets an actionable status instead of a 500.
+ */
+export async function correctWeight(args: {
+  loadId: string;
+  operatorUserId: string;
+  siteId: string;
+  weightLbs: number;
+}): Promise<void> {
+  if (!Number.isInteger(args.weightLbs) || args.weightLbs < 1 || args.weightLbs > 100_000) {
+    throw new LoadAccessError(422, 'weight_out_of_range');
+  }
+  const current = await assertOwn(args);
+  if (!CORRECTABLE_STATUSES.includes(current.status)) {
+    throw new LoadAccessError(409, 'load_not_correctable');
+  }
+  if (current.weight_lbs === args.weightLbs) return; // Nothing changed; no audit noise.
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.inboundLoad.update({
+      where: { id: args.loadId },
+      data: { weight_lbs: args.weightLbs, weight_captured_at: now },
+    });
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { weight_lbs: current.weight_lbs },
+        after: { weight_lbs: args.weightLbs, reason: 'weight_corrected' },
+      },
+      { tx },
+    );
+  });
+}
+
+/**
+ * ADR-0090 Amendment 1 (B) — take back a stack that was counted wrong.
+ *
+ * SOFT, never a delete. A stack is a BILLED unit — `finishUnload` sums
+ * `load_stacks` into `total_units` — so the row that was counted has to survive
+ * as the evidence it was counted, and the append-only audit row has to point at
+ * something that still exists. Both sum sites filter `voided_at IS NULL`
+ * instead.
+ *
+ * ## Why `in_progress` only
+ *
+ * The count is live in exactly that state. On a `finished` load the route is
+ * `reopenLoad` first, which is audited as its own event — so "the count changed
+ * after the load was finished" always has a reopen row in front of it, rather
+ * than a stack quietly vanishing out of a completed total.
+ *
+ * ## Why the stack id is checked against THIS load
+ *
+ * `stackId` comes from the client. `assertOwn` proves the operator holds the
+ * LOAD; without the second check an operator holding load A could name a stack
+ * on load B and remove units from a load they do not hold, and both loads would
+ * look perfectly healthy afterwards.
+ *
+ * A second void of the same stack is a silent no-op, not an error — the screen
+ * is reachable from a stale tab and the FIRST void is the one that happened.
+ * Same shape as `voidLoad` and `finishUnload`'s ADR-0078 D7 branch.
+ */
+export async function voidStack(args: {
+  loadId: string;
+  operatorUserId: string;
+  siteId: string;
+  stackId: string;
+}): Promise<void> {
+  const current = await assertOwn(args);
+  if (current.status !== 'in_progress') {
+    throw new LoadAccessError(409, 'load_not_unloading');
+  }
+
+  const stack = await prisma.loadStack.findUnique({
+    where: { id: args.stackId },
+    select: { id: true, load_id: true, stack_index: true, unit_count: true, voided_at: true },
+  });
+  // 404 and not 403: an id that names no stack and an id that names another
+  // load's stack are the same answer to this operator — "there is no such stack
+  // here" — and distinguishing them would confirm the existence of a row they
+  // may not read.
+  if (!stack || stack.load_id !== args.loadId) throw new LoadAccessError(404, 'stack_not_found');
+  if (stack.voided_at) return;
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.loadStack.update({
+      where: { id: stack.id },
+      data: { voided_at: now, voided_by: args.operatorUserId },
+    });
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'load_stacks',
+        row_id: stack.id,
+        before: {
+          load_id: stack.load_id,
+          stack_index: stack.stack_index,
+          unit_count: stack.unit_count,
+        },
+        after: { voided_at: now, voided_by: args.operatorUserId, reason: 'stack_voided' },
+      },
+      { tx },
+    );
+  });
 }
 
 export async function finishUnload(args: {
@@ -493,8 +759,14 @@ export async function finishUnload(args: {
   // error anywhere. Recomputing makes the replay both idempotent and correct,
   // and is a no-op in the ordinary case where nothing arrived late.
   if (args.idempotencyKey && current.status === 'finished') {
+    // ADR-0090 Am.1 — `voided_at: null`, and this is the sum site that matters
+    // most. It rewrites `total_units` on an ALREADY finished load, so filtering
+    // the primary sum below and not this one would let any keyed retry — a
+    // dropped response on a dock connection is the ordinary case — silently
+    // RESTORE voided units into a billed total, leaving the load looking
+    // perfectly healthy. The two sums must be byte-identical in their filter.
     const late = await prisma.loadStack.findMany({
-      where: { load_id: args.loadId },
+      where: { load_id: args.loadId, ...NOT_VOIDED_STACK },
       select: { unit_count: true },
     });
     const total = late.reduce((acc, s) => acc + s.unit_count, 0);
@@ -519,23 +791,73 @@ export async function finishUnload(args: {
     return;
   }
 
+  if (!ALLOWED_PRIOR.finished.includes(current.status)) {
+    throw new TransitionError(current.status, 'finished');
+  }
+
   const now = new Date();
   const startedAt = current.unload_started_at ?? now;
   const duration = Math.max(0, Math.round((now.getTime() - startedAt.getTime()) / 1000));
+  // Same filter as the replay branch above. See NOT_VOIDED_STACK.
   const stacks = await prisma.loadStack.findMany({
-    where: { load_id: args.loadId },
+    where: { load_id: args.loadId, ...NOT_VOIDED_STACK },
     select: { unit_count: true },
   });
   const totalUnits = stacks.reduce((acc, s) => acc + s.unit_count, 0);
-  await transition({
-    ...args,
-    to: 'finished',
-    data: {
-      unload_finished_at: now,
-      unload_duration_seconds: duration,
-      total_units: totalUnits,
-      count_mode: args.countMode,
-    },
+
+  // ── ADR-0090 Am.1 — the duration FREEZES at the first finish ───────────────
+  //
+  // Bill's call, 2026-08-10, and it is the decision that unblocked the reopen.
+  // `unload_duration_seconds` runs `unload_started_at → now`, so a re-finish
+  // after a reopen would add the whole correction gap. The number feeds
+  // throughput and productivity surfaces, where it is read as "how long the
+  // truck took" — so an operator who went back to fix a count would show up as
+  // an operator who unloaded slowly, and the surface that exists to reward
+  // accuracy would punish it.
+  //
+  // Enforced as a CONDITIONAL UPDATE whose WHERE is
+  // `unload_duration_seconds IS NULL`, not as a branch on a value read a moment
+  // earlier and not as a decision in the UI. Three consequences, all wanted:
+  //
+  //   - The freeze holds however the second finish is reached — the reopen path,
+  //     a replayed queue entry, a hand-crafted POST.
+  //   - It holds under CONCURRENCY. Two finishes racing both compute a duration;
+  //     the second matches zero rows rather than winning a read-then-write.
+  //   - There is exactly ONE writer of these two columns, and it refuses to
+  //     write twice. A future path that forgets the rule inherits it.
+  //
+  // `unload_finished_at` is frozen alongside it, deliberately. Advancing the
+  // timestamp while freezing the duration would leave the pair disagreeing — the
+  // schema documents the column as `unload_started_at → unload_finished_at` —
+  // and anything that recomputed the duration from the timestamps would get a
+  // different answer from the stored one. The instant of a RE-finish is not
+  // lost: it is the audit row this transaction writes.
+  await prisma.$transaction(async (tx) => {
+    const timing = await tx.inboundLoad.updateMany({
+      where: { id: args.loadId, unload_duration_seconds: null },
+      data: { unload_finished_at: now, unload_duration_seconds: duration },
+    });
+    await tx.inboundLoad.update({
+      where: { id: args.loadId },
+      data: { status: 'finished', total_units: totalUnits, count_mode: args.countMode },
+    });
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { status: current.status },
+        after: {
+          status: 'finished',
+          total_units: totalUnits,
+          // Says which of the two this was, so a re-finish is legible in the log
+          // without diffing timestamps.
+          unload_timing: timing.count === 1 ? 'measured' : 'frozen_at_first_finish',
+        },
+      },
+      { tx },
+    );
   });
 }
 

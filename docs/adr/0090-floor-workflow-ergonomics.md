@@ -1,6 +1,6 @@
 # ADR-0090 — the floor could not tell two trucks apart, could not go back, and could not close a load it never worked
 
-**Status:** Accepted, partially implemented (2026-08-11) — A and C shipped; B designed here and NOT built (see [B](#d3--b-going-back-what-ships-what-does-not-and-why))
+**Status:** Accepted, fully implemented — A and C shipped 2026-08-11; **B shipped 2026-08-11 under [Amendment 1](#amendment-1--b-shipped-and-the-duration-freezes-at-the-first-finish)**, which also records Bill's `unload_duration_seconds` decision that unblocked it
 **Builds on:** ADR-0065 Am.1 (the unfinished-loads list), ADR-0074 + Am.1 (open-portal haul visibility; the consumed-slot dead end), ADR-0077 D4 ("not recorded" is not zero), ADR-0078 (idempotent floor writes, the honest queue), ADR-0082 (claim takeover and honest attribution), ADR-0084 (the soft-void pattern — and the one decision this ADR deliberately inverts), ADR-0085 (the walk-up drop-off), ADR-0073 (manager load corrections — design-only, and the boundary this respects)
 
 ---
@@ -214,6 +214,10 @@ become reachable** — which is why this is written down rather than left silent
 
 ### D3 — B: going back — what ships, what does not, and why
 
+> **Superseded by [Amendment 1](#amendment-1--b-shipped-and-the-duration-freezes-at-the-first-finish)
+> (2026-08-11).** B is now built, to this design. The section is kept as written
+> so the amendment's deviations are readable as deviations.
+
 **Nothing for B ships in this change.** The design is recorded here because the
 research behind it is the expensive part and it should not be redone.
 
@@ -309,3 +313,230 @@ activated the iPad queue cannot reach the void either.
 4. **Should managers get the void too**, for a load already `submitted`? That is
    ADR-0073's scope and deliberately untouched — but ADR-0073 is still design-only,
    so the gap it describes remains open.
+
+---
+
+## Amendment 1 — B shipped, and the duration freezes at the first finish
+
+**Accepted 2026-08-11.** Bill made the blocking product call (Open question 1) on
+2026-08-10 at ~6:56 PM PT:
+
+> **Freeze the duration at the first finish.** When a finished load is reopened
+> to correct entries, `unload_duration_seconds` keeps the value computed at the
+> FIRST finish. A re-finish must not recompute it.
+
+That is the first of the two options D3/Open-question-1 laid out ("the duration
+measures to the FIRST finish — correct for productivity, wrong as a literal
+timestamp"), and it is what unblocked the whole of B.
+
+### Am1.1 — why this decision is the one that mattered
+
+`unload_duration_seconds` is not a diagnostic. It reaches throughput and
+productivity surfaces, where it reads as _how long the truck took_. Recomputing
+on a re-finish would add the entire reopen gap, so an operator who went back to
+fix a number would show up as an operator who unloaded slowly — the surface that
+exists to reward accuracy would have punished it. An operator who believes that
+will not press the button, and will submit a count they know is wrong instead.
+The feature would have shipped and then quietly not been used.
+
+So the freeze is not a detail of the reopen; it is the precondition for the
+reopen being usable, and the explainer copy on the button says it out loud in all
+three locales (`load_review.reopen_explainer`).
+
+### Am1.2 — the freeze is a WHERE clause, not a branch
+
+The instruction was to make the freeze structural. It is enforced in
+`finishUnload` as a conditional UPDATE:
+
+```
+UPDATE inbound_loads
+   SET unload_finished_at = $now, unload_duration_seconds = $duration
+ WHERE id = $load AND unload_duration_seconds IS NULL
+```
+
+Not a value read a moment earlier and branched on, and not a decision in the UI.
+Three consequences, all wanted:
+
+- The freeze holds **however** the second finish is reached — the reopen path, a
+  replayed ADR-0078 queue entry, a hand-crafted POST.
+- It holds under **concurrency**. Two finishes racing both compute a duration;
+  the loser matches zero rows instead of winning a read-then-write.
+- There is exactly **one writer** of those two columns and it refuses to write
+  twice, so a future path that forgets the rule inherits it.
+
+`finishUnload` therefore no longer routes through the shared `transition()`
+helper — it hand-rolls the status flip, the total and the audit row in one
+transaction alongside the conditional timing update, the same shape `voidLoad`
+already used. The audit row records which of the two happened
+(`unload_timing: 'measured' | 'frozen_at_first_finish'`), so a re-finish is
+legible in the log without diffing timestamps.
+
+**Deviation from D3, recorded: `unload_finished_at` is frozen alongside the
+duration.** D3 did not consider the pair. Advancing the timestamp while freezing
+the duration would leave the two disagreeing — `schema.prisma` documents the
+column as `unload_started_at → unload_finished_at`, and anything recomputing the
+duration from the timestamps would get a different answer from the stored one.
+The instant of a re-finish is not lost; it is the audit row.
+
+### Am1.3 — what shipped against D3, item by item
+
+| D3 item                                           | Shipped                                                                                                                                                                          | Deviation                                                                                                      |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 1. Review (read-only) from every stage            | Yes — `review-panel.tsx`, opened from a control on all five stage statuses                                                                                                       | Panel, not a route (D3 implied as much); the stage is **hidden, not unmounted** — see Am1.4                    |
+| 2. Weight correctable in place before `submitted` | Yes — `correctWeight`, no status transition, appends a second audit row                                                                                                          | Allowed set is `weight_captured / unload_started / in_progress / finished` — **`arrived` excluded**, see Am1.5 |
+| 3. Stack soft-void while `in_progress`            | Yes — `voidStack`; both sums filter through one `NOT_VOIDED_STACK` constant; monotonic indexes; `addStack` P2002 requires `voided_at IS NULL`; offer guarded to server-acked ids | Adds an ordering guard D3 did not have — see Am1.6                                                             |
+| 4. `finished → in_progress` reopen                | Yes — `reopenLoad`, audited, duration frozen                                                                                                                                     | Was "NOT designed, escalated"; Bill's call closed it                                                           |
+
+D3's three stack findings were implemented exactly as written, and each is pinned
+by a real-Postgres test in `src/lib/loads/back-navigation.db.test.ts` — a mocked
+Prisma can only be written to agree with claims about a UNIQUE index, a SELECT's
+filter and a conditional UPDATE.
+
+### Am1.4 — the stage is HIDDEN, not unmounted
+
+The one thing D3 did not anticipate. Every stage holds operator work in local
+React state that exists nowhere else: `StageStacks` carries the optimistic `tmp-`
+stacks queued while offline, the running total and the chosen count mode;
+`StageWeight` carries a typed weight and a captured photo; the BOL→weight chain
+carries a one-way `bolDone` latch. Swapping the stage out for the review panel
+would have discarded all of it and dropped the operator back at the top of the
+stage — a worse dead end than the one B exists to remove, and precisely the class
+of defect ADR-0065 Am.1 and ADR-0074 Am.1 were both written about.
+
+So the stage stays mounted inside a `hidden` container while the review renders
+beside it. `bolDone` was additionally lifted out of the old `FromBol` wrapper into
+`LoadWorkflow` for the same reason (that wrapper's `onBolDone` prop was also
+declared and never used, and is gone).
+
+### Am1.5 — `arrived` is excluded from the weight correction
+
+D3 said "correctable in place before `submitted`". At `arrived` the operator is
+still standing **on** the weight stage — there is nothing to go back to — and a
+weight written without the stage's `arrived → weight_captured` move would leave
+the workflow re-offering a stage they had just completed. `CORRECTABLE_STATUSES`
+in `load-service.ts` therefore starts at `weight_captured`, and the review panel
+does not offer the control at `arrived`.
+
+### Am1.6 — the reopen's interaction with the ADR-0078 queue
+
+D3 asked that a queued write never be double-submitted after back-nav. The
+correction writes are the easy half: `reopenLoad`, `voidStack` and
+`correctWeight` are **online-only** and absent from `FLOOR_SCOPES`, the same
+decision ADR-0082 D5 and ADR-0090 D2.4 recorded, for the same reasons — a
+correction is a statement about the CURRENT state of a record, and replaying one
+hours later applies it to a state that has moved on; refusing one offline costs a
+tap, where refusing a count loses a count. `withIdempotency` is not involved
+because none of the three is an append.
+
+The **reverse** direction is the real hazard, and it is silent: a write queued
+BEFORE the correction — a stack, a finish — replays afterwards and lands on top
+of it. A queued `finish_unload` replayed against a load the operator has just
+reopened would finish it out from under them mid-count.
+
+The honest place to stop that is the OFFER. `pendingActionsForLoad(loadId)` (new,
+in `offline-queue.ts`) counts this load's unsent actions, and the review panel
+withholds all three corrections while it is non-zero **and says why** — a control
+that is merely absent teaches the operator the feature is broken; a sentence
+explaining that their earlier taps are still in flight teaches them to wait. It
+re-reads on a 3 s tick so a correction becomes available as the queue drains,
+without a reload, and it **fails closed**: an unreadable IndexedDB is not an empty
+queue. Reading (the half JT asked for first) is never gated on it.
+
+Actions only, not uploads: a queued photo changes no number, and reading the
+uploads store materialises every Blob — the cost the `queueCounts` G4 note exists
+to avoid. There is no `by-load` index on `pending_actions` (only `pending_uploads`
+has one) and adding one would mean an IndexedDB version bump on live iPads to
+filter a store that is normally a handful of rows.
+
+### Am1.7 — the reopen edge is declared in `ALLOWED_PRIOR`, then narrowed
+
+`ALLOWED_PRIOR.in_progress` gains `finished`. It is declared there rather than
+guarded privately because that table is the single statement of which edges
+exist, and its completeness is what makes it the compile-time tripwire D2 relied
+on; an edge that guarded itself elsewhere would make the table a partial truth.
+
+But two writers now land on `in_progress` and they mean different things. So
+`transition()` gained an `allowedFrom` narrowing — an INTERSECTION with the
+declared set, so a caller can only ever restrict, never widen — and `beginUnload`
+passes `['unload_started']` while `reopenLoad` passes `['finished']`. Without
+that, a hand-crafted `beginUnloadAction` POST would silently reopen a finished
+load through the door-open path, with no reopen reason on the audit row. That is
+pinned by its own test, and the test was falsified (it goes red when the
+narrowing is removed).
+
+**What the reopen deliberately does not change:**
+
+- **The slot.** `expected_load_id` is untouched and `in_progress` is inside
+  `OPEN_DOCK_STATUSES`, so a reopened load still consumes its haul — it is live
+  work again and the real truck must not check in underneath it. Exactly the
+  opposite of the void, which severs the slot because the load was never real.
+- **The void's reach.** `ALLOWED_PRIOR.voided` already lists both `in_progress`
+  and `finished`, so a reopen moves the load between two equally voidable states.
+  Checked, and asserted through the service rather than by restating the table.
+- **`total_units`.** Recomputed on the re-finish from the live stacks, which is
+  the entire point: the duration is frozen, the COUNT is not.
+
+### Am1.8 — no new status, so AW-4 is untouched
+
+This change adds an EDGE, not a `LoadStatus` member, so the six hand-maintained
+allow-lists flagged in OPEN-ITEMS AW-4 need no edit and none was made. The
+consolidation was deliberately NOT folded in here: it spans six files across the
+export, inventory and audit paths, and bundling it with two billing-sum edits and
+a schema change would put a refactor with no test of its own inside the diff that
+carries the money risk. AW-4 stays open.
+
+### Am1.9 — rollout gating: still no new ADR-0047 surface
+
+Same reasoning as D4, re-checked rather than assumed. Every surface touched is an
+existing operator surface already gated on `ipad_queue`, and all three new server
+actions go through the same `ctx()` that enforces it. Nothing new is
+staff-visible, no recipient roster exists, no mail is sent. No `rollout_surfaces`
+row, no ADR-0047 entry.
+
+### Am1.10 — schema
+
+`load_stacks` gains `voided_at` / `voided_by` (migration
+`20260842_adr0090_back_navigation`, purely additive, idempotent, one FK
+`ON DELETE SET NULL` and one `voided_at IS NOT NULL OR voided_by IS NULL` CHECK,
+mirroring ADR-0084 and the load void beside it). Every existing stack has
+`voided_at IS NULL`, which is exactly what the new sum filters select, so the
+billed total of every load already in the database is unchanged by construction.
+
+`@@unique(load_id, stack_index)` stays FULL rather than becoming partial, per D3.
+Monotonic indexes preserve the positional meaning of the audit trail and — the
+load-bearing part — make a P2002 at a voided index provably a replay of the write
+that was voided, which is what licenses the 409. A partial index would have
+reopened those indexes for reuse and made the two cases indistinguishable.
+
+**No `reopened_at` column.** The reopen lives in `audit_log` (actor, instant,
+from/to, `reason: 'reopened_for_correction'`), which is append-only and already
+rendered on the manager load page. A column would be a second place that has to
+agree with the audit log about one event.
+
+### Am1.11 — one accepted residual
+
+**An offline-queued stack cannot be voided.** A `tmp-` id exists only in the tab
+that minted it, so there is no server row to name; the offer is guarded to
+server-acked ids, per D3. The operator's route is to wait for the queue to drain
+and then correct — which is the same wait the ordering guard in Am1.6 already
+imposes. Recorded in OPEN-ITEMS rather than left silent.
+
+### Am1.12 — consequences
+
+- The floor can check every entry from every stage, and the read is never gated
+  on the write's conditions.
+- A wrong weight, a wrong stack and a wrong final count each have a floor-side
+  remedy that is not "void the load and re-walk the truck".
+- Going back never costs an operator their measured unload time, and the button
+  says so.
+- `total_units` now has one filter constant with two call sites instead of two
+  unfiltered sums, so a third sum site added later has an obvious thing to reach
+  for.
+- The manager load page marks voided stacks; without that a manager reconciling a
+  load would read "Stack 2 — 9 units" against a total that excludes those nine.
+
+### Am1.13 — open questions still open
+
+Open questions 2 (`truck_never_arrived` notification), 3 (allow-list
+consolidation / AW-4) and 4 (manager void of a `submitted` load / ADR-0073) are
+untouched by this amendment and remain for Bill.

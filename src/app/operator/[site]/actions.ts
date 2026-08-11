@@ -263,6 +263,61 @@ export async function voidLoadAction(
   redirect(`/operator/${siteCode}/queue`);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-0090 Amendment 1 (B) — going back.
+//
+// JT, 2026-08-10: "if you want to go back to fix or check what you entered is
+// correct, vision doesn't let you."
+//
+// All three are ONLINE-ONLY and none is registered in `FLOOR_SCOPES`, which is a
+// decision rather than an omission — the same one ADR-0082 D5 recorded for the
+// takeover and ADR-0090 D2.4 for the load void. A correction is a statement
+// about the CURRENT state of a record ("that stack is wrong", "that weight is
+// wrong"), and replaying one hours later would apply it to a state that has
+// moved on. They also capture no operator data: refusing one offline costs a
+// tap, whereas refusing a count loses a count.
+//
+// That leaves the reverse hazard — a write queued BEFORE the correction
+// replaying after it — and the honest place to stop that is the offer.
+// `review-panel.tsx` withholds all three while `pendingActionsForLoad` is
+// non-zero, and says why.
+//
+// None of them redirects or signs out. The operator is mid-load and the whole
+// point is to put them back where they were; `revalidatePath` re-renders the
+// same url with the corrected server truth.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Reopen a finished load to correct its count. The duration stays frozen. */
+export async function reopenLoadAction(siteCode: string, loadId: string): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  await svc.reopenLoad({ loadId, operatorUserId, siteId });
+  // The load leaves the "ready to submit" group on the queue's unfinished list.
+  revalidatePath(`/operator/${siteCode}/queue`);
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+}
+
+/** Take back a stack counted in error. Soft — the row survives, the total drops. */
+export async function voidStackAction(
+  siteCode: string,
+  loadId: string,
+  stackId: string,
+): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  await svc.voidStack({ loadId, operatorUserId, siteId, stackId });
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+}
+
+/** Overwrite a mis-entered weight. Appends an audit row; no status transition. */
+export async function correctWeightAction(
+  siteCode: string,
+  loadId: string,
+  weightLbs: number,
+): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  await svc.correctWeight({ loadId, operatorUserId, siteId, weightLbs });
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
+}
+
 export async function rejectLoadAction(
   siteCode: string,
   loadId: string,

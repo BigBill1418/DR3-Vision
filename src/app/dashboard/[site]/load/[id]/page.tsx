@@ -94,7 +94,18 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
       transporter: { select: { name: true } },
       assigned_operator: { select: { name: true } },
       load_stacks: {
-        select: { id: true, stack_index: true, unit_count: true, count_mode: true },
+        // ADR-0090 Am.1 B — a stack the floor took back is still a row. Selected
+        // so this page can mark it, because `total_units` beside it already
+        // excludes it: without the flag a manager reconciling a load reads
+        // "Stack 2 — 9 units" against a total that does not contain those nine,
+        // and the page contradicts itself with no explanation.
+        select: {
+          id: true,
+          stack_index: true,
+          unit_count: true,
+          count_mode: true,
+          voided_at: true,
+        },
         orderBy: { stack_index: 'asc' },
       },
       load_photos: {
@@ -244,8 +255,15 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
         </section>
 
         <section className="flex flex-col gap-2">
+          {/* ADR-0090 Am.1 B — the count is the LIVE stacks. A voided stack stays
+              listed (soft void, never a delete — it is the evidence the operator
+              counted it) but is struck through and excluded from the heading, so
+              this section agrees with `total_units` above it. */}
           <h2 className="text-lg font-semibold">
-            Stacks <span className="text-sm text-dr3-mist-dim">({load.load_stacks.length})</span>
+            Stacks{' '}
+            <span className="text-sm text-dr3-mist-dim">
+              ({load.load_stacks.filter((s) => s.voided_at === null).length})
+            </span>
           </h2>
           {load.load_stacks.length === 0 ? (
             <p className="text-sm text-dr3-mist-dim">No stacks counted yet.</p>
@@ -254,12 +272,18 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
               {load.load_stacks.map((s) => (
                 <li
                   key={s.id}
-                  className="flex items-baseline justify-between rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-sm"
+                  data-voided={String(s.voided_at !== null)}
+                  className={`flex items-baseline justify-between rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-3 py-2 text-sm ${
+                    s.voided_at === null ? '' : 'text-dr3-mist-dim line-through'
+                  }`}
                 >
                   <span>Stack {s.stack_index}</span>
                   <span className="tabular-nums">
                     {s.unit_count} units{' '}
                     <span className="text-xs text-dr3-mist-dim">({s.count_mode})</span>
+                    {s.voided_at !== null && (
+                      <span className="ml-2 text-xs uppercase no-underline">voided</span>
+                    )}
                   </span>
                 </li>
               ))}
