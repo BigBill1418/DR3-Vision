@@ -45,6 +45,27 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # ── Record integrity (ADR-0097) ──────────────────────────────────────
+      # Deliberately placed BEFORE `npm ci`: both scripts are dependency-free
+      # (node + fs only), so an unresolved citation fails in seconds instead of
+      # after a five-minute build. The citation resolver is also asserted by
+      # `src/__tests__/adr-record-integrity.test.ts` in the suite below — this
+      # step exists to give the failure its own name in the checks list.
+      #
+      # The class it catches: six source files and one test cited "ADR-0065
+      # Amendment 2" for twelve days while no such amendment existed. The work
+      # had shipped; the record had not, and nothing said so.
+      - name: ADR citation resolver (hard gate)
+        run: node scripts/check-adr-citations.mjs
+
+      # ADVISORY, never blocking — it emits `::warning::` annotations and always
+      # exits 0. Same reasoning as the `migrate diff` step in the migrations job
+      # below: a hard gate on pre-existing drift would red-on-arrival every PR and
+      # MASK the real gate above. See ADR-0097 §3 for why this warns rather than
+      # fails, and why a registry row replaced P5's "GitHub issue link".
+      - name: ADR promise registry coverage (advisory)
+        run: node scripts/extract-adr-promises.mjs --check
+
       - name: Install dependencies
         run: npm ci
 

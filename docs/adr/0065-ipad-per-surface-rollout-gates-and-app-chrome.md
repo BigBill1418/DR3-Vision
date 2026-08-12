@@ -384,3 +384,106 @@ amended to say so explicitly.
   From 5 PM Pacific onward those default their date input to TOMORROW. No operator
   surface is affected — the negative control over `src/app/operator/**` is clean —
   so this is tracked for a manager-side pass rather than fixed here.
+
+---
+
+## Amendment 2 — the Pacific day, everywhere (2026-07-30; recorded 2026-08-11)
+
+**Status:** Accepted. **The code shipped 2026-07-30; this record did not.** It is
+written twelve days late, and the delay is the reason it exists in this form — see
+"Why this was written late" below.
+
+**Closes:** the residual at the end of Amendment 1 — the six manager surfaces that
+still derived a day key from the UTC day, "tracked for a manager-side pass rather
+than fixed here."
+
+### A2.1 — The defect
+
+Amendment 1 fixed the *floor* clock and named, but deliberately did not fix, the
+*manager* one. Six client screens each derived today as:
+
+```ts
+new Date().toISOString().slice(0, 10);
+```
+
+`toISOString()` converts to UTC first. From **5:00 PM Pacific — which is 00:00Z the
+next day** — every one of them returned **tomorrow**, so every date input on those
+screens defaulted to a production day that had not happened yet. An evening entry
+landed silently on the wrong day; nothing errored, because nothing was wrong as far
+as the code was concerned.
+
+The six:
+
+| Surface                                                | Role                    |
+| ------------------------------------------------------ | ----------------------- |
+| `dashboard/[site]/ops/OpsClient`                        | task due-date default   |
+| `dashboard/[site]/equipment/EquipmentClient`            | date filter default     |
+| `dashboard/[site]/loads-inventory/LoadsInventoryClient` | entry-date default      |
+| `dashboard/[site]/processed-units-close/ProcessedUnitsEntryClient` | close-date default |
+| `admin/processed-units/ProcessedUnitsClient`            | entry-date default      |
+| `admin/billing-rates/format`                            | effective-date rendering |
+
+`admin/billing-rates/format` deserves a note: its comment said `(UTC)` as though
+that settled the matter. The wire format is `@db.Date`, so the *format* was never
+in question — **which day** was, and both sites are Pacific.
+
+### A2.2 — The fix is deletion, not invention
+
+`appTodayISO()` in `@/lib/time` already existed and is documented "for client
+default values." It delegates to `pacificDayISO`, the same definition the floor
+uses. The defect was **six re-implementations of a solved problem**, not a missing
+primitive, so the fix removed six local helpers and called the shared one.
+
+This is ADR-0090 D1's cost, paid again on a different surface: *"inlining a `??`
+chain at five call sites is precisely how `held-by-panel.tsx` came to label a
+`submitted` load 'Counting' for five days."*
+
+### A2.3 — The guard, and why it is shaped that way
+
+`src/lib/app-today-iso.test.ts` asserts both halves: that the helper is right, **and
+that nobody re-rolls it**. Three properties are worth keeping when this file is next
+touched:
+
+1. **It walks `src/app` rather than checking a hand-written list.** A list of the six
+   offenders would have passed forever while a seventh screen reintroduced the bug.
+   The walk caught five files the author's original grep missed — that grep was
+   whitespace-strict and the real code was not, which is the whole argument for the
+   guard over a review checklist.
+2. **It strips comments before scanning.** The first version fired on its own
+   explanation, because the fix documents the anti-pattern by quoting it. *A guard
+   that punishes its own documentation trains people to delete the documentation.*
+3. **It proves it can fail.** One case asserts the regex matches the pattern it bans;
+   another asserts that comment-stripping does **not** hide a live call carrying a
+   trailing comment. Without those, the ban could be vacuously green — the same
+   defect class as a safety net whose failure mode is silence.
+
+The ban is deliberately narrow: it targets `new Date().toISOString().slice(0, 10)` —
+deriving **today** — and not `toISOString().slice(0, 10)` applied to a date the
+caller already has. Formatting a known `@db.Date` that way is correct, and several
+surfaces still do it legitimately.
+
+**Verification at ship:** whole repo 3,871 tests pass, `tsc` 0, eslint 0, prettier
+clean. Re-verified 2026-08-11 when this record was written: all six surfaces import
+`appTodayISO`, and the guard is green.
+
+### Why this was written late, and what it cost
+
+The work shipped as `7e1cf342` on **2026-07-30 at 08:45 PT**. No amendment was
+written. Five source files and one test carried the comment **"ADR-0065 Amendment 2"**
+from that day forward, and for twelve days that citation resolved to nothing.
+
+Nobody noticed, and nobody could have: **the failure mode was silence.** A reader
+following the citation would have found ADR-0065 with a single amendment and no way
+to tell whether the constraint was real, superseded, or imagined. This is precisely
+what ADR-0064 recorded about itself — *"This ADR was referenced by the code it
+governs … but the file itself was never committed"* — recurring undetected.
+
+It was found by **ADR-0094 §3 RC-4**, which was counting untracked promises rather
+than looking for this, and it turned out not to be alone: the same sweep found
+**ADR-0068 Amendment 3/4/5, ADR-0069 Amendment 3, and ADR-0019.5 Amendment 1** cited
+by code and likewise never written — 24 dangling citations across four ADRs.
+
+The prevention is **ADR-0097**: a citation resolver that fails CI when an
+`ADR-NNNN`/`Amendment N` reference in the tree does not resolve to a real file and
+section. Had it existed on 2026-07-30, this amendment would have been written the
+same morning, because the build would not have gone green without it.
