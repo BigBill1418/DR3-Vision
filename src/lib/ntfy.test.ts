@@ -350,6 +350,14 @@ describe('convenience wrappers', () => {
 // to a shared utility "to prevent a fourth re-discovery". DR3-Vision's helper
 // was never patched.
 //
+// AMENDED BY ADR-0093 (contract v2): the sanitizer now emits PURE ASCII and
+// folds accents (`café` -> `cafe`), where v1 stopped at latin-1. undici's wall is
+// U+00FF, but httpx — used by other fleet publishers — raises above U+007F, and
+// the fleet keeps ONE contract set by the strictest client. Note the consequence
+// for the mock below: it validates like undici, so it CANNOT catch a regression
+// from ASCII back to latin-1. The pure-ASCII assertion does that, and the shared
+// fleet vectors pin it in `src/__tests__/ntfy-header-safety-sweep.test.ts`.
+//
 // CRITICAL TEST-DESIGN NOTE: the suite above mocks `globalThis.fetch`, which
 // accepts any object as headers and therefore CANNOT observe this bug — a mock
 // is exactly why it shipped. The mock below constructs a real `Request` from the
@@ -413,7 +421,11 @@ describe('header encoding safety (ADR-0019.5)', () => {
     expect(title).not.toContain('?');
   });
 
-  it('every header value is latin-1 clean, not just the title', async () => {
+  it('every header value is pure ASCII, not just the title (contract v2)', async () => {
+    // ADR-0093 tightened this from latin-1 to ASCII. undici's own wall is U+00FF,
+    // so `café` would sail through the validating mock below — but httpx, which
+    // other fleet publishers use, raises above U+007F. One fleet, one contract,
+    // set by the strictest client. The threshold here is 128, not 256.
     bytestringValidatingFetch();
     await publishNtfy({
       topic: 'dr3-vision-system',
@@ -422,14 +434,18 @@ describe('header encoding safety (ADR-0019.5)', () => {
       tags: ['warning', 'café→x'],
       clickUrl: 'https://dr3-vision.svdp.us/bonus?q=—',
     });
-    for (const [k, v] of Object.entries(fetchCalls[0]!.init.headers as Record<string, string>)) {
+    const headers = fetchCalls[0]!.init.headers as Record<string, string>;
+    for (const [k, v] of Object.entries(headers)) {
       for (const ch of String(v)) {
         expect(
-          ch.codePointAt(0)! <= 255,
+          ch.codePointAt(0)! < 128,
           `header ${k} holds U+${ch.codePointAt(0)!.toString(16)} (${ch})`,
         ).toBe(true);
       }
     }
+    // Folded, not degraded: an accented tag stays a readable word. `caf?` would
+    // be a readability regression rather than a fix.
+    expect(String(headers['Tags'])).toContain('cafe->x');
   });
 
   it('transliterates the punctuation fleet titles actually use (ADR-0063 §1 set)', async () => {

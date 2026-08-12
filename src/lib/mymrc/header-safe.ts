@@ -23,30 +23,41 @@
 // implementation inside the narrower rootDir and re-exporting it upward
 // (`src/lib/ntfy-header-safe.ts`) is what lets BOTH bundles share a single copy.
 // Moving it back out will break the image build, not the test suite.
+//
+// CONTRACT VERSION 2 (ADR-0093; fleet contract noc-master ADR-0200). v1 emitted
+// latin-1 and only degraded codepoints above 255. v2 emits PURE ASCII and folds
+// accents. See the doc comment on `toHeaderSafe` for why.
 
 /**
  * Transliteration table for the Unicode punctuation these titles actually use.
- * Mirrors ADR-0063 §1's `toHeaderSafe()` in noc-master, plus `→` because DR3
- * period labels are written `2026-07-21→08-03`.
+ * Pinned to `toHeaderSafe()` in `noc-master/api/services/notifications.js`, the
+ * fleet's reference JS implementation, and to the shared vectors in
+ * `noc-master/data/ntfy-header-conformance.json` (vendored for CI at
+ * `src/__tests__/ntfy-header-conformance.json`).
+ *
+ * The table is not redundant with the NFKD fold below: NFKD leaves `×`, `≥` and
+ * `•` undecomposed, so without an explicit mapping they would degrade to `?`
+ * and lose meaning. Transliteration preserves the sentence; the fold preserves
+ * names; the `?` backstop preserves delivery.
  */
 const HEADER_TRANSLITERATIONS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/[—–−]/g, '-'], // em / en / minus  → hyphen
-  [/[‘’]/g, "'"],
-  [/[“”]/g, '"'],
-  [/…/g, '...'],
-  [/×/g, 'x'],
+  [/[‐-―−]/g, '-'], // hyphen / figure / en / em dash, true minus
+  [/[‘’‚‛]/g, "'"], // single curly quotes
+  [/[“”„‟]/g, '"'], // double curly quotes
+  [/…/g, '...'], // ellipsis
+  [/×/g, 'x'], // multiplication sign
   [/≥/g, '>='],
   [/≤/g, '<='],
-  [/→/g, '->'],
-  [/[    ]/g, ' '], // exotic spaces
-  [/•/g, '*'],
+  [/→/g, '->'], // rightwards arrow — DR3 period labels use it
+  [/[    ]/g, ' '], // nbsp / figure / thin / narrow spaces
+  [/[•·]/g, '*'], // bullet / middot
 ];
 
 /**
- * Make a string safe to put in an HTTP header value.
+ * Make a string safe to put in an HTTP header value. Output is PURE ASCII.
  *
- * WHY THIS EXISTS — the 2026-08-05 dropped page. Header values are ByteStrings
- * (latin-1). Node's undici throws
+ * WHY THIS EXISTS — the 2026-08-05 dropped page. Header values are ByteStrings.
+ * Node's undici throws
  *
  *   TypeError: Cannot convert argument to a ByteString because the character at
  *   index 43 has a value of 8212 which is greater than 255
@@ -58,22 +69,57 @@ const HEADER_TRANSLITERATIONS: ReadonlyArray<readonly [RegExp, string]> = [
  * publish reported `dropped` while the ntfy server was demonstrably healthy.
  * That is how the stranded-period page for Eugene Period 16 was lost.
  *
- * This is the fourth re-discovery of this class on the fleet: the bash/Python
- * helpers were patched 2026-05-06, noc-master's Node publisher by ADR-0063
- * (2026-05-22) — whose own open question asked whether the fix should become a
- * shared utility "to prevent a fourth re-discovery". This repo's helper was
- * never patched. See ADR-0019.5.
+ * WHY PURE ASCII AND NOT LATIN-1 (contract v2, ADR-0093) — undici's limit is
+ * U+00FF, so v1 stopped there and let `café` through unchanged. But the fleet's
+ * HTTP clients do not agree on where the wall is, and the strictest one sets the
+ * contract:
  *
- * Transliterate first so the operator still gets a readable sentence, then hard
- * replace any residual codepoint > 255 with `?`. The backstop matters more than
- * the table: an unmapped glyph must degrade to a sendable page, never a lost
- * one. Bodies are NOT sanitized — they travel as UTF-8 and may hold anything.
+ *   python-httpx    raises above U+007F  — ASCII ONLY  <- binding constraint
+ *   node-undici     throws  above U+00FF — accepts latin-1
+ *   python-urllib   raises  above U+00FF — accepts latin-1
+ *   curl/bash       sends raw bytes, unaffected
+ *
+ * Helix-Hub and other fleet publishers post with httpx, where `café` in a Title
+ * raises `UnicodeEncodeError: 'ascii' codec can't encode character 'é'` —
+ * the same before-the-socket, kills-both-legs failure the em dash caused here.
+ * One fleet, one contract: sanitising to the loosest client's limit means a
+ * title that is safe in this repo is a dropped page in the next one. ASCII is
+ * the only safe common denominator.
+ *
+ * ORDER MATTERS: transliterate → strip CR/LF → fold accents → degrade.
+ * Accented letters fold to their ASCII base via NFKD, so `café renewal for José`
+ * becomes `cafe renewal for Jose` and stays readable rather than `caf? for Jos?`.
+ * An ASCII-only contract is only tolerable to a human reader because names
+ * survive it. Only characters with no ASCII base (emoji, CJK) become `?` — an
+ * unmapped glyph must degrade to a sendable page, never a lost one.
+ *
+ * Iteration is over CODEPOINTS, not UTF-16 units: a naive `for (const ch of ...)`
+ * over indices would treat an astral emoji as a surrogate pair and emit `??` for
+ * one glyph.
+ *
+ * NOT sanitized: `Authorization` (a bearer is ASCII by construction; mangling it
+ * would turn an encoding bug into an auth bug) and the message BODY (sent as
+ * UTF-8, may hold any character). Both exclusions are enforced at the publishers'
+ * choke points, not here.
+ *
+ * Pinned against the shared fleet vectors vendored at
+ * `src/__tests__/ntfy-header-conformance.json` by `ntfy-header-safety-sweep.test.ts`.
  */
 export function toHeaderSafe(value: string): string {
   let out = value;
   for (const [pattern, replacement] of HEADER_TRANSLITERATIONS) {
     out = out.replace(pattern, replacement);
   }
+  // CR/LF is a header-injection primitive as well as an encoding problem. Each
+  // becomes a space (so "ok\r\nX-Evil: 1" -> "ok  X-Evil: 1"), never dropped —
+  // deleting them would silently splice two fields into one token.
   out = out.replace(/[\r\n]/g, ' ');
-  return [...out].map((ch) => (ch.codePointAt(0)! > 255 ? '?' : ch)).join('');
+
+  return [...out]
+    .map((ch) => {
+      if (ch.codePointAt(0)! < 128) return ch;
+      const base = [...ch.normalize('NFKD')].filter((c) => c.codePointAt(0)! < 128).join('');
+      return base || '?';
+    })
+    .join('');
 }

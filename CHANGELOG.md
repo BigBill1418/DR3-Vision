@@ -9,6 +9,67 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-12 — the header contract is ASCII, because the strictest client sets it (ADR-0093)
+
+ADR-0019.5 stopped the drops. It also set the output contract one client too
+loose, and this closes that.
+
+- **What changed, in one line.** `toHeaderSafe()` now emits **pure ASCII** and
+  **folds accents** — `café renewal for José` becomes `cafe renewal for Jose`.
+  Under v1 it emitted latin-1 and left `café` untouched.
+
+- **Why, since undici was demonstrably happy with `café`.** Because undici is not
+  the strictest client on the fleet. `httpx` — which Helix-Hub and other fleet
+  publishers post with — raises above **U+007F**, not U+00FF:
+  `UnicodeEncodeError: 'ascii' codec can't encode character '\xe9'`. Same
+  before-the-socket, kills-both-legs failure the em dash caused here, triggered by
+  a character v1 deliberately preserved. A title provably safe in DR3-Vision was a
+  dropped page one repo over. Sanitizing to the loosest client's limit is
+  ADR-0019.5's own per-publisher failure mode, re-expressed as a per-repo one.
+
+- **Measured, not assumed.** v1 run against the canonical fleet vectors
+  (`noc-master/data/ntfy-header-conformance.json`) failed **3 of 20** — exactly
+  the accent cases: `accent-fold` (`café renewal for José`), `accent-fold-high`
+  (`naïve ÿ`), `mixed`. The other 17 already conformed; the gap was the latin-1
+  allowance, not the transliteration table. Two gaps sit outside the vectors and
+  were also closed: no `·` (U+00B7) mapping, and a dash class covering only `—–−`
+  instead of the full U+2010–U+2015 range.
+
+- **BEHAVIOUR CHANGE operators will see.** Accented names in alert **titles** now
+  read `cafe` / `Jose` rather than `café` / `José`. That is a deliberate,
+  visible readability cost, paid so one title is deliverable by every fleet
+  publisher. Folding is what makes ASCII tolerable — `caf?` would be a
+  readability regression rather than a fix. `ß` and `°` now degrade to `?`,
+  where v1 passed them through; flagged upstream as a fleet-wide improvement
+  rather than a local divergence. **Bodies are unaffected** and keep their full
+  Unicode, as before.
+
+- **`Authorization` and the BODY are still never sanitized**, and sanitization
+  still happens at each publisher's single choke point — never per-field at call
+  sites, which is the shape that failed three times.
+
+- **Pinned to the fleet, in CI.** The canonical vectors are now **vendored** at
+  `src/__tests__/ntfy-header-conformance.json` and asserted on every run:
+  conformance to all 20, output is pure ASCII, a real undici `Request` accepts the
+  sanitized value, the raw em-dash title genuinely still throws (the bug is
+  proven, not taken on the ADR's word), accents fold rather than degrade, CR/LF
+  is stripped, the function is idempotent, and a **floor of >= 15 vectors** so a
+  truncated file cannot make the suite vacuously pass. The `.ts` and `.mjs` twins
+  are pinned equal against the vector set rather than an ad-hoc case list.
+  Vendored rather than fetched on purpose: a failed fetch degrades to a SKIPPED
+  test, which is a safety net that lies.
+
+- **Audited for bypasses.** All five publishers — `src/lib/ntfy.ts`,
+  `src/lib/mymrc/ntfy.ts`, `scripts/bonus-eod-check.mjs`,
+  `scripts/bonus-escalation-check.mjs`, `scripts/migrate-with-ntfy.mjs` — route
+  headers through the shared sanitizer. No bypass path found.
+
+- **Known limitation, raised upstream not patched locally.** Decomposed (NFD)
+  input — `e` + U+0301 rather than precomposed `é` — yields `cafe?`. Both fleet
+  reference implementations share this, so DR3 matches them rather than
+  silently diverging on a case the shared vectors cannot detect. Belongs in
+  ADR-0200 so every publisher moves together.
+
 ## 2026-08-11 (2:25 PM PT) — the em dash that ate the payroll alert (ADR-0019.5)
 
 Bill asked why the 2026-08-05 page got dropped. It was an em dash.
