@@ -246,11 +246,12 @@ describe('runProcessorQuotaDigest', () => {
     expect(db.createdLogs).toHaveLength(0);
   });
 
-  it('reports on the last COMPLETE week, not the one in progress', async () => {
+  it('reports the latest DUE Mon–Fri week — weekend excluded (ADR-0071 Am.2)', async () => {
     const db = fakeDb(FLAGGING);
     const [out] = await runProcessorQuotaDigest({ db, now: NOW });
     expect(out!.weekStartISO).toBe(WEEK);
-    expect(out!.weekEndISO).toBe('2026-07-26');
+    // Friday of that week, never the Sunday: the digest reports Mon–Fri.
+    expect(out!.weekEndISO).toBe('2026-07-24');
   });
 
   it('goes through notifyStaff — never a raw send', async () => {

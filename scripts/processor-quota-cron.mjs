@@ -3,7 +3,7 @@
 //
 // Architecture (mirrors scripts/board-pack-digest-cron.mjs): this .mjs imports
 // NOTHING — no @prisma/client, no tsx, no TypeScript. It computes the next
-// 06:00 PT instant (DST-correct via Intl formatToParts), sleeps until it, POSTs
+// 20:00 PT instant (DST-correct via Intl formatToParts), sleeps until it, POSTs
 // the internal loopback-guarded route, logs, and loops.
 //
 // ── Why it fires DAILY for a WEEKLY digest ─────────────────────────────────
@@ -28,7 +28,7 @@ const BASE = process.env.INTERNAL_BASE_URL ?? 'http://127.0.0.1:3000';
 const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 
 const PACIFIC_TZ = 'America/Los_Angeles';
-const FIRE_HOUR = 6;
+const FIRE_HOUR = 20; // ADR-0071 Am.2: Friday 20:00 PT send; daily fire keeps the self-heal
 const FIRE_MINUTE = 0;
 
 let stopping = false;
@@ -136,7 +136,7 @@ async function tick() {
 
 async function main() {
   setupShutdown();
-  logTs('daemon starting — processor-quota digest anchored to 06:00 America/Los_Angeles');
+  logTs('daemon starting — processor-quota digest anchored to 20:00 America/Los_Angeles (ADR-0071 Am.2)');
   while (!stopping) {
     try {
       await tick();

@@ -33,7 +33,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /** Fallback only — the real value comes from `processor_quota_config`. */
 export const DEFAULT_QUOTA_UNITS = 75;
 /** Fallback only — misses needed in one week before a processor is flagged. */
-export const DEFAULT_MIN_MISSES = 2;
+export const DEFAULT_MIN_MISSES = 3;
 
 export interface QuotaDay {
   dayISO: string;
@@ -113,6 +113,44 @@ export function pacificWeekBounds(at: Date): { weekStartISO: string; weekEndISO:
  * would flag someone on Wednesday for two slow days and then have no way to
  * un-flag them on Friday.
  */
+const PT_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  hour12: false,
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+/** Pacific wall-clock hour (0-23) at `at`. DST-correct via Intl. */
+export function pacificHour(at: Date): number {
+  const h = PT_CLOCK.formatToParts(at).find((x) => x.type === 'hour')?.value ?? '00';
+  // Intl emits '24' for midnight under some ICU versions; normalize.
+  return Number(h) % 24;
+}
+
+/** The digest's send moment: Friday 20:00 Pacific (ADR-0071 Amendment 2). */
+export const SEND_DOW_FRIDAY_OFFSET = 4; // Monday + 4 = Friday
+export const SEND_HOUR_PT = 20;
+
+/**
+ * The most recent Monday–**Friday** week whose Friday 20:00 PT send moment has
+ * PASSED as of `at` (ADR-0071 Amendment 2).
+ *
+ * - Fri 20:00 PT or later, Sat, Sun → the CURRENT week (Mon–Fri just ended).
+ * - Mon 00:00 → Fri 19:59 PT → the PREVIOUS week — which is exactly what makes
+ *   a missed Friday send self-heal: Saturday/Sunday/Monday ticks still target
+ *   that Friday's week, and the (site, week) idempotency claim turns the
+ *   already-sent case into a no-op.
+ */
+export function latestDueMonFriWeek(at: Date): { weekStartISO: string; weekEndISO: string } {
+  const { weekStartISO } = pacificWeekBounds(at);
+  const fridayISO = addDaysISO(weekStartISO, SEND_DOW_FRIDAY_OFFSET);
+  const todayISO = pacificISO(at);
+  const due =
+    todayISO > fridayISO || (todayISO === fridayISO && pacificHour(at) >= SEND_HOUR_PT);
+  const start = due ? weekStartISO : addDaysISO(weekStartISO, -7);
+  return { weekStartISO: start, weekEndISO: addDaysISO(start, SEND_DOW_FRIDAY_OFFSET) };
+}
+
 export function previousCompleteWeek(at: Date): { weekStartISO: string; weekEndISO: string } {
   const { weekStartISO } = pacificWeekBounds(at);
   const start = addDaysISO(weekStartISO, -7);
@@ -122,6 +160,8 @@ export function previousCompleteWeek(at: Date): { weekStartISO: string; weekEndI
 export interface ComputeArgs {
   siteId: string;
   weekStartISO: string;
+  /** Defaults to weekStart+6 (Mon–Sun). The Friday digest passes weekStart+4. */
+  weekEndISO?: string;
   quota?: number;
   minMisses?: number;
 }
@@ -137,7 +177,7 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
   const quota = args.quota ?? DEFAULT_QUOTA_UNITS;
   const minMisses = args.minMisses ?? DEFAULT_MIN_MISSES;
   const weekStartISO = args.weekStartISO;
-  const weekEndISO = addDaysISO(weekStartISO, 6);
+  const weekEndISO = args.weekEndISO ?? addDaysISO(args.weekStartISO, 6);
 
   const entries = await db.bonusDailyEntry.findMany({
     where: {

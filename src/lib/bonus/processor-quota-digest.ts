@@ -22,7 +22,7 @@ import { notifyStaff } from '@/lib/notify/notify-staff';
 import { log } from '@/lib/observability/logger';
 import {
   computeProcessorQuotaWeek,
-  previousCompleteWeek,
+  latestDueMonFriWeek,
   type ProcessorWeek,
   type QuotaWeek,
 } from './processor-quota';
@@ -142,8 +142,8 @@ export interface RunQuotaDigestOptions {
 }
 
 /**
- * Evaluate the most recent complete week for every ENABLED site config and send
- * the digest where someone flagged.
+ * Evaluate the most recent DUE Mon-Fri week (Friday 20:00 PT send moment passed;
+ * ADR-0071 Am.2) for every ENABLED site config and send the digest where someone flagged.
  *
  * Idempotent per (site, week): the unique index on `processor_quota_logs` is what
  * stops a cron that fires twice — or a container restarted at 06:01 — from
@@ -182,13 +182,18 @@ export async function runProcessorQuotaDigest(
 
   try {
     for (const cfg of configs) {
+      // ADR-0071 Amendment 2: Friday 20:00 PT, reporting the CURRENT Mon–Fri
+      // week. The selector returns the most recent week whose send moment has
+      // passed, so weekend/Monday catch-up ticks still target that Friday's
+      // week and the idempotency claim no-ops the already-sent case.
       const bounds = opts.weekStartISO
         ? { weekStartISO: opts.weekStartISO, weekEndISO: '' }
-        : previousCompleteWeek(now);
+        : latestDueMonFriWeek(now);
 
       const week = await computeProcessorQuotaWeek(db, {
         siteId: cfg.site_id,
         weekStartISO: bounds.weekStartISO,
+        ...(bounds.weekEndISO ? { weekEndISO: bounds.weekEndISO } : {}),
         quota: Number(cfg.quota_units),
         minMisses: cfg.min_misses,
       });

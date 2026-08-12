@@ -222,3 +222,50 @@ describe('miss + flag logic', () => {
     expect((await compute(entries, 75, 3)).flagged).toHaveLength(0); // threshold raised
   });
 });
+
+// ── ADR-0071 Amendment 2: Friday 20:00 PT send window (falsification-grade) ──
+import { latestDueMonFriWeek, pacificHour, DEFAULT_MIN_MISSES } from './processor-quota';
+
+describe('latestDueMonFriWeek (Am.2 send-window selector)', () => {
+  // 2026-08-14 is a Friday. PT is UTC-7 in August.
+  const fri1959 = new Date('2026-08-15T02:59:00Z'); // Fri 19:59 PT
+  const fri2000 = new Date('2026-08-15T03:00:00Z'); // Fri 20:00 PT — the moment
+  const sat = new Date('2026-08-15T16:00:00Z'); // Sat 09:00 PT
+  const sun = new Date('2026-08-16T16:00:00Z'); // Sun 09:00 PT
+  const monNext = new Date('2026-08-17T13:00:00Z'); // Mon 06:00 PT next week
+  const thu = new Date('2026-08-13T20:00:00Z'); // Thu 13:00 PT
+
+  it('Thu and Fri 19:59 target the PREVIOUS Mon–Fri week', () => {
+    expect(latestDueMonFriWeek(thu)).toEqual({ weekStartISO: '2026-08-03', weekEndISO: '2026-08-07' });
+    expect(latestDueMonFriWeek(fri1959)).toEqual({ weekStartISO: '2026-08-03', weekEndISO: '2026-08-07' });
+  });
+
+  it('Fri 20:00 PT flips to the CURRENT Mon–Fri week — the send moment', () => {
+    expect(latestDueMonFriWeek(fri2000)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+  });
+
+  it('Sat/Sun catch-up still targets that Friday week (self-heal window)', () => {
+    expect(latestDueMonFriWeek(sat)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+    expect(latestDueMonFriWeek(sun)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+  });
+
+  it('Monday next week targets the just-finished week (late catch-up, then idempotent no-op)', () => {
+    expect(latestDueMonFriWeek(monNext)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+  });
+
+  it('window is Mon–Fri, never Mon–Sun', () => {
+    const w = latestDueMonFriWeek(fri2000);
+    expect(w.weekEndISO).toBe('2026-08-14'); // Friday, not Sunday 08-16
+  });
+
+  it('DST spring-forward day still resolves a valid hour', () => {
+    // 2026-03-08 02:30 PT does not exist; 10:30Z that day is 03:30 PDT.
+    expect(pacificHour(new Date('2026-03-08T10:30:00Z'))).toBe(3);
+  });
+});
+
+describe('Am.2 default threshold', () => {
+  it('DEFAULT_MIN_MISSES is 3 — two bad days no longer flag by default', () => {
+    expect(DEFAULT_MIN_MISSES).toBe(3);
+  });
+});
