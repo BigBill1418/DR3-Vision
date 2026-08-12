@@ -1,4 +1,4 @@
-# ADR-0097 — A citation is a promise that a reason is written down
+# ADR-0098 — A citation is a promise that a reason is written down
 
 **Date:** 2026-08-11 (Pacific)
 **Status:** Accepted, implemented.
@@ -117,7 +117,7 @@ bug.
 ### D4 — The registry check WARNS; it never fails a build
 
 `node scripts/extract-adr-promises.mjs --check` emits a GitHub `::warning::`
-annotation for any ADR **newer than the registry epoch (0097)** that states a
+annotation for any ADR **newer than the registry epoch (0098)** that states a
 promise but has no row. Older ADRs are grandfathered: they are added as they are
 touched, not by a big-bang backfill nobody would review.
 
@@ -235,3 +235,39 @@ the obvious cases, not the source of truth. The register is the source of truth.
   A comment citing ADR-0074 for a rule that actually lives in ADR-0082 passes.
 - **The 33 seeded rows are not the full 104-ADR corpus.** 40 ADRs show promise
   candidates; only the floor set was audited.
+
+---
+
+## 8. This ADR was ADR-0097 for three minutes
+
+**What happened.** Two unrelated ADRs claimed **0097** on 2026-08-11. PR #244
+("A page that heals before the phone buzzes") was opened at **05:31:51Z**; this
+one, PR #245, at **05:32:10Z** — **nineteen seconds later**. Both merged (05:48:08Z
+and 05:51:44Z), and `main` briefly carried two ADR-0097 files.
+
+**Resolution.** `docs/adr/README.md` states the rule: *"A number is claimed by the
+first PUSHED reference to it, anywhere — not by the first file to reach `main`,"*
+and the precedent is that **the later claim renumbers** (ADR-0087 → 0088, resolved
+the same way). PR #244 claimed first, so this ADR renumbered to **0098** — also the
+lower-blast-radius choice, since ADR-0097 is cited by runtime code
+(`src/lib/doc-ingest/*`) while this one was cited only by its own CI scripts.
+
+**Why the number check did not save us.** Both files were checked against every
+remote branch and every open PR before pushing; #244 did not exist yet at that
+moment. The rule is sound but the window it leaves open is *the time between your
+check and your push* — here, seconds.
+
+**What is fixed.** `findDuplicateAdrNumbers` is now part of the **hard gate**. Two
+or more PRIMARY files on one number fails CI; amendment files
+(`NNNN-amendment-K-*.md`) legitimately share their parent's number and are excluded.
+
+This is worth stating precisely, because it is the sharper half of the lesson in
+§1. **The checker was green the entire time both ADR-0097s were on `main`** — the
+index MERGES files by number, which is exactly right for amendments and blind to a
+collision. A citation to ADR-0097 resolved to *two different decisions*, and that is
+**worse than resolving to none**: an unresolved citation announces itself, while an
+ambiguous one looks correct. A gate that only checks the failure mode you thought of
+still leaves the record able to lie.
+
+While fixing it, the index row that ADR-0097 never got was also written — the same
+completeness gap §6 describes, found the same way.

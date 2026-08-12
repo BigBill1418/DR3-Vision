@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ADR promise extractor + registry check (ADR-0097 C2; prescribed by ADR-0094 §5 P5).
+// ADR promise extractor + registry check (ADR-0098 C2; prescribed by ADR-0094 §5 P5).
 //
 // THE DEFECT THIS ADDRESSES. ADR-0094 §3 RC-4 counted roughly 42 forward-looking
 // commitments across the 13 floor ADRs. Not one carried an issue number. About
@@ -19,7 +19,7 @@
 // WHAT THIS IS NOT. It is not an attempt to understand English. It is a
 // deliberately narrow keyword pass tuned for PRECISION over recall: a noisy
 // linter gets disabled, and a disabled linter is worth less than no linter at
-// all. It will miss promises. That is the accepted trade — see ADR-0097 §4.
+// all. It will miss promises. That is the accepted trade — see ADR-0098 §4.
 //
 //   node scripts/extract-adr-promises.mjs            # list candidates
 //   node scripts/extract-adr-promises.mjs --check    # registry coverage (warns)
@@ -37,7 +37,7 @@ import { join } from 'node:path';
  * are only reported if they already carry a row. Anything NEWER that states a
  * promise without a registry row is what `--check` warns about.
  */
-export const REGISTRY_EPOCH_ADR = 97;
+export const REGISTRY_EPOCH_ADR = 98;
 
 /**
  * The promise vocabulary, tuned against the real corpus (104 ADRs).
@@ -46,7 +46,7 @@ export const REGISTRY_EPOCH_ADR = 97;
  * overwhelmingly genuine forward commitments. Patterns that read well in the
  * abstract but produced mostly descriptive prose — bare `should be`, bare
  * `will be`, bare `planned`, bare `pending` — were REMOVED after audit. They are
- * listed in ADR-0097 §4 as deliberate misses rather than silently dropped.
+ * listed in ADR-0098 §4 as deliberate misses rather than silently dropped.
  */
 export const PROMISE_MARKERS = [
   { name: 'not-in-this-change', re: /\bnot\s+(?:in\s+this\s+change|touched\s+here|done\s+here|fixed\s+here|addressed\s+here)\b/i },

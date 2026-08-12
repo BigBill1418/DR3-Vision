@@ -9,7 +9,39 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
-## 2026-08-11 (11 PM PT) — A citation is a promise that a reason is written down (ADR-0097)
+## 2026-08-11 (11:55 PM PT) — Two ADRs claimed 0097 nineteen seconds apart (ADR-0098 §8)
+
+**ADR number collision, resolved.** PR #244 ("A page that heals before the phone
+buzzes") was opened at 05:31:51Z and PR #245 ("A citation is a promise…") at
+**05:32:10Z** — both claiming **ADR-0097**, both merged, and `main` briefly carried
+two ADR-0097 files.
+
+- **Resolved per the repo's own rule**, stated in `docs/adr/README.md`: a number is
+  claimed by the first **pushed** reference, and the **later claim renumbers**
+  (precedent: ADR-0087 → 0088). PR #244 claimed first, so the citation/promise ADR
+  renumbered to **ADR-0098**. That was also the lower-blast-radius choice — ADR-0097
+  is cited by runtime code (`src/lib/doc-ingest/*`), ADR-0098 only by its own CI
+  scripts.
+
+- **The checker was green the whole time.** The index deliberately MERGES files that
+  share a number — correct for amendments, blind to a collision. So a citation to
+  ADR-0097 resolved to **two different decisions**, which is *worse* than resolving
+  to none: an unresolved citation announces itself, an ambiguous one looks correct.
+
+- **`findDuplicateAdrNumbers` is now part of the hard gate.** Two or more PRIMARY
+  files on one number fails CI; `NNNN-amendment-K-*.md` files legitimately share
+  their parent's number and are excluded. Three tests, including one that proves the
+  detector fires and one that proves it does **not** fire on the legitimate
+  parent-plus-amendments case.
+
+- **ADR-0097 also got the index row it never had** — the same completeness gap, found
+  the same way.
+
+Both numbers were verified free across all 56 remote branches and every open PR
+before pushing; #244 did not exist at that moment. The rule is sound, but the window
+it leaves open is the time between the check and the push. Now a gate closes it.
+
+## 2026-08-11 (11 PM PT) — A citation is a promise that a reason is written down (ADR-0098)
 
 Implements **ADR-0094 §5 P5**. Documentation, CI and test only — no runtime code,
 no new dependency, nothing to deploy.
@@ -52,7 +84,7 @@ no new dependency, nothing to deploy.
   hard gate on pre-existing drift would red-on-arrival every PR and mask the real
   gate above.
 
-- **Two deliberate deviations from P5 as written**, recorded in ADR-0097 §3: a
+- **Two deliberate deviations from P5 as written**, recorded in ADR-0098 §3: a
   registry row instead of a GitHub issue link (42 promises carried **zero** issue
   numbers — that is not 42 oversights, it is a team that does not work through
   issues, and a rule pointing at an unused system gets satisfied with a dead link),

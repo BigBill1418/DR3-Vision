@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ADR citation resolver (ADR-0097 C1; prescribed by ADR-0094 §5 P5).
+// ADR citation resolver (ADR-0098 C1; prescribed by ADR-0094 §5 P5).
 //
 // THE DEFECT THIS CATCHES. Five source files and one test carried the comment
 // "ADR-0065 Amendment 2 — the Pacific day, not the UTC day." No such amendment
@@ -181,6 +181,31 @@ export function collectAdrIndex(adrDir) {
   return index;
 }
 
+/**
+ * Two different ADRs claiming the SAME number.
+ *
+ * The index above merges every file sharing a number, which is correct for
+ * amendments and blind to a collision — so on 2026-08-11 two unrelated ADRs both
+ * landed on `main` as ADR-0097, nineteen seconds apart in PR creation, and this
+ * checker reported everything green. A citation to "ADR-0097" then resolves to
+ * two different decisions, which is worse than one that resolves to none: it
+ * looks correct.
+ *
+ * A number legitimately spans several files ONLY when the extras are amendment
+ * files (`0069-amendment-2-*.md`). Two or more PRIMARY files on one number is a
+ * collision. The repo's rule is that the number belongs to the first PUSHED
+ * reference; the later claim renumbers.
+ */
+export function findDuplicateAdrNumbers(adrDir) {
+  const index = collectAdrIndex(adrDir);
+  const collisions = [];
+  for (const [number, entry] of index) {
+    const primaries = entry.files.filter((f) => !AMENDMENT_FILENAME_RE.test(f));
+    if (primaries.length > 1) collisions.push({ number, files: primaries.sort() });
+  }
+  return collisions;
+}
+
 /** Extract every ADR citation in `text`, with 1-based line numbers. */
 export function extractCitations(text) {
   const found = [];
@@ -298,7 +323,17 @@ if (isMain) {
     );
   }
 
-  if (violations.length === 0 && staleBaseline.length === 0) {
+  const collisions = findDuplicateAdrNumbers(join(process.cwd(), 'docs', 'adr'));
+  for (const c of collisions) {
+    console.error(
+      `✗ ADR number collision: ${c.files.length} primary files claim ADR-${c.number}:\n` +
+        c.files.map((f) => `    ${f}`).join('\n') +
+        `\n    A citation to ADR-${c.number} now resolves to two different decisions.\n` +
+        `    The number belongs to the first PUSHED reference; the later claim renumbers.\n`,
+    );
+  }
+
+  if (violations.length === 0 && staleBaseline.length === 0 && collisions.length === 0) {
     console.log(
       `✓ ADR citations resolve — ${stats.citations} citations across ${stats.filesScanned} files against ${stats.adrsIndexed} ADRs.`,
     );

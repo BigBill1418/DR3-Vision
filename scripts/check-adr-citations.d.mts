@@ -1,7 +1,7 @@
 // Type surface for the (JS) ADR citation resolver, so a vitest test can import it
 // under `allowJs: false`. The module is side-effect-free on import — the CLI half
 // is guarded behind an entrypoint check — so importing it only exposes the pure
-// functions. See ADR-0097.
+// functions. See ADR-0098.
 
 export interface AdrIndexEntry {
   /** Every file carrying this ADR number: the parent plus any separate amendment files. */
@@ -59,3 +59,16 @@ export function checkAdrCitations(options?: {
   scanDirs?: string[];
   adrDir?: string;
 }): CitationCheckResult;
+
+export interface AdrNumberCollision {
+  number: string;
+  /** Primary (non-amendment) files claiming the same number. */
+  files: string[];
+}
+
+/**
+ * Two or more PRIMARY ADR files claiming one number. Amendment files
+ * (`NNNN-amendment-K-*.md`) legitimately share their parent's number and are
+ * excluded.
+ */
+export function findDuplicateAdrNumbers(adrDir: string): AdrNumberCollision[];
