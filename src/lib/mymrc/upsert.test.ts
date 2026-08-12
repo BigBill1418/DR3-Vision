@@ -38,16 +38,20 @@ function buildPrismaMock(opts: {
   sources?: Array<{ id: string; name: string }>;
   transporters?: Array<{ id: string; name: string }>;
   existingByHaulId?: Map<string, ExistingExpected | null>;
-  staleRows?: Array<{ id: string; external_mymrc_haul_id: string; cancelled_at: Date | null }>;
+  staleRows?: Array<{
+    id: string;
+    external_mymrc_haul_id: string;
+    cancelled_at: Date | null;
+    missed_scrape_count?: number;
+    first_missed_at?: Date | null;
+  }>;
 }) {
   const expectedCreate = vi.fn();
   const expectedUpdate = vi.fn();
   const auditCreate = vi.fn();
   return {
     site: {
-      findUnique: vi.fn(async () =>
-        opts.siteFound === false ? null : { id: 'site-id-1' },
-      ),
+      findUnique: vi.fn(async () => (opts.siteFound === false ? null : { id: 'site-id-1' })),
     },
     source: {
       findMany: vi.fn(async () => opts.sources ?? []),
@@ -77,7 +81,16 @@ function buildPrismaMock(opts: {
             })
             .filter((r): r is ExistingExpected => r !== null);
         }
-        return opts.staleRows ?? [];
+        // ADR-0099 — the sweep now SELECTS the streak columns, so the fake has
+        // to supply them or `missed + 1` silently becomes NaN and every
+        // comparison against the threshold is false. Defaulting to 0 here means
+        // an existing fixture describes a haul on its FIRST miss, which is the
+        // honest reading of a row that predates the column.
+        return (opts.staleRows ?? []).map((r) => ({
+          missed_scrape_count: 0,
+          first_missed_at: null,
+          ...r,
+        }));
       }),
     },
     auditLog: {
@@ -161,13 +174,17 @@ describe('upsertScrapedHauls — insert path', () => {
     expect(summary.inserted).toBe(1);
     expect(summary.updated).toBe(0);
     expect(prisma._spies.expectedCreate).toHaveBeenCalledTimes(1);
-    const createArgs = prisma._spies.expectedCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    const createArgs = prisma._spies.expectedCreate.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
     expect(createArgs.data['source_id']).toBe('src-1');
     expect(createArgs.data['transporter_id']).toBe('tx-1');
     expect(createArgs.data['site_id']).toBe('site-id-1');
     expect(createArgs.data['cancelled_at']).toBeNull();
     expect(prisma._spies.auditCreate).toHaveBeenCalledTimes(1);
-    const auditArgs = prisma._spies.auditCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    const auditArgs = prisma._spies.auditCreate.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
     expect(auditArgs.data['action']).toBe('insert');
     expect(auditArgs.data['actor_label']).toBe('system:mymrc-scrape');
     expect(auditArgs.data['table_name']).toBe('expected_loads');
@@ -187,7 +204,9 @@ describe('upsertScrapedHauls — insert path', () => {
     });
     expect(summary.unmatched_source_count).toBe(1);
     expect(summary.unmatched_transporter_count).toBe(1);
-    const createArgs = prisma._spies.expectedCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    const createArgs = prisma._spies.expectedCreate.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
     expect(createArgs.data['source_id']).toBeNull();
     expect(createArgs.data['transporter_id']).toBeNull();
     expect(createArgs.data['source_name_at_sync']).toBe('Source Alpha');
@@ -213,10 +232,14 @@ describe('upsertScrapedHauls — insert path', () => {
     expect(summary.unmatched_source_names).toEqual(['Ghost Depot']);
     expect(summary.unmatched_transporter_names).toEqual(['Phantom Freight']);
     // Exactly one warn per category, and it names the offending values.
-    const sourceWarns = logged.filter((l) => l.level === 'warn' && l.message.includes('unmatched source name'));
+    const sourceWarns = logged.filter(
+      (l) => l.level === 'warn' && l.message.includes('unmatched source name'),
+    );
     expect(sourceWarns).toHaveLength(1);
     expect(sourceWarns[0]?.message).toContain('Ghost Depot');
-    const txWarns = logged.filter((l) => l.level === 'warn' && l.message.includes('unmatched transporter name'));
+    const txWarns = logged.filter(
+      (l) => l.level === 'warn' && l.message.includes('unmatched transporter name'),
+    );
     expect(txWarns).toHaveLength(1);
     expect(txWarns[0]?.message).toContain('Phantom Freight');
   });
@@ -259,8 +282,19 @@ describe('upsertScrapedHauls — update path', () => {
     const updateArgs = prisma._spies.expectedUpdate.mock.calls[0]?.[0] as {
       data: Record<string, unknown>;
     };
-    // Bare last_synced_at + cancelled_at touch — NOT a full row update
-    expect(Object.keys(updateArgs.data).sort()).toEqual(['cancelled_at', 'last_synced_at']);
+    // Bare freshness touch — NOT a full row update. ADR-0099 added the streak
+    // reset to this payload: a haul PRESENT in this pass has a miss streak of
+    // zero by definition, and without the reset here — the path an unchanged
+    // haul takes, i.e. almost every haul on almost every pass — the count would
+    // be cumulative rather than consecutive.
+    expect(Object.keys(updateArgs.data).sort()).toEqual([
+      'cancelled_at',
+      'first_missed_at',
+      'last_synced_at',
+      'missed_scrape_count',
+    ]);
+    expect(updateArgs.data['missed_scrape_count']).toBe(0);
+    expect(updateArgs.data['first_missed_at']).toBeNull();
     expect(prisma._spies.auditCreate).not.toHaveBeenCalled();
   });
 
@@ -306,11 +340,17 @@ describe('upsertScrapedHauls — update path', () => {
 
 describe('upsertScrapedHauls — stale cancellation', () => {
   it('cancels in-window stale rows (cancelled_at = now) + writes soft_delete audit', async () => {
+    // ADR-0099 — `H-GONE` arrives already carrying TWO consecutive misses, so
+    // this pass is its third and the threshold is met. Before ADR-0099 a single
+    // absence was enough; the fixture states the streak explicitly rather than
+    // relying on a default, because the streak IS the contract now.
     const stale = [
       {
         id: 'stale-1',
         external_mymrc_haul_id: 'H-GONE',
         cancelled_at: null,
+        missed_scrape_count: 2,
+        first_missed_at: new Date('2026-05-06T16:00:00.000Z'),
       },
       {
         id: 'stale-2',
@@ -352,8 +392,22 @@ describe('upsertScrapedHauls — stale cancellation', () => {
     // but is absent from the current MyMRC scrape. It must survive untouched —
     // Janette's manual morning entries must never be clobbered (mission §8).
     const stale = [
-      { id: 'manual-1', external_mymrc_haul_id: 'MANUAL-am-entry-1', cancelled_at: null },
-      { id: 'mymrc-gone', external_mymrc_haul_id: 'H-GONE', cancelled_at: null },
+      {
+        id: 'manual-1',
+        external_mymrc_haul_id: 'MANUAL-am-entry-1',
+        cancelled_at: null,
+        // Ripe by count — proving the manual guard is what saves it, not the
+        // ADR-0099 threshold happening to be unmet.
+        missed_scrape_count: 2,
+        first_missed_at: new Date('2026-05-06T16:00:00.000Z'),
+      },
+      {
+        id: 'mymrc-gone',
+        external_mymrc_haul_id: 'H-GONE',
+        cancelled_at: null,
+        missed_scrape_count: 2,
+        first_missed_at: new Date('2026-05-06T16:00:00.000Z'),
+      },
     ];
     const prisma = buildPrismaMock({
       sources: [{ id: 'src-1', name: 'Source Alpha' }],
@@ -374,5 +428,186 @@ describe('upsertScrapedHauls — stale cancellation', () => {
     );
     expect(cancelledIds).toContain('mymrc-gone');
     expect(cancelledIds).not.toContain('manual-1');
+  });
+});
+
+// ── ADR-0099 — the sweep needs a memory ─────────────────────────────────────
+//
+// The defect: `expected_loads` rows were cancelled the FIRST time a scrape did
+// not list them. Measured on production 2026-08-11 22:04 PT — 69
+// auto-cancellations, **67 later un-cancelled by a subsequent scrape**, 30 of
+// them by the very next hourly pass, only 2 genuine retirements. Each wrong
+// cancellation removed the slot from the queue outright (`cancelled_at: null`
+// filter) and reduced its hauls card to "View only", and 16 fired BEFORE the
+// appointment — while the truck could still arrive.
+//
+// These tests are written against the OBSERVABLE payloads (what is written, and
+// whether an audit row appears), not against the counter, because "the row
+// survived" is the property the floor cares about.
+describe('upsertScrapedHauls — consecutive-miss threshold (ADR-0099)', () => {
+  const RIPE = { missed_scrape_count: 2, first_missed_at: new Date('2026-05-06T16:00:00.000Z') };
+
+  type StaleRows = NonNullable<Parameters<typeof buildPrismaMock>[0]['staleRows']>;
+
+  function sweep(staleRows: StaleRows, hauls: string[]) {
+    const prisma = buildPrismaMock({
+      sources: [{ id: 'src-1', name: 'Source Alpha' }],
+      transporters: [{ id: 'tx-1', name: 'Carrier One' }],
+      staleRows,
+    });
+    return {
+      prisma,
+      run: () =>
+        upsertScrapedHauls({
+          prisma: prisma as unknown as Parameters<typeof upsertScrapedHauls>[0]['prisma'],
+          site: 'eugene',
+          hauls: hauls.map((h) => buildHaul(h)),
+          scrapedAt: NOW,
+          now: NOW,
+        }),
+    };
+  }
+
+  it('THE DEFECT: one missing pass no longer cancels anything', async () => {
+    const { prisma, run } = sweep(
+      [{ id: 'r1', external_mymrc_haul_id: 'H-BLIP', cancelled_at: null }],
+      ['H-OTHER'],
+    );
+    const summary = await run();
+
+    expect(summary.cancelled, 'a single missing pass retired a live haul').toBe(0);
+    const upd = prisma._spies.expectedUpdate.mock.calls.find(
+      (c) => (c[0] as { where: { id: string } }).where.id === 'r1',
+    );
+    const data = (upd![0] as { data: Record<string, unknown> }).data;
+    expect(data['cancelled_at'], 'the row must stay live').toBeUndefined();
+    expect(data['missed_scrape_count']).toBe(1);
+    expect(data['first_missed_at']).toEqual(NOW);
+  });
+
+  it('a second missing pass still does not cancel — it counts', async () => {
+    const { prisma, run } = sweep(
+      [
+        {
+          id: 'r1',
+          external_mymrc_haul_id: 'H-BLIP',
+          cancelled_at: null,
+          missed_scrape_count: 1,
+          first_missed_at: new Date('2026-05-06T17:00:00.000Z'),
+        },
+      ],
+      ['H-OTHER'],
+    );
+    const summary = await run();
+
+    expect(summary.cancelled).toBe(0);
+    const data = (
+      prisma._spies.expectedUpdate.mock.calls.find(
+        (c) => (c[0] as { where: { id: string } }).where.id === 'r1',
+      )![0] as { data: Record<string, unknown> }
+    ).data;
+    expect(data['missed_scrape_count']).toBe(2);
+    // The streak's START is preserved, not re-stamped — otherwise "how long was
+    // it gone" is unanswerable from the row.
+    expect(data['first_missed_at']).toEqual(new Date('2026-05-06T17:00:00.000Z'));
+  });
+
+  it('the THIRD consecutive miss cancels, and the audit row carries the evidence', async () => {
+    const { prisma, run } = sweep(
+      [{ id: 'r1', external_mymrc_haul_id: 'H-GONE', cancelled_at: null, ...RIPE }],
+      ['H-OTHER'],
+    );
+    const summary = await run();
+
+    expect(summary.cancelled).toBe(1);
+    const audit = prisma._spies.auditCreate.mock.calls.at(-1)?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(audit.data['action']).toBe('soft_delete');
+    const after = audit.data['after'] as Record<string, unknown>;
+    // "Was three the right number?" has to be answerable from the ledger rather
+    // than from the argument in the ADR — ADR-0094 §6 asks this of every
+    // threshold, and a soft_delete row that records only `cancelled_at` cannot
+    // answer it.
+    expect(after['missed_scrape_count']).toBe(3);
+    // `writeAudit` round-trips its payload through JSON, so instants land in the
+    // ledger as ISO strings. Asserted in that form deliberately: this is what a
+    // future query against `audit_log.after` actually reads.
+    expect(after['first_missed_at']).toBe(RIPE.first_missed_at.toISOString());
+  });
+
+  it('a haul PRESENT in this pass has its streak reset — misses must be CONSECUTIVE', async () => {
+    // The drop-then-re-add case the module header has always described. Without
+    // the reset the count is cumulative, and three scattered misses across three
+    // weeks would retire a haul that appeared in the ninety passes between them.
+    // Inlined rather than reusing `existingMatching()` — that helper is scoped
+    // to the update-path describe block above.
+    const map = new Map<string, ExistingExpected | null>([
+      [
+        'H-BACK',
+        {
+          id: 'existing-back',
+          site_id: 'site-id-1',
+          expected_arrival_at: HAUL_BASE.expected_arrival_at,
+          source_id: 'src-1',
+          source_name_at_sync: 'Source Alpha',
+          transporter_id: 'tx-1',
+          transporter_name_at_sync: 'Carrier One',
+          expected_unit_count: 50,
+          bol_number: 'BOL-A',
+          scheduled_at_mymrc: null,
+          cancelled_at: new Date('2026-05-05T00:00:00Z'),
+        },
+      ],
+    ]);
+    const prisma = buildPrismaMock({
+      sources: [{ id: 'src-1', name: 'Source Alpha' }],
+      transporters: [{ id: 'tx-1', name: 'Carrier One' }],
+      existingByHaulId: map,
+    });
+    await upsertScrapedHauls({
+      prisma: prisma as unknown as Parameters<typeof upsertScrapedHauls>[0]['prisma'],
+      site: 'eugene',
+      hauls: [buildHaul('H-BACK')],
+      scrapedAt: NOW,
+      now: NOW,
+    });
+
+    const data = (
+      prisma._spies.expectedUpdate.mock.calls.at(-1)![0] as { data: Record<string, unknown> }
+    ).data;
+    expect(data['cancelled_at'], 'a re-appearing haul must come back to life').toBeNull();
+    expect(data['missed_scrape_count']).toBe(0);
+    expect(data['first_missed_at']).toBeNull();
+  });
+
+  it('A PASS THAT SAW NOTHING RETIRES NOTHING — the whole-site fence', async () => {
+    // `feedExpectedLoads` reads the MIRROR, not the scrape, so an empty array can
+    // reach this function without `sync.ts`'s zero-anomaly gate ever firing. With
+    // a one-miss rule that was a whole-site wipe on one bad read; with a
+    // three-miss rule it is a whole-site wipe after three. The fence is cheaper
+    // than depending on two callers upstream continuing to hold.
+    const log = vi.fn();
+    const prisma = buildPrismaMock({
+      staleRows: [{ id: 'r1', external_mymrc_haul_id: 'H-GONE', cancelled_at: null, ...RIPE }],
+    });
+    const summary = await upsertScrapedHauls({
+      prisma: prisma as unknown as Parameters<typeof upsertScrapedHauls>[0]['prisma'],
+      site: 'eugene',
+      hauls: [],
+      scrapedAt: NOW,
+      now: NOW,
+      log,
+    });
+
+    expect(summary.cancelled).toBe(0);
+    expect(
+      prisma._spies.expectedUpdate,
+      'an empty pass wrote to expected_loads',
+    ).not.toHaveBeenCalled();
+    // Silence would make this indistinguishable from "nothing was stale".
+    expect(
+      log.mock.calls.some(([lvl, msg]) => lvl === 'warn' && /sweep SKIPPED/.test(String(msg))),
+    ).toBe(true);
   });
 });

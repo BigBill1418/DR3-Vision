@@ -136,6 +136,13 @@ export interface PortalHaulRow {
   reconcilableExpectedLoadId: string | null;
   /** The slot's own Pacific day, for the confirmation the operator must read. */
   slotDayISO: string | null;
+  /**
+   * ADR-0099 — non-null when the haul HAS a slot and MyMRC withdrew it. Distinct
+   * from `slotDayISO === null` (no slot was ever bridged) and from every other
+   * reason `expectedLoadId` is null. The card is read-only either way; the
+   * difference is whether it can say why.
+   */
+  cancelledAt: Date | null;
 }
 
 export interface PortalHaulsPage {
@@ -288,6 +295,16 @@ interface SiblingVerdict {
   reconcilableExpectedLoadId: string | null;
   /** The slot's own Pacific day (`YYYY-MM-DD`) — what the operator must confirm. */
   slotDayISO: string | null;
+  /**
+   * ADR-0099 — when MyMRC withdrew this slot, or null if it is live.
+   *
+   * The audit's D-2 finding: a cancelled sibling used to hit a bare `continue`
+   * below, which emitted NO verdict at all — so the card fell through to the
+   * same "View only" branch as "no sibling" and "not today". Three unrelated
+   * conditions, one four-letter label. This field is what lets the card say
+   * which one it is.
+   */
+  cancelledAt: Date | null;
 }
 
 function toRow(r: MirrorSelection, expectedByHaulId: Map<string, SiblingVerdict>): PortalHaulRow {
@@ -309,6 +326,7 @@ function toRow(r: MirrorSelection, expectedByHaulId: Map<string, SiblingVerdict>
     consumedLoad: verdict?.consumedLoad ?? null,
     reconcilableExpectedLoadId: verdict?.reconcilableExpectedLoadId ?? null,
     slotDayISO: verdict?.slotDayISO ?? null,
+    cancelledAt: verdict?.cancelledAt ?? null,
   };
 }
 
@@ -381,9 +399,26 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
       },
     });
     for (const s of siblings) {
-      // A CANCELLED expected load is not check-in-able. Mapping it would render a
-      // button whose server action refuses — worse than no button at all.
-      if (s.cancelled_at !== null) continue;
+      // A CANCELLED expected load is not check-in-able: `startInboundLoad`
+      // answers 409 `expected_load_cancelled`, so a control here would be one
+      // whose only outcome is a refusal — the thing ADR-0074 Am.1 forbids.
+      //
+      // ADR-0099 — but it must still SAY SO. This used to be a bare `continue`
+      // that emitted no verdict, so the row fell through to the identical "View
+      // only" card as "no sibling exists" and "not scheduled today". The
+      // operator standing next to a truck whose slot MyMRC withdrew 40 minutes
+      // ago got two words and no reason, on the one surface that still showed
+      // the row at all — the queue filters it out entirely.
+      if (s.cancelled_at !== null) {
+        expectedByHaulId.set(s.external_mymrc_haul_id, {
+          startableExpectedLoadId: null,
+          consumedLoad: s.inbound_load ? toConsumedLoad(s.inbound_load) : null,
+          reconcilableExpectedLoadId: null,
+          slotDayISO: s.expected_arrival_at !== null ? pacificDayISO(s.expected_arrival_at) : null,
+          cancelledAt: s.cancelled_at,
+        });
+        continue;
+      }
 
       if (s.inbound_load) {
         // CONSUMED. `startInboundLoad` would hand back this existing child, so a
@@ -396,6 +431,7 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
           // ADR-0091 routes into it.
           reconcilableExpectedLoadId: null,
           slotDayISO: null,
+          cancelledAt: null,
         });
         continue;
       }
@@ -416,6 +452,7 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
         // and the reconcile cannot be made evidence-bearing.
         reconcilableExpectedLoadId: at !== null && !startableToday ? s.id : null,
         slotDayISO: at !== null ? pacificDayISO(at) : null,
+        cancelledAt: null,
       });
     }
   }

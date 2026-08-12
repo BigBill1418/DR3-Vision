@@ -64,7 +64,8 @@
     "open_status_voided": "Cerrada por error",
     "open_status_submitted_to_mymrc": "Enviada a MyMRC",
     "open_status_processed": "Procesada",
-    "open_status_unknown": "Estado desconocido"
+    "open_status_unknown": "Estado desconocido",
+    "withdrawn_heading": "Retirados de la lista de hoy por MyMRC"
   },
   "load_header": {
     "unknown_source": "Origen desconocido",
@@ -364,7 +365,9 @@
       "late_cancel": "Cancelar",
       "late_failed": "No se pudo registrar. Actualice la página e inténtelo de nuevo.",
       "stale_day": "Esta página es de un día anterior. Recárguela para registrar las cargas de hoy.",
-      "empty_no_hauls_why": "Este sitio no tiene conexión con el portal MyMRC, así que no hay nada que mostrar aquí. Es normal — usa la cola para los camiones de hoy."
+      "empty_no_hauls_why": "Este sitio no tiene conexión con el portal MyMRC, así que no hay nada que mostrar aquí. Es normal — usa la cola para los camiones de hoy.",
+      "withdrawn": "MyMRC retiró este viaje a las {{time}}.",
+      "withdrawn_what_to_do": "Si el camión está aquí, llama a la oficina. En cuanto lo vuelvan a poner en MyMRC, reaparece en esta pantalla dentro de una hora — no tienes que hacer nada en el iPad."
     },
     "inbound": {
       "heading": "Confirmar recepción",

@@ -702,6 +702,43 @@ describe('a slot booked for another day is RECONCILABLE, not startable', () => {
     expect(row?.reconcilableExpectedLoadId).toBeNull();
   });
 
+  // ── ADR-0099 — a withdrawn slot must SAY it was withdrawn ─────────────────
+  //
+  // The read layer used to hit a bare `continue` on a cancelled sibling, which
+  // emitted NO verdict at all. The card therefore fell through to the identical
+  // "View only" branch as "no sibling exists" and "not scheduled today" — three
+  // unrelated conditions under one four-letter label, on the only surface that
+  // still showed the row (the queue filtered it out entirely).
+  it('THE DEFECT: a cancelled slot now reports WHEN it was withdrawn', async () => {
+    const withdrawnAt = new Date('2026-08-09T23:00:00Z');
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-cancelled',
+        expected_arrival_at: TODAY_APPT,
+        cancelled_at: withdrawnAt,
+      }),
+    ];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+
+    expect(row?.cancelledAt).toEqual(withdrawnAt);
+    // Still no control anywhere — `startInboundLoad` answers 409
+    // `expected_load_cancelled`, so any of these being non-null would be an
+    // affordance whose only outcome is a refusal.
+    expect(row?.expectedLoadId).toBeNull();
+    expect(row?.reconcilableExpectedLoadId).toBeNull();
+    // And it can still name the day, so the card is not reduced to a bare date.
+    expect(row?.slotDayISO).not.toBeNull();
+  });
+
+  it('a LIVE slot reports no withdrawal — the field is not a default', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [expectedRow({ id: 'exp-live', expected_arrival_at: TODAY_APPT })];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.cancelledAt).toBeNull();
+    expect(row?.expectedLoadId).toBe('exp-live');
+  });
+
   it('a CONSUMED past-day slot reports its child, never a reconcile', async () => {
     store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
     store.expected = [

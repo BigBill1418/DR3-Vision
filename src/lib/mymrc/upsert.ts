@@ -45,6 +45,38 @@ import type { Logger } from './sync';
 const SCRAPE_WINDOW_DAYS = 7;
 const ACTOR_LABEL = 'system:mymrc-scrape';
 
+/**
+ * ADR-0099 — how many CONSECUTIVE scrapes must miss a haul before it is retired.
+ *
+ * ## Why three, and why this number is not a guess
+ *
+ * The cron runs hourly on the hour (`scripts/mymrc-cron.mjs` → `msUntilNextHour`),
+ * so three consecutive misses means the haul has been absent from the portal for
+ * at least ~2 hours of wall clock.
+ *
+ * Measured against every auto-cancellation in production history at 2026-08-11
+ * 22:04 PT (n=69), bucketed by how long until a later scrape un-cancelled the
+ * same row:
+ *
+ *     next scrape (<=70m)   30      <- one miss. Eliminated by N=2.
+ *     70m - 3h               2      <- eliminated by N=3.
+ *     >24h                  35      <- median 46h. NOT eliminable by any N.
+ *     never restored         2      <- the only genuine retirements.
+ *
+ * The distribution is cleanly bimodal, and N=3 sits in the gap. It removes
+ * **32 of 69 cancellations (46%)** — every one that resolved inside a day —
+ * while leaving the >24h population untouched, which is correct: a haul absent
+ * for two days really has been withdrawn, and cancelling it is the right answer.
+ *
+ * N=2 would remove 30 of those 32. The extra hour buys the 70m–3h pair and a
+ * margin against a single skipped or slow run, and costs at most ~2 extra hours
+ * of a stale row remaining VISIBLE — which is the safe direction, because the
+ * failure this exists to prevent is a truck on the dock with no row to tap.
+ *
+ * Re-derive this from `audit_log` before changing it; the query is in ADR-0099.
+ */
+const CANCEL_AFTER_CONSECUTIVE_MISSES = 3;
+
 // Scrape-ownership marker (source=manual protection — ADR-0038 D2, mission §8).
 // Real MyMRC haul ids are "H-<digits>"; the stale-cancel sweep may only cancel
 // rows it owns (a MyMRC haul that dropped off the feed). Operator/manual expected
@@ -107,9 +139,7 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
   // table) to avoid an N+1 across the haul list.
   const sourceNames = [...new Set(ctx.hauls.map((h) => h.source_name))];
   const transporterNames = [
-    ...new Set(
-      ctx.hauls.map((h) => h.transporter_name).filter((n): n is string => n !== null),
-    ),
+    ...new Set(ctx.hauls.map((h) => h.transporter_name).filter((n): n is string => n !== null)),
   ];
   const [sourceRows, transporterRows] = await Promise.all([
     sourceNames.length > 0
@@ -198,7 +228,7 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
       unmatchedSourceNames.add(haul.source_name);
     }
     const transporterId = haul.transporter_name
-      ? transporterByName.get(haul.transporter_name) ?? null
+      ? (transporterByName.get(haul.transporter_name) ?? null)
       : null;
     if (haul.transporter_name && transporterId === null) {
       unmatchedTransporters += 1;
@@ -221,7 +251,18 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
       last_synced_at: ctx.scrapedAt,
       // Re-appearing haul → un-cancel. MyMRC sometimes drops then
       // re-adds a haul during operator edits; preserve the row identity.
+      //
+      // ADR-0099 — this un-cancel ALREADY WORKED, and measuring it is what
+      // produced the threshold below: 67 of 69 auto-cancellations were undone
+      // here by a later pass. So the resurrection path is not new, it is the
+      // evidence. What is new is the streak reset: a haul present in THIS pass
+      // has a miss streak of zero by definition, and without the reset the
+      // count would be cumulative rather than consecutive — three scattered
+      // misses over three weeks would retire a haul that appeared in the ninety
+      // passes between them.
       cancelled_at: null,
+      missed_scrape_count: 0,
+      first_missed_at: null,
     };
 
     if (!existing) {
@@ -259,7 +300,17 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
       // freshness signal, not a value change.
       await ctx.prisma.expectedLoad.update({
         where: { id: existing.id },
-        data: { last_synced_at: ctx.scrapedAt, cancelled_at: null },
+        // ADR-0099 — the streak reset rides the freshness touch too. This is the
+        // path taken by an UNCHANGED haul, which is the overwhelmingly common
+        // case: without it, a haul that is present every hour but never edited
+        // would keep whatever streak a single earlier miss left behind, and the
+        // count would stop meaning "consecutive".
+        data: {
+          last_synced_at: ctx.scrapedAt,
+          cancelled_at: null,
+          missed_scrape_count: 0,
+          first_missed_at: null,
+        },
       });
       continue;
     }
@@ -279,38 +330,96 @@ export async function upsertScrapedHauls(ctx: UpsertContext): Promise<UpsertSumm
     });
   }
 
-  // Stale-haul cancellation. Scrape window is "today through +7 days"
-  // (matches the runbook); we only flag rows whose expected arrival
-  // falls in that window AND aren't in the latest scrape. Past-arrival
-  // rows are owned by the load workflow, not the scrape.
-  const windowStart = startOfUtcDay(now);
+  // ── Stale-haul cancellation (ADR-0099) ──────────────────────────────────
+  //
+  // Scrape window is "today through +7 days" (matches the runbook); only rows
+  // whose expected arrival falls in that window AND are absent from the latest
+  // scrape are candidates. Past-arrival rows are owned by the load workflow.
+  //
+  // WHAT CHANGED: this used to cancel on ONE missing pass. It now requires
+  // `CANCEL_AFTER_CONSECUTIVE_MISSES` of them. The comment two blocks up has
+  // always said the input is unreliable — "MyMRC sometimes drops then re-adds a
+  // haul during operator edits" — and production proved how unreliable at
+  // 2026-08-11 22:04 PT: 69 auto-cancellations, **67 later un-cancelled by a
+  // subsequent scrape**, 30 of them by the very next hourly pass. Two were
+  // genuine. The sweep was flapping, and each flap hid a slot from the queue
+  // (`cancelled_at: null` filter) and reduced its hauls card to "View only" —
+  // 16 of those firings landed BEFORE the appointment, while the truck could
+  // still turn up.
+  const windowStart = startOfPacificDay(now);
   const windowEnd = new Date(windowStart.getTime() + SCRAPE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const scrapedIds = new Set(ctx.hauls.map((h) => h.external_mymrc_haul_id));
-  const stale = await ctx.prisma.expectedLoad.findMany({
-    where: {
-      site_id: siteId,
-      cancelled_at: null,
-      expected_arrival_at: { gte: windowStart, lte: windowEnd },
-    },
-    select: { id: true, external_mymrc_haul_id: true, cancelled_at: true },
-  });
-  for (const row of stale) {
-    if (scrapedIds.has(row.external_mymrc_haul_id)) continue;
-    // Never cancel a manually-entered row (source=manual protection).
-    if (!MYMRC_OWNED_HAUL_ID.test(row.external_mymrc_haul_id)) continue;
-    await ctx.prisma.expectedLoad.update({
-      where: { id: row.id },
-      data: { cancelled_at: now },
+
+  // FENCE: a scrape that saw NOTHING must never retire everything.
+  //
+  // `sync.ts` has a zero-anomaly gate on the LIST pass, and `markDisappeared`
+  // runs only on a proven-complete list — but neither guards THIS function,
+  // which is fed from the mirror by `feedExpectedLoads` and can legitimately be
+  // reached with an empty array if the mirror query returns nothing for a site.
+  // With a one-miss rule that was a whole-site wipe on a single bad read; with a
+  // three-miss rule it is a whole-site wipe after three. Cheaper to state the
+  // invariant than to rely on two callers upstream continuing to hold.
+  if (ctx.hauls.length === 0) {
+    ctx.log?.(
+      'warn',
+      `mymrc-upsert: ${ctx.site} — 0 hauls in this pass; stale-cancel sweep SKIPPED (a pass that saw nothing cannot prove anything is gone)`,
+    );
+  } else {
+    const stale = await ctx.prisma.expectedLoad.findMany({
+      where: {
+        site_id: siteId,
+        cancelled_at: null,
+        expected_arrival_at: { gte: windowStart, lte: windowEnd },
+      },
+      select: {
+        id: true,
+        external_mymrc_haul_id: true,
+        cancelled_at: true,
+        missed_scrape_count: true,
+        first_missed_at: true,
+      },
     });
-    cancelled += 1;
-    await writeAudit(ctx.prisma, {
-      actor_label: ACTOR_LABEL,
-      action: 'soft_delete',
-      table_name: 'expected_loads',
-      row_id: row.id,
-      before: { cancelled_at: null },
-      after: { cancelled_at: now },
-    });
+    for (const row of stale) {
+      if (scrapedIds.has(row.external_mymrc_haul_id)) continue;
+      // Never cancel a manually-entered row (source=manual protection).
+      if (!MYMRC_OWNED_HAUL_ID.test(row.external_mymrc_haul_id)) continue;
+
+      const misses = row.missed_scrape_count + 1;
+      const firstMissedAt = row.first_missed_at ?? now;
+
+      if (misses < CANCEL_AFTER_CONSECUTIVE_MISSES) {
+        // Count it and leave it ALIVE. No audit row: a miss is not a change to
+        // the haul, it is a fact about this pass, and `audit_log` is append-only
+        // and retained indefinitely (hard rule #6) — writing one per miss per
+        // row per hour would bury the cancellations that matter in noise.
+        await ctx.prisma.expectedLoad.update({
+          where: { id: row.id },
+          data: { missed_scrape_count: misses, first_missed_at: firstMissedAt },
+        });
+        continue;
+      }
+
+      await ctx.prisma.expectedLoad.update({
+        where: { id: row.id },
+        data: { cancelled_at: now, missed_scrape_count: misses, first_missed_at: firstMissedAt },
+      });
+      cancelled += 1;
+      await writeAudit(ctx.prisma, {
+        actor_label: ACTOR_LABEL,
+        action: 'soft_delete',
+        table_name: 'expected_loads',
+        row_id: row.id,
+        before: { cancelled_at: null, missed_scrape_count: row.missed_scrape_count },
+        after: {
+          cancelled_at: now,
+          // ADR-0099 — the evidence the cancellation was earned, carried on the
+          // audit row so "was three the right number?" is answerable from the
+          // ledger rather than from an argument.
+          missed_scrape_count: misses,
+          first_missed_at: firstMissedAt,
+        },
+      });
+    }
   }
 
   // One warn per run naming the deduped unmatched names — an unmatched name means
@@ -401,8 +510,56 @@ function hasMaterialChange(existing: ExistingRow, next: NextRow): boolean {
   return false;
 }
 
-function startOfUtcDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+/**
+ * Midnight at the start of the current PACIFIC day, as a true instant.
+ *
+ * ## Why this replaced `startOfUtcDay` (ADR-0099, audit D-2 secondary defect)
+ *
+ * The sweep bounded its window on `startOfUtcDay(now)` while every READ surface
+ * bounds on the Pacific day (`currentPacificDayWindow` in `@/lib/time`). Between
+ * 17:00 PT and Pacific midnight the UTC day has already rolled, so the sweep's
+ * "today" was the operator's TOMORROW — and the window's lower edge had walked
+ * past the slots still on the queue. That is the exact UTC/Pacific class ADR-0065
+ * was written to eliminate, still live in the write path a month later.
+ *
+ * ## Why it is duplicated instead of imported
+ *
+ * `src/lib/mymrc` compiles standalone via `tsconfig.mymrc.json`, whose rootDir
+ * forbids importing from above it — the same constraint that already forces the
+ * local `writeAudit` above and `header-safe.ts` beside this file. The read-side
+ * helper stays authoritative; this one must agree with it.
+ *
+ * DST-correct in both directions because the offset is asked of `Intl` for the
+ * instant in question rather than assumed: `en-CA` yields `YYYY-MM-DD`, and
+ * re-parsing that day at the zone's own offset gives the true midnight instant.
+ * The fall-back ambiguity (two 01:00s on 2026-11-01) cannot produce a zero-width
+ * or inverted window here, because only the START of the day is derived and the
+ * end is a fixed +7d offset from it.
+ */
+const PACIFIC_TZ = 'America/Los_Angeles';
+
+export function startOfPacificDay(d: Date): Date {
+  // The Pacific calendar day `d` falls on. `en-CA` is the locale that yields
+  // `YYYY-MM-DD` rather than a US-ordered date.
+  const dayISO = new Intl.DateTimeFormat('en-CA', { timeZone: PACIFIC_TZ }).format(d);
+
+  // The zone's UTC offset ON THAT DAY, read rather than assumed. Probed at noon
+  // UTC so the probe itself can never land on a 01:00–03:00 DST transition.
+  const probe = new Date(`${dayISO}T12:00:00Z`);
+  const localHour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: PACIFIC_TZ,
+      hour: 'numeric',
+      hour12: false,
+    })
+      .formatToParts(probe)
+      .find((x) => x.type === 'hour')?.value ?? '12',
+  );
+  // Pacific is BEHIND UTC, so 12:00Z reads as 05:00 (PDT) or 04:00 (PST) and the
+  // offset is 7 or 8. Midnight Pacific is therefore that many hours AFTER the
+  // day's 00:00Z.
+  const offsetHours = 12 - localHour;
+  return new Date(new Date(`${dayISO}T00:00:00Z`).getTime() + offsetHours * 3_600_000);
 }
 
 // Local audit writer — accepts the caller's PrismaClient so the cron

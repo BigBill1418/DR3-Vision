@@ -55,6 +55,8 @@ export interface HaulRowView {
   reconcilableExpectedLoadId: string | null;
   /** That slot's own Pacific day, `YYYY-MM-DD`. */
   slotDayISO: string | null;
+  /** ADR-0099 — non-null when MyMRC WITHDREW this haul's slot. */
+  cancelledAtISO: string | null;
   /** Non-null ⇒ the slot has already been worked. See `portal-hauls.ts`. */
   consumedLoad: {
     status: string;
@@ -248,6 +250,33 @@ export function HaulsClient({
         >
           {renderBody(r)}
         </ReconcileRow>
+      ) : r.cancelledAtISO ? (
+        // ADR-0099 — MyMRC WITHDREW this slot. Until now this hit a bare
+        // `continue` in `portal-hauls.ts` and fell into the "View only" branch
+        // below, so a withdrawn haul, an undated one and a haul with no slot at
+        // all were the same two words.
+        //
+        // No control, deliberately: `startInboundLoad` answers 409
+        // `expected_load_cancelled`, so a button here would be one whose only
+        // outcome is a refusal. What it gets instead is the `hold_remote_note`
+        // shape the audit names as the house best practice for exactly this
+        // case — say WHEN it happened, WHO can act, and FROM WHERE. And it
+        // self-heals: the office re-adding the haul in MyMRC brings the row back
+        // within the hour, because the scrape's un-cancel path already works.
+        <div
+          className="rounded-lg bg-amber-900/40 p-4 ring-1 ring-amber-400/40"
+          data-testid="haul-withdrawn"
+        >
+          {renderBody(r)}
+          <p className="mt-2 text-start text-sm font-semibold text-amber-100">
+            {t('floor.hauls.withdrawn', {
+              time: formatTime(new Date(r.cancelledAtISO), locale),
+            })}
+          </p>
+          <p className="mt-1 text-start text-sm text-dr3-cream/80">
+            {t('floor.hauls.withdrawn_what_to_do')}
+          </p>
+        </div>
       ) : (
         // No sibling at all, or an UNDATED one: information, not work. ADR-0074
         // D5 forbids synthesizing a slot to make a button possible, and an

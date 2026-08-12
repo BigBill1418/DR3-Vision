@@ -61,6 +61,10 @@ function toView(r: PortalHaulRow): HaulRowView {
     // ADR-0096 — the divergent-day state, carried as its own field.
     reconcilableExpectedLoadId: r.reconcilableExpectedLoadId,
     slotDayISO: r.slotDayISO,
+    // ADR-0099 — MyMRC withdrew the slot. Its own field for the same reason
+    // `reconcilableExpectedLoadId` is: three unrelated conditions used to share
+    // one "View only" label, and a card cannot name a state it was not handed.
+    cancelledAtISO: r.cancelledAt ? r.cancelledAt.toISOString() : null,
     consumedLoad: r.consumedLoad
       ? {
           status: r.consumedLoad.status,
