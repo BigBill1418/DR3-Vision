@@ -9,6 +9,61 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (10 PM PT) — Why the floor keeps calling: one defect class, not many bugs (ADR-0094)
+
+Bill, after the second floor-blocking incident in two days: _"I need to understand
+why these issues keep happening — they should not need to call for help daily for
+this kind of issue."_ **ADR-0094 is the answer**, measured against production rather
+than argued from the code. Documentation only — no behaviour changes in this commit.
+
+- **The headline number: 43 of 89 scheduled slots — 48.3% — diverge from the happy
+  path.** Arrived on a different calendar day (7), >4h late (10), >4h early (4),
+  never produced a child load at all (29), crossed midnight (6 of 64 claims),
+  changed operator (15), carried no expected count (14). The design treats
+  divergence as exceptional; in the yard it is a coin flip. And the response to
+  nearly every unmodeled divergence is the same — **a card with information on it
+  and no way to act.** The three incidents of 8/10–8/11 are three branches of one
+  defect class, so fixing one branch per incident is a losing race.
+
+- **A correction to the premise.** The floor workflow did not "go live in June."
+  `inbound_loads` records the first operator-claimed load on **2026-07-29** — before
+  that, zero rows carry an `assigned_operator_id`. The claim/count/submit workflow
+  has ten operating days on it, with floor write volume up **~60× in that window**
+  and the peak day (08-10, 92 writes) producing three ADRs.
+
+- **A 13-day backlog nobody could see.** Of 16 recorded takeovers, eight fired in a
+  16-minute burst on the morning of 08-10 against claims aged **2.9 to 12.8 days** —
+  a backlog reaching back to the first days of floor use, cleared by hand on the
+  first morning ADR-0082's takeover control existed. There was no representation for
+  "claimed and abandoned," so the condition accumulated silently from day one.
+
+- **Five ranked root causes**, with the shares stated as overlapping contributions
+  rather than a partition: the domain model encodes the schedule while the floor
+  works the yard (~60%); parity between surfaces was convention, not test (~25%);
+  ship velocity outran the verification loop (~40% of the *recurrence rate* — four
+  behaviour-changing PRs merged 13:59–19:54 PT on 08-10, and Pablo was stranded at
+  07:50 the next morning by the 16:29 one); **forward promises live in prose, and
+  prose does not execute** (~15%); and a maturation curve that predicts the incident
+  rate **rises before it falls**.
+
+- **Found while counting promises:** ~42 forward commitments across the 13 floor
+  ADRs carry **zero issue numbers**, and six source files plus one test cite an
+  **`ADR-0065 Amendment 2` that does not exist**. Same class as the health pill that
+  two later ADRs cited as a live control while it sat unbuilt for four months.
+
+- **P0–P6, ~11–13 engineering days**, ordered by leverage per hour and front-loaded
+  so the first 1.5 days change what Bill knows and the first 4 change what CI
+  catches. §6 states plainly what the plan does *not* fix — it does not reduce the
+  48% divergence rate, and the first week of telemetry will look **worse**, which is
+  the instrument working rather than a regression.
+
+**Landed late:** written earlier the same evening and held out of git while the
+shared checkout carried another session's work. Committed unmodified except for a
+landing note and a date correction — the header read `2026-08-12`, the UTC day, the
+same bleed this file warns about at the top and that `0101306` corrected for
+ADR-0093 hours earlier. **§5 P2 shipped as ADR-0096 before this ADR landed**, and
+followed its prescription: no widening of the ADR-0074 D5 day bound.
+
 ## 2026-08-11 (5:18 PM PT) — INCIDENT: a truck that arrived a day late had no way in (ADR-0096)
 
 Bill, 5:18 PM PT: _"Trying to access speedy delivery H-136980. But it won't let
