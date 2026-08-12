@@ -25,7 +25,19 @@ import type { DriveFile } from './types';
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const REQUEST_TIMEOUT_MS = 60_000; // xlsm downloads can be multi-MB
-const FILE_SELECT = 'id,name,cTag,size,lastModifiedDateTime';
+// ADR-0102 — `file` and `folder` are NOT optional here.
+//
+// `$select` returns ONLY the properties it names. This list used to stop at
+// `lastModifiedDateTime`, so every driveItem came back without its `file` facet,
+// `toDriveFile()` read that absence as "folder, not a file", and `listFolder`
+// returned zero files for EVERY folder in EVERY drive. The transport was
+// structurally incapable of finding anything: DR3 Woodland polled 1098 times and
+// recorded `not_found` 1098 times while the workbook sat in the folder.
+//
+// `folder` is selected too, so file-vs-folder is a POSITIVE test on both sides
+// rather than an inference from one missing field — which is what let the
+// omission masquerade as a legitimate answer.
+const FILE_SELECT = 'id,name,cTag,size,lastModifiedDateTime,file,folder';
 
 interface TokenCache {
   token: string;
@@ -68,8 +80,12 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
         signal: controller.signal,
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
-      if (res.status === 403) throw new FilesForbiddenError(`Graph returned 403 for ${redactUrl(url)} — Files.Read.All missing?`);
-      if (res.status === 401) throw new FilesAuthFailedError(`Graph returned 401 for ${redactUrl(url)}`);
+      if (res.status === 403)
+        throw new FilesForbiddenError(
+          `Graph returned 403 for ${redactUrl(url)} — Files.Read.All missing?`,
+        );
+      if (res.status === 401)
+        throw new FilesAuthFailedError(`Graph returned 401 for ${redactUrl(url)}`);
       return res;
     } finally {
       clearTimeout(timer);
@@ -79,7 +95,8 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
   async function graphJson(url: string): Promise<Record<string, unknown>> {
     const res = await graphFetch(url);
     if (res.status === 404) return { value: [], notFound: true };
-    if (!res.ok) throw new FilesContractDriftError(`Graph GET ${redactUrl(url)} → HTTP ${res.status}`);
+    if (!res.ok)
+      throw new FilesContractDriftError(`Graph GET ${redactUrl(url)} → HTTP ${res.status}`);
     return (await res.json()) as Record<string, unknown>;
   }
 
@@ -91,7 +108,10 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
   function childrenUrl(driveUpn: string, folderPath: string): string {
     const clean = folderPath.replace(/^\/+|\/+$/g, '');
     if (clean === '') return `${driveRoot(driveUpn)}/root/children?$select=${FILE_SELECT}&$top=200`;
-    const encPath = clean.split('/').map((seg) => encodeURIComponent(seg)).join('/');
+    const encPath = clean
+      .split('/')
+      .map((seg) => encodeURIComponent(seg))
+      .join('/');
     return `${driveRoot(driveUpn)}/root:/${encPath}:/children?$select=${FILE_SELECT}&$top=200`;
   }
 
@@ -116,7 +136,31 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
       const body: Record<string, unknown> = await graphJson(url);
       if (body['notFound']) return []; // missing folder ⇒ empty, never a throw (D5)
       const value = body['value'];
-      if (!Array.isArray(value)) throw new FilesContractDriftError('children response missing "value" array');
+      if (!Array.isArray(value))
+        throw new FilesContractDriftError('children response missing "value" array');
+      // ADR-0102 — a silent zero must be a loud one.
+      //
+      // We asked for `file` and `folder`, so every item must carry exactly one of
+      // them. If a page of items carries NEITHER, the select was dropped (or Graph
+      // changed) and `toDriveFile` is about to classify every file as a folder and
+      // report an empty folder — the exact six-week failure this ADR is about,
+      // whose symptom was indistinguishable from "the file isn't there".
+      //
+      // Checked per PAGE and only when items exist, so a genuinely empty folder
+      // stays empty and one odd item (a package, a shortcut) cannot trip it.
+      if (value.length > 0) {
+        const classifiable = value.filter((raw) => {
+          const r = raw as RawDriveItem;
+          return r.file !== undefined || (r as { folder?: unknown }).folder !== undefined;
+        });
+        if (classifiable.length === 0) {
+          throw new FilesContractDriftError(
+            `children response carried ${value.length} item(s), none with a "file" or "folder" facet — ` +
+              `the $select was dropped, so every item would be misread as a folder and this folder ` +
+              `would report as empty`,
+          );
+        }
+      }
       for (const raw of value) {
         const f = toDriveFile(raw as RawDriveItem);
         if (f) files.push(f);
@@ -127,7 +171,11 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
     return files;
   }
 
-  async function getFile(driveUpn: string, folderPath: string, fileName: string): Promise<DriveFile | null> {
+  async function getFile(
+    driveUpn: string,
+    folderPath: string,
+    fileName: string,
+  ): Promise<DriveFile | null> {
     const files = await listFolder(driveUpn, folderPath);
     const target = fileName.toLowerCase();
     return files.find((f) => f.name.toLowerCase() === target) ?? null;
@@ -135,7 +183,9 @@ export function graphFilesTransport(config: GraphFilesConfig): FilesTransport {
 
   async function downloadFile(driveUpn: string, fileId: string): Promise<Uint8Array> {
     // /content is a 302 to a pre-authed download URL; fetch follows it by default.
-    const res = await graphFetch(`${driveRoot(driveUpn)}/items/${encodeURIComponent(fileId)}/content`);
+    const res = await graphFetch(
+      `${driveRoot(driveUpn)}/items/${encodeURIComponent(fileId)}/content`,
+    );
     if (!res.ok) throw new FilesContractDriftError(`download item ${fileId} → HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   }
