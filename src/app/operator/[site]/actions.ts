@@ -70,6 +70,48 @@ export async function startLoadAction(siteCode: string, expectedLoadId: string):
 }
 
 /**
+ * ADR-0096 — check in a truck whose slot is scheduled for a DIFFERENT Pacific day.
+ *
+ * The 2026-08-11 incident: H-136980 (Speedy Delivery, Union City) was booked for
+ * 8/10 09:00 PT, nobody checked it in, and the truck turned up on the 11th. Both
+ * check-in surfaces are day-bounded (ADR-0074 D5), so the card rendered
+ * read-only with no control and tapping it did nothing. Bill: *"We are clicking
+ * it and it does nothing."*
+ *
+ * ## Why this is a separate action rather than a wider `startLoadAction`
+ *
+ * The day bound is not incidental — it is what stops a child load being minted
+ * onto the wrong slot, and removing it re-arms the 159-unit mis-booking of
+ * ADR-0074 Am.1. So the ordinary path keeps its exact meaning and this one is
+ * the explicit, noisier exception: the operator confirms the slot's own
+ * scheduled day, that day travels to the server, and `startInboundLoad` refuses
+ * unless it matches the row. A stale page cannot produce the value, which is
+ * what makes the acknowledgement evidence rather than a permission the UI
+ * granted itself.
+ *
+ * `acknowledgedSlotDayISO` is NOT trusted as an authorization token — it is
+ * compared against the row inside the same transaction that writes. The
+ * operator, the site and the load id all still come from the session via
+ * `ctx()`, exactly as the ordinary path.
+ */
+export async function startLoadReconciledAction(
+  siteCode: string,
+  expectedLoadId: string,
+  acknowledgedSlotDayISO: string,
+): Promise<void> {
+  const { operatorUserId, siteId } = await ctx(siteCode);
+  const load = await svc.startInboundLoad({
+    expectedLoadId,
+    siteId,
+    operatorUserId,
+    reconcile: { acknowledgedSlotDayISO },
+  });
+  revalidatePath(`/operator/${siteCode}/queue`);
+  revalidatePath(`/operator/${siteCode}/hauls`);
+  redirect(`/operator/${siteCode}/load/${load.id}`);
+}
+
+/**
  * ADR-0082 — take over a still-open dock load held by another operator.
  *
  * ONLINE-ONLY, and that is a decision rather than an omission (ADR-0082 D5): this

@@ -625,3 +625,101 @@ describe('ADR-0074 Am.1 — "Coming up" check-in is bounded to the current Pacif
     expect(page.rows[0]?.expectedLoadId).toBeNull();
   });
 });
+
+// ── ADR-0096 ────────────────────────────────────────────────────────────────
+//
+// H-136980 on 2026-08-11: booked 8/10, never checked in, truck arrived the next
+// day. Live, uncancelled, unconsumed — so it reached neither the consumed branch
+// nor the startable branch, and the UI had nothing to render but "View only".
+describe('a slot booked for another day is RECONCILABLE, not startable', () => {
+  const YESTERDAY_APPT = new Date('2026-08-09T22:00:00Z'); // 2026-08-09 15:00 PT
+
+  it('THE INCIDENT: a past-day live slot is named, not silently dropped', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-136980' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-h136980',
+        external_mymrc_haul_id: 'H-136980',
+        expected_arrival_at: YESTERDAY_APPT,
+      }),
+    ];
+
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    // D5 is NOT widened — this is the property that keeps a child load from
+    // being minted onto the wrong slot.
+    expect(row?.expectedLoadId).toBeNull();
+    // …and the divergent state gets its own name and its own route.
+    expect(row?.reconcilableExpectedLoadId).toBe('exp-h136980');
+    expect(row?.slotDayISO).toBe('2026-08-09');
+  });
+
+  it('a FUTURE-day slot is reconcilable too — early trucks are real', async () => {
+    // 2026-08-11: H-136147 was claimed at 07:55 PT against a 15:00 PT slot. A
+    // truck can be early as easily as late, and both are the same divergence.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-136147' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-future',
+        external_mymrc_haul_id: 'H-136147',
+        expected_arrival_at: TOMORROW_APPT,
+      }),
+    ];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.expectedLoadId).toBeNull();
+    expect(row?.reconcilableExpectedLoadId).toBe('exp-future');
+  });
+
+  it('a TODAY slot is startable and NOT reconcilable — the states are exclusive', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [expectedRow({ id: 'exp-today' })];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.expectedLoadId).toBe('exp-today');
+    expect(row?.reconcilableExpectedLoadId).toBeNull();
+  });
+
+  it('an UNDATED slot is neither — there is no day to confirm or to check', async () => {
+    // The server assert compares the acknowledgement against the slot's day, so
+    // a slot without one cannot produce evidence and must stay read-only.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [expectedRow({ id: 'exp-undated', expected_arrival_at: null })];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.expectedLoadId).toBeNull();
+    expect(row?.reconcilableExpectedLoadId).toBeNull();
+    expect(row?.slotDayISO).toBeNull();
+  });
+
+  it('a CANCELLED past-day slot is NOT reconcilable', async () => {
+    // Reconcile is an exception to the DAY rule, never to cancellation.
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-cancelled',
+        expected_arrival_at: YESTERDAY_APPT,
+        cancelled_at: new Date('2026-08-09T23:00:00Z'),
+      }),
+    ];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.reconcilableExpectedLoadId).toBeNull();
+  });
+
+  it('a CONSUMED past-day slot reports its child, never a reconcile', async () => {
+    store.mirror = [mirrorRow({ external_haul_id: 'H-100001' })];
+    store.expected = [
+      expectedRow({
+        id: 'exp-consumed',
+        expected_arrival_at: YESTERDAY_APPT,
+        inbound_load: {
+          id: 'child-1',
+          status: 'submitted',
+          total_units: 12,
+          submitted_at: new Date('2026-08-09T23:30:00Z'),
+          assigned_operator_id: 'user-x',
+          assigned_operator: { name: 'X' },
+        },
+      }),
+    ];
+    const row = (await listPortalHauls({ siteId: WOODLAND, now: NOW })).rows[0];
+    expect(row?.reconcilableExpectedLoadId).toBeNull();
+    expect(row?.consumedLoad?.status).toBe('submitted');
+  });
+});

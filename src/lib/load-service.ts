@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { writeAudit } from '@/lib/audit';
+import { pacificDayISO } from '@/lib/time';
 import { withIdempotency } from '@/lib/idempotency';
 
 // State-machine moves for the inbound-load workflow per
@@ -191,10 +192,34 @@ function isExpectedLoadClaimCollision(e: unknown): boolean {
  *          the caller redirects to renders the held-by state (ADR-0082), which is
  *          why this is a return value rather than a throw.
  */
+/**
+ * ADR-0096 — the caller's statement of WHICH day it believes this slot is
+ * scheduled for, and the only way to start a load against a slot that is not
+ * today's.
+ *
+ * Deliberately NOT a boolean. `allowAnyDay: true` would close nothing — a stale
+ * client would pass it exactly as happily as a correct one. Naming the day means
+ * a caller that has not actually READ this slot cannot produce the value, so the
+ * server's comparison is evidence that the operator was looking at the truck
+ * they are reconciling rather than a permission the UI granted itself.
+ */
+export interface SlotReconciliation {
+  /** The slot's own Pacific day, `YYYY-MM-DD`, as the caller rendered it. */
+  acknowledgedSlotDayISO: string;
+}
+
 export async function startInboundLoad(args: {
   expectedLoadId: string;
   siteId: string;
   operatorUserId: string;
+  /**
+   * ADR-0096 — present ONLY on the explicit "this truck arrived on a different
+   * day" path. Absent means the ordinary path, which now requires the slot to be
+   * due today.
+   */
+  reconcile?: SlotReconciliation | undefined;
+  /** Injectable clock; the day comparison is Pacific, never UTC. */
+  now?: Date | undefined;
 }): Promise<{ id: string; claimed: boolean }> {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -204,6 +229,10 @@ export async function startInboundLoad(args: {
           id: true,
           site_id: true,
           cancelled_at: true,
+          // ADR-0096 — the day guard's input. Selected here rather than read
+          // outside the transaction: a guard that reads outside the transaction
+          // it is guarding is a race with better manners (`idempotency.ts`).
+          expected_arrival_at: true,
           source_id: true,
           transporter_id: true,
           bol_number: true,
@@ -222,7 +251,42 @@ export async function startInboundLoad(args: {
         return { id: expected.inbound_load.id, claimed: false };
       }
 
-      const now = new Date();
+      // ── ADR-0096 — THE DAY GUARD, server-side at last ────────────────────
+      //
+      // ADR-0074 D5 bounds check-in to the current Pacific day, and until now
+      // that bound lived ENTIRELY in the two read layers (`portal-hauls.ts` and
+      // the queue page's `where`). ADR-0074 Am.1 recorded the server-side gap as
+      // an open decision; ADR-0094 re-confirmed it was still open. A bookmarked
+      // page, a replayed POST or a hand-written call could mint a child onto any
+      // slot at the site, of any age — the 159-unit mis-booking the bound exists
+      // to prevent, reachable by going around the UI that enforced it.
+      //
+      // PACIFIC, never UTC. After 5 PM PDT the UTC day has already rolled, so a
+      // UTC comparison would refuse today's own slots for the last seven hours of
+      // every Pacific day — the entire evening shift, including the 5:25 PM PT
+      // moment this ADR was written in.
+      const now = args.now ?? new Date();
+      const slotDayISO = expected.expected_arrival_at
+        ? pacificDayISO(expected.expected_arrival_at)
+        : null;
+      const todayISO = pacificDayISO(now);
+
+      if (args.reconcile) {
+        // An undated slot has no day to agree with, so agreement cannot be
+        // demonstrated and the exception cannot be granted.
+        if (slotDayISO === null) throw new LoadAccessError(409, 'expected_load_undated');
+        if (args.reconcile.acknowledgedSlotDayISO !== slotDayISO) {
+          throw new LoadAccessError(409, 'slot_day_mismatch');
+        }
+      } else if (slotDayISO !== todayISO) {
+        // Includes the undated case: a NULL day cannot be PROVEN to be today, so
+        // it falls on the refusing side (the same direction `portal-hauls.ts`
+        // chose for the read layer).
+        throw new LoadAccessError(409, 'expected_load_not_due_today');
+      }
+
+      const reconciled = slotDayISO !== null && slotDayISO !== todayISO;
+
       const created = await tx.inboundLoad.create({
         data: {
           site_id: args.siteId,
@@ -252,6 +316,11 @@ export async function startInboundLoad(args: {
             expected_load_id: expected.id,
             assigned_operator_id: args.operatorUserId,
             assigned_at: now,
+            // ADR-0096 — a load minted against another day's slot must be
+            // answerable later without re-deriving it from two timestamps.
+            // Absent entirely on an ordinary same-day start, so the presence of
+            // the key IS the signal.
+            ...(reconciled ? { reconciled_from_day: slotDayISO, reconciled_on_day: todayISO } : {}),
           },
         },
         { tx },

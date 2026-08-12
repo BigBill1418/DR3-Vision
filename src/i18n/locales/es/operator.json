@@ -350,7 +350,14 @@
       "status_confirmed": "Programada",
       "units_pending": "Unidades pendientes",
       "check_in": "Toca para registrar",
-      "view_only": "Solo lectura"
+      "view_only": "Solo lectura",
+      "late_scheduled": "Programada para {{date}} — no es hoy",
+      "late_cta": "El camión ya está aquí — regístrelo",
+      "late_confirm": "¿Registrar {{haul}}, programada para {{date}}, como llegada hoy?",
+      "late_yes": "Sí, regístrela",
+      "late_cancel": "Cancelar",
+      "late_failed": "No se pudo registrar. Actualice la página e inténtelo de nuevo.",
+      "stale_day": "Esta página es de un día anterior. Recárguela para registrar las cargas de hoy."
     },
     "inbound": {
       "heading": "Confirmar recepción",

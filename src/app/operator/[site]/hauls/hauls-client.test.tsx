@@ -18,11 +18,15 @@
 
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import en from '@/i18n/locales/en/operator.json';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('../actions', () => ({ startLoadAction: vi.fn() }));
+const startLoadReconciledAction = vi.fn();
+vi.mock('../actions', () => ({
+  startLoadAction: vi.fn(),
+  startLoadReconciledAction: (...a: unknown[]) => startLoadReconciledAction(...a),
+}));
 
 vi.mock('@/i18n/provider', async () => {
   const { getDictionary, translate } = await import('@/i18n/dictionary');
@@ -51,6 +55,8 @@ function row(over: Partial<HaulRowView> = {}): HaulRowView {
     consumerDropoffUnits: null,
     expectedLoadId: null,
     consumedLoad: null,
+    reconcilableExpectedLoadId: null,
+    slotDayISO: null,
     ...over,
   };
 }
@@ -257,5 +263,80 @@ describe('ADR-0091 — an OPEN child is a route back in, not a dead end', () => 
     expect(rowList().queryByRole('button')).toBeNull();
     expect(screen.queryByText(en.floor.hauls.check_in)).toBeNull();
     expect(screen.getByText(en.floor.hauls.view_only)).toBeTruthy();
+  });
+});
+
+// ── ADR-0096 ────────────────────────────────────────────────────────────────
+//
+// The 2026-08-11 PM incident. H-136980 (Speedy Delivery, Union City) was booked
+// for 8/10, nobody checked it in, and the truck arrived on the 11th. The slot was
+// live and unconsumed, so it reached neither the consumed branch nor the
+// check-in branch, and fell to the bare "View only" card. Bill: "We are clicking
+// it and it does nothing."
+describe('ADR-0096 — a truck that arrived on a different day is not a dead end', () => {
+  const late = () =>
+    row({
+      externalHaulId: 'H-136980',
+      collectionSite: 'Speedy Delivery LLC - Union City',
+      reconcilableExpectedLoadId: 'exp-h136980',
+      slotDayISO: '2026-08-10',
+    });
+
+  it('THE INCIDENT: the card is no longer a bare read-only note', () => {
+    list(late());
+    expect(screen.queryByText(en.floor.hauls.view_only)).toBeNull();
+    expect(rowList().getByRole('button')).toBeTruthy();
+  });
+
+  it('names the day it was booked for, so the operator can tell slots apart', () => {
+    list(late());
+    // The body already carries the docking date; this asserts the explicit
+    // "booked for X — not today" line, which is the one that tells the operator
+    // WHY the ordinary control is absent.
+    expect(screen.getByText(/Booked for .*Aug 10.*not today/i)).toBeTruthy();
+  });
+
+  it('does NOT check in on the first tap — the second tap reads the slot back', () => {
+    // One-tap would make this as easy to mis-fire as the ordinary check-in, on
+    // the one state where mis-firing mints a load onto the wrong slot.
+    list(late());
+    fireEvent.click(rowList().getByRole('button'));
+    expect(startLoadReconciledAction).not.toHaveBeenCalled();
+    // The read-back names BOTH identifying facts, which is the whole point of
+    // the second tap.
+    expect(screen.getByText(/Check in H-136980, booked for .*Aug 10.*today\?/i)).toBeTruthy();
+    expect(screen.getByText(new RegExp(en.floor.hauls.late_yes, 'i'))).toBeTruthy();
+  });
+
+  it('sends the slot’s OWN day to the server on confirm', () => {
+    // The value the server compares. A client that never read this slot cannot
+    // produce it, which is what makes the acknowledgement evidence.
+    list(late());
+    fireEvent.click(rowList().getByRole('button'));
+    fireEvent.click(screen.getByText(new RegExp(en.floor.hauls.late_yes, 'i')));
+    expect(startLoadReconciledAction).toHaveBeenCalledWith('woodland', 'exp-h136980', '2026-08-10');
+  });
+
+  it('cancelling backs out and writes nothing', () => {
+    list(late());
+    fireEvent.click(rowList().getByRole('button'));
+    fireEvent.click(screen.getByText(new RegExp(en.floor.hauls.late_cancel, 'i')));
+    expect(startLoadReconciledAction).not.toHaveBeenCalled();
+    expect(screen.queryByText(new RegExp(en.floor.hauls.late_yes, 'i'))).toBeNull();
+  });
+
+  it('an UNDATED slot stays read-only — there is no day to confirm or check', () => {
+    // Excluded deliberately: the server assert compares against the slot's day,
+    // so a slot without one cannot produce an acknowledgement worth checking.
+    list(row({ reconcilableExpectedLoadId: null, slotDayISO: null }));
+    expect(screen.getByText(en.floor.hauls.view_only)).toBeTruthy();
+    expect(rowList().queryByRole('button')).toBeNull();
+  });
+
+  it('a slot due TODAY still gets the ordinary one-tap check-in', () => {
+    // The friction is scoped to the divergent state; the common path is untouched.
+    list(row({ expectedLoadId: 'exp-live' }));
+    expect(screen.getByText(en.floor.hauls.check_in)).toBeTruthy();
+    expect(screen.queryByText(new RegExp(en.floor.hauls.late_cta, 'i'))).toBeNull();
   });
 });

@@ -336,7 +336,14 @@
       "status_confirmed": "Scheduled",
       "units_pending": "Units pending",
       "check_in": "Tap to check in",
-      "view_only": "View only"
+      "view_only": "View only",
+      "late_scheduled": "Booked for {{date}} — not today",
+      "late_cta": "The truck is here now — check it in",
+      "late_confirm": "Check in {{haul}}, booked for {{date}}, as arriving today?",
+      "late_yes": "Yes, check it in",
+      "late_cancel": "Cancel",
+      "late_failed": "Couldn't check it in. Pull down to refresh, then try again.",
+      "stale_day": "This page is from an earlier day. Reload to check in today's hauls."
     },
     "inbound": {
       "heading": "Confirm inbound",

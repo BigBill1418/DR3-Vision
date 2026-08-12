@@ -6,6 +6,11 @@ import { useT, useLocale } from '@/i18n/provider';
 import { pacificDateLabel, dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
 import type { FloorInboundDayView } from '@/lib/loads/floor-inbound';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import {
+  classifyWriteRefusal,
+  WriteRefusalNotice,
+  type WriteRefusal,
+} from '../../_components/write-refusal';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0060 F-2 client — confirm / correct / enter the day's inbound haul counts. Total
@@ -29,14 +34,27 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [busyDay, setBusyDay] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Audit D-8 — a refusal no retap can clear; see `write-refusal.tsx`. */
+  const [refusal, setRefusal] = useState<WriteRefusal | null>(null);
   /** ADR-0078 — days whose entry is queued locally, NOT server-acked. */
   const [queuedDays, setQueuedDays] = useState<string[]>([]);
+
+  /**
+   * Audit D-8 — a soft refresh re-renders the day list from the server, so a
+   * page held open across Pacific midnight stops offering yesterday.
+   */
+  function refreshToToday(): void {
+    setRefusal(null);
+    setError(null);
+    router.refresh();
+  }
 
   const dateLabel = (iso: string): string => pacificDateLabel(dayKeyUTCFromISO(iso), locale);
 
   async function post(dateISO: string, program: number, nonProgram: number): Promise<void> {
     setBusyDay(dateISO);
     setError(null);
+    setRefusal(null);
     // ADR-0078 — one key per submit attempt, reused by the queued entry so a
     // request that landed but lost its response replays to the same write.
     const idempotencyKey = newIdempotencyKey();
@@ -54,6 +72,14 @@ export function InboundClient({ siteCode, initialRows }: Props) {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
+        // Audit D-8 — the ADR-0065 day pin (422 `date_not_today`) and an expired
+        // session (401) are not "try again" failures, and `errorMessage` below
+        // has no branch for either: both fell through to `save_failed`.
+        const refused = classifyWriteRefusal(res.status, body.error);
+        if (refused) {
+          setRefusal(refused);
+          return;
+        }
         setError(errorMessage(body.error));
         return;
       }
@@ -106,6 +132,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
           {error}
         </p>
       )}
+      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
       {queuedDays.length > 0 && (
         <p
           className="rounded-lg bg-amber-900/50 px-4 py-3 text-sm font-medium text-dr3-cream ring-1 ring-amber-400/40"
