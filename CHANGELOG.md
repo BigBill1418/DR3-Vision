@@ -25,7 +25,7 @@ two ADR-0097 files.
 
 - **The checker was green the whole time.** The index deliberately MERGES files that
   share a number — correct for amendments, blind to a collision. So a citation to
-  ADR-0097 resolved to **two different decisions**, which is *worse* than resolving
+  ADR-0097 resolved to **two different decisions**, which is _worse_ than resolving
   to none: an unresolved citation announces itself, an ambiguous one looks correct.
 
 - **`findDuplicateAdrNumbers` is now part of the hard gate.** Two or more PRIMARY
@@ -69,7 +69,7 @@ no new dependency, nothing to deploy.
 - **The gate went hard on day one** by baselining the 18 pre-existing violations in
   `KNOWN_UNRESOLVED`. Writing those five amendments would mean inventing history for
   work this author did not do, so they are tracked instead. **The baseline
-  ratchets:** an entry that no longer matches a real violation *fails* the check, so
+  ratchets:** an entry that no longer matches a real violation _fails_ the check, so
   it cannot quietly become a second `OPEN-ITEMS.md`.
 
 - **New register: `docs/adr/PROMISES.md`**, seeded with **33 hand-audited rows** —
@@ -377,6 +377,53 @@ regression, no stale document. (The other eleven DR3 messages tonight are
 
 - **`discovery_gap` left open deliberately** — 8 readable-but-unwatched documents,
   listed by name in the ADR for Bill to choose from. Nothing auto-registered.
+
+## 2026-08-11 (10:00 PM PT) — the scrape was retiring trucks that were still coming (ADR-0099)
+
+The hourly MyMRC scrape cancelled an `expected_loads` row the **first** time a
+pass did not list it. Measured against `audit_log` at 2026-08-11 22:04 PT:
+
+|                                            |        |
+| ------------------------------------------ | ------ |
+| Auto-cancellations, all time               | **69** |
+| …later UN-cancelled by a subsequent scrape | **67** |
+| …never restored (genuine retirements)      | **2**  |
+| …restored by the very NEXT hourly pass     | 30     |
+| …that fired BEFORE the appointment         | 16     |
+
+**97% of every auto-cancellation this system has ever performed was wrong.** The
+sweep was not retiring dead hauls, it was flapping — and a cancelled slot did not
+merely lose its button, it _disappeared_: the queue filtered on
+`cancelled_at: null`, and the hauls screen hit a bare `continue` that dropped the
+card into the same "View only" branch as "no slot" and "not today".
+
+- **Cancel on a STREAK, not one absence.** `expected_loads` gains
+  `missed_scrape_count` + `first_missed_at`; a row is retired only after **3
+  consecutive** misses. N=3 is read off the measured distribution, which is
+  cleanly bimodal — it removes 32 of 69 cancellations (every one that resolved
+  inside a day) and cannot touch the >24h population, where cancelling is
+  correct. The streak resets on both write paths a present haul can take.
+
+- **A pass that saw nothing retires nothing.** `feedExpectedLoads` reads the
+  mirror, so an empty array can reach the sweep without the zero-anomaly gate
+  firing. Now fenced explicitly, with a warning — silence would be
+  indistinguishable from "nothing was stale".
+
+- **The window is the PACIFIC day.** It bounded on `startOfUtcDay`, so between
+  17:00 PT and midnight the sweep's "today" was the operator's tomorrow — the
+  ADR-0065 class, still live in the write path.
+
+- **A withdrawn slot is now legible on BOTH surfaces** — its own amber card on
+  the hauls screen ("MyMRC withdrew this haul at 11:00 AM" + what to do), and a
+  separate "Taken off today's list by MyMRC" block on the queue instead of being
+  filtered away. **No control**, deliberately: `startInboundLoad` answers 409
+  `expected_load_cancelled`, so a button would be an affordance whose only
+  outcome is a refusal. It self-heals — the office re-adding the haul in MyMRC
+  restores the row within the hour, which is the mechanism that produced the 67
+  measured restorations. An operator-facing restore button is a **billing**
+  decision and is put to Bill in OPEN-ITEMS rather than defaulted.
+
+Closes floor dead-end audit **D-2** and the `cancelled` third of **D-1**.
 
 ## 2026-08-11 (5:18 PM PT) — INCIDENT: a truck that arrived a day late had no way in (ADR-0096)
 

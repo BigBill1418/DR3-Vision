@@ -53,7 +53,7 @@ ADRs, **not one carrying an issue number**.
 | #    | Status                                                                                                                                   | Where               |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
 | D-1  | **PARTLY CLOSED** — the day-bound half shipped as ADR-0096 (`reconcilableExpectedLoadId`). The `cancelled` discriminator ships with D-2. | ADR-0096 (#241)     |
-| D-2  | **CLOSED**                                                                                                                               | ADR-0097            |
+| D-2  | **CLOSED**                                                                                                                               | ADR-0099            |
 | D-3  | **CLOSED** — `src/app/operator/not-found.tsx`. Shipped WITHOUT the iPad hand-check the finding asked for; see the note under D-3.        | dead-end batch      |
 | D-4  | **CLOSED**                                                                                                                               | dead-end batch      |
 | D-5  | **CLOSED** — both surfaces, one commit                                                                                                   | dead-end batch      |
@@ -114,7 +114,7 @@ The finding reports 69 auto-cancellations, 16 of them pre-appointment. Re-run at
 2026-08-11 22:04 PT, the audit trail also shows **67 of those 69 were later
 UN-cancelled by a subsequent scrape** — 30 of them by the very next hourly pass.
 Only 2 in the entire history were genuine retirements. The sweep was not retiring
-dead hauls; it was FLAPPING. See ADR-0097.
+dead hauls; it was FLAPPING. See ADR-0099.
 
 ---
 

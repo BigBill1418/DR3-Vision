@@ -50,7 +50,8 @@
     "open_status_voided": "Closed as a mistake",
     "open_status_submitted_to_mymrc": "Sent to MyMRC",
     "open_status_processed": "Processed",
-    "open_status_unknown": "Status unknown"
+    "open_status_unknown": "Status unknown",
+    "withdrawn_heading": "Taken off today’s list by MyMRC"
   },
   "load_header": {
     "unknown_source": "Unknown source",
@@ -350,7 +351,9 @@
       "late_cancel": "Cancel",
       "late_failed": "Couldn't check it in. Pull down to refresh, then try again.",
       "stale_day": "This page is from an earlier day. Reload to check in today's hauls.",
-      "empty_no_hauls_why": "This site has no MyMRC portal feed, so there is nothing to list here. That is normal — use the queue for today’s trucks."
+      "empty_no_hauls_why": "This site has no MyMRC portal feed, so there is nothing to list here. That is normal — use the queue for today’s trucks.",
+      "withdrawn": "MyMRC withdrew this haul at {{time}}.",
+      "withdrawn_what_to_do": "If the truck is here, call the office. Once they put it back in MyMRC it comes back on this screen within the hour — you do not need to do anything on the iPad."
     },
     "inbound": {
       "heading": "Confirm inbound",

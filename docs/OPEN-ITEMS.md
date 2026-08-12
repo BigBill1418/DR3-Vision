@@ -19,6 +19,49 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.AY — 2026-08-11/12 floor dead-end week-one slice — one decision for Bill, two accepted residuals
+
+The dead-end inventory (`docs/2026-08-11-floor-dead-end-state-inventory.md`, 25
+findings) and ADR-0094's prevention plan, executed as far as the week-one scope
+went. Sixteen findings closed. What is left:
+
+- **DECISION FOR BILL — may the floor restore a slot MyMRC withdrew?** (ADR-0099
+  §D4.) A withdrawn slot is now legible on both surfaces and self-heals within an
+  hour once the office re-adds the haul, but there is no operator control, and a
+  truck arriving against a slot withdrawn more than three scrapes ago still needs
+  a phone call. A restore button is buildable and would survive long enough to
+  work. It is not defaulted because a load worked against a haul MyMRC does not
+  list is a **billing** artefact, and whether the floor may create one is a
+  product call, not an engineering one. **Ask:** yes/no, and if yes, manager-gated
+  or any operator?
+
+- **RESIDUAL — the error-contract batch is untouched.** Audit D-7, D-10, D-11,
+  D-12, D-13, D-16 (all M). D-7 in particular (`{"error":"error"}` from five
+  auth/rollout guards) is a _prerequisite_ for the rest of §2.4 being fixable,
+  because the information is destroyed server-side.
+
+- **RESIDUAL — D-3 shipped WITHOUT the iPad hand-check the audit asked for.** The
+  audit could not drive `notFound()` end-to-end (the auth redirect intercepts
+  every unauthenticated probe) and wanted ten minutes on a real iPad first. The
+  page shipped anyway because the default 404 has no chrome, no locale and no
+  navigation in _every_ scenario, so it is a strict improvement either way — but
+  the exact repro is still unconfirmed. Worth one tap next time an iPad is in
+  hand: open `/operator/woodland/load/<a-uuid-that-does-not-exist>` while signed
+  in and confirm the green chrome + Back appear.
+
+- **WATCH — `src/lib/ap/poll.test.ts` is load-sensitive.** It fails under a full
+  parallel suite run on a busy host and passes in isolation against both the
+  pristine and the changed tree (A/B'd 2026-08-12). Pre-existing, not caused by
+  the dead-end work, and not investigated here. If CI starts flaking on it, this
+  is the note.
+
+- **WATCH — the ship-before-noon rule is a documented convention, not CI.**
+  ADR-0094 P4, now in `CONTRIBUTING.md`. Nothing enforces it. Note that this very
+  slice was shipped in the evening, which the rule would have deferred; see the
+  rule's own text for why that is recorded rather than hidden.
+
+---
+
 ## 0.AX — 2026-08-10 late-night solidity sweep ("confirm we are solid") — two fixes executed, one decision for Bill, two watch items
 
 Bill ordered a full verification sweep (~6:56 PM PT). All six of the day's PRs

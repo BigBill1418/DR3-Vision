@@ -581,6 +581,23 @@ model ExpectedLoad {
   last_synced_at           DateTime     @default(now())
   cancelled_at             DateTime? // set when haul disappears from MyMRC
 
+  // ── ADR-0099 — how many CONSECUTIVE scrapes have missed this haul ──────────
+  // The stale-haul sweep used to cancel on ONE absence. Measured on production
+  // 2026-08-11 22:04 PT: of 69 auto-cancellations, 67 were later UN-cancelled by
+  // a subsequent scrape and 30 of those came back on the very next hourly pass.
+  // The sweep was not retiring dead hauls, it was FLAPPING — and the gap between
+  // the cancel and the restore is a window in which the queue hides the row
+  // entirely and the hauls screen says "View only".
+  //
+  // Reset to 0 on every scrape that CONTAINS the haul, so the count is
+  // consecutive by construction rather than cumulative.
+  missed_scrape_count      Int          @default(0)
+  // When the current miss STREAK began. Not used by the cancel decision (the
+  // count is), and deliberately kept anyway: it is the only way to answer "was
+  // the threshold right?" from the data instead of from the argument, which
+  // ADR-0094 §6 asks of every threshold this repo sets.
+  first_missed_at          DateTime?
+
   inbound_load InboundLoad?
 
   @@index([site_id, expected_arrival_at])

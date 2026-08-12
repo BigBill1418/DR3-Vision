@@ -123,16 +123,28 @@ export default async function OperatorQueuePage({ params }: Props) {
   // away from it.
   const openLoads = await listSiteOpenLoads(site.id, session.user.id);
 
-  const loads = await prisma.expectedLoad.findMany({
+  // ADR-0099 — `cancelled_at: null` USED TO BE A PREDICATE HERE, and it is the
+  // one filter that contradicted the comment forty lines below in this very
+  // query: "A vanished row tells the operator standing next to the truck
+  // nothing at all — the identical silence that ADR-0065 Am.1 and ADR-0082 were
+  // both written to end." That reasoning was applied to the CONSUMED case and
+  // not to the withdrawn one, which is how the audit's sharpest asymmetry came
+  // about: a slot MyMRC cancelled was INVISIBLE on the queue and UNEXPLAINED on
+  // the hauls screen, and neither surface had a way out.
+  //
+  // Production says the filter was hiding the wrong thing 97% of the time: of 69
+  // auto-cancellations, 67 were undone by a later scrape. So the row is selected
+  // and PARTITIONED below, exactly as the consumed row already is.
+  const allSlots = await prisma.expectedLoad.findMany({
     where: {
       site_id: site.id,
-      cancelled_at: null,
       // Half-open [start, endExclusive) — current Pacific day only.
       expected_arrival_at: { gte: today.start, lt: today.endExclusive },
     },
     select: {
       id: true,
       expected_arrival_at: true,
+      cancelled_at: true,
       // ADR-0090 A — the haul number. NOT NULL on this model, and the only
       // field that separates two of one site's trucks on one day.
       external_mymrc_haul_id: true,
@@ -161,6 +173,13 @@ export default async function OperatorQueuePage({ params }: Props) {
     },
     orderBy: { expected_arrival_at: 'asc' },
   });
+
+  // The live queue keeps its exact previous contents — every consumer below is
+  // unchanged. Withdrawn slots are a SEPARATE, quieter block so they cannot be
+  // mistaken for work, and so an empty queue with a withdrawn truck on the dock
+  // no longer reads as "nothing expected today".
+  const loads = allSlots.filter((l) => l.cancelled_at === null);
+  const withdrawn = allSlots.filter((l) => l.cancelled_at !== null && l.inbound_load === null);
 
   // Last-sync timestamp for the empty-state caption — pulled from
   // the freshest scrape across the site's loads. Once T-013 ships
@@ -299,6 +318,56 @@ export default async function OperatorQueuePage({ params }: Props) {
                   );
                 })}
               </ul>
+            )}
+
+            {/* ADR-0099 — slots MyMRC withdrew for TODAY.
+                Below the live queue and visually quieter than it, because this is
+                not work: it is the answer to "my truck is here and it is not on
+                the screen", which had no answer at all while the query filtered
+                these out. No control — `startInboundLoad` answers 409
+                `expected_load_cancelled`, and a button whose only outcome is a
+                refusal is what ADR-0074 Am.1 forbids. It names the time, the
+                actor and the place instead, and it self-heals: the office
+                re-adding the haul in MyMRC restores the row within the hour.
+                Consumed slots are excluded — a withdrawn slot whose load was
+                already started is rescued by `listSiteOpenLoads` above and would
+                otherwise appear twice. */}
+            {withdrawn.length > 0 && (
+              <section
+                className="flex flex-col gap-3 rounded-xl bg-amber-900/30 p-4 ring-1 ring-amber-400/40"
+                data-testid="queue-withdrawn"
+              >
+                <header>
+                  <h2 className="text-base font-bold">{t('queue.withdrawn_heading')}</h2>
+                  <p className="mt-1 text-sm text-dr3-cream/80">
+                    {t('floor.hauls.withdrawn_what_to_do')}
+                  </p>
+                </header>
+                <ul className="flex flex-col gap-2">
+                  {withdrawn.map((l) => (
+                    <li key={l.id} className="rounded-lg bg-dr3-green-dark/40 p-4">
+                      <p className="text-base font-medium">
+                        <span className="font-mono">{l.external_mymrc_haul_id}</span>
+                        {' · '}
+                        {l.source?.name ?? l.source_name_at_sync}
+                      </p>
+                      <p className="mt-1 text-sm text-dr3-cream/70">
+                        {formatTime(l.expected_arrival_at, locale)}
+                        {l.expected_unit_count != null && (
+                          <span className="ms-3">
+                            {t('queue.approx_units', { count: l.expected_unit_count })}
+                          </span>
+                        )}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-amber-100">
+                        {t('floor.hauls.withdrawn', {
+                          time: l.cancelled_at ? formatTime(l.cancelled_at, locale) : '—',
+                        })}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
             {/* ADR-0082 — LAST on the page, and that ordering is the policy: your
                 own unfinished work, then today's expected hauls, then loads

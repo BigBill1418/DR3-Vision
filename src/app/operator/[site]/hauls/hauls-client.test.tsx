@@ -57,6 +57,8 @@ function row(over: Partial<HaulRowView> = {}): HaulRowView {
     consumedLoad: null,
     reconcilableExpectedLoadId: null,
     slotDayISO: null,
+    // ADR-0099 — a live slot by default; the withdrawn cases pass it explicitly.
+    cancelledAtISO: null,
     ...over,
   };
 }
@@ -338,5 +340,69 @@ describe('ADR-0096 — a truck that arrived on a different day is not a dead end
     list(row({ expectedLoadId: 'exp-live' }));
     expect(screen.getByText(en.floor.hauls.check_in)).toBeTruthy();
     expect(screen.queryByText(new RegExp(en.floor.hauls.late_cta, 'i'))).toBeNull();
+  });
+});
+
+// ── ADR-0099 — the withdrawn card ──────────────────────────────────────────
+//
+// The audit's D-2. A slot MyMRC cancelled was INVISIBLE on the queue
+// (`cancelled_at: null` predicate) and UNEXPLAINED here — it fell into the same
+// "View only" branch as "no sibling" and "not today". Production 2026-08-11
+// 22:04 PT: 69 auto-cancellations, 67 of them undone by a later scrape, 30 by
+// the very next hourly pass. So the state the floor was told nothing about was,
+// 97% of the time, a slot that was about to come back.
+describe('ADR-0099 — a withdrawn slot says so, and says what to do', () => {
+  const withdrawn = () =>
+    row({
+      externalHaulId: 'H-136699',
+      slotDayISO: '2026-08-10',
+      cancelledAtISO: '2026-08-10T18:00:00.000Z', // 11:00 AM PDT
+    });
+
+  it('THE DEFECT: it is no longer the bare "View only" card', () => {
+    list(withdrawn());
+    expect(screen.getByTestId('haul-withdrawn')).toBeTruthy();
+    expect(screen.queryByText(en.floor.hauls.view_only)).toBeNull();
+  });
+
+  it('names WHEN MyMRC withdrew it, in Pacific', () => {
+    list(withdrawn());
+    // 18:00Z is 11:00 AM PDT. Rendering the container's UTC clock would say
+    // 6:00 PM — the ADR-0065 Am.1 defect, on the field this card exists for.
+    expect(document.body.textContent).toMatch(/11:00\s*AM/);
+  });
+
+  it('names who can act and from where, and offers NO control', () => {
+    list(withdrawn());
+    expect(document.body.textContent).toContain(en.floor.hauls.withdrawn_what_to_do);
+    // `startInboundLoad` answers 409 `expected_load_cancelled`. A button here
+    // would be a control whose only outcome is a refusal — what ADR-0074 Am.1
+    // forbids, and the reason this is an EXPLAINED dead end and not a restore
+    // button. It self-heals instead: the office re-adding the haul in MyMRC
+    // brings the row back within the hour via the scrape's un-cancel path.
+    expect(rowList().queryByRole('button')).toBeNull();
+    expect(rowList().queryByRole('link')).toBeNull();
+  });
+
+  it('a consumed slot still routes even if the slot was later withdrawn', () => {
+    // `open-loads.ts` rescues a started load regardless of what happens to its
+    // parent slot, and this card must agree: the consumed branch is tested
+    // FIRST, so a withdrawal cannot strand work already in progress.
+    list(
+      row({
+        cancelledAtISO: '2026-08-10T18:00:00.000Z',
+        consumedLoad: {
+          status: 'in_progress',
+          open: true,
+          totalUnits: null,
+          workedAtISO: null,
+          loadId: 'load-9',
+          holderUserId: VIEWER,
+          holderName: 'Janette',
+        },
+      }),
+    );
+    expect(rowList().getByRole('link').getAttribute('href')).toContain('/load/load-9');
+    expect(screen.queryByTestId('haul-withdrawn')).toBeNull();
   });
 });
