@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { DeadEndBeacon } from '../../_components/dead-end-beacon';
 import { useT, useLocale } from '@/i18n/provider';
 import { pacificDateLabel, dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
 import type { FloorInboundDayView } from '@/lib/loads/floor-inbound';
@@ -137,6 +138,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
     // names a destination and withholds it.
     return (
       <div className="flex flex-col items-start gap-4">
+        <DeadEndBeacon siteCode={siteCode} surface="inbound" state="no_inbound_days" />
         <p className="text-dr3-cream/70">{t('floor.inbound.empty')}</p>
         <p className="text-sm text-dr3-cream/60">{t('floor.inbound.empty_why')}</p>
         <Link
@@ -168,7 +170,12 @@ export function InboundClient({ siteCode, initialRows }: Props) {
           {t('floor.inbound.go_to_queue')}
         </Link>
       )}
-      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+      {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="inbound"
+        />}
       {queuedDays.length > 0 && (
         <p
           className="rounded-lg bg-amber-900/50 px-4 py-3 text-sm font-medium text-dr3-cream ring-1 ring-amber-400/40"

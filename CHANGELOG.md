@@ -9,6 +9,49 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-12 (12:15 AM PT) — the floor should not be the discovery mechanism (ADR-0100)
+
+Implements ADR-0094 §P0 and §P4 — the two items it sequenced FIRST, ahead of
+every fix, because *"today, the discovery mechanism for this entire defect class
+is Bill's phone."*
+
+- **Every actionless floor state is now counted.** `<DeadEndBeacon>` mounts
+  inside the branch it measures (so it cannot drift from it) and reports
+  `{surface, state, objectId, locale}`; identity and site are resolved
+  SERVER-SIDE from the session and never accepted from the client. Emits
+  `evt=floor.dead_end` to Loki + `dr3_vision_floor_dead_end_renders_total`.
+
+- **Every classified write refusal is counted too**, on its own counter and its
+  own `evt` — an operator who ACTED and was told no is a different question from
+  one stuck looking at a screen. `WriteRefusalNotice` now takes `siteCode` and
+  `surface` as REQUIRED props: an optional telemetry prop is one the next screen
+  forgets, and a surface missing from the metric reads identically to a surface
+  where nobody is being refused.
+
+- **A log line and a counter, not a table.** Loki + Prometheus already exist and
+  are already watched (ADR-0022 §3/§4), so this is queryable tonight with no
+  migration and no retention question. Label sets are CLOSED unions validated
+  again at the API boundary — the object id rides the Loki line, never a
+  Prometheus label, because a per-haul label is how a counter becomes a
+  cardinality incident.
+
+- **The instrument cannot break what it measures.** Each sink is wrapped
+  separately (a registry error cannot cost the log line), the route answers 204
+  with no body, and the browser beacon is `keepalive`, never retried, and never
+  touches IndexedDB — the offline queue is for the operator's work.
+
+- **Per ADR-0037 this does NOT page.** A dead-end render is not actionable within
+  five minutes: it is a tile and a digest line. The one shape that could earn
+  `high` — the same object dead-ended by the same user 3+ times in an hour — is
+  registered as a promise, not built.
+
+- **P4, the shipping window:** floor-facing changes deploy **before 12:00 PT** or
+  wait for tomorrow. Written into a new `CONTRIBUTING.md`. Noon rather than
+  ADR-0094's proposed 15:00 (Bill's call) — 15:00 would have permitted the 13:59
+  ship inside the measured 8/10 cluster. A documented convention, not CI, and the
+  file says so — including that this very slice was shipped in the evening, which
+  the rule would have deferred.
+
 ## 2026-08-11 (11:55 PM PT) — Two ADRs claimed 0097 nineteen seconds apart (ADR-0098 §8)
 
 **ADR number collision, resolved.** PR #244 ("A page that heals before the phone

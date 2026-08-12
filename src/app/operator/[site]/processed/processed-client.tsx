@@ -147,7 +147,12 @@ export function ProcessedClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+      {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="processed"
+        />}
       {saved && (
         <p className="rounded-lg bg-dr3-green/30 px-4 py-3 text-sm font-medium text-dr3-cream">
           {t('floor.common.saved')}

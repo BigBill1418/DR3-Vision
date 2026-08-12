@@ -454,7 +454,12 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+        {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="count"
+        />}
 
         <label className="flex flex-col gap-2 text-base font-semibold">
           {t('floor.count.hold_manager_label')}
@@ -528,7 +533,12 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+        {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="count"
+        />}
 
         <button
           type="button"
@@ -574,7 +584,12 @@ export function CountClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+      {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="count"
+        />}
 
       <NumberStepper label={primaryLabel} value={primary} onChange={setPrimary} />
       <NumberStepper
