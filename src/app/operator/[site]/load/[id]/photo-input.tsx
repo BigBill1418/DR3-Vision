@@ -74,6 +74,34 @@ function isSignedOut(res: Response): boolean {
   return res.status === 401;
 }
 
+/**
+ * Audit D-17 — a raw English technical string on a trilingual iPad.
+ *
+ * The three `setError` sites in this file all did:
+ *
+ *     setError(e instanceof Error ? e.message : 'upload failed');
+ *
+ * which renders the literals thrown a few lines above — `mint failed (403)`,
+ * `R2 PUT failed (500)` — straight at an operator, bypassing i18n entirely on a
+ * floor that runs en/es/ur. It also compounds D-16: `onCaptured` never fires, so
+ * the parent's Continue stays disabled with nothing connecting the two, under a
+ * button reading "Retry BOL photo".
+ *
+ * 403 is the one worth special-casing, exactly as 401 already is at `isSignedOut`
+ * above. A 403 on a mint is authenticated-but-refused, and on a SHARED iPad that
+ * is almost always a load belonging to a different operator's login — so "Retry"
+ * forever is the wrong instruction, and signing in again is not the fix either.
+ * `conflicts-client.tsx` has had the right sentence for this since ADR-0086 Am.1
+ * (`why_other_operator`); the live path never learned it. Same words, one
+ * `photo.` key, because a floor operator should not read two different
+ * explanations of one condition depending on which screen found it.
+ */
+function photoErrorCopy(e: unknown): string {
+  return e instanceof Error && /\b403\b/.test(e.message)
+    ? 'photo.other_operator'
+    : 'photo.error_upload';
+}
+
 export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
   const t = useT();
   const locale = useLocale();
@@ -186,7 +214,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
         return;
       }
       setStatus('error');
-      setError(e instanceof Error ? e.message : 'upload failed');
+      setError(t(photoErrorCopy(e)));
       return;
     }
 
@@ -205,7 +233,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
           return;
         }
         setStatus('error');
-        setError(e instanceof Error ? e.message : 'upload failed');
+        setError(t(photoErrorCopy(e)));
         return;
       }
     }
@@ -252,7 +280,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured }: Props) {
         return;
       }
       setStatus('error');
-      setError(e instanceof Error ? e.message : 'upload failed');
+      setError(t(photoErrorCopy(e)));
       return;
     }
 

@@ -35,6 +35,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { LoadStatus } from '@prisma/client';
+import en from '@/i18n/locales/en/operator.json';
 
 // The stage components are never rendered on a terminal status, but they are
 // imported, and they reach for server actions / `next/navigation` at module
@@ -145,6 +146,67 @@ describe('ADR-0074 Am.1 — a terminal load offers a way back to the queue', () 
     cleanup();
     renderAt('rejected');
     expect(screen.getByText(/rejected/i)).toBeTruthy();
+  });
+});
+
+// Audit D-4 — the OTHER half of the same enum.
+//
+// ADR-0074 Am.1 fixed `submitted` / `rejected` above and left the rest of
+// `LoadStatus` on a branch that was, in its entirety:
+//
+//     return <p>{t('workflow.unhandled_status', { status: load.status })}</p>;
+//
+// — a bare paragraph interpolating a raw enum token ("Unhandled status: voided"),
+// no Link, no button, not even a wrapping element, translated just as uselessly
+// into Spanish and Urdu. Its sibling three lines above carried the comment "A
+// dead end with reassuring copy is worse than a bare dead end" and a route.
+//
+// It is REACHABLE. `voidLoad` sets `status: 'voided'` and NULLs
+// `expected_load_id` but leaves `assigned_operator_id` intact, so the voiding
+// operator stays the holder, `heldByOther` is false, and one Back tap after the
+// void redirect lands here. Production held 0 voided loads at 2026-08-11 22:04
+// PT — the panel is live and simply unused. The first operator to use it hits
+// this, which is why the test is written over the WHOLE non-stage set rather
+// than over `voided` alone.
+describe('Audit D-4 — every non-stage status gets a label and a route', () => {
+  // The four statuses that fall past the `submitted`/`rejected` branch and past
+  // `STAGE_STATUSES`. Listed explicitly so adding a status to the schema without
+  // deciding what this screen does is a visible omission, not a silent one.
+  const CLOSED_STATUSES = [
+    'verified',
+    'voided',
+    'submitted_to_mymrc',
+    'processed',
+  ] as const satisfies readonly LoadStatus[];
+
+  it.each(CLOSED_STATUSES)('`%s` renders a link to the queue', (status) => {
+    renderAt(status);
+    expect(screen.getByRole('link').getAttribute('href')).toBe(`/operator/${SITE}/queue`);
+  });
+
+  it.each(CLOSED_STATUSES)('`%s` never renders the raw enum token', (status) => {
+    renderAt(status);
+    // The literal that shipped. The status must be described in words an
+    // operator can read, never echoed back as a database value.
+    expect(document.body.textContent).not.toContain('Unhandled status');
+    expect(document.body.textContent).not.toContain(`: ${status}`);
+  });
+
+  it('names the state in operator language, from the shared map', () => {
+    renderAt('voided');
+    // `queue.open_status_voided` — the label `held-by-panel.tsx` already had and
+    // this branch did not. Asserted through the catalogue rather than by string
+    // literal, so a copy edit moves the test with the product.
+    expect(document.body.textContent).toContain(en.queue.open_status_voided);
+  });
+
+  it('a status this build has never heard of is admitted, not guessed', () => {
+    // The `open-loads.tsx` defect in the other direction: its local copy of the
+    // map fell back to "Counting", telling an operator a closed load was being
+    // counted right now. Ignorance is the honest floor.
+    renderAt('some_future_status' as LoadStatus);
+    expect(document.body.textContent).toContain(en.queue.open_status_unknown);
+    expect(screen.getByRole('link').getAttribute('href')).toBe(`/operator/${SITE}/queue`);
   });
 });
 

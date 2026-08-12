@@ -9,6 +9,11 @@ import type { Locale } from '@/i18n/config';
 import { formatDate, formatTime } from '@/lib/format';
 import { newIdempotencyKey } from '@/lib/offline-queue';
 import type { TakeoverActionResult } from '@/lib/loads/load-claim';
+import {
+  FLOOR_STATUS_KEY,
+  FLOOR_STATUS_FALLBACK_KEY,
+  floorStatusKey,
+} from '@/lib/loads/floor-status-label';
 import { takeOverLoadAction } from '../../actions';
 
 // ADR-0082 — what a second operator sees instead of a silent bounce.
@@ -38,32 +43,12 @@ import { takeOverLoadAction } from '../../actions';
 // locked out". On 2026-08-10 the truth was "this was finished five days ago",
 // and the Santa Rita operator waited on someone who was not working.
 //
-// Exported for the test that walks the enum: a status added to the schema
-// without a label here is how this got in, so the guard is over the whole set
-// rather than over the cases someone remembered.
-export const STATUS_KEY: Record<string, string> = {
-  expected: 'queue.open_status_expected',
-  arrived: 'queue.open_status_arrived',
-  weight_captured: 'queue.open_status_weight_captured',
-  unload_started: 'queue.open_status_unload_started',
-  in_progress: 'queue.open_status_in_progress',
-  finished: 'queue.open_status_finished',
-  submitted: 'queue.open_status_submitted',
-  verified: 'queue.open_status_verified',
-  rejected: 'queue.open_status_rejected',
-  voided: 'queue.open_status_voided',
-  submitted_to_mymrc: 'queue.open_status_submitted_to_mymrc',
-  processed: 'queue.open_status_processed',
-};
-
-/**
- * The label for a status this build has never heard of.
- *
- * "Status unknown" rather than any real stage: the failure mode being closed
- * here is a CONFIDENT WRONG ANSWER, and a fallback that names a specific live
- * activity is exactly that. Admitting ignorance is the honest floor.
- */
-export const STATUS_FALLBACK_KEY = 'queue.open_status_unknown';
+// Audit D-4 — the map MOVED to `@/lib/loads/floor-status-label`. It was one of
+// THREE copies (see that file's header); `open-loads.tsx` carried a five-entry
+// copy whose fallback was "Counting", which is the very defect the paragraph
+// above describes, still armed one directory away. Re-exported under the old
+// names so nothing that reads this module has to care.
+export { FLOOR_STATUS_KEY as STATUS_KEY, FLOOR_STATUS_FALLBACK_KEY as STATUS_FALLBACK_KEY };
 
 type Props = {
   siteCode: string;
@@ -174,7 +159,7 @@ export function HeldByPanel({
         {/* The name is the headline. Everything else on this panel is detail. */}
         <p className="text-lg font-bold">{t('takeover.held_by', { name: holder })}</p>
         <p className="mt-1 text-sm text-dr3-cream/70">
-          {t(STATUS_KEY[status] ?? STATUS_FALLBACK_KEY)}
+          {t(floorStatusKey(status))}
           {heldSinceAt && (
             <>
               {' · '}

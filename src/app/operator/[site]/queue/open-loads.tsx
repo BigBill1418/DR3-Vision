@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import type { Locale } from '@/i18n/config';
 import { formatDate, formatTime } from '@/lib/format';
-import type { LoadStatus } from '@prisma/client';
 import type { OpenLoadView } from '@/lib/loads/open-loads';
+import { floorStatusKey } from '@/lib/loads/floor-status-label';
 
 // ADR-0065 Amendment 1 — the "unfinished loads" block at the top of the dock queue.
 //
@@ -18,24 +18,16 @@ import type { OpenLoadView } from '@/lib/loads/open-loads';
 // component and resolves its strings with `translate()`, so `t` is passed in
 // rather than reached for with `useT()`.
 
-const STATUS_KEY: Record<string, string> = {
-  arrived: 'queue.open_status_arrived',
-  weight_captured: 'queue.open_status_weight_captured',
-  unload_started: 'queue.open_status_unload_started',
-  in_progress: 'queue.open_status_in_progress',
-  finished: 'queue.open_status_finished',
-  // ADR-0090 C — unreachable through `listSiteOpenLoads` (voided is outside
-  // OPEN_DOCK_STATUSES), but the fallback below says "Counting", and a confident
-  // wrong answer is the defect ADR-0074 Am.1 fixed in held-by-panel.tsx.
-  voided: 'queue.open_status_voided',
-};
-
-function statusKey(status: LoadStatus): string {
-  // Fail SOFT to the generic "in progress" label. An unmapped status must never
-  // render a raw enum token at an operator, and must never throw — the whole point
-  // of this block is that it is the way out of a stranded load.
-  return STATUS_KEY[status] ?? 'queue.open_status_in_progress';
-}
+// Audit D-4 — this file used to carry its own five-entry copy of the status map
+// whose fallback was `queue.open_status_in_progress`, i.e. "Counting". Its own
+// comment named that as "the defect ADR-0074 Am.1 fixed in held-by-panel.tsx"
+// and then kept it: an unmapped status was told the operator it was being
+// counted right now. Failing SOFT is correct; failing soft to a CONFIDENT WRONG
+// ANSWER is not. The shared map's fallback is "Status unknown".
+//
+// `floorStatusKey` is a plain function over a type-only enum import, so it is
+// safe in this server component and in the two client components that also read
+// it — which is the whole reason the map is no longer local.
 
 export function OpenLoadsSection({
   siteCode,
@@ -89,7 +81,7 @@ export function OpenLoadsSection({
                   {t('queue.bol_label')} {r.bolNumber ?? t('queue.bol_dash')}
                 </span>
                 <span className="mt-1 block text-xs opacity-80">
-                  {t(statusKey(r.status))}
+                  {t(floorStatusKey(r.status))}
                   {r.arrivedAt && (
                     <>
                       {' · '}
@@ -178,7 +170,7 @@ export function HeldByOthersSection({
                 <span className="mt-0.5 block truncate text-xs text-dr3-cream/70">
                   {t('queue.bol_label')} {r.bolNumber ?? t('queue.bol_dash')}
                   {' · '}
-                  {t(statusKey(r.status))}
+                  {t(floorStatusKey(r.status))}
                   {r.arrivedAt && (
                     <>
                       {' · '}

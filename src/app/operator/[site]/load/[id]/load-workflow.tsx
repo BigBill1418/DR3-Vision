@@ -4,6 +4,7 @@ import type { LoadStatus, PhotoKind } from '@prisma/client';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useI18n } from '@/i18n/provider';
+import { floorStatusKey } from '@/lib/loads/floor-status-label';
 import { StageBol } from './stage-bol';
 import { StageWeight } from './stage-weight';
 import { StageDoor } from './stage-door';
@@ -128,7 +129,48 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   }
 
   if (!STAGE_STATUSES.includes(load.status)) {
-    return <p>{t('workflow.unhandled_status', { status: load.status })}</p>;
+    // Audit D-4 — this branch WAS the whole of it:
+    //
+    //     return <p>{t('workflow.unhandled_status', { status: load.status })}</p>;
+    //
+    // No Link, no button, not even a wrapping element, and the copy interpolated
+    // a raw enum token — "Unhandled status: voided", translated just as uselessly
+    // into Spanish and Urdu. Its sibling seven lines above carries the comment
+    // "A dead end with reassuring copy is worse than a bare dead end" and a
+    // <Link> to the queue. This branch got neither.
+    //
+    // WHICH STATUSES LAND HERE: `verified`, `voided`, `submitted_to_mymrc`,
+    // `processed`. Production at 2026-08-11 22:04 PT held 627 `verified` loads
+    // and zero `voided` ones — but the 627 all carry `assigned_operator_id IS
+    // NULL`, so they route to `HeldByPanel` instead. That is luck from a
+    // different code path, not coverage.
+    //
+    // The reachable one is `voided`. `voidLoad` (`load-service.ts`) sets
+    // `status: 'voided'` and NULLs `expected_load_id` but leaves
+    // `assigned_operator_id` INTACT — so the operator who voids a load is still
+    // its holder, `heldByOther` is false, and one Back tap after the void
+    // redirect lands them here. The void panel is live in the workflow and has
+    // simply not been used yet; the first operator to use it hits this.
+    //
+    // The fix is the one its sibling already had, plus the enum→label map that
+    // `held-by-panel.tsx` already maintained for exactly this failure — now
+    // shared (`floor-status-label.ts`) rather than copied a fourth time. A
+    // status this build has never heard of reads "Status unknown", never a raw
+    // token and never a confident wrong stage.
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="rounded-md bg-dr3-green-dark/50 p-4 text-center" data-testid="load-closed">
+          <p className="text-lg font-bold">{t(floorStatusKey(load.status))}</p>
+          <p className="mt-2 text-sm text-dr3-cream/80">{t('workflow.closed_body')}</p>
+        </div>
+        <Link
+          href={`/operator/${siteCode}/queue`}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-4 py-3 text-center text-base font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream"
+        >
+          {t('workflow.back_to_queue')}
+        </Link>
+      </div>
+    );
   }
 
   const stage = (() => {

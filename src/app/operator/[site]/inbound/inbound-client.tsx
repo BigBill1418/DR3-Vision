@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useT, useLocale } from '@/i18n/provider';
 import { pacificDateLabel, dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
 import type { FloorInboundDayView } from '@/lib/loads/floor-inbound';
@@ -38,6 +39,14 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   const [refusal, setRefusal] = useState<WriteRefusal | null>(null);
   /** ADR-0078 — days whose entry is queued locally, NOT server-acked. */
   const [queuedDays, setQueuedDays] = useState<string[]>([]);
+  /**
+   * Audit D-15 — `err_per_load` ends with the words "Confirm it on the queue."
+   * and the screen then withheld the queue. A sentence that names a destination
+   * and does not link to it is a dead end with directions written on it. Tracked
+   * as a flag rather than by comparing the rendered string, so a copy edit can
+   * never silently detach the route from the sentence that promises it.
+   */
+  const [errorRoutesToQueue, setErrorRoutesToQueue] = useState(false);
 
   /**
    * Audit D-8 — a soft refresh re-renders the day list from the server, so a
@@ -54,6 +63,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   async function post(dateISO: string, program: number, nonProgram: number): Promise<void> {
     setBusyDay(dateISO);
     setError(null);
+    setErrorRoutesToQueue(false);
     setRefusal(null);
     // ADR-0078 — one key per submit attempt, reused by the queued entry so a
     // request that landed but lost its response replays to the same write.
@@ -80,6 +90,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
           setRefusal(refused);
           return;
         }
+        setErrorRoutesToQueue(body.error === 'per_load_exists');
         setError(errorMessage(body.error));
         return;
       }
@@ -118,7 +129,24 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   }
 
   if (initialRows.length === 0) {
-    return <p className="text-dr3-cream/70">{t('floor.inbound.empty')}</p>;
+    // Audit D-6 — "No recent inbound days." was a bare <p> in an EARLY RETURN
+    // that replaced the entire screen body: no reason, no next action, and the
+    // one thing an operator in that state actually needs (the queue, where a
+    // truck gets checked in and an inbound day comes into existence) unnamed and
+    // unlinked. Audit D-15 is the same defect one step further along — copy that
+    // names a destination and withholds it.
+    return (
+      <div className="flex flex-col items-start gap-4">
+        <p className="text-dr3-cream/70">{t('floor.inbound.empty')}</p>
+        <p className="text-sm text-dr3-cream/60">{t('floor.inbound.empty_why')}</p>
+        <Link
+          href={`/operator/${siteCode}/queue`}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-6 py-3 text-base font-bold text-dr3-ink"
+        >
+          {t('floor.inbound.go_to_queue')}
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -131,6 +159,14 @@ export function InboundClient({ siteCode, initialRows }: Props) {
         >
           {error}
         </p>
+      )}
+      {errorRoutesToQueue && (
+        <Link
+          href={`/operator/${siteCode}/queue`}
+          className="min-h-[56px] self-start rounded-lg bg-dr3-green px-6 py-3 text-base font-bold text-dr3-ink"
+        >
+          {t('floor.inbound.go_to_queue')}
+        </Link>
       )}
       {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
       {queuedDays.length > 0 && (
@@ -145,6 +181,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
       {initialRows.map((row) => (
         <DayCard
           key={row.dateISO}
+          siteCode={siteCode}
           row={row}
           label={dateLabel(row.dateISO)}
           isToday={row.isToday}
@@ -172,6 +209,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
 }
 
 function DayCard({
+  siteCode,
   row,
   label,
   isToday,
@@ -183,6 +221,7 @@ function DayCard({
   confirmedWhen,
   chip,
 }: {
+  siteCode: string;
   row: FloorInboundDayView;
   label: string;
   isToday: boolean;
@@ -223,9 +262,26 @@ function DayCard({
       </div>
 
       {readOnly ? (
-        <p className="mt-3 text-sm text-dr3-cream/60">
-          {row.officeOwned ? t('floor.inbound.office_locked') : t('floor.inbound.per_load_locked')}
-        </p>
+        // Audit D-15 — `per_load_locked` reads "This day was counted
+        // truck-by-truck ON THE QUEUE" and the queue was not reachable from the
+        // sentence naming it. `office_locked` names a PERSON rather than a
+        // screen ("a manager can change it"), so it correctly gets no link:
+        // there is no route to a colleague.
+        <div className="mt-3 flex flex-col items-start gap-3">
+          <p className="text-sm text-dr3-cream/60">
+            {row.officeOwned
+              ? t('floor.inbound.office_locked')
+              : t('floor.inbound.per_load_locked')}
+          </p>
+          {!row.officeOwned && (
+            <Link
+              href={`/operator/${siteCode}/queue`}
+              className="min-h-[44px] rounded-lg bg-dr3-green-dark/60 px-4 py-2 text-sm font-semibold text-dr3-cream"
+            >
+              {t('floor.inbound.go_to_queue')}
+            </Link>
+          )}
+        </div>
       ) : editing ? (
         <div className="mt-4 flex flex-col gap-4">
           <NumberStepper

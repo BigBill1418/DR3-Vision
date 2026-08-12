@@ -292,6 +292,24 @@ export function ReviewPanel({ siteCode, load, onClose }: Props) {
                     {voided && (
                       <span className="text-xs no-underline">{t('load_review.stack_voided')}</span>
                     )}
+                    {/* Audit D-25 — a `tmp-` stack rendered IDENTICALLY to an
+                        acked one and silently lacked its Remove button. The
+                        reasoning above is right — offering a control that would
+                        404 is worse — but the operator was told nothing, so one
+                        row inexplicably lacked the button its neighbour had, and
+                        the natural reading is "the app is broken" rather than
+                        "that one has not sent yet". This file already contains
+                        the model for the missing sentence twelve lines below
+                        (`load_review.unsent`): withhold the control, state the
+                        cause, and let it self-heal. */}
+                    {canVoidStack && !voided && !acked && (
+                      <span
+                        data-testid={`review-stack-unsent-${s.id}`}
+                        className="text-xs italic no-underline opacity-70"
+                      >
+                        {t('load_review.stack_unsent')}
+                      </span>
+                    )}
                     {canVoidStack && !voided && acked && (
                       <button
                         type="button"

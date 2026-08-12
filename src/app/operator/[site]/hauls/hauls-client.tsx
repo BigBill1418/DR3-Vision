@@ -25,6 +25,7 @@ import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
+import { floorStatusKey } from '@/lib/loads/floor-status-label';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
 import { QueueRow } from '../queue/queue-row';
@@ -176,7 +177,14 @@ export function HaulsClient({
         date: formatDate(workedAt, locale),
       });
     }
-    return t('floor.common.already_worked');
+    // Audit D-5 — the fallback used to be the bare two words "Already worked",
+    // which told the operator the slot was spent and nothing about what happened
+    // to it. It is reachable for a `rejected` child (never submitted, so
+    // `submitted_at` and therefore `workedAtISO` are null); production held 2 at
+    // 2026-08-11 22:04 PT, both with null units AND null date, so both landed
+    // here. Saying the STATUS costs one interpolation and turns "something
+    // happened" into "it was rejected at the dock".
+    return t('floor.common.already_worked_status', { status: t(floorStatusKey(c.status)) });
   };
 
   const renderRow = (r: HaulRowView) => (
@@ -339,10 +347,28 @@ export function HaulsClient({
       {rows.length > 0 ? (
         <ul className="flex flex-col gap-3">{rows.map(renderRow)}</ul>
       ) : (
-        <div className="rounded-lg bg-dr3-green-dark/40 p-8 text-center">
+        <div className="flex flex-col items-center gap-4 rounded-lg bg-dr3-green-dark/40 p-8 text-center">
           <p className="text-lg font-medium">
             {hasAnyHauls ? t('floor.hauls.empty_no_results') : t('floor.hauls.empty_no_hauls')}
           </p>
+          {/* Audit D-6 — "No portal hauls for this site." was a bare <p> that
+              ended the conversation, and for EUGENE it is the PERMANENT state of
+              this screen: the MyMRC mirror is Woodland-only by contract. A
+              Eugene operator tapping through saw a flat refusal with no
+              indication it was by design. The "no results" case keeps its Clear
+              button above and needs nothing here; the "no data" case gets the
+              reason and a route, in the house `not_activated_body` style. */}
+          {!hasAnyHauls && (
+            <>
+              <p className="text-sm text-dr3-cream/70">{t('floor.hauls.empty_no_hauls_why')}</p>
+              <Link
+                href={`/operator/${siteCode}/queue`}
+                className="min-h-[56px] rounded-lg bg-dr3-green px-6 py-3 text-base font-bold text-dr3-ink"
+              >
+                {t('floor.inbound.go_to_queue')}
+              </Link>
+            </>
+          )}
         </div>
       )}
     </div>

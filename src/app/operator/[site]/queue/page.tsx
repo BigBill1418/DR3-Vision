@@ -14,6 +14,7 @@ import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { listSiteOpenLoads } from '@/lib/loads/open-loads';
 import { CONSUMED_SLOT_SELECT, toConsumedLoad } from '@/lib/loads/consumed-slot';
 import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
+import { floorStatusKey } from '@/lib/loads/floor-status-label';
 import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -254,12 +255,21 @@ export default async function OperatorQueuePage({ params }: Props) {
                               <div className="rounded-lg bg-dr3-green-dark/40 p-4">
                                 {body}
                                 <p className="mt-2 text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
+                                  {/* Audit D-5 — the same fallback as the hauls
+                                      screen, changed in the same commit. These
+                                      two surfaces have now failed identically
+                                      TWICE (ADR-0074 Am.1, then ADR-0091), so a
+                                      copy change on one of them that is not made
+                                      on the other is the RC-2 defect, not a
+                                      cosmetic omission. */}
                                   {consumed.totalUnits != null && consumed.workedAt
                                     ? t('floor.common.already_worked_detail', {
                                         units: consumed.totalUnits,
                                         date: formatDate(consumed.workedAt, locale),
                                       })
-                                    : t('floor.common.already_worked')}
+                                    : t('floor.common.already_worked_status', {
+                                        status: t(floorStatusKey(consumed.status)),
+                                      })}
                                 </p>
                               </div>
                             );
