@@ -9,6 +9,33 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (10 PM PT) — H-135793 attribution recorded; canonical source-attribution notes doc created
+
+Docs only. New `docs/INVENTORY-SOURCE-ATTRIBUTION.md` — the canonical running record for
+individual inbound-load attribution questions, companion to the source-classification email
+sent at the Loads & Inventory go-live (ADR-0037). Rules stay in ADR-0037 +
+`src/lib/inventory/source-classification.ts`; specific reconciliations now live in the new doc.
+
+First entry: the **150 units entered 2026-07-29 at DR3 Woodland** were **one load**, MyMRC haul
+**H-135793** (150 units, all program, Delivered, docking 08:00 PDT). Transporter per system is
+**Humboldt Sanitation**; it was reported to Bill by email as "Humble Moving." The system name is
+authoritative unless Bill corrects it — both recorded, neither overwritten.
+
+Three things the note pins down so they are not misread later:
+
+- **The link is an inference, not a foreign key.** The iPad floor row carries
+  `transporter_id`, `source_id` and `external_mymrc_haul_id` all NULL. The match rests on
+  there being exactly one 150-unit load fleet-wide that day, exactly one 150-unit mirror haul
+  in the window, same site, same 150/150 program split, submitted 34 min after docking.
+- **`arrived_at 2026-07-29 07:00:00Z` is Pacific midnight of the business day**, the
+  day-anchoring convention of ADR-0037 §B7.1 — not the truck's arrival time.
+- **The mirror's `docking_appointment_date` 12:00 is a date-field noon placeholder.** The
+  appointment is 08:00 PDT (`docking_appointment_at` 15:00Z). A report quoting "docking 12:00"
+  is reading the placeholder.
+
+Also noted: a separate 3-unit Humboldt Sanitation `b2b_haul` at Woodland the same day is **not**
+part of H-135793.
+
 ## 2026-08-11 (10 PM PT) — Why the floor keeps calling: one defect class, not many bugs (ADR-0094)
 
 Bill, after the second floor-blocking incident in two days: _"I need to understand
