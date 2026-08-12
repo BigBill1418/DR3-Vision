@@ -265,11 +265,12 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
   // ── ADR-0097 §1 — a self-healing blip is not a page ───────────────────────
   //
   // `sweep_failed` pages `high`, and until 2026-08-12 it did so on the FIRST
-  // failure. The sweep runs every 15 minutes (~96/day) against Microsoft Graph,
-  // which 503s roughly 1% of the time; every one of those self-healed on the
-  // next run. That is about one page a day telling Bill about a condition that
-  // was already over before his phone buzzed — ADR-0037 gate 3 ("has the system
-  // tried to self-heal first?") says wait one retry.
+  // failure. Measured over the seven days to 2026-08-12: 689 runs, 684 ok, 4
+  // failed, 1 partial — a 0.58% failure rate, on 08-06, 08-09, 08-10 and 08-11.
+  // NONE were consecutive and every one self-healed on the next 15-minute run,
+  // so all four told Bill about a condition that was already over before his
+  // phone buzzed — ADR-0037 gate 3 ("has the system tried to self-heal first?")
+  // says wait one retry. Under this grading all four send zero pages.
   //
   // The consecutiveness is free: a successful sweep RESOLVES the open row, so an
   // open row that reaches occurrence 2 can only have got there via two failures
