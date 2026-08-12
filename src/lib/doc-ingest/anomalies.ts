@@ -52,6 +52,19 @@ interface AnomalyPolicy {
   priority: 'default' | 'high' | 'urgent' | null;
   /** Which surface answers "what do I do about this". */
   page: string;
+  /**
+   * ADR-0097 §1 — page only once the OPEN row has reached this many
+   * occurrences. Absent (or 1) ⇒ page on the transition, which is the default
+   * and stays the default for every kind but one.
+   *
+   * This is how ADR-0037's third gate ("has the system tried to self-heal
+   * first?") is enforced for a condition whose retry is the very next sweep.
+   * It costs one sweep interval of latency and nothing else: because a success
+   * RESOLVES the open row, an open row can only reach occurrence 2 via two
+   * failures with no success between them. Consecutiveness is already in the
+   * ledger — this just reads it.
+   */
+  pageAfterOccurrences?: number;
 }
 
 /**
@@ -88,7 +101,19 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
 
   // ── The sweep itself. This one MUST page: the sweep is the correctness
   // guarantee, and a silently dead sweep is the ADR-0057 D9 / MyMRC failure.
-  sweep_failed: { severity: 'critical', priority: 'high', page: HEALTH_PAGE_PATH },
+  //
+  // ADR-0097 §1 — but not on the FIRST failure. The sweep runs ~96 times a day
+  // against Microsoft Graph, which 503s on roughly 1% of them; every one of
+  // those self-healed on the next 15-minute run. Paging on the first failure
+  // meant about one page a day about a condition that was already over. The
+  // guard is unchanged in kind and severity — a genuinely dead sweep still
+  // pages `high`, fifteen minutes later than it used to.
+  sweep_failed: {
+    severity: 'critical',
+    priority: 'high',
+    page: HEALTH_PAGE_PATH,
+    pageAfterOccurrences: 2,
+  },
   reauth_required: { severity: 'critical', priority: 'high', page: CONNECT_PAGE_PATH },
 
   // ── Content acquisition ───────────────────────────────────────────────────
@@ -166,6 +191,27 @@ export interface RaiseAnomalyArgs {
   context?: Record<string, unknown>;
   /** Override the per-kind default (e.g. escalate after N consecutive failures). */
   severity?: DocIngestAnomalySeverity;
+  /**
+   * ADR-0097 §2 — record THIS occurrence, but do not page for it.
+   *
+   * For a kind that is usually actionable but has a specific, recognised
+   * variant the operator can do nothing about. The motivating case is
+   * `subscription_renew_failed`: on OneDrive for Business a subscription may
+   * only be created on a drive ROOT, and Vision reaches its documents through
+   * item-level shares, so Microsoft's 403 is a structural limit the code itself
+   * documents as not-to-be-fixed (see SUBSCRIPTION_SCOPE_NOTE). It re-paged
+   * every 24h forever and failed ADR-0037 gate 1 — nothing is actionable within
+   * five minutes, or ever. It is a health tile.
+   *
+   * Deliberately ONE-DIRECTIONAL: this can only ever suppress a page, never
+   * raise one. A caller that gets it wrong makes the surface quieter than the
+   * grading intends, which is visible on /admin/doc-ingest/health — it can
+   * never manufacture an alert or escalate a severity. The decision stays with
+   * the raise site because only the raise site knows which variant it caught;
+   * the KIND cannot be demoted wholesale without taking the genuinely
+   * actionable renewal failures with it.
+   */
+  dashboardOnly?: boolean;
   now?: Date;
 }
 
@@ -234,7 +280,7 @@ export async function raiseAnomaly(
     }
   }
 
-  const paged = await maybePage(prisma, anomaly, policy, raised, now);
+  const paged = await maybePage(prisma, anomaly, policy, raised, now, args.dashboardOnly === true);
   return { anomaly, raised, paged };
 }
 
@@ -268,8 +314,17 @@ async function maybePage(
   policy: AnomalyPolicy,
   raised: boolean,
   now: Date,
+  dashboardOnly: boolean,
 ): Promise<boolean> {
   if (policy.priority === null) return false;
+  // ADR-0097 §2 — a recognised not-fixable variant of an otherwise pageable
+  // kind. Recorded and visible; never on Bill's phone.
+  if (dashboardOnly) return false;
+
+  // ADR-0097 §1 — self-heal grace. Checked BEFORE the re-page window so the
+  // suppressed first failure leaves `last_paged_at` null, which is what lets
+  // the second failure page immediately rather than waiting out 24 hours.
+  if (anomaly.occurrences < (policy.pageAfterOccurrences ?? 1)) return false;
 
   const dueForRepage =
     anomaly.last_paged_at === null ||

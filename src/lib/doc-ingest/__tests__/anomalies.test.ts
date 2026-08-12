@@ -262,6 +262,119 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
     expect(anomalyPolicy('sweep_failed').severity).toBe('critical');
   });
 
+  // ── ADR-0097 §1 — a self-healing blip is not a page ───────────────────────
+  //
+  // `sweep_failed` pages `high`, and until 2026-08-12 it did so on the FIRST
+  // failure. Measured over the seven days to 2026-08-12: 689 runs, 684 ok, 4
+  // failed, 1 partial — a 0.58% failure rate, on 08-06, 08-09, 08-10 and 08-11.
+  // NONE were consecutive and every one self-healed on the next 15-minute run,
+  // so all four told Bill about a condition that was already over before his
+  // phone buzzed — ADR-0037 gate 3 ("has the system tried to self-heal first?")
+  // says wait one retry. Under this grading all four send zero pages.
+  //
+  // The consecutiveness is free: a successful sweep RESOLVES the open row, so an
+  // open row that reaches occurrence 2 can only have got there via two failures
+  // with no success between them. The ledger already encodes it.
+
+  it('does NOT page on a single sweep failure — the next sweep is 15 minutes away', async () => {
+    const result = await raiseAnomaly(p(), {
+      kind: 'sweep_failed',
+      subject: 'sweep',
+      detail: 'graph 503',
+      now: NOW,
+    });
+
+    // The anomaly is still RAISED and visible on the health surface …
+    expect(result.raised).toBe(true);
+    expect(prisma._stores.anomalies).toHaveLength(1);
+    expect(prisma._stores.anomalies[0]?.['status']).toBe('open');
+    // … it just does not reach for Bill's phone yet.
+    expect(result.paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+    // Nothing may claim a page happened, or the 24h window arms against nothing.
+    expect(prisma._stores.anomalies[0]?.['last_paged_at']).toBeNull();
+  });
+
+  it('DOES page on the second consecutive failure — a dead sweep still pages, 15 minutes later', async () => {
+    await raiseAnomaly(p(), { kind: 'sweep_failed', subject: 'sweep', detail: 'x', now: NOW });
+    expect(publishNtfy).not.toHaveBeenCalled();
+
+    const second = await raiseAnomaly(p(), {
+      kind: 'sweep_failed',
+      subject: 'sweep',
+      detail: 'x',
+      now: new Date(NOW.getTime() + 15 * 60_000),
+    });
+
+    // This is the ADR-0057 D9 guard the delay must not weaken: a genuinely dead
+    // sweep is still reported, one sweep interval later than before.
+    expect(second.paged).toBe(true);
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+    expect(prisma._stores.anomalies[0]?.['last_paged_at']).toEqual(
+      new Date(NOW.getTime() + 15 * 60_000),
+    );
+  });
+
+  it('resets the count when a sweep succeeds — two ISOLATED blips never page', async () => {
+    // The exact production shape: a 503 at 16:13, a clean sweep at 16:28, another
+    // 503 hours later. Two failures, but not consecutive — neither may page.
+    await raiseAnomaly(p(), { kind: 'sweep_failed', subject: 'sweep', detail: 'x', now: NOW });
+    await resolveAnomaly(p(), 'sweep_failed', 'sweep', 'A sweep completed successfully.', NOW);
+
+    const later = await raiseAnomaly(p(), {
+      kind: 'sweep_failed',
+      subject: 'sweep',
+      detail: 'x',
+      now: new Date(NOW.getTime() + 4 * 60 * 60_000),
+    });
+
+    expect(later.raised).toBe(true);
+    expect(later.paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('leaves every OTHER kind paging on the transition', async () => {
+    // The delay is a targeted grading change for one kind, not a global mute.
+    expect(anomalyPolicy('sweep_failed').pageAfterOccurrences).toBe(2);
+    for (const kind of ['access_denied', 'aggregate_variance', 'download_failed'] as const) {
+      expect(anomalyPolicy(kind).pageAfterOccurrences ?? 1).toBe(1);
+    }
+  });
+
+  // ── ADR-0097 §2 — a structural limit is a tile, not a page ────────────────
+
+  it('does not page an occurrence marked dashboardOnly, but still opens the row', async () => {
+    const result = await raiseAnomaly(p(), {
+      kind: 'subscription_renew_failed',
+      subject: 'drive:A',
+      detail: 'Microsoft refused a change subscription. STRUCTURAL limit.',
+      dashboardOnly: true,
+      now: NOW,
+    });
+
+    expect(result.raised).toBe(true);
+    expect(result.paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+    // Visible on /admin/doc-ingest/health, and never stamped as paged.
+    expect(prisma._stores.anomalies[0]?.['status']).toBe('open');
+    expect(prisma._stores.anomalies[0]?.['last_paged_at']).toBeNull();
+  });
+
+  it('still pages a subscription failure that is NOT the structural limit', async () => {
+    // The demotion is per-occurrence and one-directional. A renewal that failed
+    // for any other reason is actionable and must survive the tuning — silencing
+    // the whole KIND would have taken this with it.
+    const result = await raiseAnomaly(p(), {
+      kind: 'subscription_renew_failed',
+      subject: 'drive:B',
+      detail: 'Could not renew the change subscription: 500 internal error.',
+      now: NOW,
+    });
+
+    expect(result.paged).toBe(true);
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+  });
+
   it('never marks anything `urgent` — none of this is customer-visible at 3 a.m.', () => {
     const kinds = [
       'access_denied',

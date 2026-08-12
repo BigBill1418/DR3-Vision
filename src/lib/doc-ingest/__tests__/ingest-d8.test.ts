@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ExcelJS from 'exceljs';
 import { ingestSource } from '../ingest';
+import { raiseAnomaly } from '../anomalies';
 import { DocIngestAccessDeniedError, DocIngestOversizeError, type DocIngestGraph } from '../graph';
 import {
   makeFakePrisma,
@@ -86,6 +87,74 @@ describe('ingestSource — idempotency', () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect(prisma._stores.versions).toHaveLength(1);
     expect(prisma._stores.fileDrops).toHaveLength(1);
+  });
+
+  // ── REGRESSION 2026-08-12 (ADR-0097 §3) — a healed download that never clears ──
+  //
+  // ADR-0095 moved the `download_failed` resolve ABOVE the guardrail branch so a
+  // recovered source whose revision merely STAGED would still clear. It did not
+  // go far enough: the resolve still sits below the `unchanged` early return,
+  // which is the path almost every sweep takes. So a source that 503'd once and
+  // then downloaded cleanly kept an OPEN `download_failed` row for as long as its
+  // content did not change again — re-paging every 24h about a failure that
+  // healed in fifteen minutes.
+  //
+  // Measured live on TEREX.xlsx: Graph 503'd at 16:58 PT on 2026-08-11, the 17:13
+  // sweep archived the file cleanly, and the row was still open at 22:00 PT
+  // because the ctag had not moved since.
+  //
+  // "My copy is current and archived" is a STRONGER statement than "a download
+  // succeeded", so the unchanged path is entitled to clear it.
+  it('clears an open `download_failed` on the UNCHANGED path — a current copy is proof', async () => {
+    const source = await seedSource();
+    const graph = makeGraph({ downloadItem: async () => workbookBytes([['Units'], [1]]) });
+
+    // Sweep 1 ingests cleanly.
+    await ingestSource(p(), graph, source, { now: NOW, putBytes });
+
+    // A later 503 opens a download_failed against this source.
+    await raiseAnomaly(p(), {
+      kind: 'download_failed',
+      subject: 'drive-A:item-1',
+      docSourceId: source.id,
+      detail: 'graph 503',
+      now: NOW,
+    });
+    expect(openAnomalies('download_failed')).toHaveLength(1);
+
+    // Sweep 2: content has not changed, so this returns `unchanged` without
+    // downloading. Under the pre-ADR-0097 code the row stayed open forever.
+    const result = await ingestSource(p(), graph, source, { now: NOW, putBytes });
+
+    expect(result.outcome).toBe('unchanged');
+    expect(openAnomalies('download_failed')).toHaveLength(0);
+    // Resolved, not deleted — the history is the evidence it happened.
+    expect(
+      prisma._stores.anomalies.filter(
+        (a) => a['kind'] === 'download_failed' && a['status'] === 'resolved',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('does NOT clear `download_failed` when the current revision was never archived', async () => {
+    // r2_key is null when the archive write failed. `applyVersion` raises
+    // download_failed for exactly that, so clearing it here would put the two in
+    // a resolve/raise loop — and the claim "I hold this document" would be false.
+    const source = await seedSource();
+    const graph = makeGraph({ downloadItem: async () => workbookBytes([['Units'], [1]]) });
+    const failingPut = vi.fn(async () => {
+      throw new Error('r2 unavailable');
+    });
+
+    await ingestSource(p(), graph, source, { now: NOW, putBytes: failingPut });
+    expect(prisma._stores.versions[0]?.['r2_key']).toBeNull();
+
+    const before = openAnomalies('download_failed').length;
+    const result = await ingestSource(p(), graph, source, { now: NOW, putBytes: failingPut });
+
+    expect(result.outcome).toBe('unchanged');
+    expect(openAnomalies('download_failed')).toHaveLength(before);
+    expect(before).toBeGreaterThan(0);
   });
 
   // ── REGRESSION 2026-07-29 — the silent permanent stop ─────────────────────
