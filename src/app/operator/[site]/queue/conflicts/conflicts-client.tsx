@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
+import { DeadEndBeacon } from '../../../_components/dead-end-beacon';
 import {
   listBlocked,
   listConflicts,
@@ -251,6 +252,11 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
   // because empty-because-we-could-not-look is the case that was lying.
   if (unreadable) {
     return (
+      <>
+        {/* The state that used to LIE (D-14). A count of it is how we learn
+            whether IndexedDB is failing on a real iPad, which nothing has ever
+            been able to say. */}
+        <DeadEndBeacon siteCode={siteCode} surface="conflicts" state="queue_unreadable" />
       <p
         role="alert"
         data-testid="conflicts-unreadable"
@@ -258,6 +264,7 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
       >
         {t('floor.conflicts.unreadable')}
       </p>
+      </>
     );
   }
 

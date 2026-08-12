@@ -22,6 +22,12 @@ interface MetricsBundle {
   offlineQueueDepth: Gauge<'site' | 'user_id'>;
   bonusPayPeriodsByState: Gauge<'site' | 'state'>;
   payrollDeliverySuccess: Counter<'outcome'>;
+  // ADR-0100 / ADR-0094 §P0 — the dead-end instrument. Label sets are CLOSED
+  // unions in `dead-end.ts` (never free strings), which is what keeps these two
+  // counters' cardinality bounded: 9 surfaces x 9 states x 2 sites is a ceiling,
+  // not a hope.
+  deadEndRenders: Counter<'surface' | 'state' | 'site'>;
+  writeRefusals: Counter<'surface' | 'refusal' | 'site'>;
 }
 
 // Reuse one bundle across dev HMR reloads. A module-scoped const would be
@@ -86,6 +92,20 @@ function buildBundle(): MetricsBundle {
     registers: [registry],
   });
 
+  const deadEndRenders = new Counter({
+    name: 'dr3_vision_floor_dead_end_renders_total',
+    help: 'Renders of a floor state that names a condition and offers no control (ADR-0094 P0)',
+    labelNames: ['surface', 'state', 'site'],
+    registers: [registry],
+  });
+
+  const writeRefusals = new Counter({
+    name: 'dr3_vision_floor_write_refusals_total',
+    help: 'Floor writes refused with a CLASSIFIED reason the operator was shown (ADR-0094 P0)',
+    labelNames: ['surface', 'refusal', 'site'],
+    registers: [registry],
+  });
+
   return {
     registry,
     httpRequestsTotal,
@@ -95,6 +115,8 @@ function buildBundle(): MetricsBundle {
     offlineQueueDepth,
     bonusPayPeriodsByState,
     payrollDeliverySuccess,
+    deadEndRenders,
+    writeRefusals,
   };
 }
 
@@ -109,6 +131,8 @@ export const r2UploadSuccess = bundle.r2UploadSuccess;
 export const offlineQueueDepth = bundle.offlineQueueDepth;
 export const bonusPayPeriodsByState = bundle.bonusPayPeriodsByState;
 export const payrollDeliverySuccess = bundle.payrollDeliverySuccess;
+export const deadEndRenders = bundle.deadEndRenders;
+export const writeRefusals = bundle.writeRefusals;
 
 /**
  * Record one completed HTTP request. Increments the request counter and observes

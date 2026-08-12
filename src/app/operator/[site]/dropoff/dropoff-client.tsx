@@ -289,7 +289,12 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
         <p className="text-lg text-dr3-chartreuse">{t('floor.common.queued')}</p>
       )}
       {error && <p className="text-lg text-red-300">{error}</p>}
-      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
+      {refusal && <WriteRefusalNotice
+          refusal={refusal}
+          onRefresh={refreshToToday}
+          siteCode={siteCode}
+          surface="dropoff"
+        />}
     </div>
   );
 }

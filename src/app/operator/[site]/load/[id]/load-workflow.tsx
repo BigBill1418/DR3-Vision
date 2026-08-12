@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useI18n } from '@/i18n/provider';
 import { floorStatusKey } from '@/lib/loads/floor-status-label';
+import { DeadEndBeacon } from '../../../_components/dead-end-beacon';
 import { StageBol } from './stage-bol';
 import { StageWeight } from './stage-weight';
 import { StageDoor } from './stage-door';
@@ -159,6 +160,15 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     // token and never a confident wrong stage.
     return (
       <div className="flex flex-col gap-4">
+        {/* ADR-0100 §P0 — this branch now has a route, but it is still a state
+            with no WORK in it, and how often the floor lands here is the only
+            way to know whether the void panel is being used as intended. */}
+        <DeadEndBeacon
+          siteCode={siteCode}
+          surface="load"
+          state="load_closed"
+          objectId={load.id}
+        />
         <div className="rounded-md bg-dr3-green-dark/50 p-4 text-center" data-testid="load-closed">
           <p className="text-lg font-bold">{t(floorStatusKey(load.status))}</p>
           <p className="mt-2 text-sm text-dr3-cream/80">{t('workflow.closed_body')}</p>

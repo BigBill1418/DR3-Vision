@@ -1,6 +1,8 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useT } from '@/i18n/provider';
+import type { DeadEndSurface } from '@/lib/observability/dead-end';
 
 // Audit D-8 — the two refusals every floor WRITE client can earn and none of
 // them could read.
@@ -85,11 +87,37 @@ export function classifyWriteRefusal(status: number, errorCode: unknown): WriteR
 export function WriteRefusalNotice({
   refusal,
   onRefresh,
+  siteCode,
+  surface,
 }: {
   refusal: WriteRefusal;
   onRefresh: () => void;
+  /**
+   * ADR-0100 §P0 — required, not optional. An optional telemetry prop is a
+   * telemetry prop the next screen forgets, and the whole point of counting
+   * refusals is that the count is COMPLETE: a surface missing from the metric is
+   * indistinguishable from a surface where nobody is being refused.
+   */
+  siteCode: string;
+  surface: DeadEndSurface;
 }) {
   const t = useT();
+
+  // ADR-0094 §P0's second half: "every classified write-refusal". A refusal is
+  // NOT a dead-end render — this operator ACTED and was told no — so it goes to
+  // its own counter. Fires once per mount of the notice, which is once per
+  // refusal, because the notice is cleared and re-created on the next attempt.
+  useEffect(() => {
+    void fetch(`/api/operator/${siteCode}/dead-end`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({ surface, refusal }),
+    }).catch(() => {
+      /* never load-bearing — see dead-end-beacon.tsx */
+    });
+  }, [siteCode, surface, refusal]);
+
   return (
     <div className="flex flex-col gap-3" data-testid="write-refusal" data-refusal={refusal}>
       <p role="alert" className="rounded-lg bg-red-900/60 px-4 py-3 text-sm font-medium text-white">

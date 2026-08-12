@@ -15,6 +15,7 @@ import { listSiteOpenLoads } from '@/lib/loads/open-loads';
 import { CONSUMED_SLOT_SELECT, toConsumedLoad } from '@/lib/loads/consumed-slot';
 import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
 import { floorStatusKey } from '@/lib/loads/floor-status-label';
+import { recordDeadEnd } from '@/lib/observability/dead-end';
 import { FloorPageHeading } from '../../_components/page-heading';
 
 // Expected-loads queue per SPRINT-1-PLAN T-005. Server-renders the
@@ -180,6 +181,26 @@ export default async function OperatorQueuePage({ params }: Props) {
   // no longer reads as "nothing expected today".
   const loads = allSlots.filter((l) => l.cancelled_at === null);
   const withdrawn = allSlots.filter((l) => l.cancelled_at !== null && l.inbound_load === null);
+
+  // ADR-0100 §P0 — this is a SERVER component, so it calls the recorder directly
+  // rather than mounting a `<DeadEndBeacon>`: there is no browser round trip to
+  // make and the session is already resolved here.
+  //
+  // Emitted in the component BODY, not inside JSX. A side effect wedged into a
+  // render expression is both unreadable and a lie about when it runs — and the
+  // one thing this instrument must never do is behave differently from how it
+  // reads (ADR-0100 D4).
+  for (const l of withdrawn) {
+    recordDeadEnd({
+      surface: 'queue',
+      state: 'slot_withdrawn',
+      objectId: l.external_mymrc_haul_id,
+      siteCode: site.code,
+      userId: session.user.id,
+      role: session.user.role ?? 'operator',
+      locale,
+    });
+  }
 
   // Last-sync timestamp for the empty-state caption — pulled from
   // the freshest scrape across the site's loads. Once T-013 ships

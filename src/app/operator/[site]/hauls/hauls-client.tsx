@@ -26,6 +26,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
 import { floorStatusKey } from '@/lib/loads/floor-status-label';
+import { DeadEndBeacon } from '../../_components/dead-end-beacon';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
 import { QueueRow } from '../queue/queue-row';
@@ -217,6 +218,12 @@ export function HaulsClient({
         </Link>
       ) : r.consumedLoad ? (
         <div className="rounded-lg bg-dr3-green-dark/40 p-4">
+          <DeadEndBeacon
+            siteCode={siteCode}
+            surface="hauls"
+            state="already_worked"
+            objectId={r.externalHaulId}
+          />
           {renderBody(r)}
           <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-cream/70">
             {consumedNote(r.consumedLoad)}
@@ -267,6 +274,16 @@ export function HaulsClient({
           className="rounded-lg bg-amber-900/40 p-4 ring-1 ring-amber-400/40"
           data-testid="haul-withdrawn"
         >
+          {/* ADR-0100 §P0 — the state ADR-0099 measured at 69 firings, 67 of them
+              wrong. Now that it is legible it also has to be COUNTABLE: the
+              three-miss threshold is a judgement made on 69 events, and this is
+              the readout that says whether it was the right one. */}
+          <DeadEndBeacon
+            siteCode={siteCode}
+            surface="hauls"
+            state="slot_withdrawn"
+            objectId={r.externalHaulId}
+          />
           {renderBody(r)}
           <p className="mt-2 text-start text-sm font-semibold text-amber-100">
             {t('floor.hauls.withdrawn', {
@@ -284,6 +301,15 @@ export function HaulsClient({
         // check — so it stays read-only rather than getting a reconcile control
         // whose acknowledgement could not be verified.
         <div className="rounded-lg bg-dr3-green-dark/40 p-4">
+          {/* ADR-0100 §P0 — "View only" is the branch that dead-ended H-136980 on
+              2026-08-11 and produced a 5:18 PM phone call. It is the single
+              highest-value thing on the floor to have a count of. */}
+          <DeadEndBeacon
+            siteCode={siteCode}
+            surface="hauls"
+            state="view_only"
+            objectId={r.externalHaulId}
+          />
           {renderBody(r)}
           <p className="mt-2 text-start text-xs uppercase tracking-wide text-dr3-cream/50">
             {t('floor.hauls.view_only')}
@@ -389,6 +415,9 @@ export function HaulsClient({
               reason and a route, in the house `not_activated_body` style. */}
           {!hasAnyHauls && (
             <>
+              {/* Eugene's PERMANENT state, by contract. Counting it separates
+                  "designed and explained" from "nobody has looked at this yet". */}
+              <DeadEndBeacon siteCode={siteCode} surface="hauls" state="no_portal_feed" />
               <p className="text-sm text-dr3-cream/70">{t('floor.hauls.empty_no_hauls_why')}</p>
               <Link
                 href={`/operator/${siteCode}/queue`}
