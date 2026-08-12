@@ -276,12 +276,7 @@ async function maybePage(
     now.getTime() - anomaly.last_paged_at.getTime() >= ANOMALY_REPAGE_INTERVAL_MS;
   if (!raised && !dueForRepage) return false;
 
-  await prisma.docIngestAnomaly.update({
-    where: { id: anomaly.id },
-    data: { last_paged_at: now },
-  });
-
-  await publishNtfy({
+  const result = await publishNtfy({
     topic: NTFY_TOPIC,
     title: `Document ingestion — ${anomaly.kind.replace(/_/g, ' ')}`,
     body: anomaly.detail,
@@ -291,6 +286,35 @@ async function maybePage(
     // This module owns dedup via `last_paged_at`. The in-process ledger must not
     // ALSO suppress, or a container restart silently changes paging behaviour.
     cooldownMs: 0,
+  });
+
+  // Stamp the ledger only for a page that actually LANDED.
+  //
+  // Until 2026-08-11 this update ran BEFORE the publish and ignored its result,
+  // so `last_paged_at` recorded an intention, not a delivery. Through the
+  // ADR-0019.5 em-dash era that made the failure invisible in the worst possible
+  // way: the title on line 286 holds a literal U+2014, so `publishNtfy` threw
+  // inside undici before a socket opened and EVERY doc-ingest page was
+  // discarded — while every one of those anomalies still wrote `last_paged_at`.
+  // The ledger said Bill had been told. He had not. Production carried
+  // `sweep_failed` rows stamped as paged on 07-31, 08-01, 08-06, 08-09 and 08-10
+  // with no corresponding message anywhere in ntfy's seven-day cache.
+  //
+  // Worse, the stamp then armed the 24h re-page window against a page that never
+  // existed, so the retry the operator was relying on was suppressed by the
+  // record of its own failure. A ledger that cannot distinguish "sent" from
+  // "attempted" does not just lose one page; it guarantees the loss is silent.
+  //
+  // `ok` is true for 'sent', 'fallback-sent', 'cooldown-suppressed' and
+  // 'unconfigured' — all of which are correctly treated as paged (the first two
+  // reached ntfy; the last two are deliberate local suppressions that must not
+  // spin). Only 'dropped' returns false, and leaving the stamp untouched there
+  // lets the next sweep, fifteen minutes later, try again.
+  if (!result.ok) return false;
+
+  await prisma.docIngestAnomaly.update({
+    where: { id: anomaly.id },
+    data: { last_paged_at: now },
   });
   return true;
 }

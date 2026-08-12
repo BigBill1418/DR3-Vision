@@ -170,6 +170,72 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
     expect(publishNtfy).toHaveBeenCalledTimes(2);
   });
 
+  // ── ADR-0019.5 Am.1 — the ledger must record DELIVERY, not intention ──────
+  //
+  // These pin the incident of 2026-08-11. `maybePage` stamped `last_paged_at`
+  // BEFORE publishing and ignored the result, so through the em-dash era every
+  // doc-ingest page was discarded by undici while the row recorded a successful
+  // page — and the stamp then armed the 24h window against a page that never
+  // existed, suppressing the retry. Both assertions below fail on that code.
+
+  it('does NOT stamp last_paged_at when the page was dropped', async () => {
+    vi.mocked(publishNtfy).mockResolvedValueOnce({ ok: false, outcome: 'dropped' });
+
+    const result = await raiseAnomaly(p(), {
+      kind: 'access_denied',
+      subject: 's',
+      detail: 'x',
+      now: NOW,
+    });
+
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+    // The page did not land, so the anomaly was not paged …
+    expect(result.paged).toBe(false);
+    // … and nothing in the ledger may claim otherwise.
+    expect(prisma._stores.anomalies[0]?.['last_paged_at']).toBeNull();
+  });
+
+  it('retries on the very next sweep after a drop, instead of waiting out the 24h window', async () => {
+    vi.mocked(publishNtfy).mockResolvedValueOnce({ ok: false, outcome: 'dropped' });
+    await raiseAnomaly(p(), { kind: 'access_denied', subject: 's', detail: 'x', now: NOW });
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+
+    // One sweep interval later — far inside the re-page cooldown. Under the old
+    // code the dropped page had already stamped the row, so this was silently
+    // suppressed and the condition went unreported for a full day.
+    await raiseAnomaly(p(), {
+      kind: 'access_denied',
+      subject: 's',
+      detail: 'x',
+      now: new Date(NOW.getTime() + 15 * 60_000),
+    });
+    expect(publishNtfy).toHaveBeenCalledTimes(2);
+    expect(prisma._stores.anomalies[0]?.['last_paged_at']).toEqual(
+      new Date(NOW.getTime() + 15 * 60_000),
+    );
+  });
+
+  it('treats a locally-suppressed page as delivered — cooldown and unconfigured must not spin', async () => {
+    // `ok: true` with no request on the wire is a DELIBERATE local decision, not
+    // a loss. Retrying these every sweep would hammer a publisher that is doing
+    // exactly what it was told to do.
+    for (const outcome of ['cooldown-suppressed', 'unconfigured'] as const) {
+      resetFakeIds();
+      prisma = makeFakePrisma();
+      vi.mocked(publishNtfy).mockClear();
+      vi.mocked(publishNtfy).mockResolvedValueOnce({ ok: true, outcome });
+
+      const result = await raiseAnomaly(p(), {
+        kind: 'access_denied',
+        subject: 's',
+        detail: 'x',
+        now: NOW,
+      });
+      expect(result.paged).toBe(true);
+      expect(prisma._stores.anomalies[0]?.['last_paged_at']).toEqual(NOW);
+    }
+  });
+
   it('grades the D7 guardrail kinds as critical and pageable — real money is at stake', () => {
     for (const kind of [
       'aggregate_variance',
