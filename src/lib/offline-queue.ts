@@ -671,6 +671,35 @@ export async function listConflicts(): Promise<PendingSummary> {
   return { uploads: uploads.filter(isConflict), actions: actions.filter(isConflict) };
 }
 
+/**
+ * Audit D-22 — rows parked on UNREACHABLE OBJECT STORAGE, which had no screen.
+ *
+ * `floor.conflicts.why_upload_blocked` ("Photo storage was unreachable. It is
+ * safe to try again now.") exists in all three locales and was written for
+ * exactly these rows. The audit recorded it as unreachable because `reasonLabel`
+ * never returns it; the real reason is one level further down and worse —
+ * `listConflicts` filters strictly on the `conflict:` prefix, so a `blocked:`
+ * row NEVER REACHES THE CONFLICTS SCREEN AT ALL. It was not that the sentence
+ * lost a race with the catch-all; there was no surface for it to lose on.
+ *
+ * The only thing that represented these rows was the chrome pill ("Photos can't
+ * upload — tell a manager"), whose control is `sync`, not a route — so an
+ * operator told to tell a manager could not show them WHICH photos, or how many,
+ * or since when.
+ *
+ * Deliberately a SEPARATE reader rather than widening `listConflicts`:
+ * `conflictCount` drives the chrome's "{{count}} need you" badge, and folding
+ * blocked rows into it would double-count them against the uploads-blocked pill
+ * that already exists for precisely this state. Same store, same Retry, its own
+ * section, its own count.
+ */
+export async function listBlocked(): Promise<PendingSummary> {
+  const { uploads, actions } = await listPending();
+  const isBlocked = (r: { last_error: string | null }) =>
+    r.last_error?.startsWith(BLOCKED_PREFIX) ?? false;
+  return { uploads: uploads.filter(isBlocked), actions: actions.filter(isBlocked) };
+}
+
 export async function conflictCount(): Promise<number> {
   const { uploads, actions } = await listConflicts();
   return uploads.length + actions.length;

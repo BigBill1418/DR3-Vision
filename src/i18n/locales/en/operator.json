@@ -1,6 +1,7 @@
 {
   "site_picker": {
-    "heading": "Choose your site"
+    "heading": "Choose your site",
+    "empty": "No sites are set up on this iPad yet. Ask a manager."
   },
   "name_picker": {
     "heading": "Tap your name to sign in",
@@ -75,11 +76,11 @@
     "unknown_holder": "another operator"
   },
   "workflow": {
-    "unhandled_status": "Unhandled status: {{status}}",
     "status_submitted": "submitted",
     "status_rejected": "rejected",
     "load_done": "Load {{status}}.",
-    "back_to_queue": "Back to the queue"
+    "back_to_queue": "Back to the queue",
+    "closed_body": "This load is closed — there is nothing left to do on it. Nothing you entered was lost."
   },
   "stage_bol": {
     "heading": "1. Bill of Lading",
@@ -209,7 +210,8 @@
     "reopen": "Go back to counting",
     "reopening": "Going back…",
     "reopen_failed": "Couldn't go back. Try again.",
-    "unsent": "You still have work on this load waiting to send. You can look at everything here, but fixing has to wait until it has sent — otherwise the older entry could land on top of your fix."
+    "unsent": "You still have work on this load waiting to send. You can look at everything here, but fixing has to wait until it has sent — otherwise the older entry could land on top of your fix.",
+    "stack_unsent": "still sending"
   },
   "stage_finish": {
     "heading": "6. Finish",
@@ -232,7 +234,8 @@
     "save_failed": "Save failed",
     "submit_failed": "Submit failed",
     "submitting": "Submitting…",
-    "submit": "Submit load (sign out)"
+    "submit": "Submit load (sign out)",
+    "concern_add_another": "Add another concern"
   },
   "photo": {
     "uploading": "Uploading {{label}}…",
@@ -247,7 +250,9 @@
     "label_weight_ticket": "weight ticket",
     "label_door_open": "door-open",
     "label_rejection": "rejection evidence",
-    "label_concern": "concern photo"
+    "label_concern": "concern photo",
+    "error_upload": "That picture did not send. Tap to try again.",
+    "other_operator": "This load is signed in under another operator, so this picture cannot be sent under your name. Have that operator sign in on this iPad."
   },
   "auth_login": {
     "heading": "Sign in",
@@ -292,7 +297,8 @@
       "already_worked_detail": "Already worked — {{units}} units, submitted {{date}}",
       "already_started": "Already started by another operator",
       "resume_yours": "You started this — tap to open it",
-      "started_by": "Started by {{name}} — tap to take it over"
+      "started_by": "Started by {{name}} — tap to take it over",
+      "already_worked_status": "Already worked — {{status}}"
     },
     "hub": {
       "heading": "Daily check",
@@ -343,7 +349,8 @@
       "late_yes": "Yes, check it in",
       "late_cancel": "Cancel",
       "late_failed": "Couldn't check it in. Pull down to refresh, then try again.",
-      "stale_day": "This page is from an earlier day. Reload to check in today's hauls."
+      "stale_day": "This page is from an earlier day. Reload to check in today's hauls.",
+      "empty_no_hauls_why": "This site has no MyMRC portal feed, so there is nothing to list here. That is normal — use the queue for today’s trucks."
     },
     "inbound": {
       "heading": "Confirm inbound",
@@ -366,7 +373,9 @@
       "per_load_locked": "This day was counted truck-by-truck on the queue.",
       "err_office": "This day was entered by the office. Ask a manager to change it.",
       "err_per_load": "This day was already counted truck-by-truck. Confirm it on the queue.",
-      "err_split": "Program + non-program must add up to the total."
+      "err_split": "Program + non-program must add up to the total.",
+      "empty_why": "Nothing has been received here yet. Inbound days appear once a truck is checked in on the queue.",
+      "go_to_queue": "Go to the queue"
     },
     "count": {
       "heading": "Count on hand",
@@ -418,7 +427,9 @@
       "void_confirm_no": "Keep it",
       "void_done": "Count removed.",
       "void_err_prior_day": "That count was taken on {{day}}, not today. Ask the office to change it.",
-      "void_err_gone": "That count is not there any more."
+      "void_err_gone": "That count is not there any more.",
+      "hold_gone": "A manager already dealt with this one. Enter the count again if you still need to.",
+      "void_done_again": "Back to the counts"
     },
     "processed": {
       "heading": "Confirm processed",
@@ -427,7 +438,8 @@
       "non_program_label": "Non-program stripped",
       "total_label": "Total stripped",
       "submit": "Confirm count",
-      "err_closed": "Today is closed. Ask an admin to reopen it."
+      "err_closed": "Today is closed. Ask an admin to reopen it.",
+      "go_hub": "Back to my screens"
     },
     "error": {
       "heading": "Something went wrong",
@@ -475,7 +487,10 @@
       "retry_all": "Try all {{count}} again",
       "why_manager_hold": "This count is large enough to need a manager. It is stored safely and waiting for approval — retrying will not speed it up.",
       "why_taken_over": "Another operator took this load over, so this entry could not be sent under your name. It is stored safely — whoever holds the load now can enter it, or discard this.",
-      "dropoff_ref": "Drop-off of {{units}} units for {{day}}"
+      "dropoff_ref": "Drop-off of {{units}} units for {{day}}",
+      "unreadable": "This iPad cannot read its saved entries right now, so this list may be incomplete. Nothing has been lost. Close the app and open it again — if it still says this, tell a manager.",
+      "discard_reason_required": "Type a reason before discarding. Nothing was discarded.",
+      "blocked_heading": "Photos waiting on storage"
     },
     "dropoff": {
       "heading": "Drop-off",
@@ -490,6 +505,11 @@
       "photo_taken": "✓ Photo taken — tap to retake",
       "photo_required": "A photo is required for every drop-off.",
       "send": "Send drop-off"
+    },
+    "not_found": {
+      "heading": "That screen is not here",
+      "body": "This link does not go anywhere on this iPad. Nothing you entered was lost.",
+      "go_sites": "Choose your site"
     }
   },
   "nav": {

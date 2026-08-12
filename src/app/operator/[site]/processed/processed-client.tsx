@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import {
@@ -114,10 +115,23 @@ export function ProcessedClient({
   }
 
   if (closed) {
+    // Audit D-15 — "Today is closed. Ask an admin to reopen it." names WHO can
+    // act, which clears the EXPLAINED bar, but it is an early return that
+    // replaces the entire screen body: the operator is left on a page whose only
+    // content is a refusal, with nothing to tap. Naming a person and offering a
+    // way off the screen are two different jobs and this branch only did one.
     return (
-      <p className="rounded-lg bg-dr3-green-dark/40 px-4 py-6 text-center text-lg">
-        {t('floor.processed.err_closed')}
-      </p>
+      <div className="flex flex-col items-center gap-4">
+        <p className="rounded-lg bg-dr3-green-dark/40 px-4 py-6 text-center text-lg">
+          {t('floor.processed.err_closed')}
+        </p>
+        <Link
+          href={`/operator/${siteCode}/today`}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-6 py-3 text-base font-bold text-dr3-ink"
+        >
+          {t('floor.processed.go_hub')}
+        </Link>
+      </div>
     );
   }
 

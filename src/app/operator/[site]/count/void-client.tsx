@@ -125,6 +125,26 @@ export function CountVoidClient({
         data-testid="count-void-done"
       >
         <p className="text-center text-lg font-bold">{t('floor.count.void_done')}</p>
+        {/* Audit D-21 — this was a bare <section> with one sentence and NO
+            control. The panel only became useful again when the
+            `router.refresh()` fired above re-rendered it; if that refresh was
+            slow or failed, the operator was looking at an inert card with no way
+            to remove a second mistaken count. Every other terminal phase in
+            `count-client.tsx` carries a "Count again" control — this one is the
+            odd file out, and the fix is the control its siblings already have.
+            It does not depend on the refresh landing: it resets local phase. */}
+        <button
+          type="button"
+          onClick={() => {
+            setTarget(null);
+            setError(null);
+            setPhase('list');
+          }}
+          className="min-h-[56px] rounded-lg bg-dr3-green px-4 py-3 text-lg font-bold text-dr3-ink"
+          data-testid="count-void-done-back"
+        >
+          {t('floor.count.void_done_again')}
+        </button>
       </section>
     );
   }

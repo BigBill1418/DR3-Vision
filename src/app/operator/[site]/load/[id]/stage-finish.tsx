@@ -56,6 +56,13 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
         );
         setConcernSaved(true);
         setShowConcern(false);
+        // Audit D-24 — the form is now re-openable, so it must not re-open
+        // pre-filled with the concern just filed. `addConcernAction` mints a
+        // fresh idempotency key per call, so a re-submit of identical text would
+        // file a genuine SECOND row rather than being deduped — the reset is
+        // what stops "add another" from meaning "accidentally file that again".
+        setCategory('');
+        setNote('');
       } catch (e) {
         // The claim may have moved while this iPad sat on the stage screen.
         // Refresh in that case: the page re-renders as the held-by panel and
@@ -90,13 +97,22 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
         </p>
       </header>
 
-      {!showConcern && !concernSaved && (
+      {/* Audit D-24 — this used to require `!concernSaved`, so after saving ONE
+          concern the control was simply GONE, with no sentence explaining why.
+          An operator with a second thing to report (a load can easily have both
+          contamination and a damaged pallet) had no affordance and nothing
+          telling them the screen had decided one was enough. Nothing server-side
+          limits concerns to one per load — the restriction existed only in this
+          boolean. The label changes on the second pass so the control reads as
+          "another", not as an undo of the one already recorded. */}
+      {!showConcern && (
         <button
           type="button"
           onClick={() => setShowConcern(true)}
+          data-testid="add-concern"
           className="rounded-lg bg-dr3-green-dark/50 px-6 py-4 text-base font-semibold text-dr3-cream transition-colors hover:bg-dr3-green-dark/80"
         >
-          {t('stage_finish.add_concern')}
+          {concernSaved ? t('stage_finish.concern_add_another') : t('stage_finish.add_concern')}
         </button>
       )}
 

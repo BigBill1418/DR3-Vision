@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useT } from '@/i18n/provider';
+import { useT, useLocale } from '@/i18n/provider';
+import { formatDate, formatTime } from '@/lib/format';
 import {
+  listBlocked,
   listConflicts,
   removeAction,
   removeUpload,
@@ -51,21 +53,42 @@ type Props = { siteCode: string; todayISO: string };
 
 export function ConflictsClient({ siteCode, todayISO }: Props) {
   const t = useT();
+  const locale = useLocale();
   const router = useRouter();
   const [actions, setActions] = useState<PendingAction[]>([]);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  /** Audit D-22 — rows parked on unreachable object storage. See `listBlocked`. */
+  const [blocked, setBlocked] = useState<PendingUpload[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  /** Audit D-14 — the third state: not empty, UNREADABLE. */
+  const [unreadable, setUnreadable] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const c = await listConflicts();
+      const [c, b] = await Promise.all([listConflicts(), listBlocked()]);
       setActions(c.actions);
       setUploads(c.uploads);
+      setBlocked(b.uploads);
+      setUnreadable(false);
     } catch {
-      // IndexedDB unavailable — render the empty state rather than crashing the
-      // one screen an operator was sent to in order to fix something.
+      // Audit D-14 — this used to swallow the failure and fall through to the
+      // EMPTY state, which renders "Nothing is stuck. Everything you entered has
+      // been sent." That is not an empty state; it is an affirmative claim of
+      // safety made on the strength of a read that FAILED. The operator arrived
+      // here BECAUSE the chrome badge said items are stuck, and the screen then
+      // contradicted the badge with no error.
+      //
+      // The repo already had both policies live, on the same class of call, with
+      // no ADR reconciling them: `review-panel.tsx` catches an identical failure
+      // and FAILS CLOSED (`.catch(() => setUnsent(1))`, withholding the fix
+      // controls and explaining why), while this file and
+      // `use-connection-state.ts` failed OPEN. `review-panel`'s policy is the
+      // right one and is adopted here as the house rule: distinguish "empty"
+      // from "could not read" — the third state — and never assert safety from
+      // a read that did not happen.
+      setUnreadable(true);
     } finally {
       setLoaded(true);
     }
@@ -77,8 +100,20 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
 
   /** Discard: audited server-side FIRST, removed locally only if that lands. */
   async function discard(row: PendingAction | PendingUpload, isUpload: boolean): Promise<void> {
-    const reason = window.prompt(t('floor.conflicts.discard_reason')) ?? '';
-    if (reason.trim() === '') return;
+    // Audit D-20 — this was `window.prompt(...) ?? ''` followed by
+    // `if (reason.trim() === '') return;`, which collapsed TWO different things
+    // into one silent return. Cancelling the prompt is self-explanatory (the
+    // operator dismissed their own dialog) and stays silent. Typing nothing, or
+    // only spaces, and pressing OK is a refusal — the operator did act, and the
+    // screen changed in no way at all. `busy` was never set, so there was not
+    // even a flicker to read as feedback.
+    const raw = window.prompt(t('floor.conflicts.discard_reason'));
+    if (raw === null) return; // cancelled — the prompt was its own feedback
+    const reason = raw.trim();
+    if (reason === '') {
+      setError(t('floor.conflicts.discard_reason_required'));
+      return;
+    }
     setBusy(row.id);
     setError(null);
     try {
@@ -165,6 +200,11 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
   }
 
   function reasonLabel(lastError: string | null): string {
+    // Audit D-22 — FIRST, because a `blocked:` row is not a refusal at all: the
+    // server never saw it. Everything below this line describes something the
+    // server decided, and applying any of those sentences to an infrastructure
+    // outage tells the operator their entry was rejected when it was not.
+    if (lastError?.startsWith('blocked:')) return t('floor.conflicts.why_upload_blocked');
     if (lastError === 'conflict:date_not_today') return t('floor.conflicts.why_wrong_day');
     // A parked PHOTO whose re-mint was refused 403/404 is almost always a load
     // that belongs to a different operator's login on this shared iPad. The
@@ -185,8 +225,16 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
     return t('floor.conflicts.why_refused');
   }
 
+  // Audit D-23 — was a bare `new Date(ms).toLocaleString()`, i.e. the IPAD'S OWN
+  // clock and zone. Everywhere else on the floor is Pacific-pinned server-side
+  // through `@/lib/format`, precisely because ADR-0065 Am.1 found the container's
+  // UTC clock telling a Woodland operator a 15:00Z appointment was "3:00 PM".
+  // This call site escaped that sweep and read the DEVICE, so a shared iPad with
+  // a drifted or mis-zoned clock mis-timed one of the two screens an operator
+  // consults when something is already wrong.
   function whenLabel(ms: number): string {
-    return new Date(ms).toLocaleString();
+    const d = new Date(ms);
+    return `${formatDate(d, locale)} ${formatTime(d, locale)}`;
   }
 
   function scopeLabel(scope: string): string {
@@ -198,7 +246,22 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
 
   if (!loaded) return null;
 
-  if (actions.length === 0 && uploads.length === 0) {
+  // Audit D-14 — the unreadable state OUTRANKS the empty state and is never
+  // silently merged into it. It is rendered even when the lists are empty,
+  // because empty-because-we-could-not-look is the case that was lying.
+  if (unreadable) {
+    return (
+      <p
+        role="alert"
+        data-testid="conflicts-unreadable"
+        className="rounded-lg bg-amber-900/50 px-4 py-6 text-base font-medium leading-relaxed text-dr3-cream ring-1 ring-amber-400/40"
+      >
+        {t('floor.conflicts.unreadable')}
+      </p>
+    );
+  }
+
+  if (actions.length === 0 && uploads.length === 0 && blocked.length === 0) {
     return (
       <p className="rounded-lg bg-dr3-green-dark/40 px-4 py-8 text-center text-lg">
         {t('floor.conflicts.empty')}
@@ -344,6 +407,42 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
           </div>
         </div>
       ))}
+
+      {/* Audit D-22 — photos parked on unreachable object storage. Their own
+          section rather than mixed into the list above, because the honest
+          framing is different: nothing here needs adjudicating and nothing was
+          refused. The server never saw these. Retry is offered (storage coming
+          back is exactly what makes them sendable) and Discard deliberately is
+          NOT — discarding evidence because the bucket was briefly unreachable is
+          the one outcome that cannot be undone. */}
+      {blocked.length > 0 && (
+        <section className="flex flex-col gap-3" data-testid="conflicts-blocked">
+          <h2 className="text-start text-base font-bold">{t('floor.conflicts.blocked_heading')}</h2>
+          {blocked.map((row) => (
+            <div key={row.id} className="rounded-xl bg-dr3-green-dark/40 p-5">
+              <p className="text-lg font-bold">
+                {row.subject === 'dropoff' && row.dropoff
+                  ? t(`floor.dropoff.kind_${row.dropoff.kind}`)
+                  : t('floor.conflicts.what_photo', { kind: row.kind })}
+              </p>
+              <p className="mt-1 text-sm text-dr3-cream/70">
+                {t('floor.conflicts.queued_at', { when: whenLabel(row.queued_at) })}
+              </p>
+              <p className="mt-1 text-sm text-amber-200">{reasonLabel(row.last_error)}</p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={busy === row.id}
+                  onClick={() => void retry(row, true)}
+                  className="min-h-[48px] rounded-lg bg-dr3-green px-4 py-2 text-base font-bold text-dr3-ink disabled:opacity-50"
+                >
+                  {t('floor.conflicts.retry')}
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

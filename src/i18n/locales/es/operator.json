@@ -14,7 +14,8 @@
     "floor_chrome_aria": "Navegación de pantalla"
   },
   "site_picker": {
-    "heading": "Elige tu sitio"
+    "heading": "Elige tu sitio",
+    "empty": "Todavía no hay sitios configurados en este iPad. Pregunta a un gerente."
   },
   "name_picker": {
     "heading": "Toca tu nombre para iniciar sesión",
@@ -89,11 +90,11 @@
     "unknown_holder": "otro operador"
   },
   "workflow": {
-    "unhandled_status": "Estado no manejado: {{status}}",
     "status_submitted": "enviada",
     "status_rejected": "rechazada",
     "load_done": "Carga {{status}}.",
-    "back_to_queue": "Volver a la cola"
+    "back_to_queue": "Volver a la cola",
+    "closed_body": "Esta carga está cerrada — no queda nada por hacer en ella. No se perdió nada de lo que ingresaste."
   },
   "stage_bol": {
     "heading": "1. Bill of Lading (BOL)",
@@ -223,7 +224,8 @@
     "reopen": "Volver a contar",
     "reopening": "Volviendo…",
     "reopen_failed": "No se pudo volver. Inténtalo de nuevo.",
-    "unsent": "Todavía tienes trabajo de esta carga esperando enviarse. Aquí puedes revisar todo, pero las correcciones tienen que esperar a que se envíe; si no, lo anterior podría caer encima de tu corrección."
+    "unsent": "Todavía tienes trabajo de esta carga esperando enviarse. Aquí puedes revisar todo, pero las correcciones tienen que esperar a que se envíe; si no, lo anterior podría caer encima de tu corrección.",
+    "stack_unsent": "aún enviando"
   },
   "stage_finish": {
     "heading": "6. Finalizar",
@@ -246,7 +248,8 @@
     "save_failed": "Error al guardar",
     "submit_failed": "Error al enviar",
     "submitting": "Enviando…",
-    "submit": "Enviar carga (cerrar sesión)"
+    "submit": "Enviar carga (cerrar sesión)",
+    "concern_add_another": "Agregar otra observación"
   },
   "photo": {
     "uploading": "Subiendo {{label}}…",
@@ -261,7 +264,9 @@
     "label_weight_ticket": "boleta de peso",
     "label_door_open": "puerta abierta",
     "label_rejection": "evidencia de rechazo",
-    "label_concern": "foto de observación"
+    "label_concern": "foto de observación",
+    "error_upload": "Esa foto no se envió. Toca para intentarlo otra vez.",
+    "other_operator": "Esta carga está iniciada por otro operador, así que esta foto no se puede enviar a tu nombre. Pide a ese operador que inicie sesión en este iPad."
   },
   "auth_login": {
     "heading": "Iniciar sesión",
@@ -306,7 +311,8 @@
       "already_worked_detail": "Ya trabajada — {{units}} unidades, enviada el {{date}}",
       "already_started": "Ya iniciada por otro operador",
       "resume_yours": "Usted la inició — toque para abrirla",
-      "started_by": "Iniciada por {{name}} — toque para tomarla"
+      "started_by": "Iniciada por {{name}} — toque para tomarla",
+      "already_worked_status": "Ya trabajada — {{status}}"
     },
     "hub": {
       "heading": "Revisión diaria",
@@ -357,7 +363,8 @@
       "late_yes": "Sí, regístrela",
       "late_cancel": "Cancelar",
       "late_failed": "No se pudo registrar. Actualice la página e inténtelo de nuevo.",
-      "stale_day": "Esta página es de un día anterior. Recárguela para registrar las cargas de hoy."
+      "stale_day": "Esta página es de un día anterior. Recárguela para registrar las cargas de hoy.",
+      "empty_no_hauls_why": "Este sitio no tiene conexión con el portal MyMRC, así que no hay nada que mostrar aquí. Es normal — usa la cola para los camiones de hoy."
     },
     "inbound": {
       "heading": "Confirmar recepción",
@@ -380,7 +387,9 @@
       "per_load_locked": "Este día se contó camión por camión en la cola.",
       "err_office": "Este día lo ingresó la oficina. Pide a un gerente que lo cambie.",
       "err_per_load": "Este día ya se contó camión por camión. Confírmalo en la cola.",
-      "err_split": "Programa + fuera de programa debe sumar el total."
+      "err_split": "Programa + fuera de programa debe sumar el total.",
+      "empty_why": "Todavía no se ha recibido nada aquí. Los días de entrada aparecen cuando se registra un camión en la cola.",
+      "go_to_queue": "Ir a la cola"
     },
     "count": {
       "heading": "Contar existencias",
@@ -432,7 +441,9 @@
       "void_confirm_no": "Conservarlo",
       "void_done": "Conteo quitado.",
       "void_err_prior_day": "Ese conteo se tomó el {{day}}, no hoy. Pida a la oficina que lo cambie.",
-      "void_err_gone": "Ese conteo ya no está."
+      "void_err_gone": "Ese conteo ya no está.",
+      "hold_gone": "Un gerente ya se encargó de esto. Ingresa el conteo otra vez si aún lo necesitas.",
+      "void_done_again": "Volver a los conteos"
     },
     "processed": {
       "heading": "Confirmar procesado",
@@ -441,7 +452,8 @@
       "non_program_label": "Fuera de programa desarmado",
       "total_label": "Total desarmado",
       "submit": "Confirmar conteo",
-      "err_closed": "Hoy está cerrado. Pide a un administrador que lo reabra."
+      "err_closed": "Hoy está cerrado. Pide a un administrador que lo reabra.",
+      "go_hub": "Volver a mis pantallas"
     },
     "error": {
       "heading": "Algo salió mal",
@@ -489,7 +501,10 @@
       "retry_all": "Reintentar los {{count}}",
       "why_manager_hold": "Este conteo es lo bastante grande como para requerir un gerente. Está guardado de forma segura y esperando aprobación — reintentar no lo acelerará.",
       "why_taken_over": "Otro operador tomó esta carga, así que esta entrada no se pudo enviar a tu nombre. Está guardada — quien tenga la carga ahora puede ingresarla, o puedes descartar esta.",
-      "dropoff_ref": "Entrega de {{units}} unidades para {{day}}"
+      "dropoff_ref": "Entrega de {{units}} unidades para {{day}}",
+      "unreadable": "Este iPad no puede leer sus entradas guardadas en este momento, así que esta lista puede estar incompleta. No se ha perdido nada. Cierra la aplicación y ábrela otra vez — si sigue diciendo esto, avisa a un gerente.",
+      "discard_reason_required": "Escribe un motivo antes de descartar. No se descartó nada.",
+      "blocked_heading": "Fotos esperando al almacenamiento"
     },
     "dropoff": {
       "heading": "Entrega",
@@ -504,6 +519,11 @@
       "photo_taken": "✓ Foto tomada — toca para repetir",
       "photo_required": "Se requiere una foto para cada entrega.",
       "send": "Enviar entrega"
+    },
+    "not_found": {
+      "heading": "Esa pantalla no está aquí",
+      "body": "Este enlace no lleva a ninguna parte en este iPad. No se perdió nada de lo que ingresaste.",
+      "go_sites": "Elige tu sitio"
     }
   }
 }

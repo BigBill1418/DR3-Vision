@@ -41,6 +41,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import en from '@/i18n/locales/en/operator.json';
 
 const { enqueueUpload, isOfflineError, newIdempotencyKey } = vi.hoisted(() => ({
   enqueueUpload: vi.fn(async () => ({})),
@@ -152,23 +153,39 @@ describe('a 401 from the mint is a SIGN-IN, not a retry', () => {
 describe('what a 401 must NOT change', () => {
   // Guard-the-guard. If the new branch swallowed every failure, this suite
   // would be proving nothing: a 500 is a real error and still reads as one.
+  // Audit D-17 — these two assertions USED TO PIN THE DEFECT AS THE CONTRACT.
+  // Both waited for the literal `mint failed (500)` / `mint failed (403)`, i.e.
+  // they required the screen to render the raw English thrown by the fetch
+  // wrapper, on a floor that runs en/es/ur. Their INTENT was right and is kept
+  // exactly — a 500 is still a real error, a 403 still must not offer a sign-in
+  // — but the evidence is now the translated sentence rather than the developer
+  // string, and each one explicitly asserts the raw token is GONE so this
+  // cannot regress back into the catalogue's blind spot.
   it('a 500 is still a plain error with a retry', async () => {
     mintAnswers(500, 'boom');
     render(<PhotoInput loadId="load-1" kind="bol" labelKey="bol" onCaptured={onCaptured} />);
     shoot();
     await waitFor(() => expect(screen.getByRole('button').textContent).toMatch(/Retry BOL/));
-    expect(document.body.textContent).toContain('mint failed (500)');
+    expect(document.body.textContent).toContain(en.photo.error_upload);
+    expect(document.body.textContent, 'a raw thrown string reached the floor').not.toContain(
+      'mint failed',
+    );
     expect(enqueueUpload, 'a server error is not an auth failure').not.toHaveBeenCalled();
   });
 
   // A 403 is authenticated-but-refused — a cross-site photo, or a non-operator.
   // Signing in again does not fix it, and offering a sign-in would be the same
-  // species of wrong answer in the other direction.
-  it('a 403 does NOT offer a sign-in', async () => {
+  // species of wrong answer in the other direction. What it DOES now say is the
+  // sentence `conflicts-client.tsx` has used for this exact condition since
+  // ADR-0086 Am.1 — one condition, one explanation, both screens.
+  it('a 403 does NOT offer a sign-in, and names the real cause', async () => {
     mintAnswers(403, 'forbidden');
     render(<PhotoInput loadId="load-1" kind="bol" labelKey="bol" onCaptured={onCaptured} />);
     shoot();
-    await waitFor(() => expect(document.body.textContent).toContain('mint failed (403)'));
+    await waitFor(() => expect(document.body.textContent).toContain(en.photo.other_operator));
+    expect(document.body.textContent, 'a raw thrown string reached the floor').not.toContain(
+      'mint failed',
+    );
     expect(screen.getByRole('button').textContent).not.toMatch(/sign in/i);
   });
 

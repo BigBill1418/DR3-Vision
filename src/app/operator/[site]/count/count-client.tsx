@@ -92,6 +92,19 @@ export function CountClient({
   const swingPct =
     priorTotal === null || priorTotal === 0 ? null : (Math.abs(delta ?? 0) / priorTotal) * 100;
 
+  /**
+   * Audit D-9 — "the hold you are looking at is no longer pending".
+   *
+   * Approve answers 404 `hold_not_found`; Discard answers 409 because the row
+   * exists but has left `pending`. Two statuses, one fact, and the screen must
+   * react to the FACT — which is why this is a named predicate rather than a
+   * status check inlined twice that could drift apart the way the three copies
+   * of the status map did (see `floor-status-label.ts`).
+   */
+  function isHoldGone(status: number, code: string): boolean {
+    return (status === 404 && code === 'hold_not_found') || status === 409;
+  }
+
   function reset(): void {
     setResult(null);
     setPrimary(0);
@@ -244,6 +257,27 @@ export function CountClient({
           return;
         }
         const code = String(b['error'] ?? '');
+        // Audit D-9 — the hold screen could become UNESCAPABLE. If the hold had
+        // already been released or discarded from a manager's desktop, Approve
+        // answered 404 `hold_not_found` and Discard answered 409, and BOTH
+        // rendered `floor.common.save_failed` — "Couldn't save. Try again." —
+        // with no `reset()` and no branch back to `'entry'`. The operator
+        // retyped a manager's PIN into a screen that could never succeed;
+        // escape required knowing to use the chrome Back pill.
+        //
+        // A hold that is gone is not a save failure, it is a resolved hold. Drop
+        // back to entry and say who resolved it, which is the same shape
+        // `hold_remote_note` already uses on this screen: name the actor and the
+        // place, then get out of the way.
+        if (isHoldGone(res.status, code)) {
+          setHold(null);
+          setPin('');
+          setApproverId('');
+          setError(t('floor.count.hold_gone'));
+          setPhase('entry');
+          router.refresh();
+          return;
+        }
         setError(
           code === 'bad_pin'
             ? t('floor.count.err_bad_pin')
@@ -273,10 +307,19 @@ export function CountClient({
 
   async function discard(): Promise<void> {
     if (!hold) return;
-    const reason = window.prompt(t('floor.count.hold_discard_reason')) ?? '';
-    if (reason.trim() === '') return;
+    // Audit D-20 — cancelling the native prompt is its own feedback and stays
+    // silent; an EMPTY reason typed into it is a refusal that changed nothing on
+    // screen. The two are separated, as in `conflicts-client.tsx`.
+    const raw = window.prompt(t('floor.count.hold_discard_reason'));
+    if (raw === null) return;
+    const reason = raw.trim();
+    if (reason === '') {
+      setError(t('floor.conflicts.discard_reason_required'));
+      return;
+    }
     setBusy(true);
     setRefusal(null);
+    setError(null);
     try {
       const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'DELETE',
@@ -289,8 +332,24 @@ export function CountClient({
       } else {
         // Audit D-8 — same treatment as Approve, one control over.
         const refused = classifyWriteRefusal(res.status, null);
-        if (refused) setRefusal(refused);
-        else setError(t('floor.common.save_failed'));
+        if (refused) {
+          setRefusal(refused);
+        } else {
+          // Audit D-9 — and so is the hold-already-gone branch. A 409 here means
+          // the hold is no longer pending, which is the same fact Approve's 404
+          // reports; both must land the operator somewhere they can act.
+          const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+          if (isHoldGone(res.status, String(b['error'] ?? ''))) {
+            setHold(null);
+            setPin('');
+            setApproverId('');
+            setError(t('floor.count.hold_gone'));
+            setPhase('entry');
+            router.refresh();
+          } else {
+            setError(t('floor.common.save_failed'));
+          }
+        }
       }
     } catch {
       setError(t('floor.common.save_failed'));
