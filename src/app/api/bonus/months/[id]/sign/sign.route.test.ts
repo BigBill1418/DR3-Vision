@@ -64,7 +64,17 @@ interface MockMonth {
 
 const sitesStore = new Map<string, { id: string; code: string; name: string }>();
 const monthStore = new Map<string, MockMonth>();
-const entryStore: Array<{ bonus_pay_period_id: string; mattress_count: number }> = [];
+// `subject_user_id` (ADR-0019.3 §2) mirrors `bonus_employees.user_id` for the
+// employee an entry belongs to — NULL for the 132 of 133 production rows that
+// are not system users. It lives on the SAME store the payout read uses, so the
+// separation-of-duties read and the payout read cannot disagree about which
+// entries a period holds.
+const entryStore: Array<{
+  bonus_pay_period_id: string;
+  mattress_count: number;
+  subject_user_id?: string;
+  subject_name?: string;
+}> = [];
 const auditRows: Array<{
   action: string;
   table_name: string;
@@ -131,6 +141,27 @@ vi.mock('@/lib/prisma', () => {
       entryStore
         .filter((e) => e.bonus_pay_period_id === where.bonus_pay_period_id)
         .map((e) => ({ ...e })),
+    ),
+    // ADR-0019.3 §2 — the separation-of-duties read, resolving the
+    // `bonus_employee.user_id` relation filter against the same entry store.
+    findFirst: vi.fn(
+      async ({
+        where,
+      }: {
+        where: { bonus_pay_period_id: string; bonus_employee: { user_id: string } };
+      }) => {
+        const hit = entryStore.find(
+          (e) =>
+            e.bonus_pay_period_id === where.bonus_pay_period_id &&
+            e.subject_user_id === where.bonus_employee.user_id,
+        );
+        return hit
+          ? {
+              bonus_employee_id: `be-${hit.subject_user_id}`,
+              bonus_employee: { full_name: hit.subject_name ?? 'Unknown' },
+            }
+          : null;
+      },
     ),
   };
   const processorBonusRule = {
@@ -339,5 +370,103 @@ describe('POST /api/bonus/months/[id]/sign — scoping', () => {
     mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
     const res = await POST(makeReq(), { params });
     expect(res.status).toBe(404);
+  });
+});
+
+// ── Separation of duties (ADR-0019.3 §2) ────────────────────────
+
+describe('POST /api/bonus/months/[id]/sign — separation of duties', () => {
+  // These assertions exist at the ROUTE, not only at the data layer, because the
+  // requirement is that the API refuses — not that the UI hides a button. The
+  // endpoint is reachable directly by anyone holding a valid manager session, so
+  // a UI-only exclusion would be no exclusion at all.
+
+  it('403 when the signer is a bonus subject in the period being signed', async () => {
+    const { POST } = await import('./route');
+    seedMonth();
+    // Morena is Woodland's configured ops signer AND, in this fixture, the
+    // subject of an entry in the period — the Patrick Dills shape.
+    entryStore.push({
+      bonus_pay_period_id: 'm1',
+      mattress_count: 60,
+      subject_user_id: 'morena',
+      subject_name: 'Morena Vasquez',
+    });
+    mockSession = { user: { id: 'morena', role: 'manager', primary_site_id: WOODLAND } };
+
+    const res = await POST(makeReq(), { params });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ reason: 'sod_excluded' });
+  });
+
+  it('records no signature when it refuses', async () => {
+    const { POST } = await import('./route');
+    const m = seedMonth();
+    entryStore.push({
+      bonus_pay_period_id: 'm1',
+      mattress_count: 60,
+      subject_user_id: 'morena',
+      subject_name: 'Morena Vasquez',
+    });
+    mockSession = { user: { id: 'morena', role: 'manager', primary_site_id: WOODLAND } };
+
+    await POST(makeReq(), { params });
+
+    expect(m.ops_signed_by_user_id).toBeNull();
+    expect(m.state).toBe('pending_signatures');
+  });
+
+  it('403 even when the conflicted person routes through the override path', async () => {
+    // Morena sits in Woodland's facility_override_actor_ids, so a slot-scoped
+    // guard would refuse her ops signature and still let her sign the SAME
+    // conflicted period as facility. The exclusion is on the person + period.
+    const { POST } = await import('./route');
+    seedMonth();
+    entryStore.push({
+      bonus_pay_period_id: 'm1',
+      mattress_count: 60,
+      subject_user_id: 'morena',
+      subject_name: 'Morena Vasquez',
+    });
+    mockSession = { user: { id: 'morena', role: 'manager', primary_site_id: WOODLAND } };
+    const req = new Request('http://x/api/bonus/months/m1/sign', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'Vitest/1.0' },
+      body: JSON.stringify({ onBehalfOf: 'facility', reason: 'Janette is out' }),
+    });
+
+    const res = await POST(req, { params });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ reason: 'sod_excluded' });
+  });
+
+  it('200 for the same signer on a period holding none of their entries', async () => {
+    // The scope boundary: current and future periods are untouched.
+    const { POST } = await import('./route');
+    seedMonth();
+    entryStore.push({ bonus_pay_period_id: 'm1', mattress_count: 60 });
+    mockSession = { user: { id: 'morena', role: 'manager', primary_site_id: WOODLAND } };
+
+    const res = await POST(makeReq(), { params });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('200 for an unconflicted signer on a period that conflicts someone else', async () => {
+    const { POST } = await import('./route');
+    seedMonth();
+    entryStore.push({
+      bonus_pay_period_id: 'm1',
+      mattress_count: 60,
+      subject_user_id: 'morena',
+      subject_name: 'Morena Vasquez',
+    });
+    mockSession = { user: { id: 'janette', role: 'manager', primary_site_id: WOODLAND } };
+
+    const res = await POST(makeReq(), { params });
+
+    expect(res.status).toBe(200);
   });
 });

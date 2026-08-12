@@ -9,6 +9,71 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (10:20 PM PT) — A signer cannot sign a period he is paid by (ADR-0019.3 §2)
+
+ADR-0019.3 §2 recorded a separation-of-duties conflict as **accepted**: Patrick
+Dills took the Eugene ops-signer slot while remaining a Eugene `BonusEmployee`
+with **119 daily entries across 27 periods** (2025-01-07 → 2026-01-14, all
+`historical_imported`). Any of those periods, once amended, walks
+`historical_imported → amended → pending_signatures` and lands back in front of
+its ops signer — who is also its subject. The DB CHECK prevents
+`requester == approver`, not approver-has-an-interest. Bill approved building the
+guard; §2 is now **resolved by guard** rather than accepted.
+
+- **The rule is narrow on purpose.** A person may not sign a pay period
+  containing bonus entries attributable to their own linked `bonus_employee`.
+  No role, site, date or state test — "historical" is not a state, it is simply
+  "this period holds their entries", so current and future periods fall out
+  untouched with no carve-out. Patrick's employee row is `is_active = false`, so
+  no current period can be conflicted for him.
+
+- **Enforced server-side at the one choke point.** `recordSignature` is the only
+  path that captures a signature — natural, manual override, and the 08:30 PT
+  auto-override all funnel through it — so the guard sits there and returns
+  `sod_excluded`, surfacing as **HTTP 403** from
+  `POST /api/bonus/months/[id]/sign`. The UI hiding a control is not a guard; the
+  endpoint is reachable directly by anyone holding a manager session, and the
+  route tests assert the API refusal rather than a hidden button.
+
+- **The exclusion is on the (person, period) pair, never on the slot** — the
+  subtle part. Patrick holds Eugene's ops slot **and** sits in that site's
+  `facility_override_actor_ids`. A slot-scoped guard would have blocked his
+  natural ops signature and left him free to sign the same conflicted period
+  through the facility slot.
+
+- **It excludes without stranding.** No new authorization system: conflicted
+  periods route to the **existing** ADR-0019.2 §3 override chain. Rick
+  (facility) is unaffected, Eugene's `ops_override_actor_ids` resolves to Bill,
+  any admin may override either slot, and the auto-override actor is a separate
+  identity — so the exclusion cannot trade a conflict for a missed 09:00 PT
+  deadline. A test pins that the alternate can actually sign, not merely that the
+  conflicted signer cannot.
+
+- **The chain-health pill understands it (ADR-0019.4).** A period routed to the
+  override chain _because of_ an exclusion is **healthy** — green, with the
+  exclusion carried as standing context and rendered on
+  `/admin/bonus-chain-health` so nobody has to read an ADR to learn why an
+  override actor signed. A monitor that reported a deliberate design as a break
+  would sit permanently red, and a permanently red monitor is unread. The one
+  case it does flag is an excluded signer whose slot has **no** override backstop:
+  amber, `sod_excluded_no_backstop`, because there the risk is not hypothetical.
+
+- **The join is a real FK**, `bonus_employees.user_id → users.id`, not a name or
+  email match — verified against production, where Patrick's row carries
+  `user_id = 57964c64…` and exactly **1 of 133** `bonus_employees` rows has a
+  non-NULL `user_id`. That is the blast radius and the reason the check is one
+  indexed read.
+
+- **The new read is REQUIRED on `SignatureDb`**, the same discipline `saves`
+  carries: a test double that omits it is a failure, not a silent bypass. Every
+  pre-existing double was updated to answer honestly (no signer in those fixtures
+  is a bonus subject) rather than to answer conveniently.
+
+- **Not covered, deliberately:** the amendment **approval** path
+  (`canApproveRequest`) is unchanged — Patrick may still approve an amendment
+  touching his own entries, he simply cannot sign the period that results.
+  Changing that would alter the ADR-0028 workflow contract.
+
 ## 2026-08-11 (10 PM PT) — H-135793 attribution recorded; canonical source-attribution notes doc created
 
 Docs only. New `docs/INVENTORY-SOURCE-ATTRIBUTION.md` — the canonical running record for
@@ -67,7 +132,7 @@ than argued from the code. Documentation only — no behaviour changes in this c
 - **Five ranked root causes**, with the shares stated as overlapping contributions
   rather than a partition: the domain model encodes the schedule while the floor
   works the yard (~60%); parity between surfaces was convention, not test (~25%);
-  ship velocity outran the verification loop (~40% of the *recurrence rate* — four
+  ship velocity outran the verification loop (~40% of the _recurrence rate_ — four
   behaviour-changing PRs merged 13:59–19:54 PT on 08-10, and Pablo was stranded at
   07:50 the next morning by the 16:29 one); **forward promises live in prose, and
   prose does not execute** (~15%); and a maturation curve that predicts the incident
@@ -80,7 +145,7 @@ than argued from the code. Documentation only — no behaviour changes in this c
 
 - **P0–P6, ~11–13 engineering days**, ordered by leverage per hour and front-loaded
   so the first 1.5 days change what Bill knows and the first 4 change what CI
-  catches. §6 states plainly what the plan does *not* fix — it does not reduce the
+  catches. §6 states plainly what the plan does _not_ fix — it does not reduce the
   48% divergence rate, and the first week of telemetry will look **worse**, which is
   the instrument working rather than a regression.
 

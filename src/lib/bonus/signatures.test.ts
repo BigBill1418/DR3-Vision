@@ -108,6 +108,12 @@ function makeDb(): SignatureDb {
       // sets it; supplying it here keeps the double HONEST rather than letting
       // the lock read a shape the real client would never return.
       findMany: async () => entries.map((e) => ({ saves: 0, ...e })),
+      // ADR-0019.3 §2 — the separation-of-duties read. None of the signers in
+      // these Woodland fixtures is a linked `bonus_employee` (in production only
+      // Patrick Dills is, at Eugene), so "no conflict" is the truthful answer
+      // here rather than a convenient one. The dedicated exclusion fixtures live
+      // in `signature-sod.test.ts`.
+      findFirst: async () => null,
     },
     processorBonusRule: {
       findFirst: async () => ({
@@ -385,7 +391,11 @@ describe('a non-chain Eugene manager — rejected by the signature guard', () =>
           return { ...erow };
         },
       },
-      bonusDailyEntry: { findMany: async () => [] },
+      // ADR-0019.3 §2 — this Eugene fixture exercises SLOT resolution, not the
+      // separation-of-duties guard; the period holds no entries at all, so no
+      // signer can be a subject in it. See `signature-sod.test.ts` for the
+      // conflicted-period cases.
+      bonusDailyEntry: { findMany: async () => [], findFirst: async () => null },
       processorBonusRule: {
         findFirst: async () => ({
           id: 'rule-eu',

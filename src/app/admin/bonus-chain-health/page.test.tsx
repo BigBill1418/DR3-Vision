@@ -40,6 +40,7 @@ const GREEN: ChainHealthReport = {
       status: 'green',
       findings: [],
       autoOverrideActorName: 'Bill Barnard',
+      sodExclusions: [],
     },
   ],
 };
@@ -52,6 +53,7 @@ const RED: ChainHealthReport = {
       siteName: 'Eugene',
       status: 'red',
       autoOverrideActorName: null,
+      sodExclusions: [],
       findings: [
         {
           slot: 'auto_override',
@@ -126,6 +128,35 @@ describe('BonusChainHealthPage (ADR-0019.4)', () => {
     expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 20, orderBy: { observed_at: 'desc' } }),
     );
+  });
+
+  it('explains a separation-of-duties exclusion on an otherwise-green card', async () => {
+    // ADR-0019.3 §2 — the exclusion is standing context, not a finding. A green
+    // chain stays green AND still tells the operator why an override actor will
+    // be signing certain periods; otherwise the only place that answer exists is
+    // an ADR nobody reads at 06:30 on payroll morning.
+    loadChainHealth.mockResolvedValue({
+      overall: 'green',
+      sites: [
+        {
+          siteCode: 'eugene',
+          siteName: 'Eugene',
+          status: 'green',
+          findings: [],
+          autoOverrideActorName: 'Bill Barnard',
+          sodExclusions: [
+            { slot: 'ops_signer', userId: 'u-patrick', employeeName: 'Patrick Dills' },
+          ],
+        },
+      ],
+    });
+    findMany.mockResolvedValue([]);
+
+    const html = renderToStaticMarkup(await BonusChainHealthPage());
+
+    expect(html).toContain('Patrick Dills');
+    expect(html).toContain('override chain');
+    expect(html).toContain('not a fault');
   });
 
   it('a non-admin is redirected rather than shown the chain', async () => {

@@ -51,7 +51,28 @@ export type ChainFindingReason =
   /** A slot has an empty override list — no human backstop. */
   | 'degenerate_no_override'
   /** The auto-override actor also occupies a signer slot. */
-  | 'degenerate_actor_is_signer';
+  | 'degenerate_actor_is_signer'
+  /**
+   * ADR-0019.3 §2 — a slot whose signer is separation-of-duties excluded from
+   * some periods has NO override backstop configured. Distinct from
+   * `degenerate_no_override` because the missing backstop is not hypothetical
+   * here: the signer is already, permanently, unable to sign a class of periods.
+   */
+  | 'sod_excluded_no_backstop';
+
+/**
+ * ADR-0019.3 §2 — a chain signer who is also the subject of bonus entries, and
+ * is therefore excluded from signing the periods that contain them.
+ *
+ * This is NOT a defect. It is the guard working: those periods route to the
+ * override chain by design. It is carried on the result so the dashboard can
+ * explain why an override actor signed a period, without anyone reading an ADR.
+ */
+export interface SodExclusion {
+  slot: 'facility_signer' | 'ops_signer';
+  userId: string;
+  employeeName: string;
+}
 
 export interface ChainFinding {
   slot: ChainSlot;
@@ -82,6 +103,16 @@ export interface ChainHealthInput {
     auto_override_actor_user_id: string;
   };
   users: readonly ChainHealthUser[];
+  /**
+   * ADR-0019.3 §2 — signer slots held by someone who is also a bonus subject.
+   *
+   * Supplying this NEVER makes a healthy chain unhealthy. The evaluator needs it
+   * only so it can tell the difference between "this slot has no backstop, which
+   * would matter if the signer were ever unavailable" and "this slot has no
+   * backstop AND its signer is already barred from a class of periods". Omitting
+   * it degrades gracefully to the pre-ADR-0019.3 behaviour.
+   */
+  sodExclusions?: readonly SodExclusion[];
 }
 
 export interface ChainHealthResult {
@@ -91,6 +122,11 @@ export interface ChainHealthResult {
   findings: ChainFinding[];
   /** Display name of the auto-override actor, or null if unresolvable. */
   autoOverrideActorName: string | null;
+  /**
+   * ADR-0019.3 §2 — signers excluded from their own periods. Standing context,
+   * deliberately NOT findings: a green chain with an exclusion is green.
+   */
+  sodExclusions: SodExclusion[];
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -169,6 +205,9 @@ export function evaluateChainHealth(input: ChainHealthInput): ChainHealthResult 
   const { chain, users, siteCode, siteName } = input;
   const byId = new Map(users.map((u) => [u.id, u]));
   const findings: ChainFinding[] = [];
+  const sodExclusions = [...(input.sodExclusions ?? [])];
+  // Which override list belongs to a slot whose signer is SoD-excluded.
+  const excludedSignerSlots = new Set(sodExclusions.map((e) => e.slot));
 
   const checkOne = (slot: ChainSlot, userId: string): void => {
     const reason = brokenReason(byId.get(userId));
@@ -222,14 +261,24 @@ export function evaluateChainHealth(input: ChainHealthInput): ChainHealthResult 
       ['ops_override', chain.ops_override_actor_user_ids],
     ] as const) {
       if (ids.length === 0) {
+        const which = slot === 'ops_override' ? 'ops' : 'facility';
+        // ADR-0019.3 §2 — same severity, sharper sentence. An empty override list
+        // is amber either way; what changes is whether the risk is conditional.
+        const excluded = excludedSignerSlots.has(
+          slot === 'ops_override' ? 'ops_signer' : 'facility_signer',
+        );
         findings.push({
           slot,
-          reason: 'degenerate_no_override',
+          reason: excluded ? 'sod_excluded_no_backstop' : 'degenerate_no_override',
           userId: null,
-          detail:
-            `No override actor is configured for the ${slot === 'ops_override' ? 'ops' : 'facility'} ` +
-            'slot. If its signer is unavailable, no human can sign on their behalf before the ' +
-            '09:00 PT deadline — only the 08:30 PT auto-override could rescue the period.',
+          detail: excluded
+            ? `No override actor is configured for the ${which} slot, and its signer is ` +
+              'separation-of-duties excluded from periods containing their own bonus entries ' +
+              '(ADR-0019.3 §2). For those periods that signer cannot sign and no human backstop ' +
+              'is configured, so only an admin or the 08:30 PT auto-override could complete them.'
+            : `No override actor is configured for the ${which} ` +
+              'slot. If its signer is unavailable, no human can sign on their behalf before the ' +
+              '09:00 PT deadline — only the 08:30 PT auto-override could rescue the period.',
         });
       }
     }
@@ -257,6 +306,7 @@ export function evaluateChainHealth(input: ChainHealthInput): ChainHealthResult 
     status,
     findings,
     autoOverrideActorName: actor?.name ?? null,
+    sodExclusions,
   };
 }
 
@@ -354,6 +404,29 @@ export async function loadChainHealth(db: PrismaClient): Promise<ChainHealthRepo
       })
     : [];
 
+  // ADR-0019.3 §2 — which signers are also bonus subjects. One indexed query
+  // over the signer ids only; `some: {}` restricts it to employees that actually
+  // carry entries, so a linked-but-never-keyed employee is not reported as an
+  // exclusion it never causes. In production this matches exactly one row
+  // (Patrick Dills), because 132 of 133 `bonus_employees` have a NULL user_id.
+  const signerIds = [
+    ...new Set(rows.flatMap((r) => [r.facility_signer_user_id, r.ops_signer_user_id])),
+  ];
+  const subjects = signerIds.length
+    ? await db.bonusEmployee.findMany({
+        where: { user_id: { in: signerIds }, daily_entries: { some: {} } },
+        select: { user_id: true, full_name: true, site_id: true },
+      })
+    : [];
+  // Keyed by SITE + user, not user alone. Bonus is site-scoped, and so are pay
+  // periods — someone who is a bonus subject at Eugene is not excluded from
+  // anything at Woodland, because no Woodland period can contain their entries.
+  // A user-only key would paint a correct-but-misleading exclusion on the other
+  // site's card.
+  const subjectBySiteUser = new Map(
+    subjects.map((s) => [`${s.site_id}:${s.user_id}`, s.full_name]),
+  );
+
   const results: ChainHealthResult[] = [];
   for (const site of sites) {
     const row = bySite.get(site.id);
@@ -366,6 +439,7 @@ export async function loadChainHealth(db: PrismaClient): Promise<ChainHealthRepo
         siteName: site.name,
         status: 'red',
         autoOverrideActorName: null,
+        sodExclusions: [],
         findings: [
           {
             slot: 'auto_override',
@@ -391,6 +465,15 @@ export async function loadChainHealth(db: PrismaClient): Promise<ChainHealthRepo
           auto_override_actor_user_id: row.auto_override_actor_user_id,
         },
         users,
+        sodExclusions: (
+          [
+            ['facility_signer', row.facility_signer_user_id],
+            ['ops_signer', row.ops_signer_user_id],
+          ] as const
+        ).flatMap(([slot, userId]) => {
+          const employeeName = subjectBySiteUser.get(`${site.id}:${userId}`);
+          return employeeName ? [{ slot, userId, employeeName }] : [];
+        }),
       }),
     );
   }
