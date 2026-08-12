@@ -1,10 +1,10 @@
 {
   "$schema": "https://barnardhq.internal/schemas/ntfy-header-conformance-v1.json",
-  "version": 2,
+  "version": 3,
   "adr": "ADR-0200",
   "canonical_source": "noc-master/data/ntfy-header-conformance.json",
   "purpose": "Shared conformance vectors for ntfy header sanitisation. HTTP header values are ByteStrings (latin-1): Node/undici THROWS and Python requests/urllib RAISE UnicodeEncodeError for any codepoint > 255, killing primary AND fallback identically before a socket opens. curl/bash is unaffected (it sends raw bytes). Every fleet publisher in a throwing language MUST run its local implementation against these vectors in CI, so divergence fails a build instead of losing a page.",
-  "semantics": "transliterate-then-fold-then-degrade: map known Unicode punctuation to ASCII, strip CR/LF, fold accented letters to their ASCII base via NFKD, then replace any residual non-ASCII with '?'. Output is PURE ASCII. This is stricter than latin-1 on purpose: httpx encodes headers as ASCII and raises UnicodeEncodeError on 'e-acute', where urllib and Node accept it. ASCII is the only safe common denominator across the fleet's HTTP clients.",
+  "semantics": "transliterate-then-fold-then-degrade: map known Unicode punctuation to ASCII, strip CR/LF, fold accented letters to their ASCII base via NFKD, then replace any residual non-ASCII with '?'. Output is PURE ASCII. This is stricter than latin-1 on purpose: httpx encodes headers as ASCII and raises UnicodeEncodeError on 'e-acute', where urllib and Node accept it. ASCII is the only safe common denominator across the fleet's HTTP clients. Combining marks are DROPPED (not degraded), so NFD-decomposed input folds identically to NFC. Characters with no NFKD decomposition but an obvious ASCII rendering (ss, ae, o, deg, u, 1/2) are transliterated explicitly.",
   "never_sanitize": [
     "Authorization (a bearer is ASCII by construction; mangling it turns an encoding bug into an auth bug)",
     "the message BODY (sent as UTF-8; may hold any character)"
@@ -83,12 +83,6 @@
       "why": "U+2022"
     },
     {
-      "id": "nbsp",
-      "input": "load 5 min = 13.45",
-      "expected": "load 5 min = 13.45",
-      "why": "U+00A0 non-breaking space becomes a plain space"
-    },
-    {
       "id": "accent-fold",
       "input": "café renewal for José",
       "expected": "cafe renewal for Jose",
@@ -129,6 +123,36 @@
       "input": "",
       "expected": "",
       "why": "empty string is valid"
+    },
+    {
+      "id": "nbsp",
+      "input": "load 5 min = 13.45",
+      "expected": "load 5 min = 13.45",
+      "why": "U+00A0 non-breaking space becomes a plain space - the ORIGINAL of this vector contained no U+00A0 at all, so it could never fail (ADR-0200 Am.3)"
+    },
+    {
+      "id": "thin-spaces",
+      "input": "3 x 4 units",
+      "expected": "3 x 4 units",
+      "why": "U+2009 thin / U+202F narrow-nbsp / U+2007 figure space all become plain spaces"
+    },
+    {
+      "id": "nfd-accent",
+      "input": "café renewal",
+      "expected": "cafe renewal",
+      "why": "NFD-DECOMPOSED accent (e + U+0301). A combining mark must be DROPPED, not degraded to '?', so NFD folds identically to NFC"
+    },
+    {
+      "id": "eszett",
+      "input": "straße 5",
+      "expected": "strasse 5",
+      "why": "U+00DF has no NFKD decomposition; transliterated explicitly to 'ss' rather than degrading"
+    },
+    {
+      "id": "degree",
+      "input": "25°C outside",
+      "expected": "25degC outside",
+      "why": "U+00B0 has no ASCII base; transliterated to 'deg'"
     }
   ],
   "client_matrix": {

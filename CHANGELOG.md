@@ -9,6 +9,52 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (7:11 PM PT) — header contract v3: the same word must not sanitize differently by normal form (ADR-0200 Am.3)
+
+Re-vendored the canonical fleet conformance vectors from **v2 (20 vectors) to
+v3 (24)** and upgraded both sanitizer twins to match. Two defects were in the
+**contract itself**, not in this repo's reading of it.
+
+- **The old `nbsp` vector could never fail.** Its input contained no U+00A0 at
+  all — input and expected were byte-identical pure ASCII, so it passed against
+  any implementation, including a broken one. v3 puts real U+00A0 in it and adds
+  a `thin-spaces` vector covering U+2009 / U+202F / U+2007. Both already passed
+  here, which is the point: a vacuous vector proves nothing either way.
+
+- **Combining marks are now DROPPED, not degraded.** NFD-decomposed `café`
+  (`e` + U+0301) left the mark as a standalone codepoint with no ASCII base, so
+  it degraded to `?` and produced `cafe?` — while NFC `café` (U+00E9) folded
+  cleanly to `cafe`. The same word, two different titles, decided purely by a
+  normal form no caller controls. v3 strips U+0300–U+036F after the CR/LF pass
+  so both forms land on `cafe`.
+
+- **`ß`, `°`, `æ`, `ø`, `µ`, `½` and friends are transliterated.** These have no
+  NFKD decomposition, so the fold could not help them and they degraded to `?` —
+  `Straße` became `Stra?e`, `25°C` became `25?C`. The 2026-08-11 6:12 PM entry
+  below flagged exactly this "upstream as a fleet-wide improvement rather than a
+  local divergence"; this is that fix coming back. They now render `ss`, `deg`,
+  `ae`, `o`, `u`, `1/2`.
+
+- **Measured, not assumed.** Both twins were run against the v3 vectors _before_
+  the change: **21 of 24**, failing exactly `nfd-accent` (`cafe? renewal`),
+  `eszett` (`stra?e 5`) and `degree` (`25?C outside`). After: **24 of 24**, and
+  the 85-assertion sweep is green.
+
+- **The hollow-file floor now pins the real size.** The guard was
+  `>= 15` against a 20-vector file; it is now `>= 24`. A floor set well below the
+  vendored count silently tolerates a re-vendor that _loses_ vectors — the same
+  lie the vacuous `nbsp` vector told, in slower motion.
+
+- **Vendored byte-for-byte**, sha256
+  `6e9da3beabc242fecebab49813c8cf410e1bfa6dc8231715b783d02e7b930dff`, identical
+  to `noc-master/data/ntfy-header-conformance.json`. Copied, never retyped: the
+  file carries invisible U+00A0/U+2009/U+202F/U+2007 and NFD combining marks that
+  retyping destroys — which is how the hollow `nbsp` vector was born.
+
+- **No behaviour change for `Authorization` or the BODY**, which are still never
+  sanitized, and no change to where sanitization happens (each publisher's single
+  choke point).
+
 ## 2026-08-11 (6:12 PM PT) — the header contract is ASCII, because the strictest client sets it (ADR-0093)
 
 ADR-0019.5 stopped the drops. It also set the output contract one client too
