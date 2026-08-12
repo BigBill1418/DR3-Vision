@@ -38,8 +38,8 @@ export function pacificYearMonth(at: Date): { year: number; month0: number } {
   return { year, month0: month - 1 };
 }
 
-/** Expand a naming pattern for the Pacific month containing `at` (D5). */
-export function resolveMonthlyFileName(pattern: string, at: Date): string {
+/** Substitute `{MONTH}` / `{MONTH_TITLE}` / `{YEAR}` for the Pacific month of `at`. */
+function expandMonthTokens(pattern: string, at: Date): string {
   const { year, month0 } = pacificYearMonth(at);
   const upper = MONTHS_UPPER[month0]!;
   const title = upper.charAt(0) + upper.slice(1).toLowerCase();
@@ -47,6 +47,35 @@ export function resolveMonthlyFileName(pattern: string, at: Date): string {
     .replace(/\{MONTH\}/g, upper)
     .replace(/\{MONTH_TITLE\}/g, title)
     .replace(/\{YEAR\}/g, String(year));
+}
+
+/** Expand a naming pattern for the Pacific month containing `at` (D5). */
+export function resolveMonthlyFileName(pattern: string, at: Date): string {
+  return expandMonthTokens(pattern, at);
+}
+
+/**
+ * Expand a FOLDER path for the Pacific month containing `at` (ADR-0102).
+ *
+ * D5 automated the file name on the assumption that every month's workbook lives
+ * in one fixed folder. Woodland does not: each month has its own folder inside a
+ * per-year folder —
+ *
+ *   `DR3/Woodland/Woodland Operations/{YEAR} Daily Logs/{MONTH_TITLE} {YEAR} Woodland`
+ *
+ * so a static `folder_path` is right for one month and then silently wrong. The
+ * rollover has to cover the path or it is not a rollover.
+ *
+ * Same tokens and the same Pacific anchor as the file name, and callers pass the
+ * SAME anchor to both — which is what makes the grace window (ADR-0049 Am.4 B1)
+ * read the prior month's file out of the prior month's FOLDER rather than
+ * hunting last month's name in this month's directory.
+ *
+ * A path with no tokens is returned unchanged, so every existing source — including
+ * the empty string, meaning the drive root — behaves exactly as before.
+ */
+export function resolveMonthlyFolderPath(folderPattern: string, at: Date): string {
+  return expandMonthTokens(folderPattern, at);
 }
 
 /** `YYYY-MM` archival key segment for the Pacific month containing `at` (D8). */

@@ -23,7 +23,7 @@ build` — the same 853 s for a one-line comment as for a thousand-line feature.
 
 - **Two cache mounts, both namespaced.** `--mount=type=cache,id=dr3-npm` on
   `/root/.npm` for `npm ci`, and `--mount=type=cache,id=dr3-next-cache,
-  sharing=locked` on `/app/.next/cache` for `npm run build`. The explicit `id=`
+sharing=locked` on `/app/.next/cache` for `npm run build`. The explicit `id=`
   matters: CHAD-HQ is a ~15-tenant host, and an unnamed mount takes an id from
   its target path, so every other stack's `/root/.npm` would share one directory.
 
@@ -47,7 +47,7 @@ build` — the same 853 s for a one-line comment as for a thousand-line feature.
 - **Verified rather than assumed:** cache mounts work on the host's built-in
   BuildKit frontend with **no** `# syntax=` directive (throwaway build on
   CHAD-HQ, exit 0) — so no `docker/dockerfile:1` network pull was added to every
-  build; `docker build --check` reported *"no warnings found"*; baseline recorded
+  build; `docker build --check` reported _"no warnings found"_; baseline recorded
   at `docker builder du` **13.88 GB total, zero cache-mount records**.
 
 - **This deploy was still a full cold build**, by design — the mounts are empty
@@ -56,8 +56,8 @@ build` — the same 853 s for a one-line comment as for a thousand-line feature.
 ## 2026-08-12 (12:15 AM PT) — the floor should not be the discovery mechanism (ADR-0100)
 
 Implements ADR-0094 §P0 and §P4 — the two items it sequenced FIRST, ahead of
-every fix, because *"today, the discovery mechanism for this entire defect class
-is Bill's phone."*
+every fix, because _"today, the discovery mechanism for this entire defect class
+is Bill's phone."_
 
 - **Every actionless floor state is now counted.** `<DeadEndBeacon>` mounts
   inside the branch it measures (so it cannot drift from it) and reports
@@ -128,6 +128,64 @@ Both numbers were verified free across all 56 remote branches and every open PR
 before pushing; #244 did not exist at that moment. The rule is sound, but the window
 it leaves open is the time between the check and the push. Now a gate closes it.
 
+## 2026-08-12 (7:15 AM PT) — INCIDENT: the transport that could never find a file (ADR-0102)
+
+A `status=not_found` page for DR3 Woodland at ~7:14 AM PT: _"672 consecutive
+failed poll(s); last successful read NEVER."_ The alert advised checking for a
+rename, a typo, a stray copy or a moved folder. **None of those was true.**
+`AUGUST 2026 DAILY LOG WOODLAND.xlsm` was in its folder the whole time — 710,386
+bytes, modified 7:45 PM PT the previous evening. Ledger: **1,098 polls since
+2026-07-31, every one `not_found`, `last_success_at` NULL.** Two independent
+defects, either one sufficient on its own.
+
+- **Defect A (data): `drive_upn` held a SharePoint URL fragment, not a UPN.**
+  `kelsey_ruhland@svdp.us` — underscore — answered
+  `404 ResourceNotFound: "User not found"`. The real account is
+  `kelsey.ruhland@svdp.us`. SharePoint renders a personal site as
+  `/personal/kelsey_ruhland_svdp_us`, flattening `.` and `@` to `_`; someone read
+  the UPN out of that URL. It looks exactly like an email address and is not one.
+
+- **Defect B (code): `$select` omitted the facet the code branches on.** This is
+  the fatal one — fixing the UPN alone changed nothing. `FILE_SELECT` stopped at
+  `lastModifiedDateTime`, and `$select` returns ONLY what it names, so `raw.file`
+  was always `undefined`, `toDriveFile()` read that as "folder, not a file", and
+  **`listFolder` returned zero files for every folder in every drive.** Measured
+  live on the same folder: shipped select → 3 items, 0 kept, `getFile` null; with
+  `file,folder` → 3 items, 1 kept, found. The transport was structurally
+  incapable of finding anything, which is precisely what "last successful read
+  NEVER" means.
+
+- **Why no test caught it.** `graph-transport.ts` carried the comment "UNTESTED by
+  unit tests; the mock is the tested path", and `mock-transport.ts` hands back
+  ready-made `DriveFile` objects — it has no concept of `$select`, so every field
+  is always present. A double more permissive than the real dependency cannot
+  fail on the bug it exists to catch. New `graph-transport.test.ts` drives the
+  real transport against a fetch double that **honours `$select`**; all four
+  behavioural assertions fail against the shipped select.
+
+- **A silent zero is now a loud one.** `listFolder` throws
+  `FilesContractDriftError` when a page returns items of which none carries a
+  `file` or `folder` facet — we asked for both, so that state means the select
+  was dropped, and its symptom is an empty folder indistinguishable from a
+  correct answer. Per page, only when items exist, so an empty folder stays empty.
+
+- **The rollover was only half automated (ADR-0049 D5).** D5 templated the file
+  NAME on the assumption of one fixed folder per source. Woodland nests each
+  month inside a per-year folder, so a static `folder_path` is right for one
+  month and then silently wrong — a `not_found` every 1st, forever. New
+  `resolveMonthlyFolderPath` expands the same tokens in the path, and the engine
+  uses the **same `monthAnchor`** as the file name, so the Am.4 B1 grace window
+  reads the prior month's file out of the prior month's folder for free.
+  Token-free paths (including the empty drive-root default) are unchanged.
+  Verified live: Aug present, Sep/Oct/Nov/Dec 2026 folders already exist, and
+  `2027 Daily Logs` does not yet — the same benign no-op D5 already handles.
+
+- **Left open, deliberately:** a 404 on the _drive_ still reads identically to a
+  404 on the _folder_, so a bad `drive_upn` recommends hunting for a renamed
+  file. And the admin API validates `driveUpn` as `z.string().min(3)`, which
+  accepts a SharePoint URL fragment happily. Both are follow-ups; §2 of the ADR
+  is the reproduction.
+
 ## 2026-08-11 (11 PM PT) — A citation is a promise that a reason is written down (ADR-0098)
 
 Implements **ADR-0094 §5 P5**. Documentation, CI and test only — no runtime code,
@@ -193,6 +251,7 @@ no new dependency, nothing to deploy.
   0096, 0097** — seven of the most recent records, including two floor incidents,
   had no index row. A new test keeps `docs/adr/README.md` complete: an ADR that
   exists but is not indexed is the dangling-citation defect from the other end.
+
 ## 2026-08-11 (11 PM PT) — ADR-0071 Amendment 1: the quota monitor can now say it is alive
 
 **Verdict first: the processor performance monitor was never broken and never fired. It has
@@ -309,6 +368,7 @@ guard; §2 is now **resolved by guard** rather than accepted.
   (`canApproveRequest`) is unchanged — Patrick may still approve an amendment
   touching his own entries, he simply cannot sign the period that results.
   Changing that would alter the ADR-0028 workflow contract.
+
 ## 2026-08-11 (10 PM PT) — H-135793 attribution recorded; canonical source-attribution notes doc created
 
 Docs only. New `docs/INVENTORY-SOURCE-ATTRIBUTION.md` — the canonical running record for

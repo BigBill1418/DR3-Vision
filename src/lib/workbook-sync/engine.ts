@@ -30,7 +30,11 @@ import {
 } from '@/lib/msgraph-files';
 import { deriveDailyRows, type DailySiteScope } from './daily-adapter';
 import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
-import { resolveMonthlyFileName, yearMonthKeyFromFileName } from './naming';
+import {
+  resolveMonthlyFileName,
+  resolveMonthlyFolderPath,
+  yearMonthKeyFromFileName,
+} from './naming';
 import { billedDaysFor, isGraceWindowOpen, priorMonthAnchor } from './grace';
 import { upsertDailyProduction } from './upsert';
 
@@ -273,7 +277,15 @@ export async function syncOneSource(
       );
     } else {
       fileName = resolveMonthlyFileName(source.naming_pattern, monthAnchor);
-      const file = await transport.getFile(source.drive_upn, source.folder_path, fileName);
+      // ADR-0102 — the FOLDER rolls over with the file. Woodland keeps each
+      // month's workbook in its own per-month folder inside a per-year folder, so
+      // a static `folder_path` is correct for one month and silently wrong after
+      // that. Expanded with the SAME `monthAnchor` as the file name, which is what
+      // makes the grace window read the prior month's file out of the prior
+      // month's folder instead of hunting last month's name in this month's.
+      // Token-free paths (including the empty drive-root default) are unchanged.
+      const folderPath = resolveMonthlyFolderPath(source.folder_path, monthAnchor);
+      const file = await transport.getFile(source.drive_upn, folderPath, fileName);
       // B1 — two files in flight, two watermarks. Reading the wrong one would make
       // each poll invalidate the other's cTag (endless re-downloads) and, in the
       // other direction, let a grace read mark a genuinely-changed current-month

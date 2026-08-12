@@ -11,7 +11,11 @@ import type { PrismaClient } from '@prisma/client';
 import { putWorkbookArchive } from '@/lib/r2';
 import { selectFilesTransport } from '@/lib/msgraph-files';
 import type { FilesTransport, FilesTransportLogger } from '@/lib/msgraph-files';
-import { fileNameMatchesPattern, yearMonthKeyFromFileName } from './naming';
+import {
+  fileNameMatchesPattern,
+  resolveMonthlyFolderPath,
+  yearMonthKeyFromFileName,
+} from './naming';
 
 export interface ArchiveResult {
   siteId: string;
@@ -49,7 +53,16 @@ export async function archiveWorkbooksToR2(args: ArchiveArgs): Promise<ArchiveRe
   let transport: FilesTransport;
   try {
     transport = args.transport ?? (await selectFilesTransport(log));
-    const files = await transport.listFolder(source.drive_upn, source.folder_path);
+    // ADR-0102 — expand the folder pattern, or a templated `folder_path` is sent
+    // to Graph with its braces intact and archives nothing.
+    //
+    // Consequence worth stating: where the folder is month-scoped, one run sees
+    // ONE month (its own folder), not the whole history. D8 was written for a flat
+    // folder holding every month at once. That is a real narrowing, and it is the
+    // honest behaviour rather than a silent empty list — a source with a fixed
+    // folder still archives exactly as before.
+    const folderPath = resolveMonthlyFolderPath(source.folder_path, new Date());
+    const files = await transport.listFolder(source.drive_upn, folderPath);
     const monthly = files.filter((f) => fileNameMatchesPattern(source.naming_pattern, f.name));
     result.filesConsidered = monthly.length;
 
