@@ -353,6 +353,29 @@ function makeStore(): Store {
       s.entries
         .filter((e) => e.bonus_pay_period_id === where.bonus_pay_period_id)
         .map((e) => ({ mattress_count: e.mattress_count })),
+    // ADR-0019.3 §2 — the separation-of-duties read. `subject_user_id` mirrors
+    // `bonus_employees.user_id`; none of the processors in this cycle fixture is
+    // a system user (as in production, where 132 of 133 rows have a NULL
+    // user_id), so no signer is a subject and no period is conflicted here.
+    // Resolved against the SAME entry store the payout read uses so the two
+    // cannot disagree. `signature-sod.test.ts` owns the conflicted cases.
+    findFirst: async ({
+      where,
+    }: {
+      where: { bonus_pay_period_id: string; bonus_employee: { user_id: string } };
+    }) => {
+      const hit = s.entries.find(
+        (e) =>
+          e.bonus_pay_period_id === where.bonus_pay_period_id &&
+          (e as { subject_user_id?: string }).subject_user_id === where.bonus_employee.user_id,
+      );
+      return hit
+        ? {
+            bonus_employee_id: `be-${where.bonus_employee.user_id}`,
+            bonus_employee: { full_name: 'Fixture Processor' },
+          }
+        : null;
+    },
   };
   s.processorBonusRule = {
     findFirst: async ({ where }: { where: { site_id: string } }) => {

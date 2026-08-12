@@ -46,6 +46,7 @@ import { transitionMonth, type BonusPayPeriodState } from '@/lib/bonus/state-mac
 import { entryDateUTC, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { bonusPayPeriodsByState } from '@/lib/observability/metrics';
 import { getSignatureChain, type SignatureChainDb } from '@/lib/bonus/signature-chain';
+import { findSodConflict, type SodConflict } from '@/lib/bonus/sod-exclusion';
 
 // Re-export so the escalation cron (T-205) imports the auto-override actor from
 // one place (and so callers needn't reach into two modules).
@@ -101,6 +102,21 @@ export interface SignatureDb {
     findMany(args: {
       where: { bonus_pay_period_id: string };
     }): Promise<{ mattress_count: DecimalLike; saves: DecimalLike }[]>;
+    // ADR-0019.3 §2 — the separation-of-duties read. Declared REQUIRED for the
+    // same reason `saves` is: a structural type that let a caller or a test
+    // double omit it would let the guard be silently absent exactly where it is
+    // supposed to bite, and the suite would stay green while a conflicted signer
+    // signed their own period. Missing it is a compile error, not an incident.
+    findFirst(args: {
+      where: {
+        bonus_pay_period_id: string;
+        bonus_employee: { user_id: string };
+      };
+      select: {
+        bonus_employee_id: true;
+        bonus_employee: { select: { full_name: true } };
+      };
+    }): Promise<{ bonus_employee_id: string; bonus_employee: { full_name: string } } | null>;
   };
   processorBonusRule: {
     findFirst(args: {
@@ -212,8 +228,16 @@ export type RecordSignatureResult =
         | 'no_slot'
         | 'wrong_state'
         | 'not_authorized'
-        | 'missing_reason';
+        | 'missing_reason'
+        /**
+         * ADR-0019.3 §2 — the caller is a bonus subject within this period, so
+         * they may not sign it in ANY slot, by any path. The period routes to
+         * the existing override chain instead.
+         */
+        | 'sod_excluded';
       slot?: SignatureSlot;
+      /** Set only on `sod_excluded`: the bonus employee the caller is linked to. */
+      conflict?: SodConflict;
     };
 
 // ────────────────────────────────────────────────────────────────────
@@ -338,6 +362,29 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     // Signatures may only be captured while the month awaits them.
     if (month.state !== 'pending_signatures' && month.state !== 'partially_signed') {
       return { ok: false, reason: 'wrong_state' as const, slot };
+    }
+
+    // ADR-0019.3 §2 — separation of duties. A person who is the subject of bonus
+    // entries in THIS period may not sign it, in any slot, by any path.
+    //
+    // Deliberately checked on the (person, period) pair and not on the slot:
+    // Patrick Dills holds Eugene's ops slot AND sits in that site's
+    // `facility_override_actor_ids`, so a slot-scoped guard would block his
+    // natural ops signature and leave him free to sign the same conflicted
+    // period through the facility slot instead.
+    //
+    // Read inside the transaction so the entries being judged are the same
+    // snapshot the payout lock will total — an amendment editing entries
+    // concurrently cannot slip a conflicted row in behind the check.
+    //
+    // This does NOT strand a period. The excluded person is by definition not
+    // the only route: the counterpart slot's signer is unaffected, the slot's
+    // override actors and any admin may sign it, and the 08:30 PT auto-override
+    // actor is a separate identity. Exclusion routes the period to the existing
+    // chain (ADR-0019.2 §3) rather than removing its last signer.
+    const conflict = await findSodConflict(monthId, signer.userId, tx);
+    if (conflict) {
+      return { ok: false, reason: 'sod_excluded' as const, slot, conflict };
     }
 
     const alreadySigned =

@@ -204,6 +204,28 @@ export default async function BonusChainHealthPage() {
                       ))}
                     </ul>
                   )}
+
+                  {/*
+                    ADR-0019.3 §2 — separation-of-duties exclusions. Rendered
+                    OUTSIDE the findings list, and on a green card too, because
+                    an exclusion is not a defect: it is the guard working as
+                    designed. Showing it here answers the question an operator
+                    would otherwise have to read an ADR to answer — "why did an
+                    override actor sign that period instead of its signer?"
+                  */}
+                  {site.sodExclusions.length > 0 ? (
+                    <p className="mt-3 border-l-2 border-dr3-mist-dim/40 pl-3 text-sm text-dr3-mist-dim">
+                      {site.sodExclusions.map((e) => (
+                        <span key={e.userId} className="block leading-relaxed">
+                          <strong>{e.employeeName}</strong> holds the{' '}
+                          {e.slot === 'ops_signer' ? 'ops' : 'facility'} slot and is also a bonus
+                          subject, so they cannot sign periods containing their own entries. Those
+                          periods route to the override chain by design (ADR-0019.3 §2) — this is
+                          not a fault.
+                        </span>
+                      ))}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </div>

@@ -90,6 +90,11 @@ function makeDb(): SignatureDb {
       // sets it; supplying it here keeps the double HONEST rather than letting
       // the lock read a shape the real client would never return.
       findMany: async () => entries.map((e) => ({ saves: 0, ...e })),
+      // ADR-0019.3 §2 — no signer in these Woodland override fixtures is a
+      // linked `bonus_employee`, so there is no separation-of-duties conflict to
+      // report. `signature-sod.test.ts` covers the case where there is one,
+      // including a conflicted actor attempting the override path.
+      findFirst: async () => null,
     },
     processorBonusRule: {
       findFirst: async () => ({

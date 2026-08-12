@@ -24,6 +24,15 @@
 // he can now be the default approver for amendments to entries that include his
 // own historical bonus rows. The DB CHECK only prevents requester == approver.
 // Bill accepted this trade-off explicitly; see ADR-0028.
+//
+// PARTIALLY CLOSED (ADR-0019.3 §2, 2026-08-11): the SIGNING half of that
+// conflict is now enforced — `recordSignature` refuses a signature from anyone
+// who is a bonus subject within the period, in any slot, and routes it to the
+// override chain (`src/lib/bonus/sod-exclusion.ts`). This APPROVAL path is
+// deliberately unchanged: altering who may approve an amendment request would
+// change the ADR-0028 workflow contract, so Patrick may still approve an
+// amendment touching his own historical entries — he just cannot sign the period
+// that results.
 
 import { getSignatureChain } from '@/lib/bonus/signature-chain';
 import type { PrismaClient } from '@prisma/client';

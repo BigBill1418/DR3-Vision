@@ -135,6 +135,23 @@ export async function POST(
           { error: 'A reason is required to sign on behalf of another signer.' },
           { status: 422 },
         );
+      case 'sod_excluded':
+        // ADR-0019.3 §2 — separation of duties. Enforced HERE, server-side, in
+        // the data layer this route calls: the UI also hides the control, but a
+        // guard that lives only in the UI is not a guard, and this endpoint is
+        // reachable directly by anyone holding a session.
+        //
+        // The message names the route forward rather than just refusing, because
+        // the period still has to be signed before the 09:00 PT deadline.
+        return NextResponse.json(
+          {
+            error:
+              'You are a bonus subject in this period, so you cannot sign it. ' +
+              'It must be signed by the other signer or an override actor.',
+            reason: 'sod_excluded',
+          },
+          { status: 403 },
+        );
       default:
         return NextResponse.json({ error: 'Server error.' }, { status: 500 });
     }
