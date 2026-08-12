@@ -1,6 +1,6 @@
 // Type surface for the (JS) ADR promise extractor, so a vitest test can import it
 // under `allowJs: false`. Side-effect-free on import; the CLI half is guarded
-// behind an entrypoint check. See ADR-0097.
+// behind an entrypoint check. See ADR-0098.
 
 export interface PromiseCandidate {
   line: number;

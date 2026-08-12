@@ -483,7 +483,7 @@ than looking for this, and it turned out not to be alone: the same sweep found
 **ADR-0068 Amendment 3/4/5, ADR-0069 Amendment 3, and ADR-0019.5 Amendment 1** cited
 by code and likewise never written — 24 dangling citations across four ADRs.
 
-The prevention is **ADR-0097**: a citation resolver that fails CI when an
+The prevention is **ADR-0098**: a citation resolver that fails CI when an
 `ADR-NNNN`/`Amendment N` reference in the tree does not resolve to a real file and
 section. Had it existed on 2026-07-30, this amendment would have been written the
 same morning, because the build would not have gone green without it.

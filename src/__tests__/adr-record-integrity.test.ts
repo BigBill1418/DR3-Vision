@@ -1,4 +1,4 @@
-// ADR record integrity (ADR-0097; prescribed by ADR-0094 §5 P5).
+// ADR record integrity (ADR-0098; prescribed by ADR-0094 §5 P5).
 //
 // Two guards, deliberately different in strength:
 //
@@ -26,6 +26,7 @@ import {
   checkAdrCitations,
   collectAdrIndex,
   extractCitations,
+  findDuplicateAdrNumbers,
   KNOWN_UNRESOLVED,
 } from '../../scripts/check-adr-citations.mjs';
 import {
@@ -127,6 +128,52 @@ describe('every ADR has a row in the index', () => {
       missing,
       `These ADRs have no row in docs/adr/README.md: ${missing.join(', ')}`,
     ).toEqual([]);
+  });
+});
+
+// ── 1c. Two ADRs must not claim one number ───────────────────────────────────
+
+describe('no two ADRs claim the same number', () => {
+  it('every ADR number has exactly one primary file', () => {
+    const collisions = findDuplicateAdrNumbers(join(process.cwd(), 'docs', 'adr'));
+    const rendered = collisions.map((c) => `ADR-${c.number}: ${c.files.join(' + ')}`).join('\n  ');
+    expect(
+      collisions,
+      `Two ADRs claim one number, so a citation to it resolves to two different ` +
+        `decisions — worse than resolving to none, because it looks correct. The ` +
+        `number belongs to the first PUSHED reference; the later claim renumbers.\n  ${rendered}`,
+    ).toEqual([]);
+  });
+
+  it('DETECTS a collision — two primary files on one number', () => {
+    // This happened for real on 2026-08-11: ADR-0097 was claimed by two unrelated
+    // PRs 19 seconds apart, both merged, and the checker stayed green because the
+    // index MERGES files by number. That silence is what this test removes.
+    const root = fixture(
+      {
+        '0097-a-citation-is-a-promise.md': '# ADR-0097 — one decision\n',
+        '0097-a-page-that-heals.md': '# ADR-0097 — a different decision\n',
+      },
+      {},
+    );
+    const collisions = findDuplicateAdrNumbers(join(root, 'docs', 'adr'));
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]?.number).toBe('0097');
+    expect(collisions[0]?.files).toHaveLength(2);
+  });
+
+  it('does NOT flag a parent plus its separate amendment files', () => {
+    // The legitimate multi-file case. If this ever fires, the collision check
+    // would red every ADR that uses the separate-amendment-file convention.
+    const root = fixture(
+      {
+        '0069-bridge.md': '# ADR-0069 — the bridge\n',
+        '0069-amendment-1-trailer.md': '# ADR-0069 Amendment 1 — trailers\n',
+        '0069-amendment-2-terex.md': '# ADR-0069 Amendment 2 — TEREX\n',
+      },
+      {},
+    );
+    expect(findDuplicateAdrNumbers(join(root, 'docs', 'adr'))).toEqual([]);
   });
 });
 

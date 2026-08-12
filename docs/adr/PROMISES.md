@@ -16,7 +16,7 @@ silently, and silence is indistinguishable from health:
   files for **twelve days before it existed** — see P-06 below, the worked example
   of exactly the failure this register prevents.
 
-**How it is maintained.** Two checks, described in ADR-0097:
+**How it is maintained.** Two checks, described in ADR-0098:
 
 | Check | Mode | What it does |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ would review.
 | P-25 | ADR-0094 | **P2** — name the divergence states, give each a route (3–4 days) | PARTIAL | ADR-0096 shipped the late-arrival case (§4 row 1) without widening the D5 bound. Rows 3, 8, 10, 11, 13 remain |
 | P-26 | ADR-0094 | **P3** — floor-shaped smoke check at 06:00 PT and post-deploy (2 days) | OPEN | Closes the one-night gap between a merge and the floor finding what it broke |
 | P-27 | ADR-0094 | **P4** — no floor-surface behaviour changes merge after 15:00 PT except incident fixes | OPEN | Process only, zero engineering cost. Needs Bill's ratification to be real |
-| P-28 | ADR-0094 | **P5** — promise + citation CI | **DONE** | This register plus ADR-0097. One deliberate deviation from the P5 text, recorded in ADR-0097 §3 |
+| P-28 | ADR-0094 | **P5** — promise + citation CI | **DONE** | This register plus ADR-0098. One deliberate deviation from the P5 text, recorded in ADR-0098 §3 |
 | P-29 | ADR-0094 | **P6** — one half-day with JT and Pablo on the §4 messy cases (0.5 day) | OPEN | Highest value per hour; most likely to change the plan itself |
 | P-30 | ADR-0094 | Six status allow-lists remain duplicated (ADR-0090 Q3, OPEN-ITEMS AW-4) | OPEN | The RC-2 parity class. `ops-overview.ts` still carries a byte-for-byte copy of `OPEN_DOCK_STATUSES` under a local name |
 | P-31 | ADR-0094 | The §4 per-class divergence rates "should be re-derived at a few hundred loads before anyone plans against it" | OPEN | Sample is 64 claims over 10 operating days. Pair with P-20 |
