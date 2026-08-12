@@ -359,6 +359,11 @@ async function createSubscription(
           : `Could not create a change subscription for drive ${driveId}: ${reason}. ` +
             `The scheduled delta sweep still keeps documents correct; only latency is affected.`,
       context: { driveId, notificationUrl, scopeRelated: isScope },
+      // ADR-0097 §2 — the scope refusal is a health tile, not a page. It is the
+      // EXPECTED outcome for an item-level share (SUBSCRIPTION_SCOPE_NOTE), it
+      // is not fixable, and it re-paged every 24h forever. A validation failure
+      // or any other refusal still pages: those are actionable.
+      dashboardOnly: isScope,
       now,
     });
   }

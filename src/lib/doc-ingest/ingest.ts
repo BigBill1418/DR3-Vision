@@ -132,13 +132,38 @@ export async function ingestSource(
 
   const existingVersion = await prisma.docSourceVersion.findUnique({
     where: { doc_source_id_ctag: { doc_source_id: source.id, ctag } },
-    select: { id: true, staged: true, applied_at: true },
+    select: { id: true, staged: true, applied_at: true, r2_key: true },
   });
   // Already seen this exact content. This single check is what makes a
   // re-delivered Graph notification, a webhook retry and a scheduled sweep all
   // converge on the same state instead of stacking duplicates.
-  if (existingVersion)
+  if (existingVersion) {
+    // ── ADR-0097 §3 — clear a healed `download_failed` HERE too ─────────────
+    // ADR-0095 moved this resolve above the guardrail branch, which fixed the
+    // staged-revision case but left the far more common one: this early return.
+    // A source that 503'd once and then downloaded cleanly keeps an OPEN
+    // `download_failed` for as long as its content does not change again,
+    // re-paging every 24h about a failure that healed in fifteen minutes.
+    // TEREX.xlsx sat in exactly that state from 16:58 PT on 2026-08-11.
+    //
+    // Reaching this line means the live content marker matches a revision we
+    // have already archived — "my copy of this document is current", which is a
+    // STRONGER claim than "a download succeeded" and squarely resolves the
+    // condition. The `r2_key` guard matters: a revision whose archive write
+    // failed is one `applyVersion` raises `download_failed` FOR, so clearing it
+    // here would put the two into a resolve/raise loop and assert we hold bytes
+    // we do not.
+    if (existingVersion.r2_key) {
+      await resolveAnomaly(
+        prisma,
+        'download_failed',
+        subject,
+        'Content marker matches an archived revision — the current copy is held.',
+        now,
+      );
+    }
     return { outcome: 'unchanged', versionId: existingVersion.id, anomaliesRaised: 0 };
+  }
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
   let bytes: Uint8Array;

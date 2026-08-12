@@ -90,6 +90,75 @@ landing note and a date correction — the header read `2026-08-12`, the UTC day
 same bleed this file warns about at the top and that `0101306` corrected for
 ADR-0093 hours earlier. **§5 P2 shipped as ADR-0096 before this ADR landed**, and
 followed its prescription: no widening of the ADR-0074 D5 day bound.
+## 2026-08-11 (10:00 PM PT) — Doc-ingestion noise tuning + the resolve that never ran (ADR-0097)
+
+Bill, ~10:00 PM PT: _"I'm still getting notifications that document ingestion is
+not working and failed to get files. All of that needs to be working completely
+and without issue."_
+
+Read from ntfy's seven-day server cache: **exactly one** doc-ingestion page has
+arrived since the ADR-0095 deploy landed at 7:11 PM PT — the 7:42 PM
+`subscription_renew_failed` re-page, which is precisely the alert ADR-0095 §5
+flagged as gate-failing and left untuned pending Bill's call. No new failure, no
+regression, no stale document. (The other eleven DR3 messages tonight are
+`Container started` deploy noise from PRs #235–#241, not ingestion.)
+
+- **`sweep_failed` now pages on the SECOND consecutive failure.** The sweep runs
+  ~96×/day against Graph, which 503s on ~1% of them; every one self-healed on the
+  next run, so the old grading cost about one page a day about a condition that
+  was already over. Consecutiveness needed no new state — a successful sweep
+  resolves the open row, so `occurrences = 2` already _means_ two failures with no
+  success between. The ADR-0057 D9 guard is intact: a genuinely dead sweep still
+  pages `high`, 15 minutes later. Checked **before** the 24h re-page window so the
+  suppressed first failure leaves `last_paged_at` NULL and the second page is
+  immediate.
+
+- **`subscription_renew_failed` is demoted per-OCCURRENCE, not per-kind.** The
+  structural OneDrive-for-Business refusal (a subscription may only target a drive
+  root; Vision holds item-level shares) is a health tile forever — nothing is
+  actionable, ever. But the same kind also fires when a real subscription fails to
+  renew, which _is_ actionable, so silencing the kind would have blinded the push
+  path. New one-directional `dashboardOnly` flag, set at the raise site from the
+  `isScope` it already computed. It can only ever suppress a page, never create or
+  escalate one.
+
+- **Fixed the resolve ADR-0095 §3 only half-moved.** It lifted the
+  `download_failed` resolve above the guardrail branch, but left it below the
+  `unchanged` early return — the path nearly every sweep takes. So a healed
+  download only cleared on the next _content change_. TEREX's row from tonight's
+  4:58 PM Graph 503 was still open at 10 PM on a source verified byte-identical to
+  live Graph, and would have paged daily forever. Now resolved on the unchanged
+  path too, guarded on `r2_key` so it never fights the missing-archive raise.
+
+- **TEREX staged backlog cleared, verified against the source.** Live Graph
+  download is byte-identical (sha256 `0dea4156…`, 491,583 B) to the newest staged
+  revision; all six R2 archives hash to their recorded `content_sha256`. `Jul26`
+  column G rows 3–33 sum to **222.25**, matching the workbook's own `G34`;
+  baseline was 164.20 — July was filled in, monotonic, 31 days entered. The
+  `5698.4` outlier was a half-entered row (End Hours 2665.95 with Start Hours
+  blank) caught mid-keystroke and self-corrected 15 minutes later. Newest revision
+  applied; four superseded intermediates discarded; audit rows carry the
+  verification basis.
+
+- **Known, NOT fixed here: `parse_summary.numericTotals` is exactly 2×** — it
+  counts each sheet's own totals row as data (`444.50 = 2 × 222.25`). It corrupts
+  nothing (consumed only by the variance comparison and the display; money rows
+  come from a separate extractor that stages for human confirmation) and changes
+  no staging decision (the doubling is consistent on both sides, so +35.4% is
+  exact either way). Not fixed tonight because correcting it makes every stored
+  baseline 2× its successor — a −50% variance that would stage every watched
+  document at once. **Whoever fixes it must re-baseline in the same change.**
+
+- **`column_nulled` on TEREX resolved as a false positive of our own upgrade.**
+  "Estimates for 2025" was never removed — it is at `Annual Cost!A1` right now.
+  ADR-0067 Am.8 correctly moved header detection from row 1 (merged section
+  titles) to row 2 (real headers), 3 pseudo-columns → 21 real ones, and the
+  guardrail compared across the change. The 92 occurrences are 92 findings in
+  **one** sweep collapsing onto one fingerprint, not 92 events — `first_seen_at`
+  and `last_seen_at` are identical to the millisecond.
+
+- **`discovery_gap` left open deliberately** — 8 readable-but-unwatched documents,
+  listed by name in the ADR for Bill to choose from. Nothing auto-registered.
 
 ## 2026-08-11 (5:18 PM PT) — INCIDENT: a truck that arrived a day late had no way in (ADR-0096)
 
