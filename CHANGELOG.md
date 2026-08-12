@@ -9,6 +9,71 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (11 PM PT) — A citation is a promise that a reason is written down (ADR-0097)
+
+Implements **ADR-0094 §5 P5**. Documentation, CI and test only — no runtime code,
+no new dependency, nothing to deploy.
+
+- **The phantom-citation class was four families, not one.** ADR-0094 found six
+  source files and a test citing an `ADR-0065 Amendment 2` that did not exist.
+  Running a resolver over the whole tree found **24 citations to amendments nobody
+  ever wrote**: ADR-0065 Am.2 (7), **ADR-0068 Am.3/4/5 (14)**, ADR-0069 Am.3 (2),
+  ADR-0019.5 Am.1 (2). In every case the work shipped and the record did not.
+
+- **ADR-0065 Amendment 2 now exists**, twelve days after the code it governs. It
+  records what shipped as `7e1cf342` on 2026-07-30 08:45 PT: six manager screens
+  derived today as `new Date().toISOString().slice(0, 10)`, so from 5 PM Pacific
+  every date input on those screens defaulted to **tomorrow** and an evening entry
+  landed on a production day that had not happened. It also closes the residual
+  ADR-0065 Amendment 1 left open — the same six surfaces, named and deferred.
+
+- **New hard gate: `node scripts/check-adr-citations.mjs`.** Every `ADR-NNNN` and
+  `Amendment N` reference in `src/`, `scripts/`, `e2e/`, `tests/` must resolve to a
+  real file **and section**. over 4,000 citations across ~1,180 files against 102 ADRs (the exact count moves with every merge; the gate does not).
+  Wired into `ci.yml` **before `npm ci`** — it is dependency-free, so it fails in
+  seconds rather than after a five-minute build — and asserted again by
+  `src/__tests__/adr-record-integrity.test.ts` so it fires at push time too.
+
+- **The gate went hard on day one** by baselining the 18 pre-existing violations in
+  `KNOWN_UNRESOLVED`. Writing those five amendments would mean inventing history for
+  work this author did not do, so they are tracked instead. **The baseline
+  ratchets:** an entry that no longer matches a real violation *fails* the check, so
+  it cannot quietly become a second `OPEN-ITEMS.md`.
+
+- **New register: `docs/adr/PROMISES.md`**, seeded with **33 hand-audited rows** —
+  the floor-ADR commitments ADR-0094 counted, its own P0–P6, the five phantom
+  amendments, and ADR-0065 Am.1's residual as the worked closed example. A test
+  asserts every baselined ADR has a row, because a tolerated violation with no
+  handle is the exact failure being prevented.
+
+- **Advisory check: `node scripts/extract-adr-promises.mjs --check`** annotates any
+  ADR newer than the registry epoch that states a promise with no registry row. It
+  **never fails a build** — same reasoning as the existing `migrate diff` step: a
+  hard gate on pre-existing drift would red-on-arrival every PR and mask the real
+  gate above.
+
+- **Two deliberate deviations from P5 as written**, recorded in ADR-0097 §3: a
+  registry row instead of a GitHub issue link (42 promises carried **zero** issue
+  numbers — that is not 42 oversights, it is a team that does not work through
+  issues, and a rule pointing at an unused system gets satisfied with a dead link),
+  and warn instead of fail.
+
+- **Precision over recall, measured.** 70 candidates across 40 ADRs; ~85% precision
+  on the audited floor set. `gated on` was **removed** from the vocabulary after
+  scoring **6 false positives out of 6** — in this repo it describes a rollout flag,
+  not a commitment — and a test stops it being re-added. The recall gap is stated
+  plainly: the tool is a net for obvious cases, the register is the source of truth.
+
+- **A false positive nearly shipped.** The first indexer keyed one file per ADR
+  number, so separate amendment files (`0069-amendment-2-*.md`) overwrote their
+  parent and **46 false violations** were reported against ADR-0067 and ADR-0069. A
+  gate that cries wolf gets switched off, so the merge of both amendment conventions
+  is locked down by a named regression test.
+
+- **ADR index completeness.** Rows added for **0019.3, 0019.4, 0019.5, 0091, 0092,
+  0096, 0097** — seven of the most recent records, including two floor incidents,
+  had no index row. A new test keeps `docs/adr/README.md` complete: an ADR that
+  exists but is not indexed is the dangling-citation defect from the other end.
 ## 2026-08-11 (10:20 PM PT) — A signer cannot sign a period he is paid by (ADR-0019.3 §2)
 
 ADR-0019.3 §2 recorded a separation-of-duties conflict as **accepted**: Patrick
