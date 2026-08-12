@@ -15,11 +15,14 @@
 // every module that builds ntfy headers and asserts each routes through the one
 // shared sanitizer. A fifth publisher fails this test on the day it is written.
 //
-// CONTRACT v2 (ADR-0093): the output must be PURE ASCII, not merely latin-1,
-// because httpx — used by other fleet publishers — raises above U+007F where
-// undici tolerates up to U+00FF. The behaviour is pinned against the SHARED
-// fleet vectors vendored at `./ntfy-header-conformance.json` (canonical copy:
-// `noc-master/data/ntfy-header-conformance.json`).
+// CONTRACT v3 (ADR-0093; fleet contract noc-master ADR-0200 Am.3): the output
+// must be PURE ASCII, not merely latin-1, because httpx — used by other fleet
+// publishers — raises above U+007F where undici tolerates up to U+00FF. v3 adds
+// that combining marks are DROPPED (so NFD-decomposed input folds identically to
+// NFC) and that characters with no NFKD decomposition but an obvious ASCII
+// rendering are transliterated rather than degraded. The behaviour is pinned
+// against the SHARED fleet vectors vendored at `./ntfy-header-conformance.json`
+// (canonical copy: `noc-master/data/ntfy-header-conformance.json`).
 //
 // Vendored rather than fetched at runtime, on purpose: a network fetch that
 // fails degrades to a SKIPPED test — a safety net that lies, which is the whole
@@ -108,8 +111,11 @@ describe('ntfy header safety — repo-wide sweep (ADR-0019.5)', () => {
 describe('toHeaderSafe — conformance to the shared fleet vectors (ADR-0093)', () => {
   it('the vendored vector file is present and not hollowed out', () => {
     // An empty or truncated vector file would make every per-vector assertion
-    // below pass while checking nothing. Pin a floor.
-    expect(VECTORS.length).toBeGreaterThanOrEqual(15);
+    // below pass while checking nothing. Pin a floor at the contract's current
+    // size (v3 = 24) rather than a stale one: a floor set well below the
+    // vendored count silently tolerates a re-vendor that LOSES vectors, which is
+    // the same lie in slower motion. Raise this whenever the fleet contract grows.
+    expect(VECTORS.length).toBeGreaterThanOrEqual(24);
   });
 
   it.each(VECTORS.map((v) => [v.id, v] as const))('vector %s', (_id, v) => {

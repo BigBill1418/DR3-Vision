@@ -24,9 +24,13 @@
 // (`src/lib/ntfy-header-safe.ts`) is what lets BOTH bundles share a single copy.
 // Moving it back out will break the image build, not the test suite.
 //
-// CONTRACT VERSION 2 (ADR-0093; fleet contract noc-master ADR-0200). v1 emitted
-// latin-1 and only degraded codepoints above 255. v2 emits PURE ASCII and folds
-// accents. See the doc comment on `toHeaderSafe` for why.
+// CONTRACT VERSION 3 (ADR-0093; fleet contract noc-master ADR-0200 Am.3). v1
+// emitted latin-1 and only degraded codepoints above 255. v2 emits PURE ASCII
+// and folds accents. v3 closes two blind spots in v2: combining marks are now
+// DROPPED rather than degraded (so NFD-decomposed input folds identically to
+// NFC), and characters with no NFKD decomposition but an obvious ASCII
+// rendering (ß, °, æ, ø, µ, ½ …) are transliterated instead of becoming '?'.
+// See the doc comment on `toHeaderSafe` for why.
 
 /**
  * Transliteration table for the Unicode punctuation these titles actually use.
@@ -51,6 +55,21 @@ const HEADER_TRANSLITERATIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/→/g, '->'], // rightwards arrow — DR3 period labels use it
   [/[    ]/g, ' '], // nbsp / figure / thin / narrow spaces
   [/[•·]/g, '*'], // bullet / middot
+  // No NFKD decomposition but an obvious ASCII rendering (ADR-0200 Am.3):
+  // without these they degrade to '?' and mangle real words — `Straße` became
+  // `Stra?e`, `25°C` became `25?C`.
+  [/ß/g, 'ss'],
+  [/æ/g, 'ae'],
+  [/Æ/g, 'AE'],
+  [/ø/g, 'o'],
+  [/Ø/g, 'O'],
+  [/œ/g, 'oe'],
+  [/Œ/g, 'OE'],
+  [/°/g, 'deg'],
+  [/µ/g, 'u'],
+  [/½/g, '1/2'],
+  [/¼/g, '1/4'],
+  [/¾/g, '3/4'],
 ];
 
 /**
@@ -86,12 +105,19 @@ const HEADER_TRANSLITERATIONS: ReadonlyArray<readonly [RegExp, string]> = [
  * title that is safe in this repo is a dropped page in the next one. ASCII is
  * the only safe common denominator.
  *
- * ORDER MATTERS: transliterate → strip CR/LF → fold accents → degrade.
- * Accented letters fold to their ASCII base via NFKD, so `café renewal for José`
- * becomes `cafe renewal for Jose` and stays readable rather than `caf? for Jos?`.
- * An ASCII-only contract is only tolerable to a human reader because names
- * survive it. Only characters with no ASCII base (emoji, CJK) become `?` — an
- * unmapped glyph must degrade to a sendable page, never a lost one.
+ * ORDER MATTERS: transliterate → strip CR/LF → drop combining marks → fold
+ * accents → degrade. Accented letters fold to their ASCII base via NFKD, so
+ * `café renewal for José` becomes `cafe renewal for Jose` and stays readable
+ * rather than `caf? for Jos?`. An ASCII-only contract is only tolerable to a
+ * human reader because names survive it. Only characters with no ASCII base
+ * (emoji, CJK) become `?` — an unmapped glyph must degrade to a sendable page,
+ * never a lost one.
+ *
+ * COMBINING MARKS ARE DROPPED, NOT DEGRADED (contract v3, ADR-0200 Am.3) — the
+ * same word must not sanitize differently by normal form. `café` composed (NFC,
+ * U+00E9) folded to `cafe`, but decomposed (NFD, `e` + U+0301) left the mark as
+ * a standalone codepoint with no ASCII base, so it degraded to `?` and produced
+ * `cafe?`. Callers do not control the normal form of the strings they are handed.
  *
  * Iteration is over CODEPOINTS, not UTF-16 units: a naive `for (const ch of ...)`
  * over indices would treat an astral emoji as a surrogate pair and emit `??` for
@@ -114,6 +140,10 @@ export function toHeaderSafe(value: string): string {
   // becomes a space (so "ok\r\nX-Evil: 1" -> "ok  X-Evil: 1"), never dropped —
   // deleting them would silently splice two fields into one token.
   out = out.replace(/[\r\n]/g, ' ');
+  // DROP combining marks so NFD-decomposed input folds identically to NFC.
+  // Degrading them to '?' turned NFD `café` into `cafe?` — same word, different
+  // output, purely by normal form. (ADR-0200 Am.3)
+  out = out.replace(/[\u0300-\u036F]/g, '');
 
   return [...out]
     .map((ch) => {
