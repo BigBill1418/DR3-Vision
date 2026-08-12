@@ -1,6 +1,6 @@
 # ADR-0093: The header contract is ASCII, because the strictest client sets it
 
-**Date:** 2026-08-12
+**Date:** 2026-08-11
 **Status:** Accepted
 **Amends:** ADR-0019.5 (the em dash that ate the payroll alert) — tightens its output contract
 **Adopts:** noc-master ADR-0200 — the fleet-wide header conformance contract (v2)
