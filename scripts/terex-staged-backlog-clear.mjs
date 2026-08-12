@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// ADR-0097 §4 — ONE-SHOT clearance of the TEREX staged-revision backlog.
+// ADR-0098 §4 — ONE-SHOT clearance of the TEREX staged-revision backlog.
 //
 // ── Why this exists ─────────────────────────────────────────────────────────
 // Five TEREX.xlsx revisions sat behind the D7 variance guardrail from 08-10.
 // The guardrail staged them because it could not verify the change was real;
-// ADR-0097 §4 verified it out-of-band (live Graph download byte-identical to the
+// ADR-0098 §4 verified it out-of-band (live Graph download byte-identical to the
 // newest archived revision, sheet Jul26 col G summing to the workbook's own
 // G34 = 222.25 against a 164.20 baseline — July being filled in). This applies
 // that decision.
@@ -48,7 +48,7 @@ const SOURCE_ID = '8a0246e7-dbb0-4de2-a90f-ddc5d4b2de4b';
  * says WHY the guardrail was answered, not merely that it was.
  */
 const BASIS = {
-  adr: 'ADR-0097 §4',
+  adr: 'ADR-0098 §4',
   verified_at_pt: '2026-08-11 ~22:00 PT',
   live_graph_sha256: '0dea4156aac563c7add45e8c8182a63b270c26455c41338b3b62eba88775533d',
   live_graph_bytes: 491583,
@@ -69,7 +69,7 @@ const BASIS = {
   units_caveat:
     "parse_summary.numericTotals counts each sheet's own totals row as a data row, so every " +
     'SUM-totalled aggregate is exactly 2x the human-readable figure (444.50 = 2 x 222.25; ' +
-    '328.40 = 2 x 164.20). This is a known defect recorded in ADR-0097 §4 and deliberately NOT ' +
+    '328.40 = 2 x 164.20). This is a known defect recorded in ADR-0098 §4 and deliberately NOT ' +
     'fixed here. It corrupts no business table and changes no staging decision (the doubling is ' +
     'consistent on both sides, so the +35.4% variance is exact either way). Read numericTotals as ' +
     'a change detector, never as a business figure.',
@@ -150,7 +150,7 @@ async function main() {
           r2_key: target.r2_key,
           status: 'received',
           detected_kind: source.doc_class,
-          note: 'Applied from a staged shared-document revision after out-of-band verification (ADR-0097 §4).',
+          note: 'Applied from a staged shared-document revision after out-of-band verification (ADR-0098 §4).',
           uploaded_by: ACTOR,
           ingest_source: 'shared_file',
           doc_source_id: SOURCE_ID,
@@ -218,7 +218,7 @@ async function main() {
     const note =
       `Superseded by ${EXPECTED.apply.id} (${EXPECTED.apply.observed}), which was verified ` +
       `byte-identical to the live Microsoft Graph copy and applied. This is an earlier state of ` +
-      `the same workbook; applying it would materialize stale content. ADR-0097 §4.`;
+      `the same workbook; applying it would materialize stale content. ADR-0098 §4.`;
     const now = new Date();
     await prisma.$transaction(async (tx) => {
       await tx.docSourceVersion.update({
@@ -264,9 +264,9 @@ async function main() {
         resolved_by: ACTOR,
         resolution_note:
           `Staged revision decided after out-of-band verification against the live Microsoft ` +
-          `Graph copy (ADR-0097 §4). The change is real: sheet "Jul26" now sums to 222.25 ` +
+          `Graph copy (ADR-0098 §4). The change is real: sheet "Jul26" now sums to 222.25 ` +
           `(the workbook's own G34) against a 164.20 baseline — July filled in. Recorded ` +
-          `aggregates are 2x the human-readable figure; see ADR-0097 §4 "units caveat".`,
+          `aggregates are 2x the human-readable figure; see ADR-0098 §4 "units caveat".`,
       },
     });
     log(`RESOLVED ${row.kind} (${row.id})`);
@@ -296,7 +296,7 @@ async function main() {
         resolved_at: new Date(),
         resolved_by: ACTOR,
         resolution_note:
-          `FALSE POSITIVE of our own upgrade (ADR-0097 §5). Column "Estimates for 2025" was never ` +
+          `FALSE POSITIVE of our own upgrade (ADR-0098 §5). Column "Estimates for 2025" was never ` +
           `removed — it is in the live workbook at 'Annual Cost'!A1. ADR-0067 Amendment 8 correctly ` +
           `moved header detection from row 1 (three merged section titles) to row 2 (the real ` +
           `headers), taking Annual Cost from 3 pseudo-columns to 21 real ones, and the guardrail ` +

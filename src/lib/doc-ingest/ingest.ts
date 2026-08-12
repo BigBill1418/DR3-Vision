@@ -138,7 +138,7 @@ export async function ingestSource(
   // re-delivered Graph notification, a webhook retry and a scheduled sweep all
   // converge on the same state instead of stacking duplicates.
   if (existingVersion) {
-    // ── ADR-0097 §3 — clear a healed `download_failed` HERE too ─────────────
+    // ── ADR-0098 §3 — clear a healed `download_failed` HERE too ─────────────
     // ADR-0095 moved this resolve above the guardrail branch, which fixed the
     // staged-revision case but left the far more common one: this early return.
     // A source that 503'd once and then downloaded cleanly keeps an OPEN

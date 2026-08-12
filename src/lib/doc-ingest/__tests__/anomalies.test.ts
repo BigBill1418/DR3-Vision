@@ -262,7 +262,7 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
     expect(anomalyPolicy('sweep_failed').severity).toBe('critical');
   });
 
-  // ── ADR-0097 §1 — a self-healing blip is not a page ───────────────────────
+  // ── ADR-0098 §1 — a self-healing blip is not a page ───────────────────────
   //
   // `sweep_failed` pages `high`, and until 2026-08-12 it did so on the FIRST
   // failure. Measured over the seven days to 2026-08-12: 689 runs, 684 ok, 4
@@ -341,7 +341,7 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
     }
   });
 
-  // ── ADR-0097 §2 — a structural limit is a tile, not a page ────────────────
+  // ── ADR-0098 §2 — a structural limit is a tile, not a page ────────────────
 
   it('does not page an occurrence marked dashboardOnly, but still opens the row', async () => {
     const result = await raiseAnomaly(p(), {

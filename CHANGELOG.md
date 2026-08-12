@@ -37,7 +37,7 @@ no new dependency, nothing to deploy.
 - **The gate went hard on day one** by baselining the 18 pre-existing violations in
   `KNOWN_UNRESOLVED`. Writing those five amendments would mean inventing history for
   work this author did not do, so they are tracked instead. **The baseline
-  ratchets:** an entry that no longer matches a real violation *fails* the check, so
+  ratchets:** an entry that no longer matches a real violation _fails_ the check, so
   it cannot quietly become a second `OPEN-ITEMS.md`.
 
 - **New register: `docs/adr/PROMISES.md`**, seeded with **33 hand-audited rows** —
@@ -74,6 +74,7 @@ no new dependency, nothing to deploy.
   0096, 0097** — seven of the most recent records, including two floor incidents,
   had no index row. A new test keeps `docs/adr/README.md` complete: an ADR that
   exists but is not indexed is the dangling-citation defect from the other end.
+
 ## 2026-08-11 (10:20 PM PT) — A signer cannot sign a period he is paid by (ADR-0019.3 §2)
 
 ADR-0019.3 §2 recorded a separation-of-duties conflict as **accepted**: Patrick
@@ -221,7 +222,7 @@ same bleed this file warns about at the top and that `0101306` corrected for
 ADR-0093 hours earlier. **§5 P2 shipped as ADR-0096 before this ADR landed**, and
 followed its prescription: no widening of the ADR-0074 D5 day bound.
 
-## 2026-08-11 (10:00 PM PT) — Doc-ingestion noise tuning + the resolve that never ran (ADR-0097)
+## 2026-08-11 (10:00 PM PT) — Doc-ingestion noise tuning + the resolve that never ran (ADR-0098)
 
 Bill, ~10:00 PM PT: _"I'm still getting notifications that document ingestion is
 not working and failed to get files. All of that needs to be working completely

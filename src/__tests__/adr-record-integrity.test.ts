@@ -123,10 +123,87 @@ describe('every ADR has a row in the index', () => {
       // Separate amendment files are indexed under their parent's row.
       .filter((n, i, all) => all.indexOf(n) === i);
 
+    expect(missing, `These ADRs have no row in docs/adr/README.md: ${missing.join(', ')}`).toEqual(
+      [],
+    );
+  });
+
+  // ── ADR-0098 §8 — a citation must resolve UNIQUELY, not merely resolve ─────
+  //
+  // The resolver asks "does the cited ADR exist?". On the night of 2026-08-11
+  // two agents working in parallel each wrote an ADR-0097 —
+  // `0097-a-citation-is-a-promise` (merged 10:48 PM PT) and
+  // `0097-a-page-that-heals-before-the-phone-buzzes` (10:51 PM). Every check in
+  // this file passed: both files existed, the resolver globbed `0097-*.md`,
+  // found a match, and was satisfied. So `ADR-0097 §4` silently meant two
+  // different documents in one tree.
+  //
+  // That is this file's own defect class one level up — existence is not
+  // identity. `collectAdrIndex` keys a Map by number, so a duplicate is
+  // invisible there by construction: the second file simply overwrites the
+  // first and the index looks healthy. The filenames are the only place the
+  // collision is observable, so that is where this looks.
+  // A `NNNN-amendment-N-*.md` file deliberately shares its parent's number —
+  // that is how amendments are recorded here, and the README indexes them under
+  // the parent's row. The digit after `amendment-` is load-bearing: it keeps
+  // `0029-amendment-notification-batching.md`, a PRIMARY ADR whose subject
+  // happens to be amendments, inside the check.
+  const isAmendmentSibling = (f: string) => /^\d{4}(?:\.\d+)?-amendment-\d+-/.test(f);
+
+  it('no two ADR files share a number — a citation must identify exactly one record', () => {
+    const adrDir = join(process.cwd(), 'docs', 'adr');
+    const byNumber = new Map<string, string[]>();
+    for (const file of readdirSync(adrDir)) {
+      const m = /^(\d{4}(?:\.\d+)?)[-.]/.exec(file);
+      if (!m?.[1] || !file.endsWith('.md') || isAmendmentSibling(file)) continue;
+      byNumber.set(m[1], [...(byNumber.get(m[1]) ?? []), file]);
+    }
+    const duplicates = [...byNumber.entries()]
+      .filter(([, files]) => files.length > 1)
+      .map(([n, files]) => `ADR-${n}: ${files.join(' + ')}`);
+
     expect(
-      missing,
-      `These ADRs have no row in docs/adr/README.md: ${missing.join(', ')}`,
+      duplicates,
+      `Two ADRs claim the same number, so citations to it are ambiguous:\n${duplicates.join('\n')}\n` +
+        `The EARLIER-MERGED file keeps the number; renumber the other and update its citations.`,
     ).toEqual([]);
+  });
+
+  it('proves it can fail — a duplicated number is caught', () => {
+    // Without this the guard above is vacuously green the moment the tree is
+    // clean, which is every moment except the one that matters.
+    const root = fixture(
+      {
+        // Bodies go through `cite()` for the reason documented on that helper:
+        // this file is inside the tree the resolver scans, so spelling out an
+        // amendment reference here — even inside a comment explaining why not
+        // to — is itself an unresolved citation that fails the hard gate above.
+        // (That is not hypothetical; it is how this block was first written.)
+        // The collision check only ever reads FILENAMES anyway.
+        '0046-a.md': `# ${cite('0046')} — first\n`,
+        '0046-b.md': `# ${cite('0046')} — second, same number\n`,
+        '0047-c.md': `# ${cite('0047')} — fine\n`,
+        // Must NOT count as a collision: this is how an amendment is recorded.
+        // The NAME is assembled at runtime for the same reason as the bodies —
+        // written literally, `0047-amendment-1-…` is itself read as a citation
+        // to an amendment ADR-0047 does not have, and fails the hard gate.
+        [`0047-amendment-${1}-more.md`]: `# ${cite('0047')} amendment file\n`,
+      },
+      {},
+    );
+    const byNumber = new Map<string, string[]>();
+    for (const file of readdirSync(join(root, 'docs', 'adr'))) {
+      const m = /^(\d{4}(?:\.\d+)?)[-.]/.exec(file);
+      if (!m?.[1] || !file.endsWith('.md') || isAmendmentSibling(file)) continue;
+      byNumber.set(m[1], [...(byNumber.get(m[1]) ?? []), file]);
+    }
+    const duplicates = [...byNumber.entries()].filter(([, files]) => files.length > 1);
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0]?.[0]).toBe('0046');
+    expect(duplicates[0]?.[1]).toHaveLength(2);
+    // And the index cannot see it: keyed by number, the second file wins.
+    expect(collectAdrIndex(join(root, 'docs', 'adr')).size).toBe(2);
   });
 });
 
@@ -181,7 +258,9 @@ describe('the citation resolver — proving it can fail', () => {
     // amendments. Reading it as "ADR-0029 Amendment <n>" would silently accept a
     // citation to an amendment that does not exist.
     const root = fixture(
-      { '0029-amendment-notification-batching.md': '# ADR-0029 — Amendment notification batching\n' },
+      {
+        '0029-amendment-notification-batching.md': '# ADR-0029 — Amendment notification batching\n',
+      },
       { 'a.ts': `// ${cite('0029', 1)}\n` },
     );
     expect(check(root).violations).toHaveLength(1);

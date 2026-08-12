@@ -53,7 +53,7 @@ interface AnomalyPolicy {
   /** Which surface answers "what do I do about this". */
   page: string;
   /**
-   * ADR-0097 §1 — page only once the OPEN row has reached this many
+   * ADR-0098 §1 — page only once the OPEN row has reached this many
    * occurrences. Absent (or 1) ⇒ page on the transition, which is the default
    * and stays the default for every kind but one.
    *
@@ -102,7 +102,7 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
   // ── The sweep itself. This one MUST page: the sweep is the correctness
   // guarantee, and a silently dead sweep is the ADR-0057 D9 / MyMRC failure.
   //
-  // ADR-0097 §1 — but not on the FIRST failure. The sweep runs ~96 times a day
+  // ADR-0098 §1 — but not on the FIRST failure. The sweep runs ~96 times a day
   // against Microsoft Graph, which 503s on roughly 1% of them; every one of
   // those self-healed on the next 15-minute run. Paging on the first failure
   // meant about one page a day about a condition that was already over. The
@@ -192,7 +192,7 @@ export interface RaiseAnomalyArgs {
   /** Override the per-kind default (e.g. escalate after N consecutive failures). */
   severity?: DocIngestAnomalySeverity;
   /**
-   * ADR-0097 §2 — record THIS occurrence, but do not page for it.
+   * ADR-0098 §2 — record THIS occurrence, but do not page for it.
    *
    * For a kind that is usually actionable but has a specific, recognised
    * variant the operator can do nothing about. The motivating case is
@@ -317,11 +317,11 @@ async function maybePage(
   dashboardOnly: boolean,
 ): Promise<boolean> {
   if (policy.priority === null) return false;
-  // ADR-0097 §2 — a recognised not-fixable variant of an otherwise pageable
+  // ADR-0098 §2 — a recognised not-fixable variant of an otherwise pageable
   // kind. Recorded and visible; never on Bill's phone.
   if (dashboardOnly) return false;
 
-  // ADR-0097 §1 — self-heal grace. Checked BEFORE the re-page window so the
+  // ADR-0098 §1 — self-heal grace. Checked BEFORE the re-page window so the
   // suppressed first failure leaves `last_paged_at` null, which is what lets
   // the second failure page immediately rather than waiting out 24 hours.
   if (anomaly.occurrences < (policy.pageAfterOccurrences ?? 1)) return false;

@@ -89,7 +89,7 @@ describe('ingestSource — idempotency', () => {
     expect(prisma._stores.fileDrops).toHaveLength(1);
   });
 
-  // ── REGRESSION 2026-08-12 (ADR-0097 §3) — a healed download that never clears ──
+  // ── REGRESSION 2026-08-12 (ADR-0098 §3) — a healed download that never clears ──
   //
   // ADR-0095 moved the `download_failed` resolve ABOVE the guardrail branch so a
   // recovered source whose revision merely STAGED would still clear. It did not
@@ -123,7 +123,7 @@ describe('ingestSource — idempotency', () => {
     expect(openAnomalies('download_failed')).toHaveLength(1);
 
     // Sweep 2: content has not changed, so this returns `unchanged` without
-    // downloading. Under the pre-ADR-0097 code the row stayed open forever.
+    // downloading. Under the pre-ADR-0098 code the row stayed open forever.
     const result = await ingestSource(p(), graph, source, { now: NOW, putBytes });
 
     expect(result.outcome).toBe('unchanged');

@@ -1,4 +1,4 @@
-# ADR-0097 — A page that heals before the phone buzzes
+# ADR-0098 — A page that heals before the phone buzzes
 
 **Date:** 2026-08-11 (Pacific)
 **Status:** Accepted
@@ -9,6 +9,18 @@ gap its §3 fix left open
 **Incident:** 2026-08-11 ~10:00 PM PT — _"I'm still getting notifications that
 document ingestion is not working and failed to get files. All of that needs to
 be working completely and without issue."_
+
+> **Numbering note.** This shipped as ADR-0097 and was renumbered to 0098 within
+> the hour. Two agents working in parallel both claimed 0097 on the night of
+> 2026-08-11; `0097-a-citation-is-a-promise` merged at 10:48 PM PT and this at
+> 10:51 PM, so the earlier merge keeps the number. See §8 — the collision is also
+> the reason the duplicate-number guard in `adr-record-integrity.test.ts` exists.
+>
+> **The production audit rows written by §4's backlog clearance at 10:34 PM PT
+> cite "ADR-0097 §4", because they were written before the renumber.** They mean
+> this document. Audit rows are append-only and were deliberately not rewritten;
+> the `actor_label` `system:terex-staged-backlog-clear-adr0097` is left matching
+> them for the same reason.
 
 ---
 
@@ -277,8 +289,9 @@ the surface, and a human decides. Left open deliberately.
 
 ## 7. Consequences
 
-- Roughly one page per day disappears (`sweep_failed` on self-healing 503s) and
-  one recurring 24h page disappears (`subscription_renew_failed` scope refusals).
+- Roughly one page every other day disappears (`sweep_failed` on self-healing
+  blips — measured: 4 in 7 days, none consecutive, all four would now be silent)
+  and one recurring 24h page disappears (`subscription_renew_failed` refusals).
   Neither condition becomes invisible: both remain open rows on
   `/admin/doc-ingest/health`.
 - A genuinely dead sweep still pages `high`, 15 minutes later than before. A
@@ -290,3 +303,25 @@ the surface, and a human decides. Left open deliberately.
   the same change**, or the next sweep stages every document at once.
 - The anomaly board's remaining open item is `discovery_gap`, which is a question
   for Bill rather than a fault.
+
+## 8. The number collision, and the guard it earned
+
+ADR-0097 shipped two hours before this one with a citation resolver that fails CI
+when an ADR citation does not resolve. Within the hour, this ADR was written as a
+second ADR-0097 by a different agent working in parallel — and **every one of
+those checks passed.**
+
+They passed because they ask _"does the cited ADR exist?"_ Both files existed. The
+resolver globs `docs/adr/0097-*.md`, finds a match, and is satisfied. Nothing
+asked whether the number identified **exactly one** document, so `ADR-0097 §4`
+silently meant two different things — the citation-integrity register and the
+TEREX verification — in the same tree.
+
+That is the same shape ADR-0097 was written about, one level up: _a citation that
+resolves is not the same as a citation that resolves **uniquely**._ A check that
+confirms existence but not uniqueness reports green on an ambiguous record, which
+is exactly the failure mode the register exists to eliminate.
+
+`adr-record-integrity.test.ts` now asserts that no two ADR files share a number.
+It fails on the tree as it stood at 10:51 PM PT tonight, which is the only real
+evidence that it works.
