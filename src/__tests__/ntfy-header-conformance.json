@@ -1,0 +1,141 @@
+{
+  "$schema": "https://barnardhq.internal/schemas/ntfy-header-conformance-v1.json",
+  "version": 2,
+  "adr": "ADR-0200",
+  "canonical_source": "noc-master/data/ntfy-header-conformance.json",
+  "purpose": "Shared conformance vectors for ntfy header sanitisation. HTTP header values are ByteStrings (latin-1): Node/undici THROWS and Python requests/urllib RAISE UnicodeEncodeError for any codepoint > 255, killing primary AND fallback identically before a socket opens. curl/bash is unaffected (it sends raw bytes). Every fleet publisher in a throwing language MUST run its local implementation against these vectors in CI, so divergence fails a build instead of losing a page.",
+  "semantics": "transliterate-then-fold-then-degrade: map known Unicode punctuation to ASCII, strip CR/LF, fold accented letters to their ASCII base via NFKD, then replace any residual non-ASCII with '?'. Output is PURE ASCII. This is stricter than latin-1 on purpose: httpx encodes headers as ASCII and raises UnicodeEncodeError on 'e-acute', where urllib and Node accept it. ASCII is the only safe common denominator across the fleet's HTTP clients.",
+  "never_sanitize": [
+    "Authorization (a bearer is ASCII by construction; mangling it turns an encoding bug into an auth bug)",
+    "the message BODY (sent as UTF-8; may hold any character)"
+  ],
+  "vectors": [
+    {
+      "id": "ascii-untouched",
+      "input": "URGENT: payroll deadline MISSED - Woodland Period 13",
+      "expected": "URGENT: payroll deadline MISSED - Woodland Period 13",
+      "why": "plain ASCII must pass through byte-identical"
+    },
+    {
+      "id": "em-dash",
+      "input": "URGENT: bonus period STRANDED — DR3 Eugene Period 16",
+      "expected": "URGENT: bonus period STRANDED - DR3 Eugene Period 16",
+      "why": "the exact 2026-08-05 title whose loss cost a payroll cycle (DR3 ADR-0019.5)"
+    },
+    {
+      "id": "adr-0063-cordon",
+      "input": "Host saturation: droneops-server mem=78.7% load5=13.45 — cordoning",
+      "expected": "Host saturation: droneops-server mem=78.7% load5=13.45 - cordoning",
+      "why": "the exact 2026-05-22 title whose loss triggered noc-master ADR-0063"
+    },
+    {
+      "id": "en-dash",
+      "input": "window 09:00–17:00 exceeded",
+      "expected": "window 09:00-17:00 exceeded",
+      "why": "en dash U+2013"
+    },
+    {
+      "id": "minus-sign",
+      "input": "delta −12 units",
+      "expected": "delta -12 units",
+      "why": "true minus U+2212, not a hyphen"
+    },
+    {
+      "id": "arrow",
+      "input": "period 2026-07-21→08-03 rolled",
+      "expected": "period 2026-07-21->08-03 rolled",
+      "why": "U+2192; DR3 period labels use it"
+    },
+    {
+      "id": "curly-single",
+      "input": "the host's ‘primary’ link is down",
+      "expected": "the host's 'primary' link is down",
+      "why": "U+2018/U+2019"
+    },
+    {
+      "id": "curly-double",
+      "input": "alert “disk full” on bos-hq",
+      "expected": "alert \"disk full\" on bos-hq",
+      "why": "U+201C/U+201D"
+    },
+    {
+      "id": "ellipsis",
+      "input": "retrying… attempt 3 of 5",
+      "expected": "retrying... attempt 3 of 5",
+      "why": "U+2026"
+    },
+    {
+      "id": "multiply",
+      "input": "throughput 3× baseline",
+      "expected": "throughput 3x baseline",
+      "why": "U+00D7"
+    },
+    {
+      "id": "gte-lte",
+      "input": "quota ≥ 90% and ≤ 100%",
+      "expected": "quota >= 90% and <= 100%",
+      "why": "U+2265 / U+2264"
+    },
+    {
+      "id": "bullet",
+      "input": "checks • disk • cert",
+      "expected": "checks * disk * cert",
+      "why": "U+2022"
+    },
+    {
+      "id": "nbsp",
+      "input": "load 5 min = 13.45",
+      "expected": "load 5 min = 13.45",
+      "why": "U+00A0 non-breaking space becomes a plain space"
+    },
+    {
+      "id": "accent-fold",
+      "input": "café renewal for José",
+      "expected": "cafe renewal for Jose",
+      "why": "httpx rejects ANY non-ASCII header, so accents fold to their base letter - readable, unlike '?'"
+    },
+    {
+      "id": "accent-fold-high",
+      "input": "naïve ÿ",
+      "expected": "naive y",
+      "why": "U+00FF folds rather than degrading"
+    },
+    {
+      "id": "emoji",
+      "input": "vendor 😀 offline",
+      "expected": "vendor ? offline",
+      "why": "no ASCII base exists, so it degrades to ?"
+    },
+    {
+      "id": "cjk",
+      "input": "ホスト障害",
+      "expected": "?????",
+      "why": "no ASCII base; degrades to ?"
+    },
+    {
+      "id": "mixed",
+      "input": "STRANDED — café ≥ 90% … 😀 →",
+      "expected": "STRANDED - cafe >= 90% ... ? ->",
+      "why": "several classes in one string"
+    },
+    {
+      "id": "crlf-injection",
+      "input": "ok\r\nX-Evil: 1",
+      "expected": "ok  X-Evil: 1",
+      "why": "CR/LF stripped - header-injection defence, not just encoding"
+    },
+    {
+      "id": "empty",
+      "input": "",
+      "expected": "",
+      "why": "empty string is valid"
+    }
+  ],
+  "client_matrix": {
+    "node-undici": "throws TypeError above U+00FF; accepts latin-1",
+    "python-urllib": "raises UnicodeEncodeError above U+00FF; accepts latin-1",
+    "python-requests": "raises UnicodeEncodeError above U+00FF; accepts latin-1",
+    "python-httpx": "raises UnicodeEncodeError above U+007F - ASCII ONLY (strictest; sets the contract)",
+    "curl-bash": "sends raw bytes, unaffected"
+  }
+}

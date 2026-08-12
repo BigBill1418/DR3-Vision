@@ -1,62 +1,93 @@
-// ADR-0019.5 — header-safe coercion for the cron daemons.
+// ADR-0019.5 / ADR-0093 — header-safe coercion for the cron daemons.
 //
 // A .mjs twin of `src/lib/ntfy-header-safe.ts`, kept because these daemons are
 // deliberately dependency-free plain JS that run from the runner stage without a
 // TS compile step (see the header of any *-cron.mjs). The two implementations
-// are pinned equal by `src/__tests__/ntfy-header-safety-sweep.test.ts`, so they
-// cannot drift the way the fleet's four independent copies of this fix did.
+// are pinned equal by `src/__tests__/ntfy-header-safety-sweep.test.ts` — on the
+// shared fleet vectors, not on an ad-hoc case list — so they cannot drift the
+// way the fleet's four independent copies of this fix did.
 //
 // Why it matters HERE especially: these daemons publish the app-INDEPENDENT
 // backstop pages — the ones that fire when the app is down. A dropped page from
 // this layer has nothing behind it.
+//
+// CONTRACT VERSION 2 (ADR-0093; fleet contract noc-master ADR-0200). v1 emitted
+// latin-1 and only degraded codepoints above 255. v2 emits PURE ASCII and folds
+// accents. See the doc comment on `toHeaderSafe` for why.
 
 const HEADER_TRANSLITERATIONS = [
-  [/[—–−]/g, '-'], // em / en / minus  → hyphen
-  [/[‘’]/g, "'"],
-  [/[“”]/g, '"'],
-  [/…/g, '...'],
-  [/×/g, 'x'],
+  [/[‐-―−]/g, '-'], // hyphen / figure / en / em dash, true minus
+  [/[‘’‚‛]/g, "'"], // single curly quotes
+  [/[“”„‟]/g, '"'], // double curly quotes
+  [/…/g, '...'], // ellipsis
+  [/×/g, 'x'], // multiplication sign
   [/≥/g, '>='],
   [/≤/g, '<='],
-  [/→/g, '->'],
-  [/[    ]/g, ' '], // exotic spaces
-  [/•/g, '*'],
+  [/→/g, '->'], // rightwards arrow — DR3 period labels use it
+  [/[    ]/g, ' '], // nbsp / figure / thin / narrow spaces
+  [/[•·]/g, '*'], // bullet / middot
 ];
 
 /**
- * Make a string safe to put in an HTTP header value.
+ * Make a string safe to put in an HTTP header value. Output is PURE ASCII.
  *
- * WHY THIS EXISTS — the 2026-08-05 dropped page. Header values are ByteStrings
- * (latin-1). Node's undici throws
+ * WHY THIS EXISTS — the 2026-08-05 dropped page. Header values are ByteStrings.
+ * Node's undici throws
  *
  *   TypeError: Cannot convert argument to a ByteString because the character at
  *   index 43 has a value of 8212 which is greater than 255
  *
  * for any codepoint > 255. Every DR3 alert title contains an em dash (U+2014 =
- * 8212), so `X-Title` threw — and because `buildHeaders` produces the same
- * header for both transports, it threw identically on the primary AND the
- * ntfy.sh fallback, in the same millisecond, WITHOUT OPENING A SOCKET. The
- * publish reported `dropped` while the ntfy server was demonstrably healthy.
- * That is how the stranded-period page for Eugene Period 16 was lost.
+ * 8212), so `X-Title` threw — and because the fallback builds the same header,
+ * it threw identically on the primary AND the ntfy.sh fallback, in the same
+ * millisecond, WITHOUT OPENING A SOCKET. The publish reported `dropped` while
+ * the ntfy server was demonstrably healthy. That is how the stranded-period page
+ * for Eugene Period 16 was lost.
  *
- * This is the fourth re-discovery of this class on the fleet: the bash/Python
- * helpers were patched 2026-05-06, noc-master's Node publisher by ADR-0063
- * (2026-05-22) — whose own open question asked whether the fix should become a
- * shared utility "to prevent a fourth re-discovery". This repo's helper was
- * never patched. See ADR-0019.5.
+ * WHY PURE ASCII AND NOT LATIN-1 (contract v2, ADR-0093) — undici's limit is
+ * U+00FF, so v1 stopped there and let `café` through unchanged. But the fleet's
+ * HTTP clients do not agree on where the wall is, and the strictest one sets the
+ * contract:
  *
- * Transliterate first so the operator still gets a readable sentence, then hard
- * replace any residual codepoint > 255 with `?`. The backstop matters more than
- * the table: an unmapped glyph must degrade to a sendable page, never a lost
- * one. Bodies are NOT sanitized — they travel as UTF-8 and may hold anything.
+ *   python-httpx    raises above U+007F  — ASCII ONLY  <- binding constraint
+ *   node-undici     throws  above U+00FF — accepts latin-1
+ *   python-urllib   raises  above U+00FF — accepts latin-1
+ *   curl/bash       sends raw bytes, unaffected
+ *
+ * Helix-Hub and other fleet publishers post with httpx, where `café` in a Title
+ * raises `UnicodeEncodeError: 'ascii' codec can't encode character 'é'` — the
+ * same before-the-socket, kills-both-legs failure the em dash caused here. One
+ * fleet, one contract: sanitising to the loosest client's limit means a title
+ * that is safe in this repo is a dropped page in the next one.
+ *
+ * ORDER MATTERS: transliterate → strip CR/LF → fold accents → degrade.
+ * Accented letters fold to their ASCII base via NFKD, so `café renewal for José`
+ * becomes `cafe renewal for Jose` and stays readable rather than `caf? for Jos?`.
+ * Only characters with no ASCII base (emoji, CJK) become `?` — an unmapped glyph
+ * must degrade to a sendable page, never a lost one.
+ *
+ * Iteration is over CODEPOINTS, not UTF-16 units, so an astral emoji yields one
+ * `?` rather than two.
+ *
+ * NOT sanitized: `Authorization` (a bearer is ASCII by construction; mangling it
+ * would turn an encoding bug into an auth bug) and the message BODY (sent as
+ * UTF-8). Both exclusions live at the callers' choke points, not here.
  */
 export function toHeaderSafe(value) {
   let out = value;
   for (const [pattern, replacement] of HEADER_TRANSLITERATIONS) {
     out = out.replace(pattern, replacement);
   }
+  // CR/LF is a header-injection primitive as well as an encoding problem. Each
+  // becomes a space (so "ok\r\nX-Evil: 1" -> "ok  X-Evil: 1"), never dropped.
   // eslint-disable-next-line no-control-regex -- stripping CR/LF is header-injection defence
   out = out.replace(/[\r\n]/g, ' ');
-  return [...out].map((ch) => (ch.codePointAt(0) > 255 ? '?' : ch)).join('');
-}
 
+  return [...out]
+    .map((ch) => {
+      if (ch.codePointAt(0) < 128) return ch;
+      const base = [...ch.normalize('NFKD')].filter((c) => c.codePointAt(0) < 128).join('');
+      return base || '?';
+    })
+    .join('');
+}
