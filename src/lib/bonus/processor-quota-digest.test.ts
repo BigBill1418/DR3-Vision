@@ -40,29 +40,46 @@ interface Entry {
   units: number;
 }
 
+// ADR-0071 Amendment 1 — this fixture used to return `[]` for a disabled config,
+// faithfully mimicking the `where: { enabled: true }` the production query then
+// carried. That made the fixture MORE permissive than the thing under test: the
+// module could never observe a disabled row, so the twelve-day silence it caused
+// was not merely untested, it was untestable. The real query now reads every
+// config and checks `enabled` in code, so the double must hand back the row.
 function fakeDb(entries: Entry[], opts: { enabled?: boolean; existingLog?: boolean } = {}) {
   const logs: Record<string, unknown>[] = [];
+  const runs: Record<string, unknown>[] = [];
   const db = {
     createdLogs: logs,
+    createdRuns: runs,
     processorQuotaConfig: {
-      findMany: async () =>
-        opts.enabled === false
-          ? []
-          : [
-              {
-                id: 'cfg-1',
-                site_id: 'site-woodland',
-                enabled: true,
-                quota_units: 75,
-                min_misses: 2,
-                site: { id: 'site-woodland', code: 'woodland', name: 'Woodland' },
-                recipients: [
-                  { email: 'bill.barnard@svdp.us' },
-                  { email: 'morena.gomez@svdp.us' },
-                  { email: 'janette.tomas@svdp.us' },
-                ],
-              },
+      // The double APPLIES `where.enabled` the way Postgres would. Without that
+      // it is more permissive than the real dependency, and the defect this
+      // amendment fixes — `where: { enabled: true }` on the live query — stays
+      // green no matter how it is reintroduced, because the fake hands back the
+      // row either way. A mock that cannot express the bug cannot guard it.
+      findMany: async (args?: { where?: { enabled?: boolean } }) =>
+        [
+          {
+            id: 'cfg-1',
+            site_id: 'site-woodland',
+            enabled: opts.enabled !== false,
+            quota_units: 75,
+            min_misses: 2,
+            site: { id: 'site-woodland', code: 'woodland', name: 'Woodland' },
+            recipients: [
+              { email: 'bill.barnard@svdp.us' },
+              { email: 'morena.gomez@svdp.us' },
+              { email: 'janette.tomas@svdp.us' },
             ],
+          },
+        ].filter((r) => args?.where?.enabled === undefined || r.enabled === args.where.enabled),
+    },
+    processorQuotaRun: {
+      create: async (args: { data: Record<string, unknown> }) => {
+        runs.push(args.data);
+        return { id: 'run-1' };
+      },
     },
     processorQuotaLog: {
       findUnique: async () => (opts.existingLog ? { suppressed: false, flagged_count: 3 } : null),
@@ -144,11 +161,81 @@ describe('runProcessorQuotaDigest', () => {
     expect(notifyStaffMock).not.toHaveBeenCalled();
   });
 
-  it('a disabled site config is not evaluated at all', async () => {
+  // ── ADR-0071 Amendment 1: the twelve-day silence ────────────────────────
+  //
+  // These replace an earlier test that asserted a disabled config produced ZERO
+  // outcomes. That assertion described the code accurately and described the
+  // desired behaviour wrongly: it is exactly the state in which the cron fired
+  // every morning from 2026-07-31 to 2026-08-11 and left no evidence anywhere,
+  // and it was green the whole time.
+  it('EVALUATES a disabled site — and still sends nothing', async () => {
     const db = fakeDb(FLAGGING, { enabled: false });
     const outs = await runProcessorQuotaDigest({ db, now: NOW });
-    expect(outs).toHaveLength(0);
+    expect(outs).toHaveLength(1);
+    expect(outs[0]!.skipped).toBe('disabled');
+    // The number Bill could not see: what the digest WOULD have said.
+    expect(outs[0]!.flaggedCount).toBe(1);
     expect(notifyStaffMock).not.toHaveBeenCalled();
+  });
+
+  // The landmine this amendment had to step around. `processor_quota_logs` is
+  // unique on (site, week) and an existing row means "already sent". If a
+  // disabled evaluation wrote one, it would claim every week it skipped, and the
+  // morning the alert is switched on it would find the week already claimed and
+  // stay silent — the guard eating the thing it guards.
+  it('a disabled evaluation writes NO week log — it must not claim the week', async () => {
+    const db = fakeDb(FLAGGING, { enabled: false }) as unknown as {
+      createdLogs: Record<string, unknown>[];
+    };
+    await runProcessorQuotaDigest({ db: db as never, now: NOW });
+    expect(db.createdLogs).toHaveLength(0);
+  });
+
+  it('a disabled run STILL writes a heartbeat — off must not look like dead', async () => {
+    const db = fakeDb(FLAGGING, { enabled: false }) as unknown as {
+      createdRuns: Record<string, unknown>[];
+    };
+    await runProcessorQuotaDigest({ db: db as never, now: NOW });
+    expect(db.createdRuns).toHaveLength(1);
+    expect(db.createdRuns[0]!['configs_total']).toBe(1);
+    expect(db.createdRuns[0]!['configs_enabled']).toBe(0);
+    expect(db.createdRuns[0]!['sites_evaluated']).toBe(1);
+    expect(db.createdRuns[0]!['digests_sent']).toBe(0);
+  });
+
+  it('an ENABLED run that delivered records digests_sent — delivered, not attempted', async () => {
+    const db = fakeDb(FLAGGING) as unknown as { createdRuns: Record<string, unknown>[] };
+    await runProcessorQuotaDigest({ db: db as never, now: NOW });
+    expect(db.createdRuns).toHaveLength(1);
+    expect(db.createdRuns[0]!['configs_enabled']).toBe(1);
+    expect(db.createdRuns[0]!['digests_sent']).toBe(1);
+    expect(db.createdRuns[0]!['flagged_total']).toBe(1);
+  });
+
+  it('a send that reached NOBODY is not counted as a digest sent (ADR-0095)', async () => {
+    notifyStaffMock.mockResolvedValueOnce({
+      surfaceCode: 'processor_quota_digest',
+      siteId: 'site-woodland',
+      mode: 'pilot' as const,
+      intendedRecipients: ['a@svdp.us'],
+      actualRecipients: [],
+      sends: [],
+      delivered: 0,
+      disabled: false,
+    } as never);
+    const db = fakeDb(FLAGGING) as unknown as {
+      createdRuns: Record<string, unknown>[];
+      createdLogs: Record<string, unknown>[];
+    };
+    await runProcessorQuotaDigest({ db: db as never, now: NOW });
+    expect(db.createdRuns[0]!['digests_sent']).toBe(0);
+    expect(db.createdLogs[0]!['sent_at']).toBeNull();
+  });
+
+  it('a dry run forges NO heartbeat — poking thresholds cannot fake a live cron', async () => {
+    const db = fakeDb(FLAGGING) as unknown as { createdRuns: Record<string, unknown>[] };
+    await runProcessorQuotaDigest({ db: db as never, now: NOW, dryRun: true });
+    expect(db.createdRuns).toHaveLength(0);
   });
 
   it('a dry run evaluates but never sends and never logs', async () => {

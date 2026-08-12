@@ -13,6 +13,7 @@ import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { getMymrcCredentialStatus } from '@/lib/mymrc/credential-store';
 import { loadChainHealth } from '@/lib/bonus/chain-health';
+import { loadProcessorQuotaHealth } from '@/lib/bonus/processor-quota-liveness';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,6 +98,35 @@ async function probeSignatureChain(): Promise<Subsystem> {
   }
 }
 
+// ADR-0071 Amendment 1 — the check that would have answered the question
+// "we are supposed to get alerts and I have seen nothing" in one glance.
+//
+// The quota digest is a SILENCE-MEANS-FINE alert: no email is the normal, and
+// intended, weekly outcome. That design only holds while somebody can confirm
+// the monitor is running, and until this probe existed nobody could. Amber here
+// is not a lesser red — it is the state "alive, and deliberately not emailing
+// anyone", which is a setting to revisit rather than a fault to fix.
+async function probeProcessorQuota(): Promise<Subsystem> {
+  try {
+    const h = await loadProcessorQuotaHealth(prisma);
+    return {
+      key: 'processor-quota',
+      label: 'Processor quota monitor',
+      status: h.status,
+      detail: h.detail,
+    };
+  } catch {
+    // probeDb owns the DB-down signal; duplicating it here double-counts one
+    // outage and would turn the whole pill red for a single root cause.
+    return {
+      key: 'processor-quota',
+      label: 'Processor quota monitor',
+      status: 'amber',
+      detail: 'Unknown',
+    };
+  }
+}
+
 function worst(subs: Subsystem[]): Status {
   if (subs.some((s) => s.status === 'red')) return 'red';
   if (subs.some((s) => s.status === 'amber')) return 'amber';
@@ -118,7 +148,12 @@ export async function GET(): Promise<Response> {
   );
   const glitchtip = present('GLITCHTIP_DSN');
 
-  const [db, mymrc, chain] = await Promise.all([probeDb(), probeMymrc(), probeSignatureChain()]);
+  const [db, mymrc, chain, quota] = await Promise.all([
+    probeDb(),
+    probeMymrc(),
+    probeSignatureChain(),
+    probeProcessorQuota(),
+  ]);
 
   const subsystems: Subsystem[] = [
     db,
@@ -148,6 +183,7 @@ export async function GET(): Promise<Response> {
       detail: glitchtip ? 'DSN configured' : 'Not configured',
     },
     chain,
+    quota,
   ];
 
   return NextResponse.json(

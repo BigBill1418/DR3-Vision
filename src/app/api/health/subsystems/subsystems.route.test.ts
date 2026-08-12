@@ -40,6 +40,26 @@ vi.mock('@/lib/bonus/chain-health', () => ({
   },
 }));
 
+// ADR-0071 Amendment 1 — the processor-quota monitor subsystem. `quotaStatus`
+// flips the three states; the important one is AMBER, which means "the monitor
+// is running and is deliberately emailing nobody". Before this probe existed
+// that state was invisible, and the operator's "we are supposed to get alerts
+// and I have seen nothing" had nowhere to be answered.
+let quotaStatus: 'green' | 'amber' | 'red' = 'green';
+let quotaThrows = false;
+vi.mock('@/lib/bonus/processor-quota-liveness', () => ({
+  loadProcessorQuotaHealth: async () => {
+    if (quotaThrows) throw new Error('db down');
+    return {
+      status: quotaStatus,
+      detail: quotaStatus === 'green' ? 'Ran 3 hours ago; digest enabled for 1 of 2 sites.' : 'off',
+      lastRunAt: new Date('2026-08-12T13:00:00.000Z'),
+      configsTotal: 2,
+      configsEnabled: quotaStatus === 'green' ? 1 : 0,
+    };
+  },
+}));
+
 // audit 2026-07-16 · HEALTH — the route now requires a manager/admin role. Mock
 // auth() so the config-presence assertions run as a manager by default; the
 // operator-403 case flips it.
@@ -74,6 +94,8 @@ beforeEach(() => {
   sessionRole = 'manager';
   chainStatus = 'green';
   chainThrows = false;
+  quotaStatus = 'green';
+  quotaThrows = false;
   mymrcConfigured = false;
   clearEnv();
 });
@@ -182,5 +204,54 @@ describe('signature-chain subsystem (ADR-0019.4)', () => {
     const chain = body.subsystems.find((s) => s.key === 'signature-chain');
     expect(chain?.status).toBe('amber');
     expect(chain?.detail).toBe('Unknown');
+  });
+});
+
+// ── ADR-0071 Amendment 1 ──────────────────────────────────────────────────
+//
+// The processor-quota digest is a silence-means-fine alert, so "no email" is
+// its normal weekly outcome. That reading is only safe while somebody can see
+// the monitor is alive. It shipped switched off on 2026-07-31, the cron fired
+// daily, nothing anywhere recorded a run, and on 2026-08-11 the operator asked
+// why he had seen nothing — a question the system could not answer.
+describe('GET /api/health/subsystems — processor-quota monitor', () => {
+  async function subsystems() {
+    const res = await GET();
+    return (await res.json()) as {
+      overall: string;
+      subsystems: { key: string; status: string; detail: string }[];
+    };
+  }
+
+  it('is present in the subsystem list at all — the gap that hid the silence', async () => {
+    const body = await subsystems();
+    expect(body.subsystems.map((s) => s.key)).toContain('processor-quota');
+  });
+
+  // The distinction the whole amendment exists for: "switched off" degrades the
+  // pill so it is visible, but must never read as an outage, because nothing is
+  // broken — a person chose it and a person can unchoose it.
+  it('an AMBER monitor (alive, emailing nobody) degrades without turning the pill red', async () => {
+    quotaStatus = 'amber';
+    const body = await subsystems();
+    expect(body.subsystems.find((s) => s.key === 'processor-quota')?.status).toBe('amber');
+    expect(body.overall).not.toBe('red');
+  });
+
+  // A stopped monitor IS an outage: managers read no-email as "everyone met
+  // quota", so a dead cron actively misinforms rather than merely going quiet.
+  it('a RED monitor turns the whole pill red — a dead quota cron misinforms', async () => {
+    quotaStatus = 'red';
+    const body = await subsystems();
+    expect(body.subsystems.find((s) => s.key === 'processor-quota')?.status).toBe('red');
+    expect(body.overall).toBe('red');
+  });
+
+  it('a thrown probe degrades to amber, not red — probeDb owns the DB-down signal', async () => {
+    quotaThrows = true;
+    const body = await subsystems();
+    const quota = body.subsystems.find((s) => s.key === 'processor-quota');
+    expect(quota?.status).toBe('amber');
+    expect(quota?.detail).toBe('Unknown');
   });
 });

@@ -9,7 +9,12 @@
 // surface and must never be — the floor sees its own production, not a ranked
 // list of colleagues. The gate here is admin POWERS (`role === 'admin'`), which
 // is the site-independent check; site REACH is irrelevant because the report is
-// explicitly Woodland-scoped by the query itself.
+// explicitly scoped by `site_id` in the query itself, never by the viewer.
+//
+// ADR-0071 Amendment 1: that scoping used to be Woodland by accident as much as
+// by design — Woodland held the only config row, so `findFirst()` could not
+// return anything else. Eugene now has one (seeded disabled), so the site is
+// chosen explicitly and carried in the URL rather than left to row order.
 //
 // ── Deliberately NOT merged into the daily production report ────────────────
 // Separate report, separate email (operator directive, 2026-07-30). The daily
@@ -48,7 +53,7 @@ function units(n: number): string {
 export default async function ProcessorQuotaReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ week?: string }>;
+  searchParams: Promise<{ week?: string; site?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect('/login');
@@ -71,8 +76,23 @@ export default async function ProcessorQuotaReportPage({
   const requested = sp.week && /^\d{4}-\d{2}-\d{2}$/.test(sp.week) ? sp.week : null;
   const weekStartISO = requested ?? previousCompleteWeek(now).weekStartISO;
 
-  const config = await prisma.processorQuotaConfig.findFirst({
+  // ADR-0071 Amendment 1 — this was `findFirst()` with no ordering, which was
+  // safe only because exactly one config existed. Eugene now has one too (seeded
+  // disabled), and an unordered `findFirst` across two rows shows whichever site
+  // Postgres happened to return — a screen that silently changes which floor it
+  // is describing. Ordered, selectable, and the chosen site is in the URL.
+  const configs = await prisma.processorQuotaConfig.findMany({
     include: { site: true, recipients: true },
+    orderBy: { site: { code: 'asc' } },
+  });
+  const config = configs.find((c) => c.site.code === sp.site) ?? configs[0];
+
+  // The heartbeat, on the one screen where somebody tuning the threshold will
+  // see it. "Last checked" is the answer to "is this thing even running" —
+  // the question that went unanswerable for twelve days.
+  const lastRun = await prisma.processorQuotaRun.findFirst({
+    orderBy: { ran_at: 'desc' },
+    select: { ran_at: true, configs_enabled: true },
   });
 
   if (!config) {
@@ -118,20 +138,61 @@ export default async function ProcessorQuotaReportPage({
           and is never a miss.
         </p>
 
+        {/* ── Site switcher (ADR-0071 Amendment 1) ──────────────────── */}
+        {configs.length > 1 && (
+          <div className="mt-4 flex flex-wrap gap-2 text-sm" data-testid="quota-site-switcher">
+            {configs.map((c) => (
+              <Link
+                key={c.id}
+                href={`/admin/processor-quota?site=${c.site.code}&week=${weekStartISO}`}
+                className={
+                  c.id === config.id
+                    ? 'rounded-md bg-dr3-mist/15 px-3 py-1.5 font-medium ring-1 ring-dr3-mist/30'
+                    : 'rounded-md bg-dr3-steel/30 px-3 py-1.5 ring-1 ring-dr3-steel-light/20 hover:bg-dr3-steel/50'
+                }
+              >
+                {c.site.name}
+                <span className="ml-2 text-xs opacity-70">{c.enabled ? 'on' : 'off'}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+
         {!config.enabled && (
           <p
             className="mt-4 rounded-md bg-amber-500/15 px-4 py-3 text-sm text-amber-200 ring-1 ring-amber-500/30"
             data-testid="quota-disabled-banner"
           >
-            The weekly digest is <strong>turned off</strong>. This report is live and accurate; no
-            email is being sent to anyone.
+            The weekly digest is <strong>turned off</strong> for {config.site.name}. This report is
+            live and accurate; no email is being sent to anyone.
           </p>
         )}
+
+        {/* ── Monitor heartbeat (ADR-0071 Amendment 1) ──────────────────
+            Silence is this alert's normal weekly outcome, so "no email" is only
+            trustworthy while the monitor is known to be running. Until this
+            line existed there was no way to tell a quiet week from a dead cron,
+            and for twelve days there was nothing to tell it with. */}
+        <p
+          className="mt-3 text-xs text-dr3-mist-dim"
+          data-testid="quota-monitor-heartbeat"
+          suppressHydrationWarning
+        >
+          {lastRun
+            ? `Monitor last checked ${lastRun.ran_at.toLocaleString('en-US', {
+                timeZone: 'America/Los_Angeles',
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })} PT · digest enabled for ${lastRun.configs_enabled} site${
+                lastRun.configs_enabled === 1 ? '' : 's'
+              }. It runs daily at 06:00 PT and reports the last complete Mon–Sun week.`
+            : 'Monitor has never recorded a run — no email is NOT evidence that quota was met.'}
+        </p>
 
         {/* ── Week nav ──────────────────────────────────────────────── */}
         <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
           <Link
-            href={`/admin/processor-quota?week=${prevWeek}`}
+            href={`/admin/processor-quota?site=${config.site.code}&week=${prevWeek}`}
             className="rounded-md bg-dr3-steel/30 px-3 py-1.5 ring-1 ring-dr3-steel-light/20 hover:bg-dr3-steel/50"
           >
             ← {prevWeek}
@@ -140,7 +201,7 @@ export default async function ProcessorQuotaReportPage({
             {week.weekStartISO} → {week.weekEndISO}
           </span>
           <Link
-            href={`/admin/processor-quota?week=${nextWeek}`}
+            href={`/admin/processor-quota?site=${config.site.code}&week=${nextWeek}`}
             className="rounded-md bg-dr3-steel/30 px-3 py-1.5 ring-1 ring-dr3-steel-light/20 hover:bg-dr3-steel/50"
           >
             {nextWeek} →
