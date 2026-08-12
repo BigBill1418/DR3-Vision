@@ -51,11 +51,28 @@ mute, because in each case the blunt version would take a real guard with it.
 
 ### §1 — `sweep_failed` pages on the SECOND consecutive failure
 
-The sweep runs every 15 minutes, ~96 times a day, against Microsoft Graph. Graph
-503s on roughly 1% of those. Every single one since at least 07-28 self-healed on
-the next run. Paging on the first failure meant about one page a day describing a
-condition that was already over before the phone buzzed — a textbook failure of
-ADR-0037's third gate, _"has the system tried to self-heal first?"_
+Measured, not estimated. `doc_ingest_sweep_runs` over the seven days to
+2026-08-12 05:31Z:
+
+| status    | runs |
+| --------- | ---- |
+| `ok`      | 684  |
+| `failed`  | 4    |
+| `partial` | 1    |
+
+689 runs, a **0.58% failure rate** — and the shape matters more than the rate:
+the four failures fell on **08-06, 08-09, 08-10 and 08-11**, days apart. **No two
+were consecutive.** Every one self-healed on the next 15-minute run. Two were
+Graph 503s on `sharedWithMe`, two were `This operation was aborted` timeouts.
+
+So paging on the first failure bought Bill roughly **one page every other day**,
+each describing a condition that was over before his phone buzzed — a textbook
+failure of ADR-0037's third gate, _"has the system tried to self-heal first?"_
+
+Under the new grading **all four would have been suppressed and zero pages sent**,
+because each one's row was resolved by the following successful sweep before it
+could reach occurrence 2. That is the whole intent: the only thing that survives
+the filter is a sweep that is still failing fifteen minutes later.
 
 The delay costs one sweep interval and nothing else. The ADR-0057 D9 guard — a
 silently dead sweep is the failure this whole subsystem exists to prevent — is

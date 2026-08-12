@@ -67,7 +67,7 @@ than argued from the code. Documentation only — no behaviour changes in this c
 - **Five ranked root causes**, with the shares stated as overlapping contributions
   rather than a partition: the domain model encodes the schedule while the floor
   works the yard (~60%); parity between surfaces was convention, not test (~25%);
-  ship velocity outran the verification loop (~40% of the *recurrence rate* — four
+  ship velocity outran the verification loop (~40% of the _recurrence rate_ — four
   behaviour-changing PRs merged 13:59–19:54 PT on 08-10, and Pablo was stranded at
   07:50 the next morning by the 16:29 one); **forward promises live in prose, and
   prose does not execute** (~15%); and a maturation curve that predicts the incident
@@ -80,7 +80,7 @@ than argued from the code. Documentation only — no behaviour changes in this c
 
 - **P0–P6, ~11–13 engineering days**, ordered by leverage per hour and front-loaded
   so the first 1.5 days change what Bill knows and the first 4 change what CI
-  catches. §6 states plainly what the plan does *not* fix — it does not reduce the
+  catches. §6 states plainly what the plan does _not_ fix — it does not reduce the
   48% divergence rate, and the first week of telemetry will look **worse**, which is
   the instrument working rather than a regression.
 
@@ -90,6 +90,7 @@ landing note and a date correction — the header read `2026-08-12`, the UTC day
 same bleed this file warns about at the top and that `0101306` corrected for
 ADR-0093 hours earlier. **§5 P2 shipped as ADR-0096 before this ADR landed**, and
 followed its prescription: no widening of the ADR-0074 D5 day bound.
+
 ## 2026-08-11 (10:00 PM PT) — Doc-ingestion noise tuning + the resolve that never ran (ADR-0097)
 
 Bill, ~10:00 PM PT: _"I'm still getting notifications that document ingestion is
@@ -103,10 +104,14 @@ flagged as gate-failing and left untuned pending Bill's call. No new failure, no
 regression, no stale document. (The other eleven DR3 messages tonight are
 `Container started` deploy noise from PRs #235–#241, not ingestion.)
 
-- **`sweep_failed` now pages on the SECOND consecutive failure.** The sweep runs
-  ~96×/day against Graph, which 503s on ~1% of them; every one self-healed on the
-  next run, so the old grading cost about one page a day about a condition that
-  was already over. Consecutiveness needed no new state — a successful sweep
+- **`sweep_failed` now pages on the SECOND consecutive failure.** Measured over
+  the 7 days to 08-12 05:31Z: **684 ok / 4 failed / 1 partial** across 689 runs — a
+  0.58% failure rate. The four failures fell on 08-06, 08-09, 08-10 and 08-11,
+  **none consecutive**, every one self-healed on the next 15-minute run. The old
+  grading cost roughly one page every other day about a condition already over;
+  under the new one **all four would have sent zero pages**, because each row was
+  resolved by the following successful sweep before it could reach occurrence 2.
+  Consecutiveness needed no new state — a successful sweep
   resolves the open row, so `occurrences = 2` already _means_ two failures with no
   success between. The ADR-0057 D9 guard is intact: a genuinely dead sweep still
   pages `high`, 15 minutes later. Checked **before** the 24h re-page window so the
