@@ -1,22 +1,22 @@
 # DR3-Vision production Dockerfile
-# Multi-stage: deps → builder → runner
+# Multi-stage: builder → runner
 # Target image size: ~300MB (includes Playwright browser binaries)
+#
+# BUILD CACHING (ADR-0101). Two BuildKit cache mounts below carry the npm
+# download cache and the Next.js compiler cache ACROSS builds. Read that ADR
+# before touching either `RUN` line — deleting a `--mount` flag silently
+# restores the ~14-minute cold compile, and nothing fails to tell you.
+#
+# No `# syntax=` directive on purpose: CHAD-HQ's built-in BuildKit frontend
+# (Docker 29.3.1) already supports `RUN --mount=type=cache` — verified by a
+# throwaway build on the host 2026-08-12. Adding the directive would make every
+# build pull `docker/dockerfile:1` over the network for zero gain.
+#
+# The `deps` stage that used to sit here was REMOVED 2026-08-12: nothing ever
+# copied from it (`--from=deps` appears nowhere in this file, and compose sets
+# no build `target:`), so BuildKit never even built it. Do not restore it.
 
-# ─── Stage 1: deps ───────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS deps
-WORKDIR /app
-
-# Install build dependencies for argon2 native module
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
-
-# ─── Stage 2: builder ────────────────────────────────────────────────────
+# ─── Stage 1: builder ────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
@@ -28,7 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# `id=dr3-npm` namespaces the mount: CHAD-HQ is a ~15-tenant host and an
+# unnamed mount defaults to an id derived from the target path, which every
+# other stack's `/root/.npm` would then share. This restores the tarball cache
+# after CHAD-HQ's nightly buildkit prune drops the npm layer, which is what put
+# a ~200-270s reinstall tail on the first build of every day (ADR-0101).
+RUN --mount=type=cache,id=dr3-npm,target=/root/.npm npm ci
 
 COPY . .
 # Bake the deploy identity (ADR: alerts must show the real SHA, not package.json 0.1.0).
@@ -43,7 +48,19 @@ RUN DATABASE_URL='postgresql://build:build@127.0.0.1:5432/build?schema=public' n
 # this ENV does not carry into the runner stage (separate FROM). Required for
 # both manual host builds and the fleet auto-deployer. (Codified 2026-06-06.)
 ENV NODE_OPTIONS=--max-old-space-size=8192
-RUN npm run build
+# THE expensive step: this line preceded by `COPY . .` re-executes on EVERY
+# commit, so it never hit the Docker layer cache — 93 pages / 191 API routes /
+# 266k LOC recompiled from scratch, ~787s of a ~853s build. Next.js keeps its
+# compiler cache in `.next/cache` ("a cache to .next/cache that is shared
+# between builds" — Next.js CI build-caching docs); `.dockerignore` excludes
+# `.next`, so nothing carried it in. This mount persists it host-side between
+# builds. `sharing=locked` serializes concurrent builds instead of letting two
+# writers interleave into one cache directory. Type-checking STAYS in this
+# step by explicit decision — it is the payroll type-lie gate (ADR-0101).
+#
+# Nothing COPYs `.next/cache` into the runner, so this is a build-time-only
+# change with no runtime surface.
+RUN --mount=type=cache,id=dr3-next-cache,target=/app/.next/cache,sharing=locked npm run build
 # Compile the standalone MyMRC scrape worker (TS → CJS) for the cron
 # container. The Next.js standalone bundle does NOT include arbitrary
 # `src/lib/` modules — only what Next's tracer reaches from app routes.
@@ -52,7 +69,7 @@ RUN npm run build
 # into the runner. See `tsconfig.mymrc.json` for the compile scope.
 RUN npx tsc --project tsconfig.mymrc.json
 
-# ─── Stage 3: runner (production) ────────────────────────────────────────
+# ─── Stage 2: runner (production) ────────────────────────────────────────
 # Base image version MUST match the resolved `playwright` package version in
 # package-lock.json. The npm caret (^1.48.0) resolved up to 1.59.1; the v1.48.0
 # base ships browsers Playwright 1.59.1 can't find ("Executable doesn't exist"),
