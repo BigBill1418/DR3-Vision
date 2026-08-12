@@ -70,6 +70,53 @@ loose, and this closes that.
   silently diverging on a case the shared vectors cannot detect. Belongs in
   ADR-0200 so every publisher moves together.
 
+## 2026-08-11 (6:10 PM PT) — the ledger recorded the attempt, not the page (ADR-0095)
+
+Bill, at 5:51 PM: *"I got a bunch of vision ntfy's about not being able to download
+or ingest files. why?"* **Nothing started failing. The channel started working.**
+
+- **These alerts are newly VISIBLE, not newly OCCURRING.** `anomalies.ts` builds
+  every doc-ingest title as ``Document ingestion — ${kind}`` — a literal U+2014. Per
+  ADR-0019.5 that threw inside undici before a socket opened, on both legs, so
+  **every document-ingestion page ever raised was discarded**. ADR-0019.5 shipped at
+  2:25 PM, the container came up at 3:42 PM, and the first such page Bill has ever
+  received landed at 4:13 PM. The delivered title hexdumps as `2d` — an ASCII hyphen,
+  i.e. `toHeaderSafe()` folding the dash. The alerts did not change; the sanitizer
+  that lets them out of the process did.
+
+- **The defect fixed here.** `maybePage()` stamped `last_paged_at` *before*
+  publishing and discarded the result, so the ledger recorded an intention rather
+  than a delivery. Production carries `sweep_failed` rows stamped as paged on 07-31,
+  08-01, 08-06, 08-09 and 08-10 with no matching message anywhere in ntfy's 7-day
+  cache. Worse, that stamp arms the 24h re-page window — **a page that never
+  existed suppressed its own retry for a day.** Now: publish first, stamp only on
+  `result.ok`, and leave a `dropped` page unstamped so the next sweep retries it in
+  fifteen minutes. (`cooldown-suppressed` and `unconfigured` are `ok` — deliberate
+  local suppressions that must not spin.)
+
+- **Second defect, same incident.** `download_failed` was resolved only on the
+  *applied* path, below the guardrail branch, so a source that recovered but whose
+  revision **staged** never cleared its anomaly. TEREX.xlsx hit exactly that: Graph
+  503 at 4:58 PM, clean download at 5:13 PM, revision staged on an aggregate
+  variance, `download_failed` left open on a source downloading perfectly — and it
+  would have paged daily forever. Whether a revision applies is a guardrail decision
+  about content; whether it downloaded is not. The resolve moves above the branch.
+
+- **What was actually wrong with ingestion: nothing that still is.** Two transient
+  Graph 503s, each healed by the next 15-minute sweep. Sweep failure rate is ~1 in
+  ~96 runs/day and has been since at least 07-28. The `discovery gap` is by design
+  (registration is manual) and the `aggregate variance` is the guardrail working —
+  TEREX "Day Total Hrs Used" 328.40 → 444.50 (+35.4%), **staged, not applied**,
+  awaiting a human. MyMRC sync is unrelated and clean.
+
+- **Deliberately not changed** (policy calls for Bill, see ADR-0095 §5): grading
+  `sweep_failed` to page on the second *consecutive* failure rather than the first,
+  and demoting `subscription_renew_failed` — a limit the code itself documents as
+  structural and unfixable — to a dashboard tile.
+
+- Tests: 3 new in `anomalies.test.ts`, 1 in `ingest-d8.test.ts`, each verified to
+  fail against the unpatched code. Full doc-ingest suite 436 passed / 28 files.
+
 ## 2026-08-11 (2:25 PM PT) — the em dash that ate the payroll alert (ADR-0019.5)
 
 Bill asked why the 2026-08-05 page got dropped. It was an em dash.

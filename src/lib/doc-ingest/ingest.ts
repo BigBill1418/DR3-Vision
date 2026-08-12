@@ -274,6 +274,19 @@ export async function ingestSource(
     parseError: parsed.ok ? null : parsed.message,
   });
 
+  // The download demonstrably succeeded — we are holding `bytes` and a parsed
+  // revision. Resolve here, ABOVE the guardrail branch, not after `applyVersion`.
+  //
+  // It used to sit on the applied path only, so a source that recovered from a
+  // download failure but whose new revision the guardrail STAGED never cleared
+  // its `download_failed` row. The anomaly stayed open on a source that was
+  // downloading perfectly, and re-paged every 24h forever. TEREX.xlsx hit exactly
+  // that on 2026-08-11: a Graph 503 at 16:58, a clean download at 17:13 whose
+  // revision staged on an aggregate variance, and an open `download_failed`
+  // afterwards. Whether a revision APPLIES is a guardrail decision about content;
+  // whether it DOWNLOADED is not, and one must not gate the other.
+  await resolveAnomaly(prisma, 'download_failed', subject, 'Download succeeded.');
+
   if (verdict.stage) {
     const reason = verdict.findings.map((f) => f.detail).join(' ');
     await prisma.docSourceVersion.update({
@@ -299,7 +312,6 @@ export async function ingestSource(
   }
 
   await applyVersion(prisma, source, version, bytes.byteLength, DOC_INGEST_ACTOR, now, 'auto');
-  await resolveAnomaly(prisma, 'download_failed', subject, 'Download succeeded.');
   return { outcome: 'applied', versionId: version.id, anomaliesRaised: 0 };
 }
 

@@ -330,6 +330,55 @@ describe('D6 — auto-flow, and D7 — stage instead', () => {
     expect(prisma._stores.fileDrops).toHaveLength(1);
   });
 
+  // ── ADR-0019.5 Am.1 — a stage must not hold a download failure open ───────
+  //
+  // TEREX.xlsx, 2026-08-11: Graph 503'd the content download at 16:58, the 17:13
+  // sweep downloaded it cleanly, and the revision STAGED on an aggregate
+  // variance. Because the `download_failed` resolve sat below the guardrail
+  // branch, the anomaly stayed open on a source that was downloading perfectly —
+  // and re-paged Bill every 24h for a failure that had already healed.
+  it('clears download_failed when a recovered download STAGES rather than applies', async () => {
+    const source = await seedSource();
+
+    // Revision 1 establishes the baseline and downloads fine.
+    await ingestSource(
+      p(),
+      makeGraph({ downloadItem: async () => workbookBytes([['Amount'], [1000]]) }),
+      source,
+      { now: NOW, putBytes },
+    );
+
+    // The download fails — exactly the Graph 503 TEREX hit.
+    const failed = { ...source, ctag: 'ctag-2' } as typeof source;
+    await ingestSource(
+      p(),
+      makeGraph({
+        downloadItem: async () => {
+          throw new Error('graph … → HTTP 503: service unavailable');
+        },
+      }),
+      failed,
+      { now: NOW, putBytes },
+    );
+    expect(openAnomalies('download_failed')).toHaveLength(1);
+
+    // Next sweep: the download succeeds, but the content trips the guardrail so
+    // the revision is staged rather than applied.
+    const recovered = { ...source, ctag: 'ctag-3' } as typeof source;
+    const result = await ingestSource(
+      p(),
+      makeGraph({ downloadItem: async () => workbookBytes([['Amount'], [400]]) }),
+      recovered,
+      { now: NOW, putBytes },
+    );
+
+    expect(result.outcome).toBe('staged');
+    // The guardrail finding is real and stays open — a human must act on it.
+    expect(openAnomalies('aggregate_variance')).toHaveLength(1);
+    // But the DOWNLOAD is demonstrably working, so its anomaly must be closed.
+    expect(openAnomalies('download_failed')).toHaveLength(0);
+  });
+
   it('measures the next change against the last APPLIED revision, not a staged one', async () => {
     const source = await seedSource();
     await ingestSource(
