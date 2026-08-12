@@ -4,6 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import {
+  classifyWriteRefusal,
+  WriteRefusalNotice,
+  type WriteRefusal,
+} from '../../_components/write-refusal';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0060 F-3 client — physical on-hand count.
@@ -64,6 +69,12 @@ export function CountClient({
   const [program, setProgram] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Audit D-8 — held separately from `error` because these two refusals are not
+   * "couldn't save, try again": one of them carries a control, and neither may
+   * be shown next to the generic sentence that told the floor to retap forever.
+   */
+  const [refusal, setRefusal] = useState<WriteRefusal | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [phase, setPhase] = useState<Phase>('entry');
   const [hold, setHold] = useState<Hold | null>(null);
@@ -92,7 +103,21 @@ export function CountClient({
     setApproverId('');
     setPin('');
     setError(null);
+    setRefusal(null);
     setPhase('entry');
+  }
+
+  /**
+   * Audit D-8 — the way out of a day mismatch.
+   *
+   * `countDate` is a prop from the server page, so a soft refresh re-renders it
+   * to the current Pacific day while the typed counts survive in local state.
+   * The operator taps Save once more and it lands.
+   */
+  function refreshToToday(): void {
+    setRefusal(null);
+    setError(null);
+    router.refresh();
   }
 
   function bodyForSubmit(): Record<string, unknown> {
@@ -118,6 +143,7 @@ export function CountClient({
   async function submit(): Promise<void> {
     setBusy(true);
     setError(null);
+    setRefusal(null);
     // ADR-0078 — minted HERE, once, before the attempt. Reused verbatim by the
     // queued entry if this request never gets an answer, so a submit that
     // actually landed and merely lost its response replays to the SAME write
@@ -134,6 +160,15 @@ export function CountClient({
       const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
       if (!res.ok) {
+        // Audit D-8 — BEFORE every other branch. The 422 the ADR-0065 day pin
+        // throws and the 401 an expired session earns are both refusals no
+        // retap can clear, and until this they arrived as "Couldn't save. Try
+        // again." — the sentence that produced the retap.
+        const refused = classifyWriteRefusal(res.status, b['error']);
+        if (refused) {
+          setRefusal(refused);
+          return;
+        }
         // Tier 2 — the server HELD it. Not an error to retry past: the count is
         // stored safely and needs a person, so this is a state change, not a
         // failure message.
@@ -190,6 +225,7 @@ export function CountClient({
     if (!hold) return;
     setBusy(true);
     setError(null);
+    setRefusal(null);
     try {
       const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'POST',
@@ -198,6 +234,15 @@ export function CountClient({
       });
       const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
+        // Audit D-8 — a hold released behind an expired session read "Couldn't
+        // save" and invited the operator to retype a manager's PIN into a screen
+        // that cannot answer. Say which thing is wrong.
+        const refused = classifyWriteRefusal(res.status, b['error']);
+        if (refused) {
+          setRefusal(refused);
+          setPin('');
+          return;
+        }
         const code = String(b['error'] ?? '');
         setError(
           code === 'bad_pin'
@@ -231,6 +276,7 @@ export function CountClient({
     const reason = window.prompt(t('floor.count.hold_discard_reason')) ?? '';
     if (reason.trim() === '') return;
     setBusy(true);
+    setRefusal(null);
     try {
       const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'DELETE',
@@ -241,7 +287,10 @@ export function CountClient({
         setHold(null);
         setPhase('discarded');
       } else {
-        setError(t('floor.common.save_failed'));
+        // Audit D-8 — same treatment as Approve, one control over.
+        const refused = classifyWriteRefusal(res.status, null);
+        if (refused) setRefusal(refused);
+        else setError(t('floor.common.save_failed'));
       }
     } catch {
       setError(t('floor.common.save_failed'));
@@ -346,6 +395,7 @@ export function CountClient({
             {error}
           </p>
         )}
+        {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
 
         <label className="flex flex-col gap-2 text-base font-semibold">
           {t('floor.count.hold_manager_label')}
@@ -419,6 +469,7 @@ export function CountClient({
             {error}
           </p>
         )}
+        {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
 
         <button
           type="button"
@@ -464,6 +515,7 @@ export function CountClient({
           {error}
         </p>
       )}
+      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
 
       <NumberStepper label={primaryLabel} value={primary} onChange={setPrimary} />
       <NumberStepper

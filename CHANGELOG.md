@@ -9,6 +9,54 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-11 (5:18 PM PT) — INCIDENT: a truck that arrived a day late had no way in (ADR-0096)
+
+Bill, 5:18 PM PT: _"Trying to access speedy delivery H-136980. But it won't let
+us. We are clicking it and it does nothing."_
+
+**H-136980** (Speedy Delivery LLC – Union City, Woodland) was booked for **8/10
+9:00 AM PT**, nobody checked it in, and the truck arrived on the 11th. Live,
+uncancelled, and with **no child load row** — so it reached neither the consumed
+branch nor the check-in branch and fell to the bare "View only" card. The tap did
+nothing because nothing was attempted. **Not a regression from ADR-0091**, which
+only touched slots that already have a child row; this is the pre-existing
+ADR-0074 D5 day-bound branch.
+
+- **Unblocked 5:25 PM PT** by shifting `expected_arrival_at` +1 day into the
+  current window (a scheduling field only — arrival and units come from
+  `inbound_loads.arrived_at` at check-in). Janette checked in at **5:37 PM PT**
+  and the load reached `submitted`.
+
+- **The durable fix does NOT widen the day bound.** ADR-0094 §P2 is explicit that
+  the bound is what stops a child load being minted onto the wrong slot (the
+  159-unit mis-booking of ADR-0074 Am.1). `startableExpectedLoadId` keeps its
+  exact meaning; the divergent case gets its own named state,
+  `reconcilableExpectedLoadId`, with its own deliberately slower two-tap control
+  whose second tap reads back the haul number **and** the day it was booked for.
+
+- **The day guard now exists server-side, which it never did.** `startInboundLoad`
+  performed no day check at all — the whole D5 bound lived in the two read layers,
+  an open decision since ADR-0074 Am.1 and still open per ADR-0094. A bookmarked
+  page or replayed POST could mint a child onto any slot at the site, of any age.
+  Now enforced in the transaction that writes, **in Pacific** (a UTC comparison
+  would refuse today's own slots for the last 7 hours of every Pacific day).
+
+- **The exception is an acknowledgement, not a flag.** The caller must state which
+  day it believes the slot is scheduled for; the server refuses unless it matches
+  the row. A stale client cannot produce the value, so it is evidence rather than
+  a permission the UI granted itself. Reconciled starts stamp
+  `reconciled_from_day` / `reconciled_on_day` on the audit row.
+
+- **Audit finding D-8 closed in the same change.** The online `date_not_today`
+  refusal was a true silent no-op on all four floor write clients while the
+  translated sentence sat wired only into the offline replay path. All four now
+  classify it — and 401 — through one shared `classifyWriteRefusal` chokepoint,
+  reusing existing strings (`floor.conflicts.why_wrong_day`,
+  `auth_login.error_session_expired`). `dropoff-client.tsx` never parsed the
+  response body at all; it does now. `QueueRow`, which swallowed every error, now
+  names the one refusal a correctly-rendered page can hit — and re-throws
+  `NEXT_REDIRECT` so a success is never reported as a failure.
+
 ## 2026-08-11 (7:11 PM PT) — header contract v3: the same word must not sanitize differently by normal form (ADR-0200 Am.3)
 
 Re-vendored the canonical fleet conformance vectors from **v2 (20 vectors) to

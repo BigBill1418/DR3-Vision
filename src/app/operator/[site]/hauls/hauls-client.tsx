@@ -28,6 +28,7 @@ import { describeConsumedSlot } from '@/lib/loads/consumed-slot-view';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
 import { QueueRow } from '../queue/queue-row';
+import { ReconcileRow } from './reconcile-row';
 import { SEARCH_MAX, buildHaulsListHref, type HaulsListParams } from './list-url';
 
 /**
@@ -49,6 +50,10 @@ export interface HaulRowView {
   consumerDropoffUnits: number | null;
   /** Non-null ⇒ startable RIGHT NOW (live, unconsumed, due today). */
   expectedLoadId: string | null;
+  /** ADR-0096 — live + unconsumed but booked for ANOTHER Pacific day. */
+  reconcilableExpectedLoadId: string | null;
+  /** That slot's own Pacific day, `YYYY-MM-DD`. */
+  slotDayISO: string | null;
   /** Non-null ⇒ the slot has already been worked. See `portal-hauls.ts`. */
   consumedLoad: {
     status: string;
@@ -217,11 +222,30 @@ export function HaulsClient({
             {t('floor.hauls.check_in')}
           </p>
         </QueueRow>
+      ) : r.reconcilableExpectedLoadId && r.slotDayISO ? (
+        // ADR-0096 — a LIVE, UNCONSUMED slot booked for another Pacific day. The
+        // truck can be on the dock right now; H-136980 was, on 2026-08-11, and
+        // this branch is why tapping its card did nothing.
+        //
+        // Note what is NOT done here: `expectedLoadId` is untouched. ADR-0074 D5
+        // still means "due today", because that bound is what stops a child load
+        // being minted onto the wrong slot. This is a separately named state with
+        // its own, deliberately slower control.
+        <ReconcileRow
+          siteCode={siteCode}
+          expectedLoadId={r.reconcilableExpectedLoadId}
+          slotDayISO={r.slotDayISO}
+          slotDayLabel={formatDate(new Date(`${r.slotDayISO}T12:00:00Z`), locale)}
+          haulLabel={r.externalHaulId ?? t('floor.hauls.no_date')}
+        >
+          {renderBody(r)}
+        </ReconcileRow>
       ) : (
-        // No sibling, or one that is not due today: information, not work.
-        // ADR-0074 D5 forbids synthesizing one to make a button possible, so the
-        // row renders read-only with NO control. The appointment date is already
-        // on the body, which is what "not yet" looks like to an operator.
+        // No sibling at all, or an UNDATED one: information, not work. ADR-0074
+        // D5 forbids synthesizing a slot to make a button possible, and an
+        // undated slot has no day for the operator to confirm or the server to
+        // check — so it stays read-only rather than getting a reconcile control
+        // whose acknowledgement could not be verified.
         <div className="rounded-lg bg-dr3-green-dark/40 p-4">
           {renderBody(r)}
           <p className="mt-2 text-start text-xs uppercase tracking-wide text-dr3-cream/50">

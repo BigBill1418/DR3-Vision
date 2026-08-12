@@ -58,6 +58,9 @@ function toView(r: PortalHaulRow): HaulRowView {
     nonProgramUnits: r.nonProgramUnits,
     consumerDropoffUnits: r.consumerDropoffUnits,
     expectedLoadId: r.expectedLoadId,
+    // ADR-0096 — the divergent-day state, carried as its own field.
+    reconcilableExpectedLoadId: r.reconcilableExpectedLoadId,
+    slotDayISO: r.slotDayISO,
     consumedLoad: r.consumedLoad
       ? {
           status: r.consumedLoad.status,

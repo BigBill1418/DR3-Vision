@@ -4,6 +4,11 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueDropoff, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import {
+  classifyWriteRefusal,
+  WriteRefusalNotice,
+  type WriteRefusal,
+} from '../../_components/write-refusal';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0085 — the walk-up drop-off capture screen.
@@ -50,8 +55,23 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
   const [photo, setPhoto] = useState<File | null>(null);
   const [status, setStatus] = useState<Status>('entry');
   const [error, setError] = useState<string | null>(null);
+  /** Audit D-8 — a refusal no retap can clear; see `write-refusal.tsx`. */
+  const [refusal, setRefusal] = useState<WriteRefusal | null>(null);
 
   const canSend = kind !== null && units > 0 && photo !== null && status !== 'sending';
+
+  /**
+   * Audit D-8 — `dropoffDate` is a server-rendered prop, so a soft refresh
+   * re-points the screen at the current Pacific day. The label, units and photo
+   * already selected survive it, because a walk-up drop-off is captured with a
+   * person standing at the door and re-collecting it is not free.
+   */
+  function refreshToToday(): void {
+    setRefusal(null);
+    setError(null);
+    setStatus('entry');
+    router.refresh();
+  }
 
   function reset(): void {
     setKind(null);
@@ -64,6 +84,7 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
     if (kind === null || photo === null) return;
     setStatus('sending');
     setError(null);
+    setRefusal(null);
 
     // Minted ONCE per submit attempt and reused by the queued entry, so a request
     // that landed but lost its response replays to the SAME write rather than
@@ -101,6 +122,16 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content_type: contentType }),
       });
+      // Audit D-8 — the session can end between opening this screen and the
+      // person arriving at the door. A 401 here is not a network failure and not
+      // a retry: `queueIt` is deliberately NOT called, because the drain runs
+      // behind the same dead session and "saved on this iPad" over a row that
+      // cannot send is the false confirmation ADR-0078 exists to prevent.
+      if (mint.status === 401) {
+        setStatus('error');
+        setRefusal('signed_out');
+        return;
+      }
       if (!mint.ok) throw new Error(`mint ${mint.status}`);
       const minted = (await mint.json()) as { storage_key: string; upload_url: string | null };
       storageKey = minted.storage_key;
@@ -150,6 +181,16 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
       });
       if (!res.ok) {
         setStatus('error');
+        // Audit D-8 — this branch never read the body at all, so NO refusal this
+        // route can return was distinguishable from any other: `date_not_today`,
+        // `invalid_input` and a 500 produced one identical sentence. Parsing it
+        // is the precondition for classifying anything.
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        const refused = classifyWriteRefusal(res.status, b.error);
+        if (refused) {
+          setRefusal(refused);
+          return;
+        }
         setError(t('floor.common.save_failed'));
         return;
       }
@@ -184,10 +225,10 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
       <p className="text-sm text-dr3-cream/70">{t('floor.dropoff.intro')}</p>
 
       <div className="flex flex-col gap-2">
-        <p className="text-base font-semibold text-dr3-cream/90">
-          {t('floor.dropoff.kind_label')}
-        </p>
-        <div className="flex gap-3">{(['floor_public', 'floor_incentive'] as Kind[]).map(kindBtn)}</div>
+        <p className="text-base font-semibold text-dr3-cream/90">{t('floor.dropoff.kind_label')}</p>
+        <div className="flex gap-3">
+          {(['floor_public', 'floor_incentive'] as Kind[]).map(kindBtn)}
+        </div>
       </div>
 
       <NumberStepper
@@ -210,7 +251,14 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null;
             setPhoto(f);
-            if (status === 'error') setStatus('entry');
+            if (status === 'error') {
+              setStatus('entry');
+              setError(null);
+              // The refusal described the LAST attempt; a new photo starts
+              // another one. Leaving it up would attach yesterday's reason to
+              // today's tap.
+              setRefusal(null);
+            }
           }}
         />
         <button
@@ -241,6 +289,7 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
         <p className="text-lg text-dr3-chartreuse">{t('floor.common.queued')}</p>
       )}
       {error && <p className="text-lg text-red-300">{error}</p>}
+      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
     </div>
   );
 }

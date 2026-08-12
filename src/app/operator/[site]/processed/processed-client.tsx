@@ -4,6 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import {
+  classifyWriteRefusal,
+  WriteRefusalNotice,
+  type WriteRefusal,
+} from '../../_components/write-refusal';
 import { NumberStepper } from '../number-stepper';
 
 // ADR-0060 F-4 client — confirm today's stripped (processed) counts. Confirm-only:
@@ -35,12 +40,26 @@ export function ProcessedClient({
   const [saved, setSaved] = useState(false);
   /** ADR-0078 — queued locally, NOT server-acked. Never rendered as Saved. */
   const [queued, setQueued] = useState(false);
+  /** Audit D-8 — a refusal no retap can clear; see `write-refusal.tsx`. */
+  const [refusal, setRefusal] = useState<WriteRefusal | null>(null);
 
   const total = program + nonProgram;
+
+  /**
+   * Audit D-8 — `productionDate` is a server-rendered prop, so a soft refresh
+   * re-points this screen at the current Pacific day without discarding the
+   * numbers already typed into the steppers.
+   */
+  function refreshToToday(): void {
+    setRefusal(null);
+    setError(null);
+    router.refresh();
+  }
 
   async function submit(): Promise<void> {
     setBusy(true);
     setError(null);
+    setRefusal(null);
     setSaved(false);
     setQueued(false);
     // ADR-0078 — minted once per attempt and reused by the queued entry.
@@ -58,6 +77,13 @@ export function ProcessedClient({
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
+        // Audit D-8 — `closed` was the only mapped reason; the ADR-0065 day pin
+        // and an expired session both fell through to `save_failed`.
+        const refused = classifyWriteRefusal(res.status, b.error);
+        if (refused) {
+          setRefusal(refused);
+          return;
+        }
         setError(
           b.error === 'closed' ? t('floor.processed.err_closed') : t('floor.common.save_failed'),
         );
@@ -107,6 +133,7 @@ export function ProcessedClient({
           {error}
         </p>
       )}
+      {refusal && <WriteRefusalNotice refusal={refusal} onRefresh={refreshToToday} />}
       {saved && (
         <p className="rounded-lg bg-dr3-green/30 px-4 py-3 text-sm font-medium text-dr3-cream">
           {t('floor.common.saved')}

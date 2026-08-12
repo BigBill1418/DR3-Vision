@@ -71,6 +71,11 @@ const { globalCalls, txCalls, prismaMock } = vi.hoisted(() => {
           id: 'E',
           site_id: 'S',
           cancelled_at: null,
+          // ADR-0096 — the slot must be due TODAY or `startInboundLoad` refuses
+          // before it reaches the write. This test is about WHICH CLIENT the
+          // re-read goes through, so the fixture is dated to today to keep it
+          // exercising that, rather than tripping the day guard.
+          expected_arrival_at: new Date(),
           source_id: null,
           transporter_id: null,
           bol_number: null,

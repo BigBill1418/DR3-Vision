@@ -60,7 +60,7 @@
 
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
-import { currentPacificDayWindow } from '@/lib/time';
+import { pacificDayISO, currentPacificDayWindow } from '@/lib/time';
 import {
   CONSUMED_SLOT_SELECT,
   toConsumedLoad,
@@ -128,6 +128,14 @@ export interface PortalHaulRow {
    * dock needed on 2026-08-10 and could not get from any screen.
    */
   consumedLoad: ConsumedLoadRef | null;
+  /**
+   * ADR-0096 — non-null when this haul's slot is live and unconsumed but
+   * scheduled for a DIFFERENT Pacific day. Mutually exclusive with
+   * `expectedLoadId` by construction.
+   */
+  reconcilableExpectedLoadId: string | null;
+  /** The slot's own Pacific day, for the confirmation the operator must read. */
+  slotDayISO: string | null;
 }
 
 export interface PortalHaulsPage {
@@ -267,6 +275,19 @@ interface SiblingVerdict {
   /** Non-null only when the row is genuinely startable right now. */
   startableExpectedLoadId: string | null;
   consumedLoad: ConsumedLoadRef | null;
+  /**
+   * ADR-0096 — the slot exists, is live and unconsumed, but its appointment is
+   * on a DIFFERENT Pacific day. The truck can still be here; this is the state
+   * that dead-ended H-136980 on 2026-08-11.
+   *
+   * Deliberately a SEPARATE field rather than widening `startableExpectedLoadId`
+   * to "any day". That bound is what stops a child load being minted onto the
+   * wrong slot (the 159-unit mis-booking of ADR-0074 Am.1), so it keeps its exact
+   * meaning and the divergent case gets its own name and its own, noisier route.
+   */
+  reconcilableExpectedLoadId: string | null;
+  /** The slot's own Pacific day (`YYYY-MM-DD`) — what the operator must confirm. */
+  slotDayISO: string | null;
 }
 
 function toRow(r: MirrorSelection, expectedByHaulId: Map<string, SiblingVerdict>): PortalHaulRow {
@@ -286,6 +307,8 @@ function toRow(r: MirrorSelection, expectedByHaulId: Map<string, SiblingVerdict>
     consumerDropoffUnits: r.unpaid_consumer_dropoff_units,
     expectedLoadId: verdict?.startableExpectedLoadId ?? null,
     consumedLoad: verdict?.consumedLoad ?? null,
+    reconcilableExpectedLoadId: verdict?.reconcilableExpectedLoadId ?? null,
+    slotDayISO: verdict?.slotDayISO ?? null,
   };
 }
 
@@ -369,6 +392,10 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
         expectedByHaulId.set(s.external_mymrc_haul_id, {
           startableExpectedLoadId: null,
           consumedLoad: toConsumedLoad(s.inbound_load),
+          // A consumed slot is never reconcilable: the child already exists and
+          // ADR-0091 routes into it.
+          reconcilableExpectedLoadId: null,
+          slotDayISO: null,
         });
         continue;
       }
@@ -383,6 +410,12 @@ export async function listPortalHauls(args: ListPortalHaulsArgs): Promise<Portal
       expectedByHaulId.set(s.external_mymrc_haul_id, {
         startableExpectedLoadId: startableToday ? s.id : null,
         consumedLoad: null,
+        // ADR-0096 — dated, live, unconsumed, and NOT today. The undated case is
+        // excluded on purpose and stays read-only: there is no day for the
+        // operator to confirm, so the server-side assert has nothing to compare
+        // and the reconcile cannot be made evidence-bearing.
+        reconcilableExpectedLoadId: at !== null && !startableToday ? s.id : null,
+        slotDayISO: at !== null ? pacificDayISO(at) : null,
       });
     }
   }
