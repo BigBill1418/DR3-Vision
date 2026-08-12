@@ -106,6 +106,58 @@ no new dependency, nothing to deploy.
   0096, 0097** — seven of the most recent records, including two floor incidents,
   had no index row. A new test keeps `docs/adr/README.md` complete: an ADR that
   exists but is not indexed is the dangling-citation defect from the other end.
+## 2026-08-11 (11 PM PT) — ADR-0071 Amendment 1: the quota monitor can now say it is alive
+
+**Verdict first: the processor performance monitor was never broken and never fired. It has
+been switched OFF in the database since it shipped on 2026-07-31, deliberately, pending a
+decision on the quota number — and nothing in the system was capable of saying so.**
+
+Ground truth taken live on CHAD-HQ (2026-08-11, ~10:40 PM PT):
+
+- `processor_quota_config`: one row, Woodland, `enabled = f`, quota 75, min_misses 2.
+- `processor_quota_logs`: **0 rows** — no week has ever been evaluated.
+- `dr3-vision-processor-quota` container: **up and scheduling correctly**, next tick
+  06:00 PT. The internal route answers **HTTP 200**; the cron token is present and valid.
+
+So the cron fired every morning for twelve days and left behind exactly what a dead cron
+leaves behind: nothing. The cause is one clause — the digest selected
+`where: { enabled: true }`, matched zero rows, skipped the loop and returned `{"outcomes":[]}`.
+ADR-0071 §4 anticipated precisely this failure shape and guarded the _suppressed week_; the
+guard sat one step below the gate that was actually closed.
+
+**Shipped**
+
+- `processor_quota_runs` — a heartbeat written on **every live run**, including the run that
+  evaluates nothing because every site is off, and the run that throws. Deliberately not keyed
+  on `(site, week)`: that key belongs to `processor_quota_logs` and means "already sent", so a
+  heartbeat sharing it would claim each week it skipped and permanently mute the first real digest.
+- Disabled sites are now **evaluated read-only** and reported as `skipped: 'disabled'` with the
+  count the digest _would_ have sent. Nothing is mailed and no week log is written.
+- `loadProcessorQuotaHealth()` + a `processor-quota` subsystem on `/api/health/subsystems`,
+  with three states rather than two: **green** (enabled and running), **amber** (running and
+  deliberately emailing nobody), **red** (never ran, or stale beyond 36 h). Amber is the state
+  that was invisible; red on an enabled site is the dangerous one, because managers read
+  no-email as "everyone met quota".
+- `/admin/processor-quota` shows a **"Monitor last checked …" heartbeat line** and, now that a
+  second site exists, an explicit **site switcher**; the page's `findFirst()` became an ordered
+  `findMany` (unordered `findFirst` across two rows silently changes which floor it describes).
+- **Eugene seeded a config row (disabled).** It had none, so Eugene processors were not passing
+  the quota — they were not being looked at. Recipients deliberately left empty: a guessed
+  address does not fail loudly (ADR-0071's own finding), so Eugene's list is Bill's to fill in.
+
+**What Bill missed, measured against real data.** Woodland, at the configured 75 / 2-misses,
+per completed week: 06-29 3 of 9 · 07-06 6 of 17 · 07-13 5 of 19 · 07-20 11 of 18 ·
+07-27 13 of 23 · 08-03 **18 of 21**. Eugene would have flagged 2 in the week of 08-03. Six
+emails, naming most of the floor, and the last one names 86% of it. Woodland's median daily
+output over that span is **64 units against a 75 quota**, so the threshold sits above typical
+performance and the digest is a roster, not an exception list. Eugene's median is 83.
+The threshold decision ADR-0071 reserved for Bill is still open and is still the blocker.
+
+Tests: 21 new (7 liveness, 8 digest, 4 subsystem-route, 2 fixture-correctness), full suite
+**5,362 passing**. Every new guard falsified before being kept — including the fixture itself,
+which returned `[]` for a disabled config and so was _more permissive than Postgres_, making
+the twelve-day silence not merely untested but untestable.
+
 ## 2026-08-11 (10:20 PM PT) — A signer cannot sign a period he is paid by (ADR-0019.3 §2)
 
 ADR-0019.3 §2 recorded a separation-of-duties conflict as **accepted**: Patrick
@@ -170,7 +222,6 @@ guard; §2 is now **resolved by guard** rather than accepted.
   (`canApproveRequest`) is unchanged — Patrick may still approve an amendment
   touching his own entries, he simply cannot sign the period that results.
   Changing that would alter the ADR-0028 workflow contract.
-
 ## 2026-08-11 (10 PM PT) — H-135793 attribution recorded; canonical source-attribution notes doc created
 
 Docs only. New `docs/INVENTORY-SOURCE-ATTRIBUTION.md` — the canonical running record for

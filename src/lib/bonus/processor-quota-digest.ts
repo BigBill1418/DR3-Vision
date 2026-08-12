@@ -122,6 +122,14 @@ export interface QuotaDigestOutcome {
   mode: 'live' | 'pilot' | null;
   delivered: number;
   error: string | null;
+  /**
+   * ADR-0071 Amendment 1. Set when the site was evaluated but deliberately not
+   * acted on. `'disabled'` is the only value today and it is the one that
+   * matters: previously a disabled site produced no outcome at all, so the
+   * cron's own log line read `{"outcomes":[]}` — the same thing it prints when
+   * the feature has been deleted. An evaluated-but-skipped site says so.
+   */
+  skipped: 'disabled' | null;
 }
 
 export interface RunQuotaDigestOptions {
@@ -148,149 +156,247 @@ export async function runProcessorQuotaDigest(
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
 
-  // `enabled` gates SENDING, not evaluating. A dry run must be able to read a
-  // DISABLED config, because the prescribed workflow is exactly "try a threshold
-  // against real weeks BEFORE turning the email on" — and gating the dry run on
-  // `enabled` makes that impossible without first enabling the thing you are
-  // trying to evaluate. Found in live verification 2026-07-31: the first dry run
-  // against the real week returned `{"outcomes":[]}` and looked like "no data"
-  // when it actually meant "not switched on".
+  // `enabled` gates SENDING, not evaluating — and as of ADR-0071 Amendment 1 it
+  // does not gate the QUERY either.
+  //
+  // It used to: the live run selected `where: { enabled: true }`, so with the
+  // feature shipped disabled it matched zero rows, skipped the loop entirely and
+  // returned `{"outcomes":[]}` having written nothing. That is byte-identical to
+  // what a run produces when the config table has been dropped, and
+  // indistinguishable from a dead cron. Twelve days of daily fires (2026-07-31 →
+  // 2026-08-11) left no trace, and the operator's question "why have I seen
+  // nothing" had no answer in the database.
+  //
+  // Now every config is read and EVALUATED — evaluation is read-only and costs
+  // one indexed query — and `enabled` is checked at the one place it means
+  // something: immediately before anything irreversible. A disabled site
+  // therefore contributes an honest outcome and a heartbeat line saying what the
+  // digest WOULD have said, without a single email leaving the building.
   const configs = await db.processorQuotaConfig.findMany({
-    where: dryRun ? {} : { enabled: true },
     include: { site: true, recipients: true },
+    orderBy: { site: { code: 'asc' } },
   });
 
   const outcomes: QuotaDigestOutcome[] = [];
+  let runError: string | null = null;
 
-  for (const cfg of configs) {
-    const bounds = opts.weekStartISO
-      ? { weekStartISO: opts.weekStartISO, weekEndISO: '' }
-      : previousCompleteWeek(now);
+  try {
+    for (const cfg of configs) {
+      const bounds = opts.weekStartISO
+        ? { weekStartISO: opts.weekStartISO, weekEndISO: '' }
+        : previousCompleteWeek(now);
 
-    const week = await computeProcessorQuotaWeek(db, {
-      siteId: cfg.site_id,
-      weekStartISO: bounds.weekStartISO,
-      quota: Number(cfg.quota_units),
-      minMisses: cfg.min_misses,
-    });
-
-    const base = {
-      siteId: cfg.site_id,
-      siteCode: cfg.site.code,
-      weekStartISO: week.weekStartISO,
-      weekEndISO: week.weekEndISO,
-      processorsSeen: week.rows.length,
-      flaggedCount: week.flagged.length,
-    };
-
-    if (dryRun) {
-      outcomes.push({
-        ...base,
-        suppressed: week.flagged.length === 0,
-        alreadyEvaluated: false,
-        mode: null,
-        delivered: 0,
-        error: null,
+      const week = await computeProcessorQuotaWeek(db, {
+        siteId: cfg.site_id,
+        weekStartISO: bounds.weekStartISO,
+        quota: Number(cfg.quota_units),
+        minMisses: cfg.min_misses,
       });
-      continue;
-    }
 
-    // Idempotency. Claim the (site, week) BEFORE sending: if the send throws we
-    // still hold a row recording the attempt, and a retry is an explicit
-    // operator action rather than an accidental second mail.
-    const weekStartDate = new Date(`${week.weekStartISO}T00:00:00.000Z`);
-    const existing = await db.processorQuotaLog.findUnique({
-      where: { site_id_week_start: { site_id: cfg.site_id, week_start: weekStartDate } },
-    });
-    if (existing) {
-      log.info(
-        { site: cfg.site.code, week: week.weekStartISO },
-        '[processor-quota] week already evaluated — no second send',
-      );
-      outcomes.push({
-        ...base,
-        suppressed: existing.suppressed,
-        alreadyEvaluated: true,
-        mode: null,
-        delivered: 0,
-        error: null,
+      const base = {
+        siteId: cfg.site_id,
+        siteCode: cfg.site.code,
+        weekStartISO: week.weekStartISO,
+        weekEndISO: week.weekEndISO,
+        processorsSeen: week.rows.length,
+        flaggedCount: week.flagged.length,
+      };
+
+      if (dryRun) {
+        outcomes.push({
+          ...base,
+          suppressed: week.flagged.length === 0,
+          alreadyEvaluated: false,
+          mode: null,
+          delivered: 0,
+          error: null,
+          skipped: null,
+        });
+        continue;
+      }
+
+      // ── The `enabled` gate, at the last possible moment ────────────────────
+      //
+      // Deliberately placed AFTER evaluation and BEFORE anything irreversible.
+      // Evaluating costs one indexed read and buys the heartbeat a truthful line —
+      // "Woodland: 21 processors, 18 would flag, not sent (disabled)" — which is
+      // what makes a switched-off monitor legible instead of silent.
+      //
+      // No `processor_quota_logs` row is written here, and that is not an
+      // oversight: that table is keyed unique on (site, week) and the digest
+      // treats an existing row as "already sent, do not send again". Recording a
+      // disabled evaluation there would claim every week it skipped, so the
+      // morning Bill enables the alert it would find the week already claimed and
+      // stay silent — the guard would have eaten the thing it guards. Disabled
+      // runs belong in `processor_quota_runs`, which has no such key.
+      if (!cfg.enabled) {
+        log.info(
+          {
+            site: cfg.site.code,
+            week: week.weekStartISO,
+            processors: week.rows.length,
+            wouldFlag: week.flagged.length,
+          },
+          '[processor-quota] site disabled — evaluated, nothing sent',
+        );
+        outcomes.push({
+          ...base,
+          suppressed: false,
+          alreadyEvaluated: false,
+          mode: null,
+          delivered: 0,
+          error: null,
+          skipped: 'disabled',
+        });
+        continue;
+      }
+
+      // Idempotency. Claim the (site, week) BEFORE sending: if the send throws we
+      // still hold a row recording the attempt, and a retry is an explicit
+      // operator action rather than an accidental second mail.
+      const weekStartDate = new Date(`${week.weekStartISO}T00:00:00.000Z`);
+      const existing = await db.processorQuotaLog.findUnique({
+        where: { site_id_week_start: { site_id: cfg.site_id, week_start: weekStartDate } },
       });
-      continue;
-    }
+      if (existing) {
+        log.info(
+          { site: cfg.site.code, week: week.weekStartISO },
+          '[processor-quota] week already evaluated — no second send',
+        );
+        outcomes.push({
+          ...base,
+          suppressed: existing.suppressed,
+          alreadyEvaluated: true,
+          mode: null,
+          delivered: 0,
+          error: null,
+          skipped: null,
+        });
+        continue;
+      }
 
-    // ── The suppression decision ──────────────────────────────────────────
-    if (week.flagged.length === 0) {
+      // ── The suppression decision ──────────────────────────────────────────
+      if (week.flagged.length === 0) {
+        await db.processorQuotaLog.create({
+          data: {
+            site_id: cfg.site_id,
+            week_start: weekStartDate,
+            week_end: new Date(`${week.weekEndISO}T00:00:00.000Z`),
+            processors_seen: week.rows.length,
+            flagged_count: 0,
+            suppressed: true,
+            recipient_count: 0,
+          },
+        });
+        log.info(
+          { site: cfg.site.code, week: week.weekStartISO, processors: week.rows.length },
+          '[processor-quota] nobody flagged — digest suppressed (evaluated, recorded)',
+        );
+        outcomes.push({
+          ...base,
+          suppressed: true,
+          alreadyEvaluated: false,
+          mode: null,
+          delivered: 0,
+          error: null,
+          skipped: null,
+        });
+        continue;
+      }
+
+      const recipients = cfg.recipients.map((r) => r.email).filter((e) => e.trim() !== '');
+      let mode: 'live' | 'pilot' | null = null;
+      let delivered = 0;
+      let error: string | null = null;
+
+      try {
+        const res = await notifyStaff({
+          surfaceCode: PROCESSOR_QUOTA_SURFACE,
+          site: { id: cfg.site_id, code: cfg.site.code },
+          recipients,
+          subject: `Processor production — ${week.flagged.length} flagged — week of ${week.weekStartISO}`,
+          htmlBody: renderQuotaDigestHtml(week, cfg.site.name),
+          db,
+        });
+        mode = res.mode;
+        delivered = res.delivered;
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        log.error({ err, site: cfg.site.code }, '[processor-quota] digest send failed');
+      }
+
       await db.processorQuotaLog.create({
         data: {
           site_id: cfg.site_id,
           week_start: weekStartDate,
           week_end: new Date(`${week.weekEndISO}T00:00:00.000Z`),
           processors_seen: week.rows.length,
-          flagged_count: 0,
-          suppressed: true,
-          recipient_count: 0,
+          flagged_count: week.flagged.length,
+          suppressed: false,
+          recipient_count: recipients.length,
+          // Only stamped when something was really delivered — an attempted send
+          // that reached nobody must not read as "they were told".
+          sent_at: delivered > 0 ? new Date() : null,
+          error_text: error,
         },
       });
-      log.info(
-        { site: cfg.site.code, week: week.weekStartISO, processors: week.rows.length },
-        '[processor-quota] nobody flagged — digest suppressed (evaluated, recorded)',
-      );
+
       outcomes.push({
         ...base,
-        suppressed: true,
-        alreadyEvaluated: false,
-        mode: null,
-        delivered: 0,
-        error: null,
-      });
-      continue;
-    }
-
-    const recipients = cfg.recipients.map((r) => r.email).filter((e) => e.trim() !== '');
-    let mode: 'live' | 'pilot' | null = null;
-    let delivered = 0;
-    let error: string | null = null;
-
-    try {
-      const res = await notifyStaff({
-        surfaceCode: PROCESSOR_QUOTA_SURFACE,
-        site: { id: cfg.site_id, code: cfg.site.code },
-        recipients,
-        subject: `Processor production — ${week.flagged.length} flagged — week of ${week.weekStartISO}`,
-        htmlBody: renderQuotaDigestHtml(week, cfg.site.name),
-        db,
-      });
-      mode = res.mode;
-      delivered = res.delivered;
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      log.error({ err, site: cfg.site.code }, '[processor-quota] digest send failed');
-    }
-
-    await db.processorQuotaLog.create({
-      data: {
-        site_id: cfg.site_id,
-        week_start: weekStartDate,
-        week_end: new Date(`${week.weekEndISO}T00:00:00.000Z`),
-        processors_seen: week.rows.length,
-        flagged_count: week.flagged.length,
         suppressed: false,
-        recipient_count: recipients.length,
-        // Only stamped when something was really delivered — an attempted send
-        // that reached nobody must not read as "they were told".
-        sent_at: delivered > 0 ? new Date() : null,
-        error_text: error,
-      },
-    });
-
-    outcomes.push({
-      ...base,
-      suppressed: false,
-      alreadyEvaluated: false,
-      mode,
-      delivered,
-      error,
-    });
+        alreadyEvaluated: false,
+        mode,
+        delivered,
+        error,
+        skipped: null,
+      });
+    }
+  } catch (err) {
+    runError = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    // ── The heartbeat ──────────────────────────────────────────────────────
+    //
+    // Written on EVERY live run, including the run that evaluated nothing
+    // because every site is switched off, and including the run that threw.
+    // That unconditionality is the entire fix: a monitor whose only output is an
+    // event is indistinguishable from a dead one until the day it fires, and
+    // this one was silent for twelve days without anybody being able to tell.
+    //
+    // `dryRun` is excluded deliberately. Its contract is "evaluate and change
+    // nothing", and an operator poking thresholds from /admin must not be able
+    // to forge a heartbeat for a cron that is not running.
+    if (!dryRun) {
+      try {
+        await db.processorQuotaRun.create({
+          data: {
+            configs_total: configs.length,
+            configs_enabled: configs.filter((c) => c.enabled).length,
+            sites_evaluated: outcomes.length,
+            processors_seen: outcomes.reduce((n, o) => n + o.processorsSeen, 0),
+            flagged_total: outcomes.reduce((n, o) => n + o.flaggedCount, 0),
+            // Delivered, never attempted (ADR-0095).
+            digests_sent: outcomes.filter((o) => o.delivered > 0).length,
+            detail: outcomes.map((o) => ({
+              siteCode: o.siteCode,
+              weekStartISO: o.weekStartISO,
+              processorsSeen: o.processorsSeen,
+              flaggedCount: o.flaggedCount,
+              suppressed: o.suppressed,
+              alreadyEvaluated: o.alreadyEvaluated,
+              delivered: o.delivered,
+              skipped: o.skipped,
+              error: o.error,
+            })),
+            error_text: runError,
+          },
+        });
+      } catch (err) {
+        // A heartbeat that cannot be written must not take down the digest that
+        // was about to be sent — the email matters more than the record of it.
+        log.error({ err }, '[processor-quota] heartbeat write failed');
+      }
+    }
   }
 
   return outcomes;

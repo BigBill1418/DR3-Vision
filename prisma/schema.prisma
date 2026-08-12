@@ -5882,6 +5882,44 @@ model ProcessorQuotaLog {
   @@map("processor_quota_logs")
 }
 
+/// ADR-0071 Amendment 1 — the monitor's standing heartbeat.
+///
+/// `ProcessorQuotaLog` records a WEEK that was evaluated. It can only be written
+/// once a config is enabled, so while the feature shipped disabled it recorded
+/// nothing at all and a live cron was indistinguishable from a dead one. This
+/// table records a RUN — one row every live fire, whether or not any site is
+/// enabled and whether or not anything was sent.
+///
+/// Deliberately NOT keyed on (site, week): that key belongs to
+/// `processor_quota_logs`, where it enforces send-idempotency. A heartbeat
+/// sharing it would claim the week and permanently suppress the first real
+/// digest — the guard would eat the thing it guards.
+model ProcessorQuotaRun {
+  id     String   @id @default(uuid())
+  ran_at DateTime @default(now())
+
+  /// Sites holding a config at all. Zero means unconfigured, not merely off.
+  configs_total   Int @default(0)
+  /// Of those, how many would actually mail. Zero with a fresh `ran_at` is the
+  /// honest reading of "the monitor is alive and the alert is switched off".
+  configs_enabled Int @default(0)
+  /// Disabled sites are still evaluated read-only, so this counts them too —
+  /// the heartbeat can say what the digest WOULD have said without sending it.
+  sites_evaluated Int @default(0)
+  processors_seen Int @default(0)
+  flagged_total   Int @default(0)
+  /// Digests DELIVERED to at least one recipient. Per ADR-0095 an attempted send
+  /// that reached nobody is never recorded as a send.
+  digests_sent    Int @default(0)
+
+  /// Per-site breakdown, for diagnosis without a redeploy.
+  detail     Json
+  error_text String?
+
+  @@index([ran_at])
+  @@map("processor_quota_runs")
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Tiered anchor-overwrite guardrail (ADR-0072).
 //
