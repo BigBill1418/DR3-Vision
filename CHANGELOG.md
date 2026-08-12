@@ -9,6 +9,50 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-12 (3:50 AM PT) — the build recompiled everything to ship anything (ADR-0101)
+
+Deploy builds cost ~17 minutes and about **853 s** of that was `docker compose
+build` — the same 853 s for a one-line comment as for a thousand-line feature.
+
+- **The Docker layer cache was never the problem.** `RUN npm run build` sits
+  below `COPY . .`, so every commit invalidates it and Next.js recompiles **93
+  pages / 191 API routes / ~266k LOC** from cold: ~787 s of the 853 s. It started
+  cold every time because nothing carried `.next/cache` between builds —
+  `.dockerignore` excludes `.next` (correctly), and there was no BuildKit cache
+  mount.
+
+- **Two cache mounts, both namespaced.** `--mount=type=cache,id=dr3-npm` on
+  `/root/.npm` for `npm ci`, and `--mount=type=cache,id=dr3-next-cache,
+  sharing=locked` on `/app/.next/cache` for `npm run build`. The explicit `id=`
+  matters: CHAD-HQ is a ~15-tenant host, and an unnamed mount takes an id from
+  its target path, so every other stack's `/root/.npm` would share one directory.
+
+- **CHAD-HQ's nightly prune was eating the other 200–270 s.**
+  `buildkit-prune-daily` (04:30 UTC, an ADR-0062 §2 artifact in `noc-master`) ran
+  at `--keep-storage=4GB`; the 2026-08-12 04:31 run **deleted 12.63 GB and left
+  5.166 GB**, evicting the `npm ci` layer so the first build of each day paid a
+  reinstall tail. Retention raised to **40 GB** (the host has 4.4 TB free), and
+  the flag moved off the deprecated `--keep-storage` onto `--reserved-space` —
+  the script runs under `set -euo pipefail`, so the day that alias is removed the
+  entire prune would die silently.
+
+- **Type-checking stays inside the image build**, by explicit decision. CI
+  type-checks the commit; `npm run build` type-checks the artifact that ships,
+  and that is the gate the ADR-0033 payroll type-lie would have tripped.
+
+- **The dead `deps` stage is gone.** Nothing ever copied from it and compose sets
+  no build `target:`, so BuildKit never built it — zero time saved, one less
+  thing that reads like it matters.
+
+- **Verified rather than assumed:** cache mounts work on the host's built-in
+  BuildKit frontend with **no** `# syntax=` directive (throwaway build on
+  CHAD-HQ, exit 0) — so no `docker/dockerfile:1` network pull was added to every
+  build; `docker build --check` reported *"no warnings found"*; baseline recorded
+  at `docker builder du` **13.88 GB total, zero cache-mount records**.
+
+- **This deploy was still a full cold build**, by design — the mounts are empty
+  until a build fills them. The halved build is read off the NEXT deploy.
+
 ## 2026-08-12 (12:15 AM PT) — the floor should not be the discovery mechanism (ADR-0100)
 
 Implements ADR-0094 §P0 and §P4 — the two items it sequenced FIRST, ahead of
