@@ -5843,7 +5843,7 @@ model ProcessorQuotaConfig {
   quota_units Decimal @default(75) @db.Decimal(5, 1)
 
   /// Misses in one Monday–Sunday week before a processor is flagged. Seeded 2.
-  min_misses Int @default(2)
+  min_misses Int @default(3)
 
   /// Pacific wall-clock send time. The week reported on is always the most
   /// recent COMPLETE Mon–Sun week, so the send day is a delivery choice, not a
