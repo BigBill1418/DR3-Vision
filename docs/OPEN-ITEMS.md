@@ -19,6 +19,86 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.AZ — 2026-08-12 handoff #259: commodity sources confirmed, quota digest enabled, unwatched-file triage
+
+All four phases of the confirm-and-sweep handoff executed (evening PT). Full
+evidence: `docs/q2-commodity-reconciliation-finding-2026-08-12.md` §CONFIRMED.
+
+- **HEADLINE — Layer B is buildable from files (Q-2/AK-4b evidence landed).**
+  `Woodland Outbound Auditing 2026.xlsx` (now watched, source `63da2155`) carries
+  per-commodity WEIGHT per outbound load (M-id grain, VC-vendor codes, BOL IDs,
+  shipment dates; no dollars). `Woodland Invoices tracking.xlsx` (now watched,
+  source `e0101cb5`) carries Invoice # + `Amt.` + category/commodity (no
+  weights). **No shared machine key** (275 Invoice# vs 816 BOL / 831 M-id:
+  zero overlap) — but the linkage is hand-recorded in Notes (tickets that ARE
+  BOL IDs, M-id lists, tonnage+rate, "in MyMRC <date>") and 29 invoice rows key
+  directly to **H-haul numbers**. Reconciliation grain that works:
+  (month × commodity × vendor), with per-load matching for the Notes-keyed
+  subset. Building it stays **Bill's call** (AK-4).
+- **WATCH — do NOT confirm the Outbound file's proposed class.** The classifier
+  proposed `commodity_audit_tracker` (conf 0.30); that absorber expects the
+  sign-off-log shape, not a weights workbook. Needs a new class when Layer B is
+  designed. (The Invoices file proposed `ap_history_report` 0.72 — also leave
+  unconfirmed; it is not an AP feed.)
+- **RETENTION RISK — 4 of 5 watched sources live on Kelsey's personal OneDrive**
+  (departed 2026-08-08); if the account is deprovisioned the live links die (R2
+  retains ingested versions). Durable fix = move the canon to a team/SharePoint
+  library — the same move ADR-0067 Am.6 §E recommends. Operator action.
+- **TRIAGE — the remaining 6 reachable-but-unwatched files** (all
+  `/Documents/Attachments/` e-mail-attachment snapshots; none looks like
+  client-PII; nothing auto-watched — Bill decides):
+  | File | Size/owner/modified | Likely is | Recommend |
+  |---|---|---|---|
+  | DR3 Data Tracking.xlsx | 331 KB · Kelsey · 07-29 | general tracking workbook, contents unknown | **watch once to sample** (same read-only pattern as this handoff), then decide |
+  | TEREX.xlsx (Attachments copy) | 481 KB · Kelsey · 07-29 | duplicate-by-name of the WATCHED TEREX (which lives on Janette's drive, still updating) — different identity, frozen snapshot | don't watch (double-ingest risk) |
+  | DR3 Machine List (2).xlsx | 41 KB · **Bill** · 07-28 | equipment roster copy; superseded by the ADR-0062 equipment master | don't watch |
+  | DR3 Meeting Notes Log 2026.xlsx | 81 KB · Kelsey · 07-29 | meeting notes; names staff, no operational figures | don't watch |
+  | DR3 Task Lists for 2025.xlsx | 50 KB · Kelsey · 07-29 | stale 2025 task lists | don't watch |
+  | JOURNAL Woodland Facility.xlsx | 58 KB · Kelsey · 07-29 | facility journal; may contain personnel/incident notes | keep unwatched pending Bill review (C-47-adjacent) |
+- **DONE — ADR-0071 Am.2 shipped and enabled** (see CHANGELOG this date):
+  #257/#258 merged, Woodland `enabled=true / min_misses=3 / Friday 20:00 PT`,
+  recipients Bill+Morena+Janette (pre-existing), the 8/03–8/07 week pre-claimed
+  (suppressed, reason on the row) so the **first digest lands Friday 2026-08-14
+  20:00 PT** covering Mon 8/10–Fri 8/14. Eugene stays disabled, recipients
+  empty (Am.1 — Bill's to fill).
+- **DONE — F-1 display completion**: COR headcount prose now renders a real
+  number or "not recorded", never `—`, never a fabricated 0 (prefill already
+  derived from payroll per ADR-0076; this closes the display letter of F-1).
+- **DECISION BRIEF — C-47 (scope narrowing), investigation only, nothing
+  changed.** The live connection (`doc_ingest_connections`, verified
+  2026-08-12) holds `email openid profile User.Read Files.Read.All
+Sites.Read.All`. What doc-ingest actually exercises today needs only
+  `Files.Read.All`: sharedWithMe enumeration, `/shares/{token}` URL
+  registration (C-48: measured working on Files.Read.All), per-item
+  metadata/children/delta/content on the 5 watched item-level shares, and the
+  ADR-0080 reachability probe. Nothing currently calls a Sites API; the only
+  planned consumer of `Sites.Read.All` is the ADR-0067 Am.6 §B SharePoint-list
+  subscription — which is also the recommended escape from both on-borrowed-time
+  discovery routes. The 11,403-file/42-site blast radius is **unproven to come
+  from the scope at all** (the ⚠ 2026-07-29 amendment): it may be docs-dr3's
+  org-wide site membership, in which case dropping the scope shrinks nothing.
+  **Decision shape for Bill:** (1) run the falsifiable narrowed-token test from
+  a separately consented test app (avoids the refresh-token-rotation re-auth
+  risk on prod); (2) if the scope is the lever, narrow it; if membership is,
+  pull docs-dr3 out of `NSStaff`/`HSS*` site groups — that removes the PII
+  exposure under either answer and costs doc-ingest nothing today.
+- **DECISION BRIEF — ADR-0087 (VLM equipment identity), Proposed, unbuilt.**
+  Proposes: key VLM↔DR3 equipment on `vlm_legacy_id` (one additive nullable
+  column + partial unique index), nightly additive upsert from the existing
+  `vlm-cdc` → `analytics.equipment` feed (dry-run first; never hard-delete), a
+  canonical match key that PRESERVES `-` and `#` (both proven to distinguish
+  real assets), "key proposes, corroboration disposes" merges, wiring
+  `findSimilarEquipment` into the AP request path (the hole that minted 4
+  duplicates on 2026-08-06 alone), a 22-value type vocabulary, and CSV decision
+  registers in-repo instead of chat approvals. Cost: one migration + one sync
+  job + register decisions (3 type-vocab calls, ghost bulk rule, a handful of
+  corroborated merges); plus the CDC projection must regain VIN/plate for merge
+  corroboration. Unblocks: durable equipment population (519/626 matched,
+  drifting), real dedup (M104/F9/DV2547), and `equipment_trend` leaving pilot
+  on trustworthy identity. **Open question for Bill:** accept the ADR and
+  authorize the build, and make the register's three pending vocabulary calls
+  (`Vehicle`, `Van`, blank) plus the ghost-archival bulk rule.
+
 ## 0.AY — 2026-08-11/12 floor dead-end week-one slice — one decision for Bill, two accepted residuals
 
 The dead-end inventory (`docs/2026-08-11-floor-dead-end-state-inventory.md`, 25
@@ -1412,6 +1492,9 @@ Everything below is a DECISION or an OPERATIONAL action, not code.
   ticked boxes. There IS a legitimate feature in it — "did anyone audit METAL in
   March, and who" — but that is a compliance-records surface, not
   absorption-for-reconciliation, and it needs Bill's call before it is built.
+  **2026-08-12 update:** the reconciliation inputs themselves are now CONFIRMED
+  to live in the two sibling files (watched + sampled, handoff #259) — see §0.AZ
+  and the finding doc's CONFIRMED section.
 - **Q-3 — ADR-0073 shape** (see 0.AC, L-1).
 
 ### Operator actions

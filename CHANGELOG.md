@@ -9,6 +9,48 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-12 (10:30 PM PT) — the reconciliation Kelsey took with her was in two unwatched files (handoff #259)
+
+The Q-2 finding named two reachable-but-unwatched spreadsheets as the likely
+home of the real MyMRC-vs-vendor-invoice inputs. This session turned "likely"
+into **confirmed**, read-only, using the pipeline's own machinery.
+
+- **Both files are now watched `doc_sources`** (registered by identity from
+  `doc_ingest_reachable_items`, exactly what the admin register route does;
+  audited under Bill's user id, `system:handoff-259-phase1-register`). Sweep run
+  `28997020` ingested + parsed both; ADR-0067 Am.8 resolved **strong** header
+  rows past the MyMRC banners (Jan sheet: row 10 under 7 title rows). The
+  classifier filed **proposals only** — nothing confirmed, so ADR-0069
+  absorption never ran and no money figure touched a typed table.
+- **The answer** (full evidence in the finding doc's CONFIRMED section):
+  Outbound = per-commodity **weights** per load (M-id grain, VC vendor codes,
+  BOL IDs, dates; no dollars). Invoices = **Invoice # + Amt. + category/
+  commodity** (no weights). **No shared machine key** (275 Invoice# × 816 BOL /
+  831 M-id: zero overlap) — but Notes hand-record tickets that ARE BOL IDs,
+  M-id lists, tonnage+rate, and 29 rows key to **H-haul numbers**. **Layer B is
+  buildable** at (month × commodity × vendor) grain, per-load for the
+  Notes-keyed subset. Building it remains Bill's decision (AK-4).
+- **Reachable-but-unwatched went 8 → 6**, and the 6 are now a named triage
+  table in OPEN-ITEMS §0.AZ (all Attachments-folder snapshots; none watched,
+  none PII-sampled). Also recorded there: 4 of 5 watched sources live on
+  Kelsey's departed-account OneDrive (retention risk), and the Outbound file's
+  proposed class must NOT be confirmed as `commodity_audit_tracker`.
+- **ADR-0071 Am.2 landed and is enabled** (#257 + #258, both CI-green, merged):
+  digest anchor 20:00 PT, `latestDueMonFriWeek()` Mon–Fri window, default
+  min_misses 3 (migration `20260846`, default-only — no live row rewritten by
+  migration, no migration renamed). Live Woodland row flipped
+  `enabled=true / min_misses=3 / send_dow=5 / 20:00` (audited); recipients were
+  already Bill+Morena+Janette. The 8/03–8/07 week was **pre-claimed suppressed**
+  (reason on the row) so the first digest is **Friday 2026-08-14 20:00 PT**
+  covering Mon 8/10–Fri 8/14 — not a Thursday catch-up. Eugene stays disabled.
+- **F-1 closed to the letter**: the COR headcount prose now renders a real
+  number or **"not recorded"** — never `—`, never a fabricated 0 (matching the
+  Terex band convention; data side was already payroll-derived per ADR-0076).
+- **Verified rather than assumed:** the "#256 batch" premise was checked against
+  main first — the renumber (0078/0087/0097/0098) and F-1 data fix were already
+  on main; the digest code was NOT (it sat in open PR #257). What "verify the
+  batch landed" actually required was landing it.
+
 ## 2026-08-12 (3:50 AM PT) — the build recompiled everything to ship anything (ADR-0101)
 
 Deploy builds cost ~17 minutes and about **853 s** of that was `docker compose
