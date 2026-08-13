@@ -436,3 +436,17 @@ row would hold the day forever, making a mistaken entry permanent.
   change that moves the number it qualifies would make two changes look like one.
 - The equipment registry gains a real dependent: `ON DELETE RESTRICT` means a
   machine with recorded days cannot be deleted (verified against PG16).
+
+## Migration-name divergence (recorded 2026-08-12, batch F-4)
+
+Production `_prisma_migrations` carries `20260830_adr0078_equipment_daily_throughput`
+— **that migration is THIS ADR's work** (`equipment_daily_throughput`), not
+ADR-0078's (iPad reliability). The name froze before the ADR numbering settled
+(the 0078/0079 collision era, see `docs/adr/README.md` renumber note).
+
+Shipped migration names are immutable: renaming the row risks a checksum/drift
+mismatch on the next `prisma migrate` for zero functional gain, and deleting or
+altering the table it created is explicitly forbidden (OPEN-ITEMS F-4:
+"Harmless; do not 'fix' it by deleting the table"). The divergence is
+documentation-only and this note is the fix.
+

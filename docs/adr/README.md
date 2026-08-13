@@ -131,3 +131,26 @@ This directory contains short, dated, immutable records of the technical and arc
    - **Consequences** — what this commits us to
 3. Once accepted, ADRs are immutable. To overturn one, write a new ADR that supersedes it.
 4. Cross-reference the charter section that prompted the decision.
+
+---
+
+## ADR number-collision record (verified 2026-08-12, batch Phase 2)
+
+The 2026-08-12 batch called for renumbering four collisions (0078, 0087,
+0097, 0098). **Verification against current `main` found the renumbering
+already executed** during the 2026-08-11 marathon:
+
+- terex-daily-throughput sits at **0079** (0078 = iPad reliability, its
+  93 cross-references all legitimate);
+- throughput-gap-watchdog sits at **0088** (0087 = VLM equipment identity);
+- the 0097/0098 tangle was resolved by ADR-0098 itself (its §8 records the
+  19-second double-claim and the renumber; 0097 = page-that-heals,
+  0098 = citation-is-a-promise);
+- the amendment-style shared numbers (0067, 0069, 0071) are legitimate and
+  untouched.
+
+The cheap collision guard also already exists:
+`src/__tests__/adr-record-integrity.test.ts` fails CI when two primary files
+claim one number. Residue closed by this commit: the ADR-0079 migration-name
+divergence note (F-4). Migration names were not touched anywhere.
+
