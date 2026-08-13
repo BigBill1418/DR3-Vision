@@ -458,9 +458,14 @@ export function CorClient({
             {showSeries && hc && (
               <div className="mt-3 rounded-lg border border-white/10 bg-black/25 p-3 text-xs">
                 <p className="opacity-80">
-                  Pre-fill from month-end close {hc.monthEndDate ?? '—'}: employees{' '}
-                  {hc.employeesCount ?? '—'}, processors {hc.processorsCount ?? '—'}. The FT/PT
-                  split is your judgment — the daily close captures totals only.
+                  {/* OPEN-ITEMS 0.AG F-1 — a real number or "not recorded", never an
+                      ambiguous dash and never a fabricated 0. Processors derive from
+                      payroll (ADR-0076); the FT/PT total stays whatever the close
+                      recorded, which in production is nothing. */}
+                  Pre-fill (month-end close {hc.monthEndDate ?? 'none'}): employees{' '}
+                  {hc.employeesCount ?? 'not recorded'}, processors from payroll{' '}
+                  {hc.processorsCount ?? 'not recorded'}. The FT/PT split is your judgment — the
+                  daily close captures totals only.
                 </p>
                 <table className="mt-2 w-full text-left">
                   <thead className="opacity-60">
