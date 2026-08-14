@@ -49,6 +49,12 @@ export const FLEET_ADRS = {
   // it (`scripts/ntfy-header-safe.mjs`) and conforms against its vectors, so the
   // citation is correct even though the record is not in this repo.
   '0200': 'noc-master/docs/adr/0200-fleet-ntfy-header-safety-conformance.md',
+  // noc-master ADR-0194 — alert-delivery redundancy. Amendment 3 is the sweep
+  // that regenerated every weak obscured ntfy.sh fallback suffix across the
+  // fleet, including the three `dr3-vision-*` rows this repo mirrors by hand in
+  // `src/lib/ntfy.ts`. The registry the values come from lives there, so the
+  // record does too.
+  '0194': 'noc-master/docs/adr/0194-alert-delivery-redundancy-and-io-psi-saturation-axis.md',
 };
 
 /**
