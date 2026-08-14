@@ -145,7 +145,9 @@ describe('publishNtfy — fallback on primary failure', () => {
       'https://ntfy.barnardhq.com/dr3-vision-system',
       'https://ntfy.barnardhq.com/dr3-vision-system',
     ]);
-    expect(fetchCalls[3]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
+    expect(fetchCalls[3]!.url).toBe(
+      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
+    );
     const fbHeaders = fetchCalls[3]!.init.headers as Record<string, string>;
     expect(fbHeaders['X-Title']).toBe('[FALLBACK] [DR3-Vision] Migration applied 0001_init');
     expect(fbHeaders['Authorization']).toBeUndefined();
@@ -511,5 +513,79 @@ describe('header encoding safety (ADR-0019.5)', () => {
     const fbTitle = String((fetchCalls.at(-1)!.init.headers as Record<string, string>)['X-Title']);
     expect(fbTitle).toContain('[FALLBACK]');
     expect(fbTitle).not.toContain('—');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// noc-master ADR-0194 Amendment 3 — the fallback topic name IS the credential,
+// and this repo keeps FIVE hand-maintained copies of one of them.
+//
+// `dr3-vision-system`'s obscured topic is written out verbatim in five places:
+// this map, `src/lib/mymrc/ntfy.ts` (the alias-less MyMRC bundle, which cannot
+// import from here), and three standalone `scripts/*.mjs` daemons that run as
+// their own compose services. Nothing at runtime can notice them diverging —
+// the fallback only fires when ntfy.barnardhq.com is already down, and public
+// ntfy.sh returns 200 for a POST to ANY topic name, so a stale copy publishes
+// into the void and reports success. DroneOpsMap had exactly this drift for
+// months before the same sweep found it.
+//
+// These two tests are therefore the only mechanism that can catch it.
+// ────────────────────────────────────────────────────────────────────────
+describe('obscured ntfy.sh fallback topics (ADR-0194 Am.3)', () => {
+  const STRONG = /^[0-9a-f]{32,}$/;
+
+  it('every pinned fallback topic carries its own >=32-hex suffix, within ntfy limits', () => {
+    const map = __testing.fallbackTopicByPrimary;
+    const entries = Object.entries(map);
+    expect(entries.length).toBeGreaterThan(0);
+
+    const suffixes = new Set<string>();
+    for (const [primary, topic] of entries) {
+      const suffix = topic.slice(topic.lastIndexOf('-') + 1);
+      expect(STRONG.test(suffix), `${primary} -> ${topic}: suffix is ${suffix.length} chars`).toBe(
+        true,
+      );
+      // ntfy silently 404s a topic over 64 chars on BOTH servers, so an
+      // over-length name is a fallback that reports success and delivers
+      // nothing (noc-master ADR-0194 3i).
+      expect(topic.length, `${primary} -> ${topic}`).toBeLessThanOrEqual(64);
+      expect(/^[A-Za-z0-9_-]+$/.test(topic), `${primary} -> ${topic}`).toBe(true);
+      suffixes.add(suffix);
+    }
+    // Distinct secrets: one shared suffix means one guess exposes them all.
+    expect(suffixes.size).toBe(entries.length);
+  });
+
+  it('guards the guard: the strength regex rejects the retired 5-char suffixes', () => {
+    expect(STRONG.test('k8m2n')).toBe(false);
+    expect(STRONG.test('r4w7q')).toBe(false);
+    expect(STRONG.test('f9j5p')).toBe(false);
+    expect(STRONG.test('a'.repeat(31))).toBe(false);
+    expect(STRONG.test('a'.repeat(32))).toBe(true);
+  });
+
+  it('all five hand-maintained copies of dr3-vision-system agree', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const expected = __testing.fallbackTopicByPrimary['dr3-vision-system'];
+    expect(expected).toBeTruthy();
+
+    // Each of these holds its own literal because it cannot import this module:
+    // the MyMRC bundle compiles alias-less, and the three .mjs daemons run as
+    // separate compose services outside the Next build graph.
+    const copies = [
+      'src/lib/mymrc/ntfy.ts',
+      'scripts/bonus-eod-check.mjs',
+      'scripts/bonus-escalation-check.mjs',
+      'scripts/migrate-with-ntfy.mjs',
+    ];
+    for (const rel of copies) {
+      const text = await readFile(new URL(`../../${rel}`, import.meta.url), 'utf8');
+      expect(text, `${rel} does not carry the current dr3-vision-system fallback topic`).toContain(
+        expected,
+      );
+      expect(text, `${rel} still carries a retired fallback topic`).not.toMatch(
+        /bhq-fb-dr3v-\w+-\w{4,6}(?![0-9a-f])/,
+      );
+    }
   });
 });

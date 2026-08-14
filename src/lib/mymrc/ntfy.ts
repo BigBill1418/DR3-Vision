@@ -17,7 +17,7 @@ import type { FeedName } from './types';
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
 const FALLBACK_BASE = 'https://ntfy.sh';
 // Pinned obscured fallback topic for `dr3-vision-system` (ntfy-fallback-topics.yml).
-const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
+const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
 // Tier-3 fallback click (ADR-0036): the NOC status page for this service.
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';

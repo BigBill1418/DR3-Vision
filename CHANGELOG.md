@@ -9,6 +9,42 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-13 (8:15 PM PT) — five hand-copied fallback topics, one weak secret each (noc-master ADR-0194 Am.3)
+
+The `dr3-vision-*` rows in the fleet's obscured-fallback registry each carried a
+**5-character suffix** (~26 bits). These name the public `ntfy.sh` topics this
+app fails over to when `ntfy.barnardhq.com` is unreachable, and **public ntfy.sh
+has no authentication — the topic name is the entire access control.** A
+5-character suffix is enumerable: guess it and you can read every system alert
+DR3-Vision fails over onto it, and POST a forged `[DR3-Vision]` page straight to
+Bill's phone. All three regenerated with 32 hex (128 bits).
+
+**The structural problem is that one of them is written out in five places.**
+`dr3-vision-system`'s topic appears in `src/lib/ntfy.ts`, in
+`src/lib/mymrc/ntfy.ts` (the MyMRC bundle compiles alias-less and cannot import
+it), and in three standalone `scripts/*.mjs` daemons that run as their own
+compose services outside the Next build graph. Nothing at runtime can notice
+them diverging: the fallback only fires when the primary is already down, and
+`ntfy.sh` answers **200 for a POST to any topic name**, so a stale copy
+publishes into the void and logs success. The sibling repo swept in the same
+pass (DroneOpsMap) had exactly that drift, live, for months.
+
+- `src/lib/ntfy.ts`, `src/lib/mymrc/ntfy.ts`,
+  `scripts/{bonus-eod-check,bonus-escalation-check,migrate-with-ntfy}.mjs` —
+  11 literals across 7 files updated in one commit.
+- `src/lib/ntfy.test.ts` — three new tests in an `ADR-0194 Am.3` block:
+  every pinned topic carries its own `>=32`-hex suffix, is inside ntfy's 64-char
+  limit (over-length 404s on **both** servers and delivers nothing), and all
+  suffixes are distinct; a guard-the-guard case pinning the regex against the
+  three retired values; and a **cross-file consistency check** that reads the
+  four sibling copies off disk and fails if any drifts from `src/lib/ntfy.ts`.
+  Proven non-vacuous — reverting the MyMRC copy to `bhq-fb-dr3v-system-k8m2n`
+  fails it by name. 24 passed (was 21).
+
+No behaviour change and no operator-visible surface. `tsc --noEmit` clean;
+ESLint unchanged from `main` (the one `bonus-eod-check.mjs` unused-disable
+warning is present at HEAD and is not from this change).
+
 ## 2026-08-12 (10:30 PM PT) — the reconciliation Kelsey took with her was in two unwatched files (handoff #259)
 
 The Q-2 finding named two reachable-but-unwatched spreadsheets as the likely

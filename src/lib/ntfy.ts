@@ -52,10 +52,10 @@ const FALLBACK_BASE = 'https://ntfy.sh';
 // added 2026-05-06. Public ntfy.sh topics; access control IS the
 // obscured suffix. Bill's reader subscribes; nobody else needs the name.
 const FALLBACK_TOPIC_BY_PRIMARY: Readonly<Record<string, string>> = {
-  'dr3-vision-system': 'bhq-fb-dr3v-system-k8m2n',
+  'dr3-vision-system': 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
   'dr3-vision-container': 'barnardhq-fleet-dr3-vision-8a7f2c91e6b4d3a85f0c9d2e7b1a8f4c3',
-  'dr3-vision-deploys': 'bhq-fb-dr3v-deploys-r4w7q',
-  'dr3-vision-loads': 'bhq-fb-dr3v-loads-f9j5p',
+  'dr3-vision-deploys': 'bhq-fb-dr3v-deploys-6438a50ae307f3744cbcc19d314f787a',
+  'dr3-vision-loads': 'bhq-fb-dr3v-loads-43e1bf27f2c2e628478017a0e756cf73',
 };
 
 // ADR-0036 §Click URL priority tier 3.
@@ -575,6 +575,13 @@ function fingerprintFromError(err: unknown): string {
 // ────────────────────────────────────────────────────────────────────────
 
 export const __testing = {
+  /**
+   * The pinned obscured-fallback map, exposed so the suite can assert the
+   * suffixes are still strong. On public ntfy.sh the topic name is the whole
+   * access control (noc-master ADR-0194 Am.3), and this map is hand-copied
+   * from the fleet registry — so nothing at runtime can notice it rotting.
+   */
+  fallbackTopicByPrimary: FALLBACK_TOPIC_BY_PRIMARY,
   clearCooldownLedger,
   cooldownActive: (key: string) => cooldownActive(key, Date.now()),
   cooldownLedgerSize: () => cooldownLedger.size,
