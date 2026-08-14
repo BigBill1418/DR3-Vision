@@ -33,7 +33,7 @@ import { PrismaClient } from '@prisma/client';
 const PRIMARY_BASE = process.env.NTFY_BASE_URL?.trim() || 'https://ntfy.barnardhq.com';
 const FALLBACK_BASE = 'https://ntfy.sh';
 const TOPIC = process.env.NTFY_TOPIC_SYSTEM?.trim() || 'dr3-vision-system';
-const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
+const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 const TIMEOUT_MS = 5_000;
 

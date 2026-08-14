@@ -138,7 +138,9 @@ describe('publishFireFailure — app-independent backstop page', () => {
 
     expect(ok).toBe(true);
     expect(calls).toHaveLength(2);
-    expect(calls[1]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
+    expect(calls[1]!.url).toBe(
+      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
+    );
     const fbHeaders = calls[1]!.init.headers as Record<string, string>;
     expect(String(fbHeaders['X-Title'])).toContain('[FALLBACK]');
     // Fallback carries no bearer (public server).
@@ -152,7 +154,9 @@ describe('publishFireFailure — app-independent backstop page', () => {
     // file is missing — it still reaches the anonymous fallback server.
     expect(ok).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
+    expect(calls[0]!.url).toBe(
+      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
+    );
     const fbHeaders = calls[0]!.init.headers as Record<string, string>;
     expect(String(fbHeaders['X-Title'])).toContain('[FALLBACK]');
     // The primary (authenticated) server is never touched without a bearer.
@@ -165,6 +169,8 @@ describe('publishFireFailure — app-independent backstop page', () => {
     const ok = await publishFireFailure('t4', FIXED_NOW);
     expect(ok).toBe(false);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe('https://ntfy.sh/bhq-fb-dr3v-system-k8m2n');
+    expect(calls[0]!.url).toBe(
+      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
+    );
   });
 });

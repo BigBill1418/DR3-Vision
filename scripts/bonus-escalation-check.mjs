@@ -60,7 +60,7 @@ const RETRY_SPACING_MS = 15 * 60 * 1000;
 const NTFY_PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
 const NTFY_FALLBACK_BASE = 'https://ntfy.sh';
 const NTFY_TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
-const NTFY_FALLBACK_TOPIC = 'bhq-fb-dr3v-system-k8m2n';
+const NTFY_FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const NTFY_CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 const NTFY_TIMEOUT_MS = 5_000;
 
