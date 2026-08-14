@@ -9,6 +9,65 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-14 (12:15 AM PT) — the capture held a page the heal had already closed (ADR-0103)
+
+**Incident: `[DR3-Vision] MyMRC sync error - woodland [outbound]`, 2026-08-13
+11:01 PM PT.** The MyMRC `outbound` feed failed with
+`page.waitForTimeout: Target page, context or browser has been closed`, one
+second after the log said `mid-run re-auth recovered on attempt 1/3`. Same
+fingerprint had fired once before, 2026-08-12 12:01 AM PT.
+
+### Fixed
+
+- **`captureListPage` no longer caches the Playwright page across
+  `ensureAuthenticated`.** A mid-run session drop makes the shared `AdminSession`
+  tear down its context and open a NEW page (ADR-0057 `rebuildAndLogin`), so the
+  cached reference was dead and the settle call threw. The `AdminSession`
+  docstring already required this ("callers must never cache the reference across
+  an `ensureAuthenticated`"); this was the one caller that did.
+- **A healed pass is now replayed, not patched.** Merely re-reading the page
+  would have stopped the alert and shipped a _worse_ defect: the aura listeners
+  were bound to the dead page and the heal re-navigates itself, so the capture
+  would have come back EMPTY and silently under-synced billing data. The pass is
+  discarded and re-run on the healed page, listeners and all.
+- Budget `MAX_CAPTURE_PASSES = 2`. If the last pass is still healed, the capture
+  is **discarded** rather than trusted — the heal only fires on a logged-OUT
+  page, so that traffic is unauthenticated. `fetchListPage` then wedges loud and
+  resumable on the missing envelope instead of replaying garbage.
+- Freshness was green throughout (`hauls`/`processed`/`outbound` all newest
+  2026-08-13, 0.8d behind). **This was not the known confirmed-but-undelivered
+  freshness pattern, and nothing was silenced.**
+
+### Fixed — two source files were binary to `grep`
+
+Found while diagnosing: `grep` reported **zero matches for `export`** in
+`src/lib/mymrc/list-page.ts`, a 571-line module exporting 23 symbols.
+
+- `src/lib/mymrc/list-page.ts` and `src/lib/equipment/import.ts` each contained a
+  **literal 0x00 byte** used as a composite-key separator. NUL is valid UTF-8, so
+  both compiled and every test passed — but `grep`/`ripgrep` classify a file
+  containing NUL as binary and **skip it silently**, reporting no hits rather than
+  an error. Every codebase-wide audit over this repo has had a blind spot in both
+  files.
+- Both changed to the `\u0000` escape. **Byte-identical at runtime** — verified by
+  normalising the escape back to a raw NUL and reproducing the previous file
+  exactly, and (for `import.ts`, whose NUL feeds a sha256 idempotency key) by
+  confirming the digest is unchanged.
+- Repo-wide sweep of all 1,837 tracked files: no other source file affected.
+- **New guard:** `src/lib/repo-hygiene.nul-bytes.test.ts` fails the suite on any
+  tracked text file containing 0x00, so this cannot recur silently. Verified by
+  staging a probe file with a NUL and watching the guard fail.
+
+### Verification
+
+- New `backfill-portal-client.capture-heal.test.ts` (4 tests). **Adversarially
+  confirmed**: reverted to the pre-fix source and watched 3 of the 4 fail with the
+  exact production string `page.waitForTimeout: Target page, context or browser
+has been closed`.
+- `vitest run src/lib/mymrc/ src/lib/equipment/` — 612 passed.
+- `tsc --noEmit` + `tsc -p tsconfig.mymrc.json --noEmit` clean; `next lint
+--max-warnings 0` clean.
+
 ## 2026-08-13 (8:15 PM PT) — five hand-copied fallback topics, one weak secret each (noc-master ADR-0194 Am.3)
 
 The `dr3-vision-*` rows in the fleet's obscured-fallback registry each carried a

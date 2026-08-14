@@ -159,7 +159,10 @@ export const SORT_FLIP_STEP_COUNT = 4;
  * one `pageSize` window and asc+desc tile from both ends. The engine stops (sets
  * `completed_at`) when the page it just fetched is this index.
  */
-export function sortFlipLastPageIndex(totalCount: number, pageSize: number = BACKFILL_PAGE_SIZE): number {
+export function sortFlipLastPageIndex(
+  totalCount: number,
+  pageSize: number = BACKFILL_PAGE_SIZE,
+): number {
   const ps = Math.max(1, Math.trunc(pageSize));
   return Math.ceil(Math.max(0, totalCount) / ps) - 1;
 }
@@ -170,7 +173,10 @@ export function sortFlipLastPageIndex(totalCount: number, pageSize: number = BAC
  * middle rank band is unreachable via the getItems offset ceiling. The client
  * turns this into a LOUD wedge — it must never masquerade as complete.
  */
-export function sortFlipExceedsCoverage(totalCount: number, pageSize: number = BACKFILL_PAGE_SIZE): boolean {
+export function sortFlipExceedsCoverage(
+  totalCount: number,
+  pageSize: number = BACKFILL_PAGE_SIZE,
+): boolean {
   const ps = Math.max(1, Math.trunc(pageSize));
   return totalCount > SORT_FLIP_STEP_COUNT * ps;
 }
@@ -225,7 +231,7 @@ export function parseGetItemsResponse(body: string): GetItemsPage {
   }
   const actions =
     parsed && typeof parsed === 'object' && Array.isArray((parsed as { actions?: unknown }).actions)
-      ? ((parsed as { actions: Array<{ state?: string; returnValue?: unknown }> }).actions)
+      ? (parsed as { actions: Array<{ state?: string; returnValue?: unknown }> }).actions
       : [];
   for (const action of actions) {
     if (action?.state !== 'SUCCESS') continue;
@@ -251,7 +257,13 @@ export function parseGetItemsResponse(body: string): GetItemsPage {
     // rather than the old misleading "no getItems action" (which masked the 2050
     // truncation as generic drift).
     const rv = action.returnValue as GetItemsReturnScalars | undefined;
-    if (rv && typeof rv === 'object' && 'message' in rv && 'hasMoreData' in rv && !('recordIdActionsList' in rv)) {
+    if (
+      rv &&
+      typeof rv === 'object' &&
+      'message' in rv &&
+      'hasMoreData' in rv &&
+      !('recordIdActionsList' in rv)
+    ) {
       throw new PortalContractDriftError(
         `getItems: offset-ceiling response (no records; message: ${JSON.stringify(strOrNull(rv.message))}) — ` +
           `requested offset exceeded the SOQL OFFSET 2000 cap`,
@@ -467,8 +479,10 @@ export function parseGetItemsRequest(message: string): CapturedGetItemsRequest |
     if (!isGetItems && !('filterName' in params)) continue;
     return {
       actionId: typeof a['id'] === 'string' ? (a['id'] as string) : null,
-      entityName: typeof params['entityName'] === 'string' ? (params['entityName'] as string) : null,
-      filterName: typeof params['filterName'] === 'string' ? (params['filterName'] as string) : null,
+      entityName:
+        typeof params['entityName'] === 'string' ? (params['entityName'] as string) : null,
+      filterName:
+        typeof params['filterName'] === 'string' ? (params['filterName'] as string) : null,
     };
   }
   return null;
@@ -527,7 +541,12 @@ export function correlateCapturedListViews(
     const req = parseGetItemsRequest(message);
     if (!req || req.entityName === null || req.filterName === null) continue;
     const filterTitle = req.actionId !== null ? (titleByActionId.get(req.actionId) ?? null) : null;
-    const dedupKey = `${req.entityName} ${req.filterName}`;
+    // NUL separates the two halves so no entity/filter pair can collide with
+    // another by concatenation. Write it as the ESCAPE, never a literal NUL byte:
+    // a raw 0x00 makes this whole file read as BINARY to grep/ripgrep, which then
+    // skip it silently — every codebase-wide audit gets a 571-line blind spot and
+    // reports zero hits rather than an error (ADR-0103).
+    const dedupKey = `${req.entityName}\u0000${req.filterName}`;
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
     out.push({ entityName: req.entityName, filterName: req.filterName, filterTitle });

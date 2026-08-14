@@ -29,11 +29,7 @@
 
 import type { Request as PwRequest, Response as PwResponse } from 'playwright';
 import type { BackfillListPage, BackfillPortalClient } from './backfill';
-import {
-  AuthFailedError,
-  PortalContractDriftError,
-  type AdminSession,
-} from './portal-client';
+import { AuthFailedError, PortalContractDriftError, type AdminSession } from './portal-client';
 import {
   BACKFILL_LIST_VIEWS,
   BACKFILL_PAGE_SIZE,
@@ -143,7 +139,9 @@ export function createBackfillPortalClient(
     capturedPaths.add(path);
     if (cap.framework && !framework) framework = cap.framework;
     for (const v of correlateCapturedListViews(cap.requestMessages, cap.responseBodies)) {
-      if (!capturedViews.some((c) => c.entityName === v.entityName && c.filterName === v.filterName)) {
+      if (
+        !capturedViews.some((c) => c.entityName === v.entityName && c.filterName === v.filterName)
+      ) {
         capturedViews.push(v);
       }
     }
@@ -204,7 +202,14 @@ export function createBackfillPortalClient(
       const actionId = `bf-${actionSeq++}`;
       const formFields = buildGetItemsFormFields(
         framework,
-        { entityName: objectApiName, filterName, offset: step.offset, pageSize, sortBy: step.sortBy, getCount: true },
+        {
+          entityName: objectApiName,
+          filterName,
+          offset: step.offset,
+          pageSize,
+          sortBy: step.sortBy,
+          getCount: true,
+        },
         actionId,
       );
 
@@ -245,9 +250,13 @@ export function createBackfillPortalClient(
       // `totalCount` decides how many steps cover the view. If it is somehow absent
       // (contract drift — it is reliably present live), run the FULL plan rather
       // than risk under-covering: over-paging is idempotent, silent loss is not.
-      const lastNeeded = total !== null ? sortFlipLastPageIndex(total, pageSize) : SORT_FLIP_STEP_COUNT - 1;
+      const lastNeeded =
+        total !== null ? sortFlipLastPageIndex(total, pageSize) : SORT_FLIP_STEP_COUNT - 1;
       if (total === null) {
-        log('warn', `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} getCount returned no totalCount — running full sort-flip plan`);
+        log(
+          'warn',
+          `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} getCount returned no totalCount — running full sort-flip plan`,
+        );
       }
       const hasMoreData = pageIndex < lastNeeded;
       log(
@@ -265,6 +274,13 @@ export function createBackfillPortalClient(
 const AURA_URL_RE = /\/s\/sfsites\/aura/i;
 const PORTAL_ORIGIN = 'https://mrc-us.my.site.com';
 const CAPTURE_SETTLE_MS = 4_000;
+// ADR-0103 — a mid-run heal invalidates the page a capture pass is bound to, so
+// the pass has to be re-run on the healed page. TWO passes is the whole budget:
+// pass 1 may be healed away, pass 2 runs on a session `ensureAuthenticated` has
+// already PROVEN authenticated (it throws AuthFailedError otherwise), so a third
+// pass could only chase a portal that is dropping us faster than we can log in —
+// which is the deadman's job to report, not this loop's to absorb.
+const MAX_CAPTURE_PASSES = 2;
 
 /**
  * Implement {@link BackfillSession} over an {@link AdminSession} (the shared,
@@ -280,7 +296,10 @@ const CAPTURE_SETTLE_MS = 4_000;
  * (record-fields-client.ts) captures billing fields via `captureListPage`'s
  * envelope.
  */
-export function playwrightBackfillSession(admin: AdminSession, log: Logger = noopLog): BackfillSession {
+export function playwrightBackfillSession(
+  admin: AdminSession,
+  log: Logger = noopLog,
+): BackfillSession {
   let endpointUrl: string | null = null;
 
   return {
@@ -289,7 +308,6 @@ export function playwrightBackfillSession(admin: AdminSession, log: Logger = noo
       const requestMessages: string[] = [];
       const responseBodies: string[] = [];
       let framework: AuraFrameworkParams | null = null;
-      const page = admin.getPage();
 
       const onRequest = (req: PwRequest): void => {
         if (req.method() !== 'POST' || !AURA_URL_RE.test(req.url())) return;
@@ -310,17 +328,65 @@ export function playwrightBackfillSession(admin: AdminSession, log: Logger = noo
           .catch(() => undefined);
       };
 
-      page.on('request', onRequest);
-      page.on('response', onResponse);
-      try {
-        await admin.gotoWithRetry(url, 'networkidle');
-        await admin.ensureAuthenticated(url);
-        await page.waitForTimeout(CAPTURE_SETTLE_MS);
-      } finally {
-        page.off('request', onRequest);
-        page.off('response', onResponse);
+      // ADR-0103 — `admin.getPage()` is re-read INSIDE every pass, never cached
+      // across `ensureAuthenticated`. A mid-run heal (`rebuildAndLogin`) closes the
+      // context and opens a NEW page, which broke this capture two ways at once:
+      //   1. the loud one — `page.waitForTimeout` on the closed page threw
+      //      "Target page, context or browser has been closed", failing the feed;
+      //   2. the quiet one — our aura listeners were still bound to the DEAD page,
+      //      and the heal's own re-navigation to `url` happened with nothing
+      //      listening, so a capture that survived (1) would return EMPTY. Empty is
+      //      worse than failed: it under-syncs billing data without a word.
+      // So a healed pass is DISCARDED and replayed on the healed page, listeners
+      // and all, rather than patched up in place.
+      let healed = false;
+      for (let pass = 1; pass <= MAX_CAPTURE_PASSES; pass++) {
+        const page = admin.getPage();
+        // A replayed pass must not inherit the healed-away pass's partial capture.
+        requestMessages.length = 0;
+        responseBodies.length = 0;
+        framework = null;
+        healed = false;
+
+        page.on('request', onRequest);
+        page.on('response', onResponse);
+        try {
+          await admin.gotoWithRetry(url, 'networkidle');
+          await admin.ensureAuthenticated(url);
+          // Identity, not a flag: `ensureAuthenticated` heals silently, and the only
+          // honest evidence that it did is that the live page is no longer ours.
+          healed = admin.getPage() !== page;
+          if (!healed) await page.waitForTimeout(CAPTURE_SETTLE_MS);
+        } finally {
+          // `off` is a synchronous emitter removal — safe on an already-closed page.
+          page.off('request', onRequest);
+          page.off('response', onResponse);
+        }
+        if (!healed) break;
+        log(
+          'warn',
+          `mymrc-backfill: session healed mid-capture ${path} — replaying capture on the healed page (pass ${pass}/${MAX_CAPTURE_PASSES})`,
+        );
       }
-      log('info', `mymrc-backfill: capture ${path} — ${requestMessages.length} getItems req, ${responseBodies.length} aura resp`);
+      if (healed) {
+        // Budget exhausted and the LAST pass was still healed away. That pass did
+        // capture traffic — but `ensureAuthenticated` only heals when the page reads
+        // logged-OUT, so that traffic came off an unauthenticated page and must not
+        // be replayed. Hand back an EMPTY capture: `fetchListPage` turns a missing
+        // envelope into a loud PortalContractDriftError (a resumable wedge), which
+        // is the honest outcome. Trusting it would silently under-sync billing.
+        requestMessages.length = 0;
+        responseBodies.length = 0;
+        framework = null;
+        log(
+          'warn',
+          `mymrc-backfill: capture ${path} ABANDONED — session healed on every pass; returning an empty capture so the replay wedges loud`,
+        );
+      }
+      log(
+        'info',
+        `mymrc-backfill: capture ${path} — ${requestMessages.length} getItems req, ${responseBodies.length} aura resp`,
+      );
       return { framework, requestMessages, responseBodies };
     },
 
