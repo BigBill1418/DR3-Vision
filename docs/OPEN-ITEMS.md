@@ -19,6 +19,34 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BA — 2026-08-13 late-night MyMRC sync incident (ADR-0103) — fixed and deployed, two watch items, one audit caveat
+
+The 11:01 PM PT `MyMRC sync error - woodland [outbound]` page was a cached-page
+contract violation in the scraper's capture path, fixed and live as `d717859`
+(12:34 AM PT scrape verified clean, all four Woodland feeds ok, freshness
+green). Full record: ADR-0103. Residuals:
+
+- **WATCH — the heal branch has not yet run live.** The replay-on-heal path is
+  proven adversarially by test; its first live exercise will be the next
+  mid-run session drop (historically ~once/day). Confirmation looks like a
+  `heal detected — pass discarded, replaying` log line in
+  `dr3-vision-mymrc-scrape` with the feed still ending `ok`. If instead the
+  `mymrc-error:woodland:*` fingerprint fires again with the SAME
+  `waitForTimeout` message, the fix missed a second caller — reopen ADR-0103.
+- **WATCH — CI on `main` was red for ~35 min after `d717859`** (the direct push
+  bypassed the PR gate; the full-suite ADR-index test failed on the missing
+  0103 row — the deployer ships on health, not CI, so prod was never blocked).
+  Closed by this docs commit (index row added, `adr-record-integrity` 20/20
+  locally). Standing note: a direct-to-main incident fix should run
+  `npx vitest run src/__tests__/adr-record-integrity.test.ts` before push.
+- **AUDIT CAVEAT — any grep-based audit of this repo executed before
+  2026-08-14 silently excluded** `src/lib/mymrc/list-page.ts` (571 lines) and
+  `src/lib/equipment/import.ts`: both contained a literal 0x00 byte, which
+  grep/ripgrep treat as "binary — skip, report nothing". Fixed (escapes,
+  byte-identical) + guarded by `repo-hygiene.nul-bytes.test.ts`. Re-run any
+  audit whose conclusions leaned on repo-wide grep coverage of the MyMRC or
+  equipment-import modules.
+
 ## 0.AZ — 2026-08-12 handoff #259: commodity sources confirmed, quota digest enabled, unwatched-file triage
 
 All four phases of the confirm-and-sweep handoff executed (evening PT). Full

@@ -67,6 +67,14 @@ has been closed`.
 - `vitest run src/lib/mymrc/ src/lib/equipment/` — 612 passed.
 - `tsc --noEmit` + `tsc -p tsconfig.mymrc.json --noEmit` clean; `next lint
 --max-warnings 0` clean.
+- **Docs follow-up (~12:55 AM PT):** the direct-to-main push left `main` CI red
+  for ~35 min — the full suite's ADR-index test caught 0103 missing its
+  `docs/adr/README.md` row (the pre-push hook runs only typecheck + the bonus
+  suite, so it could not have). Row added, `adr-record-integrity` 20/20;
+  incident residuals (heal-branch live-proof watch, the pre-2026-08-14
+  grep-audit caveat) recorded in OPEN-ITEMS §0.BA. The deployer gates on
+  health, not CI, so prod was never blocked — but the red run is why this
+  follow-up exists.
 
 ## 2026-08-13 (8:15 PM PT) — five hand-copied fallback topics, one weak secret each (noc-master ADR-0194 Am.3)
 
