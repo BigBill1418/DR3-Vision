@@ -89,6 +89,19 @@ evidence: `docs/q2-commodity-reconciliation-finding-2026-08-12.md` §CONFIRMED.
   (suppressed, reason on the row) so the **first digest lands Friday 2026-08-14
   20:00 PT** covering Mon 8/10–Fri 8/14. Eugene stays disabled, recipients
   empty (Am.1 — Bill's to fill).
+  **2026-08-14 postscript — the first send fired PILOT, then went LIVE the same
+  evening.** The enablement above missed the ADR-0047 rollout gate: the
+  `processor_quota_digest` surface was still `pilot`, so the Friday 20:00 PT
+  send correctly rerouted to admins with the `[PILOT — would have sent to: …]`
+  banner (the gate doing its job — content + targeting validated before ramp).
+  Bill reviewed it and ordered the flip (~9:20 PM PT): Woodland surface flipped
+  `live` via `flipRolloutSurface` (audited, criteria note on the row), the
+  pilot claim row for week 8/10 cleared (audited delete, before-image kept),
+  and the run re-fired — **delivered live 9:23 PM PT to Morena + Bill +
+  Janette** (notify audit: mode `live`, 3/3, week 8/10–8/14, 15 of 22
+  flagged). Eugene's surface remains `pilot` and its config disabled.
+  Lesson for the next surface enablement: `enabled=true` on the feature config
+  AND the ADR-0047 rollout row are two separate gates — check both.
 - **DONE — F-1 display completion**: COR headcount prose now renders a real
   number or "not recorded", never `—`, never a fabricated 0 (prefill already
   derived from payroll per ADR-0076; this closes the display letter of F-1).

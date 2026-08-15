@@ -9,6 +9,25 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-14 (9:23 PM PT) — the first quota digest went out pilot, Bill flipped it live the same evening
+
+The Friday 20:00 PT send (week 8/10–8/14, 22 processors seen, **15 flagged** at
+75 / 3-misses Mon–Fri) fired in **pilot**: the 08-12 enablement set the feature
+config but missed the ADR-0047 rollout gate, so `notifyStaff` rerouted to the
+admins with the `[PILOT — would have sent to: …]` banner — the gate working as
+designed. Bill reviewed the pilot copy and ordered the ramp (~9:20 PM PT):
+
+- Woodland `processor_quota_digest` surface flipped `pilot → live` through
+  `flipRolloutSurface` (the admin route's own path; audited, criteria note on
+  the row). Eugene stays `pilot` with its config disabled.
+- Tonight's pilot claim row cleared (audited delete, before-image preserved) and
+  the internal route re-fired: **mode `live`, delivered 3/3** — Morena, Bill,
+  Janette — verified in the notify audit and the fresh `processor_quota_logs`
+  row (`sent_at` 9:23 PM PT).
+- Operating note now in OPEN-ITEMS §0.AZ: a notification feature has TWO gates —
+  its own config row and the ADR-0047 rollout surface. Enablement checklists
+  must flip (or consciously not flip) both.
+
 ## 2026-08-14 (12:15 AM PT) — the capture held a page the heal had already closed (ADR-0103)
 
 **Incident: `[DR3-Vision] MyMRC sync error - woodland [outbound]`, 2026-08-13
