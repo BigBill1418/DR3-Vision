@@ -207,6 +207,14 @@ export const docIngestMessages = {
     reachabilityFailed: 'The last scan could not run, so this count proves nothing:',
     reachabilityScope: 'Scope',
     reachabilityScanned: 'Last scanned',
+
+  // ── ADR-0104 §D7 — the duplicate-document alarm ─────────────────────────
+  // Copy matters: the operator must learn WHAT is wrong and WHAT TO DO in one
+  // read, because the fix (disable the stale copy) is one click away on the
+  // screen they just came from.
+  duplicateSourcesHeading: 'Two copies of the same document are enabled',
+  duplicateSourcesBody:
+    'A document class that names ONE physical document per site has more than one enabled source. Absorbing both would count every row twice — the same failure that once reported $231,203.82 for a $77,067.94 document. Disable all but the live copy on the sources list.',
   },
 
   // ── ADR-0069 reconciliation ────────────────────────────────────────────────
