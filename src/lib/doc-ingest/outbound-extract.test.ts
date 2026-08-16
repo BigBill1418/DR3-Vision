@@ -1,6 +1,6 @@
 // ADR-0104 §D2/§D3 — outbound weight-audit extraction.
 //
-// Fixtures mirror the REAL workbook read out of R2 on 2026-08-16, header text
+// Fixtures mirror the REAL workbook read out of R2 on 2026-08-15, header text
 // for header text. The three shapes that matter are all reproduced:
 //   - `Outbound Feb 2026` — header on row 4, `Account Name` present, real Excel
 //     `Date` cells, `Column1` filler at index 1;

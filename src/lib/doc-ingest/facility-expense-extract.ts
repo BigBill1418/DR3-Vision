@@ -8,7 +8,7 @@
 //
 // ── THE THING THE PLAN GOT WRONG, AND WHAT IS DONE INSTEAD ─────────────────
 // The build plan mapped `Invoice Date` straight onto a date column. Measured
-// against the live bytes 2026-08-16, that column DOES NOT HOLD DATES. It holds
+// against the live bytes 2026-08-15, that column DOES NOT HOLD DATES. It holds
 // DAY-OF-MONTH numbers — 5, 6, 12, 27 — and the month lives in BANNER ROWS
 // written into the sheet body ("February", "March"). Across the two Woodland
 // sheets, ZERO of 332 rows carry a cell a date could be read from.

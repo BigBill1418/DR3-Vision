@@ -136,7 +136,7 @@ const RULES: Rule[] = [
   },
   {
     // ADR-0104 §D2. Structure signals read off the REAL header rows of
-    // "Woodland Outbound Auditing 2026.xlsx" (measured 2026-08-16 against the
+    // "Woodland Outbound Auditing 2026.xlsx" (measured 2026-08-15 against the
     // archived bytes, not assumed): the header row is on row 1, 2, 4 or 10
     // depending on the sheet, and these four labels are present on all eleven
     // candidate sheets.
@@ -151,7 +151,7 @@ const RULES: Rule[] = [
   },
   {
     // ADR-0104 §D4. Signals from the REAL row-3 headers of "Woodland Invoices
-    // tracking.xlsx" (measured 2026-08-16). `present on daily log` is the
+    // tracking.xlsx" (measured 2026-08-15). `present on daily log` is the
     // distinctive one — no other watched document has it.
     kind: 'facility_expense_log',
     name: [/\binvoices?\b[\s_-]*tracking/i],

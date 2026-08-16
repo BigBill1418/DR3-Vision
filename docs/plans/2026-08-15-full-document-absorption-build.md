@@ -495,7 +495,7 @@ Confirmations are executed under **Bill's user id** per his instruction; the aud
 6. **Review and confirm the two staged batches** on the new review pages, after eyeballing the totals against the workbook.
 7. **Verify**: `doc_sources` shows 11 registered / 0 unconfirmed; `runAbsorptionPass` reports `absorbed` for the two new sources and `not_absorbable` for the five archive ones; the coverage page renders with a pinned version id.
 
-## 14A. Amendment 1 — what the live bytes said when the build ran (2026-08-16 PT)
+## 14A. Amendment 1 — what the live bytes said when the build ran (2026-08-15 PT)
 
 **Status:** applied. Every figure below was re-measured by the executor against the
 archived R2 objects and against prod, and the build follows the MEASURED number
@@ -509,7 +509,7 @@ month table already sums to the right answer — 131 + 113 + 135 + 158 + 139 + 1
 = **831** — so the prose figure was a transcription slip, not a measurement
 error. Everything else in §8.5 holds exactly:
 
-| Figure                | Plan       | Measured 2026-08-16 |
+| Figure                | Plan       | Measured 2026-08-15 |
 | --------------------- | ---------- | ------------------- |
 | candidate sheets      | 11 of 16   | **11 of 16** ✔      |
 | distinct loads        | ~1,085     | **831**             |
@@ -602,7 +602,7 @@ None of these is in §10 and all three were found by reading the file:
 
 ### A1.7 Measured expense volumes (§10's figures were approximate)
 
-| Sheet           | Plan       | Measured 2026-08-16                    |
+| Sheet           | Plan       | Measured 2026-08-15                    |
 | --------------- | ---------- | -------------------------------------- |
 | `WOODLAND 2026` | 144 / $430,607 | **138 rows / $430,606.74**, $0.00 credited |
 | `WOODLAND 2025` | 200 / $544,322 | **194 rows / $544,321.62**, $104,241.82 credited |

@@ -96,7 +96,7 @@ export interface OutboundCoverage {
    * A weight for a shipment the system has no record of is a finding, not a
    * rounding error, and it would be invisible in a coverage percentage — which
    * only ever counts the mirror's side. Measured 0 of 831 against prod on
-   * 2026-08-16; it is surfaced so that stops being an assumption.
+   * 2026-08-15; it is surfaced so that stops being an assumption.
    */
   unmatchedAbsorbedLoads: string[];
   /**

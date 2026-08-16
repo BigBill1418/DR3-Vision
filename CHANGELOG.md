@@ -9,7 +9,7 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
-## 2026-08-16 — every outbound load is recorded, and now 831 of them have a weight (ADR-0104)
+## 2026-08-15 (7:22 PM PT) — every outbound load is recorded, and now 831 of them have a weight (ADR-0104)
 
 `mymrc_outbound_mirror` holds **4,673 outbound loads** spanning 2023-01-02 to
 2026-08-14. Every one carries a Materials ID; 4,669 carry a BOL and a shipment
@@ -115,6 +115,39 @@ has.
 workbook covers Woodland, January to June 2026; ~3,840 of 4,673 loads remain
 weightless and no watched document supplies them. That is worse-looking than the
 silence it replaces, and it is the point (P-47).
+
+### Executed and verified in production, 7:22 PM PT
+
+Under Bill's written instruction, as a NAMED non-human run (`actor_label`
+`system:adr-0104-execution`, `actor_user_id` NULL — ADR-0077's discipline; his
+user id is recorded as the AUTHORIZER, not the actor, and the instruction is
+quoted verbatim in the run's audit row).
+
+- Kelsey's TEREX copy `5b298aeb` was **disabled FIRST**, then classified
+  honestly as `terex_maintenance_log`. Order was load-bearing: between a confirm
+  and a disable the source is absorbable, and a sweep landing in that window
+  double-absorbs 173 maintenance events.
+- All eight remaining sources confirmed. **`doc_sources`: 11 registered, 0
+  unconfirmed** (was 8 unconfirmed).
+- Sweep run `96afe54c` fired; the absorption pass landed **831 load rows, 1,699
+  commodity rows, 332 expense rows** — matching the extractor's dry run against
+  the archived bytes exactly.
+- **Zero new anomalies.** 6 sheets contributed loads; the 5 duplicate sheets
+  contributed 0, as designed. 2 sign disagreements stored and surfaced.
+- Expenses: `WOODLAND 2025` 194 rows / $544,321.63 / $104,241.82 credited;
+  `WOODLAND 2026` 138 rows / $430,606.74. **0 rows carry a real invoice date**;
+  316 carry a day number. Both Stockton sheets refused.
+- The coverage read, pinned to revision `7829de7b`: **4,670 Woodland loads on
+  record, 831 with a weight, 3,839 without, 5,619,037 lb known.** The
+  per-commodity split sums to the load total to the pound. `revisionBleedIds` 0,
+  unmatched absorbed loads 0.
+- All seven of the ADR's spot-check Materials IDs resolve with matching BOL and
+  shipment date.
+
+**Both batches are STAGED and await Bill's confirmation** on
+`/admin/doc-ingest/outbound` and `/admin/doc-ingest/expenses`. Nothing counts
+until he accepts them — that is the whole point of §D5, and an agent clicking it
+would put his attestation on a reading nobody read.
 
 ## 2026-08-14 (9:23 PM PT) — the first quota digest went out pilot, Bill flipped it live the same evening
 

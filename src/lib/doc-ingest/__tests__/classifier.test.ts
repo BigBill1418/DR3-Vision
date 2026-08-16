@@ -306,7 +306,7 @@ describe('the model is shown every kind it is allowed to answer (ADR-0104 §D9)'
 
 describe('the ADR-0104 classes classify locally (ADR-0104 §5.1)', () => {
   it('proposes outbound_weight_audit from the REAL headers', () => {
-    // Header text read off the live workbook 2026-08-16, not invented.
+    // Header text read off the live workbook 2026-08-15, not invented.
     const c = classifyLocally({
       filename: 'Woodland Outbound Auditing 2026.xlsx',
       pathHint: null,
