@@ -17,6 +17,7 @@ import {
   sharedWithMeDaysRemaining,
 } from './pipeline-config';
 import { latestReachabilityScan, type ReachabilityGapItem } from './reachability';
+import { findSingleInstanceViolations } from './single-instance';
 
 export interface SubscriptionHealth {
   id: string;
@@ -75,6 +76,23 @@ export interface DocIngestHealth {
     sunsetDateIsInferred: boolean;
   };
   /**
+   * ADR-0104 §D7 — classes that name ONE physical document per site, with more
+   * than one ENABLED source.
+   *
+   * ── Why this is on a live surface and not only in a test ──────────────────
+   * The ADR protects this invariant with a regression test, and a test tells
+   * CI. It does not tell the operator standing in front of the admin screen the
+   * day somebody re-enables a duplicate — and the duplicate that motivated the
+   * rule (a frozen `TEREX.xlsx` copy on a departed account) is held off by a
+   * BOOLEAN COLUMN, which any admin can flip back with one click from this very
+   * product. A guard whose only consumer is CI is invisible exactly where the
+   * mistake gets made.
+   *
+   * Normally empty. Non-empty means some class is about to count every one of
+   * its rows twice.
+   */
+  singleInstanceViolations: { docClass: string; siteId: string | null; sourceIds: string[] }[];
+  /**
    * REACHABLE vs WATCHED (ADR-0080) — the guard discovery never had.
    *
    * `null` means no scan has ever run, which is NOT the same as a gap of zero
@@ -116,6 +134,14 @@ export async function loadDocIngestHealth(
         select: { observed_at: true },
       }),
     ]);
+
+  // ADR-0104 §D7. Read as ROWS and judged by the shared pure rule, so the live
+  // surface and the regression test cannot drift into two different invariants.
+  const singleInstanceViolations = findSingleInstanceViolations(
+    await prisma.docSource.findMany({
+      select: { id: true, doc_class: true, site_id: true, enabled: true },
+    }),
+  );
 
   const [total, active, disabled, accessDenied, disappeared, readBlocked, awaitingConfirmation] =
     await Promise.all([
@@ -191,6 +217,7 @@ export async function loadDocIngestHealth(
       acknowledged: acknowledgedAnomalies,
     },
     staged: { count: staged, oldestISO: oldestStaged?.observed_at.toISOString() ?? null },
+    singleInstanceViolations,
     discovery: {
       sunsetDate: SHARED_WITH_ME_SUNSET,
       daysRemaining: sharedWithMeDaysRemaining(now),

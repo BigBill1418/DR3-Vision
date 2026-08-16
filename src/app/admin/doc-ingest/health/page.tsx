@@ -199,6 +199,31 @@ export default async function DocIngestHealthPage() {
             • scan errored    → we could not look. Not "no gap".
             • gap === 0       → genuinely nothing unwatched, in the stated scope.
         */}
+        {/* ADR-0104 §D7 — DUPLICATE DOCUMENTS.
+            Normally absent. A class that names ONE physical document per site
+            with two ENABLED sources is about to count every one of its rows
+            twice — the ADR-0077 class, on a boolean anybody can flip from the
+            confirm queue one screen away. Rendered only when it fires, because
+            a permanent green "0 duplicates" tile is noise the eye stops
+            reading, and this must be startling on the day it appears. */}
+        {health.singleInstanceViolations.length > 0 && (
+          <section className="rounded-lg bg-red-500/10 p-4 ring-1 ring-red-500/40">
+            <h2 className="text-xl font-semibold text-red-200">
+              {M.health.duplicateSourcesHeading}
+            </h2>
+            <p className="mt-2 text-sm text-red-100/90">{M.health.duplicateSourcesBody}</p>
+            <ul className="mt-3 flex flex-col gap-2 text-sm">
+              {health.singleInstanceViolations.map((v) => (
+                <li key={`${v.docClass}-${v.siteId ?? 'none'}`} className="font-mono text-xs">
+                  <span className="text-red-200">{v.docClass}</span> · site{' '}
+                  {v.siteId ?? '(none)'} · {v.sourceIds.length} enabled:{' '}
+                  {v.sourceIds.join(', ')}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section
           className={`rounded-lg p-4 ring-1 ${
             reachability === null || reachability.error !== null
