@@ -85,6 +85,17 @@ import {
   extractCommodityFromWorkbook,
   stageCommodityRows,
 } from './commodity-absorb';
+import {
+  describeOutboundSheets,
+  extractOutboundFromWorkbook,
+  stageOutboundRows,
+} from './outbound-absorb';
+import {
+  describeFacilityExpenseSheets,
+  extractFacilityExpensesFromWorkbook,
+  stageFacilityExpenseRows,
+} from './facility-expense-absorb';
+import { siteNameTokens } from './facility-expense-extract';
 
 /** Audit actor for absorption writes. Mirrors the ingest pipeline's label. */
 export const ABSORB_ACTOR = 'system:doc-ingest:absorb';
@@ -106,6 +117,12 @@ export const ABSORBABLE_KINDS = new Set<string>([
   // is `doc_commodity_audit_rows`; both existed and were tested before this line
   // was added, which is the only thing that entitles a kind to be here.
   'commodity_audit_tracker',
+  // ADR-0104 §D1. EXACTLY two additions. The four archive-only classes
+  // (`facility_journal`, `meeting_notes_log`, `admin_task_tracker`,
+  // `analysis_workbook`) and `equipment_inventory` stay OUT — they are in
+  // `DOC_KINDS` so the classifier stops asking, not so they can be absorbed.
+  'outbound_weight_audit',
+  'facility_expense_log',
 ]);
 
 export type AbsorbOutcome =
@@ -299,6 +316,12 @@ export async function absorbVersion(
   }
   if (source.doc_class === 'commodity_audit_tracker') {
     return absorbCommodityTracker(prisma, source, version, bytes, siteId, subject, now);
+  }
+  if (source.doc_class === 'outbound_weight_audit') {
+    return absorbOutboundAudit(prisma, source, version, bytes, siteId, subject, now);
+  }
+  if (source.doc_class === 'facility_expense_log') {
+    return absorbFacilityExpenseLog(prisma, source, version, bytes, siteId, subject, now);
   }
 
   // ── Extract ───────────────────────────────────────────────────────────────
@@ -1052,6 +1075,356 @@ async function absorbCommodityTracker(
       versionId: version.id,
       outcome: 'absorbed',
       rowsWritten: staged,
+      datesCovered: dates.size,
+      reason: null,
+      anomaliesRaised: 0,
+    },
+    now,
+  );
+}
+
+/**
+ * ADR-0104 §D2 — absorb a confirmed outbound weight audit, STAGED.
+ *
+ * ── The largest injection of figures this system has taken ─────────────────
+ * 831 loads, ~5.6 million lb, against a `mymrc_outbound_mirror` whose
+ * `weight_lbs` is NULL on 4,673 of 4,673 rows. The outcome is `absorbed`
+ * because the extraction genuinely succeeded, but the rows are `staged`:
+ * nothing counts until a human confirms the batch on
+ * `/admin/doc-ingest/outbound`.
+ *
+ * ── Why it stages, when the trailer list did not ───────────────────────────
+ * The trailer list carries weights and went in directly. This does too, and it
+ * stages anyway, and the reason is not precaution: these weights are the input
+ * to CalRecycle stewardship percentages and MRC reporting, and the cross-sheet
+ * de-duplication is a JUDGEMENT — 556 of 1,387 candidate rows are dropped as
+ * duplicates of one another — that a person should ratify once. The preview
+ * shows the de-duplication so that the smaller total is believable.
+ *
+ * REFERENCE ONLY. This writes two `doc_*` tables. It does not touch
+ * `outbound_materials`, `outbound_vendors`, `recycling_rates`,
+ * `landfilled_units`, `outbound_material_payments` or `invoices` — all six
+ * remain 0 rows (AK-4b) — and it does not touch `processed_units_daily`, whose
+ * one writer is workbook-sync (ADR-0049).
+ */
+async function absorbOutboundAudit(
+  prisma: PrismaClient,
+  source: DocSource,
+  version: DocSourceVersion,
+  bytes: Uint8Array,
+  siteId: string,
+  subject: string,
+  now: Date,
+): Promise<AbsorbResult> {
+  let extracted: Awaited<ReturnType<typeof extractOutboundFromWorkbook>>;
+  try {
+    extracted = await extractOutboundFromWorkbook(bytes);
+  } catch (e) {
+    const reason =
+      `"${source.display_name}" is registered as an outbound_weight_audit but could not be read ` +
+      `as a workbook: ${describe(e)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'unreadable',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  // ── THE LOUD ZERO ─────────────────────────────────────────────────────────
+  // A 16-sheet workbook that yields nothing is far more likely to mean "we did
+  // not recognise the outbound listings" than "no loads shipped", so the message
+  // names every sheet, the header row found on each, and why each was passed
+  // over. Five of the sixteen are pivot sheets refused DELIBERATELY.
+  if (extracted.result.loads.length === 0) {
+    const reason =
+      `"${source.display_name}" is confirmed as an outbound_weight_audit, was read successfully, ` +
+      `and produced ZERO loads. This is NOT evidence that nothing shipped. ` +
+      `${extracted.result.failure?.message ?? ''} ${describeOutboundSheets(extracted.result)}`.trim();
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id, sheets: extracted.sheetNames },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'empty',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  const staged = await prisma.$transaction((tx) =>
+    stageOutboundRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      result: extracted.result,
+      now,
+    }),
+  );
+
+  // Coverage = distinct SHIPMENT DAYS the absorbed loads actually state. A load
+  // whose date cell could not be read contributes nothing rather than being
+  // counted against an invented day.
+  const dates = new Set<string>();
+  for (const l of extracted.result.loads) if (l.shipmentDateISO !== null) dates.add(l.shipmentDateISO);
+
+  await writeAudit({
+    actor_label: ABSORB_ACTOR,
+    action: 'insert',
+    table_name: 'doc_outbound_load_rows',
+    row_id: version.id,
+    after: {
+      doc_source_id: source.id,
+      doc_class: 'outbound_weight_audit',
+      rows_staged: staged.staged,
+      commodity_rows_staged: staged.commodityRows,
+      // Staged, NOT counted. Recorded explicitly so a reader of this audit row
+      // cannot mistake extraction for acceptance.
+      awaiting_confirmation: true,
+      // Stated so nobody has to open the absorber to know what this write did
+      // NOT do.
+      reference_only: true,
+      wrote_operational_tables: false,
+      total_weight_lbs: extracted.result.totals.totalWeightLbs,
+      shipment_days_covered: dates.size,
+      duplicates_removed: extracted.result.duplicatesRemoved,
+      sign_check_failures: extracted.result.signCheckFailures,
+      parts_check_failures: extracted.result.partsCheckFailures,
+      label_collisions: staged.collisions,
+      sheets_read: extracted.result.sheets
+        .filter((s) => s.skipped === null)
+        .map((s) => s.sheetName),
+      sheets_skipped: extracted.result.sheets
+        .filter((s) => s.skipped !== null)
+        .map((s) => s.sheetName),
+      note: describeOutboundSheets(extracted.result),
+    },
+  });
+
+  await resolveAnomaly(
+    prisma,
+    'absorption_empty',
+    subject,
+    `Staged ${staged.staged} outbound load row(s) and ${staged.commodityRows} commodity row(s) ` +
+      `from revision ${version.id}, awaiting confirmation.`,
+    now,
+  ).catch(() => undefined);
+
+  return finishTerminal(
+    prisma,
+    version,
+    {
+      versionId: version.id,
+      outcome: 'absorbed',
+      rowsWritten: staged.staged,
+      datesCovered: dates.size,
+      reason: null,
+      anomaliesRaised: 0,
+    },
+    now,
+  );
+}
+
+/**
+ * ADR-0104 §D4 — absorb a confirmed facility expense log, STAGED.
+ *
+ * Money-touching ($974,928.36 across the two Woodland sheets), so
+ * preview-then-confirm on the ordinary ADR-0069 Am.2 grounds.
+ *
+ * NOT `invoices` (ADR-0041): that table carries an immutable-version
+ * discipline, a lifecycle state machine and delivery planning, and this document
+ * is a log of things already paid with no lifecycle at all. Writing it there
+ * would manufacture payable-looking records that were never payables.
+ *
+ * ── The registered-site list is read, not assumed ──────────────────────────
+ * The workbook holds two STOCKTON sheets, and Stockton has no row in `sites`.
+ * Rather than hardcoding four sheet names, the extractor is handed the tokens
+ * every registered site answers to and refuses anything else BY NAME — so a
+ * Stockton sheet stays refused, and stops being refused the day somebody
+ * registers Stockton.
+ */
+async function absorbFacilityExpenseLog(
+  prisma: PrismaClient,
+  source: DocSource,
+  version: DocSourceVersion,
+  bytes: Uint8Array,
+  siteId: string,
+  subject: string,
+  now: Date,
+): Promise<AbsorbResult> {
+  const sites = await prisma.site.findMany({ select: { id: true, name: true } });
+  const scope = {
+    registeredTokens: sites.flatMap((s) => siteNameTokens(s.name)),
+    documentTokens: siteNameTokens(sites.find((s) => s.id === siteId)?.name ?? ''),
+  };
+
+  let extracted: Awaited<ReturnType<typeof extractFacilityExpensesFromWorkbook>>;
+  try {
+    extracted = await extractFacilityExpensesFromWorkbook(bytes, scope);
+  } catch (e) {
+    const reason =
+      `"${source.display_name}" is registered as a facility_expense_log but could not be read as ` +
+      `a workbook: ${describe(e)}`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'unreadable',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  // ── THE LOUD ZERO ─────────────────────────────────────────────────────────
+  // Zero rows here would most likely mean the site gate refused EVERY sheet, or
+  // that the header row moved. Both are operator-actionable and neither is "the
+  // document was empty", so the message names each sheet and its own reason.
+  if (extracted.totalRows === 0) {
+    const reason =
+      `"${source.display_name}" is confirmed as a facility_expense_log, was read successfully, and ` +
+      `produced ZERO expense rows. This is NOT evidence the document is empty. ` +
+      `${describeFacilityExpenseSheets(extracted.perSheet)} ` +
+      `Sheets present: ${extracted.sheetNames.join(', ') || '(none)'}.`;
+    const res = await raiseAnomaly(prisma, {
+      kind: 'absorption_empty',
+      subject,
+      docSourceId: source.id,
+      docSourceVersionId: version.id,
+      detail: reason,
+      context: { versionId: version.id, sheets: extracted.sheetNames },
+      now,
+    });
+    return finishTerminal(
+      prisma,
+      version,
+      {
+        versionId: version.id,
+        outcome: 'empty',
+        rowsWritten: 0,
+        datesCovered: 0,
+        reason,
+        anomaliesRaised: res.raised ? 1 : 0,
+      },
+      now,
+    );
+  }
+
+  const staged = await prisma.$transaction((tx) =>
+    stageFacilityExpenseRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    }),
+  );
+
+  // Coverage = distinct INVOICE DATES the rows actually state, and on this
+  // document that is expected to be ZERO: the `Invoice Date` column holds
+  // day-of-month numbers, not dates (see `facility-expense-extract.ts`). The
+  // field is filled with the thing it is named for and the audit row states the
+  // month/day split alongside, rather than a composed date the sheet never wrote.
+  const dates = new Set<string>();
+  for (const sheet of extracted.perSheet) {
+    for (const r of sheet.rows) if (r.invoiceDateISO !== null) dates.add(r.invoiceDateISO);
+  }
+
+  const absorbedSheets = extracted.perSheet.filter((s) => s.failure === null);
+  const totals = absorbedSheets.reduce(
+    (acc, s) => ({
+      amount: acc.amount + s.totals.amount,
+      creditAmount: acc.creditAmount + s.totals.creditAmount,
+    }),
+    { amount: 0, creditAmount: 0 },
+  );
+  const allRows = absorbedSheets.flatMap((s) => s.rows);
+
+  await writeAudit({
+    actor_label: ABSORB_ACTOR,
+    action: 'insert',
+    table_name: 'doc_facility_expense_rows',
+    row_id: version.id,
+    after: {
+      doc_source_id: source.id,
+      doc_class: 'facility_expense_log',
+      rows_staged: staged.staged,
+      awaiting_confirmation: true,
+      reference_only: true,
+      wrote_invoices_table: false,
+      totals_preview: totals,
+      // The finding this document forced. Recorded here so the absence of dates
+      // is a stated reading rather than a silent zero.
+      rows_with_a_real_invoice_date: dates.size,
+      rows_with_a_day_number: allRows.filter((r) => r.invoiceDay !== null).length,
+      rows_above_the_first_month_banner: allRows.filter((r) => r.invoiceMonthLabel === null).length,
+      haul_references: allRows.filter((r) => r.haulRef !== null).length,
+      sheets_absorbed: absorbedSheets.map((s) => s.sheetName),
+      sheets_refused: extracted.perSheet
+        .filter((s) => s.failure !== null)
+        .map((s) => ({ sheet: s.sheetName, reason: s.failure?.kind })),
+      label_collisions: staged.collisions,
+      note: describeFacilityExpenseSheets(extracted.perSheet),
+    },
+  });
+
+  await resolveAnomaly(
+    prisma,
+    'absorption_empty',
+    subject,
+    `Staged ${staged.staged} facility expense row(s) from revision ${version.id}, awaiting confirmation.`,
+    now,
+  ).catch(() => undefined);
+
+  return finishTerminal(
+    prisma,
+    version,
+    {
+      versionId: version.id,
+      outcome: 'absorbed',
+      rowsWritten: staged.staged,
       datesCovered: dates.size,
       reason: null,
       anomaliesRaised: 0,

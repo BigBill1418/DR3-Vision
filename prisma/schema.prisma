@@ -102,6 +102,13 @@ model Site {
   // Absorbed commodity audit-coverage rows (ADR-0080)
   doc_commodity_audit_rows DocCommodityAuditRow[]
 
+  // Absorbed outbound load weights + their commodity split (ADR-0104 D2)
+  doc_outbound_load_rows      DocOutboundLoadRow[]
+  doc_outbound_commodity_rows DocOutboundCommodityRow[]
+
+  // Absorbed facility expense-log rows (ADR-0104 D4)
+  doc_facility_expense_rows DocFacilityExpenseRow[]
+
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
@@ -6292,4 +6299,239 @@ model DocCommodityAuditRow {
   @@index([doc_source_id, status])
   @@index([site_id, sheet_year])
   @@map("doc_commodity_audit_rows")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0104 §D2 — absorbed OUTBOUND LOAD rows.
+// ────────────────────────────────────────────────────────────────────────
+//
+/// One shipped load, as "Woodland Outbound Auditing 2026.xlsx" recorded it.
+///
+/// ── Why this table exists ──────────────────────────────────────────────────
+/// `mymrc_outbound_mirror` holds 4,673 outbound loads and `weight_lbs` is NULL
+/// on 4,673 of them (measured against prod 2026-08-16). The system knows every
+/// load left, when, on what BOL, to whose account — and does not know what any
+/// of them weighed. This workbook is that missing column, joinable on
+/// `external_materials_id`, which is UNIQUE-indexed on the mirror.
+///
+/// ── REFERENCE, never operational (§D1) ─────────────────────────────────────
+/// This is NOT `outbound_materials`. Writing that table needs a
+/// `vendor_id -> outbound_vendors` and a rate keyed `(vendor_id, commodity,
+/// ship_date)` to satisfy ADR-0055's `recycled_lbs + landfilled_lbs ==
+/// weight_lbs`, and the workbook contains neither master. Standing them up from
+/// `Disposition` strings would be fabrication. All six operational vendor-leg
+/// tables stay at 0 rows; that is AK-4b.
+///
+/// ── Version-scoped from the first row (ADR-0080 §D8, ADR-0077) ─────────────
+/// The unique key is `(version, external_materials_id)`, so N confirmed
+/// revisions coexist, each a COMPLETE copy. Every read pins one revision before
+/// it aggregates. Summing across revisions is how the TEREX ledger reported
+/// $231,203.82 for a $77,067.94 document.
+model DocOutboundLoadRow {
+  id String @id @default(uuid())
+
+  /// Plain scalars, matching the other absorbed-row tables: only `site` is a
+  /// declared Prisma relation.
+  doc_source_id         String
+  doc_source_version_id String
+
+  /// NULL is UNCLASSIFIED, never a guess (hard rule #2) — absorption refuses a
+  /// NULL-site source before a row ever reaches here.
+  site_id String?
+  site    Site?   @relation(fields: [site_id], references: [id])
+
+  /// Provenance back to the cell. NOT identity — see the unique key.
+  sheet_name String
+  row_index  Int
+
+  /// The join key. `Materials: Materials ID`, e.g. "M-160053". Matches
+  /// `mymrc_outbound_mirror.external_materials_id`.
+  external_materials_id String
+  bol_id                String?
+  /// The sheet's `Account Name`. ABSENT on both April sheets (the column is
+  /// literally headed "Column1" there), so it is NEVER the source of site —
+  /// site comes from the doc_source. Stored only to assert against.
+  account_name_raw      String?
+  /// "Active" / "Inactive" in the live file.
+  materials_status      String?
+  /// "Outbound" on every measured row.
+  materials_record_type String?
+
+  /// Set only when the cell resolved to a real date.
+  shipment_date     DateTime? @db.Date
+  /// ALWAYS what the cell said. The SAME shipment appears as an Excel Date on
+  /// one sheet, the serial 46055 on its duplicate, and the text "1/2/2026" on
+  /// the January sheet. Measured across the 831 distinct loads: 561 real Dates,
+  /// 139 serials, 131 text.
+  shipment_date_raw String?
+
+  /// From `Total Outbound Weight` — the POSITIVE figure, which reconciles to
+  /// the sum of the 13 commodity columns exactly (0 drift on 831 of 831 rows).
+  total_weight_lbs       Decimal? @db.Decimal(12, 2)
+  /// From `Total Outbound Materials Weight`, which is its NEGATION. Stored ONLY
+  /// so the guardrail can assert the sign relationship and fail loudly if the
+  /// workbook's convention changes. NEVER read as a weight: an extractor that
+  /// picked this most-official-sounding right-most column would ingest every
+  /// weight in the operation with the wrong sign, and because it is internally
+  /// consistent nothing downstream would look wrong until a total met reality.
+  total_weight_check_lbs Decimal? @db.Decimal(12, 2)
+
+  /// NULL when the sheet recorded nothing. Never 0 for a blank — a recorded 0
+  /// and an unrecorded figure are different claims.
+  program_units     Int?
+  non_program_units Int?
+
+  status         DocAbsorptionStatus @default(staged)
+  confirmed_at   DateTime?
+  confirmed_by   String?
+  discarded_at   DateTime?
+  discarded_by   String?
+  discard_reason String?
+
+  absorbed_at DateTime @default(now())
+
+  /// The DEDUP MECHANISM, in the schema. The key is the Materials ID and NOT
+  /// `(sheet, row_index)`: the workbook has four sheet pairs that are exact
+  /// duplicates of each other plus one filtered subset sheet, so 556 of 1,387
+  /// candidate rows are the same load twice. Keying on the load makes the
+  /// collision impossible rather than merely unlikely.
+  @@unique([doc_source_version_id, external_materials_id], map: "doc_outbound_load_rows_version_matid_key")
+  @@index([doc_source_id, status], map: "doc_outbound_load_rows_source_status_idx")
+  @@index([site_id, shipment_date], map: "doc_outbound_load_rows_site_ship_idx")
+  @@index([external_materials_id], map: "doc_outbound_load_rows_matid_idx")
+  @@map("doc_outbound_load_rows")
+}
+
+/// One (load x commodity) weight, written only where the `(lbs)` cell held a
+/// number.
+///
+/// A 26-column-wide parent would encode the commodity vocabulary in the SCHEMA,
+/// where adding a commodity becomes a migration. The vocabulary is data.
+model DocOutboundCommodityRow {
+  id String @id @default(uuid())
+
+  doc_source_id         String
+  doc_source_version_id String
+
+  site_id String?
+  site    Site?   @relation(fields: [site_id], references: [id])
+
+  external_materials_id String
+  /// VERBATIM column stem: "Foam", "Shoddy/Felt", "Whole Mattresses and
+  /// Foundations". Not normalised.
+  commodity             String
+  /// The cell as a number. A recorded 0 is KEPT as 0 — the export writes 0 for
+  /// a commodity this load did not carry, and turning that into "not recorded"
+  /// would be the inverse of the blank-is-not-zero rule.
+  weight_lbs            Decimal? @db.Decimal(12, 2)
+  /// Live vocabulary measured 2026-08-16 is FIVE values, not four: Recycling,
+  /// Landfill, Biomass, Renovation, and the case variant "landfill". Stored
+  /// verbatim, NEVER mapped — mapping "Landfill" onto `landfilled_units`
+  /// semantics is exactly the operational write §D1 forbids.
+  disposition           String?
+
+  sheet_name String
+  row_index  Int
+
+  /// Mirrors the parent's, flipped by the same decide call in the same
+  /// transaction. A child that could outlive its parent's decision would let a
+  /// discarded batch's weights stay readable.
+  status      DocAbsorptionStatus @default(staged)
+  absorbed_at DateTime            @default(now())
+
+  @@unique([doc_source_version_id, external_materials_id, commodity], map: "doc_outbound_commodity_rows_version_matid_commodity_key")
+  @@index([doc_source_id, status], map: "doc_outbound_commodity_rows_source_status_idx")
+  @@index([site_id, commodity], map: "doc_outbound_commodity_rows_site_commodity_idx")
+  @@map("doc_outbound_commodity_rows")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0104 §D4 — absorbed FACILITY EXPENSE rows.
+// ────────────────────────────────────────────────────────────────────────
+//
+/// One line of "Woodland Invoices tracking.xlsx" — a hand-kept desk log of
+/// facility expenses already paid.
+///
+/// NOT `invoices` (ADR-0041). That table carries an immutable-version
+/// discipline, a lifecycle state machine and delivery planning; this is a log of
+/// things already paid with no lifecycle at all, and writing it there would
+/// manufacture payable-looking records that were never payables.
+///
+/// The two STOCKTON sheets are refused per-sheet with the reason
+/// `site_not_registered`: Stockton is not a row in `sites`, and hard rule #2
+/// says a NULL site never reaches a site-scoped surface.
+model DocFacilityExpenseRow {
+  id String @id @default(uuid())
+
+  doc_source_id         String
+  doc_source_version_id String
+
+  site_id String?
+  site    Site?   @relation(fields: [site_id], references: [id])
+
+  sheet_name String
+  /// The sheet's own banner year, from the sheet name ("WOODLAND 2026" -> 2026).
+  sheet_year Int?
+  row_index  Int
+
+  present_on_daily_log String?
+  /// Header differs by sheet: `desk receipt` on three, `receipt date` on
+  /// STOCKTON 2025.
+  receipt_raw          String?
+
+  /// Set ONLY when the cell itself held a real date. Measured against the live
+  /// bytes 2026-08-16: that is ZERO rows on both Woodland sheets. The
+  /// `Invoice Date` column does NOT hold dates — it holds DAY-OF-MONTH numbers
+  /// (5, 6, 12, 27) under month banner rows written in the sheet body. See
+  /// `invoice_month_label` / `invoice_day` below.
+  invoice_date        DateTime? @db.Date
+  /// ALWAYS what the cell said ("5").
+  invoice_date_raw    String?
+  /// The forward-filled month BANNER row above this row, verbatim ("February").
+  /// NULL for the rows above the first banner — 25 of 138 on WOODLAND 2026 and
+  /// 15 of 194 on WOODLAND 2025 sit in an unbannered opening block, and
+  /// inferring "January" from position would be a guess.
+  invoice_month_label String?
+  /// 1-31 when `Invoice Date` held a plain day number, else NULL.
+  invoice_day         Int?
+
+  /// NULL when the cell was blank. NEVER 0 — an expense with no recorded amount
+  /// is not a free expense (the ADR-0069 Am.2 rule for `actual_repair_cost`).
+  amount        Decimal? @db.Decimal(12, 2)
+  credit_amount Decimal? @db.Decimal(12, 2)
+
+  /// VERBATIM. The live sheets hold 15 and 17 distinct values including case
+  /// variants of one category ("Transportation"/"transportation",
+  /// "Diesel"/"diesel", "Supplies"/"supplies").
+  category_raw  String?
+  /// Trimmed + lower-cased, for grouping. A CONVENIENCE, not a taxonomy —
+  /// nobody has agreed a taxonomy.
+  category_norm String?
+
+  invoice_number String?
+  notes          String?
+  machine_id_raw String?
+  day_raw        String?
+
+  /// VERBATIM. The column is overloaded: real commodities ("wood", "trash",
+  /// "pocket coils") and 6 H-haul references, all on WOODLAND 2026.
+  commodity_raw String?
+  /// Set ONLY when `commodity_raw` matches ^H-?\d+. Null otherwise.
+  haul_ref      String?
+  /// Present only on the WOODLAND 2026 sheet (9 rows).
+  gallons       Decimal? @db.Decimal(10, 2)
+
+  status         DocAbsorptionStatus @default(staged)
+  confirmed_at   DateTime?
+  confirmed_by   String?
+  discarded_at   DateTime?
+  discarded_by   String?
+  discard_reason String?
+
+  absorbed_at DateTime @default(now())
+
+  @@unique([doc_source_version_id, sheet_name, row_index], map: "doc_facility_expense_rows_version_sheet_row_key")
+  @@index([doc_source_id, status], map: "doc_facility_expense_rows_source_status_idx")
+  @@index([site_id, invoice_date], map: "doc_facility_expense_rows_site_date_idx")
+  @@map("doc_facility_expense_rows")
 }

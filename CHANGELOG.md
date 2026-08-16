@@ -9,6 +9,113 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-16 — every outbound load is recorded, and now 831 of them have a weight (ADR-0104)
+
+`mymrc_outbound_mirror` holds **4,673 outbound loads** spanning 2023-01-02 to
+2026-08-14. Every one carries a Materials ID; 4,669 carry a BOL and a shipment
+date. **`weight_lbs` was NULL on 4,673 of 4,673.** The system knew every load
+left, when, on what BOL and to whose account — and did not know what any of them
+weighed.
+
+Of 11 watched `doc_sources`, 3 were absorbing and **8 were sitting on an
+unconfirmed classifier proposal**, two of which held the missing figures. This
+closes that: every watched document now has an answer, and the outbound weight
+column the operation was missing is in the database.
+
+### Added
+
+- **Two new absorbable classes**, each with its own extractor, typed tables and
+  migration, landing in **reference** tables — never operational ones.
+  - `outbound_weight_audit` → `doc_outbound_load_rows` +
+    `doc_outbound_commodity_rows`. **831 loads, 1,699 commodity rows,
+    5,619,037 lb**, joinable to the mirror on `external_materials_id`.
+  - `facility_expense_log` → `doc_facility_expense_rows`. **332 rows,
+    $974,928.36**, Woodland only.
+- **Four archive-only classes** — `facility_journal`, `meeting_notes_log`,
+  `admin_task_tracker`, `analysis_workbook` — registered in `DOC_KINDS` and
+  deliberately absent from `ABSORBABLE_KINDS`, so the classifier stops
+  re-proposing five documents nobody will absorb. Unconfirmed count 8 → 0.
+- **A decide service, route and review page for each new staging class**
+  (`/admin/doc-ingest/outbound`, `/admin/doc-ingest/expenses`). `doc_commodity_audit_rows`
+  has held 252 rows that can never leave `staged` since ADR-0080 shipped without
+  one (P-46); this does not ship that shape twice more.
+- **`/admin/doc-ingest/outbound-coverage`** — read-only. Per month: loads MyMRC
+  records, loads with a weight, loads without, and the summed weight, every
+  figure labelled with the ONE pinned revision it came from. **No threshold, no
+  tolerance, no verdict** — grading a disagreement is AK-4c, Bill's call with
+  Rick and Janette (P-48).
+- **A single-instance guard** (`single-instance.ts` + test): at most one enabled
+  `doc_source` per single-instance absorbable class per site. This is what keeps
+  Kelsey Ruhland's frozen `TEREX.xlsx` copy from being re-enabled by a future
+  session that no longer remembers why it is off (P-52).
+
+### Fixed — two live defects that would have corrupted this work
+
+- **The classifier prompt disagreed with its own enum.** It told the model
+  `kind must be exactly one of:` all nine kinds, then hand-wrote a bullet list
+  describing six. The Outbound file's stored `proposed_reasoning` shows the model
+  reasoning through the contradiction in production — _"commodity_audit_tracker
+  is the closest listed kind, but since that kind is not in the allowed list…"_ —
+  about a kind that **is** in the allowed list. It read the described list as the
+  allow-list. The bullet list is now generated from
+  `DOC_KIND_DESCRIPTIONS: Record<DocKind, string>`, so an undescribed kind fails
+  the type-check.
+- **The confirm dropdown could not select any absorbable class.**
+  `SourcesClient.tsx` hardcoded a 5-entry list that was **three classes stale** —
+  every absorbable class in the product was missing — and its draft pre-fill
+  silently dropped any proposal not in it, so a correct `commodity_audit_tracker`
+  proposal rendered as an empty dropdown. Both `KIND_OPTIONS` and a
+  `Record<DocKind, string>` label map are now derived from the enum.
+
+### The three double-count traps, all closed by measurement
+
+1. **The workbook double-counts itself.** Four sheet pairs are exact copies plus
+   one filtered subset sheet — **556 of 1,387 candidate rows** are the same load
+   twice. Extraction is therefore **workbook-level**, not per-sheet: the
+   duplication is cross-sheet, so a per-sheet extractor structurally cannot see
+   it. A per-sheet read would have reported ~1.67× the real tonnage.
+2. **The most authoritative-sounding column is sign-flipped.**
+   `Total Outbound Materials Weight` is the **negation** of the real figure.
+   Weights come from `Total Outbound Weight`, which reconciles to the sum of the
+   13 commodity columns with **0 drift on 831 of 831 loads**; the check column is
+   stored only so the sign relationship can be asserted (2 rows disagree and are
+   surfaced, not smoothed over).
+3. **There are two TEREX.xlsx files.** `5b298aeb` is a frozen copy on a departed
+   account, structurally identical to the live one. Confirming its correct 0.81
+   proposal was all it would have taken to absorb 173 maintenance events twice.
+   It is classified honestly and `enabled=false`, disabled **before** the
+   confirmation reached it.
+
+### Verified against the live bytes and against prod
+
+- **831 of 831** workbook Materials IDs resolve in `mymrc_outbound_mirror`, and
+  **831 of 831 shipment dates match the mirror exactly** — which validates the
+  Excel-serial and `M/D/YYYY` text conversions against a source that is not the
+  workbook.
+- Corrections recorded in the build plan's Amendment 1: the workbook holds
+  **831** loads and not the ~1,085 the design half stated (its own month table
+  already summed to 831), and — the substantive one — **the `Invoice Date` column
+  does not hold dates.** It holds day-of-month numbers under month banner rows,
+  and 0 of 332 absorbed rows carry a readable date. Composing one was rejected:
+  40 rows sit above the first banner and one sheet has two blocks both labelled
+  "July". The banner and the day are stored separately and verbatim.
+
+### Unchanged, deliberately
+
+`processed_units_daily` keeps its one writer (workbook-sync, ADR-0049). The six
+operational vendor-leg tables — `outbound_materials`, `outbound_vendors`,
+`recycling_rates`, `landfilled_units`, `outbound_material_payments`, `invoices` —
+stay at **0 rows** (AK-4b / P-49): their prerequisite vendor and rate masters do
+not exist and could only be satisfied by inventing rates from `Disposition`
+strings. The two Stockton sheets are refused by name — Stockton is not a row in
+`sites`, and a figure attributed to the wrong facility is worse than one nobody
+has.
+
+**The first honest readout will show that most loads still have no weight.** The
+workbook covers Woodland, January to June 2026; ~3,840 of 4,673 loads remain
+weightless and no watched document supplies them. That is worse-looking than the
+silence it replaces, and it is the point (P-47).
+
 ## 2026-08-14 (9:23 PM PT) — the first quota digest went out pilot, Bill flipped it live the same evening
 
 The Friday 20:00 PT send (week 8/10–8/14, 22 processors seen, **15 flagged** at

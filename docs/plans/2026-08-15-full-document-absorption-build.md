@@ -495,6 +495,161 @@ Confirmations are executed under **Bill's user id** per his instruction; the aud
 6. **Review and confirm the two staged batches** on the new review pages, after eyeballing the totals against the workbook.
 7. **Verify**: `doc_sources` shows 11 registered / 0 unconfirmed; `runAbsorptionPass` reports `absorbed` for the two new sources and `not_absorbable` for the five archive ones; the coverage page renders with a pinned version id.
 
+## 14A. Amendment 1 — what the live bytes said when the build ran (2026-08-16 PT)
+
+**Status:** applied. Every figure below was re-measured by the executor against the
+archived R2 objects and against prod, and the build follows the MEASURED number
+wherever it disagrees with §1–§14. The plan's own instruction was "do falsify any
+figure you can"; these are the ones that moved.
+
+### A1.1 The outbound workbook holds **831** distinct loads, not ~1,085
+
+`~1,085` appears in §1, §8.5 and ADR-0104 §D3 and it is wrong. The ADR's own
+month table already sums to the right answer — 131 + 113 + 135 + 158 + 139 + 155
+= **831** — so the prose figure was a transcription slip, not a measurement
+error. Everything else in §8.5 holds exactly:
+
+| Figure                | Plan       | Measured 2026-08-16 |
+| --------------------- | ---------- | ------------------- |
+| candidate sheets      | 11 of 16   | **11 of 16** ✔      |
+| distinct loads        | ~1,085     | **831**             |
+| `duplicatesRemoved`   | ~556       | **556** ✔           |
+| sheets refused        | 5 pivots   | **5 pivots** ✔      |
+| commodity rows        | (unstated) | **1,699**           |
+| total weight          | (unstated) | **5,619,037 lb**    |
+| `signCheckFailures`   | (unstated) | **2** — `M-159724` (7,760 vs −6,286), `M-172079` (4,215 vs −4,160) |
+| `partsCheckFailures`  | (unstated) | **0** of 831        |
+
+Independently falsified against prod: **831 of 831** Materials IDs resolve in
+`mymrc_outbound_mirror`, and **831 of 831 shipment dates match the mirror
+exactly** — which validates the Excel-serial and `M/D/YYYY` conversions against a
+source that is not the workbook. 830 of 831 BOL ids also match. The mirror holds
+**834** Woodland Jan–Jun 2026 loads, so 3 are outside the workbook's range.
+
+### A1.2 There is no existing date converter to reuse (§8.4 is wrong)
+
+§8.4 says to "reuse whatever `toCell` / `trailer-extract.ts` already does". Neither
+does anything: `toCell` returns an Excel serial as `num` and a text date as
+`text`, and `trailer-extract.ts` only ever reads `cell.date`. **270 of the 831
+loads** carry a serial (139) or text (131), so `excelSerialToISO` and
+`usDateTextToISO` are written in `outbound-extract.ts`. Serials at or below 60
+are REFUSED rather than shifted, because that region is inside Excel's 1900
+leap-year artefact and guessing a side would invent a date.
+
+### A1.3 A commodity cell holding **0** is written, not skipped
+
+§7.2 says "write a row only where the `(lbs)` cell is non-null" and then cites
+"120 populated commodity cells" for Feb 2026. Those two are different rules: Feb
+has **233 non-null** commodity cells and **120 non-zero** ones. The build follows
+the STATED rule (non-null), giving **1,699** commodity rows rather than 869.
+
+The reason is the repo's own discipline running in the other direction: a blank
+cell means NOT RECORDED and a `0` means the export recorded zero. Dropping a
+recorded 0 would be inventing "not recorded", which is the exact inverse of the
+ADR-0069 Am.2 rule. A 0 also contributes 0 to every sum, so nothing downstream
+moves.
+
+### A1.4 `Disposition` has **five** live values, not four
+
+Measured: `Recycling`, `Landfill`, `Biomass`, `Renovation`, and the case variant
+`landfill`. Stored verbatim as §D2 already requires, so no code changes — but the
+"closed four-value vocabulary" claim in ADR-0104 §D2 is not true of the live file.
+
+### A1.5 **The `Invoice Date` column does not hold dates** (§7.3 / §10 changed)
+
+This is the substantive deviation. §10 maps `Invoice Date` onto
+`invoice_date` + `_raw`. Measured against the live bytes, **0 of the 332 absorbed
+rows carry a cell a date can be read from**. The column holds **day-of-month
+numbers** (5, 6, 12, 27) and the month lives in **banner rows written into the
+sheet body** ("February", "March").
+
+Composing a date from (sheet year + banner + day) was considered and **rejected**:
+
+- **25 rows** on `WOODLAND 2026` and **15** on `WOODLAND 2025` sit ABOVE the
+  first banner, so their month is genuinely unstated and "January" would be an
+  inference from position; and
+- `WOODLAND 2026` carries **two blocks both bannered "July"** (rows 214 and 258),
+  so a composed date would be confidently wrong for one of them.
+
+A composed date is indistinguishable on screen from one the operator wrote, and a
+guess made first becomes the default by inertia (ADR-0080 §D7). So the schema
+gains two columns and `invoice_date` stays NULL unless the cell itself held a
+date:
+
+```
+invoice_month_label  TEXT     -- the forward-filled banner, VERBATIM. NULL above the first.
+invoice_day          INTEGER  -- 1-31 when the cell held a plain day number.
+```
+
+Consequence: `datesCovered` for this class is **0**, and that is correct rather
+than a silent zero — the absorb audit row states
+`rows_with_a_real_invoice_date: 0` alongside `rows_with_a_day_number` and
+`rows_above_the_first_month_banner`, and the review page says so in words.
+
+### A1.6 Three more row-gate rules the sheets forced
+
+None of these is in §10 and all three were found by reading the file:
+
+1. **`Yearly Total` rows exist**, not just `Monthly Total`. The gate is
+   `/^(monthly|yearly)\s+total/i`. Without the `yearly` half, one label row per
+   sheet is absorbed as an expense.
+2. **A repeated header can have a BLANK `category` cell.** §10's rule ("skip the
+   row if `category_raw === 'category'`") misses the one on `STOCKTON 2025`, so
+   the gate checks the category, the invoice-date and the amount columns.
+3. **A month banner can be written into the `Invoice Date` column** —
+   `WOODLAND 2025` row 205 says "November" there. Banner detection searches the
+   whole row rather than one fixed cell.
+
+### A1.7 Measured expense volumes (§10's figures were approximate)
+
+| Sheet           | Plan       | Measured 2026-08-16                    |
+| --------------- | ---------- | -------------------------------------- |
+| `WOODLAND 2026` | 144 / $430,607 | **138 rows / $430,606.74**, $0.00 credited |
+| `WOODLAND 2025` | 200 / $544,322 | **194 rows / $544,321.62**, $104,241.82 credited |
+| `STOCKTON 2026` | 17 / $15,736 refused | **12 rows / $15,736.44 refused** |
+| `STOCKTON 2025` | 8 / $6,124 refused   | **7 rows / $6,123.64 refused**   |
+| `Sheet1`        | refused    | **refused (`no_header_row`)** ✔        |
+
+**Total absorbed: 332 rows / $974,928.36.** Every amount matches the plan to the
+cent; only the row counts moved, because the plan's gate counted some banner and
+subtotal rows.
+
+### A1.8 The Stockton refusal is driven by the `sites` table, not by sheet names
+
+§10 says "match the site prefix on the sheet name, case-insensitively; do not
+hardcode the four names". The extractor is handed the tokens every registered
+site answers to (derived from `sites.name`) plus this document's own, and refuses
+anything else with `site_not_registered` — or `site_not_this_document` when a
+sheet names a DIFFERENT registered site. The test proves the refusal is the site
+registry talking and not a parse failure wearing a site's name: the same Stockton
+fixture absorbs cleanly the moment `stockton` is in the registered set.
+
+### A1.9 The vocabulary moved to `doc-kinds.ts`
+
+§6.2 asks `SourcesClient.tsx` (a `'use client'` component) to hold
+`Record<DocKind, string>`, which means importing `DOC_KINDS` from
+`classifier.ts` — and `classifier.ts` reaches the Anthropic SDK through
+`await import(...)`, which webpack would then pull into the browser bundle.
+`DOC_KINDS`, `DocKind`, `isDocKind` and `DOC_KIND_DESCRIPTIONS` therefore live in
+`src/lib/doc-ingest/doc-kinds.ts`; `classifier.ts` re-exports all four, so no
+existing import path changed.
+
+### A1.10 The version-pin test was VACUOUS on the first attempt
+
+Recorded because it is the lesson, not the fix. `computeOutboundCoverage` builds
+a `Map` keyed on the Materials ID, and a map **silently collapses** a duplicate:
+deleting the version clause did NOT double the count — the first version of the
+test passed with the pin removed. An unpinned read does not produce a visibly
+absurd total, it quietly answers from whichever revision was read last, which is
+worse.
+
+Two changes: the module now reports `revisionBleedIds` (unreachable inside one
+revision, because `(version, materials id)` is UNIQUE), and the fixture lists the
+NEWER revision first so last-write-wins changes the weight. Re-run with the pin
+deleted, the suite now fails with `expected 3000 to be 15520`.
+
+---
+
 ## 15. Verification gate before you claim done
 
 - `node scripts/check-adr-citations.mjs` — any `ADR-0104` you write into `src/`, `scripts/`, `e2e/`, `tests/` must resolve. Markdown is not scanned, code is.
