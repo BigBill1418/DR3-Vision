@@ -14,7 +14,7 @@
 // This takes the `terex-extract.ts` shape (every sheet at once, one result) and
 // NOT the `commodity-extract.ts` shape (one result per sheet). The duplication
 // in this workbook is CROSS-SHEET, so a per-sheet extractor structurally cannot
-// see it. Measured against the live bytes 2026-08-16 — 16 sheets, 11 of which
+// see it. Measured against the live bytes 2026-08-15 — 16 sheets, 11 of which
 // carry both required headers:
 //
 //     "Outbound Feb 2026"   n "Feb2026 outbounds"       = 113 IDENTICAL SET

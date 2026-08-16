@@ -21,7 +21,7 @@ import type { FacilityExpenseExtractResult } from '../facility-expense-extract';
 const V = 'ver-1';
 const SRC = 'src-1';
 const SITE = 'site-woodland';
-const NOW = new Date('2026-08-16T18:00:00.000Z');
+const NOW = new Date('2026-08-15T18:00:00.000Z');
 
 interface Stored {
   external_materials_id?: string;

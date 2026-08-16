@@ -19,6 +19,72 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BB — ADR-0104 shipped and executed 2026-08-15 (7:22 PM PT) — TWO STAGED BATCHES AWAIT BILL
+
+The document-ingestion gap is closed: `doc_sources` is **11 registered, 0
+unconfirmed**, and the outbound weight column the operation was missing is in the
+database. `mymrc_outbound_mirror` had `weight_lbs` NULL on **4,673 of 4,673**
+loads; **831 of them now have a weight** (5,619,037 lb, Woodland Jan–Jun 2026),
+plus 1,699 commodity rows and 332 facility-expense rows.
+
+### WAITING ON BILL — the only thing this build cannot do for itself
+
+Both batches are **STAGED**. Nothing counts until he accepts them, and an agent
+clicking confirm would put his attestation on a reading nobody read (ADR-0069
+Am.2 O-2). Two clicks, both admin-only:
+
+| Screen | What to check before accepting |
+| --- | --- |
+| `/admin/doc-ingest/outbound` | **831 loads / 5,619,037 lb.** The screen states that 556 duplicate rows were removed — four sheet pairs are exact copies plus one subset sheet — so the total is the real tonnage and not ~1.67x it. It also names the 2 loads (`M-159724`, `M-172079`) where the workbook's own check column disagrees with its weight column. |
+| `/admin/doc-ingest/expenses` | **332 rows / $974,928.37**, $104,241.82 credited. Both STOCKTON sheets were refused (Stockton is not a registered site). **No row carries a real invoice date** — the workbook's `Invoice Date` column holds a day of the month under month banner rows, and 40 rows sit above the first banner, so their month is genuinely unstated. |
+
+Until he accepts, `/admin/doc-ingest/outbound-coverage` reads empty at
+`confirmed` scope by design; the `staged` view shows the figures.
+
+### Still open, and NOT closed by this build
+
+- **AK-4c — what a disagreement MEANS.** The coverage page surfaces the
+  mirror/workbook join and grades nothing: no threshold, no tolerance, no
+  verdict (P-48). That rule is Bill's with Rick and Janette, and it has had **no
+  owner since Kelsey's availability ended 2026-08-08** (see the preamble). A
+  guess encoded now would become the default by being first.
+- **AK-4b — the operational outbound leg.** `outbound_materials`,
+  `outbound_vendors`, `recycling_rates`, `landfilled_units`,
+  `outbound_material_payments` and `invoices` all stay at **0 rows** (P-49).
+  Their prerequisite vendor and rate masters do not exist and could only be
+  satisfied by inventing rates from `Disposition` strings.
+- **P-47 — 3,839 Woodland loads still have no weight**, and every Eugene load.
+  The only document that supplies weights covers Woodland Jan–Jun 2026. Loads
+  before 2026, after June 2026, and all of Eugene are out of its range and **no
+  currently watched document supplies them.** If a MyMRC export for those
+  periods exists, registering it is the fix; nothing in the code is.
+- **P-46 — `doc_commodity_audit_rows` still has 252 rows that can never leave
+  `staged`.** ADR-0080 shipped that class with no decide service; ADR-0104 ships
+  one for each of its own two staging classes rather than replicating the gap,
+  but does not repair this one. It needs a `commodity-decide.ts` on the same
+  contract plus a confirm control on `/admin/doc-ingest/commodity`.
+- **P-50 — the `Licenses, Registrations, etc` sheet** (41 rows: filed-through,
+  expiry, cost, owner) is real operational value that is NOT captured. It lives
+  in a stale 2025 file. That needs a CURRENT document from Bill, not an
+  extractor.
+
+### Two operating notes worth keeping
+
+- **A squash-merge inherits `[skip-deploy]` from any commit folded into it.**
+  PR #261 merged with a body carrying the trailer twice — inherited from the two
+  docs-only design commits — so the deployer took the pull-only path and never
+  rebuilt the app image. The build only reached prod on the follow-up (#262).
+  When a branch mixes docs-only commits with real code, check the squash body
+  before merging.
+- **Kelsey's TEREX copy `5b298aeb` is held off by `enabled = false`, not by a
+  constraint** (P-52). It is now classified honestly as `terex_maintenance_log`,
+  so it is exactly one Enable click from double-absorbing 173 maintenance
+  events. As of this build the health page raises a red panel if any
+  single-instance class ever has two enabled sources — but the guard is a
+  report, not a lock.
+
+---
+
 ## 0.BA — 2026-08-13 late-night MyMRC sync incident (ADR-0103) — fixed and deployed, two watch items, one audit caveat
 
 The 11:01 PM PT `MyMRC sync error - woodland [outbound]` page was a cached-page

@@ -1,7 +1,7 @@
 // ADR-0104 §D4 — facility expense-log extraction.
 //
 // Fixtures mirror the REAL "Woodland Invoices tracking.xlsx" read out of R2 on
-// 2026-08-16: a two-row title banner, a header on row 3, an unbannered opening
+// 2026-08-15: a two-row title banner, a header on row 3, an unbannered opening
 // block, then repeating (month banner -> repeated header -> rows -> subtotal)
 // blocks, and a `Yearly Total` row at the foot.
 //

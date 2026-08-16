@@ -101,7 +101,7 @@ import { decideOutboundBatch } from '../outbound-decide';
 import { decideFacilityExpenseBatch } from '../facility-expense-decide';
 
 const V = 'ver-1';
-const NOW = new Date('2026-08-16T18:00:00.000Z');
+const NOW = new Date('2026-08-15T18:00:00.000Z');
 
 beforeEach(() => {
   store.loads = [

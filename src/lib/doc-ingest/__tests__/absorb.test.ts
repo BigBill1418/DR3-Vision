@@ -239,7 +239,7 @@ describe('absorbVersion (ADR-0069)', () => {
     // WIDENED four times: Am.1 added `trailer_list`, Am.2 added
     // `terex_maintenance_log` (both 2026-07-31), ADR-0080 added
     // `commodity_audit_tracker` (2026-08-07), and ADR-0104 §D1 added
-    // `outbound_weight_audit` + `facility_expense_log` (2026-08-16). This
+    // `outbound_weight_audit` + `facility_expense_log` (2026-08-15). This
     // assertion is a tripwire and it has fired on ALL FOUR changes, exactly as
     // intended. It stays exact rather than becoming a `toContain`: the point is
     // that adding a kind here without adding its extractor and its typed table

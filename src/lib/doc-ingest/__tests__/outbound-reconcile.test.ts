@@ -15,7 +15,7 @@
 //     the total changes. Byte-identical fixtures would have left the direction
 //     unpinned — exactly how the production triple-count got through (ADR-0077).
 //
-// The figures are the live document's own shape, measured 2026-08-16: the
+// The figures are the live document's own shape, measured 2026-08-15: the
 // workbook supplies 831 loads for Woodland Jan–Jun 2026 against a
 // `mymrc_outbound_mirror` holding 4,673 loads back to 2023, all weightless.
 
@@ -143,7 +143,7 @@ function absorbed(
     site_id: WOODLAND,
     status: 'confirmed',
     doc_source_version_id: V2,
-    absorbed_at: new Date('2026-08-16T00:00:00.000Z'),
+    absorbed_at: new Date('2026-08-15T00:00:00.000Z'),
     external_materials_id: id,
     total_weight_lbs: weight,
     ...over,
@@ -207,7 +207,7 @@ describe('computeOutboundCoverage — the version pin (ADR-0077)', () => {
     // The older revision's weights are 3,000 lb. If the module ordered `asc`
     // this would be 3000 and the version id would be V1.
     expect(c.totals.weightLbs).not.toBe(3000);
-    expect(c.absorbedAtISO).toBe('2026-08-16T00:00:00.000Z');
+    expect(c.absorbedAtISO).toBe('2026-08-15T00:00:00.000Z');
   });
 
   it('never mixes staged into a confirmed total', async () => {
