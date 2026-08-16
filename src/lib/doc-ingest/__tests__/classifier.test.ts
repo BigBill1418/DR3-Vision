@@ -13,6 +13,10 @@ import {
   detectPeriod,
   detectSite,
   isDocKind,
+  userPrompt,
+  renderKindVocabulary,
+  DOC_KINDS,
+  DOC_KIND_DESCRIPTIONS,
   CONFIRM_CONFIDENCE_FLOOR,
   VENDOR_INVOICE_CORRECT_ADDRESS,
   type ClassifierInput,
@@ -234,5 +238,120 @@ describe('kind vocabulary', () => {
       expect(isDocKind(kind)).toBe(true);
     }
     expect(isDocKind('payroll_register')).toBe(false);
+  });
+});
+
+// ── ADR-0104 §D9 — the prompt disagreed with its own enum ───────────────────
+//
+// `userPrompt()` told the model `kind must be exactly one of: ${DOC_KINDS}` —
+// nine kinds — and then hand-wrote a bullet list describing SIX. `trailer_list`,
+// `terex_maintenance_log` and `commodity_audit_tracker` were named as legal and
+// never explained, and the model read the DESCRIBED list as the allow-list. The
+// Outbound file's stored `proposed_reasoning` shows it happening in production:
+//
+//   "commodity_audit_tracker is the closest listed kind, but since that kind is
+//    not in the allowed list, and none of the allowed kinds clearly match…"
+//
+// — written about a kind that IS in the allowed list. The fix is derivation, not
+// six more string literals.
+describe('the model is shown every kind it is allowed to answer (ADR-0104 §D9)', () => {
+  it('describes EVERY member of DOC_KINDS in the rendered prompt', () => {
+    const prompt = userPrompt({
+      filename: 'Woodland Outbound Auditing 2026.xlsx',
+      pathHint: null,
+      contentType: null,
+      summary: null,
+    });
+
+    for (const kind of DOC_KINDS) {
+      // Named in the allow-list sentence AND described in the bullet list. Only
+      // the first of those was true before ADR-0104, for 3 of 9 kinds.
+      expect(prompt, `${kind} must be named`).toContain(kind);
+      expect(prompt, `${kind} must be described`).toContain(`- ${kind}: `);
+    }
+  });
+
+  it('FALSIFIES the guard: a hand-written six-kind list fails it', () => {
+    // The pre-ADR-0104 bullet list, verbatim. Asserting that this SHAPE fails is
+    // what proves the test above is not true by construction — a vocabulary
+    // check that has never seen a bad vocabulary proves nothing.
+    const stalePrompt =
+      `kind must be exactly one of: ${DOC_KINDS.join(', ')}.\n` +
+      '- daily_log_workbook: a daily operations log.\n' +
+      '- ap_history_report: a historical listing of AP invoices.\n' +
+      '- equipment_inventory: a register of physical assets.\n' +
+      '- rate_table: pricing or rates.\n' +
+      '- mrc_invoice: paperwork from the MRC.\n' +
+      '- vendor_invoice: a single bill from a supplier.\n' +
+      '- unknown: anything you are not confident about.\n';
+
+    const undescribed = DOC_KINDS.filter((k) => !stalePrompt.includes(`- ${k}: `));
+    expect(undescribed).toContain('trailer_list');
+    expect(undescribed).toContain('terex_maintenance_log');
+    expect(undescribed).toContain('commodity_audit_tracker');
+    // The two new absorbable classes would have been silently undescribed too.
+    expect(undescribed).toContain('outbound_weight_audit');
+    expect(undescribed).toContain('facility_expense_log');
+  });
+
+  it('has a non-empty description for every kind', () => {
+    // `Record<DocKind, string>` already makes a MISSING key a compile error.
+    // This catches the other way to get it wrong: a present-but-empty string.
+    for (const kind of DOC_KINDS) {
+      expect(DOC_KIND_DESCRIPTIONS[kind].trim().length, kind).toBeGreaterThan(10);
+    }
+    expect(renderKindVocabulary().split('\n').filter(Boolean)).toHaveLength(DOC_KINDS.length);
+  });
+});
+
+describe('the ADR-0104 classes classify locally (ADR-0104 §5.1)', () => {
+  it('proposes outbound_weight_audit from the REAL headers', () => {
+    // Header text read off the live workbook 2026-08-16, not invented.
+    const c = classifyLocally({
+      filename: 'Woodland Outbound Auditing 2026.xlsx',
+      pathHint: null,
+      contentType: null,
+      summary: {
+        sheets: [
+          {
+            name: 'Outbound Feb 2026',
+            headers: [
+              'Materials: Materials ID',
+              'Shipment Date',
+              'BOL ID',
+              'Total Outbound Weight',
+              'Steel Disposition',
+            ],
+          },
+        ],
+        totalRows: 113,
+        textSample: '',
+      } as unknown as ParseSummary,
+    });
+    expect(c.kind).toBe('outbound_weight_audit');
+    // Strong enough to skip the Claude fallback entirely — the point of adding
+    // a local rule rather than tuning a confidence.
+    expect(c.confidence).toBeGreaterThanOrEqual(CONFIRM_CONFIDENCE_FLOOR);
+    expect(c.site).toBe('Woodland');
+  });
+
+  it('proposes facility_expense_log from the REAL headers', () => {
+    const c = classifyLocally({
+      filename: 'Woodland Invoices tracking.xlsx',
+      pathHint: null,
+      contentType: null,
+      summary: {
+        sheets: [
+          {
+            name: 'WOODLAND 2026',
+            headers: ['Present on Daily Log', 'Invoice Date', 'credit amt', 'Invoice #', 'Machine ID'],
+          },
+        ],
+        totalRows: 325,
+        textSample: '',
+      } as unknown as ParseSummary,
+    });
+    expect(c.kind).toBe('facility_expense_log');
+    expect(c.confidence).toBeGreaterThanOrEqual(CONFIRM_CONFIDENCE_FLOOR);
   });
 });

@@ -24,6 +24,7 @@ import {
   type FakeDocIngestPrisma,
 } from '../__testutils__/fake-prisma';
 import { absorbVersion, runAbsorptionPass, ABSORBABLE_KINDS } from '../absorb';
+import { DOC_KINDS } from '../doc-kinds';
 
 const SITE_ID = 'site-woodland';
 const NOW = new Date('2026-07-30T12:00:00.000Z');
@@ -235,12 +236,14 @@ describe('absorbVersion (ADR-0069)', () => {
   });
 
   it('the absorbable set is exactly the kinds with a real extractor — widening it is a deliberate act', () => {
-    // WIDENED three times: Am.1 added `trailer_list`, Am.2 added
-    // `terex_maintenance_log` (both 2026-07-31), and ADR-0080 added
-    // `commodity_audit_tracker` (2026-08-07). This assertion is a tripwire and it
-    // fired on ALL THREE changes, exactly as intended. It stays exact rather than becoming a `toContain`:
-    // the point is that adding a kind here without adding its extractor and its
-    // typed table has to break a test.
+    // WIDENED four times: Am.1 added `trailer_list`, Am.2 added
+    // `terex_maintenance_log` (both 2026-07-31), ADR-0080 added
+    // `commodity_audit_tracker` (2026-08-07), and ADR-0104 §D1 added
+    // `outbound_weight_audit` + `facility_expense_log` (2026-08-16). This
+    // assertion is a tripwire and it has fired on ALL FOUR changes, exactly as
+    // intended. It stays exact rather than becoming a `toContain`: the point is
+    // that adding a kind here without adding its extractor and its typed table
+    // has to break a test.
     //
     // Each kind has its OWN extractor and its OWN table. There is deliberately no
     // shared "generic row" path — a generic extractor is how a trailer list ends
@@ -250,7 +253,28 @@ describe('absorbVersion (ADR-0069)', () => {
       'trailer_list',
       'terex_maintenance_log',
       'commodity_audit_tracker',
+      'outbound_weight_audit',
+      'facility_expense_log',
     ]);
+  });
+
+  it('the six ADR-0104 archive classes are registered but NOT absorbable', () => {
+    // §D8. They exist in `DOC_KINDS` so the classifier stops re-proposing them
+    // every sweep and so the confirm queue can ANSWER them — not so they can be
+    // absorbed. `equipment_inventory` is the pre-existing member of that set and
+    // is asserted alongside the five new ones so the rule reads as one rule.
+    for (const kind of [
+      'facility_journal',
+      'meeting_notes_log',
+      'admin_task_tracker',
+      'analysis_workbook',
+      'equipment_inventory',
+      // Recognised so it can be REFUSED and redirected, never absorbed.
+      'vendor_invoice',
+    ]) {
+      expect(DOC_KINDS).toContain(kind);
+      expect(ABSORBABLE_KINDS.has(kind)).toBe(false);
+    }
   });
 });
 

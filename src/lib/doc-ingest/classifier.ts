@@ -31,33 +31,13 @@ import {
   apExtractionFallbackEnabled,
 } from '@/lib/ap/extraction/config';
 import type { ParseSummary } from './parse';
+import { DOC_KINDS, DOC_KIND_DESCRIPTIONS, isDocKind, type DocKind } from './doc-kinds';
 
-/**
- * The document vocabulary (D5).
- *
- * `vendor_invoice` is in the list precisely so it can be RECOGNIZED and
- * REFUSED. It is not routed here — ADR-0046's AP mailbox is its address — and
- * detecting it lets Vision say where it should have gone instead of silently
- * filing a payable as a data source.
- */
-export const DOC_KINDS = [
-  'daily_log_workbook',
-  'trailer_list',
-  'terex_maintenance_log',
-  'commodity_audit_tracker',
-  'ap_history_report',
-  'equipment_inventory',
-  'rate_table',
-  'mrc_invoice',
-  'vendor_invoice',
-  'unknown',
-] as const;
-
-export type DocKind = (typeof DOC_KINDS)[number];
-
-export function isDocKind(v: string): v is DocKind {
-  return (DOC_KINDS as readonly string[]).includes(v);
-}
+// Re-exported so every existing `from '@/lib/doc-ingest/classifier'` import of
+// the vocabulary keeps working. The definitions live in `doc-kinds.ts` — see
+// that file's header for why.
+export { DOC_KINDS, DOC_KIND_DESCRIPTIONS, isDocKind };
+export type { DocKind };
 
 /** Where a misdirected vendor invoice actually belongs. Stated, never implied. */
 export const VENDOR_INVOICE_CORRECT_ADDRESS = 'ap@svdp.us';
@@ -153,6 +133,54 @@ const RULES: Rule[] = [
       /\b(2nd|second)[\s_-]*audit\b/i,
       /\binitials\b/i,
     ],
+  },
+  {
+    // ADR-0104 §D2. Structure signals read off the REAL header rows of
+    // "Woodland Outbound Auditing 2026.xlsx" (measured 2026-08-16 against the
+    // archived bytes, not assumed): the header row is on row 1, 2, 4 or 10
+    // depending on the sheet, and these four labels are present on all eleven
+    // candidate sheets.
+    kind: 'outbound_weight_audit',
+    name: [/\boutbound\b/i, /\bauditing\b/i],
+    structure: [
+      /materials:\s*materials id/i,
+      /\bbol id\b/i,
+      /\btotal outbound weight\b/i,
+      /\bdisposition\b/i,
+    ],
+  },
+  {
+    // ADR-0104 §D4. Signals from the REAL row-3 headers of "Woodland Invoices
+    // tracking.xlsx" (measured 2026-08-16). `present on daily log` is the
+    // distinctive one — no other watched document has it.
+    kind: 'facility_expense_log',
+    name: [/\binvoices?\b[\s_-]*tracking/i],
+    structure: [
+      /\bpresent on daily log\b/i,
+      /\bcredit amt\b/i,
+      /\binvoice\s*#/i,
+      /\bmachine id\b/i,
+    ],
+  },
+  {
+    kind: 'facility_journal',
+    name: [/\bjournal\b/i],
+    structure: [/\bfacility journal\b/i],
+  },
+  {
+    kind: 'meeting_notes_log',
+    name: [/meeting[\s_-]*notes/i],
+    structure: [/\bmeeting date\b/i, /\battendees\b/i],
+  },
+  {
+    kind: 'admin_task_tracker',
+    name: [/task[\s_-]*lists?/i],
+    structure: [/\bproject title\b/i, /%\s*complete/i],
+  },
+  {
+    kind: 'analysis_workbook',
+    name: [/data[\s_-]*tracking/i],
+    structure: [/\bmass balance\b/i, /\bforecast\b/i, /\brecovery rate\b/i],
   },
   {
     kind: 'ap_history_report',
@@ -314,17 +342,23 @@ const SYSTEM_PROMPT =
   'a wrong confident answer is much worse than an honest unknown, because downstream systems act on it ' +
   'automatically.';
 
-function userPrompt(input: ClassifierInput): string {
+/**
+ * The kind vocabulary, rendered for the model.
+ *
+ * DERIVED from {@link DOC_KIND_DESCRIPTIONS}, never hand-written — see §D9 on
+ * that constant. Exported so a test can assert every member of `DOC_KINDS`
+ * appears in it; that test fails against the pre-ADR-0104 prompt.
+ */
+export function renderKindVocabulary(): string {
+  return DOC_KINDS.map((k) => `- ${k}: ${DOC_KIND_DESCRIPTIONS[k]}\n`).join('');
+}
+
+export function userPrompt(input: ClassifierInput): string {
   return (
     'Classify this document.\n\n' +
     `kind must be exactly one of: ${DOC_KINDS.join(', ')}.\n` +
-    '- daily_log_workbook: a daily operations log of mattresses received/processed at a facility.\n' +
-    '- ap_history_report: a historical listing of accounts-payable invoices.\n' +
-    '- equipment_inventory: a register of physical assets/equipment.\n' +
-    '- rate_table: pricing or rates, usually with effective dates.\n' +
-    '- mrc_invoice: paperwork from the Mattress Recycling Council.\n' +
-    '- vendor_invoice: a single bill from a supplier requesting payment.\n' +
-    '- unknown: anything you are not confident about.\n\n' +
+    renderKindVocabulary() +
+    '\n' +
     'site must be exactly "Eugene", "Woodland", or null. No other site exists.\n' +
     'period should be "YYYY-MM" when the document covers a specific month, otherwise null.\n\n' +
     'Return JSON with fields: kind (string), confidence (number 0-1), site (string|null), ' +

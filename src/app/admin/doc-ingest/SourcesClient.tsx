@@ -17,26 +17,61 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { docIngestMessages as M } from '@/lib/doc-ingest/messages';
+import { DOC_KINDS, type DocKind } from '@/lib/doc-ingest/doc-kinds';
 import type { DocSourceRow } from '@/lib/doc-ingest/health';
 
-/** Confirmable kinds. `vendor_invoice` is deliberately absent — see the route. */
-const KIND_OPTIONS = [
-  'daily_log_workbook',
-  'ap_history_report',
-  'equipment_inventory',
-  'rate_table',
-  'mrc_invoice',
-] as const;
+/**
+ * ADR-0104 §D9 — the confirmable kinds, DERIVED from the enum.
+ *
+ * ── The defect this replaces ────────────────────────────────────────────────
+ * This was a hand-written 5-entry literal that had gone THREE CLASSES STALE:
+ * `trailer_list`, `terex_maintenance_log` and `commodity_audit_tracker` — every
+ * absorbable class in the product — were missing, though the API route accepted
+ * them all. Worse than a missing option: the draft pre-fill below only accepts
+ * the classifier's proposal when it is in this list, so a CORRECT
+ * `commodity_audit_tracker` proposal was silently dropped from the form and the
+ * admin saw an empty dropdown with no explanation.
+ *
+ * The filter mirrors `CONFIRMABLE_KINDS` in
+ * `src/app/api/admin/doc-ingest/sources/route.ts` exactly — `vendor_invoice` is
+ * recognised so it can be REFUSED and redirected (ADR-0046's AP mailbox is its
+ * address), and `unknown` is not an answer.
+ *
+ * Adding six more string literals to a list that is already three stale would be
+ * shipping the same defect again. A hand-maintained mirror of an enum drifts; a
+ * derived one cannot.
+ */
+const KIND_OPTIONS: readonly DocKind[] = DOC_KINDS.filter(
+  (k) => k !== 'vendor_invoice' && k !== 'unknown',
+);
 
-const KIND_LABEL: Record<string, string> = {
+/**
+ * `Record<DocKind, string>` is the point: a new class fails to COMPILE until it
+ * is labelled here. An index signature (`Record<string, string>`, which this
+ * was) accepts a missing key silently and renders `undefined`.
+ */
+const KIND_LABEL: Record<DocKind, string> = {
   daily_log_workbook: 'Daily log workbook',
+  trailer_list: 'Trailer list',
+  terex_maintenance_log: 'TEREX maintenance log',
+  commodity_audit_tracker: 'Commodity audit tracker',
+  outbound_weight_audit: 'Outbound weight audit',
+  facility_expense_log: 'Facility expense log',
+  facility_journal: 'Facility journal (archive only)',
+  meeting_notes_log: 'Meeting notes log (archive only)',
+  admin_task_tracker: 'Task tracker (archive only)',
+  analysis_workbook: 'Analysis workbook (archive only)',
   ap_history_report: 'AP history report',
-  equipment_inventory: 'Equipment inventory',
+  equipment_inventory: 'Equipment inventory (archive only)',
   rate_table: 'Rate table',
   mrc_invoice: 'MRC invoice',
   vendor_invoice: 'Vendor invoice (wrong address)',
   unknown: 'Unknown',
 };
+
+function labelFor(kind: string): string {
+  return (KIND_LABEL as Record<string, string>)[kind] ?? kind;
+}
 
 interface Site {
   id: string;
@@ -154,6 +189,9 @@ export function SourcesClient({
       // Pre-fill from the classifier's proposal — but `unknown`/`vendor_invoice`
       // are not confirmable, so they pre-fill as empty and force a real choice
       // rather than letting a low-confidence guess be accepted by reflex.
+      // Now that KIND_OPTIONS is derived from DOC_KINDS, this accepts every
+      // absorbable proposal. Before ADR-0104 it silently dropped a correct
+      // `commodity_audit_tracker` because that kind was missing from the list.
       kind:
         s.proposedClass && (KIND_OPTIONS as readonly string[]).includes(s.proposedClass)
           ? s.proposedClass
@@ -219,7 +257,7 @@ export function SourcesClient({
                     <p className="mt-2 text-sm text-dr3-mist-dim">
                       {M.sources.proposal}:{' '}
                       <span className="text-dr3-mist">
-                        {KIND_LABEL[s.proposedClass] ?? s.proposedClass}
+                        {labelFor(s.proposedClass)}
                       </span>
                       {s.proposedConfidence !== null
                         ? ` · ${(s.proposedConfidence * 100).toFixed(0)}% ${M.sources.confidence}`
@@ -333,7 +371,7 @@ export function SourcesClient({
                       ) : null}
                     </td>
                     <td className="py-2 pr-4">
-                      {s.docClass ? (KIND_LABEL[s.docClass] ?? s.docClass) : M.sources.unclassified}
+                      {s.docClass ? labelFor(s.docClass) : M.sources.unclassified}
                     </td>
                     <td className="py-2 pr-4">{s.siteName ?? M.sources.noSite}</td>
                     <td className="py-2 pr-4">{s.period ?? '—'}</td>

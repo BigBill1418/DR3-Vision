@@ -285,6 +285,15 @@ export const docIngestMessages = {
     title: 'TEREX maintenance',
   },
 
+  // ── ADR-0104 §D2/§D4 — the two new staged classes, and the read-only join ─
+  outbound: {
+    title: 'Outbound weights',
+    coverageTitle: 'Outbound coverage',
+  },
+  expenses: {
+    title: 'Facility expenses',
+  },
+
   errors: {
     keyMissing:
       'The token encryption key is not mounted on this host. Provision ~/.dr3-vision-secrets/doc-ingest.env before connecting.',

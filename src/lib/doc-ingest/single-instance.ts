@@ -1,0 +1,107 @@
+// ADR-0104 §D7 — at most ONE enabled source per single-instance class, per site.
+//
+// ┌───────────────────────────────────────────────────────────────────────────┐
+// │ THE THING THIS EXISTS TO STOP                                            │
+// │                                                                           │
+// │ There are TWO `TEREX.xlsx` documents. `8a0246e7` is Janette's live file.  │
+// │ `5b298aeb` is a frozen copy on Kelsey Ruhland's departed-account          │
+// │ OneDrive. They are not byte-identical (491,676 vs 492,470 bytes,          │
+// │ different SHA-256) but structurally they are the same document: 40 sheets │
+// │ each, identical sheet names, and `Maintenance Log 2025` holds 173 rows in │
+// │ BOTH. The classifier proposes `terex_maintenance_log` at 0.81 for the     │
+// │ copy — correctly. Confirming that proposal is all it would take to absorb │
+// │ every maintenance event a second time.                                    │
+// │                                                                           │
+// │ The copy is held off by `enabled = false`. That is a ROW, not a           │
+// │ constraint, and a future session that no longer remembers why will flip   │
+// │ it back. This rule is what survives after everyone has forgotten (P-52).  │
+// └───────────────────────────────────────────────────────────────────────────┘
+//
+// ── Why not a per-source exemption in `ABSORBABLE_KINDS` ───────────────────
+// Rejected in the ADR by name. `ABSORBABLE_KINDS` is a set of CLASS names with
+// no per-source escape hatch and it should not grow one — a set with exceptions
+// is a set nobody can read. `enabled = false` is the only state that is
+// simultaneously honest about what the document is and structurally incapable of
+// absorbing it: `runAbsorptionPass` selects on `enabled: true`.
+//
+// ── Why not a DB unique index ──────────────────────────────────────────────
+// A partial unique index on `(doc_class, site_id) WHERE enabled` would be
+// stronger, and it would also make a legitimate hand-over — the day a NEW
+// outbound workbook replaces the old one — a migration rather than two clicks.
+// The rule is enforced as a CHECK a human can read and a test that fails,
+// deliberately at that level. It is stated so the choice is visible.
+
+/**
+ * Absorbable classes where more than one enabled source per site is a defect.
+ *
+ * `daily_log_workbook` is deliberately ABSENT. That class names a PERIODIC
+ * document — one workbook per month per site — so several enabled sources are
+ * the normal, correct state and asserting otherwise would fail on healthy data.
+ * The distinction is the whole reason this is a named list rather than
+ * `ABSORBABLE_KINDS`.
+ */
+export const SINGLE_INSTANCE_KINDS: ReadonlySet<string> = new Set([
+  'trailer_list',
+  'terex_maintenance_log',
+  'commodity_audit_tracker',
+  'outbound_weight_audit',
+  'facility_expense_log',
+]);
+
+/** The shape this rule reads. Declared so the mapping is checked, not assumed. */
+export interface SingleInstanceSource {
+  id: string;
+  doc_class: string | null;
+  site_id: string | null;
+  enabled: boolean;
+  display_name?: string;
+}
+
+export interface SingleInstanceViolation {
+  docClass: string;
+  /** `null` is its own group: two unscoped sources of one class collide too. */
+  siteId: string | null;
+  sourceIds: string[];
+}
+
+/**
+ * Every `(class, site)` pair with more than one ENABLED source.
+ *
+ * Pure and total: it takes rows and returns findings, so the same rule can be
+ * asserted in a unit test against a fixture and run against production without
+ * a second implementation drifting away from the first.
+ */
+export function findSingleInstanceViolations(
+  sources: readonly SingleInstanceSource[],
+): SingleInstanceViolation[] {
+  const groups = new Map<string, SingleInstanceViolation>();
+
+  for (const s of sources) {
+    // A disabled source is exactly the state this rule permits — that is HOW
+    // Kelsey's copy is held. Filtering on it here is the rule, not a shortcut.
+    if (!s.enabled) continue;
+    if (s.doc_class === null || !SINGLE_INSTANCE_KINDS.has(s.doc_class)) continue;
+    // `\u0000` written as an ESCAPE, never as a raw byte: a literal NUL makes
+    // grep and ripgrep skip the whole file SILENTLY. The escape is
+    // byte-identical at runtime, and NUL is the right separator here because
+    // it cannot occur in a class name or a uuid.
+    const key = `${s.doc_class}\u0000${s.site_id ?? ''}`;
+    const group = groups.get(key);
+    if (group) group.sourceIds.push(s.id);
+    else groups.set(key, { docClass: s.doc_class, siteId: s.site_id, sourceIds: [s.id] });
+  }
+
+  return [...groups.values()]
+    .filter((g) => g.sourceIds.length > 1)
+    .map((g) => ({ ...g, sourceIds: [...g.sourceIds].sort() }));
+}
+
+/** An operator-readable account of a violation. Names the fix, not just the fault. */
+export function describeSingleInstanceViolation(v: SingleInstanceViolation): string {
+  return (
+    `${v.sourceIds.length} ENABLED sources are classified "${v.docClass}" for site ` +
+    `${v.siteId ?? '(none)'}: ${v.sourceIds.join(', ')}. That class names ONE physical document ` +
+    `per site, so absorbing both would count every row twice. Disable all but the live one ` +
+    `(ADR-0104 §D7).`
+  );
+}

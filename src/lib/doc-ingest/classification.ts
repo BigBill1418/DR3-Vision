@@ -320,18 +320,36 @@ export async function setSourceEnabled(
   enabled: boolean,
   actorUserId: string,
   now: Date = new Date(),
+  /**
+   * ADR-0104 §D7 — set INSTEAD of a real `users.id` when a named non-human run
+   * flips the switch, mirroring `ConfirmClassificationArgs.actorLabel`. The
+   * audit row then carries `actor_label` with `actor_user_id` NULL.
+   *
+   * This exists because the ADR-0104 execution has to DISABLE Kelsey's TEREX
+   * copy before any class confirmation reaches it, and doing that under Bill's
+   * user id would put a person's name on an action a script took — a false
+   * claim in an append-only table (hard rule #6, ADR-0077's actor discipline).
+   * The `reason` travels with it so the next reader does not have to find the
+   * ADR to know why a live-looking document is switched off.
+   */
+  actor: { label?: string | undefined; reason?: string | undefined } = {},
 ): Promise<void> {
   const source = await prisma.docSource.findUniqueOrThrow({ where: { id: sourceId } });
   await prisma.$transaction(async (tx) => {
     await tx.docSource.update({ where: { id: sourceId }, data: { enabled } });
     await writeAudit(
       {
-        actor_user_id: actorUserId,
+        actor_user_id: actor.label ? null : actorUserId,
+        actor_label: actor.label ?? null,
         action: 'update',
         table_name: 'doc_sources',
         row_id: sourceId,
         before: { enabled: source.enabled },
-        after: { enabled, at: now },
+        after: {
+          enabled,
+          at: now,
+          ...(actor.reason ? { reason: actor.reason } : {}),
+        },
       },
       { tx },
     );
