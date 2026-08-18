@@ -16,6 +16,15 @@
 //
 // Every figure names the ONE revision it came from. See `outbound-reconcile.ts`
 // for why that is not optional.
+//
+// ── ADR-0108 added ONE thing, and it is not a verdict ──────────────────────
+// Some loads are now marked "outside the usual range for this commodity". That
+// is a look-at-this against an editable line, not a finding: the wording never
+// says wrong, mismatch, error or dispute, and no alert or email exists on this
+// path. AK-4c is unchanged and still Bill's with Rick and Janette. The flags are
+// computed inside the SAME pinned revision and at the SAME scope as everything
+// else on the screen, and an uncovered load is never flagged — it has no weight
+// to be unusual.
 
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -26,6 +35,10 @@ import {
   UNDATED_BUCKET,
   type OutboundScope,
 } from '@/lib/doc-ingest/outbound-reconcile';
+import {
+  computeOutboundVariance,
+  type OutboundVarianceReview,
+} from '@/lib/doc-ingest/outbound-variance';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,6 +93,15 @@ export default async function OutboundCoveragePage({
   const scope: OutboundScope = params.scope === 'staged' ? 'staged' : 'confirmed';
   const coverage = siteId === null ? null : await computeOutboundCoverage(siteId, { scope });
   const siteName = sites.find((s) => s.id === siteId)?.name ?? null;
+
+  // ADR-0108. The pin is handed over, never re-derived: flags describe the SAME
+  // revision and the SAME scope the figures above came from, and there is no
+  // code path that can compute a flag without one.
+  const variance: OutboundVarianceReview | null =
+    siteId !== null && coverage !== null && coverage.versionId !== null
+      ? await computeOutboundVariance(siteId, { versionId: coverage.versionId, scope })
+      : null;
+  const flaggedLoads = new Set(variance?.flaggedLoadIds ?? []);
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-8 text-dr3-mist">
@@ -154,7 +176,7 @@ export default async function OutboundCoveragePage({
               <Stat
                 label="Still without one"
                 value={String(coverage.totals.loadsWithoutWeight)}
-                hint="no watched document supplies these"
+                hint="expected — outside the workbook's range, not missing data"
               />
               <Stat label="Weight known" value={lbs(coverage.totals.weightLbs)} />
             </div>
@@ -162,9 +184,9 @@ export default async function OutboundCoveragePage({
             <p className="mt-4 rounded-lg bg-dr3-steel/20 p-4 text-xs text-dr3-mist-dim">
               Every figure on this page comes from <strong>one revision</strong> of the workbook —{' '}
               <code className="text-dr3-mist">{coverage.versionId}</code>, absorbed{' '}
-              {pt(coverage.absorbedAtISO)}, at <strong>{coverage.scope}</strong> scope. Revisions are
-              not summed together: each one is a complete copy of the document, so adding two would
-              report twice the tonnage while looking like a bigger, better answer.
+              {pt(coverage.absorbedAtISO)}, at <strong>{coverage.scope}</strong> scope. Revisions
+              are not summed together: each one is a complete copy of the document, so adding two
+              would report twice the tonnage while looking like a bigger, better answer.
               {coverage.unmatchedAbsorbedLoads.length > 0 ? (
                 <>
                   {' '}
@@ -248,6 +270,8 @@ export default async function OutboundCoveragePage({
               </>
             )}
 
+            {variance !== null && <VarianceSection variance={variance} flagged={flaggedLoads} />}
+
             <p className="mt-6 text-xs text-dr3-mist-dim">
               The uncovered count is expected to be large, and it is shown rather than hidden. The
               only document that supplies outbound weights covers <strong>Woodland</strong>,{' '}
@@ -260,6 +284,141 @@ export default async function OutboundCoveragePage({
         )}
       </div>
     </main>
+  );
+}
+
+/**
+ * ADR-0108 — loads whose weight is unusual for their commodity.
+ *
+ * ── The wording is load-bearing ────────────────────────────────────────────
+ * "Exceeds the current variance threshold (editable)". The screen states a
+ * distance from a line, says the line is movable, and then stops. It never
+ * reaches for the vocabulary of blame — `outbound-variance.copy.test.ts` holds
+ * the list of banned words and fails this file if one appears, because the
+ * pressure to add one arrives later and quietly, and whoever writes the first
+ * one settles AK-4c by accident.
+ */
+function VarianceSection({
+  variance,
+  flagged,
+}: {
+  variance: OutboundVarianceReview;
+  flagged: Set<string>;
+}) {
+  const live = variance.bounds.filter((b) => b.inactiveReason === null);
+  const quiet = variance.bounds.filter((b) => b.inactiveReason !== null);
+
+  return (
+    <>
+      <h2 className="mt-8 text-lg font-semibold">Loads to look at</h2>
+      <p className="mt-1 max-w-3xl text-xs text-dr3-mist-dim">
+        A load appears here when one of its commodity weights sits outside the usual range for that
+        commodity — it <strong>exceeds the current variance threshold (editable)</strong>. That is a
+        prompt to go and look, and nothing more: no claim is made that the figure is wrong, and
+        nothing is sent to anybody. The line lives in{' '}
+        <Link href="/admin/doc-ingest/outbound-variance" className="text-dr3-cyan underline">
+          variance flag settings
+        </Link>{' '}
+        and an admin can move it without a deploy. Flags are computed inside the same revision and
+        the same <strong>{variance.scope}</strong> scope as the figures above.
+      </p>
+
+      {variance.nothingIsBounded ? (
+        <p className="mt-3 rounded-lg bg-dr3-steel/20 p-4 text-xs text-dr3-mist-dim">
+          No commodity currently has a live range, so no load is marked. This is a setting, not a
+          result — it does not mean the weights agree with anything.
+        </p>
+      ) : variance.flags.length === 0 ? (
+        <p className="mt-3 rounded-lg bg-dr3-steel/20 p-4 text-xs text-dr3-mist-dim">
+          No load in this revision sits outside its commodity&apos;s current range. That is a
+          statement about the range, not a clean bill of health.
+        </p>
+      ) : (
+        <>
+          <p className="mt-3 text-xs text-dr3-mist-dim">
+            <strong className="text-dr3-mist">{flagged.size}</strong> load
+            {flagged.size === 1 ? '' : 's'} across {variance.flags.length} commodity row
+            {variance.flags.length === 1 ? '' : 's'}.
+          </p>
+          <div className="mt-3 overflow-x-auto rounded-lg ring-1 ring-dr3-steel-light/20">
+            <table className="w-full min-w-[680px] text-left text-sm">
+              <thead className="bg-dr3-steel/30 text-xs uppercase tracking-wide text-dr3-mist-dim">
+                <tr>
+                  <th className="px-3 py-2">Materials ID</th>
+                  <th className="px-3 py-2">Commodity</th>
+                  <th className="px-3 py-2 text-right">Recorded</th>
+                  <th className="px-3 py-2 text-right">Usual range</th>
+                  <th className="px-3 py-2 text-right">Steps out</th>
+                </tr>
+              </thead>
+              <tbody>
+                {variance.flags.map((f) => (
+                  <tr
+                    key={`${f.externalMaterialsId}:${f.commodity}`}
+                    className="border-t border-dr3-steel-light/15"
+                    data-testid="variance-flag-row"
+                  >
+                    <td className="px-3 py-2 font-medium">{f.externalMaterialsId}</td>
+                    <td className="px-3 py-2">{f.commodity}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-amber-300">
+                      {lbs(f.weightLbs)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-dr3-mist-dim">
+                      {lbs(f.lowLbs)} – {lbs(f.highLbs)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-dr3-mist-dim">
+                      {f.stepsOut.toFixed(1)} {f.direction}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <p className="mt-3 text-xs text-dr3-mist-dim" data-testid="variance-bounds-summary">
+        Ranges in use:{' '}
+        {live.length === 0
+          ? 'none'
+          : live
+              .map(
+                (b) =>
+                  `${b.commodity} ${Math.round(b.lowLbs ?? 0).toLocaleString()}–${Math.round(
+                    b.highLbs ?? 0,
+                  ).toLocaleString()} lb`,
+              )
+              .join(' · ')}
+        .
+        {quiet.length > 0 && (
+          <>
+            {' '}
+            Not flagged at all:{' '}
+            {quiet
+              .map(
+                (b) =>
+                  `${b.commodity} (${
+                    b.inactiveReason === 'turned_off'
+                      ? 'turned off'
+                      : b.inactiveReason === 'too_few_observations'
+                        ? `only ${b.sampleN} recorded load${b.sampleN === 1 ? '' : 's'}, ${b.minSampleN} needed`
+                        : 'no spread to measure against'
+                  })`,
+              )
+              .join(' · ')}
+            . A commodity with too few loads is left alone rather than judged against a range
+            invented from a handful of rows.
+          </>
+        )}
+      </p>
+
+      {variance.commoditiesWithoutABound.length > 0 && (
+        <p className="mt-2 text-xs text-dr3-mist-dim">
+          No range has been set for {variance.commoditiesWithoutABound.join(', ')}. Those loads are
+          shown in the tables above and are simply not marked either way.
+        </p>
+      )}
+    </>
   );
 }
 

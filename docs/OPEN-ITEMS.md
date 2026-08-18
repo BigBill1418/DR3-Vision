@@ -72,6 +72,32 @@ Until he accepts, `/admin/doc-ingest/outbound-coverage` reads empty at
   verdict (P-48). That rule is Bill's with Rick and Janette, and it has had **no
   owner since Kelsey's availability ended 2026-08-08** (see the preamble). A
   guess encoded now would become the default by being first.
+  **2026-08-18 (ADR-0108) — still open, and deliberately so.** The page now
+  marks loads whose weight is unusual _for their own commodity_ against an
+  editable line (`/admin/doc-ingest/outbound-variance`, defaults `k = 6`,
+  `min_sample_n = 20`, seeded from the measured distribution). That is a
+  look-at-this, not a verdict: no `ok`/`mismatch` wording, **no alert channel and
+  no email**, and a test fails the build on the vocabulary of blame. It moves the
+  state from "nothing is surfaced" to "unusual rows are surfaced against a number
+  you can change" — it does **not** decide what a difference means, and does not
+  need an owner to keep working.
+- **AK-4c dollar leg — BLOCKED on a join key that does not exist.** Measured
+  2026-08-18 and reported rather than approximated: of 332 facility-expense rows,
+  262 carry an invoice number (233 distinct normalized); overlap with the mirror's
+  4,628 distinct normalized BOL ids is **4** — bare-numeric collision territory,
+  not a signal — overlap with Materials IDs is **0**; `commodity_raw` ↔ Materials
+  ID is **0** (it holds 12 commodity _names_, never an id); and the 6 `haul_ref`
+  values are `H-` prefixed **inbound** hauls, not outbound `M-` loads. **To
+  unblock:** the expense log needs a load or BOL reference captured at entry, or
+  MyMRC needs to expose an invoice number on the outbound record. Neither exists
+  and neither can be inferred. No dollar matching was built (ADR-0108 §5).
+- **A real weight comparand could appear, and here is the exact condition.**
+  39 mirror rows _do_ carry per-commodity pound figures under Salesforce
+  commodity keys (`Waste__c`, `Wood__c`) — which is why a search for "weight"
+  finds nothing while a comparand exists in principle. They are all **March
+  2024** and their overlap with the workbook's Jan–Jun 2026 loads is **zero**. If
+  detail capture is ever extended over the workbook's range, a genuine
+  expected-vs-actual pair exists and ADR-0108 should be revisited (ADR-0108 §2.1).
 - **AK-4b — the operational outbound leg.** `outbound_materials`,
   `outbound_vendors`, `recycling_rates`, `landfilled_units`,
   `outbound_material_payments` and `invoices` all stay at **0 rows** (P-49).
