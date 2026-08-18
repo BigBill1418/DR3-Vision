@@ -9,6 +9,7 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+<<<<<<< HEAD
 ## 2026-08-18 (12:05 PM PT) — Start and End hours, and run hours stop being typed (ADR-0107)
 
 The TEREX sheet does not record a duration. It records **two hour-meter
@@ -69,6 +70,69 @@ The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
 `Day Total Hrs Used` disagrees with `End − Start`, and the extractor's own header
 records that such rows exist. Measuring that disagreement is a data question, not
 a code change to guess at.
+=======
+## 2026-08-18 — the comparand that does not exist, and the outlier that does (ADR-0108)
+
+Handoff #264 asked for expected-vs-actual variance flagging on the outbound
+weights ADR-0104 absorbed. **The premise died on measurement, before any code was
+written**, and that is recorded rather than worked around:
+`mymrc_outbound_mirror` carries a weight for **0 of 4,685** loads and no
+weight-like key anywhere in its payload; positive unit counts exist on **1 of the
+831** joined loads, so there is no lbs-per-unit denominator either; and the
+workbook's own total-vs-parts is already reconciled at **0 drift on 831 of 831**.
+There is no expected-vs-actual pair, and inventing one would make the guess
+authoritative by being first (ADR-0080 §D7).
+
+**What shipped instead is what the data supports: per-commodity load-weight
+outlier flagging**, seeded from the measured distribution of the pinned revision.
+
+- **A second measurement changed the shape of that too.** A symmetric `±k×MAD`
+  bound in pounds is structurally blind below the median — weight ≥ 0 caps the
+  reachable low-side deviation at `median/MAD`, which for Wood is **4.01 MAD**,
+  so no `k ≥ 4.01` can ever flag a low Wood weight however absurd. The real
+  keying-error row `Wood 40 lb` (median 3,170) sits at 3.96, just inside. The
+  deviation is therefore measured in **log space**, making the band a ratio and
+  genuinely two-sided; `Wood 40 lb` lands 16.5 steps out.
+- **Thresholds are an editable table**, not constants: `outbound_variance_config`
+  (median, spread step, `k`, minimum-n, on/off) on the `processor_quota_config`
+  precedent, retunable by an admin at `/admin/doc-ingest/outbound-variance`
+  without a deploy. Defaults `k = 6`, `min_sample_n = 20` — k=6 puts **14 of 831
+  loads (1.7%)** on the list against 41 at k=5 and 60 at k=4, and the floor turns
+  flagging off for the six commodities too thin to estimate a spread from
+  (Cotton n=3 spreads by ×2.29; three singletons whose zero-width band would flag
+  every row that is not exactly the median).
+- **AK-4c is untouched.** Flags are a _look-at-this_: the copy says a load
+  "exceeds the current variance threshold (editable)" and never wrong, mismatch,
+  error or dispute; there is **no alert channel and no email**; and a test scans
+  the rendered copy and fails the build on the vocabulary of blame. What a
+  difference _means_ is still Bill's decision with Rick and Janette.
+- **Dollar-side matching is BLOCKED and was not built.** No join key survives:
+  normalized invoice# ↔ mirror BOL overlaps **4** of 233 distinct expense keys
+  against 4,628 mirror BOLs (bare-numeric collisions), invoice# ↔ Materials ID
+  **0**, `commodity_raw` ↔ Materials ID **0** (it holds 12 commodity _names_),
+  and the 6 `haul_ref` values are `H-` **inbound** hauls, not outbound `M-` loads.
+  Four accidental matches would have looked exactly like a working feature.
+
+Honesty rails, each falsified first: flags compute only inside the pinned winning
+revision (`versionId` is a required argument, and deleting the version clause
+makes the suite flag a 40 lb row the winning revision had already corrected to
+3,300 — failure quoted in ADR-0108 §8); an uncovered load is **not covered**,
+never "0 variance" and never flagged; a recorded `0` is "carried none", not a low
+outlier.
+
+**Item 5 of the same handoff verified green** — the §12 reconcile module and
+coverage page match their contract clause for clause. One amendment: the
+uncovered-count stat tile now reads _"expected — outside the workbook's range,
+not missing data"_ rather than _"no watched document supplies these"_, which was
+true and read like a fault. The number is ~3,850 (P-47) and a reader who takes it
+for data loss goes hunting a bug that is not there.
+
+Note the surface renders at `staged` scope today, because both ADR-0104 batches
+are still staged awaiting Bill (OPEN-ITEMS §0.BB). Flagging follows whichever
+scope the page renders and **never promotes staged to confirmed**.
+
+Admin-only. Not a floor surface.
+>>>>>>> origin/main
 
 ## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
 
