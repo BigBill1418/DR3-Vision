@@ -19,6 +19,42 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BC — ADR-0105 shipped 2026-08-18 — the manager count correction has NO SCREEN
+
+`POST/GET /api/manager/[site]/snapshots/[id]/correct` is live, gated and audited:
+a manager or admin can correct a physical count taken today or yesterday
+(Pacific), the corrected value becomes the anchor, and the prior value is
+retained. **No UI renders it.** A manager cannot reach this from a browser.
+
+That is not an oversight in this build — it is the ADR-0084 residual inherited
+whole: `GET /api/manager/[site]/snapshots`, the only manager-facing list of
+counts, **has no client consumer in the app** (ADR-0084 §"Premises that died" #1,
+re-verified 2026-08-18). There is nowhere to hang a Correct button until that
+list is rendered somewhere.
+
+**What is needed, in order:**
+
+1. A manager surface listing counts — the natural home is
+   `/dashboard/[site]/loads-inventory`, which today calls `onHand` and never the
+   snapshot list. `GET .../correct` already returns exactly the correctable set
+   (live, physical, today + yesterday, with `enteredByUserId` and an
+   `isCorrection` flag), so the screen does not have to re-derive eligibility.
+2. A confirm step naming the operator whose count is being changed, on the
+   ADR-0084 Am.1 precedent — the widened gate there shipped **with** the
+   disclosure, and the same trade applies here.
+3. Voided rows shown struck-through and labelled, distinguishing _withdrawn_
+   (ADR-0084) from _corrected away_ (ADR-0105) by the audit row's `reason` —
+   the column cannot tell them apart by design (ADR-0105 D1).
+
+**Also open, deliberately not fixed by ADR-0105:** the daily report's "counted
+by" line names the **manager** for a corrected count, because `resolveCounter`
+reads the insert audit row's actor. The original operator is preserved as
+`counted_by` in the payload. Changing `resolveCounter` changes a report that is
+sent, so it needs its own evidence and its own ADR — the same call ADR-0084 made
+about the `created_at DESC` divergence.
+
+---
+
 ## 0.BB — ADR-0104 shipped and executed 2026-08-15 (7:22 PM PT) — TWO STAGED BATCHES AWAIT BILL
 
 The document-ingestion gap is closed: `doc_sources` is **11 registered, 0

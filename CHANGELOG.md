@@ -9,6 +9,80 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-18 (11:15 AM PT) — a manager can correct an operator's count without ringing Bill (ADR-0105)
+
+ADR-0084 gave the **floor** a same-day self-void and explicitly left the desk
+with nothing: _"a count discovered wrong the next morning is a phone call, not a
+tap."_ It has been a phone call ever since, and the right number gets written on
+paper beside the sheet. This closes that.
+
+A manager (or admin) at the count's own site can now correct a physical count
+taken **today or yesterday, Pacific**. The corrected value becomes the live
+anchor and the prior value is retained — nothing is ever deleted.
+
+### Added
+
+- **`correctPhysicalCount`** (`src/lib/inventory/correct-count.ts`) and
+  **`POST/GET /api/manager/[site]/snapshots/[id]/correct`**. Gated on
+  `requireManagerForSite` via `requireActivatedManager` — **operators are refused
+  403** and keep exactly the ADR-0084 Am.1 self-void they already had.
+- **Edit in place, with soft-void discipline.** The corrected value is written as
+  a new `physical` snapshot carrying the **original's `snapshot_at`** (so the
+  count stays on the day it was taken), and the row it corrects is soft-voided
+  with ADR-0084's existing `voided_at`/`voided_by`. **No new column and no new
+  reader obligation** — all thirteen ADR-0084 anchor readers honour this for free.
+- **Storage-layer audit, enforced.** Both audit rows (`insert` on the new row,
+  `update` on the corrected one — who / when / from / to / whose entry /
+  `corrected_to`) are written in the same transaction and then **read back before
+  it commits**. A missing audit row aborts the whole thing, so the failure mode is
+  "the correction did not happen", never "the correction happened quietly".
+- **No approval gate** — Bill's decision, recorded in ADR-0105 D4 so nobody later
+  "restores" a gate that was never removed.
+
+### Fixed before it shipped
+
+- **The delta trap.** Re-deriving `reconciled_delta` via `reconcilePhysicalCount`
+  would anchor `onHand` on **the row being corrected** (it ties on `snapshot_at`,
+  wins the `created_at` tiebreak, and the soft-void is invisible to it because
+  that read runs outside the transaction). It would have recorded the size of the
+  typo — `−45` — where the drift against the running balance belongs: `−28`. The
+  baseline is now preserved arithmetically. Falsified in the suite.
+- **A false green, caught.** The first `npm run typecheck` in the fresh worktree
+  reported success while printing `sh: 1: tsc: not found` — no `node_modules`,
+  and the output was piped into `tail`, so the exit code was `tail`'s. Every gate
+  was re-run with the exit code preserved.
+
+### Verified
+
+Typecheck clean, ESLint clean (`--max-warnings 0`), Prettier clean on every
+authored file. **1,524 passed / 39 skipped** across `src/lib/{inventory,audit,cor,loads,dashboard,bonus}`,
+`src/app/api/manager` and the ADR-record integrity suite — including the
+payroll-critical bonus suite, untouched and green. `check-adr-citations`: 4,497
+citations across 1,218 files resolve.
+
+**Seven falsifications, each broken on purpose and observed red:** audit read-back
+deleted; window narrowed to today; window widened to three days; delta re-derived;
+`entered_by` dropped; hard delete instead of soft-void; role gate removed. The
+hard-delete one was **rewritten** after it first went red for the wrong reason
+(the fake Prisma had no `deleteMany`, so the double was refusing rather than the
+assertion catching).
+
+### Premise that died
+
+**"Counts feed pay" is false**, and the repo says so in an executed test:
+`src/lib/bonus/__tests__/saves-inventory.test.ts` asserts the payroll saves path
+writes to nothing but `unit_status_movements`, with
+`expect(touchedModels).not.toContain('siteInventorySnapshot')`. A physical count
+feeds `onHand` → the floor, the EOD report, the COR and MRC billing — the
+**revenue** path, not payroll. Still money-adjacent; the mechanism is not the one
+the handoff named.
+
+### Known residual
+
+**There is no screen.** The API is complete and gated, but no manager UI renders
+it — the endpoint that would host it (`GET /api/manager/[site]/snapshots`) still
+has no client consumer, exactly as ADR-0084 recorded. Tracked in OPEN-ITEMS §0.BC.
+
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 
 The team is still logging maintenance in the TEREX workbook (five edits since
