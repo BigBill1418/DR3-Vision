@@ -90,7 +90,9 @@ function renderAt(status: LoadStatus) {
         unload_started_at: null,
         total_units: 159,
         weight_lbs: 21000,
-        photo_kinds: ['bol'],
+        // ADR-0109 — counts replaced the deduped `photo_kinds` array. One BOL
+        // photo held, which is what `['bol']` meant here.
+        photo_counts: { bol: 1 },
         stacks: [],
       }}
       operatorName="Marisol"

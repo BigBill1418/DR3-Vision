@@ -267,7 +267,11 @@
     "label_rejection": "evidencia de rechazo",
     "label_concern": "foto de observación",
     "error_upload": "Esa foto no se envió. Toca para intentarlo otra vez.",
-    "other_operator": "Esta carga está iniciada por otro operador, así que esta foto no se puede enviar a tu nombre. Pide a ese operador que inicie sesión en este iPad."
+    "other_operator": "Esta carga está iniciada por otro operador, así que esta foto no se puede enviar a tu nombre. Pide a ese operador que inicie sesión en este iPad.",
+    "add_another": "➕ Agregar otra foto",
+    "count": "{{count}} de {{max}} fotos",
+    "count_full": "{{count}} de {{max}} fotos — es todo lo que admite este paso",
+    "limit_reached": "Este paso ya tiene {{max}} fotos. Es el máximo que admite, así que esta no se puede enviar."
   },
   "auth_login": {
     "heading": "Iniciar sesión",

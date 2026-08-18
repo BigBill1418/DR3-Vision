@@ -28,8 +28,15 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     inboundLoad: { findUnique: loadFindUnique },
     user: { findUnique: userFindUnique },
+    // ADR-0109 — `count` and `$executeRaw` exist because the confirm route's
+    // three-photo ceiling calls them. 0 held: this suite asks who may write, not
+    // how many times.
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-      fn({ loadPhoto: { create: loadPhotoCreate }, auditLog: { create: auditCreate } }),
+      fn({
+        loadPhoto: { create: loadPhotoCreate, count: async () => 0 },
+        auditLog: { create: auditCreate },
+        $executeRaw: async () => 1,
+      }),
   },
 }));
 // PARTIAL mock: the presign is replaced, the prefix rule is NOT. Mocking the

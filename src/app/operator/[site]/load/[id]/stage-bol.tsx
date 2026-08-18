@@ -13,10 +13,15 @@ export function StageBol({
   siteCode,
   loadId,
   onCaptured,
+  // ADR-0109 — BOL photos already on the server. Load-bearing on THIS stage in
+  // particular: the BOL step is gated by the client latch `bolDone`, so a
+  // reload returns the operator here with photos already written.
+  photoCount = 0,
 }: {
   siteCode: string;
   loadId: string;
   onCaptured: () => void;
+  photoCount?: number;
 }) {
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
@@ -33,6 +38,7 @@ export function StageBol({
         kind="bol"
         labelKey="bol"
         onCaptured={() => setHasFile(true)}
+        initialCount={photoCount}
       />
       <button
         type="button"

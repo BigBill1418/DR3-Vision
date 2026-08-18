@@ -10,7 +10,16 @@ import { PhotoInput } from './photo-input';
 // stamps `unload_started_at` and computes
 // `time_to_unload_start_seconds` (silent SLA metric).
 
-export function StageDoor({ siteCode, loadId }: { siteCode: string; loadId: string }) {
+export function StageDoor({
+  siteCode,
+  loadId,
+  /** ADR-0109 — door-open photos already on the server. */
+  photoCount = 0,
+}: {
+  siteCode: string;
+  loadId: string;
+  photoCount?: number;
+}) {
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -26,6 +35,7 @@ export function StageDoor({ siteCode, loadId }: { siteCode: string; loadId: stri
         kind="door_open"
         labelKey="door_open"
         onCaptured={() => setHasFile(true)}
+        initialCount={photoCount}
       />
       <button
         type="button"

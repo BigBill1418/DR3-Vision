@@ -9,6 +9,87 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-18 — three photos where the flow asks for one, and the load already had four (ADR-0109)
+
+Handoff #264 Item 1, under Bill's _no more sheets_: give a load room for the
+extra pictures the floor takes anyway, so they stop living on the iPad camera
+roll and in text messages.
+
+**The premise died on checking, and it would have stopped the floor.** The brief
+asked for "up to 3 photos **total per load**". Measured against prod:
+
+```
+photos_per_load n=2 loads=57   n=3 loads=21   n=4 loads=4   n=5 loads=4   n=6 loads=1
+```
+
+An ordinary load already takes three — BOL, weight ticket, door-open — because
+they are three stages, each with its own required capture. A per-load ceiling of
+three would have refused the **door-open** photo on every load that also took a
+weight ticket, and door-open is the capture that starts the unload timer
+(ADR-0012 §1). The ceiling is therefore **per capture point**, `(load_id, kind)`:
+one required and unchanged, two optional and unnamed.
+
+**The capability was already there, unbounded and uncounted.** `PhotoInput`'s
+button stayed live after a successful capture, so re-tapping it uploaded another
+photo. 18 `(load, kind)` pairs in production carry 2-4 rows with **distinct
+storage keys** — genuinely separate captures, not ADR-0078 duplicate confirms —
+including one load holding **four BOL photos** taken over 3m 38s on 2026-08-10.
+What shipped is the bound, the count and a named affordance; no new pipeline.
+
+### Added
+
+- **`src/lib/loads/photo-limit.ts`** — `MAX_PHOTOS_PER_KIND = 3`, Prisma-free so
+  the browser bundle and the API route read the same number. A client hiding its
+  control at a different number than the server refuses at is the "control whose
+  only outcome is a refusal" CONTRIBUTING.md forbids on `/operator`.
+- **An "Add another photo" affordance** — generic and unnamed (no slot labels, no
+  new `PhotoKind`, no migration), with a running "{n} of 3 photos" caption. The
+  control is **withdrawn** at the ceiling rather than left to refuse, and is
+  offered only from `done`/`queued` — never from `signed_out`, whose contract is
+  _one instruction, once: sign in_.
+- **A server ceiling at `/api/photos/confirm`**, answering **409** with
+  `{error, limit, held}`. Not 401: `isAuthResponse` renders 401 as "sign in and
+  this will send", and no sign-in makes a fourth photo fit — the 2026-08-10
+  Woodland shape of an instruction that cannot work.
+
+### The three placements that are load-bearing
+
+1. **Inside the `withIdempotency` callback, not above it.** A replay of a claimed
+   key returns the stored response without reaching the callback, so a photo
+   whose confirm landed and whose response was lost still drains. Hoisting the
+   count — the natural "check before you do work" refactor — was falsified by
+   hand against real Postgres: `Error: photo_limit_reached` on both replay tests.
+   That is a fourth-photo guard eating a **first** photo's replay.
+2. **At confirm, never at the mint.** `replayUpload` re-mints every photo older
+   than eight minutes _including one whose confirm already succeeded_; a capped
+   mint would park an already-stored photo as a permanent conflict. The wasted
+   R2 PUT costs bytes, that would cost evidence.
+3. **`pg_advisory_xact_lock` before the count** (the `recycling-rates.ts`
+   precedent). Count-then-insert is not atomic under READ COMMITTED, and two
+   iPads draining one load is ordinary since ADR-0078 Am.1 made the photo gate
+   site-scoped.
+
+### Verified, not assumed
+
+- **The freshness composite already keys on the newest photo generically** —
+  `listOpenClaimsWithStaleness` selects `load_photos` with no `where` at all, so
+  photos 2-3 participate in `GREATEST(updated_at, newest stack, newest photo)`
+  (ADR-0092 D1). **Nothing was changed**; a regression fence was added that goes
+  red the moment anyone filters that select.
+- `LoadView.photo_kinds` → `photo_counts`, with the review panel's kind list
+  projected from it. Two fields carrying one fact is ADR-0091's lesson.
+- Ran against an **ephemeral `postgres:16-alpine`** with the full migration chain
+  applied by `prisma migrate deploy` — not shipped un-executed. **17 files, 176
+  tests, all green**, including `locale-parity`. Every new guard was falsified by
+  hand and the red is quoted verbatim in the suite that owns it.
+
+### Known and accepted
+
+Nine production loads already hold more photos than the ceiling allows. Those
+rows are **not retracted** — the cap governs new writes only, `photosRemaining()`
+clamps at 0, and a load already over the ceiling takes no more. One real
+behaviour is withdrawn: the fourth photo of a kind, used once ever.
+
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 
 The team is still logging maintenance in the TEREX workbook (five edits since

@@ -29,8 +29,19 @@ type LoadView = {
   total_units: number | null;
   /** ADR-0090 Am.1 — read by the review panel; null when no ticket was taken. */
   weight_lbs: number | null;
-  /** ADR-0090 Am.1 — which photo kinds exist, so the review can say what is missing. */
-  photo_kinds: PhotoKind[];
+  /**
+   * ADR-0090 Am.1 / ADR-0109 — how many photos of each kind the load already
+   * holds. A kind with no photos is absent, which reads the same as 0 at every
+   * call site.
+   *
+   * ONE field, two readers, and that is deliberate. It seeds each stage's "add
+   * another photo" affordance (ADR-0109) AND answers the review panel's "was the
+   * BOL captured" (ADR-0090 Am.1), which is `> 0`. It replaced a `photo_kinds`
+   * array carrying the same fact in a lossier shape: two fields would have let a
+   * caller supply a kind list that disagreed with the counts, and ADR-0091 is the
+   * standing lesson about one fact with two representations.
+   */
+  photo_counts: Partial<Record<PhotoKind, number>>;
   stacks: ReviewStack[];
 };
 
@@ -125,7 +136,12 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   // things that have to agree about what back means.
   if (load.status === 'unload_started' && showReject) {
     return (
-      <StageReject siteCode={siteCode} loadId={load.id} onCancel={() => setShowReject(false)} />
+      <StageReject
+        siteCode={siteCode}
+        loadId={load.id}
+        onCancel={() => setShowReject(false)}
+        photoCount={load.photo_counts.rejection ?? 0}
+      />
     );
   }
 
@@ -163,12 +179,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
         {/* ADR-0100 §P0 — this branch now has a route, but it is still a state
             with no WORK in it, and how often the floor lands here is the only
             way to know whether the void panel is being used as intended. */}
-        <DeadEndBeacon
-          siteCode={siteCode}
-          surface="load"
-          state="load_closed"
-          objectId={load.id}
-        />
+        <DeadEndBeacon siteCode={siteCode} surface="load" state="load_closed" objectId={load.id} />
         <div className="rounded-md bg-dr3-green-dark/50 p-4 text-center" data-testid="load-closed">
           <p className="text-lg font-bold">{t(floorStatusKey(load.status))}</p>
           <p className="mt-2 text-sm text-dr3-cream/80">{t('workflow.closed_body')}</p>
@@ -199,13 +210,25 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           siteCode={siteCode}
           loadId={load.id}
           onSkipped={() => setWeightSkipped(true)}
+          photoCount={load.photo_counts.weight_ticket ?? 0}
         />
       ) : (
-        <StageBol siteCode={siteCode} loadId={load.id} onCaptured={() => setBolDone(true)} />
+        <StageBol
+          siteCode={siteCode}
+          loadId={load.id}
+          onCaptured={() => setBolDone(true)}
+          photoCount={load.photo_counts.bol ?? 0}
+        />
       );
     }
     if (load.status === 'arrived' || load.status === 'weight_captured') {
-      return <StageDoor siteCode={siteCode} loadId={load.id} />;
+      return (
+        <StageDoor
+          siteCode={siteCode}
+          loadId={load.id}
+          photoCount={load.photo_counts.door_open ?? 0}
+        />
+      );
     }
     if (load.status === 'unload_started') {
       return (
@@ -250,7 +273,8 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
             id: load.id,
             status: load.status,
             weightLbs: load.weight_lbs,
-            photoKinds: load.photo_kinds,
+            // Projected here rather than carried alongside — see `photo_counts`.
+            photoKinds: Object.keys(load.photo_counts) as PhotoKind[],
             stacks: load.stacks,
           }}
           onClose={() => setReview(false)}
