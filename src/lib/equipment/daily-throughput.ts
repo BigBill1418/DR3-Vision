@@ -90,6 +90,13 @@ export const MIN_PRIOR_DAY_REASON_CHARS = 4;
 /** `Decimal(5,2)` — run hours are recorded to the hundredth of an hour. */
 const RUN_HOURS_SCALE = 2;
 
+/**
+ * ADR-0107 — `Decimal(8,2)`. The hour METER is read to the hundredth too (the
+ * sheet carries `2,462.75`, `2,804.8`), but it is CUMULATIVE, so it needs the
+ * wider precision: `run_hours` is bounded by 24 and a meter only ever climbs.
+ */
+const METER_HOURS_SCALE = 2;
+
 export class DailyThroughputValidationError extends Error {
   readonly status = 422;
   constructor(message: string) {
@@ -172,20 +179,32 @@ export class DailyThroughputAmendmentRequiredError extends Error {
 }
 
 /**
- * Enforce the daily-entry shape. Pure — no DB, no clock.
+ * Enforce the daily-entry shape and DERIVE the run hours. Pure — no DB, no clock.
  *
  * `units_processed` is a non-negative INTEGER: `0` is a legitimate RECORDED value
  * (the machine ran and produced nothing), and it is NOT the same fact as "nobody
  * entered a number", which is the ABSENCE of a row (ADR-0077 D4, restated).
  *
- * `run_hours` must be strictly POSITIVE. A day the machine did not run at all is
- * not an entry with zero hours — it is the absence of an entry, and admitting a
- * `0` here would put a divide-by-zero into the units-per-hour path.
+ * ADR-0107 — `run_hours` is no longer an input. It is `end_hours - start_hours`,
+ * the same subtraction the workbook performs in its own `Day Total Hrs Used`
+ * column, computed here from the two cumulative hour-METER readings rather than
+ * typed. That closes the gap where the difference could be keyed as something
+ * other than the difference, and nothing could check it.
+ *
+ * The derived value keeps ADR-0079's bounds exactly: strictly POSITIVE (a day
+ * the machine did not run is the ABSENCE of an entry, not a zero-hour one, and a
+ * `0` would divide by zero in the units-per-hour path) and at most 24.
  */
 export function assertDailyThroughputShape(
   unitsProcessed: number,
-  runHours: number,
-): { unitsProcessed: number; runHours: Prisma.Decimal } {
+  startHours: number,
+  endHours: number,
+): {
+  unitsProcessed: number;
+  startHours: Prisma.Decimal;
+  endHours: Prisma.Decimal;
+  runHours: Prisma.Decimal;
+} {
   if (!Number.isInteger(unitsProcessed) || unitsProcessed < 0) {
     throw new DailyThroughputValidationError(
       `units_processed must be a whole number >= 0 (got ${String(unitsProcessed)})`,
@@ -196,20 +215,52 @@ export function assertDailyThroughputShape(
       `units_processed must be <= ${MAX_UNITS_PROCESSED} (got ${String(unitsProcessed)})`,
     );
   }
-  if (typeof runHours !== 'number' || !Number.isFinite(runHours) || runHours <= 0) {
+  for (const [label, v] of [
+    ['start_hours', startHours],
+    ['end_hours', endHours],
+  ] as const) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      throw new DailyThroughputValidationError(
+        `${label} must be a non-negative hour-meter reading (got ${String(v)})`,
+      );
+    }
+  }
+
+  // Rounded to the stored scale BEFORE comparing. Comparing the raw floats and
+  // then rounding would admit a pair that is ordered at full precision but equal
+  // once stored — the row would then violate the `end > start` CHECK it had just
+  // been told it satisfied.
+  const start = new Prisma.Decimal(startHours.toFixed(METER_HOURS_SCALE));
+  const end = new Prisma.Decimal(endHours.toFixed(METER_HOURS_SCALE));
+
+  if (!end.greaterThan(start)) {
     throw new DailyThroughputValidationError(
-      `run_hours must be a positive number (got ${String(runHours)})`,
+      `end_hours must be greater than start_hours — the machine does not run overnight, ` +
+        `so an end reading at or below the start is a keying error ` +
+        `(start ${start.toString()}, end ${end.toString()})`,
     );
   }
-  if (runHours > MAX_RUN_HOURS) {
+
+  const runHours = new Prisma.Decimal(end.minus(start).toFixed(RUN_HOURS_SCALE));
+
+  // `end > start` at scale 2 already implies a difference of >= 0.01, so this is
+  // belt-and-braces rather than reachable — but it is the bound ADR-0079 D1
+  // states, and the day it becomes reachable (a scale change) is precisely the
+  // day nobody would remember to re-add it.
+  if (!runHours.greaterThan(0)) {
     throw new DailyThroughputValidationError(
-      `run_hours must be <= ${MAX_RUN_HOURS} — a machine cannot run more than a day (got ${String(runHours)})`,
+      `run_hours must be a positive number (derived ${runHours.toString()} from ` +
+        `${start.toString()} → ${end.toString()})`,
     );
   }
-  return {
-    unitsProcessed,
-    runHours: new Prisma.Decimal(runHours.toFixed(RUN_HOURS_SCALE)),
-  };
+  if (runHours.greaterThan(MAX_RUN_HOURS)) {
+    throw new DailyThroughputValidationError(
+      `run_hours must be <= ${MAX_RUN_HOURS} — a machine cannot run more than a day ` +
+        `(derived ${runHours.toString()} from ${start.toString()} → ${end.toString()})`,
+    );
+  }
+
+  return { unitsProcessed, startHours: start, endHours: end, runHours };
 }
 
 /**
@@ -256,6 +307,14 @@ export interface DailyThroughputView {
   unitsProcessed: number;
   /** Decimal string — never a float, so the recorded scale survives the round trip. */
   runHours: string;
+  /**
+   * ADR-0107 — the hour-METER readings `runHours` was derived from, or `null` on
+   * a pre-ADR-0107 row. `null` is load-bearing: it says "this day's hours were
+   * recorded before the meter was captured", which is a different fact from a
+   * meter reading of zero, and is never backfilled into one.
+   */
+  startHours: string | null;
+  endHours: string | null;
   notes: string | null;
   createdBy: string | null;
   actorLabel: string | null;
@@ -270,6 +329,8 @@ interface DailyRow {
   throughput_date: Date;
   units_processed: number;
   run_hours: Prisma.Decimal;
+  start_hours: Prisma.Decimal | null;
+  end_hours: Prisma.Decimal | null;
   notes: string | null;
   created_by: string | null;
   actor_label: string | null;
@@ -285,6 +346,8 @@ function toView(r: DailyRow): DailyThroughputView {
     throughputDateISO: dayISO(r.throughput_date),
     unitsProcessed: r.units_processed,
     runHours: r.run_hours.toString(),
+    startHours: r.start_hours?.toString() ?? null,
+    endHours: r.end_hours?.toString() ?? null,
     notes: r.notes,
     createdBy: r.created_by,
     actorLabel: r.actor_label,
@@ -339,7 +402,12 @@ export async function upsertDailyThroughput(args: {
   siteId: string;
   throughputDate: Date;
   unitsProcessed: number;
-  runHours: number;
+  /**
+   * ADR-0107 — the two cumulative hour-METER readings. BOTH are required;
+   * `run_hours` is their difference and is no longer an input.
+   */
+  startHours: number;
+  endHours: number;
   notes?: string | null;
   /**
    * ADR-0106 — WHY a backdated day is being written. REQUIRED on any date before
@@ -352,7 +420,21 @@ export async function upsertDailyThroughput(args: {
   /** Injectable "today" (a `@db.Date` key). Defaults to the Pacific day. */
   today?: Date;
 }): Promise<DailyThroughputView> {
-  const shape = assertDailyThroughputShape(args.unitsProcessed, args.runHours);
+  // ADR-0107 — the hand-entry path is REMOVED, and says so out loud.
+  //
+  // TypeScript drops `runHours` from the argument type, but a JS caller can
+  // still pass it: a route handler forwarding an unvalidated body, a script, a
+  // path written next year against a stale example. Silently discarding it would
+  // let that caller believe it had set the run hours while the derivation
+  // quietly overrode them — a disagreement between what was sent and what was
+  // stored, which is the exact class of defect this ADR removes. So it refuses.
+  if ('runHours' in args) {
+    throw new DailyThroughputValidationError(
+      'run_hours cannot be set by hand — it is derived as end_hours - start_hours (ADR-0107). ' +
+        'Send startHours and endHours instead.',
+    );
+  }
+  const shape = assertDailyThroughputShape(args.unitsProcessed, args.startHours, args.endHours);
   const today = args.today ?? appToday();
   const day = new Date(
     Date.UTC(
@@ -427,7 +509,12 @@ export async function upsertDailyThroughput(args: {
   // itself is overwritten in place), so it must not be read back off an object
   // the update has already touched.
   const before = existing
-    ? { units_processed: existing.units_processed, run_hours: existing.run_hours.toString() }
+    ? {
+        units_processed: existing.units_processed,
+        run_hours: existing.run_hours.toString(),
+        start_hours: existing.start_hours?.toString() ?? null,
+        end_hours: existing.end_hours?.toString() ?? null,
+      }
     : null;
 
   const row = await prisma.$transaction(async (tx) => {
@@ -439,6 +526,8 @@ export async function upsertDailyThroughput(args: {
         data: {
           units_processed: shape.unitsProcessed,
           run_hours: shape.runHours,
+          start_hours: shape.startHours,
+          end_hours: shape.endHours,
           ...(args.notes !== undefined ? { notes: clean(args.notes) } : {}),
         },
       });
@@ -452,6 +541,8 @@ export async function upsertDailyThroughput(args: {
           after: {
             units_processed: shape.unitsProcessed,
             run_hours: shape.runHours.toString(),
+            start_hours: shape.startHours.toString(),
+            end_hours: shape.endHours.toString(),
             ...priorDayAudit,
           },
         },
@@ -466,6 +557,8 @@ export async function upsertDailyThroughput(args: {
         throughput_date: day,
         units_processed: shape.unitsProcessed,
         run_hours: shape.runHours,
+        start_hours: shape.startHours,
+        end_hours: shape.endHours,
         notes: clean(args.notes),
         ...actorColumns(args.actor),
       },
@@ -481,6 +574,8 @@ export async function upsertDailyThroughput(args: {
           throughput_date: dayISO(day),
           units_processed: shape.unitsProcessed,
           run_hours: shape.runHours.toString(),
+          start_hours: shape.startHours.toString(),
+          end_hours: shape.endHours.toString(),
           ...priorDayAudit,
         },
       },
@@ -567,6 +662,48 @@ export async function voidDailyThroughput(args: {
     return voided;
   });
   return toView(row as DailyRow);
+}
+
+/**
+ * ADR-0107 — the previous recorded day's END meter reading, for the machine at
+ * this site, as of `beforeDay`. `null` when there is nothing to carry.
+ *
+ * This is the sheet's own model, expressed as a query. In the workbook each
+ * day's `Start Hours` is not typed at all — it is a formula pointing at the row
+ * above (`=F<prev>`, and `='Jul26'!F33` across a month boundary). A meter is
+ * cumulative, so yesterday's end IS today's start unless someone reset or
+ * serviced the machine. Prefilling from here matches what the floor already
+ * does, and leaves the field editable for the case where it does not hold.
+ *
+ * Deliberately NOT `null`-tolerant in the wrong direction: rows whose meter is
+ * NULL (every pre-ADR-0107 day) are excluded rather than treated as zero, so a
+ * legacy day prefills nothing instead of seeding a fabricated `0` — which is the
+ * no-backfill rule applied to the UI instead of the table.
+ *
+ * Returns the Decimal as a STRING so the recorded scale survives to the input.
+ */
+export async function previousEndHours(
+  siteId: string,
+  beforeDay: Date,
+  machineId?: string,
+): Promise<string | null> {
+  const id = machineId ?? (await resolveSiteThroughputMachine(siteId))?.id;
+  if (!id) return null;
+
+  const prior = await prisma.equipmentDailyThroughput.findFirst({
+    where: {
+      equipment_id: id,
+      voided_at: null,
+      throughput_date: { lt: beforeDay },
+      end_hours: { not: null },
+    },
+    // NEAREST earlier day, not the earliest and not the highest reading. A
+    // machine serviced mid-month can read LOWER than an older row, so ordering
+    // by the reading rather than the date would carry a stale meter forward.
+    orderBy: { throughput_date: 'desc' },
+    select: { end_hours: true },
+  });
+  return prior?.end_hours?.toString() ?? null;
 }
 
 /** The machine's recorded days, newest first. Voided rows excluded by default. */

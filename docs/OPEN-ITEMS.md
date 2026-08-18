@@ -51,6 +51,24 @@ maintenance logging habit is a separate half, and staged revisions will keep
 arriving until they stop editing the sheet at all. It removes the excuse, not
 the habit.
 
+**2026-08-18 addendum 2 — the sheet's Start/End columns now exist in Vision
+(ADR-0107), and one residual is left open deliberately.** `start_hours` /
+`end_hours` are captured and `run_hours` is derived from them, so the sheet's
+`Start Hours`, `End Hours` and `Day Total Hrs Used` columns can be retired.
+
+**RESIDUAL — the ADR-0081 workbook importer still writes NULL meters
+(ADR-0107 D6).** The extractor already parses `startHours`/`endHours`, so this
+looks like a two-line change and is not. The new
+`run_hours_is_the_difference` CHECK would refuse any sheet row whose own
+`Day Total Hrs Used` does not equal `End − Start` to the cent, and
+`terex-monthly-extract.ts` records in its header that such rows exist — it
+refuses to derive hours from the meter difference precisely because operators
+leave the day-total formula un-filled on some rows. **What is owed: measure how
+many rows in the absorbed history actually disagree, and by how much.** That
+number decides between wiring the import as-is, importing only agreeing rows, or
+relaxing the CHECK — and it is a data question with a real answer, not a
+judgement call to make blind.
+
 ### WAITING ON BILL — the only thing this build cannot do for itself
 
 Both batches are **STAGED**. Nothing counts until he accepts them, and an agent
