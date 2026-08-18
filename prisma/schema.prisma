@@ -106,6 +106,9 @@ model Site {
   doc_outbound_load_rows      DocOutboundLoadRow[]
   doc_outbound_commodity_rows DocOutboundCommodityRow[]
 
+  // Editable per-commodity outlier bounds for the coverage page (ADR-0108)
+  outbound_variance_config OutboundVarianceConfig[]
+
   // Absorbed facility expense-log rows (ADR-0104 D4)
   doc_facility_expense_rows DocFacilityExpenseRow[]
 
@@ -6443,6 +6446,85 @@ model DocOutboundCommodityRow {
   @@index([doc_source_id, status], map: "doc_outbound_commodity_rows_source_status_idx")
   @@index([site_id, commodity], map: "doc_outbound_commodity_rows_site_commodity_idx")
   @@map("doc_outbound_commodity_rows")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0108 — the editable per-commodity outlier bound.
+// ────────────────────────────────────────────────────────────────────────
+//
+/// Where the "look at this load" line sits, for one commodity at one site.
+///
+/// ── This is a CONFIG TABLE and not a constant, deliberately ───────────────
+/// The numbers below were measured from one revision of one workbook on one
+/// date. They are a starting point, not a finding. Rick and Janette will retune
+/// them once they have looked at what the first pass surfaces, and a threshold
+/// that needs a deploy to move is a threshold nobody moves — it silently
+/// becomes the definition of "normal" instead of a question somebody asked.
+/// Same reasoning, same shape, as `processor_quota_config` (ADR-0071).
+///
+/// ── Why the bound is MULTIPLICATIVE and not ±k×MAD in pounds ──────────────
+/// Load weights are strictly positive and right-skewed, and that breaks a
+/// symmetric bound in linear pounds in a way that is invisible until you look
+/// for it: the largest LOW-side deviation any row can physically have is the
+/// median itself, so the low side is capped at `median / MAD` deviations. For
+/// Wood that cap is **4.01 MAD** (median 3,170, MAD 790) — meaning a linear
+/// bound at any k >= 4.01 can never flag a low Wood weight however absurd, and
+/// the real keying-error-shaped `Wood 40 lb` row sits at 3.96, just inside. A
+/// detector that cannot report the defect it was built for is worse than none.
+///
+/// So the deviation is measured in LOG space. That makes the bound a RATIO
+/// rather than a difference, which is both correct for this shape of data and
+/// far easier to retune: `spread_ratio` is one MAD step expressed as a
+/// multiplier, and the band is `median / ratio^k  ..  median * ratio^k`.
+model OutboundVarianceConfig {
+  id      String @id @default(uuid())
+  site_id String
+  site    Site   @relation(fields: [site_id], references: [id])
+
+  /// VERBATIM workbook stem, matching `doc_outbound_commodity_rows.commodity`
+  /// byte for byte ("Shoddy/Felt", "Quilt and Toppers"). Normalising here would
+  /// silently stop matching the rows this is supposed to bound.
+  commodity String
+
+  /// Off switches this commodity's flagging entirely. The floor below does the
+  /// same job automatically; this is the manual override for a commodity whose
+  /// spread an operator knows to be meaningless.
+  enabled Boolean @default(true)
+
+  /// The typical load weight for this commodity, in pounds. The GEOMETRIC
+  /// median (exp of the median of ln lbs), which is what the log-space bound is
+  /// centred on. Decimal(12,2) matches `weight_lbs` exactly.
+  median_lbs Decimal @db.Decimal(12, 2)
+
+  /// One median-absolute-deviation step, as a MULTIPLIER. 1.2235 means "a
+  /// typical Waste load is within a factor of 1.2235 of the median". Must be
+  /// > 1 for a band to exist: a ratio of exactly 1 is a zero-width spread and
+  /// flagging is refused rather than firing on every row that is not precisely
+  /// the median.
+  spread_ratio Decimal @db.Decimal(8, 4)
+
+  /// How many MAD steps out the line sits. Seeded 6. See the ADR for the
+  /// measured flag volume at 3/4/5/6/8.
+  k Decimal @db.Decimal(4, 2) @default(6.00)
+
+  /// Below this many observations the spread is not estimable and flagging is
+  /// OFF for this commodity — stated on screen rather than silently absent.
+  /// Seeded 20.
+  min_sample_n Int @default(20)
+
+  /// PROVENANCE, not a control. How many rows the seeded median and spread were
+  /// measured from, and out of which revision on which date. Kept so that a
+  /// future reader can tell a tuned number from a seeded one, and can see that
+  /// a `sample_n` of 3 is why Cotton never flags.
+  sample_n              Int
+  seeded_from_version_id String?
+  seed_measured_on       DateTime? @db.Date
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([site_id, commodity], map: "outbound_variance_config_site_commodity_key")
+  @@map("outbound_variance_config")
 }
 
 // ────────────────────────────────────────────────────────────────────────
