@@ -9,7 +9,89 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
-<<<<<<< HEAD
+
+## 2026-08-18 (3:30 PM PT) — An untaught kind, an unguarded door, and a number the building cannot hold (ADR-0110)
+
+Bill: on-hand inventory is *constantly* wrong, especially on the production
+report, and it goes negative on both sites. **Two of the four suspected causes
+died on measurement, and that is the most useful thing in this entry.**
+
+**The report does NOT compute on-hand a second way.** The standing suspicion was
+that `getEodInventorySnapshot` re-derived the balance independently of `onHand` —
+"two modules, two chances to disagree". It already delegates *both* day balances
+to `onHand`; live Woodland reads 442 program / 397 non-program / 839 total,
+identical on both paths. Its own aggregate queries are `_max` **date** keys for
+freshness, not units. There was nothing to unify.
+
+**Woodland's inbound is not under-fed today.** Anchor 2,483 (07-22) + inbound
+18,392 + dropoffs 92 − stripped 20,128 = **839**, to the unit. No negative in the
+trailing 14 days, zero undated hauls against 7,372 Delivered, and the 15
+`Confirmed` hauls are *future* appointments — what a healthy scheduling feed looks
+like. No inbound recovery was run, and none was needed.
+
+**Eugene is EMPTY, not negative.** No anchor has ever been set, `inbound_loads` is
+empty all-time, no mirror or processed rows. Its `0` is not a measurement of an
+empty building; it is the absence of any measurement. Tonight's count gives it a
+first anchor (Tier 0 — no prior, no swing arithmetic, nothing in the way).
+
+### What was actually wrong
+
+**A drop-off `kind` nobody taught the balance about.** `onHand` summed consumer
+drop-offs with **no `kind` predicate**, so every kind — present and future —
+landed in the PROGRAM pool by default. ADR-0085 added `floor_public` and
+`floor_incentive` and this reader absorbed them without anyone deciding it should.
+It happened to be right. MRC is billed on program units, so a mis-routed kind is a
+mis-invoice **indistinguishable from a correct one**. Now gated twice, because the
+enum can grow through two doors: a total `Record<ConsumerDropoffKind, 'program'>`
+fails `tsc` with `TS2741` on a new member, and `sumTaughtDropoffKinds` **throws**
+on a kind the database returns that the module was never taught — the raw
+`ALTER TYPE` door the compile gate is blind to. The query is a `groupBy(['kind'])`
+on the same table, window and round trip; the grouping buys no arithmetic, it buys
+the reader the ability to *see* what it is adding up.
+
+**A negative floor rendered as though someone had measured it.** The building
+cannot hold −2,439 mattresses. `EodInventoryState` gains `negative`, checked
+**before** freshness — a negative behind a *fresh* anchor is the worst case, not an
+acceptable one, and the precedence makes every existing `state === 'healthy'` guard
+(notably the ADR-0058 estimated-floor block) stop deriving from a broken floor for
+free. Either **pool** counts, not just the total: a −300 program pool inside a +900
+total is a billing error a total-only check waves through. On the report and the
+floor tile the figure is **replaced** by the banner, not shown beside it — a
+negative printed anywhere gets pasted into a spreadsheet — and the tile's
+days-remaining line is suppressed outright rather than CSS-hidden, because
+`display:none` still ships the sentence to anything reading the page.
+
+**Freshness that could not see intake stop.** `flowThrough` is the max over *every*
+feed, so a site that keeps stripping while intake is frozen reads perfectly fresh —
+the outflow rows hold the max up. That is exactly the 2026-07-22→31 outage: the
+delivered feed froze for nine days, processing kept subtracting, every signal
+stayed green and the floor went negative. Intake now has its own clock
+(`inboundThrough` / `inboundDaysSince` / `inboundStale`), surfaced from the `_max`
+the existing freshness aggregate **already fetched and threw away**. No new query,
+no second freshness system. The threshold is *derived from* the ADR-0089 mirror
+guard's own 96 h so the two cannot drift apart.
+
+### The one found while verifying, and the one that mattered tonight
+
+**ADR-0072 was enforced on the iPad count path and the hold-release path — but not
+on `POST /api/manager/[site]/snapshots`.** That is the Loads & Inventory desktop
+form a manager actually uses. It went straight to `reconcilePhysicalCount` with no
+tier check: same table, same anchor, same total authority over the floor, none of
+the friction. A 32% swing was accepted with `201` and written. A gated capability
+is only as gated as its **least guarded entry point**. The route now classifies
+server-side and holds Tier 2 exactly as the floor path does, reusing `createHold`
+so the entry is preserved and the release is recorded against whoever approves it.
+Falsified against the real pre-fix handler on `origin/main`, not a hand-mutated
+copy: `expected 201 to be 422`, and the anchor really was written.
+
+**No schema change, no migration, and no live number moves** — the grouped
+drop-off sum is asserted equal to the old bare sum for any all-taught window,
+which is what let this ship on the day of a physical count.
+
+Also in this commit: **`CHANGELOG.md` on `main` carried committed merge-conflict
+markers** (`<<<<<<< HEAD` / `=======` / `>>>>>>> origin/main` at lines 12/73/135),
+which landed with today's ADR-0107 and ADR-0108 entries. Both entries were intact
+inside the block; only the three marker lines were removed.
 
 ## 2026-08-18 (2:45 PM PT) — ops: the on-hand Phase-0 diagnosis, and the skip-deploy squash trap's second firing
 
@@ -96,7 +178,6 @@ The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
 `Day Total Hrs Used` disagrees with `End − Start`, and the extractor's own header
 records that such rows exist. Measuring that disagreement is a data question, not
 a code change to guess at.
-=======
 
 ## 2026-08-18 — the comparand that does not exist, and the outlier that does (ADR-0108)
 

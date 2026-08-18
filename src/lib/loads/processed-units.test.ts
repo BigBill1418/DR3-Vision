@@ -40,7 +40,9 @@ const store = {
     units_in_processing: number;
   },
   inboundAgg: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
-  dropoffAgg: { units: 0 } as Record<string, number | null>,
+  // handoff #270 §1 — `onHand` GROUPS drop-offs by kind so an untaught kind can be
+  // refused rather than silently summed. Mirrors the real `groupBy` return shape.
+  dropoffAgg: [] as Array<{ kind: string; _sum: { units: number | null } }>,
   strippedAgg: { stripped_program: 0, stripped_non_program: 0 } as Record<string, number | null>,
 };
 
@@ -112,7 +114,7 @@ vi.mock('@/lib/prisma', () => {
       // onHand() inputs (close negative-balance guard).
       siteInventorySnapshot: { findFirst: async () => store.anchor },
       inboundLoad: { aggregate: async () => ({ _sum: store.inboundAgg }) },
-      consumerDropoff: { aggregate: async () => ({ _sum: store.dropoffAgg }) },
+      consumerDropoff: { groupBy: async () => store.dropoffAgg },
       auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) },
       $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
         fn({ processedUnitsDaily: model, auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) } }),
@@ -140,7 +142,7 @@ beforeEach(() => {
   store.landByDate.clear();
   store.anchor = null;
   store.inboundAgg = { program_unit_count: 0, non_program_unit_count: 0 };
-  store.dropoffAgg = { units: 0 };
+  store.dropoffAgg = [];
   store.strippedAgg = { stripped_program: 0, stripped_non_program: 0 };
 });
 

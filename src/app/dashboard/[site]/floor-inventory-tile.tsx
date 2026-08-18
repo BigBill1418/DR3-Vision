@@ -27,7 +27,7 @@ function Pool({ label, value, emphasize }: { label: string; value: number; empha
     <div>
       <div className="text-xs uppercase tracking-wide text-dr3-mist-dim">{label}</div>
       <div
-        className={`tabular-nums font-bold text-dr3-mist ${emphasize ? 'text-3xl' : 'text-2xl'}`}
+        className={`font-bold tabular-nums text-dr3-mist ${emphasize ? 'text-3xl' : 'text-2xl'}`}
         data-testid={`floor-pool-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
       >
         {units(value)}
@@ -64,31 +64,63 @@ export function FloorInventoryTile({
           Live · as of {tile.asOfISO}
         </span>
       </div>
-      <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
-        <Pool label="Program" value={tile.programOnFloor} emphasize />
-        <Pool label="Non-program" value={tile.nonProgramOnFloor} />
-        <Pool label="Total" value={tile.totalOnFloor} />
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-dr3-mist-dim">
-        <span data-testid="floor-program-days">
-          Program pool{' '}
-          {tile.programDaysRemaining === null ? (
-            <span>— no trailing rate yet</span>
-          ) : (
-            <>
-              <strong className="text-dr3-mist">{daysLabel(tile.programDaysRemaining)}</strong>{' '}
-              remaining at the current pace
-            </>
-          )}
-        </span>
-        {tile.trailingUnitsPerDay !== null && (
-          <span>
-            7-day pace{' '}
-            <strong className="tabular-nums text-dr3-mist">{units(tile.trailingUnitsPerDay)}</strong>{' '}
-            units/day
+      {/*
+        handoff #270 §4a — a negative floor renders as a DIAGNOSTIC, not a number.
+        The building cannot hold −2,439 mattresses, so the figure is not a small
+        quantity, it is proof that intake is under-fed and processing has been
+        subtracted from it anyway. The pools are replaced by the banner rather
+        than shown alongside it: a negative printed anywhere on a manager surface
+        gets copied into a spreadsheet, and this one is not a measurement of
+        anything. The projection row below is suppressed for the same reason.
+      */}
+      {tile.negative ? (
+        <div
+          className="rounded border border-red-500/60 bg-red-500/10 p-3 text-sm leading-relaxed text-red-200"
+          data-testid="floor-negative-banner"
+          role="status"
+        >
+          <strong className="block text-red-300">On-hand is computing negative.</strong>
+          Intake data is incomplete — processing has been subtracted from inbound that has not all
+          been recorded. This figure is not reliable and is not shown. A physical count resets the
+          floor.
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <Pool label="Program" value={tile.programOnFloor} emphasize />
+          <Pool label="Non-program" value={tile.nonProgramOnFloor} />
+          <Pool label="Total" value={tile.totalOnFloor} />
+        </div>
+      )}
+      {/*
+        Suppressed entirely (not CSS-hidden) on a negative floor: "≈ 0 days
+        remaining" derived from a broken pool is another confident-looking number,
+        and markup that is merely `display:none` still ships the sentence to
+        anything reading the page's HTML.
+      */}
+      {!tile.negative && (
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-dr3-mist-dim">
+          <span data-testid="floor-program-days">
+            Program pool{' '}
+            {tile.programDaysRemaining === null ? (
+              <span>— no trailing rate yet</span>
+            ) : (
+              <>
+                <strong className="text-dr3-mist">{daysLabel(tile.programDaysRemaining)}</strong>{' '}
+                remaining at the current pace
+              </>
+            )}
           </span>
-        )}
-      </div>
+          {tile.trailingUnitsPerDay !== null && (
+            <span>
+              7-day pace{' '}
+              <strong className="tabular-nums text-dr3-mist">
+                {units(tile.trailingUnitsPerDay)}
+              </strong>{' '}
+              units/day
+            </span>
+          )}
+        </div>
+      )}
     </Link>
   );
 }

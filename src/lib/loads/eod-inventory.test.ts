@@ -56,12 +56,16 @@ vi.mock('@/lib/prisma', () => ({
       // ADR-0059 provisional-inbound probe — count of mymrc_haul rows in the balance window.
       count: async () => store.provisionalInboundCount,
     },
-    consumerDropoff: { aggregate: async () => ({ _max: { dropoff_date: store.flowMax.dropoffDate } }) },
+    consumerDropoff: {
+      aggregate: async () => ({ _max: { dropoff_date: store.flowMax.dropoffDate } }),
+    },
     processedUnitsDaily: {
       aggregate: async () => ({ _max: { production_date: store.flowMax.productionDate } }),
     },
     outboundMaterial: { aggregate: async () => ({ _max: { ship_date: store.flowMax.shipDate } }) },
-    landfilledUnit: { aggregate: async () => ({ _max: { disposal_date: store.flowMax.disposalDate } }) },
+    landfilledUnit: {
+      aggregate: async () => ({ _max: { disposal_date: store.flowMax.disposalDate } }),
+    },
   },
 }));
 
@@ -214,18 +218,39 @@ describe('classifyEodInventory (the freshness gate)', () => {
 
 describe('eodInventorySignature (the resend fingerprint)', () => {
   const mk = (over: Partial<EodInventorySnapshot>): EodInventorySnapshot =>
-    ({ state: 'healthy', programOnHand: 1597, nonProgramOnHand: 886, flowThrough: null, ...over }) as EodInventorySnapshot;
+    ({
+      state: 'healthy',
+      programOnHand: 1597,
+      nonProgramOnHand: 886,
+      flowThrough: null,
+      ...over,
+    }) as EodInventorySnapshot;
 
   it('undefined inventory → empty string (an inventory read failure never forces a resend)', () => {
     expect(eodInventorySignature(undefined)).toBe('');
   });
 
-  it('captures state, both pools, flow-recency, and the provisional flag', () => {
+  it('captures state, both pools, flow-recency, provisional, and intake-staleness', () => {
     const t = Date.UTC(2026, 6, 22);
-    // ADR-0059 — trailing `:c` = confirmed (no provisional inbound); `:p` = provisional.
-    expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(`healthy:1597:886:${t}:c`);
+    // ADR-0059 — `:c` = confirmed (no provisional inbound); `:p` = provisional.
+    // handoff #270 §4b — trailing `:f` = intake fresh; `:s` = intake stale.
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(
+      `healthy:1597:886:${t}:c:f`,
+    );
     expect(eodInventorySignature(mk({ flowThrough: new Date(t), inboundProvisional: true }))).toBe(
-      `healthy:1597:886:${t}:p`,
+      `healthy:1597:886:${t}:p:f`,
+    );
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t), inboundStale: true }))).toBe(
+      `healthy:1597:886:${t}:c:s`,
+    );
+  });
+
+  // handoff #270 §4b — intake going quiet can leave both pools and the freshness
+  // state untouched while the panel gains a "why this is suspect" flag. A report
+  // that renders the flag but never re-sends has not told anyone.
+  it('an intake fresh→stale flip changes the signature even when pools are unchanged', () => {
+    expect(eodInventorySignature(mk({ inboundStale: true }))).not.toBe(
+      eodInventorySignature(mk({ inboundStale: false })),
     );
   });
 
@@ -361,7 +386,11 @@ describe('getEodInventorySnapshot', () => {
   it('flowThrough + movementToday reflect a flow dated the report day; it keeps an OLD anchor fresh', async () => {
     // Anchor 17 days old (past the 14-day window) — stale on its own — but a
     // processed-units row dated today feeds the balance → current → healthy.
-    store.anchor = { id: 'snap-old', snapshot_at: countedAt(2026, 7, 5), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap-old',
+      snapshot_at: countedAt(2026, 7, 5),
+      pool_attribution: 'measured',
+    };
     store.flowMax.productionDate = new Date(Date.UTC(2026, 6, 22)); // @db.Date key = report day
     store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
 
@@ -373,7 +402,11 @@ describe('getEodInventorySnapshot', () => {
   });
 
   it('a same-day inbound arrival (a true instant) counts as movementToday', async () => {
-    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 20), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap',
+      snapshot_at: countedAt(2026, 7, 20),
+      pool_attribution: 'measured',
+    };
     store.flowMax.inboundArrivedAt = new Date(Date.UTC(2026, 6, 22, 18, 0, 0)); // 11:00 PDT July 22
     store.balances.set(END_TODAY, { program: 50, nonProgram: 0 });
 
@@ -383,7 +416,11 @@ describe('getEodInventorySnapshot', () => {
   });
 
   it('no flow + an anchor before today → flowThrough is the anchor day, movementToday false', async () => {
-    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 20), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap',
+      snapshot_at: countedAt(2026, 7, 20),
+      pool_attribution: 'measured',
+    };
     store.balances.set(END_TODAY, { program: 10, nonProgram: 0 });
 
     const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
@@ -392,7 +429,11 @@ describe('getEodInventorySnapshot', () => {
   });
 
   it('a physical count taken on the report day is itself movementToday', async () => {
-    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap',
+      snapshot_at: countedAt(2026, 7, 22),
+      pool_attribution: 'measured',
+    };
     store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
 
     const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
@@ -400,7 +441,11 @@ describe('getEodInventorySnapshot', () => {
   });
 
   it('ADR-0059: inboundProvisional=true when the balance window holds a mymrc_haul row', async () => {
-    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap',
+      snapshot_at: countedAt(2026, 7, 22),
+      pool_attribution: 'measured',
+    };
     store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
     store.provisionalInboundCount = 1;
 
@@ -409,7 +454,11 @@ describe('getEodInventorySnapshot', () => {
   });
 
   it('ADR-0059: inboundProvisional=false when no mymrc_haul row is in the window (e.g. a paper_bulk day)', async () => {
-    store.anchor = { id: 'snap', snapshot_at: countedAt(2026, 7, 22), pool_attribution: 'measured' };
+    store.anchor = {
+      id: 'snap',
+      snapshot_at: countedAt(2026, 7, 22),
+      pool_attribution: 'measured',
+    };
     store.balances.set(END_TODAY, { program: 100, nonProgram: 0 });
     store.provisionalInboundCount = 0;
 

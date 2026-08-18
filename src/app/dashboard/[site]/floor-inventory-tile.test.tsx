@@ -16,6 +16,7 @@ const base: FloorInventoryTileData = {
   nonProgramOnFloor: 1152,
   totalOnFloor: 1289,
   anchorPool: 'measured',
+  negative: false,
   trailingUnitsPerDay: 237,
   programDaysRemaining: 137 / 237,
   asOfISO: '2026-07-21',
@@ -82,5 +83,66 @@ describe('FloorInventoryTile', () => {
     );
     expect(html).toContain('>10.5<');
     expect(html).toContain('>1,162.5<');
+  });
+});
+
+// ── handoff #270 §4a — the floor tile stops rendering an impossible number ───
+//
+// Same disease as the production report, different surface: the tile printed
+// "−2,439" in a 3xl bold numeral because that is what the arithmetic produced.
+// A negative floor is not a small floor — it is proof intake is under-fed and
+// processing has been subtracted from it anyway.
+describe('FloorInventoryTile — negative floor', () => {
+  const negative: FloorInventoryTileData = {
+    ...base,
+    programOnFloor: -2439,
+    nonProgramOnFloor: 512,
+    totalOnFloor: -1927,
+    negative: true,
+  };
+
+  // ── FALSIFICATION (tile banner) ───────────────────────────────────────────
+  // Verified by hand against the pre-fix component (no `negative` branch): the
+  // banner assertion failed with `expected '…' to contain
+  // 'data-testid="floor-negative-banner"'`, and the absence assertions failed
+  // because the markup really did carry `>-2,439<` in a pool numeral.
+  it('renders the banner instead of the pool numerals', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={negative} siteCode="woodland" />);
+    expect(html).toContain('data-testid="floor-negative-banner"');
+    expect(html).toContain('On-hand is computing negative');
+    expect(html).toContain('This figure is not reliable');
+  });
+
+  it('does NOT render the negative figures in a value position', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={negative} siteCode="woodland" />);
+    // No pool numerals at all — not the negatives, and not the one pool that
+    // happens to be positive (a lone "512" reads as a measured floor).
+    expect(html).not.toContain('data-testid="floor-pool-program"');
+    expect(html).not.toContain('data-testid="floor-pool-non-program"');
+    expect(html).not.toContain('data-testid="floor-pool-total"');
+    expect(html).not.toContain('-2,439');
+    expect(html).not.toContain('−2,439');
+    expect(html).not.toContain('-1,927');
+  });
+
+  // "≈ 0 days remaining" derived from a broken pool is another confident-looking
+  // number. Suppressed OUTRIGHT rather than CSS-hidden — markup that is merely
+  // `display:none` still ships the sentence to anything reading the HTML.
+  it('suppresses the days-remaining projection entirely, not just visually', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={negative} siteCode="woodland" />);
+    expect(html).not.toContain('data-testid="floor-program-days"');
+    expect(html).not.toContain('remaining at the current pace');
+    expect(html).not.toContain('7-day pace');
+  });
+
+  // The control. Every marker claimed absent above is present on a healthy floor,
+  // so none of those assertions can be passing for the boring reason.
+  it('(control) all of those markers DO render on a healthy floor', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={base} siteCode="woodland" />);
+    expect(html).toContain('data-testid="floor-pool-program"');
+    expect(html).toContain('data-testid="floor-pool-total"');
+    expect(html).toContain('data-testid="floor-program-days"');
+    expect(html).toContain('7-day pace');
+    expect(html).not.toContain('data-testid="floor-negative-banner"');
   });
 });

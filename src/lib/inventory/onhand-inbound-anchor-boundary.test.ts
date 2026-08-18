@@ -55,7 +55,7 @@ vi.mock('@/lib/prisma', () => ({
         return { _sum: { program_unit_count: p, non_program_unit_count: np } };
       },
     },
-    consumerDropoff: { aggregate: async () => ({ _sum: { units: 0 } }) },
+    consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: { aggregate: async () => ({ _sum: { stripped_program: 0, stripped_non_program: 0 } }) },
     outboundMaterial: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },
     landfilledUnit: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },

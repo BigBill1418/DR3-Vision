@@ -163,6 +163,40 @@ export function renderEodInventoryHtml(
     );
   }
 
+  // ── handoff #270 §4a — a negative floor is a DIAGNOSTIC, never a figure ────
+  // The building cannot hold a negative number of mattresses, so this state is
+  // proof that intake is under-fed: real processing has been subtracted from
+  // incomplete inbound. Woodland's −5,401 (July) and −2,439 (August) were both
+  // rendered as though they were measurements of something.
+  //
+  // The bare number is deliberately ABSENT from this branch. Printing "−2,439"
+  // anywhere in the panel — even next to a warning — invites it into a spreadsheet
+  // or a billing conversation, and the whole point is that it is not a quantity of
+  // anything. What renders instead is the magnitude inside a sentence that says it
+  // is not reliable, plus the reason: how long intake has been silent.
+  if (eod.state === 'negative') {
+    const worst = Math.min(eod.totalOnHand, eod.programOnHand, eod.nonProgramOnHand);
+    const magnitude = fmtUnits(Math.abs(Math.round(worst * 10) / 10));
+    // Prefer the intake age — it is the actual cause. Fall back to the anchor age
+    // when the site has no inbound on record at all, rather than asserting a
+    // "0 days old" that would read as though intake were healthy.
+    const why =
+      eod.inboundDaysSince != null
+        ? `most recent inbound is ${eod.inboundDaysSince} ${eod.inboundDaysSince === 1 ? 'day' : 'days'} old`
+        : 'no inbound has ever been recorded for this site';
+    const anchorLine = eod.anchor
+      ? `Last physical count: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago).`
+      : 'No physical count on record for this site.';
+    return eodPanel(
+      siteName,
+      `<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding:12px 14px;background:${WARN_BG};border:2px solid ${SVDP_RED};border-radius:6px;font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:${WARN_INK}">` +
+        `<strong style="color:${SVDP_RED};font-size:14px">⚠ On-hand is computing negative (−${magnitude}).</strong><br>` +
+        `Intake data is incomplete — ${escapeHtml(why)}. <strong>This figure is not reliable and is not shown.</strong><br>` +
+        `${anchorLine} A physical count resets the floor and closes the gap; the drift is recorded as the count's reconciled delta.` +
+        `</td></tr></table>`,
+    );
+  }
+
   if (eod.state === 'stale') {
     const anchorLine = eod.anchor
       ? `Last measured anchor: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`
@@ -201,6 +235,14 @@ export function renderEodInventoryHtml(
     // the provisional row for a day.
     (eod.inboundProvisional
       ? `<tr><td colspan="2" style="padding-top:10px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>Inbound: provisional</strong> — from MyMRC haul counts, pending floor confirmation.</td></tr>`
+      : '') +
+    // handoff #270 §4b — the number computed and is shown, but say WHY it is
+    // suspect. Intake going quiet while processing keeps subtracting is the exact
+    // mechanism that walks a floor negative, and it is invisible in the figure
+    // itself right up until the figure is already wrong. Flagged, not hidden: this
+    // is still the best available number, unlike the negative case above.
+    (eod.inboundStale
+      ? `<tr><td colspan="2" style="padding-top:10px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>⚠ Intake feed is quiet</strong> — most recent inbound is ${eod.inboundDaysSince} days old (over the ${eod.inboundStaleDays}-day tolerance). Processing keeps subtracting from it, so this figure trends low until intake catches up.</td></tr>`
       : '') +
     // ADR-0058 §3.3 / ADR-0059 — what on-hand actually means, so a reconciled floor is
     // never misread as a fully-confirmed live net position.
