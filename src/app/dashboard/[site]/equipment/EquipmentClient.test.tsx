@@ -541,3 +541,51 @@ describe('ADR-0081 — the machine metrics band', () => {
     expect(band).toContain('not a machine that has never needed a repair');
   });
 });
+
+// ── ADR-0107 — the RENDERED contract: run hours are no longer typed ─────────
+//
+// The service tests prove the derivation and its bounds. This proves the half a
+// service test cannot: that the hand-entry control is GONE FROM THE SCREEN. A
+// derivation that ships alongside a still-present "Run hours" box would leave
+// the manager typing a number the server discards, which is the ADR-0079 defect
+// class (two artifacts of one fact) reintroduced at the UI.
+//
+// Static markup, house pattern — `renderToStaticMarkup` runs no effects, so this
+// asserts the form's INITIAL contract, not its fetched state.
+describe('ADR-0107 — the entry form asks for meters, not a duration', () => {
+  const entryHtml = (): string =>
+    renderToStaticMarkup(
+      <EquipmentClient
+        siteCode="woodland"
+        throughput={throughput([ENTERED_AUG], 1)}
+        showTrend={false}
+        showEntry
+        machines={[{ id: 'eq-terex-1', displayName: 'Terex' }]}
+        machineLabel="Terex"
+      />,
+    );
+
+  it('offers Start and End meter fields', () => {
+    const html = entryHtml();
+    expect(html).toContain('Start hours (meter)');
+    expect(html).toContain('End hours (meter)');
+  });
+
+  it('does NOT offer a typed Run hours field', () => {
+    const html = entryHtml();
+    // The label the removed control carried. Its continued presence would mean
+    // the derivation shipped while the box that contradicts it stayed.
+    expect(html).not.toContain('>Run hours<');
+  });
+
+  it('shows run hours as a CALCULATED read-out', () => {
+    expect(entryHtml()).toContain('Run hours (calculated)');
+  });
+
+  // The recorded-days TABLE is deliberately not asserted here: it renders only
+  // when `rows.length > 0`, and `renderToStaticMarkup` runs no effects, so the
+  // fetch that fills it never happens. An assertion on it could only ever be
+  // satisfied by markup this harness cannot produce — a test that cannot pass
+  // for a structural reason teaches nothing. The meter columns it renders come
+  // straight off `DailyThroughputView`, which the service tests pin.
+});

@@ -9,6 +9,159 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+<<<<<<< HEAD
+
+## 2026-08-18 (2:45 PM PT) — ops: the on-hand Phase-0 diagnosis, and the skip-deploy squash trap's second firing
+
+**Handoff #270 Phase 0 (read-only, reported to Bill before any fix).** Live-DB
+diagnosis of the "chronically wrong on-hand": the report and the canonical
+balance ALREADY agree exactly (`getEodInventorySnapshot` delegates to `onHand`;
+442 / 397 / 839 at Woodland on both paths, arithmetic ties to the unit), no
+negative in 14 days, 0 undated hauls of 7,372 Delivered, the 15 `Confirmed`
+hauls are future appointments. **Eugene is not negative — it is EMPTY**: no
+anchor ever, zero inbound/mirror/processed rows all-time; its 0 is meaningless
+and tonight's EOD count establishes its first anchor (thereafter static until
+Eugene feeds exist — the named follow-up). The one structural hazard confirmed:
+`onHand` sums drop-off units with NO kind filter, so an untaught kind joins the
+pool silently — the fail-loud fix, the report==onHand regression pin, and the
+negative/stale display banners are in build (ADR-0110 expected), targeted to
+land before tonight's count. The count path's ADR-0072 overwrite guardrail and
+Pacific-day handling are under end-to-end verification for tonight.
+
+**Incident: prod ran ~2.5 h without ADR-0108.** The #267 squash merge inherited
+a `[skip-deploy]` trailer from a folded branch-commit message (the same
+mechanism as the 8/15 #261 case — second firing); the deployer forced pull-only
+and logged success. Caught on reconciliation at 2:35 PM PT; the #269 merge
+(explicit clean `--body`) carried ADR-0107 + ADR-0108 to prod together.
+Standing rule recorded in OPEN-ITEMS §0.BD: every squash merge passes an
+explicit `--body`.
+
+## 2026-08-18 (12:05 PM PT) — Start and End hours, and run hours stop being typed (ADR-0107)
+
+The TEREX sheet does not record a duration. It records **two hour-meter
+readings** and computes the duration from them. ADR-0079 captured the answer and
+threw away the question — so nothing could check the subtraction, and two of the
+sheet's nine columns still had nowhere to live in Vision.
+
+**The meter-vs-clock question is RESOLVED, and it is meters.** Measured against
+the live workbook: `Jul26` runs 2,462.75 → 2,608.05, `Aug26` continues
+2,685 → 2,804.8, daily deltas ~6–12 h, and each day's Start is a **formula**
+pointing at the row above (`=F<prev>`, `='Jul26'!F33` across the month
+boundary). This repo's own extractor already said so — it types them "Hour-meter
+readings" and separately flags `Nov24`/`Dec24` as the tabs carrying `Start
+Time`/`End Time` **clock** times. Both shapes exist in the workbook's history;
+the 2025–2026 tabs this product mirrors are meters.
+
+### Added
+
+- **`start_hours` / `end_hours`** — `Decimal(8,2)`, nullable, additive migration.
+  Wider than `run_hours`'s `(5,2)` because a meter is cumulative: at ~2,805 h and
+  ~1,400 h/yr, a `(6,2)` ceiling of 9,999.99 arrives inside the asset's service
+  life.
+- **Start PRE-FILLS from the previous recorded day's End** (`GET ?forDate=`),
+  mirroring the sheet's own carry-forward formula. Editable, still required.
+  Nearest earlier DAY — not highest reading, because a serviced machine can read
+  lower than an older row — and a legacy day with NULL meters prefills nothing
+  rather than seeding a fabricated `0`.
+- **Four DB CHECKs**, proved by insertion against a clean PG16 **including the
+  positive controls**: `meter_pair_complete`, `meter_end_after_start`,
+  `meter_non_negative`, and `run_hours_is_the_difference` — the last being what
+  stops the stored difference and the stored pair from ever disagreeing.
+
+### Changed
+
+- **`run_hours` is DERIVED (`end - start`), stored, and no longer accepted as an
+  input anywhere.** The service throws on `'runHours' in args`, the route's zod
+  schema is `.strict()` so a stale client gets a `422` rather than a silently
+  ignored field, and the UI shows a calculated read-out instead of an input.
+  Leaving the box on screen while the server derived the value would have
+  reintroduced ADR-0079's own two-artifacts-of-one-fact defect at the UI.
+- **`end > start` is refused** — the machine does not run overnight, so an End at
+  or below the Start is a keying error, never a short day. Both readings are
+  rounded to the stored scale BEFORE comparison, so a pair that is ordered at
+  full precision but equal once stored (`2800.001 → 2800.002`) is caught rather
+  than written as a zero-hour day.
+
+### Not backfilled
+
+Existing rows keep their `run_hours` with **NULL** meters. A difference does not
+determine the pair it came from, and a fabricated `0 → 6.5` would be
+indistinguishable from a real reading — and would then propagate through the
+carry-forward. The UI draws `—`, not `0`.
+
+### Deferred, with a reason
+
+The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
+`run_hours_is_the_difference` would refuse any sheet row whose own
+`Day Total Hrs Used` disagrees with `End − Start`, and the extractor's own header
+records that such rows exist. Measuring that disagreement is a data question, not
+a code change to guess at.
+=======
+
+## 2026-08-18 — the comparand that does not exist, and the outlier that does (ADR-0108)
+
+Handoff #264 asked for expected-vs-actual variance flagging on the outbound
+weights ADR-0104 absorbed. **The premise died on measurement, before any code was
+written**, and that is recorded rather than worked around:
+`mymrc_outbound_mirror` carries a weight for **0 of 4,685** loads and no
+weight-like key anywhere in its payload; positive unit counts exist on **1 of the
+831** joined loads, so there is no lbs-per-unit denominator either; and the
+workbook's own total-vs-parts is already reconciled at **0 drift on 831 of 831**.
+There is no expected-vs-actual pair, and inventing one would make the guess
+authoritative by being first (ADR-0080 §D7).
+
+**What shipped instead is what the data supports: per-commodity load-weight
+outlier flagging**, seeded from the measured distribution of the pinned revision.
+
+- **A second measurement changed the shape of that too.** A symmetric `±k×MAD`
+  bound in pounds is structurally blind below the median — weight ≥ 0 caps the
+  reachable low-side deviation at `median/MAD`, which for Wood is **4.01 MAD**,
+  so no `k ≥ 4.01` can ever flag a low Wood weight however absurd. The real
+  keying-error row `Wood 40 lb` (median 3,170) sits at 3.96, just inside. The
+  deviation is therefore measured in **log space**, making the band a ratio and
+  genuinely two-sided; `Wood 40 lb` lands 16.5 steps out.
+- **Thresholds are an editable table**, not constants: `outbound_variance_config`
+  (median, spread step, `k`, minimum-n, on/off) on the `processor_quota_config`
+  precedent, retunable by an admin at `/admin/doc-ingest/outbound-variance`
+  without a deploy. Defaults `k = 6`, `min_sample_n = 20` — k=6 puts **14 of 831
+  loads (1.7%)** on the list against 41 at k=5 and 60 at k=4, and the floor turns
+  flagging off for the six commodities too thin to estimate a spread from
+  (Cotton n=3 spreads by ×2.29; three singletons whose zero-width band would flag
+  every row that is not exactly the median).
+- **AK-4c is untouched.** Flags are a _look-at-this_: the copy says a load
+  "exceeds the current variance threshold (editable)" and never wrong, mismatch,
+  error or dispute; there is **no alert channel and no email**; and a test scans
+  the rendered copy and fails the build on the vocabulary of blame. What a
+  difference _means_ is still Bill's decision with Rick and Janette.
+- **Dollar-side matching is BLOCKED and was not built.** No join key survives:
+  normalized invoice# ↔ mirror BOL overlaps **4** of 233 distinct expense keys
+  against 4,628 mirror BOLs (bare-numeric collisions), invoice# ↔ Materials ID
+  **0**, `commodity_raw` ↔ Materials ID **0** (it holds 12 commodity _names_),
+  and the 6 `haul_ref` values are `H-` **inbound** hauls, not outbound `M-` loads.
+  Four accidental matches would have looked exactly like a working feature.
+
+Honesty rails, each falsified first: flags compute only inside the pinned winning
+revision (`versionId` is a required argument, and deleting the version clause
+makes the suite flag a 40 lb row the winning revision had already corrected to
+3,300 — failure quoted in ADR-0108 §8); an uncovered load is **not covered**,
+never "0 variance" and never flagged; a recorded `0` is "carried none", not a low
+outlier.
+
+**Item 5 of the same handoff verified green** — the §12 reconcile module and
+coverage page match their contract clause for clause. One amendment: the
+uncovered-count stat tile now reads _"expected — outside the workbook's range,
+not missing data"_ rather than _"no watched document supplies these"_, which was
+true and read like a fault. The number is ~3,850 (P-47) and a reader who takes it
+for data loss goes hunting a bug that is not there.
+
+Note the surface renders at `staged` scope today, because both ADR-0104 batches
+are still staged awaiting Bill (OPEN-ITEMS §0.BB). Flagging follows whichever
+scope the page renders and **never promotes staged to confirmed**.
+
+Admin-only. Not a floor surface.
+
+> > > > > > > origin/main
+
 ## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
 
 Yesterday's entry recorded the standing tension plainly: the team keeps editing
