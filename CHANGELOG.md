@@ -9,6 +9,29 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
+
+The team is still logging maintenance in the TEREX workbook (five edits since
+8/14). Every revision staged: the Aug26 sheet's cumulative counters ("Day Total
+Hrs Used" 141→214.5, "Units per hour" 127→206) legitimately accrete past the
+ADR-0069 15%/$50 guardrail threshold mid-month, so nothing had applied since
+8/13. At Bill's written instruction ("apply the latest terex sheet … apply all
+the current data"):
+
+- Newest revision `626b11aa` (modified 8/17 6:09 PM PT) applied through
+  `applyVersion` (mode `system`, actor `system:terex-apply-20260817`);
+  absorption ran on the next sweep — **absorbed, 80 rows**, no error, no new
+  anomalies. Version-pinned reads now serve the current sheet.
+- Five superseded staged intermediates discarded (audited under Bill's id,
+  original guardrail reasons preserved in the audit before-images) — each
+  version is a complete copy, so the newest carries all current data.
+
+**Standing tension, recorded in OPEN-ITEMS §0.BB:** while the team keeps using
+the sheet, every future edit will re-stage and sit. The fix Bill wants is the
+team moving to Vision's equipment entry; until that happens, staged TEREX
+revisions need a periodic apply pass, or the mid-month accretion pattern needs a
+guardrail carve-out (a decision, not a default).
+
 ## 2026-08-15 (7:22 PM PT) — every outbound load is recorded, and now 831 of them have a weight (ADR-0104)
 
 `mymrc_outbound_mirror` holds **4,673 outbound loads** spanning 2023-01-02 to

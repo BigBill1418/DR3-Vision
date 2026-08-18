@@ -27,15 +27,28 @@ database. `mymrc_outbound_mirror` had `weight_lbs` NULL on **4,673 of 4,673**
 loads; **831 of them now have a weight** (5,619,037 lb, Woodland Jan–Jun 2026),
 plus 1,699 commodity rows and 332 facility-expense rows.
 
+**2026-08-17 addendum — the TEREX sheet is still the floor's habit, and the
+guardrail now shows it.** Five revisions of the live TEREX source staged between
+8/14 and 8/17 (Aug26 cumulative counters legitimately accrete past the ADR-0069
+15% threshold mid-month; nothing applied since 8/13). At Bill's written
+instruction the newest (`626b11aa`, modified 8/17 6:09 PM PT) was applied and
+absorbed (**80 rows**, no error) and the five superseded intermediates
+discarded, all audited. **Standing item:** while the team keeps editing the
+sheet, every edit re-stages and sits silently. Either the team moves to
+Vision's equipment entry (Bill: "we need to get them to stop"), or staged TEREX
+revisions get a periodic apply pass / a deliberate guardrail carve-out for
+mid-month accretion. Until one of those happens, "the ledger looks stale" means
+"check the staged queue" first.
+
 ### WAITING ON BILL — the only thing this build cannot do for itself
 
 Both batches are **STAGED**. Nothing counts until he accepts them, and an agent
 clicking confirm would put his attestation on a reading nobody read (ADR-0069
 Am.2 O-2). Two clicks, both admin-only:
 
-| Screen | What to check before accepting |
-| --- | --- |
-| `/admin/doc-ingest/outbound` | **831 loads / 5,619,037 lb.** The screen states that 556 duplicate rows were removed — four sheet pairs are exact copies plus one subset sheet — so the total is the real tonnage and not ~1.67x it. It also names the 2 loads (`M-159724`, `M-172079`) where the workbook's own check column disagrees with its weight column. |
+| Screen                       | What to check before accepting                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/admin/doc-ingest/outbound` | **831 loads / 5,619,037 lb.** The screen states that 556 duplicate rows were removed — four sheet pairs are exact copies plus one subset sheet — so the total is the real tonnage and not ~1.67x it. It also names the 2 loads (`M-159724`, `M-172079`) where the workbook's own check column disagrees with its weight column.        |
 | `/admin/doc-ingest/expenses` | **332 rows / $974,928.37**, $104,241.82 credited. Both STOCKTON sheets were refused (Stockton is not a registered site). **No row carries a real invoice date** — the workbook's `Invoice Date` column holds a day of the month under month banner rows, and 40 rows sit above the first banner, so their month is genuinely unstated. |
 
 Until he accepts, `/admin/doc-ingest/outbound-coverage` reads empty at
