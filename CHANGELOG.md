@@ -206,6 +206,116 @@ retiring.
 `run_hours NOT NULL`, the `(equipment_id, throughput_date)` partial unique, and
 every read path. The month bound is a write-path predicate. **No migration.**
 
+## 2026-08-18 (11:15 AM PT) — a manager can correct an operator's count without ringing Bill (ADR-0105)
+
+ADR-0084 gave the **floor** a same-day self-void and explicitly left the desk
+with nothing: _"a count discovered wrong the next morning is a phone call, not a
+tap."_ It has been a phone call ever since, and the right number gets written on
+paper beside the sheet. This closes that.
+
+A manager (or admin) at the count's own site can now correct a physical count
+taken **today or yesterday, Pacific**. The corrected value becomes the live
+anchor and the prior value is retained — nothing is ever deleted.
+
+### Added
+
+- **`correctPhysicalCount`** (`src/lib/inventory/correct-count.ts`) and
+  **`POST/GET /api/manager/[site]/snapshots/[id]/correct`**. Gated on
+  `requireManagerForSite` via `requireActivatedManager` — **operators are refused
+  403** and keep exactly the ADR-0084 Am.1 self-void they already had.
+- **Edit in place, with soft-void discipline.** The corrected value is written as
+  a new `physical` snapshot carrying the **original's `snapshot_at`** (so the
+  count stays on the day it was taken), and the row it corrects is soft-voided
+  with ADR-0084's existing `voided_at`/`voided_by`. **No new column and no new
+  reader obligation** — all thirteen ADR-0084 anchor readers honour this for free.
+- **Storage-layer audit, enforced.** Both audit rows (`insert` on the new row,
+  `update` on the corrected one — who / when / from / to / whose entry /
+  `corrected_to`) are written in the same transaction and then **read back before
+  it commits**. A missing audit row aborts the whole thing, so the failure mode is
+  "the correction did not happen", never "the correction happened quietly".
+- **No approval gate** — Bill's decision, recorded in ADR-0105 D4 so nobody later
+  "restores" a gate that was never removed.
+
+### Fixed before it shipped
+
+- **The delta trap.** Re-deriving `reconciled_delta` via `reconcilePhysicalCount`
+  would anchor `onHand` on **the row being corrected** (it ties on `snapshot_at`,
+  wins the `created_at` tiebreak, and the soft-void is invisible to it because
+  that read runs outside the transaction). It would have recorded the size of the
+  typo — `−45` — where the drift against the running balance belongs: `−28`. The
+  baseline is now preserved arithmetically. Falsified in the suite.
+- **A false green, caught.** The first `npm run typecheck` in the fresh worktree
+  reported success while printing `sh: 1: tsc: not found` — no `node_modules`,
+  and the output was piped into `tail`, so the exit code was `tail`'s. Every gate
+  was re-run with the exit code preserved.
+
+### Verified
+
+Typecheck clean, ESLint clean (`--max-warnings 0`), Prettier clean on every
+authored file. **1,524 passed / 39 skipped** across `src/lib/{inventory,audit,cor,loads,dashboard,bonus}`,
+`src/app/api/manager` and the ADR-record integrity suite — including the
+payroll-critical bonus suite, untouched and green. `check-adr-citations`: 4,497
+citations across 1,218 files resolve.
+
+**Seven falsifications, each broken on purpose and observed red:** audit read-back
+deleted; window narrowed to today; window widened to three days; delta re-derived;
+`entered_by` dropped; hard delete instead of soft-void; role gate removed. The
+hard-delete one was **rewritten** after it first went red for the wrong reason
+(the fake Prisma had no `deleteMany`, so the double was refusing rather than the
+assertion catching).
+
+### Premise that died
+
+**"Counts feed pay" is false**, and the repo says so in an executed test:
+`src/lib/bonus/__tests__/saves-inventory.test.ts` asserts the payroll saves path
+writes to nothing but `unit_status_movements`, with
+`expect(touchedModels).not.toContain('siteInventorySnapshot')`. A physical count
+feeds `onHand` → the floor, the EOD report, the COR and MRC billing — the
+**revenue** path, not payroll. Still money-adjacent; the mechanism is not the one
+the handoff named.
+
+### The screen, shipped with it (ADR-0105 D9)
+
+An API a manager cannot reach relocates the phone call rather than retiring it,
+so `/dashboard/[site]/count-corrections` ships in the same change — linked from
+`/dashboard/[site]/loads-inventory`, the page a manager is already on when the
+balance looks wrong.
+
+- **Same gate as the API**, and it runs BEFORE the counts are read — a page that
+  fetched first and denied second would ship numbers to a browser not allowed to
+  see them. The test asserts the read never happened, not that the markup looks
+  right.
+- **`correctable` is computed server-side** from the same predicate the service
+  gates on, so the screen cannot offer a Correct button on a row the service
+  refuses. Superseded and floor-withdrawn rows carry no affordance.
+- **Refusals surface VERBATIM** — the 409 already names the counted day, today,
+  the earliest correctable day and the route to use instead. Re-wording it in the
+  client would create a second copy of the window rule that can drift from the
+  enforced one.
+- **The chain renders honestly**: the superseded value stays visible, struck
+  through, labelled `superseded by <value>` with the corrector's name; the live
+  row says `corrected from <value>`; an ADR-0084 floor void says `withdrawn on
+the floor`. No verdict language — pinned by a test asserting "wrong", "error",
+  "mistake", "invalid" and "incorrect" never render against a count.
+- `listCorrectableCountsAtSite` → **`listWindowCountsAtSite`**, now returning live
+  AND superseded rows with chain links. Deliberately not `NOT_VOIDED`-filtered and
+  allowlisted in the reader guard on ADR-0084 D3's grounds: a history is not an
+  anchor selector, and hiding the retained value would defeat the soft-void
+  discipline in the UI instead of in the database.
+
+**Four more falsifications, each observed red:** the Correct button stops
+checking `correctable`; the page calls its auth guard but ignores the refusal;
+the 409 is re-worded instead of surfaced; the history reader filters voided rows
+out. The page-gate break was **rewritten** after its first form went red by
+crashing (`Cannot read properties of undefined`) rather than on the claim.
+
+### Known residual
+
+**The daily report's "counted by" line names the manager for a corrected count**
+(`resolveCounter` reads the insert audit row's actor; the operator is preserved as
+`counted_by`). Deliberately not fixed — changing it changes a report that is sent.
+Tracked in OPEN-ITEMS §0.BC.
+
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 
 The team is still logging maintenance in the TEREX workbook (five edits since

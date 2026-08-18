@@ -240,6 +240,33 @@ const ALLOWLIST: Exception[] = [
       'report it. By construction the row IS voided; filtering it out would throw.',
     mustContain: 'count === 0',
   },
+  {
+    file: 'src/lib/inventory/correct-count.ts',
+    method: 'findUnique',
+    why:
+      'ADR-0105 — the manager correction service. Same `findUnique` constraint as ' +
+      'the reactivate route: only unique fields may appear in the where-clause. ' +
+      'The compensating control is STRICTER than the filter would be — the row is ' +
+      'fetched by id and refused post-read with 422 `snapshot_voided`, whereas ' +
+      'filtering would report "not found" and send the manager hunting for a row ' +
+      'that is on their screen. Its `listCorrectableCountsAtSite` findMany, which ' +
+      'IS an eligibility selector, carries NOT_VOIDED and is not exempted here.',
+    mustContain: 'throw new SnapshotAlreadyVoidedError()',
+  },
+  {
+    file: 'src/lib/inventory/correct-count.ts',
+    method: 'findMany',
+    why:
+      'ADR-0105 — `listWindowCountsAtSite` is the manager correction screen`s HISTORY, ' +
+      'not an anchor selector; nothing is computed from it. Filtering voided rows out ' +
+      'would hide what a corrected count was corrected FROM, which is the soft-void ' +
+      'discipline made invisible to the only people who can act on it. The void state ' +
+      'is surfaced instead, and each row carries `correctable` computed from the same ' +
+      'predicate the service gates on, so the screen cannot offer an action the ' +
+      'service would refuse. Same reasoning as the /admin/inventory/anchors and ' +
+      'manager-snapshots entries above.',
+    mustContain: 'correctable: r.voided_at === null',
+  },
 ];
 
 function isAllowed(site: CallSite): Exception | undefined {

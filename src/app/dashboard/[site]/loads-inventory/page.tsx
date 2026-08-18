@@ -40,10 +40,7 @@ export default async function LoadsInventoryPage({ params }: Props) {
   // D7 activation gate (data-driven, ADR-0047) — admins always pass; operators/
   // managers pass only when the per-site `loads_inventory` surface is flipped
   // `live`. Default/pilot/unregistered ⇒ admin-only (unchanged historical behavior).
-  const loadsInventoryLive = await isUiSurfaceLive(
-    UI_SURFACE.LOADS_INVENTORY,
-    result.ctx.siteId,
-  );
+  const loadsInventoryLive = await isUiSurfaceLive(UI_SURFACE.LOADS_INVENTORY, result.ctx.siteId);
   if (result.ctx.role !== 'admin' && !loadsInventoryLive) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
@@ -84,6 +81,14 @@ export default async function LoadsInventoryPage({ params }: Props) {
           className="mt-2 inline-block text-sm underline opacity-90"
         >
           Daily close entry (stripped units) →
+        </Link>
+        {/* ADR-0105 — the correction surface. Linked from here because this is the
+            page a manager is already on when they notice the balance is wrong. */}
+        <Link
+          href={`/dashboard/${siteCode}/count-corrections`}
+          className="ml-4 mt-2 inline-block text-sm underline opacity-90"
+        >
+          Correct a physical count (today / yesterday) →
         </Link>
 
         <div className="mt-6 grid grid-cols-3 gap-4">

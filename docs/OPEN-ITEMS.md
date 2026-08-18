@@ -87,6 +87,35 @@ build agents plus an orchestrator.
 - #268 merge tomorrow before noon PT.
 - Eugene inbound/processing feeds (scoping decision, named by the Phase-0
   diagnosis).
+## 0.BC — ADR-0105 shipped 2026-08-18 — screen INCLUDED; one deliberate residual left
+
+`POST/GET /api/manager/[site]/snapshots/[id]/correct` is live, gated and audited,
+**and `/dashboard/[site]/count-corrections` renders it** — linked from
+`/dashboard/[site]/loads-inventory`. A manager or admin can correct a physical
+count taken today or yesterday (Pacific) from the browser: the corrected value
+becomes the anchor, the prior value stays on screen struck through and labelled
+`superseded by <value>`, and no approval is required.
+
+**The "no screen" item recorded when this ADR first landed is CLOSED** — the
+surface shipped in the same PR (#265) rather than being deferred, because an
+endpoint a manager cannot reach relocates the phone call instead of retiring it.
+
+### Still open, and deliberate
+
+- **The daily report's "counted by" line names the MANAGER for a corrected
+  count.** `eod-inventory.resolveCounter` reads the insert audit row's actor, and
+  on a corrected snapshot that is whoever put the number on the record. The
+  operator who physically counted is preserved as `counted_by` in the audit
+  payload and as `entered_by` on the correction row, so nothing is lost — but the
+  rendered line changes. **Not fixed here on purpose:** changing `resolveCounter`
+  changes a report that is actually sent, which needs its own evidence and its
+  own ADR (the same call ADR-0084 made about the `created_at DESC` divergence).
+- **No browser/e2e test of the correction screen.** Covered by server-render and
+  jsdom tests; nobody has clicked the real page against a real database.
+- **`GET /api/manager/[site]/snapshots` still has no client consumer.** ADR-0105
+  did not adopt it — it ships its own list (`listWindowCountsAtSite`) because that
+  endpoint returns a history with no correction chain and no `correctable` flag.
+  The older endpoint remains unrendered, exactly as ADR-0084 recorded.
 
 ## 0.BB — ADR-0104 shipped and executed 2026-08-15 (7:22 PM PT) — TWO STAGED BATCHES AWAIT BILL
 
