@@ -328,7 +328,9 @@ function client(): Record<string, unknown> {
     // was selected, and folding in flow the fake does not window correctly would
     // measure the fake instead of the code.
     inboundLoad: { aggregate: async () => EMPTY_SUM },
-    consumerDropoff: { aggregate: async () => EMPTY_SUM },
+    // handoff #270 §1 — `onHand` reads drop-offs via groupBy(['kind']) so an untaught
+    // kind is refused rather than silently summed into the program pool. No rows here.
+    consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: { aggregate: async () => EMPTY_SUM, count: async () => 0 },
     outboundMaterial: { aggregate: async () => EMPTY_SUM },
     landfilledUnit: { aggregate: async () => EMPTY_SUM },

@@ -24,7 +24,13 @@ const store = {
     pool_attribution?: string;
   },
   inbound: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
-  dropoffs: { units: 0 } as Record<string, number | null>,
+  // handoff #270 §1 — `onHand` now GROUPS drop-offs by kind so an untaught kind can
+  // be refused rather than silently summed. The fake mirrors the real `groupBy`
+  // return shape (one row per kind PRESENT in the window), not the old bare `_sum`.
+  dropoffs: [{ kind: 'unpaid', _sum: { units: 0 } }] as Array<{
+    kind: string;
+    _sum: { units: number | null };
+  }>,
   stripped: {
     stripped_program: D(0),
     stripped_non_program: D(0),
@@ -41,7 +47,7 @@ vi.mock('@/lib/prisma', () => ({
       findFirst: async () => store.anchor,
     },
     inboundLoad: { aggregate: async (): Promise<Agg> => ({ _sum: store.inbound }) },
-    consumerDropoff: { aggregate: async (): Promise<Agg> => ({ _sum: store.dropoffs }) },
+    consumerDropoff: { groupBy: async () => store.dropoffs },
     processedUnitsDaily: { aggregate: async (): Promise<Agg> => ({ _sum: store.stripped }) },
     // WholeUnitsSold reads renovation-sub-category outbound rows.
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
@@ -274,7 +280,7 @@ describe('onHand — DB adapter', () => {
       units_in_processing: 62,
     };
     store.inbound = { program_unit_count: 150, non_program_unit_count: 25 };
-    store.dropoffs = { units: 10 };
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: 10 } }];
     store.stripped = { stripped_program: D('60.0'), stripped_non_program: D('5.0') };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 12 };
     store.landfilled = { program_units: 3, non_program_units: 2 };
@@ -286,6 +292,35 @@ describe('onHand — DB adapter', () => {
     // nonProgram:    0 +  25      −  5 − 12 − 2 =    6
     expect(r.program.toString()).toBe('4159');
     expect(r.nonProgram.toString()).toBe('6');
+    expect(r.total.toString()).toBe('4165');
+  });
+
+  // ── FALSIFICATION (kind-guard, wiring) ───────────────────────────────────
+  // The pure refusal is proved in dropoff-kind-guard.test.ts. THIS proves `onHand`
+  // is actually wired through it: a guard that exists but is not on the path is
+  // the defect class this repo keeps re-finding. Against the pre-fix reader
+  // (`aggregate({ _sum: { units } })`) the same window resolved to a balance
+  // containing the untaught 15 — no throw, and no way to tell from the number.
+  it('THROWS rather than compute a balance when a drop-off kind is untaught', async () => {
+    store.dropoffs = [
+      { kind: 'unpaid', _sum: { units: 10 } },
+      { kind: 'floor_commercial', _sum: { units: 15 } },
+    ];
+    await expect(onHand('site-woodland', new Date('2026-07-03T00:00:00Z'))).rejects.toThrow(
+      /not taught to the inventory balance/,
+    );
+  });
+
+  it('still composes normally when every kind present is taught', async () => {
+    // Same total drop-off units as the base case (10), split across three taught
+    // kinds — so the grouping itself moves no number.
+    store.dropoffs = [
+      { kind: 'unpaid', _sum: { units: 4 } },
+      { kind: 'floor_public', _sum: { units: 5 } },
+      { kind: 'floor_incentive', _sum: { units: 1 } },
+    ];
+    const r = await onHand('site-woodland', new Date('2026-07-03T00:00:00Z'));
+    expect(r.program.toString()).toBe('4159');
     expect(r.total.toString()).toBe('4165');
   });
 
@@ -307,7 +342,7 @@ describe('onHand — DB adapter', () => {
 
   it('coalesces null aggregate sums to zero (no rows since anchor)', async () => {
     store.inbound = { program_unit_count: null, non_program_unit_count: null };
-    store.dropoffs = { units: null };
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: null } }];
     store.stripped = { stripped_program: null, stripped_non_program: null };
     store.wholeUnitsSold = { program_units: null, non_program_units: null };
     store.landfilled = { program_units: null, non_program_units: null };
@@ -328,7 +363,7 @@ describe('reconcilePhysicalCount — writes anchor + audit, records delta', () =
     };
     // No flow since anchor → computed total 4000.
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: 0 } }];
     store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };
@@ -382,7 +417,7 @@ describe('reconcilePhysicalCount — measured pool split validation', () => {
       units_in_processing: 0,
     };
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: 0 } }];
     store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };
@@ -453,7 +488,7 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
   beforeEach(() => {
     // No flow since the anchor → the anchor's pools ARE the balance.
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: 0 } }];
     store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };

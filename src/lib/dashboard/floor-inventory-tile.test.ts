@@ -26,7 +26,9 @@ const store = {
     pool_attribution?: string;
   },
   inbound: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
-  dropoffs: { units: 0 } as Record<string, number | null>,
+  // handoff #270 §1 — `onHand` GROUPS drop-offs by kind so an untaught kind can be
+  // refused rather than silently summed. Mirrors the real `groupBy` return shape.
+  dropoffs: [] as Array<{ kind: string; _sum: { units: number | null } }>,
   stripped: {
     stripped_program: D(0),
     stripped_non_program: D(0),
@@ -41,7 +43,7 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     siteInventorySnapshot: { findFirst: async () => store.anchor },
     inboundLoad: { aggregate: async (): Promise<Agg> => ({ _sum: store.inbound }) },
-    consumerDropoff: { aggregate: async (): Promise<Agg> => ({ _sum: store.dropoffs }) },
+    consumerDropoff: { groupBy: async () => store.dropoffs },
     processedUnitsDaily: {
       aggregate: async (): Promise<Agg> => ({ _sum: store.stripped }),
       findMany: async ({
@@ -66,7 +68,7 @@ import {
 beforeEach(() => {
   store.anchor = null;
   store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
-  store.dropoffs = { units: 0 };
+  store.dropoffs = [];
   store.stripped = { stripped_program: D(0), stripped_non_program: D(0) };
   store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
   store.landfilled = { program_units: 0, non_program_units: 0 };
@@ -111,7 +113,7 @@ describe('computeFloorInventoryTile — pools come from the ADR-0037 running bal
   it('inbound / dropoffs / sold / landfilled all flow through the shared pool math', async () => {
     rickMorningAnchor();
     store.inbound = { program_unit_count: 50, non_program_unit_count: 10 };
-    store.dropoffs = { units: 5 }; // program pool (CIP)
+    store.dropoffs = [{ kind: 'unpaid', _sum: { units: 5 } }]; // program pool (CIP)
     store.wholeUnitsSold = { program_units: 0, non_program_units: 12 };
     store.landfilled = { program_units: 2, non_program_units: 3 };
     const tile = await computeFloorInventoryTile('S1', { now: new Date('2026-07-21T00:00:00Z') });

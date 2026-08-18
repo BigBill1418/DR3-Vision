@@ -39,13 +39,116 @@
 // All arithmetic uses `Prisma.Decimal` (stripped units are Decimal(7,1); every
 // other count is an Int) so there is zero float drift at any count boundary.
 
-import { Prisma, type LoadStatus } from '@prisma/client';
+import { Prisma, type LoadStatus, type ConsumerDropoffKind } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
 import { NOT_VOIDED } from './snapshot-void';
 
 const D = Prisma.Decimal;
 type DecimalLike = Prisma.Decimal | number | string;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Consumer drop-off kinds — taught, not assumed (handoff #270 §1)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The drop-off leg used to be a bare `aggregate({ _sum: { units } })` with NO
+// `kind` filter, so EVERY kind — present and future — summed into the PROGRAM
+// pool by default. That is not a policy, it is the absence of one: the ADR-0085
+// iPad walk-up flow added `floor_public` / `floor_incentive` to the enum and this
+// reader joined them to the billing pool without anyone deciding it should. It
+// happened to be the right answer. Nobody checked, and nothing would have said so
+// if it were wrong — MRC is billed on PROGRAM units, so a mis-routed kind is a
+// mis-invoice that looks exactly like a correct one.
+//
+// TWO gates now stand between a new kind and the floor, because the enum can grow
+// through two different doors:
+//
+//  1. COMPILE TIME — `DROPOFF_KIND_POOL` is a total `Record<ConsumerDropoffKind, …>`.
+//     Add a member to the Prisma enum and `tsc` fails here with a missing property
+//     until someone writes down which pool it belongs to. This is the door a normal
+//     `prisma migrate` + `prisma generate` comes through, and it is closed.
+//  2. RUN TIME — `sumTaughtDropoffKinds` throws on any kind the DB returns that this
+//     module was never taught. This is the door a hand-written `ALTER TYPE … ADD
+//     VALUE` in raw SQL comes through, where the generated client (and therefore
+//     gate 1) never learns the new member at all.
+//
+// The value type is the LITERAL `'program'`, not the pool union, and that is
+// deliberate. Every kind today is program-pool (CIP consumer drop-offs), and
+// `computeRunningBalance` receives them as one scalar `dropoffUnits` added to the
+// program leg. A future non-program kind therefore cannot be expressed by editing
+// this table alone — it fails to typecheck, forcing the author to the place where
+// the pool split actually lives instead of silently widening this map and shipping
+// units into the wrong ledger.
+
+/** Which pool each consumer drop-off kind's units belong to. See the block above. */
+export const DROPOFF_KIND_POOL: Readonly<Record<ConsumerDropoffKind, 'program'>> = {
+  incentive: 'program',
+  unpaid: 'program',
+  illegal: 'program',
+  // ADR-0085 — the iPad walk-up flow's two label-only kinds. Both are consumer
+  // drop-offs at the floor; the label carries no pool meaning.
+  floor_public: 'program',
+  floor_incentive: 'program',
+};
+
+/**
+ * The kinds this module has been taught, derived from the one table above so the
+ * list and the routing can never drift apart.
+ */
+export const KNOWN_DROPOFF_KINDS: ReadonlySet<string> = new Set(Object.keys(DROPOFF_KIND_POOL));
+
+/**
+ * A consumer drop-off kind reached the balance that this module was never taught
+ * how to route. Refused rather than summed: an untaught kind added to the program
+ * pool by default is a silent mis-billing, and the whole point of the ADR-0085
+ * lesson is that "default-add" is not a decision anyone made.
+ *
+ * Deliberately NOT a 4xx. Nothing the caller sent caused this — the data model
+ * grew past the reader. It surfaces as a read failure at every `onHand` consumer
+ * (the report drops its inventory section with a logged error; the dashboard tile
+ * degrades to null), which is the existing, tested failure path for "this balance
+ * could not be computed" and is strictly louder than a wrong number.
+ */
+export class UnknownDropoffKindError extends Error {
+  readonly siteId: string;
+  readonly kinds: readonly string[];
+  constructor(siteId: string, kinds: readonly string[]) {
+    super(
+      `Consumer drop-off kind(s) not taught to the inventory balance: ${kinds.join(', ')}. ` +
+        `Site ${siteId}'s on-hand cannot be computed until DROPOFF_KIND_POOL in ` +
+        `src/lib/inventory/running-balance.ts records which pool each belongs to. ` +
+        `Refusing to sum an untaught kind into the program pool by default.`,
+    );
+    this.name = 'UnknownDropoffKindError';
+    this.siteId = siteId;
+    this.kinds = kinds;
+  }
+}
+
+/** One `groupBy(['kind'])` row, as narrow as this function actually needs. */
+export interface DropoffKindGroup {
+  kind: string;
+  _sum: { units: number | null };
+}
+
+/**
+ * Total drop-off units across the window, refusing any kind this module was never
+ * taught (gate 2 above). Pure — no DB, no clock — so the refusal is unit-testable
+ * against a fabricated future kind without waiting for one to exist.
+ *
+ * A group is present only when the window holds at least one row of that kind, so
+ * this asks exactly the right question: "is every kind that actually reached this
+ * balance one we know how to route?" A kind with rows summing to zero still throws
+ * — it is untaught either way, and the next row will carry units.
+ */
+export function sumTaughtDropoffKinds(
+  groups: readonly DropoffKindGroup[],
+  siteId: string,
+): Prisma.Decimal {
+  const untaught = groups.filter((g) => !KNOWN_DROPOFF_KINDS.has(g.kind)).map((g) => g.kind);
+  if (untaught.length > 0) throw new UnknownDropoffKindError(siteId, untaught);
+  return groups.reduce((sum, g) => sum.plus(g._sum.units ?? 0), new D(0));
+}
 
 /** A program / non-program pool pair of unit quantities. */
 export interface PoolPair {
@@ -309,7 +412,13 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
         arrived_at: inboundWindow,
       },
     }),
-    prisma.consumerDropoff.aggregate({
+    // GROUPED BY KIND, not a bare sum. The grouping is not for arithmetic — every
+    // taught kind still lands in the program pool, so the total is identical — it is
+    // what lets `sumTaughtDropoffKinds` SEE an untaught kind instead of silently
+    // absorbing it. Same table, same window, same round trip; the only thing that
+    // changed is that the reader now has to recognise what it is adding up.
+    prisma.consumerDropoff.groupBy({
+      by: ['kind'],
       _sum: { units: true },
       where: { site_id: siteId, dropoff_date: dateWindow },
     }),
@@ -335,7 +444,9 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       program: inbound._sum.program_unit_count ?? 0,
       nonProgram: inbound._sum.non_program_unit_count ?? 0,
     },
-    dropoffUnits: dropoffs._sum.units ?? 0,
+    // Throws (does not default to 0, and does not silently include) when the window
+    // holds a kind this module was never taught. See DROPOFF_KIND_POOL.
+    dropoffUnits: sumTaughtDropoffKinds(dropoffs, siteId),
     stripped: {
       program: stripped._sum.stripped_program ?? 0,
       nonProgram: stripped._sum.stripped_non_program ?? 0,

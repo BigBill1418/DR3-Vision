@@ -52,6 +52,18 @@ export interface FloorInventoryTileData {
   totalOnFloor: number;
   /** How the anchor snapshot's pools were derived — `legacy` = unsplit anchor. */
   anchorPool: 'measured' | 'legacy' | null;
+  /**
+   * handoff #270 §4a — true when ANY pool (or the total) computed below zero.
+   *
+   * A negative floor is not a small floor, it is a broken input: real processing
+   * subtracted from incomplete intake. The tile must not render it as a quantity,
+   * so this flag — not the sign of the numbers — is what the component branches
+   * on, and it is decided HERE so the tile and the daily report cannot disagree
+   * about when a floor has gone impossible. Either pool counts, not just the
+   * total: MRC bills on program units, so a negative program pool inside a
+   * positive total is still a billing-grade error.
+   */
+  negative: boolean;
   trailingUnitsPerDay: number | null;
   programDaysRemaining: number | null;
   asOfISO: string;
@@ -110,11 +122,16 @@ export async function computeFloorInventoryTile(
 
   const projection = computeProgramPoolProjection(balance.program, closes);
 
+  const programOnFloor = balance.program.toNumber();
+  const nonProgramOnFloor = balance.nonProgram.toNumber();
+  const totalOnFloor = balance.total.toNumber();
+
   return {
-    programOnFloor: balance.program.toNumber(),
-    nonProgramOnFloor: balance.nonProgram.toNumber(),
-    totalOnFloor: balance.total.toNumber(),
+    programOnFloor,
+    nonProgramOnFloor,
+    totalOnFloor,
     anchorPool: balance.anchorPool ?? null,
+    negative: programOnFloor < 0 || nonProgramOnFloor < 0 || totalOnFloor < 0,
     trailingUnitsPerDay: projection.trailingUnitsPerDay,
     programDaysRemaining: projection.programDaysRemaining,
     asOfISO,

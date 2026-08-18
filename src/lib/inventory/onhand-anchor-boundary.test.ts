@@ -35,7 +35,7 @@ vi.mock('@/lib/prisma', () => ({
       }),
     },
     inboundLoad: { aggregate: async () => ({ _sum: { program_unit_count: 0, non_program_unit_count: 0 } }) },
-    consumerDropoff: { aggregate: async () => ({ _sum: { units: 0 } }) },
+    consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: {
       // WHERE-aware: sum only rows in the `{ gt, lte }` production_date window.
       aggregate: async ({ where }: { where: { production_date: { gt: Date; lte: Date } } }) => {

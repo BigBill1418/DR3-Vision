@@ -262,7 +262,8 @@ function client(): Record<string, unknown> {
     // — the assertions are about WHICH ANCHOR was selected, and folding in flow
     // the fake does not window correctly would measure the fake instead.
     inboundLoad: { aggregate: async () => EMPTY_SUM },
-    consumerDropoff: { aggregate: async () => EMPTY_SUM },
+    // handoff #270 §1 — drop-offs are read via groupBy(['kind']) now; no rows here.
+    consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: { aggregate: async () => EMPTY_SUM, count: async () => 0 },
     outboundMaterial: { aggregate: async () => EMPTY_SUM },
     landfilledUnit: { aggregate: async () => EMPTY_SUM },
