@@ -9,6 +9,67 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-18 (12:05 PM PT) — Start and End hours, and run hours stop being typed (ADR-0107)
+
+The TEREX sheet does not record a duration. It records **two hour-meter
+readings** and computes the duration from them. ADR-0079 captured the answer and
+threw away the question — so nothing could check the subtraction, and two of the
+sheet's nine columns still had nowhere to live in Vision.
+
+**The meter-vs-clock question is RESOLVED, and it is meters.** Measured against
+the live workbook: `Jul26` runs 2,462.75 → 2,608.05, `Aug26` continues
+2,685 → 2,804.8, daily deltas ~6–12 h, and each day's Start is a **formula**
+pointing at the row above (`=F<prev>`, `='Jul26'!F33` across the month
+boundary). This repo's own extractor already said so — it types them "Hour-meter
+readings" and separately flags `Nov24`/`Dec24` as the tabs carrying `Start
+Time`/`End Time` **clock** times. Both shapes exist in the workbook's history;
+the 2025–2026 tabs this product mirrors are meters.
+
+### Added
+
+- **`start_hours` / `end_hours`** — `Decimal(8,2)`, nullable, additive migration.
+  Wider than `run_hours`'s `(5,2)` because a meter is cumulative: at ~2,805 h and
+  ~1,400 h/yr, a `(6,2)` ceiling of 9,999.99 arrives inside the asset's service
+  life.
+- **Start PRE-FILLS from the previous recorded day's End** (`GET ?forDate=`),
+  mirroring the sheet's own carry-forward formula. Editable, still required.
+  Nearest earlier DAY — not highest reading, because a serviced machine can read
+  lower than an older row — and a legacy day with NULL meters prefills nothing
+  rather than seeding a fabricated `0`.
+- **Four DB CHECKs**, proved by insertion against a clean PG16 **including the
+  positive controls**: `meter_pair_complete`, `meter_end_after_start`,
+  `meter_non_negative`, and `run_hours_is_the_difference` — the last being what
+  stops the stored difference and the stored pair from ever disagreeing.
+
+### Changed
+
+- **`run_hours` is DERIVED (`end - start`), stored, and no longer accepted as an
+  input anywhere.** The service throws on `'runHours' in args`, the route's zod
+  schema is `.strict()` so a stale client gets a `422` rather than a silently
+  ignored field, and the UI shows a calculated read-out instead of an input.
+  Leaving the box on screen while the server derived the value would have
+  reintroduced ADR-0079's own two-artifacts-of-one-fact defect at the UI.
+- **`end > start` is refused** — the machine does not run overnight, so an End at
+  or below the Start is a keying error, never a short day. Both readings are
+  rounded to the stored scale BEFORE comparison, so a pair that is ordered at
+  full precision but equal once stored (`2800.001 → 2800.002`) is caught rather
+  than written as a zero-hour day.
+
+### Not backfilled
+
+Existing rows keep their `run_hours` with **NULL** meters. A difference does not
+determine the pair it came from, and a fabricated `0 → 6.5` would be
+indistinguishable from a real reading — and would then propagate through the
+carry-forward. The UI draws `—`, not `0`.
+
+### Deferred, with a reason
+
+The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
+`run_hours_is_the_difference` would refuse any sheet row whose own
+`Day Total Hrs Used` disagrees with `End − Start`, and the extractor's own header
+records that such rows exist. Measuring that disagreement is a data question, not
+a code change to guess at.
+
 ## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
 
 Yesterday's entry recorded the standing tension plainly: the team keeps editing

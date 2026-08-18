@@ -4164,6 +4164,28 @@ model EquipmentDailyThroughput {
   /// a machine cannot run more than 24 hours in a calendar day.
   run_hours Decimal @db.Decimal(5, 2)
 
+  /// ADR-0107 — the two cumulative hour-METER readings `run_hours` is the
+  /// difference between. NOT clock times: the sheet's `Jul26` tab runs
+  /// 2,462.75 → 2,608.05 and `Aug26` continues 2,685 → 2,804.8, each day's
+  /// Start carried from the prior day's End by formula.
+  ///
+  /// NULLABLE, and never backfilled. Every pre-ADR-0107 row keeps its
+  /// `run_hours` with both of these NULL, because a difference does not
+  /// determine the pair it came from and inventing one would put two
+  /// fabricated meter readings into the table whose whole purpose is that the
+  /// number is authoritative. REQUIREDNESS FOR MANAGER ENTRY IS ENFORCED IN THE
+  /// SERVICE — the columns stay nullable so the ADR-0081 workbook importer can
+  /// still project sheet rows whose meter cells are legitimately blank.
+  ///
+  /// `Decimal(8,2)`, wider than `run_hours`: a meter is cumulative and only
+  /// climbs (~2,805 h today, ~1,400 h/yr), so a (6,2) ceiling would be reached
+  /// inside the asset's service life.
+  ///
+  /// Four DB CHECKs back these up — the pair is all-or-nothing, `end > start`,
+  /// `start >= 0`, and `run_hours = end - start` whenever both are present.
+  start_hours Decimal? @db.Decimal(8, 2)
+  end_hours   Decimal? @db.Decimal(8, 2)
+
   notes String?
 
   /// ADR-0036 / ADR-0077 actor discipline. A human entry carries the REAL
