@@ -77,11 +77,47 @@ feeds `onHand` → the floor, the EOD report, the COR and MRC billing — the
 **revenue** path, not payroll. Still money-adjacent; the mechanism is not the one
 the handoff named.
 
+### The screen, shipped with it (ADR-0105 D9)
+
+An API a manager cannot reach relocates the phone call rather than retiring it,
+so `/dashboard/[site]/count-corrections` ships in the same change — linked from
+`/dashboard/[site]/loads-inventory`, the page a manager is already on when the
+balance looks wrong.
+
+- **Same gate as the API**, and it runs BEFORE the counts are read — a page that
+  fetched first and denied second would ship numbers to a browser not allowed to
+  see them. The test asserts the read never happened, not that the markup looks
+  right.
+- **`correctable` is computed server-side** from the same predicate the service
+  gates on, so the screen cannot offer a Correct button on a row the service
+  refuses. Superseded and floor-withdrawn rows carry no affordance.
+- **Refusals surface VERBATIM** — the 409 already names the counted day, today,
+  the earliest correctable day and the route to use instead. Re-wording it in the
+  client would create a second copy of the window rule that can drift from the
+  enforced one.
+- **The chain renders honestly**: the superseded value stays visible, struck
+  through, labelled `superseded by <value>` with the corrector's name; the live
+  row says `corrected from <value>`; an ADR-0084 floor void says `withdrawn on
+the floor`. No verdict language — pinned by a test asserting "wrong", "error",
+  "mistake", "invalid" and "incorrect" never render against a count.
+- `listCorrectableCountsAtSite` → **`listWindowCountsAtSite`**, now returning live
+  AND superseded rows with chain links. Deliberately not `NOT_VOIDED`-filtered and
+  allowlisted in the reader guard on ADR-0084 D3's grounds: a history is not an
+  anchor selector, and hiding the retained value would defeat the soft-void
+  discipline in the UI instead of in the database.
+
+**Four more falsifications, each observed red:** the Correct button stops
+checking `correctable`; the page calls its auth guard but ignores the refusal;
+the 409 is re-worded instead of surfaced; the history reader filters voided rows
+out. The page-gate break was **rewritten** after its first form went red by
+crashing (`Cannot read properties of undefined`) rather than on the claim.
+
 ### Known residual
 
-**There is no screen.** The API is complete and gated, but no manager UI renders
-it — the endpoint that would host it (`GET /api/manager/[site]/snapshots`) still
-has no client consumer, exactly as ADR-0084 recorded. Tracked in OPEN-ITEMS §0.BC.
+**The daily report's "counted by" line names the manager for a corrected count**
+(`resolveCounter` reads the insert audit row's actor; the operator is preserved as
+`counted_by`). Deliberately not fixed — changing it changes a report that is sent.
+Tracked in OPEN-ITEMS §0.BC.
 
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 

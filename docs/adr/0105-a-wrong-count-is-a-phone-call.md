@@ -240,6 +240,56 @@ Two things this deliberately does **not** treat as idempotent successes:
   loser their value is on the record when it is not would be the worst available
   answer.
 
+### D9 — The screen ships WITH the API, because an API is not a retired phone call
+
+Bill's instruction for this work was "clean, clear, **usable by the team**". An
+endpoint a manager cannot reach does not retire the phone call; it relocates it.
+So `/dashboard/[site]/count-corrections` ships in the same change, linked from
+`/dashboard/[site]/loads-inventory` — the page a manager is already on when they
+notice the balance looks wrong.
+
+It is deliberately small:
+
+- **Same gate as the API.** `checkManagerForSite` + the ADR-0047
+  `loads_inventory` rollout surface, so a site whose module is dark has neither
+  the screen nor a live endpoint behind it. The gate runs **before** the counts
+  are read — a page that fetched first and denied second would ship the numbers
+  to a browser that is not allowed to see them, and the test asserts the read
+  never happened rather than asserting the markup looks right.
+- **No second copy of the rule.** `correctable` is computed server-side from the
+  same predicate `correctPhysicalCount` gates on, and the Correct affordance
+  keys on it. The screen therefore cannot offer an action the service refuses —
+  the drift ADR-0084 D2 spent a whole guard test preventing on the read path.
+- **Refusals are surfaced VERBATIM.** The 409 bodies already name the counted
+  day, today, the earliest correctable day and the route to use instead.
+  Re-wording them in the client would create a second statement of the window
+  rule that can drift from the enforced one, and the server's is the one that is
+  true.
+- **The chain is rendered honestly.** Superseded rows stay on the screen, struck
+  through, labelled `superseded by <value>` with the corrector's name; the live
+  row says `corrected from <value>`. A floor withdrawal (ADR-0084) is labelled
+  `withdrawn on the floor` instead — the two cases share the `voided_at` column
+  by D1 and are told apart only by the audit row's `reason`, resolved once in
+  `listWindowCountsAtSite` rather than guessed at per reader. **No verdict
+  language**: the screen says what happened and who did it and leaves the
+  judgement to the reader, which a test pins by asserting the words "wrong",
+  "error", "mistake", "invalid" and "incorrect" never render against a count.
+- **The corrected value lands on the column the original used** — a CA count
+  writes `units_indoor`, an OR count writes `units_total`. Writing it to the
+  other column would silently change what the number means to
+  `snapshotTotalUnits` and to the COR.
+
+`listCorrectableCountsAtSite` became **`listWindowCountsAtSite`** and now returns
+live AND superseded rows with their chain links, because the screen has to show
+what a corrected count was corrected from. That read is deliberately **not**
+`NOT_VOIDED`-filtered and is allowlisted in the guard test on the same grounds
+ADR-0084 D3 allowlisted `/admin/inventory/anchors` and the manager snapshot list:
+a history is not an anchor selector, and hiding the retained value would defeat
+the soft-void discipline in the UI rather than in the database.
+
+What it deliberately does **not** have: an approval flow (D4), any filter beyond
+the window the API already enforces, pagination, or a second correction path.
+
 ### D8 — Online only
 
 `manager.count.correct` is absent from `FLOOR_SCOPES`, so `/api/queue/replay`
@@ -302,11 +352,11 @@ Shipped code wins; each of these was in the brief and is not true of the repo.
    what this extends. Verified against the shipped `voidSnapshot`, not inferred
    from the handoff's wording.
 
-3. **"The manager can see the void state today."** ADR-0084 already recorded that
+3. **"The manager can see the void state today."** ADR-0084 recorded that
    `GET /api/manager/[site]/snapshots` has **no client consumer** — the only
    surface that lists counts to a manager is not rendered anywhere. Re-checked
-   this session: still true. The correction API and its `GET` list are therefore
-   server-complete and **screen-less**; see "Not verified".
+   this session: still true of _that_ endpoint, and it is why this ADR ships its
+   own screen (D9) rather than hanging a button off a list that nobody renders.
 
 ---
 
@@ -351,15 +401,26 @@ Every guard was **broken on purpose, observed red, and restored** by a harness
 that reverts the file in a `finally` block. Green-on-first-run was not accepted
 as evidence for any of them.
 
-| #   | Break                                            | Went red                                                                                          |
-| --- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| F-a | `assertCorrectionAudited` call deleted           | ✅ 2 — `promise resolved "{ …(8) }" instead of rejecting`                                         |
-| F-b | window narrowed to today only                    | ✅ 5 — `outside_correction_window` on yesterday's count                                           |
-| F-c | window widened to three days                     | ✅ 3 — including `two-day Pacific window measured 97h across the fall-back: expected 97 to be 49` |
-| F-d | delta re-derived against the row being corrected | ✅ 2 — `expected -45 to be -28`                                                                   |
-| F-e | `entered_by` dropped from the audit payload      | ✅ 4 — `expected undefined to be 'user-jt'`                                                       |
-| F-f | hard delete instead of soft-void                 | ✅ 4 — `expected undefined to be defined` (the retained row is gone)                              |
-| F-g | manager role gate removed from the route         | ✅ 4 — `expected 404 to be 403` for the operator                                                  |
+| #   | Break                                                 | Went red                                                                                                       |
+| --- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| F-a | `assertCorrectionAudited` call deleted                | ✅ 2 — `promise resolved "{ …(8) }" instead of rejecting`                                                      |
+| F-b | window narrowed to today only                         | ✅ 5 — `outside_correction_window` on yesterday's count                                                        |
+| F-c | window widened to three days                          | ✅ 3 — including `two-day Pacific window measured 97h across the fall-back: expected 97 to be 49`              |
+| F-d | delta re-derived against the row being corrected      | ✅ 2 — `expected -45 to be -28`                                                                                |
+| F-e | `entered_by` dropped from the audit payload           | ✅ 4 — `expected undefined to be 'user-jt'`                                                                    |
+| F-f | hard delete instead of soft-void                      | ✅ 4 — `expected undefined to be defined` (the retained row is gone)                                           |
+| F-g | manager role gate removed from the route              | ✅ 4 — `expected 404 to be 403` for the operator                                                               |
+| U-a | Correct button stops checking `correctable`           | ✅ 2 — _"a superseded count still offered a Correct button — the screen offers an action the service refuses"_ |
+| U-b | page calls the auth guard but **ignores its refusal** | ✅ 3 — `expected '<main class="min-h-screen bg-dr3-spac…' to contain 'Access denied'`                          |
+| U-c | 409 message re-worded instead of surfaced verbatim    | ✅ 1 — `expected 'Correction refused (409).' to be 'This count was taken on 2026-07-26. C…'`                   |
+| U-d | history reader filters voided rows out                | ✅ 2 — `expected [ 'snap-new-1' ] to deeply equal [ 'snap-new-1', 'snap-today' ]`                              |
+
+**U-b was rewritten, for the same reason F-f was.** Its first form deleted the
+gate outright, which made `result.ctx` undefined and went red with
+`Cannot read properties of undefined (reading 'siteId')` — a crash, proving only
+that the gate is load-bearing, not that an operator is denied. The kept form is
+the realistic defect: the guard is **called and its refusal ignored**. That fails
+on the claim itself — the operator receives the rendered page.
 
 **F-f was fixed after its first run because it went red for the wrong reason.**
 The fake Prisma had no `deleteMany`, so breaking the service produced
@@ -402,7 +463,12 @@ Numeric assertions use real `Prisma.Decimal`.
   producing exactly one winner. The first is already covered by ADR-0084's
   `snapshot-void.db.test.ts` in CI's `migrations` job; the second is covered here
   only by the modelled race. That is the honest status.
-- **There is no screen.** The API and its correctable-counts list are complete and
-  gated; no manager UI renders them, because the endpoint that would host it has
-  no client consumer today (premise 3). A manager cannot reach this from a browser
-  until that surface is built. Recorded as the top residual, not as a detail.
+- **The screen has no end-to-end (browser) test.** The gate, the affordance
+  rules, the verbatim refusal and the chain rendering are covered by
+  server-render and jsdom tests; nobody has clicked the real page against a real
+  database. The rendering conventions follow the sibling manager surfaces, but
+  the visual result is unverified — the same residual ADR-0084 recorded for the
+  iPad void surface.
+- **The correction screen is English-only.** That matches every other manager
+  desktop surface (the i18n contract is an operator-iPad concern), so it is a
+  deliberate consequence rather than an omission.

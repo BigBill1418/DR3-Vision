@@ -345,7 +345,7 @@ import { onHand, PoolSplitMismatchError } from './running-balance';
 import { SnapshotNotFoundError, SnapshotNotPhysicalError } from './void-count';
 import {
   correctPhysicalCount,
-  listCorrectableCountsAtSite,
+  listWindowCountsAtSite,
   pacificCorrectionWindow,
   CORRECTION_REASON,
   CorrectionUnauditedError,
@@ -810,19 +810,24 @@ describe('F4 — the Pacific two-day window', () => {
     expect(hours, `two-day Pacific window measured ${hours}h across the fall-back`).toBe(49);
   });
 
-  it('the correctable LIST uses the same window as the service', async () => {
+  it('the screen LIST uses the same window as the service', async () => {
     // They must agree by construction, or the screen offers a row the service
     // then refuses.
     seedOperatorCount({ id: 'snap-today', units_total: 1 });
     seedOperatorCount({ id: 'snap-yday', snapshot_at: PT_JUL27, units_total: 2 });
     seedOperatorCount({ id: 'snap-2back', snapshot_at: PT_JUL26, units_total: 3 });
-    const rows = await listCorrectableCountsAtSite(SITE, MIDDAY_JUL28);
+    const rows = await listWindowCountsAtSite(SITE, MIDDAY_JUL28);
     expect(rows.map((r) => r.id).sort()).toEqual(['snap-today', 'snap-yday']);
     expect(rows.find((r) => r.id === 'snap-yday')!.countedDayISO).toBe('2026-07-27');
     expect(rows.every((r) => r.enteredByUserId === JT)).toBe(true);
+    expect(rows.every((r) => r.correctable)).toBe(true);
   });
 
-  it('the correctable list drops a row once it has been corrected', async () => {
+  it('a corrected row stays VISIBLE but stops being correctable, and names its successor', async () => {
+    // The screen must still show what the corrected count was corrected FROM —
+    // dropping it would make the retained prior value invisible to the only
+    // people who can act on it, which is the soft-void discipline defeated by
+    // the UI rather than by the database.
     seedOperatorCount({ id: 'snap-today', units_total: 1 });
     const result = await correctPhysicalCount({
       snapshotId: 'snap-today',
@@ -832,9 +837,37 @@ describe('F4 — the Pacific two-day window', () => {
       poolAttribution: 'legacy',
       now: MIDDAY_JUL28,
     });
-    const rows = await listCorrectableCountsAtSite(SITE, MIDDAY_JUL28);
-    expect(rows.map((r) => r.id)).toEqual([result.snapshotId]);
-    expect(rows[0]!.isCorrection).toBe(true);
+
+    const rows = await listWindowCountsAtSite(SITE, MIDDAY_JUL28);
+    expect(rows.map((r) => r.id).sort()).toEqual([result.snapshotId, 'snap-today'].sort());
+
+    const old = rows.find((r) => r.id === 'snap-today')!;
+    expect(old.correctable).toBe(false);
+    expect(old.voidReason).toBe('corrected');
+    expect(old.correctedToId).toBe(result.snapshotId);
+    expect(old.voidedByUserId).toBe(MORENA);
+    expect(old.physicalTotal, 'the prior value must still be readable').toBe(1);
+
+    const live = rows.find((r) => r.id === result.snapshotId)!;
+    expect(live.correctable).toBe(true);
+    expect(live.isCorrection).toBe(true);
+    expect(live.correctedFromId).toBe('snap-today');
+  });
+
+  it('distinguishes a floor WITHDRAWAL from a correction — the column cannot', async () => {
+    // `voided_at` carries both meanings by design (D1). Only the audit row's
+    // reason can tell them apart, and the screen has to say which one happened.
+    seedOperatorCount({
+      id: 'snap-withdrawn',
+      units_total: 7,
+      voided_at: MIDDAY_JUL28,
+      voided_by: JT,
+    });
+    const rows = await listWindowCountsAtSite(SITE, MIDDAY_JUL28);
+    const row = rows.find((r) => r.id === 'snap-withdrawn')!;
+    expect(row.voidReason).toBe('withdrawn');
+    expect(row.correctedToId).toBeNull();
+    expect(row.correctable).toBe(false);
   });
 });
 

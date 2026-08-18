@@ -34,7 +34,7 @@ import {
 import { PoolSplitMismatchError } from '@/lib/inventory/running-balance';
 import {
   correctPhysicalCount,
-  listCorrectableCountsAtSite,
+  listWindowCountsAtSite,
   CountCorrectionOutsideWindowError,
   CountCorrectionConflictError,
 } from '@/lib/inventory/correct-count';
@@ -54,12 +54,17 @@ const Body = z.object({
   pool_attribution: z.enum(['measured', 'legacy']).optional(),
 });
 
-/** The rows this manager may correct right now — today + yesterday, live only. */
+/**
+ * The two-day window's counts — live AND superseded, each carrying `correctable`
+ * and its chain links. Superseded rows ride along deliberately: the screen has to
+ * show what a corrected count was corrected FROM, or the soft-void discipline is
+ * invisible to the only people who can act on it.
+ */
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
   const { site } = await params;
   try {
     const ctx = await requireActivatedManager(site);
-    return NextResponse.json({ rows: await listCorrectableCountsAtSite(ctx.siteId) });
+    return NextResponse.json({ rows: await listWindowCountsAtSite(ctx.siteId) });
   } catch (e) {
     return loadsErrorResponse(e, {
       site,

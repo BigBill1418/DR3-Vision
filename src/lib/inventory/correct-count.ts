@@ -712,7 +712,7 @@ async function assertCorrectionAudited(
   if (missing.length > 0) throw new CorrectionUnauditedError(missing.join(' + '));
 }
 
-export interface CorrectableCountRow {
+export interface WindowCountRow {
   id: string;
   countedDayISO: string;
   enteredAt: Date;
@@ -724,27 +724,53 @@ export interface CorrectableCountRow {
   enteredByUserId: string | null;
   /** True when this row is itself the product of an earlier correction. */
   isCorrection: boolean;
+  /** The row this one corrected, when it is a correction. */
+  correctedFromId: string | null;
+  /** The row that superseded this one, when it has been corrected away. */
+  correctedToId: string | null;
+  /** Set when this row is no longer live — withdrawn OR corrected away. */
+  voidedAt: Date | null;
+  /** Who withdrew or corrected it. */
+  voidedByUserId: string | null;
+  /**
+   * Why it is not live. `corrected` = superseded by ADR-0105; `withdrawn` = an
+   * ADR-0084 void. The COLUMN cannot tell these apart by design (D1) — the audit
+   * row's `reason` is the only thing that can, so it is resolved here once rather
+   * than guessed at by every reader.
+   */
+  voidReason: 'corrected' | 'withdrawn' | null;
+  /** True when the service would accept a correction for this row right now. */
+  correctable: boolean;
 }
 
 /**
- * The live physical counts at a site from today and yesterday (Pacific) — the set
- * the manager screen may offer to correct.
+ * Every physical count at a site from today and yesterday (Pacific) — live AND
+ * superseded — with the correction chain attached.
  *
- * The list and the service agree BY CONSTRUCTION: both accept exactly the live,
- * in-window, physical counts at the site, so the screen cannot offer a row the
- * service would then refuse. Voided rows are excluded because the screen offers
- * an ACTION and a withdrawn or already-corrected count is not actionable; the
- * manager history endpoint and `/admin/inventory/anchors` are where those stay
- * visible, labelled.
+ * **Deliberately NOT filtered by `NOT_VOIDED`, and allowlisted as such in
+ * `snapshot-void-readers.guard.test.ts`.** This is a HISTORY, not an anchor
+ * selector: nothing is computed from what it returns. Dropping the superseded
+ * rows would reproduce exactly the problem soft-voiding exists to avoid — the
+ * number the floor entered vanishes, and the manager looking at a corrected count
+ * cannot see what it was corrected from. The same reasoning ADR-0084 D3 applied
+ * to `/admin/inventory/anchors` and the manager snapshot list.
+ *
+ * The void state is SURFACED instead, and `correctable` is computed here from the
+ * same predicate the service gates on, so the screen and the service agree by
+ * construction: the screen cannot offer a Correct affordance on a row the service
+ * would then refuse.
+ *
+ * Names are NOT resolved here. The service stays a pure inventory concern with no
+ * `users` dependency — the page resolves ids to names, exactly as ADR-0084 Am.1
+ * decided for the iPad void list.
  */
-export async function listCorrectableCountsAtSite(
+export async function listWindowCountsAtSite(
   siteId: string,
   now: Date = new Date(),
-): Promise<CorrectableCountRow[]> {
+): Promise<WindowCountRow[]> {
   const { start, endExclusive } = pacificCorrectionWindow(now);
   const rows = await prisma.siteInventorySnapshot.findMany({
     where: {
-      ...NOT_VOIDED,
       site_id: siteId,
       snapshot_kind: 'physical',
       snapshot_at: { gte: start, lt: endExclusive },
@@ -760,25 +786,42 @@ export async function listCorrectableCountsAtSite(
       units_indoor: true,
       units_total: true,
       units_in_processing: true,
+      voided_at: true,
+      voided_by: true,
     },
   });
   if (rows.length === 0) return [];
 
-  const inserts = await prisma.auditLog.findMany({
-    where: { table_name: TABLE, action: 'insert', row_id: { in: rows.map((r) => r.id) } },
+  const ids = rows.map((r) => r.id);
+  const audit = await prisma.auditLog.findMany({
+    where: { table_name: TABLE, row_id: { in: ids } },
     orderBy: { created_at: 'asc' },
-    select: { row_id: true, actor_user_id: true, after: true },
+    select: { row_id: true, action: true, actor_user_id: true, after: true },
   });
-  const firstInsert = new Map<string, { actor: string | null; after: unknown }>();
-  for (const i of inserts) {
-    if (!firstInsert.has(i.row_id)) {
-      firstInsert.set(i.row_id, { actor: i.actor_user_id, after: i.after });
+
+  interface Payload {
+    corrected_from?: unknown;
+    corrected_to?: unknown;
+    reason?: unknown;
+  }
+  const firstInsert = new Map<string, { actor: string | null; after: Payload }>();
+  const lastUpdate = new Map<string, Payload>();
+  for (const a of audit) {
+    const after = (a.after ?? {}) as Payload;
+    if (a.action === 'insert') {
+      // First insert row wins, matching the service's `orderBy created_at asc`.
+      if (!firstInsert.has(a.row_id)) firstInsert.set(a.row_id, { actor: a.actor_user_id, after });
+    } else if (a.action === 'update') {
+      lastUpdate.set(a.row_id, after);
     }
   }
 
   return rows.map((r) => {
     const ins = firstInsert.get(r.id);
-    const after = (ins?.after ?? null) as { corrected_from?: unknown } | null;
+    const upd = lastUpdate.get(r.id);
+    const correctedFromId =
+      typeof ins?.after.corrected_from === 'string' ? ins.after.corrected_from : null;
+    const correctedToId = typeof upd?.corrected_to === 'string' ? upd.corrected_to : null;
     return {
       id: r.id,
       countedDayISO: pacificDayISO(r.snapshot_at),
@@ -788,7 +831,15 @@ export async function listCorrectableCountsAtSite(
       units_total: r.units_total,
       units_in_processing: r.units_in_processing,
       enteredByUserId: ins?.actor ?? null,
-      isCorrection: typeof after?.corrected_from === 'string',
+      isCorrection: correctedFromId !== null,
+      correctedFromId,
+      correctedToId,
+      voidedAt: r.voided_at,
+      voidedByUserId: r.voided_by,
+      // A superseded row names its successor; a withdrawn one does not. Reported
+      // from the record rather than inferred from the column, which cannot say.
+      voidReason: r.voided_at === null ? null : correctedToId !== null ? 'corrected' : 'withdrawn',
+      correctable: r.voided_at === null,
     };
   });
 }

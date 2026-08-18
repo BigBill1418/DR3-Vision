@@ -253,6 +253,20 @@ const ALLOWLIST: Exception[] = [
       'IS an eligibility selector, carries NOT_VOIDED and is not exempted here.',
     mustContain: 'throw new SnapshotAlreadyVoidedError()',
   },
+  {
+    file: 'src/lib/inventory/correct-count.ts',
+    method: 'findMany',
+    why:
+      'ADR-0105 — `listWindowCountsAtSite` is the manager correction screen`s HISTORY, ' +
+      'not an anchor selector; nothing is computed from it. Filtering voided rows out ' +
+      'would hide what a corrected count was corrected FROM, which is the soft-void ' +
+      'discipline made invisible to the only people who can act on it. The void state ' +
+      'is surfaced instead, and each row carries `correctable` computed from the same ' +
+      'predicate the service gates on, so the screen cannot offer an action the ' +
+      'service would refuse. Same reasoning as the /admin/inventory/anchors and ' +
+      'manager-snapshots entries above.',
+    mustContain: 'correctable: r.voided_at === null',
+  },
 ];
 
 function isAllowed(site: CallSite): Exception | undefined {
