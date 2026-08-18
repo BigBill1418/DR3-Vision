@@ -55,9 +55,17 @@ build agents plus an orchestrator.
   end-to-end verification that tonight's count path is guarded (ADR-0072 tiered
   overwrite guardrail wired to /count, Pacific-day date correct, Eugene
   first-anchor case safe). Merge target: before the EOD count.
-- Tonight: Woodland re-anchors (current anchor is 27.5 days old); Eugene counts
-  its first. ADR-0105's correction screen is live first, so a mis-keyed count
-  tonight is correctable under audit.
+- **COUNT ARMED (verified live 3:55 PM PT, post-ADR-0110 deploy):** report ==
+  onHand on both sites (Woodland 947/397/1,344 healthy; Eugene 0/0/0 zero);
+  every anchor-write path tier-guarded (the desktop snapshot POST's missing
+  ADR-0072 guardrail was FOUND AND FIXED in #271 — pre-fix it accepted a 32%
+  swing with 201); ADR-0105's correction screen live, so a mis-keyed count is
+  correctable under audit. Woodland re-anchors (prior anchor 27.5 d old);
+  Eugene counts its FIRST (tier-0 no-prior-anchor case test-covered).
+- **Decision after tonight:** `correct-count.ts` (ADR-0105) is a third
+  anchor-write door with real controls but no swing-tier check — a typo'd
+  correction of a typo is possible. Deliberately not churned on count day;
+  needs a call tomorrow (flagged in #271).
 
 ### Incidents & residuals from today
 
@@ -87,6 +95,7 @@ build agents plus an orchestrator.
 - #268 merge tomorrow before noon PT.
 - Eugene inbound/processing feeds (scoping decision, named by the Phase-0
   diagnosis).
+
 ## 0.BC — ADR-0105 shipped 2026-08-18 — screen INCLUDED; one deliberate residual left
 
 `POST/GET /api/manager/[site]/snapshots/[id]/correct` is live, gated and audited,
