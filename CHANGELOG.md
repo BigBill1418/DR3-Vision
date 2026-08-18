@@ -9,6 +9,50 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
+
+Yesterday's entry recorded the standing tension plainly: the team keeps editing
+the TEREX workbook, and the fix Bill wants is them moving to Vision's equipment
+entry. This closes the half of that Vision was responsible for.
+
+ADR-0079 D4 refused **every** prior day with `409 requires_amendment` and named
+the office as the route. The floor did not go to the office — it went back to the
+sheet, which is the artifact "no more sheets" exists to retire. A refusal the
+users can route around is not a control; it is a redirect to the system you were
+retiring.
+
+### Changed
+
+- **Prior-day entry and edit are ACCEPTED for any date in the current Pacific
+  calendar month.** A date in a prior month is still refused with the same
+  `409 requires_amendment` — the `409` body now also carries `monthStart`, so the
+  refusal states the rule and not only the verdict.
+- **A backdated change REQUIRES a reason**, stored on the audit row as
+  `prior_day: true` / `prior_day_reason`, beside the actor and timestamp
+  `audit_log` already carries. Who, when, why. Refused `422` without one, and
+  nothing is written — no row, and no audit row claiming one.
+- **No approval gate**, on ADR-0079 D4's own evidence:
+  `resolveAmendmentApprover` 403s any requester who is not a bonus payroll
+  signer, so a four-eyes step would hand this feature's audience a refusal they
+  could do nothing about (OPEN-ITEMS F-2, unchanged).
+- **The same bound now applies to the VOID path.** `voidDailyThroughput` had no
+  date bound at all — the UI hid the button, the API did not. Left alone, last
+  month's figure would have been uncorrectable but **erasable**.
+
+### Added
+
+- `monthStartOfDayKey(day)` in `src/lib/time.ts`. `appCurrentMonthStart` takes an
+  **instant**; feeding it a `@db.Date` day key returns the WRONG month, measured:
+  key `2026-08-01` → `2026-07-01`, because UTC midnight re-reads as 17:00 the
+  previous Pacific day. As a month floor that fails **open** on the 1st of every
+  month. `appCurrentMonthStart` is now expressed in terms of the new helper so
+  the two cannot drift.
+
+### Not touched
+
+`run_hours NOT NULL`, the `(equipment_id, throughput_date)` partial unique, and
+every read path. The month bound is a write-path predicate. **No migration.**
+
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 
 The team is still logging maintenance in the TEREX workbook (five edits since

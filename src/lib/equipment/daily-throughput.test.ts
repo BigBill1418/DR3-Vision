@@ -212,6 +212,15 @@ const TODAY = new Date(Date.UTC(2026, 7, 7)); // 2026-08-07, the Pacific "today"
 const YESTERDAY = new Date(Date.UTC(2026, 7, 6));
 const MANAGER = { actorUserId: 'user-morena', ip: '203.0.113.9', userAgent: 'vitest' };
 
+// ADR-0106 — the month bound. `LAST_MONTH` is deliberately the day IMMEDIATELY
+// before `MONTH_START`: an off-by-one in the boundary shows up here and nowhere
+// else, and a date chosen further back would pass a comparison that is wrong by
+// exactly one day.
+const MONTH_START = new Date(Date.UTC(2026, 7, 1)); // 2026-08-01
+const LAST_MONTH = new Date(Date.UTC(2026, 6, 31)); // 2026-07-31
+const TWO_DAYS_BACK = new Date(Date.UTC(2026, 7, 5)); // 2026-08-05, in-month
+const REASON = 'JT was out Friday; numbers came off the sheet Monday.';
+
 beforeEach(() => {
   store.rows.length = 0;
   store.audits.length = 0;
@@ -351,11 +360,16 @@ describe('upsertDailyThroughput — same-day entry (ADR-0079 D4)', () => {
   });
 });
 
-describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => {
-  it('refuses a past day with a 409 requires_amendment and writes NOTHING', async () => {
+// ADR-0079 D4 originally refused EVERY prior day, and these two tests pinned
+// that. ADR-0106 supersedes it for in-month dates, so the boundary they measure
+// MOVES — from "before today" to "before this month". They are re-pointed at the
+// prior month rather than deleted: the refusal itself is not gone, and a deleted
+// test would have quietly stopped checking that it still writes nothing.
+describe('upsertDailyThroughput — the PRIOR-MONTH refusal (ADR-0079 D4, as amended by ADR-0106)', () => {
+  it('refuses a prior-month day with a 409 requires_amendment and writes NOTHING', async () => {
     const err = await upsertDailyThroughput({
       siteId: SITE,
-      throughputDate: YESTERDAY,
+      throughputDate: LAST_MONTH,
       unitsProcessed: 190,
       runHours: 5,
       actor: MANAGER,
@@ -367,8 +381,9 @@ describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => 
     expect(e.status).toBe(409);
     expect(e.toBody()).toEqual({
       error: 'requires_amendment',
-      targetDate: '2026-08-06',
+      targetDate: '2026-07-31',
       today: '2026-08-07',
+      monthStart: '2026-08-01',
       existing: null,
       proposed: { unitsProcessed: 190, runHours: '5' },
     });
@@ -378,13 +393,13 @@ describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => 
     expect(store.audits).toHaveLength(0);
   });
 
-  it('refuses an EDIT to a past day and reports what is on record vs proposed', async () => {
-    // A row already exists for yesterday (entered when it WAS today).
+  it('refuses an EDIT to a prior-month day and reports what is on record vs proposed', async () => {
+    // A row already exists for that day (entered when it WAS in month).
     store.rows.push({
       id: 'dt-existing',
       site_id: SITE,
       equipment_id: MACHINE.id,
-      throughput_date: YESTERDAY,
+      throughput_date: LAST_MONTH,
       units_processed: 190,
       run_hours: new Prisma.Decimal('5.00'),
       notes: null,
@@ -392,14 +407,15 @@ describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => 
       actor_label: null,
       voided_at: null,
       voided_by: null,
-      created_at: new Date('2026-08-06T20:00:00Z'),
+      created_at: new Date('2026-07-31T20:00:00Z'),
     });
 
     const err = (await upsertDailyThroughput({
       siteId: SITE,
-      throughputDate: YESTERDAY,
+      throughputDate: LAST_MONTH,
       unitsProcessed: 205,
       runHours: 5.5,
+      reason: REASON,
       actor: MANAGER,
       today: TODAY,
     }).catch((e: unknown) => e)) as DailyThroughputAmendmentRequiredError;
@@ -412,6 +428,222 @@ describe('upsertDailyThroughput — the PRIOR-day refusal (ADR-0079 D4)', () => 
     expect(store.rows[0]!.units_processed).toBe(190);
     expect(store.rows[0]!.run_hours.toFixed(2)).toBe('5.00');
     expect(store.audits).toHaveLength(0);
+  });
+
+  it('YESTERDAY is no longer refused — it is in-month, which is the whole change', async () => {
+    const row = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: YESTERDAY,
+      unitsProcessed: 190,
+      runHours: 5,
+      reason: REASON,
+      actor: MANAGER,
+      today: TODAY,
+    });
+    expect(row.throughputDateISO).toBe('2026-08-06');
+  });
+});
+
+describe('ADR-0106 — a prior day INSIDE the current Pacific month', () => {
+  it('ACCEPTS two days back when a reason is given, and audits who/when/why', async () => {
+    const row = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TWO_DAYS_BACK,
+      unitsProcessed: 188,
+      runHours: 6.25,
+      reason: REASON,
+      actor: MANAGER,
+      today: TODAY,
+    });
+
+    expect(row.throughputDateISO).toBe('2026-08-05');
+    expect(row.unitsProcessed).toBe(188);
+
+    // The write is REAL — this is the behaviour ADR-0079 D4 refused.
+    expect(store.rows.filter((r) => r.voided_at === null)).toHaveLength(1);
+
+    // who / when / why. `who` is the real manager id (never a borrowed one),
+    // `when` is the audit row's own `created_at`, and `why` is the reason —
+    // which is the half that did not exist before ADR-0106.
+    const audit = store.audits.at(-1)!;
+    expect(audit.action).toBe('insert');
+    expect(audit.actor_user_id).toBe('user-morena');
+    expect(audit.after).toMatchObject({
+      prior_day: true,
+      prior_day_reason: REASON,
+      throughput_date: '2026-08-05',
+    });
+  });
+
+  it('REFUSES a prior day with no reason, and writes nothing at all', async () => {
+    const err = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TWO_DAYS_BACK,
+      unitsProcessed: 188,
+      runHours: 6.25,
+      actor: MANAGER,
+      today: TODAY,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputValidationError);
+    expect((err as Error).message).toMatch(/reason/i);
+
+    // A refusal that half-applied would be worse than the refusal it replaced.
+    expect(store.rows).toHaveLength(0);
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('REFUSES a whitespace-only reason — a required field satisfied by a space is not required', async () => {
+    const err = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TWO_DAYS_BACK,
+      unitsProcessed: 188,
+      runHours: 6.25,
+      reason: '   ',
+      actor: MANAGER,
+      today: TODAY,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputValidationError);
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it('EDITS an in-month prior day, auditing the before AND the reason', async () => {
+    await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TWO_DAYS_BACK,
+      unitsProcessed: 188,
+      runHours: 6.25,
+      reason: REASON,
+      actor: MANAGER,
+      today: TODAY,
+    });
+    await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TWO_DAYS_BACK,
+      unitsProcessed: 201,
+      runHours: 6.5,
+      reason: 'Recount: two bins were double-counted.',
+      actor: MANAGER,
+      today: TODAY,
+    });
+
+    expect(store.rows.filter((r) => r.voided_at === null)).toHaveLength(1);
+    const audit = store.audits.at(-1)!;
+    expect(audit.action).toBe('update');
+    expect(audit.before).toMatchObject({ units_processed: 188 });
+    expect(audit.after).toMatchObject({
+      units_processed: 201,
+      prior_day: true,
+      prior_day_reason: 'Recount: two bins were double-counted.',
+    });
+  });
+});
+
+describe('ADR-0106 — the month floor still refuses a PRIOR month', () => {
+  it('refuses 2026-07-31 on 2026-08-07 with 409 requires_amendment, even WITH a reason', async () => {
+    const err = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: LAST_MONTH,
+      unitsProcessed: 190,
+      runHours: 5,
+      reason: REASON,
+      actor: MANAGER,
+      today: TODAY,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputAmendmentRequiredError);
+    const e = err as DailyThroughputAmendmentRequiredError;
+    expect(e.status).toBe(409);
+    expect(e.toBody()).toEqual({
+      error: 'requires_amendment',
+      targetDate: '2026-07-31',
+      today: '2026-08-07',
+      monthStart: '2026-08-01',
+      existing: null,
+      proposed: { unitsProcessed: 190, runHours: '5' },
+    });
+    expect(store.rows).toHaveLength(0);
+    expect(store.audits).toHaveLength(0);
+  });
+
+  /**
+   * The ONE day a month the bound can be got wrong.
+   *
+   * `appCurrentMonthStart` takes an INSTANT, but this service holds a `@db.Date`
+   * day-key (UTC midnight). Feeding the key `2026-08-01` to it returns
+   * **2026-07-01**, because `appToday()` re-reads UTC midnight as an instant —
+   * 2026-07-31 17:00 PDT. Measured, not reasoned:
+   *
+   *   day key                      : 2026-08-01T00:00:00.000Z
+   *   appToday(day key)            : 2026-07-31T00:00:00.000Z
+   *   appCurrentMonthStart(day key): 2026-07-01T00:00:00.000Z
+   *
+   * On the 1st that mistake moves the floor a whole month back and ACCEPTS every
+   * day of the prior month — a fail-OPEN, on the one day nobody would test by
+   * hand. This is why the bound derives from the day-key directly.
+   */
+  it('on the FIRST of the month, yesterday belongs to the prior month and is refused', async () => {
+    const err = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: LAST_MONTH,
+      unitsProcessed: 190,
+      runHours: 5,
+      reason: REASON,
+      actor: MANAGER,
+      today: MONTH_START,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputAmendmentRequiredError);
+    expect((err as DailyThroughputAmendmentRequiredError).toBody().monthStart).toBe('2026-08-01');
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it('the FIRST of the month itself is same-day and needs no reason', async () => {
+    const row = await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: MONTH_START,
+      unitsProcessed: 150,
+      runHours: 5,
+      actor: MANAGER,
+      today: MONTH_START,
+    });
+    expect(row.throughputDateISO).toBe('2026-08-01');
+    expect(store.audits.at(-1)!.after).not.toMatchObject({ prior_day: true });
+  });
+});
+
+describe('ADR-0106 — the same-day path is unchanged', () => {
+  it('records today with NO reason, and the audit carries no prior-day marker', async () => {
+    await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TODAY,
+      unitsProcessed: 212,
+      runHours: 6.5,
+      actor: MANAGER,
+      today: TODAY,
+    });
+
+    const after = store.audits[0]!.after as Record<string, unknown>;
+    // Byte-identical to the ADR-0079 shape: a same-day entry gains NO new keys.
+    expect(Object.keys(after).sort()).toEqual(
+      ['equipment_id', 'run_hours', 'throughput_date', 'units_processed'].sort(),
+    );
+  });
+
+  it('IGNORES a reason supplied on a same-day entry rather than recording a why that has no what', async () => {
+    await upsertDailyThroughput({
+      siteId: SITE,
+      throughputDate: TODAY,
+      unitsProcessed: 212,
+      runHours: 6.5,
+      reason: 'not a prior-day change',
+      actor: MANAGER,
+      today: TODAY,
+    });
+    const after = store.audits[0]!.after as Record<string, unknown>;
+    expect(after['prior_day_reason']).toBeUndefined();
+    expect(after['prior_day']).toBeUndefined();
   });
 });
 
@@ -453,7 +685,7 @@ describe('(equipment, day) uniqueness', () => {
       actor: MANAGER,
       today: TODAY,
     });
-    await voidDailyThroughput({ id: first.id, siteId: SITE, actor: MANAGER });
+    await voidDailyThroughput({ id: first.id, siteId: SITE, actor: MANAGER, today: TODAY });
 
     const second = await upsertDailyThroughput({
       siteId: SITE,
@@ -471,6 +703,82 @@ describe('(equipment, day) uniqueness', () => {
   });
 });
 
+/**
+ * ADR-0106 — the month bound has to hold on EVERY verb that changes a day.
+ *
+ * `upsertDailyThroughput` is not the only way to change what a day says: a void
+ * erases it from every series and the tile. A bound enforced on one verb and not
+ * its sibling is not a bound — it is a bound with a documented bypass. Voiding
+ * 2026-07-31 makes the machine's July day read "not recorded", which is the same
+ * class of backdated change the 409 exists to refuse.
+ */
+describe('ADR-0106 — the month bound holds on the VOID path too', () => {
+  const seedRow = (day: Date) => {
+    store.rows.push({
+      id: 'dt-old',
+      site_id: SITE,
+      equipment_id: MACHINE.id,
+      throughput_date: day,
+      units_processed: 190,
+      run_hours: new Prisma.Decimal('5.00'),
+      notes: null,
+      created_by: 'user-morena',
+      actor_label: null,
+      voided_at: null,
+      voided_by: null,
+      created_at: new Date('2026-07-31T20:00:00Z'),
+    });
+  };
+
+  it('REFUSES to void a prior-MONTH day, and the row stays live', async () => {
+    seedRow(LAST_MONTH);
+    const err = await voidDailyThroughput({
+      id: 'dt-old',
+      siteId: SITE,
+      reason: REASON,
+      actor: MANAGER,
+      today: TODAY,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputAmendmentRequiredError);
+    expect(store.rows[0]!.voided_at).toBeNull();
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('REFUSES to void an in-month prior day with no reason', async () => {
+    seedRow(TWO_DAYS_BACK);
+    const err = await voidDailyThroughput({
+      id: 'dt-old',
+      siteId: SITE,
+      actor: MANAGER,
+      today: TODAY,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DailyThroughputValidationError);
+    expect(store.rows[0]!.voided_at).toBeNull();
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('ACCEPTS an in-month prior-day void WITH a reason, and audits the why', async () => {
+    seedRow(TWO_DAYS_BACK);
+    await voidDailyThroughput({
+      id: 'dt-old',
+      siteId: SITE,
+      reason: 'Entered against the wrong machine.',
+      actor: MANAGER,
+      today: TODAY,
+    });
+
+    expect(store.rows[0]!.voided_at).not.toBeNull();
+    const audit = store.audits.at(-1)!;
+    expect(audit.action).toBe('soft_delete');
+    expect(audit.after).toMatchObject({
+      prior_day: true,
+      prior_day_reason: 'Entered against the wrong machine.',
+    });
+  });
+});
+
 describe('voidDailyThroughput', () => {
   it('soft-voids, audits, and never hard-deletes (hard rule #6)', async () => {
     const row = await upsertDailyThroughput({
@@ -481,7 +789,12 @@ describe('voidDailyThroughput', () => {
       actor: MANAGER,
       today: TODAY,
     });
-    const voided = await voidDailyThroughput({ id: row.id, siteId: SITE, actor: MANAGER });
+    const voided = await voidDailyThroughput({
+      id: row.id,
+      siteId: SITE,
+      actor: MANAGER,
+      today: TODAY,
+    });
 
     expect(voided.voidedAt).not.toBeNull();
     expect(store.rows).toHaveLength(1); // retained, not removed
@@ -501,9 +814,9 @@ describe('voidDailyThroughput', () => {
       actor: MANAGER,
       today: TODAY,
     });
-    await voidDailyThroughput({ id: row.id, siteId: SITE, actor: MANAGER });
+    await voidDailyThroughput({ id: row.id, siteId: SITE, actor: MANAGER, today: TODAY });
     const before = store.audits.length;
-    await voidDailyThroughput({ id: row.id, siteId: SITE, actor: MANAGER });
+    await voidDailyThroughput({ id: row.id, siteId: SITE, actor: MANAGER, today: TODAY });
     expect(store.audits).toHaveLength(before);
   });
 
@@ -517,7 +830,7 @@ describe('voidDailyThroughput', () => {
       today: TODAY,
     });
     await expect(
-      voidDailyThroughput({ id: row.id, siteId: 'site-eugene', actor: MANAGER }),
+      voidDailyThroughput({ id: row.id, siteId: 'site-eugene', actor: MANAGER, today: TODAY }),
     ).rejects.toThrow(/not found/);
     expect(store.rows[0]!.voided_at).toBeNull();
   });
