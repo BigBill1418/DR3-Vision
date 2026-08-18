@@ -5,8 +5,10 @@
 // only (CLAUDE.md hard rule #2).
 //
 //   GET  → the machine's recorded days, newest first
-//   POST → record or edit TODAY (Pacific). A prior day is REFUSED with
-//          409 `requires_amendment` (ADR-0079 D4), never silently accepted.
+//   POST → record or edit any day in the CURRENT Pacific calendar month
+//          (ADR-0106). A backdated day requires a `reason`, stored on the audit
+//          row (422 without it). A day in a PRIOR MONTH is REFUSED with
+//          409 `requires_amendment`, never silently accepted.
 //
 // There is no PATCH: the (equipment, day) partial unique makes a second same-day
 // POST an EDIT of the same row rather than a duplicate, so one verb covers both.
@@ -35,6 +37,14 @@ const Upsert = z.object({
   unitsProcessed: z.number().int().nonnegative().max(MAX_UNITS_PROCESSED),
   runHours: z.number().positive().max(MAX_RUN_HOURS),
   notes: z.string().max(2000).nullable().optional(),
+  /**
+   * ADR-0106 — required by the SERVICE on a backdated write, optional on the
+   * wire. The requirement is deliberately not expressed here: zod cannot see
+   * which Pacific day it is, and a bound that depends on the clock belongs
+   * where the clock is read. Making it `.min()` here would refuse same-day
+   * entries that send `reason: ''`.
+   */
+  reason: z.string().max(2000).nullable().optional(),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
@@ -72,6 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       unitsProcessed: d.unitsProcessed,
       runHours: d.runHours,
       notes: d.notes ?? null,
+      reason: d.reason ?? null,
       // ADR-0036/0077 actor discipline — the REAL signed-in manager, never a
       // system label on a human's entry and never a borrowed id.
       actor: {

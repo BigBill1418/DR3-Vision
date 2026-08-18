@@ -70,6 +70,17 @@ revisions get a periodic apply pass / a deliberate guardrail carve-out for
 mid-month accretion. Until one of those happens, "the ledger looks stale" means
 "check the staged queue" first.
 
+**2026-08-18 addendum — one of the two reasons the team stays on the sheet is
+gone (ADR-0106).** The standing item above says the fix is the team moving to
+Vision's equipment entry. Vision was giving them a reason not to: ADR-0079 D4
+refused every prior day, so a Monday correction to Friday's numbers could only
+be made in the workbook. Prior-day entry and edit are now accepted for any date
+in the current Pacific month, with a required reason on the audit row; a prior
+month still routes to the office. **This does not close 0.BB** — the team's
+maintenance logging habit is a separate half, and staged revisions will keep
+arriving until they stop editing the sheet at all. It removes the excuse, not
+the habit.
+
 ### WAITING ON BILL — the only thing this build cannot do for itself
 
 Both batches are **STAGED**. Nothing counts until he accepts them, and an agent
