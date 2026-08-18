@@ -10,6 +10,32 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
 <<<<<<< HEAD
+
+## 2026-08-18 (2:45 PM PT) — ops: the on-hand Phase-0 diagnosis, and the skip-deploy squash trap's second firing
+
+**Handoff #270 Phase 0 (read-only, reported to Bill before any fix).** Live-DB
+diagnosis of the "chronically wrong on-hand": the report and the canonical
+balance ALREADY agree exactly (`getEodInventorySnapshot` delegates to `onHand`;
+442 / 397 / 839 at Woodland on both paths, arithmetic ties to the unit), no
+negative in 14 days, 0 undated hauls of 7,372 Delivered, the 15 `Confirmed`
+hauls are future appointments. **Eugene is not negative — it is EMPTY**: no
+anchor ever, zero inbound/mirror/processed rows all-time; its 0 is meaningless
+and tonight's EOD count establishes its first anchor (thereafter static until
+Eugene feeds exist — the named follow-up). The one structural hazard confirmed:
+`onHand` sums drop-off units with NO kind filter, so an untaught kind joins the
+pool silently — the fail-loud fix, the report==onHand regression pin, and the
+negative/stale display banners are in build (ADR-0110 expected), targeted to
+land before tonight's count. The count path's ADR-0072 overwrite guardrail and
+Pacific-day handling are under end-to-end verification for tonight.
+
+**Incident: prod ran ~2.5 h without ADR-0108.** The #267 squash merge inherited
+a `[skip-deploy]` trailer from a folded branch-commit message (the same
+mechanism as the 8/15 #261 case — second firing); the deployer forced pull-only
+and logged success. Caught on reconciliation at 2:35 PM PT; the #269 merge
+(explicit clean `--body`) carried ADR-0107 + ADR-0108 to prod together.
+Standing rule recorded in OPEN-ITEMS §0.BD: every squash merge passes an
+explicit `--body`.
+
 ## 2026-08-18 (12:05 PM PT) — Start and End hours, and run hours stop being typed (ADR-0107)
 
 The TEREX sheet does not record a duration. It records **two hour-meter
@@ -71,6 +97,7 @@ The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
 records that such rows exist. Measuring that disagreement is a data question, not
 a code change to guess at.
 =======
+
 ## 2026-08-18 — the comparand that does not exist, and the outlier that does (ADR-0108)
 
 Handoff #264 asked for expected-vs-actual variance flagging on the outbound
@@ -132,7 +159,8 @@ are still staged awaiting Bill (OPEN-ITEMS §0.BB). Flagging follows whichever
 scope the page renders and **never promotes staged to confirmed**.
 
 Admin-only. Not a floor surface.
->>>>>>> origin/main
+
+> > > > > > > origin/main
 
 ## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
 
