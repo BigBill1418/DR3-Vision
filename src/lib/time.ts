@@ -112,10 +112,30 @@ export function previousDayKey(day: Date): Date {
   return new Date(day.getTime() - 86_400_000);
 }
 
+/**
+ * First-of-month (UTC midnight) for a value that is ALREADY a `@db.Date` day key.
+ *
+ * Use this — not `appCurrentMonthStart` — whenever the month is being derived
+ * from a day key rather than from a real instant. The two are not
+ * interchangeable, and the difference is invisible on 30 days out of 31:
+ * `appCurrentMonthStart` runs its argument through `appToday()`, which re-reads
+ * UTC midnight as an INSTANT. Feeding it the key `2026-08-01` therefore yields
+ * **2026-07-01**, because 2026-08-01T00:00Z is 2026-07-31 17:00 PDT:
+ *
+ *   day key                      : 2026-08-01T00:00:00.000Z
+ *   appToday(day key)            : 2026-07-31T00:00:00.000Z
+ *   appCurrentMonthStart(day key): 2026-07-01T00:00:00.000Z
+ *
+ * A month FLOOR built that way fails OPEN on the first of every month — exactly
+ * the day a hand-test would not cover (ADR-0106).
+ */
+export function monthStartOfDayKey(day: Date): Date {
+  return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1));
+}
+
 /** First-of-month (UTC midnight) for the Pacific calendar month of `instant`. */
 export function appCurrentMonthStart(instant: Date = new Date()): Date {
-  const d = appToday(instant);
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  return monthStartOfDayKey(appToday(instant));
 }
 
 /** The current Pacific calendar year (e.g. 2026). */
