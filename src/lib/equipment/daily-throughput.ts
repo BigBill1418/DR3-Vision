@@ -19,14 +19,19 @@
 // The machine is resolved from the equipment REGISTRY (ADR-0077's identity rule),
 // never a hardcoded id.
 //
-// DAY DISCIPLINE (D4): today is the PACIFIC day, everywhere. Same-day entry and
-// edit are free and audited; a PRIOR day is REFUSED, not silently accepted — see
-// `DailyThroughputAmendmentRequiredError` and the ADR-0079 D4 note on why this
-// refuses rather than reusing the bonus amendment workflow.
+// DAY DISCIPLINE (D4, as amended by ADR-0106): today is the PACIFIC day,
+// everywhere. Same-day entry and edit are free and audited. A prior day INSIDE
+// the current Pacific calendar month is accepted, and REQUIRES a reason that is
+// stored on the audit row — who, when and why. A day in a PRIOR MONTH is still
+// refused; see `DailyThroughputAmendmentRequiredError`.
+//
+// ADR-0079 D4 refused every prior day, which was right about compliance and
+// wrong about the floor: the team's workaround was to correct the TEREX sheet
+// instead, the exact habit this product exists to end.
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { appToday, dayISO } from '@/lib/time';
+import { appToday, dayISO, monthStartOfDayKey } from '@/lib/time';
 import type { AnyActorContext } from '@/lib/admin-equipment';
 
 const TABLE = 'equipment_daily_throughput';
@@ -72,6 +77,16 @@ export const MAX_UNITS_PROCESSED = 10_000;
  */
 export const MAX_RUN_HOURS = 24;
 
+/**
+ * ADR-0106 — the shortest reason that can count as one.
+ *
+ * A bare non-empty check is satisfied by a single keystroke, and the entire
+ * point of the field is that a future reader can tell WHY a day was rewritten.
+ * Four characters refuses `.` and `x` without standing between a manager and a
+ * real answer ("sick", "typo" both clear it).
+ */
+export const MIN_PRIOR_DAY_REASON_CHARS = 4;
+
 /** `Decimal(5,2)` — run hours are recorded to the hundredth of an hour. */
 const RUN_HOURS_SCALE = 2;
 
@@ -100,21 +115,25 @@ export class NoMachineForSiteError extends Error {
 }
 
 /**
- * ADR-0079 D4 — a PRIOR-day change is refused, and says why.
+ * ADR-0079 D4, as amended by ADR-0106 — a change to a day in a PRIOR MONTH is
+ * refused, and says why.
  *
- * The handoff asked for prior-day edits to route through "the existing bonus
- * amendment workflow". They cannot, and the reason is structural rather than
- * cosmetic — see ADR-0079 D4 and OPEN-ITEMS F-2. The decisive one:
- * `resolveAmendmentApprover` sources the approver from `bonus_signature_chains`
- * and THROWS `AmendmentWorkflowForbiddenError` for any requester who is not a
- * bonus payroll signer. A Woodland equipment manager is not necessarily one, so
- * routing equipment through it would hand the exact audience this feature is for
- * a 403 they could do nothing about.
+ * ADR-0079 D4 refused EVERY prior day and named the office as the route. That
+ * refusal was correct about compliance and wrong about the floor: the team's
+ * actual workaround was to go and fix it in the TEREX sheet, which is the exact
+ * habit "no more sheets" exists to end (CHANGELOG 2026-08-17, OPEN-ITEMS §0.BB).
+ * ADR-0106 moves the line from "today" to "this Pacific calendar month" — the
+ * window a manager can still reconstruct honestly — and requires a REASON on
+ * anything backdated. Beyond the month boundary this still refuses.
  *
- * Forking a parallel four-eyes system for one field was explicitly out of scope.
- * So this REFUSES — visibly, with the office named as the route — rather than
- * silently accepting a backdated change to a compliance-adjacent number. The
- * shape deliberately mirrors the bonus `409 requires_amendment` body so the
+ * No approval gate, and ADR-0079 D4's own finding is why: `resolveAmendmentApprover`
+ * sources the approver from `bonus_signature_chains` and THROWS
+ * `AmendmentWorkflowForbiddenError` for any requester who is not a bonus payroll
+ * signer. A Woodland equipment manager is not necessarily one, so a four-eyes
+ * gate would hand the exact audience this feature is for a 403 they could do
+ * nothing about (OPEN-ITEMS F-2).
+ *
+ * The shape still mirrors the bonus `409 requires_amendment` body so the
  * eventual generalization is a swap, not a rewrite.
  */
 export class DailyThroughputAmendmentRequiredError extends Error {
@@ -123,6 +142,8 @@ export class DailyThroughputAmendmentRequiredError extends Error {
   constructor(
     readonly targetDateISO: string,
     readonly todayISO: string,
+    /** ADR-0106 — the floor that was applied, so the refusal can state the rule. */
+    readonly monthStartISO: string,
     readonly existing: { unitsProcessed: number; runHours: string } | null,
     readonly proposed: { unitsProcessed: number; runHours: string },
   ) {
@@ -135,6 +156,7 @@ export class DailyThroughputAmendmentRequiredError extends Error {
     error: 'requires_amendment';
     targetDate: string;
     today: string;
+    monthStart: string;
     existing: { unitsProcessed: number; runHours: string } | null;
     proposed: { unitsProcessed: number; runHours: string };
   } {
@@ -142,6 +164,7 @@ export class DailyThroughputAmendmentRequiredError extends Error {
       error: this.error,
       targetDate: this.targetDateISO,
       today: this.todayISO,
+      monthStart: this.monthStartISO,
       existing: this.existing,
       proposed: this.proposed,
     };
@@ -318,6 +341,13 @@ export async function upsertDailyThroughput(args: {
   unitsProcessed: number;
   runHours: number;
   notes?: string | null;
+  /**
+   * ADR-0106 — WHY a backdated day is being written. REQUIRED on any date before
+   * today and ignored on today, so the audit trail never carries a why with no
+   * what. Stored on the AUDIT row, not on the throughput row: it is a fact about
+   * an edit, not about the machine's day, and `notes` already means the latter.
+   */
+  reason?: string | null;
   actor: AnyActorContext;
   /** Injectable "today" (a `@db.Date` key). Defaults to the Pacific day. */
   today?: Date;
@@ -347,19 +377,50 @@ export async function upsertDailyThroughput(args: {
     where: { equipment_id: machine.id, throughput_date: day, voided_at: null },
   });
 
-  // ADR-0079 D4 — the prior-day refusal. Deliberately AFTER `existing` is loaded
-  // so the 409 can show the manager what is on record versus what they typed;
-  // a refusal that cannot say what it is refusing to change is not actionable.
-  if (day.getTime() < today.getTime()) {
+  // ADR-0106 — the month bound, and the reason that rides a backdated write.
+  //
+  // Derived from the day KEY, never from `appCurrentMonthStart(today)`: that
+  // helper takes an INSTANT and would re-read the UTC-midnight key as 17:00 the
+  // previous Pacific day, putting the floor a whole month back on the 1st and
+  // failing OPEN on the one day of the month nobody hand-tests. See
+  // `monthStartOfDayKey`.
+  const monthStart = monthStartOfDayKey(today);
+  const isPriorDay = day.getTime() < today.getTime();
+
+  // Deliberately AFTER `existing` is loaded so the 409 can show the manager what
+  // is on record versus what they typed; a refusal that cannot say what it is
+  // refusing to change is not actionable.
+  if (day.getTime() < monthStart.getTime()) {
     throw new DailyThroughputAmendmentRequiredError(
       dayISO(day),
       dayISO(today),
+      dayISO(monthStart),
       existing
         ? { unitsProcessed: existing.units_processed, runHours: existing.run_hours.toString() }
         : null,
       { unitsProcessed: shape.unitsProcessed, runHours: shape.runHours.toString() },
     );
   }
+
+  // A backdated write without a stated why is refused BEFORE anything is written.
+  // `clean()` collapses whitespace-only to null, so a required field cannot be
+  // satisfied with a space bar.
+  const reason = isPriorDay ? clean(args.reason) : null;
+  if (isPriorDay && !reason) {
+    throw new DailyThroughputValidationError(
+      `a reason is required to record or change ${dayISO(day)}, which is before today (${dayISO(today)})`,
+    );
+  }
+  if (reason && reason.length < MIN_PRIOR_DAY_REASON_CHARS) {
+    throw new DailyThroughputValidationError(
+      `the reason must be at least ${MIN_PRIOR_DAY_REASON_CHARS} characters (got ${reason.length})`,
+    );
+  }
+
+  // The audit fragment a backdated write carries and a same-day write does not.
+  // Spread into the payload so the same-day shape stays byte-identical to
+  // ADR-0079's — a same-day entry gains no keys at all.
+  const priorDayAudit = reason ? { prior_day: true, prior_day_reason: reason } : {};
 
   // Snapshot the BEFORE side before anything can mutate it. The audit's `before`
   // is the only record of what the number used to be (hard rule #6 — the row
@@ -391,6 +452,7 @@ export async function upsertDailyThroughput(args: {
           after: {
             units_processed: shape.unitsProcessed,
             run_hours: shape.runHours.toString(),
+            ...priorDayAudit,
           },
         },
       });
@@ -419,6 +481,7 @@ export async function upsertDailyThroughput(args: {
           throughput_date: dayISO(day),
           units_processed: shape.unitsProcessed,
           run_hours: shape.runHours.toString(),
+          ...priorDayAudit,
         },
       },
     });
@@ -436,12 +499,48 @@ export async function upsertDailyThroughput(args: {
 export async function voidDailyThroughput(args: {
   id: string;
   siteId: string;
+  /** ADR-0106 — required to void a day before today, exactly as for a write. */
+  reason?: string | null;
   actor: AnyActorContext;
+  /** Injectable "today" (a `@db.Date` key). Defaults to the Pacific day. */
+  today?: Date;
 }): Promise<DailyThroughputView> {
   const existing = await prisma.equipmentDailyThroughput.findUnique({ where: { id: args.id } });
   if (!existing || existing.site_id !== args.siteId)
     throw new DailyThroughputNotFoundError(args.id);
   if (existing.voided_at) return toView(existing as DailyRow);
+
+  // ADR-0106 — the SAME bound as the write path, because this is the other way to
+  // change what a day says. A void makes the day read "not recorded" everywhere,
+  // so a month bound that only guarded `upsert` would be a bound with a bypass:
+  // last month's figure could not be corrected, but it could be erased.
+  const today = args.today ?? appToday();
+  const day = existing.throughput_date;
+  const monthStart = monthStartOfDayKey(today);
+  const isPriorDay = day.getTime() < today.getTime();
+
+  if (day.getTime() < monthStart.getTime()) {
+    throw new DailyThroughputAmendmentRequiredError(
+      dayISO(day),
+      dayISO(today),
+      dayISO(monthStart),
+      { unitsProcessed: existing.units_processed, runHours: existing.run_hours.toString() },
+      { unitsProcessed: existing.units_processed, runHours: existing.run_hours.toString() },
+    );
+  }
+
+  const reason = isPriorDay ? clean(args.reason) : null;
+  if (isPriorDay && !reason) {
+    throw new DailyThroughputValidationError(
+      `a reason is required to remove ${dayISO(day)}, which is before today (${dayISO(today)})`,
+    );
+  }
+  if (reason && reason.length < MIN_PRIOR_DAY_REASON_CHARS) {
+    throw new DailyThroughputValidationError(
+      `the reason must be at least ${MIN_PRIOR_DAY_REASON_CHARS} characters (got ${reason.length})`,
+    );
+  }
+  const priorDayAudit = reason ? { prior_day: true, prior_day_reason: reason } : {};
 
   const row = await prisma.$transaction(async (tx) => {
     const voided = await tx.equipmentDailyThroughput.update({
@@ -462,7 +561,7 @@ export async function voidDailyThroughput(args: {
           units_processed: existing.units_processed,
           run_hours: existing.run_hours.toString(),
         },
-        after: { voided_at: voided.voided_at?.toISOString() ?? null },
+        after: { voided_at: voided.voided_at?.toISOString() ?? null, ...priorDayAudit },
       },
     });
     return voided;
