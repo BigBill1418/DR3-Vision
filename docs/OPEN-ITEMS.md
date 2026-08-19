@@ -52,16 +52,18 @@ Status ledger for the day, written ~11:30 AM PT; in-flight items say so.
   (operator affordance on the in_progress screen, required category + evidence
   photo, same-transaction stack void + audit, slot semantics per
   ADR-0090/0091). Floor-facing → deploys in the 2026-08-20 before-noon window.
-- **The discovery-gap watchdog is BLIND (found while answering Bill's question
-  about the gap alert).** The alert itself was stale — resolved 8/15 within
-  minutes of the gap-close; nothing is unwatched and capture is healthy. But
-  the search-based reachability probe has returned **0 items errorless** since
-  at least 8:29 AM PT today while all 11 sources are individually healthy —
-  "0 reachable, 0 unwatched, gap 0" is a contradiction reported as quiet.
-  **IN BUILD — ADR-0112:** root-cause (response-shape drift vs Graph-side
-  change vs permission) + a contradiction guard (probe empty while sources
-  healthy = loud anomaly, never gap-0). One transient probe outage last night
-  (10:24 PM PT, self-resolved 15 min).
+- **CORRECTED (12:45 PM PT): the discovery-gap watchdog was never blind — the
+  11:00 AM report misread the gap-snapshot table** (`doc_ingest_reachable_items`
+  is written only when a gap EXISTS; gap 0 since the 8/15 17:12 PT close means
+  no rows, not no probe). Live probe capture: 22 raw hits = the same 11 docs
+  deduped, no shape/permission drift; C-47/C-48 untouched. **What was real and
+  shipped (ADR-0112, #273):** a successful-but-EMPTY search would have
+  RESOLVED the standing anomaly with an all-clear ("0 of 0 watched") — now a
+  loud `discovery_probe_contradiction` that resolves nothing; unprojectable
+  search hits throw `GraphContractDriftError` instead of silently vanishing
+  (the ADR-0102 class); digest wording says "completeness UNVERIFIED" when the
+  probe can't run. Also repaired: committed merge-conflict markers in
+  CHANGELOG from the #268 squash. Live behavior for healthy scans unchanged.
 - Haul visibility spot-checks for Bill: H-137950 / H-137360 / H-137366 all
   mirrored, detailed, and inside the inventory feed (day-aggregates tie to the
   mirror to the unit; H-137950's 8/18 units are inside the counted 923, not
