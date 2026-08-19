@@ -82,7 +82,9 @@ vi.mock('@/lib/observability/metrics', () => ({
 // Import AFTER mocks are registered.
 import {
   checkInlineSendBudget,
+  planSend,
   GRAPH_INLINE_SEND_LIMIT_BYTES,
+  EXCHANGE_MESSAGE_LIMIT_DEFAULT_BYTES,
   sendPayrollPdf,
   sendSystemEmail,
   __testing,
@@ -435,15 +437,43 @@ function heavy(mb: number): Buffer {
 }
 
 describe('sendSystemEmail — inline-attachment size ceiling', () => {
-  it('REFUSES an oversized attachment without posting anything to Graph', async () => {
-    let posts = 0;
+  // ADR-0114 CHANGED WHAT "over the inline ceiling" MEANS. It used to mean the
+  // message was refused; it now means the message takes the draft + upload-session
+  // transport instead of one `sendMail` POST. The MEASUREMENT below is unchanged
+  // and still load-bearing — it is what picks the transport — so these tests keep
+  // asserting it. What they no longer assert is that exceeding it kills the mail,
+  // because that was the defect ADR-0114 fixed, not a contract worth preserving.
+  it('measures base64 cost, not raw bytes, when deciding the inline budget', async () => {
+    // 2.4 MB raw -> 3.2 MB base64: legal raw, illegal inline.
+    const attachment = { filename: 'receipt.pdf', buffer: heavy(2.4) };
+    const report = checkInlineSendBudget({
+      to: 'mary.scott@svdp.us',
+      subject: 'Approved reimbursement',
+      htmlBody: '<p>x</p>',
+      attachment,
+    });
+
+    expect(report).not.toBeNull();
+    expect(report?.filenames).toEqual(['receipt.pdf']);
+    expect(report?.limitBytes).toBe(GRAPH_INLINE_SEND_LIMIT_BYTES);
+    // base64 really is the number that matters — the raw bytes alone are under 3 MB.
+    expect(report?.rawAttachmentBytes).toBeLessThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
+    expect(report?.encodedAttachmentBytes).toBeGreaterThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
+  });
+
+  it('sends an over-inline attachment via the draft path instead of a doomed sendMail', async () => {
+    // The pre-ADR-0114 assertion here was `posts === 0` — nothing must reach
+    // Graph. That is now wrong in the one way that matters: nothing reaching
+    // Graph is precisely why acb03895 never arrived. What must NOT happen is a
+    // `sendMail` POST that Graph would reject; the draft route is correct.
+    const posted: string[] = [];
     const client: FakeClient = {
-      api: () => {
+      api: (path: string) => {
         const req: FakeRequest = {
           header: () => req,
           post: async () => {
-            posts += 1;
-            return undefined;
+            posted.push(path);
+            return /\/messages$/.test(path) ? { id: 'DRAFT1' } : undefined;
           },
         };
         return req;
@@ -455,22 +485,13 @@ describe('sendSystemEmail — inline-attachment size ceiling', () => {
       to: 'mary.scott@svdp.us',
       subject: 'Approved reimbursement',
       htmlBody: '<p>x</p>',
-      // 2.4 MB raw -> 3.2 MB base64, over the ceiling on its own.
       attachment: { filename: 'receipt.pdf', buffer: heavy(2.4) },
     });
 
-    // The whole point: the request is never made.
-    expect(posts).toBe(0);
-    expect(res.delivered).toBe(false);
-    expect(res.oversize).not.toBeNull();
-    expect(res.oversize?.filenames).toEqual(['receipt.pdf']);
-    expect(res.oversize?.limitBytes).toBe(GRAPH_INLINE_SEND_LIMIT_BYTES);
-    // base64 really is the number that matters — the raw bytes alone are under 3 MB.
-    expect(res.oversize?.rawAttachmentBytes).toBeLessThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
-    expect(res.oversize?.encodedAttachmentBytes).toBeGreaterThan(GRAPH_INLINE_SEND_LIMIT_BYTES);
-    // No status: there was no response to have a status.
-    expect(res.lastStatus).toBeUndefined();
-    expect(res.retries).toBe(0);
+    expect(res.delivered).toBe(true);
+    expect(res.transport).toBe('upload-session');
+    expect(res.oversize).toBeNull();
+    expect(posted.some((p) => p.endsWith('/sendMail'))).toBe(false);
   });
 
   it('is distinguishable from every other non-delivery, so a caller can say WHY', async () => {
@@ -497,11 +518,12 @@ describe('sendSystemEmail — inline-attachment size ceiling', () => {
       htmlBody: '<p>x</p>',
       attachment: { filename: 'small.pdf', buffer: Buffer.alloc(16) },
     });
+    // Above the MAILBOX limit — the only size that is still unsendable.
     const sizeRefusal = await sendSystemEmail({
       to: 'a@svdp.us',
       subject: 's',
       htmlBody: '<p>x</p>',
-      attachment: { filename: 'huge.pdf', buffer: heavy(4) },
+      attachment: { filename: 'huge.pdf', buffer: heavy(30) },
     });
 
     expect(transportFailure.delivered).toBe(false);
@@ -509,23 +531,27 @@ describe('sendSystemEmail — inline-attachment size ceiling', () => {
     // …and only one of them is a size problem.
     expect(transportFailure.oversize).toBeNull();
     expect(sizeRefusal.oversize).not.toBeNull();
+    expect(sizeRefusal.oversize?.ceiling).toBe('exchange-message');
+    expect(sizeRefusal.oversize?.limitBytes).toBe(EXCHANGE_MESSAGE_LIMIT_DEFAULT_BYTES);
   });
 
   it('sums MULTIPLE attachments — the AP path attaches one stamped PDF per original', async () => {
-    __testing.setClientFactory(() => capturingClient().client as never);
-    const res = await sendSystemEmail({
+    // Each is comfortably legal alone; together they are not. A per-FILE check
+    // would route these inline and Graph would reject the send. The sum is what
+    // picks the transport — this is the acb03895 shape exactly.
+    const args = {
       to: 'a@svdp.us',
       subject: 's',
       htmlBody: '<p>x</p>',
-      // Each is comfortably legal alone; together they are not. A per-file check
-      // would have passed this and produced exactly the silent non-delivery.
       attachments: [
         { filename: 'a.pdf', buffer: heavy(1.2) },
         { filename: 'b.pdf', buffer: heavy(1.2) },
       ],
-    });
-    expect(res.oversize).not.toBeNull();
-    expect(res.oversize?.filenames).toEqual(['a.pdf', 'b.pdf']);
+    };
+    const report = checkInlineSendBudget(args);
+    expect(report).not.toBeNull();
+    expect(report?.filenames).toEqual(['a.pdf', 'b.pdf']);
+    expect(planSend(args).mode).toBe('upload-session');
   });
 
   it('lets a normal attachment through untouched', async () => {

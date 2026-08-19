@@ -140,11 +140,18 @@ export type ApMailOutcome =
   // (it fires only on the final approved/rejected state). The second approver was
   // paged/emailed via `notifySecondApprovalNeeded` instead.
   | 'second_approval_pending'
-  // The stamped original(s) exceeded what Microsoft Graph accepts as an inline
-  // attachment, so NOTHING was sent — distinct from `failed`, where a request was
-  // made and rejected. A retry cannot fix it; the invoice has to be shrunk or
-  // fetched from Vision instead. Kept separate precisely so accounting is not told
-  // "we tried" about a mail that was never posted.
+  // The stamped original(s) exceeded the SENDING MAILBOX's per-message limit, so
+  // NOTHING was sent — distinct from `failed`, where a request was made and
+  // rejected. A retry cannot fix it; the invoice has to be shrunk or fetched from
+  // Vision instead. Kept separate precisely so accounting is not told "we tried"
+  // about a mail that was never posted.
+  //
+  // ADR-0114 moved this ceiling a long way out: it used to trip at Graph's 3 MB
+  // inline-request limit (which is what stranded acb03895), and now trips only at
+  // the mailbox transport limit — 35 MB by default. This outcome should be rare
+  // rather than routine, but it is deliberately NOT deleted: a limit still exists,
+  // and a refusal that has nowhere to be reported is how the original silence
+  // happened.
   | 'too_large';
 
 export interface DecideResult {
@@ -1252,11 +1259,15 @@ export async function sendDecisionEmail(
     await publishNtfy({
       topic: 'dr3-vision-system',
       title: 'AP decision email NOT sent — stamped invoice too large to attach',
+      // ADR-0114: since the upload-session transport shipped, this refusal means
+      // the message exceeds what the MAILBOX will transmit — not what one Graph
+      // request will carry. Naming the wrong ceiling would send the operator to
+      // shrink an attachment that is already well inside Graph's limits.
       body: `AP request ${requestId} was decided (${req.status}) but the stamped attachment(s) total ${Math.round(
         rawAttachmentBytes / 1024,
       )} KB, above the ${Math.round(
         limitBytes / 1024,
-      )} KB Microsoft Graph accepts inline. NO email was sent to accounting and re-sending will not help. The decision stands and the stamped original is archived in Vision — open the AP queue for request ${requestId} to retrieve it.`,
+      )} KB per-message limit on the sending mailbox. NO email was sent to accounting and re-sending will not help until the attachments are smaller or the mailbox limit is raised. The decision stands and the stamped original is archived in Vision — open the AP queue for request ${requestId} to retrieve it.`,
       priority: 'high',
       tags: ['error', 'ap', 'dr3-vision'],
       fingerprint: `ap-decision-mail-too-large:${requestId}`,

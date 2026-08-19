@@ -15,6 +15,10 @@ const sendSystemEmail = vi.fn(async () => ({
   retries: 0,
   lastStatus: 202 as number | undefined,
   oversize: null as OversizeAttachmentReport | null,
+  // ADR-0114 — which Graph shape carried it. `notifyStaff` does not branch on
+  // this, but the mock's return type is inferred from this literal, so it has to
+  // carry every field the real result does or a test cannot set it.
+  transport: 'inline' as 'inline' | 'upload-session',
 }));
 const writeAudit = vi.fn(async () => undefined);
 
@@ -59,6 +63,7 @@ beforeEach(() => {
     retries: 0,
     lastStatus: 202,
     oversize: null,
+    transport: 'inline',
   });
 });
 
@@ -177,12 +182,16 @@ describe('notifyStaff — oversized attachments', () => {
       retries: 0,
       lastStatus: undefined,
       oversize: {
-        limitBytes: 3145728,
-        encodedAttachmentBytes: 4000000,
-        rawAttachmentBytes: 3000000,
+        // ADR-0114 — a refusal now means the MAILBOX limit was exceeded, not the
+        // Graph inline-request limit (which the draft path carries past).
+        ceiling: 'exchange-message',
+        limitBytes: 36700160,
+        encodedAttachmentBytes: 40000000,
+        rawAttachmentBytes: 30000000,
         overheadBytes: 65536,
         filenames: ['receipt.pdf'],
       },
+      transport: 'inline',
     });
 
     const res = await notifyStaff({

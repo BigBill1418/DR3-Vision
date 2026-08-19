@@ -9,6 +9,49 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (12:15 PM PT) — AP decision mail can finally carry a real invoice (ADR-0114)
+
+**A refusal is not a delivery.** AP request `acb03895` was decided (rejected) at
+11:29 AM PT and accounting was never told. The `oversize` guard did exactly what
+it was built to do — the stamped attachments totalled 4,146 KB against a 3,072 KB
+ceiling, `decision_mail_sent_at` stayed NULL, ntfy paged, nothing was silently
+dropped. The gap was that **there was no transport that could carry what it
+refused**, so re-sending could never have worked at any point.
+
+The first theory died on measurement, and its evidence had looked supportive: the
+repo does have a shrink ladder and its CI tests are green, but they are green
+about `src/lib/reimbursements/pdf.ts` — the ladder is called from one sibling
+function in its own file, and the **AP** decision path neither imports it nor
+measures a byte count anywhere. Porting it would not have helped either: three of
+the four stamped artifacts are JPEG scans (so not the vector case), but the ladder
+is a per-document budget and this failure is a whole-message **sum**.
+
+What was actually missing: `sendSystemEmail` only ever spoke Graph's
+small-message shape (one `sendMail`, attachments base64'd inline, valid below
+3 MB). The documented large shape — create a draft, attach each file, send the
+draft — was never built.
+
+- **Draft + upload-session transport**, chosen inside `sendSystemEmail` by measured
+  size. Callers unchanged; `notifyStaff` is still the chokepoint.
+- **Each attachment routes by its OWN size**, because Graph refuses
+  `createUploadSession` below 3 MB (`ErrorAttachmentSizeShouldNotBeLessThanMinimumSize`).
+  acb03895's four artifacts are 85 KB / ~1.3 / ~1.4 / ~1.4 MB — not one reaches
+  3 MB, so the intuitive "oversize ⇒ upload session" would have had Graph reject
+  all four. It takes the draft path with four direct attachment POSTs and zero
+  upload sessions; the draft is what lifts the ceiling.
+- **The ceiling is now the mailbox's**, not one Graph request's: 35 MB default via
+  `M365_MAIL_MAX_MESSAGE_BYTES`, clamped to [3 MB, 150 MB]. Every operator-facing
+  message now names which ceiling was exceeded.
+- **Failure honesty**: `delivered` only after `send` returns; any post-draft
+  failure deletes the draft; an un-deletable draft is logged loudly and still
+  reported as failed.
+- The ADR-0021 retry policy now lives in one shared session used by both
+  transports, budget scoped per send rather than per call.
+- Three tests had pinned "over the inline ceiling ⇒ refused" — the defect as
+  contract — and now assert the measurement instead. Falsified four ways
+  (see ADR-0114 §Falsification). No schema change, no migration; `Mail.ReadWrite`
+  was already granted 2026-07-09, so no operator action.
+
 ## 2026-08-19 (11:30 AM PT) — ops: the count lands measured, the photos ship, a bed-bug load is rejected without a path, and a blind watchdog is caught
 
 Day ledger in OPEN-ITEMS §0.BE. Highlights: Woodland's EOD-8/18 physical count
