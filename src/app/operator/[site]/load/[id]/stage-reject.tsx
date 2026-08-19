@@ -7,20 +7,17 @@ import { rejectLoadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
 import { PhotoInput } from './photo-input';
 import { useLiveControl, type StageDisableReason } from './stage-liveness';
-
-const CATEGORIES: RejectionCategory[] = [
-  'contamination',
-  'damaged',
-  'wet',
-  'bedbugs',
-  'short',
-  'mislabeled',
-  'other',
-];
+import { RejectFields, rejectFormReady, rejectNoteRequired } from './reject-fields';
 
 // Stage 5b — reject. Category dropdown + multi-photo + note + submit.
 // Photos are best-effort (T-007 wires R2); for T-006 the operator
 // captures one rejection photo and the note carries the rest.
+//
+// ADR-0113 — the category list and the note rule moved to `reject-fields.tsx`.
+// This stage is no longer the only place a load can be refused from
+// (`late-reject-panel.tsx` offers the same decision from `in_progress` and
+// `finished`), and a second hand-written copy of the `RejectionCategory` mirror
+// is how a schema addition comes to render on one screen and not the other.
 
 export function StageReject({
   siteCode,
@@ -34,9 +31,9 @@ export function StageReject({
   onCancel: () => void;
   photoCount?: number;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [category, setCategory] = useState<RejectionCategory | ''>('');
-  const [hasPhoto, setHasPhoto] = useState(false);
+  const [hasPhoto, setHasPhoto] = useState(photoCount > 0);
   const [note, setNote] = useState('');
   const [isPending, startTransition] = useTransition();
   // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
@@ -48,18 +45,37 @@ export function StageReject({
   // Registering Submit anyway is what makes the RECORD useful: the disable-reason
   // snapshot on a future `no_live_controls` elsewhere is only readable if the
   // vocabulary is consistent across stages.
+  // ADR-0113 — `no_note` is the fourth refusal, and it is a vocabulary entry
+  // rather than an extra `||` on the button. `submitReason` is BOTH what
+  // disables the control and what ADR-0122 reports when a screen goes dead; a
+  // `disabled` that could be true while `submitReason` was null would make that
+  // snapshot a record of a different screen than the one the operator is stuck
+  // on — which is the whole failure this instrument exists to catch.
+  //
+  // The order is the operator's order: they pick a reason, photograph it, and
+  // type only if the reason was `other`.
   const submitReason: StageDisableReason | null = isPending
     ? 'pending'
     : !category
       ? 'no_category'
       : !hasPhoto
         ? 'no_photo'
-        : null;
+        : rejectNoteRequired(category) && !note.trim()
+          ? 'no_note'
+          : null;
   useLiveControl('reject_back', null);
   useLiveControl('reject_submit', submitReason);
 
   const submit = () => {
-    if (!category || !hasPhoto) return;
+    // ADR-0113 — mirrors the server's two 422s (`rejection_photo_required`,
+    // `rejection_note_required`), which are now enforced there rather than
+    // living only in this button's `disabled`.
+    // `category === ''` first so the narrowing reaches the action call below;
+    // `rejectFormReady` re-checks it, but a helper returning true is not a type
+    // guard over one of its inputs.
+    if (category === '') return;
+    if (!rejectFormReady({ category, note, hasPhoto })) return;
+    if (rejectNoteRequired(category) && !note.trim()) return;
     setError(null);
     startTransition(async () => {
       try {
@@ -86,21 +102,13 @@ export function StageReject({
           {t('stage_reject.back')}
         </button>
       </header>
-      <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
-        {t('stage_reject.reason_label')}
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value as RejectionCategory | '')}
-          className="rounded-md border border-dr3-cream/30 bg-dr3-green-deep px-3 py-3 text-base text-dr3-cream focus:border-dr3-green focus:outline-none"
-        >
-          <option value="">{t('stage_reject.reason_select')}</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {t(`stage_reject.category_${c}`)}
-            </option>
-          ))}
-        </select>
-      </label>
+      <RejectFields
+        category={category}
+        onCategory={setCategory}
+        note={note}
+        onNote={setNote}
+        idPrefix="stage-reject"
+      />
       <PhotoInput
         loadId={loadId}
         kind="rejection"
@@ -108,22 +116,10 @@ export function StageReject({
         onCaptured={() => setHasPhoto(true)}
         initialCount={photoCount}
       />
-      <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
-        {t('stage_reject.note_label')}
-        {/* `lang={locale}` so iPadOS dictation picks the right input
-            language for voice-to-text per SPRINT-1-PLAN T-008. */}
-        <textarea
-          rows={4}
-          lang={locale}
-          value={note}
-          onChange={(e) => setNote(e.target.value.slice(0, 1000))}
-          placeholder={t('stage_reject.note_placeholder')}
-          className="rounded-md border border-dr3-cream/30 bg-dr3-green-deep px-3 py-2 text-base text-dr3-cream placeholder:text-dr3-cream/40 focus:border-dr3-green focus:outline-none"
-        />
-      </label>
       {error && <p className="text-sm text-red-300">{error}</p>}
       <button
         type="button"
+        data-testid="stage-reject-submit"
         disabled={submitReason !== null}
         onClick={submit}
         className="rounded-lg bg-red-700 px-6 py-4 text-lg font-semibold text-white transition-colors hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-40"

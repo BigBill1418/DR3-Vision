@@ -15,7 +15,9 @@ import { StageReject } from './stage-reject';
 import { StageFinish } from './stage-finish';
 import { StageLivenessBoundary } from './stage-liveness';
 import { selectStage, WORKING_STATUSES } from '@/lib/loads/stage-selection';
+import type { StageId } from '@/lib/floor/stage-controls';
 import { VoidLoadPanel } from './void-load-panel';
+import { LateRejectPanel } from './late-reject-panel';
 import { ReviewPanel, type ReviewStack } from './review-panel';
 
 // Stage dispatch. The visible "stage" is a function of `load.status`
@@ -55,6 +57,36 @@ type LoadView = {
   weight_skipped: boolean;
   stacks: ReviewStack[];
 };
+
+/**
+ * ADR-0113 — the STAGES where the reject is offered as a footer panel, because
+ * the stage screen itself does not offer it.
+ *
+ * Expressed in ADR-0124's vocabulary. This was a `LoadStatus[]` named after
+ * `STAGE_STATUSES`, which ADR-0124 deleted along with the client latches; the
+ * dispatch now answers in `StageId`, so this asks its question in the same
+ * terms. It is also strictly better typed: renaming a stage is a compile error
+ * here, where a status list would have gone on silently matching nothing.
+ *
+ * `decision` is deliberately absent. That stage already puts "Begin unload" and
+ * "Reject load" side by side, and a second entrance to the same decision on one
+ * screen is two controls that have to agree about what rejecting means. The gap
+ * this closes is everything AFTER that fork: once the first stack lands the load
+ * is `in_progress`, `stacks` renders, and until 2026-08-19 there was no refusal
+ * path at all — not in the UI and not in `ALLOWED_PRIOR` behind it.
+ *
+ * `finish` is included for the reason ADR-0090 D2.3 included `finished` in the
+ * void's set. Bugs found while looking at the finished pile are found there, and
+ * leaving that one stage out would rebuild the identical dead end one screen
+ * further along. The ADR-0090 Am.1 reopen edge would technically route around
+ * it, but "reopen the load, then reject it" is a remedy behind a door labelled
+ * something else, which on a floor is the same as no remedy.
+ *
+ * Not derived from the server's `ALLOWED_PRIOR.rejected`, which is the wider
+ * authority — it still admits the three pre-count statuses this omits. The two
+ * answer different questions: what is LEGAL, and what should be OFFERED here.
+ */
+const LATE_REJECT_STAGES: readonly StageId[] = ['stacks', 'finish'] as const;
 
 type Props = {
   siteCode: string;
@@ -109,6 +141,29 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
       load.status === 'submitted' ? t('workflow.status_submitted') : t('workflow.status_rejected');
     return (
       <div className="flex flex-col gap-4">
+        {/* ADR-0113 — this branch had NO beacon, and its sibling twelve lines
+            below has carried one since ADR-0100 §P0. The omission was invisible
+            because the two branches look alike; they are not alike. `submitted`
+            is the designed end of the happy path — the floor lands here having
+            done everything right, and counting that as a dead end would bury the
+            real ones under the commonest event on the screen. `rejected` is the
+            opposite: a load with no work left in it, reached by a refusal, and
+            after this change it is reached by an operator who was mid-count when
+            they got here. How often that happens is the only measure of whether
+            the late reject is being used as intended.
+
+            `load_closed` is reused rather than a new state minted, because that
+            is what this is. The consequence, stated so nobody re-derives it from
+            a graph: the `load_closed` series STEPS UP when this ships and is not
+            comparable across the deploy. */}
+        {load.status === 'rejected' && (
+          <DeadEndBeacon
+            siteCode={siteCode}
+            surface="load"
+            state="load_closed"
+            objectId={load.id}
+          />
+        )}
         <p className="rounded-md bg-dr3-green-dark/50 p-4 text-center">
           {t('workflow.load_done', { status: statusLabel })}
         </p>
@@ -300,6 +355,30 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           >
             {t('load_review.open')}
           </button>
+          {/* ADR-0113 — the late reject, offered from the two stages that had no
+              way out of a load the floor had already started working.
+
+              Deliberately NOT offered on `arrived` / `weight_captured` /
+              `unload_started`: those three reach the inspection stage, which
+              carries `StageReject` as one of its two equal-weight choices, and a
+              second entrance to the same decision on the same screen is two
+              controls that have to agree about what rejecting means.
+
+              It sits BELOW the review and ABOVE the void, which is the order of
+              how final the three are. The void says "this load record is wrong";
+              the reject says "this physical load is refused" — adjacent, and not
+              interchangeable. ADR-0090 D2.1 drew that line for the void and it
+              holds from this side too: a rejected truck is a real delivery that
+              really arrived and was really turned away, and it must not be
+              recorded as a load that never existed. */}
+          {stageId !== null && LATE_REJECT_STAGES.includes(stageId) && (
+            <LateRejectPanel
+              siteCode={siteCode}
+              loadId={load.id}
+              stacks={load.stacks}
+              photoCount={load.photo_counts.rejection ?? 0}
+            />
+          )}
           <VoidLoadPanel siteCode={siteCode} loadId={load.id} />
         </>
       )}
