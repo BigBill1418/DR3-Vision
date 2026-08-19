@@ -1,3 +1,4 @@
+import type { PhotoKind } from '@prisma/client';
 import { auth } from '@/lib/auth';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
@@ -163,6 +164,14 @@ export default async function LoadPage({ params }: Props) {
     );
   }
 
+  // ADR-0109 — how many photos of each kind this load already holds. Seeds the
+  // per-stage capture affordance so a reload mid-flow cannot offer three more
+  // taps on a step that has room for none.
+  const photoCounts = load.load_photos.reduce<Partial<Record<PhotoKind, number>>>((acc, p) => {
+    acc[p.kind] = (acc[p.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <main className="px-6 pb-6">
       <div className="mx-auto max-w-2xl pt-6">
@@ -192,9 +201,10 @@ export default async function LoadPage({ params }: Props) {
             unload_started_at: load.unload_started_at?.toISOString() ?? null,
             total_units: load.total_units,
             weight_lbs: load.weight_lbs,
-            // Deduped: several rows of one kind (a retaken photo) is one answer
-            // to "was the BOL captured".
-            photo_kinds: [...new Set(load.load_photos.map((p) => p.kind))],
+            // ADR-0109 — counts, not a deduped kind list. The review panel's
+            // "was the BOL captured" is `count > 0` and is projected inside the
+            // workflow; the stages need the number itself.
+            photo_counts: photoCounts,
             stacks: load.load_stacks.map((s) => ({
               ...s,
               voided_at: s.voided_at?.toISOString() ?? null,

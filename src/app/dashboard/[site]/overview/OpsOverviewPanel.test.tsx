@@ -25,7 +25,7 @@ const full: OpsOverview = {
     nonProgramOnFloor: 1152,
     totalOnFloor: 1289,
     anchorPool: 'measured',
-  negative: false,
+    negative: false,
     trailingUnitsPerDay: 237,
     programDaysRemaining: 0.58,
     asOfISO: '2026-07-22',

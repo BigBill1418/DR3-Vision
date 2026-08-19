@@ -25,10 +25,13 @@ export function StageReject({
   siteCode,
   loadId,
   onCancel,
+  /** ADR-0109 — rejection-evidence photos already on the server. */
+  photoCount = 0,
 }: {
   siteCode: string;
   loadId: string;
   onCancel: () => void;
+  photoCount?: number;
 }) {
   const { t, locale } = useI18n();
   const [category, setCategory] = useState<RejectionCategory | ''>('');
@@ -88,6 +91,7 @@ export function StageReject({
         kind="rejection"
         labelKey="rejection"
         onCaptured={() => setHasPhoto(true)}
+        initialCount={photoCount}
       />
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
         {t('stage_reject.note_label')}

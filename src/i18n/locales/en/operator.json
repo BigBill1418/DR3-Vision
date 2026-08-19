@@ -253,7 +253,11 @@
     "label_rejection": "rejection evidence",
     "label_concern": "concern photo",
     "error_upload": "That picture did not send. Tap to try again.",
-    "other_operator": "This load is signed in under another operator, so this picture cannot be sent under your name. Have that operator sign in on this iPad."
+    "other_operator": "This load is signed in under another operator, so this picture cannot be sent under your name. Have that operator sign in on this iPad.",
+    "add_another": "➕ Add another photo",
+    "count": "{{count}} of {{max}} photos",
+    "count_full": "{{count}} of {{max}} photos — that is all this step holds",
+    "limit_reached": "This step already holds {{max}} photos. That is the most it takes, so this one cannot be sent."
   },
   "auth_login": {
     "heading": "Sign in",

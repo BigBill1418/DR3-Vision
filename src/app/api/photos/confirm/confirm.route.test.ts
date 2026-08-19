@@ -31,10 +31,22 @@ function firstData<T = Record<string, unknown>>(spy: { mock: { calls: unknown[][
 }
 
 vi.mock('@/lib/load-photo-guard', () => ({ requireOperatorOrGrantAtLoadSite }));
+// ADR-0109 — the fake transaction gained `loadPhoto.count` and `$executeRaw`
+// when the three-photo ceiling landed, and it is stated rather than quietly
+// filled in. A tx fake that is MISSING a method the route calls does not fail
+// with "you forgot to stub count"; it throws `count is not a function` from
+// inside the route and every test in the file goes red at once for a reason
+// that has nothing to do with what it asserts. `count` returns 0 here — this
+// suite is about auth and attribution, and a load with no photos is the state
+// in which those questions are interesting.
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-      fn({ loadPhoto: { create: loadPhotoCreate }, auditLog: { create: auditCreate } }),
+      fn({
+        loadPhoto: { create: loadPhotoCreate, count: async () => 0 },
+        auditLog: { create: auditCreate },
+        $executeRaw: async () => 1,
+      }),
   },
 }));
 // The idempotency layer is exercised against real Postgres elsewhere

@@ -14,10 +14,13 @@ export function StageWeight({
   siteCode,
   loadId,
   onSkipped,
+  /** ADR-0109 — weight-ticket photos already on the server. */
+  photoCount = 0,
 }: {
   siteCode: string;
   loadId: string;
   onSkipped: () => void;
+  photoCount?: number;
 }) {
   const t = useT();
   const [mode, setMode] = useState<'choose' | 'add'>('choose');
@@ -76,6 +79,7 @@ export function StageWeight({
         kind="weight_ticket"
         labelKey="weight_ticket"
         onCaptured={() => setHasPhoto(true)}
+        initialCount={photoCount}
       />
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
         {t('stage_weight.weight_label')}

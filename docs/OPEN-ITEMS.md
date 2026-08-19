@@ -147,6 +147,38 @@ endpoint a manager cannot reach relocates the phone call instead of retiring it.
   endpoint returns a history with no correction chain and no `correctable` flag.
   The older endpoint remains unrendered, exactly as ADR-0084 recorded.
 
+## 0.BC — 2026-08-18 three photos per capture point (ADR-0109) — two accepted residuals
+
+Handoff #264 Item 1 shipped: a load takes **3 photos per capture point** (BOL,
+weight ticket, door-open, rejection), one required and unchanged, two optional
+and unnamed. The brief's "3 total per load" was falsified against prod before
+building — an ordinary load already takes three, so a per-load cap would have
+refused the door-open photo (which starts the unload timer) on every load with a
+weight ticket. Retires the extra-photo camera-roll/text side channel.
+
+**Accepted residual 1 — nine production loads are already over the ceiling.**
+Measured 2026-08-18: 4 loads hold 4 photos, 4 hold 5, 1 holds 6, and load
+`fce4fbc5-9fca-4d50-8afb-d074b8994e74` holds **four BOL photos** alone. The cap
+governs **new writes only**; those rows are not retracted and
+`photosRemaining()` clamps at 0 so none renders a negative count. No action
+needed — recorded so a future reader does not read them as a cap failure.
+
+**Accepted residual 2 — one behaviour is withdrawn.** An operator who could take
+a fourth photo of one kind no longer can. That has happened once, ever
+(2026-08-10). Three is Bill's stated ceiling, and the control is removed rather
+than left to refuse — so the floor meets a limit, not an error. If the floor
+asks for more, the number is one constant in `src/lib/loads/photo-limit.ts` and
+a product decision, not a rebuild.
+
+**Watch item — the `concern` PhotoKind still has no stage that mounts it.**
+`PhotoKind.concern` exists in the schema and has a translated label
+(`photo.label_concern`), and no operator surface captures one. Pre-existing, not
+introduced here, and now slightly more visible because the extras this ADR adds
+are the thing a "concern" photo would otherwise have been. Not a defect; a
+question about whether that kind should exist at all.
+
+---
+
 ## 0.BB — ADR-0104 shipped and executed 2026-08-15 (7:22 PM PT) — TWO STAGED BATCHES AWAIT BILL
 
 The document-ingestion gap is closed: `doc_sources` is **11 registered, 0

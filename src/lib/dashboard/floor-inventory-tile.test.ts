@@ -60,10 +60,7 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import {
-  computeFloorInventoryTile,
-  computeProgramPoolProjection,
-} from './floor-inventory-tile';
+import { computeFloorInventoryTile, computeProgramPoolProjection } from './floor-inventory-tile';
 
 beforeEach(() => {
   store.anchor = null;
