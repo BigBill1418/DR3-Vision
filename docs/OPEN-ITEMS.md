@@ -62,6 +62,20 @@ build agents plus an orchestrator.
   swing with 201); ADR-0105's correction screen live, so a mis-keyed count is
   correctable under audit. Woodland re-anchors (prior anchor 27.5 d old);
   Eugene counts its FIRST (tier-0 no-prior-anchor case test-covered).
+- **COUNT APPLIED (2026-08-19 ~7:50 AM PT, Bill's instruction):** Woodland
+  physical count **923** recorded as the authoritative anchor for EOD 8/18
+  (snapshot `6f8ae03b`, Pacific-midnight-8/18 storage per D-3, `legacy`/unsplit
+  attribution — crew counted total only; Bill confirmed the site and the
+  unsplit recording in-session, which also served as the >20%-swing manager
+  approval). **`reconciled_delta = +383`** (counted 923 vs computed 540) — the
+  ledger was UNDER-counting by 383 units, the drift evidence the reset exists
+  to capture; likely provisional-inbound under-feed, worth reading against the
+  next few days of MyMRC deliveries. On-hand now computes forward from 923.
+  **Caveat recorded:** unsplit anchor attributes the whole 923 to the program
+  pool (ADR-0037 §3) — program-billed figures are conservative-high until the
+  next measured (split) count; next count should capture the split.
+  **Eugene did NOT count** — still unanchored/zero; its first anchor remains
+  open alongside the Eugene-feeds decision.
 - **Decision after tonight:** `correct-count.ts` (ADR-0105) is a third
   anchor-write door with real controls but no swing-tier check — a typo'd
   correction of a typo is possible. Deliberately not churned on count day;
