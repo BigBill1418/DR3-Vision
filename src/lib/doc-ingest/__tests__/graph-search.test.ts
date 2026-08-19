@@ -206,6 +206,54 @@ describe('searchDriveItems — the response walk', () => {
     expect(res.total).toBe(0);
   });
 
+  // ── ADR-0112 — a shape change must not project to a quiet zero ────────────
+  //
+  // `projectDriveItem` returns null for a resource it cannot key, and the walk
+  // used to DROP those silently. That is the ADR-0102 lesson in its purest form:
+  // a response whose branch field moved projects to nothing, the scan records
+  // `reachable 0`, and the surface says every document is watched. The transport
+  // cannot know a shape changed — but it CAN know that Graph handed it hits and
+  // it produced no items from them, and that is never a legitimate state.
+  it('THROWS on hits it cannot project, rather than dropping them silently', async () => {
+    // The classic: `parentReference` present but carrying no `driveId`, so the
+    // identity half of the (driveId, itemId) key is gone. Every hit is affected,
+    // which is exactly how a real contract drift arrives.
+    const drifted = {
+      resource: {
+        id: '01MACHINE',
+        name: 'DR3 Machine List (2).xlsx',
+        file: { mimeType: 'application/vnd.ms-excel' },
+        parentReference: { siteId: 'svdplanecounty-my.sharepoint.com,abc,def' },
+      },
+    };
+    const { fetchImpl } = jsonFetch([searchBody([drifted], false, 1)]);
+    const graph = docIngestGraph(prismaWithToken(), { fetchImpl });
+
+    const outcome = await graph
+      .searchDriveItems('filetype:xlsx', 200)
+      .then((r) => `SILENT: ${r.items.length} items from ${1} hit(s)`)
+      .catch((e) => `THREW: ${(e as Error).name}`);
+    expect(outcome).toBe('THREW: GraphContractDriftError');
+  });
+
+  it('still projects the hits it CAN, when only some drift', async () => {
+    // Not an all-or-nothing guard: one unprojectable hit among good ones is
+    // still a contract change, and reporting the rest would under-state the
+    // reachable set — the same under-count ADR-0080 exists to end.
+    const drifted = { resource: { name: 'no-id.xlsx', parentReference: { driveId: 'd' } } };
+    const { fetchImpl } = jsonFetch([
+      searchBody(
+        [hit('01TRAILER', 'drive-kelsey', 'Woodland Trailer list.xlsx'), drifted],
+        false,
+        2,
+      ),
+    ]);
+    const graph = docIngestGraph(prismaWithToken(), { fetchImpl });
+    await expect(graph.searchDriveItems('filetype:xlsx', 200)).rejects.toThrow(
+      /could not be projected/i,
+    );
+  });
+
   it('THROWS on an HTTP failure rather than reporting zero items', async () => {
     const fetchImpl = async (): Promise<Response> =>
       new Response('{"error":{"code":"serviceNotAvailable"}}', { status: 503 });

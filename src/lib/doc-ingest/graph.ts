@@ -245,6 +245,24 @@ export interface DocIngestSearch {
   ): Promise<{ items: GraphDriveItem[]; total: number | null; truncated: boolean }>;
 }
 
+/**
+ * ADR-0112 — Graph returned a hit this client could not key.
+ *
+ * `projectDriveItem` returns null for a resource with no `id` or no resolvable
+ * `driveId`, and the search walk used to drop those on the floor. A shape change
+ * that moved either field therefore produced an EMPTY result set from a HTTP 200
+ * — and an empty result set is read downstream as "Vision can reach nothing",
+ * which `runReachabilityScan` would have rendered as "every document in scope is
+ * being watched". The transport cannot detect that a contract changed, but it can
+ * detect that it was handed hits and produced nothing from them, and refuse.
+ *
+ * Named for the `PortalContractDriftError` precedent in `src/lib/mymrc/`: the
+ * failure mode being prevented is identical — a green run with no rows.
+ */
+export class GraphContractDriftError extends Error {
+  override readonly name = 'GraphContractDriftError';
+}
+
 /** The file exceeded the byte cap. Pages; never silently truncates. */
 export class DocIngestOversizeError extends Error {
   override readonly name = 'DocIngestOversizeError';
@@ -700,7 +718,20 @@ export function docIngestGraph(
         if (Array.isArray(hits)) {
           for (const hit of hits) {
             const projected = projectDriveItem(rec(hit)?.['resource']);
-            if (projected) items.push(projected);
+            // ADR-0112. A hit Graph returned but this client cannot key is a
+            // CONTRACT CHANGE, not a document to skip. Dropping it silently is
+            // how a moved `parentReference.driveId` becomes a clean scan
+            // reporting zero reachable documents. Throwing routes it into
+            // `runReachabilityScan`'s catch, which records a FAILED scan and
+            // raises — loud, and attributable to the field that moved.
+            if (!projected) {
+              throw new GraphContractDriftError(
+                `POST /search/query returned a hit that could not be projected to a driveItem ` +
+                  `(no id, or no resolvable parentReference.driveId): ` +
+                  `${JSON.stringify(rec(hit)?.['resource'])?.slice(0, 400)}`,
+              );
+            }
+            items.push(projected);
           }
         }
 

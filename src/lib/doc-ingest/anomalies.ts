@@ -142,6 +142,23 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
   // belongs in the pipeline, which is a same-day question, not an hour-one one.
   // It routes to the SOURCES page because that is where registering one happens.
   discovery_gap: { severity: 'warning', priority: 'default', page: SOURCES_PAGE_PATH },
+  // ADR-0112. The probe RAN, said zero, and Vision was reading live documents
+  // at the same moment. Graded like `absorption_empty` and for the identical
+  // reason: a silent zero is the failure this module keeps re-learning, and the
+  // branch it would otherwise take is not merely quiet but actively reassuring —
+  // it RESOLVES the standing gap alert with "everything is watched (0 of 0)".
+  //
+  // `critical` because the discovery guard has stopped being able to answer its
+  // question, which is strictly worse than a known gap. `default` rather than
+  // `high` under ADR-0037 question 1: the fix is a code change or waiting out a
+  // Microsoft-side index lag, not a 5-minute operator action, so it must be
+  // same-day and unmissable rather than an hour-one page. It routes to HEALTH,
+  // not SOURCES — there is nothing to register, the instrument is the subject.
+  discovery_probe_contradiction: {
+    severity: 'critical',
+    priority: 'default',
+    page: HEALTH_PAGE_PATH,
+  },
 
   // ── D7 guardrail. Real money and real inventory counts. These STAGE a change
   // rather than let it flow, so a human must act before the numbers move.
