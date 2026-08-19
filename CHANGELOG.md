@@ -9,6 +9,22 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 — cloudflared 2026.3.0 -> 2026.8.2 (fleet-wide version-rot remediation)
+
+This stack's tunnel connector was running cloudflared 2026.3.0. Cloudflare
+supports releases "within one year of the most recent release"; a 2026-08-19
+fleet survey found 22 connectors, most months behind, and one (the ntfy
+alerting tunnel) already outside that window.
+
+It rots silently by construction: the official cloudflare/cloudflared Docker
+image disables the built-in self-updater, a floating `:latest` tag only
+resolves at container recreate, and the NOC deployer reacts to git commits
+rather than upstream image releases. Nothing was ever going to notice.
+
+Image tag only — no functional, ingress, auth or routing change. Fleet-wide
+reasoning, survey, alternatives considered and the monthly supervised bump
+routine: `noc-master/docs/adr/0212-cloudflared-version-rot.md`.
+
 <<<<<<< HEAD
 
 ## 2026-08-18 — three photos where the flow asks for one, and the load already had four (ADR-0109)
