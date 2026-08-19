@@ -9,16 +9,85 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-18 (5:00 PM PT) — The probe was wrong, not the password (ADR-0111)
+
+At 3:51 PM the MyMRC scrape worker paged: `mymrc: still logged out after fresh
+login (admin)`. The stored admin credential — created 2026-07-22, never rotated —
+was the prime suspect, then a Salesforce Experience Cloud device-verification
+challenge. **Both died on measurement, and the credential was never touched.**
+
+**Bill's browser worked, and so did the scraper.** The 4:00 PM cycle, nine
+minutes after the page, ran fully clean on the same stored credential: all four
+feeds, mirror freshness green, exit 0. The question was never "why can't it log
+in" — it was "why does it sometimes believe it hasn't".
+
+**One controlled login, captured.** A single headless login from the scraper image
+landed authenticated: the post-submit page carried the "Switch Account" banner and
+the "viewing as DR3" context. No verification challenge, no authentication error,
+no lockout notice.
+
+**The decisive run.** Re-using ONE authenticated session across twelve
+navigations — spending no further logins — and reading the auth state twice per
+navigation:
+
+| Read                                         | Verdict                   |
+| -------------------------------------------- | ------------------------- |
+| At `domcontentloaded` (what production does) | **logged out in 3 of 12** |
+| After `networkidle` + settle                 | logged **in** in 12 of 12 |
+
+The session was authenticated every time. The probe disagreed 25% of the time.
+Those trials ran against a warm, idle portal — the race belongs to the check, not
+to container boot; a boot storm only makes it likelier to lose.
+
+**Why.** `/s/` is an Aura SPA whose authenticated markers paint client-side
+_after_ `domcontentloaded`. `looksLoggedOut` is a positive test — correctly so
+since ADR-0038 D4 — but it reaches its verdict two ways: a real sign-in form
+(decisive) or merely no marker (an assumption). On an Aura shell those are
+indistinguishable. Verified against the live capture: the shell carries no
+sign-in markup, no sign-in URL and no banner, and an anonymous `/s/` renders that
+_same_ shell. `collectAura` already waits `networkidle` + 6 s for exactly this
+reason. Only the auth read did not.
+
+### Fixed
+
+- **The auth verdict waits for the page to decide.** New `looksDefinitelyLoggedOut`
+  reports decisive evidence only; `isLoginPage` — the one choke point all six
+  consumers share — polls every 250 ms up to 15 s. Fail-loud is preserved; the
+  bound is a poll _count_, not wall-clock. Honest cost, pinned by a test: an
+  expired session renders that same undecided shell, so it waits out the budget
+  before failing.
+- **Session failures appear in the ledger.** `openAdminSession` throws before the
+  first feed row, so `mymrc_sync_runs` read 100% green straight through this
+  incident and the only evidence was a container log that a redeploy destroys —
+  and did. Session failures now write `feed='__session__'`. No schema change.
+- **The page waits for self-heal.** It fired on the _first_ failed tick, gated by
+  a cooldown `Map` held in the per-tick process — which exits after every tick, so
+  it gated nothing. The ledger now supplies real cross-tick memory: pages on the
+  second failure within an hour (ADR-0037 Q3), and fails **open** so broken
+  bookkeeping can never silence a real outage.
+- **The boot scrape stops racing its own stack.** `BOOT_DELAY_MS` 5 s → 90 s
+  (`MYMRC_BOOT_DELAY_MS` to override). Both boot scrapes that day died inside the
+  stack recreation — one to this race, one to a `chrome-headless-shell` SIGSEGV
+  about two seconds after container start — and both healed at the next
+  top-of-hour, untouched.
+
+### Verification
+
+Falsified by reverting `isLoginPage` to its single read: the regression test then
+fails with the incident's own string. The unhydrated-shell fixture is a live
+capture and carries a guard test — its first draft described the sign-in markup in
+its own header comment, which the predicates scan, making the fixture assert the
+opposite of its purpose. The test caught it.
 
 ## 2026-08-18 (3:30 PM PT) — An untaught kind, an unguarded door, and a number the building cannot hold (ADR-0110)
 
-Bill: on-hand inventory is *constantly* wrong, especially on the production
+Bill: on-hand inventory is _constantly_ wrong, especially on the production
 report, and it goes negative on both sites. **Two of the four suspected causes
 died on measurement, and that is the most useful thing in this entry.**
 
 **The report does NOT compute on-hand a second way.** The standing suspicion was
 that `getEodInventorySnapshot` re-derived the balance independently of `onHand` —
-"two modules, two chances to disagree". It already delegates *both* day balances
+"two modules, two chances to disagree". It already delegates _both_ day balances
 to `onHand`; live Woodland reads 442 program / 397 non-program / 839 total,
 identical on both paths. Its own aggregate queries are `_max` **date** keys for
 freshness, not units. There was nothing to unify.
@@ -26,7 +95,7 @@ freshness, not units. There was nothing to unify.
 **Woodland's inbound is not under-fed today.** Anchor 2,483 (07-22) + inbound
 18,392 + dropoffs 92 − stripped 20,128 = **839**, to the unit. No negative in the
 trailing 14 days, zero undated hauls against 7,372 Delivered, and the 15
-`Confirmed` hauls are *future* appointments — what a healthy scheduling feed looks
+`Confirmed` hauls are _future_ appointments — what a healthy scheduling feed looks
 like. No inbound recovery was run, and none was needed.
 
 **Eugene is EMPTY, not negative.** No anchor has ever been set, `inbound_loads` is
@@ -47,11 +116,11 @@ fails `tsc` with `TS2741` on a new member, and `sumTaughtDropoffKinds` **throws*
 on a kind the database returns that the module was never taught — the raw
 `ALTER TYPE` door the compile gate is blind to. The query is a `groupBy(['kind'])`
 on the same table, window and round trip; the grouping buys no arithmetic, it buys
-the reader the ability to *see* what it is adding up.
+the reader the ability to _see_ what it is adding up.
 
 **A negative floor rendered as though someone had measured it.** The building
 cannot hold −2,439 mattresses. `EodInventoryState` gains `negative`, checked
-**before** freshness — a negative behind a *fresh* anchor is the worst case, not an
+**before** freshness — a negative behind a _fresh_ anchor is the worst case, not an
 acceptable one, and the precedence makes every existing `state === 'healthy'` guard
 (notably the ADR-0058 estimated-floor block) stop deriving from a broken floor for
 free. Either **pool** counts, not just the total: a −300 program pool inside a +900
@@ -61,14 +130,14 @@ negative printed anywhere gets pasted into a spreadsheet — and the tile's
 days-remaining line is suppressed outright rather than CSS-hidden, because
 `display:none` still ships the sentence to anything reading the page.
 
-**Freshness that could not see intake stop.** `flowThrough` is the max over *every*
+**Freshness that could not see intake stop.** `flowThrough` is the max over _every_
 feed, so a site that keeps stripping while intake is frozen reads perfectly fresh —
 the outflow rows hold the max up. That is exactly the 2026-07-22→31 outage: the
 delivered feed froze for nine days, processing kept subtracting, every signal
 stayed green and the floor went negative. Intake now has its own clock
 (`inboundThrough` / `inboundDaysSince` / `inboundStale`), surfaced from the `_max`
 the existing freshness aggregate **already fetched and threw away**. No new query,
-no second freshness system. The threshold is *derived from* the ADR-0089 mirror
+no second freshness system. The threshold is _derived from_ the ADR-0089 mirror
 guard's own 96 h so the two cannot drift apart.
 
 ### The one found while verifying, and the one that mattered tonight

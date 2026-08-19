@@ -247,6 +247,32 @@ export function looksLoggedOut(input: {
   return true;
 }
 
+/**
+ * POSITIVE logged-out evidence — the DECISIVE half of `looksLoggedOut` (ADR-0111).
+ *
+ * `looksLoggedOut` is correct as a verdict on a FULLY RENDERED page, but it
+ * reaches that verdict two different ways: a real login form (decisive) or the
+ * mere ABSENCE of an authenticated marker (a fall-through assumption). On the
+ * Salesforce Aura SPA at `/s/` those are not the same thing. At
+ * `domcontentloaded` the shell carries NEITHER the login form NOR the
+ * "Switch Account" / "viewing as DR3" banner — the banner is rendered
+ * client-side moments later — so the fall-through fires on a perfectly healthy
+ * session.
+ *
+ * This predicate reports ONLY the decisive evidence, so a caller can tell
+ * "the portal is showing me a login form" (stop now) apart from
+ * "nothing has rendered yet" (wait and look again).
+ */
+export function looksDefinitelyLoggedOut(input: {
+  url: string;
+  html: string;
+  usernameFieldVisible: boolean;
+}): boolean {
+  if (input.usernameFieldVisible) return true;
+  if (/\/s\/login(\/|\?|$)/i.test(input.url)) return true;
+  return hasVisibleLoginControl(input.html);
+}
+
 // ── Stale-session self-heal (pure planner; unit-tested) ──────────────────────
 
 /**
@@ -324,12 +350,29 @@ export interface PortalClientOptions {
   /** Short backoff between mid-run re-auth attempts, ms — absorbs transient
    * `net::ERR_ABORTED` nav flakiness before the next clean rebuild. Default 800. */
   reauthBackoffMs?: number;
+  /**
+   * How long the auth verdict may wait for the Aura shell to render its
+   * authenticated marker before giving up and reporting logged-out (ADR-0111).
+   * Only ever spent when the page is UNDECIDED — a real login form short-circuits
+   * on the first read, so an expired session still fails fast. Default 15000.
+   */
+  authSettleMs?: number;
+  /** Poll interval while the auth verdict is undecided, ms. Default 250. */
+  authPollMs?: number;
   log?: Logger;
 }
 
 const DEFAULT_NAV_RETRIES = 2;
 const DEFAULT_REAUTH_ATTEMPTS = 3;
 const DEFAULT_REAUTH_BACKOFF_MS = 800;
+/**
+ * ADR-0111. Aura hydration of `/s/` was observed at ~2.6–4.5 s to
+ * `domcontentloaded` with the authenticated banner landing after that; 15 s
+ * leaves generous headroom over the slowest observed render while still
+ * bounding a genuinely dead session to one tick.
+ */
+const DEFAULT_AUTH_SETTLE_MS = 15_000;
+const DEFAULT_AUTH_POLL_MS = 250;
 
 /**
  * A list fetch result: the window's record ids PLUS whether that window is the
@@ -416,6 +459,8 @@ export async function openAdminSession(
   const navRetries = Math.max(0, opts.navRetries ?? DEFAULT_NAV_RETRIES);
   const reauthAttempts = Math.max(1, opts.reauthAttempts ?? DEFAULT_REAUTH_ATTEMPTS);
   const reauthBackoffMs = Math.max(0, opts.reauthBackoffMs ?? DEFAULT_REAUTH_BACKOFF_MS);
+  const authSettleMs = Math.max(0, opts.authSettleMs ?? DEFAULT_AUTH_SETTLE_MS);
+  const authPollMs = Math.max(1, opts.authPollMs ?? DEFAULT_AUTH_POLL_MS);
   const stateFile = opts.storageStatePath ?? adminAuthStatePath();
   await mkdir(dirname(stateFile), { recursive: true });
 
@@ -445,12 +490,45 @@ export async function openAdminSession(
       .catch(() => false);
   }
 
+  /**
+   * The auth verdict, tolerant of Aura hydration (ADR-0111).
+   *
+   * A SINGLE read at `domcontentloaded` mis-reported a healthy admin session as
+   * logged-out in 3 of 12 live trials on 2026-08-18 — trials in which the
+   * session was authenticated 12 of 12 times once the page had settled. That
+   * 25% false-negative rate is what produced the intermittent
+   * "still logged out after fresh login" page: the credential, the login flow
+   * and the portal were all fine; only the probe was wrong.
+   *
+   * So this polls until the page is DECIDED:
+   *   - an authenticated marker appears        ⇒ logged IN  (returns false)
+   *   - decisive logged-out evidence appears   ⇒ logged OUT (returns true, fast —
+   *                                               a genuinely expired session
+   *                                               still fails on the first read)
+   *   - neither, all the way to the deadline   ⇒ logged OUT (fail LOUD, unchanged)
+   *
+   * The deadline is a POLL COUNT, not wall-clock, so the bound is deterministic
+   * under a fake clock in tests.
+   */
   async function isLoginPage(): Promise<boolean> {
-    return looksLoggedOut({
-      url: page.url(),
-      html: await page.content().catch(() => ''),
-      usernameFieldVisible: await usernameVisible(),
-    });
+    const polls = Math.max(1, Math.ceil(authSettleMs / authPollMs));
+    for (let attempt = 1; ; attempt++) {
+      const input = {
+        url: page.url(),
+        html: await page.content().catch(() => ''),
+        usernameFieldVisible: await usernameVisible(),
+      };
+      if (!looksLoggedOut(input)) return false;
+      if (looksDefinitelyLoggedOut(input)) return true;
+      if (attempt >= polls) {
+        log(
+          'warn',
+          `mymrc: auth state still undecided after ${attempt} poll(s) (~${authSettleMs}ms) — treating as logged out`,
+        );
+        return true;
+      }
+      await page.waitForTimeout(authPollMs).catch(() => undefined);
+    }
   }
 
   // Bounded-retry navigation. Never throws — a nav that never resolves leaves the
