@@ -9,6 +9,15 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (9:35 AM PT) — ops: AP morning digest now reaches Morena and Janette, not only Bill
+
+The digest's recipient list is the per-user `notify_daily_digest` pref
+(ap_notification_prefs), and only Bill's was on — this morning's 6:00 AM send
+went to exactly one inbox. At Bill's instruction ("it should be me / morena &
+janette") both managers' prefs were flipped on (audited,
+`system:ap-digest-recipients-20260819`). The `ap_notify` surface is already
+live at both sites, so the next 6:00 AM PT send delivers to all three.
+
 ## 2026-08-18 (5:00 PM PT) — The probe was wrong, not the password (ADR-0111)
 
 At 3:51 PM the MyMRC scrape worker paged: `mymrc: still logged out after fresh
