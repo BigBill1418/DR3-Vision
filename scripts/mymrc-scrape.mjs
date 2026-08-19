@@ -84,6 +84,67 @@ export function resolveActiveSites({ explicit, envValue, known, log: logFn = log
   return valid;
 }
 
+// ── Session-start failure ledger + paging policy (ADR-0111) ─────────────────
+//
+// Before this, a tick that never got a session wrote NOTHING to
+// `mymrc_sync_runs` — `openAdminSession` throws before the first feed row is
+// created. So the ledger read 100% green straight through the 2026-08-18
+// incident, and the only trace was a container log that a redeploy destroys.
+// A `__session__` row makes the failure class visible to every ledger query.
+//
+// It also fixes the paging decision. The old page fired on the FIRST failed
+// tick, from a cooldown Map that lives in the per-tick process and is therefore
+// empty on every tick — no cross-tick memory at all, so a self-healing blip
+// paged anyway (ADR-0037 Q3: page after self-heal has been given its chance,
+// not before). Counting the ledger rows gives real cross-tick memory: a lone
+// blip stays silent, and a genuinely dead session pages on the retry ~9 minutes
+// later.
+const SESSION_FEED = '__session__';
+const SESSION_REPEAT_WINDOW_MS = 60 * 60 * 1000;
+const SESSION_PAGE_AFTER = 2; // this failure + at least one more in the window
+
+/**
+ * Ledger a session-start failure and report how many have landed in the window.
+ *
+ * FAILS OPEN on its own errors: if the bookkeeping cannot be written, it returns
+ * `Infinity` so the caller still pages. Broken bookkeeping must never be able to
+ * silence a real outage.
+ */
+export async function recordSessionFailure({ prisma, activeSites, message, log: logFn = log }) {
+  try {
+    const code = Array.isArray(activeSites) ? activeSites[0] : undefined;
+    const site =
+      (code ? await prisma.site.findFirst({ where: { code }, select: { id: true } }) : null) ??
+      (await prisma.site.findFirst({ select: { id: true }, orderBy: { code: 'asc' } }));
+    if (!site?.id) {
+      logFn('warn', 'mymrc: no site row to attribute the session failure to — paging anyway');
+      return { ledgered: false, recent: Number.POSITIVE_INFINITY };
+    }
+    const now = new Date();
+    await prisma.mymrcSyncRun.create({
+      data: {
+        site_id: site.id,
+        feed: SESSION_FEED,
+        started_at: now,
+        finished_at: now,
+        status: 'auth_failed',
+        error: message,
+      },
+    });
+    const recent = await prisma.mymrcSyncRun.count({
+      where: {
+        feed: SESSION_FEED,
+        status: 'auth_failed',
+        started_at: { gte: new Date(now.getTime() - SESSION_REPEAT_WINDOW_MS) },
+      },
+    });
+    return { ledgered: true, recent };
+  } catch (err) {
+    logFn('warn', `mymrc: could not ledger the session failure (${describeErr(err)}) — paging anyway`);
+    return { ledgered: false, recent: Number.POSITIVE_INFINITY };
+  }
+}
+
 /**
  * Orchestrate one scrape tick. Collaborators are INJECTED (`deps`) so the flow is
  * unit-testable with fakes and never touches `dist/` or launches a real browser:
@@ -133,11 +194,28 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     } catch (err) {
       const msg = describeErr(err);
       logFn('error', `admin session start failed: ${msg}`);
+      const { recent } = await recordSessionFailure({
+        prisma,
+        activeSites,
+        message: msg,
+        log: logFn,
+      });
+      if (recent < SESSION_PAGE_AFTER) {
+        // ADR-0037 Q3 — let the system try to heal itself first. The cron retries
+        // in ~9 minutes; if that one fails too, the next call pages.
+        logFn(
+          'warn',
+          `mymrc: session start failed (${recent} in the last hour) — NOT paging yet, the retry decides (ADR-0037 Q3)`,
+        );
+        return 1;
+      }
       await mymrc.ntfyPager
         .page({
           kind: 'auth_failed',
           site: 'admin',
-          message: `MyMRC admin login/session failed to start: ${msg}`,
+          message:
+            `MyMRC admin login/session failed to start ${recent}x in the last hour ` +
+            `(latest: ${msg}). If this is a credential problem, re-enter it at ${ADMIN_SURFACE_URL}.`,
           fingerprint: 'mymrc-auth-failed:admin',
         })
         .catch(() => undefined);

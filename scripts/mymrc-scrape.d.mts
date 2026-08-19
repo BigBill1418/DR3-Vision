@@ -51,3 +51,27 @@ export function resolveActiveSites(args: ResolveActiveSitesArgs): string[];
  * and returns a non-zero code without launching a browser or attempting a sync.
  */
 export function runMymrcScrape(deps: MymrcScrapeDeps): Promise<number>;
+
+/** Args for {@link recordSessionFailure}. */
+export interface RecordSessionFailureArgs {
+  /** A PrismaClient (kept `unknown` — the test supplies a fake). */
+  prisma: unknown;
+  /** Active recycler context codes; the first is preferred for attribution. */
+  activeSites?: string[];
+  /** Human error text. Never contains credentials. */
+  message: string;
+  log?: (level: string, message: string) => void;
+}
+
+/**
+ * Ledger a session-start failure as a `feed='__session__'`, `status='auth_failed'`
+ * row and report how many such failures landed in the trailing hour — the
+ * cross-tick memory the paging decision needs (ADR-0111 D3/D4).
+ *
+ * FAILS OPEN: if the ledger cannot be written or counted, `recent` is
+ * `Infinity` so the caller still pages. Broken bookkeeping must never be able to
+ * silence a real outage.
+ */
+export function recordSessionFailure(
+  args: RecordSessionFailureArgs,
+): Promise<{ ledgered: boolean; recent: number }>;
