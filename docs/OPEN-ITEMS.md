@@ -19,6 +19,54 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BE — 2026-08-19: the count lands split, the digest reaches the managers, a bed-bug load gets rejected, and two watchdogs get honest
+
+Status ledger for the day, written ~11:30 AM PT; in-flight items say so.
+
+- **Woodland EOD-8/18 count APPLIED, then FINALIZED with the split.** First
+  applied unsplit at 7:50 AM PT (anchor `6f8ae03b`, delta +383 vs computed
+  540); Bill delivered the final split ~10 AM (**923 = 201 program + 722
+  non-program**) — unsplit anchor soft-voided (chain-linked in audit), MEASURED
+  anchor `855a23b1` live; balance reads 201/722/923. **The computed baseline
+  moved 540→721 in the two hours between** (MRC late-arriving prior-day data)
+  — the provisional-inbound drift class caught in the act; both deltas
+  preserved (+383, +202). Eugene did NOT count (still unanchored; feeds
+  decision open).
+- **AP morning digest now reaches Bill + Morena + Janette** (was Bill only —
+  the notify_daily_digest pref was on for exactly one user; this morning's
+  6:00 AM send had `recipients: 1`). Both managers' prefs flipped on, audited;
+  first three-recipient send is tomorrow 6:00 AM PT. Rick/Shannon/Kelsey
+  remain off.
+- **ADR-0109 (photos) LIVE at 10:36 AM PT** inside the floor window at Bill's
+  go-ahead — **handoff #264 is complete in its entirety** (ADRs 0105–0109 all
+  deployed). One CI flake en route (`stamp-render-gate` Chromium timing test;
+  same commit green in the parallel run) — flaky test noted for maintenance.
+- **H-137759 (Ron Lawrence & Son, Placer landfill): accepted, unload started,
+  MASSIVE BED BUGS — rejected by audited manual rectification** (~11:20 AM PT,
+  load `85f7221b`: in_progress → rejected / category `bedbugs`, 1 stack
+  soft-voided same-transaction, evidence photos retained, actor
+  `system:h137759-bedbug-rejection`). Inventory/pay never touched (non-verified
+  statuses feed nothing). **Bill's action: reject the haul MRC-side too** — the
+  mirror still shows it `Confirmed` and Vision cannot write to MRC.
+  **IN BUILD — ADR-0113:** the product path for reject-after-unload-start
+  (operator affordance on the in_progress screen, required category + evidence
+  photo, same-transaction stack void + audit, slot semantics per
+  ADR-0090/0091). Floor-facing → deploys in the 2026-08-20 before-noon window.
+- **The discovery-gap watchdog is BLIND (found while answering Bill's question
+  about the gap alert).** The alert itself was stale — resolved 8/15 within
+  minutes of the gap-close; nothing is unwatched and capture is healthy. But
+  the search-based reachability probe has returned **0 items errorless** since
+  at least 8:29 AM PT today while all 11 sources are individually healthy —
+  "0 reachable, 0 unwatched, gap 0" is a contradiction reported as quiet.
+  **IN BUILD — ADR-0112:** root-cause (response-shape drift vs Graph-side
+  change vs permission) + a contradiction guard (probe empty while sources
+  healthy = loud anomaly, never gap-0). One transient probe outage last night
+  (10:24 PM PT, self-resolved 15 min).
+- Haul visibility spot-checks for Bill: H-137950 / H-137360 / H-137366 all
+  mirrored, detailed, and inside the inventory feed (day-aggregates tie to the
+  mirror to the unit; H-137950's 8/18 units are inside the counted 923, not
+  double-added).
+
 ## 0.BD — 2026-08-18 SHIP-TODAY day: handoff #264 (retire the sheets) + handoff #270 (on-hand) — live status ledger
 
 Written ~2:45 PM PT while the day is still in flight; each line states its own

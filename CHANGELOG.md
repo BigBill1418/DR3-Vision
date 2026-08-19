@@ -9,6 +9,20 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (11:30 AM PT) — ops: the count lands measured, the photos ship, a bed-bug load is rejected without a path, and a blind watchdog is caught
+
+Day ledger in OPEN-ITEMS §0.BE. Highlights: Woodland's EOD-8/18 physical count
+applied and finalized as a MEASURED anchor (923 = 201 program + 722
+non-program; the unsplit first pass soft-voided and chain-linked; computed
+baseline moved 540→721 between the two writes — provisional-inbound drift
+observed live, both deltas preserved). ADR-0109 deployed in the floor window —
+handoff #264 fully complete. AP digest recipients corrected (was Bill alone;
+now + Morena + Janette). H-137759 rejected after unload start via audited
+manual rectification (category `bedbugs`, stack soft-voided, evidence
+retained) — the product path is ADR-0113, in build, floor window 8/20. The
+discovery-gap watchdog found reporting "gap 0" while its probe returned zero
+items against 11 healthy sources — contradiction guard is ADR-0112, in build.
+
 ## 2026-08-19 — cloudflared 2026.3.0 -> 2026.8.2 (fleet-wide version-rot remediation)
 
 This stack's tunnel connector was running cloudflared 2026.3.0. Cloudflare
