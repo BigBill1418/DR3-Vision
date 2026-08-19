@@ -361,7 +361,9 @@ export async function notifyReimbursementDecided(
       problems.push(
         `Approved reimbursement mail was REFUSED before sending: the attachment is ${Math.round(
           res.oversize.rawAttachmentBytes / 1024,
-        )} KB, over what Microsoft Graph accepts inline. Mary has NOT been told to pay it, and re-sending will not help.`,
+        )} KB, over the ${Math.round(
+          res.oversize.limitBytes / 1024,
+        )} KB per-message limit on the sending mailbox. Mary has NOT been told to pay it, and re-sending will not help.`,
       );
     }
     // `sent_to_accounting_at` is an AUDIT field: it must record that accounting

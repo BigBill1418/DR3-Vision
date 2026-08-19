@@ -674,9 +674,14 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                 : body.mail === 'disabled'
                   ? 'decided (mail disabled — M365 not configured).'
                   : body.mail === 'too_large'
-                    ? // Deliberately does NOT offer Re-send: the attachment exceeds what
-                      // Graph accepts inline, so a re-send reproduces the same refusal.
-                      'DECIDED, but the stamped invoice is too large to email — accounting was NOT told. Re-sending will not help; open the request and forward the stamped PDF manually.'
+                    ? // ADR-0114 — this used to say "re-sending will not help", which was
+                      // true only while the transport could not carry anything over 3 MB.
+                      // It now carries up to the mailbox limit, so this outcome means the
+                      // message is too big for the MAILBOX and Re-send genuinely cannot
+                      // help until it shrinks. Kept honest in both directions: the
+                      // operator is told to forward manually, not sent to click a button
+                      // that will refuse again.
+                      'DECIDED, but the stamped invoice exceeds the sending mailbox’s per-message limit — accounting was NOT told. Re-sending will not help at this size; open the request and forward the stamped PDF manually.'
                     : 'decided, but the decision email failed to send. Use Re-send.';
           setMsg(`Request ${decision}; ${mailNote}`);
         }
