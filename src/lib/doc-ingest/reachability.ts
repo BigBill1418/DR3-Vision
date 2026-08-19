@@ -42,6 +42,13 @@ import { sourceKey } from './discovery';
 /** The stable subject for the gap anomaly — one alert, not one per document. */
 export const REACHABILITY_SUBJECT = 'discovery:reachability';
 
+/**
+ * ADR-0112 — the subject for "the probe answered zero and the answer cannot be
+ * true". A SEPARATE subject as well as a separate kind, so that clearing the
+ * contradiction never touches a standing gap alert and vice versa.
+ */
+export const REACHABILITY_CONTRADICTION_SUBJECT = 'discovery:reachability:contradiction';
+
 export interface ReachabilityGapItem {
   driveId: string;
   itemId: string;
@@ -92,6 +99,17 @@ export interface RunReachabilityScanOptions {
  * raises the anomaly — the one thing it must never do is return `gap: []` when
  * it simply could not look, because a silent zero here would re-create exactly
  * the invisible under-count this module exists to end.
+ *
+ * ADR-0112 extends that rule to the case it did not originally cover: a probe
+ * that SUCCEEDS and sees nothing. There are two ways to end up unable to answer,
+ * and only one of them throws. A search that returns an empty set while Vision is
+ * demonstrably reading live documents is recorded as a CONTRADICTION — same
+ * `error` column, same "this number is not evidence" contract — rather than
+ * falling through to the all-clear branch, which does not merely stay quiet but
+ * RESOLVES the standing gap anomaly.
+ *
+ * So `error === null` is the ONLY condition under which a caller may read
+ * `gap.length` as a real number. Every consumer already branches that way.
  */
 export async function runReachabilityScan(
   prisma: PrismaClient,
@@ -155,9 +173,71 @@ export async function runReachabilityScan(
   // deliberately switched off is not a discovery gap — re-reporting it every
   // sweep would train him to ignore the alert, which is ADR-0037 question 4.
   const sources = await prisma.docSource.findMany({
-    select: { drive_id: true, item_id: true },
+    select: { drive_id: true, item_id: true, enabled: true, disappeared_at: true },
   });
   const watchedKeys = new Set(sources.map((s) => sourceKey(s.drive_id, s.item_id)));
+
+  // ── ADR-0112 — a zero that CONTRADICTS the watched set ─────────────────────
+  //
+  // `searchDriveItems` did not throw, so the catch above never fired: this is a
+  // SUCCESSFUL probe reporting that Vision can read nothing at all. Left alone,
+  // that falls through to the `gap.length === 0` branch below and RESOLVES the
+  // standing anomaly with "Every document in scope is being watched (0 of 0)" —
+  // an all-clear assembled from an empty result set, and indistinguishable in
+  // the scan row and in the 06:00 digest from a genuinely healthy sweep.
+  //
+  // Two readings of `doc_sources` are deliberately different here. WATCHED counts
+  // every row including disabled ones (a document Bill switched off is not a
+  // gap). LIVE counts only the rows the pipeline currently asserts exist and is
+  // still reading. It is the live count that makes the zero decidable without
+  // guessing: "I can see zero documents in the tenant" and "I am successfully
+  // reading eleven of them" cannot both be true.
+  //
+  // The guard deliberately does NOT claim every live source must match the scope
+  // — the scope is a filetype-and-path filter and a source could legitimately sit
+  // outside it. It claims something weaker and sound: a TOTAL zero, while the
+  // pipeline is demonstrably reading documents, is either a broken probe or a
+  // scope that excludes everything Vision watches. Both mean the number is not
+  // evidence of anything, and neither is good news.
+  const liveSources = sources.filter((s) => s.enabled && s.disappeared_at === null);
+  if (byKey.size === 0 && liveSources.length > 0) {
+    const reason =
+      `The reachability probe returned 0 document(s) while Vision is actively watching ` +
+      `${liveSources.length} live source(s), so this scan CANNOT be read as "nothing is missing" — ` +
+      `a search that sees nothing while the pipeline is reading documents is a broken probe or a ` +
+      `scope that matches none of them, not an empty tenant. No gap number has been recorded and ` +
+      `no existing discovery alert has been cleared. Scope was ${scope}.`;
+    await prisma.docIngestReachabilityScan.create({
+      data: {
+        scanned_at: now,
+        scope_query: scope,
+        reachable_count: 0,
+        watched_count: 0,
+        gap_count: 0,
+        truncated: found.truncated,
+        error: reason,
+      },
+    });
+    const res = await raiseAnomaly(prisma, {
+      kind: 'discovery_probe_contradiction',
+      subject: REACHABILITY_CONTRADICTION_SUBJECT,
+      detail: reason,
+      context: { scope, reachable: 0, liveSources: liveSources.length },
+      now,
+    });
+    // NOT resolving `discovery_gap`: clearing a standing alert on the strength of
+    // a measurement that just proved itself unreliable is the precise move this
+    // guard exists to prevent.
+    return {
+      scope,
+      reachable: 0,
+      watched: 0,
+      gap: [],
+      truncated: found.truncated,
+      error: reason,
+      anomaliesRaised: res.raised ? 1 : 0,
+    };
+  }
 
   const gap: ReachabilityGapItem[] = [];
   let watched = 0;
@@ -418,10 +498,15 @@ export async function docIngestDiscoveryGapWarning(
     );
   }
 
+  // Covers BOTH untrustworthy outcomes — the probe that could not run (ADR-0080)
+  // and the probe that ran and contradicted itself (ADR-0112). The prefix is
+  // deliberately neutral about WHICH: the stored reason says so in its own words,
+  // and a prefix that asserted "could not run" would mis-describe a scan that ran
+  // perfectly well and returned an answer that cannot be true.
   if (scan.error !== null) {
     return (
-      `The document-discovery completeness check could not run, so Vision CANNOT say whether ` +
-      `documents are being missed: ${scan.error}`
+      `Document-discovery completeness is UNVERIFIED — Vision CANNOT say whether documents are ` +
+      `being missed: ${scan.error}`
     );
   }
 

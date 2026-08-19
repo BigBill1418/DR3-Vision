@@ -1357,6 +1357,13 @@ enum DocIngestAnomalyKind {
   /// Also raised when the probe itself cannot run — "we could not look" must
   /// never be recorded as "there is no gap".
   discovery_gap
+  /// ADR-0112 — the probe SUCCEEDED and returned zero documents while Vision was
+  /// demonstrably reading live ones in the same sweep. A separate kind from
+  /// `discovery_gap` because it is a different question with a different answer:
+  /// a gap is a human deciding whether a document belongs in the pipeline, this
+  /// is the probe having stopped being able to answer at all. Recorded loudly
+  /// because the alternative — the `gap 0` branch — reads as an all-clear.
+  discovery_probe_contradiction
 }
 
 enum DocIngestAnomalySeverity {

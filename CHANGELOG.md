@@ -23,6 +23,76 @@ retained) — the product path is ADR-0113, in build, floor window 8/20. The
 discovery-gap watchdog found reporting "gap 0" while its probe returned zero
 items against 11 healthy sources — contradiction guard is ADR-0112, in build.
 
+## 2026-08-19 (11:15 AM PT) — A zero that contradicts the watched set (ADR-0112)
+
+Handoff #271 reported the ADR-0080 reachability probe — the discovery-gap
+watchdog — had "gone silently blind": every scan since ~08:29 AM PT showing 0
+items with `error = null`, where prior scans returned 6-8.
+
+**The premise died on the scans table.** `reachable_count` has been **11 on every
+successful scan since the probe's first run on 2026-08-07**, including 10:35 AM
+PT this morning. There is no window in which it reported zero reachable
+documents. The number that went to zero is `gap_count`:
+
+```
+reachable/watched/gap   scans   first (PT)          last (PT)
+11 / 3 / 8               512    2026-08-07 16:05    2026-08-12 21:46
+11 / 5 / 6               270    2026-08-12 21:47    2026-08-15 17:03
+ 0 / 0 / 0  (error)        2    2026-08-13 03:49    2026-08-18 22:24
+11 / 11 / 0              360    2026-08-15 17:12    2026-08-19 10:35
+```
+
+**The flip is 2026-08-15 17:12:32 PT, and its cause is six `doc_sources` rows
+created two to six seconds earlier** (17:12:26-30: DR3 Data Tracking, JOURNAL
+Woodland Facility, TEREX, DR3 Task Lists, DR3 Meeting Notes Log, DR3 Machine
+List (2)). The earlier 8 -> 6 step has the same signature — two sources at
+2026-08-12 21:47:15, next scan nine seconds later. That is O-2 working as
+designed: the probe named the unwatched documents, a human registered them.
+**The gap did not go blind. It closed.**
+
+One controlled live probe confirmed the search route healthy — `HTTP 200`,
+`total: 22`, 22 raw hits, **0 unprojectable**, 22 -> 11 after the
+`(driveId, itemId)` dedup, all 11 matching `doc_sources`. No shape drift, no
+permission drift. **`Sites.Read.All` (C-47) was verified working and not
+touched** — that review is Bill's.
+
+### What was actually wrong
+
+The report was wrong about what happened and right about what is possible. Three
+latent holes, none of which had fired:
+
+- **A successful EMPTY search was an all-clear, not merely a silence.** An empty
+  result set with no throw fell through to the `gap.length === 0` branch, which
+  does not just stay quiet — it **resolves the standing anomaly** with "Every
+  document in scope is being watched (0 of 0)", byte-identical in the scan row
+  and the 06:00 digest to the healthy 11/11/0 running today. Now a
+  **contradiction** whenever >=1 live source (enabled, not disappeared) exists:
+  "I can see zero documents" and "I am successfully reading eleven" cannot both
+  be true. Recorded in the existing `error` column, raising the new
+  `discovery_probe_contradiction` kind, resolving nothing.
+- **The transport dropped unprojectable hits silently.** A moved
+  `parentReference.driveId` — the ADR-0102 `$select` lesson exactly — would have
+  manufactured that empty set out of a healthy 200. Now throws
+  `GraphContractDriftError`, routing into the catch ADR-0080 already wrote and
+  nothing was reaching.
+- **The digest claimed a cause it cannot know** ("could not run"), which
+  mis-describes a probe that ran and contradicted itself. Now "completeness is
+  UNVERIFIED".
+
+Graded `critical`/`default` to the health page on the `absorption_empty`
+precedent — same silent-zero shape; the fix is a code change or a Microsoft-side
+wait, not a five-minute operator action, so ADR-0037 Q1 forbids `high`.
+
+**Nothing about today's live behaviour changes**: 11/11/0 still reports 11/11/0.
+Migration adds one enum value; no table change.
+
+### Also repaired
+
+`CHANGELOG.md` carried **unresolved merge-conflict markers** (`<<<<<<< HEAD` at
+line 42, `=======` at line 124, no terminator) committed by the ADR-0109 squash
+(336d64d, PR #268). Both sides were legitimate sequential entries; markers
+removed, no content dropped, newest-first ordering restored.
+
 ## 2026-08-19 — cloudflared 2026.3.0 -> 2026.8.2 (fleet-wide version-rot remediation)
 
 This stack's tunnel connector was running cloudflared 2026.3.0. Cloudflare
@@ -39,7 +109,14 @@ Image tag only — no functional, ingress, auth or routing change. Fleet-wide
 reasoning, survey, alternatives considered and the monthly supervised bump
 routine: `noc-master/docs/adr/0212-cloudflared-version-rot.md`.
 
-<<<<<<< HEAD
+## 2026-08-19 (9:35 AM PT) — ops: AP morning digest now reaches Morena and Janette, not only Bill
+
+The digest's recipient list is the per-user `notify_daily_digest` pref
+(ap_notification_prefs), and only Bill's was on — this morning's 6:00 AM send
+went to exactly one inbox. At Bill's instruction ("it should be me / morena &
+janette") both managers' prefs were flipped on (audited,
+`system:ap-digest-recipients-20260819`). The `ap_notify` surface is already
+live at both sites, so the next 6:00 AM PT send delivers to all three.
 
 ## 2026-08-18 — three photos where the flow asks for one, and the load already had four (ADR-0109)
 
@@ -121,16 +198,6 @@ Nine production loads already hold more photos than the ceiling allows. Those
 rows are **not retracted** — the cap governs new writes only, `photosRemaining()`
 clamps at 0, and a load already over the ceiling takes no more. One real
 behaviour is withdrawn: the fourth photo of a kind, used once ever.
-=======
-
-## 2026-08-19 (9:35 AM PT) — ops: AP morning digest now reaches Morena and Janette, not only Bill
-
-The digest's recipient list is the per-user `notify_daily_digest` pref
-(ap_notification_prefs), and only Bill's was on — this morning's 6:00 AM send
-went to exactly one inbox. At Bill's instruction ("it should be me / morena &
-janette") both managers' prefs were flipped on (audited,
-`system:ap-digest-recipients-20260819`). The `ap_notify` surface is already
-live at both sites, so the next 6:00 AM PT send delivers to all three.
 
 ## 2026-08-18 (5:00 PM PT) — The probe was wrong, not the password (ADR-0111)
 

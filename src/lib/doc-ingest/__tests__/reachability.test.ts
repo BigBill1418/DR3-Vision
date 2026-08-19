@@ -92,18 +92,36 @@ function liveReachable(): GraphDriveItem[] {
   ];
 }
 
+/**
+ * A `doc_sources` row. `enabled` / `disappeared_at` are modelled because the
+ * module reads BOTH: every source counts as WATCHED (including disabled ones),
+ * but only a LIVE source — enabled and not disappeared — is evidence that
+ * documents exist for the probe to have found. Defaulting them here keeps the
+ * two readings from being silently conflated by a fixture that omits the fields.
+ */
+function source(
+  drive_id: string,
+  item_id: string,
+  over: { enabled?: boolean; disappeared_at?: Date | null } = {},
+): DocSourceRow {
+  return { drive_id, item_id, enabled: true, disappeared_at: null, ...over };
+}
+
+interface DocSourceRow {
+  drive_id: string;
+  item_id: string;
+  enabled: boolean;
+  disappeared_at: Date | null;
+}
+
 /** The three `doc_sources` rows production actually held on 2026-08-07. */
-function liveWatched(): { drive_id: string; item_id: string }[] {
-  return [
-    { drive_id: JANETTE, item_id: TEREX_ID },
-    { drive_id: KELSEY, item_id: 'commodity' },
-    { drive_id: KELSEY, item_id: 'trailer' },
-  ];
+function liveWatched(): DocSourceRow[] {
+  return [source(JANETTE, TEREX_ID), source(KELSEY, 'commodity'), source(KELSEY, 'trailer')];
 }
 
 interface Store {
   connectionState: 'connected' | 'reauth_required';
-  sources: { drive_id: string; item_id: string }[];
+  sources: DocSourceRow[];
   scans: Record<string, unknown>[];
   items: Record<string, unknown>[];
   anomalies: { kind: string; subject: string; detail: string }[];
@@ -288,7 +306,7 @@ describe('runReachabilityScan — the live 2026-08-07 measurement', () => {
     // Bill's kill switch means "stop spending effort on this", not "keep
     // reminding me about it". Re-reporting a deliberately disabled document
     // every sweep is the deduplication failure ADR-0037 question 4 asks about.
-    store.sources = [...liveWatched(), { drive_id: BILL, item_id: 'machine' }];
+    store.sources = [...liveWatched(), source(BILL, 'machine', { enabled: false })];
     const res = await runReachabilityScan(fakePrisma(), searchReturning(liveReachable()), {
       now: NOW,
       scope: SCOPE,
@@ -313,7 +331,7 @@ describe('runReachabilityScan — the live 2026-08-07 measurement', () => {
   });
 
   it('resolves the anomaly — and raises none — when everything is watched', async () => {
-    store.sources = liveReachable().map((i) => ({ drive_id: i.driveId, item_id: i.id }));
+    store.sources = liveReachable().map((i) => source(i.driveId, i.id));
     const res = await runReachabilityScan(fakePrisma(), searchReturning(liveReachable()), {
       now: NOW,
       scope: SCOPE,
@@ -447,7 +465,7 @@ describe('docIngestDiscoveryGapWarning — the 06:00 digest line', () => {
 
   it('stays SILENT only when a successful scan found no gap', async () => {
     const prisma = fakePrisma();
-    store.sources = liveReachable().map((i) => ({ drive_id: i.driveId, item_id: i.id }));
+    store.sources = liveReachable().map((i) => source(i.driveId, i.id));
     await runReachabilityScan(prisma, searchReturning(liveReachable()), {
       now: NOW,
       scope: SCOPE,
@@ -482,5 +500,87 @@ describe('runReachabilityScan — retention keeps the counts, drops the snapshot
     const newestId = store.scans[store.scans.length - 1]?.['id'];
     const scansWithItems = new Set(store.items.map((i) => i['scan_id']));
     expect([...scansWithItems]).toEqual([newestId]);
+  });
+});
+
+// ── ADR-0112 — a zero that contradicts the watched set ──────────────────────
+//
+// The 2026-08-19 blindness review. The scan table was read as "the probe has
+// gone blind" and the premise died on measurement — `reachable_count` had been
+// 11 on every successful scan since 2026-08-07, and the 0 that was read as
+// blindness was `gap_count`, which went to 0 legitimately when Bill registered
+// the last six documents at 17:12 PT on 2026-08-15.
+//
+// But the hole the review went looking for is REAL and was unguarded. A
+// SUCCESSFUL search that returns an empty result set — Microsoft's search index
+// lagging, a scope edited into matching nothing, or a projection that drops
+// every hit — lands on the `gap.length === 0` branch and RESOLVES the anomaly
+// with "Every document in scope is being watched (0 of 0)". That is a cheerful
+// all-clear assembled from nothing, and it is indistinguishable, in the scan
+// row and in the digest, from the genuinely healthy 11/11/0 that runs today.
+//
+// The contradiction is what makes it decidable without guessing: Vision was
+// reading eleven live documents in the same sweep. "I can see zero documents"
+// and "I am successfully reading eleven documents" cannot both be true.
+describe('runReachabilityScan — a zero that contradicts the watched set is not an all-clear', () => {
+  it('raises the CONTRADICTION instead of resolving to a quiet "gap 0"', async () => {
+    // Search SUCCEEDS — no throw, no error, `truncated: false` — and returns
+    // nothing, while eleven enabled, non-disappeared sources are on the books.
+    store.sources = liveReachable().map((i) => source(i.driveId, i.id));
+
+    const res = await runReachabilityScan(fakePrisma(), searchReturning([]), {
+      now: NOW,
+      scope: SCOPE,
+    });
+
+    // Phrased as a VERDICT for the same reason the 503 guard above is: the whole
+    // risk is a failure that LOOKS like health, so the red has to show it looking
+    // like health rather than printing `expected null not to be null`.
+    const verdict =
+      res.error === null
+        ? `ALL-CLEAR: ${res.reachable} readable, ${res.watched} watched, gap ${res.gap.length}`
+        : `CONTRADICTION: ${res.error}`;
+    expect(verdict).toMatch(/^CONTRADICTION: /);
+
+    // Persisted as a scan that CANNOT be trusted, not as a clean zero.
+    expect(store.scans).toHaveLength(1);
+    expect(store.scans[0]?.['error']).toMatch(/0 document/);
+
+    // And the gap anomaly is NOT resolved. Resolving here would clear a standing
+    // alert on the strength of a measurement that just proved itself unreliable.
+    expect(store.resolved).toHaveLength(0);
+    expect(store.anomalies).toHaveLength(1);
+    expect(store.anomalies[0]?.kind).toBe('discovery_probe_contradiction');
+  });
+
+  it('stays QUIET when the zero is explainable — no live source contradicts it', async () => {
+    // The legitimate empty tenant: nothing enabled, nothing undeleted. A zero
+    // here contradicts nothing, and shouting would make the guard wallpaper.
+    store.sources = [
+      source(KELSEY, 'commodity', { enabled: false }),
+      source(KELSEY, 'trailer', { disappeared_at: new Date('2026-08-01T00:00:00Z') }),
+    ];
+
+    const res = await runReachabilityScan(fakePrisma(), searchReturning([]), {
+      now: NOW,
+      scope: SCOPE,
+    });
+
+    expect(res.error).toBeNull();
+    expect(res.reachable).toBe(0);
+    expect(store.anomalies).toHaveLength(0);
+    expect(store.resolved).toEqual([{ kind: 'discovery_gap', subject: REACHABILITY_SUBJECT }]);
+  });
+
+  it('tells the DIGEST the figure is unverified, rather than staying silent', async () => {
+    const prisma = fakePrisma();
+    store.sources = liveReachable().map((i) => source(i.driveId, i.id));
+    await runReachabilityScan(prisma, searchReturning([]), { now: NOW, scope: SCOPE });
+
+    // `gap_count` is 0 on this row, which is precisely the value the digest
+    // treats as the one quiet case. It must branch on `error` FIRST.
+    const line = await docIngestDiscoveryGapWarning(prisma, NOW);
+    expect(line).not.toBeNull();
+    expect(line).toMatch(/0 document/);
   });
 });

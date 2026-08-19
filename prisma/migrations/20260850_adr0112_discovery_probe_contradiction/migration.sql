@@ -1,0 +1,39 @@
+-- ADR-0112 — a reachability zero that contradicts the watched set.
+--
+-- The 2026-08-19 blindness review found the reported symptom was not real: the
+-- probe's `reachable_count` had been 11 on every successful scan since
+-- 2026-08-07, and the zero that was read as blindness was `gap_count`, which
+-- reached 0 legitimately when the last six documents were registered at
+-- 17:12 PT on 2026-08-15.
+--
+-- The hole it went looking for, however, was real and unguarded. A SUCCESSFUL
+-- `POST /search/query` that returns an empty result set — a lagging search
+-- index, a scope edited into matching nothing, a projection that drops every
+-- hit — lands on the `gap.length === 0` branch of `runReachabilityScan` and
+-- RESOLVES the standing anomaly with "Every document in scope is being watched
+-- (0 of 0)". A cheerful all-clear assembled from nothing, indistinguishable in
+-- both the scan row and the 06:00 digest from the healthy 11/11/0 that runs
+-- today.
+--
+-- This kind is what that zero is recorded as instead, whenever Vision was
+-- reading at least one live source in the same sweep: "I can see zero
+-- documents" and "I am successfully reading eleven" cannot both be true.
+--
+-- A SEPARATE kind rather than a second subject under `discovery_gap` because
+-- the two grade differently and must: a gap is `warning`/`default` (a human
+-- deciding whether a document belongs in the pipeline — a same-day question),
+-- while this is `critical` (the guard itself has stopped being able to answer).
+-- The policy table is `Record<DocIngestAnomalyKind, AnomalyPolicy>`, so adding
+-- the value makes `tsc` demand the grading rather than letting it default.
+--
+-- Postgres limitation: ALTER TYPE ... ADD VALUE cannot run inside the same
+-- transaction as a statement that USES the new value. Nothing here does, and
+-- Prisma's runner executes each statement separately, so this is safe.
+--
+-- NO table change: the contradiction is recorded in the EXISTING
+-- `doc_ingest_reachability_scans.error` column, which every consumer already
+-- branches on before reading a count (that branch is ADR-0080's own rule, and
+-- it was already correct — nothing was reaching it).
+
+-- AlterEnum
+ALTER TYPE "DocIngestAnomalyKind" ADD VALUE 'discovery_probe_contradiction';
