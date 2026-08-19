@@ -39,6 +39,7 @@ export {
   extractRecord,
   detailUrl,
   looksLoggedOut,
+  looksDefinitelyLoggedOut,
   type PortalClient,
   type PortalClientOptions,
   type ListRecordIdsResult,

@@ -19,6 +19,7 @@ vi.mock('@/lib/observability/logger', () => ({
 import {
   renderSubject,
   renderHtmlBody,
+  renderEodInventoryHtml,
   sendDailyReport,
 } from '@/lib/bonus/daily-report-notifications';
 import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
@@ -260,7 +261,14 @@ function makeEod(overrides: Partial<EodInventorySnapshot> = {}): EodInventorySna
     flowThrough: REPORT_DAY,
     movementToday: true,
     inboundProvisional: false,
+    // handoff #270 §4b — a HEALTHY default: intake arrived on the report day, so
+    // the base fixture carries no suspicion flag and every existing expectation
+    // about the healthy panel keeps measuring what it always did.
+    inboundThrough: REPORT_DAY,
+    inboundDaysSince: 0,
+    inboundStale: false,
     staleDays: 14,
+    inboundStaleDays: 4,
     ...overrides,
   };
 }
@@ -271,6 +279,150 @@ function bodyWithEod(eod: EodInventorySnapshot | undefined): string {
     includeComparisons: false,
   });
 }
+
+// ── handoff #270 §4 — a wrong on-hand can never render silently ─────────────
+//
+// The disease this closes: the panel printed a confident figure no matter how
+// starved its inputs were. Woodland's −5,401 (July) and −2,439 (August) went out
+// on the production report as though someone had measured them.
+//
+// Two shapes, deliberately different:
+//   NEGATIVE     — impossible. The figure is REPLACED by a diagnostic. The
+//                  load-bearing assertion is the absence one: the bare number
+//                  must not appear anywhere in the body.
+//   INTAKE STALE — the figure is still the best available, so it RENDERS, with a
+//                  flag saying why it is suspect.
+describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
+  /** A floor that has walked negative behind a fresh, measured, same-day anchor —
+   *  the worst case, because everything about the anchor looks trustworthy. */
+  const negativeEod = () =>
+    makeEod({
+      state: 'negative',
+      programOnHand: -2439,
+      nonProgramOnHand: 512,
+      totalOnHand: -1927,
+      programPct: null,
+      nonProgramPct: null,
+      inboundThrough: utc(2026, 7, 9),
+      inboundDaysSince: 13,
+      inboundStale: true,
+    });
+
+  // ── FALSIFICATION (banner) ──────────────────────────────────────────────
+  // Verified by hand against the pre-fix renderer (no `negative` branch, so this
+  // fixture fell through to the healthy path): the banner assertions failed with
+  // `expected '…' to contain 'On-hand is computing negative'`, and the ABSENCE
+  // assertions below failed because the body really did contain '−2,439'.
+  it('renders the LOUD banner instead of the figures', () => {
+    const html = bodyWithEod(negativeEod());
+    expect(html).toContain('On-hand is computing negative');
+    expect(html).toContain('2,439'); // the magnitude, inside the sentence
+    expect(html).toContain('This figure is not reliable');
+  });
+
+  it('explains WHY — the intake age, not just that it is broken', () => {
+    const html = bodyWithEod(negativeEod());
+    expect(html).toContain('Intake data is incomplete');
+    expect(html).toContain('13 days old');
+  });
+
+  // THE assertion of this whole concern. A banner that appears NEXT TO the bare
+  // negative has changed nothing: the number still gets read, quoted and pasted.
+  //
+  // Scoped to the PANEL, not the whole body, so the claim is precise. The
+  // magnitude does appear once, inside the sentence "computing negative (−2,439)"
+  // — that is the diagnostic, and the handoff asks for it explicitly. What must
+  // not exist is the figure in a VALUE position: a labelled row, a bold figure, a
+  // tabular-numeral cell. Those are what get read as a measurement.
+  it('does NOT render the negative in any value position', () => {
+    const panel = renderEodInventoryHtml(negativeEod(), 'Woodland');
+
+    // No labelled figure rows at all.
+    expect(panel).not.toContain('Program units on hand');
+    expect(panel).not.toContain('Non-program units on hand');
+    expect(panel).not.toContain('Total on hand');
+    // No right-aligned tabular-numeral cells — the panel's figure-cell signature.
+    expect(panel).not.toContain('tabular-nums');
+    // No derived figures computed off a broken floor.
+    expect(panel).not.toContain('Change from yesterday');
+    expect(panel).not.toContain('Program / non-program split');
+
+    // The magnitude appears EXACTLY ONCE, and it is inside the diagnostic sentence.
+    expect(panel.split('2,439').length - 1).toBe(1);
+    expect(panel).toContain('computing negative (−2,439)');
+  });
+
+  // Proves the assertion above is not true-by-construction. The SAME renderer,
+  // the SAME fixture shape, positive figures: every marker claimed absent above is
+  // demonstrably present on a healthy floor. Without this control, "does not
+  // contain 'Total on hand'" would also pass on an empty string.
+  it('(control) every one of those markers DOES render on a healthy floor', () => {
+    const panel = renderEodInventoryHtml(makeEod(), 'Woodland');
+    expect(panel).toContain('Program units on hand');
+    expect(panel).toContain('Non-program units on hand');
+    expect(panel).toContain('Total on hand');
+    expect(panel).toContain('tabular-nums');
+    expect(panel).toContain('Change from yesterday');
+    expect(panel).toContain('Program / non-program split');
+  });
+
+  it('still names the anchor, so the reader knows how to fix it', () => {
+    const html = bodyWithEod(negativeEod());
+    expect(html).toContain('Last physical count');
+    expect(html).toContain('A physical count resets the floor');
+  });
+
+  it('a NEGATIVE PROGRAM pool inside a positive total is still banner-worthy', () => {
+    // MRC bills on program units, so this is a billing-grade error that a
+    // total-only check would wave straight through.
+    const panel = renderEodInventoryHtml(
+      makeEod({ state: 'negative', programOnHand: -300, nonProgramOnHand: 1200, totalOnHand: 900 }),
+      'Woodland',
+    );
+    expect(panel).toContain('On-hand is computing negative');
+    expect(panel).toContain('(−300)'); // the worst pool, not the positive total
+    expect(panel).not.toContain('Program units on hand');
+  });
+
+  it('falls back to a truthful line when the site has NO inbound on record', () => {
+    // Eugene's standing condition. Asserting "0 days old" here would read as
+    // though intake were perfectly healthy, which is the opposite of the truth.
+    const html = bodyWithEod(
+      makeEod({ state: 'negative', totalOnHand: -5, inboundThrough: null, inboundDaysSince: null }),
+    );
+    expect(html).toContain('no inbound has ever been recorded');
+    expect(html).not.toContain('days old');
+  });
+
+  // ADR-0058 §3.3 gates its "estimated floor after today" block on
+  // `state === 'healthy'`, so the new state suppresses it for free. Pinned,
+  // because the alternative is projecting tomorrow's floor off a broken one.
+  it('suppresses the ADR-0058 estimated-floor block', () => {
+    const html = bodyWithEod(negativeEod());
+    expect(html).not.toContain('Estimated floor after today');
+  });
+});
+
+describe('renderHtmlBody — EOD inventory, stale intake (§4b)', () => {
+  it('renders the number WITH a why-suspect flag when intake has gone quiet', () => {
+    const html = bodyWithEod(makeEod({ inboundStale: true, inboundDaysSince: 9 }));
+    // The figure still renders — this is the best available number, unlike §4a.
+    expect(html).toContain('3,748');
+    expect(html).toContain('Intake feed is quiet');
+    expect(html).toContain('9 days old');
+    expect(html).toContain('trends low until intake catches up');
+  });
+
+  it('names the tolerance it breached, so the flag is auditable', () => {
+    const html = bodyWithEod(makeEod({ inboundStale: true, inboundDaysSince: 9 }));
+    expect(html).toContain('4-day tolerance');
+  });
+
+  it('renders NO flag when intake is current', () => {
+    const html = bodyWithEod(makeEod({ inboundStale: false, inboundDaysSince: 0 }));
+    expect(html).not.toContain('Intake feed is quiet');
+  });
+});
 
 describe('renderHtmlBody — EOD inventory', () => {
   it('HEALTHY renders the figures, delta, split, count date and counter', () => {

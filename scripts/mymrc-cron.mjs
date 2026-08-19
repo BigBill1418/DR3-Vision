@@ -24,7 +24,25 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRAPE_SCRIPT = resolve(__dirname, 'mymrc-scrape.mjs');
 const HOUR_MS = 60 * 60 * 1000;
-const BOOT_DELAY_MS = 5_000; // Tiny delay so postgres healthcheck likely settled.
+/**
+ * Delay before the BOOT scrape (ADR-0111).
+ *
+ * Was 5 s, which put the boot scrape squarely inside the stack recreation. Both
+ * boot scrapes observed on 2026-08-18 failed there, each in a different way:
+ *   - 3:50:52 PM — Chromium came up but the portal auth verdict lost its race
+ *     against Aura hydration ("still logged out after fresh login");
+ *   - 4:38:21 PM — `chrome-headless-shell` took SIGSEGV ~2 s after container
+ *     start, while ~20 sibling containers were still being recreated.
+ * Both self-healed at the next top-of-hour on an unchanged credential.
+ *
+ * 90 s clears the observed recreation window (~17 s of container churn plus
+ * migrate/healthcheck settling) with headroom, and still populates the queue
+ * long before the next hourly anchor. Override with `MYMRC_BOOT_DELAY_MS`.
+ */
+const BOOT_DELAY_MS = (() => {
+  const raw = Number(process.env.MYMRC_BOOT_DELAY_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 90_000;
+})();
 
 let inFlight = false;
 let stopping = false;

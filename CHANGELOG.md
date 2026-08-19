@@ -9,6 +9,8 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+<<<<<<< HEAD
+
 ## 2026-08-18 — three photos where the flow asks for one, and the load already had four (ADR-0109)
 
 Handoff #264 Item 1, under Bill's _no more sheets_: give a load room for the
@@ -89,6 +91,475 @@ Nine production loads already hold more photos than the ceiling allows. Those
 rows are **not retracted** — the cap governs new writes only, `photosRemaining()`
 clamps at 0, and a load already over the ceiling takes no more. One real
 behaviour is withdrawn: the fourth photo of a kind, used once ever.
+=======
+
+## 2026-08-19 (9:35 AM PT) — ops: AP morning digest now reaches Morena and Janette, not only Bill
+
+The digest's recipient list is the per-user `notify_daily_digest` pref
+(ap_notification_prefs), and only Bill's was on — this morning's 6:00 AM send
+went to exactly one inbox. At Bill's instruction ("it should be me / morena &
+janette") both managers' prefs were flipped on (audited,
+`system:ap-digest-recipients-20260819`). The `ap_notify` surface is already
+live at both sites, so the next 6:00 AM PT send delivers to all three.
+
+## 2026-08-18 (5:00 PM PT) — The probe was wrong, not the password (ADR-0111)
+
+At 3:51 PM the MyMRC scrape worker paged: `mymrc: still logged out after fresh
+login (admin)`. The stored admin credential — created 2026-07-22, never rotated —
+was the prime suspect, then a Salesforce Experience Cloud device-verification
+challenge. **Both died on measurement, and the credential was never touched.**
+
+**Bill's browser worked, and so did the scraper.** The 4:00 PM cycle, nine
+minutes after the page, ran fully clean on the same stored credential: all four
+feeds, mirror freshness green, exit 0. The question was never "why can't it log
+in" — it was "why does it sometimes believe it hasn't".
+
+**One controlled login, captured.** A single headless login from the scraper image
+landed authenticated: the post-submit page carried the "Switch Account" banner and
+the "viewing as DR3" context. No verification challenge, no authentication error,
+no lockout notice.
+
+**The decisive run.** Re-using ONE authenticated session across twelve
+navigations — spending no further logins — and reading the auth state twice per
+navigation:
+
+| Read                                         | Verdict                   |
+| -------------------------------------------- | ------------------------- |
+| At `domcontentloaded` (what production does) | **logged out in 3 of 12** |
+| After `networkidle` + settle                 | logged **in** in 12 of 12 |
+
+The session was authenticated every time. The probe disagreed 25% of the time.
+Those trials ran against a warm, idle portal — the race belongs to the check, not
+to container boot; a boot storm only makes it likelier to lose.
+
+**Why.** `/s/` is an Aura SPA whose authenticated markers paint client-side
+_after_ `domcontentloaded`. `looksLoggedOut` is a positive test — correctly so
+since ADR-0038 D4 — but it reaches its verdict two ways: a real sign-in form
+(decisive) or merely no marker (an assumption). On an Aura shell those are
+indistinguishable. Verified against the live capture: the shell carries no
+sign-in markup, no sign-in URL and no banner, and an anonymous `/s/` renders that
+_same_ shell. `collectAura` already waits `networkidle` + 6 s for exactly this
+reason. Only the auth read did not.
+
+### Fixed
+
+- **The auth verdict waits for the page to decide.** New `looksDefinitelyLoggedOut`
+  reports decisive evidence only; `isLoginPage` — the one choke point all six
+  consumers share — polls every 250 ms up to 15 s. Fail-loud is preserved; the
+  bound is a poll _count_, not wall-clock. Honest cost, pinned by a test: an
+  expired session renders that same undecided shell, so it waits out the budget
+  before failing.
+- **Session failures appear in the ledger.** `openAdminSession` throws before the
+  first feed row, so `mymrc_sync_runs` read 100% green straight through this
+  incident and the only evidence was a container log that a redeploy destroys —
+  and did. Session failures now write `feed='__session__'`. No schema change.
+- **The page waits for self-heal.** It fired on the _first_ failed tick, gated by
+  a cooldown `Map` held in the per-tick process — which exits after every tick, so
+  it gated nothing. The ledger now supplies real cross-tick memory: pages on the
+  second failure within an hour (ADR-0037 Q3), and fails **open** so broken
+  bookkeeping can never silence a real outage.
+- **The boot scrape stops racing its own stack.** `BOOT_DELAY_MS` 5 s → 90 s
+  (`MYMRC_BOOT_DELAY_MS` to override). Both boot scrapes that day died inside the
+  stack recreation — one to this race, one to a `chrome-headless-shell` SIGSEGV
+  about two seconds after container start — and both healed at the next
+  top-of-hour, untouched.
+
+### Verification
+
+Falsified by reverting `isLoginPage` to its single read: the regression test then
+fails with the incident's own string. The unhydrated-shell fixture is a live
+capture and carries a guard test — its first draft described the sign-in markup in
+its own header comment, which the predicates scan, making the fixture assert the
+opposite of its purpose. The test caught it.
+
+## 2026-08-18 (3:30 PM PT) — An untaught kind, an unguarded door, and a number the building cannot hold (ADR-0110)
+
+Bill: on-hand inventory is _constantly_ wrong, especially on the production
+report, and it goes negative on both sites. **Two of the four suspected causes
+died on measurement, and that is the most useful thing in this entry.**
+
+**The report does NOT compute on-hand a second way.** The standing suspicion was
+that `getEodInventorySnapshot` re-derived the balance independently of `onHand` —
+"two modules, two chances to disagree". It already delegates _both_ day balances
+to `onHand`; live Woodland reads 442 program / 397 non-program / 839 total,
+identical on both paths. Its own aggregate queries are `_max` **date** keys for
+freshness, not units. There was nothing to unify.
+
+**Woodland's inbound is not under-fed today.** Anchor 2,483 (07-22) + inbound
+18,392 + dropoffs 92 − stripped 20,128 = **839**, to the unit. No negative in the
+trailing 14 days, zero undated hauls against 7,372 Delivered, and the 15
+`Confirmed` hauls are _future_ appointments — what a healthy scheduling feed looks
+like. No inbound recovery was run, and none was needed.
+
+**Eugene is EMPTY, not negative.** No anchor has ever been set, `inbound_loads` is
+empty all-time, no mirror or processed rows. Its `0` is not a measurement of an
+empty building; it is the absence of any measurement. Tonight's count gives it a
+first anchor (Tier 0 — no prior, no swing arithmetic, nothing in the way).
+
+### What was actually wrong
+
+**A drop-off `kind` nobody taught the balance about.** `onHand` summed consumer
+drop-offs with **no `kind` predicate**, so every kind — present and future —
+landed in the PROGRAM pool by default. ADR-0085 added `floor_public` and
+`floor_incentive` and this reader absorbed them without anyone deciding it should.
+It happened to be right. MRC is billed on program units, so a mis-routed kind is a
+mis-invoice **indistinguishable from a correct one**. Now gated twice, because the
+enum can grow through two doors: a total `Record<ConsumerDropoffKind, 'program'>`
+fails `tsc` with `TS2741` on a new member, and `sumTaughtDropoffKinds` **throws**
+on a kind the database returns that the module was never taught — the raw
+`ALTER TYPE` door the compile gate is blind to. The query is a `groupBy(['kind'])`
+on the same table, window and round trip; the grouping buys no arithmetic, it buys
+the reader the ability to _see_ what it is adding up.
+
+**A negative floor rendered as though someone had measured it.** The building
+cannot hold −2,439 mattresses. `EodInventoryState` gains `negative`, checked
+**before** freshness — a negative behind a _fresh_ anchor is the worst case, not an
+acceptable one, and the precedence makes every existing `state === 'healthy'` guard
+(notably the ADR-0058 estimated-floor block) stop deriving from a broken floor for
+free. Either **pool** counts, not just the total: a −300 program pool inside a +900
+total is a billing error a total-only check waves through. On the report and the
+floor tile the figure is **replaced** by the banner, not shown beside it — a
+negative printed anywhere gets pasted into a spreadsheet — and the tile's
+days-remaining line is suppressed outright rather than CSS-hidden, because
+`display:none` still ships the sentence to anything reading the page.
+
+**Freshness that could not see intake stop.** `flowThrough` is the max over _every_
+feed, so a site that keeps stripping while intake is frozen reads perfectly fresh —
+the outflow rows hold the max up. That is exactly the 2026-07-22→31 outage: the
+delivered feed froze for nine days, processing kept subtracting, every signal
+stayed green and the floor went negative. Intake now has its own clock
+(`inboundThrough` / `inboundDaysSince` / `inboundStale`), surfaced from the `_max`
+the existing freshness aggregate **already fetched and threw away**. No new query,
+no second freshness system. The threshold is _derived from_ the ADR-0089 mirror
+guard's own 96 h so the two cannot drift apart.
+
+### The one found while verifying, and the one that mattered tonight
+
+**ADR-0072 was enforced on the iPad count path and the hold-release path — but not
+on `POST /api/manager/[site]/snapshots`.** That is the Loads & Inventory desktop
+form a manager actually uses. It went straight to `reconcilePhysicalCount` with no
+tier check: same table, same anchor, same total authority over the floor, none of
+the friction. A 32% swing was accepted with `201` and written. A gated capability
+is only as gated as its **least guarded entry point**. The route now classifies
+server-side and holds Tier 2 exactly as the floor path does, reusing `createHold`
+so the entry is preserved and the release is recorded against whoever approves it.
+Falsified against the real pre-fix handler on `origin/main`, not a hand-mutated
+copy: `expected 201 to be 422`, and the anchor really was written.
+
+**No schema change, no migration, and no live number moves** — the grouped
+drop-off sum is asserted equal to the old bare sum for any all-taught window,
+which is what let this ship on the day of a physical count.
+
+Also in this commit: **`CHANGELOG.md` on `main` carried committed merge-conflict
+markers** (`<<<<<<< HEAD` / `=======` / `>>>>>>> origin/main` at lines 12/73/135),
+which landed with today's ADR-0107 and ADR-0108 entries. Both entries were intact
+inside the block; only the three marker lines were removed.
+
+## 2026-08-18 (2:45 PM PT) — ops: the on-hand Phase-0 diagnosis, and the skip-deploy squash trap's second firing
+
+**Handoff #270 Phase 0 (read-only, reported to Bill before any fix).** Live-DB
+diagnosis of the "chronically wrong on-hand": the report and the canonical
+balance ALREADY agree exactly (`getEodInventorySnapshot` delegates to `onHand`;
+442 / 397 / 839 at Woodland on both paths, arithmetic ties to the unit), no
+negative in 14 days, 0 undated hauls of 7,372 Delivered, the 15 `Confirmed`
+hauls are future appointments. **Eugene is not negative — it is EMPTY**: no
+anchor ever, zero inbound/mirror/processed rows all-time; its 0 is meaningless
+and tonight's EOD count establishes its first anchor (thereafter static until
+Eugene feeds exist — the named follow-up). The one structural hazard confirmed:
+`onHand` sums drop-off units with NO kind filter, so an untaught kind joins the
+pool silently — the fail-loud fix, the report==onHand regression pin, and the
+negative/stale display banners are in build (ADR-0110 expected), targeted to
+land before tonight's count. The count path's ADR-0072 overwrite guardrail and
+Pacific-day handling are under end-to-end verification for tonight.
+
+**Incident: prod ran ~2.5 h without ADR-0108.** The #267 squash merge inherited
+a `[skip-deploy]` trailer from a folded branch-commit message (the same
+mechanism as the 8/15 #261 case — second firing); the deployer forced pull-only
+and logged success. Caught on reconciliation at 2:35 PM PT; the #269 merge
+(explicit clean `--body`) carried ADR-0107 + ADR-0108 to prod together.
+Standing rule recorded in OPEN-ITEMS §0.BD: every squash merge passes an
+explicit `--body`.
+
+## 2026-08-18 (12:05 PM PT) — Start and End hours, and run hours stop being typed (ADR-0107)
+
+The TEREX sheet does not record a duration. It records **two hour-meter
+readings** and computes the duration from them. ADR-0079 captured the answer and
+threw away the question — so nothing could check the subtraction, and two of the
+sheet's nine columns still had nowhere to live in Vision.
+
+**The meter-vs-clock question is RESOLVED, and it is meters.** Measured against
+the live workbook: `Jul26` runs 2,462.75 → 2,608.05, `Aug26` continues
+2,685 → 2,804.8, daily deltas ~6–12 h, and each day's Start is a **formula**
+pointing at the row above (`=F<prev>`, `='Jul26'!F33` across the month
+boundary). This repo's own extractor already said so — it types them "Hour-meter
+readings" and separately flags `Nov24`/`Dec24` as the tabs carrying `Start
+Time`/`End Time` **clock** times. Both shapes exist in the workbook's history;
+the 2025–2026 tabs this product mirrors are meters.
+
+### Added
+
+- **`start_hours` / `end_hours`** — `Decimal(8,2)`, nullable, additive migration.
+  Wider than `run_hours`'s `(5,2)` because a meter is cumulative: at ~2,805 h and
+  ~1,400 h/yr, a `(6,2)` ceiling of 9,999.99 arrives inside the asset's service
+  life.
+- **Start PRE-FILLS from the previous recorded day's End** (`GET ?forDate=`),
+  mirroring the sheet's own carry-forward formula. Editable, still required.
+  Nearest earlier DAY — not highest reading, because a serviced machine can read
+  lower than an older row — and a legacy day with NULL meters prefills nothing
+  rather than seeding a fabricated `0`.
+- **Four DB CHECKs**, proved by insertion against a clean PG16 **including the
+  positive controls**: `meter_pair_complete`, `meter_end_after_start`,
+  `meter_non_negative`, and `run_hours_is_the_difference` — the last being what
+  stops the stored difference and the stored pair from ever disagreeing.
+
+### Changed
+
+- **`run_hours` is DERIVED (`end - start`), stored, and no longer accepted as an
+  input anywhere.** The service throws on `'runHours' in args`, the route's zod
+  schema is `.strict()` so a stale client gets a `422` rather than a silently
+  ignored field, and the UI shows a calculated read-out instead of an input.
+  Leaving the box on screen while the server derived the value would have
+  reintroduced ADR-0079's own two-artifacts-of-one-fact defect at the UI.
+- **`end > start` is refused** — the machine does not run overnight, so an End at
+  or below the Start is a keying error, never a short day. Both readings are
+  rounded to the stored scale BEFORE comparison, so a pair that is ordered at
+  full precision but equal once stored (`2800.001 → 2800.002`) is caught rather
+  than written as a zero-hour day.
+
+### Not backfilled
+
+Existing rows keep their `run_hours` with **NULL** meters. A difference does not
+determine the pair it came from, and a fabricated `0 → 6.5` would be
+indistinguishable from a real reading — and would then propagate through the
+carry-forward. The UI draws `—`, not `0`.
+
+### Deferred, with a reason
+
+The ADR-0081 **workbook importer is not wired to these columns** (ADR-0107 D6).
+`run_hours_is_the_difference` would refuse any sheet row whose own
+`Day Total Hrs Used` disagrees with `End − Start`, and the extractor's own header
+records that such rows exist. Measuring that disagreement is a data question, not
+a code change to guess at.
+
+## 2026-08-18 — the comparand that does not exist, and the outlier that does (ADR-0108)
+
+Handoff #264 asked for expected-vs-actual variance flagging on the outbound
+weights ADR-0104 absorbed. **The premise died on measurement, before any code was
+written**, and that is recorded rather than worked around:
+`mymrc_outbound_mirror` carries a weight for **0 of 4,685** loads and no
+weight-like key anywhere in its payload; positive unit counts exist on **1 of the
+831** joined loads, so there is no lbs-per-unit denominator either; and the
+workbook's own total-vs-parts is already reconciled at **0 drift on 831 of 831**.
+There is no expected-vs-actual pair, and inventing one would make the guess
+authoritative by being first (ADR-0080 §D7).
+
+**What shipped instead is what the data supports: per-commodity load-weight
+outlier flagging**, seeded from the measured distribution of the pinned revision.
+
+- **A second measurement changed the shape of that too.** A symmetric `±k×MAD`
+  bound in pounds is structurally blind below the median — weight ≥ 0 caps the
+  reachable low-side deviation at `median/MAD`, which for Wood is **4.01 MAD**,
+  so no `k ≥ 4.01` can ever flag a low Wood weight however absurd. The real
+  keying-error row `Wood 40 lb` (median 3,170) sits at 3.96, just inside. The
+  deviation is therefore measured in **log space**, making the band a ratio and
+  genuinely two-sided; `Wood 40 lb` lands 16.5 steps out.
+- **Thresholds are an editable table**, not constants: `outbound_variance_config`
+  (median, spread step, `k`, minimum-n, on/off) on the `processor_quota_config`
+  precedent, retunable by an admin at `/admin/doc-ingest/outbound-variance`
+  without a deploy. Defaults `k = 6`, `min_sample_n = 20` — k=6 puts **14 of 831
+  loads (1.7%)** on the list against 41 at k=5 and 60 at k=4, and the floor turns
+  flagging off for the six commodities too thin to estimate a spread from
+  (Cotton n=3 spreads by ×2.29; three singletons whose zero-width band would flag
+  every row that is not exactly the median).
+- **AK-4c is untouched.** Flags are a _look-at-this_: the copy says a load
+  "exceeds the current variance threshold (editable)" and never wrong, mismatch,
+  error or dispute; there is **no alert channel and no email**; and a test scans
+  the rendered copy and fails the build on the vocabulary of blame. What a
+  difference _means_ is still Bill's decision with Rick and Janette.
+- **Dollar-side matching is BLOCKED and was not built.** No join key survives:
+  normalized invoice# ↔ mirror BOL overlaps **4** of 233 distinct expense keys
+  against 4,628 mirror BOLs (bare-numeric collisions), invoice# ↔ Materials ID
+  **0**, `commodity_raw` ↔ Materials ID **0** (it holds 12 commodity _names_),
+  and the 6 `haul_ref` values are `H-` **inbound** hauls, not outbound `M-` loads.
+  Four accidental matches would have looked exactly like a working feature.
+
+Honesty rails, each falsified first: flags compute only inside the pinned winning
+revision (`versionId` is a required argument, and deleting the version clause
+makes the suite flag a 40 lb row the winning revision had already corrected to
+3,300 — failure quoted in ADR-0108 §8); an uncovered load is **not covered**,
+never "0 variance" and never flagged; a recorded `0` is "carried none", not a low
+outlier.
+
+**Item 5 of the same handoff verified green** — the §12 reconcile module and
+coverage page match their contract clause for clause. One amendment: the
+uncovered-count stat tile now reads _"expected — outside the workbook's range,
+not missing data"_ rather than _"no watched document supplies these"_, which was
+true and read like a fault. The number is ~3,850 (P-47) and a reader who takes it
+for data loss goes hunting a bug that is not there.
+
+Note the surface renders at `staged` scope today, because both ADR-0104 batches
+are still staged awaiting Bill (OPEN-ITEMS §0.BB). Flagging follows whichever
+scope the page renders and **never promotes staged to confirmed**.
+
+Admin-only. Not a floor surface.
+
+> > > > > > > origin/main
+
+## 2026-08-18 (11:15 AM PT) — the manager can fix yesterday, inside this month (ADR-0106)
+
+Yesterday's entry recorded the standing tension plainly: the team keeps editing
+the TEREX workbook, and the fix Bill wants is them moving to Vision's equipment
+entry. This closes the half of that Vision was responsible for.
+
+ADR-0079 D4 refused **every** prior day with `409 requires_amendment` and named
+the office as the route. The floor did not go to the office — it went back to the
+sheet, which is the artifact "no more sheets" exists to retire. A refusal the
+users can route around is not a control; it is a redirect to the system you were
+retiring.
+
+### Changed
+
+- **Prior-day entry and edit are ACCEPTED for any date in the current Pacific
+  calendar month.** A date in a prior month is still refused with the same
+  `409 requires_amendment` — the `409` body now also carries `monthStart`, so the
+  refusal states the rule and not only the verdict.
+- **A backdated change REQUIRES a reason**, stored on the audit row as
+  `prior_day: true` / `prior_day_reason`, beside the actor and timestamp
+  `audit_log` already carries. Who, when, why. Refused `422` without one, and
+  nothing is written — no row, and no audit row claiming one.
+- **No approval gate**, on ADR-0079 D4's own evidence:
+  `resolveAmendmentApprover` 403s any requester who is not a bonus payroll
+  signer, so a four-eyes step would hand this feature's audience a refusal they
+  could do nothing about (OPEN-ITEMS F-2, unchanged).
+- **The same bound now applies to the VOID path.** `voidDailyThroughput` had no
+  date bound at all — the UI hid the button, the API did not. Left alone, last
+  month's figure would have been uncorrectable but **erasable**.
+
+### Added
+
+- `monthStartOfDayKey(day)` in `src/lib/time.ts`. `appCurrentMonthStart` takes an
+  **instant**; feeding it a `@db.Date` day key returns the WRONG month, measured:
+  key `2026-08-01` → `2026-07-01`, because UTC midnight re-reads as 17:00 the
+  previous Pacific day. As a month floor that fails **open** on the 1st of every
+  month. `appCurrentMonthStart` is now expressed in terms of the new helper so
+  the two cannot drift.
+
+### Not touched
+
+`run_hours NOT NULL`, the `(equipment_id, throughput_date)` partial unique, and
+every read path. The month bound is a write-path predicate. **No migration.**
+
+## 2026-08-18 (11:15 AM PT) — a manager can correct an operator's count without ringing Bill (ADR-0105)
+
+ADR-0084 gave the **floor** a same-day self-void and explicitly left the desk
+with nothing: _"a count discovered wrong the next morning is a phone call, not a
+tap."_ It has been a phone call ever since, and the right number gets written on
+paper beside the sheet. This closes that.
+
+A manager (or admin) at the count's own site can now correct a physical count
+taken **today or yesterday, Pacific**. The corrected value becomes the live
+anchor and the prior value is retained — nothing is ever deleted.
+
+### Added
+
+- **`correctPhysicalCount`** (`src/lib/inventory/correct-count.ts`) and
+  **`POST/GET /api/manager/[site]/snapshots/[id]/correct`**. Gated on
+  `requireManagerForSite` via `requireActivatedManager` — **operators are refused
+  403** and keep exactly the ADR-0084 Am.1 self-void they already had.
+- **Edit in place, with soft-void discipline.** The corrected value is written as
+  a new `physical` snapshot carrying the **original's `snapshot_at`** (so the
+  count stays on the day it was taken), and the row it corrects is soft-voided
+  with ADR-0084's existing `voided_at`/`voided_by`. **No new column and no new
+  reader obligation** — all thirteen ADR-0084 anchor readers honour this for free.
+- **Storage-layer audit, enforced.** Both audit rows (`insert` on the new row,
+  `update` on the corrected one — who / when / from / to / whose entry /
+  `corrected_to`) are written in the same transaction and then **read back before
+  it commits**. A missing audit row aborts the whole thing, so the failure mode is
+  "the correction did not happen", never "the correction happened quietly".
+- **No approval gate** — Bill's decision, recorded in ADR-0105 D4 so nobody later
+  "restores" a gate that was never removed.
+
+### Fixed before it shipped
+
+- **The delta trap.** Re-deriving `reconciled_delta` via `reconcilePhysicalCount`
+  would anchor `onHand` on **the row being corrected** (it ties on `snapshot_at`,
+  wins the `created_at` tiebreak, and the soft-void is invisible to it because
+  that read runs outside the transaction). It would have recorded the size of the
+  typo — `−45` — where the drift against the running balance belongs: `−28`. The
+  baseline is now preserved arithmetically. Falsified in the suite.
+- **A false green, caught.** The first `npm run typecheck` in the fresh worktree
+  reported success while printing `sh: 1: tsc: not found` — no `node_modules`,
+  and the output was piped into `tail`, so the exit code was `tail`'s. Every gate
+  was re-run with the exit code preserved.
+
+### Verified
+
+Typecheck clean, ESLint clean (`--max-warnings 0`), Prettier clean on every
+authored file. **1,524 passed / 39 skipped** across `src/lib/{inventory,audit,cor,loads,dashboard,bonus}`,
+`src/app/api/manager` and the ADR-record integrity suite — including the
+payroll-critical bonus suite, untouched and green. `check-adr-citations`: 4,497
+citations across 1,218 files resolve.
+
+**Seven falsifications, each broken on purpose and observed red:** audit read-back
+deleted; window narrowed to today; window widened to three days; delta re-derived;
+`entered_by` dropped; hard delete instead of soft-void; role gate removed. The
+hard-delete one was **rewritten** after it first went red for the wrong reason
+(the fake Prisma had no `deleteMany`, so the double was refusing rather than the
+assertion catching).
+
+### Premise that died
+
+**"Counts feed pay" is false**, and the repo says so in an executed test:
+`src/lib/bonus/__tests__/saves-inventory.test.ts` asserts the payroll saves path
+writes to nothing but `unit_status_movements`, with
+`expect(touchedModels).not.toContain('siteInventorySnapshot')`. A physical count
+feeds `onHand` → the floor, the EOD report, the COR and MRC billing — the
+**revenue** path, not payroll. Still money-adjacent; the mechanism is not the one
+the handoff named.
+
+### The screen, shipped with it (ADR-0105 D9)
+
+An API a manager cannot reach relocates the phone call rather than retiring it,
+so `/dashboard/[site]/count-corrections` ships in the same change — linked from
+`/dashboard/[site]/loads-inventory`, the page a manager is already on when the
+balance looks wrong.
+
+- **Same gate as the API**, and it runs BEFORE the counts are read — a page that
+  fetched first and denied second would ship numbers to a browser not allowed to
+  see them. The test asserts the read never happened, not that the markup looks
+  right.
+- **`correctable` is computed server-side** from the same predicate the service
+  gates on, so the screen cannot offer a Correct button on a row the service
+  refuses. Superseded and floor-withdrawn rows carry no affordance.
+- **Refusals surface VERBATIM** — the 409 already names the counted day, today,
+  the earliest correctable day and the route to use instead. Re-wording it in the
+  client would create a second copy of the window rule that can drift from the
+  enforced one.
+- **The chain renders honestly**: the superseded value stays visible, struck
+  through, labelled `superseded by <value>` with the corrector's name; the live
+  row says `corrected from <value>`; an ADR-0084 floor void says `withdrawn on
+the floor`. No verdict language — pinned by a test asserting "wrong", "error",
+  "mistake", "invalid" and "incorrect" never render against a count.
+- `listCorrectableCountsAtSite` → **`listWindowCountsAtSite`**, now returning live
+  AND superseded rows with chain links. Deliberately not `NOT_VOIDED`-filtered and
+  allowlisted in the reader guard on ADR-0084 D3's grounds: a history is not an
+  anchor selector, and hiding the retained value would defeat the soft-void
+  discipline in the UI instead of in the database.
+
+**Four more falsifications, each observed red:** the Correct button stops
+checking `correctable`; the page calls its auth guard but ignores the refusal;
+the 409 is re-worded instead of surfaced; the history reader filters voided rows
+out. The page-gate break was **rewritten** after its first form went red by
+crashing (`Cannot read properties of undefined`) rather than on the claim.
+
+### Known residual
+
+**The daily report's "counted by" line names the manager for a corrected count**
+(`resolveCounter` reads the insert audit row's actor; the operator is preserved as
+`counted_by`). Deliberately not fixed — changing it changes a report that is sent.
+Tracked in OPEN-ITEMS §0.BC.
+
+> > > > > > > origin/main
 
 ## 2026-08-17 (7:30 PM PT) — ops: five staged TEREX revisions cleared; the guardrail and the floor's habits are now visibly at odds
 

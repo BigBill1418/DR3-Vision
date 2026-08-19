@@ -546,6 +546,13 @@ function CostPanel({ throughput }: { throughput: EquipmentThroughput }) {
 
 // ── Daily throughput capture (ADR-0079) ────────────────────────────────────
 //
+// ADR-0106 — mirrors `MIN_PRIOR_DAY_REASON_CHARS` in the SERVICE, deliberately
+// as a literal. `daily-throughput.ts` imports `@/lib/prisma`, so importing the
+// constant from it would pull the Prisma client into this client bundle. The
+// service is the enforcer — this copy only spares the manager a round trip, and
+// the same reasoning is why the run-hours bounds below are literals too.
+const MIN_PRIOR_DAY_REASON_CHARS = 4;
+//
 // The replacement for the sheet's Terex column: units processed + run hours,
 // entered by the manager, once a day. `onClick` only (hard rule #10).
 function DailyThroughputEntry({
@@ -560,18 +567,46 @@ function DailyThroughputEntry({
   const [rows, setRows] = useState<DailyThroughputView[]>([]);
   const [date, setDate] = useState(todayIso());
   const [units, setUnits] = useState('');
-  const [runHours, setRunHours] = useState('');
+  // ADR-0107 — the two hour-METER readings. Run hours are no longer typed; they
+  // are `end - start`, shown below as a derived read-out.
+  const [startHours, setStartHours] = useState('');
+  const [endHours, setEndHours] = useState('');
+  const [carryForward, setCarryForward] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<FieldMsg | null>(null);
 
+  // ADR-0106 — a backdated day needs a reason, and the field only exists when it
+  // is required. Both comparisons are on ISO day STRINGS, which sort
+  // lexicographically for `YYYY-MM-DD`, so no Date is constructed in the browser
+  // — a `new Date('2026-08-05')` here would be parsed as UTC and could render the
+  // control a day early or late depending on the reader's own zone.
+  const isPriorDay = date !== '' && date < todayIso();
+  const isPriorMonth = date !== '' && date.slice(0, 7) < todayIso().slice(0, 7);
+
   const load = useCallback(async () => {
-    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput`);
+    // `forDate` asks the SERVER for the carry-forward reading, rather than
+    // re-deriving "nearest earlier day with a meter" in the browser. One rule,
+    // one implementation (ADR-0107 D4).
+    const qs = date ? `?forDate=${encodeURIComponent(date)}` : '';
+    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput${qs}`);
     if (!res.ok) return;
-    const data = (await res.json()) as { rows: DailyThroughputView[] };
+    const data = (await res.json()) as {
+      rows: DailyThroughputView[];
+      carryForwardStartHours: string | null;
+    };
     setRows(data.rows);
-  }, [siteCode]);
+    setCarryForward(data.carryForwardStartHours);
+  }, [siteCode, date]);
   useEffect(() => void load(), [load]);
+
+  // ADR-0107 — Start PRE-FILLS from the previous day's End, which is what the
+  // sheet does with a formula (`=F<prev>`). Only ever fills an EMPTY box: once
+  // the manager has typed something, a re-fetch must not overwrite it.
+  useEffect(() => {
+    if (carryForward !== null) setStartHours((cur) => (cur === '' ? carryForward : cur));
+  }, [carryForward]);
 
   const save = async () => {
     setBusy(true);
@@ -583,24 +618,30 @@ function DailyThroughputEntry({
         body: JSON.stringify({
           throughputDate: date,
           unitsProcessed: Number(units),
-          runHours: Number(runHours),
+          startHours: Number(startHours),
+          endHours: Number(endHours),
           notes: notes || null,
+          reason: reason || null,
         }),
       });
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string; today?: string };
-        // ADR-0079 D4 — a prior-day change is REFUSED, and the message says so
-        // honestly and names where to take it. It does not pretend to have
-        // opened a request that does not exist, and it does not quietly accept
-        // the edit. See OPEN-ITEMS F-2 for the generalization that would let
-        // this route into a real approval flow.
+        const err = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          today?: string;
+          monthStart?: string;
+        };
+        // ADR-0106 — the refusal now applies only BEYOND the current month, so
+        // the message names the month, not "today". It still does not pretend to
+        // have opened a request that does not exist, and it still does not
+        // quietly accept the edit. See OPEN-ITEMS F-2 for the generalization
+        // that would let this route into a real approval flow.
         if (err.error === 'requires_amendment') {
           setMsg({
             kind: 'err',
             text:
-              `Only today (${err.today ?? todayIso()}) can be entered or corrected here. ` +
-              `Changing a past day needs the office — send them the date and the corrected ` +
-              `numbers and they will amend it.`,
+              `Only days from ${err.monthStart ?? 'the start of this month'} onward can be ` +
+              `entered or corrected here. An earlier month needs the office — send them the ` +
+              `date and the corrected numbers and they will amend it.`,
           });
           return;
         }
@@ -610,27 +651,77 @@ function DailyThroughputEntry({
         });
         return;
       }
-      setMsg({ kind: 'ok', text: "Today's numbers recorded." });
+      setMsg({
+        kind: 'ok',
+        text: isPriorDay ? `${date} recorded, with your reason.` : "Today's numbers recorded.",
+      });
       setUnits('');
-      setRunHours('');
+      setStartHours('');
+      setEndHours('');
       setNotes('');
+      setReason('');
       await load();
     } finally {
       setBusy(false);
     }
   };
 
-  const voidRow = async (id: string) => {
-    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput/${id}`, {
+  // ADR-0106 — removing a backdated day is a backdated change, so it carries the
+  // same reason. The reason rides the query string because a DELETE body is not
+  // reliably delivered.
+  const voidRow = async (id: string, rowDate: string) => {
+    const backdated = rowDate < todayIso();
+    if (backdated && reason.trim().length < MIN_PRIOR_DAY_REASON_CHARS) {
+      setMsg({
+        kind: 'err',
+        text: `Type a reason above before removing ${rowDate} — it is an earlier day, so the removal is recorded with a why.`,
+      });
+      return;
+    }
+    const qs = backdated ? `?reason=${encodeURIComponent(reason.trim())}` : '';
+    const res = await fetch(`/api/manager/${siteCode}/equipment/daily-throughput/${id}${qs}`, {
       method: 'DELETE',
     });
-    if (res.ok) await load();
+    if (res.ok) {
+      setMsg({ kind: 'ok', text: `${rowDate} removed.` });
+      setReason('');
+      await load();
+      return;
+    }
+    const err = (await res.json().catch(() => ({}))) as { error?: string; monthStart?: string };
+    setMsg({
+      kind: 'err',
+      text:
+        err.error === 'requires_amendment'
+          ? `${rowDate} is before ${err.monthStart ?? 'this month'} and can only be changed by the office.`
+          : `Remove failed: ${err.error ?? res.status}.`,
+    });
   };
 
-  // Both figures are required — the whole point of capturing is that the hours
+  // ADR-0107 — the run hours the entry will record, DERIVED. `null` whenever the
+  // pair is incomplete or does not make a real day, which is also exactly when
+  // the form must not submit. This is the same subtraction the service performs;
+  // the service is the enforcer and re-checks it against the same bounds.
+  const derivedRunHours = (() => {
+    if (startHours.trim() === '' || endHours.trim() === '') return null;
+    const st = Number(startHours);
+    const en = Number(endHours);
+    if (!Number.isFinite(st) || !Number.isFinite(en) || st < 0) return null;
+    const diff = Number((en - st).toFixed(2));
+    return diff > 0 && diff <= 24 ? diff : null;
+  })();
+
+  // Every figure is required — the whole point of capturing is that the hours
   // arrive WITH the units, so a rate never has to be computed against a guess.
+  // ADR-0106 adds the reason on a backdated day, and a prior MONTH cannot be
+  // saved at all. The server enforces all of it regardless — this only stops
+  // the round trip.
   const canSave =
-    date !== '' && units.trim() !== '' && runHours.trim() !== '' && Number(runHours) > 0;
+    date !== '' &&
+    units.trim() !== '' &&
+    derivedRunHours !== null &&
+    !isPriorMonth &&
+    (!isPriorDay || reason.trim().length >= MIN_PRIOR_DAY_REASON_CHARS);
 
   if (!machine) {
     return (
@@ -650,9 +741,11 @@ function DailyThroughputEntry({
         {machineLabel === 'Equipment' ? 'Daily processing' : `${machineLabel} — daily processing`}
       </h2>
       <p className="mt-1 text-sm opacity-70">
-        Enter what the machine processed today and how many hours it ran. This replaces the
+        Enter what the machine processed today and the machine&apos;s hour-meter reading at the
+        start and end of the shift — run hours are calculated from those two. This replaces the
         sheet&apos;s daily column — it is the number the throughput chart reads. Today can be edited
-        freely; a past day has to go through the office.
+        freely; an earlier day in this month can be entered or corrected with a reason. An earlier
+        month has to go through the office.
       </p>
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <label className={labelCls}>
@@ -676,16 +769,30 @@ function DailyThroughputEntry({
             className={inputCls}
           />
         </label>
+        {/* ADR-0107 — the sheet's own two columns. These are cumulative HOUR-METER
+            readings off the machine, not clock times: the Aug26 tab runs
+            2,685 -> 2,804.8 across the month. */}
         <label className={labelCls}>
-          <span className="opacity-70">Run hours</span>
+          <span className="opacity-70">Start hours (meter)</span>
           <input
             type="number"
-            min="0.25"
-            max="24"
-            step="0.25"
+            min="0"
+            step="0.01"
             inputMode="decimal"
-            value={runHours}
-            onChange={(e) => setRunHours(e.target.value)}
+            value={startHours}
+            onChange={(e) => setStartHours(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">End hours (meter)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            value={endHours}
+            onChange={(e) => setEndHours(e.target.value)}
             className={inputCls}
           />
         </label>
@@ -699,6 +806,61 @@ function DailyThroughputEntry({
           />
         </label>
       </div>
+
+      {/* ADR-0106 — the reason appears only when the date is backdated, so the
+          same-day entry stays the two-field form it has always been. */}
+      {isPriorDay && !isPriorMonth && (
+        <div className="mt-3">
+          <label className={labelCls}>
+            <span className="opacity-70">
+              Why is {date} being{' '}
+              {rows.some((r) => r.throughputDateISO === date) ? 'changed' : 'entered'} now?
+              (required)
+            </span>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. JT was out Friday — numbers came off the sheet Monday"
+              className={inputCls}
+            />
+          </label>
+          <p className="mt-1 text-xs opacity-60">
+            Saved to the audit record with your name and the time. It is not a note about the
+            machine&apos;s day — it is the record of why an earlier day was written after the fact.
+          </p>
+        </div>
+      )}
+
+      {isPriorMonth && (
+        <p className="mt-3 text-sm opacity-80">
+          {date} is in an earlier month. Days from the 1st of this month onward can be corrected
+          here; anything earlier needs the office.
+        </p>
+      )}
+      {/* ADR-0107 — run hours are shown, never typed. Rendering the derived
+          figure (rather than hiding it) keeps the number the manager used to
+          enter visible, so the change reads as "we compute this for you" and
+          not as "we removed it". */}
+      <p className="mt-2 text-sm">
+        <span className="opacity-70">Run hours (calculated): </span>
+        {derivedRunHours !== null ? (
+          <span className="font-semibold">{derivedRunHours}</span>
+        ) : startHours.trim() !== '' && endHours.trim() !== '' ? (
+          <span className="opacity-80">
+            End must be greater than Start, and the day cannot exceed 24 hours.
+          </span>
+        ) : (
+          <span className="opacity-60">enter both meter readings</span>
+        )}
+      </p>
+      {carryForward !== null && startHours === carryForward && (
+        <p className="mt-1 text-xs opacity-60">
+          Start filled in from the previous recorded day&apos;s end reading ({carryForward}). Change
+          it if the meter was reset or the machine was serviced.
+        </p>
+      )}
+
       <div className="mt-3 flex items-center gap-3">
         <button type="button" disabled={!canSave || busy} onClick={save} className={btnCls}>
           {busy ? 'Saving…' : 'Save daily numbers'}
@@ -713,6 +875,8 @@ function DailyThroughputEntry({
               <tr>
                 <th className="py-1 pr-4">Date</th>
                 <th className="py-1 pr-4">Units</th>
+                <th className="py-1 pr-4">Start</th>
+                <th className="py-1 pr-4">End</th>
                 <th className="py-1 pr-4">Run hrs</th>
                 <th className="py-1 pr-4">Units/hr</th>
                 <th className="py-1 pr-4">Notes</th>
@@ -726,16 +890,26 @@ function DailyThroughputEntry({
                   <tr key={r.id} className="border-t border-white/10">
                     <td className="py-1 pr-4">{r.throughputDateISO}</td>
                     <td className="py-1 pr-4">{r.unitsProcessed}</td>
+                    {/* ADR-0107 — a pre-ADR-0107 day has no meter pair and says
+                        so with an em dash. It is NOT shown as 0: the reading
+                        was never taken, and inventing one is the fabrication
+                        the no-backfill rule refuses. */}
+                    <td className="py-1 pr-4">{r.startHours ?? '—'}</td>
+                    <td className="py-1 pr-4">{r.endHours ?? '—'}</td>
                     <td className="py-1 pr-4">{r.runHours}</td>
                     <td className="py-1 pr-4">
                       {hrs > 0 ? (r.unitsProcessed / hrs).toFixed(1) : '—'}
                     </td>
                     <td className="py-1 pr-4 opacity-80">{r.notes ?? ''}</td>
                     <td className="py-1">
-                      {r.throughputDateISO === todayIso() && (
+                      {/* ADR-0106 — removable for any day this month, not only
+                          today. An earlier month shows no button, because the
+                          server refuses it and an affordance whose only outcome
+                          is a refusal is worse than none (ADR-0074 Am.1). */}
+                      {r.throughputDateISO.slice(0, 7) === todayIso().slice(0, 7) && (
                         <button
                           type="button"
-                          onClick={() => void voidRow(r.id)}
+                          onClick={() => void voidRow(r.id, r.throughputDateISO)}
                           className="text-xs underline opacity-70 hover:opacity-100"
                         >
                           Remove

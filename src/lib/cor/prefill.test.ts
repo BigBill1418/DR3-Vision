@@ -46,7 +46,9 @@ interface BonusEntryRow {
 const store = {
   anchor: null as null | Record<string, unknown>,
   inbound: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
-  dropoffs: { units: 0 } as Record<string, number | null>,
+  // handoff #270 §1 — `onHand` GROUPS drop-offs by kind so an untaught kind can be
+  // refused rather than silently summed. Mirrors the real `groupBy` return shape.
+  dropoffs: [] as Array<{ kind: string; _sum: { units: number | null } }>,
   stripped: { stripped_program: D(0), stripped_non_program: D(0) } as Record<
     string,
     Prisma.Decimal | null
@@ -68,7 +70,7 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     siteInventorySnapshot: { findFirst: async () => store.anchor },
     inboundLoad: { aggregate: async (): Promise<Agg> => ({ _sum: store.inbound }) },
-    consumerDropoff: { aggregate: async (): Promise<Agg> => ({ _sum: store.dropoffs }) },
+    consumerDropoff: { groupBy: async () => store.dropoffs },
     processedUnitsDaily: {
       aggregate: async (): Promise<Agg> => ({ _sum: store.stripped }),
       findMany: async () => store.closes,
@@ -194,7 +196,7 @@ describe('computeCorPrefill — June 2026 Woodland acceptance fixture (§7-b)', 
       reconciled_delta: 0,
     };
     store.inbound = { program_unit_count: 19451, non_program_unit_count: 229 }; // F40 / G40
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [];
     store.stripped = { stripped_program: D('17126.0'), stripped_non_program: D('0.0') }; // D40 / E40
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };
@@ -368,7 +370,7 @@ describe('computeCorPrefill — headcount from the payroll source (ADR-0076 foll
       reconciled_delta: 0,
     };
     store.inbound = { program_unit_count: 0, non_program_unit_count: 0 };
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [];
     store.stripped = { stripped_program: D('0.0'), stripped_non_program: D('0.0') };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };
@@ -520,7 +522,7 @@ describe('computeCorPrefill — inbound-freshness + negative-ledger gate (PR #19
       reconciled_delta: 0,
     };
     store.inbound = { program_unit_count: 150, non_program_unit_count: 0 };
-    store.dropoffs = { units: 0 };
+    store.dropoffs = [];
     store.stripped = { stripped_program: D('8034.0'), stripped_non_program: D('0.0') };
     store.wholeUnitsSold = { program_units: 0, non_program_units: 0 };
     store.landfilled = { program_units: 0, non_program_units: 0 };

@@ -17,8 +17,16 @@ const ANCHOR_AT = new Date('2026-07-22T07:00:00Z'); // 00:00 PDT July 22
 
 // Two bridged processed rows: one ON the anchor Pacific day, one the day AFTER.
 const PROCESSED = [
-  { production_date: new Date('2026-07-22T00:00:00.000Z'), stripped_program: D(800), stripped_non_program: D(0) },
-  { production_date: new Date('2026-07-23T00:00:00.000Z'), stripped_program: D(750), stripped_non_program: D(0) },
+  {
+    production_date: new Date('2026-07-22T00:00:00.000Z'),
+    stripped_program: D(800),
+    stripped_non_program: D(0),
+  },
+  {
+    production_date: new Date('2026-07-23T00:00:00.000Z'),
+    stripped_program: D(750),
+    stripped_non_program: D(0),
+  },
 ];
 
 vi.mock('@/lib/prisma', () => ({
@@ -34,8 +42,10 @@ vi.mock('@/lib/prisma', () => ({
         pool_attribution: 'measured',
       }),
     },
-    inboundLoad: { aggregate: async () => ({ _sum: { program_unit_count: 0, non_program_unit_count: 0 } }) },
-    consumerDropoff: { aggregate: async () => ({ _sum: { units: 0 } }) },
+    inboundLoad: {
+      aggregate: async () => ({ _sum: { program_unit_count: 0, non_program_unit_count: 0 } }),
+    },
+    consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: {
       // WHERE-aware: sum only rows in the `{ gt, lte }` production_date window.
       aggregate: async ({ where }: { where: { production_date: { gt: Date; lte: Date } } }) => {
@@ -52,8 +62,12 @@ vi.mock('@/lib/prisma', () => ({
         return { _sum: { stripped_program: p, stripped_non_program: np } };
       },
     },
-    outboundMaterial: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },
-    landfilledUnit: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },
+    outboundMaterial: {
+      aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
+    },
+    landfilledUnit: {
+      aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
+    },
   },
 }));
 

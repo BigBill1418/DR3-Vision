@@ -22,8 +22,16 @@ const ANCHOR_AT = new Date('2026-07-22T07:00:00Z'); // 00:00 PDT July 22
 // Two bridged mymrc_haul inbound rows: arrived_at ON the anchor Pacific day, and the day
 // AFTER — both at Pacific-midnight (the exact instant the bridge writes).
 const INBOUND = [
-  { arrived_at: pacificMidnightInstantOfDayISO('2026-07-22'), program_unit_count: 561, non_program_unit_count: 0 },
-  { arrived_at: pacificMidnightInstantOfDayISO('2026-07-23'), program_unit_count: 527, non_program_unit_count: 0 },
+  {
+    arrived_at: pacificMidnightInstantOfDayISO('2026-07-22'),
+    program_unit_count: 561,
+    non_program_unit_count: 0,
+  },
+  {
+    arrived_at: pacificMidnightInstantOfDayISO('2026-07-23'),
+    program_unit_count: 527,
+    non_program_unit_count: 0,
+  },
 ];
 
 vi.mock('@/lib/prisma', () => ({
@@ -55,10 +63,16 @@ vi.mock('@/lib/prisma', () => ({
         return { _sum: { program_unit_count: p, non_program_unit_count: np } };
       },
     },
-    consumerDropoff: { aggregate: async () => ({ _sum: { units: 0 } }) },
-    processedUnitsDaily: { aggregate: async () => ({ _sum: { stripped_program: 0, stripped_non_program: 0 } }) },
-    outboundMaterial: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },
-    landfilledUnit: { aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }) },
+    consumerDropoff: { groupBy: async () => [] },
+    processedUnitsDaily: {
+      aggregate: async () => ({ _sum: { stripped_program: 0, stripped_non_program: 0 } }),
+    },
+    outboundMaterial: {
+      aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
+    },
+    landfilledUnit: {
+      aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
+    },
   },
 }));
 

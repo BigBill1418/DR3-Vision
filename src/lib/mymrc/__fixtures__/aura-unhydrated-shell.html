@@ -1,0 +1,31 @@
+<!--
+  ADR-0111 - the MyMRC /s/ Aura shell as it exists at domcontentloaded, BEFORE
+  Lightning hydrates the page body.
+
+  Captured live from https://mrc-us.my.site.com/s/ on 2026-08-18 (PDT). The
+  structure below is the real shell: the auraLoadingBox spinner is what the
+  browser has actually painted at that moment.
+
+  NOTE TO EDITORS: this comment deliberately avoids spelling out the sign-in
+  markup tokens (the sign-in path segment, the username placeholder attribute,
+  the password input type). The logged-out predicates scan the WHOLE document
+  text, so naming those tokens here - even inside a comment - would make the
+  fixture assert the opposite of what it is for. A first draft of this file did
+  exactly that and the test caught it.
+
+  Verified substring profile of the live 224 KB capture, reproduced faithfully
+  here: zero occurrences of any sign-in marker, and zero occurrences of the
+  authenticated banner. That profile is the whole point - this page carries
+  NEITHER an authenticated marker NOR any decisive signed-out evidence, and it
+  renders IDENTICALLY whether the session is authenticated or anonymous. That is
+  precisely why a single read at domcontentloaded cannot tell a healthy session
+  from a dead one.
+-->
+<!DOCTYPE html><html lang="en-US" dir="ltr" class="slds-no-wcag"><head><title>Home</title>
+<meta name="viewport" content="initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, width=device-width">
+<script> window.onload = function() {document.getElementsByClassName("logoImage")[0].addEventListener("click",function() {location.href = "https://mattressrecyclingcouncil.org/"; });}</script>
+</head><body class="null comm-page-home">
+<div class="auraMsgBox auraLoadingBox" id="auraLoadingBox"><div class="logo"></div><div class="spinner"></div><span>Loading</span></div>
+<div class="" id="auraErrorMask"><div role="dialog" aria-labelledby="auraErrorTitle" aria-describedby="auraErrorMessage" aria-modal="true" class="auraErrorBox" id="auraError"></div></div>
+<div id="auraAppcacheProgress"></div>
+</body></html>

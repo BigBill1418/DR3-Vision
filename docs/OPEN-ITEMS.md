@@ -19,6 +19,134 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BD — 2026-08-18 SHIP-TODAY day: handoff #264 (retire the sheets) + handoff #270 (on-hand) — live status ledger
+
+Written ~2:45 PM PT while the day is still in flight; each line states its own
+status. Two handoffs ran concurrently, six + four workstreams, four parallel
+build agents plus an orchestrator.
+
+### Handoff #264 — six items, per-item PR
+
+| Item                                                  | ADR / PR        | Status (2:45 PM PT)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3 — Terex prior-day, month-bounded, reasoned, audited | ADR-0106 / #266 | **LIVE** (deployed 11:51 AM PT, smoke passed). Also closed an unbounded void hole the diagnosis surfaced: the API allowed voiding ANY prior day (UI merely hid the button)                                                                                                                                                                                                                                                                                          |
+| 4 — Terex Start/End meters, run-hours derived+locked  | ADR-0107 / #269 | Merged 2:36 PM PT, **deploying now**. Meter-vs-clock resolved from live bytes: 2025–26 tabs are cumulative hour-meters (2dp; the sheet carries Start from prior End by formula); Nov/Dec-24 tabs were clock-times — both shapes recorded in D1                                                                                                                                                                                                                      |
+| 5 — reconcile view verification                       | ADR-0108 / #267 | Verified green clause-by-clause vs plan §12; one red clause fixed (the uncovered stat tile now says "expected — outside the workbook's range", not fault-speak)                                                                                                                                                                                                                                                                                                     |
+| 6 — data-derived variance flags                       | ADR-0108 / #267 | Merged 12:01 PM PT; **rides the current deploy** (see incident below). The handoff's comparand DIED on measurement (mirror holds no weight anywhere; units on 1 of 831 joined loads; total-vs-parts already 0-drift) — shipped per-commodity log-space MAD outlier flags instead, k=6, n≥20 floor, editable config, 14/831 flagged. **Dollar side BLOCKED on a nonexistent join key** (4 accidental of 233 keys; 0 Materials-ID matches) — reported, not fabricated |
+| 2 — manager corrects operator count, 2-day window     | ADR-0105 / #265 | CI-green including the `/dashboard/[site]/count-corrections` screen (added after review — "usable by the team" means a screen, not an API). **Merges next** after the in-flight deploy + docs re-union. 11 falsifications, storage-layer audit proven                                                                                                                                                                                                               |
+| 1 — up to 3 photos                                    | ADR-0109 / #268 | CI-green, **parked for tomorrow before noon PT** (floor window). Premise died safely: "3 total per load" would have refused the door-open (timer-starting) photo on ordinary loads — the flow already takes 3 kinds; ceiling shipped per (load, kind). The capability existed by accident and the floor was already using it (87 loads with photos; up to 6)                                                                                                        |
+
+### Handoff #270 — on-hand (SHIP-TODAY; EOD physical count tonight)
+
+- **Phase 0 diagnosis DONE and reported to Bill** (~1 PM PT), live-DB, read-only.
+  Headline findings, contradicting the handoff's assumptions: **report ==
+  canonical already** (`getEodInventorySnapshot` delegates to `onHand`; live
+  442/397/839 identical on both paths); **Woodland is arithmetically healthy
+  today** (ties to the unit; no negative in 14 days; 0 undated of 7,372
+  Delivered hauls; 15 Confirmed = future appointments, benign); **Eugene is
+  EMPTY, not negative** (no anchor ever, zero inbound/mirror/processed rows —
+  its 0 is meaningless; tonight = its FIRST anchor; thereafter static until
+  feeds exist — Eugene feeds are the named follow-up); the **kind gap is real
+  but unfired** (all drop-off kinds sum unfiltered into the pool — the next new
+  kind joins silently).
+- **Phases 1/2/4 + Phase-3 verification: building now** (one PR): kind
+  fail-loud, report==onHand regression pin, negative/stale banners on report +
+  floor tile (display-layer, reusing the existing freshness signal), and
+  end-to-end verification that tonight's count path is guarded (ADR-0072 tiered
+  overwrite guardrail wired to /count, Pacific-day date correct, Eugene
+  first-anchor case safe). Merge target: before the EOD count.
+- **COUNT ARMED (verified live 3:55 PM PT, post-ADR-0110 deploy):** report ==
+  onHand on both sites (Woodland 947/397/1,344 healthy; Eugene 0/0/0 zero);
+  every anchor-write path tier-guarded (the desktop snapshot POST's missing
+  ADR-0072 guardrail was FOUND AND FIXED in #271 — pre-fix it accepted a 32%
+  swing with 201); ADR-0105's correction screen live, so a mis-keyed count is
+  correctable under audit. Woodland re-anchors (prior anchor 27.5 d old);
+  Eugene counts its FIRST (tier-0 no-prior-anchor case test-covered).
+- **COUNT APPLIED (2026-08-19 ~7:50 AM PT, Bill's instruction):** Woodland
+  physical count **923** recorded as the authoritative anchor for EOD 8/18
+  (snapshot `6f8ae03b`, Pacific-midnight-8/18 storage per D-3, `legacy`/unsplit
+  attribution — crew counted total only; Bill confirmed the site and the
+  unsplit recording in-session, which also served as the >20%-swing manager
+  approval). **`reconciled_delta = +383`** (counted 923 vs computed 540) — the
+  ledger was UNDER-counting by 383 units, the drift evidence the reset exists
+  to capture; likely provisional-inbound under-feed, worth reading against the
+  next few days of MyMRC deliveries. On-hand now computes forward from 923.
+  **SUPERSEDED same morning (~10:00 AM PT): Bill delivered the FINAL split —
+  923 = 201 program + 722 non-program.** The unsplit anchor was soft-voided
+  (ADR-0084/0105 discipline, chain-linked in audit) and replaced by MEASURED
+  anchor `855a23b1` (201/722/923). Live balance now reads 201/722/923.
+  **Both drift snapshots preserved:** the 7:50 AM anchor recorded delta +383
+  (vs computed 540); by 10:00 AM the computed baseline had moved to 721 —
+  MRC's late-arriving prior-day data raised computed history by ~181 units in
+  two hours — so the measured row records delta +202. That movement is the
+  provisional-inbound drift class in live action, and is itself evidence for
+  why the physical count is the authority.
+  **Eugene did NOT count** — still unanchored/zero; its first anchor remains
+  open alongside the Eugene-feeds decision.
+- **Decision after tonight:** `correct-count.ts` (ADR-0105) is a third
+  anchor-write door with real controls but no swing-tier check — a typo'd
+  correction of a typo is possible. Deliberately not churned on count day;
+  needs a call tomorrow (flagged in #271).
+
+### Incidents & residuals from today
+
+- **The [skip-deploy] squash trap fired a SECOND time (#267, 12:01 PM PT).** The
+  squash body inherited the tag from a branch commit; the deployer forced
+  pull-only and logged "Updated (no services to rebuild)"; prod ran without
+  ADR-0108 for ~2.5 h until the orchestrator's reconciliation caught it. Fixed
+  by the #269 merge (explicit clean body). **Standing rule: every squash merge
+  passes an explicit `--body`; check the squash message for the tag before
+  merging.** Follow-up worth an ADR discussion (noc-master side): the deployer
+  should arguably honor `[skip-deploy]` only in the subject line of the range
+  head, not anywhere in a squash body.
+- Platform-wide API 529 storm ~10:40 AM PT dropped all four build agents
+  mid-start; all resumed with backoff, no work lost.
+- The CHAD-HQ builder cache was ~4.9 GB and fully reclaimable again before the
+  2:37 PM build — the ADR-0101 cache-persistence residual is still live; deploys
+  are running cold (~21 min).
+- Three build agents independently hit `tsc | head` masking real errors behind
+  exit 0 — lab hazard, each caught it; noting for the fleet.
+
+### Still open at day close (expected)
+
+- Bill: the two staged ADR-0104 batch confirmations (outbound / expenses review
+  pages) — the variance page reads staged scope honestly meanwhile.
+- Bill/Rick/Janette: variance threshold retuning after the first real week
+  (AK-4c verdicts stay human).
+- #268 merge tomorrow before noon PT.
+- Eugene inbound/processing feeds (scoping decision, named by the Phase-0
+  diagnosis).
+
+## 0.BC — ADR-0105 shipped 2026-08-18 — screen INCLUDED; one deliberate residual left
+
+`POST/GET /api/manager/[site]/snapshots/[id]/correct` is live, gated and audited,
+**and `/dashboard/[site]/count-corrections` renders it** — linked from
+`/dashboard/[site]/loads-inventory`. A manager or admin can correct a physical
+count taken today or yesterday (Pacific) from the browser: the corrected value
+becomes the anchor, the prior value stays on screen struck through and labelled
+`superseded by <value>`, and no approval is required.
+
+**The "no screen" item recorded when this ADR first landed is CLOSED** — the
+surface shipped in the same PR (#265) rather than being deferred, because an
+endpoint a manager cannot reach relocates the phone call instead of retiring it.
+
+### Still open, and deliberate
+
+- **The daily report's "counted by" line names the MANAGER for a corrected
+  count.** `eod-inventory.resolveCounter` reads the insert audit row's actor, and
+  on a corrected snapshot that is whoever put the number on the record. The
+  operator who physically counted is preserved as `counted_by` in the audit
+  payload and as `entered_by` on the correction row, so nothing is lost — but the
+  rendered line changes. **Not fixed here on purpose:** changing `resolveCounter`
+  changes a report that is actually sent, which needs its own evidence and its
+  own ADR (the same call ADR-0084 made about the `created_at DESC` divergence).
+- **No browser/e2e test of the correction screen.** Covered by server-render and
+  jsdom tests; nobody has clicked the real page against a real database.
+- **`GET /api/manager/[site]/snapshots` still has no client consumer.** ADR-0105
+  did not adopt it — it ships its own list (`listWindowCountsAtSite`) because that
+  endpoint returns a history with no correction chain and no `correctable` flag.
+  The older endpoint remains unrendered, exactly as ADR-0084 recorded.
+
 ## 0.BC — 2026-08-18 three photos per capture point (ADR-0109) — two accepted residuals
 
 Handoff #264 Item 1 shipped: a load takes **3 photos per capture point** (BOL,
@@ -72,6 +200,35 @@ revisions get a periodic apply pass / a deliberate guardrail carve-out for
 mid-month accretion. Until one of those happens, "the ledger looks stale" means
 "check the staged queue" first.
 
+**2026-08-18 addendum — one of the two reasons the team stays on the sheet is
+gone (ADR-0106).** The standing item above says the fix is the team moving to
+Vision's equipment entry. Vision was giving them a reason not to: ADR-0079 D4
+refused every prior day, so a Monday correction to Friday's numbers could only
+be made in the workbook. Prior-day entry and edit are now accepted for any date
+in the current Pacific month, with a required reason on the audit row; a prior
+month still routes to the office. **This does not close 0.BB** — the team's
+maintenance logging habit is a separate half, and staged revisions will keep
+arriving until they stop editing the sheet at all. It removes the excuse, not
+the habit.
+
+**2026-08-18 addendum 2 — the sheet's Start/End columns now exist in Vision
+(ADR-0107), and one residual is left open deliberately.** `start_hours` /
+`end_hours` are captured and `run_hours` is derived from them, so the sheet's
+`Start Hours`, `End Hours` and `Day Total Hrs Used` columns can be retired.
+
+**RESIDUAL — the ADR-0081 workbook importer still writes NULL meters
+(ADR-0107 D6).** The extractor already parses `startHours`/`endHours`, so this
+looks like a two-line change and is not. The new
+`run_hours_is_the_difference` CHECK would refuse any sheet row whose own
+`Day Total Hrs Used` does not equal `End − Start` to the cent, and
+`terex-monthly-extract.ts` records in its header that such rows exist — it
+refuses to derive hours from the meter difference precisely because operators
+leave the day-total formula un-filled on some rows. **What is owed: measure how
+many rows in the absorbed history actually disagree, and by how much.** That
+number decides between wiring the import as-is, importing only agreeing rows, or
+relaxing the CHECK — and it is a data question with a real answer, not a
+judgement call to make blind.
+
 ### WAITING ON BILL — the only thing this build cannot do for itself
 
 Both batches are **STAGED**. Nothing counts until he accepts them, and an agent
@@ -93,6 +250,32 @@ Until he accepts, `/admin/doc-ingest/outbound-coverage` reads empty at
   verdict (P-48). That rule is Bill's with Rick and Janette, and it has had **no
   owner since Kelsey's availability ended 2026-08-08** (see the preamble). A
   guess encoded now would become the default by being first.
+  **2026-08-18 (ADR-0108) — still open, and deliberately so.** The page now
+  marks loads whose weight is unusual _for their own commodity_ against an
+  editable line (`/admin/doc-ingest/outbound-variance`, defaults `k = 6`,
+  `min_sample_n = 20`, seeded from the measured distribution). That is a
+  look-at-this, not a verdict: no `ok`/`mismatch` wording, **no alert channel and
+  no email**, and a test fails the build on the vocabulary of blame. It moves the
+  state from "nothing is surfaced" to "unusual rows are surfaced against a number
+  you can change" — it does **not** decide what a difference means, and does not
+  need an owner to keep working.
+- **AK-4c dollar leg — BLOCKED on a join key that does not exist.** Measured
+  2026-08-18 and reported rather than approximated: of 332 facility-expense rows,
+  262 carry an invoice number (233 distinct normalized); overlap with the mirror's
+  4,628 distinct normalized BOL ids is **4** — bare-numeric collision territory,
+  not a signal — overlap with Materials IDs is **0**; `commodity_raw` ↔ Materials
+  ID is **0** (it holds 12 commodity _names_, never an id); and the 6 `haul_ref`
+  values are `H-` prefixed **inbound** hauls, not outbound `M-` loads. **To
+  unblock:** the expense log needs a load or BOL reference captured at entry, or
+  MyMRC needs to expose an invoice number on the outbound record. Neither exists
+  and neither can be inferred. No dollar matching was built (ADR-0108 §5).
+- **A real weight comparand could appear, and here is the exact condition.**
+  39 mirror rows _do_ carry per-commodity pound figures under Salesforce
+  commodity keys (`Waste__c`, `Wood__c`) — which is why a search for "weight"
+  finds nothing while a comparand exists in principle. They are all **March
+  2024** and their overlap with the workbook's Jan–Jun 2026 loads is **zero**. If
+  detail capture is ever extended over the workbook's range, a genuine
+  expected-vs-actual pair exists and ADR-0108 should be revisited (ADR-0108 §2.1).
 - **AK-4b — the operational outbound leg.** `outbound_materials`,
   `outbound_vendors`, `recycling_rates`, `landfilled_units`,
   `outbound_material_payments` and `invoices` all stay at **0 rows** (P-49).

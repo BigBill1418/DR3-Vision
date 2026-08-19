@@ -39,12 +39,33 @@
 // lost, it is attributed one day later.
 
 import { prisma } from '@/lib/prisma';
-import { onHand, VERIFIED_INBOUND_STATUSES, anchorFlowBounds } from '@/lib/inventory/running-balance';
+import {
+  onHand,
+  VERIFIED_INBOUND_STATUSES,
+  anchorFlowBounds,
+} from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
+import { DEFAULT_MAX_AGE_MS } from '@/lib/mymrc/freshness';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
 export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
+
+/**
+ * How stale the INBOUND feed may get before the rendered figure carries a
+ * why-suspect flag (handoff #270 §4b), in whole days.
+ *
+ * Derived from `DEFAULT_MAX_AGE_MS` rather than chosen here, so this and the
+ * mirror-freshness pager cannot drift into disagreeing about when intake has
+ * stopped. That constant is 96h for a reason worth not re-deciding: it clears a
+ * normal weekend plus a holiday Monday without crying wolf, while catching the
+ * nine-day Woodland freeze on day four instead of never.
+ *
+ * Deliberately much tighter than the 14-day ANCHOR window. They measure different
+ * things: an anchor is allowed to age while daily flows keep the balance honest,
+ * but intake stopping for four days IS the thing that makes the balance dishonest.
+ */
+export const INBOUND_STALE_DAYS = Math.round(DEFAULT_MAX_AGE_MS / 86_400_000);
 
 /**
  * The configured freshness window. Read at call time (not module load) so the
@@ -65,11 +86,13 @@ export function eodInventoryStaleDays(
 }
 
 /**
- * `healthy` — fresh `measured` anchor: render the numbers.
- * `stale`   — anchor missing/legacy/older than the window: render the warning band.
- * `zero`    — no anchor AND no movement at all (pre-backfill): render the neutral band.
+ * `negative` — a pool (or the total) computed BELOW ZERO. Known-bad: render the
+ *              diagnostic banner, never the figure. See the block below.
+ * `healthy`  — fresh `measured` anchor: render the numbers.
+ * `stale`    — anchor missing/legacy/older than the window: render the warning band.
+ * `zero`     — no anchor AND no movement at all (pre-backfill): render the neutral band.
  */
-export type EodInventoryState = 'healthy' | 'stale' | 'zero';
+export type EodInventoryState = 'negative' | 'healthy' | 'stale' | 'zero';
 
 /** The last physical count that anchors the balance, as far as the report cares. */
 export interface EodAnchorInfo {
@@ -126,8 +149,32 @@ export interface EodInventorySnapshot {
    * `paper_bulk` (manager) or iPad confirmation replaces the provisional row for a day.
    */
   inboundProvisional: boolean;
+  /**
+   * handoff #270 §4b — Pacific day of the newest VERIFIED INBOUND at/before end of
+   * day (the ADR-0089 delivered signal, site-scoped). Distinct from `flowThrough`,
+   * which is the max over every feed and therefore stays fresh on outflow alone
+   * while intake is frozen. Null when the site has no inbound at all — which is
+   * Eugene's standing condition, not a fault.
+   */
+  inboundThrough: Date | null;
+  /** Whole days from `inboundThrough` to the report day. Null when there is no inbound. */
+  inboundDaysSince: number | null;
+  /**
+   * True when intake has been silent longer than `INBOUND_STALE_DAYS` while the
+   * figure still computed — the "shown, but here is why it is suspect" case.
+   *
+   * A single decided boolean rather than each renderer comparing days against a
+   * threshold itself: two surfaces disagreeing about when a number is trustworthy
+   * is the same two-computations defect this handoff exists to close, one level
+   * down. Never true when there is no inbound on record at all (`null` days) —
+   * "this site has no intake feed" is a different statement from "the feed died",
+   * and flagging the first as the second would put a permanent warning on Eugene.
+   */
+  inboundStale: boolean;
   /** The freshness window this snapshot was graded against. */
   staleDays: number;
+  /** The inbound-silence window `inboundStale` was graded against. */
+  inboundStaleDays: number;
 }
 
 /** The end-of-day instant for a @db.Date-shaped Pacific day key. */
@@ -170,11 +217,36 @@ export function classifyEodInventory(args: {
   priorTotal: number;
   staleDays: number;
   flowDaysSince?: number | null;
+  /** Pools, for the impossible-state check. Omitted → only the total is checked. */
+  programOnHand?: number;
+  nonProgramOnHand?: number;
 }): EodInventoryState {
   const { anchor } = args;
+
+  // ── handoff #270 §4(a) — the impossible state, checked FIRST ──────────────
+  // The building cannot hold a negative number of mattresses. A negative pool is
+  // not a small number, it is PROOF that an input is missing: real processing
+  // (Stripped) has been subtracted from incomplete intake. Woodland rendered
+  // −5,401 in July and −2,439 in August as though they were measurements.
+  //
+  // This is checked BEFORE freshness because a negative floor behind a fresh
+  // anchor is the WORST case, not an acceptable one — the anchor being recent is
+  // exactly what makes the wrong number persuasive. Precedence also means every
+  // existing `state === 'healthy'` guard downstream (notably the ADR-0058 §3.3
+  // "estimated floor after today" block) stops deriving from a negative floor for
+  // free, rather than each consumer needing its own check.
+  //
+  // Either POOL going negative counts, not just the total: MRC is billed on
+  // program units, so a −300 program pool inside a +900 total is a billing error
+  // that a total-only check would wave through.
+  const pools = [args.totalOnHand, args.programOnHand, args.nonProgramOnHand];
+  if (pools.some((v) => v !== undefined && v < 0)) return 'negative';
+
   if (anchor !== null) {
     const effectiveDaysSince =
-      args.flowDaysSince != null ? Math.min(anchor.daysSince, args.flowDaysSince) : anchor.daysSince;
+      args.flowDaysSince != null
+        ? Math.min(anchor.daysSince, args.flowDaysSince)
+        : anchor.daysSince;
     return anchor.poolAttribution === 'measured' && effectiveDaysSince <= args.staleDays
       ? 'healthy'
       : 'stale';
@@ -194,7 +266,13 @@ export function eodInventorySignature(eod: EodInventorySnapshot | undefined): st
   // ADR-0059 — include `inboundProvisional`: a provisional→confirmed flip (a manager
   // paper_bulk entry replacing the mymrc_haul row) can leave the pools unchanged yet
   // drops the "provisional" label, so the resend must fire on that transition too.
-  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}:${eod.inboundProvisional ? 'p' : 'c'}`;
+  // handoff #270 §4b — `inboundStale` rides along for the same reason
+  // `inboundProvisional` does: intake going quiet can leave both pools and the
+  // freshness state untouched while the panel gains a "why this is suspect" flag,
+  // and a report that renders the flag but never re-sends has not told anyone.
+  // (`state` already covers the healthy→negative flip, which changes the panel
+  // wholesale.)
+  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}:${eod.inboundProvisional ? 'p' : 'c'}:${eod.inboundStale ? 's' : 'f'}`;
 }
 
 /** Percent of `total` represented by `part`, one decimal. Null when total ≤ 0. */
@@ -227,7 +305,10 @@ async function resolveCounter(snapshotId: string): Promise<string | null> {
  * day); `arrived_at` is a true instant, so it is shifted through the Pacific zone.
  * Null when the site has no flow at all.
  */
-async function latestFlowDayKey(siteId: string, endOfDay: Date): Promise<Date | null> {
+async function latestFlowDayKey(
+  siteId: string,
+  endOfDay: Date,
+): Promise<{ any: Date | null; inbound: Date | null }> {
   const [inbound, dropoff, processed, renovation, landfilled] = await Promise.all([
     prisma.inboundLoad.aggregate({
       _max: { arrived_at: true },
@@ -254,14 +335,35 @@ async function latestFlowDayKey(siteId: string, endOfDay: Date): Promise<Date | 
       where: { site_id: siteId, disposal_date: { lte: endOfDay } },
     }),
   ]);
+  // handoff #270 §4(b) — the INBOUND leg is kept separate as well as merged, from
+  // the SAME aggregate that was already running. This is deliberately not a second
+  // freshness system: it is the value the existing query already fetched and then
+  // threw away by folding it into one max.
+  //
+  // Why it has to be separate. `flowThrough` is the max over EVERY feed, so a site
+  // that keeps stripping while intake is frozen reads perfectly fresh — the
+  // outflow rows hold the max up. That is not a hypothetical: it is precisely the
+  // 2026-07-22→31 Woodland outage, where the delivered feed froze for nine days,
+  // processing continued subtracting, and every freshness signal in the system
+  // stayed green while the floor went negative. A number starved of intake is only
+  // detectable by measuring INTAKE.
+  //
+  // `inbound_loads.arrived_at` is the right column to measure because it IS the
+  // ADR-0089 delivered signal: the bridge writes each load at Pacific-midnight of
+  // `recycler_reported_delivery_date ?? docking_appointment_date` (inbound-bridge.ts),
+  // the same COALESCE the mirror-freshness guard keys on. Measuring anything else
+  // would certify a feed we cannot see — the ADR-0089 D3 lesson.
+  const inboundKey = inbound._max.arrived_at ? pacificDayKeyUTC(inbound._max.arrived_at) : null;
   const keys: Date[] = [];
-  if (inbound._max.arrived_at) keys.push(pacificDayKeyUTC(inbound._max.arrived_at));
+  if (inboundKey) keys.push(inboundKey);
   if (dropoff._max.dropoff_date) keys.push(dropoff._max.dropoff_date);
   if (processed._max.production_date) keys.push(processed._max.production_date);
   if (renovation._max.ship_date) keys.push(renovation._max.ship_date);
   if (landfilled._max.disposal_date) keys.push(landfilled._max.disposal_date);
-  if (keys.length === 0) return null;
-  return new Date(Math.max(...keys.map((d) => d.getTime())));
+  return {
+    any: keys.length === 0 ? null : new Date(Math.max(...keys.map((d) => d.getTime()))),
+    inbound: inboundKey,
+  };
 }
 
 /**
@@ -311,12 +413,22 @@ export async function getEodInventorySnapshot(
   // flowThrough = the LATER of the anchor's Pacific day and the newest flow day. This
   // is the recency that grades freshness and that movementToday keys on.
   const anchorDayKey = anchorRow ? dayKeyUTCFromISO(dayISO(anchorRow.snapshot_at)) : null;
-  const flowThrough = mostRecentDay(anchorDayKey, latestFlow);
+  const flowThrough = mostRecentDay(anchorDayKey, latestFlow.any);
   const flowDaysSince =
     flowThrough != null
       ? Math.round((reportDate.getTime() - flowThrough.getTime()) / 86_400_000)
       : null;
   const movementToday = flowThrough != null && flowThrough.getTime() === reportDate.getTime();
+
+  // §4b — intake recency on its OWN clock. Note it is NOT rescued by the anchor:
+  // taking a physical count does not mean a truck arrived, and folding the anchor
+  // in here would let tonight's count mask a dead intake feed for another fortnight.
+  const inboundThrough = latestFlow.inbound;
+  const inboundDaysSince =
+    inboundThrough != null
+      ? Math.round((reportDate.getTime() - inboundThrough.getTime()) / 86_400_000)
+      : null;
+  const inboundStale = inboundDaysSince != null && inboundDaysSince > INBOUND_STALE_DAYS;
 
   const programOnHand = balance.program.toNumber();
   const nonProgramOnHand = balance.nonProgram.toNumber();
@@ -342,6 +454,8 @@ export async function getEodInventorySnapshot(
     state: classifyEodInventory({
       anchor,
       totalOnHand,
+      programOnHand,
+      nonProgramOnHand,
       priorTotal: priorBalance.total.toNumber(),
       staleDays,
       flowDaysSince,
@@ -358,7 +472,11 @@ export async function getEodInventorySnapshot(
     flowThrough,
     movementToday,
     inboundProvisional: provisionalInboundCount > 0,
+    inboundThrough,
+    inboundDaysSince,
+    inboundStale,
     staleDays,
+    inboundStaleDays: INBOUND_STALE_DAYS,
   };
 }
 

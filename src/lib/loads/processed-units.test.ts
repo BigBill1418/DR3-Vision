@@ -40,32 +40,53 @@ const store = {
     units_in_processing: number;
   },
   inboundAgg: { program_unit_count: 0, non_program_unit_count: 0 } as Record<string, number | null>,
-  dropoffAgg: { units: 0 } as Record<string, number | null>,
+  // handoff #270 §1 — `onHand` GROUPS drop-offs by kind so an untaught kind can be
+  // refused rather than silently summed. Mirrors the real `groupBy` return shape.
+  dropoffAgg: [] as Array<{ kind: string; _sum: { units: number | null } }>,
   strippedAgg: { stripped_program: 0, stripped_non_program: 0 } as Record<string, number | null>,
 };
 
 vi.mock('@/lib/prisma', () => {
   const model = {
-    findUnique: async ({ where }: { where: { id?: string; site_id_production_date?: { site_id: string; production_date: Date } } }) => {
+    findUnique: async ({
+      where,
+    }: {
+      where: { id?: string; site_id_production_date?: { site_id: string; production_date: Date } };
+    }) => {
       if (where.id) return store.rows.find((r) => r.id === where.id) ?? null;
       const k = where.site_id_production_date!;
       return (
         store.rows.find(
-          (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+          (r) =>
+            r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
         ) ?? null
       );
     },
     findMany: async () => store.rows,
-    upsert: async ({ where, create, update }: { where: { site_id_production_date: { site_id: string; production_date: Date } }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+    upsert: async ({
+      where,
+      create,
+      update,
+    }: {
+      where: { site_id_production_date: { site_id: string; production_date: Date } };
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => {
       const k = where.site_id_production_date;
       const found = store.rows.find(
-        (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+        (r) =>
+          r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
       );
       if (found) {
         Object.assign(found, update);
         return found;
       }
-      const row = { id: `p${store.rows.length + 1}`, closed_at: null, notes: null, ...create } as Row;
+      const row = {
+        id: `p${store.rows.length + 1}`,
+        closed_at: null,
+        notes: null,
+        ...create,
+      } as Row;
       store.rows.push(row);
       return row;
     },
@@ -97,7 +118,9 @@ vi.mock('@/lib/prisma', () => {
         },
       },
       landfilledUnit: {
-        aggregate: async (args?: { where?: { disposal_date?: Date | Record<string, unknown> } }) => {
+        aggregate: async (args?: {
+          where?: { disposal_date?: Date | Record<string, unknown> };
+        }) => {
           const dd = args?.where?.disposal_date;
           if (dd instanceof Date) return { _sum: store.landByDate.get(dd.getTime()) ?? store.land };
           return { _sum: store.land };
@@ -112,10 +135,13 @@ vi.mock('@/lib/prisma', () => {
       // onHand() inputs (close negative-balance guard).
       siteInventorySnapshot: { findFirst: async () => store.anchor },
       inboundLoad: { aggregate: async () => ({ _sum: store.inboundAgg }) },
-      consumerDropoff: { aggregate: async () => ({ _sum: store.dropoffAgg }) },
+      consumerDropoff: { groupBy: async () => store.dropoffAgg },
       auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) },
       $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-        fn({ processedUnitsDaily: model, auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) } }),
+        fn({
+          processedUnitsDaily: model,
+          auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) },
+        }),
     },
   };
 });
@@ -140,7 +166,7 @@ beforeEach(() => {
   store.landByDate.clear();
   store.anchor = null;
   store.inboundAgg = { program_unit_count: 0, non_program_unit_count: 0 };
-  store.dropoffAgg = { units: 0 };
+  store.dropoffAgg = [];
   store.strippedAgg = { stripped_program: 0, stripped_non_program: 0 };
 });
 
@@ -182,23 +208,53 @@ describe('upsertProcessedUnits', () => {
   it('surfaces the DERIVED whole-units-sold + landfilled for the day (never entered)', async () => {
     store.reno = { program_units: 8, non_program_units: 2 };
     store.land = { program_units: 3, non_program_units: 0 };
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 100, strippedNonProgram: 0, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 100,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
     expect(v.derived.wholeUnitsSold.total).toBe(10);
     expect(v.derived.landfilled.total).toBe(3);
   });
 
   it('updates the same day in place before close', async () => {
-    await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 150, strippedNonProgram: 25, actorUserId: 'U1' });
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 160, strippedNonProgram: 15, actorUserId: 'U1' });
+    await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      actorUserId: 'U1',
+    });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 160,
+      strippedNonProgram: 15,
+      actorUserId: 'U1',
+    });
     expect(v.strippedProgram).toBe('160');
     expect(store.rows).toHaveLength(1);
   });
 
   it('BLOCKS an edit after the day is closed (directs to amendment path)', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 150, strippedNonProgram: 25, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      actorUserId: 'U1',
+    });
     await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
     try {
-      await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 999, strippedNonProgram: 0, actorUserId: 'U1' });
+      await upsertProcessedUnits({
+        siteId: SITE,
+        productionDate: DAY,
+        strippedProgram: 999,
+        strippedNonProgram: 0,
+        actorUserId: 'U1',
+      });
       expect.unreachable('should have blocked');
     } catch (e) {
       expect(e).toBeInstanceOf(ProcessedUnitsError);
@@ -209,33 +265,57 @@ describe('upsertProcessedUnits', () => {
 
   it('rejects invalid quantities', async () => {
     await expect(
-      upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: -1, strippedNonProgram: 0, actorUserId: 'U1' }),
+      upsertProcessedUnits({
+        siteId: SITE,
+        productionDate: DAY,
+        strippedProgram: -1,
+        strippedNonProgram: 0,
+        actorUserId: 'U1',
+      }),
     ).rejects.toBeInstanceOf(ProcessedUnitsError);
   });
 });
 
 describe('closeProcessedUnitsDay', () => {
   it('stamps closed_at + writes an audit row, then refuses a second close', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 150, strippedNonProgram: 25, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      actorUserId: 'U1',
+    });
     const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
     expect(closed.closedAt).not.toBeNull();
     expect(store.audits.length).toBeGreaterThanOrEqual(2);
-    await expect(closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' })).rejects.toBeInstanceOf(
-      ProcessedUnitsError,
-    );
+    await expect(
+      closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' }),
+    ).rejects.toBeInstanceOf(ProcessedUnitsError);
   });
 
   it('404s a row at another site', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 1, strippedNonProgram: 0, actorUserId: 'U1' });
-    await expect(closeProcessedUnitsDay({ id: v.id, siteId: 'OTHER', actorUserId: 'U1' })).rejects.toBeInstanceOf(
-      ProcessedUnitsError,
-    );
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 1,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
+    await expect(
+      closeProcessedUnitsDay({ id: v.id, siteId: 'OTHER', actorUserId: 'U1' }),
+    ).rejects.toBeInstanceOf(ProcessedUnitsError);
   });
 });
 
 describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', () => {
   it('REFUSES (422 negative_balance) a close that drives the PROGRAM pool negative, no ack', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 200,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
     // No anchor, no inbound → 200 stripped drives program to −200.
     store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
     try {
@@ -252,18 +332,35 @@ describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', (
   });
 
   it('detects a negative NON-PROGRAM pool as well', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 0, strippedNonProgram: 50, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 0,
+      strippedNonProgram: 50,
+      actorUserId: 'U1',
+    });
     store.strippedAgg = { stripped_program: 0, stripped_non_program: 50 };
-    await expect(closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' })).rejects.toBeInstanceOf(
-      ProcessedUnitsError,
-    );
+    await expect(
+      closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' }),
+    ).rejects.toBeInstanceOf(ProcessedUnitsError);
     expect(store.rows[0]?.closed_at ?? null).toBeNull();
   });
 
   it('CLOSES a negative day when acknowledgeNegative is set, and audits the acknowledgment + numbers', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 200,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
     store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
-    const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1', acknowledgeNegative: true });
+    const closed = await closeProcessedUnitsDay({
+      id: v.id,
+      siteId: SITE,
+      actorUserId: 'U1',
+      acknowledgeNegative: true,
+    });
     expect(closed.closedAt).not.toBeNull();
     const closeAudit = store.audits.at(-1) as { after: Record<string, unknown> };
     expect(closeAudit.after['acknowledged_negative']).toBe(true);
@@ -271,9 +368,20 @@ describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', (
   });
 
   it('CLOSES normally (no ack, no acknowledgment audit) when the balance stays non-negative', async () => {
-    const v = await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 200, strippedNonProgram: 0, actorUserId: 'U1' });
+    const v = await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 200,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
     // A 500-unit physical anchor absorbs the 200 stripped → +300, non-negative.
-    store.anchor = { snapshot_at: new Date('2026-07-01T00:00:00Z'), units_indoor: 500, units_total: null, units_in_processing: 0 };
+    store.anchor = {
+      snapshot_at: new Date('2026-07-01T00:00:00Z'),
+      units_indoor: 500,
+      units_total: null,
+      units_in_processing: 0,
+    };
     store.strippedAgg = { stripped_program: 200, stripped_non_program: 0 };
     const closed = await closeProcessedUnitsDay({ id: v.id, siteId: SITE, actorUserId: 'U1' });
     expect(closed.closedAt).not.toBeNull();
@@ -284,7 +392,13 @@ describe('closeProcessedUnitsDay — negative-balance guard (D6, finding 10)', (
 
 describe('listProcessedUnits', () => {
   it('returns rows for the site', async () => {
-    await upsertProcessedUnits({ siteId: SITE, productionDate: DAY, strippedProgram: 150, strippedNonProgram: 25, actorUserId: 'U1' });
+    await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: DAY,
+      strippedProgram: 150,
+      strippedNonProgram: 25,
+      actorUserId: 'U1',
+    });
     const rows = await listProcessedUnits(SITE);
     expect(rows).toHaveLength(1);
   });
@@ -293,9 +407,27 @@ describe('listProcessedUnits', () => {
     const d1 = new Date('2026-07-01T00:00:00Z');
     const d2 = new Date('2026-07-02T00:00:00Z');
     const d3 = new Date('2026-07-03T00:00:00Z');
-    await upsertProcessedUnits({ siteId: SITE, productionDate: d1, strippedProgram: 10, strippedNonProgram: 0, actorUserId: 'U1' });
-    await upsertProcessedUnits({ siteId: SITE, productionDate: d2, strippedProgram: 20, strippedNonProgram: 0, actorUserId: 'U1' });
-    await upsertProcessedUnits({ siteId: SITE, productionDate: d3, strippedProgram: 30, strippedNonProgram: 0, actorUserId: 'U1' });
+    await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: d1,
+      strippedProgram: 10,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
+    await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: d2,
+      strippedProgram: 20,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
+    await upsertProcessedUnits({
+      siteId: SITE,
+      productionDate: d3,
+      strippedProgram: 30,
+      strippedNonProgram: 0,
+      actorUserId: 'U1',
+    });
     // Distinct per-date outflow; d2 has NONE (must map to ZERO_OUTFLOW, exactly as the
     // single-day path returns for a day with no rows).
     store.renoByDate.set(d1.getTime(), { program_units: 5, non_program_units: 1 });
