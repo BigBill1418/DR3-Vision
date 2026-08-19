@@ -71,9 +71,16 @@ build agents plus an orchestrator.
   ledger was UNDER-counting by 383 units, the drift evidence the reset exists
   to capture; likely provisional-inbound under-feed, worth reading against the
   next few days of MyMRC deliveries. On-hand now computes forward from 923.
-  **Caveat recorded:** unsplit anchor attributes the whole 923 to the program
-  pool (ADR-0037 §3) — program-billed figures are conservative-high until the
-  next measured (split) count; next count should capture the split.
+  **SUPERSEDED same morning (~10:00 AM PT): Bill delivered the FINAL split —
+  923 = 201 program + 722 non-program.** The unsplit anchor was soft-voided
+  (ADR-0084/0105 discipline, chain-linked in audit) and replaced by MEASURED
+  anchor `855a23b1` (201/722/923). Live balance now reads 201/722/923.
+  **Both drift snapshots preserved:** the 7:50 AM anchor recorded delta +383
+  (vs computed 540); by 10:00 AM the computed baseline had moved to 721 —
+  MRC's late-arriving prior-day data raised computed history by ~181 units in
+  two hours — so the measured row records delta +202. That movement is the
+  provisional-inbound drift class in live action, and is itself evidence for
+  why the physical count is the authority.
   **Eugene did NOT count** — still unanchored/zero; its first anchor remains
   open alongside the Eugene-feeds decision.
 - **Decision after tonight:** `correct-count.ts` (ADR-0105) is a third
