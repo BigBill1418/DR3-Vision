@@ -32,6 +32,32 @@ vi.mock('@/lib/prisma', () => ({
             store.updates.push(data);
             return {};
           },
+          // ADR-0118 — the verify write is a GUARDED `updateMany` and its
+          // `count` is the verdict. Modelled against the fixture row rather
+          // than as `async () => ({ count: 1 })`: the `where` restates the
+          // status and (when issuing) `dr3_number`, and a fake that always
+          // reports a hit cannot fail when the guard stops guarding.
+          updateMany: async ({
+            where,
+            data,
+          }: {
+            where: Record<string, unknown>;
+            data: unknown;
+          }) => {
+            const row = store.load as unknown as Record<string, unknown> | null;
+            if (!row) return { count: 0 };
+            for (const [k, v] of Object.entries(where)) {
+              if (k === 'id') continue;
+              // `?? null` because a fixture that simply omits a nullable column
+              // holds `undefined`, where Postgres holds NULL. Normalising the
+              // ABSENT case (not the value case) is faithful modelling, not
+              // leniency: without it the `dr3_number: null` guard would miss on
+              // every fixture that does not spell the column out.
+              if ((row[k] ?? null) !== v) return { count: 0 };
+            }
+            store.updates.push(data);
+            return { count: 1 };
+          },
         },
         auditLog: {
           create: async ({ data }: { data: unknown }) => {

@@ -9,6 +9,56 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (12:20 AM PT) — Two managers, one load, two DR3 numbers (ADR-0118)
+
+**The comment said a DR3 number could never be double-assigned. Neither half of
+it was true.** `verify-gate.ts` carried this, above the verify transaction:
+
+> `verified` is reached exactly once per load, and we only issue when
+> `dr3_number` is still null, so a number is never double-assigned.
+
+`verified` was reached exactly once per load only because nothing enforced it —
+the write was an unguarded `update({ where: { id } })`, which succeeds whatever
+the row's state. And "we only issue when `dr3_number` is still null" was decided
+from a read taken on the shared client *outside* the transaction, before the
+split arithmetic and the source lookups that follow it.
+
+So two managers verifying the same submitted load — the office desktop and a
+second tab, or a double-submit on a slow save — both read
+`status: 'submitted', dr3_number: null`, both drew a number from
+`document_sequences`, and both wrote. Two numbers burned off the sequence that
+documents MRC loads, one of them attached to nothing, and the load silently
+carrying whichever write landed second. `document_sequences` guarantees the two
+issuers get *different* numbers (`sequences.ts` — one `UPDATE … RETURNING`,
+row-locked); it cannot guarantee that only one of them was asked.
+
+The issue decision is now conditional on the state it was made from: a guarded
+`updateMany` restating **both** fields `issuesDr3` depends on. If either moved,
+it matches zero rows and the transaction throws `concurrent_verify` (409) —
+and the throw is the point. `sequences.ts:11-14` already said what a rollback
+means: *"if that transaction rolls back, the counter increment rolls back with
+it — a rejected/failed verify never burns a DR3 number."* The loser's number
+goes back into the sequence.
+
+`dr3_number: null` is in the guard **only when issuing**, so a load that arrived
+carrying a number from MyMRC is still verified without being refused for holding
+it. The false comment is replaced with the reasoning above.
+
+Proven against a real Postgres. Restoring the unguarded write reports all three
+failures in one run (the headline claims use `expect.soft` so the counter
+arithmetic is still evaluated):
+
+```
+→ exactly one verify may succeed: expected [ … ] to have a length of 1 but got 2
+→ exactly one verify must be refused: expected [] to have a length of 1 but got +0
+→ the loser's DR3 number must roll back into the sequence: expected 2 to be 1
+```
+
+- `src/lib/loads/verify-gate.ts` — guarded `updateMany`, `concurrent_verify` reason.
+- `src/lib/loads/verify-gate.db.test.ts` — two real-Postgres cases.
+
+*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT
+— this is the operator-dock path.*
 ## 2026-08-19 (11:40 PM PT) — Releasing a held count is one transaction (ADR-0118)
 
 **One counted event could produce two anchors.** ADR-0072 deliberately built two
