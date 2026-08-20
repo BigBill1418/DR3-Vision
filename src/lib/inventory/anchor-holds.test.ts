@@ -58,15 +58,37 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}) {
   };
   const updates: Record<string, unknown>[] = [];
   const audits: Record<string, unknown>[] = [];
-  return {
+  const self = {
     hold,
     updates,
     audits,
     inventoryCountHold: {
       findUnique: async () => hold,
+      // ADR-0118 — the loser's error message is re-read INSIDE the transaction,
+      // so the fake must answer with the state that actually won.
+      findUniqueOrThrow: async () => hold,
       update: async (a: { data: Record<string, unknown> }) => {
         updates.push(a.data);
         return hold;
+      },
+      // ADR-0118 — the release gate. Modelled FAITHFULLY rather than as
+      // `async () => ({ count: 1 })`: the `where` is re-evaluated against the
+      // fixture row and the row is mutated on a hit, so a fixture whose status
+      // is not `pending` makes the guard MISS — which is the whole behaviour
+      // under test. A fake that always reports a hit cannot fail when the guard
+      // stops guarding.
+      updateMany: async (a: {
+        where: Record<string, unknown>;
+        data: Record<string, unknown>;
+      }) => {
+        const h = hold as unknown as Record<string, unknown>;
+        for (const [k, v] of Object.entries(a.where)) {
+          if (k === 'id') continue;
+          if (h[k] !== v) return { count: 0 };
+        }
+        updates.push(a.data);
+        for (const [k, v] of Object.entries(a.data)) h[k] = v;
+        return { count: 1 };
       },
     },
     user: {
@@ -93,6 +115,14 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}) {
       },
     },
   };
+  // ADR-0118 — `releaseHold` now does its work on one transaction. The fake runs
+  // the callback against ITSELF, so every write the release makes is still
+  // observable through `updates` / `audits`. It does NOT model rollback: that
+  // claim is not expressible against a fake at all, and is proven in
+  // `anchor-holds.db.test.ts` against a real Postgres.
+  return Object.assign(self, {
+    $transaction: async <T,>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(self),
+  });
 }
 
 beforeEach(() => vi.clearAllMocks());
