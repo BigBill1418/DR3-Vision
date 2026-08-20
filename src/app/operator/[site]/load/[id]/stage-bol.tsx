@@ -40,9 +40,23 @@ export function StageBol({
         onCaptured={() => setHasFile(true)}
         initialCount={photoCount}
       />
+      {/* ADR-0121 — the gate reads the SERVER FACT as well as this mount's state.
+          `hasFile` is `useState(false)` and is therefore false on every fresh
+          mount, no matter what the load already holds. Taking the BOL does not
+          move `load.status` (it stays `arrived`), so a reload — or the next
+          operator taking the load over — comes back to this stage with the photo
+          already written and `hasFile` false. Combined with `PhotoInput`
+          disabling capture once `count > 0` and withholding "add another" until
+          `done`/`queued`, that left the screen with NO live control at all, and
+          it survived a hard refresh because the trapping state is a
+          `load_photos` row. H-137810 sat at `arrived` for 90+ minutes on
+          2026-08-20 while three operators took it over in turn.
+
+          `photoCount === 0` keeps ADR-0060's forced-BOL rule intact: a first
+          visit with nothing captured and nothing on the server still refuses. */}
       <button
         type="button"
-        disabled={!hasFile || isPending}
+        disabled={(!hasFile && photoCount === 0) || isPending}
         onClick={() =>
           startTransition(async () => {
             await bolCapturedAction(siteCode, loadId);

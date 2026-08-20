@@ -9,6 +9,62 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (1:30 PM PT) — EMERGENCY: a re-entered load stage had no live control
+
+**The Woodland floor was trapped one step into the dock workflow for ~90 minutes
+during floor hours.** Reported as *"no response, totally locked up, totally
+unusable"*; a full iPad refresh did not help, because the trapping state was a
+`load_photos` row in Postgres.
+
+`abaf1aae` (H-137810) was checked in at 12:36:25 PT, its BOL photo landed at
+12:36:35, and it then sat at `arrived` for 90+ minutes while three operators took
+it over in turn. Every other load that day left `arrived` in 43 s – 2 m 19 s.
+
+The server was fine throughout, which is what made it hard to read: healthz
+0.13 s, Postgres idle (zero advisory locks over ~600 samples, zero waiters),
+check-ins still succeeding — `cfc91dbe` was created at 1:00:56 PM PT, *during*
+the outage — and photos 12 captured / 12 uploaded.
+
+Three correct decisions compose into a dead screen on any RE-ENTRY to a stage
+that already holds its photo:
+
+- `load-workflow.tsx` gates the BOL step on `bolDone`, a client `useState`; the
+  BOL photo does not move `load.status` off `arrived`, so any reload or takeover
+  returns to stage 1;
+- `stage-bol.tsx` gated Continue on `hasFile`, also client state, false on every
+  fresh mount;
+- `photo-input.tsx` disables capture once `count > 0` (ADR-0109, correct) and
+  renders "add another" only from `done`/`queued` — a fresh mount is `idle`.
+
+Capture disabled, add-another absent, Continue disabled. ADR-0109 (#268,
+`336d64d`, live 2026-08-19 10:35 AM PT) also removed the accidental escape hatch:
+`initialCount` used to default to 0, so re-taking the photo re-armed Continue.
+
+Fixed by gating Continue on the server fact too —
+`disabled={(!hasFile && photoCount === 0) || isPending}` — in **both**
+`stage-bol.tsx` and `stage-door.tsx`. `photoCount` was already plumbed from
+`page.tsx`'s `photo_counts`. `stage-door.tsx` was not the file that trapped the
+floor today only because the load never reached it; identical shape, armed, fixed
+in the same change. Stage 2 (weight) escapes via its own "None" button. **No data
+touched** — the stuck loads need no repair, the operator re-opens and proceeds.
+
+`stage-reentry.test.tsx` mounts the REAL composition (no stubbed `PhotoInput` —
+the disabled capture button is half the trap) and asserts at least one ENABLED
+control by counting buttons rather than naming a testid. Bands 0/1/2/3, because
+the existing `photo-input.limit.test.tsx` mounts only 0 and MAX(3) and production
+was at **1**. Recorded red against the live SHA `7567ef1`: 8 failed | 4 passed;
+green after: 12 passed. Full operator surface: 20 files, 253 tests green.
+
+Follow-ups, NOT in this PR: (1) `DeadEndBeacon` is absent from all seven
+`stage-*.tsx` — mounted there it would have fired at 12:36:35 rather than the
+floor being the discovery mechanism at 12:52, plus an ntfy alert graded `high`;
+(2) server-derived stage selection to retire the `bolDone` latch; (3) unrelated —
+Bill's manual M-186301 correction (960/110) is missing, the row still reads
+970/100 `source = 'import'`: ADR-0119 guarded the MyMRC bridge but the
+**workbook-import** writer is a third author and is not covered.
+
+See `docs/adr/0121-three-correct-decisions-and-no-way-out.md`.
+
 ## 2026-08-20 (2:40 AM PT) — HOTFIX: ADR-0120 broke a compile scope nothing runs
 
 **`main` was unbuildable for ~20 minutes and the deploy failed twice.**
