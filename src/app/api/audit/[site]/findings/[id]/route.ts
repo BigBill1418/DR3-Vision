@@ -23,7 +23,12 @@ async function resolveSiteAccess(
   if (!session?.user?.id) return { status: 401 };
   const site = await prisma.site.findUnique({ where: { code: siteCode }, select: { id: true } });
   if (!site) return { status: 404 };
-  const isAdmin = session.user.role === 'admin';
+  // ADR-0116 — ROLE first, then reach (see the sibling `run/route.ts`). Without
+  // the role gate an operator could PATCH a finding's lifecycle
+  // (open → resolved / not_an_issue), which is a manager review action.
+  const role = session.user.role;
+  if (role !== 'manager' && role !== 'admin') return { status: 403 };
+  const isAdmin = role === 'admin';
   const canReach = isAdmin || session.user.all_sites === true || session.user.primary_site_id === site.id;
   if (!canReach) return { status: 403 };
   return { siteId: site.id, userId: session.user.id };

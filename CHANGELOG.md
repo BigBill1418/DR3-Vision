@@ -9,6 +9,35 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (10:25 PM PT) — Reach is not power (ADR-0116)
+
+**Five surfaces asked whether you could reach the site, and never whether you
+were a manager.** `POST /api/audit/[site]/run`, `GET`/`PATCH
+/api/audit/[site]/findings/[id]`, `/dashboard/[site]`,
+`/dashboard/[site]/audit` and `/dashboard/[site]/load/[id]` each hand-rolled
+`canReach = isAdmin || all_sites || primary_site_id === site.id` with no role
+gate above it. An operator is neither admin nor `all_sites`, but
+`primary_site_id === site.id` is true for their own site — so an operator could
+run on-demand audits (persisting finding-lifecycle and `audit_runs` rows),
+**transition findings** `open → resolved / not_an_issue`, and render three
+manager pages. An operator PIN session carries a real `role` and
+`primary_site_id` (`auth.ts:236-240`) and `middleware.ts` gates on
+authentication only, never role. Neither API route had any test at all.
+
+Demonstrated end to end, not inferred: the new six-case suite run against the
+**pre-fix** route fails the operator case with `expected 200 to be 403` — the
+audit actually executed.
+
+The correct sibling already existed —
+`dashboard/[site]/loads/page.tsx:166-167` does the role check properly — so this
+is drift from a known-good pattern, not a design gap. CLAUDE.md hard rule #2
+names it exactly: "Do not reconflate them."
+
+**Not merged.** The fix narrows access to five surfaces that have been operator-
+reachable since they were written. No `/operator` surface links into
+`/dashboard` (swept), so the evidence says nobody is meant to be there — but
+"no link" is not "nobody navigates there", and that is Bill's call, not the
+audit's. Held for Bill as a people-question, not a code-question; Bill approved 2026-08-19 ~10:25 PM PT and it merged.
 ## 2026-08-19 (8:15 PM PT) — Inbound workbook promotion has never landed a row (ADR-0115)
 
 **The argument that was refused before the query was sent.** Every inbound

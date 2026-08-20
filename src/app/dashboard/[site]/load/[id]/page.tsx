@@ -53,10 +53,15 @@ export default async function ManagerLoadDetailPage({ params }: Props) {
   });
   if (!site) notFound();
 
-  const isAdmin = session.user.role === 'admin';
+  // ADR-0116 — ROLE first, then reach (CLAUDE.md hard rule #2). Without the
+  // role gate an operator whose `primary_site_id` matches renders the manager
+  // load-detail surface.
+  const role = session.user.role;
+  const isAdmin = role === 'admin';
+  const isManager = role === 'manager' || isAdmin;
   // ADR-0024: an all-sites manager reaches every site.
   const isAssigned = session.user.primary_site_id === site.id || session.user.all_sites === true;
-  if (!isAdmin && !isAssigned) {
+  if (!isManager || (!isAdmin && !isAssigned)) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-dr3-space px-6 text-center text-dr3-mist">
         <h1 className="text-2xl font-semibold">403 — not authorized for this site</h1>

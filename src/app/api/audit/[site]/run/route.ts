@@ -33,7 +33,19 @@ export async function POST(
   const site = await prisma.site.findUnique({ where: { code: siteCode }, select: { id: true, code: true } });
   if (!site) return NextResponse.json({ error: 'site not found' }, { status: 404 });
 
-  const isAdmin = session.user.role === 'admin';
+  // ADR-0116 — ROLE first, then reach. This is the order `requireManagerForSite`
+  // uses (`auth-helpers.ts:50-53`) and the order CLAUDE.md hard rule #2 requires:
+  // site REACH and manager POWER are two different questions and must not be
+  // reconflated. This route asked only the reach question, and an operator
+  // answers it: a PIN session carries a real `role` and `primary_site_id`
+  // (`auth.ts:236-240`) and `middleware.ts` gates on authentication only, never
+  // role — so an operator satisfied `canReach` for their own site and could POST
+  // an on-demand audit run, persisting finding-lifecycle and `audit_runs` rows.
+  const role = session.user.role;
+  if (role !== 'manager' && role !== 'admin') {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+  const isAdmin = role === 'admin';
   const canReach = isAdmin || session.user.all_sites === true || session.user.primary_site_id === site.id;
   if (!canReach) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
