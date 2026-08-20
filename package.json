@@ -13,6 +13,7 @@
     "start": "next start",
     "lint": "next lint --max-warnings 0",
     "typecheck": "tsc --noEmit",
+    "check:prisma-keys": "node scripts/check-prisma-write-keys.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",

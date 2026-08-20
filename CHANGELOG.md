@@ -9,6 +9,76 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (8:15 PM PT) — Inbound workbook promotion has never landed a row (ADR-0115)
+
+**The argument that was refused before the query was sent.** Every inbound
+workbook promotion has thrown at runtime since `87a605be` (2026-07-06, PR #77).
+`promoteWorkbookImport` passed `source: 'import'` to `inboundLoad.createMany`,
+but `InboundLoad.source` is the `Source?` **relation** — already set one line up
+via `source_id` — not a `RecordSource` column. Prisma rejects an unknown
+argument at **argument validation, before the query is sent**, so the throw
+aborted the enclosing `$transaction` and a promotion containing even one inbound
+row promoted **nothing** — no ledger row, no anchor, no processed/outbound/
+landfilled/dropoff rows either. Prod corroboration: `import_id` is NULL on all
+743 `inbound_loads` rows.
+
+The file already knew. Ninety lines above the defect its own `CONFLICT_TABLES`
+note says `inbound_loads.source` is the Source relation and that "inbound
+promotion provenance rides on `import_id` alone"; so does ADR-0048 §86-92. The
+code contradicted both for six weeks.
+
+Three guards were in place and all three were structurally blind:
+
+- **`tsc --noEmit` exits 0** on it, file in scope, even with `--incremental
+false`. Prisma's `SelectSubset` maps only the top-level argument keys
+  (`data`, `skipDuplicates`) and lets `T['data']` through unmapped, so
+  excess-property checking is gone before the nested payload is compared. No
+  `tsconfig` setting recovers it.
+- **Both promotion suites inject fake Prisma clients** whose `createMany` is
+  `async ({ data }) => ({ count: data.length })`. A fake that accepts every
+  payload cannot reject an unknown argument — it agreed with the bug.
+- **An unreachable database would not have caught it either.** With a bad
+  `DATABASE_URL` the good and bad payloads both raise
+  `PrismaClientInitializationError`; the branches collapse and the test passes
+  on broken code. Only a real, reachable Postgres discriminates.
+
+Shipped:
+
+- **The one-line fix**, with a comment naming the relation-vs-column
+  distinction so the next author reading five sibling tables that all stamp
+  `source` does not "restore" it.
+- **`workbook-promotion.inbound-write.db.test.ts`** — real client, real
+  Postgres, in the ADR-0078 lane. Asserts the landed row **from the database**,
+  not from the return value (which is computed before the write and would still
+  be right after a rollback). Verified red → green, not assumed: red is
+  `Unknown argument 'source'` at `workbook-promotion.ts:1156`.
+- **`scripts/check-prisma-write-keys.mjs`, wired into CI as a hard gate** —
+  checks every statically-readable Prisma write payload against the **generated**
+  client's field sets. Field sets are **per method, never unioned**:
+  `InboundLoadCreateInput` _does_ have a relation-form `source` while
+  `CreateManyInput` does not, and the first draft of this script unioned them
+  and reported the live defect as clean. It prints
+  `payloads checked 344 · payloads not statically readable 76` on every run,
+  because a gate that answers "clean" without saying what it skipped is
+  indistinguishable from a gate that is off. Falsified before being trusted:
+  re-injecting the bug makes it exit 1 naming the exact line.
+- **F-4 — the transportation leg now says when it resolves nothing.**
+  `resolveTransportationInputs` selects `where transport_charged = true` and
+  nothing in the codebase writes that column (DDL-default `false` on all 743 prod
+  rows; read at `generation-inputs.ts:272` and `leg-fetchers.ts:105`, written
+  nowhere). Every per-load failure throws loudly, but a zero-row select just
+  skipped the loop — a structurally empty CA freight + fuel-surcharge leg with
+  nothing saying so. Now `warn` when billing-ready inbound exists in the window
+  but none is flagged (silently under-billed), `info` when the window is
+  genuinely quiet. **Log-only — no amount, status set or control flow changed**,
+  and it deliberately does not add the missing writer (that is Phase 0 G-2/G-3,
+  Bill's call). Mutation-checked: neutering the warn branch fails exactly one of
+  its three cases.
+
+Nothing was retro-promoted — the June/July imports that failed remain
+unpromoted; re-running them is an operator action, not a migration. No schema
+change, no migration.
+
 ## 2026-08-19 (12:15 PM PT) — AP decision mail can finally carry a real invoice (ADR-0114)
 
 **A refusal is not a delivery.** AP request `acb03895` was decided (rejected) at

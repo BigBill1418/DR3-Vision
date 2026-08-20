@@ -1172,7 +1172,18 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
           program_unit_count: i.programUnits,
           non_program_unit_count: i.nonProgramUnits,
           retrac_id: i.retracId,
-          source: 'import' as const,
+          // NO `source` KEY HERE. Unlike every sibling table in this
+          // transaction, `InboundLoad.source` is the `Source?` RELATION (the
+          // collection site, already set via `source_id` above), NOT a
+          // `RecordSource` provenance column — see the `CONFLICT_TABLES`
+          // note above and ADR-0048 §86-92: inbound promotion provenance
+          // rides on `import_id` alone. Passing `source: 'import'` here made
+          // Prisma reject the call at ARGUMENT VALIDATION, aborting this
+          // whole `$transaction`, so no promoted row of any kind landed
+          // (ADR-0115 / F-5). `tsc` cannot see it — Prisma's `SelectSubset`
+          // drops excess-property checking on the nested `data` payload — so
+          // the guard is the real-client suite
+          // `workbook-promotion.inbound-write.db.test.ts`.
           import_id: pid,
         })),
       });
