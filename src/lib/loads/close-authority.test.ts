@@ -114,6 +114,12 @@ vi.mock('@/lib/prisma', () => {
       store.rows.push(row);
       return row;
     },
+    // ADR-0119 — the service re-reads the committed row to build its view.
+    findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
+      const r = store.rows.find((x) => x.id === where.id);
+      if (!r) throw new Error(`row ${where.id} not found`);
+      return r;
+    },
   };
   const zero = { _sum: {} as Record<string, number | null> };
   const tx = {
@@ -123,6 +129,43 @@ vi.mock('@/lib/prisma', () => {
         store.audits.push(data);
         return data;
       },
+    },
+    // ADR-0119 — the manual write is now a guarded raw upsert. This fake
+    // reproduces its two OUTCOMES against the same fixture store (closed ⇒ zero
+    // rows ⇒ the service raises; open ⇒ one row) rather than parsing SQL. The
+    // SQL's own guarantee — that the WHERE is re-evaluated against the row
+    // version actually being written — is a Postgres property and is proven in
+    // `processed-units.db.test.ts`, not here. This suite's subject is the
+    // AUTHORITY rule: a manager may amend before the close and never after.
+    $queryRaw: async (sql: { values?: unknown[] }) => {
+      const v = (sql.values ?? []) as unknown[];
+      const [id, siteId, day] = v as [string, string, Date];
+      const found = store.rows.find(
+        (r) => r.site_id === siteId && r.production_date.getTime() === new Date(day).getTime(),
+      );
+      if (found) {
+        if (found.closed_at) return [];
+        Object.assign(found, {
+          stripped_program: v[3],
+          stripped_non_program: v[4],
+          entered_by: v[10],
+          notes: v[11],
+          source: 'manual',
+        });
+        return [{ id: found.id, inserted: false }];
+      }
+      store.rows.push({
+        id,
+        site_id: siteId,
+        production_date: new Date(day),
+        stripped_program: v[3],
+        stripped_non_program: v[4],
+        entered_by: v[10],
+        notes: v[11],
+        source: 'manual',
+        closed_at: null,
+      } as unknown as Row);
+      return [{ id, inserted: true }];
     },
   };
   return {

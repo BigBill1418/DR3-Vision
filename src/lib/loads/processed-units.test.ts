@@ -95,6 +95,12 @@ vi.mock('@/lib/prisma', () => {
       Object.assign(r, data);
       return r;
     },
+    // ADR-0119 — the service re-reads the committed row to build its view.
+    findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
+      const r = store.rows.find((x) => x.id === where.id);
+      if (!r) throw new Error(`row ${where.id} not found`);
+      return r;
+    },
     // onHand()'s stripped aggregate (close negative-balance guard).
     aggregate: async () => ({ _sum: store.strippedAgg }),
   };
@@ -141,6 +147,64 @@ vi.mock('@/lib/prisma', () => {
         fn({
           processedUnitsDaily: model,
           auditLog: { create: async ({ data }: { data: unknown }) => store.audits.push(data) },
+          // ADR-0119 — the manual write is now a guarded raw upsert
+          // (`ON CONFLICT … DO UPDATE … WHERE closed_at IS NULL`), because
+          // Prisma's fluent `upsert` cannot express a condition the update must
+          // satisfy. This fake does NOT parse SQL — it reproduces the two
+          // OUTCOMES the statement can have, against the same fixture store:
+          //
+          //   - a row exists and is CLOSED  → zero rows (the guard refused)
+          //   - a row exists and is open    → one row, `inserted: false`
+          //   - no row                      → one row, `inserted: true`
+          //
+          // What it deliberately does NOT claim to prove is the SQL itself —
+          // that the WHERE is re-evaluated against the row version actually
+          // being written when a close commits mid-statement. That is a
+          // property of Postgres, not of this code, and it is proven in
+          // `processed-units.db.test.ts` against a real database.
+          $queryRaw: async (sql: { values?: unknown[] }) => {
+            const [id, siteId, day] = (sql.values ?? []) as [string, string, Date];
+            const found = store.rows.find(
+              (r) =>
+                r.site_id === siteId && r.production_date.getTime() === new Date(day).getTime(),
+            );
+            if (found) {
+              if (found.closed_at) return [];
+              const v = (sql.values ?? []) as unknown[];
+              Object.assign(found, {
+                stripped_program: v[3],
+                stripped_non_program: v[4],
+                saved_units: v[5],
+                material_ticket_number: v[6],
+                employees_count: v[7],
+                processors_count: v[8],
+                pocketcoil_estimate: v[9],
+                entered_by: v[10],
+                notes: v[11],
+                // The ownership handoff under test.
+                source: 'manual',
+              });
+              return [{ id: found.id, inserted: false }];
+            }
+            const v = (sql.values ?? []) as unknown[];
+            store.rows.push({
+              id,
+              site_id: siteId,
+              production_date: new Date(day),
+              stripped_program: v[3],
+              stripped_non_program: v[4],
+              saved_units: v[5],
+              material_ticket_number: v[6],
+              employees_count: v[7],
+              processors_count: v[8],
+              pocketcoil_estimate: v[9],
+              entered_by: v[10],
+              notes: v[11],
+              source: 'manual',
+              closed_at: null,
+            } as unknown as Row);
+            return [{ id, inserted: true }];
+          },
         }),
     },
   };
