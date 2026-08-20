@@ -49,6 +49,74 @@ Three fixes:
    `→ expected [ 'dr3:promo:site-woodland' ] to deeply equal [ 'dr3:promotion:site-woodland' ]`
 3. **CI now runs `npm run build:mymrc`** — the same command the Dockerfile runs
    — so this class breaks on the PR instead of in the deploy.
+## 2026-08-20 (2:15 AM PT) — Eight places where the record could go missing (ADR-0118)
+
+The batch of high-severity siblings from the 2026-08-19 audit — one rule
+(ADR-0118) in three shapes.
+
+**A state machine that was consulted and then not enforced.**
+`load-service.ts` `transition()` read the status through `assertOwn` on the
+shared client, checked it against `ALLOWED_PRIOR`, then wrote with an unguarded
+`update({ where: { id } })` — which succeeds whatever the row's status is by the
+time it runs — and wrote its audit row afterwards, separately. One load is
+reachable from the shared kiosk, the operator's own iPad and the offline-queue
+replay endpoint, so two requests routinely pass the same check and both write.
+`load-claim.ts:372-376` already names this exact defect in a comment and fixes
+it for claims only. Now a guarded `updateMany` restating the status the
+transition was authorised from, raising the same typed `TransitionError` the
+pre-check raises, with the audit row on the same transaction.
+
+**The same shape, on money.** `commodity-payments/payments.ts` — two managers
+marking one commodity load `paid` in the AP queue both read `invoiced`, both
+passed `TRANSITIONS`, both wrote. Neither refused, and the audit log gained TWO
+rows each claiming to be the `invoiced->paid` transition, so the record of who
+moved this money was ambiguous forever.
+
+**A billed total that could change with nothing recording it.**
+`finishUnload`'s replay branch rewrites `total_units` on an already-finished
+load — the number the load is billed on — as two sequential writes on the shared
+client. The non-replay path fifty lines below already did this inside a
+transaction, so the two halves of one function disagreed about whether a total
+rewrite is auditable. Guarded on the value the recompute was measured against,
+so a second replay of the same queued stack is a silent no-op rather than a
+second audit row claiming a change that had already happened.
+
+**Five staging absorptions whose audit row was written after the commit.**
+`doc-ingest/absorb.ts` — trailer rows, Terex maintenance, commodity audit,
+outbound loads, facility expenses. A failure between the commit and the audit
+write left absorbed rows standing with no record of which document version
+produced them, how many landed, or which sheets declined — for staging tables
+whose whole purpose is to be reconciled against later. The same file's
+reference-row path already had it right; these five had drifted from it.
+
+### A defect the new test caught in the fix itself
+
+The guarded write is an `updateMany`, and `updateMany` accepts **scalar fields
+only**. `submitLoad` and `rejectLoad` were passing
+`submitted_by: { connect: { id } }` — a nested relation write — which Prisma
+rejects at argument validation, before the query is sent. That is the ADR-0115
+failure mode exactly: it aborted the enclosing transaction and refused every
+reject and every submit at runtime, with nothing wrong in the data. The
+real-Postgres suite went red on the first run and named it.
+
+Both call sites now set `submitted_by_id` (the same column), and `transition`'s
+`data` parameter was retyped from `InboundLoadUpdateInput` to
+`InboundLoadUncheckedUpdateInput` — the scalar-only surface — so `tsc` refuses a
+`connect` here rather than leaving it to be discovered at runtime.
+
+Falsifying both guards back to the pre-fix shape gives all six assertions red:
+
+```
+→ exactly one transition may succeed: expected [ … ] to have a length of 1 but got 2
+→ the loser must be refused: expected [] to have a length of 1 but got +0
+→ a refused transition must leave no audit row: expected [ …, … ] to have a length of 1 but got 2
+→ exactly one manager may flip this load to paid: expected [ … ] to have a length of 1 but got 2
+→ one money flip, one audit row: expected [ …, … ] to have a length of 1 but got 2
+```
+
+- `src/lib/commodity-payments/payments.ts`, `src/lib/load-service.ts` (×2),
+  `src/lib/doc-ingest/absorb.ts` (×5).
+- `src/lib/loads/tx-discipline.db.test.ts` — two real-Postgres cases.
 
 *Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
 

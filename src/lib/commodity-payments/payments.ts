@@ -143,25 +143,66 @@ export async function upsertPaymentRecord(args: UpsertPaymentArgs) {
     data.paid_at = dayKeyUTCFromISO(appTodayISO());
   }
 
-  const row = before
-    ? await prisma.outboundMaterialPayment.update({ where: { id: before.id }, data })
-    : await prisma.outboundMaterialPayment.create({
+  // ── ADR-0118 — the money flip is guarded, and its audit row rides with it ───
+  //
+  // `TRANSITIONS[fromStatus]` is checked forty lines above against `before`,
+  // read on the shared client. The write that followed was an unguarded
+  // `update({ where: { id } })` — it succeeds whatever the row's status is now —
+  // and the audit row was written afterwards, separately.
+  //
+  // Two managers marking the same commodity load `paid` in the AP queue both
+  // read `invoiced`, both passed the transition table, and both wrote. Neither
+  // is refused, `paid_at` ends up stamped by whichever landed second, and the
+  // audit log gains TWO rows each claiming to be the `invoiced->paid`
+  // transition — so the record of who moved this money, and from what, is
+  // ambiguous forever. Worse in the reverse direction: a concurrent
+  // `paid -> invoiced` correction and a `invoiced -> paid` flip can interleave
+  // so the surviving status disagrees with the surviving date.
+  //
+  // The guard restates the status the transition was authorised FROM. On an
+  // insert there is no prior row to guard, and the unique key on
+  // `outbound_material_id` is what refuses a second one.
+  const row = await prisma.$transaction(async (tx) => {
+    let written;
+    if (before) {
+      const { count } = await tx.outboundMaterialPayment.updateMany({
+        where: { id: before.id, status: fromStatus },
+        data,
+      });
+      if (count === 0) {
+        const now = await tx.outboundMaterialPayment.findUniqueOrThrow({
+          where: { id: before.id },
+          select: { status: true },
+        });
+        throw new CommodityPaymentTransitionError(now.status, toStatus);
+      }
+      written = await tx.outboundMaterialPayment.findUniqueOrThrow({ where: { id: before.id } });
+    } else {
+      written = await tx.outboundMaterialPayment.create({
         data: {
           ...(data as Prisma.OutboundMaterialPaymentUncheckedCreateInput),
           outbound_material_id: load.id,
           created_by: args.actorUserId,
         },
       });
+    }
 
-  // Audit uses the shared insert/update actions; the reconciliation-specific
-  // transition (e.g. invoiced->paid) is carried in the `after` payload.
-  await writeAudit({
-    actor_user_id: args.actorUserId,
-    action: before ? 'update' : 'insert',
-    table_name: 'outbound_material_payments',
-    row_id: row.id,
-    before: before ?? undefined,
-    after: { ...row, transition: `${fromStatus}->${toStatus}` },
+    // Audit uses the shared insert/update actions; the reconciliation-specific
+    // transition (e.g. invoiced->paid) is carried in the `after` payload.
+    // Hard rule #6 — written on the SAME transaction, so a money-status change
+    // can never stand without the row that records it.
+    await writeAudit(
+      {
+        actor_user_id: args.actorUserId,
+        action: before ? 'update' : 'insert',
+        table_name: 'outbound_material_payments',
+        row_id: written.id,
+        before: before ?? undefined,
+        after: { ...written, transition: `${fromStatus}->${toStatus}` },
+      },
+      { tx },
+    );
+    return written;
   });
   return row;
 }
